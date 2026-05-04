@@ -1,6 +1,6 @@
 # Implementation Plan 04 — `paladin-gtk`
 
-Source of truth: [DESIGN.md](DESIGN.md) §3, §7, §11 (Milestone 7), §12.
+Source of truth: [DESIGN.md](DESIGN.md) §3, §4.6–§4.7, §5–§13.
 Depends on: [`IMPLEMENTATION_PLAN_01_CORE.md`](IMPLEMENTATION_PLAN_01_CORE.md).
 
 > **Status: deferred to v0.2.** Per §12, the GUI is deferred to v0.2; the
@@ -36,7 +36,7 @@ crates/paladin-gtk/
 │   ├── cli.rs             # GlobalArgs (--vault, --no-color); reject --json
 │   ├── app/
 │   │   ├── mod.rs         # AppModel + AppMsg + AppOutput
-│   │   └── state.rs       # Locked / Unlocked { vault, store, settings }
+│   │   └── state.rs       # Missing / Locked / Unlocked { vault, store }
 │   ├── components/
 │   │   ├── unlock.rs      # UnlockComponent — encrypted vaults only
 │   │   ├── account_list.rs    # AccountListComponent (gtk::ListView + factory)
@@ -49,11 +49,15 @@ crates/paladin-gtk/
 │   ├── auto_lock.rs       # GLib idle/timeout source; encrypted-only; plaintext no-op
 │   ├── hotp_reveal.rs     # 120s per-row reveal window
 │   ├── icons.rs           # gtk::IconTheme lookup against Account.icon_hint
+│   ├── search.rs          # case-insensitive issuer/label filtering
 │   └── ticker.rs          # 250ms timeout source for TOTP gauge updates
 └── tests/
     ├── icon_resolution.rs
+    ├── search_logic.rs
     ├── auto_lock_logic.rs        # pure logic; no display required
     ├── clipboard_clear_logic.rs  # pure logic; no display required
+    ├── hotp_reveal_logic.rs
+    ├── gtk_smoke.rs              # xvfb-run integration smoke test
     └── manual/MANUAL_TEST_PLAN.md
 ```
 
@@ -64,11 +68,13 @@ inclusion.
 
 ## Component tree (per §7)
 
-- `AppModel` — owns the unlocked `Vault` (or `Locked` state).
+- `AppModel` — owns the `Missing`, `Locked`, or `Unlocked` state.
 - `UnlockComponent` — passphrase entry, **shown only when the vault is
   encrypted**. Skipped entirely for plaintext vaults.
 - `AccountListComponent` — `gtk::ListView` with a custom row factory bound
-  to a `gio::ListStore` of `AccountRowModel`.
+  to a `gio::ListStore` of `AccountRowModel`. Includes a search entry using
+  the same case-insensitive `"{issuer}:{label}"` substring matching as §5 /
+  §6 via `str::to_lowercase()`; no Unicode normalization.
 - `AccountRowComponent` — label, code, progress (TOTP) / "next" button
   (HOTP), copy button. HOTP rows hide their code until the user activates
   "next" (advances counter and saves); after a 120-second reveal window the
@@ -79,15 +85,23 @@ inclusion.
   the visible code and does not advance again.
 - `AddAccountComponent` — manual fields + "scan from clipboard image". Reads
   a `gdk::Texture` from the GDK clipboard, downloads it into an RGBA8
-  buffer, and passes that to `paladin_core::import::qr_image_bytes`.
-  Multi-QR imports use a fixed `ImportConflict::Skip` and report
-  imported/skipped/warning counts (parity with §6).
+  buffer, and passes width, height, bytes, and `import_time` to
+  `paladin_core::import::qr_image_bytes`. Manual entries use
+  `paladin_core::validate_manual`; validation warnings show inline and do
+  not block creation. Manual duplicate collisions reject with the existing
+  account in the dialog. Multi-QR imports use a fixed `ImportConflict::Skip`
+  and report imported/skipped/warning counts (parity with §6). Successful
+  manual and QR additions call `Vault::save(&Store)` after accounts are
+  inserted.
 - `RemoveDialog` — confirmation gate before calling `Vault::remove` followed
   by `Vault::save(&Store)`. Save errors surface inline.
 - `PassphraseDialog` — three sub-flows mirroring CLI/TUI: `set` / `change` /
   `remove`. New passphrases prompted twice; mismatch returns to the dialog
   with an inline error. `remove` shows the plaintext-storage warning and
-  requires explicit confirmation before mutation.
+  requires explicit confirmation before mutation. `set` is enabled only for
+  plaintext vaults; `change` and `remove` are enabled only for encrypted
+  vaults. Any stale invalid-state error stays in the dialog and does not
+  mutate visible state.
 - `SettingsComponent` — toggles for auto-lock and clipboard-clear, with
   spinners for timeouts. Spinners clamp to the §5 minimums
   (`auto_lock.timeout_secs >= 30`, `clipboard.clear_secs >= 5`). Setters
@@ -106,8 +120,8 @@ Behave the same as the TUI, including **opt-in default** and the
   re-presenting `UnlockComponent`. For plaintext vaults the timer is never
   armed; the setting still persists for the encrypted-later case.
 - Clipboard auto-clear: at copy time, capture `(token, value)`. On wake,
-  read the current `gdk::Clipboard` text; if it equals `value`, clear;
-  otherwise no-op.
+  ignore stale tokens first, then read the current `gdk::Clipboard` text; if
+  it equals `value`, clear; otherwise no-op.
 
 ## Icons (per §7)
 
@@ -124,18 +138,38 @@ to disable, and theming is delegated to Adwaita / the system theme.
 
 ## Vault interaction
 
-- On launch, `paladin_core::inspect(path)` resolves the mode.
-- Plaintext → open directly, jump to `AccountListComponent`.
+- Resolve vault path from `--vault` or `directories::ProjectDirs::data_dir()`,
+  then call `paladin_core::inspect(path)` to resolve the mode.
+- Plaintext → call `paladin_core::open(path, VaultLock::Plaintext)` directly,
+  then jump to `AccountListComponent`.
 - Encrypted → present `UnlockComponent`. On submit, call
   `paladin_core::open(path, VaultLock::Encrypted(secret))` on
   `gio::spawn_blocking` so the §4.4 Argon2 KDF (m=64 MiB defaults) does not
   block the GTK main loop; the dialog shows a spinner until the join
   completes. Wrong passphrase surfaces inline; `unsafe_permissions` shows
-  a dialog with the same human `chmod` repair string the CLI uses.
+  a dialog with the same human `chmod` repair wording the CLI uses,
+  formatted locally from the core error fields without depending on
+  `paladin-cli`.
 - Missing → show a non-mutating dialog telling the user to run
   `paladin init`. The GUI does not create vaults in v0.2 (parity with §6).
 - Operations route through `Vault` and `Store` methods — no GUI-side
   duplication of OTP, validation, or import logic.
+
+## Effect errors
+
+Effects update visible state only after the underlying mutation succeeds:
+
+- HOTP `next`: if `Vault::hotp_advance` fails, leave the row/reveal state
+  unchanged and show an inline/status error.
+- Copy: if the GDK clipboard write fails, show an inline/status error and do
+  not schedule clipboard auto-clear.
+- Add / remove / settings saves keep the active dialog open with an inline
+  error. Durability-unconfirmed save errors are shown as committed but
+  uncertain, matching the core error.
+- Passphrase transition errors keep the passphrase dialog open. Successful
+  transitions update the current vault mode before the dialog closes.
+- QR clipboard import errors — no image, image decode failure, zero decoded
+  QRs, and invalid QR payloads — stay in the Add dialog with an inline error.
 
 ## Linux desktop integration
 
@@ -148,8 +182,8 @@ to disable, and theming is delegated to Adwaita / the system theme.
 The GUI itself is hard to test without a display server. Tests are split:
 
 - **Pure-logic unit tests** (no display): icon resolution helpers,
-  auto-lock state machine, clipboard "clear if unchanged" decision logic,
-  HOTP reveal window timing.
+  search filtering, auto-lock state machine, clipboard "clear if unchanged"
+  decision logic, HOTP reveal window timing.
 - **Smoke test** in CI under `xvfb-run`: app launches, opens a prepared
   plaintext vault, the list renders. Required for Milestone 7 sign-off.
 - **Manual test plan** (`tests/manual/MANUAL_TEST_PLAN.md`) per Milestone 7
@@ -158,9 +192,10 @@ The GUI itself is hard to test without a display server. Tests are split:
   if-unchanged; add manual; add via clipboard image; settings persist;
   passphrase set/change/remove; icon theme resolution + fallback.
 
-## Milestone 7 checklist (per §11)
+## Milestone 7 checklist (expanded from §11)
 
-- [ ] Relm4 component tree (Unlock / List / Row / Add / Settings).
+- [ ] Relm4 component tree (Unlock / List / Row / Add / Remove /
+  Passphrase / Settings).
 - [ ] Conditional unlock view (encrypted vaults only).
 - [ ] Clipboard + auto-lock parity with TUI (opt-in).
 - [ ] Linux desktop file + icon.
@@ -170,10 +205,10 @@ The GUI itself is hard to test without a display server. Tests are split:
 
 ## Dependencies (per §9)
 
-`relm4`, `gtk4` (via `gtk4-rs`), `glib`, `gio`, `gdk4`, plus `paladin-core`.
-GDK clipboard is the canonical Wayland/X11 path; `arboard` is **not** a
-hard dependency for v0.2 and is only added if GDK clipboard proves
-insufficient during implementation.
+`relm4`, `gtk4` (via `gtk4-rs`), `glib`, `gio`, `gdk4`, `clap`,
+`directories`, plus `paladin-core`. GDK clipboard is the canonical
+Wayland/X11 path; `arboard` is **not** a hard dependency for v0.2 and is
+only added if GDK clipboard proves insufficient during implementation.
 
 **No `tokio`.** GTK's main loop is the executor; long work runs on
 `gio::spawn_blocking` with results delivered back to the main thread via
@@ -189,11 +224,14 @@ Relm4 messages.
 
 ## Definition of done
 
-- Component tree from §7 implemented.
+- Component tree above implemented.
 - Plaintext vault opens to list directly; encrypted vault gates on unlock.
 - Auto-lock and clipboard-clear are off by default; the plaintext-vault
   no-op rule applies to auto-lock only (clipboard-clear works in both modes).
 - Icon resolution works against system theme with placeholder fallback.
+- `xvfb-run` headless smoke test green in CI.
 - Manual test plan executes cleanly on a Wayland and an X11 session.
+- `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo test --all`,
+  `cargo deny check`, `cargo audit` clean.
 - DESIGN.md unchanged unless a contradiction surfaces; in that case
   DESIGN.md is updated first.
