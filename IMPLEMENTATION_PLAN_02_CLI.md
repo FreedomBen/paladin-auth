@@ -114,7 +114,9 @@ exclusive with `--qr` and is rejected at parse time.
 
 Text-mode `settings get [key]` may filter to one dotted key. `--json`
 always returns the full nested `VaultSettings` object, and dotted key names
-never appear in JSON output.
+never appear in JSON output. Boolean values are accepted only as lowercase
+`true` or `false`; numeric settings are accepted only as base-10 `u32`
+strings, then validated against the minimums above.
 
 ## Passphrase prompts
 
@@ -166,8 +168,9 @@ never appear in JSON output.
 - Text-mode warnings, including short-secret validation warnings and the
   plaintext-export warning, are written to stderr.
 
-Exit codes: `0` success, non-zero per error class. `--json` does not change
-exit codes; the JSON envelope carries the same information.
+Exit codes: `0` success; clap's default usage/parse exit for syntax errors;
+`1` for Paladin runtime errors. `--json` does not change exit codes; the
+JSON envelope carries the detailed `kind`.
 
 ## `paladin tui` exec wrapper
 
@@ -258,9 +261,10 @@ where relevant, and exit code.
   surfaces as `invalid_passphrase` with
   `reason: "confirmation_mismatch"`. Durability-unconfirmed surfaced as
   `save_durability_unconfirmed` (with `committed: true`) when the
-  post-commit fsync fails (use a fault-injection `Store` available from
-  `paladin-core` tests-only). Pre-commit failure surfaces as
-  `save_not_committed` with `committed: false`.
+  post-commit fsync fails; pre-commit failure surfaces as
+  `save_not_committed` with `committed: false`. Process-level CLI tests use
+  a test-only feature/env hook in the real binary to trigger the core
+  fault-injection `Store` paths for pre-commit and post-commit failures.
 - **`import`** for each format with each `--on-conflict` policy. Atomic
   failure on any invalid entry.
 - **`export --plaintext` / `--encrypted`** refuses overwrite without
