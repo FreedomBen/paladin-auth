@@ -8,6 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Write exhaustive tests that cover base functionality and any edge cases, particularly for the core shared library.
 - Use a Test Driven Development (TDD) approach: write failing tests before implementing features, then implement the code to make the tests pass.
 - Commit after making changes.  Do not push.
+- For containers, use Containerfile and compose.yaml and always build and run with rootless podman unless explicitly told otherwise.
 
 ## Project status
 

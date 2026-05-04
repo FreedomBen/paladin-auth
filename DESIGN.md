@@ -200,6 +200,16 @@ Auto-detect format by content sniffing, with `--format` to override:
   `otpauth://` URI through the URI parser. The GTK GUI also accepts a QR
   image pasted from the clipboard, decoded via the same path.
 
+`detect` resolves the format in this fixed order, returning the first
+match: file starts with the `PALADIN\0` magic → `Paladin`; image-format
+magic bytes (PNG, JPEG, GIF, BMP, WebP) → `Qr`; UTF-8 text that parses
+as JSON with Aegis's top-level `version` / `header` / `db` shape →
+`Aegis`; JSON matching Gnome Authenticator's exported shape → `Gnome`;
+UTF-8 starting with `otpauth://` (single, line-list, or JSON array of
+such URIs) → `Otpauth`; otherwise `Unknown`. Plaintext Paladin exports
+land in the `Otpauth` branch by design — they share the same on-disk
+format as a JSON `otpauth://` array.
+
 Each importer is tested with sample fixture files committed under
 `crates/paladin-core/tests/fixtures/`. The byte-oriented importers
 (`aegis`, `gnome`, `otpauth`) take `&[u8]`; the encrypted Paladin
@@ -260,9 +270,9 @@ Built with `clap` (derive). Commands:
 
 | Command                                     | Behavior                                                         |
 | ------------------------------------------- | ---------------------------------------------------------------- |
-| `paladin init [--force]`                    | Create a new vault. Prompts: passphrase? (empty = plaintext). Refuses to clobber an existing vault unless `--force` (which rotates the old file to `vault.bin.bak` first). |
+| `paladin init [--force]`                    | Create a new vault. Prompts: passphrase? (empty = plaintext). Refuses to clobber an existing vault unless `--force` (which rotates the old file to `vault.bin.bak` first, overwriting any existing backup). |
 | `paladin add`                               | Add an account interactively (or via flags / URI).               |
-| `paladin add --qr <path>`                   | Add by scanning a QR image file.                                 |
+| `paladin add --qr <path>`                   | Add by scanning a QR image file. Every decoded QR in the image is added; collisions use the default `import` merge policy (`skip`). For other policies, use `import --format=qr`. |
 | `paladin list`                              | List accounts (no codes).                                        |
 | `paladin show <query>`                      | Print the current code. **Advances HOTP counter.**               |
 | `paladin peek <query>`                      | Print the current code without advancing the HOTP counter; for TOTP, identical to `show`. |
@@ -275,7 +285,7 @@ Built with `clap` (derive). Commands:
 | `paladin export --plaintext <out>`          | Write JSON `otpauth://` array. Warns; refuses overwrite without `--force`. |
 | `paladin export --encrypted <out>`          | Write Paladin-format encrypted bundle.                           |
 | `paladin import [--on-conflict=<mode>] <path>` | Auto-detect format and merge into the vault. Conflict mode: `skip` (default), `replace`, `append`. See merge policy below. |
-| `paladin import --format=<fmt> <path>`      | Force format: `otpauth`, `aegis`, `gnome`, `paladin`, `qr`.      |
+| `paladin import --format=<fmt> <path>`      | Force format: `otpauth`, `aegis`, `gnome`, `paladin` (encrypted bundle only), `qr`.      |
 | `paladin settings get [key]`                | Show vault settings (auto-lock, clipboard-clear).                |
 | `paladin settings set <key> <value>`        | Edit vault settings.                                             |
 | `paladin tui`                               | Convenience wrapper: execs `paladin-tui` with the same args. Keeps the §3 "binaries don't reach into each other" rule intact. |
@@ -290,6 +300,9 @@ Vault settings keys (subject to extension):
 | `auto_lock.timeout_secs`  | u32              | `300`   | Idle timeout when enabled.                   |
 | `clipboard.clear_enabled` | bool             | `false` | TUI/GUI: schedule a clipboard wipe after copy. (CLI ignores.) |
 | `clipboard.clear_secs`    | u32              | `20`    | Wipe timeout when enabled.                   |
+
+Minimum values: `auto_lock.timeout_secs >= 30`, `clipboard.clear_secs
+>= 5`. `settings set` rejects lower values with a validation error.
 
 ### Query resolution
 
@@ -321,6 +334,11 @@ identical**. Behavior on collision is controlled by `--on-conflict`:
 - `replace` — overwrite the existing entry's mutable fields (algo,
   digits, kind, icon hint, updated). The `id` is preserved.
 - `append` — always insert as a new entry, even if it's an exact dupe.
+
+The collision check runs against the *running* import state, so
+duplicates within a single input are themselves subject to
+`--on-conflict`: `skip` keeps the first, `replace` is last-wins, and
+`append` keeps every copy.
 
 Non-colliding entries are always inserted. Imports are atomic at the
 batch level: if any entry fails validation (§8.9), no entries are added.
@@ -366,7 +384,9 @@ Library: **Relm4** on **GTK4**. Component tree:
   Skipped entirely for plaintext vaults.
 - `AccountListComponent` — `gtk::ListView` with a custom row factory.
 - `AccountRowComponent` — label, code, progress (TOTP) / "next" button (HOTP),
-  copy button.
+  copy button. HOTP rows hide their code until the user activates "next"
+  (advances counter and saves); after a 120-second reveal window the code
+  returns to the hidden state, matching the TUI.
 - `AddAccountComponent` — manual fields + "scan from clipboard image".
 - `SettingsComponent` — toggles for auto-lock and clipboard-clear, with
   spinners for timeouts.
@@ -433,7 +453,7 @@ Concrete obligations and explicit user-controlled tradeoffs:
 | `tui-input`                        | TUI text input widget            |
 | `relm4`, `gtk4`                    | GUI                              |
 | `clap`                             | CLI parsing                      |
-| `serde`, `serde_json`, `bincode`   | Vault and JSON I/O               |
+| `serde`, `serde_json`, `bincode` (v2) | Vault and JSON I/O             |
 | `hmac`, `sha1`, `sha2`             | TOTP / HOTP primitives           |
 | `chacha20poly1305`                 | AEAD (XChaCha20-Poly1305)        |
 | `argon2`                           | KDF                              |
