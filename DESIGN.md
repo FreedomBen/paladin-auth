@@ -146,14 +146,16 @@ secrets between 10 and 15 bytes inclusive.
   `valid_until = valid_from + period`, interpreted as the half-open window
   `[valid_from, valid_until)`. `seconds_remaining` is
   `valid_until - now_unix`, clamped to `0` at the boundary. `totp_code`
-  rejects `SystemTime` values before the Unix epoch instead of saturating.
+  rejects `SystemTime` values before the Unix epoch instead of saturating,
+  and returns a time-range error if `valid_until` would overflow `u64`.
 - **HOTP:** RFC 4226, same primitives. Validate against RFC 4226 Appendix D
   test vectors. Both entry points compute `HOTP(K, C)` for the current
   stored counter `C`; they differ only in whether they mutate state:
   - `hotp_peek` returns the code without advancing — used by UIs
     that want to render the code before the user commits to "use" it.
   - `hotp_advance` returns the same code, advances the stored counter
-    to `C + 1`, **and saves the vault atomically**. It takes `&Store`
+    to `C + 1`, sets `updated_at` to the supplied `now`, **and saves the
+    vault atomically**. It takes `&Store`
     for that reason. If the save fails before the primary-file commit
     point (§4.3), the in-memory counter and `updated_at` are rolled back
     to their previous values and `hotp_advance` returns `Err`. If the
@@ -182,6 +184,20 @@ else:
 ```
 
 `VaultPayload` = `{ accounts: Vec<Account>, settings: VaultSettings }`.
+It is encoded with bincode v2 using:
+
+```rust
+bincode::config::standard()
+    .with_little_endian()
+    .with_fixed_int_encoding()
+    .with_limit::<16_777_216>()
+```
+
+Decode requires full input consumption: trailing bytes after the
+`VaultPayload` are an `invalid_payload` error. The 16 MiB limit applies to the
+serialized `VaultPayload` bytes, excluding the Paladin header and AEAD tag;
+`open` rejects plaintext payloads and decrypted encrypted payloads that exceed
+that limit before constructing a `Vault`.
 
 - **Location.** Resolved via `directories::ProjectDirs::data_dir()`,
   which on Linux follows the XDG Base Directory spec and on macOS /
@@ -238,13 +254,17 @@ else:
   partial save is overwritten on the next save and unlinked by the next
   `open`. On any non-crash error during a save, remaining `.tmp` files
   are unlinked before the call returns; completed renames are not undone.
-- **Backups.** On every successful write, keep the previous `vault.bin` as
-  `vault.bin.bak` (one generation). The backup is always written to match
-  the mode and key of the **new** primary: for regular saves this is the same
-  as the previous primary, and for passphrase transitions (§4.5) the rotated
-  `.bak` is rewritten so it never preserves a superseded encryption state —
-  re-encrypted under the new key for `set_passphrase` and
-  `change_passphrase`, or written as plaintext for `remove_passphrase`.
+- **Backups.** For normal saves and passphrase transitions, every
+  successful write after a primary already exists keeps the previous primary
+  payload available as `vault.bin.bak` (one generation). The backup is
+  always written to match the mode and key of the **new** primary: for
+  regular saves this is the same as the previous primary, and for passphrase
+  transitions (§4.5) the rotated `.bak` is rewritten so it never preserves a
+  superseded encryption state — re-encrypted under the new key for
+  `set_passphrase` and `change_passphrase`, or written as plaintext for
+  `remove_passphrase`. The explicit `paladin init --force` clobber path is
+  the exception: it rotates the old file verbatim before creating the new
+  vault (§5).
 - **Versioning.** `format_ver` starts at `1` for v0.1 and is bumped on any
   breaking change to the header layout or `VaultPayload` schema. Old
   versions are read by an explicit migration path — never silently coerced.
@@ -371,7 +391,16 @@ Auto-detect format by content sniffing, with `--format` to override:
   backup whose `header` indicates encryption — without prompting for a
   passphrase. Aegis exports with an empty `entries` array are rejected
   with the same "no entries to import" error as the otpauth and QR
-  paths.
+  paths. Plaintext Aegis entries are accepted only when `type` is `totp`
+  or `hotp`; any other entry type rejects the whole batch with
+  `unsupported_aegis_entry_type` and `source_index`, preserving import
+  atomicity. Accepted entries map `name` → `label`, `issuer` → `issuer`
+  (empty becomes `None`), `info.secret` → `secret`, `info.algo` →
+  `algorithm`, `info.digits` → `digits`, `info.period` → `Totp.period`,
+  and `info.counter` → `Hotp.counter`. TOTP `period` defaults to 30 if
+  absent; HOTP `counter` is required. Aegis icon fields and other metadata
+  are ignored in v0.1; `icon_hint` is derived from the issuer using the
+  §4.1 slug rule.
 - **QR image file** — one or more accounts (one per decoded QR);
   errors if no QRs are decoded. Uses `rqrr` to decode every QR in the
   image and feeds each resulting `otpauth://` URI through the URI
@@ -402,12 +431,15 @@ a typed unsupported-plaintext-vault error without importing accounts.
 Importer timestamps are deterministic by source format. `otpauth`, QR,
 and Aegis imports set `created_at = updated_at = import_time` for each
 new parsed account because those formats do not carry Paladin timestamps.
-Paladin encrypted bundles preserve each account's stored timestamps. Under
+Paladin encrypted bundles preserve each account's stored timestamps for
+inserted/appended rows. Source `AccountId`s from Paladin bundles are never
+inserted into the destination vault: non-colliding rows and
+`--on-conflict=append` rows receive fresh UUIDv4 IDs at merge time. Under
 `--on-conflict=replace`, the existing entry keeps its `id` and
 `created_at`, receives the incoming mutable account fields, and sets
 `updated_at = import_time` regardless of source format. HOTP-to-HOTP
-collisions additionally preserve the existing `Hotp.counter` (§5
-merge policy).
+collisions additionally preserve the existing `Hotp.counter` (§5 merge
+policy).
 
 ### 4.7 Public API sketch
 
@@ -440,7 +472,7 @@ impl Vault {
     pub fn import_accounts(&mut self, accounts: Vec<ValidatedAccount>, policy: ImportConflict, now: SystemTime) -> Result<ImportReport>;  // applies the §5 merge policy
     pub fn totp_code(&self, id: AccountId, now: SystemTime) -> Result<Code>;       // TOTP only; errors on HOTP entries
     pub fn hotp_peek(&self, id: AccountId) -> Result<Code>;                        // HOTP only; does not advance
-    pub fn hotp_advance(&mut self, store: &Store, id: AccountId) -> Result<Code>;  // HOTP only; advances counter and saves atomically
+    pub fn hotp_advance(&mut self, store: &Store, id: AccountId, now: SystemTime) -> Result<Code>;  // HOTP only; advances counter, updates `updated_at`, and saves atomically
     pub fn settings(&self) -> &VaultSettings;
     pub fn set_auto_lock_enabled(&mut self, enabled: bool);
     pub fn set_auto_lock_timeout_secs(&mut self, secs: u32) -> Result<()>;
@@ -508,6 +540,25 @@ Built with `clap` (derive). Commands:
 | `paladin tui`                               | Convenience wrapper: execs `paladin-tui`, forwarding all global flags (e.g. `--vault`, `--no-color`) verbatim. Keeps the §3 "binaries don't reach into each other" rule intact. |
 
 Global flags: `--vault <path>`, `--no-color`, `--json` (for scripting).
+
+`paladin add` supports exactly one input mode per invocation:
+interactive prompts (no account-definition flags), `--uri <otpauth-uri>`,
+or manual flags. Manual mode requires `--label` and `--secret`; optional
+fields are `--issuer`, `--algorithm sha1|sha256|sha512`, `--digits 6|7|8`,
+`--kind totp|hotp`, `--period <secs>`, `--counter <u64>`, and
+`--icon-hint <slug>`. Manual mode defaults to TOTP, SHA1, 6 digits, and a
+30-second period. HOTP manual entries default to counter 0 when `--counter`
+is omitted. Manual `--secret` is Base32 text using the same rules as the
+`otpauth://` `secret` parameter; the decoded bytes must pass the §4.1 secret
+validation. `--period` is TOTP-only, `--counter` is HOTP-only, and
+`--icon-hint` must pass the §4.1 slug validation; when omitted, `icon_hint`
+is derived from the issuer using the §4.1 defaulting rule. All add modes use
+the shared account validation path and return validation warnings in the
+success payload. A single-entry `add` rejects an existing
+`(secret, issuer, label)` collision with `duplicate_account` and the existing
+`account` summary unless `--allow-duplicate` is supplied, in which case it
+appends a new account. `add --qr` remains the multi-entry exception and uses
+the import merge path with fixed `--on-conflict=skip`.
 
 All mutating CLI commands call the atomic save path before returning
 success. If save fails, the command exits non-zero. The primary vault file
@@ -608,20 +659,79 @@ Errors use stable snake_case `kind` values:
   "error": {
     "kind": "multiple_matches",
     "message": "query matched multiple accounts",
-    "candidates": []
+    "candidates": [
+      {
+        "id": "550e8400-e29b-41d4-a716-446655440000",
+        "issuer": "GitHub",
+        "label": "ben@example.com",
+        "kind": "totp",
+        "algorithm": "sha1",
+        "digits": 6,
+        "period": 30,
+        "counter": null,
+        "icon_hint": "github",
+        "created_at": 1777939200,
+        "updated_at": 1777939200,
+        "disambiguator": "id:550e8400"
+      },
+      {
+        "id": "a1b2c3d4-e5f6-47a8-9b0c-111213141516",
+        "issuer": "GitLab",
+        "label": "ben@example.com",
+        "kind": "totp",
+        "algorithm": "sha1",
+        "digits": 6,
+        "period": 30,
+        "counter": null,
+        "icon_hint": "gitlab",
+        "created_at": 1777939200,
+        "updated_at": 1777939200,
+        "disambiguator": "id:a1b2c3d4"
+      }
+    ]
   }
 }
 ```
 
 `candidates` is present only for ambiguity errors. Each entry is an
-`AccountSummary` extended with a `disambiguator` string field
-carrying the shortest-unique `id:<hex>` form (the same prefix shown
-in the text-mode candidate list, ≥8 hex chars), so JSON consumers can
-re-query by exact id without recomputing the prefix. Errors may include additional stable fields
+`AccountSummary` extended with a `disambiguator` string field carrying the
+shortest-unique `id:<hex>` form (the same prefix shown in the text-mode
+candidate list, ≥8 hex chars), so JSON consumers can re-query by exact id
+without recomputing the prefix. Errors may include additional stable fields
 when they affect recovery or side effects: `save_durability_unconfirmed`
 includes `"committed": true`; `save_not_committed` includes
 `"committed": false`; and `clipboard_write_failed` includes `account` plus
 `counter_used` (`null` for TOTP).
+
+v0.1 error kinds and stable fields:
+
+| `kind`                          | Meaning                                      | Stable extra fields                        |
+| ------------------------------- | -------------------------------------------- | ------------------------------------------ |
+| `validation_error`              | Input or imported data failed validation.    | `field`, `reason`, optional `source_index` |
+| `invalid_passphrase`            | New passphrase is not acceptable.            | `reason`                                   |
+| `invalid_state`                 | Operation is invalid for vault state.        | `operation`, `state`                       |
+| `vault_missing`                 | Selected vault path does not exist.          | `path`                                     |
+| `vault_exists`                  | Creation refused to overwrite a vault.       | `path`                                     |
+| `wrong_vault_lock`              | Supplied lock mode does not match file.      | `expected`, `actual`                       |
+| `decrypt_failed`                | Encrypted vault/bundle failed auth.          | none                                       |
+| `invalid_header`                | Paladin header is malformed/unknown.         | optional `path`                            |
+| `invalid_payload`               | Bincode payload is invalid or too large.     | `reason`, optional `path`                  |
+| `unsupported_format_version`    | Paladin `format_ver` has no migration.       | `format_ver`                               |
+| `kdf_params_out_of_bounds`      | Argon2 header params exceed policy.          | `m_kib`, `t`, `p`                          |
+| `unsupported_import_format`     | Detected/forced import format is invalid.    | `format`                                   |
+| `unsupported_plaintext_vault`   | Import saw a plaintext Paladin vault.        | none                                       |
+| `unsupported_encrypted_aegis`   | Aegis import saw an encrypted backup.        | none                                       |
+| `unsupported_aegis_entry_type`  | Aegis entry is not `totp` or `hotp`.         | `source_index`, `entry_type`               |
+| `no_entries_to_import`          | Import/QR input decoded zero accounts.       | none                                       |
+| `duplicate_account`             | `add` collided without `--allow-duplicate`.  | `account`                                  |
+| `no_match`                      | Query matched no accounts.                   | none                                       |
+| `multiple_matches`              | Query matched too many accounts.             | `candidates`                               |
+| `counter_overflow`              | HOTP advance would exceed `u64::MAX`.        | `account`                                  |
+| `time_range`                    | Time is before epoch or overflows TOTP.      | none                                       |
+| `save_not_committed`            | Save failed before primary commit.           | `committed: false`                         |
+| `save_durability_unconfirmed`   | Save committed but durability is unclear.    | `committed: true`                          |
+| `clipboard_write_failed`        | Clipboard write failed after generation.     | `account`, `counter_used`                  |
+| `io_error`                      | Filesystem/image/terminal I/O failed.        | `operation`, optional `path`               |
 
 Vault settings keys (subject to extension):
 
@@ -842,11 +952,17 @@ Concrete obligations and explicit user-controlled tradeoffs:
 
 - **Unit tests** in `paladin-core`:
   - RFC 6238 (TOTP) and RFC 4226 (HOTP) test vectors.
+  - TOTP time-window boundaries, including pre-Unix-epoch rejection,
+    exact-boundary `seconds_remaining = 0`, and far-future overflow
+    rejection.
   - `otpauth://` parser round-trip (TOTP and HOTP), including duplicate
     known parameters, ignored unknown parameters, case-insensitive
     algorithm/type handling, base32 padding/casing, and HOTP/TOTP-specific
     `counter`/`period` rules.
   - Vault round-trip in **both** modes (plaintext and encrypted).
+  - Bincode payload contract: fixed v2 config, full-input-consumption
+    rejection, and 16 MiB payload-limit rejection for plaintext and
+    encrypted vaults.
   - Tamper detection on encrypted vault: flip a ciphertext byte → fail;
     flip any byte in the AAD-bound header (`format_ver`, `mode`, `kdf_id`,
     Argon2 params, `salt`, `aead_id`, `nonce`) → fail.
@@ -856,15 +972,18 @@ Concrete obligations and explicit user-controlled tradeoffs:
     `0700` on dir) post-save and during staged writes.
   - Passphrase set/change/remove transitions, including pre-commit rollback
     and durability-unconfirmed failures after the primary-file commit point.
-  - HOTP counter advances on `hotp_advance`, not on `hotp_peek` or `totp_code`; `hotp_advance` also persists the new counter to disk before returning.
+  - HOTP counter advances on `hotp_advance`, not on `hotp_peek` or
+    `totp_code`; `hotp_advance` also updates `updated_at` and persists the
+    new counter to disk before returning.
   - Account validation rejects out-of-range digits, TOTP periods, HOTP
     counter overflow, empty labels, malformed icon hints, mismatched
     otpauth issuers, and invalid timestamps; short secrets in the 10-15
     byte range produce `short_secret` warnings.
   - Zeroize-on-drop assertions for `Secret` and `SecretString`.
-  - Importers: Aegis plaintext, our own export round-trip, plaintext
-    Paladin vault rejection, encrypted-Aegis rejection, and QR image
-    decode (single-QR and multi-QR images) — fixture files in
+  - Importers: Aegis plaintext TOTP/HOTP mapping, unsupported Aegis entry
+    type rejection, our own export round-trip with fresh destination IDs,
+    plaintext Paladin vault rejection, encrypted-Aegis rejection, and QR
+    image decode (single-QR and multi-QR images) — fixture files in
     `tests/fixtures/`. Also covers the "zero accounts" rejection path
     (empty JSON array, blank otpauth file, empty Aegis `entries`,
     image with no decodable QRs).
@@ -875,6 +994,8 @@ Concrete obligations and explicit user-controlled tradeoffs:
   - CLI `--json` success/error shapes, warning payloads, durability error
     fields, HOTP clipboard-write failure behavior, and export overwrite
     guards.
+  - CLI `add` input modes, mutual-exclusion errors, duplicate-account
+    rejection, and `--allow-duplicate`.
   - TUI HOTP copy behavior: hidden rows do not copy, revealed rows copy
     without advancing again.
   - Plaintext-vault auto-lock is a no-op in TUI state handling now, with
@@ -953,18 +1074,30 @@ Concrete obligations and explicit user-controlled tradeoffs:
 
 **Decided at sign-off (2026-05-04):**
 - AEAD = **XChaCha20-Poly1305** (24-byte nonce, AEAD ID 1).
-- Vault encoding = **bincode** (private format, not for interop).
-- HOTP CLI semantics: `show` and `copy` **advance** the counter; `peek` does not.
-- Aegis **encrypted** backups deferred to v0.2 (plaintext export supported in v0.1).
+- Vault encoding = **bincode v2** with the fixed config and 16 MiB payload
+  limit in §4.3 (private format, not for interop).
+- HOTP CLI semantics: `show` and `copy` **advance** the counter; `peek`
+  does not.
+- Aegis **encrypted** backups deferred to v0.2 (plaintext export supported
+  in v0.1).
+- Aegis v0.1 support is limited to plaintext TOTP/HOTP entries; unsupported
+  entry types reject the batch with a typed error.
 - GUI deferred to v0.2; **TUI ships in v0.1**.
-- TUI runtime = plain threads + `mpsc` (no `tokio` — a local TUI doesn't need async I/O).
-- **Icon hints:** name-only `Option<String>` slug (§4.1, §7). User-supplied icon bytes rejected to keep the vault payload small.
+- TUI runtime = plain threads + `mpsc` (no `tokio` — a local TUI doesn't
+  need async I/O).
+- **Icon hints:** name-only `Option<String>` slug (§4.1, §7).
+  User-supplied icon bytes rejected to keep the vault payload small.
 - Account validation ranges are fixed in §4.1, including OTP digits,
   TOTP period, HOTP counter overflow, timestamp format, and issuer/label
   normalization.
 - Argon2 header parameters are bounded before KDF work (§4.4).
 - Plaintext Paladin vault files are not an import format in v0.1; use
   plaintext export for portable URI-list import/export (§4.6).
+- Paladin encrypted bundle imports preserve timestamps but assign fresh IDs
+  for inserted/appended rows; replacements keep the destination ID.
+- CLI `add` input modes, duplicate behavior, and `--allow-duplicate` are
+  fixed in §5.
+- v0.1 JSON error kinds and stable fields are fixed in §5.
 - Plaintext auto-lock is a no-op; HOTP copy in TUI/GUI only copies an
   already revealed HOTP code and never advances a second time.
 - Both plaintext and encrypted CLI exports refuse overwrite without `--force`.
