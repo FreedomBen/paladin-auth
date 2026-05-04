@@ -110,10 +110,12 @@ else:
   `rename` over the target, then `fsync` the parent directory so the
   rename is durable across power loss.
 - **Backups.** On every successful write, keep the previous `vault.bin` as
-  `vault.bin.bak` (one generation). The backup mirrors the mode of the
-  previous primary, so a previously-encrypted vault never leaks plaintext via
-  the backup. The one exception is `set_passphrase`, which re-encrypts the
-  rotated `.bak` under the new key (§4.5).
+  `vault.bin.bak` (one generation). The backup is always written to match
+  the mode and key of the **new** primary: for regular saves this is the same
+  as the previous primary, and for passphrase transitions (§4.5) the rotated
+  `.bak` is rewritten so it never preserves a superseded encryption state —
+  re-encrypted under the new key for `set_passphrase` and
+  `change_passphrase`, or written as plaintext for `remove_passphrase`.
 - **Versioning.** `format_ver` starts at `1` for v0.1 and is bumped on any
   breaking change to the header layout or `VaultPayload` schema. Old
   versions are read by an explicit migration path — never silently coerced.
@@ -122,12 +124,19 @@ else:
 
 - **KDF:** Argon2id with sane defaults (m=64 MiB, t=3, p=1), tunable in the
   header so we can raise costs over time without breaking old vaults. The
-  passphrase + salt deterministically derive the 32-byte AEAD key.
+  passphrase + salt deterministically derive the 32-byte AEAD key. Regular
+  saves preserve the in-header Argon2 parameters, so an old vault opened on
+  a faster machine does not silently inherit higher cost on its next write;
+  raising costs requires an explicit `change_passphrase` (or a future
+  dedicated upgrade command).
 - **AEAD:** **XChaCha20-Poly1305** (24-byte nonce, simpler misuse story than
   AES-GCM). Header records the algorithm ID so we can migrate later. All
   header bytes after the magic — `format_ver`, `mode`, `kdf_id`, the Argon2
   params, `salt`, `aead_id`, and `nonce` — are passed as AEAD associated
-  data, so tampering with any of them fails decryption.
+  data, so tampering with any of them fails decryption. Each save uses a
+  freshly generated random nonce; salt is preserved across regular saves and
+  regenerated only on passphrase transitions (§4.5). Salt and nonce are
+  drawn from the OS CSPRNG (`getrandom`).
 - **Key handling:** derived key lives in a `Zeroizing<[u8; 32]>` and is
   dropped as soon as the encrypt/decrypt op returns. The passphrase
   itself (a `SecretString`) is retained by the `Vault` between `open`
@@ -144,8 +153,8 @@ A vault's encryption state is mutable at runtime. The user can:
 | Operation             | Starting state | Resulting state | Notes                                       |
 | --------------------- | -------------- | --------------- | ------------------------------------------- |
 | **Set passphrase**    | plaintext      | encrypted       | Generate fresh salt + nonce; derive key; encrypt. The rotated `.bak` is also encrypted under the new key (with its own fresh nonce) so it cannot retain the previous plaintext secrets. |
-| **Change passphrase** | encrypted      | encrypted       | Decrypt with old; fresh salt + nonce; encrypt with new. |
-| **Remove passphrase** | encrypted      | plaintext       | Decrypt; write payload directly. Loud confirmation required. |
+| **Change passphrase** | encrypted      | encrypted       | Decrypt with old; fresh salt + nonce; encrypt with new. The rotated `.bak` is re-encrypted under the new key (with its own fresh nonce) so the old key — which the user may be retiring because it was compromised — cannot recover prior contents from the backup. |
+| **Remove passphrase** | encrypted      | plaintext       | Decrypt; write payload directly. The rotated `.bak` is also written as plaintext, so it remains accessible without the just-removed passphrase. Loud confirmation required. |
 
 All three go through the same atomic-write + backup path as a normal save.
 Each is a single-step transition that either fully succeeds or leaves the
@@ -211,7 +220,7 @@ pub fn create(path: &Path, lock: VaultLock) -> Result<(Vault, Store)>;    // err
 impl Vault {
     pub fn add(&mut self, account: Account) -> AccountId;
     pub fn remove(&mut self, id: AccountId) -> Option<Account>;
-    pub fn iter(&self) -> impl Iterator<Item = &Account>;
+    pub fn iter(&self) -> impl Iterator<Item = &Account>;                          // insertion order
     pub fn totp_code(&self, id: AccountId, now: SystemTime) -> Result<Code>;       // TOTP only; errors on HOTP entries
     pub fn hotp_peek(&self, id: AccountId) -> Result<Code>;                        // HOTP only; does not advance
     pub fn hotp_advance(&mut self, store: &Store, id: AccountId) -> Result<Code>;  // HOTP only; advances counter and saves atomically
@@ -241,7 +250,7 @@ pub mod import {
 
 pub mod export {
     pub fn otpauth_list(accounts: &[Account]) -> Vec<u8>;                              // JSON array of `otpauth://` URIs (infallible: validated `Account`s always serialize)
-    pub fn encrypted(accounts: &[Account], passphrase: &SecretString) -> Result<Vec<u8>>;  // Paladin encrypted bundle
+    pub fn encrypted(accounts: &[Account], passphrase: &SecretString) -> Result<Vec<u8>>;  // Paladin encrypted bundle. Wraps `VaultPayload { accounts, settings: VaultSettings::default() }`; `import::paladin` discards the settings field.
 }
 ```
 
