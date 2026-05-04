@@ -104,11 +104,29 @@ else:
 
 - **Location.** `directories::ProjectDirs` →
   Linux: `~/.local/share/paladin/vault.bin` (XDG).
-- **Permissions.** File is created `0600` regardless of mode. In plaintext
-  mode this is the *only* protection on the secrets, so we enforce it.
-- **Atomic writes.** Write to `vault.bin.tmp`, `fsync` the temp file,
-  `rename` over the target, then `fsync` the parent directory so the
-  rename is durable across power loss.
+- **Permissions.** File is created `0600` regardless of mode; backups
+  are also `0600`. The parent directory, if we create it, is `0700`. In
+  plaintext mode these permissions are the *only* protection on the
+  secrets, so we enforce them.
+- **Atomic writes.** Each save stages both the new primary and the new
+  backup, then commits with renames:
+  1. Write the new primary content to `vault.bin.tmp` and `fsync` it.
+  2. Write the new backup content to `vault.bin.bak.tmp` and `fsync`
+     it. Skipped on a first-ever save when no prior content exists.
+     For regular saves the backup content is the soon-to-be-replaced
+     primary; for passphrase transitions (§4.5) it is reconstituted
+     under the new mode/key.
+  3. `rename` `vault.bin.bak.tmp` → `vault.bin.bak` (overwriting any
+     existing backup).
+  4. `rename` `vault.bin.tmp` → `vault.bin` (overwriting the prior
+     primary).
+  5. `fsync` the parent directory so the renames are durable across
+     power loss.
+
+  A crash before step 4 leaves the previous primary in place; a crash
+  between steps 3 and 4 leaves the new `.bak` paired with the old
+  primary plus a leftover `vault.bin.tmp` that the next `open` deletes.
+  On any error, remaining `.tmp` files are unlinked.
 - **Backups.** On every successful write, keep the previous `vault.bin` as
   `vault.bin.bak` (one generation). The backup is always written to match
   the mode and key of the **new** primary: for regular saves this is the same
@@ -137,12 +155,18 @@ else:
   freshly generated random nonce; salt is preserved across regular saves and
   regenerated only on passphrase transitions (§4.5). Salt and nonce are
   drawn from the OS CSPRNG (`getrandom`).
-- **Key handling:** derived key lives in a `Zeroizing<[u8; 32]>` and is
-  dropped as soon as the encrypt/decrypt op returns. The passphrase
-  itself (a `SecretString`) is retained by the `Vault` between `open`
-  and the next `save` or passphrase transition so saves don't re-prompt;
-  each save re-derives the key from `(passphrase, salt)` at the
-  in-header Argon2id parameters and drops it again on return.
+- **Key handling:** for an encrypted vault, the 32-byte AEAD key is
+  derived from `(passphrase, salt)` at `open` into a
+  `Zeroizing<[u8; 32]>` and cached on the `Vault` for its lifetime,
+  alongside the retained `SecretString` passphrase. Saves reuse the
+  cached key rather than re-deriving — Argon2id at the default cost is
+  hundreds of milliseconds, which would otherwise be paid per HOTP
+  advance. Both the key and the passphrase are zeroized when the
+  `Vault` is dropped or at any passphrase transition (after which a
+  fresh key is derived from the new passphrase and a fresh salt).
+  Caching the key does not expand the threat model: an attacker with
+  memory access to the running process could derive it from the
+  retained passphrase regardless.
 - **Passphrase prompt:** via `rpassword` for the CLI; via the host UI for the
   TUI/GUI.
 
@@ -158,8 +182,8 @@ A vault's encryption state is mutable at runtime. The user can:
 
 All three go through the same atomic-write + backup path as a normal save.
 Each is a single-step transition that either fully succeeds or leaves the
-file untouched (the `.tmp` is rolled back). On failure, the existing `.bak`
-is left in place, so the user always has at least one recovery point.
+files untouched (the `.tmp` files are rolled back). On failure, the existing
+`.bak` is left in place, so the user always has at least one recovery point.
 
 ### 4.6 Import / Export
 
@@ -195,18 +219,20 @@ Auto-detect format by content sniffing, with `--format` to override:
   goal for v0.2 since they require implementing Aegis's KDF profile.
 - **Gnome Authenticator** — JSON export produced by its
   *Backup → Save in plain text* action.
-- **QR image file** — one or more accounts (one per decoded QR); uses
-  `rqrr` to decode every QR in the image and feeds each resulting
-  `otpauth://` URI through the URI parser. The GTK GUI also accepts a QR
-  image pasted from the clipboard, decoded via the same path.
+- **QR image file** — one or more accounts (one per decoded QR);
+  errors if no QRs are decoded. Uses `rqrr` to decode every QR in the
+  image and feeds each resulting `otpauth://` URI through the URI
+  parser. The GTK GUI also accepts a QR image pasted from the
+  clipboard, decoded via the same path.
 
 `detect` resolves the format in this fixed order, returning the first
 match: file starts with the `PALADIN\0` magic → `Paladin`; image-format
 magic bytes (PNG, JPEG, GIF, BMP, WebP) → `Qr`; UTF-8 text that parses
 as JSON with Aegis's top-level `version` / `header` / `db` shape →
 `Aegis`; JSON matching Gnome Authenticator's exported shape → `Gnome`;
-UTF-8 starting with `otpauth://` (single, line-list, or JSON array of
-such URIs) → `Otpauth`; otherwise `Unknown`. Plaintext Paladin exports
+UTF-8 either (a) starting with `otpauth://` (single URI or newline-
+separated list of such URIs), or (b) parsing as a JSON array of strings
+each starting with `otpauth://` → `Otpauth`; otherwise `Unknown`. Plaintext Paladin exports
 land in the `Otpauth` branch by design — they share the same on-disk
 format as a JSON `otpauth://` array.
 
@@ -270,9 +296,9 @@ Built with `clap` (derive). Commands:
 
 | Command                                     | Behavior                                                         |
 | ------------------------------------------- | ---------------------------------------------------------------- |
-| `paladin init [--force]`                    | Create a new vault. Prompts: passphrase? (empty = plaintext). Refuses to clobber an existing vault unless `--force` (which rotates the old file to `vault.bin.bak` first, overwriting any existing backup). |
+| `paladin init [--force]`                    | Create a new vault. Prompts: passphrase? (empty = plaintext). Refuses to clobber an existing vault unless `--force` (which rotates the old file to `vault.bin.bak` first, overwriting any existing backup). The rotated `.bak` is preserved verbatim — a plaintext-to-encrypted clobber leaves plaintext secrets in `.bak` until the user removes it manually. |
 | `paladin add`                               | Add an account interactively (or via flags / URI).               |
-| `paladin add --qr <path>`                   | Add by scanning a QR image file. Every decoded QR in the image is added; collisions use the default `import` merge policy (`skip`). For other policies, use `import --format=qr`. |
+| `paladin add --qr <path>`                   | Add by scanning a QR image file. Every decoded QR in the image is added (errors if none decode); collisions use the default `import` merge policy (`skip`). For other policies, use `import --format=qr`. |
 | `paladin list`                              | List accounts (no codes).                                        |
 | `paladin show <query>`                      | Print the current code. **Advances HOTP counter.**               |
 | `paladin peek <query>`                      | Print the current code without advancing the HOTP counter; for TOTP, identical to `show`. |
@@ -322,7 +348,9 @@ Minimum values: `auto_lock.timeout_secs >= 30`, `clipboard.clear_secs
   UUID's de-hyphenated 32-char hex form (e.g. `id:a1b2c3d4` matches any
   UUID starting with `a1b2c3d4`), never as a substring match. If the
   prefix matches multiple entries, the same single-match rule above
-  applies for `copy`/`remove`/`rename`.
+  applies for `copy`/`remove`/`rename`. `id:` is reserved as a query
+  prefix; an account whose `issuer:label` happens to start with `id:`
+  is still reachable by any other substring of that key.
 
 ### Import merge policy
 
