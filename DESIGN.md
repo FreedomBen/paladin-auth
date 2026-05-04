@@ -22,6 +22,9 @@ sharing a common core. Status: **approved 2026-05-04 / pre-implementation**.
   Users who want sync can export an encrypted bundle and move it themselves.
 - **Webcam-based QR scanning.** Image-file scanning yes; live camera no.
 - **Mobile platforms.**
+- **macOS and Windows.** v0.1 targets Linux; `directories::ProjectDirs`
+  provides cross-platform paths, but CI, packaging, and clipboard/UI
+  testing on those platforms are deferred to v0.2+.
 - **Hardware-token (YubiKey HMAC-SHA1) backends.** Possible later.
 
 ## 3. Workspace layout
@@ -73,8 +76,10 @@ file header — so settings can't be tampered with on an encrypted vault.
   - `hotp_advance` returns the same code, advances the stored counter
     to `C + 1`, **and saves the vault atomically** (so an in-memory
     advance can never silently desync from the on-disk file). It takes
-    `&Store` for that reason. A subsequent `hotp_peek` after an advance
-    therefore returns the code for the new counter.
+    `&Store` for that reason. If the save fails, the in-memory counter is
+    rolled back to `C` and `hotp_advance` returns `Err`. A subsequent
+    `hotp_peek` after a successful advance therefore returns the code for
+    the new counter.
 
 ### 4.3 Storage
 
@@ -122,7 +127,11 @@ else:
   params, `salt`, `aead_id`, and `nonce` — are passed as AEAD associated
   data, so tampering with any of them fails decryption.
 - **Key handling:** derived key lives in a `Zeroizing<[u8; 32]>` and is
-  dropped as soon as the encrypt/decrypt op returns.
+  dropped as soon as the encrypt/decrypt op returns. The passphrase
+  itself (a `SecretString`) is retained by the `Vault` between `open`
+  and the next `save` or passphrase transition so saves don't re-prompt;
+  each save re-derives the key from `(passphrase, salt)` at the
+  in-header Argon2id parameters and drops it again on return.
 - **Passphrase prompt:** via `rpassword` for the CLI; via the host UI for the
   TUI/GUI.
 
@@ -138,8 +147,8 @@ A vault's encryption state is mutable at runtime. The user can:
 
 All three go through the same atomic-write + backup path as a normal save.
 Each is a single-step transition that either fully succeeds or leaves the
-file untouched (the `.tmp` is rolled back). The previous `.bak` is preserved
-across the transition so the user has at least one recovery point.
+file untouched (the `.tmp` is rolled back). On failure, the existing `.bak`
+is left in place, so the user always has at least one recovery point.
 
 ### 4.6 Import / Export
 
@@ -158,7 +167,9 @@ Two formats, user picks per invocation:
   is given.
 - **Encrypted (Paladin bundle).** Same payload wrapped in Paladin's
   encrypted file format (§4.3) under a passphrase the user supplies at
-  export time (independent of the vault's own passphrase).
+  export time (independent of the vault's own passphrase). Empty
+  passphrases are rejected: `export::encrypted` returns an error rather
+  than silently producing a plaintext-equivalent bundle.
 
 #### Import
 
@@ -242,8 +253,8 @@ Built with `clap` (derive). Commands:
 | `paladin add --qr <path>`                   | Add by scanning a QR image file.                                 |
 | `paladin list`                              | List accounts (no codes).                                        |
 | `paladin show <query>`                      | Print the current code. **Advances HOTP counter.**               |
-| `paladin peek <query>`                      | Print the next code without advancing (HOTP) / same as show (TOTP). |
-| `paladin copy <query>`                      | Copy code to clipboard. (Auto-clear is TUI/GUI-only — the CLI ignores `clipboard.clear_enabled`; see §8.6.) |
+| `paladin peek <query>`                      | Print the current code without advancing the HOTP counter; for TOTP, identical to `show`. |
+| `paladin copy <query>`                      | Copy code to clipboard. **Advances HOTP counter.** (Auto-clear is TUI/GUI-only — the CLI ignores `clipboard.clear_enabled`; see §8.6.) |
 | `paladin remove <query>`                    | Remove an account (with confirmation).                           |
 | `paladin rename <query> <label>`            | Rename an account.                                               |
 | `paladin passphrase set`                    | Encrypt a plaintext vault under a new passphrase.                |
@@ -282,8 +293,11 @@ Vault settings keys (subject to extension):
   matches they exit non-zero and list the candidates, each prefixed with
   a short `id:<8 hex>` form taken from the UUID. The user can re-run with
   that exact-id form (e.g. `paladin copy id:a1b2c3d4`).
-- A query starting with `id:` is treated as an exact prefix match against
-  the UUID, never as a substring match.
+- A query starting with `id:` is treated as a prefix match against the
+  UUID's de-hyphenated 32-char hex form (e.g. `id:a1b2c3d4` matches any
+  UUID starting with `a1b2c3d4`), never as a substring match. If the
+  prefix matches multiple entries, the same single-match rule above
+  applies for `copy`/`remove`/`rename`.
 
 ### Import merge policy
 
@@ -319,7 +333,7 @@ Layout (single-screen MVP):
 
 - TOTP rows: live `Gauge` countdown, re-render on a 250 ms tick.
 - HOTP rows: code is hidden until the user presses `n` (advances counter and
-  saves); after a brief reveal window, returns to the hidden state.
+  saves); after a 120-second reveal window, returns to the hidden state.
 - Modal dialogs for add / remove / passphrase / settings.
 - **Auto-lock:** **off by default.** When `auto_lock.enabled = true`, the TUI
   clears the in-memory vault after `auto_lock.timeout_secs` of no input and
@@ -443,13 +457,13 @@ Concrete obligations and explicit user-controlled tradeoffs:
 
 ## 11. Roadmap & checklist
 
-### Milestone 0 — Skeleton
+### Milestone 0 — Skeleton *(v0.1)*
 - [ ] Initialize workspace `Cargo.toml`, `rust-toolchain.toml`, `.gitignore`.
 - [ ] Create `paladin-core`, `paladin-cli`, `paladin-tui`, `paladin-gtk` crates.
 - [ ] CI: fmt + clippy + test on Linux.
 - [ ] `README.md` with build instructions.
 
-### Milestone 1 — Core OTP + storage
+### Milestone 1 — Core OTP + storage *(v0.1)*
 - [ ] `Account`, `Secret`, `Algorithm`, `OtpKind`, `Vault`, `VaultSettings` types with `Zeroize`.
 - [ ] RFC 6238 (TOTP) implementation + Appendix B vectors.
 - [ ] RFC 4226 (HOTP) implementation + Appendix D vectors.
@@ -459,12 +473,12 @@ Concrete obligations and explicit user-controlled tradeoffs:
 - [ ] One-generation `.bak` preserved across all writes.
 - [ ] Tamper-detection and round-trip tests for both modes.
 
-### Milestone 2 — Passphrase management
+### Milestone 2 — Passphrase management *(v0.1)*
 - [ ] `set_passphrase`, `change_passphrase`, `remove_passphrase` on `Vault`.
 - [ ] Atomic transition with rollback on write failure.
 - [ ] Tests covering all three transitions and the failure-rollback path.
 
-### Milestone 3 — Import / Export
+### Milestone 3 — Import / Export *(v0.1)*
 - [ ] Plaintext export (JSON `otpauth://` array) with overwrite guard + `0600`.
 - [ ] Encrypted export bundle (Paladin format).
 - [ ] Importer: `otpauth://` URIs (single + list).
@@ -475,7 +489,7 @@ Concrete obligations and explicit user-controlled tradeoffs:
 - [ ] Auto-detect with explicit `--format` override.
 - [ ] Fixture-based tests for each importer.
 
-### Milestone 4 — CLI
+### Milestone 4 — CLI *(v0.1)*
 - [ ] `init` (with optional passphrase), `add`, `list`, `show`, `peek`, `remove`, `rename`.
 - [ ] `copy` (clipboard wipe gated on settings).
 - [ ] `passphrase set / change / remove`.
@@ -484,7 +498,7 @@ Concrete obligations and explicit user-controlled tradeoffs:
 - [ ] `--json` output for scripting.
 - [ ] `assert_cmd` integration tests.
 
-### Milestone 5 — TUI
+### Milestone 5 — TUI *(v0.1)*
 - [ ] Single-screen list view with TOTP gauges and HOTP "advance" key.
 - [ ] Search/filter input.
 - [ ] Add / remove / passphrase / settings modals.
@@ -492,14 +506,14 @@ Concrete obligations and explicit user-controlled tradeoffs:
 - [ ] Opt-in auto-lock and clipboard-clear honoring vault settings.
 - [ ] Snapshot tests for rendering.
 
-### Milestone 6 — GUI
+### Milestone 6 — GUI *(v0.2)*
 - [ ] Relm4 component tree (Unlock / List / Row / Add / Settings).
 - [ ] Conditional unlock view (encrypted vaults only).
 - [ ] Clipboard + auto-lock parity with TUI (opt-in).
 - [ ] Linux desktop file + icon.
 - [ ] Manual test plan documented.
 
-### Milestone 7 — Hardening & release
+### Milestone 7 — Hardening & release *(v0.1)*
 - [ ] `SECURITY.md` with threat model covering both vault modes.
 - [ ] `cargo deny` + `cargo audit` clean in CI.
 - [ ] Aegis **encrypted** import (stretch).
@@ -514,12 +528,11 @@ Concrete obligations and explicit user-controlled tradeoffs:
 - HOTP CLI semantics: `show` and `copy` **advance** the counter; `peek` does not.
 - Aegis **encrypted** backups deferred to v0.2 (plaintext export supported in v0.1).
 - GUI deferred to v0.2; **TUI ships in v0.1**.
+- TUI runtime = plain threads + `mpsc` (no `tokio` — a local TUI doesn't need async I/O).
 
 **Still open (do not block v0.1 start):**
 
-1. **TUI runtime:** plain threads + `mpsc` vs. `tokio`. Lean: plain threads —
-   simpler, and we don't need async I/O for a local TUI.
-2. **Icon hints:** store an `issuer`-derived icon name and let GUIs resolve
+1. **Icon hints:** store an `issuer`-derived icon name and let GUIs resolve
    it, or embed user-supplied icon bytes in the vault? Lean: name-only.
 
 ## 13. License
