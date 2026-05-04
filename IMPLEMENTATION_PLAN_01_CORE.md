@@ -33,7 +33,7 @@ crates/paladin-core/
 │   │   ├── validation.rs # Shared Account validation (labels, secrets, periods…)
 │   │   └── slug.rs       # icon_hint slug rules + issuer-derived defaulting
 │   ├── otp/
-│   │   ├── mod.rs        # totp_code, hotp_peek, hotp_advance helpers (pure)
+│   │   ├── mod.rs        # pure OTP primitives (compute_totp, compute_hotp)
 │   │   ├── totp.rs       # RFC 6238
 │   │   └── hotp.rs       # RFC 4226
 │   ├── otpauth/
@@ -101,10 +101,24 @@ Each step lands as its own commit. Tests come first.
   slugs, mismatched otpauth issuers, invalid timestamps; short-secret warnings
   in 10–15 byte range).
 - [ ] Implement `Account`, `AccountId` (UUIDv4 stored as 16 bytes, hyphenated
-  display, `id:<8 hex>` short form), `Secret` newtype with `Zeroize + Drop`,
-  `Algorithm`, `OtpKind`, `Code`.
+  canonical `Display`; the CLI computes any short-prefix disambiguator at
+  render time since uniqueness depends on full vault contents the library
+  doesn't curate), `Secret` newtype with `Zeroize + Drop`, `Algorithm`,
+  `OtpKind`, `Code`.
 - [ ] No `Debug` impls that print secret bytes — wire a derive-audit test that
   greps the build output for `impl Debug` on `Secret`/`SecretString` fields.
+- [ ] Define `error.rs` `PaladinError` to carry only the core-returnable
+  §5 kinds: `validation_error`, `invalid_passphrase`, `invalid_state`,
+  `vault_missing`, `vault_exists`, `unsafe_permissions`, `wrong_vault_lock`,
+  `decrypt_failed`, `invalid_header`, `invalid_payload`,
+  `unsupported_format_version`, `kdf_params_out_of_bounds`,
+  `unsupported_import_format`, `unsupported_plaintext_vault`,
+  `unsupported_encrypted_aegis`, `unsupported_aegis_entry_type`,
+  `no_entries_to_import`, `duplicate_account`, `counter_overflow`,
+  `time_range`, `save_not_committed`, `save_durability_unconfirmed`, and
+  `io_error`. The CLI-only kinds (`clipboard_write_failed`, `no_match`,
+  `multiple_matches`) are owned by the CLI plan and never returned from
+  core.
 
 ### Phase C — OTP generation (Milestone 1, part 2)
 
@@ -112,9 +126,11 @@ Each step lands as its own commit. Tests come first.
 - [ ] Tests: TOTP boundary semantics — half-open `[valid_from, valid_until)`,
   `seconds_remaining ∈ 1..=period`, exact-boundary selects new counter and
   reports full period, pre-epoch rejection, `valid_until` overflow rejection.
-- [ ] Implement `totp_code(&self, …)`, `hotp_peek(&self, …)`,
-  `hotp_advance(&mut self, &Store, …)`. Only `hotp_advance` mutates and
-  persists.
+- [ ] Implement pure OTP primitives in `otp/`: TOTP code given (secret,
+  algorithm, period, digits, now); HOTP code given (secret, algorithm,
+  digits, counter). These are state-free and never persist. The Vault
+  methods `totp_code`, `hotp_peek`, and `hotp_advance` (Phase G) route
+  through them; only `hotp_advance` mutates and persists.
 
 ### Phase D — `otpauth://` parser/emitter (Milestone 1, part 3)
 
@@ -132,7 +148,11 @@ Each step lands as its own commit. Tests come first.
 - [ ] Tests: file written `0600`, parent created `0700`, atomic write via
   same-directory tempfile + rename, `.bak` rotated on each save (one
   generation), `unsafe_permissions` rejection at `open` and `create` (parent
-  directory + primary + backup), CLI-friendly `chmod` repair string in error.
+  directory + primary + backup). The typed `unsafe_permissions` error
+  carries `path`, `subject` (one of `vault_dir`, `vault_file`,
+  `backup_file`), `actual_mode`, and `expected_mode` (mode strings as
+  four-digit octal, e.g. `"0644"`); chmod-command formatting is CLI plan
+  scope.
 - [ ] Implement `Store` (open/save), permissions module (Unix path; non-Unix
   stubs that compile but reject with a clear error), atomic-write pipeline.
 - [ ] Implement `inspect(path)` (header probe, no decryption, no perms check).
@@ -146,9 +166,19 @@ Each step lands as its own commit. Tests come first.
   `kdf_id`, Argon2 params, `salt`, `aead_id`, or `nonce` causes decryption
   to fail; flipping a ciphertext byte fails; flipping the AEAD tag fails.
 - [ ] Tests: Argon2 parameter bounds rejected before any KDF work.
+- [ ] Tests: regular encrypted saves preserve the in-header Argon2 params
+  and `salt`, and use a freshly generated random `nonce` per save (drawn
+  from the OS CSPRNG).
+- [ ] Tests: AEAD key caching — `open` derives the 32-byte key once into
+  a `Zeroizing<[u8; 32]>` cached on `Vault` alongside the `SecretString`
+  passphrase; subsequent saves reuse the cached key without re-running
+  Argon2id (assert via Argon2 invocation counter or timing budget); both
+  fields are zeroized when `Vault` drops. Plaintext vaults hold no cached
+  key or passphrase.
 - [ ] Implement `crypto::argon2` (defaults m=64 MiB, t=3, p=1 with bounds),
   `crypto::aead` (XChaCha20-Poly1305 with header bytes serialized as AAD),
-  encrypted `Store` save/open paths.
+  encrypted `Store` save/open paths, and the cached-key data model on
+  `Vault`.
 
 ### Phase G — Vault behavior + settings (Milestone 1, part 6)
 
@@ -168,6 +198,11 @@ Each step lands as its own commit. Tests come first.
   change) or written plaintext (remove).
 - [ ] Tests: pre-commit failure leaves primary file untouched and rolls
   in-memory mode/key back; post-commit failure surfaces durability-unconfirmed.
+- [ ] Tests: cached key/passphrase lifecycle — pre-commit failure leaves
+  the cache matching the previous mode (prior key+passphrase for
+  encrypted, no cache for plaintext); successful commit (or
+  durability-unconfirmed) replaces the cache to match the new on-disk
+  mode and zeroizes the old key bytes and old passphrase.
 - [ ] Implement `set_passphrase`, `change_passphrase`, `remove_passphrase` on
   `Vault` going through the §4.3 atomic-write + backup pipeline.
 
@@ -176,19 +211,36 @@ Each step lands as its own commit. Tests come first.
 - [ ] Tests for `import::detect` content sniffing → `ImportFormat` for each
   of: single `otpauth://` URI (with surrounding whitespace), `otpauth://`
   line list (blank lines tolerated), JSON array of URIs, Aegis JSON
-  (plaintext + encrypted shapes), Paladin encrypted bundle, QR image;
-  zero-account inputs rejected as "no entries to import".
-- [ ] Tests for `import::otpauth_uri_list`, `import::aegis_plaintext`
-  (unsupported-encrypted error path), `import::paladin`, `import::qr_image`,
-  including timestamps preserved for Paladin bundle imports and fresh IDs
-  assigned for inserted/appended rows; replacements keep destination ID.
+  (plaintext + encrypted shapes both return `Aegis`), Paladin encrypted
+  bundle, QR image; non-matching inputs return `Unknown`. Detection
+  inspects shape only and never rejects on emptiness.
+- [ ] Tests for zero-account inputs rejected uniformly with
+  `no_entries_to_import` at the importer call site: empty JSON `otpauth`
+  array, blank otpauth file, Aegis with empty `entries`, image with no
+  decoded QRs.
+- [ ] Tests for `import::otpauth`, `import::aegis_plaintext` (encrypted
+  Aegis → typed `unsupported_encrypted_aegis`; non-`totp`/`hotp` entry →
+  `unsupported_aegis_entry_type` with `source_index`, batch rejected),
+  `import::paladin` (encrypted bundle round-trip; plaintext-mode Paladin
+  file → `unsupported_plaintext_vault`; source `VaultSettings` discarded),
+  `import::qr_image` (decoded QRs that are not `otpauth://` URIs reject
+  the batch with `validation_error` + `source_index`), including
+  timestamps preserved for Paladin bundle imports and fresh IDs assigned
+  for inserted/appended rows; replacements keep destination ID.
 - [ ] Tests for merge policy `Skip` / `Replace` / `Append` against running
   state, including HOTP-to-HOTP `Replace` preserving `Hotp.counter` and
   cross-kind replace swapping the whole `kind`.
 - [ ] Tests for batch atomicity: any validation failure aborts the batch;
   warnings do not.
 - [ ] Tests for `export::otpauth_list` (infallible JSON array of URIs) and
-  `export::encrypted` (round-trips with the importer).
+  `export::encrypted` (round-trips with the importer; rejects empty
+  passphrase).
+- [ ] Implement `read_qr_image(path) -> Result<Vec<String>>` in
+  `import/qr.rs` (loads the image, decodes every QR via `rqrr`, returns
+  one URI string per decoded QR; empty `Vec` when the image contains no
+  QRs — the wrapping `import::qr_image` is what turns that into
+  `no_entries_to_import`). Re-exported at the crate root per §4.7
+  alongside `parse_otpauth` and `validate_manual`.
 
 ### Phase J — Public API freeze + library polish
 
@@ -221,9 +273,17 @@ is a separate `#[test]` or `cases![]` family.
   durability-unconfirmed post-commit.
 - Account validation matrix — every branch in §4.1.
 - Short-secret warning surfaces in `ValidatedAccount.warnings`.
-- Importers: Aegis plaintext OK; Aegis encrypted → typed unsupported error;
-  Paladin bundle round-trip; QR image with N codes; URI-list trimming and
-  blank-line handling; zero-account inputs rejected uniformly.
+- Importers: Aegis plaintext OK; Aegis encrypted → typed
+  `unsupported_encrypted_aegis`; Aegis non-`totp`/`hotp` entry type →
+  `unsupported_aegis_entry_type` with `source_index` (batch rejected);
+  Paladin bundle round-trip with timestamps preserved and source
+  `VaultSettings` discarded; plaintext-mode Paladin file →
+  `unsupported_plaintext_vault`; QR image with N codes; non-otpauth QR
+  payloads rejected with `validation_error` + `source_index`; URI-list
+  trimming and blank-line handling; zero-account inputs rejected
+  uniformly with `no_entries_to_import`.
+- HOTP `hotp_peek` after a committed `hotp_advance` returns the code for
+  the new (post-advance) counter.
 - Merge policy: `Skip` / `Replace` / `Append` including running-state
   collisions and HOTP counter preservation.
 - Zeroize-on-drop: post-drop memory-poke proves bytes were wiped (via a
@@ -232,9 +292,10 @@ is a separate `#[test]` or `cases![]` family.
 ## Dependencies (per §9)
 
 `hmac`, `sha1`, `sha2`, `argon2`, `chacha20poly1305`, `secrecy`, `zeroize`,
-`base32`, `url`, `bincode` (v2), `serde`, `serde_json`, `directories`,
-`uuid`, `thiserror`, `rqrr`, `image`. No `tokio`, no `reqwest`, no
-network-touching crate.
+`getrandom` (pinned explicitly so the salt/nonce CSPRNG source per §4.4
+doesn't drift across transitive minor versions), `base32`, `url`,
+`bincode` (v2), `serde`, `serde_json`, `directories`, `uuid`, `thiserror`,
+`rqrr`, `image`. No `tokio`, no `reqwest`, no network-touching crate.
 
 ## Out of scope for this plan
 
