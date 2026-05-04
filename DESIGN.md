@@ -184,8 +184,13 @@ else:
   exhaustion before authentication, `open` rejects encrypted vaults whose
   header parameters are outside these bounds before running Argon2id:
   `m_kib` 8192 to 1048576 (8 MiB to 1 GiB), `t` 1 to 10, and `p` 1 to 4.
-  Future releases may widen those bounds only with an explicit format or
-  policy update.
+  The 8 MiB floor is deliberately well below the 64 MiB default and
+  OWASP's 19 MiB Argon2id guidance: it is the minimum we will *accept on
+  read* so that vaults written on memory-constrained hardware (small
+  SBCs, older phones running a portable build) can still be opened. New
+  vaults always pick the default unless the user opts into a custom
+  cost. Future releases may widen those bounds only with an explicit
+  format or policy update.
 - **AEAD:** **XChaCha20-Poly1305** (24-byte nonce, simpler misuse story than
   AES-GCM). Header records the algorithm ID so we can migrate later. All
   header bytes after the magic — `format_ver`, `mode`, `kdf_id`, the Argon2
@@ -368,8 +373,10 @@ Built with `clap` (derive). Commands:
 Global flags: `--vault <path>`, `--no-color`, `--json` (for scripting).
 
 All mutating CLI commands save atomically before returning success. If the
-save fails, the command exits non-zero and the in-memory change is rolled
-back before the process exits. Imports of encrypted Paladin bundles prompt
+save fails, the command exits non-zero and the on-disk vault is unchanged
+because the staged `.tmp` files are discarded before any rename commits
+(§4.3); no partial state is ever observable to a later command. Imports of
+encrypted Paladin bundles prompt
 for the bundle passphrase, which is independent of the vault passphrase.
 For files with `PALADIN\0` magic, the CLI probes the mode first: `mode == 0`
 returns the unsupported-plaintext-vault error without a passphrase prompt,
@@ -404,14 +411,21 @@ Success shapes:
 | `copy`                        | `{ "copied": true, "account": AccountSummary, "counter_used": number_or_null }` |
 | `add`, `rename`               | `{ "account": AccountSummary }`                                                 |
 | `remove`                      | `{ "removed": AccountSummary }`                                                 |
-| `import`                      | `{ "imported": n, "skipped": n, "replaced": n, "accounts": [AccountSummary] }`  |
+| `import`                      | `{ "imported": n, "skipped": n, "replaced": n, "appended": n, "accounts": [AccountSummary] }` |
 | `export`                      | `{ "written": "/path/to/out", "format": "otpauth_or_paladin" }`                |
 | `settings get`, `settings set` | `{ "settings": VaultSettings }`                                                 |
 | `init`, `passphrase *`        | `{ "ok": true, "status": "plaintext_or_encrypted" }`                           |
 
 Pseudo-values such as `number_or_null` and `plaintext_or_encrypted`
 document allowed values; concrete output uses actual numbers, `null`, or
-enum strings.
+enum strings. For `import`, every input row falls into exactly one of
+four buckets: `imported` counts non-colliding rows written as new
+entries, `skipped` counts collisions kept under `--on-conflict=skip`,
+`replaced` counts collisions overwritten under `--on-conflict=replace`,
+and `appended` counts collisions inserted as additional entries under
+`--on-conflict=append`. `accounts` lists every entry the import added or
+modified — i.e. the union of `imported`, `replaced`, and `appended`, but
+not `skipped`.
 
 `CodeResult` contains `account`, `code`, and either TOTP timing
 (`valid_from` and `valid_until` as Unix seconds, plus
