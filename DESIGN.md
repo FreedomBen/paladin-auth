@@ -10,7 +10,9 @@ sharing a common core. Status: **approved 2026-05-04 / pre-implementation**.
   library crate. The CLI, TUI, and GUI are thin presentation layers.
 - **Compatible.** Read/write standard `otpauth://` URIs (RFC 6238 / RFC 4226 /
   Google Authenticator key-URI format). Import from QR images. Import from
-  Aegis and Gnome Authenticator exports. Export plaintext or encrypted.
+  Aegis exports. (Gnome Authenticator's "Backup → Save in plain text"
+  is already a list of `otpauth://` URIs and rides the same import
+  path.) Export plaintext or encrypted.
 - **Optional passphrase.** A vault may be passphrase-encrypted or stored in
   plaintext. The user chooses, and can change that choice at any time.
 - **User-controlled hardening.** Auto-lock and clipboard auto-clear are
@@ -268,7 +270,10 @@ Two formats, user picks per invocation:
 Auto-detect format by content sniffing, with `--format` to override:
 
 - **`otpauth://` URI** (single line, or one per line, or JSON array).
-  Inputs that decode to zero accounts (empty JSON array, blank file,
+  This is also the format produced by Gnome Authenticator's *Backup →
+  Save in plain text* action (FreeOTP+-compatible URI list), so Gnome
+  exports import through this path with no dedicated handler. Inputs
+  that decode to zero accounts (empty JSON array, blank file,
   whitespace-only) are rejected with the same "no entries to import"
   error as a QR image with no decoded QRs.
 - **Paladin encrypted bundle** — round-trips with our encrypted exporter.
@@ -280,8 +285,6 @@ Auto-detect format by content sniffing, with `--format` to override:
 - **Aegis** — JSON export. v0.1 supports the **plaintext export** out of
   the box; **encrypted Aegis backups** (scrypt + AES-256-GCM) are a stretch
   goal for v0.2 since they require implementing Aegis's KDF profile.
-- **Gnome Authenticator** — JSON export produced by its
-  *Backup → Save in plain text* action.
 - **QR image file** — one or more accounts (one per decoded QR);
   errors if no QRs are decoded. Uses `rqrr` to decode every QR in the
   image and feeds each resulting `otpauth://` URI through the URI
@@ -292,18 +295,16 @@ Auto-detect format by content sniffing, with `--format` to override:
 match: file starts with the `PALADIN\0` magic → `Paladin`; image-format
 magic bytes (PNG, JPEG, GIF, BMP, WebP) → `Qr`; UTF-8 text that parses
 as JSON with Aegis's top-level `version` / `header` / `db` shape →
-`Aegis`; JSON matching Gnome Authenticator's exported shape (the exact
-schema is pinned at implementation time against fixture files in
-`crates/paladin-core/tests/fixtures/`) → `Gnome`;
-UTF-8 either (a) starting with `otpauth://` (single URI or newline-
-separated list of such URIs), or (b) parsing as a JSON array of strings
-each starting with `otpauth://` → `Otpauth`; otherwise `Unknown`.
+`Aegis`; UTF-8 either (a) starting with `otpauth://` (single URI or
+newline-separated list of such URIs), or (b) parsing as a JSON array
+of strings each starting with `otpauth://` → `Otpauth`; otherwise
+`Unknown`.
 Plaintext exports land in the `Otpauth` branch by design — they share
 the same on-disk format as a JSON `otpauth://` array.
 
 Each importer is tested with sample fixture files committed under
 `crates/paladin-core/tests/fixtures/`. The byte-oriented importers
-(`aegis`, `gnome`, `otpauth`) take `&[u8]`; the encrypted Paladin
+(`aegis`, `otpauth`) take `&[u8]`; the encrypted Paladin
 importer additionally takes a passphrase (`SecretString`), and the
 QR importer takes a path (it loads the image, decodes every QR via
 `rqrr`, and feeds each resulting URI through `parse_otpauth`). When
@@ -342,10 +343,9 @@ pub fn parse_otpauth(uri: &str) -> Result<Account>;
 pub fn read_qr_image(path: &Path) -> Result<Vec<String>>;                 // one URI per decoded QR; returns an empty Vec when the image contains no QRs (the `import::qr_image` wrapper turns that into an error)
 
 pub mod import {
-    pub enum ImportFormat { Otpauth, Aegis, Gnome, Paladin, Qr, Unknown }
+    pub enum ImportFormat { Otpauth, Aegis, Paladin, Qr, Unknown }
     pub fn otpauth(bytes: &[u8]) -> Result<Vec<Account>>;          // single URI, line-list, or JSON array of URIs; errors when the input decodes to zero accounts (empty array, blank file, etc.)
     pub fn aegis_plaintext(bytes: &[u8]) -> Result<Vec<Account>>;
-    pub fn gnome_authenticator(bytes: &[u8]) -> Result<Vec<Account>>;
     pub fn paladin(bytes: &[u8], passphrase: &SecretString) -> Result<Vec<Account>>;  // encrypted Paladin bundle only
     pub fn qr_image(path: &Path) -> Result<Vec<Account>>;
     pub fn detect(bytes: &[u8]) -> ImportFormat;
@@ -378,7 +378,7 @@ Built with `clap` (derive). Commands:
 | `paladin export --plaintext <out>`          | Write JSON `otpauth://` array. Warns; refuses overwrite without `--force`. |
 | `paladin export --encrypted <out>`          | Write Paladin-format encrypted bundle. Refuses overwrite without `--force`. |
 | `paladin import [--on-conflict=<mode>] <path>` | Auto-detect format and merge into the vault. Conflict mode: `skip` (default), `replace`, `append`. See merge policy below. |
-| `paladin import --format=<fmt> <path>`      | Force format: `otpauth`, `aegis`, `gnome`, `paladin` (encrypted bundle only), `qr`.      |
+| `paladin import --format=<fmt> <path>`      | Force format: `otpauth`, `aegis`, `paladin` (encrypted bundle only), `qr`.               |
 | `paladin settings get [key]`                | Show vault settings (auto-lock, clipboard-clear).                |
 | `paladin settings set <key> <value>`        | Edit vault settings.                                             |
 | `paladin tui`                               | Convenience wrapper: execs `paladin-tui` with the same args. Keeps the §3 "binaries don't reach into each other" rule intact. |
@@ -681,8 +681,8 @@ Concrete obligations and explicit user-controlled tradeoffs:
     counter overflow, empty labels, malformed icon hints, mismatched
     otpauth issuers, and invalid timestamps.
   - Zeroize-on-drop assertions for `Secret` and `SecretString`.
-  - Importers: Aegis plaintext, Gnome Authenticator, our own export
-    round-trip, and plaintext Paladin vault rejection — fixture files in
+  - Importers: Aegis plaintext, our own export round-trip, and
+    plaintext Paladin vault rejection — fixture files in
     `tests/fixtures/`.
 - **Property tests** (`proptest`) for the URI parser and base32 secret
   decoding.
@@ -725,7 +725,6 @@ Concrete obligations and explicit user-controlled tradeoffs:
 - [ ] Importer: `otpauth://` URIs (single + list).
 - [ ] Importer: Paladin encrypted bundle; plaintext Paladin vault files return an unsupported-format error.
 - [ ] Importer: Aegis plaintext export.
-- [ ] Importer: Gnome Authenticator plaintext export.
 - [ ] Importer: QR image files (`rqrr`).
 - [ ] Auto-detect with explicit `--format` override.
 - [ ] Fixture-based tests for each importer.
@@ -792,9 +791,9 @@ lives in [`LICENSE`](LICENSE) at the repo root.
   `Cargo.toml`.
 - New source files should carry the standard SPDX header
   (`// SPDX-License-Identifier: AGPL-3.0-or-later`).
-- Vendored code, fixture files imported from other projects (e.g., Aegis or
-  Gnome Authenticator export samples used as test fixtures), and any
-  third-party assets must be vetted for license compatibility before
+- Vendored code, fixture files imported from other projects (e.g.,
+  Aegis export samples used as test fixtures), and any third-party
+  assets must be vetted for license compatibility before
   inclusion. AGPL-3.0-or-later can be combined with GPL-3.0-or-later
   under the AGPL/GPLv3 compatibility terms, and common permissive
   licenses such as MIT, BSD, ISC, and Apache-2.0 are generally compatible
