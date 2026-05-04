@@ -6,6 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - `DESIGN.md` is the source of truth for how the application and library should work.  If the user requests a change that conflicts, update DESIGN.md so it stays in sync.
 - Write exhaustive tests that cover base functionality and any edge cases, particularly for the core shared library.
+- Use a Test Driven Development (TDD) approach: write failing tests before implementing features, then implement the code to make the tests pass.
 
 ## Project status
 

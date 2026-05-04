@@ -110,8 +110,10 @@ else:
   `rename` over the target, then `fsync` the parent directory so the
   rename is durable across power loss.
 - **Backups.** On every successful write, keep the previous `vault.bin` as
-  `vault.bin.bak` (one generation). Backup inherits the mode of the file it
-  replaces (no plaintext leak from a previously-encrypted vault).
+  `vault.bin.bak` (one generation). The backup mirrors the mode of the
+  previous primary, so a previously-encrypted vault never leaks plaintext via
+  the backup. The one exception is `set_passphrase`, which re-encrypts the
+  rotated `.bak` under the new key (§4.5).
 - **Versioning.** `format_ver` starts at `1` for v0.1 and is bumped on any
   breaking change to the header layout or `VaultPayload` schema. Old
   versions are read by an explicit migration path — never silently coerced.
@@ -179,21 +181,22 @@ Auto-detect format by content sniffing, with `--format` to override:
 - **Paladin encrypted bundle** — round-trips with our encrypted exporter.
   Plaintext Paladin exports are detected and read as `otpauth://` URI
   lists above (they share the same on-disk format).
-- **Aegis** — JSON export. v1 supports the **plaintext export** out of the
-  box; **encrypted Aegis backups** (scrypt + AES-256-GCM) are a stretch goal
-  for v0.2 since they require implementing Aegis's KDF profile.
+- **Aegis** — JSON export. v0.1 supports the **plaintext export** out of
+  the box; **encrypted Aegis backups** (scrypt + AES-256-GCM) are a stretch
+  goal for v0.2 since they require implementing Aegis's KDF profile.
 - **Gnome Authenticator** — JSON export produced by its
   *Backup → Save in plain text* action.
-- **QR image file** — single account; uses `rqrr` to decode then feeds the
-  resulting `otpauth://` URI through the URI parser. The GTK GUI also
-  accepts a QR image pasted from the clipboard, decoded via the same path.
+- **QR image file** — one or more accounts (one per decoded QR); uses
+  `rqrr` to decode every QR in the image and feeds each resulting
+  `otpauth://` URI through the URI parser. The GTK GUI also accepts a QR
+  image pasted from the clipboard, decoded via the same path.
 
 Each importer is tested with sample fixture files committed under
 `crates/paladin-core/tests/fixtures/`. The byte-oriented importers
-(`aegis`, `gnome`, `otpauth`, plaintext `paladin`) take `&[u8]`; the
-encrypted Paladin importer additionally takes a `VaultLock`, and the
-QR importer takes a path (it loads the image, decodes via `rqrr`, and
-feeds the resulting URI through `parse_otpauth`).
+(`aegis`, `gnome`, `otpauth`) take `&[u8]`; the encrypted Paladin
+importer additionally takes a passphrase (`SecretString`), and the
+QR importer takes a path (it loads the image, decodes every QR via
+`rqrr`, and feeds each resulting URI through `parse_otpauth`).
 
 ### 4.7 Public API sketch
 
@@ -201,9 +204,9 @@ feeds the resulting URI through `parse_otpauth`).
 pub enum VaultLock { Plaintext, Encrypted(SecretString) }
 pub enum VaultStatus { Plaintext, Encrypted, Missing }
 
-pub fn inspect(path: &Path) -> Result<VaultStatus>;                       // header probe; no decryption
+pub fn inspect(path: &Path) -> Result<VaultStatus>;                       // header probe; no decryption. Ok(Missing) iff the file does not exist; other I/O errors and unrecognized magic are Err.
 pub fn open(path: &Path, lock: VaultLock) -> Result<(Vault, Store)>;      // errors if `lock` doesn't match the file mode
-pub fn create(path: &Path, lock: VaultLock) -> Result<(Vault, Store)>;
+pub fn create(path: &Path, lock: VaultLock) -> Result<(Vault, Store)>;    // errors if `path` already exists; caller is responsible for any rotation
 
 impl Vault {
     pub fn add(&mut self, account: Account) -> AccountId;
@@ -224,7 +227,7 @@ impl Vault {
 }
 
 pub fn parse_otpauth(uri: &str) -> Result<Account>;
-pub fn read_qr_image(path: &Path) -> Result<String>;
+pub fn read_qr_image(path: &Path) -> Result<Vec<String>>;                 // one URI per decoded QR in the image
 
 pub mod import {
     pub enum ImportFormat { Otpauth, Aegis, Gnome, Paladin, Qr, Unknown }
@@ -237,7 +240,7 @@ pub mod import {
 }
 
 pub mod export {
-    pub fn otpauth_list(accounts: &[Account]) -> Vec<u8>;                              // JSON array of `otpauth://` URIs
+    pub fn otpauth_list(accounts: &[Account]) -> Vec<u8>;                              // JSON array of `otpauth://` URIs (infallible: validated `Account`s always serialize)
     pub fn encrypted(accounts: &[Account], passphrase: &SecretString) -> Result<Vec<u8>>;  // Paladin encrypted bundle
 }
 ```
@@ -399,7 +402,10 @@ Concrete obligations and explicit user-controlled tradeoffs:
    output `0600`.
 9. **Imports are fully validated.** Each importer parses into `Account`
    values without trusting the source's claimed structure — secrets are
-   length-checked, base32 is validated, algorithms must be in our enum.
+   length-checked (rejected if shorter than 10 bytes / 80 bits; entries
+   shorter than 16 bytes / 128 bits — the RFC 4226 §4 minimum — are
+   accepted with a per-entry warning), base32 is validated, algorithms
+   must be in our enum.
 10. **No telemetry, no network calls.** Verified by `cargo deny` policy.
 11. **Reproducible builds.** Pin `rust-toolchain.toml`. Lock all deps.
 12. **Threat model documented separately** in `SECURITY.md` before v1.
@@ -516,7 +522,6 @@ Concrete obligations and explicit user-controlled tradeoffs:
 ### Milestone 7 — Hardening & release *(v0.1)*
 - [ ] `SECURITY.md` with threat model covering both vault modes.
 - [ ] `cargo deny` + `cargo audit` clean in CI.
-- [ ] Aegis **encrypted** import (stretch).
 - [ ] Reproducible release builds; signed checksums.
 - [ ] v0.1.0 tag.
 
