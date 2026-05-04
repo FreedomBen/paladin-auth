@@ -94,48 +94,93 @@ Startup mirrors the CLI's vault inspection path:
 │ Search: ____________                                     │
 ├──────────────────────────────────────────────────────────┤
 │ ▶ GitHub (ben@…)        123 456   ████████░░  18s        │
-│   AWS prod              987 654   ███░░░░░░░   6s        │
-│   Backup HOTP (●●●●)    [press n]                        │
+│   AWS prod              987 654   ████░░░░░░   8s        │
+│   AWS-HOTP (#42)        ▸ press n to advance             │
 ├──────────────────────────────────────────────────────────┤
 │ [↑↓] move  [enter] copy  [n] next-HOTP  [a] add  [/] find│
 └──────────────────────────────────────────────────────────┘
 ```
 
 - TOTP rows render a live `Gauge` countdown; re-rendered on every 250 ms tick.
-- HOTP rows: code is hidden (`●●●●`) until the user presses `n`, which
-  calls `Vault::hotp_advance` (advances counter and saves). After a
-  120-second reveal window the code returns to the hidden state. `n` always
-  advances and re-reveals (it's the "give me the next code" key) — pressing
-  `n` again during an open reveal advances to the next counter rather than
-  no-op'ing.
+- HOTP rows: when hidden, the code area shows the prompt
+  `▸ press n to advance` and the row's `(#counter)` is shown in the
+  label-suffix slot (matching DESIGN §6). Pressing `n` calls
+  `Vault::hotp_advance` (advances counter and saves) and reveals the
+  generated code in place of the prompt for a 120-second window, after
+  which the row returns to the hidden state. `n` always advances and
+  re-reveals (it's the "give me the next code" key) — pressing `n` again
+  during an open reveal advances to the next counter rather than
+  no-op'ing. `n` is a no-op when the selected row is TOTP (TOTP codes
+  are always visible).
 - Copying a hidden HOTP row is **rejected** with a status-line message.
   Copying during the reveal window copies the visible code and does not
   advance again.
 
+## Focus model
+
+Focus alternates between the search bar and the account list. `/`
+focuses the search bar; typing narrows the filtered list in place.
+While the search bar is focused, `↑`/`↓` still move the list selection
+and `Enter` copies the selected entry — the selection is always
+navigable so the user does not need to unfocus the search to act on a
+result. `Esc` clears the search query and returns focus to the list;
+on the list, `Esc` is a no-op. Modal dialogs trap focus while open and
+intercept `Esc` to close themselves. The unlock and missing-vault
+screens accept `q` / `Ctrl-C` to quit; the unlock screen additionally
+accepts character input (passphrase) and `Enter` (submit).
+
 ## Modals (per §6)
 
-- **Add** — manual fields and "scan from clipboard image". Manual entries
-  use `paladin_core::validate_manual`; clipboard images are read through
-  `arboard`, converted to raw RGBA8 bytes, and passed to
+- **Add** — manual fields and "scan from clipboard image" (triggered by
+  an in-modal action key). Manual mode collects label, issuer, secret
+  (Base32 RFC 4648, case-insensitive, optional `=` padding), algorithm
+  (`sha1` / `sha256` / `sha512`), digits (6 / 7 / 8), kind (`totp` or
+  `hotp`), period (TOTP-only) or counter (HOTP-only), and optional
+  icon-hint slug; defaults follow the CLI manual-add defaults in
+  DESIGN §5 (TOTP, SHA1, 6 digits, 30 s period, HOTP counter 0,
+  icon-hint defaulted from the issuer per §4.1). Manual entries route
+  through `paladin_core::validate_manual`; clipboard images are read
+  through `arboard`, converted to raw RGBA8 bytes, and passed to
   `paladin_core::import::qr_image_bytes`. Validation warnings are shown
-  inline and do not block creation. Manual duplicate collisions reject with
-  the existing account in the modal; QR imports call `Vault::import_accounts`
-  with `ImportConflict::Skip` and report imported/skipped/warning counts.
+  inline and do not block creation. Manual duplicate collisions
+  initially reject with the existing account in the modal and offer an
+  "add anyway" confirmation that re-submits the same input on the
+  duplicate-allowed path (CLI parity with `--allow-duplicate`,
+  appending a new account that shares the `(secret, issuer, label)`
+  triple). QR imports call `Vault::import_accounts` with
+  `ImportConflict::Skip` and report imported/skipped/warning counts.
   Successful additions call `Vault::save(&Store)` after the validated
   accounts are inserted.
 - **Remove** — confirmation modal. On confirm, calls `Vault::remove`, then
   `Vault::save(&Store)`.
-- **Passphrase** — three sub-flows mirroring CLI: `set` / `change` /
-  `remove`. New passphrases prompted twice and confirmed; mismatch returns
-  to the modal with an inline error. `remove` shows the plaintext-storage
-  warning and requires explicit confirmation before mutation.
+- **Passphrase** — three sub-flows mirroring CLI's
+  `passphrase set / change / remove`. The available sub-flow is gated
+  by vault mode: `set` is offered only on plaintext vaults
+  (plaintext → encrypted), and `change` / `remove` are offered only on
+  encrypted vaults; opening the modal in a state with no available
+  sub-flow surfaces an inline message instead of mutation controls.
+  New passphrases (`set`, `change`) are prompted twice and confirmed;
+  mismatch returns to the modal with an inline `invalid_passphrase`
+  (`reason: "confirmation_mismatch"`) error. Empty new passphrases are
+  rejected with `invalid_passphrase` (`reason: "zero_length"`).
+  `remove` shows the plaintext-storage warning and requires explicit
+  confirmation before mutation. The transition methods
+  (`set_passphrase` / `change_passphrase` / `remove_passphrase`) save
+  themselves through `&Store`; the TUI surfaces pre-commit and
+  durability-unconfirmed failures inline per DESIGN §4.5.
 - **Settings** — toggles for `auto_lock.enabled` and
   `clipboard.clear_enabled`, spinners for `auto_lock.timeout_secs` and
   `clipboard.clear_secs`. The spinners clamp to the §5 minimums
-  (`auto_lock.timeout_secs >= 30`, `clipboard.clear_secs >= 5`). Settings
-  setters validate but do not save themselves; after a successful setter
-  call, the TUI persists with `Vault::save(&Store)` and shows any save error
-  inline.
+  (`auto_lock.timeout_secs >= 30`, `clipboard.clear_secs >= 5`). The
+  modal accumulates pending edits in modal-local state and only commits
+  on Confirm: pending values are validated against the same setters
+  (`set_auto_lock_*`, `set_clipboard_clear_*`), then a single
+  `Vault::save(&Store)` persists the batch. Setters that fail
+  validation surface inline against the offending field and block the
+  commit; closing the modal with `Esc` discards pending edits without
+  invoking setters or save. Save errors are shown inline and the modal
+  stays open so the user can retry. If no fields changed, Confirm
+  closes without invoking save.
 
 ## Auto-lock (per §6)
 
@@ -148,6 +193,12 @@ Startup mirrors the CLI's vault inspection path:
 - Idle is reset by any `AppEvent::Input`. Timer is implemented as a
   cancel-token + timer thread; on cancellation, the next scheduled wake is
   ignored.
+- Locking discards all secret-bearing UI state alongside the vault: any
+  open HOTP reveal window is closed and its in-memory code dropped, the
+  search query is cleared, and any modal is closed. The clipboard
+  auto-clear timer is preserved across lock so that a copy made just
+  before lock still gets wiped at its scheduled time, but lock itself
+  does not pre-emptively wipe (per DESIGN §6 "only-if-unchanged").
 
 ## Clipboard auto-clear (per §6)
 
@@ -163,8 +214,13 @@ Startup mirrors the CLI's vault inspection path:
 
 Effects update visible state only after the underlying mutation succeeds:
 
-- HOTP `n`: leave the row/reveal state unchanged and show a status-line
-  error if `Vault::hotp_advance` fails.
+- HOTP `n`: pre-commit save failures (`save_not_committed`) leave the
+  in-memory counter and reveal state unchanged (per DESIGN §4.4
+  rollback) and surface a status-line error. Durability-unconfirmed
+  failures (`save_durability_unconfirmed`) reveal the new code and
+  report the committed-but-uncertain status in the status line — the
+  user has the new code in hand even though durability is in question.
+  All other failures show a status-line error and leave the row hidden.
 - Copy: show a status-line error if clipboard write fails; do not schedule
   auto-clear.
 - Add / remove / settings saves: keep the modal open with an inline error
@@ -198,26 +254,49 @@ captured with `insta` golden snapshots using `ratatui::backend::TestBackend`.
   Search filter; selection navigation; modal open/close; HOTP `n` triggers a
   `HotpAdvance` effect; effect failures leave visible state unchanged and
   surface inline/status-line errors.
-- **Search**: case-insensitive substring across label / issuer using
-  `str::to_lowercase()` with no Unicode normalization; insertion order
-  preserved among matches.
+- **Search**: case-insensitive substring against the
+  `{issuer}:{label}` match key (matching CLI query resolution in
+  DESIGN §5; empty issuer is allowed and the colon is still present in
+  the match key) using `str::to_lowercase()` with no Unicode
+  normalization; insertion order preserved among matches. The `id:`
+  prefix form is CLI-only and is **not** honored by the TUI search.
 - **Auto-lock**: timer arms on `Unlocked` + `enabled` + encrypted; resets
   on input; transitions to `Locked` on expiry; **no-op** for plaintext
-  vaults (timer never arms). Setting persists across saves.
+  vaults (timer never arms). Setting persists across saves. Locking
+  discards open HOTP reveal windows, the search query, and any modal;
+  a clipboard auto-clear timer scheduled before lock survives lock and
+  still fires only-if-unchanged.
 - **Clipboard auto-clear**: timer schedules; stale tokens are ignored;
   "only-if-unchanged" honored when an external copy mutates the clipboard
   between copy and wake.
-- **Add modal**: manual duplicate collision rejects with existing account;
-  clipboard QR import uses `ImportConflict::Skip`, reports imported/skipped
-  counts, handles validation warnings, and rejects no-image / no-QR /
-  invalid-QR cases inline.
+- **Add modal**: manual duplicate collision rejects with existing
+  account, and the follow-up "add anyway" confirmation re-submits the
+  same input on the duplicate-allowed path so the new entry is appended
+  with a fresh ID; clipboard QR import uses `ImportConflict::Skip`,
+  reports imported/skipped counts, handles validation warnings, and
+  rejects no-image / no-QR / invalid-QR cases inline.
+- **Settings modal**: pending edits are buffered until Confirm; `Esc`
+  discards them without invoking setters or save; Confirm runs every
+  changed setter and persists with one `Vault::save(&Store)`; setter
+  validation failure surfaces inline and blocks the save; a save
+  failure keeps the modal open with the inline error; Confirm with no
+  changes closes without saving.
 - **HOTP reveal window**: reveal closes after 120 s; `n` during an open
   reveal advances again (does not no-op).
 - **Insta snapshots** for every screen state: empty vault, single TOTP,
   mixed TOTP/HOTP with hidden + revealed rows, search-active, every modal
   (Add / Remove / Passphrase set/change/remove / Settings), unlock screen,
   missing-vault screen, status-line error after rejected copy, `--no-color`
-  variants.
+  variants. Error-state snapshots: inline `save_not_committed` and
+  `save_durability_unconfirmed` rendered in each mutating modal (Add,
+  Remove, Passphrase set/change/remove, Settings); status-line
+  `save_durability_unconfirmed` after HOTP `n`; status-line
+  `clipboard_write_failed` after a failed copy; unlock screen with
+  inline wrong-passphrase error; Add modal with QR-import inline
+  errors (no clipboard image, image decode failure, zero decoded QRs,
+  invalid QR payload); Add modal with `duplicate_account` and the
+  follow-up "add anyway" confirmation; Passphrase modal with
+  `confirmation_mismatch` and `zero_length` inline errors.
 - **Plaintext vault**: opens directly to list (no unlock screen).
 - **Encrypted vault**: opens to unlock screen; wrong passphrase shows
   inline error; correct passphrase advances to list.
