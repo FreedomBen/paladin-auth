@@ -108,7 +108,10 @@ Each step lands as its own commit. Tests come first.
   canonical `Display`; the CLI computes any short-prefix disambiguator at
   render time since uniqueness depends on full vault contents the library
   doesn't curate), `Secret` newtype with `Zeroize + Drop`, `Algorithm`,
-  `OtpKind`, `Code`.
+  `OtpKind`, `Code`, `ValidationWarning`, `ValidatedAccount`,
+  `AccountInput`, and the public `validate_manual(input, now)` entry
+  point that routes manual flag-driven input through the same validation
+  table as `parse_otpauth` and the importers.
 - [ ] No `Debug` impls that print secret bytes — wire compile-fail coverage
   proving `Secret` cannot be formatted with `Debug`, plus runtime assertions
   that any public `Debug` output for secret-bearing types omits or redacts the
@@ -120,11 +123,13 @@ Each step lands as its own commit. Tests come first.
   `unsupported_format_version`, `kdf_params_out_of_bounds`,
   `unsupported_import_format`, `unsupported_plaintext_vault`,
   `unsupported_encrypted_aegis`, `unsupported_aegis_entry_type`,
-  `no_entries_to_import`, `duplicate_account`, `counter_overflow`,
+  `no_entries_to_import`, `counter_overflow`,
   `time_range`, `save_not_committed`, `save_durability_unconfirmed`, and
   `io_error`. The CLI-only kinds (`clipboard_write_failed`, `no_match`,
-  `multiple_matches`) are owned by the CLI plan and never returned from
-  core.
+  `multiple_matches`, `duplicate_account`) are owned by the CLI plan and
+  never returned from core — `Vault::add` is infallible per §4.7, so the
+  CLI performs `(secret, issuer, label)` collision detection itself via
+  `Vault::iter` before calling `add`.
 
 ### Phase C — OTP generation (Milestone 1, part 2)
 
@@ -153,9 +158,10 @@ Each step lands as its own commit. Tests come first.
   config from §4.3; full-input-consumption rejection; 16 MiB payload limit.
 - [ ] Tests: file written `0600`, parent created `0700`, atomic write via
   same-directory tempfile + rename, `.bak` rotated on each save after a primary
-  exists (one generation), `unsafe_permissions` rejection at `open` and
-  `create` (parent directory + primary + backup). The typed
-  `unsafe_permissions` error
+  exists (one generation), `unsafe_permissions` rejection at `open`
+  (parent directory + primary + backup when present) and at `create`
+  (parent directory only, since primary/backup do not yet exist). The
+  typed `unsafe_permissions` error
   carries `path`, `subject` (one of `vault_dir`, `vault_file`,
   `backup_file`), `actual_mode`, and `expected_mode` (mode strings as
   four-digit octal, e.g. `"0644"`); chmod-command formatting is CLI plan
@@ -164,6 +170,9 @@ Each step lands as its own commit. Tests come first.
   is absent, reports plaintext/encrypted mode from the header without
   decryption, returns an error for unrecognized magic, and deliberately skips
   permission checks.
+- [ ] Tests: `open` returns `vault_missing` when the primary file is
+  absent; `create` returns `vault_exists` when the primary already
+  exists (caller is responsible for any rotation, e.g. `init --force`).
 - [ ] Implement `Store` (open/save), permissions module (Unix path; non-Unix
   stubs that compile but reject `open` / `create` before touching vault content
   with `io_error` and `operation: "unsupported_platform_permissions"`),
@@ -189,6 +198,9 @@ Each step lands as its own commit. Tests come first.
   Argon2id (assert via deterministic test instrumentation); both
   fields are zeroized when `Vault` drops. Plaintext vaults hold no cached
   key or passphrase.
+- [ ] Tests: `open` rejects `VaultLock` mismatches with `wrong_vault_lock`
+  before any KDF work — `VaultLock::Plaintext` against an encrypted file,
+  and `VaultLock::Encrypted(_)` against a plaintext file.
 - [ ] Implement `crypto::argon2` (defaults m=64 MiB, t=3, p=1 with bounds),
   `crypto::aead` (XChaCha20-Poly1305 with header bytes serialized as AAD),
   encrypted `Store` save/open paths, and the cached-key data model on
@@ -312,8 +324,13 @@ is a separate `#[test]` or `cases![]` family.
 - AEAD key caching — one Argon2id derivation at `open`, cached key reused on
   save, no cache for plaintext vaults, cached key/passphrase zeroized on drop.
 - File / dir permissions — post-save permissions, `unsafe_permissions`
-  rejection on `open` and `create` (parent / primary / backup), first-save
-  backup skip, later one-generation `.bak` rotation.
+  rejection on `open` (parent / primary / backup when present) and on
+  `create` (parent only, since primary/backup do not yet exist),
+  first-save backup skip, later one-generation `.bak` rotation.
+- `open` / `create` precondition errors — `vault_missing` for absent
+  primary on `open`; `vault_exists` for existing primary on `create`;
+  `wrong_vault_lock` on cross-mode `VaultLock` (both directions) before
+  any KDF work.
 - Vault behavior and settings: `add` / `remove` / `iter` insertion order /
   `rename` timestamp update; settings timeout validation.
 - HOTP `hotp_advance` rollback, durability-unconfirmed post-commit behavior,

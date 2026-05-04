@@ -1132,7 +1132,8 @@ Concrete obligations and explicit user-controlled tradeoffs:
 
 ### Milestone 0 — Skeleton *(v0.1)*
 - [ ] Initialize workspace `Cargo.toml`, `rust-toolchain.toml`, `.gitignore`.
-- [ ] Create `paladin-core`, `paladin-cli`, `paladin-tui`, and a placeholder `paladin-gtk` crate for v0.2.
+- [ ] Create the `paladin-core` crate scaffold (binary crates are added in
+  Milestones 4 / 5 / 7 alongside the work that owns them).
 - [ ] CI: fmt + clippy + test on Linux.
 - [ ] `README.md` with build instructions.
 
@@ -1165,6 +1166,7 @@ Concrete obligations and explicit user-controlled tradeoffs:
 - [ ] Fixture-based tests for each importer.
 
 ### Milestone 4 — CLI *(v0.1)*
+- [ ] Add the `paladin-cli` crate to the workspace.
 - [ ] `init` (with optional passphrase), `add`, `list`, `show`, `peek`, `remove`, `rename`.
 - [ ] `copy` (clipboard copy only; no CLI auto-clear).
 - [ ] `passphrase set / change / remove`.
@@ -1174,6 +1176,7 @@ Concrete obligations and explicit user-controlled tradeoffs:
 - [ ] `assert_cmd` integration tests.
 
 ### Milestone 5 — TUI *(v0.1)*
+- [ ] Add the `paladin-tui` crate to the workspace.
 - [ ] Single-screen list view with TOTP gauges and HOTP "advance" key.
 - [ ] Search/filter input.
 - [ ] Add / remove / passphrase / settings modals.
@@ -1190,6 +1193,7 @@ Concrete obligations and explicit user-controlled tradeoffs:
 - [ ] v0.1.0 tag.
 
 ### Milestone 7 — GUI *(v0.2)*
+- [ ] Add the `paladin-gtk` crate to the workspace (placeholder for v0.2 work).
 - [ ] Relm4 component tree (Unlock / List / Row / Add / Settings).
 - [ ] Conditional unlock view (encrypted vaults only).
 - [ ] Clipboard + auto-lock parity with TUI (opt-in).
