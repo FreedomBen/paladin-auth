@@ -183,8 +183,22 @@ else:
 
 `VaultPayload` = `{ accounts: Vec<Account>, settings: VaultSettings }`.
 
-- **Location.** `directories::ProjectDirs` →
-  Linux: `~/.local/share/paladin/vault.bin` (XDG).
+- **Location.** Resolved via `directories::ProjectDirs::data_dir()`,
+  which follows the XDG Base Directory spec on Linux and the platform
+  conventions on macOS / Windows. The vault is application data (a
+  secrets store), not user-editable configuration, so it lives under
+  `XDG_DATA_HOME` — **not** `XDG_CONFIG_HOME`. The latter is reserved
+  for any future preferences file that ships separately from the
+  vault.
+  - Linux: `${XDG_DATA_HOME:-~/.local/share}/paladin/vault.bin`
+  - macOS: `~/Library/Application Support/paladin/vault.bin`
+  - Windows: `%APPDATA%\paladin\data\vault.bin`
+
+  The filename is always `vault.bin`; the on-disk encoding is the
+  private bincode format described above (it is binary regardless of
+  mode and is not interop with any other tool). A `--vault <path>`
+  flag on every binary overrides the resolved location for testing
+  and for users who keep their vault on removable media.
 - **Permissions.** File is created `0600` regardless of mode; temporary
   files and backups are also `0600`. The parent directory, if we create
   it, is `0700`. In plaintext mode these permissions are the *only*
