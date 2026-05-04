@@ -51,7 +51,7 @@ Binaries depend only on `paladin-core`. They never reach into each other.
 | Type         | Purpose                                                                  |
 | ------------ | ------------------------------------------------------------------------ |
 | `Account`    | A single OTP entry: id (`AccountId`), label, issuer, secret, algo, digits, kind, icon_hint (see below), created/updated. |
-| `AccountId`  | UUIDv4. Stored as 16 bytes in the vault; displayed in canonical hyphenated form. Short `id:<8 hex>` prefix is the CLI disambiguator. |
+| `AccountId`  | UUIDv4. Stored as 16 bytes in the vault; displayed in canonical hyphenated form. Short `id:<8 hex>` prefix is the usual CLI disambiguator; candidate lists extend beyond 8 hex chars when needed for uniqueness. |
 | `Secret`     | Newtype wrapping `Vec<u8>`; implements `Zeroize` and `Drop`.             |
 | `Algorithm`  | Enum: `Sha1` (default), `Sha256`, `Sha512`.                              |
 | `OtpKind`    | Enum: `Totp { period: u32 }` (default 30s) or `Hotp { counter: u64 }`.   |
@@ -71,6 +71,30 @@ resolve it (§7), the CLI and TUI ignore the field. We deliberately do
 not store icon bytes — that would inflate the vault and complicate the
 bincode payload without offering meaningful benefit over icon-theme
 lookup.
+
+`Account` fields are private; manual entry, URI parsing, importers, and any
+future constructors all go through the same validation path:
+
+| Field                      | Rule                                                                            |
+| -------------------------- | ------------------------------------------------------------------------------- |
+| `label`                    | Trim Unicode whitespace; reject empty; max 128 UTF-8 bytes.                     |
+| `issuer`                   | Trim Unicode whitespace; empty becomes `None`; max 128 UTF-8 bytes when set.    |
+| `secret`                   | 10 to 1024 decoded bytes. 10-15 bytes are accepted with a per-entry warning.    |
+| `algorithm`                | `Sha1`, `Sha256`, or `Sha512`; default `Sha1`.                                  |
+| `digits`                   | 6 to 8 inclusive; default 6. Codes are zero-padded to exactly this width.        |
+| `Totp.period`              | 1 to 300 seconds inclusive; default 30.                                         |
+| `Hotp.counter`             | 0 to `u64::MAX`; `hotp_advance` errors before mutation at `u64::MAX`.           |
+| `icon_hint`                | `None` or the slug format above.                                                |
+| `created_at`, `updated_at` | UTC Unix seconds (`u64`), 0 to 253402300799 inclusive.                          |
+
+For `otpauth://` imports, the path label and `issuer` query parameter are
+percent-decoded, then normalized with the rules above. If both an issuer
+prefix in the label (`Issuer:Account`) and an `issuer` query parameter are
+present, they must match after trimming or the URI is rejected.
+
+`created_at` is stable after account creation; `updated_at` changes on any
+account payload mutation, including HOTP counter advances. The timestamp
+upper bound is `9999-12-31T23:59:59Z`.
 
 ### 4.2 OTP generation
 
@@ -113,15 +137,16 @@ else:
 
 - **Location.** `directories::ProjectDirs` →
   Linux: `~/.local/share/paladin/vault.bin` (XDG).
-- **Permissions.** File is created `0600` regardless of mode; backups
-  are also `0600`. The parent directory, if we create it, is `0700`. In
-  plaintext mode these permissions are the *only* protection on the
-  secrets, so we enforce them.
+- **Permissions.** File is created `0600` regardless of mode; temporary
+  files and backups are also `0600`. The parent directory, if we create
+  it, is `0700`. In plaintext mode these permissions are the *only*
+  protection on the secrets, so we enforce them.
 - **Atomic writes.** Each save stages both the new primary and the new
   backup, then commits with renames:
   1. Write the new primary content to `vault.bin.tmp` and `fsync` it.
   2. Write the new backup content to `vault.bin.bak.tmp` and `fsync`
-     it. Skipped on a first-ever save when no prior content exists.
+     it. Skipped, along with step 3, on a first-ever save when no
+     prior content exists.
      For regular saves the backup content is the soon-to-be-replaced
      primary; for passphrase transitions (§4.5) it is reconstituted
      under the new mode/key.
@@ -155,7 +180,12 @@ else:
   saves preserve the in-header Argon2 parameters, so an old vault opened on
   a faster machine does not silently inherit higher cost on its next write;
   raising costs requires an explicit `change_passphrase` (or a future
-  dedicated upgrade command).
+  dedicated upgrade command). To avoid attacker-controlled resource
+  exhaustion before authentication, `open` rejects encrypted vaults whose
+  header parameters are outside these bounds before running Argon2id:
+  `m_kib` 8192 to 1048576 (8 MiB to 1 GiB), `t` 1 to 10, and `p` 1 to 4.
+  Future releases may widen those bounds only with an explicit format or
+  policy update.
 - **AEAD:** **XChaCha20-Poly1305** (24-byte nonce, simpler misuse story than
   AES-GCM). Header records the algorithm ID so we can migrate later. All
   header bytes after the magic — `format_ver`, `mode`, `kdf_id`, the Argon2
@@ -193,6 +223,8 @@ All three go through the same atomic-write + backup path as a normal save.
 Each is a single-step transition that either fully succeeds or leaves the
 files untouched (the `.tmp` files are rolled back). On failure, the existing
 `.bak` is left in place, so the user always has at least one recovery point.
+`set_passphrase` and `change_passphrase` reject empty passphrases; users who
+want plaintext storage must use `remove_passphrase`.
 
 ### 4.6 Import / Export
 
@@ -209,11 +241,14 @@ Two formats, user picks per invocation:
   **The CLI prints a clear warning** before writing unencrypted secrets to
   disk and refuses to write to a file that already exists unless `--force`
   is given.
-- **Encrypted (Paladin bundle).** Same payload wrapped in Paladin's
-  encrypted file format (§4.3) under a passphrase the user supplies at
-  export time (independent of the vault's own passphrase). Empty
-  passphrases are rejected: `export::encrypted` returns an error rather
-  than silently producing a plaintext-equivalent bundle.
+- **Encrypted (Paladin bundle).** The same accounts encoded as
+  `VaultPayload { accounts, settings: VaultSettings::default() }` and
+  wrapped in Paladin's encrypted file format (§4.3) under a passphrase
+  the user supplies at export time (independent of the vault's own
+  passphrase). Empty passphrases are rejected: `export::encrypted`
+  returns an error rather than silently producing a plaintext-equivalent
+  bundle. The CLI refuses to write an encrypted export to a file that
+  already exists unless `--force` is given, matching plaintext export.
 
 #### Import
 
@@ -221,8 +256,11 @@ Auto-detect format by content sniffing, with `--format` to override:
 
 - **`otpauth://` URI** (single line, or one per line, or JSON array).
 - **Paladin encrypted bundle** — round-trips with our encrypted exporter.
-  Plaintext Paladin exports are detected and read as `otpauth://` URI
-  lists above (they share the same on-disk format).
+  Files with `PALADIN\0` magic but plaintext mode are rejected by the
+  Paladin importer in v0.1; users should use `export --plaintext` to
+  produce a portable `otpauth://` URI list instead. Plaintext exports are
+  detected and read as `otpauth://` URI lists above (they share the same
+  on-disk format).
 - **Aegis** — JSON export. v0.1 supports the **plaintext export** out of
   the box; **encrypted Aegis backups** (scrypt + AES-256-GCM) are a stretch
   goal for v0.2 since they require implementing Aegis's KDF profile.
@@ -241,16 +279,18 @@ as JSON with Aegis's top-level `version` / `header` / `db` shape →
 `Aegis`; JSON matching Gnome Authenticator's exported shape → `Gnome`;
 UTF-8 either (a) starting with `otpauth://` (single URI or newline-
 separated list of such URIs), or (b) parsing as a JSON array of strings
-each starting with `otpauth://` → `Otpauth`; otherwise `Unknown`. Plaintext Paladin exports
-land in the `Otpauth` branch by design — they share the same on-disk
-format as a JSON `otpauth://` array.
+each starting with `otpauth://` → `Otpauth`; otherwise `Unknown`.
+Plaintext exports land in the `Otpauth` branch by design — they share
+the same on-disk format as a JSON `otpauth://` array.
 
 Each importer is tested with sample fixture files committed under
 `crates/paladin-core/tests/fixtures/`. The byte-oriented importers
 (`aegis`, `gnome`, `otpauth`) take `&[u8]`; the encrypted Paladin
 importer additionally takes a passphrase (`SecretString`), and the
 QR importer takes a path (it loads the image, decodes every QR via
-`rqrr`, and feeds each resulting URI through `parse_otpauth`).
+`rqrr`, and feeds each resulting URI through `parse_otpauth`). When
+`import::paladin` sees a valid Paladin header with `mode == 0`, it returns
+a typed unsupported-plaintext-vault error without importing accounts.
 
 ### 4.7 Public API sketch
 
@@ -311,14 +351,14 @@ Built with `clap` (derive). Commands:
 | `paladin list`                              | List accounts (no codes).                                        |
 | `paladin show <query>`                      | Print the current code. **Advances HOTP counter.**               |
 | `paladin peek <query>`                      | Print the current code without advancing the HOTP counter; for TOTP, identical to `show`. |
-| `paladin copy <query>`                      | Copy code to clipboard. **Advances HOTP counter.** (Auto-clear is TUI/GUI-only — the CLI ignores `clipboard.clear_enabled`; see §8.6.) |
+| `paladin copy <query>`                      | Copy code to clipboard. **Advances HOTP counter.** (Auto-clear is TUI/GUI-only — the CLI ignores `clipboard.clear_enabled`; see security consideration 6.) |
 | `paladin remove <query>`                    | Remove an account (with confirmation).                           |
 | `paladin rename <query> <label>`            | Rename an account.                                               |
 | `paladin passphrase set`                    | Encrypt a plaintext vault under a new passphrase.                |
 | `paladin passphrase change`                 | Re-encrypt under a new passphrase.                               |
 | `paladin passphrase remove`                 | Decrypt to plaintext. Requires `--yes-i-know` to skip the warning. |
 | `paladin export --plaintext <out>`          | Write JSON `otpauth://` array. Warns; refuses overwrite without `--force`. |
-| `paladin export --encrypted <out>`          | Write Paladin-format encrypted bundle.                           |
+| `paladin export --encrypted <out>`          | Write Paladin-format encrypted bundle. Refuses overwrite without `--force`. |
 | `paladin import [--on-conflict=<mode>] <path>` | Auto-detect format and merge into the vault. Conflict mode: `skip` (default), `replace`, `append`. See merge policy below. |
 | `paladin import --format=<fmt> <path>`      | Force format: `otpauth`, `aegis`, `gnome`, `paladin` (encrypted bundle only), `qr`.      |
 | `paladin settings get [key]`                | Show vault settings (auto-lock, clipboard-clear).                |
@@ -326,6 +366,70 @@ Built with `clap` (derive). Commands:
 | `paladin tui`                               | Convenience wrapper: execs `paladin-tui` with the same args. Keeps the §3 "binaries don't reach into each other" rule intact. |
 
 Global flags: `--vault <path>`, `--no-color`, `--json` (for scripting).
+
+All mutating CLI commands save atomically before returning success. If the
+save fails, the command exits non-zero and the in-memory change is rolled
+back before the process exits. Imports of encrypted Paladin bundles prompt
+for the bundle passphrase, which is independent of the vault passphrase.
+For files with `PALADIN\0` magic, the CLI probes the mode first: `mode == 0`
+returns the unsupported-plaintext-vault error without a passphrase prompt,
+and `mode == 1` prompts for the bundle passphrase.
+
+With `--json`, commands write one JSON document to stdout on success and
+one JSON document to stderr on failure. `code` values are strings so
+leading zeroes are preserved. The common account shape is:
+
+```json
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "issuer": "GitHub",
+  "label": "ben@example.com",
+  "kind": "totp",
+  "algorithm": "sha1",
+  "digits": 6,
+  "period": 30,
+  "counter": null,
+  "icon_hint": "github",
+  "created_at": 1777939200,
+  "updated_at": 1777939200
+}
+```
+
+Success shapes:
+
+| Command family                | JSON shape                                                                      |
+| ----------------------------- | ------------------------------------------------------------------------------- |
+| `list`                        | `{ "accounts": [AccountSummary] }`                                              |
+| `show`, `peek`                | `{ "codes": [CodeResult] }`                                                     |
+| `copy`                        | `{ "copied": true, "account": AccountSummary, "counter_used": number_or_null }` |
+| `add`, `rename`               | `{ "account": AccountSummary }`                                                 |
+| `remove`                      | `{ "removed": AccountSummary }`                                                 |
+| `import`                      | `{ "imported": n, "skipped": n, "replaced": n, "accounts": [AccountSummary] }`  |
+| `export`                      | `{ "written": "/path/to/out", "format": "otpauth_or_paladin" }`                |
+| `settings get`, `settings set` | `{ "settings": VaultSettings }`                                                 |
+| `init`, `passphrase *`        | `{ "ok": true, "status": "plaintext_or_encrypted" }`                           |
+
+Pseudo-values such as `number_or_null` and `plaintext_or_encrypted`
+document allowed values; concrete output uses actual numbers, `null`, or
+enum strings.
+
+`CodeResult` contains `account`, `code`, and either TOTP timing
+(`valid_from` and `valid_until` as Unix seconds, plus
+`seconds_remaining` as an integer duration) or HOTP `counter_used`.
+Errors use stable snake_case `kind` values:
+
+```json
+{
+  "error": {
+    "kind": "multiple_matches",
+    "message": "query matched multiple accounts",
+    "candidates": []
+  }
+}
+```
+
+`candidates` is present only for ambiguity errors and contains
+`AccountSummary` objects.
 
 Vault settings keys (subject to extension):
 
@@ -351,15 +455,20 @@ Minimum values: `auto_lock.timeout_secs >= 30`, `clipboard.clear_secs
 - `peek` prints **all** matching entries unconditionally (no state mutation).
 - `copy`, `remove`, and `rename` require a single match. On multiple
   matches they exit non-zero and list the candidates, each prefixed with
-  a short `id:<8 hex>` form taken from the UUID. The user can re-run with
-  that exact-id form (e.g. `paladin copy id:a1b2c3d4`).
+  the shortest unique `id:<hex>` form taken from the UUID, with a minimum
+  length of 8 hex chars. The user can re-run with that exact-id form
+  (e.g. `paladin copy id:a1b2c3d4`).
+- A query with no matches exits non-zero and prints a concise "no matching
+  account" error.
 - A query starting with `id:` is treated as a prefix match against the
   UUID's de-hyphenated 32-char hex form (e.g. `id:a1b2c3d4` matches any
   UUID starting with `a1b2c3d4`), never as a substring match. If the
   prefix matches multiple entries, the same single-match rule above
   applies for `copy`/`remove`/`rename`. `id:` is reserved as a query
-  prefix; an account whose `issuer:label` happens to start with `id:`
-  is still reachable by any other substring of that key.
+  prefix; the prefix after `id:` must be 8 to 32 hex chars, and invalid
+  or shorter prefixes are validation errors. An account whose
+  `issuer:label` happens to start with `id:` is still reachable by any
+  other substring of that key.
 
 ### Import merge policy
 
@@ -378,7 +487,8 @@ duplicates within a single input are themselves subject to
 `append` keeps every copy.
 
 Non-colliding entries are always inserted. Imports are atomic at the
-batch level: if any entry fails validation (§8.9), no entries are added.
+batch level: if any entry fails validation (see security consideration 9),
+no entries are added.
 
 ## 6. TUI (`paladin-tui`)
 
@@ -401,10 +511,16 @@ Layout (single-screen MVP):
 - TOTP rows: live `Gauge` countdown, re-render on a 250 ms tick.
 - HOTP rows: code is hidden until the user presses `n` (advances counter and
   saves); after a 120-second reveal window, returns to the hidden state.
+  Copying a hidden HOTP row is rejected with a status message. Copying
+  during the reveal window copies the visible code and does not advance
+  the counter again.
 - Modal dialogs for add / remove / passphrase / settings.
 - **Auto-lock:** **off by default.** When `auto_lock.enabled = true`, the TUI
   clears the in-memory vault after `auto_lock.timeout_secs` of no input and
-  shows the unlock screen.
+  shows the unlock screen for encrypted vaults. For plaintext vaults,
+  auto-lock is a no-op because there is no credential to require; the
+  setting remains persisted so it takes effect if the vault is encrypted
+  later.
 - **Clipboard auto-clear:** **off by default.** When
   `clipboard.clear_enabled = true`, copying a code schedules a wipe after
   `clipboard.clear_secs` — and the wipe only fires if the clipboard still
@@ -423,13 +539,15 @@ Library: **Relm4** on **GTK4**. Component tree:
 - `AccountRowComponent` — label, code, progress (TOTP) / "next" button (HOTP),
   copy button. HOTP rows hide their code until the user activates "next"
   (advances counter and saves); after a 120-second reveal window the code
-  returns to the hidden state, matching the TUI.
+  returns to the hidden state, matching the TUI. Copying a hidden HOTP row
+  is disabled; copying during the reveal window copies the visible code and
+  does not advance again.
 - `AddAccountComponent` — manual fields + "scan from clipboard image".
 - `SettingsComponent` — toggles for auto-lock and clipboard-clear, with
   spinners for timeouts.
 
 Auto-lock and clipboard auto-clear behave the same as the TUI, including the
-opt-in default.
+opt-in default and the plaintext-vault auto-lock no-op.
 
 Icons: `AccountRowComponent` resolves `Account.icon_hint` against the
 system icon theme via `gtk::IconTheme`, falling back to a generic
@@ -463,21 +581,27 @@ Concrete obligations and explicit user-controlled tradeoffs:
    would lose data if we wiped silently. When `clipboard.clear_enabled` is
    true, the TUI/GUI schedules a wipe and only runs it if the clipboard
    *still contains the code we wrote* (compare before clearing). The CLI
-   never schedules a wipe — per §8.7 it doesn't hold state, so users who
-   want auto-clear from the CLI should pipe through their own tooling.
+   never schedules a wipe — CLI commands do not hold state after they
+   exit, so users who want auto-clear from the CLI should pipe through
+   their own tooling.
 7. **Auto-lock is opt-in.** Default behavior is to keep the unlocked vault
-   resident as long as the TUI/GUI is open. CLI commands always
-   open → operate → close, never holding state, regardless of settings.
+   resident as long as the TUI/GUI is open. When enabled, auto-lock only
+   locks encrypted vaults; for plaintext vaults it is a no-op because no
+   unlock credential exists. CLI commands always open → operate → close,
+   never holding state, regardless of settings.
 8. **Plaintext export warns loudly.** The CLI prints a multi-line warning,
    refuses to overwrite an existing file without `--force`, and writes the
    output `0600`.
 9. **Imports are fully validated.** Each importer parses into `Account`
    values without trusting the source's claimed structure — secrets are
-   length-checked (rejected if shorter than 10 bytes / 80 bits; entries
-   shorter than 16 bytes / 128 bits — the RFC 4226 §4 minimum — are
-   accepted with a per-entry warning), base32 is validated, algorithms
-   must be in our enum.
-10. **No telemetry, no network calls.** Verified by `cargo deny` policy.
+   length-checked (rejected if shorter than 10 bytes / 80 bits or longer
+   than 1024 bytes; entries shorter than 16 bytes / 128 bits — the RFC
+   4226 §4 minimum — are accepted with a per-entry warning), base32 is
+   validated, algorithms must be in our enum, and OTP parameters must
+   pass the §4.1 validation table.
+10. **No telemetry, no network calls.** Enforced by code review and tests;
+    `cargo deny` covers dependency license/advisory policy, not runtime
+    network behavior.
 11. **Reproducible builds.** Pin `rust-toolchain.toml`. Lock all deps.
 12. **Threat model documented separately** in `SECURITY.md` before v1.
 
@@ -518,17 +642,28 @@ Concrete obligations and explicit user-controlled tradeoffs:
   - Tamper detection on encrypted vault: flip a ciphertext byte → fail;
     flip any byte in the AAD-bound header (`format_ver`, `mode`, `kdf_id`,
     Argon2 params, `salt`, `aead_id`, `nonce`) → fail.
-  - File-permission enforcement (`0600` on file, `0700` on dir) post-save.
+  - Argon2 parameter bounds reject headers outside the v0.1 limits before
+    KDF work begins.
+  - File-permission enforcement (`0600` on primary, backup, and temp files;
+    `0700` on dir) post-save and during staged writes.
   - Passphrase set/change/remove transitions, including failure-rollback
     (simulate write failure mid-transition → original file unchanged).
   - HOTP counter advances on `hotp_advance`, not on `hotp_peek` or `totp_code`; `hotp_advance` also persists the new counter to disk before returning.
+  - Account validation rejects out-of-range digits, TOTP periods, HOTP
+    counter overflow, empty labels, malformed icon hints, mismatched
+    otpauth issuers, and invalid timestamps.
   - Zeroize-on-drop assertions for `Secret` and `SecretString`.
   - Importers: Aegis plaintext, Gnome Authenticator, our own export
-    round-trip — fixture files in `tests/fixtures/`.
+    round-trip, and plaintext Paladin vault rejection — fixture files in
+    `tests/fixtures/`.
 - **Property tests** (`proptest`) for the URI parser and base32 secret
   decoding.
 - **Integration tests** per binary using `assert_cmd` (CLI) and
   golden-snapshot tests (`insta`) for TUI rendering.
+  - CLI `--json` success/error shapes and export overwrite guards.
+  - TUI HOTP copy behavior: hidden rows do not copy, revealed rows copy
+    without advancing again.
+  - Plaintext-vault auto-lock is a no-op in TUI/GUI state handling.
 - **CI:** `cargo fmt --check`, `cargo clippy -- -D warnings`,
   `cargo test --all`, `cargo deny check`, `cargo audit`.
 
@@ -542,11 +677,12 @@ Concrete obligations and explicit user-controlled tradeoffs:
 
 ### Milestone 1 — Core OTP + storage *(v0.1)*
 - [ ] `Account`, `Secret`, `Algorithm`, `OtpKind`, `Vault`, `VaultSettings` types with `Zeroize`.
+- [ ] Shared `Account` validation for labels, issuers, secrets, OTP parameters, timestamps, and icon hints.
 - [ ] RFC 6238 (TOTP) implementation + Appendix B vectors.
 - [ ] RFC 4226 (HOTP) implementation + Appendix D vectors.
 - [ ] `otpauth://` parser + base32 secret handling (TOTP and HOTP URIs).
 - [ ] **Plaintext** vault format with atomic writes + `0600` file / `0700` parent-dir enforcement.
-- [ ] **Encrypted** vault format: Argon2id + AEAD with header versioning.
+- [ ] **Encrypted** vault format: Argon2id + AEAD with header versioning and KDF parameter bounds.
 - [ ] One-generation `.bak` preserved across all writes.
 - [ ] Tamper-detection and round-trip tests for both modes.
 
@@ -557,9 +693,9 @@ Concrete obligations and explicit user-controlled tradeoffs:
 
 ### Milestone 3 — Import / Export *(v0.1)*
 - [ ] Plaintext export (JSON `otpauth://` array) with overwrite guard + `0600`.
-- [ ] Encrypted export bundle (Paladin format).
+- [ ] Encrypted export bundle (Paladin format) with overwrite guard.
 - [ ] Importer: `otpauth://` URIs (single + list).
-- [ ] Importer: Paladin encrypted bundle (plaintext exports are read via the otpauth importer above).
+- [ ] Importer: Paladin encrypted bundle; plaintext Paladin vault files return an unsupported-format error.
 - [ ] Importer: Aegis plaintext export.
 - [ ] Importer: Gnome Authenticator plaintext export.
 - [ ] Importer: QR image files (`rqrr`).
@@ -568,11 +704,11 @@ Concrete obligations and explicit user-controlled tradeoffs:
 
 ### Milestone 4 — CLI *(v0.1)*
 - [ ] `init` (with optional passphrase), `add`, `list`, `show`, `peek`, `remove`, `rename`.
-- [ ] `copy` (clipboard wipe gated on settings).
+- [ ] `copy` (clipboard copy only; no CLI auto-clear).
 - [ ] `passphrase set / change / remove`.
 - [ ] `export --plaintext / --encrypted`, `import [--format]`.
 - [ ] `settings get / set`.
-- [ ] `--json` output for scripting.
+- [ ] `--json` output for scripting using the schemas in §5.
 - [ ] `assert_cmd` integration tests.
 
 ### Milestone 5 — TUI *(v0.1)*
@@ -580,7 +716,8 @@ Concrete obligations and explicit user-controlled tradeoffs:
 - [ ] Search/filter input.
 - [ ] Add / remove / passphrase / settings modals.
 - [ ] Conditional unlock screen (only when vault is encrypted).
-- [ ] Opt-in auto-lock and clipboard-clear honoring vault settings.
+- [ ] Opt-in auto-lock and clipboard-clear honoring vault settings, with plaintext auto-lock as a no-op.
+- [ ] HOTP reveal/copy behavior: hidden rows do not copy; revealed rows copy without advancing again.
 - [ ] Snapshot tests for rendering.
 
 ### Milestone 6 — GUI *(v0.2)*
@@ -606,6 +743,15 @@ Concrete obligations and explicit user-controlled tradeoffs:
 - GUI deferred to v0.2; **TUI ships in v0.1**.
 - TUI runtime = plain threads + `mpsc` (no `tokio` — a local TUI doesn't need async I/O).
 - **Icon hints:** name-only `Option<String>` slug (§4.1, §7). User-supplied icon bytes rejected to keep the vault payload small.
+- Account validation ranges are fixed in §4.1, including OTP digits,
+  TOTP period, HOTP counter overflow, timestamp format, and issuer/label
+  normalization.
+- Argon2 header parameters are bounded before KDF work (§4.4).
+- Plaintext Paladin vault files are not an import format in v0.1; use
+  plaintext export for portable URI-list import/export (§4.6).
+- Plaintext auto-lock is a no-op; HOTP copy in TUI/GUI only copies an
+  already revealed HOTP code and never advances a second time.
+- Both plaintext and encrypted CLI exports refuse overwrite without `--force`.
 
 No open questions remain.
 
@@ -621,8 +767,10 @@ lives in [`LICENSE`](LICENSE) at the repo root.
 - Vendored code, fixture files imported from other projects (e.g., Aegis or
   Gnome Authenticator export samples used as test fixtures), and any
   third-party assets must be vetted for license compatibility before
-  inclusion. AGPL-3.0-or-later is one-way compatible with GPL-3.0-or-later
-  but not with permissive-only or earlier-GPL-only code.
+  inclusion. AGPL-3.0-or-later can be combined with GPL-3.0-or-later
+  under the AGPL/GPLv3 compatibility terms, and common permissive
+  licenses such as MIT, BSD, ISC, and Apache-2.0 are generally compatible
+  with AGPL-3.0-or-later. Earlier-GPL-only code is not compatible.
 
 Practical note for an OTP authenticator: the AGPL §13 "remote network
 interaction" clause is largely inert for v0.1 since Paladin runs locally
