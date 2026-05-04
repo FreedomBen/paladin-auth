@@ -110,7 +110,7 @@ The `otpauth://` parser applies these rules:
   issuer prefix and account label.
 - **`issuer`:** optional, percent-decoded as UTF-8, and normalized with
   the issuer rule above. If also present as a label prefix, the two
-  issuers must match after trimming.
+  issuers must match after issuer normalization.
 - **`secret`:** required. Base32 using the RFC 4648 alphabet,
   case-insensitive, with optional `=` padding. ASCII whitespace inside
   the value is rejected.
@@ -147,9 +147,12 @@ secrets between 10 and 15 bytes inclusive.
   `floor(now_unix / period)`. `valid_from = counter * period` and
   `valid_until = valid_from + period`, interpreted as the half-open window
   `[valid_from, valid_until)`. `seconds_remaining` is
-  `valid_until - now_unix`, clamped to `0` at the boundary. `totp_code`
-  rejects `SystemTime` values before the Unix epoch instead of saturating,
-  and returns a time-range error if `valid_until` would overflow `u64`.
+  `valid_until - now_unix`; because `now_unix` selects the active counter,
+  a successful call reports a value in `1..=period`, with an exact window
+  boundary selecting the new counter and reporting the full period.
+  `totp_code` rejects `SystemTime` values before the Unix epoch instead of
+  saturating, and returns a time-range error if `valid_until` would overflow
+  `u64`.
 - **HOTP:** RFC 4226, same primitives. Validate against RFC 4226 Appendix D
   test vectors. Both entry points compute `HOTP(K, C)` for the current
   stored counter `C`; they differ only in whether they mutate state:
@@ -229,7 +232,16 @@ decoding or KDF/AEAD work.
 - **Permissions.** File is created `0600` regardless of mode; temporary
   files and backups are also `0600`. The parent directory, if we create
   it, is `0700`. In plaintext mode these permissions are the *only*
-  protection on the secrets, so we enforce them.
+  protection on the secrets, so we enforce them. On Linux v0.1, `open`
+  rejects a vault before decoding if the parent directory grants any
+  group/other permissions, or if the primary or backup file, when present,
+  grants any group/other permissions. The CLI text error names the failing
+  path, actual mode, expected repair mode, and the `chmod` command that
+  would repair it; `--json` reports `unsafe_permissions` with `path`,
+  `subject`, `actual_mode`, and `expected_mode` fields. Mode fields are
+  four-digit octal strings such as `"0644"`, with expected repair modes
+  `"0700"` for directories and `"0600"` for files. `subject` is one of
+  `vault_dir`, `vault_file`, or `backup_file`.
 - **Atomic writes.** Each save stages both the new primary and the new
   backup, then commits with renames:
   1. Write the new primary content to `vault.bin.tmp` and `fsync` it.
@@ -269,8 +281,9 @@ decoding or KDF/AEAD work.
   superseded encryption state — re-encrypted under the new key for
   `set_passphrase` and `change_passphrase`, or written as plaintext for
   `remove_passphrase`. The explicit `paladin init --force` clobber path is
-  the exception: it rotates the old file verbatim before creating the new
-  vault (§5).
+  the exception: it stages the new vault first, then rotates the old
+  primary verbatim during its clobber commit sequence (§5), so it never
+  rewrites the old payload under the new mode/key.
 - **Versioning.** `format_ver` starts at `1` for v0.1 and is bumped on any
   breaking change to the header layout or `VaultPayload` schema. Old
   versions are read by an explicit migration path — never silently coerced.
@@ -375,13 +388,15 @@ Two formats, user picks per invocation:
 
 Auto-detect format by content sniffing, with `--format` to override:
 
-- **`otpauth://` URI** (single line, or one per line, or JSON array).
+- **`otpauth://` URI** (single line, one per nonblank line, or JSON array).
   This is also the format produced by Gnome Authenticator's *Backup →
   Save in plain text* action (FreeOTP+-compatible URI list), so Gnome
-  exports import through this path with no dedicated handler. Inputs
-  that decode to zero accounts (empty JSON array, blank file,
-  whitespace-only) are rejected with the same "no entries to import"
-  error as a QR image with no decoded QRs.
+  exports import through this path with no dedicated handler. For text
+  inputs, the importer trims leading/trailing Unicode whitespace around
+  the whole input for single-URI detection, trims each line in line-list
+  mode, and ignores blank lines. Inputs that decode to zero accounts
+  (empty JSON array, blank file, whitespace-only) are rejected with the
+  same "no entries to import" error as a QR image with no decoded QRs.
 - **Paladin encrypted bundle** — round-trips with our encrypted exporter.
   Files with `PALADIN\0` magic but plaintext mode are rejected by the
   Paladin importer in v0.1; users should use `export --plaintext` to
@@ -420,9 +435,10 @@ Auto-detect format by content sniffing, with `--format` to override:
 match: file starts with the `PALADIN\0` magic → `Paladin`; image-format
 magic bytes (PNG, JPEG, GIF, BMP, WebP) → `Qr`; UTF-8 text that parses
 as JSON with Aegis's top-level `version` / `header` / `db` shape →
-`Aegis`; UTF-8 either (a) starting with `otpauth://` (single URI or
-newline-separated list of such URIs), or (b) parsing as a JSON array
-of strings each starting with `otpauth://` → `Otpauth`; otherwise
+`Aegis`; UTF-8 that, after outer whitespace trim, either (a) starts with
+`otpauth://` (single URI or newline-separated list whose nonblank
+trimmed lines each start with `otpauth://`), or (b) parses as a JSON
+array of strings each starting with `otpauth://` → `Otpauth`; otherwise
 `Unknown`.
 Plaintext exports land in the `Otpauth` branch by design — they share
 the same on-disk format as a JSON `otpauth://` array.
@@ -545,7 +561,7 @@ Built with `clap` (derive). Commands:
 
 | Command                                     | Behavior                                                         |
 | ------------------------------------------- | ---------------------------------------------------------------- |
-| `paladin init [--force]`                    | Create a new vault. Prompts: passphrase? (empty = plaintext). Refuses to clobber an existing vault unless `--force` (which rotates the old file to `vault.bin.bak` first, overwriting any existing backup). The rotated `.bak` is preserved verbatim — a plaintext-to-encrypted clobber leaves plaintext secrets in `.bak` until the user removes it manually. |
+| `paladin init [--force]`                    | Create a new vault. Prompts: passphrase? (empty = plaintext). Refuses to clobber an existing vault unless `--force` (which stages the new vault first, then rotates the old file to `vault.bin.bak`, overwriting any existing backup). The rotated `.bak` is preserved verbatim — a plaintext-to-encrypted clobber leaves plaintext secrets in `.bak` until the user removes it manually. |
 | `paladin add`                               | Add an account interactively (or via flags / URI).               |
 | `paladin add --qr <path>`                   | Add by scanning a QR image file. Every decoded QR in the image is added (errors if none decode); collisions use the default `import` merge policy (`skip`). For other policies, use `import --format=qr`. |
 | `paladin list`                              | List accounts (no codes).                                        |
@@ -567,6 +583,18 @@ Built with `clap` (derive). Commands:
 
 Global flags: `--vault <path>`, `--no-color`, `--json` (for scripting).
 
+Passphrase prompts always read from `/dev/tty` via `rpassword`, not from
+stdin/stdout, in both text and `--json` modes. Existing vault passphrases
+and encrypted Paladin bundle import passphrases are prompted once. New
+passphrases (`init` when the first entry is non-empty, `passphrase set`,
+`passphrase change`, and `export --encrypted`) are prompted twice and must
+match. For `init`, an empty first entry selects plaintext storage and skips
+confirmation; every other empty new passphrase is rejected with
+`invalid_passphrase` (`reason: "zero_length"`). Confirmation mismatch exits
+before mutation with `invalid_passphrase` (`reason: "confirmation_mismatch"`).
+If `/dev/tty` is unavailable, the CLI exits with `io_error` and operation
+`"passphrase_prompt"`.
+
 `paladin add` supports exactly one input mode per invocation:
 interactive prompts (no account-definition flags), `--uri <otpauth-uri>`,
 manual flags, or `--qr <path>`. Manual mode requires `--label` and `--secret`; optional
@@ -586,6 +614,18 @@ success payload. A single-entry `add` rejects an existing
 appends a new account. `add --qr` remains the multi-entry exception and uses
 the import merge path with fixed `--on-conflict=skip`; `--allow-duplicate`
 is mutually exclusive with `--qr` and is rejected at parse time.
+
+`init --force` uses a dedicated clobber path. It writes the new vault to
+`vault.bin.tmp` and `fsync`s it before moving any existing primary. If that
+staging step fails, the old primary and `.bak` are untouched. Once staging
+succeeds, if an existing primary is present, it renames `vault.bin` →
+`vault.bin.bak` (overwriting any existing backup). It then renames
+`vault.bin.tmp` → `vault.bin` and `fsync`s the parent directory. The
+primary rename is the primary-file commit point. A failure after backup
+rotation but before the primary rename leaves the old vault available at
+`vault.bin.bak`; the CLI error names that path so the user can restore it.
+A failure after the primary rename is reported as durability-unconfirmed,
+matching the normal save semantics.
 
 All mutating CLI commands call the atomic save path before returning
 success. If save fails, the command exits non-zero. The primary vault file
@@ -607,8 +647,9 @@ attempted and the counter is not advanced. If the clipboard write fails
 after a committed HOTP advance, Paladin does **not** roll the counter back
 because the code may already have been exposed to the clipboard provider;
 the command exits non-zero with `clipboard_write_failed`, `account`, and
-`counter_used` in the error payload. TOTP clipboard failures use the same
-error kind with `counter_used: null`.
+`counter_used` in the error payload; for HOTP, the `account` summary
+reflects the persisted post-advance counter. TOTP clipboard failures use
+the same error kind with `counter_used: null`.
 
 With `--json`, commands write one JSON document to stdout on success and
 one JSON document to stderr on failure. `code` values are strings so
@@ -667,12 +708,14 @@ if that source row is later skipped as a duplicate.
 
 `CodeResult` always contains `account` (an `AccountSummary`) and
 `code` (a string of digits, zero-padded to the entry's `digits`
-width). It also carries kind-specific timing fields, with the unused
+width). Account summaries in command results reflect persisted state
+after the command succeeds. For HOTP `show` and `copy`, that means
+`account.counter` is the stored post-advance counter while `counter_used`
+is the integer counter that produced the code (the pre-advance counter).
+`CodeResult` also carries kind-specific timing fields, with the unused
 fields set to `null`: TOTP entries include `valid_from` and
 `valid_until` as Unix seconds plus `seconds_remaining` as an integer
-duration, and have `counter_used: null`; HOTP entries include
-`counter_used` (the integer counter that produced the code, i.e. the
-pre-advance counter for `show`/`copy`), and have `valid_from`,
+duration, and have `counter_used: null`; HOTP entries have `valid_from`,
 `valid_until`, and `seconds_remaining` set to `null`.
 `Warning` objects use stable snake_case `kind` values. The v0.1 warning
 shape is `{ "kind": "short_secret", "message": "...", "source_index": 0,
@@ -731,8 +774,9 @@ candidate list, ≥8 hex chars), so JSON consumers can re-query by exact id
 without recomputing the prefix. Errors may include additional stable fields
 when they affect recovery or side effects: `save_durability_unconfirmed`
 includes `"committed": true`; `save_not_committed` includes
-`"committed": false`; and `clipboard_write_failed` includes `account` plus
-`counter_used` (`null` for TOTP).
+`"committed": false` and, for `init --force` failures that moved the old
+primary to `.bak`, `backup_path`; and `clipboard_write_failed` includes
+`account` plus `counter_used` (`null` for TOTP).
 
 v0.1 error kinds and stable fields:
 
@@ -743,6 +787,7 @@ v0.1 error kinds and stable fields:
 | `invalid_state`                 | Operation is invalid for vault state.        | `operation`, `state`                       |
 | `vault_missing`                 | Selected vault path does not exist.          | `path`                                     |
 | `vault_exists`                  | Creation refused to overwrite a vault.       | `path`                                     |
+| `unsafe_permissions`            | Vault path permissions are too broad.        | `path`, `subject`, `actual_mode`, `expected_mode` |
 | `wrong_vault_lock`              | Supplied lock mode does not match file.      | `expected`, `actual`                       |
 | `decrypt_failed`                | Encrypted vault/bundle failed auth.          | none                                       |
 | `invalid_header`                | Paladin header is malformed/unknown.         | optional `path`                            |
@@ -759,7 +804,7 @@ v0.1 error kinds and stable fields:
 | `multiple_matches`              | Query matched too many accounts.             | `candidates`                               |
 | `counter_overflow`              | HOTP advance would exceed `u64::MAX`.        | `account`                                  |
 | `time_range`                    | Time is before epoch or overflows TOTP.      | none                                       |
-| `save_not_committed`            | Save failed before primary commit.           | `committed: false`                         |
+| `save_not_committed`            | Save failed before primary commit.           | `committed: false`, optional `backup_path` |
 | `save_durability_unconfirmed`   | Save committed but durability is unclear.    | `committed: true`                          |
 | `clipboard_write_failed`        | Clipboard write failed after generation.     | `account`, `counter_used`                  |
 | `io_error`                      | Filesystem/image/terminal I/O failed.        | `operation`, optional `path`               |
@@ -781,6 +826,9 @@ settings setters reject lower values with a validation error.
 
 `<query>` is a case-insensitive substring match against `"{issuer}:{label}"`
 (empty issuer is allowed; the colon is still present in the match key).
+Matching compares `str::to_lowercase()` output for the query and match key;
+Paladin applies no Unicode normalization and no locale-specific casing, so
+visually equivalent but differently normalized strings may not match.
 
 - `show` prints **all** matching entries when every match is TOTP. If any
   matched entry is HOTP, `show` requires a single match — the same rule
@@ -984,12 +1032,13 @@ Concrete obligations and explicit user-controlled tradeoffs:
 - **Unit tests** in `paladin-core`:
   - RFC 6238 (TOTP) and RFC 4226 (HOTP) test vectors.
   - TOTP time-window boundaries, including pre-Unix-epoch rejection,
-    exact-boundary `seconds_remaining = 0`, and far-future overflow
-    rejection.
+    exact-boundary counter rollover with `seconds_remaining = period`,
+    and far-future overflow rejection.
   - `otpauth://` parser round-trip (TOTP and HOTP), including duplicate
     known parameters, ignored unknown parameters, case-insensitive
     algorithm/type handling, base32 padding/casing, and HOTP/TOTP-specific
-    `counter`/`period` rules.
+    `counter`/`period` rules, plus trimmed single-URI input and blank-line
+    handling in URI lists.
   - Vault round-trip in **both** modes (plaintext and encrypted).
   - Bincode payload contract: fixed v2 config, full-input-consumption
     rejection, and 16 MiB payload-limit rejection for plaintext and
@@ -1000,7 +1049,8 @@ Concrete obligations and explicit user-controlled tradeoffs:
   - Argon2 parameter bounds reject headers outside the v0.1 limits before
     KDF work begins.
   - File-permission enforcement (`0600` on primary, backup, and temp files;
-    `0700` on dir) post-save and during staged writes.
+    `0700` on dir) post-save and during staged writes, plus rejection of
+    unsafe existing primary/backup/directory paths with `unsafe_permissions`.
   - Passphrase set/change/remove transitions, including pre-commit rollback
     and durability-unconfirmed failures after the primary-file commit point.
   - HOTP counter advances on `hotp_advance`, not on `hotp_peek` or
@@ -1023,10 +1073,13 @@ Concrete obligations and explicit user-controlled tradeoffs:
 - **Integration tests** for each shipped binary using `assert_cmd` (CLI)
   and golden-snapshot tests (`insta`) for TUI rendering.
   - CLI `--json` success/error shapes, warning payloads, durability error
-    fields, HOTP clipboard-write failure behavior, and export overwrite
-    guards.
+    fields, HOTP post-advance account summaries, clipboard-write failure
+    behavior, passphrase no-TTY / confirmation-mismatch failures, and export
+    overwrite guards.
   - CLI `add` input modes, mutual-exclusion errors, duplicate-account
     rejection, and `--allow-duplicate`.
+  - CLI query resolution, including `str::to_lowercase()` matching,
+    no-normalization Unicode behavior, and `id:` prefix validation.
   - TUI HOTP copy behavior: hidden rows do not copy, revealed rows copy
     without advancing again.
   - Plaintext-vault auto-lock is a no-op in TUI state handling now, with
@@ -1132,6 +1185,18 @@ Concrete obligations and explicit user-controlled tradeoffs:
 - Plaintext auto-lock is a no-op; HOTP copy in TUI/GUI only copies an
   already revealed HOTP code and never advances a second time.
 - Both plaintext and encrypted CLI exports refuse overwrite without `--force`.
+- Unsafe existing vault permissions are rejected with a typed error that
+  tells the user which path and mode to fix (§4.3, §5).
+- `init --force` stages the new vault before rotating the old primary
+  verbatim into `.bak` (§5).
+- CLI passphrase prompts use `/dev/tty`; new passphrases are confirmed,
+  and no-TTY / mismatch failures are typed (§5).
+- HOTP JSON command results report post-advance account state and preserve
+  the pre-advance counter in `counter_used` (§5).
+- Query case-insensitivity uses `str::to_lowercase()` with no Unicode
+  normalization or locale-specific casing (§5).
+- `otpauth://` text imports trim outer whitespace and ignore blank lines
+  in URI-list mode (§4.6).
 
 No open questions remain.
 
