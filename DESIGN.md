@@ -47,7 +47,8 @@ Binaries depend only on `paladin-core`. They never reach into each other.
 
 | Type         | Purpose                                                                  |
 | ------------ | ------------------------------------------------------------------------ |
-| `Account`    | A single OTP entry: id, label, issuer, secret, algo, digits, kind, icon hint, created/updated. |
+| `Account`    | A single OTP entry: id (`AccountId`), label, issuer, secret, algo, digits, kind, icon hint, created/updated. |
+| `AccountId`  | UUIDv4. Stored as 16 bytes in the vault; displayed in canonical hyphenated form. Short `id:<8 hex>` prefix is the CLI disambiguator. |
 | `Secret`     | Newtype wrapping `Vec<u8>`; implements `Zeroize` and `Drop`.             |
 | `Algorithm`  | Enum: `Sha1` (default), `Sha256`, `Sha512`.                              |
 | `OtpKind`    | Enum: `Totp { period: u32 }` (default 30s) or `Hotp { counter: u64 }`.   |
@@ -62,12 +63,16 @@ file header — so settings can't be tampered with on an encrypted vault.
 ### 4.2 OTP generation
 
 - **TOTP:** RFC 6238, on top of `hmac` + `sha1` / `sha2`. Validate against
-  RFC 6238 Appendix B test vectors.
+  RFC 6238 Appendix B test vectors. Generation is read-only — `totp_code`
+  takes `&self` and never mutates the vault.
 - **HOTP:** RFC 4226, same primitives. Validate against RFC 4226 Appendix D
-  test vectors.
-- Generating an HOTP code **advances the stored counter and saves the vault**.
-  A separate `peek` operation returns the next code without advancing — used
-  by UIs that want to render before the user commits to "use" the code.
+  test vectors. Two entry points:
+  - `hotp_peek` returns the next code without advancing — used by UIs
+    that want to render a code before the user commits to "use" it.
+  - `hotp_advance` returns the current code, advances the stored counter,
+    **and saves the vault atomically** (so an in-memory advance can never
+    silently desync from the on-disk file). It takes `&Store` for that
+    reason.
 
 ### 4.3 Storage
 
@@ -98,6 +103,9 @@ else:
 - **Backups.** On every successful write, keep the previous `vault.bin` as
   `vault.bin.bak` (one generation). Backup inherits the mode of the file it
   replaces (no plaintext leak from a previously-encrypted vault).
+- **Versioning.** `format_ver` starts at `1` for v0.1 and is bumped on any
+  breaking change to the header layout or `VaultPayload` schema. Old
+  versions are read by an explicit migration path — never silently coerced.
 
 ### 4.4 Crypto (when mode == encrypted)
 
@@ -154,7 +162,8 @@ Auto-detect format by content sniffing, with `--format` to override:
 - **Gnome Authenticator** — JSON export produced by its
   *Backup → Save in plain text* action.
 - **QR image file** — single account; uses `rqrr` to decode then feeds the
-  resulting `otpauth://` URI through the URI parser.
+  resulting `otpauth://` URI through the URI parser. The GTK GUI also
+  accepts a QR image pasted from the clipboard, decoded via the same path.
 
 Each importer is a pure `&[u8] -> Result<Vec<Account>>` function, tested with
 sample fixture files committed under `crates/paladin-core/tests/fixtures/`.
@@ -164,15 +173,16 @@ sample fixture files committed under `crates/paladin-core/tests/fixtures/`.
 ```rust
 pub enum VaultLock { Plaintext, Encrypted(SecretString) }
 
-pub fn open(path: &Path, lock: VaultLock) -> Result<Vault>;
-pub fn create(path: &Path, lock: VaultLock) -> Result<Vault>;
+pub fn open(path: &Path, lock: VaultLock) -> Result<(Vault, Store)>;
+pub fn create(path: &Path, lock: VaultLock) -> Result<(Vault, Store)>;
 
 impl Vault {
     pub fn add(&mut self, account: Account) -> AccountId;
     pub fn remove(&mut self, id: AccountId) -> Option<Account>;
     pub fn iter(&self) -> impl Iterator<Item = &Account>;
-    pub fn code(&mut self, id: AccountId, now: SystemTime) -> Result<Code>;  // advances HOTP
-    pub fn peek(&self, id: AccountId, now: SystemTime) -> Result<Code>;      // does not advance
+    pub fn totp_code(&self, id: AccountId, now: SystemTime) -> Result<Code>;       // TOTP only; errors on HOTP entries
+    pub fn hotp_peek(&self, id: AccountId) -> Result<Code>;                        // HOTP only; does not advance
+    pub fn hotp_advance(&mut self, store: &Store, id: AccountId) -> Result<Code>;  // HOTP only; advances counter and saves atomically
     pub fn settings(&self) -> &VaultSettings;
     pub fn settings_mut(&mut self) -> &mut VaultSettings;
 
@@ -188,6 +198,7 @@ pub fn parse_otpauth(uri: &str) -> Result<Account>;
 pub fn read_qr_image(path: &Path) -> Result<String>;
 
 pub mod import {
+    pub enum ImportFormat { Otpauth, Aegis, Gnome, Paladin, Qr, Unknown }
     pub fn aegis_plaintext(bytes: &[u8]) -> Result<Vec<Account>>;
     pub fn gnome_authenticator(bytes: &[u8]) -> Result<Vec<Account>>;
     pub fn paladin(bytes: &[u8], lock: VaultLock) -> Result<Vec<Account>>;
@@ -206,13 +217,13 @@ Built with `clap` (derive). Commands:
 
 | Command                                     | Behavior                                                         |
 | ------------------------------------------- | ---------------------------------------------------------------- |
-| `paladin init`                              | Create a new vault. Prompts: passphrase? (empty = plaintext).    |
+| `paladin init [--force]`                    | Create a new vault. Prompts: passphrase? (empty = plaintext). Refuses to clobber an existing vault unless `--force` (which rotates the old file to `vault.bin.bak` first). |
 | `paladin add`                               | Add an account interactively (or via flags / URI).               |
 | `paladin add --qr <path>`                   | Add by scanning a QR image file.                                 |
 | `paladin list`                              | List accounts (no codes).                                        |
 | `paladin show <query>`                      | Print the current code. **Advances HOTP counter.**               |
 | `paladin peek <query>`                      | Print the next code without advancing (HOTP) / same as show (TOTP). |
-| `paladin copy <query>`                      | Copy code to clipboard. Auto-clear only if enabled in settings.  |
+| `paladin copy <query>`                      | Copy code to clipboard. (Auto-clear is TUI/GUI-only — the CLI ignores `clipboard.clear_enabled`; see §8.6.) |
 | `paladin remove <query>`                    | Remove an account (with confirmation).                           |
 | `paladin rename <query> <label>`            | Rename an account.                                               |
 | `paladin passphrase set`                    | Encrypt a plaintext vault under a new passphrase.                |
@@ -220,11 +231,11 @@ Built with `clap` (derive). Commands:
 | `paladin passphrase remove`                 | Decrypt to plaintext. Requires `--yes-i-know` to skip the warning. |
 | `paladin export --plaintext <out>`          | Write JSON `otpauth://` array. Warns; refuses overwrite without `--force`. |
 | `paladin export --encrypted <out>`          | Write Paladin-format encrypted bundle.                           |
-| `paladin import <path>`                     | Auto-detect format and merge into the vault.                     |
+| `paladin import [--on-conflict=<mode>] <path>` | Auto-detect format and merge into the vault. Conflict mode: `skip` (default), `replace`, `append`. See merge policy below. |
 | `paladin import --format=<fmt> <path>`      | Force format: `otpauth`, `aegis`, `gnome`, `paladin`, `qr`.      |
 | `paladin settings get [key]`                | Show vault settings (auto-lock, clipboard-clear).                |
 | `paladin settings set <key> <value>`        | Edit vault settings.                                             |
-| `paladin tui`                               | Launch the TUI (convenience; same as `paladin-tui`).             |
+| `paladin tui`                               | Convenience wrapper: execs `paladin-tui` with the same args. Keeps the §3 "binaries don't reach into each other" rule intact. |
 
 Global flags: `--vault <path>`, `--no-color`, `--json` (for scripting).
 
@@ -234,8 +245,35 @@ Vault settings keys (subject to extension):
 | ------------------------- | ---------------- | ------- | -------------------------------------------- |
 | `auto_lock.enabled`       | bool             | `false` | Whether TUI/GUI lock on idle.                |
 | `auto_lock.timeout_secs`  | u32              | `300`   | Idle timeout when enabled.                   |
-| `clipboard.clear_enabled` | bool             | `false` | Whether `copy` schedules a clipboard wipe.   |
+| `clipboard.clear_enabled` | bool             | `false` | TUI/GUI: schedule a clipboard wipe after copy. (CLI ignores.) |
 | `clipboard.clear_secs`    | u32              | `20`    | Wipe timeout when enabled.                   |
+
+### Query resolution
+
+`<query>` is a case-insensitive substring match against `"{issuer}:{label}"`
+(empty issuer is allowed; the colon is still present in the match key).
+
+- `show` prints **all** matching entries.
+- `copy`, `remove`, and `rename` require a single match. On multiple
+  matches they exit non-zero and list the candidates, each prefixed with
+  a short `id:<8 hex>` form taken from the UUID. The user can re-run with
+  that exact-id form (e.g. `paladin copy id:a1b2c3d4`).
+- A query starting with `id:` is treated as an exact prefix match against
+  the UUID, never as a substring match.
+
+### Import merge policy
+
+Two entries collide when their **(secret, issuer, label) triple is
+identical**. Behavior on collision is controlled by `--on-conflict`:
+
+- `skip` *(default)* — keep the existing entry; print a one-line warning
+  for each skipped import.
+- `replace` — overwrite the existing entry's mutable fields (algo,
+  digits, kind, icon hint, updated). The `id` is preserved.
+- `append` — always insert as a new entry, even if it's an exact dupe.
+
+Non-colliding entries are always inserted. Imports are atomic at the
+batch level: if any entry fails validation (§8.9), no entries are added.
 
 ## 6. TUI (`paladin-tui`)
 
@@ -308,11 +346,13 @@ Concrete obligations and explicit user-controlled tradeoffs:
    impls leak secret bytes — assert this with `#[derive]` audits in tests.
 5. **No swap leakage** *(best-effort).* Document `mlockall` on Linux as a
    recommendation; do not require it.
-6. **Clipboard hygiene is opt-in.** Default behavior is to leave the
-   clipboard alone — many users have clipboard managers and would lose data
-   if we wiped silently. When `clipboard.clear_enabled` is true, the wipe
-   only runs if the clipboard *still contains the code we wrote* (compare
-   before clearing).
+6. **Clipboard hygiene is opt-in (TUI/GUI only).** Default behavior is to
+   leave the clipboard alone — many users have clipboard managers and
+   would lose data if we wiped silently. When `clipboard.clear_enabled` is
+   true, the TUI/GUI schedules a wipe and only runs it if the clipboard
+   *still contains the code we wrote* (compare before clearing). The CLI
+   never schedules a wipe — per §8.7 it doesn't hold state, so users who
+   want auto-clear from the CLI should pipe through their own tooling.
 7. **Auto-lock is opt-in.** Default behavior is to keep the unlocked vault
    resident as long as the TUI/GUI is open. CLI commands always
    open → operate → close, never holding state, regardless of settings.
@@ -364,7 +404,7 @@ Concrete obligations and explicit user-controlled tradeoffs:
   - File-permission enforcement (`0600` on file, `0700` on dir) post-save.
   - Passphrase set/change/remove transitions, including failure-rollback
     (simulate write failure mid-transition → original file unchanged).
-  - HOTP counter advances on `code()`, not on `peek()`.
+  - HOTP counter advances on `hotp_advance`, not on `hotp_peek` or `totp_code`; `hotp_advance` also persists the new counter to disk before returning.
   - Zeroize-on-drop assertions for `Secret` and `SecretString`.
   - Importers: Aegis plaintext, Gnome Authenticator, our own export
     round-trip — fixture files in `tests/fixtures/`.
