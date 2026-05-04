@@ -72,7 +72,8 @@ at most 64 bytes. On `add` we default it from the issuer, when present, by
 lowercasing and replacing each run of disallowed characters with a
 single `-`, then trimming leading/trailing `-` (e.g. `"GitHub"` →
 `"github"`, `"Google Cloud"` → `"google-cloud"`); if the result is
-empty, or if the issuer is `None`, the field stays `None`. The user can
+empty, exceeds 64 bytes, or if the issuer is `None`, the field stays
+`None`. The user can
 override or clear it. The slug is a hint, not a guarantee: GUIs resolve
 it (§7); the CLI and TUI ignore the field. We deliberately do not store
 icon bytes — that would
@@ -97,7 +98,8 @@ constructors all go through the same validation path:
 For `otpauth://` imports, the path label and `issuer` query parameter are
 percent-decoded, then normalized with the rules above. If both an issuer
 prefix in the label (`Issuer:Account`) and an `issuer` query parameter are
-present, they must match after trimming or the URI is rejected.
+present, they must be byte-equal after both are normalized
+(case-sensitive), or the URI is rejected.
 
 The `otpauth://` parser applies these rules:
 
@@ -197,7 +199,11 @@ Decode requires full input consumption: trailing bytes after the
 `VaultPayload` are an `invalid_payload` error. The 16 MiB limit applies to the
 serialized `VaultPayload` bytes, excluding the Paladin header and AEAD tag;
 `open` rejects plaintext payloads and decrypted encrypted payloads that exceed
-that limit before constructing a `Vault`.
+that limit before constructing a `Vault`. To bound resource use before
+authentication, `open` also rejects vault files whose on-disk size exceeds
+`header_size + 16 MiB` for plaintext mode, or `header_size + 16 MiB +
+16 byte AEAD tag` for encrypted mode, with `invalid_payload` before any
+decoding or KDF/AEAD work.
 
 - **Location.** Resolved via `directories::ProjectDirs::data_dir()`,
   which on Linux follows the XDG Base Directory spec and on macOS /
@@ -397,8 +403,11 @@ Auto-detect format by content sniffing, with `--format` to override:
   atomicity. Accepted entries map `name` → `label`, `issuer` → `issuer`
   (empty becomes `None`), `info.secret` → `secret`, `info.algo` →
   `algorithm`, `info.digits` → `digits`, `info.period` → `Totp.period`,
-  and `info.counter` → `Hotp.counter`. TOTP `period` defaults to 30 if
-  absent; HOTP `counter` is required. Aegis icon fields and other metadata
+  and `info.counter` → `Hotp.counter`. `info.algo` defaults to `SHA1`
+  and `info.digits` defaults to `6` if absent (matching §4.1). `name`
+  and `info.secret` are required; missing either rejects the batch with
+  `validation_error` carrying `source_index`. TOTP `period` defaults to
+  30 if absent; HOTP `counter` is required. Aegis icon fields and other metadata
   are ignored in v0.1; `icon_hint` is derived from the issuer using the
   §4.1 slug rule.
 - **QR image file** — one or more accounts (one per decoded QR);
@@ -490,6 +499,23 @@ impl Vault {
 pub fn parse_otpauth(uri: &str, import_time: SystemTime) -> Result<ValidatedAccount>;
 pub fn read_qr_image(path: &Path) -> Result<Vec<String>>;                 // one URI per decoded QR; returns an empty Vec when the image contains no QRs (the `import::qr_image` wrapper turns that into an error)
 
+/// Unvalidated manual input from the CLI's flag-driven `add` mode (or any
+/// other caller that doesn't already have an `otpauth://` URI). `secret`
+/// is base32 text; decoding and length-checking happen inside
+/// `validate_manual`, which routes through the same validation table as
+/// `parse_otpauth` and the importers.
+pub struct AccountInput {
+    pub label: String,
+    pub issuer: Option<String>,
+    pub secret: SecretString,
+    pub algorithm: Algorithm,
+    pub digits: u8,
+    pub kind: OtpKind,
+    pub icon_hint: Option<String>,
+}
+
+pub fn validate_manual(input: AccountInput, now: SystemTime) -> Result<ValidatedAccount>;
+
 pub mod import {
     pub enum ImportFormat { Otpauth, Aegis, Paladin, Qr, Unknown }
     pub fn otpauth(bytes: &[u8], import_time: SystemTime) -> Result<Vec<ValidatedAccount>>;  // single URI, line-list, or JSON array of URIs; errors when the input decodes to zero accounts (empty array, blank file, etc.)
@@ -526,24 +552,24 @@ Built with `clap` (derive). Commands:
 | `paladin show <query>`                      | Print the current code. **Advances HOTP counter.**               |
 | `paladin peek <query>`                      | Print the current code without advancing the HOTP counter; for TOTP, identical to `show`. |
 | `paladin copy <query>`                      | Copy code to clipboard. For HOTP, advances and saves before attempting the clipboard write. (Auto-clear is TUI/GUI-only — the CLI ignores `clipboard.clear_enabled`; see security consideration 6.) |
-| `paladin remove <query>`                    | Remove an account (with confirmation).                           |
+| `paladin remove <query>`                    | Remove an account. Prompts for confirmation; `--yes` skips the prompt. Required under `--json` (no TTY prompt available). |
 | `paladin rename <query> <label>`            | Rename an account.                                               |
 | `paladin passphrase set`                    | Encrypt a plaintext vault under a new passphrase.                |
 | `paladin passphrase change`                 | Re-encrypt under a new passphrase.                               |
-| `paladin passphrase remove`                 | Decrypt to plaintext. Requires `--yes-i-know` to skip the warning. |
+| `paladin passphrase remove`                 | Decrypt to plaintext. Requires `--yes-i-know` to skip the warning. Required under `--json` (no TTY prompt available). |
 | `paladin export --plaintext <out>`          | Write JSON `otpauth://` array. Warns; refuses overwrite without `--force`. |
 | `paladin export --encrypted <out>`          | Write Paladin-format encrypted bundle. Refuses overwrite without `--force`. |
 | `paladin import [--on-conflict=<mode>] <path>` | Auto-detect format and merge into the vault. Conflict mode: `skip` (default), `replace`, `append`. See merge policy below. |
 | `paladin import --format=<fmt> <path>`      | Force format: `otpauth`, `aegis`, `paladin` (encrypted bundle only), `qr`.               |
 | `paladin settings get [key]`                | Show vault settings (auto-lock, clipboard-clear).                |
 | `paladin settings set <key> <value>`        | Edit vault settings.                                             |
-| `paladin tui`                               | Convenience wrapper: execs `paladin-tui`, forwarding all global flags (e.g. `--vault`, `--no-color`) verbatim. Keeps the §3 "binaries don't reach into each other" rule intact. |
+| `paladin tui`                               | Convenience wrapper: execs `paladin-tui` (resolved via `PATH`), forwarding all global flags (e.g. `--vault`, `--no-color`) verbatim. `--json` is rejected at parse time because the TUI has no JSON mode. If `paladin-tui` is not on `PATH`, exits non-zero with `io_error` (`operation: "exec_paladin_tui"`). Keeps the §3 "binaries don't reach into each other" rule intact. |
 
 Global flags: `--vault <path>`, `--no-color`, `--json` (for scripting).
 
 `paladin add` supports exactly one input mode per invocation:
 interactive prompts (no account-definition flags), `--uri <otpauth-uri>`,
-or manual flags. Manual mode requires `--label` and `--secret`; optional
+manual flags, or `--qr <path>`. Manual mode requires `--label` and `--secret`; optional
 fields are `--issuer`, `--algorithm sha1|sha256|sha512`, `--digits 6|7|8`,
 `--kind totp|hotp`, `--period <secs>`, `--counter <u64>`, and
 `--icon-hint <slug>`. Manual mode defaults to TOTP, SHA1, 6 digits, and a
@@ -558,7 +584,8 @@ success payload. A single-entry `add` rejects an existing
 `(secret, issuer, label)` collision with `duplicate_account` and the existing
 `account` summary unless `--allow-duplicate` is supplied, in which case it
 appends a new account. `add --qr` remains the multi-entry exception and uses
-the import merge path with fixed `--on-conflict=skip`.
+the import merge path with fixed `--on-conflict=skip`; `--allow-duplicate`
+is mutually exclusive with `--qr` and is rejected at parse time.
 
 All mutating CLI commands call the atomic save path before returning
 success. If save fails, the command exits non-zero. The primary vault file
@@ -652,6 +679,10 @@ shape is `{ "kind": "short_secret", "message": "...", "source_index": 0,
 "decoded_len": 10, "recommended_min": 16 }`; `source_index` is zero-based
 and omitted for single-entry `add`. Text-mode commands print warnings to
 stderr while still exiting zero on success.
+`VaultSettings` JSON is nested by category: `{ "auto_lock": { "enabled":
+bool, "timeout_secs": number }, "clipboard": { "clear_enabled": bool,
+"clear_secs": number } }`. The dotted `<category>.<field>` form is for
+CLI arguments only and never appears in JSON output.
 Errors use stable snake_case `kind` values:
 
 ```json
