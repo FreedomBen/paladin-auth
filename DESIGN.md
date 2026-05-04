@@ -184,15 +184,20 @@ else:
 `VaultPayload` = `{ accounts: Vec<Account>, settings: VaultSettings }`.
 
 - **Location.** Resolved via `directories::ProjectDirs::data_dir()`,
-  which follows the XDG Base Directory spec on Linux and the platform
-  conventions on macOS / Windows. The vault is application data (a
-  secrets store), not user-editable configuration, so it lives under
+  which on Linux follows the XDG Base Directory spec and on macOS /
+  Windows follows the platform conventions baked into the
+  `directories` crate. The vault is application data (a secrets
+  store), not user-editable configuration, so it lives under
   `XDG_DATA_HOME` — **not** `XDG_CONFIG_HOME`. The latter is reserved
   for any future preferences file that ships separately from the
   vault.
-  - Linux: `${XDG_DATA_HOME:-~/.local/share}/paladin/vault.bin`
-  - macOS: `~/Library/Application Support/paladin/vault.bin`
-  - Windows: `%APPDATA%\paladin\data\vault.bin`
+  - Linux (v0.1 target):
+    `${XDG_DATA_HOME:-~/.local/share}/paladin/vault.bin`.
+  - macOS / Windows: whatever `ProjectDirs::data_dir()` returns under
+    the platform conventions. The exact paths depend on the
+    `ProjectDirs::from(qualifier, organization, application)`
+    arguments chosen at instantiation and are exercised once v0.2
+    adds those targets (§2).
 
   The filename is always `vault.bin`; the on-disk encoding is the
   private bincode format described above (it is binary regardless of
@@ -360,6 +365,13 @@ Auto-detect format by content sniffing, with `--format` to override:
 - **Aegis** — JSON export. v0.1 supports the **plaintext export** out of
   the box; **encrypted Aegis backups** (scrypt + AES-256-GCM) are a stretch
   goal for v0.2 since they require implementing Aegis's KDF profile.
+  Detection (below) returns `Aegis` for both shapes because they share
+  the same top-level JSON layout, so v0.1 `import::aegis_plaintext`
+  returns a typed unsupported-encrypted-aegis error when handed a
+  backup whose `header` indicates encryption — without prompting for a
+  passphrase. Aegis exports with an empty `entries` array are rejected
+  with the same "no entries to import" error as the otpauth and QR
+  paths.
 - **QR image file** — one or more accounts (one per decoded QR);
   errors if no QRs are decoded. Uses `rqrr` to decode every QR in the
   image and feeds each resulting `otpauth://` URI through the URI
@@ -393,7 +405,9 @@ new parsed account because those formats do not carry Paladin timestamps.
 Paladin encrypted bundles preserve each account's stored timestamps. Under
 `--on-conflict=replace`, the existing entry keeps its `id` and
 `created_at`, receives the incoming mutable account fields, and sets
-`updated_at = import_time` regardless of source format.
+`updated_at = import_time` regardless of source format. HOTP-to-HOTP
+collisions additionally preserve the existing `Hotp.counter` (§5
+merge policy).
 
 ### 4.7 Public API sketch
 
@@ -491,7 +505,7 @@ Built with `clap` (derive). Commands:
 | `paladin import --format=<fmt> <path>`      | Force format: `otpauth`, `aegis`, `paladin` (encrypted bundle only), `qr`.               |
 | `paladin settings get [key]`                | Show vault settings (auto-lock, clipboard-clear).                |
 | `paladin settings set <key> <value>`        | Edit vault settings.                                             |
-| `paladin tui`                               | Convenience wrapper: execs `paladin-tui` with the same args. Keeps the §3 "binaries don't reach into each other" rule intact. |
+| `paladin tui`                               | Convenience wrapper: execs `paladin-tui`, forwarding all global flags (e.g. `--vault`, `--no-color`) verbatim. Keeps the §3 "binaries don't reach into each other" rule intact. |
 
 Global flags: `--vault <path>`, `--no-color`, `--json` (for scripting).
 
@@ -538,6 +552,12 @@ leading zeroes are preserved. The common account shape is:
 }
 ```
 
+For HOTP entries, `kind` is `"hotp"`, `period` is `null`, and
+`counter` carries the stored counter value (e.g. `42`). For TOTP
+entries, `period` carries the configured TOTP period and `counter` is
+`null`. `issuer` and `icon_hint` are `null` when unset (a missing
+issuer is `null`, never `""`).
+
 Success shapes:
 
 | Command family                | JSON shape                                                                      |
@@ -551,7 +571,7 @@ Success shapes:
 | `remove`                      | `{ "removed": AccountSummary }`                                                 |
 | `import`                      | `{ "imported": n, "skipped": n, "replaced": n, "appended": n, "accounts": [AccountSummary], "warnings": [Warning] }` |
 | `export`                      | `{ "written": "/path/to/out", "format": "otpauth_or_paladin" }`                |
-| `settings get`, `settings set` | `{ "settings": VaultSettings }`                                                 |
+| `settings get`, `settings set` | `{ "settings": VaultSettings }` (always full settings; `[key]` on `get` only filters text-mode display, never the JSON shape) |
 | `init`, `passphrase *`        | `{ "ok": true, "status": "plaintext_or_encrypted" }`                           |
 
 Pseudo-values such as `number_or_null` and `plaintext_or_encrypted`
@@ -567,9 +587,15 @@ not `skipped`. `warnings` lists validation warnings collected before the
 merge policy is applied, so a short-secret warning is still reported even
 if that source row is later skipped as a duplicate.
 
-`CodeResult` contains `account`, `code`, and either TOTP timing
-(`valid_from` and `valid_until` as Unix seconds, plus
-`seconds_remaining` as an integer duration) or HOTP `counter_used`.
+`CodeResult` always contains `account` (an `AccountSummary`) and
+`code` (a string of digits, zero-padded to the entry's `digits`
+width). It also carries kind-specific timing fields, with the unused
+fields set to `null`: TOTP entries include `valid_from` and
+`valid_until` as Unix seconds plus `seconds_remaining` as an integer
+duration, and have `counter_used: null`; HOTP entries include
+`counter_used` (the integer counter that produced the code, i.e. the
+pre-advance counter for `show`/`copy`), and have `valid_from`,
+`valid_until`, and `seconds_remaining` set to `null`.
 `Warning` objects use stable snake_case `kind` values. The v0.1 warning
 shape is `{ "kind": "short_secret", "message": "...", "source_index": 0,
 "decoded_len": 10, "recommended_min": 16 }`; `source_index` is zero-based
@@ -587,8 +613,11 @@ Errors use stable snake_case `kind` values:
 }
 ```
 
-`candidates` is present only for ambiguity errors and contains
-`AccountSummary` objects. Errors may include additional stable fields
+`candidates` is present only for ambiguity errors. Each entry is an
+`AccountSummary` extended with a `disambiguator` string field
+carrying the shortest-unique `id:<hex>` form (the same prefix shown
+in the text-mode candidate list, ≥8 hex chars), so JSON consumers can
+re-query by exact id without recomputing the prefix. Errors may include additional stable fields
 when they affect recovery or side effects: `save_durability_unconfirmed`
 includes `"committed": true`; `save_not_committed` includes
 `"committed": false`; and `clipboard_write_failed` includes `account` plus
@@ -623,7 +652,8 @@ settings setters reject lower values with a validation error.
   length of 8 hex chars. The user can re-run with that exact-id form
   (e.g. `paladin copy id:a1b2c3d4`).
 - A query with no matches exits non-zero and prints a concise "no matching
-  account" error.
+  account" error (`--json` error `kind: "no_match"`, parallel to
+  `multiple_matches`).
 - A query starting with `id:` is treated as a prefix match against the
   UUID's de-hyphenated 32-char hex form (e.g. `id:a1b2c3d4` matches any
   UUID starting with `a1b2c3d4`), never as a substring match. If the
@@ -643,6 +673,12 @@ identical**. Behavior on collision is controlled by `--on-conflict`:
   for each skipped import.
 - `replace` — overwrite the existing entry's mutable fields (algo,
   digits, kind, icon_hint, `updated_at`). The `id` is preserved.
+  **HOTP-to-HOTP collisions additionally preserve the existing
+  `Hotp.counter`**: `replace` swaps in the incoming algo / digits /
+  icon_hint but never rewinds the counter, so an import cannot reissue
+  HOTP codes the user has already advanced past. (Cross-kind
+  collisions — HOTP-to-TOTP or TOTP-to-HOTP — replace the entire
+  `kind` because there is no comparable counter on one side.)
 - `append` — always insert as a new entry, even if it's an exact dupe.
 
 The collision check runs against the *running* import state, so
@@ -674,11 +710,14 @@ Layout (single-screen MVP):
 ```
 
 - TOTP rows: live `Gauge` countdown, re-render on a 250 ms tick.
-- HOTP rows: code is hidden until the user presses `n` (advances counter and
-  saves); after a 120-second reveal window, returns to the hidden state.
-  Copying a hidden HOTP row is rejected with a status message. Copying
-  during the reveal window copies the visible code and does not advance
-  the counter again.
+- HOTP rows: code is hidden until the user presses `n` (advances counter
+  and saves); after a 120-second reveal window, returns to the hidden
+  state. `n` **always** advances and re-reveals — it is the "give me
+  the next code" key — so pressing `n` again during an open reveal
+  window advances to the next counter rather than no-op'ing on the
+  already-visible code. Copying a hidden HOTP row is rejected with a
+  status message. Copying during the reveal window copies the visible
+  code and does not advance the counter again.
 - Modal dialogs for add / remove / passphrase / settings.
 - **Auto-lock:** **off by default.** When `auto_lock.enabled = true`, the TUI
   clears the in-memory vault after `auto_lock.timeout_secs` of no input and
@@ -823,9 +862,12 @@ Concrete obligations and explicit user-controlled tradeoffs:
     otpauth issuers, and invalid timestamps; short secrets in the 10-15
     byte range produce `short_secret` warnings.
   - Zeroize-on-drop assertions for `Secret` and `SecretString`.
-  - Importers: Aegis plaintext, our own export round-trip, and
-    plaintext Paladin vault rejection — fixture files in
-    `tests/fixtures/`.
+  - Importers: Aegis plaintext, our own export round-trip, plaintext
+    Paladin vault rejection, encrypted-Aegis rejection, and QR image
+    decode (single-QR and multi-QR images) — fixture files in
+    `tests/fixtures/`. Also covers the "zero accounts" rejection path
+    (empty JSON array, blank otpauth file, empty Aegis `entries`,
+    image with no decodable QRs).
 - **Property tests** (`proptest`) for the URI parser and base32 secret
   decoding.
 - **Integration tests** for each shipped binary using `assert_cmd` (CLI)
