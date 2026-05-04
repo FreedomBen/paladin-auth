@@ -66,13 +66,15 @@ file header — so settings can't be tampered with on an encrypted vault.
   RFC 6238 Appendix B test vectors. Generation is read-only — `totp_code`
   takes `&self` and never mutates the vault.
 - **HOTP:** RFC 4226, same primitives. Validate against RFC 4226 Appendix D
-  test vectors. Two entry points:
-  - `hotp_peek` returns the next code without advancing — used by UIs
-    that want to render a code before the user commits to "use" it.
-  - `hotp_advance` returns the current code, advances the stored counter,
-    **and saves the vault atomically** (so an in-memory advance can never
-    silently desync from the on-disk file). It takes `&Store` for that
-    reason.
+  test vectors. Both entry points compute `HOTP(K, C)` for the current
+  stored counter `C`; they differ only in whether they mutate state:
+  - `hotp_peek` returns the code without advancing — used by UIs
+    that want to render the code before the user commits to "use" it.
+  - `hotp_advance` returns the same code, advances the stored counter
+    to `C + 1`, **and saves the vault atomically** (so an in-memory
+    advance can never silently desync from the on-disk file). It takes
+    `&Store` for that reason. A subsequent `hotp_peek` after an advance
+    therefore returns the code for the new counter.
 
 ### 4.3 Storage
 
@@ -99,7 +101,9 @@ else:
   Linux: `~/.local/share/paladin/vault.bin` (XDG).
 - **Permissions.** File is created `0600` regardless of mode. In plaintext
   mode this is the *only* protection on the secrets, so we enforce it.
-- **Atomic writes.** Write to `vault.bin.tmp`, `fsync`, `rename`.
+- **Atomic writes.** Write to `vault.bin.tmp`, `fsync` the temp file,
+  `rename` over the target, then `fsync` the parent directory so the
+  rename is durable across power loss.
 - **Backups.** On every successful write, keep the previous `vault.bin` as
   `vault.bin.bak` (one generation). Backup inherits the mode of the file it
   replaces (no plaintext leak from a previously-encrypted vault).
@@ -113,7 +117,10 @@ else:
   header so we can raise costs over time without breaking old vaults. The
   passphrase + salt deterministically derive the 32-byte AEAD key.
 - **AEAD:** **XChaCha20-Poly1305** (24-byte nonce, simpler misuse story than
-  AES-GCM). Header records the algorithm ID so we can migrate later.
+  AES-GCM). Header records the algorithm ID so we can migrate later. All
+  header bytes after the magic — `format_ver`, `mode`, `kdf_id`, the Argon2
+  params, `salt`, `aead_id`, and `nonce` — are passed as AEAD associated
+  data, so tampering with any of them fails decryption.
 - **Key handling:** derived key lives in a `Zeroizing<[u8; 32]>` and is
   dropped as soon as the encrypt/decrypt op returns.
 - **Passphrase prompt:** via `rpassword` for the CLI; via the host UI for the
@@ -125,7 +132,7 @@ A vault's encryption state is mutable at runtime. The user can:
 
 | Operation             | Starting state | Resulting state | Notes                                       |
 | --------------------- | -------------- | --------------- | ------------------------------------------- |
-| **Set passphrase**    | plaintext      | encrypted       | Generate fresh salt + nonce; derive key; encrypt. |
+| **Set passphrase**    | plaintext      | encrypted       | Generate fresh salt + nonce; derive key; encrypt. The rotated `.bak` is also encrypted under the new key (with its own fresh nonce) so it cannot retain the previous plaintext secrets. |
 | **Change passphrase** | encrypted      | encrypted       | Decrypt with old; fresh salt + nonce; encrypt with new. |
 | **Remove passphrase** | encrypted      | plaintext       | Decrypt; write payload directly. Loud confirmation required. |
 
@@ -140,22 +147,27 @@ across the transition so the user has at least one recovery point.
 
 Two formats, user picks per invocation:
 
-- **Plaintext.** A JSON array of `otpauth://` URIs, one entry per account
-  (HOTP entries carry their counter via the standard `counter` URI parameter,
-  per the Google Authenticator key-URI format). Cross-compatible with most
-  authenticators that accept URI lists. **The CLI prints a clear warning** before writing
-  unencrypted secrets to disk and refuses to write to a file that already
-  exists unless `--force` is given.
-- **Encrypted.** Same payload wrapped in Paladin's encrypted file format
-  (§4.3) under a passphrase the user supplies at export time (independent of
-  the vault's own passphrase).
+- **Plaintext (otpauth URI list).** A JSON array of `otpauth://` URIs, one
+  entry per account (HOTP entries carry their counter via the standard
+  `counter` URI parameter, per the Google Authenticator key-URI format).
+  This *is* the otpauth URI list format — there is no Paladin-specific
+  plaintext envelope, and on import these files are read via the otpauth
+  path. Cross-compatible with most authenticators that accept URI lists.
+  **The CLI prints a clear warning** before writing unencrypted secrets to
+  disk and refuses to write to a file that already exists unless `--force`
+  is given.
+- **Encrypted (Paladin bundle).** Same payload wrapped in Paladin's
+  encrypted file format (§4.3) under a passphrase the user supplies at
+  export time (independent of the vault's own passphrase).
 
 #### Import
 
 Auto-detect format by content sniffing, with `--format` to override:
 
 - **`otpauth://` URI** (single line, or one per line, or JSON array).
-- **Paladin export** (plaintext or encrypted) — round-trips with our exporter.
+- **Paladin encrypted bundle** — round-trips with our encrypted exporter.
+  Plaintext Paladin exports are detected and read as `otpauth://` URI
+  lists above (they share the same on-disk format).
 - **Aegis** — JSON export. v1 supports the **plaintext export** out of the
   box; **encrypted Aegis backups** (scrypt + AES-256-GCM) are a stretch goal
   for v0.2 since they require implementing Aegis's KDF profile.
@@ -165,15 +177,21 @@ Auto-detect format by content sniffing, with `--format` to override:
   resulting `otpauth://` URI through the URI parser. The GTK GUI also
   accepts a QR image pasted from the clipboard, decoded via the same path.
 
-Each importer is a pure `&[u8] -> Result<Vec<Account>>` function, tested with
-sample fixture files committed under `crates/paladin-core/tests/fixtures/`.
+Each importer is tested with sample fixture files committed under
+`crates/paladin-core/tests/fixtures/`. The byte-oriented importers
+(`aegis`, `gnome`, `otpauth`, plaintext `paladin`) take `&[u8]`; the
+encrypted Paladin importer additionally takes a `VaultLock`, and the
+QR importer takes a path (it loads the image, decodes via `rqrr`, and
+feeds the resulting URI through `parse_otpauth`).
 
 ### 4.7 Public API sketch
 
 ```rust
 pub enum VaultLock { Plaintext, Encrypted(SecretString) }
+pub enum VaultStatus { Plaintext, Encrypted, Missing }
 
-pub fn open(path: &Path, lock: VaultLock) -> Result<(Vault, Store)>;
+pub fn inspect(path: &Path) -> Result<VaultStatus>;                       // header probe; no decryption
+pub fn open(path: &Path, lock: VaultLock) -> Result<(Vault, Store)>;      // errors if `lock` doesn't match the file mode
 pub fn create(path: &Path, lock: VaultLock) -> Result<(Vault, Store)>;
 
 impl Vault {
@@ -199,15 +217,17 @@ pub fn read_qr_image(path: &Path) -> Result<String>;
 
 pub mod import {
     pub enum ImportFormat { Otpauth, Aegis, Gnome, Paladin, Qr, Unknown }
+    pub fn otpauth(bytes: &[u8]) -> Result<Vec<Account>>;          // single URI, line-list, or JSON array of URIs
     pub fn aegis_plaintext(bytes: &[u8]) -> Result<Vec<Account>>;
     pub fn gnome_authenticator(bytes: &[u8]) -> Result<Vec<Account>>;
-    pub fn paladin(bytes: &[u8], lock: VaultLock) -> Result<Vec<Account>>;
+    pub fn paladin(bytes: &[u8], passphrase: &SecretString) -> Result<Vec<Account>>;  // encrypted Paladin bundle only
+    pub fn qr_image(path: &Path) -> Result<Vec<Account>>;
     pub fn detect(bytes: &[u8]) -> ImportFormat;
 }
 
 pub mod export {
-    pub fn plaintext(accounts: &[Account]) -> Vec<u8>;
-    pub fn encrypted(accounts: &[Account], passphrase: &SecretString) -> Result<Vec<u8>>;
+    pub fn otpauth_list(accounts: &[Account]) -> Vec<u8>;                              // JSON array of `otpauth://` URIs
+    pub fn encrypted(accounts: &[Account], passphrase: &SecretString) -> Result<Vec<u8>>;  // Paladin encrypted bundle
 }
 ```
 
@@ -253,7 +273,11 @@ Vault settings keys (subject to extension):
 `<query>` is a case-insensitive substring match against `"{issuer}:{label}"`
 (empty issuer is allowed; the colon is still present in the match key).
 
-- `show` prints **all** matching entries.
+- `show` prints **all** matching entries when every match is TOTP. If any
+  matched entry is HOTP, `show` requires a single match — the same rule
+  as `copy`/`remove`/`rename` below — so a substring query cannot
+  silently advance multiple HOTP counters.
+- `peek` prints **all** matching entries unconditionally (no state mutation).
 - `copy`, `remove`, and `rename` require a single match. On multiple
   matches they exit non-zero and list the candidates, each prefixed with
   a short `id:<8 hex>` form taken from the UUID. The user can re-run with
@@ -400,7 +424,9 @@ Concrete obligations and explicit user-controlled tradeoffs:
   - RFC 6238 (TOTP) and RFC 4226 (HOTP) test vectors.
   - `otpauth://` parser round-trip (TOTP and HOTP).
   - Vault round-trip in **both** modes (plaintext and encrypted).
-  - Tamper detection on encrypted vault (flip a ciphertext byte → fail).
+  - Tamper detection on encrypted vault: flip a ciphertext byte → fail;
+    flip any byte in the AAD-bound header (`format_ver`, `mode`, `kdf_id`,
+    Argon2 params, `salt`, `aead_id`, `nonce`) → fail.
   - File-permission enforcement (`0600` on file, `0700` on dir) post-save.
   - Passphrase set/change/remove transitions, including failure-rollback
     (simulate write failure mid-transition → original file unchanged).
@@ -428,7 +454,7 @@ Concrete obligations and explicit user-controlled tradeoffs:
 - [ ] RFC 6238 (TOTP) implementation + Appendix B vectors.
 - [ ] RFC 4226 (HOTP) implementation + Appendix D vectors.
 - [ ] `otpauth://` parser + base32 secret handling (TOTP and HOTP URIs).
-- [ ] **Plaintext** vault format with atomic writes + `0600` enforcement.
+- [ ] **Plaintext** vault format with atomic writes + `0600` file / `0700` parent-dir enforcement.
 - [ ] **Encrypted** vault format: Argon2id + AEAD with header versioning.
 - [ ] One-generation `.bak` preserved across all writes.
 - [ ] Tamper-detection and round-trip tests for both modes.
@@ -442,7 +468,7 @@ Concrete obligations and explicit user-controlled tradeoffs:
 - [ ] Plaintext export (JSON `otpauth://` array) with overwrite guard + `0600`.
 - [ ] Encrypted export bundle (Paladin format).
 - [ ] Importer: `otpauth://` URIs (single + list).
-- [ ] Importer: Paladin export (plaintext + encrypted).
+- [ ] Importer: Paladin encrypted bundle (plaintext exports are read via the otpauth importer above).
 - [ ] Importer: Aegis plaintext export.
 - [ ] Importer: Gnome Authenticator plaintext export.
 - [ ] Importer: QR image files (`rqrr`).
