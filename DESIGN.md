@@ -454,3 +454,24 @@ Concrete obligations and explicit user-controlled tradeoffs:
    simpler, and we don't need async I/O for a local TUI.
 2. **Icon hints:** store an `issuer`-derived icon name and let GUIs resolve
    it, or embed user-supplied icon bytes in the vault? Lean: name-only.
+
+## 13. License
+
+This project is licensed under **AGPL-3.0-or-later**. The canonical text
+lives in [`LICENSE`](LICENSE) at the repo root.
+
+- All workspace crates set `license = "AGPL-3.0-or-later"` in their
+  `Cargo.toml`.
+- New source files should carry the standard SPDX header
+  (`// SPDX-License-Identifier: AGPL-3.0-or-later`).
+- Vendored code, fixture files imported from other projects (e.g., Aegis or
+  Gnome Authenticator export samples used as test fixtures), and any
+  third-party assets must be vetted for license compatibility before
+  inclusion. AGPL-3.0-or-later is one-way compatible with GPL-3.0-or-later
+  but not with permissive-only or earlier-GPL-only code.
+
+Practical note for an OTP authenticator: the AGPL §13 "remote network
+interaction" clause is largely inert for v0.1 since Paladin runs locally
+and offers no network service. The clause becomes load-bearing only if a
+downstream user wraps Paladin into a hosted service, in which case they
+must offer source to network users.
