@@ -66,18 +66,18 @@ crates/paladin-cli/
 
 | Command                                                | Notes |
 |--------------------------------------------------------|-------|
-| `init [--force]`                                       | Stages new vault, then rotates old primary verbatim into `.bak`. |
+| `init [--force]`                                       | Without `--force`, refuses to clobber an existing vault. With `--force`, stages new vault first, then rotates the old primary verbatim to `.bak` (overwriting any existing backup). |
 | `add` (interactive / `--uri` / manual flags / `--qr`)  | Exactly one input mode; combinations rejected at parse time. |
 | `list`                                                 | Account metadata only — no codes. |
-| `show <query>`                                         | Advances HOTP; persists before printing. |
-| `peek <query>`                                         | Never advances. |
-| `copy <query>`                                         | Advances HOTP; copies to clipboard via `arboard`. **No auto-clear.** |
-| `remove <query>`                                       | Confirmation prompt unless `--force`. |
-| `rename <query> <new-label>`                           | Updates `updated_at`. |
-| `passphrase set | change | remove`                     | Loud confirmation on `remove`. |
+| `show <query>`                                         | Advances HOTP; persists before printing. Substring queries print all matches when every match is TOTP; if any match is HOTP, requires a single match. |
+| `peek <query>`                                         | Never advances. Prints all matches unconditionally. |
+| `copy <query>`                                         | Advances HOTP; copies to clipboard via `arboard`. **No auto-clear.** Single-match required. |
+| `remove <query>`                                       | Confirmation prompt unless `--yes`. `--yes` is required under `--json` (no TTY prompt). Single-match required. |
+| `rename <query> <new-label>`                           | Updates `updated_at`. Single-match required. |
+| `passphrase set | change | remove`                     | `passphrase remove` requires `--yes-i-know` to skip the warning; required under `--json`. |
 | `import <path> [--format <fmt>] [--on-conflict <p>]`   | `auto`/`otpauth`/`aegis`/`paladin`/`qr`; `skip`/`replace`/`append`. |
 | `export --plaintext <path> | --encrypted <path>`       | Refuses overwrite without `--force`. |
-| `settings get | set`                                   | CLI ignores `clipboard.clear_enabled`. |
+| `settings get [key] | set <key> <value>`               | CLI persists `clipboard.clear_enabled` for TUI/GUI to honor but **ignores it at runtime** for `paladin copy`. `get [key]` filters text-mode display only; the `--json` shape is always the full `VaultSettings`. |
 | `tui [...]`                                            | `execvp` `paladin-tui`; rejects `--json`; forwards `--vault` / `--no-color`. |
 
 ## Add modes (per §5)
@@ -89,14 +89,16 @@ crates/paladin-cli/
 3. **Manual flags** — `--label` and `--secret` required; optional
    `--issuer`, `--algorithm sha1|sha256|sha512`, `--digits 6|7|8`,
    `--kind totp|hotp`, `--period <secs>` (TOTP-only), `--counter <u64>`
-   (HOTP-only, default 0), `--icon-hint <slug>`. Defaults: TOTP, SHA1, 6,
-   30s.
-4. `--qr <path>` — every decoded QR added; collisions use the default
-   `import` policy (`skip`); errors if no QR decodes.
+   (HOTP-only, default 0), `--icon-hint <slug>` (when omitted, derived
+   from issuer per §4.1). Defaults: TOTP, SHA1, 6, 30s. `--secret` is
+   Base32 text validated per §4.1.
+4. `--qr <path>` — every decoded QR added; collisions use a fixed
+   `--on-conflict=skip`; errors if no QR decodes.
 
 Combining input modes rejects at parse time. Single-entry `add` rejects an
 existing `(secret, issuer, label)` collision with `duplicate_account`
-unless `--allow-duplicate` is passed.
+unless `--allow-duplicate` is passed. `--allow-duplicate` is mutually
+exclusive with `--qr` and is rejected at parse time.
 
 ## Passphrase prompts
 
@@ -117,21 +119,29 @@ unless `--allow-duplicate` is passed.
 
 - Text mode is the default. ANSI styling honors `--no-color`; also disables
   when stdout is not a TTY or `NO_COLOR` is set.
-- `--json` emits the stable schema from §5 to stdout. Errors emit a JSON
-  envelope with the v0.1 `error_kind` taxonomy:
-  - `invalid_passphrase` (with `reason`)
-  - `unsafe_permissions` (with `path`, `subject`, `actual_mode`,
-    `expected_mode` — modes are 4-digit octal strings like `"0644"`)
-  - `io_error` (with `operation`)
-  - `invalid_payload`
-  - `duplicate_account`
-  - `not_found`
-  - `unsupported_format`
-  - `vault_locked` / `wrong_mode` / `kdf_params_out_of_range` /
-    `validation_error` / `import_atomic_failure`
-  - …plus any other tag the public API surfaces. The JSON schema is
-    captured in golden snapshots so additions are an explicit, reviewable
-    change.
+- `--json` emits the stable schema from §5 to stdout on success and one
+  JSON document to stderr on failure. The `code` field is a string so
+  leading zeroes are preserved.
+- The error envelope uses the v0.1 `kind` taxonomy from §5 verbatim — the
+  CLI never invents new kinds or renames existing ones. Concrete kinds
+  surfaced by CLI commands include `validation_error`, `invalid_passphrase`,
+  `invalid_state`, `vault_missing`, `vault_exists`,
+  `unsupported_format_version`, `unsafe_permissions`, `invalid_payload`,
+  `duplicate_account`, `no_match`, `multiple_matches`, `counter_overflow`,
+  `time_range`, `save_not_committed`, `save_durability_unconfirmed`,
+  `clipboard_write_failed`, `io_error`, `no_entries_to_import`, and
+  `unsupported_entry_type` (Aegis). Stable extra fields match §5 exactly:
+  - `unsafe_permissions`: `path`, `subject` (one of `vault_dir`,
+    `vault_file`, `backup_file`), `actual_mode`, `expected_mode` —
+    mode fields are four-digit octal strings like `"0644"` per §4.3.
+  - `multiple_matches`: `candidates`, each an `AccountSummary` plus a
+    `disambiguator` `id:<hex>` string (≥8 hex chars).
+  - `clipboard_write_failed`: `account`, `counter_used` (`null` for TOTP).
+  - `save_not_committed`: `committed: false`, optional `backup_path`
+    (set when `init --force` rotated the old primary to `.bak`).
+  - `save_durability_unconfirmed`: `committed: true`.
+- The JSON schema (success and error envelopes) is captured in golden
+  snapshots so additions are an explicit, reviewable change.
 
 Exit codes: `0` success, non-zero per error class. `--json` does not change
 exit codes; the JSON envelope carries the same information.
@@ -172,20 +182,36 @@ exit code.
 - **`init` + unsafe parent dir** → `unsafe_permissions` with `chmod` hint.
 - **`add --uri`** → account appears in `list`. **`add` interactive** with
   scripted `/dev/tty` (via `script` or `pty-process` test helper).
-- **`add` mode-combination rejection** (e.g. `--uri` + `--qr`).
-- **`add --qr`** with synthetic QR image.
+- **`add` mode-combination rejection** (e.g. `--uri` + `--qr`,
+  `--qr` + `--allow-duplicate`).
+- **`add --qr`** with synthetic QR image (multi-entry path uses fixed
+  `--on-conflict=skip`).
+- **`add` duplicate behavior** — `(secret, issuer, label)` collision
+  rejects with `duplicate_account` and the existing `account` summary
+  unless `--allow-duplicate` is passed.
 - **`show` vs `peek` on HOTP** — `show` persists counter advance (verified
-  by re-opening and re-running `peek`); `peek` does not.
+  by re-opening and re-running `peek`); `peek` does not. `show` on a
+  multi-match query containing any HOTP entry rejects with
+  `multiple_matches`; multi-match TOTP-only `show` prints all matches.
+- **Query resolution** — `id:<hex>` prefix routes to UUID match, never
+  substring; `<8`-hex prefixes that match multiple entries surface
+  `multiple_matches`.
 - **`copy` writes to clipboard** — gated behind a `#[cfg]` test flag because
   CI may not have a clipboard server; otherwise dry-run via a
   `PALADIN_CLIPBOARD_DRYRUN=1` env var observed by `arboard` test shim.
   Asserts the CLI **never** schedules an auto-clear regardless of
   `clipboard.clear_enabled` in the vault.
-- **`remove`** with and without `--force`.
+- **`remove`** with and without `--yes`; `--json` without `--yes` rejects at
+  parse time (no TTY prompt). `multiple_matches` includes `candidates`
+  with `disambiguator` `id:<hex>` strings.
 - **`rename`** updates `updated_at` (compared via `--json` snapshot).
-- **`passphrase set/change/remove`** end-to-end against an open vault, plus
-  durability-unconfirmed surfaced when the post-commit fsync fails (use a
-  fault-injection `Store` available from `paladin-core` tests-only).
+- **`passphrase set/change/remove`** end-to-end against an open vault.
+  `passphrase remove` requires `--yes-i-know`; `--json` without
+  `--yes-i-know` rejects at parse time. Durability-unconfirmed surfaced as
+  `save_durability_unconfirmed` (with `committed: true`) when the
+  post-commit fsync fails (use a fault-injection `Store` available from
+  `paladin-core` tests-only). Pre-commit failure surfaces as
+  `save_not_committed` with `committed: false`.
 - **`import`** for each format with each `--on-conflict` policy. Atomic
   failure on any invalid entry.
 - **`export --plaintext` / `--encrypted`** refuses overwrite without
