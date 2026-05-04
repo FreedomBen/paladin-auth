@@ -78,8 +78,8 @@ file header — so settings can't be tampered with on an encrypted vault.
 [format_ver:   u8            ]
 [mode:         u8            ]   // 0 = plaintext, 1 = encrypted
 if mode == 1:
-    [kdf_id:   u8            ]   // 1 = Argon2id
-    [argon2 params: m, t, p  ]
+    [kdf_id:   u8            ]   // 1 = Argon2id (other IDs reserved)
+    [argon2 params: m_kib u32, t u32, p u32  (little-endian, 12 bytes total)]
     [salt:     16 bytes      ]
     [aead_id:  u8            ]   // 1 = XChaCha20-Poly1305 (other IDs reserved)
     [nonce:    24 bytes      ]
@@ -132,9 +132,10 @@ across the transition so the user has at least one recovery point.
 
 Two formats, user picks per invocation:
 
-- **Plaintext.** A JSON array of `otpauth://` URIs, one entry per account,
-  plus per-account counter for HOTP. Cross-compatible with most authenticators
-  that accept URI lists. **The CLI prints a clear warning** before writing
+- **Plaintext.** A JSON array of `otpauth://` URIs, one entry per account
+  (HOTP entries carry their counter via the standard `counter` URI parameter,
+  per the Google Authenticator key-URI format). Cross-compatible with most
+  authenticators that accept URI lists. **The CLI prints a clear warning** before writing
   unencrypted secrets to disk and refuses to write to a file that already
   exists unless `--force` is given.
 - **Encrypted.** Same payload wrapped in Paladin's encrypted file format
@@ -341,7 +342,7 @@ Concrete obligations and explicit user-controlled tradeoffs:
 | `clap`                             | CLI parsing                      |
 | `serde`, `serde_json`, `bincode`   | Vault and JSON I/O               |
 | `hmac`, `sha1`, `sha2`             | TOTP / HOTP primitives           |
-| `aes-gcm` *or* `chacha20poly1305`  | AEAD                             |
+| `chacha20poly1305`                 | AEAD (XChaCha20-Poly1305)        |
 | `argon2`                           | KDF                              |
 | `secrecy`, `zeroize`               | Memory hygiene                   |
 | `rpassword`                        | CLI passphrase prompt            |
