@@ -509,6 +509,13 @@ pub fn inspect(path: &Path) -> Result<VaultStatus>;                       // hea
 pub fn open(path: &Path, lock: VaultLock) -> Result<(Vault, Store)>;      // errors if `lock` doesn't match the file mode
 pub fn create(path: &Path, lock: VaultLock) -> Result<(Vault, Store)>;    // errors if `path` already exists; caller is responsible for any rotation
 
+/// Format the human-readable §4.3 `unsafe_permissions` text — failing
+/// path, `subject`, `actual_mode`, `expected_mode`, and the `chmod`
+/// repair command. Returns `None` for any other error kind. Lives in
+/// `paladin-core` so the CLI and GUI render identical wording without
+/// re-implementing it (and without the GUI depending on `paladin-cli`).
+pub fn format_unsafe_permissions(err: &Error) -> Option<String>;
+
 impl Vault {
     pub fn add(&mut self, account: Account) -> AccountId;
     pub fn remove(&mut self, id: AccountId) -> Option<Account>;
@@ -975,6 +982,10 @@ Library: **Relm4** on **GTK4**. Component tree:
   does not advance again.
 - `AddAccountComponent` — manual fields + "scan from clipboard image",
   decoded through the core raw-RGBA QR import path.
+- `RemoveDialog` — confirmation gate before `Vault::remove` + save.
+- `PassphraseDialog` — `set` / `change` / `remove` sub-flows mirroring the
+  CLI; `set` is enabled only on plaintext vaults, `change` and `remove`
+  only on encrypted vaults.
 - `SettingsComponent` — toggles for auto-lock and clipboard-clear, with
   spinners for timeouts.
 
@@ -1194,7 +1205,7 @@ Concrete obligations and explicit user-controlled tradeoffs:
 
 ### Milestone 7 — GUI *(v0.2)*
 - [ ] Add the `paladin-gtk` crate to the workspace (placeholder for v0.2 work).
-- [ ] Relm4 component tree (Unlock / List / Row / Add / Settings).
+- [ ] Relm4 component tree (Unlock / List / Row / Add / Remove / Passphrase / Settings).
 - [ ] Conditional unlock view (encrypted vaults only).
 - [ ] Clipboard + auto-lock parity with TUI (opt-in).
 - [ ] Linux desktop file + icon.

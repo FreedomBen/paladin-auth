@@ -22,7 +22,7 @@ crates/paladin-cli/
 │   │   ├── mod.rs        # selects text vs json; no-color handling
 │   │   ├── text.rs       # human renderers per command
 │   │   └── json.rs       # stable JSON envelopes per §5
-│   ├── prompt.rs         # /dev/tty passphrase prompts (rpassword)
+│   ├── prompt.rs         # /dev/tty passphrase + interactive `add` prompts (rpassword)
 │   ├── exec_tui.rs       # `paladin tui` → execvp paladin-tui w/ flags
 │   ├── commands/
 │   │   ├── init.rs
@@ -75,7 +75,7 @@ crates/paladin-cli/
 | `remove <query>`                                       | Confirmation prompt unless `--yes`. `--yes` is required under `--json` (no TTY prompt). Single-match required. |
 | `rename <query> <new-label>`                           | Updates `updated_at`. Single-match required. |
 | `passphrase set | change | remove`                     | `passphrase remove` requires `--yes-i-know` to skip the warning; required under `--json`. |
-| `import <path> [--format <fmt>] [--on-conflict <p>]`   | Auto-detects when `--format` is omitted; forced formats are `otpauth`/`aegis`/`paladin`/`qr`; conflict policies are `skip`/`replace`/`append`. |
+| `import <path> [--format <fmt>] [--on-conflict <p>]`   | Auto-detects when `--format` is omitted; forced formats are `otpauth`/`aegis`/`paladin` (encrypted bundle only)/`qr`; conflict policies are `skip`/`replace`/`append`. |
 | `export --plaintext <path> | --encrypted <path>`       | Refuses overwrite without `--force`; plaintext export prints a clear warning before writing unencrypted secrets. |
 | `settings get [key] | set <key> <value>`               | CLI persists `clipboard.clear_enabled` for TUI/GUI to honor but **ignores it at runtime** for `paladin copy`. `get [key]` filters text-mode display only; the `--json` shape is always the full `VaultSettings`. |
 | `tui`                                                  | `execvp` `paladin-tui`; rejects `--json`; forwards `--vault` / `--no-color`. |
@@ -96,7 +96,9 @@ crates/paladin-cli/
 4. `--qr <path>` — every decoded QR added; collisions use a fixed
    `--on-conflict=skip`; errors if no QR decodes.
 
-Combining input modes rejects at parse time. Single-entry `add` rejects an
+Combining input modes rejects at parse time. Interactive prompts
+(label, issuer, secret, etc.) read from `/dev/tty` like passphrase
+prompts, never from stdin/stdout. Single-entry `add` rejects an
 existing `(secret, issuer, label)` collision with `duplicate_account`
 unless `--allow-duplicate` is passed. `--allow-duplicate` is mutually
 exclusive with `--qr` and is rejected at parse time.
@@ -123,6 +125,11 @@ strings, then validated against the minimums above.
 - All passphrase I/O goes through `rpassword` reading **from `/dev/tty`** in
   both text and `--json` modes. Never from stdin/stdout.
 - Prompted **once**: existing-vault unlock, encrypted-Paladin-bundle import.
+- For Paladin-bundle imports the CLI calls `paladin_core::inspect(path)`
+  before prompting: plaintext-mode bundles reject with
+  `unsupported_plaintext_vault` immediately (no passphrase prompt), and
+  only encrypted-mode bundles trigger the bundle-passphrase prompt before
+  the call to `paladin_core::import::paladin`.
 - Prompted **twice (must match)**: `init` with a non-empty first
   passphrase entry, `passphrase set`, `passphrase change` new passphrase,
   `export --encrypted`.
@@ -159,7 +166,9 @@ strings, then validated against the minimums above.
     mode fields are four-digit octal strings like `"0644"` per §4.3.
   - `multiple_matches`: `candidates`, each an `AccountSummary` plus a
     `disambiguator` `id:<hex>` string (≥8 hex chars).
-  - `clipboard_write_failed`: `account`, `counter_used` (`null` for TOTP).
+  - `clipboard_write_failed`: `account`, `counter_used` (`null` for TOTP);
+    for HOTP, the `account` summary reflects the persisted post-advance
+    counter per §5.
   - `save_not_committed`: `committed: false`, optional `backup_path`
     (set when `init --force` rotated the old primary to `.bak`).
   - `save_durability_unconfirmed`: `committed: true`.
@@ -189,11 +198,16 @@ Every vault-opening command except `init`:
 1. Resolve vault path (`--vault` or `directories::ProjectDirs::data_dir()`).
 2. `paladin_core::inspect(path)` to learn the mode.
 3. If encrypted, prompt once via `/dev/tty`.
-4. `paladin_core::open(path, lock)` — propagates `unsafe_permissions` with
-   the human-readable `chmod` repair string.
+4. `paladin_core::open(path, lock)` — propagates `unsafe_permissions`;
+   text mode renders the human-readable `chmod` repair string via
+   `paladin_core::format_unsafe_permissions(&err)` so the CLI and GUI
+   share a single source of wording.
 5. Perform the operation. For `show`/`copy` on HOTP, call `hotp_advance`
    (which persists before returning). For `peek` on HOTP, call `hotp_peek`.
    Other mutating operations call `Vault::save` before returning success.
+   Passphrase transitions (`set_passphrase`, `change_passphrase`,
+   `remove_passphrase`) save themselves through `&Store` and do not require
+   a follow-up `Vault::save`.
 6. Drop the `Vault` (zeroizes secrets on drop).
 7. Exit.
 

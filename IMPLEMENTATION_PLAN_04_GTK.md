@@ -79,9 +79,10 @@ inclusion.
   (HOTP), copy button. HOTP rows hide their code until the user activates
   "next" (advances counter and saves); after a 120-second reveal window the
   code returns to the hidden state, matching the TUI. Activating "next"
-  during an open reveal advances to the next counter (matches §6 — "next"
-  is the "give me the next code" affordance, never a no-op). Copying a
-  hidden HOTP row is **disabled**; copying during the reveal window copies
+  during an open reveal advances to the next counter and restarts the
+  120-second reveal window with the newly committed code (matches §6 —
+  "next" is the "give me the next code" affordance, never a no-op). Copying
+  a hidden HOTP row is **disabled**; copying during the reveal window copies
   the visible code and does not advance again.
 - `AddAccountComponent` — manual fields + "scan from clipboard image". Reads
   a `gdk::Texture` from the GDK clipboard, downloads it into an RGBA8
@@ -147,9 +148,9 @@ to disable, and theming is delegated to Adwaita / the system theme.
   `gio::spawn_blocking` so the §4.4 Argon2 KDF (m=64 MiB defaults) does not
   block the GTK main loop; the dialog shows a spinner until the join
   completes. Wrong passphrase surfaces inline; `unsafe_permissions` shows
-  a dialog with the same human `chmod` repair wording the CLI uses,
-  formatted locally from the core error fields without depending on
-  `paladin-cli`.
+  a dialog whose body is rendered via
+  `paladin_core::format_unsafe_permissions(&err)` (§4.7) so the wording
+  matches the CLI exactly and the GUI never depends on `paladin-cli`.
 - Missing → show a non-mutating dialog telling the user to run
   `paladin init`. The GUI does not create vaults in v0.2 (parity with §6).
 - Operations route through `Vault` and `Store` methods — no GUI-side
@@ -181,7 +182,9 @@ Effects update visible state only after the underlying mutation succeeds:
 
 The GUI itself is hard to test without a display server. Tests are split:
 
-- **Pure-logic unit tests** (no display): icon resolution helpers,
+- **Pure-logic unit tests** (no display): icon resolution **fallback
+  decision** (`None`/empty slug → placeholder; failed lookup → placeholder;
+  the actual `gtk::IconTheme` lookup is exercised by the smoke test),
   search filtering, auto-lock state machine, clipboard "clear if unchanged"
   decision logic, HOTP reveal window timing.
 - **Smoke test** in CI under `xvfb-run`: app launches, opens a prepared
@@ -209,6 +212,13 @@ The GUI itself is hard to test without a display server. Tests are split:
 `directories`, plus `paladin-core`. GDK clipboard is the canonical
 Wayland/X11 path; `arboard` is **not** a hard dependency for v0.2 and is
 only added if GDK clipboard proves insufficient during implementation.
+
+**No `libadwaita` for v0.2.** Styling is delegated to plain GTK4 widgets
+plus the bundled `data/style.css` (Adwaita-style, scoped via
+`gtk::CssProvider`). Adding `libadwaita` for `AdwApplicationWindow` /
+`AdwHeaderBar` / `AdwToast` is a possible v0.3 polish step if the
+manual test plan flags HIG gaps; it would require a §9 dependencies
+update first.
 
 **No `tokio`.** GTK's main loop is the executor; long work runs on
 `gio::spawn_blocking` with results delivered back to the main thread via

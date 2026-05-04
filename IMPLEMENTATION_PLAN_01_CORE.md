@@ -164,8 +164,13 @@ Each step lands as its own commit. Tests come first.
   typed `unsafe_permissions` error
   carries `path`, `subject` (one of `vault_dir`, `vault_file`,
   `backup_file`), `actual_mode`, and `expected_mode` (mode strings as
-  four-digit octal, e.g. `"0644"`); chmod-command formatting is CLI plan
-  scope.
+  four-digit octal, e.g. `"0644"`).
+- [ ] Tests: `format_unsafe_permissions(&err)` returns `Some(text)` for
+  `unsafe_permissions` errors and `None` for any other kind. The text
+  names the failing path, the actual and expected modes, and the exact
+  `chmod` command that would repair it (`0700` for directories, `0600`
+  for files), so the CLI and GUI can render identical wording without
+  re-implementing it.
 - [ ] Tests: `inspect(path)` returns `Ok(Missing)` only when the primary file
   is absent, reports plaintext/encrypted mode from the header without
   decryption, returns an error for unrecognized magic, and deliberately skips
@@ -178,6 +183,9 @@ Each step lands as its own commit. Tests come first.
   with `io_error` and `operation: "unsupported_platform_permissions"`),
   atomic-write pipeline.
 - [ ] Implement `inspect(path)` (header probe, no decryption, no perms check).
+- [ ] Implement `format_unsafe_permissions(&Error) -> Option<String>` per
+  §4.7, sourcing all wording from the `unsafe_permissions` fields so CLI
+  and GUI never diverge.
 
 ### Phase F — Encrypted storage (Milestone 1, part 5)
 
