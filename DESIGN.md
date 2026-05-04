@@ -50,7 +50,7 @@ Binaries depend only on `paladin-core`. They never reach into each other.
 
 | Type         | Purpose                                                                  |
 | ------------ | ------------------------------------------------------------------------ |
-| `Account`    | A single OTP entry: id (`AccountId`), label, issuer, secret, algo, digits, kind, icon hint, created/updated. |
+| `Account`    | A single OTP entry: id (`AccountId`), label, issuer, secret, algo, digits, kind, icon_hint (see below), created/updated. |
 | `AccountId`  | UUIDv4. Stored as 16 bytes in the vault; displayed in canonical hyphenated form. Short `id:<8 hex>` prefix is the CLI disambiguator. |
 | `Secret`     | Newtype wrapping `Vec<u8>`; implements `Zeroize` and `Drop`.             |
 | `Algorithm`  | Enum: `Sha1` (default), `Sha256`, `Sha512`.                              |
@@ -62,6 +62,15 @@ Binaries depend only on `paladin-core`. They never reach into each other.
 
 `VaultSettings` lives inside the encrypted/plaintext payload — never in the
 file header — so settings can't be tampered with on an encrypted vault.
+
+`Account.icon_hint` is an `Option<String>` icon-name slug — lowercase
+ASCII, no whitespace, max 64 chars. On `add` we default it from the
+issuer (e.g. `"GitHub"` → `"github"`) when one is provided; the user
+can override or clear it. The slug is a hint, not a guarantee: GUIs
+resolve it (§7), the CLI and TUI ignore the field. We deliberately do
+not store icon bytes — that would inflate the vault and complicate the
+bincode payload without offering meaningful benefit over icon-theme
+lookup.
 
 ### 4.2 OTP generation
 
@@ -360,7 +369,7 @@ identical**. Behavior on collision is controlled by `--on-conflict`:
 - `skip` *(default)* — keep the existing entry; print a one-line warning
   for each skipped import.
 - `replace` — overwrite the existing entry's mutable fields (algo,
-  digits, kind, icon hint, updated). The `id` is preserved.
+  digits, kind, icon_hint, updated). The `id` is preserved.
 - `append` — always insert as a new entry, even if it's an exact dupe.
 
 The collision check runs against the *running* import state, so
@@ -421,6 +430,11 @@ Library: **Relm4** on **GTK4**. Component tree:
 
 Auto-lock and clipboard auto-clear behave the same as the TUI, including the
 opt-in default.
+
+Icons: `AccountRowComponent` resolves `Account.icon_hint` against the
+system icon theme via `gtk::IconTheme`, falling back to a generic
+placeholder when the slug is `None` or unresolved. The CLI and TUI
+ignore the field entirely.
 
 ## 8. Security considerations  ⚠️
 
@@ -591,11 +605,9 @@ Concrete obligations and explicit user-controlled tradeoffs:
 - Aegis **encrypted** backups deferred to v0.2 (plaintext export supported in v0.1).
 - GUI deferred to v0.2; **TUI ships in v0.1**.
 - TUI runtime = plain threads + `mpsc` (no `tokio` — a local TUI doesn't need async I/O).
+- **Icon hints:** name-only `Option<String>` slug (§4.1, §7). User-supplied icon bytes rejected to keep the vault payload small.
 
-**Still open (do not block v0.1 start):**
-
-1. **Icon hints:** store an `issuer`-derived icon name and let GUIs resolve
-   it, or embed user-supplied icon bytes in the vault? Lean: name-only.
+No open questions remain.
 
 ## 13. License
 
