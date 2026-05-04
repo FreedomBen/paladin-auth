@@ -507,7 +507,8 @@ pub struct ImportReport {
 
 pub fn inspect(path: &Path) -> Result<VaultStatus>;                       // header probe; no decryption. Ok(Missing) iff the file does not exist; other I/O errors and unrecognized magic are Err. Deliberately does **not** enforce the §4.3 permissions check — only `open` and `create` do — so callers can probe a vault's mode before fixing perms.
 pub fn open(path: &Path, lock: VaultLock) -> Result<(Vault, Store)>;      // errors if `lock` doesn't match the file mode
-pub fn create(path: &Path, lock: VaultLock) -> Result<(Vault, Store)>;    // errors if `path` already exists; caller is responsible for any rotation
+pub fn create(path: &Path, lock: VaultLock) -> Result<(Vault, Store)>;    // errors if `path` already exists; for the `init --force` clobber semantics use `create_force`
+pub fn create_force(path: &Path, lock: VaultLock) -> Result<(Vault, Store)>;  // §5 `init --force` staged clobber: stages the new vault to `vault.bin.tmp` and `fsync`s it; if staging succeeds and a primary already exists, renames `vault.bin` → `vault.bin.bak` verbatim (overwriting any existing backup) without re-encryption; renames `vault.bin.tmp` → `vault.bin`; `fsync`s the parent directory. Pre-rename failures leave the previous primary recoverable — when failure occurs after backup rotation, the old vault is at `vault.bin.bak` and the error is `save_not_committed` with `backup_path` set. Post-commit failures surface as `save_durability_unconfirmed`. Identical to `create` when no primary exists at `path`.
 
 /// Format the human-readable §4.3 `unsafe_permissions` text — failing
 /// path, `subject`, `actual_mode`, `expected_mode`, and the `chmod`

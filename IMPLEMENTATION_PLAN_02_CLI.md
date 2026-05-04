@@ -66,8 +66,8 @@ crates/paladin-cli/
 
 | Command                                                | Notes |
 |--------------------------------------------------------|-------|
-| `init [--force]`                                       | Without `--force`, refuses to clobber an existing vault. With `--force`, stages new vault first, then rotates the old primary verbatim to `.bak` (overwriting any existing backup). |
-| `add` (interactive / `--uri` / manual flags / `--qr`)  | Exactly one input mode; combinations rejected at parse time. |
+| `init [--force]`                                       | Without `--force`, calls `paladin_core::create` and surfaces `vault_exists` if a primary already exists. With `--force`, calls `paladin_core::create_force` (which performs the §5 staged clobber: stages the new vault, then rotates the old primary verbatim to `.bak`, overwriting any existing backup). |
+| `add` (interactive / `--uri` / manual flags / `--qr`)  | Exactly one input mode; combinations rejected at parse time. Under `--json`, interactive mode is rejected at parse time — one of `--uri`, `--qr`, or the manual flags must be supplied. |
 | `list`                                                 | Account metadata only — no codes. |
 | `show <query>`                                         | Advances HOTP; persists before printing. Matching queries print all matches when every match is TOTP; if any match is HOTP, requires a single match. |
 | `peek <query>`                                         | Never advances. Prints all matches unconditionally. |
@@ -98,9 +98,12 @@ crates/paladin-cli/
 
 Combining input modes rejects at parse time. Interactive prompts
 (label, issuer, secret, etc.) read from `/dev/tty` like passphrase
-prompts, never from stdin/stdout. Single-entry `add` rejects an
-existing `(secret, issuer, label)` collision with `duplicate_account`
-unless `--allow-duplicate` is passed. `--allow-duplicate` is mutually
+prompts, never from stdin/stdout. Under `--json`, interactive mode is
+additionally rejected at parse time — one of `--uri`, `--qr`, or the
+manual flags must be supplied — mirroring the no-prompt rule on
+`remove --json` and `passphrase remove --json`. Single-entry `add`
+rejects an existing `(secret, issuer, label)` collision with
+`duplicate_account` unless `--allow-duplicate` is passed. `--allow-duplicate` is mutually
 exclusive with `--qr` and is rejected at parse time.
 
 ## Settings keys
@@ -212,8 +215,9 @@ Every vault-opening command except `init`:
 7. Exit.
 
 `init` resolves the same path, prompts for the new-vault passphrase, and
-uses `paladin_core::create`; `init --force` follows the dedicated staged
-clobber path from §5 without opening or decrypting the old primary.
+uses `paladin_core::create`; `init --force` calls
+`paladin_core::create_force` (which owns the §5 staged clobber sequence)
+without opening or decrypting the old primary.
 
 ## Implementation checklist
 
@@ -226,6 +230,10 @@ clobber path from §5 without opening or decrypting the old primary.
 - [ ] Implement text and JSON output renderers with stable success/error
   envelopes and stderr warnings.
 - [ ] Implement `paladin tui` as an `execvp` wrapper.
+- [ ] Wire the `paladin-core` `test-fault-injection` cargo feature into
+  the test build of the `paladin` binary so process-level integration
+  tests can drive pre-commit and post-commit save failures via the
+  `PALADIN_FAULT_INJECT` env var.
 - [ ] Add the CLI integration tests and JSON golden snapshots below.
 - [ ] Run the definition-of-done checks.
 
@@ -242,7 +250,8 @@ where relevant, and exit code.
 - **`add --uri`** → account appears in `list`. **`add` interactive** with
   scripted `/dev/tty` (via `script` or `pty-process` test helper).
 - **`add` mode-combination rejection** (e.g. `--uri` + `--qr`,
-  `--qr` + `--allow-duplicate`).
+  `--qr` + `--allow-duplicate`); also `add --json` without an input
+  flag (no `--uri` / `--qr` / manual flags) rejects at parse time.
 - **`add --qr`** with synthetic QR image (multi-entry path uses fixed
   `--on-conflict=skip`).
 - **`add` duplicate behavior** — `(secret, issuer, label)` collision
@@ -276,9 +285,12 @@ where relevant, and exit code.
   `reason: "confirmation_mismatch"`. Durability-unconfirmed surfaced as
   `save_durability_unconfirmed` (with `committed: true`) when the
   post-commit fsync fails; pre-commit failure surfaces as
-  `save_not_committed` with `committed: false`. Process-level CLI tests use
-  a test-only feature/env hook in the real binary to trigger the core
-  fault-injection `Store` paths for pre-commit and post-commit failures.
+  `save_not_committed` with `committed: false`. Process-level CLI tests
+  opt the test build of the `paladin` binary into the `paladin-core`
+  `test-fault-injection` cargo feature; the env var
+  `PALADIN_FAULT_INJECT=pre_commit|post_commit` selects which `Store`
+  failure path fires so `save_not_committed` and
+  `save_durability_unconfirmed` envelopes can be exercised end-to-end.
 - **`import`** for each format with each `--on-conflict` policy. Atomic
   failure on any invalid entry.
 - **`export --plaintext` / `--encrypted`** refuses overwrite without

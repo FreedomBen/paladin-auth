@@ -177,12 +177,27 @@ Each step lands as its own commit. Tests come first.
   permission checks.
 - [ ] Tests: `open` returns `vault_missing` when the primary file is
   absent; `create` returns `vault_exists` when the primary already
-  exists (caller is responsible for any rotation, e.g. `init --force`).
+  exists (rotation belongs to `create_force`, see below).
+- [ ] Tests: `create_force(path, lock)` staged clobber per §5 — writes
+  `vault.bin.tmp` and `fsync`s it before moving any existing primary;
+  staging-step failure leaves the old primary and `.bak` untouched;
+  once staged, rotates an existing `vault.bin` → `vault.bin.bak`
+  (overwriting any existing backup) verbatim and without re-encryption;
+  renames new tmp into place; `fsync`s the parent. Pre-rename failure
+  after backup rotation surfaces `save_not_committed` with `backup_path`
+  set to `vault.bin.bak`; post-commit `fsync` failure surfaces
+  `save_durability_unconfirmed`. With no existing primary at `path`,
+  behaves identically to `create`. `create_force` reuses the
+  parent-directory `unsafe_permissions` check from `create` and rejects
+  before any staged write.
 - [ ] Implement `Store` (open/save), permissions module (Unix path; non-Unix
-  stubs that compile but reject `open` / `create` before touching vault content
-  with `io_error` and `operation: "unsupported_platform_permissions"`),
+  stubs that compile but reject `open` / `create` / `create_force` before
+  touching vault content with `io_error` and
+  `operation: "unsupported_platform_permissions"`),
   atomic-write pipeline.
 - [ ] Implement `inspect(path)` (header probe, no decryption, no perms check).
+- [ ] Implement `create_force(path, lock)` in `storage` per the §5 init
+  clobber sequence.
 - [ ] Implement `format_unsafe_permissions(&Error) -> Option<String>` per
   §4.7, sourcing all wording from the `unsafe_permissions` fields so CLI
   and GUI never diverge.
@@ -298,6 +313,19 @@ Each step lands as its own commit. Tests come first.
   the snapshot.
 - [ ] Doc-comment every public item with a one-line summary and a link back to
   the relevant DESIGN.md section.
+- [ ] Add a `test-fault-injection` cargo feature (off by default) that
+  exposes a `Store` constructor honoring the
+  `PALADIN_FAULT_INJECT=pre_commit|post_commit` env var: `pre_commit`
+  fails the save before the primary rename (surfaces
+  `save_not_committed`); `post_commit` fails the parent-directory
+  `fsync` after the primary rename (surfaces
+  `save_durability_unconfirmed`). Both fault paths apply uniformly to
+  the regular save pipeline, `create_force`, and the passphrase
+  transitions. The feature is gated so production builds never link
+  the hook; only the binary crates' test builds opt in. Internal
+  `paladin-core` rollback/durability tests already exercise these
+  paths in-process — this feature is the cross-crate surface so CLI
+  and TUI integration tests can drive them end-to-end.
 
 ## Test inventory
 
