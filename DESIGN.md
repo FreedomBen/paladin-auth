@@ -63,14 +63,17 @@ Binaries depend only on `paladin-core`. They never reach into each other.
 `VaultSettings` lives inside the encrypted/plaintext payload — never in the
 file header — so settings can't be tampered with on an encrypted vault.
 
-`Account.icon_hint` is an `Option<String>` icon-name slug — lowercase
-ASCII, no whitespace, max 64 chars. On `add` we default it from the
-issuer (e.g. `"GitHub"` → `"github"`) when one is provided; the user
-can override or clear it. The slug is a hint, not a guarantee: GUIs
-resolve it (§7), the CLI and TUI ignore the field. We deliberately do
-not store icon bytes — that would inflate the vault and complicate the
-bincode payload without offering meaningful benefit over icon-theme
-lookup.
+`Account.icon_hint` is an `Option<String>` icon-name slug. The slug
+matches `[a-z0-9_-]+` (freedesktop icon-naming-spec convention) and is
+at most 64 bytes. On `add` we default it from the issuer by
+lowercasing and replacing each run of disallowed characters with a
+single `-`, then trimming leading/trailing `-` (e.g. `"GitHub"` →
+`"github"`, `"Google Cloud"` → `"google-cloud"`); if the result is
+empty the field stays `None`. The user can override or clear it. The
+slug is a hint, not a guarantee: GUIs resolve it (§7), the CLI and TUI
+ignore the field. We deliberately do not store icon bytes — that would
+inflate the vault and complicate the bincode payload without offering
+meaningful benefit over icon-theme lookup.
 
 `Account` fields are private; manual entry, URI parsing, importers, and any
 future constructors all go through the same validation path:
@@ -83,8 +86,8 @@ future constructors all go through the same validation path:
 | `algorithm`                | `Sha1`, `Sha256`, or `Sha512`; default `Sha1`.                                  |
 | `digits`                   | 6 to 8 inclusive; default 6. Codes are zero-padded to exactly this width.        |
 | `Totp.period`              | 1 to 300 seconds inclusive; default 30.                                         |
-| `Hotp.counter`             | 0 to `u64::MAX`; `hotp_advance` errors before mutation at `u64::MAX`.           |
-| `icon_hint`                | `None` or the slug format above.                                                |
+| `Hotp.counter`             | 0 to `u64::MAX`; default 0 for manual `add` without an explicit value; `hotp_advance` errors before mutation at `u64::MAX`. |
+| `icon_hint`                | `None`, or 1–64 bytes matching `[a-z0-9_-]+`.                                   |
 | `created_at`, `updated_at` | UTC Unix seconds (`u64`), 0 to 253402300799 inclusive.                          |
 
 For `otpauth://` imports, the path label and `issuer` query parameter are
@@ -157,10 +160,13 @@ else:
   5. `fsync` the parent directory so the renames are durable across
      power loss.
 
-  A crash before step 4 leaves the previous primary in place; a crash
-  between steps 3 and 4 leaves the new `.bak` paired with the old
-  primary plus a leftover `vault.bin.tmp` that the next `open` deletes.
-  On any error, remaining `.tmp` files are unlinked.
+  A crash before step 4 leaves the previous primary in place (or no
+  primary at all on a first-ever save); a crash between steps 3 and 4
+  leaves the new `.bak` paired with the old primary. Any leftover
+  `vault.bin.tmp` or `vault.bin.bak.tmp` from a partial save is
+  overwritten on the next save and unlinked by the next `open`. On any
+  non-crash error during a save, remaining `.tmp` files are unlinked
+  before the call returns.
 - **Backups.** On every successful write, keep the previous `vault.bin` as
   `vault.bin.bak` (one generation). The backup is always written to match
   the mode and key of the **new** primary: for regular saves this is the same
@@ -187,7 +193,7 @@ else:
   The 8 MiB floor is deliberately well below the 64 MiB default and
   OWASP's 19 MiB Argon2id guidance: it is the minimum we will *accept on
   read* so that vaults written on memory-constrained hardware (small
-  SBCs, older phones running a portable build) can still be opened. New
+  SBCs, low-RAM headless boxes) can still be opened. New
   vaults always pick the default unless the user opts into a custom
   cost. Future releases may widen those bounds only with an explicit
   format or policy update.
@@ -206,8 +212,9 @@ else:
   cached key rather than re-deriving — Argon2id at the default cost is
   hundreds of milliseconds, which would otherwise be paid per HOTP
   advance. Both the key and the passphrase are zeroized when the
-  `Vault` is dropped or at any passphrase transition (after which a
-  fresh key is derived from the new passphrase and a fresh salt).
+  `Vault` is dropped, and replaced (with the old material zeroized)
+  after a successful passphrase transition; a failed transition leaves
+  the cached key and passphrase in place so the vault remains usable.
   Caching the key does not expand the threat model: an attacker with
   memory access to the running process could derive it from the
   retained passphrase regardless.
@@ -228,7 +235,8 @@ All three go through the same atomic-write + backup path as a normal save.
 Each is a single-step transition that either fully succeeds or leaves the
 files untouched (the `.tmp` files are rolled back). On failure, the existing
 `.bak` is left in place, so the user always has at least one recovery point.
-`set_passphrase` and `change_passphrase` reject empty passphrases; users who
+`set_passphrase` and `change_passphrase` reject zero-length passphrases (no
+trimming or Unicode normalization is applied to passphrase bytes); users who
 want plaintext storage must use `remove_passphrase`.
 
 ### 4.6 Import / Export
@@ -260,6 +268,9 @@ Two formats, user picks per invocation:
 Auto-detect format by content sniffing, with `--format` to override:
 
 - **`otpauth://` URI** (single line, or one per line, or JSON array).
+  Inputs that decode to zero accounts (empty JSON array, blank file,
+  whitespace-only) are rejected with the same "no entries to import"
+  error as a QR image with no decoded QRs.
 - **Paladin encrypted bundle** — round-trips with our encrypted exporter.
   Files with `PALADIN\0` magic but plaintext mode are rejected by the
   Paladin importer in v0.1; users should use `export --plaintext` to
@@ -281,7 +292,9 @@ Auto-detect format by content sniffing, with `--format` to override:
 match: file starts with the `PALADIN\0` magic → `Paladin`; image-format
 magic bytes (PNG, JPEG, GIF, BMP, WebP) → `Qr`; UTF-8 text that parses
 as JSON with Aegis's top-level `version` / `header` / `db` shape →
-`Aegis`; JSON matching Gnome Authenticator's exported shape → `Gnome`;
+`Aegis`; JSON matching Gnome Authenticator's exported shape (the exact
+schema is pinned at implementation time against fixture files in
+`crates/paladin-core/tests/fixtures/`) → `Gnome`;
 UTF-8 either (a) starting with `otpauth://` (single URI or newline-
 separated list of such URIs), or (b) parsing as a JSON array of strings
 each starting with `otpauth://` → `Otpauth`; otherwise `Unknown`.
@@ -326,11 +339,11 @@ impl Vault {
 }
 
 pub fn parse_otpauth(uri: &str) -> Result<Account>;
-pub fn read_qr_image(path: &Path) -> Result<Vec<String>>;                 // one URI per decoded QR in the image
+pub fn read_qr_image(path: &Path) -> Result<Vec<String>>;                 // one URI per decoded QR; returns an empty Vec when the image contains no QRs (the `import::qr_image` wrapper turns that into an error)
 
 pub mod import {
     pub enum ImportFormat { Otpauth, Aegis, Gnome, Paladin, Qr, Unknown }
-    pub fn otpauth(bytes: &[u8]) -> Result<Vec<Account>>;          // single URI, line-list, or JSON array of URIs
+    pub fn otpauth(bytes: &[u8]) -> Result<Vec<Account>>;          // single URI, line-list, or JSON array of URIs; errors when the input decodes to zero accounts (empty array, blank file, etc.)
     pub fn aegis_plaintext(bytes: &[u8]) -> Result<Vec<Account>>;
     pub fn gnome_authenticator(bytes: &[u8]) -> Result<Vec<Account>>;
     pub fn paladin(bytes: &[u8], passphrase: &SecretString) -> Result<Vec<Account>>;  // encrypted Paladin bundle only
@@ -409,7 +422,8 @@ Success shapes:
 | `list`                        | `{ "accounts": [AccountSummary] }`                                              |
 | `show`, `peek`                | `{ "codes": [CodeResult] }`                                                     |
 | `copy`                        | `{ "copied": true, "account": AccountSummary, "counter_used": number_or_null }` |
-| `add`, `rename`               | `{ "account": AccountSummary }`                                                 |
+| `add` (single), `rename`      | `{ "account": AccountSummary }`                                                 |
+| `add --qr`                    | Same shape as `import` (a `--qr` add can decode multiple URIs and uses a fixed `--on-conflict=skip`). |
 | `remove`                      | `{ "removed": AccountSummary }`                                                 |
 | `import`                      | `{ "imported": n, "skipped": n, "replaced": n, "appended": n, "accounts": [AccountSummary] }` |
 | `export`                      | `{ "written": "/path/to/out", "format": "otpauth_or_paladin" }`                |
@@ -609,10 +623,10 @@ Concrete obligations and explicit user-controlled tradeoffs:
 9. **Imports are fully validated.** Each importer parses into `Account`
    values without trusting the source's claimed structure — secrets are
    length-checked (rejected if shorter than 10 bytes / 80 bits or longer
-   than 1024 bytes; entries shorter than 16 bytes / 128 bits — the RFC
-   4226 §4 minimum — are accepted with a per-entry warning), base32 is
-   validated, algorithms must be in our enum, and OTP parameters must
-   pass the §4.1 validation table.
+   than 1024 bytes; entries between 10 and 15 bytes inclusive — under
+   the RFC 4226 §4 minimum of 16 bytes / 128 bits — are accepted with a
+   per-entry warning), base32 is validated, algorithms must be in our
+   enum, and OTP parameters must pass the §4.1 validation table.
 10. **No telemetry, no network calls.** Enforced by code review and tests;
     `cargo deny` covers dependency license/advisory policy, not runtime
     network behavior.
