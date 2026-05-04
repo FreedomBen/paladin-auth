@@ -68,8 +68,8 @@ crates/paladin-gtk/
   row is **disabled**; copying during the reveal window copies the visible
   code and does not advance again.
 - `AddAccountComponent` — manual fields + "scan from clipboard image" (uses
-  `paladin_core::import::qr_image` against bytes pulled from the GDK
-  clipboard).
+  `paladin_core::import::qr_image_bytes` against raw RGBA bytes pulled from
+  the GDK clipboard).
 - `SettingsComponent` — toggles for auto-lock and clipboard-clear, with
   spinners for timeouts. Persisted via `Vault` setters.
 

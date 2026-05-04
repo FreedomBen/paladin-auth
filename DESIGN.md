@@ -439,13 +439,17 @@ Auto-detect format by content sniffing, with `--format` to override:
   30 if absent; HOTP `counter` is required. Aegis icon fields and other metadata
   are ignored in v0.1; `icon_hint` is derived from the issuer using the
   §4.1 slug rule.
-- **QR image file** — one or more accounts (one per decoded QR);
-  errors if no QRs are decoded. Uses `rqrr` to decode every QR in the
-  image and feeds each resulting payload through the `otpauth://`
-  URI parser. Decoded QRs that are not valid `otpauth://` URIs reject
-  the whole batch via `validation_error` with `source_index`, matching
-  the import atomicity rule below. The GTK GUI also accepts a QR
-  image pasted from the clipboard, decoded via the same path.
+- **QR image** — one or more accounts (one per decoded QR); errors if
+  no QRs are decoded. File imports load an image from disk. UI clipboard
+  imports pass raw RGBA bytes plus width/height. The raw-RGBA path rejects
+  zero dimensions and buffers whose length is not exactly
+  `width * height * 4` bytes, using overflow-checked multiplication. Both
+  paths use `rqrr` to decode every QR and feed each resulting payload
+  through the `otpauth://` URI parser. Decoded QRs that are not valid
+  `otpauth://` URIs reject the whole batch via `validation_error` with
+  `source_index`, matching the import atomicity rule below. The TUI and GTK
+  GUI accept a QR image pasted from the clipboard, decoded via the raw-RGBA
+  path.
 
 `detect` resolves the format in this fixed order, returning the first
 match: file starts with the `PALADIN\0` magic → `Paladin`; image-format
@@ -463,11 +467,11 @@ Each importer is tested with sample fixture files committed under
 `crates/paladin-core/tests/fixtures/`. The byte-oriented importers
 (`aegis`, `otpauth`) take `&[u8]` plus `import_time` when the source
 format does not carry timestamps; the encrypted Paladin importer
-additionally takes a passphrase (`SecretString`), and the QR importer
-takes a path plus `import_time` (it loads the image, decodes every QR via
-`rqrr`, and feeds each resulting URI through `parse_otpauth`). When
-`import::paladin` sees a valid Paladin header with `mode == 0`, it returns
-a typed unsupported-plaintext-vault error without importing accounts.
+additionally takes a passphrase (`SecretString`). QR import exposes both a
+path form and a raw-RGBA byte form; both decode every QR via `rqrr` and
+feed each resulting URI through `parse_otpauth`. When `import::paladin`
+sees a valid Paladin header with `mode == 0`, it returns a typed
+unsupported-plaintext-vault error without importing accounts.
 
 Importer timestamps are deterministic by source format. `otpauth`, QR,
 and Aegis imports set `created_at = updated_at = import_time` for each
@@ -530,6 +534,7 @@ impl Vault {
 
 pub fn parse_otpauth(uri: &str, import_time: SystemTime) -> Result<ValidatedAccount>;
 pub fn read_qr_image(path: &Path) -> Result<Vec<String>>;                 // one URI per decoded QR; returns an empty Vec when the image contains no QRs (the `import::qr_image` wrapper turns that into an error)
+pub fn read_qr_image_bytes(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<String>>;  // raw RGBA8 clipboard/image buffer; validates nonzero dimensions and exact byte length; returns an empty Vec when the image contains no QRs
 
 /// Unvalidated manual input from the CLI's flag-driven `add` mode (or any
 /// other caller that doesn't already have an `otpauth://` URI). `secret`
@@ -554,6 +559,7 @@ pub mod import {
     pub fn aegis_plaintext(bytes: &[u8], import_time: SystemTime) -> Result<Vec<ValidatedAccount>>;
     pub fn paladin(bytes: &[u8], passphrase: &SecretString) -> Result<Vec<ValidatedAccount>>;  // encrypted Paladin bundle only
     pub fn qr_image(path: &Path, import_time: SystemTime) -> Result<Vec<ValidatedAccount>>;
+    pub fn qr_image_bytes(width: u32, height: u32, rgba: &[u8], import_time: SystemTime) -> Result<Vec<ValidatedAccount>>;
     pub fn detect(bytes: &[u8]) -> ImportFormat;
 }
 
@@ -929,7 +935,14 @@ Layout (single-screen MVP):
   already-visible code. Copying a hidden HOTP row is rejected with a
   status message. Copying during the reveal window copies the visible
   code and does not advance the counter again.
-- Modal dialogs for add / remove / passphrase / settings.
+- Startup calls `inspect(path)`: plaintext vaults open directly to the
+  list; encrypted vaults show the unlock screen; missing vaults show a
+  non-mutating message telling the user to run `paladin init`. v0.1 TUI
+  does not create vaults.
+- Modal dialogs for add / remove / passphrase / settings. Add supports
+  manual entry and QR scan from clipboard image bytes; manual duplicates
+  reject with the existing account, while QR imports use
+  `ImportConflict::Skip` and report imported/skipped/warning counts.
 - **Auto-lock:** **off by default.** When `auto_lock.enabled = true`, the TUI
   clears the in-memory vault after `auto_lock.timeout_secs` of no input and
   shows the unlock screen for encrypted vaults. For plaintext vaults,
@@ -941,6 +954,9 @@ Layout (single-screen MVP):
   `clipboard.clear_secs` — and the wipe only fires if the clipboard still
   holds the value we wrote (so we never stomp something the user copied
   afterwards).
+- Effect failures leave the current screen/modal open and update visible
+  state only after the underlying mutation succeeds; errors surface inline
+  in the active modal or in the status line.
 - Single event loop: `crossterm` events ↔ tick events via `mpsc`.
 
 ## 7. GUI (`paladin-gtk`)
@@ -957,7 +973,8 @@ Library: **Relm4** on **GTK4**. Component tree:
   returns to the hidden state, matching the TUI. Copying a hidden HOTP row
   is disabled; copying during the reveal window copies the visible code and
   does not advance again.
-- `AddAccountComponent` — manual fields + "scan from clipboard image".
+- `AddAccountComponent` — manual fields + "scan from clipboard image",
+  decoded through the core raw-RGBA QR import path.
 - `SettingsComponent` — toggles for auto-lock and clipboard-clear, with
   spinners for timeouts.
 
@@ -1042,7 +1059,7 @@ Concrete obligations and explicit user-controlled tradeoffs:
 | `secrecy`, `zeroize`               | Memory hygiene                   |
 | `rpassword`                        | CLI passphrase prompt            |
 | `arboard`                          | Clipboard (cross-platform)       |
-| `rqrr`, `image`                    | QR decode from image files       |
+| `rqrr`, `image`                    | QR decode from files/buffers    |
 | `qrcode`                           | (Optional) display QR for setup  |
 | `directories`                      | XDG / platform paths             |
 | `thiserror`, `anyhow`              | Error types                      |
@@ -1086,10 +1103,10 @@ Concrete obligations and explicit user-controlled tradeoffs:
   - Importers: Aegis plaintext TOTP/HOTP mapping, unsupported Aegis entry
     type rejection, our own export round-trip with fresh destination IDs,
     plaintext Paladin vault rejection, encrypted-Aegis rejection, and QR
-    image decode (single-QR and multi-QR images) — fixture files in
-    `tests/fixtures/`. Also covers the "zero accounts" rejection path
-    (empty JSON array, blank otpauth file, empty Aegis `entries`,
-    image with no decodable QRs).
+    image decode (single-QR and multi-QR image files plus raw RGBA buffers)
+    — fixture files in `tests/fixtures/`. Also covers the "zero accounts"
+    rejection path (empty JSON array, blank otpauth file, empty Aegis
+    `entries`, image with no decodable QRs).
 - **Property tests** (`proptest`) for the URI parser and base32 secret
   decoding.
 - **Integration tests** for each shipped binary using `assert_cmd` (CLI)
@@ -1104,6 +1121,8 @@ Concrete obligations and explicit user-controlled tradeoffs:
     no-normalization Unicode behavior, and `id:` prefix validation.
   - TUI HOTP copy behavior: hidden rows do not copy, revealed rows copy
     without advancing again.
+  - TUI missing-vault state: shows `paladin init` guidance and does not
+    create or mutate files.
   - Plaintext-vault auto-lock is a no-op in TUI state handling now, with
     GUI parity when the GUI ships.
 - **CI:** `cargo fmt --check`, `cargo clippy -- -D warnings`,
@@ -1141,7 +1160,7 @@ Concrete obligations and explicit user-controlled tradeoffs:
 - [ ] Importer: `otpauth://` URIs (single + list).
 - [ ] Importer: Paladin encrypted bundle; plaintext Paladin vault files return an unsupported-format error.
 - [ ] Importer: Aegis plaintext export.
-- [ ] Importer: QR image files (`rqrr`).
+- [ ] Importer: QR image files and raw RGBA clipboard buffers (`rqrr`).
 - [ ] Auto-detect with explicit `--format` override.
 - [ ] Fixture-based tests for each importer.
 
@@ -1159,6 +1178,7 @@ Concrete obligations and explicit user-controlled tradeoffs:
 - [ ] Search/filter input.
 - [ ] Add / remove / passphrase / settings modals.
 - [ ] Conditional unlock screen (only when vault is encrypted).
+- [ ] Missing-vault guidance screen (no implicit vault creation).
 - [ ] Opt-in auto-lock and clipboard-clear honoring vault settings, with plaintext auto-lock as a no-op.
 - [ ] HOTP reveal/copy behavior: hidden rows do not copy; revealed rows copy without advancing again.
 - [ ] Snapshot tests for rendering.

@@ -223,8 +223,11 @@ Each step lands as its own commit. Tests come first.
   `unsupported_aegis_entry_type` with `source_index`, batch rejected),
   `import::paladin` (encrypted bundle round-trip; plaintext-mode Paladin
   file → `unsupported_plaintext_vault`; source `VaultSettings` discarded),
-  `import::qr_image` (decoded QRs that are not `otpauth://` URIs reject
-  the batch with `validation_error` + `source_index`), including
+  `import::qr_image` and `import::qr_image_bytes` (decoded QRs that are not
+  `otpauth://` URIs reject the batch with `validation_error` +
+  `source_index`; raw RGBA byte buffers reject zero dimensions, checked
+  multiplication overflow, and length mismatches before decoding, then
+  return `no_entries_to_import` when no QR decodes), including
   timestamps preserved for Paladin bundle imports and fresh IDs assigned
   for inserted/appended rows; replacements keep destination ID.
 - [ ] Tests for merge policy `Skip` / `Replace` / `Append` against running
@@ -235,12 +238,17 @@ Each step lands as its own commit. Tests come first.
 - [ ] Tests for `export::otpauth_list` (infallible JSON array of URIs) and
   `export::encrypted` (round-trips with the importer; rejects empty
   passphrase).
-- [ ] Implement `read_qr_image(path) -> Result<Vec<String>>` in
-  `import/qr.rs` (loads the image, decodes every QR via `rqrr`, returns
-  one URI string per decoded QR; empty `Vec` when the image contains no
-  QRs — the wrapping `import::qr_image` is what turns that into
-  `no_entries_to_import`). Re-exported at the crate root per §4.7
-  alongside `parse_otpauth` and `validate_manual`.
+- [ ] Implement `read_qr_image(path) -> Result<Vec<String>>` and
+  `read_qr_image_bytes(width, height, rgba) -> Result<Vec<String>>` in
+  `import/qr.rs`. The path form loads the image from disk; the byte form
+  accepts raw RGBA8 clipboard/image buffers, rejects zero dimensions,
+  rejects overflow in `width * height * 4`, and rejects any buffer length
+  other than that exact byte count. Both decode every QR via `rqrr`, return
+  one URI string per decoded QR, and return an empty `Vec` when the image
+  contains no QRs — the wrapping `import::qr_image` /
+  `import::qr_image_bytes` functions are what turn that into
+  `no_entries_to_import`. Re-exported at the crate root per §4.7 alongside
+  `parse_otpauth` and `validate_manual`.
 
 ### Phase J — Public API freeze + library polish
 
@@ -278,10 +286,10 @@ is a separate `#[test]` or `cases![]` family.
   `unsupported_aegis_entry_type` with `source_index` (batch rejected);
   Paladin bundle round-trip with timestamps preserved and source
   `VaultSettings` discarded; plaintext-mode Paladin file →
-  `unsupported_plaintext_vault`; QR image with N codes; non-otpauth QR
-  payloads rejected with `validation_error` + `source_index`; URI-list
-  trimming and blank-line handling; zero-account inputs rejected
-  uniformly with `no_entries_to_import`.
+  `unsupported_plaintext_vault`; QR image path and raw RGBA byte buffer
+  with N codes; non-otpauth QR payloads rejected with `validation_error` +
+  `source_index`; URI-list trimming and blank-line handling; zero-account
+  inputs rejected uniformly with `no_entries_to_import`.
 - HOTP `hotp_peek` after a committed `hotp_advance` returns the code for
   the new (post-advance) counter.
 - Merge policy: `Skip` / `Replace` / `Append` including running-state
