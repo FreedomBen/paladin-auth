@@ -206,7 +206,10 @@ that limit before constructing a `Vault`. To bound resource use before
 authentication, `open` also rejects vault files whose on-disk size exceeds
 `header_size + 16 MiB` for plaintext mode, or `header_size + 16 MiB +
 16 byte AEAD tag` for encrypted mode, with `invalid_payload` before any
-decoding or KDF/AEAD work.
+decoding or KDF/AEAD work. `header_size` is **10 bytes** in plaintext mode
+(8-byte magic + `format_ver` + `mode`) and **64 bytes** in encrypted mode
+(the plaintext header plus `kdf_id`, 12 bytes of Argon2 params, 16-byte
+salt, `aead_id`, and 24-byte nonce).
 
 - **Location.** Resolved via `directories::ProjectDirs::data_dir()`,
   which on Linux follows the XDG Base Directory spec and on macOS /
@@ -235,13 +238,20 @@ decoding or KDF/AEAD work.
   protection on the secrets, so we enforce them. On Linux v0.1, `open`
   rejects a vault before decoding if the parent directory grants any
   group/other permissions, or if the primary or backup file, when present,
-  grants any group/other permissions. The CLI text error names the failing
-  path, actual mode, expected repair mode, and the `chmod` command that
-  would repair it; `--json` reports `unsafe_permissions` with `path`,
-  `subject`, `actual_mode`, and `expected_mode` fields. Mode fields are
-  four-digit octal strings such as `"0644"`, with expected repair modes
-  `"0700"` for directories and `"0600"` for files. `subject` is one of
-  `vault_dir`, `vault_file`, or `backup_file`.
+  grants any group/other permissions. `create` performs the same
+  parent-directory permission check upfront against an existing parent
+  directory and rejects with `unsafe_permissions` before writing any
+  vault content, so `paladin init` cannot leave a freshly-created vault
+  in a directory that the next `open` would refuse. (Parent
+  directories that `create` creates itself are made `0700`; existing
+  parent directories are not silently tightened.) The CLI text error
+  names the failing path, actual mode, expected repair mode, and the
+  `chmod` command that would repair it; `--json` reports
+  `unsafe_permissions` with `path`, `subject`, `actual_mode`, and
+  `expected_mode` fields. Mode fields are four-digit octal strings such
+  as `"0644"`, with expected repair modes `"0700"` for directories and
+  `"0600"` for files. `subject` is one of `vault_dir`, `vault_file`, or
+  `backup_file`.
 - **Atomic writes.** Each save stages both the new primary and the new
   backup, then commits with renames:
   1. Write the new primary content to `vault.bin.tmp` and `fsync` it.
@@ -324,10 +334,14 @@ decoding or KDF/AEAD work.
   advance. Both the key and the passphrase are zeroized when the
   `Vault` is dropped, and replaced (with the old material zeroized)
   after a passphrase transition reaches the primary-file commit point.
-  A transition that fails before that point leaves the cached key and
-  passphrase in place so the vault remains usable under the previous
-  state; a durability-unconfirmed failure after the commit point keeps
-  the new cached material because the primary file has already switched
+  Plaintext vaults hold no cached key or passphrase, so "the cache" is
+  empty in that state. A transition that fails before the commit point
+  leaves the cache matching the previous mode (the prior key+passphrase
+  for an encrypted starting state, no cache for plaintext), so the vault
+  remains usable under the previous state. A durability-unconfirmed
+  failure after the commit point updates the cache to match the new
+  on-disk mode (the new key+passphrase for an encrypted target, cleared
+  cache for plaintext), because the primary file has already switched
   modes/keys.
   Caching the key does not expand the threat model: an attacker with
   memory access to the running process could derive it from the
@@ -427,9 +441,11 @@ Auto-detect format by content sniffing, with `--format` to override:
   §4.1 slug rule.
 - **QR image file** — one or more accounts (one per decoded QR);
   errors if no QRs are decoded. Uses `rqrr` to decode every QR in the
-  image and feeds each resulting `otpauth://` URI through the URI
-  parser. The GTK GUI also accepts a QR image pasted from the
-  clipboard, decoded via the same path.
+  image and feeds each resulting payload through the `otpauth://`
+  URI parser. Decoded QRs that are not valid `otpauth://` URIs reject
+  the whole batch via `validation_error` with `source_index`, matching
+  the import atomicity rule below. The GTK GUI also accepts a QR
+  image pasted from the clipboard, decoded via the same path.
 
 `detect` resolves the format in this fixed order, returning the first
 match: file starts with the `PALADIN\0` magic → `Paladin`; image-format
@@ -485,7 +501,7 @@ pub struct ImportReport {
     pub warnings: Vec<ImportWarning>,
 }
 
-pub fn inspect(path: &Path) -> Result<VaultStatus>;                       // header probe; no decryption. Ok(Missing) iff the file does not exist; other I/O errors and unrecognized magic are Err.
+pub fn inspect(path: &Path) -> Result<VaultStatus>;                       // header probe; no decryption. Ok(Missing) iff the file does not exist; other I/O errors and unrecognized magic are Err. Deliberately does **not** enforce the §4.3 permissions check — only `open` and `create` do — so callers can probe a vault's mode before fixing perms.
 pub fn open(path: &Path, lock: VaultLock) -> Result<(Vault, Store)>;      // errors if `lock` doesn't match the file mode
 pub fn create(path: &Path, lock: VaultLock) -> Result<(Vault, Store)>;    // errors if `path` already exists; caller is responsible for any rotation
 
@@ -582,6 +598,9 @@ Built with `clap` (derive). Commands:
 | `paladin tui`                               | Convenience wrapper: execs `paladin-tui` (resolved via `PATH`), forwarding all global flags (e.g. `--vault`, `--no-color`) verbatim. `--json` is rejected at parse time because the TUI has no JSON mode. If `paladin-tui` is not on `PATH`, exits non-zero with `io_error` (`operation: "exec_paladin_tui"`). Keeps the §3 "binaries don't reach into each other" rule intact. |
 
 Global flags: `--vault <path>`, `--no-color`, `--json` (for scripting).
+`--vault` and `--no-color` are accepted by every binary in the workspace
+(`paladin`, `paladin-tui`, and the v0.2 `paladin-gtk`); `--json` is
+`paladin`-only — `paladin-tui` and `paladin-gtk` reject it at parse time.
 
 Passphrase prompts always read from `/dev/tty` via `rpassword`, not from
 stdin/stdout, in both text and `--json` modes. Existing vault passphrases
@@ -597,7 +616,10 @@ If `/dev/tty` is unavailable, the CLI exits with `io_error` and operation
 
 `paladin add` supports exactly one input mode per invocation:
 interactive prompts (no account-definition flags), `--uri <otpauth-uri>`,
-manual flags, or `--qr <path>`. Manual mode requires `--label` and `--secret`; optional
+manual flags, or `--qr <path>`. Combining input modes (e.g. `--uri`
+together with manual flags or `--qr`, or `--qr` together with manual
+flags) is rejected at parse time. Manual mode requires `--label` and
+`--secret`; optional
 fields are `--issuer`, `--algorithm sha1|sha256|sha512`, `--digits 6|7|8`,
 `--kind totp|hotp`, `--period <secs>`, `--counter <u64>`, and
 `--icon-hint <slug>`. Manual mode defaults to TOTP, SHA1, 6 digits, and a
