@@ -1,7 +1,7 @@
 # Paladin — Design Document
 
 A Rust OTP authenticator (TOTP + HOTP) with CLI, TUI, and GTK4 GUI front-ends
-sharing a common core. Status: **draft / pre-implementation**.
+sharing a common core. Status: **approved 2026-05-04 / pre-implementation**.
 
 ## 1. Goals
 
@@ -81,8 +81,8 @@ if mode == 1:
     [kdf_id:   u8            ]   // 1 = Argon2id
     [argon2 params: m, t, p  ]
     [salt:     16 bytes      ]
-    [aead_id:  u8            ]   // 1 = AES-256-GCM, 2 = XChaCha20-Poly1305
-    [nonce:    12 or 24 bytes]
+    [aead_id:  u8            ]   // 1 = XChaCha20-Poly1305 (other IDs reserved)
+    [nonce:    24 bytes      ]
     [ciphertext + tag]           // bincode(VaultPayload)
 else:
     [bincode(VaultPayload)]
@@ -104,8 +104,8 @@ else:
 - **KDF:** Argon2id with sane defaults (m=64 MiB, t=3, p=1), tunable in the
   header so we can raise costs over time without breaking old vaults. The
   passphrase + salt deterministically derive the 32-byte AEAD key.
-- **AEAD:** AES-256-GCM **or** XChaCha20-Poly1305 (decided in §12). Header
-  records which algorithm was used so we can migrate later.
+- **AEAD:** **XChaCha20-Poly1305** (24-byte nonce, simpler misuse story than
+  AES-GCM). Header records the algorithm ID so we can migrate later.
 - **Key handling:** derived key lives in a `Zeroizing<[u8; 32]>` and is
   dropped as soon as the encrypt/decrypt op returns.
 - **Passphrase prompt:** via `rpassword` for the CLI; via the host UI for the
@@ -325,15 +325,10 @@ Concrete obligations and explicit user-controlled tradeoffs:
 11. **Reproducible builds.** Pin `rust-toolchain.toml`. Lock all deps.
 12. **Threat model documented separately** in `SECURITY.md` before v1.
 
-> **Confirmation needed before implementation.** The choices above
-> (Argon2id defaults, AEAD selection, vault file format with mode byte,
-> opt-in auto-lock and clipboard-clear, plaintext mode as a supported state,
-> plaintext export with `--force` semantics) have real security
-> consequences. Please review §4.3, §4.4, §4.5, §4.6, and §8 and confirm or
-> push back before code is written. Tests in `paladin-core` will assert
-> round-trip properties for both modes (plaintext and encrypted), tamper
-> detection, and file-permission enforcement, so regressions are caught
-> in CI.
+> **Approved 2026-05-04.** All decisions in §4.3, §4.4, §4.5, §4.6, and §8
+> are locked in for v0.1. Tests in `paladin-core` will assert round-trip
+> properties for both modes, tamper detection, file-permission enforcement,
+> and passphrase-transition rollback so regressions are caught in CI.
 
 ## 9. Key dependencies (proposed)
 
@@ -446,18 +441,16 @@ Concrete obligations and explicit user-controlled tradeoffs:
 
 ## 12. Open questions
 
-1. **AEAD choice:** AES-256-GCM (hardware-accelerated, ubiquitous) vs.
-   XChaCha20-Poly1305 (larger nonce, simpler misuse story). Lean: XChaCha20.
-2. **Vault encoding:** `bincode` (compact, Rust-only) vs. CBOR (interop). Lean:
-   `bincode` for v1, since the format is private to us.
-3. **TUI runtime:** plain threads + `mpsc` vs. `tokio`. Lean: plain threads —
+**Decided at sign-off (2026-05-04):**
+- AEAD = **XChaCha20-Poly1305** (24-byte nonce, AEAD ID 1).
+- Vault encoding = **bincode** (private format, not for interop).
+- HOTP CLI semantics: `show` and `copy` **advance** the counter; `peek` does not.
+- Aegis **encrypted** backups deferred to v0.2 (plaintext export supported in v0.1).
+- GUI deferred to v0.2; **TUI ships in v0.1**.
+
+**Still open (do not block v0.1 start):**
+
+1. **TUI runtime:** plain threads + `mpsc` vs. `tokio`. Lean: plain threads —
    simpler, and we don't need async I/O for a local TUI.
-4. **Icon hints:** store an `issuer`-derived icon name and let GUIs resolve
+2. **Icon hints:** store an `issuer`-derived icon name and let GUIs resolve
    it, or embed user-supplied icon bytes in the vault? Lean: name-only.
-5. **HOTP show semantics in CLI:** should `paladin show` advance the counter,
-   or should advancement require the explicit `paladin next` / a flag? Lean:
-   `show` advances (matches "I asked for a code, I'm using it"); `peek` is
-   the non-advancing escape hatch.
-6. **Aegis encrypted backups:** ship in v0.1 (extra crypto work) or defer to
-   v0.2? Lean: defer.
-7. **GUI in v0.1?** Recommend: TUI in v0.1, GUI in v0.2.
