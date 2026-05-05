@@ -1056,13 +1056,15 @@ Layout (single-screen MVP):
   list; encrypted vaults show the unlock screen; missing vaults show a
   non-mutating message telling the user to run `paladin init`. v0.1 TUI
   does not create vaults.
-- Modal dialogs for add / remove / import / export / passphrase /
+- Modal dialogs for add / remove / rename / import / export / passphrase /
   settings. Add supports manual entry, paste of an `otpauth://` URI
   (decoded via `paladin_core::parse_otpauth`), and QR scan from
   clipboard image bytes; manual and URI duplicates use
   `Vault::find_duplicate` and reject with the existing account, while
   QR imports use `ImportConflict::Skip` and report
-  imported/skipped/warning counts. Import takes a file path and
+  imported/skipped/warning counts. Rename calls `Vault::rename(id,
+  new_label, now)` inside `Vault::mutate_and_save`; issuer is not
+  editable here (parity with `paladin rename`). Import takes a file path and
   optional explicit format, prompts for the bundle passphrase on
   encrypted-Paladin sources, applies a user-selected on-conflict
   policy (`skip` / `replace` / `append`), and reports
@@ -1345,9 +1347,11 @@ Concrete obligations and explicit user-controlled tradeoffs:
     `paladin_core::parse_otpauth` with shared duplicate / validation
     / `mutate_and_save` rules, and inline rejection of malformed URIs
     and validation failures. v0.2.
-  - TUI add-via-URI: paste-`otpauth://`-URI Add route through
-    `paladin_core::parse_otpauth`, with the same duplicate /
-    validation behavior as manual mode.
+  - TUI add-via-URI + rename: paste-`otpauth://`-URI Add route through
+    `paladin_core::parse_otpauth` with the same duplicate /
+    validation behavior as manual mode; rename modal round-trips
+    through `Vault::rename` with no-op short-circuit on unchanged
+    label and prior-label restore on `save_not_committed`.
   - Plaintext-vault auto-lock is a no-op in TUI state handling now, with
     GUI parity when the GUI ships.
 - **CI:** `cargo fmt --check`, `cargo clippy -- -D warnings`,
@@ -1539,7 +1543,7 @@ artifacts side by side.
 - [ ] Add the `paladin-tui` crate to the workspace.
 - [ ] Single-screen list view with TOTP gauges and HOTP "advance" key.
 - [ ] Search/filter input.
-- [ ] Add / remove / import / export / passphrase / settings modals; Add covers manual fields, `otpauth://` URI paste, and QR scan from clipboard image.
+- [ ] Add / remove / rename / import / export / passphrase / settings modals; Add covers manual fields, `otpauth://` URI paste, and QR scan from clipboard image.
 - [ ] Conditional unlock screen (only when vault is encrypted).
 - [ ] Missing-vault guidance screen (no implicit vault creation).
 - [ ] Opt-in auto-lock and clipboard-clear honoring vault settings, with plaintext auto-lock as a no-op.

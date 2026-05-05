@@ -10,7 +10,7 @@ The final `paladin tui` integration check also depends on
 
 Standalone binary `paladin-tui`. Single-screen MVP per §6: search bar,
 account list with live TOTP gauges and HOTP reveal-on-`n`, status line, and
-modal dialogs for add / remove / import / export / passphrase / settings.
+modal dialogs for add / remove / rename / import / export / passphrase / settings.
 Auto-lock and clipboard auto-clear are **opt-in** per `VaultSettings`. The
 TUI is also reachable via `paladin tui` which `execvp`s this binary.
 
@@ -40,6 +40,7 @@ crates/paladin-tui/
 │   │   └── modals/
 │   │       ├── add.rs
 │   │       ├── remove.rs
+│   │       ├── rename.rs       # label edit; calls Vault::rename inside Vault::mutate_and_save
 │   │       ├── import.rs       # path + format + on-conflict + (optional) bundle passphrase
 │   │       ├── export.rs       # format + path + overwrite + (encrypted) twice-confirmed passphrase
 │   │       ├── passphrase.rs   # set/change/remove sub-flows
@@ -150,8 +151,8 @@ focuses the search bar; typing narrows the filtered list in place.
 While the search bar is focused, `↑`/`↓` still move the list selection
 and `Enter` copies the selected entry — the selection is always
 navigable so the user does not need to unfocus the search to act on a
-result. Other keys, including the action keys `a` / `r` / `i` / `e` /
-`n` / `p` / `s` and the quit key `q`, are routed to the search field
+result. Other keys, including the action keys `a` / `r` / `R` / `i` /
+`e` / `n` / `p` / `s` and the quit key `q`, are routed to the search field
 as character input while it has focus; the user must defocus the search
 (`Esc` to clear) to use them as actions. `Ctrl-C` is the exception and
 always quits. `Esc` clears the search query and returns focus to the list;
@@ -167,7 +168,7 @@ quit there).
 When the filter changes, preserve the selected account by `AccountId` if it
 is still present; otherwise select the first matching row. Empty result sets
 render an empty-state row and have no selection. With no selection, `Enter`,
-`n`, and `r` produce a status-line "no account selected" error and no effect;
+`n`, `r`, and `R` produce a status-line "no account selected" error and no effect;
 Add / Import / Export / Passphrase / Settings remain available from list
 focus.
 
@@ -239,6 +240,20 @@ closes it.
   with the inline error. Durability-unconfirmed saves leave the account
   removed in memory (matching the committed on-disk state) and surface
   the warning inline.
+- **Rename** — single text field pre-populated with the selected
+  account's current label. Confirm wraps
+  `Vault::rename(id, new_label, now)` in `Vault::mutate_and_save` with
+  the trimmed input; same label validation as Add (non-empty, §4.1
+  length limits). A no-op rename (trimmed input equals the current
+  label) closes the modal without invoking `mutate_and_save`. Issuer
+  is **not** editable here — parity with the CLI's `rename` taking
+  only `<new-label>`; deeper edits use Remove + Add. Pre-commit save
+  failures (`save_not_committed`) restore the prior label so memory
+  matches disk and the modal stays open with the inline error;
+  durability-unconfirmed saves leave the new label in memory and
+  surface the warning inline. Rename does not handle secret material;
+  the label buffer is cleared on submit, cancel, modal close, and
+  auto-lock alongside the other modal-local state.
 - **Import** — text field for the source path, a format selector
   (auto-detect or explicit `otpauth` / `aegis` / `paladin` / `qr`),
   and an on-conflict selector (`skip` / `replace` / `append`).
@@ -411,6 +426,7 @@ reaches the primary-file commit point with durability still uncertain:
 | `n`       | HOTP next-code (advances + reveals 120s)                |
 | `a`       | Open Add modal                                          |
 | `r`       | Open Remove confirmation                                |
+| `R`       | Open Rename modal (Shift+R; `r` stays bound to Remove)  |
 | `i`       | Open Import modal                                       |
 | `e`       | Open Export modal                                       |
 | `/`       | Focus search bar                                        |
@@ -495,7 +511,16 @@ captured with `insta` golden snapshots using `ratatui::backend::TestBackend`.
   save failure restores the prior settings values in memory and keeps the
   modal open with the inline error; a durability-unconfirmed save leaves the
   new values in memory; Confirm with no changes closes without saving.
-- **Pre-commit save rollback**: Add, Remove, Import, and Settings modals
+- **Rename modal**: opens with the selected account's current label
+  pre-populated; trimmed-equal input short-circuits without calling
+  `Vault::rename` or `Vault::mutate_and_save`; non-empty trimmed
+  changes route through `Vault::rename` inside
+  `Vault::mutate_and_save`; pre-commit `save_not_committed` restores
+  the prior label and the modal stays open with the inline error;
+  `save_durability_unconfirmed` leaves the new label in memory and
+  surfaces the warning. Empty / out-of-range labels surface inline
+  validation errors and never invoke the setter.
+- **Pre-commit save rollback**: Add, Remove, Rename, Import, and Settings modals
   route mutations through `Vault::mutate_and_save`. Each case verifies
   that a `save_not_committed` failure leaves `Vault::iter()` (or
   `Vault::settings()`) matching its pre-attempt snapshot, the modal stays
@@ -515,11 +540,11 @@ captured with `insta` golden snapshots using `ratatui::backend::TestBackend`.
   expiry, replacement, drop, and auto-lock as applicable.
 - **Insta snapshots** for every screen state: empty vault, single TOTP,
   mixed TOTP/HOTP with hidden + revealed rows, search-active, every modal
-  (Add / Remove / Import / Export / Passphrase set/change/remove /
+  (Add / Remove / Rename / Import / Export / Passphrase set/change/remove /
   Settings), unlock screen, missing-vault screen, status-line error
   after rejected copy, `--no-color` variants. Error-state snapshots:
   inline `save_not_committed` and `save_durability_unconfirmed`
-  rendered in each mutating modal (Add, Remove, Import, Passphrase
+  rendered in each mutating modal (Add, Remove, Rename, Import, Passphrase
   set/change/remove, Settings); Import modal with each importer error
   kind and the post-import counts panel; Export modal with the refused
   overwrite gate, `confirmation_mismatch`, `zero_length`, plaintext-export
@@ -623,7 +648,7 @@ is never expected to be scripted.
 - [ ] Implement reducer, event producers, effect execution, and timer tokens.
 - [ ] Implement list layout, search, TOTP gauges, HOTP reveal/copy behavior,
   HOTP `Code.counter` labels, and status-line errors.
-- [ ] Implement add / remove / import / export / passphrase / settings modals
+- [ ] Implement add / remove / rename / import / export / passphrase / settings modals
   with persistence through `Vault::mutate_and_save` where the core owns
   rollback.
 - [ ] Route export writes through `paladin_core::write_secret_file_atomic`.
