@@ -1,6 +1,6 @@
 # Implementation Plan 04 — `paladin-gtk`
 
-Source of truth: [DESIGN.md](DESIGN.md) §3, §4.2–§4.7, §5–§14.
+Source of truth: [DESIGN.md](DESIGN.md) §3, §4.1–§4.7, §5–§14.
 Depends on: [`IMPLEMENTATION_PLAN_01_CORE.md`](IMPLEMENTATION_PLAN_01_CORE.md).
 
 > **Status: deferred to v0.2.** Per §13, the GUI is deferred to v0.2; the
@@ -10,7 +10,8 @@ Depends on: [`IMPLEMENTATION_PLAN_01_CORE.md`](IMPLEMENTATION_PLAN_01_CORE.md).
 
 ## Scope
 
-Standalone GTK4 binary `paladin-gtk` built with **Relm4** on **GTK4** per §7.
+Standalone GTK4 binary `paladin-gtk` built with **Relm4** on **GTK4** per
+§7, using `libadwaita` widgets per §9.
 Exposes the same operations as the TUI: search/list of accounts, copy code,
 HOTP `next` with reveal window, add account (manual or scan-from-clipboard
 image), remove account, import/export, settings (auto-lock +
@@ -36,7 +37,7 @@ crates/paladin-gtk/
 │   ├── cli.rs             # GlobalArgs (--vault, --no-color); reject --json
 │   ├── app/
 │   │   ├── mod.rs         # AppModel + AppMsg + AppOutput
-│   │   └── state.rs       # Missing / Locked / Unlocked { vault, store }
+│   │   └── state.rs       # AppState: Missing / Locked / Unlocked { vault, store }
 │   ├── components/
 │   │   ├── unlock.rs      # UnlockComponent — encrypted vaults only
 │   │   ├── account_list.rs    # AccountListComponent (gtk::ListView + factory)
@@ -60,6 +61,10 @@ crates/paladin-gtk/
     ├── auto_lock_logic.rs        # pure logic; no display required
     ├── clipboard_clear_logic.rs  # pure logic; no display required
     ├── hotp_reveal_logic.rs
+    ├── secret_fields_logic.rs
+    ├── qr_clipboard_logic.rs
+    ├── import_dialog_logic.rs
+    ├── export_dialog_logic.rs
     ├── gtk_smoke.rs              # xvfb-run integration smoke test
     └── manual/MANUAL_TEST_PLAN.md
 ```
@@ -71,7 +76,8 @@ inclusion.
 
 ## Component tree (per §7)
 
-- `AppModel` — owns the `Missing`, `Locked`, or `Unlocked` state.
+- `AppModel` — owns the resolved vault path plus the `Missing`, `Locked`,
+  or `Unlocked` state.
 - `UnlockComponent` — passphrase entry, **shown only when the vault is
   encrypted**. Skipped entirely for plaintext vaults.
 - `AccountListComponent` — `gtk::ListView` with a custom row factory bound
@@ -97,7 +103,10 @@ inclusion.
   `width * height * 4` RGBA8 buffer with overflow-checked multiplication,
   downloads with row stride `width * 4`, and passes width, height, bytes,
   and `import_time` to
-  `paladin_core::import::qr_image_bytes`. Manual entries use
+  `paladin_core::import::qr_image_bytes`. Manual fields cover label,
+  optional issuer, Base32 secret, algorithm, digits, kind, TOTP period,
+  HOTP counter, and optional icon hint, matching
+  `paladin_core::AccountInput`. Manual entries use
   `paladin_core::validate_manual`; validation warnings show inline and do
   not block creation. Manual duplicate collisions call
   `Vault::find_duplicate(&validated)` before mutation, initially reject with
@@ -121,8 +130,9 @@ inclusion.
   selected `paladin_core::import::from_file` call runs on
   `gio::spawn_blocking` (the encrypted-Paladin variant runs Argon2id),
   with results delivered back via Relm4 messages. On success,
-  `Vault::import_accounts(accounts, conflict)` is called with the
-  user's policy inside `Vault::mutate_and_save`;
+  `Vault::import_accounts(accounts, conflict, import_time)` is called with
+  the user's policy and the same `import_time` used by `ImportOptions`
+  inside `Vault::mutate_and_save`;
   imported/skipped/replaced/appended/warning counts surface inline.
   Pre-commit save failures (`save_not_committed`) restore core's
   pre-attempt snapshot; durability-unconfirmed saves leave the merged
@@ -154,9 +164,11 @@ inclusion.
   the vault, so there is no rollback path.
 - `PassphraseDialog` — three sub-flows mirroring CLI/TUI: `set` / `change` /
   `remove`. New passphrases prompted twice; mismatch returns to the dialog
-  with an inline error. `remove` shows the plaintext-storage warning and
-  requires explicit confirmation before mutation. `set` is enabled only for
-  plaintext vaults; `change` and `remove` are enabled only for encrypted
+  with an inline error. `set` and `change` also reject zero-length new
+  passphrases inline with `invalid_passphrase`
+  (`reason: "zero_length"`). `remove` shows the plaintext-storage warning
+  and requires explicit confirmation before mutation. `set` is enabled only
+  for plaintext vaults; `change` and `remove` are enabled only for encrypted
   vaults. Any stale invalid-state error stays in the dialog and does not
   mutate visible state.
 - `SettingsComponent` — toggles for auto-lock and clipboard-clear, with
@@ -197,7 +209,8 @@ Behave the same as the TUI, including **opt-in default** and the
 - Clipboard auto-clear: mode-agnostic — runs in both plaintext and
   encrypted vaults. At copy time, capture `(token, value)`. On wake,
   ignore stale tokens first, then read the current `gdk::Clipboard` text;
-  if it equals `value`, clear; otherwise no-op.
+  if it equals `value`, clear; otherwise no-op. Pending copied values are
+  zeroized after the clear attempt or stale-token drop.
 
 ## Icons (per §7)
 
@@ -372,8 +385,9 @@ The GUI itself is hard to test without a display server. Tests are split:
   decision** (`None`/empty slug → placeholder; failed lookup → placeholder;
   the actual `gtk::IconTheme` lookup is exercised by the smoke test),
   search filtering, auto-lock state machine, clipboard "clear if unchanged"
-  decision logic, HOTP reveal window timing + counter labels, secret-field
-  clearing/redaction invariants, QR RGBA byte-length/stride preparation,
+  decision logic plus pending-value zeroization, HOTP reveal window timing
+  + counter labels, secret-field clearing/redaction invariants, QR RGBA
+  byte-length/stride preparation,
   import format-selector routing + on-conflict policy threading +
   post-merge counts mapping, export overwrite-gate + encrypted
   twice-confirm match logic + export writer error mapping.
@@ -382,9 +396,9 @@ The GUI itself is hard to test without a display server. Tests are split:
 - **Manual test plan** (`tests/manual/MANUAL_TEST_PLAN.md`) per Milestone 7
   checklist: unlock encrypted vault; copy TOTP; HOTP next reveals + copies
   while showing the counter used; reveal expires; auto-lock fires; clipboard
-  auto-clear honors if-unchanged; add manual; add via clipboard image; import each format
-  (otpauth, aegis plaintext, encrypted Paladin bundle, QR image file)
-  with each on-conflict policy and verify reported counts; export
+  auto-clear honors if-unchanged; add manual; add via clipboard image;
+  import each format (otpauth, aegis plaintext, encrypted Paladin bundle,
+  QR image file) with each on-conflict policy and verify reported counts; export
   plaintext (warning + confirmation, `0600` output) and encrypted
   Paladin bundle (twice-confirm, round-trip via Import); refused
   overwrite without confirmation; settings persist; passphrase
@@ -393,6 +407,7 @@ The GUI itself is hard to test without a display server. Tests are split:
 
 ## Milestone 7 checklist (expanded from §12)
 
+- [ ] Add the `paladin-gtk` crate to the workspace.
 - [ ] Relm4 component tree (Unlock / List / Row / Add / Remove /
   Import / Export / Passphrase / Settings).
 - [ ] Conditional unlock view (encrypted vaults only).
@@ -432,9 +447,8 @@ back into vanilla GTK4 widgets where Adwaita is idiomatic:
 
 - **Window shell.** `AppModel`'s root is an `AdwApplicationWindow`
   with an `AdwHeaderBar`. The header bar carries the search-toggle
-  button and a primary menu (`AdwSplitButton` or a plain
-  `gtk::MenuButton` driven by `gio::Menu` — choice deferred to
-  implementation). No custom title-bar drawing.
+  button and a primary menu (`gtk::MenuButton` driven by `gio::Menu`).
+  No custom title-bar drawing.
 - **Toast surface.** `AppModel` wraps the main content in an
   `AdwToastOverlay`. Transient feedback that does not need a modal —
   copy confirmation, `save_durability_unconfirmed` after a HOTP
