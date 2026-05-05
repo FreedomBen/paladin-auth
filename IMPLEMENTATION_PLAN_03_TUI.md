@@ -64,8 +64,8 @@ Every new Rust source file carries the standard SPDX header
 
 ## Event loop (per §6)
 
-Single thread runs the reducer. Two long-lived producer threads feed
-`mpsc<AppEvent>`:
+Single thread runs the reducer. Events arrive on `mpsc<AppEvent>` from two
+long-lived producer threads plus effect-owned one-shot timer threads:
 
 - **Input thread** — `crossterm::event::read()` in a loop, maps to
   `AppEvent::Input(KeyEvent | ResizeEvent | …)`.
@@ -139,11 +139,11 @@ focuses the search bar; typing narrows the filtered list in place.
 While the search bar is focused, `↑`/`↓` still move the list selection
 and `Enter` copies the selected entry — the selection is always
 navigable so the user does not need to unfocus the search to act on a
-result. Other keys, including the action keys `a` / `r` / `n` / `p` /
-`s` and the quit key `q`, are routed to the search field as character
-input while it has focus; the user must defocus the search (`Esc` to
-clear) to use them as actions. `Ctrl-C` is the exception and always
-quits. `Esc` clears the search query and returns focus to the list;
+result. Other keys, including the action keys `a` / `r` / `i` / `e` /
+`n` / `p` / `s` and the quit key `q`, are routed to the search field
+as character input while it has focus; the user must defocus the search
+(`Esc` to clear) to use them as actions. `Ctrl-C` is the exception and
+always quits. `Esc` clears the search query and returns focus to the list;
 on the list, `Esc` is a no-op. Modal dialogs trap focus while open
 and intercept `Esc` to close themselves. The missing-vault and
 startup-error screens accept `q` / `Ctrl-C` to quit. The unlock
@@ -151,7 +151,29 @@ screen accepts character input (passphrase) and `Enter` (submit), and
 quits on `Esc` or `Ctrl-C` (`q` is a valid passphrase character, so
 it is not bound to quit there).
 
+When the filter changes, preserve the selected account by `AccountId` if it
+is still present; otherwise select the first matching row. Empty result sets
+render an empty-state row and have no selection. With no selection, `Enter`,
+`n`, and `r` produce a status-line "no account selected" error and no effect;
+Add / Import / Export / Passphrase / Settings remain available from list
+focus.
+
 ## Modals (per §6)
+
+All passphrase-entry fields (unlock, encrypted Paladin import, encrypted
+export, and passphrase set/change) keep typed bytes in zeroizing buffers,
+convert to `secrecy::SecretString` only for core calls, and zeroize on
+submit, cancel, modal close, and auto-lock.
+
+Modal-local navigation is consistent across Add / Remove / Import / Export /
+Passphrase / Settings: `Tab` moves to the next control, `Shift-Tab` moves to
+the previous control, `Enter` activates the focused button or the modal's
+default confirm action, `Space` toggles the focused checkbox / toggle, `←` /
+`→` change segmented selectors, and `↑` / `↓` adjust spinners or move within
+multi-line field groups. Text fields consume printable characters and standard
+editing keys. `Esc` cancels the modal and discards pending modal-local edits
+unless the modal is showing a post-success counts panel, where `Esc` simply
+closes it.
 
 - **Add** — manual fields and "scan from clipboard image" (triggered by
   an in-modal action key). Manual mode collects label, issuer, secret
@@ -190,14 +212,17 @@ it is not bound to quit there).
 - **Import** — text field for the source path, a format selector
   (auto-detect or explicit `otpauth` / `aegis` / `paladin` / `qr`),
   and an on-conflict selector (`skip` / `replace` / `append`).
-  Encrypted Paladin bundles (explicit `format == paladin`, or
-  auto-detected via the Paladin header) prompt for the bundle
-  passphrase inside the modal before invoking the importer. Plaintext
-  Paladin headers surface `unsupported_plaintext_vault` without a
-  passphrase prompt. The selected `paladin_core::import::*` returns
-  `Vec<ValidatedAccount>`; on success, `Vault::import_accounts(accounts,
-  conflict)` is called inside `Vault::mutate_and_save` with the user's
-  policy. The modal reports
+  Paladin sources are header-probed before any passphrase prompt:
+  encrypted bundles (`mode == 1`, whether explicit `format == paladin`
+  or auto-detected via the Paladin header) prompt for the bundle
+  passphrase inside the modal before invoking the importer; plaintext
+  Paladin headers (`mode == 0`) surface `unsupported_plaintext_vault`
+  without a passphrase prompt; malformed Paladin headers fail inline
+  before any passphrase prompt. The selected
+  `paladin_core::import::*` returns `Vec<ValidatedAccount>`; on
+  success, `Vault::import_accounts(accounts, conflict)` is called
+  inside `Vault::mutate_and_save` with the user's policy. The modal
+  reports
   imported/skipped/replaced/appended/warning counts inline on
   success. Pre-commit save failures (`save_not_committed`) restore
   core's pre-attempt snapshot so memory matches disk and
@@ -207,7 +232,9 @@ it is not bound to quit there).
   (`unsupported_import_format`, `unsupported_plaintext_vault`,
   `unsupported_encrypted_aegis`, `unsupported_aegis_entry_type`,
   `validation_error`, `no_entries_to_import`, `decrypt_failed`,
-  `io_error`) stay in the modal as inline errors and never mutate
+  `invalid_header`, `invalid_payload`, `unsupported_format_version`,
+  `kdf_params_out_of_bounds`, `io_error`) stay in the modal as inline
+  errors and never mutate
   vault state.
 - **Export** — format selector (plaintext `otpauth://` JSON list or
   encrypted Paladin bundle) and a destination path field. Overwriting
@@ -326,8 +353,10 @@ Effects update visible state only after the underlying mutation succeeds:
   `unsupported_plaintext_vault`, `unsupported_encrypted_aegis`,
   `unsupported_aegis_entry_type`, `validation_error`,
   `no_entries_to_import`, `decrypt_failed`,
-  `io_error`) stay in the Import modal as inline errors and never
-  mutate vault state. Save errors follow the Add/Remove/Settings rule:
+  `invalid_header`, `invalid_payload`, `unsupported_format_version`,
+  `kdf_params_out_of_bounds`, `io_error`) stay in the Import modal as
+  inline errors and never mutate vault state. Save errors follow the
+  Add/Remove/Settings rule:
   pre-commit (`save_not_committed`) restores the
   `Vault::mutate_and_save` snapshot; durability-unconfirmed leaves the
   merged accounts and surfaces the warning.
@@ -361,14 +390,22 @@ captured with `insta` golden snapshots using `ratatui::backend::TestBackend`.
 
 - **Reducer**: every keybinding maps to the expected state transition.
   Search filter; selection navigation; modal open/close; HOTP `n` triggers a
-  `HotpAdvance` effect; effect failures leave visible state unchanged and
-  surface inline/status-line errors.
+  `HotpAdvance` effect; pre-commit effect failures leave visible state
+  unchanged and surface inline/status-line errors, while
+  durability-unconfirmed failures follow the committed-state behavior in
+  "Effect errors". Modal-local navigation covers `Tab` / `Shift-Tab`,
+  `Enter`, `Space`, arrows, text-field editing, and `Esc` cancel / close
+  behavior for every modal.
 - **Search**: case-insensitive substring against the
   `{issuer}:{label}` match key (matching CLI query resolution in
   DESIGN §5; empty issuer is allowed and the colon is still present in
   the match key) using `str::to_lowercase()` with no Unicode
-  normalization; insertion order preserved among matches. The `id:`
-  prefix form is CLI-only and is **not** honored by the TUI search.
+  normalization; insertion order preserved among matches. Filter changes
+  preserve the selected `AccountId` when it remains visible, otherwise
+  select the first match; empty result sets have no selection and action
+  keys that require a selected row surface the "no account selected"
+  status-line error. The `id:` prefix form is CLI-only and is **not**
+  honored by the TUI search.
 - **Auto-lock**: timer arms on `Unlocked` + `enabled` + encrypted; resets
   on input; transitions to `Locked` on expiry; **no-op** for plaintext
   vaults (timer never arms). Setting persists across saves. Locking
@@ -386,9 +423,11 @@ captured with `insta` golden snapshots using `ratatui::backend::TestBackend`.
   rejects no-image / no-QR / invalid-QR cases inline.
 - **Import modal**: format auto-detect routes to the correct
   `paladin_core::import::*` (otpauth / aegis / paladin / qr); explicit
-  format selector override honored; encrypted-Paladin path prompts for the
-  bundle passphrase before invoking the importer; plaintext-Paladin path
-  returns `unsupported_plaintext_vault` without prompting; on-conflict policy
+  format selector override honored; Paladin header-probing happens before
+  any passphrase prompt; encrypted-Paladin path prompts for the bundle
+  passphrase before invoking the importer; plaintext-Paladin path returns
+  `unsupported_plaintext_vault` without prompting; malformed Paladin headers
+  fail inline without prompting; on-conflict policy
   (`skip` / `replace` / `append`) is forwarded to
   `Vault::import_accounts` and reflected in the report counts;
   importer error kinds listed under "Effect errors", including
@@ -426,6 +465,9 @@ captured with `insta` golden snapshots using `ratatui::backend::TestBackend`.
   matches whatever the core left behind.
 - **HOTP reveal window**: reveal closes after 120 s; `n` during an open
   reveal advances again (does not no-op).
+- **Passphrase buffers**: unlock, encrypted Paladin import, encrypted export,
+  and passphrase set/change buffers zeroize on submit, cancel, modal close,
+  and auto-lock.
 - **Insta snapshots** for every screen state: empty vault, single TOTP,
   mixed TOTP/HOTP with hidden + revealed rows, search-active, every modal
   (Add / Remove / Import / Export / Passphrase set/change/remove /
@@ -461,8 +503,9 @@ captured with `insta` golden snapshots using `ratatui::backend::TestBackend`.
 ## Dependencies
 
 `ratatui`, `crossterm`, `tui-input`, `clap` (for arg parsing only),
-`arboard`, `directories`, plus `paladin-core`. **No `tokio`.** No
-transitive network crates (enforced by workspace `cargo deny`).
+`arboard`, `directories`, `secrecy`, `zeroize`, plus `paladin-core`.
+**No `tokio`.** No transitive network crates (enforced by workspace
+`cargo deny`).
 
 Dev-dependencies: `insta` for golden snapshots.
 
@@ -481,11 +524,11 @@ is never expected to be scripted.
 `paladin-tui` ships in `.deb`, `.rpm`, Flatpak, and AppImage in v0.1
 (§11.1). Implementation owes the release pipeline:
 
-- **Man page.** Generate `paladin-tui.1` from clap via `clap_mangen`,
-  driven by the workspace `cargo xtask man` target. The packaging
-  configs ship it gzipped at `/usr/share/man/man1/paladin-tui.1.gz`
-  per §11.3. The page documents the global flags, keybindings,
-  modal behavior, and the §6 missing-vault / startup-error screens.
+- **Man page.** Generate the argument synopsis for `paladin-tui.1` from
+  clap via `clap_mangen`, and append maintained sections for keybindings,
+  modal behavior, and the §6 missing-vault / startup-error screens, driven
+  by the workspace `cargo xtask man` target. The packaging configs ship it
+  gzipped at `/usr/share/man/man1/paladin-tui.1.gz` per §11.3.
 - **Cargo.toml metadata.** `crates/paladin-tui/Cargo.toml` sets
   `description`, `homepage`, `repository`, `keywords`, `categories`,
   and `license = "AGPL-3.0-or-later"` so `nfpm` produces correct
