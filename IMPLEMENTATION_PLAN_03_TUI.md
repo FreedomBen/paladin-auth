@@ -174,10 +174,10 @@ focus.
 ## Modals (per §6)
 
 All passphrase-entry fields (unlock, encrypted Paladin import, encrypted
-export, passphrase set/change) and the Add modal's manual-secret field
-keep typed bytes in zeroizing buffers, convert to `secrecy::SecretString`
-only for core calls, and zeroize on submit, cancel, modal close, and
-auto-lock. Any OTP code retained after generation (HOTP reveal state and
+export, passphrase set/change) and the Add modal's secret-bearing
+fields (manual-secret field and the URI-mode entry) keep typed bytes in
+zeroizing buffers, convert to `secrecy::SecretString` only for core
+calls, and zeroize on submit, cancel, modal close, and auto-lock. Any OTP code retained after generation (HOTP reveal state and
 clipboard auto-clear values) is also kept in zeroizing storage and zeroized
 when replaced, cleared, expired, or dropped.
 
@@ -191,7 +191,10 @@ editing keys. `Esc` cancels the modal and discards pending modal-local edits
 unless the modal is showing a post-success counts panel, where `Esc` simply
 closes it.
 
-- **Add** — manual fields and a focused "scan from clipboard image" control.
+- **Add** — three input modes selected via a segmented header inside
+  the modal: manual fields, paste of an `otpauth://` URI, and a
+  focused "scan from clipboard image" control (CLI parity with `add`
+  interactive / `--uri` / `--qr`).
   Manual mode collects label, issuer, secret
   (Base32 RFC 4648, case-insensitive, optional `=` padding), algorithm
   (`sha1` / `sha256` / `sha512`), digits (6 / 7 / 8), kind (`totp` or
@@ -199,12 +202,21 @@ closes it.
   icon-hint slug; defaults follow the CLI manual-add defaults in
   DESIGN §5 (TOTP, SHA1, 6 digits, 30 s period, HOTP counter 0,
   icon-hint defaulted from the issuer per §4.1). Manual entries route
-  through `paladin_core::validate_manual`; clipboard images are read
+  through `paladin_core::validate_manual`. URI mode is a single text
+  field; on submit the entered string is passed to
+  `paladin_core::parse_otpauth`, and on success the resulting
+  `ValidatedAccount` shares the manual path's duplicate-detection,
+  "add anyway" override, and `Vault::mutate_and_save` insertion.
+  Parser errors (`unsupported_import_format`, `validation_error`)
+  stay in the modal as inline errors and never mutate the vault. The
+  URI text field is treated as a secret-bearing buffer and zeroized on
+  submit, cancel, modal close, and auto-lock because the URI embeds
+  the Base32 secret. Clipboard images are read
   through `arboard::Clipboard::get_image()`, whose `ImageData` already
   carries raw RGBA8 bytes plus width/height, and passed to
   `paladin_core::import::qr_image_bytes` with the current import time. Validation warnings are shown inline and do
   not block creation. Because `Vault::add` is infallible and duplicate
-  presentation policy is owned by the front ends, manual duplicate
+  presentation policy is owned by the front ends, manual and URI duplicate
   collisions call `Vault::find_duplicate(&validated)` before mutation. A
   collision initially rejects with the existing account in the modal and
   offers an "add anyway" confirmation that re-submits the same input on the

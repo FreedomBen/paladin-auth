@@ -40,12 +40,13 @@ crates/paladin-gtk/
 │   │   ├── mod.rs         # AppModel + AppMsg + AppOutput
 │   │   └── state.rs       # AppState: Missing / Locked / Unlocked { vault, store }
 │   ├── components/
-│   │   ├── init.rs        # InitDialog — only path that creates a vault
+│   │   ├── init.rs        # InitDialog — vault creation (incl. create_force clobber confirmation)
 │   │   ├── unlock.rs      # UnlockComponent — encrypted vaults only
 │   │   ├── account_list.rs    # AccountListComponent (gtk::ListView + factory)
-│   │   ├── account_row.rs     # AccountRowComponent (label, code, gauge/next, copy)
-│   │   ├── add_account.rs     # AddAccountComponent (manual fields + paste image)
+│   │   ├── account_row.rs     # AccountRowComponent (label, code, gauge/next, copy, kebab → rename)
+│   │   ├── add_account.rs     # AddAccountComponent (manual fields + otpauth:// URI paste + paste image)
 │   │   ├── remove.rs          # RemoveDialog (confirmation gate)
+│   │   ├── rename.rs          # RenameDialog (label edit; calls Vault::rename)
 │   │   ├── import.rs          # ImportDialog (file picker + format + on-conflict + bundle passphrase)
 │   │   ├── export.rs          # ExportDialog (file picker + format + overwrite + encrypted passphrase)
 │   │   ├── passphrase.rs      # PassphraseDialog (set / change / remove flows)
@@ -66,6 +67,8 @@ crates/paladin-gtk/
     ├── secret_fields_logic.rs
     ├── qr_clipboard_logic.rs
     ├── init_dialog_logic.rs
+    ├── rename_dialog_logic.rs
+    ├── otpauth_uri_paste_logic.rs
     ├── import_dialog_logic.rs
     ├── export_dialog_logic.rs
     ├── gtk_smoke.rs              # xvfb-run integration smoke test
@@ -97,15 +100,25 @@ inclusion.
   on `gio::spawn_blocking` (the encrypted path runs the §4.4 Argon2id
   KDF). On success, swaps `AppModel` to `Unlocked` with the returned
   `(Vault, Store)` and routes to `AccountListComponent`. The dialog
-  stays open and surfaces `vault_exists` (if a vault appeared between
-  `inspect` and `create`), `unsafe_permissions` (rendered via
+  stays open and surfaces `unsafe_permissions` (rendered via
   `paladin_core::format_unsafe_permissions(&err)`),
-  `save_not_committed`, and `save_durability_unconfirmed` inline. The
-  GUI does **not** offer the CLI's `init --force` clobber path — the
-  `vault_exists` error is terminal in this dialog and users who need
-  clobber semantics run `paladin init --force` from the CLI. Passphrase
-  entries are zeroized on submit, cancel, and dialog close per
-  §"Secret entry handling".
+  `save_not_committed`, and `save_durability_unconfirmed` inline.
+  `vault_exists` (if a vault appeared between `inspect` and `create`)
+  opens an in-dialog `AdwMessageDialog` with `destructive-action`
+  styling that names the existing path and warns that the existing
+  vault will be rotated to `vault.bin.bak` (overwriting any prior
+  backup) — wording matches the CLI `init --force` warning. On
+  confirm, the dialog re-runs the operation with
+  `paladin_core::create_force(path, lock)` on `gio::spawn_blocking`,
+  reusing the passphrase choice already entered; on cancel, the
+  destructive dialog closes and `InitDialog` returns to its
+  `vault_exists` state without mutating the existing vault.
+  `create_force` errors map identically to `create`
+  (`save_not_committed` with `backup_path` set when the failure
+  follows backup rotation; `save_durability_unconfirmed` after the
+  primary rename) and stay inline. Passphrase entries are zeroized on
+  submit, cancel, destructive-confirmation cancel, and dialog close
+  per §"Secret entry handling".
 - `UnlockComponent` — passphrase entry, **shown only when the vault is
   encrypted**. Skipped entirely for plaintext vaults.
 - `AccountListComponent` — `gtk::ListView` with a custom row factory bound
@@ -119,7 +132,9 @@ inclusion.
   is preserved among matches. The CLI's `id:` prefix form is **not**
   honored by the GUI search (parity with the TUI).
 - `AccountRowComponent` — label, code, progress (TOTP) / "next" button
-  (HOTP), copy button. HOTP rows hide their code until the user activates
+  (HOTP), copy button, and a kebab `gtk::MenuButton` whose `gio::Menu`
+  exposes "Rename…" (opens `RenameDialog` for that row's account) and
+  "Remove…" (opens `RemoveDialog`). HOTP rows hide their code until the user activates
   "next" (advances counter and saves); after a 120-second reveal window the
   code returns to the hidden state, matching the TUI. Activating "next"
   during an open reveal advances to the next counter and restarts the
@@ -129,7 +144,21 @@ inclusion.
   `Code.counter` that produced the visible code until expiry. Copying a
   hidden HOTP row is **disabled**; copying during the reveal window copies
   the visible code and does not advance again.
-- `AddAccountComponent` — manual fields + "scan from clipboard image". Reads
+- `AddAccountComponent` — three input paths in a single dialog:
+  manual fields, paste of an `otpauth://` URI, and "scan from clipboard
+  image" (an `AdwViewSwitcher` or radio segmented control selects the
+  active path; CLI parity with `add` interactive / `--uri` / `--qr`).
+  The URI path uses an `AdwEntryRow` for the URI string; on submit
+  the entry is passed to `paladin_core::parse_otpauth` on the main
+  thread (no I/O, cheap), the resulting `ValidatedAccount` shares the
+  manual path's duplicate detection, "add anyway" override, and
+  `Vault::mutate_and_save` insertion, and parser errors
+  (`unsupported_import_format`, `validation_error`) stay inline in the
+  dialog without mutating the vault. The URI text is treated as
+  non-secret-by-itself in `AppMsg`/`AppOutput` (it fails open if the
+  user pastes the wrong string), but the entry buffer is still
+  zeroized on submit / cancel / dialog close because the secret is
+  embedded in it. The "scan from clipboard image" path reads
   a `gdk::Texture` from the GDK clipboard, allocates an exact
   `width * height * 4` straight (non-premultiplied) RGBA8 buffer with
   overflow-checked multiplication, and downloads via a
@@ -157,6 +186,21 @@ inclusion.
   `Vault::mutate_and_save`.
 - `RemoveDialog` — confirmation gate before calling `Vault::remove` inside
   `Vault::mutate_and_save`. Save errors surface inline.
+- `RenameDialog` — single `AdwEntryRow` pre-populated with the
+  account's current label, plus Save / Cancel buttons. Calls
+  `Vault::rename(id, new_label, now)` inside `Vault::mutate_and_save`
+  with the trimmed input. Same label validation as Add (non-empty,
+  §4.1 length limits); a no-op rename (new label equal to current
+  after trimming) closes the dialog without calling `mutate_and_save`.
+  Issuer is **not** editable here — parity with the CLI's `rename`
+  taking only `<new-label>`; deeper edits use Remove + Add.
+  Pre-commit save failures (`save_not_committed`) restore the prior
+  label in memory and keep the dialog open with the inline error;
+  durability-unconfirmed failures
+  (`save_durability_unconfirmed`) leave the new label in memory and
+  surface the warning. `RenameDialog` does not handle secret material,
+  so no zeroize obligation beyond the standard widget-buffer reset on
+  cancel / submit / close.
 - `ImportDialog` — `gtk::FileChooserNative` for the source file, a format
   selector (auto-detect or explicit `otpauth` / `aegis` / `paladin` /
   `qr`), and an on-conflict selector (`skip` / `replace` / `append`).
@@ -227,8 +271,9 @@ inclusion.
 
 ## Secret entry handling (per §8)
 
-Passphrase fields and manual-secret fields are kept out of `AppModel`,
-`AppMsg`, `AppOutput`, and other long-lived component state. The GTK entry
+Passphrase fields, manual-secret fields, and the Add dialog's
+`otpauth://` URI entry are kept out of `AppModel`, `AppMsg`,
+`AppOutput`, and other long-lived component state. The GTK entry
 buffer is the unavoidable UI boundary; Paladin-owned copies are created only
 at submit time, immediately wrapped in `secrecy::SecretString` for core
 calls, and zeroized when dropped. Submit, cancel, dialog close, and auto-lock
@@ -293,10 +338,14 @@ start from `ImportDialog`.
   explicit user confirmation (DESIGN §6, §7). Plaintext path: empty
   passphrase fields plus the unencrypted-storage warning. Encrypted
   path: twice-confirmed passphrase. Both go through
-  `paladin_core::create` on `gio::spawn_blocking`. The GUI does not
-  offer the CLI's `init --force` clobber path; `vault_exists` from
-  `create` is terminal in the dialog. Users who need clobber semantics
-  run `paladin init --force` from the CLI.
+  `paladin_core::create` on `gio::spawn_blocking`. If `create` returns
+  `vault_exists` (a vault appeared between `inspect` and `create`), the
+  dialog opens an `AdwMessageDialog` destructive-confirmation gate
+  worded the same as the CLI `init --force` warning; on confirm it
+  re-runs the operation through `paladin_core::create_force` on
+  `gio::spawn_blocking` (rotating the existing vault to `vault.bin.bak`
+  per §5 staged clobber). Cancelling the destructive gate leaves the
+  existing vault intact.
 - Operations route through `Vault` and `Store` methods — no GUI-side
   duplication of OTP, validation, or import logic.
 
@@ -315,17 +364,17 @@ Effects update visible state only after the underlying mutation succeeds:
   other failures show an inline/status error and leave the row hidden.
 - Copy: if the GDK clipboard write fails, show an inline/status error and do
   not schedule clipboard auto-clear.
-- Add / remove / settings saves: validation and setter failures happen
+- Add / remove / rename / settings saves: validation and setter failures happen
   inside or before `Vault::mutate_and_save`; core restores its
   pre-attempt snapshot on closure errors and no save is attempted.
   Pre-commit save failures (`save_not_committed`) are rolled back by
   `Vault::mutate_and_save` so memory matches disk (Add removes the
   just-inserted account(s); Remove restores the removed account at its
-  previous position; Settings restores the prior values), and the dialog
-  stays open with the inline error so the user can retry.
-  Durability-unconfirmed save errors leave the new state in memory
-  (matching the committed on-disk state) and are shown as
-  committed-but-uncertain, matching the core error.
+  previous position; Rename restores the prior label; Settings restores
+  the prior values), and the dialog stays open with the inline error
+  so the user can retry. Durability-unconfirmed save errors leave the
+  new state in memory (matching the committed on-disk state) and are
+  shown as committed-but-uncertain, matching the core error.
 - Passphrase set/change/remove: pre-commit and durability-unconfirmed
   handling lives in `Vault` itself per DESIGN §4.5 — the in-memory mode/key
   reverts on `save_not_committed` and is replaced on
@@ -334,6 +383,9 @@ Effects update visible state only after the underlying mutation succeeds:
   the dialog closes.
 - QR clipboard import errors — no image, image decode failure, zero decoded
   QRs, and invalid QR payloads — stay in the Add dialog with an inline error.
+- otpauth URI paste errors — empty input, malformed URI, unsupported
+  scheme or `type=`, and `validation_error` — stay in the Add dialog
+  with an inline error and never mutate vault state.
 - Import / export: importer and exporter errors (the typed kinds listed
   in the component descriptions) stay in the active dialog as inline
   errors and never close it. Import save errors follow the
@@ -445,7 +497,16 @@ The GUI itself is hard to test without a display server. Tests are split:
   byte-length/stride preparation,
   init dialog logic (plaintext vs encrypted routing, twice-confirm match
   / zero-length / mismatch handling, plaintext-warning gate,
-  `vault_exists` and `unsafe_permissions` routing back to inline errors),
+  `vault_exists` triggering the destructive-confirmation gate that
+  routes through `create_force` (with cancellation leaving the
+  existing vault intact), and `unsafe_permissions` routing back to
+  inline errors),
+  rename dialog logic (label validation, no-op short-circuit when the
+  trimmed input equals the current label, prior-label restore on
+  `save_not_committed`),
+  otpauth URI paste logic (parse success → shared duplicate-detection
+  with manual mode, parse-error mapping for malformed URIs and
+  unsupported types, zeroize-on-cancel of the URI entry buffer),
   import format-selector routing + on-conflict policy threading +
   post-merge counts mapping, export overwrite-gate + encrypted
   twice-confirm match logic + export writer error mapping.
@@ -454,27 +515,40 @@ The GUI itself is hard to test without a display server. Tests are split:
 - **Manual test plan** (`tests/manual/MANUAL_TEST_PLAN.md`) per Milestone 7
   checklist: init plaintext vault (empty passphrase + warning gate); init
   encrypted vault (twice-confirm); init when a vault already exists at
-  the path returns `vault_exists` inline; init under the §10 fault-injection
-  hook surfaces `save_not_committed` and `save_durability_unconfirmed`
-  inline; unlock encrypted vault; copy TOTP; HOTP next reveals + copies
-  while showing the counter used; reveal expires; auto-lock fires; clipboard
-  auto-clear honors if-unchanged; add manual; add via clipboard image;
+  the path opens the destructive-confirmation gate, confirm runs
+  `create_force` and rotates the prior vault to `vault.bin.bak`,
+  cancel leaves the prior vault intact; init under the §10
+  fault-injection hook surfaces `save_not_committed` and
+  `save_durability_unconfirmed` inline; unlock encrypted vault; copy
+  TOTP; HOTP next reveals + copies while showing the counter used;
+  reveal expires; auto-lock fires; clipboard auto-clear honors
+  if-unchanged; add manual; add via `otpauth://` URI paste (success +
+  malformed-URI rejection + duplicate "add anyway" round-trip); add
+  via clipboard image;
   import each format (otpauth, aegis plaintext, encrypted Paladin bundle,
   QR image file) with each on-conflict policy and verify reported counts; export
   plaintext (warning + confirmation, `0600` output) and encrypted
   Paladin bundle (twice-confirm, round-trip via Import); refused
-  overwrite without confirmation; settings persist; passphrase
-  set/change/remove; secret fields clear on cancel, submit, and auto-lock;
-  icon theme resolution + fallback.
+  overwrite without confirmation; rename an account via the row
+  kebab menu (label persists on reopen, no-op rename closes silently,
+  pre-commit fault injection rolls the label back); settings persist;
+  passphrase set/change/remove; secret fields clear on cancel, submit,
+  and auto-lock; icon theme resolution + fallback.
 
 ## Milestone 7 checklist (expanded from §12)
 
 - [ ] Add the `paladin-gtk` crate to the workspace.
 - [ ] Relm4 component tree (Init / Unlock / List / Row / Add / Remove /
-  Import / Export / Passphrase / Settings).
+  Rename / Import / Export / Passphrase / Settings).
 - [ ] In-app vault initialization (`InitDialog` for missing vaults;
-  plaintext + encrypted paths; explicit confirmation; no `init --force`
-  clobber path; pre-commit + durability-unconfirmed handling).
+  plaintext + encrypted paths; explicit confirmation; in-dialog
+  destructive `create_force` clobber confirmation when a vault already
+  exists at the path; pre-commit + durability-unconfirmed handling).
+- [ ] In-app account rename (`RenameDialog` reachable from the row
+  kebab menu; calls `Vault::rename` inside `Vault::mutate_and_save`).
+- [ ] Add-via-`otpauth://`-URI paste path in `AddAccountComponent`,
+  decoded via `paladin_core::parse_otpauth` and sharing the manual
+  duplicate / validation paths.
 - [ ] Conditional unlock view (encrypted vaults only).
 - [ ] Clipboard + auto-lock parity with TUI (opt-in).
 - [ ] Linux desktop file + icon.
@@ -568,8 +642,12 @@ section just pins which Adwaita class fills each role.
 - Component tree above implemented.
 - Plaintext vault opens to list directly; encrypted vault gates on
   unlock; missing vault opens `InitDialog` and can create plaintext or
-  encrypted vaults on explicit user confirmation. No implicit creation;
-  no `init --force` clobber path.
+  encrypted vaults on explicit user confirmation. `vault_exists`
+  triggers an in-dialog destructive-confirmation gate that runs
+  `create_force` on confirm. No implicit creation.
+- Account rename available from the row kebab menu; URI paste available
+  in Add. GUI users no longer need to drop to the CLI for `rename` or
+  `add --uri`.
 - Auto-lock and clipboard-clear are off by default; the plaintext-vault
   no-op rule applies to auto-lock only (clipboard-clear works in both modes).
 - HOTP reveal rows show the counter used for the visible code, then return

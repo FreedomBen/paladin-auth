@@ -1057,10 +1057,12 @@ Layout (single-screen MVP):
   non-mutating message telling the user to run `paladin init`. v0.1 TUI
   does not create vaults.
 - Modal dialogs for add / remove / import / export / passphrase /
-  settings. Add supports manual entry and QR scan from clipboard image
-  bytes; manual duplicates use `Vault::find_duplicate` and reject with
-  the existing account, while QR imports use `ImportConflict::Skip` and
-  report imported/skipped/warning counts. Import takes a file path and
+  settings. Add supports manual entry, paste of an `otpauth://` URI
+  (decoded via `paladin_core::parse_otpauth`), and QR scan from
+  clipboard image bytes; manual and URI duplicates use
+  `Vault::find_duplicate` and reject with the existing account, while
+  QR imports use `ImportConflict::Skip` and report
+  imported/skipped/warning counts. Import takes a file path and
   optional explicit format, prompts for the bundle passphrase on
   encrypted-Paladin sources, applies a user-selected on-conflict
   policy (`skip` / `replace` / `append`), and reports
@@ -1108,12 +1110,15 @@ Library: **Relm4** on **GTK4**. Component tree:
   (encrypted creation runs the §4.4 Argon2id KDF) and on success
   transitions the app to `Unlocked` with the returned `(Vault, Store)`,
   routing to the account list. `vault_exists` (if a vault appeared
-  between `inspect` and `create`), `unsafe_permissions`,
-  `invalid_passphrase` (`reason: "confirmation_mismatch"`),
-  `save_not_committed`, and `save_durability_unconfirmed` surface
-  inline; the dialog never silently fails. The GUI does not implement
-  the `init --force` clobber path — users who need it run
-  `paladin init --force` from the CLI.
+  between `inspect` and `create`) opens an in-dialog destructive
+  confirmation explaining that the existing vault will be rotated to
+  `vault.bin.bak` and a new one created in its place; on confirm the
+  dialog re-runs the create with `paladin_core::create_force(path,
+  lock)` on `gio::spawn_blocking`, applying the §5 staged-clobber
+  semantics. `unsafe_permissions`, `invalid_passphrase`
+  (`reason: "confirmation_mismatch"`), `save_not_committed`, and
+  `save_durability_unconfirmed` surface inline; the dialog never
+  silently fails.
 - `UnlockComponent` — passphrase entry, shown only when the vault is encrypted.
   Skipped entirely for plaintext vaults.
 - `AccountListComponent` — `gtk::ListView` with a custom row factory.
@@ -1125,9 +1130,16 @@ Library: **Relm4** on **GTK4**. Component tree:
   code until the reveal expires. Copying a hidden HOTP row is disabled;
   copying during the reveal window copies the visible code and does not
   advance again.
-- `AddAccountComponent` — manual fields + "scan from clipboard image",
-  decoded through the core raw-RGBA QR import path.
+- `AddAccountComponent` — manual fields + paste of an `otpauth://` URI
+  (decoded via `paladin_core::parse_otpauth`) + "scan from clipboard
+  image" decoded through the core raw-RGBA QR import path. URI and
+  manual entries share the same validation, duplicate-detection, and
+  `Vault::mutate_and_save` paths.
 - `RemoveDialog` — confirmation gate before `Vault::remove` + save.
+- `RenameDialog` — single text entry pre-populated with the account's
+  current label. Calls `Vault::rename(id, new_label, now)` inside
+  `Vault::mutate_and_save`. Issuer is not editable here (parity with
+  `paladin rename`); deeper edits use remove + re-add.
 - `ImportDialog` — `gtk::FileChooserNative` for the source path, format
   selector (auto-detect or explicit `otpauth` / `aegis` / `paladin` /
   `qr`), on-conflict policy (`skip` / `replace` / `append`), and a
@@ -1323,10 +1335,19 @@ Concrete obligations and explicit user-controlled tradeoffs:
     create or mutate files.
   - GUI missing-vault state: opens `InitDialog`; covers plaintext
     (empty passphrase + unencrypted-storage warning) and encrypted
-    (twice-confirm) creation, `vault_exists` if a vault appeared
-    between `inspect` and `create`, `unsafe_permissions` rendered
-    via `format_unsafe_permissions`, and pre-commit /
+    (twice-confirm) creation, `vault_exists` triggering the in-dialog
+    `create_force` clobber confirmation (with `vault.bin` rotated to
+    `vault.bin.bak`), `unsafe_permissions` rendered via
+    `format_unsafe_permissions`, and pre-commit /
     durability-unconfirmed save errors. v0.2.
+  - GUI rename + add-via-URI: rename round-trip via `Vault::rename`,
+    paste-`otpauth://`-URI Add route through
+    `paladin_core::parse_otpauth` with shared duplicate / validation
+    / `mutate_and_save` rules, and inline rejection of malformed URIs
+    and validation failures. v0.2.
+  - TUI add-via-URI: paste-`otpauth://`-URI Add route through
+    `paladin_core::parse_otpauth`, with the same duplicate /
+    validation behavior as manual mode.
   - Plaintext-vault auto-lock is a no-op in TUI state handling now, with
     GUI parity when the GUI ships.
 - **CI:** `cargo fmt --check`, `cargo clippy -- -D warnings`,
@@ -1518,7 +1539,7 @@ artifacts side by side.
 - [ ] Add the `paladin-tui` crate to the workspace.
 - [ ] Single-screen list view with TOTP gauges and HOTP "advance" key.
 - [ ] Search/filter input.
-- [ ] Add / remove / import / export / passphrase / settings modals.
+- [ ] Add / remove / import / export / passphrase / settings modals; Add covers manual fields, `otpauth://` URI paste, and QR scan from clipboard image.
 - [ ] Conditional unlock screen (only when vault is encrypted).
 - [ ] Missing-vault guidance screen (no implicit vault creation).
 - [ ] Opt-in auto-lock and clipboard-clear honoring vault settings, with plaintext auto-lock as a no-op.
@@ -1541,8 +1562,9 @@ artifacts side by side.
 
 ### Milestone 7 — GUI *(v0.2)*
 - [ ] Add the `paladin-gtk` crate to the workspace (placeholder for v0.2 work).
-- [ ] Relm4 component tree (Init / Unlock / List / Row / Add / Remove / Import / Export / Passphrase / Settings).
-- [ ] In-app vault initialization (`InitDialog`) for missing vaults — plaintext + encrypted paths, explicit confirmation, no `init --force` clobber path.
+- [ ] Relm4 component tree (Init / Unlock / List / Row / Add / Remove / Rename / Import / Export / Passphrase / Settings).
+- [ ] In-app vault initialization (`InitDialog`) for missing vaults — plaintext + encrypted paths, explicit confirmation, in-dialog `create_force` clobber confirmation when a vault already exists.
+- [ ] In-app account rename (`RenameDialog`) and Add-from-`otpauth://`-URI paste path (parity with CLI `rename` and `add --uri`).
 - [ ] Conditional unlock view (encrypted vaults only).
 - [ ] Clipboard + auto-lock parity with TUI (opt-in).
 - [ ] Linux desktop file + icon (consumed by the §11.3 native packages
