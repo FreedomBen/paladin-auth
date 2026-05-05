@@ -1093,7 +1093,27 @@ Layout (single-screen MVP):
 
 Library: **Relm4** on **GTK4**. Component tree:
 
-- `AppModel` — owns the unlocked `Vault` (or `Locked` state).
+- `AppModel` — owns the resolved vault path plus the `Missing` /
+  `Locked` / `Unlocked` state. Startup runs
+  `paladin_core::inspect(path)`: plaintext vaults open directly to the
+  list, encrypted vaults show `UnlockComponent`, and missing vaults
+  open `InitDialog` so the user can create a vault from inside the
+  app.
+- `InitDialog` — in-app vault initialization (v0.2 GUI only; TUI and
+  CLI keep their existing behavior). Two passphrase fields
+  (twice-confirmed; empty selects plaintext, with the same
+  unencrypted-storage warning used by `passphrase remove`) plus an
+  explicit "create vault" confirmation. Calls
+  `paladin_core::create(path, lock)` on `gio::spawn_blocking`
+  (encrypted creation runs the §4.4 Argon2id KDF) and on success
+  transitions the app to `Unlocked` with the returned `(Vault, Store)`,
+  routing to the account list. `vault_exists` (if a vault appeared
+  between `inspect` and `create`), `unsafe_permissions`,
+  `invalid_passphrase` (`reason: "confirmation_mismatch"`),
+  `save_not_committed`, and `save_durability_unconfirmed` surface
+  inline; the dialog never silently fails. The GUI does not implement
+  the `init --force` clobber path — users who need it run
+  `paladin init --force` from the CLI.
 - `UnlockComponent` — passphrase entry, shown only when the vault is encrypted.
   Skipped entirely for plaintext vaults.
 - `AccountListComponent` — `gtk::ListView` with a custom row factory.
@@ -1301,6 +1321,12 @@ Concrete obligations and explicit user-controlled tradeoffs:
     produced the visible code rather than the stored post-advance counter.
   - TUI missing-vault state: shows `paladin init` guidance and does not
     create or mutate files.
+  - GUI missing-vault state: opens `InitDialog`; covers plaintext
+    (empty passphrase + unencrypted-storage warning) and encrypted
+    (twice-confirm) creation, `vault_exists` if a vault appeared
+    between `inspect` and `create`, `unsafe_permissions` rendered
+    via `format_unsafe_permissions`, and pre-commit /
+    durability-unconfirmed save errors. v0.2.
   - Plaintext-vault auto-lock is a no-op in TUI state handling now, with
     GUI parity when the GUI ships.
 - **CI:** `cargo fmt --check`, `cargo clippy -- -D warnings`,
@@ -1515,7 +1541,8 @@ artifacts side by side.
 
 ### Milestone 7 — GUI *(v0.2)*
 - [ ] Add the `paladin-gtk` crate to the workspace (placeholder for v0.2 work).
-- [ ] Relm4 component tree (Unlock / List / Row / Add / Remove / Import / Export / Passphrase / Settings).
+- [ ] Relm4 component tree (Init / Unlock / List / Row / Add / Remove / Import / Export / Passphrase / Settings).
+- [ ] In-app vault initialization (`InitDialog`) for missing vaults — plaintext + encrypted paths, explicit confirmation, no `init --force` clobber path.
 - [ ] Conditional unlock view (encrypted vaults only).
 - [ ] Clipboard + auto-lock parity with TUI (opt-in).
 - [ ] Linux desktop file + icon (consumed by the §11.3 native packages

@@ -24,7 +24,7 @@ Per §3 / CLAUDE.md: depends only on `paladin-core`. Never reaches into
 
 ```
 crates/paladin-gtk/
-├── Cargo.toml             # license = "AGPL-3.0-or-later"; bin = "paladin-gtk"
+├── Cargo.toml             # license = "AGPL-3.0-or-later"; declares both [lib] and [[bin]] (name = "paladin-gtk") so tests/ can compile against internal modules
 ├── build.rs               # gresource bundle (icons, *.ui, *.css)
 ├── data/
 │   ├── paladin-gtk.gresource.xml
@@ -33,12 +33,14 @@ crates/paladin-gtk/
 │   ├── style.css
 │   └── paladin-gtk.desktop
 ├── src/
-│   ├── main.rs            # adw::init, register resources, RelmApp::new(...).run(...)
+│   ├── lib.rs             # re-exports internal modules so integration tests in tests/ can reach them; binary entry stays in main.rs
+│   ├── main.rs            # adw::init, register resources, RelmApp::new("io.github.paladin_otp.Gui").run(...) — ID matches the §11.4 Flatpak app ID and the desktop file's StartupWMClass
 │   ├── cli.rs             # GlobalArgs (--vault, --no-color); reject --json
 │   ├── app/
 │   │   ├── mod.rs         # AppModel + AppMsg + AppOutput
 │   │   └── state.rs       # AppState: Missing / Locked / Unlocked { vault, store }
 │   ├── components/
+│   │   ├── init.rs        # InitDialog — only path that creates a vault
 │   │   ├── unlock.rs      # UnlockComponent — encrypted vaults only
 │   │   ├── account_list.rs    # AccountListComponent (gtk::ListView + factory)
 │   │   ├── account_row.rs     # AccountRowComponent (label, code, gauge/next, copy)
@@ -63,6 +65,7 @@ crates/paladin-gtk/
     ├── hotp_reveal_logic.rs
     ├── secret_fields_logic.rs
     ├── qr_clipboard_logic.rs
+    ├── init_dialog_logic.rs
     ├── import_dialog_logic.rs
     ├── export_dialog_logic.rs
     ├── gtk_smoke.rs              # xvfb-run integration smoke test
@@ -77,13 +80,41 @@ inclusion.
 ## Component tree (per §7)
 
 - `AppModel` — owns the resolved vault path plus the `Missing`, `Locked`,
-  or `Unlocked` state.
+  or `Unlocked` state. Startup runs `paladin_core::inspect(path)` and
+  routes the result: `VaultStatus::Plaintext` opens directly to
+  `AccountListComponent`, `Encrypted` presents `UnlockComponent`, and
+  `Missing` presents `InitDialog`.
+- `InitDialog` — only path that creates a vault from the GUI (v0.2;
+  parity with DESIGN §6, §7). Two `AdwPasswordEntryRow` passphrase
+  fields (twice-confirmed; empty selects plaintext) plus an explicit
+  "create vault" confirmation button. The plaintext path shows the
+  same unencrypted-storage warning text used by `passphrase remove`,
+  and the user must tick the confirmation before submission is
+  enabled. Encrypted submission rejects empty new entries inline with
+  `invalid_passphrase` (`reason: "zero_length"`) and rejects mismatch
+  with `reason: "confirmation_mismatch"`. On submit, calls
+  `paladin_core::create(path, VaultLock::Plaintext | Encrypted(secret))`
+  on `gio::spawn_blocking` (the encrypted path runs the §4.4 Argon2id
+  KDF). On success, swaps `AppModel` to `Unlocked` with the returned
+  `(Vault, Store)` and routes to `AccountListComponent`. The dialog
+  stays open and surfaces `vault_exists` (if a vault appeared between
+  `inspect` and `create`), `unsafe_permissions` (rendered via
+  `paladin_core::format_unsafe_permissions(&err)`),
+  `save_not_committed`, and `save_durability_unconfirmed` inline. The
+  GUI does **not** offer the CLI's `init --force` clobber path — the
+  `vault_exists` error is terminal in this dialog and users who need
+  clobber semantics run `paladin init --force` from the CLI. Passphrase
+  entries are zeroized on submit, cancel, and dialog close per
+  §"Secret entry handling".
 - `UnlockComponent` — passphrase entry, **shown only when the vault is
   encrypted**. Skipped entirely for plaintext vaults.
 - `AccountListComponent` — `gtk::ListView` with a custom row factory bound
-  to a `gio::ListStore` of `AccountRowModel`. Includes a search entry using
-  the same case-insensitive `"{issuer}:{label}"` substring matching as §5 /
-  §6 via `str::to_lowercase()`; no Unicode normalization. Empty issuer is
+  to a `gio::ListStore` of `AccountRowModel`. Search uses a
+  `gtk::SearchEntry` hosted inside a `gtk::SearchBar` whose
+  `search-mode-enabled` is bound to the header bar's search-toggle button
+  (see "libadwaita usage" below). The entry applies the same
+  case-insensitive `"{issuer}:{label}"` substring matching as §5 / §6 via
+  `str::to_lowercase()`; no Unicode normalization. Empty issuer is
   allowed and the colon is still present in the match key; insertion order
   is preserved among matches. The CLI's `id:` prefix form is **not**
   honored by the GUI search (parity with the TUI).
@@ -100,15 +131,22 @@ inclusion.
   the visible code and does not advance again.
 - `AddAccountComponent` — manual fields + "scan from clipboard image". Reads
   a `gdk::Texture` from the GDK clipboard, allocates an exact
-  `width * height * 4` RGBA8 buffer with overflow-checked multiplication,
-  downloads with row stride `width * 4`, and passes width, height, bytes,
-  and `import_time` to
+  `width * height * 4` straight (non-premultiplied) RGBA8 buffer with
+  overflow-checked multiplication, and downloads via a
+  `gdk::TextureDownloader` set to `gdk::MemoryFormat::R8g8b8a8` with row
+  stride `width * 4`. The default `Texture::download` path is avoided
+  because it yields premultiplied pixels the QR decoder cannot consume.
+  Width, height, bytes, and `import_time` are then passed to
   `paladin_core::import::qr_image_bytes`. Manual fields cover label,
   optional issuer, Base32 secret, algorithm, digits, kind, TOTP period,
   HOTP counter, and optional icon hint, matching
   `paladin_core::AccountInput`. Manual entries use
   `paladin_core::validate_manual`; validation warnings show inline and do
-  not block creation. Manual duplicate collisions call
+  not block creation, while field-level parse errors (invalid Base32,
+  empty label, out-of-range digits / period / counter) and any
+  `validation_error` returned by core block submission and stay inline
+  without mutating the vault — same rule as the import dialog. Manual
+  duplicate collisions call
   `Vault::find_duplicate(&validated)` before mutation, initially reject with
   the existing account in the dialog, and offer an "add anyway" confirmation
   that re-submits the same input on the duplicate-allowed path (CLI parity
@@ -151,8 +189,10 @@ inclusion.
   `--force`). Encrypted exports prompt twice for the bundle passphrase
   and reject mismatch (`invalid_passphrase`
   `reason: "confirmation_mismatch"`) or empty entry
-  (`reason: "zero_length"`) inline; the encrypted-bundle write runs on
-  `gio::spawn_blocking` because it derives a fresh AEAD key.
+  (`reason: "zero_length"`) inline; both the encrypted-bundle and
+  plaintext writes run on `gio::spawn_blocking` (encrypted-bundle to
+  keep the fresh-AEAD-key derivation off the main loop; plaintext for
+  symmetry, since `write_secret_file_atomic` chains multiple `fsync`s).
   Plaintext exports show an explicit "this writes unencrypted secrets
   to disk" warning that the user must confirm before the write
   proceeds. Writes go through `paladin_core::write_secret_file_atomic`.
@@ -174,13 +214,16 @@ inclusion.
 - `SettingsComponent` — toggles for auto-lock and clipboard-clear, with
   spinners for timeouts. Spinners clamp to the §5 minimums
   (`auto_lock.timeout_secs >= 30`, `clipboard.clear_secs >= 5`). Uses
-  **live-apply** (each toggle / spinner change immediately invokes the
-  matching setter inside `Vault::mutate_and_save`), diverging from the TUI's
-  buffer-then-Confirm modal — `gtk::Switch` and `gtk::SpinButton` are
-  idiomatically immediate, and the §"Effect errors" pre-commit rollback
-  reverts the visible widget value on `save_not_committed`. Setters
-  validate but do not save themselves; the component owns the
-  `mutate_and_save` call and surfaces any save error inline.
+  **live-apply** (each toggle change immediately invokes the matching
+  setter inside `Vault::mutate_and_save`; spinner changes are debounced
+  500 ms via `glib::timeout_add_local` so holding +/- does not fire one
+  save per click — the most recent buffered value is the one that saves),
+  diverging from the TUI's buffer-then-Confirm modal — `AdwSwitchRow`
+  and `AdwSpinRow` are idiomatically immediate, and the §"Effect errors"
+  pre-commit rollback reverts the visible widget value on
+  `save_not_committed`. Setters validate but do not save themselves; the
+  component owns the `mutate_and_save` call and surfaces any save error
+  inline.
 
 ## Secret entry handling (per §8)
 
@@ -246,8 +289,14 @@ start from `ImportDialog`.
   a dialog whose body is rendered via
   `paladin_core::format_unsafe_permissions(&err)` (§4.7) so the wording
   matches the CLI and TUI exactly.
-- Missing → show a non-mutating dialog telling the user to run
-  `paladin init`. The GUI does not create vaults in v0.2 (parity with §6).
+- Missing → present `InitDialog`. v0.2 GUI creates vaults in-app on
+  explicit user confirmation (DESIGN §6, §7). Plaintext path: empty
+  passphrase fields plus the unencrypted-storage warning. Encrypted
+  path: twice-confirmed passphrase. Both go through
+  `paladin_core::create` on `gio::spawn_blocking`. The GUI does not
+  offer the CLI's `init --force` clobber path; `vault_exists` from
+  `create` is terminal in the dialog. Users who need clobber semantics
+  run `paladin init --force` from the CLI.
 - Operations route through `Vault` and `Store` methods — no GUI-side
   duplication of OTP, validation, or import logic.
 
@@ -259,8 +308,10 @@ Effects update visible state only after the underlying mutation succeeds:
   in-memory counter and reveal state unchanged (per DESIGN §4.2 rollback)
   and surface an inline/status error. Durability-unconfirmed failures
   (`save_durability_unconfirmed`) reveal the new code with its
-  `Code.counter` label and report the committed-but-uncertain status — the
-  user has the new code in hand even though durability is in question. All
+  `Code.counter` label and post an `AdwToast` carrying the
+  committed-but-uncertain status — the user has the new code in hand
+  even though durability is in question, and the toast is the
+  surface that conveys the warning so the row stays usable. All
   other failures show an inline/status error and leave the row hidden.
 - Copy: if the GDK clipboard write fails, show an inline/status error and do
   not schedule clipboard auto-clear.
@@ -327,7 +378,8 @@ Effects update visible state only after the underlying mutation succeeds:
   (>= 4.10)` and `libadwaita-1-0 (>= 1.4)`; Fedora declares the
   matching `gtk4` and `libadwaita` package names. No maintainer
   scripts: packages do not create or alter vaults; vault files live under
-  `$XDG_DATA_HOME/paladin/` when created by `paladin init`. The §11
+  `$XDG_DATA_HOME/paladin/` when created by `paladin init` or by the
+  GUI's `InitDialog`. The §11
   packaging pipeline validates the
   installed desktop entry with `desktop-file-validate` and verifies the
   hicolor icon install layout; it does not add package-owned
@@ -341,7 +393,10 @@ Effects update visible state only after the underlying mutation succeeds:
   Wayland and X11 fallback clipboard path required for `gdk::Clipboard`
   (`--socket=wayland`, `--socket=fallback-x11`, `--share=ipc`). The
   Flatpak app ID is the §11.4 placeholder `io.github.paladin_otp.Gui`,
-  finalized at Flathub-submission time. `flatpak-builder` consumes the
+  finalized at Flathub-submission time. The same string is passed to
+  `RelmApp::new(...)` in `main.rs` and set as `StartupWMClass` in
+  `data/paladin-gtk.desktop`, so window-to-launcher mapping works
+  identically in both Flatpak and native installs. `flatpak-builder` consumes the
   tagged release tarball with vendored Cargo deps so Flathub builds
   reproducibly without network access at build time.
 - **AppImage.** `linuxdeploy` plus
@@ -388,13 +443,20 @@ The GUI itself is hard to test without a display server. Tests are split:
   decision logic plus pending-value zeroization, HOTP reveal window timing
   + counter labels, secret-field clearing/redaction invariants, QR RGBA
   byte-length/stride preparation,
+  init dialog logic (plaintext vs encrypted routing, twice-confirm match
+  / zero-length / mismatch handling, plaintext-warning gate,
+  `vault_exists` and `unsafe_permissions` routing back to inline errors),
   import format-selector routing + on-conflict policy threading +
   post-merge counts mapping, export overwrite-gate + encrypted
   twice-confirm match logic + export writer error mapping.
 - **Smoke test** in CI under `xvfb-run`: app launches, opens a prepared
   plaintext vault, the list renders. Required for Milestone 7 sign-off.
 - **Manual test plan** (`tests/manual/MANUAL_TEST_PLAN.md`) per Milestone 7
-  checklist: unlock encrypted vault; copy TOTP; HOTP next reveals + copies
+  checklist: init plaintext vault (empty passphrase + warning gate); init
+  encrypted vault (twice-confirm); init when a vault already exists at
+  the path returns `vault_exists` inline; init under the §10 fault-injection
+  hook surfaces `save_not_committed` and `save_durability_unconfirmed`
+  inline; unlock encrypted vault; copy TOTP; HOTP next reveals + copies
   while showing the counter used; reveal expires; auto-lock fires; clipboard
   auto-clear honors if-unchanged; add manual; add via clipboard image;
   import each format (otpauth, aegis plaintext, encrypted Paladin bundle,
@@ -408,8 +470,11 @@ The GUI itself is hard to test without a display server. Tests are split:
 ## Milestone 7 checklist (expanded from §12)
 
 - [ ] Add the `paladin-gtk` crate to the workspace.
-- [ ] Relm4 component tree (Unlock / List / Row / Add / Remove /
+- [ ] Relm4 component tree (Init / Unlock / List / Row / Add / Remove /
   Import / Export / Passphrase / Settings).
+- [ ] In-app vault initialization (`InitDialog` for missing vaults;
+  plaintext + encrypted paths; explicit confirmation; no `init --force`
+  clobber path; pre-commit + durability-unconfirmed handling).
 - [ ] Conditional unlock view (encrypted vaults only).
 - [ ] Clipboard + auto-lock parity with TUI (opt-in).
 - [ ] Linux desktop file + icon.
@@ -446,9 +511,12 @@ list below pins the v0.2 choices so the implementation does not drift
 back into vanilla GTK4 widgets where Adwaita is idiomatic:
 
 - **Window shell.** `AppModel`'s root is an `AdwApplicationWindow`
-  with an `AdwHeaderBar`. The header bar carries the search-toggle
-  button and a primary menu (`gtk::MenuButton` driven by `gio::Menu`).
-  No custom title-bar drawing.
+  whose content is an `AdwToolbarView`: the top bar holds an
+  `AdwHeaderBar`, and the content slot holds the `AdwToastOverlay`
+  (see below) wrapping whichever screen is active (`InitDialog` /
+  `UnlockComponent` / `AccountListComponent`). The header bar carries
+  the search-toggle button and a primary menu (`gtk::MenuButton`
+  driven by `gio::Menu`). No custom title-bar drawing.
 - **Toast surface.** `AppModel` wraps the main content in an
   `AdwToastOverlay`. Transient feedback that does not need a modal —
   copy confirmation, `save_durability_unconfirmed` after a HOTP
@@ -498,7 +566,10 @@ section just pins which Adwaita class fills each role.
 ## Definition of done
 
 - Component tree above implemented.
-- Plaintext vault opens to list directly; encrypted vault gates on unlock.
+- Plaintext vault opens to list directly; encrypted vault gates on
+  unlock; missing vault opens `InitDialog` and can create plaintext or
+  encrypted vaults on explicit user confirmation. No implicit creation;
+  no `init --force` clobber path.
 - Auto-lock and clipboard-clear are off by default; the plaintext-vault
   no-op rule applies to auto-lock only (clipboard-clear works in both modes).
 - HOTP reveal rows show the counter used for the visible code, then return
