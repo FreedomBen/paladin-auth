@@ -1,6 +1,6 @@
 # Implementation Plan 04 — `paladin-gtk`
 
-Source of truth: [DESIGN.md](DESIGN.md) §3, §4.6–§4.7, §5–§14.
+Source of truth: [DESIGN.md](DESIGN.md) §3, §4.2–§4.7, §5–§14.
 Depends on: [`IMPLEMENTATION_PLAN_01_CORE.md`](IMPLEMENTATION_PLAN_01_CORE.md).
 
 > **Status: deferred to v0.2.** Per §13, the GUI is deferred to v0.2; the
@@ -13,8 +13,8 @@ Depends on: [`IMPLEMENTATION_PLAN_01_CORE.md`](IMPLEMENTATION_PLAN_01_CORE.md).
 Standalone GTK4 binary `paladin-gtk` built with **Relm4** on **GTK4** per §7.
 Exposes the same operations as the TUI: search/list of accounts, copy code,
 HOTP `next` with reveal window, add account (manual or scan-from-clipboard
-image), remove account, settings (auto-lock + clipboard-clear), passphrase
-set/change/remove.
+image), remove account, import/export, settings (auto-lock +
+clipboard-clear), passphrase set/change/remove.
 
 Per §3 / CLAUDE.md: depends only on `paladin-core`. Never reaches into
 `paladin-cli` or `paladin-tui`.
@@ -32,7 +32,7 @@ crates/paladin-gtk/
 │   ├── style.css
 │   └── paladin-gtk.desktop
 ├── src/
-│   ├── main.rs            # gtk::init, register resources, RelmApp::new(...).run(...)
+│   ├── main.rs            # adw::init, register resources, RelmApp::new(...).run(...)
 │   ├── cli.rs             # GlobalArgs (--vault, --no-color); reject --json
 │   ├── app/
 │   │   ├── mod.rs         # AppModel + AppMsg + AppOutput
@@ -107,9 +107,11 @@ inclusion.
 - `ImportDialog` — `gtk::FileChooserNative` for the source file, a format
   selector (auto-detect or explicit `otpauth` / `aegis` / `paladin` /
   `qr`), and an on-conflict selector (`skip` / `replace` / `append`).
-  Encrypted Paladin bundles (explicit `format == paladin` or
-  auto-detected via the Paladin header) prompt for the bundle
-  passphrase inside the dialog before invoking the importer. The
+  Paladin sources are header-probed before any passphrase prompt: encrypted
+  bundles (`mode == 1`) prompt for the bundle passphrase inside the dialog,
+  plaintext Paladin vaults (`mode == 0`) return
+  `unsupported_plaintext_vault` inline without prompting, and malformed
+  Paladin headers fail inline before any passphrase prompt. The
   selected `paladin_core::import::*` runs on `gio::spawn_blocking`
   (the encrypted-Paladin variant runs Argon2id) with results delivered
   back via Relm4 messages. On success,
@@ -119,11 +121,13 @@ inclusion.
   Pre-commit save failures (`save_not_committed`) restore core's
   pre-attempt snapshot; durability-unconfirmed saves leave the merged
   accounts in memory and surface the warning inline.
-  Importer errors (`unsupported_plaintext_vault`,
-  `unsupported_encrypted_aegis`, `unsupported_aegis_entry_type`,
-  `validation_error`, `no_entries_to_import`, `decrypt_failed`,
-  `io_error`) stay in the dialog as inline errors and never mutate
-  vault state.
+  Importer errors (`unsupported_import_format`,
+  `unsupported_plaintext_vault`, `unsupported_encrypted_aegis`,
+  `unsupported_aegis_entry_type`, `validation_error`,
+  `no_entries_to_import`, `decrypt_failed`, `invalid_header`,
+  `invalid_payload`, `unsupported_format_version`,
+  `kdf_params_out_of_bounds`, `io_error`) stay in the dialog as inline
+  errors and never mutate vault state.
 - `ExportDialog` — format selector (plaintext `otpauth://` JSON list or
   encrypted Paladin bundle) and `gtk::FileChooserNative` for the
   destination path. Overwriting an existing file is rejected unless
@@ -136,7 +140,8 @@ inclusion.
   Plaintext exports show an explicit "this writes unencrypted secrets
   to disk" warning that the user must confirm before the write
   proceeds. Writes go through `paladin_core::write_secret_file_atomic`.
-  On success the dialog closes with the written path surfaced inline;
+  On success the dialog closes and surfaces the written path in the main
+  status/toast surface;
   `io_error`, `save_not_committed`, `save_durability_unconfirmed`,
   `invalid_passphrase`, and the refused overwrite gate stay in the
   dialog. Export does not mutate
@@ -262,9 +267,9 @@ Effects update visible state only after the underlying mutation succeeds:
 
 - `data/paladin-gtk.desktop` shipped at
   `/usr/share/applications/paladin-gtk.desktop` per §11.3. Sets
-  `Categories=Utility;Security;`, the AGPL-aligned `Keywords=`, and
-  `Exec=paladin-gtk %F` so file managers can hand off `otpauth://`
-  files for import.
+  `Categories=Utility;Security;` and security/authenticator terms in
+  `Keywords=`, and uses `Exec=paladin-gtk %F` so file managers can hand off
+  `otpauth://` files for import.
 - App icon at
   `/usr/share/icons/hicolor/scalable/apps/paladin-gtk.svg`. Symbolic
   variant at `…/symbolic/apps/paladin-gtk-symbolic.svg` if the
@@ -291,10 +296,10 @@ Effects update visible state only after the underlying mutation succeeds:
   (>= 4.10)` and `libadwaita-1-0 (>= 1.4)`; Fedora declares the
   matching `gtk4` and `libadwaita` package names. No maintainer
   scripts: the vault is created on first use under
-  `$XDG_DATA_HOME/paladin/`. The desktop-entry validator
-  (`desktop-file-validate`) and the `gtk4-update-icon-cache` post-
-  install hook are run by the §11 packaging pipeline, not by the
-  package itself.
+  `$XDG_DATA_HOME/paladin/`. The §11 packaging pipeline validates the
+  installed desktop entry with `desktop-file-validate` and verifies the
+  hicolor icon install layout; it does not add package-owned
+  post-install hooks.
 - **Flatpak.** `packaging/flatpak/paladin-gtk.yml` declares
   `org.gnome.Platform//46` (and the matching SDK) — that runtime
   bundles GTK 4.14+ and libadwaita 1.5+, both ahead of the
@@ -327,7 +332,7 @@ Effects update visible state only after the underlying mutation succeeds:
   inherited from Flathub.
 - **CI sign-off.** Milestone 7 ships the
   `xvfb-run` smoke test green plus a packaging dry-run that
-  produces `.deb`, `.rpm`, and AppImage artifacts and verifies
+  produces `.deb`, `.rpm`, Flatpak, and AppImage artifacts and verifies
   `desktop-file-validate` passes on the installed `.desktop`
   entry.
 
@@ -335,8 +340,8 @@ Effects update visible state only after the underlying mutation succeeds:
 
 Resolved: **adopt `libadwaita` for v0.2.** The runtime declaration in
 §11.3 (`libadwaita-1-0 (>= 1.4)`) now matches the build-time crate
-dependency in §"Dependencies" above; the GUI uses Adwaita widgets
-where the GNOME HIG calls for them (see §"libadwaita usage" above).
+dependency in §"Dependencies" below; the GUI uses Adwaita widgets
+where the GNOME HIG calls for them (see §"libadwaita usage" below).
 No further action needed beyond keeping the build-time and
 runtime-declared baselines aligned.
 
@@ -372,6 +377,8 @@ The GUI itself is hard to test without a display server. Tests are split:
 - [ ] Conditional unlock view (encrypted vaults only).
 - [ ] Clipboard + auto-lock parity with TUI (opt-in).
 - [ ] Linux desktop file + icon.
+- [ ] `.deb`, `.rpm`, Flatpak, and AppImage artifacts for `paladin-gtk`,
+  signed and published per §11.3–§11.6; Flathub submission filed.
 - [ ] Manual test plan documented.
 - [ ] `xvfb-run` headless smoke test green in CI (plaintext vault opens
   and renders the list).
@@ -434,8 +441,9 @@ back into vanilla GTK4 widgets where Adwaita is idiomatic:
   to the row via `AdwEntryRow::add-css-class("error")` plus a
   status-line label below the row.
 - **About / help.** `AdwAboutWindow` is wired to the application
-  menu and pulls program metadata from the binary's Cargo manifest;
-  the AGPL-3.0-or-later license text ships in the gresource bundle.
+  menu and pulls program metadata from Cargo package metadata embedded
+  at compile time; the AGPL-3.0-or-later license text ships in the
+  gresource bundle.
 
 GTK-only widgets (`gtk::ListView`, `gtk::SearchEntry`,
 `gtk::FileChooserNative`, `gtk::IconTheme`, `gdk::Clipboard`) keep
@@ -460,6 +468,9 @@ section just pins which Adwaita class fills each role.
 - Icon resolution works against system theme with placeholder fallback.
 - `xvfb-run` headless smoke test green in CI.
 - Manual test plan executes cleanly on a Wayland and an X11 session.
+- `.deb`, `.rpm`, Flatpak, and AppImage artifacts build through the
+  release pipeline; GitHub-hosted artifacts are signed with `minisign`
+  and the Flathub submission is filed.
 - `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo test --all`,
   `cargo deny check`, `cargo audit` clean.
 - DESIGN.md unchanged unless a contradiction surfaces; in that case
