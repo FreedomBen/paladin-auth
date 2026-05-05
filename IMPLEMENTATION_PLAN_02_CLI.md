@@ -96,6 +96,11 @@ crates/paladin-cli/
    from issuer per §4.1). Defaults: TOTP, SHA1, 6, 30s. Manual fields
    use §4.1 validation: `--period` is 1..=300 seconds, `--icon-hint`
    matches `[a-z0-9_-]+` up to 64 bytes, and `--secret` is Base32 text.
+   `--kind` is **not** inferred from `--period` or `--counter`: passing
+   `--counter` without `--kind hotp` defaults to TOTP and rejects with
+   `validation_error` (and likewise for `--period` without `--kind totp`).
+   Explicit-kind selection avoids silently classifying an account based on
+   which optional flag the caller happened to pass.
 4. `--qr <path>` — every decoded QR added; collisions use a fixed
    `--on-conflict=skip`; errors if no QR decodes.
 
@@ -148,7 +153,11 @@ Text-mode `settings get [key]` may filter to one dotted key. `--json`
 always returns the full nested `VaultSettings` object, and dotted key names
 never appear in JSON output. Boolean values are accepted only as lowercase
 `true` or `false`; numeric settings are accepted only as base-10 `u32`
-strings, then validated against the minimums above.
+strings, then validated against the minimums above. An unrecognized dotted
+key (any value not in the table above) rejects with `validation_error`
+(`field: "key"`, `reason: "unknown_setting"`) in both text and `--json`
+modes — applies to `settings get <key>` and `settings set <key> <value>`
+alike, and is enforced before any value parsing.
 
 ## Passphrase prompts
 
@@ -291,6 +300,14 @@ envelope carry the detailed `kind`.
 - `--json` is rejected at parse time (TUI has no JSON mode).
 - If `paladin-tui` is not on `PATH`, exit non-zero with `io_error`,
   `operation: "exec_paladin_tui"`.
+- Flatpak limitation: the §11.4 publication ships `paladin` and
+  `paladin-tui` as separate Flatpak apps
+  (`io.github.paladin_otp.Cli` vs `io.github.paladin_otp.Tui`) with no
+  shared `PATH` between sandboxes, so `paladin tui` inside the CLI
+  Flatpak always exits with the `exec_paladin_tui` `io_error`. Flatpak
+  users invoke the TUI directly via `flatpak run
+  io.github.paladin_otp.Tui`. The CLI does not attempt to dispatch to
+  the TUI app via `flatpak-spawn` or any portal call.
 - Keeps the §3 "binaries don't reach into each other" rule intact — no
   in-process re-implementation of the TUI.
 
@@ -358,7 +375,13 @@ where relevant, and exit code.
 - **`init`**: empty passphrase → plaintext file, mode `0600`, dir `0700`.
   Non-empty passphrase → encrypted; second invocation refuses to clobber with
   `vault_exists` before prompting for a new passphrase; `--force` rotates old
-  primary verbatim into `.bak`.
+  primary verbatim into `.bak`. With the `paladin-core`
+  `test-fault-injection` feature wired into the test build (see the
+  passphrase bullet), `init --force` under `PALADIN_FAULT_INJECT=pre_commit`
+  surfaces `save_not_committed` with `backup_path` set to `vault.bin.bak`
+  after backup rotation, and under `PALADIN_FAULT_INJECT=post_commit`
+  surfaces `save_durability_unconfirmed` with `committed: true` — covering
+  the `backup_path` field called out in the JSON envelope above.
 - **`init` + unsafe parent dir** → `unsafe_permissions` with `chmod` hint.
 - **`add --uri`** → account appears in `list`. **`add` interactive** with
   scripted `/dev/tty` (via `script` or `pty-process` test helper), plus
@@ -430,8 +453,10 @@ where relevant, and exit code.
   the final rename and `save_durability_unconfirmed` after the final
   rename.
 - **`settings get/set`** covers default values, every dotted key, bool/u32
-  value parsing, minimum-value validation, text-mode filtering, and full
-  `VaultSettings` JSON output.
+  value parsing, minimum-value validation, text-mode filtering, full
+  `VaultSettings` JSON output, and unknown-dotted-key rejection with
+  `validation_error` (`field: "key"`, `reason: "unknown_setting"`) for both
+  `settings get <key>` and `settings set <key> <value>`.
 - **`--json` schema snapshots** for every command success, every
   `error_kind`, and representative syntax/usage failures rendered as
   JSON when `--json` is present. Locked via `insta`.
@@ -449,7 +474,9 @@ where relevant, and exit code.
   `multiple_matches`; clap-rerouted via an unknown subcommand;
   parse-time confirmation rejection via `remove --json` without
   `--yes`).
-- **`--no-color`** disables ANSI; `NO_COLOR` env var honored.
+- **`--no-color`** disables ANSI; `NO_COLOR` env var honored; ANSI also
+  disabled when stdout is not a TTY (covers the third trigger named in the
+  Output section).
 - **`paladin tui`** → spawns `paladin-tui` (a stub binary placed on `PATH`
   for the test asserts argv) and forwards `--vault` / `--no-color` in both
   accepted global-flag positions. `paladin tui --json` and `paladin --json
