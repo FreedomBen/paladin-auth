@@ -25,7 +25,7 @@ crates/paladin-tui/
 │   ├── cli.rs             # GlobalArgs (--vault, --no-color; --json rejected)
 │   ├── app/
 │   │   ├── mod.rs         # App state machine + run loop
-│   │   ├── state.rs       # AppState: Missing / Locked / Unlocked { vault, ui, modals }
+│   │   ├── state.rs       # AppState: Missing / StartupError / Locked / Unlocked { vault, ui, modals }
 │   │   ├── event.rs       # AppEvent enum (Input, Tick, ClipboardClear, AutoLock)
 │   │   ├── input.rs       # crossterm event → AppEvent translation
 │   │   ├── ticker.rs      # 250ms tick thread, sleeps, mpsc producer
@@ -84,8 +84,19 @@ Startup mirrors the CLI's vault inspection path:
    create vaults.
 4. `VaultStatus::Plaintext` opens directly to the list view.
 5. `VaultStatus::Encrypted` opens the unlock screen and prompts inside the
-   TUI; wrong passphrases keep the user on the unlock screen with an inline
-   error.
+   TUI; wrong passphrases (`decrypt_failed`) keep the user on the unlock
+   screen with an inline error.
+6. Any other error from `inspect` (e.g. `invalid_header` from
+   unrecognized magic, or `io_error`) or from `open`
+   (`unsafe_permissions`, `invalid_header`, `invalid_payload`,
+   `unsupported_format_version`, `kdf_params_out_of_bounds`,
+   `wrong_vault_lock`, `io_error`) renders a non-mutating
+   startup-error screen with the error text and quits on `q` /
+   `Ctrl-C`. `unsafe_permissions` errors render
+   `paladin_core::format_unsafe_permissions(&err)` so the TUI and CLI
+   show identical wording. The unlock screen handles only
+   `decrypt_failed` inline; every other `open` error replaces the
+   unlock screen with the startup-error screen.
 
 ## Layout (per §6)
 
@@ -123,11 +134,17 @@ focuses the search bar; typing narrows the filtered list in place.
 While the search bar is focused, `↑`/`↓` still move the list selection
 and `Enter` copies the selected entry — the selection is always
 navigable so the user does not need to unfocus the search to act on a
-result. `Esc` clears the search query and returns focus to the list;
-on the list, `Esc` is a no-op. Modal dialogs trap focus while open and
-intercept `Esc` to close themselves. The unlock and missing-vault
-screens accept `q` / `Ctrl-C` to quit; the unlock screen additionally
-accepts character input (passphrase) and `Enter` (submit).
+result. Other keys, including the action keys `a` / `r` / `n` / `p` /
+`s` and the quit key `q`, are routed to the search field as character
+input while it has focus; the user must defocus the search (`Esc` to
+clear) to use them as actions. `Ctrl-C` is the exception and always
+quits. `Esc` clears the search query and returns focus to the list;
+on the list, `Esc` is a no-op. Modal dialogs trap focus while open
+and intercept `Esc` to close themselves. The missing-vault and
+startup-error screens accept `q` / `Ctrl-C` to quit. The unlock
+screen accepts character input (passphrase) and `Enter` (submit), and
+quits on `Esc` or `Ctrl-C` (`q` is a valid passphrase character, so
+it is not bound to quit there).
 
 ## Modals (per §6)
 
@@ -150,9 +167,21 @@ accepts character input (passphrase) and `Enter` (submit).
   triple). QR imports call `Vault::import_accounts` with
   `ImportConflict::Skip` and report imported/skipped/warning counts.
   Successful additions call `Vault::save(&Store)` after the validated
-  accounts are inserted.
-- **Remove** — confirmation modal. On confirm, calls `Vault::remove`, then
-  `Vault::save(&Store)`.
+  accounts are inserted. If the save fails before the primary-file
+  commit point (`save_not_committed`), the TUI rolls back the
+  in-memory `Vault::add` / `Vault::import_accounts` mutations so
+  memory matches disk and the modal stays open with the inline error
+  — mirroring the DESIGN §4.4 hotp_advance pattern. Durability-
+  unconfirmed saves leave the new accounts in memory (matching the
+  committed on-disk state) and surface the warning inline.
+- **Remove** — confirmation modal. On confirm, calls `Vault::remove`,
+  then `Vault::save(&Store)`. If the save fails before the primary-
+  file commit point, the TUI restores the removed account into the
+  in-memory vault at its previous iteration position so memory
+  matches disk and the modal stays open with the inline error.
+  Durability-unconfirmed saves leave the account removed in memory
+  (matching the committed on-disk state) and surface the warning
+  inline.
 - **Passphrase** — three sub-flows mirroring CLI's
   `passphrase set / change / remove`. The available sub-flow is gated
   by vault mode: `set` is offered only on plaintext vaults
@@ -166,8 +195,12 @@ accepts character input (passphrase) and `Enter` (submit).
   `remove` shows the plaintext-storage warning and requires explicit
   confirmation before mutation. The transition methods
   (`set_passphrase` / `change_passphrase` / `remove_passphrase`) save
-  themselves through `&Store`; the TUI surfaces pre-commit and
-  durability-unconfirmed failures inline per DESIGN §4.5.
+  themselves through `&Store` and handle their own pre-commit
+  rollback per DESIGN §4.5 (the in-memory mode/key reverts to its
+  previous state on `save_not_committed` and is replaced on
+  `save_durability_unconfirmed`); the TUI surfaces both failure
+  classes inline and otherwise leaves the in-memory vault as the
+  core left it.
 - **Settings** — toggles for `auto_lock.enabled` and
   `clipboard.clear_enabled`, spinners for `auto_lock.timeout_secs` and
   `clipboard.clear_secs`. The spinners clamp to the §5 minimums
@@ -178,8 +211,12 @@ accepts character input (passphrase) and `Enter` (submit).
   `Vault::save(&Store)` persists the batch. Setters that fail
   validation surface inline against the offending field and block the
   commit; closing the modal with `Esc` discards pending edits without
-  invoking setters or save. Save errors are shown inline and the modal
-  stays open so the user can retry. If no fields changed, Confirm
+  invoking setters or save. If the save fails before the primary-
+  file commit point, the TUI restores the prior settings values so
+  memory matches disk and the modal stays open with the inline error;
+  the user can adjust and retry. Durability-unconfirmed saves leave
+  the new settings in memory (matching the committed on-disk state)
+  and surface the warning inline. If no fields changed, Confirm
   closes without invoking save.
 
 ## Auto-lock (per §6)
@@ -223,9 +260,22 @@ Effects update visible state only after the underlying mutation succeeds:
   All other failures show a status-line error and leave the row hidden.
 - Copy: show a status-line error if clipboard write fails; do not schedule
   auto-clear.
-- Add / remove / settings saves: keep the modal open with an inline error
-  when validation or save fails. Durability-unconfirmed save errors are
-  shown as committed-but-uncertain, matching the core error.
+- Add / remove / settings saves: validation failures occur before any
+  in-memory mutation, so no rollback is needed; the modal stays open
+  with the inline error. Pre-commit save failures
+  (`save_not_committed`) roll back the in-memory mutation so memory
+  matches disk (Add removes the just-inserted account(s); Remove
+  restores the removed account at its previous position; Settings
+  restores the prior values), and the modal stays open with the
+  inline error so the user can retry. Durability-unconfirmed save
+  errors leave the new state in memory (matching the committed
+  on-disk state) and are shown as committed-but-uncertain, matching
+  the core error.
+- Passphrase set/change/remove: pre-commit and durability-unconfirmed
+  handling lives in `Vault` itself per DESIGN §4.5 — the in-memory
+  mode/key reverts on `save_not_committed` and is replaced on
+  `save_durability_unconfirmed`. The TUI surfaces the typed error
+  inline and otherwise trusts the core's rollback.
 - QR clipboard import: no clipboard image, image decode failure, zero
   decoded QRs, and invalid QR payloads all stay in the Add modal with an
   inline error.
@@ -242,8 +292,9 @@ Effects update visible state only after the underlying mutation succeeds:
 | `/`       | Focus search bar                                        |
 | `p`       | Open Passphrase modal                                   |
 | `s`       | Open Settings modal                                     |
-| `Esc`     | Close modal / clear search                              |
-| `q`       | Quit                                                    |
+| `Esc`     | Close modal / clear search; quit on unlock screen       |
+| `q`       | Quit (typed as input when search bar or unlock passphrase has focus) |
+| `Ctrl-C`  | Quit (any screen)                                       |
 
 ## Tests
 
@@ -278,9 +329,23 @@ captured with `insta` golden snapshots using `ratatui::backend::TestBackend`.
 - **Settings modal**: pending edits are buffered until Confirm; `Esc`
   discards them without invoking setters or save; Confirm runs every
   changed setter and persists with one `Vault::save(&Store)`; setter
-  validation failure surfaces inline and blocks the save; a save
-  failure keeps the modal open with the inline error; Confirm with no
+  validation failure surfaces inline and blocks the save; a pre-
+  commit save failure restores the prior settings values in memory
+  and keeps the modal open with the inline error; a durability-
+  unconfirmed save leaves the new values in memory; Confirm with no
   changes closes without saving.
+- **Pre-commit save rollback**: Add modal `save_not_committed`
+  removes the just-added account(s) from the in-memory vault; Remove
+  modal `save_not_committed` restores the removed account at its
+  previous iteration position; Settings modal `save_not_committed`
+  restores the prior settings values. Each case verifies that
+  `Vault::iter()` (or `Vault::settings()`) post-failure matches its
+  pre-attempt snapshot, the modal stays open with the typed inline
+  error, and `save_durability_unconfirmed` leaves the new state in
+  memory while still surfacing the warning. Passphrase rollback is
+  exercised in the `paladin-core` plan; the TUI test asserts that the
+  inline error surfaces and the in-memory mode/key matches whatever
+  the core left behind.
 - **HOTP reveal window**: reveal closes after 120 s; `n` during an open
   reveal advances again (does not no-op).
 - **Insta snapshots** for every screen state: empty vault, single TOTP,
@@ -296,12 +361,19 @@ captured with `insta` golden snapshots using `ratatui::backend::TestBackend`.
   errors (no clipboard image, image decode failure, zero decoded QRs,
   invalid QR payload); Add modal with `duplicate_account` and the
   follow-up "add anyway" confirmation; Passphrase modal with
-  `confirmation_mismatch` and `zero_length` inline errors.
+  `confirmation_mismatch` and `zero_length` inline errors;
+  startup-error screen rendered with `unsafe_permissions` (text from
+  `format_unsafe_permissions`).
 - **Plaintext vault**: opens directly to list (no unlock screen).
 - **Encrypted vault**: opens to unlock screen; wrong passphrase shows
   inline error; correct passphrase advances to list.
 - **Missing vault**: opens the missing-vault screen and does not create or
   mutate files.
+- **Startup errors**: non-`decrypt_failed` errors from `inspect` /
+  `open` (including `unsafe_permissions`) open the non-mutating
+  startup-error screen and do not create or mutate files;
+  `unsafe_permissions` rendering uses `format_unsafe_permissions`
+  verbatim.
 
 ## Dependencies
 
@@ -315,8 +387,9 @@ Dev-dependencies: `insta` for golden snapshots.
 
 - [ ] Scaffold `paladin-tui` crate, workspace membership, binary entry, and
   SPDX headers.
-- [ ] Implement CLI args, vault path resolution, encrypted unlock, and
-  plaintext direct-open / missing-vault flows.
+- [ ] Implement CLI args, vault path resolution, encrypted unlock,
+  plaintext direct-open, missing-vault, and startup-error flows
+  (including `format_unsafe_permissions` rendering).
 - [ ] Implement reducer, event producers, effect execution, and timer tokens.
 - [ ] Implement list layout, search, TOTP gauges, HOTP reveal/copy behavior,
   and status-line errors.
@@ -335,5 +408,8 @@ Dev-dependencies: `insta` for golden snapshots.
 - Insta snapshots locked for every screen state.
 - `paladin tui` (CLI exec wrapper) launches this binary successfully.
 - Missing vaults show the non-mutating `paladin init` guidance screen.
+- Non-`decrypt_failed` `inspect` / `open` errors surface on the
+  non-mutating startup-error screen, with `unsafe_permissions`
+  rendered via `format_unsafe_permissions`.
 - `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo test --all`,
   `cargo deny check`, `cargo audit` clean.
