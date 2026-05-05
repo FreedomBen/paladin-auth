@@ -1,6 +1,7 @@
 # Implementation Plan 02 — `paladin-cli` (`paladin`)
 
-Source of truth: [DESIGN.md](DESIGN.md) §3, §5, §10, §12 (Milestone 4).
+Source of truth: [DESIGN.md](DESIGN.md) §3-§5, §8, §10-§12
+(Milestone 4).
 Depends on: [`IMPLEMENTATION_PLAN_01_CORE.md`](IMPLEMENTATION_PLAN_01_CORE.md).
 
 ## Scope
@@ -38,7 +39,7 @@ crates/paladin-cli/
 │   │   ├── import.rs     # --format otpauth/aegis/paladin/qr; --on-conflict
 │   │   ├── export.rs     # --plaintext / --encrypted; refuse overwrite w/o --force
 │   │   └── settings.rs   # get / set
-│   └── select.rs         # query → AccountId disambiguation (label, id:<8 hex>…)
+│   └── select.rs         # query → AccountId disambiguation (issuer:label, id:<8+ hex>…)
 └── tests/
     ├── cli_init.rs
     ├── cli_add.rs
@@ -67,15 +68,15 @@ crates/paladin-cli/
 
 | Command                                                | Notes |
 |--------------------------------------------------------|-------|
-| `init [--force]`                                       | Without `--force`, calls `paladin_core::create` and surfaces `vault_exists` if a primary already exists. With `--force`, calls `paladin_core::create_force` (which performs the §5 staged clobber: stages the new vault, then rotates the old primary verbatim to `.bak`, overwriting any existing backup). |
+| `init [--force]`                                       | Without `--force`, checks for an existing primary and surfaces `vault_exists` before prompting for the new-vault passphrase. With `--force`, calls `paladin_core::create_force` (which performs the §5 staged clobber: stages the new vault, then rotates the old primary verbatim to `.bak`, overwriting any existing backup). |
 | `add` (interactive / `--uri` / manual flags / `--qr`)  | Exactly one input mode; combinations rejected at parse time. Under `--json`, interactive mode is rejected at parse time — one of `--uri`, `--qr`, or the manual flags must be supplied. |
 | `list`                                                 | Account metadata only — no codes. |
 | `show <query>`                                         | Advances HOTP; persists before printing. Matching queries print all matches when every match is TOTP; if any match is HOTP, requires a single match. |
 | `peek <query>`                                         | Never advances. Prints all matches unconditionally. |
 | `copy <query>`                                         | Advances HOTP; copies to clipboard via `arboard`. **No auto-clear.** Single-match required. |
-| `remove <query>`                                       | Confirmation prompt unless `--yes`. `--yes` is required under `--json` (no TTY prompt). Single-match required. |
+| `remove <query>`                                       | Confirmation prompt unless `--yes`. `--yes` is required under `--json` (no confirmation prompt). Single-match required. |
 | `rename <query> <new-label>`                           | Updates `updated_at`. Single-match required. |
-| `passphrase set | change | remove`                     | `passphrase remove` requires `--yes-i-know` to skip the warning; required under `--json`. |
+| `passphrase set | change | remove`                     | `passphrase remove` warns and confirms in text mode unless `--yes-i-know` is passed; `--yes-i-know` is required under `--json`. |
 | `import <path> [--format <fmt>] [--on-conflict <p>]`   | Auto-detects when `--format` is omitted; forced formats are `otpauth`/`aegis`/`paladin` (encrypted bundle only)/`qr`; conflict policies are `skip` (default)/`replace`/`append`. |
 | `export --plaintext <path> | --encrypted <path>`       | Refuses overwrite without `--force`; both modes write through `paladin_core::write_secret_file_atomic` and create output `0600`; plaintext export prints a clear warning before writing unencrypted secrets. |
 | `settings get [key] | set <key> <value>`               | CLI persists `clipboard.clear_enabled` for TUI/GUI to honor but **ignores it at runtime** for `paladin copy`. `get [key]` filters text-mode display only; the `--json` shape is always the full `VaultSettings`. |
@@ -100,14 +101,34 @@ crates/paladin-cli/
 
 Combining input modes rejects at parse time. Interactive prompts
 (label, issuer, secret, etc.) read from `/dev/tty` like passphrase
-prompts, never from stdin/stdout. Under `--json`, interactive mode is
-additionally rejected at parse time — one of `--uri`, `--qr`, or the
-manual flags must be supplied — mirroring the no-prompt rule on
-`remove --json` and `passphrase remove --json`. Single-entry `add`
-rejects an existing `(secret, issuer, label)` collision with
-`duplicate_account` unless `--allow-duplicate` is passed.
-`--allow-duplicate` is mutually exclusive with `--qr` and is rejected at
-parse time.
+prompts, never from stdin/stdout. If `/dev/tty` is unavailable for
+interactive account entry, exit with `io_error` and `operation:
+"account_prompt"`. Under `--json`, interactive mode is additionally
+rejected at parse time — one of `--uri`, `--qr`, or the manual flags must
+be supplied — mirroring the no-prompt rule on `remove --json` and
+`passphrase remove --json`. Single-entry `add` rejects an existing
+`(secret, issuer, label)` collision with `duplicate_account` unless
+`--allow-duplicate` is passed. `--allow-duplicate` is mutually exclusive
+with `--qr` and is rejected at parse time.
+
+## Query resolution (per §5)
+
+`<query>` is a case-insensitive substring match against
+`"{issuer}:{label}"`, including the colon when the issuer is empty. Matching
+uses `str::to_lowercase()` on both the query and match key, with no Unicode
+normalization or locale-specific casing.
+
+A query starting with `id:` is never treated as a substring match. It matches
+against the account UUID's de-hyphenated 32-character hex form, and the prefix
+after `id:` must be 8 to 32 hex characters. Shorter, longer, or non-hex
+prefixes reject with `validation_error`.
+
+Candidate lists use the shortest unique `id:<hex>` form, with a minimum
+prefix length of 8 hex characters. `show` returns every match only when all
+matches are TOTP; if any match is HOTP, it requires a single match so one
+command cannot silently advance multiple HOTP counters. `peek` returns every
+match unconditionally. `copy`, `remove`, and `rename` always require a single
+match.
 
 ## Settings keys
 
@@ -149,8 +170,50 @@ strings, then validated against the minimums above.
 - Wrong starting states for `passphrase set`, `passphrase change`, and
   `passphrase remove` surface `invalid_state` before any new-passphrase
   prompt, destructive confirmation, or crypto material generation.
-- If `/dev/tty` is unavailable, exit with `io_error` and `operation:
-  "passphrase_prompt"`.
+- `passphrase remove` in text mode prints the plaintext-storage warning and
+  requires destructive confirmation unless `--yes-i-know` is passed. Under
+  `--json`, `--yes-i-know` is required at parse time because the command must
+  not block on a confirmation prompt.
+- If `/dev/tty` is unavailable for a passphrase prompt, exit with `io_error`
+  and `operation: "passphrase_prompt"`.
+
+## Non-passphrase TTY prompts
+
+- Interactive `add` account-entry prompts read from `/dev/tty`. If `/dev/tty`
+  is unavailable, exit with `io_error` and `operation: "account_prompt"`.
+- Text-mode destructive confirmations (`remove` without `--yes` and
+  `passphrase remove` without `--yes-i-know`) read from `/dev/tty`. If
+  `/dev/tty` is unavailable, exit with `io_error` and `operation:
+  "confirmation_prompt"`.
+- Under `--json`, interactive `add` and missing destructive confirmation
+  flags reject at parse time as `validation_error` and do not attempt to open
+  `/dev/tty`.
+
+## Import merge details
+
+The CLI delegates content sniffing to `paladin_core::import::detect` when
+`--format` is omitted, and forced formats call the matching importer directly.
+Auto-detection follows the §4.6 fixed order: Paladin magic, image magic, Aegis
+JSON shape, `otpauth://` URI text or JSON string array, then unknown.
+
+Each import parses and validates the full input before mutating the vault. Any
+invalid entry rejects the whole batch with the core error kind and
+`source_index` when available. Validation warnings are collected before merge
+policy is applied, so warnings for entries later skipped as duplicates still
+appear in the success envelope.
+
+Collision policy follows §5 exactly:
+
+- `skip` keeps the existing entry and counts the source row as skipped.
+- `replace` preserves the existing entry's `id` and `created_at`, replaces
+  mutable fields, sets `updated_at = import_time`, and preserves the existing
+  HOTP counter for HOTP-to-HOTP collisions.
+- `append` inserts a new account even for an exact duplicate.
+
+The collision check runs against the running import state, so duplicates within
+one input obey the same policy. Paladin encrypted bundles preserve source
+timestamps for inserted/appended rows but never insert source `AccountId`s;
+non-colliding and appended Paladin rows receive fresh UUIDv4 IDs at merge time.
 
 ## Output
 
@@ -250,10 +313,12 @@ Every vault-opening command except `init`:
 6. Drop the `Vault` (zeroizes secrets on drop).
 7. Exit.
 
-`init` resolves the same path, prompts for the new-vault passphrase, and
-uses `paladin_core::create`; `init --force` calls
-`paladin_core::create_force` (which owns the §5 staged clobber sequence)
-without opening or decrypting the old primary.
+`init` resolves the same path. Without `--force`, it checks for an existing
+primary first and returns `vault_exists` before prompting for the new-vault
+passphrase. When the path is clear, it prompts for the new-vault passphrase
+and uses `paladin_core::create`. `init --force` prompts for the new-vault
+passphrase and calls `paladin_core::create_force` (which owns the §5 staged
+clobber sequence) without opening or decrypting the old primary.
 
 ## Implementation checklist
 
@@ -261,8 +326,10 @@ without opening or decrypting the old primary.
   command dispatch.
 - [ ] Ensure new Rust source files include
   `// SPDX-License-Identifier: AGPL-3.0-or-later`.
-- [ ] Implement `/dev/tty` passphrase prompting and no-TTY error handling.
-- [ ] Implement account selection and `id:<hex>` disambiguation.
+- [ ] Implement `/dev/tty` passphrase, account-entry, and confirmation
+  prompting with no-TTY error handling.
+- [ ] Implement account selection for `issuer:label` substring queries and
+  `id:<hex>` disambiguation.
 - [ ] Implement `init`, account CRUD, `show`/`peek`/`copy`, passphrase,
   import/export, and settings commands per §5.
 - [ ] Implement text and JSON output renderers with stable success/error
@@ -282,11 +349,13 @@ temp dir, sets `--vault` to a path inside it, and asserts stdout, stderr
 where relevant, and exit code.
 
 - **`init`**: empty passphrase → plaintext file, mode `0600`, dir `0700`.
-  Non-empty passphrase → encrypted; second invocation refuses to clobber;
-  `--force` rotates old primary verbatim into `.bak`.
+  Non-empty passphrase → encrypted; second invocation refuses to clobber with
+  `vault_exists` before prompting for a new passphrase; `--force` rotates old
+  primary verbatim into `.bak`.
 - **`init` + unsafe parent dir** → `unsafe_permissions` with `chmod` hint.
 - **`add --uri`** → account appears in `list`. **`add` interactive** with
-  scripted `/dev/tty` (via `script` or `pty-process` test helper).
+  scripted `/dev/tty` (via `script` or `pty-process` test helper), plus
+  no-TTY failure as `io_error` with `operation: "account_prompt"`.
 - **`add` mode-combination rejection** (e.g. `--uri` + `--qr`,
   `--qr` + `--allow-duplicate`); also `add --json` without an input
   flag (no `--uri` / `--qr` / manual flags) rejects at parse time with a
@@ -300,9 +369,11 @@ where relevant, and exit code.
   by re-opening and re-running `peek`); `peek` does not. `show` on a
   multi-match query containing any HOTP entry rejects with
   `multiple_matches`; multi-match TOTP-only `show` prints all matches.
-- **Query resolution** — `id:<hex>` prefix routes to UUID match, never
-  substring; prefixes shorter than 8 hex chars, longer than 32 hex chars,
-  or containing non-hex characters reject with `validation_error`.
+- **Query resolution** — case-insensitive `issuer:label` substring matching,
+  empty-issuer match keys with the colon present, and no Unicode
+  normalization. `id:<hex>` prefix routes to UUID match, never substring;
+  prefixes shorter than 8 hex chars, longer than 32 hex chars, or containing
+  non-hex characters reject with `validation_error`.
 - **`copy` writes to clipboard** — gated behind a test-only build cfg/feature
   because CI may not have a clipboard server; otherwise dry-run via a
   `PALADIN_CLIPBOARD_DRYRUN=1` env var honored only by the test build before
@@ -312,12 +383,15 @@ where relevant, and exit code.
   committed HOTP advance returns `clipboard_write_failed` and leaves the
   persisted counter advanced; pre-commit HOTP save failure does not attempt
   a clipboard write.
-- **`remove`** with and without `--yes`; `--json` without `--yes` rejects at
-  parse time (no TTY prompt). `multiple_matches` includes `candidates`
-  with `disambiguator` `id:<hex>` strings.
+- **`remove`** with and without `--yes`; no-TTY confirmation failure as
+  `io_error` with `operation: "confirmation_prompt"`; `--json` without
+  `--yes` rejects at parse time (no confirmation prompt). `multiple_matches`
+  includes `candidates` with `disambiguator` `id:<hex>` strings.
 - **`rename`** updates `updated_at` (compared via `--json` snapshot).
 - **`passphrase set/change/remove`** end-to-end against an open vault.
-  `passphrase remove` requires `--yes-i-know`; `--json` without
+  `passphrase remove` covers the text-mode warning confirmation, no-TTY
+  confirmation failure as `io_error` with `operation: "confirmation_prompt"`,
+  and the `--yes-i-know` bypass; `--json` without
   `--yes-i-know` rejects at parse time. No-TTY prompt failures surface as
   `io_error` with `operation: "passphrase_prompt"`; confirmation mismatch
   surfaces as `invalid_passphrase` with
@@ -333,7 +407,11 @@ where relevant, and exit code.
   failure path fires so `save_not_committed` and
   `save_durability_unconfirmed` envelopes can be exercised end-to-end.
 - **`import`** for each format with each `--on-conflict` policy; omitting
-  `--on-conflict` defaults to `skip`. Atomic failure on any invalid entry.
+  `--on-conflict` defaults to `skip`. Covers auto-detection order, forced
+  format errors, encrypted-Aegis unsupported errors, no-entry inputs, warning
+  propagation for skipped duplicates, Paladin bundle fresh-ID behavior, and
+  HOTP-to-HOTP counter preservation under `replace`. Atomic failure on any
+  invalid entry.
 - **`export --plaintext` / `--encrypted`** refuses overwrite without
   `--force` and writes output `0600` through
   `paladin_core::write_secret_file_atomic`. Plaintext export prints the

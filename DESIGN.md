@@ -619,18 +619,18 @@ Built with `clap` (derive). Commands:
 
 | Command                                     | Behavior                                                         |
 | ------------------------------------------- | ---------------------------------------------------------------- |
-| `paladin init [--force]`                    | Create a new vault. Prompts: passphrase? (empty = plaintext). Refuses to clobber an existing vault unless `--force` (which stages the new vault first, then rotates the old file to `vault.bin.bak`, overwriting any existing backup). The rotated `.bak` is preserved verbatim — a plaintext-to-encrypted clobber leaves plaintext secrets in `.bak` until the user removes it manually. |
+| `paladin init [--force]`                    | Create a new vault. Without `--force`, checks for an existing primary and returns `vault_exists` before prompting for a new-vault passphrase. Prompts: passphrase? (empty = plaintext). Refuses to clobber an existing vault unless `--force` (which stages the new vault first, then rotates the old file to `vault.bin.bak`, overwriting any existing backup). The rotated `.bak` is preserved verbatim — a plaintext-to-encrypted clobber leaves plaintext secrets in `.bak` until the user removes it manually. |
 | `paladin add`                               | Add an account interactively (or via flags / URI).               |
 | `paladin add --qr <path>`                   | Add by scanning a QR image file. Every decoded QR in the image is added (errors if none decode); collisions use the default `import` merge policy (`skip`). For other policies, use `import --format=qr`. |
 | `paladin list`                              | List accounts (no codes).                                        |
 | `paladin show <query>`                      | Print the current code. **Advances HOTP counter.**               |
 | `paladin peek <query>`                      | Print the current code without advancing the HOTP counter; for TOTP, identical to `show`. |
 | `paladin copy <query>`                      | Copy code to clipboard. For HOTP, advances and saves before attempting the clipboard write. (Auto-clear is TUI/GUI-only — the CLI ignores `clipboard.clear_enabled`; see security consideration 6.) |
-| `paladin remove <query>`                    | Remove an account. Prompts for confirmation; `--yes` skips the prompt. Required under `--json` (no TTY prompt available). |
+| `paladin remove <query>`                    | Remove an account. Prompts for confirmation; `--yes` skips the prompt. Required under `--json` (no confirmation prompt available). |
 | `paladin rename <query> <label>`            | Rename an account.                                               |
 | `paladin passphrase set`                    | Encrypt a plaintext vault under a new passphrase.                |
 | `paladin passphrase change`                 | Re-encrypt under a new passphrase.                               |
-| `paladin passphrase remove`                 | Decrypt to plaintext. Requires `--yes-i-know` to skip the warning. Required under `--json` (no TTY prompt available). |
+| `paladin passphrase remove`                 | Decrypt to plaintext. Warns and prompts for destructive confirmation unless `--yes-i-know` is passed. Required under `--json` (no confirmation prompt available). |
 | `paladin export --plaintext <out>`          | Write JSON `otpauth://` array. Warns; refuses overwrite without `--force`; creates output `0600`. |
 | `paladin export --encrypted <out>`          | Write Paladin-format encrypted bundle. Refuses overwrite without `--force`; creates output `0600`. |
 | `paladin import [--on-conflict=<mode>] <path>` | Auto-detect format and merge into the vault. Conflict mode: `skip` (default), `replace`, `append`. See merge policy below. |
@@ -644,24 +644,29 @@ Global flags: `--vault <path>`, `--no-color`, `--json` (for scripting).
 (`paladin`, `paladin-tui`, and the v0.2 `paladin-gtk`); `--json` is
 `paladin`-only — `paladin-tui` and `paladin-gtk` reject it at parse time.
 
-Passphrase prompts always read from `/dev/tty` via `rpassword`, not from
-stdin/stdout, in both text and `--json` modes. Existing vault passphrases
-and encrypted Paladin bundle import passphrases are prompted once. New
-passphrases (`init` when the first entry is non-empty, `passphrase set`,
-`passphrase change`, and `export --encrypted`) are prompted twice and must
-match. For `init`, an empty first entry selects plaintext storage and skips
-confirmation; every other empty new passphrase is rejected with
-`invalid_passphrase` (`reason: "zero_length"`). Confirmation mismatch exits
-before mutation with `invalid_passphrase` (`reason: "confirmation_mismatch"`).
-If `/dev/tty` is unavailable, the CLI exits with `io_error` and operation
-`"passphrase_prompt"`.
+All interactive CLI prompts read from `/dev/tty`, never from stdin/stdout, in
+both text and `--json` modes. Passphrase prompts use `rpassword`. Existing
+vault passphrases and encrypted Paladin bundle import passphrases are prompted
+once. New passphrases (`init` when the first entry is non-empty,
+`passphrase set`, `passphrase change`, and `export --encrypted`) are prompted
+twice and must match. For `init`, an empty first entry selects plaintext
+storage and skips confirmation; every other empty new passphrase is rejected
+with `invalid_passphrase` (`reason: "zero_length"`). Confirmation mismatch
+exits before mutation with `invalid_passphrase`
+(`reason: "confirmation_mismatch"`). If `/dev/tty` is unavailable for a
+passphrase prompt, the CLI exits with `io_error` and operation
+`"passphrase_prompt"`. If `/dev/tty` is unavailable for interactive account
+entry, it exits with `io_error` and operation `"account_prompt"`. If
+`/dev/tty` is unavailable for a destructive confirmation prompt, it exits with
+`io_error` and operation `"confirmation_prompt"`.
 
 `paladin add` supports exactly one input mode per invocation:
 interactive prompts (no account-definition flags), `--uri <otpauth-uri>`,
 manual flags, or `--qr <path>`. Combining input modes (e.g. `--uri`
 together with manual flags or `--qr`, or `--qr` together with manual
-flags) is rejected at parse time. Manual mode requires `--label` and
-`--secret`; optional
+flags) is rejected at parse time. Under `--json`, interactive mode is rejected
+at parse time: one of `--uri`, `--qr`, or the manual flags must be supplied.
+Manual mode requires `--label` and `--secret`; optional
 fields are `--issuer`, `--algorithm sha1|sha256|sha512`, `--digits 6|7|8`,
 `--kind totp|hotp`, `--period <secs>`, `--counter <u64>`, and
 `--icon-hint <slug>`. Manual mode defaults to TOTP, SHA1, 6 digits, and a
@@ -679,17 +684,19 @@ appends a new account. `add --qr` remains the multi-entry exception and uses
 the import merge path with fixed `--on-conflict=skip`; `--allow-duplicate`
 is mutually exclusive with `--qr` and is rejected at parse time.
 
-`init --force` uses a dedicated clobber path. It writes the new vault to
-`vault.bin.tmp` and `fsync`s it before moving any existing primary. If that
-staging step fails, the old primary and `.bak` are untouched. Once staging
-succeeds, if an existing primary is present, it renames `vault.bin` →
-`vault.bin.bak` (overwriting any existing backup). It then renames
-`vault.bin.tmp` → `vault.bin` and `fsync`s the parent directory. The
-primary rename is the primary-file commit point. A failure after backup
-rotation but before the primary rename leaves the old vault available at
-`vault.bin.bak`; the CLI error names that path so the user can restore it.
-A failure after the primary rename is reported as durability-unconfirmed,
-matching the normal save semantics.
+`init` checks for an existing primary before prompting for a new-vault
+passphrase when `--force` is absent; an existing primary returns
+`vault_exists` without touching `/dev/tty`. `init --force` uses a dedicated
+clobber path. It writes the new vault to `vault.bin.tmp` and `fsync`s it
+before moving any existing primary. If that staging step fails, the old
+primary and `.bak` are untouched. Once staging succeeds, if an existing
+primary is present, it renames `vault.bin` → `vault.bin.bak` (overwriting any
+existing backup). It then renames `vault.bin.tmp` → `vault.bin` and `fsync`s
+the parent directory. The primary rename is the primary-file commit point. A
+failure after backup rotation but before the primary rename leaves the old
+vault available at `vault.bin.bak`; the CLI error names that path so the user
+can restore it. A failure after the primary rename is reported as
+durability-unconfirmed, matching the normal save semantics.
 
 All mutating CLI commands call the atomic save path before returning
 success. If save fails, the command exits non-zero. The primary vault file
@@ -735,15 +742,16 @@ mode warnings (`short_secret`) flow into the success envelope's
 `warnings` array for `add` and `import`; the plaintext-export advisory
 is suppressed because the caller opted in by passing `--plaintext`;
 clap diagnostics are rerouted via the argv pre-scan above; and progress
-or status text is never emitted. Confirmation flags (`remove --yes`,
-`passphrase remove --yes-i-know`) are required under `--json` since no
-interactive confirmation channel is available, and missing confirmations
-reject at parse time as `validation_error`. Passphrase prompts continue
-to read from `/dev/tty` via `rpassword`; the prompt string is written
-to `/dev/tty`, never to stdout or stderr, so a script that redirects
-both streams sees only the JSON envelope. This rule is the script
-contract — JSON consumers can `parse(stdout)` on exit 0 and
-`parse(stderr)` on non-zero exit without filtering.
+or status text is never emitted. Interactive `add` is rejected at parse time
+under `--json`, so account-entry prompt strings cannot appear on stdout or
+stderr. Confirmation flags (`remove --yes`, `passphrase remove
+--yes-i-know`) are required under `--json` since no interactive confirmation
+channel is available, and missing confirmations reject at parse time as
+`validation_error`. Passphrase prompts continue to read from `/dev/tty` via
+`rpassword`; the prompt string is written to `/dev/tty`, never to stdout or
+stderr, so a script that redirects both streams sees only the JSON envelope.
+This rule is the script contract — JSON consumers can `parse(stdout)` on exit
+0 and `parse(stderr)` on non-zero exit without filtering.
 
 The common account shape is:
 
