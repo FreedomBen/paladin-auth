@@ -108,8 +108,11 @@ rejected at parse time — one of `--uri`, `--qr`, or the manual flags must
 be supplied — mirroring the no-prompt rule on `remove --json` and
 `passphrase remove --json`. Single-entry `add` rejects an existing
 `(secret, issuer, label)` collision with `duplicate_account` unless
-`--allow-duplicate` is passed. `--allow-duplicate` is mutually exclusive
-with `--qr` and is rejected at parse time.
+`--allow-duplicate` is passed. The collision check calls
+`Vault::find_duplicate(&validated)` after parsing / validation and before
+`Vault::add`, so core owns the exact secret-bearing comparison while the CLI
+owns the user-facing error. `--allow-duplicate` is mutually exclusive with
+`--qr` and is rejected at parse time.
 
 ## Query resolution (per §5)
 
@@ -368,9 +371,10 @@ where relevant, and exit code.
   error envelope.
 - **`add --qr`** with synthetic QR image (multi-entry path uses fixed
   `--on-conflict=skip`).
-- **`add` duplicate behavior** — `(secret, issuer, label)` collision
-  rejects with `duplicate_account` and the existing `account` summary
-  unless `--allow-duplicate` is passed.
+- **`add` duplicate behavior** — `Vault::find_duplicate(&validated)`
+  detects `(secret, issuer, label)` collisions; the CLI rejects with
+  `duplicate_account` and the existing `account` summary unless
+  `--allow-duplicate` is passed.
 - **`show` vs `peek` on HOTP** — `show` persists counter advance (verified
   by re-opening and re-running `peek`); `peek` does not. `show` on a
   multi-match query containing any HOTP entry rejects with

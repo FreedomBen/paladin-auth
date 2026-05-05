@@ -559,6 +559,7 @@ impl Vault {
     pub fn remove(&mut self, id: AccountId) -> Option<Account>;
     pub fn iter(&self) -> impl Iterator<Item = &Account>;                          // insertion order
     pub fn rename(&mut self, id: AccountId, label: &str, now: SystemTime) -> Result<()>;
+    pub fn find_duplicate(&self, account: &ValidatedAccount) -> Option<&Account>;  // exact (secret, issuer, label) collision helper for single-entry add flows
     pub fn import_accounts(&mut self, accounts: Vec<ValidatedAccount>, policy: ImportConflict, now: SystemTime) -> Result<ImportReport>;  // applies the §5 merge policy
     pub fn totp_code(&self, id: AccountId, now: SystemTime) -> Result<Code>;       // TOTP only; errors on HOTP entries
     pub fn hotp_peek(&self, id: AccountId) -> Result<Code>;                        // HOTP only; does not advance
@@ -709,9 +710,12 @@ the shared account validation path and return validation warnings in the
 success payload. A single-entry `add` rejects an existing
 `(secret, issuer, label)` collision with `duplicate_account` and the existing
 `account` summary unless `--allow-duplicate` is supplied, in which case it
-appends a new account. `add --qr` remains the multi-entry exception and uses
-the import merge path with fixed `--on-conflict=skip`; `--allow-duplicate`
-is mutually exclusive with `--qr` and is rejected at parse time.
+appends a new account. The collision check uses
+`Vault::find_duplicate(&validated)` so the exact secret-bearing comparison
+lives in core even though `duplicate_account` remains a CLI/TUI/GUI-facing
+presentation error. `add --qr` remains the multi-entry exception and uses the
+import merge path with fixed `--on-conflict=skip`; `--allow-duplicate` is
+mutually exclusive with `--qr` and is rejected at parse time.
 
 `init` checks for an existing primary before prompting for a new-vault
 passphrase when `--force` is absent; an existing primary returns
@@ -1041,18 +1045,22 @@ Layout (single-screen MVP):
   state. `n` **always** advances and re-reveals — it is the "give me
   the next code" key — so pressing `n` again during an open reveal
   window advances to the next counter rather than no-op'ing on the
-  already-visible code. Copying a hidden HOTP row is rejected with a
-  status message. Copying during the reveal window copies the visible
-  code and does not advance the counter again.
+  already-visible code. Hidden HOTP rows show the stored next counter in
+  the row label. Revealed rows show the counter that produced the visible
+  code (`Code.counter`, the pre-advance counter) until the reveal expires;
+  after expiry, the hidden row returns to showing the stored next counter.
+  Copying a hidden HOTP row is rejected with a status message. Copying
+  during the reveal window copies the visible code and does not advance
+  the counter again.
 - Startup calls `inspect(path)`: plaintext vaults open directly to the
   list; encrypted vaults show the unlock screen; missing vaults show a
   non-mutating message telling the user to run `paladin init`. v0.1 TUI
   does not create vaults.
 - Modal dialogs for add / remove / import / export / passphrase /
   settings. Add supports manual entry and QR scan from clipboard image
-  bytes; manual duplicates reject with the existing account, while QR
-  imports use `ImportConflict::Skip` and report
-  imported/skipped/warning counts. Import takes a file path and
+  bytes; manual duplicates use `Vault::find_duplicate` and reject with
+  the existing account, while QR imports use `ImportConflict::Skip` and
+  report imported/skipped/warning counts. Import takes a file path and
   optional explicit format, prompts for the bundle passphrase on
   encrypted-Paladin sources, applies a user-selected on-conflict
   policy (`skip` / `replace` / `append`), and reports
@@ -1092,9 +1100,11 @@ Library: **Relm4** on **GTK4**. Component tree:
 - `AccountRowComponent` — label, code, progress (TOTP) / "next" button (HOTP),
   copy button. HOTP rows hide their code until the user activates "next"
   (advances counter and saves); after a 120-second reveal window the code
-  returns to the hidden state, matching the TUI. Copying a hidden HOTP row
-  is disabled; copying during the reveal window copies the visible code and
-  does not advance again.
+  returns to the hidden state, matching the TUI. Hidden rows show the stored
+  next counter; revealed rows show the counter that produced the visible
+  code until the reveal expires. Copying a hidden HOTP row is disabled;
+  copying during the reveal window copies the visible code and does not
+  advance again.
 - `AddAccountComponent` — manual fields + "scan from clipboard image",
   decoded through the core raw-RGBA QR import path.
 - `RemoveDialog` — confirmation gate before `Vault::remove` + save.
@@ -1244,6 +1254,9 @@ Concrete obligations and explicit user-controlled tradeoffs:
   - HOTP counter advances on `hotp_advance`, not on `hotp_peek` or
     `totp_code`; `hotp_advance` also updates `updated_at` and persists the
     new counter to disk before returning.
+  - `Vault::find_duplicate` detects exact `(secret, issuer, label)`
+    collisions for single-entry add flows without exposing secret bytes to
+    presentation crates.
   - Account validation rejects out-of-range digits, TOTP periods, HOTP
     counter overflow, empty labels, malformed icon hints, mismatched
     otpauth issuers, and invalid timestamps; short secrets in the 10-15
@@ -1284,7 +1297,8 @@ Concrete obligations and explicit user-controlled tradeoffs:
   - CLI query resolution, including `str::to_lowercase()` matching,
     no-normalization Unicode behavior, and `id:` prefix validation.
   - TUI HOTP copy behavior: hidden rows do not copy, revealed rows copy
-    without advancing again.
+    without advancing again, and revealed rows display the counter that
+    produced the visible code rather than the stored post-advance counter.
   - TUI missing-vault state: shows `paladin init` guidance and does not
     create or mutate files.
   - Plaintext-vault auto-lock is a no-op in TUI state handling now, with
@@ -1482,7 +1496,8 @@ artifacts side by side.
 - [ ] Conditional unlock screen (only when vault is encrypted).
 - [ ] Missing-vault guidance screen (no implicit vault creation).
 - [ ] Opt-in auto-lock and clipboard-clear honoring vault settings, with plaintext auto-lock as a no-op.
-- [ ] HOTP reveal/copy behavior: hidden rows do not copy; revealed rows copy without advancing again.
+- [ ] HOTP reveal/copy behavior: hidden rows do not copy; revealed rows copy
+  without advancing again and show the counter used.
 - [ ] Snapshot tests for rendering.
 
 ### Milestone 6 — Hardening & release *(v0.1)*
@@ -1538,7 +1553,9 @@ artifacts side by side.
   fixed in §5.
 - v0.1 JSON error kinds and stable fields are fixed in §5.
 - Plaintext auto-lock is a no-op; HOTP copy in TUI/GUI only copies an
-  already revealed HOTP code and never advances a second time.
+  already revealed HOTP code and never advances a second time; during the
+  reveal window, TUI/GUI rows show the counter that produced the visible
+  code, then return to the stored next counter when hidden.
 - Both plaintext and encrypted CLI exports refuse overwrite without `--force`
   and create output `0600`.
 - Unsafe existing vault permissions are rejected with a typed error that
@@ -1561,6 +1578,9 @@ artifacts side by side.
   TOTP `period_secs` and HOTP `counter` fields for manual add flows.
 - Core exposes `default_vault_path()` so presentation crates do not
   duplicate `ProjectDirs` vault-location logic.
+- Core exposes `Vault::find_duplicate(&ValidatedAccount)` so single-entry
+  add flows do not duplicate secret-bearing `(secret, issuer, label)`
+  collision comparison in presentation crates.
 - Core exposes `format_unsafe_permissions(&PaladinError)` so permission
   repair wording consumes the concrete shared error type.
 - Core exposes an import facade (`import::from_file` / `from_bytes`) so

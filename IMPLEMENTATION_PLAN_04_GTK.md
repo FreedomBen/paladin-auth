@@ -87,8 +87,10 @@ inclusion.
   code returns to the hidden state, matching the TUI. Activating "next"
   during an open reveal advances to the next counter and restarts the
   120-second reveal window with the newly committed code (matches §6 —
-  "next" is the "give me the next code" affordance, never a no-op). Copying
-  a hidden HOTP row is **disabled**; copying during the reveal window copies
+  "next" is the "give me the next code" affordance, never a no-op). Hidden
+  rows show the stored next counter; during reveal, the row shows the
+  `Code.counter` that produced the visible code until expiry. Copying a
+  hidden HOTP row is **disabled**; copying during the reveal window copies
   the visible code and does not advance again.
 - `AddAccountComponent` — manual fields + "scan from clipboard image". Reads
   a `gdk::Texture` from the GDK clipboard, allocates an exact
@@ -97,8 +99,9 @@ inclusion.
   and `import_time` to
   `paladin_core::import::qr_image_bytes`. Manual entries use
   `paladin_core::validate_manual`; validation warnings show inline and do
-  not block creation. Manual duplicate collisions initially reject with the
-  existing account in the dialog and offer an "add anyway" confirmation
+  not block creation. Manual duplicate collisions call
+  `Vault::find_duplicate(&validated)` before mutation, initially reject with
+  the existing account in the dialog, and offer an "add anyway" confirmation
   that re-submits the same input on the duplicate-allowed path (CLI parity
   with `--allow-duplicate`, appending a new account that shares the
   `(secret, issuer, label)` triple). Multi-QR imports use a fixed
@@ -240,12 +243,12 @@ start from `ImportDialog`.
 Effects update visible state only after the underlying mutation succeeds:
 
 - HOTP `next`: pre-commit save failures (`save_not_committed`) leave the
-  in-memory counter and reveal state unchanged (per DESIGN §4.7 rollback)
+  in-memory counter and reveal state unchanged (per DESIGN §4.2 rollback)
   and surface an inline/status error. Durability-unconfirmed failures
-  (`save_durability_unconfirmed`) reveal the new code and report the
-  committed-but-uncertain status — the user has the new code in hand even
-  though durability is in question. All other failures show an
-  inline/status error and leave the row hidden.
+  (`save_durability_unconfirmed`) reveal the new code with its
+  `Code.counter` label and report the committed-but-uncertain status — the
+  user has the new code in hand even though durability is in question. All
+  other failures show an inline/status error and leave the row hidden.
 - Copy: if the GDK clipboard write fails, show an inline/status error and do
   not schedule clipboard auto-clear.
 - Add / remove / settings saves: validation and setter failures happen
@@ -369,17 +372,17 @@ The GUI itself is hard to test without a display server. Tests are split:
   decision** (`None`/empty slug → placeholder; failed lookup → placeholder;
   the actual `gtk::IconTheme` lookup is exercised by the smoke test),
   search filtering, auto-lock state machine, clipboard "clear if unchanged"
-  decision logic, HOTP reveal window timing, secret-field clearing/redaction
-  invariants, QR RGBA byte-length/stride preparation, import format-selector
-  routing + on-conflict policy threading + post-merge counts mapping, export
-  overwrite-gate + encrypted twice-confirm match logic + export writer error
-  mapping.
+  decision logic, HOTP reveal window timing + counter labels, secret-field
+  clearing/redaction invariants, QR RGBA byte-length/stride preparation,
+  import format-selector routing + on-conflict policy threading +
+  post-merge counts mapping, export overwrite-gate + encrypted
+  twice-confirm match logic + export writer error mapping.
 - **Smoke test** in CI under `xvfb-run`: app launches, opens a prepared
   plaintext vault, the list renders. Required for Milestone 7 sign-off.
 - **Manual test plan** (`tests/manual/MANUAL_TEST_PLAN.md`) per Milestone 7
-  checklist: unlock encrypted vault; copy TOTP; HOTP next reveals + copies;
-  reveal expires; auto-lock fires; clipboard auto-clear honors
-  if-unchanged; add manual; add via clipboard image; import each format
+  checklist: unlock encrypted vault; copy TOTP; HOTP next reveals + copies
+  while showing the counter used; reveal expires; auto-lock fires; clipboard
+  auto-clear honors if-unchanged; add manual; add via clipboard image; import each format
   (otpauth, aegis plaintext, encrypted Paladin bundle, QR image file)
   with each on-conflict policy and verify reported counts; export
   plaintext (warning + confirmation, `0600` output) and encrypted
@@ -484,6 +487,8 @@ section just pins which Adwaita class fills each role.
 - Plaintext vault opens to list directly; encrypted vault gates on unlock.
 - Auto-lock and clipboard-clear are off by default; the plaintext-vault
   no-op rule applies to auto-lock only (clipboard-clear works in both modes).
+- HOTP reveal rows show the counter used for the visible code, then return
+  to the stored next counter when hidden.
 - Icon resolution works against system theme with placeholder fallback.
 - `xvfb-run` headless smoke test green in CI.
 - Manual test plan executes cleanly on a Wayland and an X11 session.

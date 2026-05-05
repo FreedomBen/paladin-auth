@@ -133,11 +133,12 @@ Each step lands as its own commit. Tests come first.
   `time_range`, `save_not_committed`, `save_durability_unconfirmed`, and
   `io_error`. Each included kind carries the stable extra fields from §5
   exactly, including field names, optionality, and value formats. The
-  CLI-only kinds (`clipboard_write_failed`, `no_match`, `multiple_matches`,
-  `duplicate_account`) are owned by the CLI plan and never returned from core
-  — `Vault::add` is infallible per §4.7, so the CLI performs
-  `(secret, issuer, label)` collision detection itself via `Vault::iter`
-  before calling `add`.
+  presentation-only kinds (`clipboard_write_failed`, `no_match`,
+  `multiple_matches`, `duplicate_account`) are never returned from core.
+  `duplicate_account` is emitted by front ends after they call
+  `Vault::find_duplicate(&validated)`; core owns the secret-bearing
+  `(secret, issuer, label)` comparison, while the presentation layer owns
+  the user-facing error and any `--allow-duplicate` / "add anyway" policy.
 
 ### Phase C — OTP generation (Milestone 1, part 2)
 
@@ -278,10 +279,11 @@ Each step lands as its own commit. Tests come first.
 ### Phase G — Vault behavior + settings (Milestone 1, part 6)
 
 - [ ] Tests: `add` / `remove` / `iter` (insertion order) / `rename` semantics;
-  `rename` updates `updated_at`; `VaultSettings` defaults are off with
-  `auto_lock.timeout_secs = 300` and `clipboard.clear_secs = 20`; settings
-  setters reject `auto_lock.timeout_secs < 30` and
-  `clipboard.clear_secs < 5`.
+  `rename` updates `updated_at`; `find_duplicate` detects exact
+  `(secret, issuer, label)` collisions and ignores non-colliding entries;
+  `VaultSettings` defaults are off with `auto_lock.timeout_secs = 300` and
+  `clipboard.clear_secs = 20`; settings setters reject
+  `auto_lock.timeout_secs < 30` and `clipboard.clear_secs < 5`.
 - [ ] Tests: `hotp_advance` rollback — inject a `Store` save error before
   primary commit point and assert in-memory counter and `updated_at` revert
   to pre-call values; durability-unconfirmed surfaced as a typed error after
@@ -296,8 +298,8 @@ Each step lands as its own commit. Tests come first.
   rollback snapshot is zeroized when dropped. Exercise add, remove, import
   merge (`skip` / `replace` / `append`), and settings changes so presentation
   crates do not need their own rollback machinery.
-- [ ] Implement `Vault` operations, `VaultSettings` setters, and
-  `Vault::mutate_and_save` per §4.7.
+- [ ] Implement `Vault` operations, `Vault::find_duplicate`,
+  `VaultSettings` setters, and `Vault::mutate_and_save` per §4.7.
 
 ### Phase H — Passphrase management (Milestone 2)
 
@@ -472,7 +474,8 @@ is a separate `#[test]` or `cases![]` family.
   reports `save_durability_unconfirmed`; encrypted and plaintext locks share
   those semantics.
 - Vault behavior and settings: `add` / `remove` / `iter` insertion order /
-  `rename` timestamp update; settings defaults and exact timeout minimums.
+  `rename` timestamp update; `find_duplicate` exact collision behavior;
+  settings defaults and exact timeout minimums.
 - `Vault::mutate_and_save`: rollback on closure error and
   `save_not_committed`, durability-unconfirmed leaves mutated state, and
   success returns the closure value; the rollback snapshot is zeroized.
