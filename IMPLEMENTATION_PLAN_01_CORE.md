@@ -42,9 +42,10 @@ crates/paladin-core/
 │   │   ├── mod.rs        # otpauth:// parser + emitter
 │   │   └── tests.rs      # round-trip + edge cases
 │   ├── storage/
-│   │   ├── mod.rs        # Store, atomic-write pipeline, .bak rotation
+│   │   ├── mod.rs        # Store, atomic-write pipeline, .bak rotation, export secret-file writer
 │   │   ├── header.rs     # PALADIN\0 magic, format_ver, mode, KDF/AEAD ids, AAD
 │   │   ├── payload.rs    # bincode v2 VaultPayload encode/decode (16 MiB cap)
+│   │   ├── secret_file.rs # write_secret_file_atomic (0600 export output; no .bak)
 │   │   ├── perms_unix.rs # 0600/0700 enforcement (Linux v0.1)
 │   │   └── perms_other.rs # Stubs for non-Unix targets
 │   ├── crypto/
@@ -76,6 +77,7 @@ crates/paladin-core/
     ├── import_aegis.rs
     ├── import_paladin.rs
     ├── import_qr.rs
+    ├── export_writer.rs
     └── zeroize.rs           # controlled zeroize assertions
 ```
 
@@ -109,9 +111,11 @@ Each step lands as its own commit. Tests come first.
   render time since uniqueness depends on full vault contents the library
   doesn't curate), `Secret` newtype with `Zeroize + Drop`, `Algorithm`,
   `OtpKind`, `Code`, `ValidationWarning`, `ValidatedAccount`,
-  `AccountInput`, and the public `validate_manual(input, now)` entry
-  point that routes manual flag-driven input through the same validation
-  table as `parse_otpauth` and the importers.
+  `AccountInput` (including TOTP-only `period_secs` and HOTP-only
+  `counter`, both optional so defaults are applied by `validate_manual`),
+  and the public `validate_manual(input, now)` entry point that routes
+  manual flag-driven input through the same validation table as
+  `parse_otpauth` and the importers.
 - [ ] No `Debug` impls that print secret bytes — wire compile-fail coverage
   proving `Secret` cannot be formatted with `Debug`, plus runtime assertions
   that any public `Debug` output for secret-bearing types omits or redacts the
@@ -203,6 +207,14 @@ Each step lands as its own commit. Tests come first.
   behaves identically to `create`. `create_force` reuses the
   parent-directory `unsafe_permissions` check from `create` and rejects
   before any staged write.
+- [ ] Tests: `write_secret_file_atomic(path, bytes)` creates the final file
+  `0600`, writes through a same-directory tempfile, `fsync`s the temp file
+  and parent directory, atomically renames into place, overwrites only when
+  the caller has chosen to call it, and never creates or rotates `.bak`.
+  Missing parents surface as `io_error`; injected write / fsync failures
+  before rename surface as `save_not_committed` and do not leave the
+  destination partially written; injected parent-fsync failures after rename
+  surface as `save_durability_unconfirmed`.
 - [ ] Implement `Store` (open/save), permissions module (Unix path; non-Unix
   stubs that compile but reject `open` / `create` / `create_force` before
   touching vault content with `io_error` and
@@ -211,6 +223,10 @@ Each step lands as its own commit. Tests come first.
 - [ ] Implement `inspect(path)` (header probe, no decryption, no perms check).
 - [ ] Implement `create_force(path, lock)` in `storage` per the §5 init
   clobber sequence.
+- [ ] Implement `write_secret_file_atomic(path, bytes)` by factoring the
+  vault save pipeline's tempfile / chmod `0600` / fsync / rename /
+  parent-fsync pieces without the vault-specific header, permissions
+  enforcement, or `.bak` rotation.
 - [ ] Implement `format_unsafe_permissions(&Error) -> Option<String>` per
   §4.7, sourcing all wording from the `unsafe_permissions` fields so CLI
   and GUI never diverge.
@@ -257,7 +273,16 @@ Each step lands as its own commit. Tests come first.
   commit point.
 - [ ] Tests: `hotp_advance` at `u64::MAX` returns `counter_overflow` before
   mutating memory or attempting a save.
-- [ ] Implement `Vault` operations and `VaultSettings` setters per §4.7.
+- [ ] Tests: `Vault::mutate_and_save` captures an internal snapshot, restores
+  it when the mutation closure returns an error, restores it when
+  `Vault::save` returns `save_not_committed`, leaves the mutated state in
+  memory when save returns `save_durability_unconfirmed`, and returns the
+  closure's success value unchanged on a clean save. The secret-bearing
+  rollback snapshot is zeroized when dropped. Exercise add, remove, import
+  merge (`skip` / `replace` / `append`), and settings changes so presentation
+  crates do not need their own rollback machinery.
+- [ ] Implement `Vault` operations, `VaultSettings` setters, and
+  `Vault::mutate_and_save` per §4.7.
 
 ### Phase H — Passphrase management (Milestone 2)
 
@@ -318,9 +343,10 @@ Each step lands as its own commit. Tests come first.
 - [ ] Tests for batch atomicity: any validation failure aborts the batch;
   warnings do not, and warnings are collected before merge-policy application
   so skipped rows can still report warnings.
-- [ ] Tests for `export::otpauth_list` (infallible JSON array of URIs) and
+- [ ] Tests for `export::otpauth_list` (infallible JSON array of URIs),
   `export::encrypted` (wraps `VaultSettings::default()`, round-trips with the
-  importer, and rejects empty passphrase).
+  importer, and rejects empty passphrase), and front-end-style export writes
+  that pass the resulting bytes through `write_secret_file_atomic`.
 - [ ] Implement `read_qr_image(path) -> Result<Vec<String>>` and
   `read_qr_image_bytes(width, height, rgba) -> Result<Vec<String>>` in
   `import/qr.rs`. The path form loads the image from disk; the byte form
@@ -349,9 +375,9 @@ Each step lands as its own commit. Tests come first.
   `save_not_committed`); `post_commit` fails the parent-directory
   `fsync` after the primary rename (surfaces
   `save_durability_unconfirmed`). Both fault paths apply uniformly to
-  the regular save pipeline, `create_force`, and the passphrase
-  transitions. The feature is gated so production builds never link
-  the hook; only the binary crates' test builds opt in. Internal
+  the regular save pipeline, `create_force`, passphrase transitions, and
+  `write_secret_file_atomic`. The feature is gated so production builds
+  never link the hook; only the binary crates' test builds opt in. Internal
   `paladin-core` rollback/durability tests already exercise these
   paths in-process — this feature is the cross-crate surface so CLI
   and TUI integration tests can drive them end-to-end. The feature-gated
@@ -371,6 +397,9 @@ is a separate `#[test]` or `cases![]` family.
   `Secret` zeroization, `Secret` non-`Debug` compile-fail coverage, and no
   secret bytes in any public `Debug` output for secret-bearing types.
 - Account validation matrix — every branch in §4.1.
+- Manual `AccountInput` validation — TOTP period defaults / overrides,
+  HOTP counter defaults / overrides, and rejection of period-on-HOTP or
+  counter-on-TOTP.
 - Short-secret warning surfaces in `ValidatedAccount.warnings`.
 - `otpauth://` round-trip — TOTP and HOTP, with and without issuer prefix,
   case-insensitive scheme/algo/type, base32 padding/casing, duplicate known
@@ -404,6 +433,9 @@ is a separate `#[test]` or `cases![]` family.
   any KDF work.
 - Vault behavior and settings: `add` / `remove` / `iter` insertion order /
   `rename` timestamp update; settings defaults and exact timeout minimums.
+- `Vault::mutate_and_save`: rollback on closure error and
+  `save_not_committed`, durability-unconfirmed leaves mutated state, and
+  success returns the closure value; the rollback snapshot is zeroized.
 - HOTP `hotp_advance` rollback, durability-unconfirmed post-commit behavior,
   and `counter_overflow` at `u64::MAX` before mutation or save.
 - HOTP `hotp_peek` after a committed `hotp_advance` returns the code for
@@ -436,9 +468,13 @@ is a separate `#[test]` or `cases![]` family.
   replacement, batch atomicity, and warnings retained even for skipped rows.
 - Exporters: `otpauth_list` emits an infallible JSON array of URIs;
   `encrypted` wraps default settings, round-trips through the importer, and
-  rejects empty passphrases.
+  rejects empty passphrases; `write_secret_file_atomic` writes export bytes
+  `0600` via tempfile / fsync / rename without `.bak` rotation and reports
+  pre-rename vs post-rename failures as `save_not_committed` vs
+  `save_durability_unconfirmed`.
 - Zeroize-on-drop: drop-in-place in a controlled allocation proves bytes are
-  wiped before deallocation for `Secret`, cached keys, and retained
+  wiped before deallocation for `Secret`, mutate-and-save rollback
+  snapshots, cached keys, and retained
   passphrases.
 
 ## Dependencies (per §4.4 / §9)

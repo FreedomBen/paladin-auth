@@ -389,7 +389,9 @@ Two formats, user picks per invocation:
   path. Cross-compatible with most authenticators that accept URI lists.
   **The CLI prints a clear warning** before writing unencrypted secrets to
   disk and refuses to write to a file that already exists unless `--force`
-  is given. The output file is created `0600`.
+  is given. The output file is written with
+  `write_secret_file_atomic`, so it is created `0600` via a
+  same-directory tempfile, rename, and parent-directory `fsync`.
 - **Encrypted (Paladin bundle).** The same accounts encoded as
   `VaultPayload { accounts, settings: VaultSettings::default() }` and
   wrapped in Paladin's encrypted file format (§4.3) under a passphrase
@@ -398,7 +400,18 @@ Two formats, user picks per invocation:
   returns an error rather than silently producing a plaintext-equivalent
   bundle. The CLI refuses to write an encrypted export to a file that
   already exists unless `--force` is given, matching plaintext export.
-  The output file is created `0600`.
+  The output file is written through `write_secret_file_atomic` and is
+  created `0600`.
+
+`write_secret_file_atomic` is the shared export-writer primitive for the CLI,
+TUI, and GUI. It writes caller-supplied bytes to an arbitrary destination path
+using a same-directory temporary file, `0600` permissions, file `fsync`,
+atomic rename, and parent-directory `fsync`. Failures before the final rename
+return `save_not_committed`; failures after the final rename return
+`save_durability_unconfirmed`. It does **not** create a `.bak` file and does
+not enforce the overwrite prompt / `--force` policy; each front-end gates
+overwrite before calling it so user-facing confirmation text stays local to
+that front-end.
 
 #### Import
 
@@ -540,8 +553,12 @@ impl Vault {
     pub fn remove_passphrase(&mut self, store: &Store) -> Result<()>;
 
     pub fn save(&self, store: &Store) -> Result<()>;
+    pub fn mutate_and_save<T, F>(&mut self, store: &Store, f: F) -> Result<T>
+    where
+        F: FnOnce(&mut Vault) -> Result<T>;  // captures a zeroized internal rollback snapshot, applies `f`, saves, restores on closure errors and `save_not_committed`, leaves mutated state on `save_durability_unconfirmed`
 }
 
+pub fn write_secret_file_atomic(path: &Path, bytes: &[u8]) -> Result<()>;  // shared export writer: same-directory tempfile, 0600, file fsync, rename, parent fsync; no .bak; save_not_committed before rename, save_durability_unconfirmed after rename; caller handles overwrite policy
 pub fn parse_otpauth(uri: &str, import_time: SystemTime) -> Result<ValidatedAccount>;
 pub fn read_qr_image(path: &Path) -> Result<Vec<String>>;                 // one URI per decoded QR; returns an empty Vec when the image contains no QRs (the `import::qr_image` wrapper turns that into an error)
 pub fn read_qr_image_bytes(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<String>>;  // raw RGBA8 clipboard/image buffer; validates nonzero dimensions and exact byte length; returns an empty Vec when the image contains no QRs
@@ -558,6 +575,8 @@ pub struct AccountInput {
     pub algorithm: Algorithm,
     pub digits: u8,
     pub kind: OtpKind,
+    pub period_secs: Option<u32>,  // TOTP-only; None defaults to 30 seconds
+    pub counter: Option<u64>,      // HOTP-only; None defaults to 0
     pub icon_hint: Option<String>,
 }
 
@@ -583,9 +602,16 @@ Because `Account` fields are private, presentation crates use `Vault`
 mutators for CLI-level changes such as rename and import merge. Those
 mutators reuse the same validation path as account construction, update
 `updated_at` on account payload changes, and leave persistence to the
-caller unless the method explicitly says it saves. `VaultSettings` fields
-are private for the same reason: settings changes go through validated
-setters so timeout minimums cannot be bypassed.
+caller unless the method explicitly says it saves. Presentation crates
+that need "mutate then save" semantics without hand-written rollback use
+`Vault::mutate_and_save`: core captures the pre-mutation state, runs the
+caller closure, saves, restores the snapshot when the closure fails or
+the save returns `save_not_committed`, and leaves the mutated in-memory
+state in place when the save returns `save_durability_unconfirmed` because
+the primary-file commit point may have been reached. The rollback snapshot
+is secret-bearing and is zeroized when dropped. `VaultSettings` fields are
+private for the same reason: settings changes go through validated setters
+so timeout minimums cannot be bypassed.
 
 ## 5. CLI (`paladin`)
 
@@ -840,8 +866,9 @@ candidate list, ≥8 hex chars), so JSON consumers can re-query by exact id
 without recomputing the prefix. Errors may include additional stable fields
 when they affect recovery or side effects: `save_durability_unconfirmed`
 includes `"committed": true`; `save_not_committed` includes
-`"committed": false` and, for `init --force` failures that moved the old
-primary to `.bak`, `backup_path`; and `clipboard_write_failed` includes
+`"committed": false` and, for vault writes such as `init --force` failures
+that moved the old primary to `.bak`, `backup_path`; and
+`clipboard_write_failed` includes
 `account` plus `counter_used` (`null` for TOTP).
 
 v0.1 error kinds and stable fields:
@@ -870,8 +897,8 @@ v0.1 error kinds and stable fields:
 | `multiple_matches`              | Query matched too many accounts.             | `candidates`                               |
 | `counter_overflow`              | HOTP advance would exceed `u64::MAX`.        | `account`                                  |
 | `time_range`                    | Time is before epoch or overflows TOTP.      | none                                       |
-| `save_not_committed`            | Save failed before primary commit.           | `committed: false`, optional `backup_path` |
-| `save_durability_unconfirmed`   | Save committed but durability is unclear.    | `committed: true`                          |
+| `save_not_committed`            | Atomic save/export failed before final rename. | `committed: false`, optional `backup_path` |
+| `save_durability_unconfirmed`   | Atomic save/export renamed final output but durability is unclear. | `committed: true` |
 | `clipboard_write_failed`        | Clipboard write failed after generation.     | `account`, `counter_used`                  |
 | `io_error`                      | Filesystem/image/terminal I/O failed.        | `operation`, optional `path`               |
 
@@ -990,7 +1017,10 @@ Layout (single-screen MVP):
   unencrypted-secrets warning before the write) or an encrypted
   Paladin bundle (passphrase prompted twice and matched), refuses
   overwrite without explicit confirmation, and surfaces the resulting
-  `0600` output path inline.
+  `0600` output path inline. Mutating modal actions use
+  `Vault::mutate_and_save` so pre-commit save failures restore the
+  pre-attempt vault state in memory; durability-unconfirmed failures leave
+  the committed state visible with an inline warning.
 - **Auto-lock:** **off by default.** When `auto_lock.enabled = true`, the TUI
   clears the in-memory vault after `auto_lock.timeout_secs` of no input and
   shows the unlock screen for encrypted vaults. For plaintext vaults,
@@ -1033,8 +1063,9 @@ Library: **Relm4** on **GTK4**. Component tree:
   encrypted Paladin bundle), `gtk::FileChooserNative` for the
   destination path, overwrite confirmation, twice-entered passphrase
   for the encrypted variant, and an explicit unencrypted-secrets
-  warning before plaintext writes. Writes `0600` and surfaces the
-  output path on success.
+  warning before plaintext writes. Writes through
+  `write_secret_file_atomic` and surfaces the `0600` output path on
+  success.
 - `PassphraseDialog` — `set` / `change` / `remove` sub-flows mirroring the
   CLI; `set` is enabled only on plaintext vaults, `change` and `remove`
   only on encrypted vaults.
@@ -1043,6 +1074,8 @@ Library: **Relm4** on **GTK4**. Component tree:
 
 Auto-lock and clipboard auto-clear behave the same as the TUI, including the
 opt-in default and the plaintext-vault auto-lock no-op.
+Mutating dialogs use `Vault::mutate_and_save` for the same rollback behavior
+as the TUI.
 
 Icons: `AccountRowComponent` resolves `Account.icon_hint` against the
 system icon theme via `gtk::IconTheme`, falling back to a generic
@@ -1154,6 +1187,11 @@ Concrete obligations and explicit user-controlled tradeoffs:
   - File-permission enforcement (`0600` on primary, backup, and temp files;
     `0700` on dir) post-save and during staged writes, plus rejection of
     unsafe existing primary/backup/directory paths with `unsafe_permissions`.
+  - `write_secret_file_atomic` export writes: `0600`, same-directory
+    tempfile, pre-rename `save_not_committed`, post-rename
+    `save_durability_unconfirmed`, and no `.bak` rotation.
+  - `Vault::mutate_and_save` rollback on mutation closure failure and
+    pre-commit save failure, plus durability-unconfirmed state retention.
   - Passphrase set/change/remove transitions, including pre-commit rollback
     and durability-unconfirmed failures after the primary-file commit point.
   - HOTP counter advances on `hotp_advance`, not on `hotp_peek` or
@@ -1177,8 +1215,8 @@ Concrete obligations and explicit user-controlled tradeoffs:
   and golden-snapshot tests (`insta`) for TUI rendering.
   - CLI `--json` success/error shapes, warning payloads, durability error
     fields, HOTP post-advance account summaries, clipboard-write failure
-    behavior, passphrase no-TTY / confirmation-mismatch failures, and export
-    overwrite guards.
+    behavior, passphrase no-TTY / confirmation-mismatch failures, export
+    overwrite guards, and export writer durability failures.
   - CLI `add` input modes, mutual-exclusion errors, duplicate-account
     rejection, and `--allow-duplicate`.
   - CLI query resolution, including `str::to_lowercase()` matching,
@@ -1270,10 +1308,15 @@ artifacts side by side.
 - **Sandbox permissions.** No `--share=network` for any front-end (§8 / §2).
   - CLI and TUI: filesystem access scoped to `xdg-data/paladin:create`
     (vault) and `xdg-config/paladin:create` (settings). The TUI inherits
-    the host terminal's stdio when launched via `flatpak run` — no D-Bus
-    or session-bus access is requested.
-  - GUI: the same vault and settings paths plus the standard Wayland /
-    X11 / clipboard sockets.
+    the host terminal's stdio when launched via `flatpak run` and, because
+    v0.1 TUI clipboard copy / QR-from-clipboard are in scope, also grants
+    `--socket=wayland`, `--socket=fallback-x11`, and `--share=ipc` for the
+    display clipboard path. It does not request `--socket=session-bus` or
+    `--socket=system-bus`; Flatpak's filtered portal bus access remains the
+    default.
+  - GUI: the same vault and settings paths plus `--socket=wayland`,
+    `--socket=fallback-x11`, and `--share=ipc` for GTK display and
+    clipboard integration.
 - **Build.** `flatpak-builder` consuming
   `packaging/flatpak/<frontend>.yml`. Source is pulled from the tagged
   release tarball with vendored Cargo dependencies (see §11.6) so
@@ -1348,6 +1391,7 @@ artifacts side by side.
 ### Milestone 3 — Import / Export *(v0.1)*
 - [ ] Plaintext export (JSON `otpauth://` array) with overwrite guard + `0600`.
 - [ ] Encrypted export bundle (Paladin format) with overwrite guard + `0600`.
+- [ ] Shared `write_secret_file_atomic` export writer used by CLI/TUI/GUI.
 - [ ] Importer: `otpauth://` URIs (single + list).
 - [ ] Importer: Paladin encrypted bundle; plaintext Paladin vault files return an unsupported-format error.
 - [ ] Importer: Aegis plaintext export.
@@ -1446,6 +1490,16 @@ artifacts side by side.
   normalization or locale-specific casing (§5).
 - `otpauth://` text imports trim outer whitespace and ignore blank lines
   in URI-list mode (§4.6).
+
+**Decided during TUI plan review (2026-05-05):**
+- Core exposes `Vault::mutate_and_save` so front ends do not hand-roll
+  rollback for add / remove / import / settings mutations.
+- Core `AccountInput` carries optional TOTP `period_secs` and HOTP
+  `counter` fields for manual add flows.
+- TUI Flatpak grants the minimal display clipboard permissions needed for
+  clipboard copy and QR-from-clipboard.
+- Core exposes `write_secret_file_atomic` for plaintext and encrypted export
+  files across all front ends.
 
 No open questions remain.
 

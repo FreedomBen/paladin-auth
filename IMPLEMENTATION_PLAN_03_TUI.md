@@ -1,16 +1,18 @@
 # Implementation Plan 03 — `paladin-tui`
 
 Source of truth: [DESIGN.md](DESIGN.md) §3, §5 (global flags / `paladin tui`),
-§6, §10, §12 (Milestone 5), §13, §14.
+§6, §8, §9, §10, §11, §12 (Milestone 5), §13, §14.
 Depends on: [`IMPLEMENTATION_PLAN_01_CORE.md`](IMPLEMENTATION_PLAN_01_CORE.md).
+The final `paladin tui` integration check also depends on
+[`IMPLEMENTATION_PLAN_02_CLI.md`](IMPLEMENTATION_PLAN_02_CLI.md).
 
 ## Scope
 
 Standalone binary `paladin-tui`. Single-screen MVP per §6: search bar,
 account list with live TOTP gauges and HOTP reveal-on-`n`, status line, and
-modal dialogs for add / remove / passphrase / settings. Auto-lock and
-clipboard auto-clear are **opt-in** per `VaultSettings`. The TUI is also
-reachable via `paladin tui` which `execvp`s this binary.
+modal dialogs for add / remove / import / export / passphrase / settings.
+Auto-lock and clipboard auto-clear are **opt-in** per `VaultSettings`. The
+TUI is also reachable via `paladin tui` which `execvp`s this binary.
 
 Runtime model (§13): plain threads + `mpsc`. **No `tokio`** — local TUIs
 don't need async I/O.
@@ -79,7 +81,8 @@ so it is unit-testable without a terminal. Effects are executed by `app::run`.
 
 Startup mirrors the CLI's vault inspection path:
 
-1. Resolve vault path (`--vault` or `directories::ProjectDirs::data_dir()`).
+1. Resolve vault path (`--vault` or
+   `directories::ProjectDirs::data_dir()/vault.bin`).
 2. Call `paladin_core::inspect(path)`.
 3. `VaultStatus::Missing` opens a non-mutating missing-vault screen with a
    status message telling the user to run `paladin init`; v0.1 TUI does not
@@ -90,7 +93,7 @@ Startup mirrors the CLI's vault inspection path:
    screen with an inline error.
 6. Any other error from `inspect` (e.g. `invalid_header` from
    unrecognized magic, or `io_error`) or from `open`
-   (`unsafe_permissions`, `invalid_header`, `invalid_payload`,
+   (`vault_missing`, `unsafe_permissions`, `invalid_header`, `invalid_payload`,
    `unsupported_format_version`, `kdf_params_out_of_bounds`,
    `wrong_vault_lock`, `io_error`) renders a non-mutating
    startup-error screen with the error text and quits on `q` /
@@ -159,51 +162,53 @@ it is not bound to quit there).
   DESIGN §5 (TOTP, SHA1, 6 digits, 30 s period, HOTP counter 0,
   icon-hint defaulted from the issuer per §4.1). Manual entries route
   through `paladin_core::validate_manual`; clipboard images are read
-  through `arboard`, converted to raw RGBA8 bytes, and passed to
-  `paladin_core::import::qr_image_bytes`. Validation warnings are shown
-  inline and do not block creation. Manual duplicate collisions
+  through `arboard`, converted to raw RGBA8 bytes plus width/height,
+  and passed to `paladin_core::import::qr_image_bytes` with the
+  current import time. Validation warnings are shown inline and do
+  not block creation. Manual duplicate collisions
   initially reject with the existing account in the modal and offer an
   "add anyway" confirmation that re-submits the same input on the
   duplicate-allowed path (CLI parity with `--allow-duplicate`,
   appending a new account that shares the `(secret, issuer, label)`
   triple). QR imports call `Vault::import_accounts` with
   `ImportConflict::Skip` and report imported/skipped/warning counts.
-  Successful additions call `Vault::save(&Store)` after the validated
-  accounts are inserted. If the save fails before the primary-file
-  commit point (`save_not_committed`), the TUI rolls back the
-  in-memory `Vault::add` / `Vault::import_accounts` mutations so
-  memory matches disk and the modal stays open with the inline error
-  — mirroring the DESIGN §4.4 hotp_advance pattern. Durability-
-  unconfirmed saves leave the new accounts in memory (matching the
-  committed on-disk state) and surface the warning inline.
-- **Remove** — confirmation modal. On confirm, calls `Vault::remove`,
-  then `Vault::save(&Store)`. If the save fails before the primary-
-  file commit point, the TUI restores the removed account into the
-  in-memory vault at its previous iteration position so memory
-  matches disk and the modal stays open with the inline error.
-  Durability-unconfirmed saves leave the account removed in memory
-  (matching the committed on-disk state) and surface the warning
-  inline.
+  Successful additions are wrapped in `Vault::mutate_and_save`, which
+  runs the `Vault::add` / `Vault::import_accounts` mutation and save
+  under core-owned rollback. If save fails before the primary-file
+  commit point (`save_not_committed`), core restores the pre-attempt
+  in-memory vault so memory matches disk and the modal stays open with
+  the inline error. Durability-unconfirmed saves leave the new accounts
+  in memory (matching the committed on-disk state) and surface the
+  warning inline.
+- **Remove** — confirmation modal. On confirm, wraps `Vault::remove` in
+  `Vault::mutate_and_save`. If the save fails before the primary-file
+  commit point, core restores the removed account and its previous
+  iteration position so memory matches disk and the modal stays open
+  with the inline error. Durability-unconfirmed saves leave the account
+  removed in memory (matching the committed on-disk state) and surface
+  the warning inline.
 - **Import** — text field for the source path, a format selector
   (auto-detect or explicit `otpauth` / `aegis` / `paladin` / `qr`),
   and an on-conflict selector (`skip` / `replace` / `append`).
   Encrypted Paladin bundles (explicit `format == paladin`, or
   auto-detected via the Paladin header) prompt for the bundle
-  passphrase inside the modal before invoking the importer. The
-  selected `paladin_core::import::*` returns
+  passphrase inside the modal before invoking the importer. Plaintext
+  Paladin headers surface `unsupported_plaintext_vault` without a
+  passphrase prompt. The selected `paladin_core::import::*` returns
   `Vec<ValidatedAccount>`; on success, `Vault::import_accounts(accounts,
-  conflict)` is called with the user's policy and persisted via
-  `Vault::save(&Store)`. The modal reports
+  conflict)` is called inside `Vault::mutate_and_save` with the user's
+  policy. The modal reports
   imported/skipped/replaced/appended/warning counts inline on
-  success. Pre-commit save failures (`save_not_committed`) roll back
-  the in-memory `import_accounts` mutation so memory matches disk and
+  success. Pre-commit save failures (`save_not_committed`) restore
+  core's pre-attempt snapshot so memory matches disk and
   the modal stays open with the inline error; durability-unconfirmed
   saves leave the merged accounts in memory (matching the committed
   on-disk state) and surface the warning. Importer errors
-  (`unsupported_plaintext_vault`, `unsupported_encrypted_aegis`,
-  `unsupported_aegis_entry_type`, `validation_error`,
-  `no_entries_to_import`, `decrypt_failed`, `io_error`) stay in the
-  modal as inline errors and never mutate vault state.
+  (`unsupported_import_format`, `unsupported_plaintext_vault`,
+  `unsupported_encrypted_aegis`, `unsupported_aegis_entry_type`,
+  `validation_error`, `no_entries_to_import`, `decrypt_failed`,
+  `io_error`) stay in the modal as inline errors and never mutate
+  vault state.
 - **Export** — format selector (plaintext `otpauth://` JSON list or
   encrypted Paladin bundle) and a destination path field. Overwriting
   an existing file is rejected unless the user confirms an inline
@@ -213,11 +218,12 @@ it is not bound to quit there).
   empty entry with `reason: "zero_length"`. Plaintext exports show
   an explicit "this writes unencrypted secrets to disk" warning that
   the user must confirm before the write proceeds. Writes go through
-  the same `0600` atomic-write pipeline used by the vault. On
-  success the modal closes with a status-line confirmation showing
-  the written path; errors (`io_error`, refused-overwrite,
-  `invalid_passphrase`) stay in the modal as inline errors. Export
-  does not mutate the vault, so there is no rollback path.
+  `paladin_core::write_secret_file_atomic`. On success the modal
+  closes with a status-line confirmation showing the written path;
+  `io_error`, `save_not_committed`, `save_durability_unconfirmed`,
+  `invalid_passphrase`, and the refused overwrite gate stay in the
+  modal as inline errors. Export does not mutate the vault, so there
+  is no rollback path.
 - **Passphrase** — three sub-flows mirroring CLI's
   `passphrase set / change / remove`. The available sub-flow is gated
   by vault mode: `set` is offered only on plaintext vaults
@@ -242,17 +248,18 @@ it is not bound to quit there).
   `clipboard.clear_secs`. The spinners clamp to the §5 minimums
   (`auto_lock.timeout_secs >= 30`, `clipboard.clear_secs >= 5`). The
   modal accumulates pending edits in modal-local state and only commits
-  on Confirm: pending values are validated against the same setters
-  (`set_auto_lock_*`, `set_clipboard_clear_*`), then a single
-  `Vault::save(&Store)` persists the batch. Setters that fail
-  validation surface inline against the offending field and block the
-  commit; closing the modal with `Esc` discards pending edits without
-  invoking setters or save. If the save fails before the primary-
-  file commit point, the TUI restores the prior settings values so
-  memory matches disk and the modal stays open with the inline error;
-  the user can adjust and retry. Durability-unconfirmed saves leave
-  the new settings in memory (matching the committed on-disk state)
-  and surface the warning inline. If no fields changed, Confirm
+  on Confirm: pending values are applied through the same setters
+  (`set_auto_lock_*`, `set_clipboard_clear_*`) inside a single
+  `Vault::mutate_and_save` transaction. The UI controls clamp to valid
+  ranges, but any defensive setter validation failure restores the
+  pre-attempt settings snapshot, surfaces inline against the offending
+  field, and blocks the save. Closing the modal with `Esc` discards
+  pending edits without invoking setters or save. If the save fails
+  before the primary-file commit point, core restores the prior settings
+  values so memory matches disk and the modal stays open with the inline
+  error; the user can adjust and retry. Durability-unconfirmed saves
+  leave the new settings in memory (matching the committed on-disk
+  state) and surface the warning inline. If no fields changed, Confirm
   closes without invoking save.
 
 ## Auto-lock (per §6)
@@ -288,7 +295,7 @@ it is not bound to quit there).
 Effects update visible state only after the underlying mutation succeeds:
 
 - HOTP `n`: pre-commit save failures (`save_not_committed`) leave the
-  in-memory counter and reveal state unchanged (per DESIGN §4.4
+  in-memory counter and reveal state unchanged (per DESIGN §4.2
   rollback) and surface a status-line error. Durability-unconfirmed
   failures (`save_durability_unconfirmed`) reveal the new code and
   report the committed-but-uncertain status in the status line — the
@@ -296,17 +303,17 @@ Effects update visible state only after the underlying mutation succeeds:
   All other failures show a status-line error and leave the row hidden.
 - Copy: show a status-line error if clipboard write fails; do not schedule
   auto-clear.
-- Add / remove / settings saves: validation failures occur before any
-  in-memory mutation, so no rollback is needed; the modal stays open
-  with the inline error. Pre-commit save failures
-  (`save_not_committed`) roll back the in-memory mutation so memory
-  matches disk (Add removes the just-inserted account(s); Remove
-  restores the removed account at its previous position; Settings
-  restores the prior values), and the modal stays open with the
-  inline error so the user can retry. Durability-unconfirmed save
-  errors leave the new state in memory (matching the committed
-  on-disk state) and are shown as committed-but-uncertain, matching
-  the core error.
+- Add / remove / settings saves: validation and setter failures happen
+  inside or before `Vault::mutate_and_save`; core restores its
+  pre-attempt snapshot on closure errors and no save is attempted.
+  Pre-commit save failures (`save_not_committed`) are rolled back by
+  `Vault::mutate_and_save` so memory matches disk (Add removes the
+  just-inserted account(s); Remove restores the removed account at its
+  previous position; Settings restores the prior values), and the modal
+  stays open with the inline error so the user can retry. Durability-
+  unconfirmed save errors leave the new state in memory (matching the
+  committed on-disk state) and are shown as committed-but-uncertain,
+  matching the core error.
 - Passphrase set/change/remove: pre-commit and durability-unconfirmed
   handling lives in `Vault` itself per DESIGN §4.5 — the in-memory
   mode/key reverts on `save_not_committed` and is replaced on
@@ -315,18 +322,19 @@ Effects update visible state only after the underlying mutation succeeds:
 - QR clipboard import: no clipboard image, image decode failure, zero
   decoded QRs, and invalid QR payloads all stay in the Add modal with an
   inline error.
-- Import: importer errors (`unsupported_plaintext_vault`,
-  `unsupported_encrypted_aegis`, `unsupported_aegis_entry_type`,
-  `validation_error`, `no_entries_to_import`, `decrypt_failed`,
+- Import: importer errors (`unsupported_import_format`,
+  `unsupported_plaintext_vault`, `unsupported_encrypted_aegis`,
+  `unsupported_aegis_entry_type`, `validation_error`,
+  `no_entries_to_import`, `decrypt_failed`,
   `io_error`) stay in the Import modal as inline errors and never
   mutate vault state. Save errors follow the Add/Remove/Settings rule:
-  pre-commit (`save_not_committed`) rolls back the in-memory
-  `import_accounts` mutation; durability-unconfirmed leaves the merged
-  accounts and surfaces the warning.
-- Export: writer errors (`io_error`, refused-overwrite,
-  `invalid_passphrase`) stay in the Export modal as inline errors.
-  Export does not mutate the vault, so save-error rollback does not
-  apply.
+  pre-commit (`save_not_committed`) restores the
+  `Vault::mutate_and_save` snapshot; durability-unconfirmed leaves the
+  merged accounts and surfaces the warning.
+- Export: writer errors (`io_error`, `save_not_committed`,
+  `save_durability_unconfirmed`, `invalid_passphrase`) and the refused
+  overwrite gate stay in the Export modal as inline errors. Export does
+  not mutate the vault, so save-error rollback does not apply.
 
 ## Keybindings (initial v0.1)
 
@@ -378,46 +386,44 @@ captured with `insta` golden snapshots using `ratatui::backend::TestBackend`.
   rejects no-image / no-QR / invalid-QR cases inline.
 - **Import modal**: format auto-detect routes to the correct
   `paladin_core::import::*` (otpauth / aegis / paladin / qr); explicit
-  `--format` override honored; encrypted-Paladin path prompts for the
-  bundle passphrase before invoking the importer; on-conflict policy
+  format selector override honored; encrypted-Paladin path prompts for the
+  bundle passphrase before invoking the importer; plaintext-Paladin path
+  returns `unsupported_plaintext_vault` without prompting; on-conflict policy
   (`skip` / `replace` / `append`) is forwarded to
   `Vault::import_accounts` and reflected in the report counts;
-  importer error kinds listed under "Effect errors" surface inline
-  without mutation; successful imports persist via `Vault::save(&Store)`
-  and a `save_not_committed` failure rolls back the in-memory merge so
-  `Vault::iter()` matches its pre-attempt snapshot.
+  importer error kinds listed under "Effect errors", including
+  `unsupported_import_format`, surface inline without mutation;
+  successful imports persist via `Vault::mutate_and_save`
+  and a `save_not_committed` failure restores the core snapshot so
+  `Vault::iter()` matches its pre-attempt state.
 - **Export modal**: format selector routes to
   `paladin_core::export::otpauth_list` or
   `paladin_core::export::encrypted`; refused overwrite rejects without
   writing; encrypted export prompts twice and rejects mismatch with
   `confirmation_mismatch` and empty entry with `zero_length`;
   plaintext export requires the unencrypted-secrets confirmation
-  before writing; output file is `0600`; writer `io_error` surfaces
-  inline and the modal stays open. Export performs no `Vault::save`
+  before writing; output is written through
+  `paladin_core::write_secret_file_atomic` with mode `0600`; writer
+  `io_error`, `save_not_committed`, and `save_durability_unconfirmed`
+  surface inline and the modal stays open. Export performs no `Vault::save`
   and leaves vault state unchanged across success and failure.
 - **Settings modal**: pending edits are buffered until Confirm; `Esc`
   discards them without invoking setters or save; Confirm runs every
-  changed setter and persists with one `Vault::save(&Store)`; setter
-  validation failure surfaces inline and blocks the save; a pre-
-  commit save failure restores the prior settings values in memory
-  and keeps the modal open with the inline error; a durability-
-  unconfirmed save leaves the new values in memory; Confirm with no
-  changes closes without saving.
-- **Pre-commit save rollback**: Add modal `save_not_committed`
-  removes the just-added account(s) from the in-memory vault; Remove
-  modal `save_not_committed` restores the removed account at its
-  previous iteration position; Import modal `save_not_committed`
-  reverses the `import_accounts` merge (insertions removed,
-  `replace`d entries restored to their pre-import field values, and
-  `append`ed entries dropped); Settings modal `save_not_committed`
-  restores the prior settings values. Each case verifies that
-  `Vault::iter()` (or `Vault::settings()`) post-failure matches its
-  pre-attempt snapshot, the modal stays open with the typed inline
-  error, and `save_durability_unconfirmed` leaves the new state in
-  memory while still surfacing the warning. Passphrase rollback is
-  exercised in the `paladin-core` plan; the TUI test asserts that the
-  inline error surfaces and the in-memory mode/key matches whatever
-  the core left behind.
+  changed setter inside one `Vault::mutate_and_save` transaction; a
+  defensive setter validation failure restores the pre-attempt settings,
+  surfaces inline, blocks the save, and keeps the modal open; a pre-commit
+  save failure restores the prior settings values in memory and keeps the
+  modal open with the inline error; a durability-unconfirmed save leaves the
+  new values in memory; Confirm with no changes closes without saving.
+- **Pre-commit save rollback**: Add, Remove, Import, and Settings modals
+  route mutations through `Vault::mutate_and_save`. Each case verifies
+  that a `save_not_committed` failure leaves `Vault::iter()` (or
+  `Vault::settings()`) matching its pre-attempt snapshot, the modal stays
+  open with the typed inline error, and `save_durability_unconfirmed`
+  leaves the new state in memory while still surfacing the warning.
+  Passphrase rollback is exercised in the `paladin-core` plan; the TUI
+  test asserts that the inline error surfaces and the in-memory mode/key
+  matches whatever the core left behind.
 - **HOTP reveal window**: reveal closes after 120 s; `n` during an open
   reveal advances again (does not no-op).
 - **Insta snapshots** for every screen state: empty vault, single TOTP,
@@ -428,9 +434,10 @@ captured with `insta` golden snapshots using `ratatui::backend::TestBackend`.
   inline `save_not_committed` and `save_durability_unconfirmed`
   rendered in each mutating modal (Add, Remove, Import, Passphrase
   set/change/remove, Settings); Import modal with each importer error
-  kind and the post-import counts panel; Export modal with refused-
-  overwrite, `confirmation_mismatch`, `zero_length`, plaintext-export
-  warning, and `io_error` writer failure; status-line
+  kind and the post-import counts panel; Export modal with the refused
+  overwrite gate, `confirmation_mismatch`, `zero_length`, plaintext-export
+  warning, `io_error` writer failure, `save_not_committed`, and
+  `save_durability_unconfirmed`; status-line
   `save_durability_unconfirmed` after HOTP `n`; status-line
   `clipboard_write_failed` after a failed copy; unlock screen with
   inline wrong-passphrase error; Add modal with QR-import inline
@@ -487,11 +494,16 @@ is never expected to be scripted.
   not register a `.desktop` file (§11.3 only ships one for
   `paladin-gtk`). No icon assets are required.
 - **Flatpak.** `packaging/flatpak/paladin-tui.yml` declares
-  `org.freedesktop.Platform//23.08`, no `--share=network`, and only
-  `xdg-data/paladin:create` plus `xdg-config/paladin:create`. No
-  D-Bus or session-bus access. `flatpak run io.…Tui` inherits the
-  invoking terminal's stdin / stdout / stderr so `crossterm` raw
-  mode and ANSI rendering work end-to-end against the host TTY.
+  `org.freedesktop.Platform//23.08`, no `--share=network`,
+  `xdg-data/paladin:create` plus `xdg-config/paladin:create`, and the
+  minimal display clipboard permissions needed for `arboard`:
+  `--socket=wayland`, `--socket=fallback-x11`, and `--share=ipc`.
+  It does not request `--socket=session-bus` or `--socket=system-bus`;
+  Flatpak's filtered portal bus access remains the default.
+  `flatpak run io.…Tui` inherits the invoking terminal's stdin /
+  stdout / stderr so `crossterm` raw mode and ANSI rendering work
+  end-to-end against the host TTY while clipboard copy and clipboard
+  image import work through the granted display socket.
 - **AppImage.** `linuxdeploy` assembles the AppDir; the `AppRun`
   forwards argv unchanged so `paladin-tui-<version>-x86_64.AppImage`
   acts as a drop-in for the bare binary. The
@@ -501,15 +513,15 @@ is never expected to be scripted.
 - **Reproducible builds.** Same workspace pipeline as the CLI:
   vendored deps, `cargo build --locked`, `SOURCE_DATE_EPOCH` from
   the release tag (§11.6).
-- **Signing.** `minisign`-signed artifacts uploaded to GitHub
-  Releases alongside the project's published public key (§11.6).
+- **Signing.** `.deb`, `.rpm`, and AppImage artifacts are signed
+  with `minisign`; the signature plus the project's published public
+  key are uploaded alongside each artifact (§11.6). Flatpak releases
+  inherit Flathub's signing.
 - **`paladin tui` interaction.** The `paladin` CLI's `tui` subcommand
-  resolves `paladin-tui` via `PATH` and `execvp`s it; under any of
-  the §11 artifact formats both binaries land on `PATH` (`.deb` /
-  `.rpm` install both to `/usr/bin/`; the Flatpak entry points are
-  separate but documented; the AppImage build ships them as
-  separate AppImages and users on AppImage-only systems must invoke
-  `paladin-tui` directly).
+  resolves `paladin-tui` via `PATH` and `execvp`s it. Native `.deb` /
+  `.rpm` installs put both binaries in `/usr/bin/`; Flatpak entry
+  points are separate but documented; AppImage builds ship separate
+  AppImages, so AppImage-only users invoke `paladin-tui` directly.
 
 ## Implementation checklist
 
@@ -521,7 +533,10 @@ is never expected to be scripted.
 - [ ] Implement reducer, event producers, effect execution, and timer tokens.
 - [ ] Implement list layout, search, TOTP gauges, HOTP reveal/copy behavior,
   and status-line errors.
-- [ ] Implement add / remove / import / export / passphrase / settings modals with persistence.
+- [ ] Implement add / remove / import / export / passphrase / settings modals
+  with persistence through `Vault::mutate_and_save` where the core owns
+  rollback.
+- [ ] Route export writes through `paladin_core::write_secret_file_atomic`.
 - [ ] Implement clipboard wrapper, QR image import from clipboard bytes, and
   only-if-unchanged auto-clear.
 - [ ] Add reducer, search, auto-lock, clipboard, HOTP reveal, and snapshot

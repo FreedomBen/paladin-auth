@@ -100,10 +100,10 @@ inclusion.
   with `--allow-duplicate`, appending a new account that shares the
   `(secret, issuer, label)` triple). Multi-QR imports use a fixed
   `ImportConflict::Skip` and report imported/skipped/warning counts (parity
-  with §6). Successful manual and QR additions call `Vault::save(&Store)`
-  after accounts are inserted.
-- `RemoveDialog` — confirmation gate before calling `Vault::remove` followed
-  by `Vault::save(&Store)`. Save errors surface inline.
+  with §6). Successful manual and QR additions run the insertions inside
+  `Vault::mutate_and_save`.
+- `RemoveDialog` — confirmation gate before calling `Vault::remove` inside
+  `Vault::mutate_and_save`. Save errors surface inline.
 - `ImportDialog` — `gtk::FileChooserNative` for the source file, a format
   selector (auto-detect or explicit `otpauth` / `aegis` / `paladin` /
   `qr`), and an on-conflict selector (`skip` / `replace` / `append`).
@@ -114,11 +114,11 @@ inclusion.
   (the encrypted-Paladin variant runs Argon2id) with results delivered
   back via Relm4 messages. On success,
   `Vault::import_accounts(accounts, conflict)` is called with the
-  user's policy and persisted via `Vault::save(&Store)`;
+  user's policy inside `Vault::mutate_and_save`;
   imported/skipped/replaced/appended/warning counts surface inline.
-  Pre-commit save failures (`save_not_committed`) roll back the
-  in-memory `import_accounts` mutation; durability-unconfirmed saves
-  leave the merged accounts in memory and surface the warning inline.
+  Pre-commit save failures (`save_not_committed`) restore core's
+  pre-attempt snapshot; durability-unconfirmed saves leave the merged
+  accounts in memory and surface the warning inline.
   Importer errors (`unsupported_plaintext_vault`,
   `unsupported_encrypted_aegis`, `unsupported_aegis_entry_type`,
   `validation_error`, `no_entries_to_import`, `decrypt_failed`,
@@ -135,10 +135,11 @@ inclusion.
   `gio::spawn_blocking` because it derives a fresh AEAD key.
   Plaintext exports show an explicit "this writes unencrypted secrets
   to disk" warning that the user must confirm before the write
-  proceeds. Writes go through the same `0600` atomic-write pipeline
-  used by the vault. On success the dialog closes with the written
-  path surfaced inline; errors (`io_error`, refused-overwrite,
-  `invalid_passphrase`) stay in the dialog. Export does not mutate
+  proceeds. Writes go through `paladin_core::write_secret_file_atomic`.
+  On success the dialog closes with the written path surfaced inline;
+  `io_error`, `save_not_committed`, `save_durability_unconfirmed`,
+  `invalid_passphrase`, and the refused overwrite gate stay in the
+  dialog. Export does not mutate
   the vault, so there is no rollback path.
 - `PassphraseDialog` — three sub-flows mirroring CLI/TUI: `set` / `change` /
   `remove`. New passphrases prompted twice; mismatch returns to the dialog
@@ -151,12 +152,12 @@ inclusion.
   spinners for timeouts. Spinners clamp to the §5 minimums
   (`auto_lock.timeout_secs >= 30`, `clipboard.clear_secs >= 5`). Uses
   **live-apply** (each toggle / spinner change immediately invokes the
-  matching setter and then `Vault::save(&Store)`), diverging from the TUI's
+  matching setter inside `Vault::mutate_and_save`), diverging from the TUI's
   buffer-then-Confirm modal — `gtk::Switch` and `gtk::SpinButton` are
   idiomatically immediate, and the §"Effect errors" pre-commit rollback
   reverts the visible widget value on `save_not_committed`. Setters
-  validate but do not save themselves; the component owns the save call
-  and surfaces any save error inline.
+  validate but do not save themselves; the component owns the
+  `mutate_and_save` call and surfaces any save error inline.
 
 ## Auto-lock and clipboard auto-clear (per §7)
 
@@ -197,8 +198,9 @@ scripted.
 
 ## Vault interaction
 
-- Resolve vault path from `--vault` or `directories::ProjectDirs::data_dir()`,
-  then call `paladin_core::inspect(path)` to resolve the mode.
+- Resolve vault path from `--vault` or
+  `directories::ProjectDirs::data_dir()/vault.bin`, then call
+  `paladin_core::inspect(path)` to resolve the mode.
 - Plaintext → call `paladin_core::open(path, VaultLock::Plaintext)` directly,
   then jump to `AccountListComponent`.
 - Encrypted → present `UnlockComponent`. On submit, call
@@ -219,7 +221,7 @@ scripted.
 Effects update visible state only after the underlying mutation succeeds:
 
 - HOTP `next`: pre-commit save failures (`save_not_committed`) leave the
-  in-memory counter and reveal state unchanged (per DESIGN §4.4 rollback)
+  in-memory counter and reveal state unchanged (per DESIGN §4.2 rollback)
   and surface an inline/status error. Durability-unconfirmed failures
   (`save_durability_unconfirmed`) reveal the new code and report the
   committed-but-uncertain status — the user has the new code in hand even
@@ -227,10 +229,11 @@ Effects update visible state only after the underlying mutation succeeds:
   inline/status error and leave the row hidden.
 - Copy: if the GDK clipboard write fails, show an inline/status error and do
   not schedule clipboard auto-clear.
-- Add / remove / settings saves: validation failures occur before any
-  in-memory mutation, so no rollback is needed; the dialog stays open with
-  an inline error. Pre-commit save failures (`save_not_committed`) roll
-  back the in-memory mutation so memory matches disk (Add removes the
+- Add / remove / settings saves: validation and setter failures happen
+  inside or before `Vault::mutate_and_save`; core restores its
+  pre-attempt snapshot on closure errors and no save is attempted.
+  Pre-commit save failures (`save_not_committed`) are rolled back by
+  `Vault::mutate_and_save` so memory matches disk (Add removes the
   just-inserted account(s); Remove restores the removed account at its
   previous position; Settings restores the prior values), and the dialog
   stays open with the inline error so the user can retry.
@@ -248,11 +251,12 @@ Effects update visible state only after the underlying mutation succeeds:
 - Import / export: importer and exporter errors (the typed kinds listed
   in the component descriptions) stay in the active dialog as inline
   errors and never close it. Import save errors follow the
-  Add/Remove/Settings rule: pre-commit (`save_not_committed`) rolls
-  back the in-memory `import_accounts` merge so memory matches disk;
-  durability-unconfirmed leaves the merged accounts and surfaces the
-  warning. Export does not mutate vault state, so save-error rollback
-  does not apply.
+  Add/Remove/Settings rule: pre-commit (`save_not_committed`) restores the
+  `Vault::mutate_and_save` snapshot; durability-unconfirmed leaves the
+  merged accounts and surfaces the warning. Export writer errors
+  (`io_error`, `save_not_committed`, `save_durability_unconfirmed`) stay
+  inline; export does not mutate vault state, so save-error rollback does
+  not apply.
 
 ## Linux desktop integration
 
@@ -297,11 +301,11 @@ Effects update visible state only after the underlying mutation succeeds:
   packaging baseline. No `--share=network`, and the §11.4 sandbox
   permissions:
   `xdg-data/paladin:create`, `xdg-config/paladin:create`, plus the
-  Wayland and X11 fallback sockets and clipboard access required
-  for `gdk::Clipboard`. The Flatpak app ID is the §11.4
-  placeholder `io.github.paladin_otp.Gui`, finalized at
-  Flathub-submission time. `flatpak-builder` consumes the tagged
-  release tarball with vendored Cargo deps so Flathub builds
+  Wayland and X11 fallback clipboard path required for `gdk::Clipboard`
+  (`--socket=wayland`, `--socket=fallback-x11`, `--share=ipc`). The
+  Flatpak app ID is the §11.4 placeholder `io.github.paladin_otp.Gui`,
+  finalized at Flathub-submission time. `flatpak-builder` consumes the
+  tagged release tarball with vendored Cargo deps so Flathub builds
   reproducibly without network access at build time.
 - **AppImage.** `linuxdeploy` plus
   `linuxdeploy-plugin-gtk` assemble the AppDir so GTK4 modules,
@@ -346,7 +350,8 @@ The GUI itself is hard to test without a display server. Tests are split:
   search filtering, auto-lock state machine, clipboard "clear if unchanged"
   decision logic, HOTP reveal window timing, import format-selector
   routing + on-conflict policy threading + post-merge counts mapping,
-  export overwrite-gate + encrypted twice-confirm match logic.
+  export overwrite-gate + encrypted twice-confirm match logic + export
+  writer error mapping.
 - **Smoke test** in CI under `xvfb-run`: app launches, opens a prepared
   plaintext vault, the list renders. Required for Milestone 7 sign-off.
 - **Manual test plan** (`tests/manual/MANUAL_TEST_PLAN.md`) per Milestone 7
@@ -419,7 +424,7 @@ back into vanilla GTK4 widgets where Adwaita is idiomatic:
   auto-lock and one for clipboard-clear. Toggles use
   `AdwSwitchRow` / `AdwActionRow`; spinners use `AdwSpinRow`.
   Live-apply (per the existing component description) still drives a
-  `Vault::save(&Store)` per change; the prior
+  `Vault::mutate_and_save` per change; the prior
   validate-revert-on-failure behavior is preserved.
 - **Passphrase entry.** `UnlockComponent` and `PassphraseDialog`
   use `AdwPasswordEntryRow` for passphrase inputs, including the

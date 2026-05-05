@@ -77,7 +77,7 @@ crates/paladin-cli/
 | `rename <query> <new-label>`                           | Updates `updated_at`. Single-match required. |
 | `passphrase set | change | remove`                     | `passphrase remove` requires `--yes-i-know` to skip the warning; required under `--json`. |
 | `import <path> [--format <fmt>] [--on-conflict <p>]`   | Auto-detects when `--format` is omitted; forced formats are `otpauth`/`aegis`/`paladin` (encrypted bundle only)/`qr`; conflict policies are `skip` (default)/`replace`/`append`. |
-| `export --plaintext <path> | --encrypted <path>`       | Refuses overwrite without `--force`; both modes create output `0600`; plaintext export prints a clear warning before writing unencrypted secrets. |
+| `export --plaintext <path> | --encrypted <path>`       | Refuses overwrite without `--force`; both modes write through `paladin_core::write_secret_file_atomic` and create output `0600`; plaintext export prints a clear warning before writing unencrypted secrets. |
 | `settings get [key] | set <key> <value>`               | CLI persists `clipboard.clear_enabled` for TUI/GUI to honor but **ignores it at runtime** for `paladin copy`. `get [key]` filters text-mode display only; the `--json` shape is always the full `VaultSettings`. |
 | `tui`                                                  | `execvp` `paladin-tui`; rejects `--json`; forwards `--vault` / `--no-color`. |
 
@@ -231,7 +231,8 @@ envelope carry the detailed `kind`.
 
 Every vault-opening command except `init`:
 
-1. Resolve vault path (`--vault` or `directories::ProjectDirs::data_dir()`).
+1. Resolve vault path (`--vault` or
+   `directories::ProjectDirs::data_dir()/vault.bin`).
 2. `paladin_core::inspect(path)` to learn the mode.
 3. If encrypted, prompt once via `/dev/tty`.
 4. `paladin_core::open(path, lock)` — propagates `unsafe_permissions`;
@@ -240,7 +241,9 @@ Every vault-opening command except `init`:
    share a single source of wording.
 5. Perform the operation. For `show`/`copy` on HOTP, call `hotp_advance`
    (which persists before returning). For `peek` on HOTP, call `hotp_peek`.
-   Other mutating operations call `Vault::save` before returning success.
+   Other mutating vault operations use `Vault::mutate_and_save` so
+   pre-commit save failures restore the in-memory pre-attempt state before
+   the command renders its error.
    Passphrase transitions (`set_passphrase`, `change_passphrase`,
    `remove_passphrase`) save themselves through `&Store` and do not require
    a follow-up `Vault::save`.
@@ -332,9 +335,12 @@ where relevant, and exit code.
 - **`import`** for each format with each `--on-conflict` policy; omitting
   `--on-conflict` defaults to `skip`. Atomic failure on any invalid entry.
 - **`export --plaintext` / `--encrypted`** refuses overwrite without
-  `--force` and writes output `0600`. Plaintext export prints the
+  `--force` and writes output `0600` through
+  `paladin_core::write_secret_file_atomic`. Plaintext export prints the
   unencrypted-secrets warning; encrypted export round-trips through
-  `import`.
+  `import`; injected writer failures surface `save_not_committed` before
+  the final rename and `save_durability_unconfirmed` after the final
+  rename.
 - **`settings get/set`** covers default values, every dotted key, bool/u32
   value parsing, minimum-value validation, text-mode filtering, and full
   `VaultSettings` JSON output.
