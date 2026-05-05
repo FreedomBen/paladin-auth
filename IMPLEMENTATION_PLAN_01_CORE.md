@@ -30,10 +30,12 @@ crates/paladin-core/
 │   ├── lib.rs            # re-exports public surface from §4.7
 │   ├── error.rs          # PaladinError + Result alias; carries core-returnable §5 error_kind values verbatim so the CLI can emit them under --json without renaming or mapping
 │   ├── domain/
-│   │   ├── mod.rs        # Account, AccountId, Algorithm, OtpKind, Code
+│   │   ├── mod.rs        # Account, AccountId, AccountSummary, AccountKindSummary, Algorithm, OtpKind, Code
 │   │   ├── secret.rs     # Secret newtype with Zeroize + Drop
 │   │   ├── validation.rs # Shared Account validation (labels, secrets, periods…)
-│   │   ├── match_key.rs  # account_match_key(): canonical "{issuer}:{label}" string used by CLI query resolution and TUI/GUI search filters
+│   │   ├── view.rs       # Account::summary(), Vault::summaries(); non-secret account projection for all front ends
+│   │   ├── match_key.rs  # account_match_key() + account_matches_search(); canonical "{issuer}:{label}" matching used by CLI / TUI / GUI
+│   │   ├── query.rs      # parse_account_query(), Vault::matching_accounts(), Vault::shortest_unique_id_prefix()
 │   │   └── slug.rs       # icon_hint slug rules + issuer-derived defaulting
 │   ├── otp/
 │   │   ├── mod.rs        # pure OTP primitives (compute_totp, compute_hotp)
@@ -55,8 +57,8 @@ crates/paladin-core/
 │   │   ├── argon2.rs     # Argon2id with header-tunable params + bounds check
 │   │   └── aead.rs       # XChaCha20-Poly1305 with header-AAD wiring
 │   ├── vault.rs          # Vault impl: add/remove/iter/rename/totp_code/hotp_*; is_encrypted() mode getter
-│   ├── shared_text.rs    # format_init_force_warning / format_plaintext_storage_warning / format_plaintext_export_warning helpers (CLI / TUI / GUI parity)
-│   ├── settings.rs       # VaultSettings (auto-lock, clipboard) + setters
+│   ├── shared_text.rs    # format_init_force_warning / format_plaintext_storage_warning / format_plaintext_export_warning / format_validation_warning helpers (CLI / TUI / GUI parity)
+│   ├── settings.rs       # VaultSettings (auto-lock, clipboard), SettingKey / SettingPatch parsers, setters
 │   ├── passphrase.rs     # set / change / remove transitions, rollback
 │   ├── import/
 │   │   ├── mod.rs        # detect(), from_file/from_bytes facade
@@ -68,15 +70,19 @@ crates/paladin-core/
 │   │   ├── mod.rs        # facade
 │   │   ├── otpauth.rs    # JSON array of otpauth:// URIs
 │   │   └── encrypted.rs  # Paladin encrypted bundle
-│   └── time.rs           # SystemTime helpers (epoch math, overflow rejection)
+│   ├── time.rs           # SystemTime helpers (epoch math, overflow rejection)
+│   └── ui_contract.rs    # HOTP_REVEAL_SECS and other shared front-end constants
 └── tests/
     ├── rfc_vectors.rs    # RFC 6238 App. B, RFC 4226 App. D
     ├── otpauth_roundtrip.rs
     ├── vault_roundtrip.rs   # both modes
     ├── tamper.rs            # AAD-bound header byte-flip matrix
     ├── perms.rs             # 0600/0700 + unsafe_permissions rejection
-    ├── shared_text.rs       # format_init_force_warning / format_plaintext_storage_warning / format_plaintext_export_warning text fixtures
-    ├── match_key.rs         # account_match_key behavior (empty issuer keeps colon; case preserved)
+    ├── shared_text.rs       # format_init_force_warning / format_plaintext_storage_warning / format_plaintext_export_warning / format_validation_warning text fixtures
+    ├── account_summary.rs   # AccountSummary / Code expose no secret bytes and match §5 JSON account/code shapes
+    ├── match_key.rs         # account_match_key + account_matches_search behavior (empty issuer keeps colon; case preserved)
+    ├── query.rs             # parse_account_query, matching_accounts, shortest_unique_id_prefix
+    ├── settings_patch.rs    # parse_setting_key / parse_setting_patch + apply_setting_patch dotted key/value grammar
     ├── passphrase.rs        # all three transitions + rollback; Vault::is_encrypted reflects each transition outcome
     ├── import_otpauth.rs
     ├── import_aegis.rs
@@ -119,16 +125,26 @@ Each step lands as its own commit. Tests come first.
   malformed icon-hint slugs, mismatched otpauth issuers, invalid timestamps;
   short-secret warnings in 10–15 byte range).
 - [ ] Implement `Account`, `AccountId` (UUIDv4 stored as 16 bytes, hyphenated
-  canonical `Display`; the CLI computes any short-prefix disambiguator at
-  render time since uniqueness depends on full vault contents the library
-  doesn't curate), `Secret` newtype with `Zeroize + Drop`, `Algorithm`,
-  `OtpKind`, `Code`, `ValidationWarning`, `ValidatedAccount`,
+  canonical `Display`; shortest unique `id:<hex>` disambiguators are computed
+  by `Vault::shortest_unique_id_prefix` because uniqueness depends on the
+  full vault contents), `Secret` newtype with `Zeroize + Drop`, `Algorithm`,
+  `OtpKind`, `Code`, `AccountKindSummary`, `AccountSummary`,
+  `ValidationWarning`, `ValidatedAccount`,
   `AccountKindInput`, `AccountInput` (including the kind selector plus
   TOTP-only `period_secs` and HOTP-only `counter`, both optional so
   defaults are applied by `validate_manual`), and the public
   `validate_manual(input, now)` entry point that routes manual
   flag-driven input through the same validation table as `parse_otpauth`
   and the importers.
+- [ ] Implement `Account::summary()` as the only public non-secret account
+  projection. `AccountSummary` matches the §5 account shape exactly
+  (`issuer` / `icon_hint` as `Option`, `period` and `counter` as
+  mutually-exclusive options, no secret field) so CLI JSON output, TUI rows,
+  GUI rows, duplicate-account presentation, and import reports never inspect
+  private `Account` fields or risk serializing secret bytes.
+- [ ] Implement `Code` as the §5 code projection: zero-padded `code`, TOTP
+  validity fields as `Some` with `counter_used = None`, and HOTP
+  `counter_used = Some(pre_advance_counter)` with validity fields `None`.
 - [ ] No `Debug` impls that print secret bytes — wire compile-fail coverage
   proving `Secret` cannot be formatted with `Debug`, plus runtime assertions
   that any public `Debug` output for secret-bearing types omits or redacts the
@@ -267,6 +283,12 @@ Each step lands as its own commit. Tests come first.
   `format_plaintext_export_warning() -> String` per §4.7. Co-locate
   with `format_unsafe_permissions` so all front-end text helpers live
   in one module and presentation crates never re-implement the wording.
+- [ ] Tests: `format_validation_warning(&ValidationWarning)` returns stable
+  fixture text for `short_secret`, using decoded length and recommended
+  minimum values from the warning.
+- [ ] Implement `format_validation_warning(&ValidationWarning) -> String`
+  in the same shared text module so CLI JSON/text warnings, TUI inline
+  warnings, and GUI inline warnings share one message source.
 
 ### Phase F — Encrypted storage (Milestone 1, part 5)
 
@@ -307,9 +329,11 @@ Each step lands as its own commit. Tests come first.
 - [ ] Tests: `add` / `remove` / `iter` (insertion order) / `rename` semantics;
   `rename` updates `updated_at`; `find_duplicate` detects exact
   `(secret, issuer, label)` collisions and ignores non-colliding entries;
-  `VaultSettings` defaults are off with `auto_lock.timeout_secs = 300` and
-  `clipboard.clear_secs = 20`; settings setters reject
-  `auto_lock.timeout_secs < 30` and `clipboard.clear_secs < 5`.
+  `get` returns accounts by `AccountId`; `summaries` returns insertion-order
+  `AccountSummary` values with no secret bytes; `VaultSettings` defaults are
+  off with `auto_lock.timeout_secs = 300` and `clipboard.clear_secs = 20`;
+  settings setters reject `auto_lock.timeout_secs < 30` and
+  `clipboard.clear_secs < 5`.
 - [ ] Tests: `hotp_advance` rollback — inject a `Store` save error before
   primary commit point and assert in-memory counter and `updated_at` revert
   to pre-call values; durability-unconfirmed surfaced as a typed error after
@@ -337,12 +361,40 @@ Each step lands as its own commit. Tests come first.
   issuer/label pair. Cover ASCII, mixed case, and Unicode label
   characters so the helper does not silently apply `to_lowercase()` /
   Unicode normalization (callers do that at compare time per §5).
-- [ ] Implement `Vault` operations, `Vault::find_duplicate`,
-  `Vault::is_encrypted`, `VaultSettings` setters, and
-  `Vault::mutate_and_save` per §4.7. Implement
-  `account_match_key(&Account)` in `domain/match_key.rs` and re-export it
-  at the crate root so CLI `select.rs`, TUI `search.rs`, and GUI
-  `search.rs` all source the canonical match key from one place.
+- [ ] Tests: `account_matches_search(&Account, query)` applies
+  `str::to_lowercase()` to both the query and `account_match_key`, performs
+  substring matching, matches the empty query, keeps empty-issuer colon
+  behavior, and performs no Unicode normalization or locale-specific casing.
+- [ ] Tests: `parse_account_query(query)` maps non-`id:` input to
+  `AccountQuery::Search`, accepts `id:` prefixes of 8..=32 hex characters
+  case-insensitively while normalizing the stored prefix to lowercase, and
+  rejects short, long, or non-hex `id:` prefixes with `validation_error`
+  (`field: "query"`). `Vault::matching_accounts` handles both search and
+  id-prefix queries in insertion order.
+- [ ] Tests: `Vault::shortest_unique_id_prefix(id)` returns the minimum
+  `id:<hex>` disambiguator of at least 8 hex characters among current
+  vault IDs, extends just far enough for collisions, returns the full
+  32-character hex prefix when needed, and returns `None` for an ID not
+  present in the vault.
+- [ ] Tests: `parse_setting_key(key)` accepts exactly the four §5 dotted
+  keys and rejects unknown keys with `validation_error`; `parse_setting_patch(key, value)`
+  reuses that parser, accepts lowercase bool values (`true` / `false`) for
+  toggle keys and base-10 `u32` values for timeout keys, and rejects malformed
+  / below-minimum values with `validation_error`. `Vault::apply_setting_patch`
+  routes through the same typed setters so direct setters and CLI-style
+  dotted patches cannot diverge.
+- [ ] Tests: `HOTP_REVEAL_SECS == 120`, locked as the shared TUI / GUI reveal
+  duration so both front ends consume the same constant.
+- [ ] Implement `Vault` operations, `Vault::get`, `Vault::summaries`,
+  `Vault::find_duplicate`, `Vault::is_encrypted`, `VaultSettings` setters,
+  `SettingKey`, `SettingPatch`, `parse_setting_key`, `parse_setting_patch`,
+  `Vault::apply_setting_patch`, and
+  `Vault::mutate_and_save` per §4.7. Implement `account_match_key`,
+  `account_matches_search`, `parse_account_query`,
+  `Vault::matching_accounts`, and `Vault::shortest_unique_id_prefix` in
+  `domain/match_key.rs` / `domain/query.rs` and re-export them at the crate
+  root so CLI selection plus TUI / GUI search all source matching semantics
+  from core.
 
 ### Phase H — Passphrase management (Milestone 2)
 
@@ -405,10 +457,11 @@ Each step lands as its own commit. Tests come first.
 - [ ] Tests for batch atomicity: any validation failure aborts the batch;
   warnings do not, and warnings are collected before merge-policy application
   so skipped rows can still report warnings.
-- [ ] Tests for `export::otpauth_list` (infallible JSON array of URIs),
-  `export::encrypted` (wraps `VaultSettings::default()`, round-trips with the
-  importer, and rejects empty passphrase), and front-end-style export writes
-  that pass the resulting bytes through `write_secret_file_atomic`.
+- [ ] Tests for `export::otpauth_list(&Vault)` (infallible JSON array of
+  URIs), `export::encrypted(&Vault, passphrase)` (wraps
+  `VaultSettings::default()`, round-trips with the importer, and rejects empty
+  passphrase), and front-end-style export writes that pass the resulting bytes
+  through `write_secret_file_atomic`.
 - [ ] Tests for import facade dispatch: `import::from_file` and
   `import::from_bytes` auto-detect with `format: None`, honor forced
   `ImportFormat` values, return `unsupported_import_format` for `Unknown`
@@ -468,6 +521,7 @@ is a separate `#[test]` or `cases![]` family.
 - TOTP boundary math: `seconds_remaining` exact-boundary, mid-window,
   pre-epoch reject, overflow reject.
 - Account identity / secret hygiene: UUIDv4 bytes + canonical display,
+  `AccountSummary` and `Code` projections matching §5 with no secret bytes,
   `Secret` zeroization, `Secret` non-`Debug` compile-fail coverage, and no
   secret bytes in any public `Debug` output for secret-bearing types.
 - Account validation matrix — every branch in §4.1, including secret length
@@ -511,14 +565,21 @@ is a separate `#[test]` or `cases![]` family.
 - `format_unsafe_permissions` returns shared repair text for
   `unsafe_permissions` and `None` for every other error kind.
 - `format_init_force_warning(path)`, `format_plaintext_storage_warning()`,
-  and `format_plaintext_export_warning()` return locked fixture text so
+  `format_plaintext_export_warning()`, and `format_validation_warning()`
+  return locked fixture text so
   CLI / TUI / GUI render identical wording for the §5 init clobber gate,
   the `passphrase remove` plaintext-storage advisory, and the
-  unencrypted-export advisory respectively.
+  unencrypted-export advisory / validation warnings respectively.
 - `account_match_key(&Account)` produces the canonical
   `"{issuer}:{label}"` key (empty issuer keeps the colon, casing
   preserved) so CLI query resolution and TUI / GUI search filters
   share one match-key definition.
+- `account_matches_search(&Account, query)`, `parse_account_query`,
+  `Vault::matching_accounts`, and `Vault::shortest_unique_id_prefix`
+  implement the shared selector pieces: case-insensitive substring
+  matching with no Unicode normalization, `id:` prefix validation and
+  matching, insertion-order match lists, and shortest-unique
+  `id:<hex>` candidate disambiguators.
 - `Vault::is_encrypted()` reflects the open / create lock mode and
   every passphrase-transition outcome (unchanged on
   `save_not_committed`, changed on success and
@@ -533,8 +594,10 @@ is a separate `#[test]` or `cases![]` family.
   reports `save_durability_unconfirmed`; encrypted and plaintext locks share
   those semantics.
 - Vault behavior and settings: `add` / `remove` / `iter` insertion order /
-  `rename` timestamp update; `find_duplicate` exact collision behavior;
-  settings defaults and exact timeout minimums.
+  `get` / `summaries` / `rename` timestamp update; `find_duplicate` exact
+  collision behavior; settings defaults, exact timeout minimums,
+  `parse_setting_key`, `parse_setting_patch`, and
+  `Vault::apply_setting_patch`.
 - `Vault::mutate_and_save`: rollback on closure error and
   `save_not_committed`, durability-unconfirmed leaves mutated state, and
   success returns the closure value; the rollback snapshot is zeroized.
@@ -542,6 +605,8 @@ is a separate `#[test]` or `cases![]` family.
   and `counter_overflow` at `u64::MAX` before mutation or save.
 - HOTP `hotp_peek` after a committed `hotp_advance` returns the code for
   the new (post-advance) counter.
+- `HOTP_REVEAL_SECS == 120` exported as the shared TUI / GUI reveal-window
+  duration.
 - Passphrase transitions: `set`, `change`, `remove`; pre-commit rollback;
   durability-unconfirmed post-commit; fresh salt/nonce behavior; backup
   rewritten under the target mode/key; cache lifecycle and old-material
@@ -574,9 +639,9 @@ is a separate `#[test]` or `cases![]` family.
   collisions on the `(secret, issuer, label)` triple, destination `id` /
   `created_at` preservation on replace, HOTP counter preservation, cross-kind
   replacement, batch atomicity, and warnings retained even for skipped rows.
-- Exporters: `otpauth_list` emits an infallible JSON array of URIs;
-  `encrypted` wraps default settings, round-trips through the importer, and
-  rejects empty passphrases; `write_secret_file_atomic` writes export bytes
+- Exporters: `otpauth_list(&Vault)` emits an infallible JSON array of URIs;
+  `encrypted(&Vault, passphrase)` wraps default settings, round-trips through
+  the importer, and rejects empty passphrases; `write_secret_file_atomic` writes export bytes
   `0600` via tempfile / fsync / rename without `.bak` rotation and reports
   pre-rename vs post-rename failures as `save_not_committed` vs
   `save_durability_unconfirmed`.
@@ -621,15 +686,16 @@ defines. Implementation owes:
   guarded by an `error-serde` cargo feature, off by default, that the
   CLI opts into; `paladin-core` itself has no JSON output paths. The
   same feature flag also gates `serde::Serialize` for the public
-  account-shape types referenced from error variants and §5 success
-  envelopes (`Account`, `AccountId`, `Algorithm`, `OtpKind`, `Code`,
-  `ValidationWarning`, `ImportReport`, `ImportWarning`,
-  `VaultSettings`) so the CLI can render `duplicate_account.account`,
-  `multiple_matches.candidates`, `clipboard_write_failed.account`,
-  `counter_overflow.account`, and the `add` / `import` /
-  `show` / `peek` / `copy` / `list` success bodies without a
-  hand-written mapping layer. The feature-gated impls are not part of
-  the stable §4.7 surface.
+  non-secret account-shape types referenced from error variants and §5
+  success envelopes (`AccountSummary`, `AccountKindSummary`, `AccountId`,
+  `Algorithm`, `Code`, `ValidationWarning`, `ImportReport`,
+  `ImportWarning`, `VaultSettings`) so the CLI can render
+  `duplicate_account.account`, `multiple_matches.candidates`,
+  `clipboard_write_failed.account`, `counter_overflow.account`, and the
+  `add` / `import` / `show` / `peek` / `copy` / `list` success bodies
+  without a hand-written mapping layer. Do **not** implement
+  `Serialize` for secret-bearing `Account` or `Secret`. The
+  feature-gated impls are not part of the stable §4.7 surface.
 - **No platform-specific build steps.** Linux is the only target in
   v0.1 (§2); the `perms_other.rs` stub keeps `cargo check
   --target=…` clean on non-Unix without changing release behavior.
@@ -651,6 +717,6 @@ semantics must be flagged to the user before implementation.
 - `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo test --all`,
   `cargo deny check`, `cargo audit` clean in CI.
 - Public API snapshot committed and matches §4.7.
-- DESIGN.md unchanged by this work (or, if a contradiction surfaces during
-  implementation, DESIGN.md is updated *first* and reviewed before code
-  changes follow).
+- DESIGN.md is kept in sync with the implemented public API; if a
+  contradiction surfaces during implementation, DESIGN.md is updated *first*
+  and reviewed before code changes follow.

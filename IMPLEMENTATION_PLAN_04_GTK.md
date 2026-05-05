@@ -53,10 +53,10 @@ crates/paladin-gtk/
 │   │   └── settings.rs        # SettingsComponent (toggles + spinners)
 │   ├── clipboard.rs       # gdk Clipboard + opt-in "clear if unchanged" wipe
 │   ├── auto_lock.rs       # GLib idle/timeout source; encrypted-only; plaintext no-op
-│   ├── hotp_reveal.rs     # 120s per-row reveal window
-│   ├── icons.rs           # gtk::IconTheme lookup against Account.icon_hint
+│   ├── hotp_reveal.rs     # per-row reveal window using paladin_core::HOTP_REVEAL_SECS
+│   ├── icons.rs           # gtk::IconTheme lookup against AccountSummary.icon_hint
 │   ├── secret_fields.rs   # extract/clear passphrase + manual-secret entries
-│   ├── search.rs          # case-insensitive issuer/label filtering using paladin_core::account_match_key for the canonical "{issuer}:{label}" key (parity with CLI / TUI)
+│   ├── search.rs          # case-insensitive issuer/label filtering using paladin_core::account_matches_search (parity with CLI / TUI)
 │   └── ticker.rs          # 250ms timeout source for TOTP gauge updates
 └── tests/
     ├── icon_resolution.rs
@@ -122,27 +122,28 @@ inclusion.
 - `UnlockComponent` — passphrase entry, **shown only when the vault is
   encrypted**. Skipped entirely for plaintext vaults.
 - `AccountListComponent` — `gtk::ListView` with a custom row factory bound
-  to a `gio::ListStore` of `AccountRowModel`. Search uses a
+  to a `gio::ListStore` of `AccountRowModel` built from
+  `paladin_core::AccountSummary` projections. Search uses a
   `gtk::SearchEntry` hosted inside a `gtk::SearchBar` whose
   `search-mode-enabled` is bound to the header bar's search-toggle button
   (see "libadwaita usage" below). The entry applies the same
-  case-insensitive substring matching as §5 / §6 against the
-  `paladin_core::account_match_key` of each account via
-  `str::to_lowercase()`; no Unicode normalization. Empty issuer is
-  allowed and the colon is still present in the match key; insertion order
-  is preserved among matches. The CLI's `id:` prefix form is **not**
-  honored by the GUI search (parity with the TUI).
+  case-insensitive substring matching as §5 / §6 through
+  `paladin_core::account_matches_search`; no Unicode normalization. Empty
+  issuer is allowed and the colon is still present in the match key;
+  insertion order is preserved among matches. The CLI's `id:` prefix form is
+  **not** honored by the GUI search (parity with the TUI).
 - `AccountRowComponent` — label, code, progress (TOTP) / "next" button
   (HOTP), copy button, and a kebab `gtk::MenuButton` whose `gio::Menu`
   exposes "Rename…" (opens `RenameDialog` for that row's account) and
   "Remove…" (opens `RemoveDialog`). HOTP rows hide their code until the user activates
-  "next" (advances counter and saves); after a 120-second reveal window the
-  code returns to the hidden state, matching the TUI. Activating "next"
+  "next" (advances counter and saves); after the shared
+  `paladin_core::HOTP_REVEAL_SECS` reveal window (120 seconds) the code
+  returns to the hidden state, matching the TUI. Activating "next"
   during an open reveal advances to the next counter and restarts the
-  120-second reveal window with the newly committed code (matches §6 —
+  shared reveal window with the newly committed code (matches §6 —
   "next" is the "give me the next code" affordance, never a no-op). Hidden
   rows show the stored next counter; during reveal, the row shows the
-  `Code.counter` that produced the visible code until expiry. Copying a
+  `Code.counter_used` that produced the visible code until expiry. Copying a
   hidden HOTP row is **disabled**; copying during the reveal window copies
   the visible code and does not advance again.
 - `AddAccountComponent` — three input paths in a single dialog:
@@ -171,7 +172,8 @@ inclusion.
   optional issuer, Base32 secret, algorithm, digits, kind, TOTP period,
   HOTP counter, and optional icon hint, matching
   `paladin_core::AccountInput`. Manual entries use
-  `paladin_core::validate_manual`; validation warnings show inline and do
+  `paladin_core::validate_manual`; validation warnings show inline with
+  `paladin_core::format_validation_warning()` and do
   not block creation, while field-level parse errors (invalid Base32,
   empty label, out-of-range digits / period / counter) and any
   `validation_error` returned by core block submission and stay inline
@@ -305,7 +307,7 @@ Behave the same as the TUI, including **opt-in default** and the
 
 ## Icons (per §7)
 
-`AccountRowComponent` resolves `Account.icon_hint` against the system icon
+`AccountRowComponent` resolves `AccountSummary.icon_hint` against the system icon
 theme via `gtk::IconTheme`, falling back to a generic placeholder when the
 slug is `None` or unresolved. The CLI and TUI ignore the field entirely.
 
@@ -360,7 +362,7 @@ Effects update visible state only after the underlying mutation succeeds:
   in-memory counter and reveal state unchanged (per DESIGN §4.2 rollback)
   and surface an inline/status error. Durability-unconfirmed failures
   (`save_durability_unconfirmed`) reveal the new code with its
-  `Code.counter` label and post an `AdwToast` carrying the
+  `Code.counter_used` label and post an `AdwToast` carrying the
   committed-but-uncertain status — the user has the new code in hand
   even though durability is in question, and the toast is the
   surface that conveys the warning so the row stays usable. All
@@ -494,9 +496,11 @@ The GUI itself is hard to test without a display server. Tests are split:
 - **Pure-logic unit tests** (no display): icon resolution **fallback
   decision** (`None`/empty slug → placeholder; failed lookup → placeholder;
   the actual `gtk::IconTheme` lookup is exercised by the smoke test),
-  search filtering, auto-lock state machine, clipboard "clear if unchanged"
+  search filtering through `paladin_core::account_matches_search`,
+  auto-lock state machine, clipboard "clear if unchanged"
   decision logic plus pending-value zeroization, HOTP reveal window timing
-  + counter labels, secret-field clearing/redaction invariants, QR RGBA
+  via `paladin_core::HOTP_REVEAL_SECS` + counter labels,
+  secret-field clearing/redaction invariants, QR RGBA
   byte-length/stride preparation,
   init dialog logic (plaintext vs encrypted routing, twice-confirm match
   / zero-length / mismatch handling, plaintext-warning gate,
@@ -561,10 +565,11 @@ The GUI itself is hard to test without a display server. Tests are split:
   `Vault::is_encrypted()` to decide whether to arm the auto-lock
   timer (encrypted only) and to track the visible vault-mode flag
   across passphrase transitions.
-- [ ] Use `paladin_core::account_match_key` for `search.rs` filtering
-  and `paladin_core::format_plaintext_export_warning()` for the
-  `ExportDialog` plaintext path so the GUI never re-implements
-  shared text or match-key logic.
+- [ ] Use `paladin_core::account_matches_search` for `search.rs` filtering,
+  `paladin_core::format_validation_warning()` for validation-warning
+  messages, and `paladin_core::format_plaintext_export_warning()` for the
+  `ExportDialog` plaintext path so the GUI never re-implements shared text
+  or match-key logic.
 - [ ] Linux desktop file + icon.
 - [ ] `.deb`, `.rpm`, Flatpak, and AppImage artifacts for `paladin-gtk`,
   signed and published per §11.3–§11.6; Flathub submission filed.
@@ -674,5 +679,5 @@ section just pins which Adwaita class fills each role.
   and the Flathub submission is filed.
 - `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo test --all`,
   `cargo deny check`, `cargo audit` clean.
-- DESIGN.md unchanged unless a contradiction surfaces; in that case
-  DESIGN.md is updated first.
+- DESIGN.md is kept in sync with implemented GUI-visible behavior; if a
+  contradiction surfaces, DESIGN.md is updated first.

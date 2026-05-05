@@ -45,10 +45,10 @@ crates/paladin-tui/
 │   │       ├── export.rs       # format + path + overwrite + (encrypted) twice-confirmed passphrase
 │   │       ├── passphrase.rs   # set/change/remove sub-flows
 │   │       └── settings.rs     # auto_lock + clipboard toggles + timeouts
-│   ├── search.rs          # incremental filter over Vault::iter() using paladin_core::account_match_key for the canonical "{issuer}:{label}" key (parity with CLI / GUI)
+│   ├── search.rs          # incremental filter over Vault::iter() using paladin_core::account_matches_search; rows render AccountSummary projections
 │   ├── clipboard.rs       # arboard wrapper + scheduled clear (only-if-unchanged)
 │   ├── auto_lock.rs       # idle-timer; encrypted-only; plaintext is no-op
-│   ├── hotp_reveal.rs     # 120s reveal window per row
+│   ├── hotp_reveal.rs     # reveal window per row using paladin_core::HOTP_REVEAL_SECS
 │   ├── terminal.rs        # raw mode / alternate-screen guard; restores terminal on exit
 │   ├── theme.rs           # color palette; --no-color disables styling
 │   └── prompt.rs          # passphrase prompt inside the TUI (modal, not /dev/tty)
@@ -130,12 +130,13 @@ Startup mirrors the CLI's vault inspection path:
   label-suffix slot using the stored next counter (matching DESIGN §6).
   Pressing `n` calls
   `Vault::hotp_advance` (advances counter and saves) and reveals the
-  generated code in place of the prompt for a 120-second window, after
+  generated code in place of the prompt for the shared
+  `paladin_core::HOTP_REVEAL_SECS` window (120 seconds), after
   which the row returns to the hidden state. `n` always advances and
   re-reveals (it's the "give me the next code" key) — pressing `n` again
   during an open reveal advances to the next counter rather than
   no-op'ing. During the reveal window, the label-suffix counter switches
-  to the `Code.counter` that produced the visible code (the pre-advance
+  to the `Code.counter_used` that produced the visible code (the pre-advance
   counter), even though the stored vault counter has already advanced.
   When the reveal expires, the row returns to the hidden prompt and the
   label suffix returns to the stored next counter. `n` is a no-op when the
@@ -215,7 +216,9 @@ closes it.
   the Base32 secret. Clipboard images are read
   through `arboard::Clipboard::get_image()`, whose `ImageData` already
   carries raw RGBA8 bytes plus width/height, and passed to
-  `paladin_core::import::qr_image_bytes` with the current import time. Validation warnings are shown inline and do
+  `paladin_core::import::qr_image_bytes` with the current import time.
+  Validation warnings are shown inline with
+  `paladin_core::format_validation_warning()` and do
   not block creation. Because `Vault::add` is infallible and duplicate
   presentation policy is owned by the front ends, manual and URI duplicate
   collisions call `Vault::find_duplicate(&validated)` before mutation. A
@@ -268,8 +271,9 @@ closes it.
   Paladin headers (`invalid_header` from `inspect`) fail inline before
   any passphrase prompt. The selected
   `paladin_core::import::from_file` call returns `Vec<ValidatedAccount>`; on
-  success, `Vault::import_accounts(accounts, conflict)` is called
-  inside `Vault::mutate_and_save` with the user's policy. The modal
+  success, `Vault::import_accounts(accounts, conflict, import_time)` is called
+  inside `Vault::mutate_and_save` with the user's policy and the same
+  `import_time` passed to `ImportOptions`. The modal
   reports
   imported/skipped/replaced/appended/warning counts inline on
   success. Pre-commit save failures (`save_not_committed`) restore
@@ -379,7 +383,7 @@ reaches the primary-file commit point with durability still uncertain:
   in-memory counter and reveal state unchanged (per DESIGN §4.2
   rollback) and surface a status-line error. Durability-unconfirmed
   failures (`save_durability_unconfirmed`) reveal the new code and
-  `Code.counter` label and report the committed-but-uncertain status in the
+  `Code.counter_used` label and report the committed-but-uncertain status in the
   status line — the user has the new code in hand even though durability is
   in question. All other failures show a status-line error and leave the row
   hidden.
@@ -426,7 +430,7 @@ reaches the primary-file commit point with durability still uncertain:
 | --------- | ------------------------------------------------------- |
 | `↑` `↓`   | Move selection                                          |
 | `Enter`   | Copy selected code (TOTP: current; HOTP: visible only)  |
-| `n`       | HOTP next-code (advances + reveals 120s)                |
+| `n`       | HOTP next-code (advances + reveals `HOTP_REVEAL_SECS`)  |
 | `a`       | Open Add modal                                          |
 | `r`       | Open Remove confirmation                                |
 | `R`       | Open Rename modal (Shift+R; `r` stays bound to Remove)  |
@@ -452,11 +456,11 @@ captured with `insta` golden snapshots using `ratatui::backend::TestBackend`.
   "Effect errors". Modal-local navigation covers `Tab` / `Shift-Tab`,
   `Enter`, `Space`, arrows, text-field editing, and `Esc` cancel / close
   behavior for every modal.
-- **Search**: case-insensitive substring against the
-  `{issuer}:{label}` match key (using the same base match key as CLI query
-  resolution in DESIGN §5; empty issuer is allowed and the colon is still
-  present in the match key) using `str::to_lowercase()` with no Unicode
-  normalization; insertion order preserved among matches. Filter changes
+- **Search**: case-insensitive substring through
+  `paladin_core::account_matches_search` (using the same base match key as
+  CLI query resolution in DESIGN §5; empty issuer is allowed and the colon is
+  still present in the match key), with no Unicode normalization; insertion
+  order preserved among matches. Filter changes
   preserve the selected `AccountId` when it remains visible, otherwise
   select the first match; empty result sets have no selection and action
   keys that require a selected row surface the "no account selected"
@@ -480,8 +484,9 @@ captured with `insta` golden snapshots using `ratatui::backend::TestBackend`.
   the follow-up "add anyway" confirmation re-submits the same input on the
   duplicate-allowed path so the new entry is appended with a fresh ID;
   clipboard QR import uses `ImportConflict::Skip`, reports imported/skipped
-  counts, handles validation warnings, and rejects no-image / no-QR /
-  invalid-QR cases inline.
+  counts, handles validation warnings rendered through
+  `paladin_core::format_validation_warning()`, and rejects no-image /
+  no-QR / invalid-QR cases inline.
 - **Import modal**: format auto-detect and explicit format overrides route
   through `paladin_core::import::from_file`; Paladin header-probing happens
   before any passphrase prompt; encrypted-Paladin path prompts for the bundle
@@ -533,7 +538,8 @@ captured with `insta` golden snapshots using `ratatui::backend::TestBackend`.
   test asserts that the inline error surfaces and the TUI's visible
   vault-mode flag tracks the transition outcome without inspecting private
   key/cache material.
-- **HOTP reveal window**: reveal closes after 120 s; `n` during an open
+- **HOTP reveal window**: reveal closes after
+  `paladin_core::HOTP_REVEAL_SECS`; `n` during an open
   reveal advances again (does not no-op); hidden rows show the stored next
   counter, while revealed rows show the counter that produced the visible
   code until expiry.
@@ -649,8 +655,9 @@ is never expected to be scripted.
 - [ ] Implement terminal raw-mode / alternate-screen lifecycle with guarded
   restoration on exit, error, `Ctrl-C`, and panic unwind.
 - [ ] Implement reducer, event producers, effect execution, and timer tokens.
-- [ ] Implement list layout, search, TOTP gauges, HOTP reveal/copy behavior,
-  HOTP `Code.counter` labels, and status-line errors.
+- [ ] Implement list layout from `AccountSummary` projections, search,
+  TOTP gauges, HOTP reveal/copy behavior,
+  HOTP `Code.counter_used` labels, and status-line errors.
 - [ ] Implement add / remove / rename / import / export / passphrase / settings modals
   with persistence through `Vault::mutate_and_save` where the core owns
   rollback. Source the `passphrase remove` warning from
@@ -660,9 +667,9 @@ is never expected to be scripted.
   identical to the CLI / GUI; gate `set` vs `change` / `remove`
   sub-flows on `Vault::is_encrypted()` and use the same getter to
   arm or skip the auto-lock timer.
-- [ ] Use `paladin_core::account_match_key` for `search.rs` substring
-  filtering so the TUI shares the canonical `"{issuer}:{label}"` key
-  with the CLI and GUI.
+- [ ] Use `paladin_core::account_matches_search` for `search.rs` substring
+  filtering so the TUI shares issuer/label matching semantics with the CLI
+  and GUI.
 - [ ] Route export writes through `paladin_core::write_secret_file_atomic`.
 - [ ] Implement clipboard wrapper, QR image import from clipboard bytes, and
   only-if-unchanged auto-clear.

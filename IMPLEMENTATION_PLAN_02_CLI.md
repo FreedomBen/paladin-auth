@@ -39,7 +39,7 @@ crates/paladin-cli/
 │   │   ├── import.rs     # --format otpauth/aegis/paladin/qr; --on-conflict
 │   │   ├── export.rs     # --plaintext / --encrypted; refuse overwrite w/o --force
 │   │   └── settings.rs   # get / set
-│   └── select.rs         # query → AccountId disambiguation. Substring matching uses paladin_core::account_match_key for the canonical "{issuer}:{label}" key (shared with TUI / GUI search); id:<8+ hex> prefix matching and shortest-unique disambiguator computation are CLI-only.
+│   └── select.rs         # thin wrapper around paladin_core::parse_account_query, Vault::matching_accounts, and Vault::shortest_unique_id_prefix; CLI owns only command-specific cardinality errors and rendering.
 └── tests/
     ├── cli_init.rs
     ├── cli_add.rs
@@ -121,22 +121,28 @@ owns the user-facing error. `--allow-duplicate` is mutually exclusive with
 
 ## Query resolution (per §5)
 
-`<query>` is a case-insensitive substring match against
-`"{issuer}:{label}"`, including the colon when the issuer is empty. Matching
-uses `str::to_lowercase()` on both the query and match key, with no Unicode
-normalization or locale-specific casing.
+`<query>` matching delegates to core. `paladin_core::parse_account_query`
+parses either a case-insensitive issuer/label substring search or a validated
+`id:` prefix selector; `Vault::matching_accounts` returns matching accounts in
+insertion order. The substring branch uses
+`paladin_core::account_matches_search`, which compares
+`str::to_lowercase()` output for the query and canonical `"{issuer}:{label}"`
+match key, with no Unicode normalization or locale-specific casing.
 
 A query starting with `id:` is never treated as a substring match. It matches
 against the account UUID's de-hyphenated 32-character hex form, and the prefix
 after `id:` must be 8 to 32 hex characters. Shorter, longer, or non-hex
-prefixes reject with `validation_error`.
+prefixes reject with the `validation_error` returned by
+`paladin_core::parse_account_query`.
 
 Candidate lists use the shortest unique `id:<hex>` form, with a minimum
-prefix length of 8 hex characters. `show` returns every match only when all
+prefix length of 8 hex characters, computed by
+`Vault::shortest_unique_id_prefix`. `show` returns every match only when all
 matches are TOTP; if any match is HOTP, it requires a single match so one
 command cannot silently advance multiple HOTP counters. `peek` returns every
 match unconditionally. `copy`, `remove`, and `rename` always require a single
-match.
+match. The CLI owns the `no_match` / `multiple_matches` presentation errors;
+core owns parsing, matching, and candidate disambiguators.
 
 ## Settings keys
 
@@ -153,8 +159,12 @@ Text-mode `settings get [key]` may filter to one dotted key. `--json`
 always returns the full nested `VaultSettings` object, and dotted key names
 never appear in JSON output. Boolean values are accepted only as lowercase
 `true` or `false`; numeric settings are accepted only as base-10 `u32`
-strings, then validated against the minimums above. An unrecognized dotted
-key (any value not in the table above) rejects with `validation_error`
+strings, then validated against the minimums above. `settings set` parses
+and validates key/value pairs through `paladin_core::parse_setting_patch` and
+applies the result through `Vault::apply_setting_patch` inside
+`Vault::mutate_and_save`; text-mode `settings get [key]` uses
+`paladin_core::parse_setting_key` for key validation. An unrecognized
+dotted key (any value not in the table above) rejects with `validation_error`
 (`field: "key"`, `reason: "unknown_setting"`) in both text and `--json`
 modes — applies to `settings get <key>` and `settings set <key> <value>`
 alike, and is enforced before any value parsing.
@@ -286,7 +296,8 @@ non-colliding and appended Paladin rows receive fresh UUIDv4 IDs at merge time.
   written to stderr in **text mode only**; under `--json` they are
   routed into the success envelope's `warnings` array (`add` /
   `import`) or suppressed (plaintext-export advisory) per the rule
-  above.
+  above. `short_secret` warning messages in both text and JSON are
+  rendered with `paladin_core::format_validation_warning()`.
 
 Exit codes: `0` success; clap's default usage/parse exit for syntax errors;
 `1` for Paladin runtime errors. `--json` does not change exit codes; it only
@@ -350,22 +361,28 @@ clobber sequence) without opening or decrypting the old primary.
 - [ ] Depend on `paladin-core` with the off-by-default `error-serde`
   feature enabled so the CLI can serialize shared error kinds and the
   account-shape types referenced from §5 success / error envelopes
-  (`Account`, `Algorithm`, `OtpKind`, `Code`, `ImportReport`,
-  `ValidationWarning`, `ImportWarning`, `VaultSettings`) without a
-  hand-written mapping layer.
-- [ ] Use `paladin_core::account_match_key` for `select.rs` substring
-  matching (parity with the TUI / GUI search match key); keep the
-  CLI-only `id:<hex>` prefix matching and the shortest-unique
-  disambiguator computation in `select.rs`.
+  (`AccountSummary`, `AccountKindSummary`, `Algorithm`, `Code`,
+  `ImportReport`, `ValidationWarning`, `ImportWarning`, `VaultSettings`)
+  without a hand-written mapping layer. The CLI never serializes
+  secret-bearing `Account` or `Secret`.
+- [ ] Use `paladin_core::parse_account_query`, `Vault::matching_accounts`,
+  `paladin_core::account_matches_search`, and
+  `Vault::shortest_unique_id_prefix` in `select.rs`; keep only the
+  command-specific cardinality decisions (`show` all-TOTP vs single,
+  `peek` all, `copy` / `remove` / `rename` single) and text / JSON error
+  rendering in the CLI.
 - [ ] Source human-facing destructive / advisory text from
   `paladin_core::format_init_force_warning(path)`,
   `paladin_core::format_plaintext_storage_warning()`, and
-  `paladin_core::format_plaintext_export_warning()` so the CLI cannot
-  drift from the TUI / GUI wording.
+  `paladin_core::format_plaintext_export_warning()`, and source
+  validation-warning messages from
+  `paladin_core::format_validation_warning()` so the CLI cannot drift from
+  the TUI / GUI wording.
 - [ ] Implement `/dev/tty` passphrase, account-entry, and confirmation
   prompting with no-TTY error handling.
-- [ ] Implement account selection for `issuer:label` substring queries and
-  `id:<hex>` disambiguation.
+- [ ] Implement the thin `select.rs` wrapper that applies CLI cardinality
+  policy to the core account-query matches and converts candidates to
+  `AccountSummary` plus core-computed disambiguators.
 - [ ] Implement `init`, account CRUD, `show`/`peek`/`copy`, passphrase,
   import/export, and settings commands per §5.
 - [ ] Implement text and JSON output renderers with stable success/error
@@ -414,11 +431,14 @@ where relevant, and exit code.
   by re-opening and re-running `peek`); `peek` does not. `show` on a
   multi-match query containing any HOTP entry rejects with
   `multiple_matches`; multi-match TOTP-only `show` prints all matches.
-- **Query resolution** — case-insensitive `issuer:label` substring matching,
-  empty-issuer match keys with the colon present, and no Unicode
-  normalization. `id:<hex>` prefix routes to UUID match, never substring;
-  prefixes shorter than 8 hex chars, longer than 32 hex chars, or containing
-  non-hex characters reject with `validation_error`.
+- **Query resolution** — `select.rs` delegates parsing, substring matching,
+  ID-prefix matching, and shortest-unique disambiguators to
+  `paladin-core`; CLI tests cover the command cardinality policy on top:
+  case-insensitive `issuer:label` substring matching, empty-issuer match
+  keys with the colon present, and no Unicode normalization. `id:<hex>`
+  prefix routes to UUID match, never substring; prefixes shorter than 8
+  hex chars, longer than 32 hex chars, or containing non-hex characters
+  reject with `validation_error`.
 - **`copy` writes to clipboard** — gated behind a test-only build cfg/feature
   because CI may not have a clipboard server; otherwise dry-run via a
   `PALADIN_CLIPBOARD_DRYRUN=1` env var honored only by the test build before
@@ -464,8 +484,9 @@ where relevant, and exit code.
   `import`; injected writer failures surface `save_not_committed` before
   the final rename and `save_durability_unconfirmed` after the final
   rename.
-- **`settings get/set`** covers default values, every dotted key, bool/u32
-  value parsing, minimum-value validation, text-mode filtering, full
+- **`settings get/set`** covers default values, every dotted key through
+  `paladin_core::parse_setting_key` / `parse_setting_patch`, bool/u32 value
+  parsing, minimum-value validation, text-mode filtering, full
   `VaultSettings` JSON output, and unknown-dotted-key rejection with
   `validation_error` (`field: "key"`, `reason: "unknown_setting"`) for both
   `settings get <key>` and `settings set <key> <value>`.
@@ -543,5 +564,5 @@ The CLI ships in `.deb`, `.rpm`, Flatpak, and AppImage in v0.1
 - `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo test --all`,
   `cargo deny check`, `cargo audit` clean.
 - CLI **never** schedules a clipboard auto-clear. Verified by test.
-- DESIGN.md unchanged unless a contradiction surfaces; in that case
-  DESIGN.md is updated first.
+- DESIGN.md is kept in sync with implemented CLI-visible behavior; if a
+  contradiction surfaces, DESIGN.md is updated first.

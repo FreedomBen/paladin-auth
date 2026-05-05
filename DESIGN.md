@@ -531,6 +531,57 @@ pub struct ValidatedAccount { pub account: Account, pub warnings: Vec<Validation
 pub enum ImportConflict { Skip, Replace, Append }
 pub struct ImportWarning { pub source_index: usize, pub warning: ValidationWarning }
 pub enum AccountKindInput { Totp, Hotp }
+pub enum AccountKindSummary { Totp, Hotp }
+pub const HOTP_REVEAL_SECS: u64 = 120;
+
+/// Non-secret account projection used by all presentation crates for list
+/// rows, duplicate-account errors, JSON output, and import reports. This is
+/// the public way to inspect an account; raw secret bytes are never exposed.
+pub struct AccountSummary {
+    pub id: AccountId,
+    pub issuer: Option<String>,
+    pub label: String,
+    pub kind: AccountKindSummary,
+    pub algorithm: Algorithm,
+    pub digits: u8,
+    pub period: Option<u32>,
+    pub counter: Option<u64>,
+    pub icon_hint: Option<String>,
+    pub created_at: u64,
+    pub updated_at: u64,
+}
+
+/// Generated OTP projection used by CLI output and TUI / GUI rows.
+/// `code` is zero-padded to the account's digit width. For TOTP, the
+/// validity fields are `Some` and `counter_used` is `None`; for HOTP, the
+/// validity fields are `None` and `counter_used` is the counter that produced
+/// the visible code.
+pub struct Code {
+    pub code: String,
+    pub valid_from: Option<u64>,
+    pub valid_until: Option<u64>,
+    pub seconds_remaining: Option<u64>,
+    pub counter_used: Option<u64>,
+}
+
+pub enum AccountQuery {
+    Search(String),                 // issuer:label substring search
+    IdPrefix { hex_prefix: String } // validated 8..=32 lowercase hex chars
+}
+
+pub enum SettingKey {
+    AutoLockEnabled,
+    AutoLockTimeoutSecs,
+    ClipboardClearEnabled,
+    ClipboardClearSecs,
+}
+
+pub enum SettingPatch {
+    AutoLockEnabled(bool),
+    AutoLockTimeoutSecs(u32),
+    ClipboardClearEnabled(bool),
+    ClipboardClearSecs(u32),
+}
 
 pub struct ImportReport {
     pub imported: usize,
@@ -573,6 +624,11 @@ pub fn format_plaintext_storage_warning() -> String;
 /// written. Static text.
 pub fn format_plaintext_export_warning() -> String;
 
+/// Format a validation warning's stable human-readable message. JSON output
+/// includes this message, and text / UI surfaces use it verbatim so warning
+/// copy does not drift between front ends.
+pub fn format_validation_warning(warning: &ValidationWarning) -> String;
+
 /// Compute the canonical `{issuer}:{label}` match key used by CLI
 /// query resolution (§5) and by TUI / GUI search filters (§6, §7).
 /// Empty issuer keeps the leading colon so the match key is the same
@@ -581,22 +637,53 @@ pub fn format_plaintext_export_warning() -> String;
 /// lower-case so the original casing remains available for display.
 pub fn account_match_key(account: &Account) -> String;
 
+/// Shared case-insensitive substring predicate for issuer/label search.
+/// It compares `str::to_lowercase()` output for the query and
+/// `account_match_key(account)`, with no Unicode normalization or
+/// locale-specific casing. An empty query matches every account.
+pub fn account_matches_search(account: &Account, query: &str) -> bool;
+
+/// Parse the CLI query grammar's shared account-selector syntax. Plain text
+/// becomes `AccountQuery::Search`; `id:` selectors are validated here so the
+/// 8..=32 hex rule is not reimplemented in the CLI. Invalid `id:` selectors
+/// return `validation_error` with `field: "query"`.
+pub fn parse_account_query(query: &str) -> Result<AccountQuery>;
+
+/// Parse a §5 dotted settings key without a value. Used by `settings get` and
+/// by `parse_setting_patch`; unknown keys return `validation_error`.
+pub fn parse_setting_key(key: &str) -> Result<SettingKey>;
+
+/// Parse a §5 dotted settings key/value pair into a typed patch. The parser
+/// owns the stable dotted key list and the CLI's lowercase `true` / `false`
+/// plus base-10 `u32` value grammar. Unknown keys and invalid values return
+/// `validation_error`.
+pub fn parse_setting_patch(key: &str, value: &str) -> Result<SettingPatch>;
+
+impl Account {
+    pub fn summary(&self) -> AccountSummary;
+}
+
 impl Vault {
+    pub fn get(&self, id: AccountId) -> Option<&Account>;
     pub fn add(&mut self, account: Account) -> AccountId;
     pub fn remove(&mut self, id: AccountId) -> Option<Account>;
     pub fn iter(&self) -> impl Iterator<Item = &Account>;                          // insertion order
+    pub fn summaries(&self) -> impl Iterator<Item = AccountSummary>;                // insertion order, non-secret projections
     pub fn rename(&mut self, id: AccountId, label: &str, now: SystemTime) -> Result<()>;
     pub fn find_duplicate(&self, account: &ValidatedAccount) -> Option<&Account>;  // exact (secret, issuer, label) collision helper for single-entry add flows
     pub fn import_accounts(&mut self, accounts: Vec<ValidatedAccount>, policy: ImportConflict, now: SystemTime) -> Result<ImportReport>;  // applies the §5 merge policy
     pub fn totp_code(&self, id: AccountId, now: SystemTime) -> Result<Code>;       // TOTP only; errors on HOTP entries
     pub fn hotp_peek(&self, id: AccountId) -> Result<Code>;                        // HOTP only; does not advance
     pub fn hotp_advance(&mut self, store: &Store, id: AccountId, now: SystemTime) -> Result<Code>;  // HOTP only; advances counter, updates `updated_at`, and saves atomically
+    pub fn matching_accounts(&self, query: &AccountQuery) -> Vec<&Account>;         // shared selector matching; callers apply command-specific cardinality rules
+    pub fn shortest_unique_id_prefix(&self, id: AccountId) -> Option<String>;       // minimum 8 hex chars; used in CLI candidate lists
     pub fn settings(&self) -> &VaultSettings;
     pub fn is_encrypted(&self) -> bool;                                            // current vault lock mode (false = plaintext, true = encrypted). Tracks passphrase transitions so TUI / GUI can gate `passphrase set` vs `passphrase change` / `remove`, decide whether to arm auto-lock, and update the visible vault-mode flag without re-inspecting the file.
     pub fn set_auto_lock_enabled(&mut self, enabled: bool);
     pub fn set_auto_lock_timeout_secs(&mut self, secs: u32) -> Result<()>;
     pub fn set_clipboard_clear_enabled(&mut self, enabled: bool);
     pub fn set_clipboard_clear_secs(&mut self, secs: u32) -> Result<()>;
+    pub fn apply_setting_patch(&mut self, patch: SettingPatch) -> Result<()>;
 
     // Passphrase management — each saves atomically.
     pub fn set_passphrase(&mut self, store: &Store, new: &SecretString) -> Result<()>;
@@ -651,13 +738,14 @@ pub mod import {
 }
 
 pub mod export {
-    pub fn otpauth_list(accounts: &[Account]) -> Vec<u8>;                              // JSON array of `otpauth://` URIs (infallible: validated `Account`s always serialize)
-    pub fn encrypted(accounts: &[Account], passphrase: &SecretString) -> Result<Vec<u8>>;  // Paladin encrypted bundle. Wraps `VaultPayload { accounts, settings: VaultSettings::default() }`; `import::paladin` discards the settings field.
+    pub fn otpauth_list(vault: &Vault) -> Vec<u8>;                              // JSON array of `otpauth://` URIs (infallible: validated accounts always serialize)
+    pub fn encrypted(vault: &Vault, passphrase: &SecretString) -> Result<Vec<u8>>;  // Paladin encrypted bundle. Wraps `VaultPayload { accounts, settings: VaultSettings::default() }`; `import::paladin` discards the settings field.
 }
 ```
 
-Because `Account` fields are private, presentation crates use `Vault`
-mutators for CLI-level changes such as rename and import merge. Those
+Because `Account` fields are private, presentation crates use
+`Account::summary` / `Vault::summaries` for non-secret display data and
+`Vault` mutators for CLI-level changes such as rename and import merge. Those
 mutators reuse the same validation path as account construction, update
 `updated_at` on account payload changes, and leave persistence to the
 caller unless the method explicitly says it saves. Presentation crates
@@ -667,9 +755,20 @@ caller closure, saves, restores the snapshot when the closure fails or
 the save returns `save_not_committed`, and leaves the mutated in-memory
 state in place when the save returns `save_durability_unconfirmed` because
 the primary-file commit point may have been reached. The rollback snapshot
-is secret-bearing and is zeroized when dropped. `VaultSettings` fields are
-private for the same reason: settings changes go through validated setters
-so timeout minimums cannot be bypassed.
+is secret-bearing and is zeroized when dropped.
+
+Account selection and settings edits are split so core owns reusable
+semantics while front ends own presentation policy. `parse_account_query`,
+`Vault::matching_accounts`, `account_matches_search`, and
+`Vault::shortest_unique_id_prefix` implement the shared §5 selector and
+issuer/label matching rules; the CLI still decides which command cardinality
+rules produce `no_match` or `multiple_matches`, and the TUI / GUI use only the
+substring predicate for search bars. `parse_setting_key`,
+`parse_setting_patch`, and `Vault::apply_setting_patch` own the dotted
+settings grammar used by the CLI, while TUI / GUI controls may call the typed
+setters directly. `VaultSettings` fields are private for the same reason:
+settings changes go through validated setters or patches so timeout minimums
+cannot be bypassed.
 
 ## 5. CLI (`paladin`)
 
@@ -814,7 +913,9 @@ stderr, so a script that redirects both streams sees only the JSON envelope.
 This rule is the script contract — JSON consumers can `parse(stdout)` on exit
 0 and `parse(stderr)` on non-zero exit without filtering.
 
-The common account shape is:
+The common account shape is `paladin_core::AccountSummary` serialized by the
+CLI's `error-serde` build. It is also the read-only projection used by TUI and
+GUI list rows:
 
 ```json
 {
@@ -881,8 +982,10 @@ duration, and have `counter_used: null`; HOTP entries have `valid_from`,
 `Warning` objects use stable snake_case `kind` values. The v0.1 warning
 shape is `{ "kind": "short_secret", "message": "...", "source_index": 0,
 "decoded_len": 10, "recommended_min": 16 }`; `source_index` is zero-based
-and omitted for single-entry `add`. Text-mode commands print warnings to
-stderr while still exiting zero on success.
+and omitted for single-entry `add`. The `message` string is produced by
+`paladin_core::format_validation_warning`, and text-mode commands / UI
+surfaces use the same helper. Text-mode commands print warnings to stderr
+while still exiting zero on success.
 `VaultSettings` JSON is nested by category: `{ "auto_lock": { "enabled":
 bool, "timeout_secs": number }, "clipboard": { "clear_enabled": bool,
 "clear_secs": number } }`. The dotted `<category>.<field>` form is for
@@ -974,8 +1077,10 @@ v0.1 error kinds and stable fields:
 The CLI owns JSON envelope rendering, but `paladin-core` exposes
 `serde::Serialize` for `PaladinError` only behind an off-by-default
 `error-serde` cargo feature so the CLI can serialize the shared
-`error_kind` taxonomy without a mapping layer. `paladin-core` itself has
-no JSON output paths, and the feature-gated serialization impl is not part
+`error_kind` taxonomy without a mapping layer. The same feature may serialize
+non-secret view types such as `AccountSummary`, `Code`, warnings, reports, and
+settings, but never secret-bearing `Account` / `Secret`. `paladin-core` itself
+has no JSON output paths, and the feature-gated serialization impl is not part
 of the stable §4.7 API surface.
 
 Vault settings keys (subject to extension):
@@ -989,7 +1094,13 @@ Vault settings keys (subject to extension):
 
 Minimum values: `auto_lock.timeout_secs >= 30`, `clipboard.clear_secs
 >= 5`. `VaultSettings` fields are private; `settings set` and the core
-settings setters reject lower values with a validation error.
+settings setters reject lower values with a validation error. The CLI's
+dotted key/value grammar is parsed by `paladin_core::parse_setting_patch`
+so key names, lowercase bool parsing, base-10 `u32` parsing, and minimum
+checks stay in core. `parse_setting_key` is the same key-name source for
+`settings get [key]`. TUI and GUI controls may call the typed setters
+directly, but they use the same setter validation and persist through
+`Vault::mutate_and_save`.
 
 ### Query resolution
 
@@ -997,7 +1108,10 @@ settings setters reject lower values with a validation error.
 (empty issuer is allowed; the colon is still present in the match key).
 Matching compares `str::to_lowercase()` output for the query and match key;
 Paladin applies no Unicode normalization and no locale-specific casing, so
-visually equivalent but differently normalized strings may not match.
+visually equivalent but differently normalized strings may not match. The
+substring predicate is `paladin_core::account_matches_search`; CLI query
+resolution, TUI search, and GUI search all use that helper rather than
+reimplementing the comparison.
 
 - `show` prints **all** matching entries when every match is TOTP. If any
   matched entry is HOTP, `show` requires a single match — the same rule
@@ -1020,7 +1134,11 @@ visually equivalent but differently normalized strings may not match.
   prefix; the prefix after `id:` must be 8 to 32 hex chars, and invalid
   or shorter prefixes are validation errors. An account whose
   `issuer:label` happens to start with `id:` is still reachable by any
-  other substring of that key.
+  other substring of that key. `paladin_core::parse_account_query` owns
+  the `id:` validation, `Vault::matching_accounts` owns the actual match
+  collection, and `Vault::shortest_unique_id_prefix` owns candidate
+  disambiguator computation. The CLI owns only the command-specific
+  cardinality policy and output error rendering.
 
 ### Import merge policy
 
@@ -1069,13 +1187,14 @@ Layout (single-screen MVP):
 
 - TOTP rows: live `Gauge` countdown, re-render on a 250 ms tick.
 - HOTP rows: code is hidden until the user presses `n` (advances counter
-  and saves); after a 120-second reveal window, returns to the hidden
+  and saves); after the shared `paladin_core::HOTP_REVEAL_SECS`
+  reveal window (120 seconds), returns to the hidden
   state. `n` **always** advances and re-reveals — it is the "give me
   the next code" key — so pressing `n` again during an open reveal
   window advances to the next counter rather than no-op'ing on the
   already-visible code. Hidden HOTP rows show the stored next counter in
   the row label. Revealed rows show the counter that produced the visible
-  code (`Code.counter`, the pre-advance counter) until the reveal expires;
+  code (`Code.counter_used`, the pre-advance counter) until the reveal expires;
   after expiry, the hidden row returns to showing the stored next counter.
   Copying a hidden HOTP row is rejected with a status message. Copying
   during the reveal window copies the visible code and does not advance
@@ -1154,7 +1273,8 @@ Library: **Relm4** on **GTK4**. Component tree:
 - `AccountListComponent` — `gtk::ListView` with a custom row factory.
 - `AccountRowComponent` — label, code, progress (TOTP) / "next" button (HOTP),
   copy button. HOTP rows hide their code until the user activates "next"
-  (advances counter and saves); after a 120-second reveal window the code
+  (advances counter and saves); after the shared
+  `paladin_core::HOTP_REVEAL_SECS` reveal window (120 seconds) the code
   returns to the hidden state, matching the TUI. Hidden rows show the stored
   next counter; revealed rows show the counter that produced the visible
   code until the reveal expires. Copying a hidden HOTP row is disabled;
@@ -1193,7 +1313,7 @@ opt-in default and the plaintext-vault auto-lock no-op.
 Mutating dialogs use `Vault::mutate_and_save` for the same rollback behavior
 as the TUI.
 
-Icons: `AccountRowComponent` resolves `Account.icon_hint` against the
+Icons: `AccountRowComponent` resolves `AccountSummary.icon_hint` against the
 system icon theme via `gtk::IconTheme`, falling back to a generic
 placeholder when the slug is `None` or unresolved. The CLI and TUI
 ignore the field entirely.
@@ -1527,8 +1647,12 @@ artifacts side by side.
 - [ ] `README.md` with build instructions.
 
 ### Milestone 1 — Core OTP + storage *(v0.1)*
-- [ ] `Account`, `Secret`, `Algorithm`, `OtpKind`, `Vault`, `VaultSettings` types with `Zeroize`.
+- [ ] `Account`, non-secret `AccountSummary`, `Secret`, `Algorithm`,
+  `OtpKind`, `Vault`, `VaultSettings`, and shared settings/query helper
+  types with `Zeroize` where secret-bearing.
 - [ ] Shared `Account` validation for labels, issuers, secrets, OTP parameters, timestamps, and icon hints.
+- [ ] Shared account display/search/query helpers and validation-warning
+  formatting used by CLI/TUI/GUI.
 - [ ] RFC 6238 (TOTP) implementation + Appendix B vectors.
 - [ ] RFC 4226 (HOTP) implementation + Appendix D vectors.
 - [ ] `otpauth://` parser + base32 secret handling (TOTP and HOTP URIs).
@@ -1671,6 +1795,19 @@ artifacts side by side.
   clipboard copy and QR-from-clipboard.
 - Core exposes `write_secret_file_atomic` for plaintext and encrypted export
   files across all front ends.
+- Core exposes `AccountSummary`, public `Code` projections, and
+  feature-gated serialization for those non-secret view types so CLI/TUI/GUI
+  can render accounts and codes without accessing private secret-bearing
+  `Account` fields.
+- Core exposes `account_matches_search`, `parse_account_query`,
+  `Vault::matching_accounts`, and `Vault::shortest_unique_id_prefix` so
+  issuer/label matching, `id:` prefix validation, and candidate
+  disambiguators are not reimplemented in presentation crates.
+- Core exposes `parse_setting_key`, `parse_setting_patch`, and
+  `Vault::apply_setting_patch` so the CLI's dotted settings grammar shares
+  the same validation as TUI / GUI typed settings controls.
+- Core exposes `format_validation_warning` and `HOTP_REVEAL_SECS` so warning
+  text and the TUI / GUI HOTP reveal duration cannot drift.
 
 **Decided during core plan review (2026-05-05):**
 - Core exposes a feature-gated `test-fault-injection` hook for binary
