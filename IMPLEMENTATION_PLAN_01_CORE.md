@@ -54,9 +54,9 @@ crates/paladin-core/
 │   │   └── perms_other.rs # Stubs for non-Unix targets
 │   ├── crypto/
 │   │   ├── mod.rs        # KDF + AEAD facades
-│   │   ├── argon2.rs     # Argon2id with header-tunable params + bounds check
+│   │   ├── argon2.rs     # Argon2id params/options, defaults, bounds check
 │   │   └── aead.rs       # XChaCha20-Poly1305 with header-AAD wiring
-│   ├── vault.rs          # Vault impl: add/remove/iter/rename/totp_code/hotp_*; is_encrypted() mode getter
+│   ├── vault.rs          # Vault impl: add/remove/iter/rename/import_accounts/totp_code/hotp_*; save/mutate_and_save; is_encrypted() mode getter
 │   ├── shared_text.rs    # format_init_force_warning / format_plaintext_storage_warning / format_plaintext_export_warning / format_validation_warning helpers (CLI / TUI / GUI parity)
 │   ├── settings.rs       # VaultSettings (auto-lock, clipboard), SettingKey / SettingPatch parsers, setters
 │   ├── passphrase.rs     # set / change / remove transitions, rollback
@@ -79,7 +79,7 @@ crates/paladin-core/
     ├── tamper.rs            # AAD-bound header byte-flip matrix
     ├── perms.rs             # 0600/0700 + unsafe_permissions rejection
     ├── shared_text.rs       # format_init_force_warning / format_plaintext_storage_warning / format_plaintext_export_warning / format_validation_warning text fixtures
-    ├── account_summary.rs   # AccountSummary / Code expose no secret bytes and match §5 JSON account/code shapes
+    ├── account_summary.rs   # AccountSummary and Code expose no secret bytes; Code is the core projection paired with AccountSummary by CLI CodeResult
     ├── match_key.rs         # account_match_key + account_matches_search behavior (empty issuer keeps colon; case preserved)
     ├── query.rs             # parse_account_query, matching_accounts, shortest_unique_id_prefix
     ├── settings_patch.rs    # parse_setting_key / parse_setting_patch + apply_setting_patch dotted key/value grammar
@@ -109,6 +109,9 @@ Each step lands as its own commit. Tests come first.
 - [ ] Write `README.md` with build instructions covering the §10 CI gate
   (`cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo test --all`,
   `cargo deny check`, `cargo audit`) — the §12 Milestone 0 README deliverable.
+- [ ] Document that `default_vault_path()` uses
+  `ProjectDirs::from("", "", "paladin")`, then appends `vault.bin` under the
+  returned `data_dir()`.
 - [ ] Add SPDX header to every source file.
 - [ ] Wire `cargo deny` policy: deny known network-stack crates (`tokio`,
   `reqwest`, `hyper`, etc.) and document manual review for new dependencies.
@@ -121,8 +124,9 @@ Each step lands as its own commit. Tests come first.
 
 - [ ] Tests: `domain/validation.rs` covering every branch in §4.1 (digits range,
   TOTP period bounds, HOTP counter bounds, label and issuer 128-byte caps,
-  empty labels, secret length rejection below 10 bytes and above 1024 bytes,
-  malformed icon-hint slugs, mismatched otpauth issuers, invalid timestamps;
+  empty labels, manual Base32 secret decoding / ASCII-whitespace rejection,
+  secret length rejection below 10 bytes and above 1024 bytes, malformed
+  icon-hint slugs, mismatched otpauth issuers, invalid timestamps;
   short-secret warnings in 10–15 byte range).
 - [ ] Implement `Account`, `AccountId` (UUIDv4 stored as 16 bytes, hyphenated
   canonical `Display`; shortest unique `id:<hex>` disambiguators are computed
@@ -159,7 +163,9 @@ Each step lands as its own commit. Tests come first.
   `no_entries_to_import`, `counter_overflow`,
   `time_range`, `save_not_committed`, `save_durability_unconfirmed`, and
   `io_error`. Each included kind carries the stable extra fields from §5
-  exactly, including field names, optionality, and value formats. The
+  exactly, including field names, optionality, value formats,
+  `unsupported_import_format.format` semantics, and the stable
+  core-owned `io_error.operation` strings. The
   presentation-only kinds (`clipboard_write_failed`, `no_match`,
   `multiple_matches`, `duplicate_account`) are never returned from core.
   `duplicate_account` is emitted by front ends after they call
@@ -191,6 +197,9 @@ Each step lands as its own commit. Tests come first.
   round-trip valid generated cases and reject malformed generated cases without
   panics.
 - [ ] Round-trip: parse → emit → parse yields the same normalized account.
+- [ ] Implement `parse_otpauth(uri, import_time)` and the internal
+  `otpauth://` emitter used by `export::otpauth_list`, with normalization
+  exactly matching the parser tests.
 
 ### Phase E — Plaintext storage (Milestone 1, part 4)
 
@@ -220,10 +229,11 @@ Each step lands as its own commit. Tests come first.
   is absent, reports plaintext/encrypted mode from the header without
   decryption, returns an error for unrecognized magic, and deliberately skips
   permission checks.
-- [ ] Tests: `default_vault_path()` appends `vault.bin` under the
-  `ProjectDirs::data_dir()` location from §4.3 and surfaces `io_error`
-  with `operation: "resolve_default_vault_path"` if the platform path
-  cannot be resolved.
+- [ ] Tests: `default_vault_path()` calls
+  `ProjectDirs::from("", "", "paladin")`, appends `vault.bin` under the
+  returned `data_dir()` location from §4.3, and surfaces `io_error` with
+  `operation: "resolve_default_vault_path"` if the platform path cannot be
+  resolved.
 - [ ] Tests: header version and ID handling — v0.1 writes `format_ver = 1`;
   unsupported versions return `unsupported_format_version`; unknown `mode`,
   `kdf_id`, or `aead_id` values return `invalid_header` before constructing a
@@ -231,7 +241,7 @@ Each step lands as its own commit. Tests come first.
 - [ ] Tests: `open` returns `vault_missing` when the primary file is
   absent; `create` returns `vault_exists` when the primary already
   exists (rotation belongs to `create_force`, see below).
-- [ ] Tests: `create_force(path, VaultLock::Plaintext)` staged clobber per
+- [ ] Tests: `create_force(path, VaultInit::Plaintext)` staged clobber per
   §5: writes `vault.bin.tmp` and `fsync`s it before moving any existing primary;
   staging-step failure leaves the old primary and `.bak` untouched;
   once staged, rotates an existing `vault.bin` → `vault.bin.bak`
@@ -251,15 +261,21 @@ Each step lands as its own commit. Tests come first.
   before rename surface as `save_not_committed` and do not leave the
   destination partially written; injected parent-fsync failures after rename
   surface as `save_durability_unconfirmed`.
-- [ ] Implement `Store` (open/save), permissions module (Unix path; non-Unix
-  stubs that compile but reject `open` / `create` / `create_force` before
-  touching vault content with `io_error` and
+- [ ] Tests: core-owned `io_error.operation` strings match the §5 table for
+  default path resolution, permission metadata reads, vault reads/writes,
+  import-file reads, image decoding, QR extraction, export writes, and
+  unsupported non-Unix permission stubs.
+- [ ] Implement `Store`, crate-root `open` / `create` storage facades,
+  permissions module (Unix path; non-Unix stubs that compile but reject
+  `open` / `create` / `create_force` before touching vault content with
+  `io_error` and
   `operation: "unsupported_platform_permissions"`),
   atomic-write pipeline.
-- [ ] Implement `default_vault_path()` in `storage::path` so presentation
-  crates do not duplicate `ProjectDirs` logic.
+- [ ] Implement `default_vault_path()` in `storage::path` with
+  `ProjectDirs::from("", "", "paladin")` so presentation crates do not
+  duplicate `ProjectDirs` logic.
 - [ ] Implement `inspect(path)` (header probe, no decryption, no perms check).
-- [ ] Implement `create_force(path, lock)` in `storage` per the §5 init
+- [ ] Implement `create_force(path, init)` in `storage` per the §5 init
   clobber sequence.
 - [ ] Implement `write_secret_file_atomic(path, bytes)` by factoring the
   vault save pipeline's tempfile / chmod `0600` / fsync / rename /
@@ -294,7 +310,9 @@ Each step lands as its own commit. Tests come first.
 
 - [ ] Tests: header byte layout (10-byte plaintext header, 64-byte
   encrypted-mode header before ciphertext); on-disk size cap
-  (`header_size + 16 MiB [+ 16-byte tag]`) before any KDF/AEAD work.
+  (`header_size + 16 MiB [+ 16-byte tag]`) before any KDF/AEAD work; decrypted
+  encrypted payloads above the 16 MiB payload limit are rejected before
+  constructing a `Vault`.
 - [ ] Tests: AAD binding — flipping any byte in `format_ver`, `mode`,
   `kdf_id`, Argon2 params, `salt`, `aead_id`, or `nonce` causes `open` to
   fail without returning a vault; flipping a ciphertext byte fails; flipping
@@ -303,9 +321,17 @@ Each step lands as its own commit. Tests come first.
   without constructing a vault.
 - [ ] Tests: Argon2 parameter bounds rejected before any KDF work (`m_kib`
   8192–1048576, `t` 1–10, `p` 1–4).
+- [ ] Tests: `Argon2Params::default()` yields m=65536 KiB, t=3, p=1;
+  `Argon2Params::validate` accepts in-range custom values and rejects
+  out-of-range values with `kdf_params_out_of_bounds`; `EncryptionOptions`
+  defaults to the default params and rejects zero-length passphrases on
+  encrypted write paths with `invalid_passphrase`.
 - [ ] Tests: regular encrypted saves preserve the in-header Argon2 params
   and `salt`, and use a freshly generated random `nonce` per save (drawn
   from the OS CSPRNG).
+- [ ] Tests: encrypted `create` / `create_force`, `set_passphrase`,
+  `change_passphrase`, and `export::encrypted` write custom validated Argon2
+  params into the header when supplied through `EncryptionOptions`.
 - [ ] Tests: AEAD key caching — `open` derives the 32-byte key once into
   a `Zeroizing<[u8; 32]>` cached on `Vault` alongside the `SecretString`
   passphrase; subsequent saves reuse the cached key without re-running
@@ -315,11 +341,12 @@ Each step lands as its own commit. Tests come first.
 - [ ] Tests: `open` rejects `VaultLock` mismatches with `wrong_vault_lock`
   before any KDF work — `VaultLock::Plaintext` against an encrypted file,
   and `VaultLock::Encrypted(_)` against a plaintext file.
-- [ ] Tests: encrypted `create` and `create_force` follow the same precondition,
-  parent-permission, staged-clobber, commit-point, and durability-error
-  semantics as plaintext storage.
-- [ ] Implement `crypto::argon2` (defaults m=64 MiB, t=3, p=1 with the §4.4
-  read bounds: `m_kib` 8192–1048576, `t` 1–10, `p` 1–4),
+- [ ] Tests: encrypted `create` and `create_force` through `VaultInit`
+  follow the same precondition, parent-permission, staged-clobber,
+  commit-point, and durability-error semantics as plaintext storage.
+- [ ] Implement `crypto::argon2` with public `Argon2Params`,
+  `EncryptionOptions`, and `VaultInit` support (defaults m=64 MiB, t=3, p=1
+  with the §4.4 read/write bounds: `m_kib` 8192–1048576, `t` 1–10, `p` 1–4),
   `crypto::aead` (XChaCha20-Poly1305 with header bytes serialized as AAD),
   encrypted `Store` save/open/create/create_force paths, and the cached-key
   data model on `Vault`.
@@ -349,9 +376,9 @@ Each step lands as its own commit. Tests come first.
   merge (`skip` / `replace` / `append`), and settings changes so presentation
   crates do not need their own rollback machinery.
 - [ ] Tests: `Vault::is_encrypted()` returns `false` for vaults opened
-  with `VaultLock::Plaintext` / created from a plaintext file, returns
-  `true` for vaults opened with `VaultLock::Encrypted` / created from an
-  encrypted file, and tracks `set_passphrase` / `change_passphrase` /
+  with `VaultLock::Plaintext` / created with `VaultInit::Plaintext`,
+  returns `true` for vaults opened with `VaultLock::Encrypted` / created with
+  encrypted `VaultInit`, and tracks `set_passphrase` / `change_passphrase` /
   `remove_passphrase` outcomes (unchanged on `save_not_committed`,
   changed on a successful save or `save_durability_unconfirmed` —
   Phase H exercises the transition cases against this getter).
@@ -385,9 +412,10 @@ Each step lands as its own commit. Tests come first.
   dotted patches cannot diverge.
 - [ ] Tests: `HOTP_REVEAL_SECS == 120`, locked as the shared TUI / GUI reveal
   duration so both front ends consume the same constant.
-- [ ] Implement `Vault` operations, `Vault::get`, `Vault::summaries`,
-  `Vault::find_duplicate`, `Vault::is_encrypted`, `VaultSettings` setters,
-  `SettingKey`, `SettingPatch`, `parse_setting_key`, `parse_setting_patch`,
+- [ ] Implement `Vault` operations, `Vault::save`, `Vault::get`,
+  `Vault::summaries`, `Vault::find_duplicate`, `Vault::import_accounts`,
+  `Vault::is_encrypted`, `VaultSettings` setters, `SettingKey`,
+  `SettingPatch`, `parse_setting_key`, `parse_setting_patch`,
   `Vault::apply_setting_patch`, and
   `Vault::mutate_and_save` per §4.7. Implement `account_match_key`,
   `account_matches_search`, `parse_account_query`,
@@ -400,9 +428,10 @@ Each step lands as its own commit. Tests come first.
 
 - [ ] Tests: `set_passphrase` (plaintext → encrypted), `change_passphrase`
   (encrypted → encrypted), `remove_passphrase` (encrypted → plaintext); each
-  transition uses a fresh salt and primary nonce; encrypted `.bak` writes use
-  their own fresh nonce under the new key (set / change), while remove writes
-  `.bak` plaintext.
+  encrypted transition takes `EncryptionOptions`, writes its default or custom
+  Argon2 params, uses a fresh salt and primary nonce; encrypted `.bak` writes
+  use their own fresh nonce under the new key (set / change), while remove
+  writes `.bak` plaintext.
 - [ ] Tests: pre-commit failure leaves primary file untouched and rolls
   in-memory mode/key back; post-commit failure surfaces durability-unconfirmed.
 - [ ] Tests: cached key/passphrase lifecycle — pre-commit failure leaves
@@ -413,9 +442,11 @@ Each step lands as its own commit. Tests come first.
 - [ ] Tests: wrong-starting-state calls return `invalid_state` before
   generating new crypto material; `set_passphrase` and `change_passphrase`
   reject zero-length passphrases with `invalid_passphrase` and
-  `reason: "zero_length"`.
-- [ ] Implement `set_passphrase`, `change_passphrase`, `remove_passphrase` on
-  `Vault` going through the §4.3 atomic-write + backup pipeline.
+  `reason: "zero_length"`; non-empty whitespace-only and Unicode passphrases
+  are treated as bytes and are not trimmed or normalized.
+- [ ] Implement `set_passphrase(options)`, `change_passphrase(options)`, and
+  `remove_passphrase` on `Vault` going through the §4.3 atomic-write +
+  backup pipeline.
 
 ### Phase I — Import / export (Milestone 3)
 
@@ -454,26 +485,40 @@ Each step lands as its own commit. Tests come first.
   including HOTP-to-HOTP `Replace` preserving `Hotp.counter` and cross-kind
   replace swapping the whole `kind`; `Replace` preserves the destination `id`
   and `created_at`.
+- [ ] Tests for `Vault::import_accounts` / `ImportReport`: imported, skipped,
+  replaced, and appended counts match the merge outcome; `accounts` lists IDs
+  for imported / replaced / appended rows only, never skipped rows; warnings
+  retain zero-based `source_index` values collected before merge-policy
+  application.
 - [ ] Tests for batch atomicity: any validation failure aborts the batch;
   warnings do not, and warnings are collected before merge-policy application
   so skipped rows can still report warnings.
 - [ ] Tests for `export::otpauth_list(&Vault)` (infallible JSON array of
-  URIs), `export::encrypted(&Vault, passphrase)` (wraps
-  `VaultSettings::default()`, round-trips with the importer, and rejects empty
-  passphrase), and front-end-style export writes that pass the resulting bytes
-  through `write_secret_file_atomic`.
+  URIs), `export::encrypted(&Vault, EncryptionOptions)` (wraps
+  `VaultSettings::default()`, writes default or custom Argon2 params,
+  round-trips with the importer, and rejects empty passphrase), and
+  front-end-style export writes that pass the resulting bytes through
+  `write_secret_file_atomic`.
 - [ ] Tests for import facade dispatch: `import::from_file` and
   `import::from_bytes` auto-detect with `format: None`, honor forced
   `ImportFormat` values, return `unsupported_import_format` for `Unknown`
-  or invalid forced/source combinations, decode encoded image bytes as QR
+  with `format: "unknown"` and for invalid forced/source combinations with
+  `format` set to the requested forced format, decode encoded image bytes as QR
   input in `from_bytes`, use the path form for QR files in `from_file`,
   and return `invalid_state` with `operation: "import_paladin"` /
   `state: "missing_passphrase"` when Paladin dispatch lacks a bundle
   passphrase.
+- [ ] Implement format-specific importers (`import::otpauth`,
+  `import::aegis_plaintext`, `import::paladin`, `import::qr_image`, and
+  `import::qr_image_bytes`) plus the `Vault::import_accounts` merge-policy
+  engine that produces `ImportReport`.
 - [ ] Implement `ImportOptions`, `import::from_file`, and
   `import::from_bytes` as the public facade over `detect` and the
   format-specific importers. `from_bytes` decodes image-format bytes with
   `image` to RGBA8 before routing through `read_qr_image_bytes`.
+- [ ] Implement `export::otpauth_list(&Vault)` using the internal
+  `otpauth://` emitter and `export::encrypted(&Vault, EncryptionOptions)`
+  using the Paladin encrypted bundle format with default `VaultSettings`.
 - [ ] Implement `read_qr_image(path) -> Result<Vec<String>>` and
   `read_qr_image_bytes(width, height, rgba) -> Result<Vec<String>>` in
   `import/qr.rs`. The path form loads the image from disk; the byte form
@@ -514,23 +559,25 @@ Each step lands as its own commit. Tests come first.
 ## Test inventory
 
 This list is exhaustive per CLAUDE.md ("write exhaustive tests"). Every entry
-is a separate `#[test]` or `cases![]` family.
+is a separate `#[test]` or table-driven case family.
 
 - RFC 6238 Appendix B vectors — SHA1/256/512 across multiple counters.
 - RFC 4226 Appendix D vectors.
 - TOTP boundary math: `seconds_remaining` exact-boundary, mid-window,
   pre-epoch reject, overflow reject.
 - Account identity / secret hygiene: UUIDv4 bytes + canonical display,
-  `AccountSummary` and `Code` projections matching §5 with no secret bytes,
-  `Secret` zeroization, `Secret` non-`Debug` compile-fail coverage, and no
-  secret bytes in any public `Debug` output for secret-bearing types.
+  `AccountSummary` and `Code` projections matching the §5 account/code fields
+  with no secret bytes, `Secret` zeroization, `Secret` non-`Debug`
+  compile-fail coverage, and no secret bytes in any public `Debug` output for
+  secret-bearing types.
 - Account validation matrix — every branch in §4.1, including secret length
   rejection at `<10` and `>1024` decoded bytes, label and issuer 128-byte
   caps, TOTP period bounds, HOTP counter bounds, digits range, icon-hint
   slug rules, and timestamp upper bound.
 - Manual `AccountInput` validation — `AccountKindInput` TOTP/HOTP
   selection, TOTP period defaults / overrides, HOTP counter defaults /
-  overrides, and rejection of period-on-HOTP or counter-on-TOTP.
+  overrides, manual Base32 secret decoding / ASCII-whitespace rejection, and
+  rejection of period-on-HOTP or counter-on-TOTP.
 - Short-secret warning surfaces in `ValidatedAccount.warnings`.
 - `otpauth://` round-trip — TOTP and HOTP, with and without issuer prefix,
   case-insensitive scheme/algo/type, base32 padding/casing, duplicate known
@@ -543,8 +590,9 @@ is a separate `#[test]` or `cases![]` family.
 - `inspect(path)` header probe: missing primary returns `Missing`, plaintext
   and encrypted headers report the correct mode without decryption, invalid
   magic errors, permission checks skipped.
-- `default_vault_path()` returns the §4.3 `vault.bin` data path or
-  `io_error` with `operation: "resolve_default_vault_path"`.
+- `default_vault_path()` uses `ProjectDirs::from("", "", "paladin")`,
+  returns the §4.3 `vault.bin` data path, or `io_error` with
+  `operation: "resolve_default_vault_path"`.
 - Header version / ID errors: unsupported `format_ver`, unknown `mode`,
   unknown `kdf_id`, and unknown `aead_id`.
 - Header byte-flip matrix on encrypted vault — every AAD-bound byte fails
@@ -552,6 +600,10 @@ is a separate `#[test]` or `cases![]` family.
 - Wrong encrypted-vault passphrase returns `decrypt_failed` without
   returning a vault.
 - Argon2 param bounds — out-of-range `m_kib`, `t`, or `p` rejected pre-KDF.
+- Argon2 custom params — default m=65536 KiB / t=3 / p=1, in-range custom
+  params accepted for encrypted create / create_force / passphrase set/change
+  / encrypted export, and out-of-range custom params rejected before
+  prompting for or accepting a new encrypted write.
 - Encrypted save invariants — size cap pre-KDF/AEAD, Argon2 params and salt
   preserved on regular saves, fresh nonce per save, ciphertext/tag tamper
   rejection.
@@ -580,14 +632,14 @@ is a separate `#[test]` or `cases![]` family.
   matching with no Unicode normalization, `id:` prefix validation and
   matching, insertion-order match lists, and shortest-unique
   `id:<hex>` candidate disambiguators.
-- `Vault::is_encrypted()` reflects the open / create lock mode and
+- `Vault::is_encrypted()` reflects the open lock mode / create init mode and
   every passphrase-transition outcome (unchanged on
   `save_not_committed`, changed on success and
   `save_durability_unconfirmed`).
 - `open` / `create` precondition errors — `vault_missing` for absent
   primary on `open`; `vault_exists` for existing primary on `create`;
-  `wrong_vault_lock` on cross-mode `VaultLock` (both directions) before
-  any KDF work.
+  `wrong_vault_lock` on cross-mode `VaultLock` during `open` (both
+  directions) before any KDF work.
 - `create_force` staged clobber — staging failure leaves existing primary and
   `.bak` untouched; after backup rotation, pre-commit failure reports
   `save_not_committed` with `backup_path`; post-commit parent `fsync` failure
@@ -608,17 +660,20 @@ is a separate `#[test]` or `cases![]` family.
 - `HOTP_REVEAL_SECS == 120` exported as the shared TUI / GUI reveal-window
   duration.
 - Passphrase transitions: `set`, `change`, `remove`; pre-commit rollback;
-  durability-unconfirmed post-commit; fresh salt/nonce behavior; backup
-  rewritten under the target mode/key; cache lifecycle and old-material
-  zeroization; wrong-starting-state `invalid_state`; zero-length new
-  passphrase rejection with `reason: "zero_length"`.
+  durability-unconfirmed post-commit; default/custom Argon2 params for
+  encrypted targets; fresh salt/nonce behavior; backup rewritten under the
+  target mode/key; cache lifecycle and old-material zeroization;
+  wrong-starting-state `invalid_state`; zero-length new passphrase rejection
+  with `reason: "zero_length"`; no trimming or Unicode normalization of
+  non-empty passphrase bytes.
 - `import::detect`: Paladin magic, QR image magic, Aegis plaintext/encrypted
   shapes, single/list/JSON-array `otpauth://`, empty otpauth JSON array shape,
   and `Unknown`.
 - Import facade: `from_file` / `from_bytes` auto-detect and forced-format
   dispatch, `unsupported_import_format` for unknown or invalid dispatch,
-  missing Paladin bundle passphrase as `invalid_state`, and encoded image
-  bytes routed through QR decoding.
+  `format` set to `"unknown"` for auto-detect failures and to the requested
+  format for forced-format failures, missing Paladin bundle passphrase as
+  `invalid_state`, and encoded image bytes routed through QR decoding.
 - Importers: Aegis plaintext field mapping, defaults, and required fields;
   Aegis encrypted → typed `unsupported_encrypted_aegis`; Aegis
   non-`totp`/`hotp` entry type →
@@ -638,13 +693,17 @@ is a separate `#[test]` or `cases![]` family.
 - Merge policy: `Skip` / `Replace` / `Append` including running-state
   collisions on the `(secret, issuer, label)` triple, destination `id` /
   `created_at` preservation on replace, HOTP counter preservation, cross-kind
-  replacement, batch atomicity, and warnings retained even for skipped rows.
+  replacement, `ImportReport` counts / account IDs, batch atomicity, and
+  warnings retained even for skipped rows.
 - Exporters: `otpauth_list(&Vault)` emits an infallible JSON array of URIs;
-  `encrypted(&Vault, passphrase)` wraps default settings, round-trips through
-  the importer, and rejects empty passphrases; `write_secret_file_atomic` writes export bytes
+  `encrypted(&Vault, EncryptionOptions)` wraps default settings, writes
+  default or custom Argon2 params, round-trips through the importer, and
+  rejects empty passphrases; `write_secret_file_atomic` writes export bytes
   `0600` via tempfile / fsync / rename without `.bak` rotation and reports
   pre-rename vs post-rename failures as `save_not_committed` vs
   `save_durability_unconfirmed`.
+- Core `io_error.operation` strings match the §5 stable operation table for
+  storage, import, image, QR, export, and unsupported-platform failures.
 - Zeroize-on-drop: drop-in-place in a controlled allocation proves bytes are
   wiped before deallocation for `Secret`, mutate-and-save rollback
   snapshots, cached keys, and retained
@@ -686,14 +745,17 @@ defines. Implementation owes:
   guarded by an `error-serde` cargo feature, off by default, that the
   CLI opts into; `paladin-core` itself has no JSON output paths. The
   same feature flag also gates `serde::Serialize` for the public
-  non-secret account-shape types referenced from error variants and §5
+  non-secret view/report types referenced from error variants and §5
   success envelopes (`AccountSummary`, `AccountKindSummary`, `AccountId`,
   `Algorithm`, `Code`, `ValidationWarning`, `ImportReport`,
-  `ImportWarning`, `VaultSettings`) so the CLI can render
-  `duplicate_account.account`, `multiple_matches.candidates`,
+  `ImportWarning`, `VaultSettings`) so the CLI can serialize shared
+  pieces for `duplicate_account.account`, `multiple_matches.candidates`,
   `clipboard_write_failed.account`, `counter_overflow.account`, and the
   `add` / `import` / `show` / `peek` / `copy` / `list` success bodies
-  without a hand-written mapping layer. Do **not** implement
+  without re-serializing those core types locally. `ImportReport.accounts`
+  remains `Vec<AccountId>` per §4.7; CLI success envelopes resolve those
+  IDs through `Vault::summaries` when they need `AccountSummary` objects.
+  Do **not** implement
   `Serialize` for secret-bearing `Account` or `Secret`. The
   feature-gated impls are not part of the stable §4.7 surface.
 - **No platform-specific build steps.** Linux is the only target in

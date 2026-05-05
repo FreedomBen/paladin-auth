@@ -214,20 +214,20 @@ salt, `aead_id`, and 24-byte nonce).
 
 - **Location.** Resolved by `paladin-core` through
   `default_vault_path()`, which uses
-  `directories::ProjectDirs::data_dir()`. On Linux this follows the XDG
-  Base Directory spec; on macOS / Windows it follows the platform
-  conventions baked into the `directories` crate. The vault is
+  `directories::ProjectDirs::from("", "", "paladin")` and then
+  `ProjectDirs::data_dir()`. On Linux this follows the XDG Base Directory
+  spec; on macOS / Windows it follows the platform conventions baked into
+  the `directories` crate. The vault is
   application data (a secrets store), not user-editable configuration,
   so it lives under `XDG_DATA_HOME` — **not** `XDG_CONFIG_HOME`. The
   latter is reserved for any future preferences file that ships
   separately from the vault.
   - Linux (v0.1 target):
     `${XDG_DATA_HOME:-~/.local/share}/paladin/vault.bin`.
-  - macOS / Windows: whatever `ProjectDirs::data_dir()` returns under
-    the platform conventions. The exact paths depend on the
-    `ProjectDirs::from(qualifier, organization, application)`
-    arguments chosen at instantiation and are exercised once v0.2
-    adds those targets (§2).
+  - macOS / Windows: whatever
+    `ProjectDirs::from("", "", "paladin").data_dir()` returns under
+    the platform conventions; those targets are exercised once v0.2
+    adds them (§2).
 
   The filename is always `vault.bin`; the on-disk encoding is the
   private bincode format described above (it is binary regardless of
@@ -311,18 +311,21 @@ salt, `aead_id`, and 24-byte nonce).
   passphrase + salt deterministically derive the 32-byte AEAD key. Regular
   saves preserve the in-header Argon2 parameters, so an old vault opened on
   a faster machine does not silently inherit higher cost on its next write;
-  raising costs requires an explicit `change_passphrase` (or a future
-  dedicated upgrade command). To avoid attacker-controlled resource
-  exhaustion before authentication, `open` rejects encrypted vaults whose
-  header parameters are outside these bounds before running Argon2id:
+  raising costs requires an explicit encrypted-write operation that supplies
+  custom `Argon2Params`: vault creation, `set_passphrase`,
+  `change_passphrase`, or encrypted export. v0.1 exposes these knobs in
+  `paladin-core`, and the CLI exposes them as advanced flags on those
+  encrypted-write commands. To avoid attacker-controlled resource exhaustion
+  before authentication, `open` rejects encrypted vaults whose header
+  parameters are outside these bounds before running Argon2id:
   `m_kib` 8192 to 1048576 (8 MiB to 1 GiB), `t` 1 to 10, and `p` 1 to 4.
   The 8 MiB floor is deliberately well below the 64 MiB default and
   OWASP's 19 MiB Argon2id guidance: it is the minimum we will *accept on
   read* so that vaults written on memory-constrained hardware (small
-  SBCs, low-RAM headless boxes) can still be opened. New
-  vaults always pick the default unless the user opts into a custom
-  cost. Future releases may widen those bounds only with an explicit
-  format or policy update.
+  SBCs, low-RAM headless boxes) can still be opened. New encrypted
+  material always uses the default unless the caller supplies a custom
+  `Argon2Params` value that passes the same bounds. Future releases may
+  widen those bounds only with an explicit format or policy update.
 - **AEAD:** **XChaCha20-Poly1305** (24-byte nonce, simpler misuse story than
   AES-GCM). Header records the algorithm ID so we can migrate later. All
   header bytes after the magic — `format_ver`, `mode`, `kdf_id`, the Argon2
@@ -402,9 +405,11 @@ Two formats, user picks per invocation:
   wrapped in Paladin's encrypted file format (§4.3) under a passphrase
   the user supplies at export time (independent of the vault's own
   passphrase). Empty passphrases are rejected: `export::encrypted`
-  returns an error rather than silently producing a plaintext-equivalent
-  bundle. The CLI refuses to write an encrypted export to a file that
-  already exists unless `--force` is given, matching plaintext export.
+  takes `EncryptionOptions` and returns an error rather than silently
+  producing a plaintext-equivalent bundle. Custom Argon2id costs can be
+  supplied through those options; omitted options use the §4.4 defaults.
+  The CLI refuses to write an encrypted export to a file that already
+  exists unless `--force` is given, matching plaintext export.
   The output file is written through `write_secret_file_atomic` and is
   created `0600`.
 
@@ -490,7 +495,9 @@ the import facade, `import::from_file` for path-backed imports or
 accepts an optional `ImportFormat`: `None` auto-detects with `detect`,
 while `Some(format)` forces the dispatch. An unknown detected format or
 an invalid forced/source combination returns `unsupported_import_format`
-with the requested/detected `format` value. When dispatch selects
+with a single `format` field: for auto-detect failures it is the detected
+format (`"unknown"`), and for forced-format failures it is the requested
+forced format. When dispatch selects
 `Paladin`, callers must supply the encrypted bundle passphrase in
 `ImportOptions`; omitting it returns `invalid_state`
 (`operation: "import_paladin"`, `state: "missing_passphrase"`). The
@@ -525,7 +532,10 @@ policy).
 pub enum PaladinError { /* core-returnable §5 error kinds */ }
 pub type Result<T> = std::result::Result<T, PaladinError>;
 pub enum VaultLock { Plaintext, Encrypted(SecretString) }
+pub enum VaultInit { Plaintext, Encrypted(EncryptionOptions) }
 pub enum VaultStatus { Plaintext, Encrypted, Missing }
+pub struct Argon2Params { pub m_kib: u32, pub t: u32, pub p: u32 }
+pub struct EncryptionOptions { pub passphrase: SecretString, pub kdf_params: Argon2Params }
 pub enum ValidationWarning { ShortSecret { decoded_len: usize, recommended_min: usize } }
 pub struct ValidatedAccount { pub account: Account, pub warnings: Vec<ValidationWarning> }
 pub enum ImportConflict { Skip, Replace, Append }
@@ -592,11 +602,21 @@ pub struct ImportReport {
     pub warnings: Vec<ImportWarning>,
 }
 
-pub fn default_vault_path() -> Result<PathBuf>;                           // shared §4.3 path resolver; appends vault.bin under ProjectDirs::data_dir()
+impl Default for Argon2Params { /* m_kib = 65536, t = 3, p = 1 */ }
+impl Argon2Params {
+    pub fn validate(&self) -> Result<()>;                                  // enforces §4.4 bounds, returns kdf_params_out_of_bounds
+}
+
+impl EncryptionOptions {
+    pub fn new(passphrase: SecretString) -> Self;                          // default Argon2Params
+    pub fn with_params(passphrase: SecretString, kdf_params: Argon2Params) -> Result<Self>;
+}
+
+pub fn default_vault_path() -> Result<PathBuf>;                           // shared §4.3 path resolver; appends vault.bin under ProjectDirs::from("", "", "paladin").data_dir()
 pub fn inspect(path: &Path) -> Result<VaultStatus>;                       // header probe; no decryption. Ok(Missing) iff the file does not exist; other I/O errors and unrecognized magic are Err. Deliberately does **not** enforce the §4.3 permissions check — only `open` and `create` do — so callers can probe a vault's mode before fixing perms.
 pub fn open(path: &Path, lock: VaultLock) -> Result<(Vault, Store)>;      // errors if `lock` doesn't match the file mode
-pub fn create(path: &Path, lock: VaultLock) -> Result<(Vault, Store)>;    // errors if `path` already exists; for the `init --force` clobber semantics use `create_force`
-pub fn create_force(path: &Path, lock: VaultLock) -> Result<(Vault, Store)>;  // §5 `init --force` staged clobber: stages the new vault to `vault.bin.tmp` and `fsync`s it; if staging succeeds and a primary already exists, renames `vault.bin` → `vault.bin.bak` verbatim (overwriting any existing backup) without re-encryption; renames `vault.bin.tmp` → `vault.bin`; `fsync`s the parent directory. Pre-rename failures leave the previous primary recoverable — when failure occurs after backup rotation, the old vault is at `vault.bin.bak` and the error is `save_not_committed` with `backup_path` set. Post-commit failures surface as `save_durability_unconfirmed`. Identical to `create` when no primary exists at `path`.
+pub fn create(path: &Path, init: VaultInit) -> Result<(Vault, Store)>;    // errors if `path` already exists; encrypted init uses `EncryptionOptions` default or custom Argon2 params; for the `init --force` clobber semantics use `create_force`
+pub fn create_force(path: &Path, init: VaultInit) -> Result<(Vault, Store)>;  // §5 `init --force` staged clobber: stages the new vault to `vault.bin.tmp` and `fsync`s it; if staging succeeds and a primary already exists, renames `vault.bin` → `vault.bin.bak` verbatim (overwriting any existing backup) without re-encryption; renames `vault.bin.tmp` → `vault.bin`; `fsync`s the parent directory. Pre-rename failures leave the previous primary recoverable — when failure occurs after backup rotation, the old vault is at `vault.bin.bak` and the error is `save_not_committed` with `backup_path` set. Post-commit failures surface as `save_durability_unconfirmed`. Identical to `create` when no primary exists at `path`.
 
 /// Format the human-readable §4.3 `unsafe_permissions` text — failing
 /// path, `subject`, `actual_mode`, `expected_mode`, and the `chmod`
@@ -686,8 +706,8 @@ impl Vault {
     pub fn apply_setting_patch(&mut self, patch: SettingPatch) -> Result<()>;
 
     // Passphrase management — each saves atomically.
-    pub fn set_passphrase(&mut self, store: &Store, new: &SecretString) -> Result<()>;
-    pub fn change_passphrase(&mut self, store: &Store, new: &SecretString) -> Result<()>;
+    pub fn set_passphrase(&mut self, store: &Store, options: EncryptionOptions) -> Result<()>;
+    pub fn change_passphrase(&mut self, store: &Store, options: EncryptionOptions) -> Result<()>;
     pub fn remove_passphrase(&mut self, store: &Store) -> Result<()>;
 
     pub fn save(&self, store: &Store) -> Result<()>;
@@ -739,9 +759,17 @@ pub mod import {
 
 pub mod export {
     pub fn otpauth_list(vault: &Vault) -> Vec<u8>;                              // JSON array of `otpauth://` URIs (infallible: validated accounts always serialize)
-    pub fn encrypted(vault: &Vault, passphrase: &SecretString) -> Result<Vec<u8>>;  // Paladin encrypted bundle. Wraps `VaultPayload { accounts, settings: VaultSettings::default() }`; `import::paladin` discards the settings field.
+    pub fn encrypted(vault: &Vault, options: EncryptionOptions) -> Result<Vec<u8>>;  // Paladin encrypted bundle. Wraps `VaultPayload { accounts, settings: VaultSettings::default() }`; uses default or custom Argon2 params from `options`; `import::paladin` discards the settings field.
 }
 ```
+
+`VaultLock` is the unlock type for existing vaults, so `open` always treats
+the encrypted file header as authoritative for KDF parameters. `VaultInit` is
+used only when creating a new primary through `create` / `create_force`;
+encrypted initialization carries `EncryptionOptions` so callers can choose the
+default Argon2id cost or a validated custom cost. Passphrase set/change and
+encrypted export also take `EncryptionOptions` because they create new
+encrypted material. Plaintext paths never carry KDF parameters.
 
 Because `Account` fields are private, presentation crates use
 `Account::summary` / `Vault::summaries` for non-secret display data and
@@ -800,6 +828,17 @@ Global flags: `--vault <path>`, `--no-color`, `--json` (for scripting).
 `--vault` and `--no-color` are accepted by every binary in the workspace
 (`paladin`, `paladin-tui`, and the v0.2 `paladin-gtk`); `--json` is
 `paladin`-only — `paladin-tui` and `paladin-gtk` reject it at parse time.
+
+Encrypted-write CLI commands accept the advanced Argon2id flags
+`--kdf-memory-mib <mib>`, `--kdf-time <iterations>`, and
+`--kdf-parallelism <lanes>`: `init` when a non-empty passphrase is chosen,
+`passphrase set`, `passphrase change`, and `export --encrypted`. Omitted
+flags use the §4.4 defaults (`64`, `3`, `1`). Supplied values are converted
+to `Argon2Params` (`m_kib = mib * 1024`) and validated against the §4.4
+bounds before prompting twice for the new passphrase or generating salt/nonce.
+Out-of-range values return `kdf_params_out_of_bounds`; invalid integers or
+`mib * 1024` overflow return `validation_error` with the corresponding flag
+as `field`.
 
 All interactive CLI prompts read from `/dev/tty`, never from stdin/stdout, in
 both text and `--json` modes. Passphrase prompts use `rpassword`. Existing
@@ -1058,7 +1097,7 @@ v0.1 error kinds and stable fields:
 | `invalid_header`                | Paladin header is malformed/unknown.         | optional `path`                            |
 | `invalid_payload`               | Bincode payload is invalid or too large.     | `reason`, optional `path`                  |
 | `unsupported_format_version`    | Paladin `format_ver` has no migration.       | `format_ver`                               |
-| `kdf_params_out_of_bounds`      | Argon2 header params exceed policy.          | `m_kib`, `t`, `p`                          |
+| `kdf_params_out_of_bounds`      | Argon2 params exceed policy.                 | `m_kib`, `t`, `p`                          |
 | `unsupported_import_format`     | Detected/forced import format is invalid.    | `format`                                   |
 | `unsupported_plaintext_vault`   | Import saw a plaintext Paladin vault.        | none                                       |
 | `unsupported_encrypted_aegis`   | Aegis import saw an encrypted backup.        | none                                       |
@@ -1073,6 +1112,42 @@ v0.1 error kinds and stable fields:
 | `save_durability_unconfirmed`   | Atomic save/export renamed final output but durability is unclear. | `committed: true` |
 | `clipboard_write_failed`        | Clipboard write failed after generation.     | `account`, `counter_used`                  |
 | `io_error`                      | Filesystem/image/terminal I/O failed.        | `operation`, optional `path`               |
+
+For `unsupported_import_format`, the `format` field is a lowercase
+`ImportFormat` string. Auto-detect failures report the detected value
+(`"unknown"`). Forced-format failures report the requested forced format,
+even when content sniffing found a different shape.
+
+Core-returned `io_error.operation` values are stable strings:
+
+| Operation                           | Meaning                                                   |
+| ----------------------------------- | --------------------------------------------------------- |
+| `resolve_default_vault_path`        | `ProjectDirs` could not resolve a data directory.         |
+| `unsupported_platform_permissions`  | Non-Unix target cannot enforce v0.1 permissions safely.   |
+| `create_vault_dir`                 | Creating the vault parent directory failed.               |
+| `stat_vault_dir`                   | Reading vault parent-directory metadata failed.           |
+| `stat_vault_file`                  | Reading primary vault metadata failed.                    |
+| `stat_backup_file`                 | Reading backup vault metadata failed.                     |
+| `read_vault_file`                  | Reading the primary vault file failed.                    |
+| `write_vault_tmp`                  | Writing the staged primary vault file failed.             |
+| `write_backup_tmp`                 | Writing the staged backup file failed.                    |
+| `fsync_temp_file`                  | Syncing a staged temp file failed.                        |
+| `rename_backup`                    | Moving content to `vault.bin.bak` failed.                 |
+| `rename_primary`                   | Moving staged content to the final primary path failed.   |
+| `fsync_vault_dir`                  | Syncing the vault parent directory failed.                |
+| `cleanup_temp_file`                | Removing a leftover temp file failed.                     |
+| `read_import_file`                 | Reading an import source file failed.                     |
+| `read_qr_image`                    | Loading a QR image file failed.                           |
+| `decode_image_bytes`               | Decoding encoded image bytes failed.                      |
+| `decode_qr_image`                  | QR extraction failed after an image was loaded.           |
+| `write_secret_file_tmp`            | Writing the export/secret staged file failed.             |
+| `fsync_secret_file_tmp`            | Syncing the export/secret staged file failed.             |
+| `rename_secret_file`               | Moving export/secret bytes to the final path failed.      |
+| `fsync_secret_file_dir`            | Syncing the export/secret parent directory failed.        |
+
+Binary crates may add presentation-specific operations such as
+`passphrase_prompt`, `account_prompt`, `confirmation_prompt`, and
+`exec_paladin_tui`, but they do not rename core operations.
 
 The CLI owns JSON envelope rendering, but `paladin-core` exposes
 `serde::Serialize` for `PaladinError` only behind an off-by-default
@@ -1255,7 +1330,7 @@ Library: **Relm4** on **GTK4**. Component tree:
   (twice-confirmed; empty selects plaintext, with the same
   unencrypted-storage warning used by `passphrase remove`) plus an
   explicit "create vault" confirmation. Calls
-  `paladin_core::create(path, lock)` on `gio::spawn_blocking`
+  `paladin_core::create(path, init)` on `gio::spawn_blocking`
   (encrypted creation runs the §4.4 Argon2id KDF) and on success
   transitions the app to `Unlocked` with the returned `(Vault, Store)`,
   routing to the account list. `vault_exists` (if a vault appeared
@@ -1263,7 +1338,7 @@ Library: **Relm4** on **GTK4**. Component tree:
   confirmation explaining that the existing vault will be rotated to
   `vault.bin.bak` and a new one created in its place; on confirm the
   dialog re-runs the create with `paladin_core::create_force(path,
-  lock)` on `gio::spawn_blocking`, applying the §5 staged-clobber
+  init)` on `gio::spawn_blocking`, applying the §5 staged-clobber
   semantics. `unsafe_permissions`, `invalid_passphrase`
   (`reason: "confirmation_mismatch"`), `save_not_committed`, and
   `save_durability_unconfirmed` surface inline; the dialog never
@@ -1420,12 +1495,17 @@ Concrete obligations and explicit user-controlled tradeoffs:
     Argon2 params, `salt`, `aead_id`, `nonce`) → fail.
   - Argon2 parameter bounds reject headers outside the v0.1 limits before
     KDF work begins.
+  - Argon2 custom write params: defaults, accepted in-range values, rejected
+    out-of-range values, and headers written by encrypted create /
+    `create_force` / passphrase set/change / encrypted export.
   - File-permission enforcement (`0600` on primary, backup, and temp files;
     `0700` on dir) post-save and during staged writes, plus rejection of
     unsafe existing primary/backup/directory paths with `unsafe_permissions`.
-  - `default_vault_path()` resolves the §4.3 data path and reports
-    `io_error` with `operation: "resolve_default_vault_path"` if the
-    platform data path cannot be resolved.
+  - `default_vault_path()` uses `ProjectDirs::from("", "", "paladin")`,
+    resolves the §4.3 data path, and reports `io_error` with
+    `operation: "resolve_default_vault_path"` if the platform data path
+    cannot be resolved.
+  - Core `io_error.operation` strings match the stable §5 table.
   - `write_secret_file_atomic` export writes: `0600`, same-directory
     tempfile, pre-rename `save_not_committed`, post-rename
     `save_durability_unconfirmed`, and no `.bak` rotation.
@@ -1454,8 +1534,8 @@ Concrete obligations and explicit user-controlled tradeoffs:
     rejection path (empty JSON array, blank otpauth file, empty Aegis
     `entries`, image with no decodable QRs). The `import::from_file` /
     `from_bytes` facade is tested for auto-detect, forced-format dispatch,
-    unknown/invalid dispatch, missing Paladin bundle passphrases, and
-    encoded-image QR bytes.
+    unknown/invalid dispatch, `unsupported_import_format.format` semantics,
+    missing Paladin bundle passphrases, and encoded-image QR bytes.
 - **Property tests** (`proptest`) for the URI parser and base32 secret
   decoding.
 - **Integration tests** for each shipped binary using `assert_cmd` (CLI)
@@ -1473,7 +1553,8 @@ Concrete obligations and explicit user-controlled tradeoffs:
   - CLI `--json` success/error shapes, warning payloads, durability error
     fields, HOTP post-advance account summaries, clipboard-write failure
     behavior, passphrase no-TTY / confirmation-mismatch failures, export
-    overwrite guards, and export writer durability failures.
+    overwrite guards, Argon2id custom-cost flags for encrypted writes, and
+    export writer durability failures.
   - CLI `add` input modes, mutual-exclusion errors, duplicate-account
     rejection, and `--allow-duplicate`.
   - CLI query resolution, including `str::to_lowercase()` matching,
@@ -1657,12 +1738,12 @@ artifacts side by side.
 - [ ] RFC 4226 (HOTP) implementation + Appendix D vectors.
 - [ ] `otpauth://` parser + base32 secret handling (TOTP and HOTP URIs).
 - [ ] **Plaintext** vault format with atomic writes + `0600` file / `0700` parent-dir enforcement.
-- [ ] **Encrypted** vault format: Argon2id + AEAD with header versioning and KDF parameter bounds.
+- [ ] **Encrypted** vault format: Argon2id + AEAD with header versioning, KDF parameter bounds, and custom encrypted-write costs.
 - [ ] One-generation `.bak` preserved across all writes.
 - [ ] Tamper-detection and round-trip tests for both modes.
 
 ### Milestone 2 — Passphrase management *(v0.1)*
-- [ ] `set_passphrase`, `change_passphrase`, `remove_passphrase` on `Vault`.
+- [ ] `set_passphrase`, `change_passphrase`, `remove_passphrase` on `Vault`, with custom Argon2id params for encrypted target states.
 - [ ] Atomic transition with pre-commit rollback and durability-unconfirmed
   handling for post-commit failures.
 - [ ] Tests covering all three transitions, pre-commit rollback, and
@@ -1816,6 +1897,14 @@ artifacts side by side.
 - Core exposes feature-gated `PaladinError` serialization under
   `error-serde`, off by default, so the CLI can serialize shared error
   kinds without renaming or mapping them locally.
+- Core resolves the default vault path with
+  `ProjectDirs::from("", "", "paladin")`, then appends `vault.bin`.
+- v0.1 supports custom Argon2id costs for encrypted writes through
+  `Argon2Params` / `EncryptionOptions`; CLI advanced flags expose the same
+  controls for init, passphrase set/change, and encrypted export.
+- Core-owned `io_error.operation` strings and
+  `unsupported_import_format.format` semantics are stable and enumerated in
+  §5.
 
 No open questions remain.
 
