@@ -297,7 +297,8 @@ Every vault-opening command except `init`:
 
 1. Resolve vault path (`--vault` or `paladin_core::default_vault_path()`).
 2. `paladin_core::inspect(path)` to learn the mode.
-3. If encrypted, prompt once via `/dev/tty`.
+3. If `inspect` returns `Missing`, return `vault_missing` immediately
+   without prompting. If encrypted, prompt once via `/dev/tty`.
 4. `paladin_core::open(path, lock)` — propagates `unsafe_permissions`;
    text mode renders the human-readable `chmod` repair string via
    `paladin_core::format_unsafe_permissions(&err)` so the CLI, TUI, and GUI
@@ -326,6 +327,9 @@ clobber sequence) without opening or decrypting the old primary.
   command dispatch.
 - [ ] Ensure new Rust source files include
   `// SPDX-License-Identifier: AGPL-3.0-or-later`.
+- [ ] Depend on `paladin-core` with the off-by-default `error-serde`
+  feature enabled so the CLI can serialize shared error kinds without a
+  hand-written mapping layer.
 - [ ] Implement `/dev/tty` passphrase, account-entry, and confirmation
   prompting with no-TTY error handling.
 - [ ] Implement account selection for `issuer:label` substring queries and
@@ -357,9 +361,11 @@ where relevant, and exit code.
   scripted `/dev/tty` (via `script` or `pty-process` test helper), plus
   no-TTY failure as `io_error` with `operation: "account_prompt"`.
 - **`add` mode-combination rejection** (e.g. `--uri` + `--qr`,
-  `--qr` + `--allow-duplicate`); also `add --json` without an input
-  flag (no `--uri` / `--qr` / manual flags) rejects at parse time with a
-  JSON error envelope.
+  `--qr` + `--allow-duplicate`) plus manual kind-specific validation
+  (`--period` on HOTP and `--counter` on TOTP reject with
+  `validation_error`); also `add --json` without an input flag (no
+  `--uri` / `--qr` / manual flags) rejects at parse time with a JSON
+  error envelope.
 - **`add --qr`** with synthetic QR image (multi-entry path uses fixed
   `--on-conflict=skip`).
 - **`add` duplicate behavior** — `(secret, issuer, label)` collision
@@ -452,22 +458,27 @@ The CLI ships in `.deb`, `.rpm`, Flatpak, and AppImage in v0.1
 (§11.1). Implementation owes the release pipeline:
 
 - **Man page.** Generate `paladin.1` from clap via `clap_mangen`,
-  driven by `cargo xtask man` (or a `build.rs` step) so the page
-  always tracks the live argument tree. The packaging configs ship
-  it gzipped at `/usr/share/man/man1/paladin.1.gz` per §11.3.
+  driven by `cargo xtask man` so the page always tracks the live
+  argument tree. The packaging configs ship it gzipped at
+  `/usr/share/man/man1/paladin.1.gz` per §11.3.
 - **Cargo.toml metadata.** `crates/paladin-cli/Cargo.toml` sets
   `description`, `homepage`, `repository`, `keywords`, `categories`,
-  and `license = "AGPL-3.0-or-later"`. `nfpm` reads these directly
-  when building `.deb` / `.rpm` so the per-format configs in
+  and `license = "AGPL-3.0-or-later"`. The packaging pipeline sources
+  these values from Cargo metadata when building `.deb` / `.rpm` so the
+  per-format configs in
   `packaging/deb/paladin.yaml` and `packaging/rpm/paladin.yaml`
   stay minimal. The Debian one-line description is short enough for
   the 60-char limit; the long form is sourced from README.
 - **Flatpak.** `packaging/flatpak/paladin.yml` declares
-  `org.freedesktop.Platform//23.08`, no `--share=network`, and only
-  `xdg-data/paladin:create` plus `xdg-config/paladin:create`. No
-  D-Bus or session-bus access is requested. `flatpak run io.…Cli`
-  inherits the invoking terminal's stdin / stdout / stderr so
-  `--json` scripting works end-to-end via the Flatpak entry point.
+  `org.freedesktop.Platform//23.08`, no `--share=network`,
+  filesystem access scoped to `xdg-data/paladin:create` plus
+  `xdg-config/paladin:create`, and the display clipboard permissions
+  required by `paladin copy`: `--socket=wayland`,
+  `--socket=fallback-x11`, and `--share=ipc`. No direct D-Bus or
+  session-bus access is requested.
+  `flatpak run io.github.paladin_otp.Cli` inherits the invoking
+  terminal's stdin / stdout / stderr so `--json` scripting works
+  end-to-end via the Flatpak entry point.
 - **AppImage.** `linuxdeploy` assembles the AppDir; the bundled
   `AppRun` forwards argv unchanged so the AppImage is a drop-in for
   the bare binary. `paladin-<version>-x86_64.AppImage` per §11.5.

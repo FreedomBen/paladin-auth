@@ -1369,11 +1369,12 @@ artifacts side by side.
   - GUI: `org.gnome.Platform` 46 with the matching SDK.
 - **Sandbox permissions.** No `--share=network` for any front-end (§8 / §2).
   - CLI and TUI: filesystem access scoped to `xdg-data/paladin:create`
-    (vault) and `xdg-config/paladin:create` (settings). The TUI inherits
-    the host terminal's stdio when launched via `flatpak run` and, because
-    v0.1 TUI clipboard copy / QR-from-clipboard are in scope, also grants
+    (vault) and `xdg-config/paladin:create` (settings). Both inherit the
+    host terminal's stdio when launched via `flatpak run`. Because
+    `paladin copy` and the TUI clipboard copy / QR-from-clipboard flows are
+    in scope for v0.1, both CLI and TUI Flatpaks also grant
     `--socket=wayland`, `--socket=fallback-x11`, and `--share=ipc` for the
-    display clipboard path. It does not request `--socket=session-bus` or
+    display clipboard path. They do not request `--socket=session-bus` or
     `--socket=system-bus`; Flatpak's filtered portal bus access remains the
     default.
   - GUI: the same vault and settings paths plus `--socket=wayland`,
