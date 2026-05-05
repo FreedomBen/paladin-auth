@@ -956,10 +956,20 @@ Layout (single-screen MVP):
   list; encrypted vaults show the unlock screen; missing vaults show a
   non-mutating message telling the user to run `paladin init`. v0.1 TUI
   does not create vaults.
-- Modal dialogs for add / remove / passphrase / settings. Add supports
-  manual entry and QR scan from clipboard image bytes; manual duplicates
-  reject with the existing account, while QR imports use
-  `ImportConflict::Skip` and report imported/skipped/warning counts.
+- Modal dialogs for add / remove / import / export / passphrase /
+  settings. Add supports manual entry and QR scan from clipboard image
+  bytes; manual duplicates reject with the existing account, while QR
+  imports use `ImportConflict::Skip` and report
+  imported/skipped/warning counts. Import takes a file path and
+  optional explicit format, prompts for the bundle passphrase on
+  encrypted-Paladin sources, applies a user-selected on-conflict
+  policy (`skip` / `replace` / `append`), and reports
+  imported/skipped/replaced/appended/warning counts. Export writes
+  either the plaintext `otpauth://` JSON list (with an explicit
+  unencrypted-secrets warning before the write) or an encrypted
+  Paladin bundle (passphrase prompted twice and matched), refuses
+  overwrite without explicit confirmation, and surfaces the resulting
+  `0600` output path inline.
 - **Auto-lock:** **off by default.** When `auto_lock.enabled = true`, the TUI
   clears the in-memory vault after `auto_lock.timeout_secs` of no input and
   shows the unlock screen for encrypted vaults. For plaintext vaults,
@@ -993,6 +1003,17 @@ Library: **Relm4** on **GTK4**. Component tree:
 - `AddAccountComponent` — manual fields + "scan from clipboard image",
   decoded through the core raw-RGBA QR import path.
 - `RemoveDialog` — confirmation gate before `Vault::remove` + save.
+- `ImportDialog` — `gtk::FileChooserNative` for the source path, format
+  selector (auto-detect or explicit `otpauth` / `aegis` / `paladin` /
+  `qr`), on-conflict policy (`skip` / `replace` / `append`), and a
+  passphrase prompt for encrypted Paladin bundles. Reports
+  imported/skipped/replaced/appended/warning counts on success.
+- `ExportDialog` — format selector (plaintext `otpauth://` JSON list or
+  encrypted Paladin bundle), `gtk::FileChooserNative` for the
+  destination path, overwrite confirmation, twice-entered passphrase
+  for the encrypted variant, and an explicit unencrypted-secrets
+  warning before plaintext writes. Writes `0600` and surfaces the
+  output path on success.
 - `PassphraseDialog` — `set` / `change` / `remove` sub-flows mirroring the
   CLI; `set` is enabled only on plaintext vaults, `change` and `remove`
   only on encrypted vaults.
@@ -1203,7 +1224,7 @@ Concrete obligations and explicit user-controlled tradeoffs:
 - [ ] Add the `paladin-tui` crate to the workspace.
 - [ ] Single-screen list view with TOTP gauges and HOTP "advance" key.
 - [ ] Search/filter input.
-- [ ] Add / remove / passphrase / settings modals.
+- [ ] Add / remove / import / export / passphrase / settings modals.
 - [ ] Conditional unlock screen (only when vault is encrypted).
 - [ ] Missing-vault guidance screen (no implicit vault creation).
 - [ ] Opt-in auto-lock and clipboard-clear honoring vault settings, with plaintext auto-lock as a no-op.
@@ -1218,7 +1239,7 @@ Concrete obligations and explicit user-controlled tradeoffs:
 
 ### Milestone 7 — GUI *(v0.2)*
 - [ ] Add the `paladin-gtk` crate to the workspace (placeholder for v0.2 work).
-- [ ] Relm4 component tree (Unlock / List / Row / Add / Remove / Passphrase / Settings).
+- [ ] Relm4 component tree (Unlock / List / Row / Add / Remove / Import / Export / Passphrase / Settings).
 - [ ] Conditional unlock view (encrypted vaults only).
 - [ ] Clipboard + auto-lock parity with TUI (opt-in).
 - [ ] Linux desktop file + icon.

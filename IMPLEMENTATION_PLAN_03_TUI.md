@@ -38,6 +38,8 @@ crates/paladin-tui/
 │   │   └── modals/
 │   │       ├── add.rs
 │   │       ├── remove.rs
+│   │       ├── import.rs       # path + format + on-conflict + (optional) bundle passphrase
+│   │       ├── export.rs       # format + path + overwrite + (encrypted) twice-confirmed passphrase
 │   │       ├── passphrase.rs   # set/change/remove sub-flows
 │   │       └── settings.rs     # auto_lock + clipboard toggles + timeouts
 │   ├── search.rs          # incremental filter over Vault::iter()
@@ -182,6 +184,40 @@ it is not bound to quit there).
   Durability-unconfirmed saves leave the account removed in memory
   (matching the committed on-disk state) and surface the warning
   inline.
+- **Import** — text field for the source path, a format selector
+  (auto-detect or explicit `otpauth` / `aegis` / `paladin` / `qr`),
+  and an on-conflict selector (`skip` / `replace` / `append`).
+  Encrypted Paladin bundles (explicit `format == paladin`, or
+  auto-detected via the Paladin header) prompt for the bundle
+  passphrase inside the modal before invoking the importer. The
+  selected `paladin_core::import::*` returns
+  `Vec<ValidatedAccount>`; on success, `Vault::import_accounts(accounts,
+  conflict)` is called with the user's policy and persisted via
+  `Vault::save(&Store)`. The modal reports
+  imported/skipped/replaced/appended/warning counts inline on
+  success. Pre-commit save failures (`save_not_committed`) roll back
+  the in-memory `import_accounts` mutation so memory matches disk and
+  the modal stays open with the inline error; durability-unconfirmed
+  saves leave the merged accounts in memory (matching the committed
+  on-disk state) and surface the warning. Importer errors
+  (`unsupported_plaintext_vault`, `unsupported_encrypted_aegis`,
+  `unsupported_aegis_entry_type`, `validation_error`,
+  `no_entries_to_import`, `decrypt_failed`, `io_error`) stay in the
+  modal as inline errors and never mutate vault state.
+- **Export** — format selector (plaintext `otpauth://` JSON list or
+  encrypted Paladin bundle) and a destination path field. Overwriting
+  an existing file is rejected unless the user confirms an inline
+  overwrite gate (parity with CLI `--force`). Encrypted exports
+  prompt twice for the bundle passphrase and reject mismatch with
+  inline `invalid_passphrase` (`reason: "confirmation_mismatch"`) or
+  empty entry with `reason: "zero_length"`. Plaintext exports show
+  an explicit "this writes unencrypted secrets to disk" warning that
+  the user must confirm before the write proceeds. Writes go through
+  the same `0600` atomic-write pipeline used by the vault. On
+  success the modal closes with a status-line confirmation showing
+  the written path; errors (`io_error`, refused-overwrite,
+  `invalid_passphrase`) stay in the modal as inline errors. Export
+  does not mutate the vault, so there is no rollback path.
 - **Passphrase** — three sub-flows mirroring CLI's
   `passphrase set / change / remove`. The available sub-flow is gated
   by vault mode: `set` is offered only on plaintext vaults
@@ -279,6 +315,18 @@ Effects update visible state only after the underlying mutation succeeds:
 - QR clipboard import: no clipboard image, image decode failure, zero
   decoded QRs, and invalid QR payloads all stay in the Add modal with an
   inline error.
+- Import: importer errors (`unsupported_plaintext_vault`,
+  `unsupported_encrypted_aegis`, `unsupported_aegis_entry_type`,
+  `validation_error`, `no_entries_to_import`, `decrypt_failed`,
+  `io_error`) stay in the Import modal as inline errors and never
+  mutate vault state. Save errors follow the Add/Remove/Settings rule:
+  pre-commit (`save_not_committed`) rolls back the in-memory
+  `import_accounts` mutation; durability-unconfirmed leaves the merged
+  accounts and surfaces the warning.
+- Export: writer errors (`io_error`, refused-overwrite,
+  `invalid_passphrase`) stay in the Export modal as inline errors.
+  Export does not mutate the vault, so save-error rollback does not
+  apply.
 
 ## Keybindings (initial v0.1)
 
@@ -289,6 +337,8 @@ Effects update visible state only after the underlying mutation succeeds:
 | `n`       | HOTP next-code (advances + reveals 120s)                |
 | `a`       | Open Add modal                                          |
 | `r`       | Open Remove confirmation                                |
+| `i`       | Open Import modal                                       |
+| `e`       | Open Export modal                                       |
 | `/`       | Focus search bar                                        |
 | `p`       | Open Passphrase modal                                   |
 | `s`       | Open Settings modal                                     |
@@ -326,6 +376,25 @@ captured with `insta` golden snapshots using `ratatui::backend::TestBackend`.
   with a fresh ID; clipboard QR import uses `ImportConflict::Skip`,
   reports imported/skipped counts, handles validation warnings, and
   rejects no-image / no-QR / invalid-QR cases inline.
+- **Import modal**: format auto-detect routes to the correct
+  `paladin_core::import::*` (otpauth / aegis / paladin / qr); explicit
+  `--format` override honored; encrypted-Paladin path prompts for the
+  bundle passphrase before invoking the importer; on-conflict policy
+  (`skip` / `replace` / `append`) is forwarded to
+  `Vault::import_accounts` and reflected in the report counts;
+  importer error kinds listed under "Effect errors" surface inline
+  without mutation; successful imports persist via `Vault::save(&Store)`
+  and a `save_not_committed` failure rolls back the in-memory merge so
+  `Vault::iter()` matches its pre-attempt snapshot.
+- **Export modal**: format selector routes to
+  `paladin_core::export::otpauth_list` or
+  `paladin_core::export::encrypted`; refused overwrite rejects without
+  writing; encrypted export prompts twice and rejects mismatch with
+  `confirmation_mismatch` and empty entry with `zero_length`;
+  plaintext export requires the unencrypted-secrets confirmation
+  before writing; output file is `0600`; writer `io_error` surfaces
+  inline and the modal stays open. Export performs no `Vault::save`
+  and leaves vault state unchanged across success and failure.
 - **Settings modal**: pending edits are buffered until Confirm; `Esc`
   discards them without invoking setters or save; Confirm runs every
   changed setter and persists with one `Vault::save(&Store)`; setter
@@ -337,7 +406,10 @@ captured with `insta` golden snapshots using `ratatui::backend::TestBackend`.
 - **Pre-commit save rollback**: Add modal `save_not_committed`
   removes the just-added account(s) from the in-memory vault; Remove
   modal `save_not_committed` restores the removed account at its
-  previous iteration position; Settings modal `save_not_committed`
+  previous iteration position; Import modal `save_not_committed`
+  reverses the `import_accounts` merge (insertions removed,
+  `replace`d entries restored to their pre-import field values, and
+  `append`ed entries dropped); Settings modal `save_not_committed`
   restores the prior settings values. Each case verifies that
   `Vault::iter()` (or `Vault::settings()`) post-failure matches its
   pre-attempt snapshot, the modal stays open with the typed inline
@@ -350,11 +422,15 @@ captured with `insta` golden snapshots using `ratatui::backend::TestBackend`.
   reveal advances again (does not no-op).
 - **Insta snapshots** for every screen state: empty vault, single TOTP,
   mixed TOTP/HOTP with hidden + revealed rows, search-active, every modal
-  (Add / Remove / Passphrase set/change/remove / Settings), unlock screen,
-  missing-vault screen, status-line error after rejected copy, `--no-color`
-  variants. Error-state snapshots: inline `save_not_committed` and
-  `save_durability_unconfirmed` rendered in each mutating modal (Add,
-  Remove, Passphrase set/change/remove, Settings); status-line
+  (Add / Remove / Import / Export / Passphrase set/change/remove /
+  Settings), unlock screen, missing-vault screen, status-line error
+  after rejected copy, `--no-color` variants. Error-state snapshots:
+  inline `save_not_committed` and `save_durability_unconfirmed`
+  rendered in each mutating modal (Add, Remove, Import, Passphrase
+  set/change/remove, Settings); Import modal with each importer error
+  kind and the post-import counts panel; Export modal with refused-
+  overwrite, `confirmation_mismatch`, `zero_length`, plaintext-export
+  warning, and `io_error` writer failure; status-line
   `save_durability_unconfirmed` after HOTP `n`; status-line
   `clipboard_write_failed` after a failed copy; unlock screen with
   inline wrong-passphrase error; Add modal with QR-import inline
@@ -393,7 +469,7 @@ Dev-dependencies: `insta` for golden snapshots.
 - [ ] Implement reducer, event producers, effect execution, and timer tokens.
 - [ ] Implement list layout, search, TOTP gauges, HOTP reveal/copy behavior,
   and status-line errors.
-- [ ] Implement add / remove / passphrase / settings modals with persistence.
+- [ ] Implement add / remove / import / export / passphrase / settings modals with persistence.
 - [ ] Implement clipboard wrapper, QR image import from clipboard bytes, and
   only-if-unchanged auto-clear.
 - [ ] Add reducer, search, auto-lock, clipboard, HOTP reveal, and snapshot
