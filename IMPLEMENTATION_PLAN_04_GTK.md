@@ -284,17 +284,18 @@ Effects update visible state only after the underlying mutation succeeds:
   `/usr/bin/paladin-gtk`, the desktop entry at
   `/usr/share/applications/`, and the icon set under
   `/usr/share/icons/hicolor/`. Debian declares `libgtk-4-1
-  (>= 4.10)` (and `libadwaita-1-0 (>= 1.4)` if the v0.2 build
-  depends on libadwaita — see "Open packaging question" below);
-  Fedora declares the matching `gtk4` (and `libadwaita`) package
-  names. No maintainer scripts: the vault is created on first use
-  under `$XDG_DATA_HOME/paladin/`. The desktop-entry validator
+  (>= 4.10)` and `libadwaita-1-0 (>= 1.4)`; Fedora declares the
+  matching `gtk4` and `libadwaita` package names. No maintainer
+  scripts: the vault is created on first use under
+  `$XDG_DATA_HOME/paladin/`. The desktop-entry validator
   (`desktop-file-validate`) and the `gtk4-update-icon-cache` post-
   install hook are run by the §11 packaging pipeline, not by the
   package itself.
 - **Flatpak.** `packaging/flatpak/paladin-gtk.yml` declares
-  `org.gnome.Platform//46` (and the matching SDK), no
-  `--share=network`, and the §11.4 sandbox permissions:
+  `org.gnome.Platform//46` (and the matching SDK) — that runtime
+  bundles GTK 4.14+ and libadwaita 1.5+, both ahead of the
+  packaging baseline. No `--share=network`, and the §11.4 sandbox
+  permissions:
   `xdg-data/paladin:create`, `xdg-config/paladin:create`, plus the
   Wayland and X11 fallback sockets and clipboard access required
   for `gdk::Clipboard`. The Flatpak app ID is the §11.4
@@ -326,17 +327,14 @@ Effects update visible state only after the underlying mutation succeeds:
   `desktop-file-validate` passes on the installed `.desktop`
   entry.
 
-### Open packaging question — libadwaita
+### libadwaita decision (2026-05-05)
 
-DESIGN §11.3 declares `libadwaita-1-0 (>= 1.4)` as a Debian dependency
-for `paladin-gtk`, but this plan's "Dependencies" section says
-**No `libadwaita` for v0.2** — styling stays on `gtk::CssProvider`.
-The two are inconsistent: a runtime dep on libadwaita without a
-build-time dep is misleading. Resolve before Milestone 7 — either
-adopt `libadwaita` for v0.2 (and drop the §"No libadwaita" note) or
-drop the libadwaita line from §11.3 and the packaging configs. Flag
-the choice to the user; both paths are within the AGPL / GTK4
-constraints, but the choice changes the dep declaration above.
+Resolved: **adopt `libadwaita` for v0.2.** The runtime declaration in
+§11.3 (`libadwaita-1-0 (>= 1.4)`) now matches the build-time crate
+dependency in §"Dependencies" above; the GUI uses Adwaita widgets
+where the GNOME HIG calls for them (see §"libadwaita usage" above).
+No further action needed beyond keeping the build-time and
+runtime-declared baselines aligned.
 
 ## Tests
 
@@ -375,21 +373,70 @@ The GUI itself is hard to test without a display server. Tests are split:
 
 ## Dependencies (per §9)
 
-`relm4`, `gtk4` (via `gtk4-rs`), `glib`, `gio`, `gdk4`, `clap`,
-`directories`, plus `paladin-core`. GDK clipboard is the canonical
-Wayland/X11 path; `arboard` is **not** a hard dependency for v0.2 and is
-only added if GDK clipboard proves insufficient during implementation.
+`relm4`, `gtk4` (via `gtk4-rs`), `libadwaita` (via `libadwaita-rs`,
+baseline 1.4 to match the §11.3 Debian dep declaration), `glib`,
+`gio`, `gdk4`, `clap`, `directories`, plus `paladin-core`. GDK
+clipboard is the canonical Wayland/X11 path; `arboard` is **not** a
+hard dependency for v0.2 and is only added if GDK clipboard proves
+insufficient during implementation.
 
-**No `libadwaita` for v0.2.** Styling is delegated to plain GTK4 widgets
-plus the bundled `data/style.css` (Adwaita-style, scoped via
-`gtk::CssProvider`). Adding `libadwaita` for `AdwApplicationWindow` /
-`AdwHeaderBar` / `AdwToast` is a possible v0.3 polish step if the
-manual test plan flags HIG gaps; it would require a §9 dependencies
-update first.
+`libadwaita` is adopted for v0.2 (decision 2026-05-05) so the GUI
+follows the GNOME HIG out of the box and the §11.3 packaging
+declaration matches the actual binary dependency. `data/style.css`
+(scoped via `gtk::CssProvider`) carries only Paladin-specific tweaks
+on top of Adwaita defaults — it never tries to recreate the Adwaita
+palette.
 
 **No `tokio`.** GTK's main loop is the executor; long work runs on
 `gio::spawn_blocking` with results delivered back to the main thread via
 Relm4 messages.
+
+## libadwaita usage
+
+Components map to Adwaita widgets where the HIG calls for them; the
+list below pins the v0.2 choices so the implementation does not drift
+back into vanilla GTK4 widgets where Adwaita is idiomatic:
+
+- **Window shell.** `AppModel`'s root is an `AdwApplicationWindow`
+  with an `AdwHeaderBar`. The header bar carries the search-toggle
+  button and a primary menu (`AdwSplitButton` or a plain
+  `gtk::MenuButton` driven by `gio::Menu` — choice deferred to
+  implementation). No custom title-bar drawing.
+- **Toast surface.** `AppModel` wraps the main content in an
+  `AdwToastOverlay`. Transient feedback that does not need a modal —
+  copy confirmation, `save_durability_unconfirmed` after a HOTP
+  advance, clipboard-clear-fired notice, settings-saved confirmation
+  — is delivered via `AdwToast`. Status-line errors that block
+  further interaction stay inline in the affected dialog.
+- **Confirmation dialogs.** `RemoveDialog`, the plaintext-export
+  consent step, and the export overwrite gate are
+  `AdwMessageDialog`s with `destructive-action` styling on the
+  destructive button. The §6 wording (e.g. the plaintext-export
+  "this writes unencrypted secrets to disk" warning) is reused
+  verbatim so the UX matches the TUI.
+- **Preferences.** `SettingsComponent` renders inside an
+  `AdwPreferencesWindow` with one `AdwPreferencesGroup` for
+  auto-lock and one for clipboard-clear. Toggles use
+  `AdwSwitchRow` / `AdwActionRow`; spinners use `AdwSpinRow`.
+  Live-apply (per the existing component description) still drives a
+  `Vault::save(&Store)` per change; the prior
+  validate-revert-on-failure behavior is preserved.
+- **Passphrase entry.** `UnlockComponent` and `PassphraseDialog`
+  use `AdwPasswordEntryRow` for passphrase inputs, including the
+  twice-confirmed entries on `set` / `change` and on
+  `ExportDialog`'s encrypted bundle path. Inline validation errors
+  (`confirmation_mismatch`, `zero_length`, `decrypt_failed`) attach
+  to the row via `AdwEntryRow::add-css-class("error")` plus a
+  status-line label below the row.
+- **About / help.** `AdwAboutWindow` is wired to the application
+  menu and pulls program metadata from the binary's Cargo manifest;
+  the AGPL-3.0-or-later license text ships in the gresource bundle.
+
+GTK-only widgets (`gtk::ListView`, `gtk::SearchEntry`,
+`gtk::FileChooserNative`, `gtk::IconTheme`, `gdk::Clipboard`) keep
+their existing roles — Adwaita does not replace those. The component
+tree section above remains the source of truth for behavior; this
+section just pins which Adwaita class fills each role.
 
 ## Out of scope for v0.2
 

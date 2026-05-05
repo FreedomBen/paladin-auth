@@ -1114,7 +1114,7 @@ Concrete obligations and explicit user-controlled tradeoffs:
 | `ratatui`                          | TUI rendering                    |
 | `crossterm`                        | TUI backend                      |
 | `tui-input`                        | TUI text input widget            |
-| `relm4`, `gtk4`                    | GUI (v0.2)                       |
+| `relm4`, `gtk4`, `libadwaita`      | GUI (v0.2) — Adwaita widgets, HIG dialogs, toasts |
 | `clap`                             | CLI parsing                      |
 | `serde`, `serde_json`, `bincode` (v2) | Vault and JSON I/O             |
 | `hmac`, `sha1`, `sha2`             | TOTP / HOTP primitives           |
