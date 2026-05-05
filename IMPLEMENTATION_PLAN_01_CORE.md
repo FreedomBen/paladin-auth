@@ -86,13 +86,19 @@ crates/paladin-core/
 
 Each step lands as its own commit. Tests come first.
 
-### Phase A — Scaffolding
+### Phase A — Scaffolding (Milestone 0)
 
 - [ ] Create virtual workspace `Cargo.toml` (members: `paladin-core` only at this
   point; binaries added in their own plans).
 - [ ] Create `rust-toolchain.toml` and `crates/paladin-core/Cargo.toml` with
   `license`, `rust-version` (MSRV decision: pin to current stable at scaffold
   time and record it in CLAUDE.md).
+- [ ] Extend `.gitignore` for the Rust workspace: ignore `/target` and any
+  other build/test artifacts the repo will produce. The existing entries
+  (`TODO.md`, `.claude/settings.local.json`, `.codex`) stay.
+- [ ] Write `README.md` with build instructions covering the §10 CI gate
+  (`cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo test --all`,
+  `cargo deny check`, `cargo audit`) — the §12 Milestone 0 README deliverable.
 - [ ] Add SPDX header to every source file.
 - [ ] Wire `cargo deny` policy: deny known network-stack crates (`tokio`,
   `reqwest`, `hyper`, etc.) and document manual review for new dependencies.
@@ -104,9 +110,10 @@ Each step lands as its own commit. Tests come first.
 ### Phase B — Domain model + validation (Milestone 1, part 1)
 
 - [ ] Tests: `domain/validation.rs` covering every branch in §4.1 (digits range,
-  TOTP period bounds, HOTP counter bounds, empty labels, malformed icon-hint
-  slugs, mismatched otpauth issuers, invalid timestamps; short-secret warnings
-  in 10–15 byte range).
+  TOTP period bounds, HOTP counter bounds, label and issuer 128-byte caps,
+  empty labels, secret length rejection below 10 bytes and above 1024 bytes,
+  malformed icon-hint slugs, mismatched otpauth issuers, invalid timestamps;
+  short-secret warnings in 10–15 byte range).
 - [ ] Implement `Account`, `AccountId` (UUIDv4 stored as 16 bytes, hyphenated
   canonical `Display`; the CLI computes any short-prefix disambiguator at
   render time since uniqueness depends on full vault contents the library
@@ -427,7 +434,10 @@ is a separate `#[test]` or `cases![]` family.
 - Account identity / secret hygiene: UUIDv4 bytes + canonical display,
   `Secret` zeroization, `Secret` non-`Debug` compile-fail coverage, and no
   secret bytes in any public `Debug` output for secret-bearing types.
-- Account validation matrix — every branch in §4.1.
+- Account validation matrix — every branch in §4.1, including secret length
+  rejection at `<10` and `>1024` decoded bytes, label and issuer 128-byte
+  caps, TOTP period bounds, HOTP counter bounds, digits range, icon-hint
+  slug rules, and timestamp upper bound.
 - Manual `AccountInput` validation — `AccountKindInput` TOTP/HOTP
   selection, TOTP period defaults / overrides, HOTP counter defaults /
   overrides, and rejection of period-on-HOTP or counter-on-TOTP.
