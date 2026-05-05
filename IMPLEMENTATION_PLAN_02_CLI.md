@@ -6,9 +6,10 @@ Depends on: [`IMPLEMENTATION_PLAN_01_CORE.md`](IMPLEMENTATION_PLAN_01_CORE.md).
 ## Scope
 
 Stateless CLI binary `paladin` that opens a vault, performs one operation,
-and exits. Per CLAUDE.md: auto-lock and clipboard-clear are TUI/GUI-only —
-the CLI ignores `clipboard.clear_enabled`. The CLI also forwards `paladin tui`
-as a thin `exec` wrapper around the `paladin-tui` binary.
+and exits. Per DESIGN.md §5 and §8, auto-lock and clipboard-clear are
+TUI/GUI-only — the CLI ignores `clipboard.clear_enabled`. The CLI also
+forwards `paladin tui` as a thin `exec` wrapper around the `paladin-tui`
+binary.
 
 ## Crate layout
 
@@ -75,8 +76,8 @@ crates/paladin-cli/
 | `remove <query>`                                       | Confirmation prompt unless `--yes`. `--yes` is required under `--json` (no TTY prompt). Single-match required. |
 | `rename <query> <new-label>`                           | Updates `updated_at`. Single-match required. |
 | `passphrase set | change | remove`                     | `passphrase remove` requires `--yes-i-know` to skip the warning; required under `--json`. |
-| `import <path> [--format <fmt>] [--on-conflict <p>]`   | Auto-detects when `--format` is omitted; forced formats are `otpauth`/`aegis`/`paladin` (encrypted bundle only)/`qr`; conflict policies are `skip`/`replace`/`append`. |
-| `export --plaintext <path> | --encrypted <path>`       | Refuses overwrite without `--force`; plaintext export prints a clear warning before writing unencrypted secrets. |
+| `import <path> [--format <fmt>] [--on-conflict <p>]`   | Auto-detects when `--format` is omitted; forced formats are `otpauth`/`aegis`/`paladin` (encrypted bundle only)/`qr`; conflict policies are `skip` (default)/`replace`/`append`. |
+| `export --plaintext <path> | --encrypted <path>`       | Refuses overwrite without `--force`; both modes create output `0600`; plaintext export prints a clear warning before writing unencrypted secrets. |
 | `settings get [key] | set <key> <value>`               | CLI persists `clipboard.clear_enabled` for TUI/GUI to honor but **ignores it at runtime** for `paladin copy`. `get [key]` filters text-mode display only; the `--json` shape is always the full `VaultSettings`. |
 | `tui`                                                  | `execvp` `paladin-tui`; rejects `--json`; forwards `--vault` / `--no-color`. |
 
@@ -91,8 +92,9 @@ crates/paladin-cli/
    `--issuer`, `--algorithm sha1|sha256|sha512`, `--digits 6|7|8`,
    `--kind totp|hotp`, `--period <secs>` (TOTP-only), `--counter <u64>`
    (HOTP-only, default 0), `--icon-hint <slug>` (when omitted, derived
-   from issuer per §4.1). Defaults: TOTP, SHA1, 6, 30s. `--secret` is
-   Base32 text validated per §4.1.
+   from issuer per §4.1). Defaults: TOTP, SHA1, 6, 30s. Manual fields
+   use §4.1 validation: `--period` is 1..=300 seconds, `--icon-hint`
+   matches `[a-z0-9_-]+` up to 64 bytes, and `--secret` is Base32 text.
 4. `--qr <path>` — every decoded QR added; collisions use a fixed
    `--on-conflict=skip`; errors if no QR decodes.
 
@@ -103,19 +105,20 @@ additionally rejected at parse time — one of `--uri`, `--qr`, or the
 manual flags must be supplied — mirroring the no-prompt rule on
 `remove --json` and `passphrase remove --json`. Single-entry `add`
 rejects an existing `(secret, issuer, label)` collision with
-`duplicate_account` unless `--allow-duplicate` is passed. `--allow-duplicate` is mutually
-exclusive with `--qr` and is rejected at parse time.
+`duplicate_account` unless `--allow-duplicate` is passed.
+`--allow-duplicate` is mutually exclusive with `--qr` and is rejected at
+parse time.
 
 ## Settings keys
 
 `settings set` accepts the §5 dotted keys only:
 
-| Key                       | Type | Minimum |
-| ------------------------- | ---- | ------- |
-| `auto_lock.enabled`       | bool | n/a     |
-| `auto_lock.timeout_secs`  | u32  | `30`    |
-| `clipboard.clear_enabled` | bool | n/a     |
-| `clipboard.clear_secs`    | u32  | `5`     |
+| Key                       | Type | Default | Minimum |
+| ------------------------- | ---- | ------- | ------- |
+| `auto_lock.enabled`       | bool | `false` | n/a     |
+| `auto_lock.timeout_secs`  | u32  | `300`   | `30`    |
+| `clipboard.clear_enabled` | bool | `false` | n/a     |
+| `clipboard.clear_secs`    | u32  | `20`    | `5`     |
 
 Text-mode `settings get [key]` may filter to one dotted key. `--json`
 always returns the full nested `VaultSettings` object, and dotted key names
@@ -127,9 +130,11 @@ strings, then validated against the minimums above.
 
 - All passphrase I/O goes through `rpassword` reading **from `/dev/tty`** in
   both text and `--json` modes. Never from stdin/stdout.
-- Prompted **once**: existing-vault unlock, encrypted-Paladin-bundle import.
-- For Paladin-bundle imports the CLI calls `paladin_core::inspect(path)`
-  before prompting: plaintext-mode bundles reject with
+- Prompted **once per prompt target**: existing-vault unlock,
+  encrypted-Paladin-bundle import.
+- For Paladin-bundle imports the CLI calls
+  `paladin_core::inspect(import_path)` before prompting: plaintext-mode
+  bundles reject with
   `unsupported_plaintext_vault` immediately (no passphrase prompt), and
   only encrypted-mode bundles trigger the bundle-passphrase prompt before
   the call to `paladin_core::import::paladin`.
@@ -141,6 +146,9 @@ strings, then validated against the minimums above.
   rejects with `invalid_passphrase` `reason: "zero_length"`.
 - Confirmation mismatch exits before mutation with `invalid_passphrase`
   `reason: "confirmation_mismatch"`.
+- Wrong starting states for `passphrase set`, `passphrase change`, and
+  `passphrase remove` surface `invalid_state` before any new-passphrase
+  prompt, destructive confirmation, or crypto material generation.
 - If `/dev/tty` is unavailable, exit with `io_error` and `operation:
   "passphrase_prompt"`.
 
@@ -151,6 +159,12 @@ strings, then validated against the minimums above.
 - `--json` emits the stable schema from §5 to stdout on success and one
   JSON document to stderr on failure. The `code` field is a string so
   leading zeroes are preserved.
+- To keep scripting predictable, the CLI pre-scans argv for an exact
+  `--json` token before clap parsing. If present, syntax/usage failures
+  also render the JSON error envelope to stderr instead of clap's text
+  diagnostics. They keep clap's normal syntax-error exit code and use
+  `kind: "validation_error"`; when no more specific parser-side field is
+  available, use `field: "argv"` and `reason: "usage"`.
 - The error envelope uses the full v0.1 `kind` taxonomy from §5 verbatim —
   the CLI never invents new kinds or renames existing ones:
   `validation_error`, `invalid_passphrase`, `invalid_state`,
@@ -181,8 +195,9 @@ strings, then validated against the minimums above.
   plaintext-export warning, are written to stderr.
 
 Exit codes: `0` success; clap's default usage/parse exit for syntax errors;
-`1` for Paladin runtime errors. `--json` does not change exit codes; the
-JSON envelope carries the detailed `kind`.
+`1` for Paladin runtime errors. `--json` does not change exit codes; it only
+changes the error renderer for syntax/usage failures and lets the JSON
+envelope carry the detailed `kind`.
 
 ## `paladin tui` exec wrapper
 
@@ -194,7 +209,7 @@ JSON envelope carries the detailed `kind`.
 - Keeps the §3 "binaries don't reach into each other" rule intact — no
   in-process re-implementation of the TUI.
 
-## Vault interaction pattern (CLI is stateless per CLAUDE.md)
+## Vault interaction pattern (CLI is stateless per DESIGN.md §8)
 
 Every vault-opening command except `init`:
 
@@ -223,6 +238,8 @@ without opening or decrypting the old primary.
 
 - [ ] Scaffold `crates/paladin-cli` with clap parsing, global flags, and
   command dispatch.
+- [ ] Ensure new Rust source files include
+  `// SPDX-License-Identifier: AGPL-3.0-or-later`.
 - [ ] Implement `/dev/tty` passphrase prompting and no-TTY error handling.
 - [ ] Implement account selection and `id:<hex>` disambiguation.
 - [ ] Implement `init`, account CRUD, `show`/`peek`/`copy`, passphrase,
@@ -251,7 +268,8 @@ where relevant, and exit code.
   scripted `/dev/tty` (via `script` or `pty-process` test helper).
 - **`add` mode-combination rejection** (e.g. `--uri` + `--qr`,
   `--qr` + `--allow-duplicate`); also `add --json` without an input
-  flag (no `--uri` / `--qr` / manual flags) rejects at parse time.
+  flag (no `--uri` / `--qr` / manual flags) rejects at parse time with a
+  JSON error envelope.
 - **`add --qr`** with synthetic QR image (multi-entry path uses fixed
   `--on-conflict=skip`).
 - **`add` duplicate behavior** — `(secret, issuer, label)` collision
@@ -264,10 +282,10 @@ where relevant, and exit code.
 - **Query resolution** — `id:<hex>` prefix routes to UUID match, never
   substring; prefixes shorter than 8 hex chars, longer than 32 hex chars,
   or containing non-hex characters reject with `validation_error`.
-- **`copy` writes to clipboard** — gated behind a `#[cfg]` test flag because
-  CI may not have a clipboard server; otherwise dry-run via a
-  `PALADIN_CLIPBOARD_DRYRUN=1` env var observed by the CLI clipboard
-  adapter before it calls `arboard`.
+- **`copy` writes to clipboard** — gated behind a test-only build cfg/feature
+  because CI may not have a clipboard server; otherwise dry-run via a
+  `PALADIN_CLIPBOARD_DRYRUN=1` env var honored only by the test build before
+  the CLI clipboard adapter calls `arboard`.
   Asserts the CLI **never** schedules an auto-clear regardless of
   `clipboard.clear_enabled` in the vault. Clipboard failure after a
   committed HOTP advance returns `clipboard_write_failed` and leaves the
@@ -282,31 +300,35 @@ where relevant, and exit code.
   `--yes-i-know` rejects at parse time. No-TTY prompt failures surface as
   `io_error` with `operation: "passphrase_prompt"`; confirmation mismatch
   surfaces as `invalid_passphrase` with
-  `reason: "confirmation_mismatch"`. Durability-unconfirmed surfaced as
-  `save_durability_unconfirmed` (with `committed: true`) when the
-  post-commit fsync fails; pre-commit failure surfaces as
+  `reason: "confirmation_mismatch"`. Wrong starting states (`set` on
+  encrypted, `change`/`remove` on plaintext) surface `invalid_state`
+  before new-passphrase prompts or mutation. Durability-unconfirmed is
+  surfaced as `save_durability_unconfirmed` (with `committed: true`) when
+  the post-commit fsync fails; pre-commit failure surfaces as
   `save_not_committed` with `committed: false`. Process-level CLI tests
   opt the test build of the `paladin` binary into the `paladin-core`
   `test-fault-injection` cargo feature; the env var
   `PALADIN_FAULT_INJECT=pre_commit|post_commit` selects which `Store`
   failure path fires so `save_not_committed` and
   `save_durability_unconfirmed` envelopes can be exercised end-to-end.
-- **`import`** for each format with each `--on-conflict` policy. Atomic
-  failure on any invalid entry.
+- **`import`** for each format with each `--on-conflict` policy; omitting
+  `--on-conflict` defaults to `skip`. Atomic failure on any invalid entry.
 - **`export --plaintext` / `--encrypted`** refuses overwrite without
-  `--force`. Plaintext export prints the unencrypted-secrets warning;
-  encrypted export round-trips through `import`.
-- **`settings get/set`** covers every dotted key, bool/u32 value parsing,
-  minimum-value validation, text-mode filtering, and full `VaultSettings`
-  JSON output.
-- **`--json` schema snapshots** for every command success and every
-  `error_kind`. Locked via `insta`.
+  `--force` and writes output `0600`. Plaintext export prints the
+  unencrypted-secrets warning; encrypted export round-trips through
+  `import`.
+- **`settings get/set`** covers default values, every dotted key, bool/u32
+  value parsing, minimum-value validation, text-mode filtering, and full
+  `VaultSettings` JSON output.
+- **`--json` schema snapshots** for every command success, every
+  `error_kind`, and representative syntax/usage failures rendered as
+  JSON when `--json` is present. Locked via `insta`.
 - **`--no-color`** disables ANSI; `NO_COLOR` env var honored.
 - **`paladin tui`** → spawns `paladin-tui` (a stub binary placed on `PATH`
   for the test asserts argv) and forwards `--vault` / `--no-color` in both
   accepted global-flag positions. `paladin tui --json` and `paladin --json
-  tui` → rejected at parse time. Missing `paladin-tui` → `io_error` with
-  `operation: "exec_paladin_tui"`.
+  tui` → rejected at parse time with JSON error envelopes. Missing
+  `paladin-tui` → `io_error` with `operation: "exec_paladin_tui"`.
 
 ## Definition of done
 

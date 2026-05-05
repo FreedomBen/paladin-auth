@@ -388,7 +388,7 @@ Two formats, user picks per invocation:
   path. Cross-compatible with most authenticators that accept URI lists.
   **The CLI prints a clear warning** before writing unencrypted secrets to
   disk and refuses to write to a file that already exists unless `--force`
-  is given.
+  is given. The output file is created `0600`.
 - **Encrypted (Paladin bundle).** The same accounts encoded as
   `VaultPayload { accounts, settings: VaultSettings::default() }` and
   wrapped in Paladin's encrypted file format (§4.3) under a passphrase
@@ -397,6 +397,7 @@ Two formats, user picks per invocation:
   returns an error rather than silently producing a plaintext-equivalent
   bundle. The CLI refuses to write an encrypted export to a file that
   already exists unless `--force` is given, matching plaintext export.
+  The output file is created `0600`.
 
 #### Import
 
@@ -603,8 +604,8 @@ Built with `clap` (derive). Commands:
 | `paladin passphrase set`                    | Encrypt a plaintext vault under a new passphrase.                |
 | `paladin passphrase change`                 | Re-encrypt under a new passphrase.                               |
 | `paladin passphrase remove`                 | Decrypt to plaintext. Requires `--yes-i-know` to skip the warning. Required under `--json` (no TTY prompt available). |
-| `paladin export --plaintext <out>`          | Write JSON `otpauth://` array. Warns; refuses overwrite without `--force`. |
-| `paladin export --encrypted <out>`          | Write Paladin-format encrypted bundle. Refuses overwrite without `--force`. |
+| `paladin export --plaintext <out>`          | Write JSON `otpauth://` array. Warns; refuses overwrite without `--force`; creates output `0600`. |
+| `paladin export --encrypted <out>`          | Write Paladin-format encrypted bundle. Refuses overwrite without `--force`; creates output `0600`. |
 | `paladin import [--on-conflict=<mode>] <path>` | Auto-detect format and merge into the vault. Conflict mode: `skip` (default), `replace`, `append`. See merge policy below. |
 | `paladin import --format=<fmt> <path>`      | Force format: `otpauth`, `aegis`, `paladin` (encrypted bundle only), `qr`.               |
 | `paladin settings get [key]`                | Show vault settings (auto-lock, clipboard-clear).                |
@@ -688,7 +689,15 @@ reflects the persisted post-advance counter. TOTP clipboard failures use
 the same error kind with `counter_used: null`.
 
 With `--json`, commands write one JSON document to stdout on success and
-one JSON document to stderr on failure. `code` values are strings so
+one JSON document to stderr on failure. To keep the CLI scriptable,
+`paladin` pre-scans argv for an exact `--json` token before clap parsing;
+when present, syntax/usage failures also render the JSON error envelope
+to stderr instead of clap's text diagnostics. Those parse failures keep
+clap's normal syntax-error exit code and use `kind: "validation_error"`;
+when no more specific parser-side validation field is available, they use
+`field: "argv"` and `reason: "usage"`. This JSON parse-error behavior is
+only for the `paladin` binary; `paladin-tui` and `paladin-gtk` reject
+`--json` without implementing JSON output. `code` values are strings so
 leading zeroes are preserved. The common account shape is:
 
 ```json
@@ -1035,7 +1044,8 @@ Concrete obligations and explicit user-controlled tradeoffs:
    never holding state, regardless of settings.
 8. **Plaintext export warns loudly.** The CLI prints a multi-line warning,
    refuses to overwrite an existing file without `--force`, and writes the
-   output `0600`.
+   output `0600`. Encrypted exports also refuse overwrite and create output
+   `0600`.
 9. **Imports are fully validated.** Each importer parses into validated
    account values without trusting the source's claimed structure — secrets are
    length-checked (rejected if shorter than 10 bytes / 80 bits or longer
@@ -1169,7 +1179,7 @@ Concrete obligations and explicit user-controlled tradeoffs:
 
 ### Milestone 3 — Import / Export *(v0.1)*
 - [ ] Plaintext export (JSON `otpauth://` array) with overwrite guard + `0600`.
-- [ ] Encrypted export bundle (Paladin format) with overwrite guard.
+- [ ] Encrypted export bundle (Paladin format) with overwrite guard + `0600`.
 - [ ] Importer: `otpauth://` URIs (single + list).
 - [ ] Importer: Paladin encrypted bundle; plaintext Paladin vault files return an unsupported-format error.
 - [ ] Importer: Aegis plaintext export.
@@ -1184,7 +1194,9 @@ Concrete obligations and explicit user-controlled tradeoffs:
 - [ ] `passphrase set / change / remove`.
 - [ ] `export --plaintext / --encrypted`, `import [--format]`.
 - [ ] `settings get / set`.
-- [ ] `--json` output for scripting using the schemas in §5.
+- [ ] `--json` output for scripting using the schemas in §5, including
+  JSON envelopes for syntax/usage failures when `paladin` receives
+  `--json`.
 - [ ] `assert_cmd` integration tests.
 
 ### Milestone 5 — TUI *(v0.1)*
@@ -1242,7 +1254,8 @@ Concrete obligations and explicit user-controlled tradeoffs:
 - v0.1 JSON error kinds and stable fields are fixed in §5.
 - Plaintext auto-lock is a no-op; HOTP copy in TUI/GUI only copies an
   already revealed HOTP code and never advances a second time.
-- Both plaintext and encrypted CLI exports refuse overwrite without `--force`.
+- Both plaintext and encrypted CLI exports refuse overwrite without `--force`
+  and create output `0600`.
 - Unsafe existing vault permissions are rejected with a typed error that
   tells the user which path and mode to fix (§4.3, §5).
 - `init --force` stages the new vault before rotating the old primary
