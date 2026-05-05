@@ -28,7 +28,7 @@ crates/paladin-core/
 ├── Cargo.toml            # license = "AGPL-3.0-or-later"
 ├── src/
 │   ├── lib.rs            # re-exports public surface from §4.7
-│   ├── error.rs          # PaladinError + Result alias; carries the §5 error_kind taxonomy verbatim so the CLI can emit it under --json without renaming or mapping
+│   ├── error.rs          # PaladinError + Result alias; carries core-returnable §5 error_kind values verbatim so the CLI can emit them under --json without renaming or mapping
 │   ├── domain/
 │   │   ├── mod.rs        # Account, AccountId, Algorithm, OtpKind, Code
 │   │   ├── secret.rs     # Secret newtype with Zeroize + Drop
@@ -129,11 +129,13 @@ Each step lands as its own commit. Tests come first.
   `unsupported_encrypted_aegis`, `unsupported_aegis_entry_type`,
   `no_entries_to_import`, `counter_overflow`,
   `time_range`, `save_not_committed`, `save_durability_unconfirmed`, and
-  `io_error`. The CLI-only kinds (`clipboard_write_failed`, `no_match`,
-  `multiple_matches`, `duplicate_account`) are owned by the CLI plan and
-  never returned from core — `Vault::add` is infallible per §4.7, so the
-  CLI performs `(secret, issuer, label)` collision detection itself via
-  `Vault::iter` before calling `add`.
+  `io_error`. Each included kind carries the stable extra fields from §5
+  exactly, including field names, optionality, and value formats. The
+  CLI-only kinds (`clipboard_write_failed`, `no_match`, `multiple_matches`,
+  `duplicate_account`) are owned by the CLI plan and never returned from core
+  — `Vault::add` is infallible per §4.7, so the CLI performs
+  `(secret, issuer, label)` collision detection itself via `Vault::iter`
+  before calling `add`.
 
 ### Phase C — OTP generation (Milestone 1, part 2)
 
@@ -182,7 +184,7 @@ Each step lands as its own commit. Tests come first.
   `unsafe_permissions` errors and `None` for any other kind. The text
   names the failing path, the actual and expected modes, and the exact
   `chmod` command that would repair it (`0700` for directories, `0600`
-  for files), so the CLI and GUI can render identical wording without
+  for files), so the CLI, TUI, and GUI can render identical wording without
   re-implementing it.
 - [ ] Tests: `inspect(path)` returns `Ok(Missing)` only when the primary file
   is absent, reports plaintext/encrypted mode from the header without
@@ -229,7 +231,7 @@ Each step lands as its own commit. Tests come first.
   enforcement, or `.bak` rotation.
 - [ ] Implement `format_unsafe_permissions(&PaladinError) -> Option<String>`
   per §4.7, sourcing all wording from the `unsafe_permissions` fields so
-  CLI and GUI never diverge.
+  CLI, TUI, and GUI never diverge.
 
 ### Phase F — Encrypted storage (Milestone 1, part 5)
 
@@ -240,6 +242,8 @@ Each step lands as its own commit. Tests come first.
   `kdf_id`, Argon2 params, `salt`, `aead_id`, or `nonce` causes `open` to
   fail without returning a vault; flipping a ciphertext byte fails; flipping
   the AEAD tag fails.
+- [ ] Tests: wrong encrypted-vault passphrase returns `decrypt_failed`
+  without constructing a vault.
 - [ ] Tests: Argon2 parameter bounds rejected before any KDF work (`m_kib`
   8192–1048576, `t` 1–10, `p` 1–4).
 - [ ] Tests: regular encrypted saves preserve the in-header Argon2 params
@@ -303,7 +307,8 @@ Each step lands as its own commit. Tests come first.
   mode and zeroizes the old key bytes and old passphrase.
 - [ ] Tests: wrong-starting-state calls return `invalid_state` before
   generating new crypto material; `set_passphrase` and `change_passphrase`
-  reject zero-length passphrases with `invalid_passphrase`.
+  reject zero-length passphrases with `invalid_passphrase` and
+  `reason: "zero_length"`.
 - [ ] Implement `set_passphrase`, `change_passphrase`, `remove_passphrase` on
   `Vault` going through the §4.3 atomic-write + backup pipeline.
 
@@ -322,13 +327,14 @@ Each step lands as its own commit. Tests come first.
   decoded QRs.
 - [ ] Tests for `import::otpauth`, `import::aegis_plaintext` (encrypted
   Aegis → typed `unsupported_encrypted_aegis`; non-`totp`/`hotp` entry →
-  `unsupported_aegis_entry_type` with `source_index`, batch rejected; field
-  mapping from `name`, `issuer`, `info.secret`, `info.algo`, `info.digits`,
-  `info.period`, and `info.counter`; TOTP period defaulting to 30; HOTP
-  counter required; missing required `name` or `info.secret` rejected with
-  `validation_error` + `source_index`),
+  `unsupported_aegis_entry_type` with `source_index` and `entry_type`, batch
+  rejected; field mapping from `name`, `issuer`, `info.secret`, `info.algo`,
+  `info.digits`, `info.period`, and `info.counter`; TOTP period defaulting to
+  30; HOTP counter required; missing required `name` or `info.secret`
+  rejected with `validation_error` + `source_index`),
   `import::paladin` (encrypted bundle round-trip; plaintext-mode Paladin
-  file → `unsupported_plaintext_vault`; source `VaultSettings` discarded),
+  file → `unsupported_plaintext_vault`; wrong bundle passphrase →
+  `decrypt_failed`; source `VaultSettings` discarded),
   `import::qr_image` and `import::qr_image_bytes` (decoded QRs that are not
   `otpauth://` URIs reject the batch with `validation_error` +
   `source_index`; raw RGBA byte buffers reject zero dimensions, checked
@@ -419,6 +425,8 @@ is a separate `#[test]` or `cases![]` family.
   unknown `kdf_id`, and unknown `aead_id`.
 - Header byte-flip matrix on encrypted vault — every AAD-bound byte fails
   without returning a vault.
+- Wrong encrypted-vault passphrase returns `decrypt_failed` without
+  returning a vault.
 - Argon2 param bounds — out-of-range `m_kib`, `t`, or `p` rejected pre-KDF.
 - Encrypted save invariants — size cap pre-KDF/AEAD, Argon2 params and salt
   preserved on regular saves, fresh nonce per save, ciphertext/tag tamper
@@ -454,23 +462,25 @@ is a separate `#[test]` or `cases![]` family.
   durability-unconfirmed post-commit; fresh salt/nonce behavior; backup
   rewritten under the target mode/key; cache lifecycle and old-material
   zeroization; wrong-starting-state `invalid_state`; zero-length new
-  passphrase rejection.
+  passphrase rejection with `reason: "zero_length"`.
 - `import::detect`: Paladin magic, QR image magic, Aegis plaintext/encrypted
   shapes, single/list/JSON-array `otpauth://`, empty otpauth JSON array shape,
   and `Unknown`.
 - Importers: Aegis plaintext field mapping, defaults, and required fields;
   Aegis encrypted → typed `unsupported_encrypted_aegis`; Aegis
   non-`totp`/`hotp` entry type →
-  `unsupported_aegis_entry_type` with `source_index` (batch rejected);
+  `unsupported_aegis_entry_type` with `source_index` and `entry_type` (batch
+  rejected);
   missing required Aegis fields reject with `validation_error` +
   `source_index`;
   Paladin bundle round-trip with timestamps preserved and source
   `VaultSettings` discarded; plaintext-mode Paladin file →
-  `unsupported_plaintext_vault`; QR image path and raw RGBA byte buffer
-  with N codes; raw RGBA zero dimensions, multiplication overflow, and length
-  mismatch; non-otpauth QR payloads rejected with `validation_error` +
-  `source_index`; URI-list trimming and blank-line handling; non-Paladin
-  imports use `import_time`; zero-account inputs rejected uniformly with
+  `unsupported_plaintext_vault`; wrong bundle passphrase →
+  `decrypt_failed`; QR image path and raw RGBA byte buffer with N codes;
+  raw RGBA zero dimensions, multiplication overflow, and length mismatch;
+  non-otpauth QR payloads rejected with `validation_error` + `source_index`;
+  URI-list trimming and blank-line handling; non-Paladin imports use
+  `import_time`; zero-account inputs rejected uniformly with
   `no_entries_to_import`.
 - Merge policy: `Skip` / `Replace` / `Append` including running-state
   collisions on the `(secret, issuer, label)` triple, destination `id` /
@@ -516,10 +526,10 @@ defines. Implementation owes:
   `cargo build --locked` is sufficient for §11.6 reproducibility.
   No build-time codegen depends on system clock, hostname, or
   network.
-- **Stable `error_kind` taxonomy.** `PaladinError` exposes the §5
-  kinds verbatim (no internal renaming) so the `paladin` CLI can
-  serialize them under `--json` and the strict-output rule in §5
-  holds without any mapping layer. Add a `serde::Serialize` impl
+- **Stable `error_kind` taxonomy.** `PaladinError` exposes the
+  core-returnable §5 kinds verbatim (no internal renaming) so the
+  `paladin` CLI can serialize them under `--json` and the strict-output
+  rule in §5 holds without any mapping layer. Add a `serde::Serialize` impl
   guarded by an `error-serde` cargo feature, off by default, that the
   CLI opts into; `paladin-core` itself has no JSON output paths.
 - **No platform-specific build steps.** Linux is the only target in
