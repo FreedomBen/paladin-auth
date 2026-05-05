@@ -51,6 +51,7 @@ crates/paladin-gtk/
 │   ├── auto_lock.rs       # GLib idle/timeout source; encrypted-only; plaintext no-op
 │   ├── hotp_reveal.rs     # 120s per-row reveal window
 │   ├── icons.rs           # gtk::IconTheme lookup against Account.icon_hint
+│   ├── secret_fields.rs   # extract/clear passphrase + manual-secret entries
 │   ├── search.rs          # case-insensitive issuer/label filtering
 │   └── ticker.rs          # 250ms timeout source for TOTP gauge updates
 └── tests/
@@ -90,8 +91,10 @@ inclusion.
   a hidden HOTP row is **disabled**; copying during the reveal window copies
   the visible code and does not advance again.
 - `AddAccountComponent` — manual fields + "scan from clipboard image". Reads
-  a `gdk::Texture` from the GDK clipboard, downloads it into an RGBA8
-  buffer, and passes width, height, bytes, and `import_time` to
+  a `gdk::Texture` from the GDK clipboard, allocates an exact
+  `width * height * 4` RGBA8 buffer with overflow-checked multiplication,
+  downloads with row stride `width * 4`, and passes width, height, bytes,
+  and `import_time` to
   `paladin_core::import::qr_image_bytes`. Manual entries use
   `paladin_core::validate_manual`; validation warnings show inline and do
   not block creation. Manual duplicate collisions initially reject with the
@@ -164,6 +167,16 @@ inclusion.
   validate but do not save themselves; the component owns the
   `mutate_and_save` call and surfaces any save error inline.
 
+## Secret entry handling (per §8)
+
+Passphrase fields and manual-secret fields are kept out of `AppModel`,
+`AppMsg`, `AppOutput`, and other long-lived component state. The GTK entry
+buffer is the unavoidable UI boundary; Paladin-owned copies are created only
+at submit time, immediately wrapped in `secrecy::SecretString` for core
+calls, and zeroized when dropped. Submit, cancel, dialog close, and auto-lock
+clear the relevant GTK entry widgets before the component returns to its idle
+state. Validation/status messages never include secret values.
+
 ## Auto-lock and clipboard auto-clear (per §7)
 
 Behave the same as the TUI, including **opt-in default** and the
@@ -199,7 +212,8 @@ diagnostic — `paladin-gtk` has no JSON output mode and never emits a
 JSON envelope, mirroring DESIGN §5. The rejection is text-only at
 clap's normal usage exit code; there is no argv pre-scan equivalent of
 the CLI's strict-mode behavior because the GUI is never expected to be
-scripted.
+scripted. No positional file or URI arguments are accepted in v0.2; imports
+start from `ImportDialog`.
 
 ## Vault interaction
 
@@ -226,7 +240,7 @@ scripted.
 Effects update visible state only after the underlying mutation succeeds:
 
 - HOTP `next`: pre-commit save failures (`save_not_committed`) leave the
-  in-memory counter and reveal state unchanged (per DESIGN §4.2 rollback)
+  in-memory counter and reveal state unchanged (per DESIGN §4.7 rollback)
   and surface an inline/status error. Durability-unconfirmed failures
   (`save_durability_unconfirmed`) reveal the new code and report the
   committed-but-uncertain status — the user has the new code in hand even
@@ -268,8 +282,9 @@ Effects update visible state only after the underlying mutation succeeds:
 - `data/paladin-gtk.desktop` shipped at
   `/usr/share/applications/paladin-gtk.desktop` per §11.3. Sets
   `Categories=Utility;Security;` and security/authenticator terms in
-  `Keywords=`, and uses `Exec=paladin-gtk %F` so file managers can hand off
-  `otpauth://` files for import.
+  `Keywords=`, and uses `Exec=paladin-gtk` with no file/URI placeholders.
+  v0.2 does not register a MIME type or URI handler; imports start inside
+  `ImportDialog`, matching the global-flag parser contract above.
 - App icon at
   `/usr/share/icons/hicolor/scalable/apps/paladin-gtk.svg`. Symbolic
   variant at `…/symbolic/apps/paladin-gtk-symbolic.svg` if the
@@ -295,8 +310,9 @@ Effects update visible state only after the underlying mutation succeeds:
   `/usr/share/icons/hicolor/`. Debian declares `libgtk-4-1
   (>= 4.10)` and `libadwaita-1-0 (>= 1.4)`; Fedora declares the
   matching `gtk4` and `libadwaita` package names. No maintainer
-  scripts: the vault is created on first use under
-  `$XDG_DATA_HOME/paladin/`. The §11 packaging pipeline validates the
+  scripts: packages do not create or alter vaults; vault files live under
+  `$XDG_DATA_HOME/paladin/` when created by `paladin init`. The §11
+  packaging pipeline validates the
   installed desktop entry with `desktop-file-validate` and verifies the
   hicolor icon install layout; it does not add package-owned
   post-install hooks.
@@ -353,10 +369,11 @@ The GUI itself is hard to test without a display server. Tests are split:
   decision** (`None`/empty slug → placeholder; failed lookup → placeholder;
   the actual `gtk::IconTheme` lookup is exercised by the smoke test),
   search filtering, auto-lock state machine, clipboard "clear if unchanged"
-  decision logic, HOTP reveal window timing, import format-selector
-  routing + on-conflict policy threading + post-merge counts mapping,
-  export overwrite-gate + encrypted twice-confirm match logic + export
-  writer error mapping.
+  decision logic, HOTP reveal window timing, secret-field clearing/redaction
+  invariants, QR RGBA byte-length/stride preparation, import format-selector
+  routing + on-conflict policy threading + post-merge counts mapping, export
+  overwrite-gate + encrypted twice-confirm match logic + export writer error
+  mapping.
 - **Smoke test** in CI under `xvfb-run`: app launches, opens a prepared
   plaintext vault, the list renders. Required for Milestone 7 sign-off.
 - **Manual test plan** (`tests/manual/MANUAL_TEST_PLAN.md`) per Milestone 7
@@ -368,7 +385,8 @@ The GUI itself is hard to test without a display server. Tests are split:
   plaintext (warning + confirmation, `0600` output) and encrypted
   Paladin bundle (twice-confirm, round-trip via Import); refused
   overwrite without confirmation; settings persist; passphrase
-  set/change/remove; icon theme resolution + fallback.
+  set/change/remove; secret fields clear on cancel, submit, and auto-lock;
+  icon theme resolution + fallback.
 
 ## Milestone 7 checklist (expanded from §12)
 
@@ -451,10 +469,11 @@ their existing roles — Adwaita does not replace those. The component
 tree section above remains the source of truth for behavior; this
 section just pins which Adwaita class fills each role.
 
-## Out of scope for v0.2
+## Out of scope for the GUI plan
 
-- Encrypted Aegis backup support (still a v0.2 stretch in §4.6, not blocking
-  GUI release).
+- Encrypted Aegis backup support unless the core v0.2 stretch in §4.6 lands
+  separately; the GUI handles core's current `unsupported_encrypted_aegis`
+  error inline and does not block the GUI release on that importer.
 - Secret-service / OS keyring integration for passphrase caching — not in
   DESIGN.md, would require an explicit design update.
 - macOS / Windows builds. Linux only for the v0.2 release.
