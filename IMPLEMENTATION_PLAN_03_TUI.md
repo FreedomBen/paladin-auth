@@ -157,10 +157,12 @@ as character input while it has focus; the user must defocus the search
 always quits. `Esc` clears the search query and returns focus to the list;
 on the list, `Esc` is a no-op. Modal dialogs trap focus while open
 and intercept `Esc` to close themselves. The missing-vault and
-startup-error screens accept `q` / `Ctrl-C` to quit. The unlock
-screen accepts character input (passphrase) and `Enter` (submit), and
-quits on `Esc` or `Ctrl-C` (`q` is a valid passphrase character, so
-it is not bound to quit there).
+startup-error screens accept `Esc` / `q` / `Ctrl-C` to quit (the
+screens are read-only dead-ends with no input or state to discard, so
+all three keys behave identically). The unlock screen accepts character
+input (passphrase) and `Enter` (submit), and quits on `Esc` or
+`Ctrl-C` (`q` is a valid passphrase character, so it is not bound to
+quit there).
 
 When the filter changes, preserve the selected account by `AccountId` if it
 is still present; otherwise select the first matching row. Empty result sets
@@ -172,11 +174,12 @@ focus.
 ## Modals (per §6)
 
 All passphrase-entry fields (unlock, encrypted Paladin import, encrypted
-export, and passphrase set/change) keep typed bytes in zeroizing buffers,
-convert to `secrecy::SecretString` only for core calls, and zeroize on
-submit, cancel, modal close, and auto-lock. Any OTP code retained after
-generation (HOTP reveal state and clipboard auto-clear values) is also kept
-in zeroizing storage and zeroized when replaced, cleared, expired, or dropped.
+export, passphrase set/change) and the Add modal's manual-secret field
+keep typed bytes in zeroizing buffers, convert to `secrecy::SecretString`
+only for core calls, and zeroize on submit, cancel, modal close, and
+auto-lock. Any OTP code retained after generation (HOTP reveal state and
+clipboard auto-clear values) is also kept in zeroizing storage and zeroized
+when replaced, cleared, expired, or dropped.
 
 Modal-local navigation is consistent across Add / Remove / Import / Export /
 Passphrase / Settings: `Tab` moves to the next control, `Shift-Tab` moves to
@@ -197,9 +200,9 @@ closes it.
   DESIGN §5 (TOTP, SHA1, 6 digits, 30 s period, HOTP counter 0,
   icon-hint defaulted from the issuer per §4.1). Manual entries route
   through `paladin_core::validate_manual`; clipboard images are read
-  through `arboard`, converted to raw RGBA8 bytes plus width/height,
-  and passed to `paladin_core::import::qr_image_bytes` with the
-  current import time. Validation warnings are shown inline and do
+  through `arboard::Clipboard::get_image()`, whose `ImageData` already
+  carries raw RGBA8 bytes plus width/height, and passed to
+  `paladin_core::import::qr_image_bytes` with the current import time. Validation warnings are shown inline and do
   not block creation. Because `Vault::add` is infallible and duplicate
   presentation policy is owned by the front ends, manual duplicate
   collisions call `Vault::find_duplicate(&validated)` before mutation. A
@@ -227,13 +230,16 @@ closes it.
 - **Import** — text field for the source path, a format selector
   (auto-detect or explicit `otpauth` / `aegis` / `paladin` / `qr`),
   and an on-conflict selector (`skip` / `replace` / `append`).
-  Paladin sources are header-probed before any passphrase prompt:
-  encrypted bundles (`mode == 1`, whether explicit `format == paladin`
-  or auto-detected via the Paladin header) prompt for the bundle
-  passphrase inside the modal before invoking the importer; plaintext
-  Paladin headers (`mode == 0`) surface `unsupported_plaintext_vault`
-  without a passphrase prompt; malformed Paladin headers fail inline
-  before any passphrase prompt. The selected
+  Paladin sources are header-probed via `paladin_core::inspect(path)`
+  before any passphrase prompt (mirroring the CLI's import probe in
+  DESIGN §5):
+  encrypted bundles (`VaultStatus::Encrypted`, whether explicit
+  `format == paladin` or auto-detected via the Paladin header) prompt
+  for the bundle passphrase inside the modal before invoking the
+  importer; plaintext Paladin headers (`VaultStatus::Plaintext`) surface
+  `unsupported_plaintext_vault` without a passphrase prompt; malformed
+  Paladin headers (`invalid_header` from `inspect`) fail inline before
+  any passphrase prompt. The selected
   `paladin_core::import::from_file` call returns `Vec<ValidatedAccount>`; on
   success, `Vault::import_accounts(accounts, conflict)` is called
   inside `Vault::mutate_and_save` with the user's policy. The modal
@@ -398,7 +404,7 @@ reaches the primary-file commit point with durability still uncertain:
 | `/`       | Focus search bar                                        |
 | `p`       | Open Passphrase modal                                   |
 | `s`       | Open Settings modal                                     |
-| `Esc`     | Close modal / clear search; quit on unlock screen       |
+| `Esc`     | Close modal / clear search; quit on unlock, missing-vault, and startup-error screens |
 | `q`       | Quit (typed as input when search bar or unlock passphrase has focus) |
 | `Ctrl-C`  | Quit (any screen)                                       |
 
@@ -492,9 +498,9 @@ captured with `insta` golden snapshots using `ratatui::backend::TestBackend`.
   counter, while revealed rows show the counter that produced the visible
   code until expiry.
 - **Sensitive UI buffers**: unlock, encrypted Paladin import, encrypted export,
-  passphrase set/change, HOTP reveal, and pending clipboard-clear buffers
-  zeroize on submit, cancel, modal close, expiry, replacement, drop, and
-  auto-lock as applicable.
+  passphrase set/change, the Add modal's manual-secret field, HOTP reveal,
+  and pending clipboard-clear buffers zeroize on submit, cancel, modal close,
+  expiry, replacement, drop, and auto-lock as applicable.
 - **Insta snapshots** for every screen state: empty vault, single TOTP,
   mixed TOTP/HOTP with hidden + revealed rows, search-active, every modal
   (Add / Remove / Import / Export / Passphrase set/change/remove /
@@ -613,6 +619,10 @@ is never expected to be scripted.
   only-if-unchanged auto-clear.
 - [ ] Add reducer, search, auto-lock, clipboard, HOTP reveal, terminal
   lifecycle, sensitive-buffer, and snapshot coverage.
+- [ ] Wire the `paladin-core` `test-fault-injection` cargo feature into
+  the test build of the `paladin-tui` binary so reducer / effect-layer
+  integration tests can drive pre-commit and durability-unconfirmed
+  save failures via the `PALADIN_FAULT_INJECT` env var.
 - [ ] Verify the `paladin tui` wrapper launches `paladin-tui` successfully.
 
 ## Definition of done
