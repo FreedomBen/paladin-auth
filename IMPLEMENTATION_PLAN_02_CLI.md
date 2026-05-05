@@ -76,7 +76,7 @@ crates/paladin-cli/
 | `copy <query>`                                         | Advances HOTP; copies to clipboard via `arboard`. **No auto-clear.** Single-match required. |
 | `remove <query>`                                       | Confirmation prompt unless `--yes`. `--yes` is required under `--json` (no confirmation prompt). Single-match required. |
 | `rename <query> <new-label>`                           | Updates `updated_at`. Single-match required. |
-| `passphrase set | change | remove`                     | `passphrase remove` warns and confirms in text mode unless `--yes-i-know` is passed; `--yes-i-know` is required under `--json`. |
+| `passphrase set | change | remove`                     | `passphrase remove` warns and confirms in text mode unless `--yes` is passed; `--yes` is required under `--json`. |
 | `import <path> [--format <fmt>] [--on-conflict <p>]`   | Auto-detects when `--format` is omitted; forced formats are `otpauth`/`aegis`/`paladin` (encrypted bundle only)/`qr`; conflict policies are `skip` (default)/`replace`/`append`. |
 | `export --plaintext <path> | --encrypted <path>`       | Refuses overwrite without `--force`; both modes write through `paladin_core::write_secret_file_atomic` and create output `0600`; plaintext export prints a clear warning before writing unencrypted secrets. |
 | `settings get [key] | set <key> <value>`               | CLI persists `clipboard.clear_enabled` for TUI/GUI to honor but **ignores it at runtime** for `paladin copy`. `get [key]` filters text-mode display only; the `--json` shape is always the full `VaultSettings`. |
@@ -171,8 +171,8 @@ strings, then validated against the minimums above.
   `passphrase remove` surface `invalid_state` before any new-passphrase
   prompt, destructive confirmation, or crypto material generation.
 - `passphrase remove` in text mode prints the plaintext-storage warning and
-  requires destructive confirmation unless `--yes-i-know` is passed. Under
-  `--json`, `--yes-i-know` is required at parse time because the command must
+  requires destructive confirmation unless `--yes` is passed. Under
+  `--json`, `--yes` is required at parse time because the command must
   not block on a confirmation prompt.
 - If `/dev/tty` is unavailable for a passphrase prompt, exit with `io_error`
   and `operation: "passphrase_prompt"`.
@@ -182,7 +182,7 @@ strings, then validated against the minimums above.
 - Interactive `add` account-entry prompts read from `/dev/tty`. If `/dev/tty`
   is unavailable, exit with `io_error` and `operation: "account_prompt"`.
 - Text-mode destructive confirmations (`remove` without `--yes` and
-  `passphrase remove` without `--yes-i-know`) read from `/dev/tty`. If
+  `passphrase remove` without `--yes`) read from `/dev/tty`. If
   `/dev/tty` is unavailable, exit with `io_error` and `operation:
   "confirmation_prompt"`.
 - Under `--json`, interactive `add` and missing destructive confirmation
@@ -265,9 +265,9 @@ non-colliding and appended Paladin rows receive fresh UUIDv4 IDs at merge time.
   via `--plaintext`; clap diagnostics are rerouted by the argv
   pre-scan above; status / progress text is never emitted; and
   passphrase prompts read from `/dev/tty` via `rpassword` so prompt
-  strings never reach stdout or stderr. Missing confirmation flags
-  (`remove --yes`, `passphrase remove --yes-i-know`) reject at parse
-  time as `validation_error` rather than silently blocking on a
+  strings never reach stdout or stderr. Missing required `--yes`
+  confirmation flags for `remove` and `passphrase remove` reject at
+  parse time as `validation_error` rather than silently blocking on a
   prompt.
 - Text-mode warnings (`short_secret`, the plaintext-export advisory) are
   written to stderr in **text mode only**; under `--json` they are
@@ -391,8 +391,8 @@ where relevant, and exit code.
 - **`passphrase set/change/remove`** end-to-end against an open vault.
   `passphrase remove` covers the text-mode warning confirmation, no-TTY
   confirmation failure as `io_error` with `operation: "confirmation_prompt"`,
-  and the `--yes-i-know` bypass; `--json` without
-  `--yes-i-know` rejects at parse time. No-TTY prompt failures surface as
+  and the `--yes` bypass; `--json` without
+  `--yes` rejects at parse time. No-TTY prompt failures surface as
   `io_error` with `operation: "passphrase_prompt"`; confirmation mismatch
   surfaces as `invalid_passphrase` with
   `reason: "confirmation_mismatch"`. Wrong starting states (`set` on

@@ -630,7 +630,7 @@ Built with `clap` (derive). Commands:
 | `paladin rename <query> <label>`            | Rename an account.                                               |
 | `paladin passphrase set`                    | Encrypt a plaintext vault under a new passphrase.                |
 | `paladin passphrase change`                 | Re-encrypt under a new passphrase.                               |
-| `paladin passphrase remove`                 | Decrypt to plaintext. Warns and prompts for destructive confirmation unless `--yes-i-know` is passed. Required under `--json` (no confirmation prompt available). |
+| `paladin passphrase remove`                 | Decrypt to plaintext. Warns and prompts for destructive confirmation unless `--yes` is passed. Required under `--json` (no confirmation prompt available). |
 | `paladin export --plaintext <out>`          | Write JSON `otpauth://` array. Warns; refuses overwrite without `--force`; creates output `0600`. |
 | `paladin export --encrypted <out>`          | Write Paladin-format encrypted bundle. Refuses overwrite without `--force`; creates output `0600`. |
 | `paladin import [--on-conflict=<mode>] <path>` | Auto-detect format and merge into the vault. Conflict mode: `skip` (default), `replace`, `append`. See merge policy below. |
@@ -744,8 +744,8 @@ is suppressed because the caller opted in by passing `--plaintext`;
 clap diagnostics are rerouted via the argv pre-scan above; and progress
 or status text is never emitted. Interactive `add` is rejected at parse time
 under `--json`, so account-entry prompt strings cannot appear on stdout or
-stderr. Confirmation flags (`remove --yes`, `passphrase remove
---yes-i-know`) are required under `--json` since no interactive confirmation
+stderr. Confirmation flags (`remove --yes`, `passphrase remove --yes`) are
+required under `--json` since no interactive confirmation
 channel is available, and missing confirmations reject at parse time as
 `validation_error`. Passphrase prompts continue to read from `/dev/tty` via
 `rpassword`; the prompt string is written to `/dev/tty`, never to stdout or
