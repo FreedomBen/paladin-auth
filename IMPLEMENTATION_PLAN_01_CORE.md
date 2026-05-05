@@ -33,6 +33,7 @@ crates/paladin-core/
 │   │   ├── mod.rs        # Account, AccountId, Algorithm, OtpKind, Code
 │   │   ├── secret.rs     # Secret newtype with Zeroize + Drop
 │   │   ├── validation.rs # Shared Account validation (labels, secrets, periods…)
+│   │   ├── match_key.rs  # account_match_key(): canonical "{issuer}:{label}" string used by CLI query resolution and TUI/GUI search filters
 │   │   └── slug.rs       # icon_hint slug rules + issuer-derived defaulting
 │   ├── otp/
 │   │   ├── mod.rs        # pure OTP primitives (compute_totp, compute_hotp)
@@ -53,7 +54,8 @@ crates/paladin-core/
 │   │   ├── mod.rs        # KDF + AEAD facades
 │   │   ├── argon2.rs     # Argon2id with header-tunable params + bounds check
 │   │   └── aead.rs       # XChaCha20-Poly1305 with header-AAD wiring
-│   ├── vault.rs          # Vault impl: add/remove/iter/rename/totp_code/hotp_*
+│   ├── vault.rs          # Vault impl: add/remove/iter/rename/totp_code/hotp_*; is_encrypted() mode getter
+│   ├── shared_text.rs    # format_init_force_warning / format_plaintext_storage_warning / format_plaintext_export_warning helpers (CLI / TUI / GUI parity)
 │   ├── settings.rs       # VaultSettings (auto-lock, clipboard) + setters
 │   ├── passphrase.rs     # set / change / remove transitions, rollback
 │   ├── import/
@@ -73,7 +75,9 @@ crates/paladin-core/
     ├── vault_roundtrip.rs   # both modes
     ├── tamper.rs            # AAD-bound header byte-flip matrix
     ├── perms.rs             # 0600/0700 + unsafe_permissions rejection
-    ├── passphrase.rs        # all three transitions + rollback
+    ├── shared_text.rs       # format_init_force_warning / format_plaintext_storage_warning / format_plaintext_export_warning text fixtures
+    ├── match_key.rs         # account_match_key behavior (empty issuer keeps colon; case preserved)
+    ├── passphrase.rs        # all three transitions + rollback; Vault::is_encrypted reflects each transition outcome
     ├── import_otpauth.rs
     ├── import_aegis.rs
     ├── import_paladin.rs
@@ -248,6 +252,21 @@ Each step lands as its own commit. Tests come first.
 - [ ] Implement `format_unsafe_permissions(&PaladinError) -> Option<String>`
   per §4.7, sourcing all wording from the `unsafe_permissions` fields so
   CLI, TUI, and GUI never diverge.
+- [ ] Tests: `format_init_force_warning(path)` returns text that names
+  the supplied path, mentions `vault.bin.bak`, and warns that any
+  prior backup will be overwritten — locked via fixture string compare
+  so CLI `init --force` and the GUI `InitDialog` destructive gate stay
+  byte-identical.
+- [ ] Tests: `format_plaintext_storage_warning()` and
+  `format_plaintext_export_warning()` return stable text — locked via
+  fixture so CLI text-mode `passphrase remove`, the TUI Passphrase /
+  Export modals, and the GUI `PassphraseDialog` / `InitDialog` /
+  `ExportDialog` plaintext paths render identical wording.
+- [ ] Implement `format_init_force_warning(&Path) -> String`,
+  `format_plaintext_storage_warning() -> String`, and
+  `format_plaintext_export_warning() -> String` per §4.7. Co-locate
+  with `format_unsafe_permissions` so all front-end text helpers live
+  in one module and presentation crates never re-implement the wording.
 
 ### Phase F — Encrypted storage (Milestone 1, part 5)
 
@@ -305,8 +324,25 @@ Each step lands as its own commit. Tests come first.
   rollback snapshot is zeroized when dropped. Exercise add, remove, import
   merge (`skip` / `replace` / `append`), and settings changes so presentation
   crates do not need their own rollback machinery.
+- [ ] Tests: `Vault::is_encrypted()` returns `false` for vaults opened
+  with `VaultLock::Plaintext` / created from a plaintext file, returns
+  `true` for vaults opened with `VaultLock::Encrypted` / created from an
+  encrypted file, and tracks `set_passphrase` / `change_passphrase` /
+  `remove_passphrase` outcomes (unchanged on `save_not_committed`,
+  changed on a successful save or `save_durability_unconfirmed` —
+  Phase H exercises the transition cases against this getter).
+- [ ] Tests: `account_match_key(&Account)` returns `"{issuer}:{label}"`
+  with the colon present even when issuer is empty, preserves the
+  original casing, and round-trips equality for accounts that share an
+  issuer/label pair. Cover ASCII, mixed case, and Unicode label
+  characters so the helper does not silently apply `to_lowercase()` /
+  Unicode normalization (callers do that at compare time per §5).
 - [ ] Implement `Vault` operations, `Vault::find_duplicate`,
-  `VaultSettings` setters, and `Vault::mutate_and_save` per §4.7.
+  `Vault::is_encrypted`, `VaultSettings` setters, and
+  `Vault::mutate_and_save` per §4.7. Implement
+  `account_match_key(&Account)` in `domain/match_key.rs` and re-export it
+  at the crate root so CLI `select.rs`, TUI `search.rs`, and GUI
+  `search.rs` all source the canonical match key from one place.
 
 ### Phase H — Passphrase management (Milestone 2)
 
@@ -474,6 +510,19 @@ is a separate `#[test]` or `cases![]` family.
   cleanup on `open`, and temp cleanup on non-crash save errors.
 - `format_unsafe_permissions` returns shared repair text for
   `unsafe_permissions` and `None` for every other error kind.
+- `format_init_force_warning(path)`, `format_plaintext_storage_warning()`,
+  and `format_plaintext_export_warning()` return locked fixture text so
+  CLI / TUI / GUI render identical wording for the §5 init clobber gate,
+  the `passphrase remove` plaintext-storage advisory, and the
+  unencrypted-export advisory respectively.
+- `account_match_key(&Account)` produces the canonical
+  `"{issuer}:{label}"` key (empty issuer keeps the colon, casing
+  preserved) so CLI query resolution and TUI / GUI search filters
+  share one match-key definition.
+- `Vault::is_encrypted()` reflects the open / create lock mode and
+  every passphrase-transition outcome (unchanged on
+  `save_not_committed`, changed on success and
+  `save_durability_unconfirmed`).
 - `open` / `create` precondition errors — `vault_missing` for absent
   primary on `open`; `vault_exists` for existing primary on `create`;
   `wrong_vault_lock` on cross-mode `VaultLock` (both directions) before
@@ -570,7 +619,17 @@ defines. Implementation owes:
   `paladin` CLI can serialize them under `--json` and the strict-output
   rule in §5 holds without any mapping layer. Add a `serde::Serialize` impl
   guarded by an `error-serde` cargo feature, off by default, that the
-  CLI opts into; `paladin-core` itself has no JSON output paths.
+  CLI opts into; `paladin-core` itself has no JSON output paths. The
+  same feature flag also gates `serde::Serialize` for the public
+  account-shape types referenced from error variants and §5 success
+  envelopes (`Account`, `AccountId`, `Algorithm`, `OtpKind`, `Code`,
+  `ValidationWarning`, `ImportReport`, `ImportWarning`,
+  `VaultSettings`) so the CLI can render `duplicate_account.account`,
+  `multiple_matches.candidates`, `clipboard_write_failed.account`,
+  `counter_overflow.account`, and the `add` / `import` /
+  `show` / `peek` / `copy` / `list` success bodies without a
+  hand-written mapping layer. The feature-gated impls are not part of
+  the stable §4.7 surface.
 - **No platform-specific build steps.** Linux is the only target in
   v0.1 (§2); the `perms_other.rs` stub keeps `cargo check
   --target=…` clean on non-Unix without changing release behavior.

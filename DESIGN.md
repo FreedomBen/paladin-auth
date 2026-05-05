@@ -554,6 +554,33 @@ pub fn create_force(path: &Path, lock: VaultLock) -> Result<(Vault, Store)>;  //
 /// without re-implementing it.
 pub fn format_unsafe_permissions(err: &PaladinError) -> Option<String>;
 
+/// Format the `init --force` / `vault_exists` clobber warning text —
+/// names the existing vault path, calls out the `vault.bin.bak` rotation,
+/// and warns that any prior backup is overwritten. Lives in
+/// `paladin-core` so the CLI confirmation prompt and the GUI
+/// `InitDialog` destructive gate render identical wording.
+pub fn format_init_force_warning(existing_vault: &Path) -> String;
+
+/// Format the plaintext-storage warning shown by `passphrase remove`
+/// (CLI / TUI / GUI) and by the GUI `InitDialog`'s plaintext path.
+/// Static text — no parameters — so all three front ends share a
+/// single source.
+pub fn format_plaintext_storage_warning() -> String;
+
+/// Format the plaintext-export warning shown by CLI `export
+/// --plaintext`, the TUI Export modal's plaintext path, and the GUI
+/// `ExportDialog` plaintext path before unencrypted secrets are
+/// written. Static text.
+pub fn format_plaintext_export_warning() -> String;
+
+/// Compute the canonical `{issuer}:{label}` match key used by CLI
+/// query resolution (§5) and by TUI / GUI search filters (§6, §7).
+/// Empty issuer keeps the leading colon so the match key is the same
+/// shape across every account. Callers apply `str::to_lowercase()` to
+/// both sides for case-insensitive matching; this helper does not
+/// lower-case so the original casing remains available for display.
+pub fn account_match_key(account: &Account) -> String;
+
 impl Vault {
     pub fn add(&mut self, account: Account) -> AccountId;
     pub fn remove(&mut self, id: AccountId) -> Option<Account>;
@@ -565,6 +592,7 @@ impl Vault {
     pub fn hotp_peek(&self, id: AccountId) -> Result<Code>;                        // HOTP only; does not advance
     pub fn hotp_advance(&mut self, store: &Store, id: AccountId, now: SystemTime) -> Result<Code>;  // HOTP only; advances counter, updates `updated_at`, and saves atomically
     pub fn settings(&self) -> &VaultSettings;
+    pub fn is_encrypted(&self) -> bool;                                            // current vault lock mode (false = plaintext, true = encrypted). Tracks passphrase transitions so TUI / GUI can gate `passphrase set` vs `passphrase change` / `remove`, decide whether to arm auto-lock, and update the visible vault-mode flag without re-inspecting the file.
     pub fn set_auto_lock_enabled(&mut self, enabled: bool);
     pub fn set_auto_lock_timeout_secs(&mut self, secs: u32) -> Result<()>;
     pub fn set_clipboard_clear_enabled(&mut self, enabled: bool);

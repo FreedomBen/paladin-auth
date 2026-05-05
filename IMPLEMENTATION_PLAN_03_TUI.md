@@ -45,7 +45,7 @@ crates/paladin-tui/
 │   │       ├── export.rs       # format + path + overwrite + (encrypted) twice-confirmed passphrase
 │   │       ├── passphrase.rs   # set/change/remove sub-flows
 │   │       └── settings.rs     # auto_lock + clipboard toggles + timeouts
-│   ├── search.rs          # incremental filter over Vault::iter()
+│   ├── search.rs          # incremental filter over Vault::iter() using paladin_core::account_match_key for the canonical "{issuer}:{label}" key (parity with CLI / GUI)
 │   ├── clipboard.rs       # arboard wrapper + scheduled clear (only-if-unchanged)
 │   ├── auto_lock.rs       # idle-timer; encrypted-only; plaintext is no-op
 │   ├── hotp_reveal.rs     # 120s reveal window per row
@@ -290,9 +290,9 @@ closes it.
   overwrite gate (parity with CLI `--force`). Encrypted exports
   prompt twice for the bundle passphrase and reject mismatch with
   inline `invalid_passphrase` (`reason: "confirmation_mismatch"`) or
-  empty entry with `reason: "zero_length"`. Plaintext exports show
-  an explicit "this writes unencrypted secrets to disk" warning that
-  the user must confirm before the write proceeds. Writes go through
+  empty entry with `reason: "zero_length"`. Plaintext exports render
+  `paladin_core::format_plaintext_export_warning()` verbatim and the
+  user must confirm before the write proceeds. Writes go through
   `paladin_core::write_secret_file_atomic`. On success the modal
   closes with a status-line confirmation showing the written path;
   `io_error`, `save_not_committed`, `save_durability_unconfirmed`,
@@ -301,10 +301,13 @@ closes it.
   is no rollback path.
 - **Passphrase** — three sub-flows mirroring CLI's
   `passphrase set / change / remove`. The available sub-flow is gated
-  by vault mode: `set` is offered only on plaintext vaults
-  (plaintext → encrypted), and `change` / `remove` are offered only on
-  encrypted vaults; opening the modal in a state with no available
-  sub-flow surfaces an inline message instead of mutation controls.
+  by `Vault::is_encrypted()`: `set` is offered only on plaintext
+  vaults (plaintext → encrypted), and `change` / `remove` are offered
+  only on encrypted vaults; opening the modal in a state with no
+  available sub-flow surfaces an inline message instead of mutation
+  controls. The `remove` sub-flow renders
+  `paladin_core::format_plaintext_storage_warning()` verbatim so the
+  TUI shares wording with the CLI / GUI.
   New passphrases (`set`, `change`) are prompted twice and confirmed;
   mismatch returns to the modal with an inline `invalid_passphrase`
   (`reason: "confirmation_mismatch"`) error. Empty new passphrases are
@@ -650,7 +653,16 @@ is never expected to be scripted.
   HOTP `Code.counter` labels, and status-line errors.
 - [ ] Implement add / remove / rename / import / export / passphrase / settings modals
   with persistence through `Vault::mutate_and_save` where the core owns
-  rollback.
+  rollback. Source the `passphrase remove` warning from
+  `paladin_core::format_plaintext_storage_warning()` and the
+  plaintext-export warning from
+  `paladin_core::format_plaintext_export_warning()` so wording stays
+  identical to the CLI / GUI; gate `set` vs `change` / `remove`
+  sub-flows on `Vault::is_encrypted()` and use the same getter to
+  arm or skip the auto-lock timer.
+- [ ] Use `paladin_core::account_match_key` for `search.rs` substring
+  filtering so the TUI shares the canonical `"{issuer}:{label}"` key
+  with the CLI and GUI.
 - [ ] Route export writes through `paladin_core::write_secret_file_atomic`.
 - [ ] Implement clipboard wrapper, QR image import from clipboard bytes, and
   only-if-unchanged auto-clear.

@@ -39,7 +39,7 @@ crates/paladin-cli/
 │   │   ├── import.rs     # --format otpauth/aegis/paladin/qr; --on-conflict
 │   │   ├── export.rs     # --plaintext / --encrypted; refuse overwrite w/o --force
 │   │   └── settings.rs   # get / set
-│   └── select.rs         # query → AccountId disambiguation (issuer:label, id:<8+ hex>…)
+│   └── select.rs         # query → AccountId disambiguation. Substring matching uses paladin_core::account_match_key for the canonical "{issuer}:{label}" key (shared with TUI / GUI search); id:<8+ hex> prefix matching and shortest-unique disambiguator computation are CLI-only.
 └── tests/
     ├── cli_init.rs
     ├── cli_add.rs
@@ -68,7 +68,7 @@ crates/paladin-cli/
 
 | Command                                                | Notes |
 |--------------------------------------------------------|-------|
-| `init [--force]`                                       | Without `--force`, checks for an existing primary and surfaces `vault_exists` before prompting for the new-vault passphrase. With `--force`, calls `paladin_core::create_force` (which performs the §5 staged clobber: stages the new vault, then rotates the old primary verbatim to `.bak`, overwriting any existing backup). |
+| `init [--force]`                                       | Without `--force`, checks for an existing primary and surfaces `vault_exists` before prompting for the new-vault passphrase. With `--force`, prints `paladin_core::format_init_force_warning(path)` (text mode) before any prompt, then calls `paladin_core::create_force` (which performs the §5 staged clobber: stages the new vault, then rotates the old primary verbatim to `.bak`, overwriting any existing backup). |
 | `add` (interactive / `--uri` / manual flags / `--qr`)  | Exactly one input mode; combinations rejected at parse time. Under `--json`, interactive mode is rejected at parse time — one of `--uri`, `--qr`, or the manual flags must be supplied. |
 | `list`                                                 | Account metadata only — no codes. |
 | `show <query>`                                         | Advances HOTP; persists before printing. Matching queries print all matches when every match is TOTP; if any match is HOTP, requires a single match. |
@@ -76,9 +76,9 @@ crates/paladin-cli/
 | `copy <query>`                                         | Advances HOTP; copies to clipboard via `arboard`. **No auto-clear.** Single-match required. |
 | `remove <query>`                                       | Confirmation prompt unless `--yes`. `--yes` is required under `--json` (no confirmation prompt). Single-match required. |
 | `rename <query> <new-label>`                           | Updates `updated_at`. Single-match required. |
-| `passphrase set | change | remove`                     | `passphrase remove` warns and confirms in text mode unless `--yes` is passed; `--yes` is required under `--json`. |
+| `passphrase set | change | remove`                     | `passphrase remove` prints `paladin_core::format_plaintext_storage_warning()` and confirms in text mode unless `--yes` is passed; `--yes` is required under `--json`. |
 | `import <path> [--format <fmt>] [--on-conflict <p>]`   | Auto-detects when `--format` is omitted; forced formats are `otpauth`/`aegis`/`paladin` (encrypted bundle only)/`qr`; conflict policies are `skip` (default)/`replace`/`append`. |
-| `export --plaintext <path> | --encrypted <path>`       | Refuses overwrite without `--force`; both modes write through `paladin_core::write_secret_file_atomic` and create output `0600`; plaintext export prints a clear warning before writing unencrypted secrets. |
+| `export --plaintext <path> | --encrypted <path>`       | Refuses overwrite without `--force`; both modes write through `paladin_core::write_secret_file_atomic` and create output `0600`; plaintext export prints `paladin_core::format_plaintext_export_warning()` before writing unencrypted secrets. |
 | `settings get [key] | set <key> <value>`               | CLI persists `clipboard.clear_enabled` for TUI/GUI to honor but **ignores it at runtime** for `paladin copy`. `get [key]` filters text-mode display only; the `--json` shape is always the full `VaultSettings`. |
 | `tui`                                                  | `execvp` `paladin-tui`; rejects `--json`; forwards `--vault` / `--no-color`. |
 
@@ -348,8 +348,20 @@ clobber sequence) without opening or decrypting the old primary.
 - [ ] Ensure new Rust source files include
   `// SPDX-License-Identifier: AGPL-3.0-or-later`.
 - [ ] Depend on `paladin-core` with the off-by-default `error-serde`
-  feature enabled so the CLI can serialize shared error kinds without a
+  feature enabled so the CLI can serialize shared error kinds and the
+  account-shape types referenced from §5 success / error envelopes
+  (`Account`, `Algorithm`, `OtpKind`, `Code`, `ImportReport`,
+  `ValidationWarning`, `ImportWarning`, `VaultSettings`) without a
   hand-written mapping layer.
+- [ ] Use `paladin_core::account_match_key` for `select.rs` substring
+  matching (parity with the TUI / GUI search match key); keep the
+  CLI-only `id:<hex>` prefix matching and the shortest-unique
+  disambiguator computation in `select.rs`.
+- [ ] Source human-facing destructive / advisory text from
+  `paladin_core::format_init_force_warning(path)`,
+  `paladin_core::format_plaintext_storage_warning()`, and
+  `paladin_core::format_plaintext_export_warning()` so the CLI cannot
+  drift from the TUI / GUI wording.
 - [ ] Implement `/dev/tty` passphrase, account-entry, and confirmation
   prompting with no-TTY error handling.
 - [ ] Implement account selection for `issuer:label` substring queries and

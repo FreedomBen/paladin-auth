@@ -56,7 +56,7 @@ crates/paladin-gtk/
 │   ├── hotp_reveal.rs     # 120s per-row reveal window
 │   ├── icons.rs           # gtk::IconTheme lookup against Account.icon_hint
 │   ├── secret_fields.rs   # extract/clear passphrase + manual-secret entries
-│   ├── search.rs          # case-insensitive issuer/label filtering
+│   ├── search.rs          # case-insensitive issuer/label filtering using paladin_core::account_match_key for the canonical "{issuer}:{label}" key (parity with CLI / TUI)
 │   └── ticker.rs          # 250ms timeout source for TOTP gauge updates
 └── tests/
     ├── icon_resolution.rs
@@ -90,10 +90,10 @@ inclusion.
 - `InitDialog` — only path that creates a vault from the GUI (v0.2;
   parity with DESIGN §6, §7). Two `AdwPasswordEntryRow` passphrase
   fields (twice-confirmed; empty selects plaintext) plus an explicit
-  "create vault" confirmation button. The plaintext path shows the
-  same unencrypted-storage warning text used by `passphrase remove`,
-  and the user must tick the confirmation before submission is
-  enabled. Encrypted submission rejects empty new entries inline with
+  "create vault" confirmation button. The plaintext path renders
+  `paladin_core::format_plaintext_storage_warning()` verbatim — the
+  same wording `PassphraseDialog`'s remove flow and the CLI / TUI use —
+  and the user must tick the confirmation before submission is enabled. Encrypted submission rejects empty new entries inline with
   `invalid_passphrase` (`reason: "zero_length"`) and rejects mismatch
   with `reason: "confirmation_mismatch"`. On submit, calls
   `paladin_core::create(path, VaultLock::Plaintext | Encrypted(secret))`
@@ -105,9 +105,9 @@ inclusion.
   `save_not_committed`, and `save_durability_unconfirmed` inline.
   `vault_exists` (if a vault appeared between `inspect` and `create`)
   opens an in-dialog `AdwMessageDialog` with `destructive-action`
-  styling that names the existing path and warns that the existing
-  vault will be rotated to `vault.bin.bak` (overwriting any prior
-  backup) — wording matches the CLI `init --force` warning. On
+  styling whose body is rendered from
+  `paladin_core::format_init_force_warning(existing_path)` so wording
+  stays identical to the CLI `init --force` confirmation. On
   confirm, the dialog re-runs the operation with
   `paladin_core::create_force(path, lock)` on `gio::spawn_blocking`,
   reusing the passphrase choice already entered; on cancel, the
@@ -126,7 +126,8 @@ inclusion.
   `gtk::SearchEntry` hosted inside a `gtk::SearchBar` whose
   `search-mode-enabled` is bound to the header bar's search-toggle button
   (see "libadwaita usage" below). The entry applies the same
-  case-insensitive `"{issuer}:{label}"` substring matching as §5 / §6 via
+  case-insensitive substring matching as §5 / §6 against the
+  `paladin_core::account_match_key` of each account via
   `str::to_lowercase()`; no Unicode normalization. Empty issuer is
   allowed and the colon is still present in the match key; insertion order
   is preserved among matches. The CLI's `id:` prefix form is **not**
@@ -237,9 +238,9 @@ inclusion.
   plaintext writes run on `gio::spawn_blocking` (encrypted-bundle to
   keep the fresh-AEAD-key derivation off the main loop; plaintext for
   symmetry, since `write_secret_file_atomic` chains multiple `fsync`s).
-  Plaintext exports show an explicit "this writes unencrypted secrets
-  to disk" warning that the user must confirm before the write
-  proceeds. Writes go through `paladin_core::write_secret_file_atomic`.
+  Plaintext exports render
+  `paladin_core::format_plaintext_export_warning()` verbatim and the
+  user must confirm before the write proceeds. Writes go through `paladin_core::write_secret_file_atomic`.
   On success the dialog closes and surfaces the written path in the main
   status/toast surface;
   `io_error`, `save_not_committed`, `save_durability_unconfirmed`,
@@ -250,10 +251,12 @@ inclusion.
   `remove`. New passphrases prompted twice; mismatch returns to the dialog
   with an inline error. `set` and `change` also reject zero-length new
   passphrases inline with `invalid_passphrase`
-  (`reason: "zero_length"`). `remove` shows the plaintext-storage warning
-  and requires explicit confirmation before mutation. `set` is enabled only
-  for plaintext vaults; `change` and `remove` are enabled only for encrypted
-  vaults. Any stale invalid-state error stays in the dialog and does not
+  (`reason: "zero_length"`). `remove` renders
+  `paladin_core::format_plaintext_storage_warning()` verbatim and
+  requires explicit confirmation before mutation. The available
+  sub-flow is gated by `Vault::is_encrypted()`: `set` is enabled only
+  when the getter returns `false`; `change` and `remove` only when it
+  returns `true`. Any stale invalid-state error stays in the dialog and does not
   mutate visible state.
 - `SettingsComponent` — toggles for auto-lock and clipboard-clear, with
   spinners for timeouts. Spinners clamp to the §5 minimums
@@ -541,16 +544,27 @@ The GUI itself is hard to test without a display server. Tests are split:
 - [ ] Relm4 component tree (Init / Unlock / List / Row / Add / Remove /
   Rename / Import / Export / Passphrase / Settings).
 - [ ] In-app vault initialization (`InitDialog` for missing vaults;
-  plaintext + encrypted paths; explicit confirmation; in-dialog
-  destructive `create_force` clobber confirmation when a vault already
-  exists at the path; pre-commit + durability-unconfirmed handling).
+  plaintext + encrypted paths; explicit confirmation; plaintext-path
+  warning sourced from
+  `paladin_core::format_plaintext_storage_warning()`; in-dialog
+  destructive `create_force` clobber confirmation rendered from
+  `paladin_core::format_init_force_warning(existing_path)` when a vault
+  already exists at the path; pre-commit + durability-unconfirmed
+  handling).
 - [ ] In-app account rename (`RenameDialog` reachable from the row
   kebab menu; calls `Vault::rename` inside `Vault::mutate_and_save`).
 - [ ] Add-via-`otpauth://`-URI paste path in `AddAccountComponent`,
   decoded via `paladin_core::parse_otpauth` and sharing the manual
   duplicate / validation paths.
 - [ ] Conditional unlock view (encrypted vaults only).
-- [ ] Clipboard + auto-lock parity with TUI (opt-in).
+- [ ] Clipboard + auto-lock parity with TUI (opt-in). Use
+  `Vault::is_encrypted()` to decide whether to arm the auto-lock
+  timer (encrypted only) and to track the visible vault-mode flag
+  across passphrase transitions.
+- [ ] Use `paladin_core::account_match_key` for `search.rs` filtering
+  and `paladin_core::format_plaintext_export_warning()` for the
+  `ExportDialog` plaintext path so the GUI never re-implements
+  shared text or match-key logic.
 - [ ] Linux desktop file + icon.
 - [ ] `.deb`, `.rpm`, Flatpak, and AppImage artifacts for `paladin-gtk`,
   signed and published per §11.3–§11.6; Flathub submission filed.
