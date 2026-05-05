@@ -902,6 +902,13 @@ v0.1 error kinds and stable fields:
 | `clipboard_write_failed`        | Clipboard write failed after generation.     | `account`, `counter_used`                  |
 | `io_error`                      | Filesystem/image/terminal I/O failed.        | `operation`, optional `path`               |
 
+The CLI owns JSON envelope rendering, but `paladin-core` exposes
+`serde::Serialize` for `PaladinError` only behind an off-by-default
+`error-serde` cargo feature so the CLI can serialize the shared
+`error_kind` taxonomy without a mapping layer. `paladin-core` itself has
+no JSON output paths, and the feature-gated serialization impl is not part
+of the stable §4.7 API surface.
+
 Vault settings keys (subject to extension):
 
 | Key                       | Type             | Default | Effect                                       |
@@ -1213,6 +1220,16 @@ Concrete obligations and explicit user-controlled tradeoffs:
   decoding.
 - **Integration tests** for each shipped binary using `assert_cmd` (CLI)
   and golden-snapshot tests (`insta`) for TUI rendering.
+  Binary integration tests that need process-level filesystem failure
+  coverage enable `paladin-core`'s off-by-default
+  `test-fault-injection` cargo feature. Under that feature, core exposes
+  a test-only `Store` constructor and shared atomic-write fault hook that
+  honor `PALADIN_FAULT_INJECT=pre_commit|post_commit`; the two fault modes
+  exercise `save_not_committed` before the primary/final rename and
+  `save_durability_unconfirmed` after the parent-directory `fsync` fails.
+  The hook applies uniformly to regular saves, `create_force`, passphrase
+  transitions, and `write_secret_file_atomic`, is not linked into
+  production builds, and is excluded from the stable §4.7 API surface.
   - CLI `--json` success/error shapes, warning payloads, durability error
     fields, HOTP post-advance account summaries, clipboard-write failure
     behavior, passphrase no-TTY / confirmation-mismatch failures, export
@@ -1500,6 +1517,14 @@ artifacts side by side.
   clipboard copy and QR-from-clipboard.
 - Core exposes `write_secret_file_atomic` for plaintext and encrypted export
   files across all front ends.
+
+**Decided during core plan review (2026-05-05):**
+- Core exposes a feature-gated `test-fault-injection` hook for binary
+  integration tests to drive pre-commit and post-commit storage failures
+  end-to-end without linking fault-injection code into production builds.
+- Core exposes feature-gated `PaladinError` serialization under
+  `error-serde`, off by default, so the CLI can serialize shared error
+  kinds without renaming or mapping them locally.
 
 No open questions remain.
 

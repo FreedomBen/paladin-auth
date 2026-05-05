@@ -1,7 +1,7 @@
 # Implementation Plan 01 — `paladin-core`
 
 Source of truth: [DESIGN.md](DESIGN.md) §3, §4, §5 error taxonomy,
-§8–§10, §12 Milestones 1–3, and §14.
+§8–§11, §12 Milestones 0–3, and §14.
 Status: pre-implementation. This plan stays grounded in DESIGN.md and does not
 invent any public crate, public type, or public API beyond what is specified
 there. Internal module paths below are scoped implementation details.
@@ -195,8 +195,8 @@ Each step lands as its own commit. Tests come first.
 - [ ] Tests: `open` returns `vault_missing` when the primary file is
   absent; `create` returns `vault_exists` when the primary already
   exists (rotation belongs to `create_force`, see below).
-- [ ] Tests: `create_force(path, lock)` staged clobber per §5 — writes
-  `vault.bin.tmp` and `fsync`s it before moving any existing primary;
+- [ ] Tests: `create_force(path, VaultLock::Plaintext)` staged clobber per
+  §5: writes `vault.bin.tmp` and `fsync`s it before moving any existing primary;
   staging-step failure leaves the old primary and `.bak` untouched;
   once staged, rotates an existing `vault.bin` → `vault.bin.bak`
   (overwriting any existing backup) verbatim and without re-encryption;
@@ -227,9 +227,9 @@ Each step lands as its own commit. Tests come first.
   vault save pipeline's tempfile / chmod `0600` / fsync / rename /
   parent-fsync pieces without the vault-specific header, permissions
   enforcement, or `.bak` rotation.
-- [ ] Implement `format_unsafe_permissions(&Error) -> Option<String>` per
-  §4.7, sourcing all wording from the `unsafe_permissions` fields so CLI
-  and GUI never diverge.
+- [ ] Implement `format_unsafe_permissions(&PaladinError) -> Option<String>`
+  per §4.7, sourcing all wording from the `unsafe_permissions` fields so
+  CLI and GUI never diverge.
 
 ### Phase F — Encrypted storage (Milestone 1, part 5)
 
@@ -254,11 +254,14 @@ Each step lands as its own commit. Tests come first.
 - [ ] Tests: `open` rejects `VaultLock` mismatches with `wrong_vault_lock`
   before any KDF work — `VaultLock::Plaintext` against an encrypted file,
   and `VaultLock::Encrypted(_)` against a plaintext file.
+- [ ] Tests: encrypted `create` and `create_force` follow the same precondition,
+  parent-permission, staged-clobber, commit-point, and durability-error
+  semantics as plaintext storage.
 - [ ] Implement `crypto::argon2` (defaults m=64 MiB, t=3, p=1 with the §4.4
   read bounds: `m_kib` 8192–1048576, `t` 1–10, `p` 1–4),
   `crypto::aead` (XChaCha20-Poly1305 with header bytes serialized as AAD),
-  encrypted `Store` save/open paths, and the cached-key data model on
-  `Vault`.
+  encrypted `Store` save/open/create/create_force paths, and the cached-key
+  data model on `Vault`.
 
 ### Phase G — Vault behavior + settings (Milestone 1, part 6)
 
@@ -368,8 +371,8 @@ Each step lands as its own commit. Tests come first.
 - [ ] Doc-comment every public item with a one-line summary and a link back to
   the relevant DESIGN.md section.
 - [ ] Add a `test-fault-injection` cargo feature (off by default) that
-  exposes, only under `cfg(feature = "test-fault-injection")`, a `Store`
-  constructor honoring the
+  exposes, only under `cfg(feature = "test-fault-injection")`, a test-only
+  `Store` constructor and shared atomic-write fault hook honoring the
   `PALADIN_FAULT_INJECT=pre_commit|post_commit` env var: `pre_commit`
   fails the save before the primary rename (surfaces
   `save_not_committed`); `post_commit` fails the parent-directory
@@ -381,8 +384,8 @@ Each step lands as its own commit. Tests come first.
   `paladin-core` rollback/durability tests already exercise these
   paths in-process — this feature is the cross-crate surface so CLI
   and TUI integration tests can drive them end-to-end. The feature-gated
-  constructor is excluded from the default public-API snapshot and is not part
-  of the stable §4.7 surface.
+  constructor and hook are excluded from the default public-API snapshot and are
+  not part of the stable §4.7 surface.
 
 ## Test inventory
 
@@ -427,10 +430,17 @@ is a separate `#[test]` or `cases![]` family.
   `create` (parent only, since primary/backup do not yet exist),
   first-save backup skip, later one-generation `.bak` rotation, leftover temp
   cleanup on `open`, and temp cleanup on non-crash save errors.
+- `format_unsafe_permissions` returns shared repair text for
+  `unsafe_permissions` and `None` for every other error kind.
 - `open` / `create` precondition errors — `vault_missing` for absent
   primary on `open`; `vault_exists` for existing primary on `create`;
   `wrong_vault_lock` on cross-mode `VaultLock` (both directions) before
   any KDF work.
+- `create_force` staged clobber — staging failure leaves existing primary and
+  `.bak` untouched; after backup rotation, pre-commit failure reports
+  `save_not_committed` with `backup_path`; post-commit parent `fsync` failure
+  reports `save_durability_unconfirmed`; encrypted and plaintext locks share
+  those semantics.
 - Vault behavior and settings: `add` / `remove` / `iter` insertion order /
   `rename` timestamp update; settings defaults and exact timeout minimums.
 - `Vault::mutate_and_save`: rollback on closure error and
@@ -510,7 +520,7 @@ defines. Implementation owes:
   kinds verbatim (no internal renaming) so the `paladin` CLI can
   serialize them under `--json` and the strict-output rule in §5
   holds without any mapping layer. Add a `serde::Serialize` impl
-  guarded by a `serde` cargo feature, off by default, that the
+  guarded by an `error-serde` cargo feature, off by default, that the
   CLI opts into; `paladin-core` itself has no JSON output paths.
 - **No platform-specific build steps.** Linux is the only target in
   v0.1 (§2); the `perms_other.rs` stub keeps `cargo check
