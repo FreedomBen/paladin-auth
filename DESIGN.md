@@ -698,8 +698,28 @@ clap's normal syntax-error exit code and use `kind: "validation_error"`;
 when no more specific parser-side validation field is available, they use
 `field: "argv"` and `reason: "usage"`. This JSON parse-error behavior is
 only for the `paladin` binary; `paladin-tui` and `paladin-gtk` reject
-`--json` without implementing JSON output. `code` values are strings so
-leading zeroes are preserved. The common account shape is:
+`--json` without implementing JSON output (their rejection is plain
+text — there is no JSON envelope). `code` values are strings so
+leading zeroes are preserved.
+
+Under `--json`, `paladin` writes **only** the JSON envelope: the success
+document to stdout, the failure document to stderr, and no other bytes
+on either stream. The strict-mode rule covers every output path: text-
+mode warnings (`short_secret`) flow into the success envelope's
+`warnings` array for `add` and `import`; the plaintext-export advisory
+is suppressed because the caller opted in by passing `--plaintext`;
+clap diagnostics are rerouted via the argv pre-scan above; and progress
+or status text is never emitted. Confirmation flags (`remove --yes`,
+`passphrase remove --yes-i-know`) are required under `--json` since no
+interactive confirmation channel is available, and missing confirmations
+reject at parse time as `validation_error`. Passphrase prompts continue
+to read from `/dev/tty` via `rpassword`; the prompt string is written
+to `/dev/tty`, never to stdout or stderr, so a script that redirects
+both streams sees only the JSON envelope. This rule is the script
+contract — JSON consumers can `parse(stdout)` on exit 0 and
+`parse(stderr)` on non-zero exit without filtering.
+
+The common account shape is:
 
 ```json
 {

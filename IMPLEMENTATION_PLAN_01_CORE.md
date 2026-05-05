@@ -28,7 +28,7 @@ crates/paladin-core/
 ├── Cargo.toml            # license = "AGPL-3.0-or-later"
 ├── src/
 │   ├── lib.rs            # re-exports public surface from §4.7
-│   ├── error.rs          # PaladinError + Result alias; JSON-stable error_kind tags
+│   ├── error.rs          # PaladinError + Result alias; carries the §5 error_kind taxonomy verbatim so the CLI can emit it under --json without renaming or mapping
 │   ├── domain/
 │   │   ├── mod.rs        # Account, AccountId, Algorithm, OtpKind, Code
 │   │   ├── secret.rs     # Secret newtype with Zeroize + Drop
@@ -452,6 +452,33 @@ doesn't drift across transitive minor versions), `base32`, `url`,
 Dev/test only: `proptest` (parser/base32 properties), `trybuild`
 (`Secret` non-`Debug` compile-fail coverage), and `tempfile` (storage and
 permission fixtures).
+
+## Packaging support (per §11)
+
+`paladin-core` is a library and is not itself a release artifact, but
+the v0.1 / v0.2 packaging pipeline depends on the workspace shape it
+defines. Implementation owes:
+
+- **Cargo.toml metadata.** `crates/paladin-core/Cargo.toml` carries
+  `description`, `repository`, `license = "AGPL-3.0-or-later"`, and
+  pinned `rust-version`. Binary crates inherit consistent values via
+  `package.workspace = true` so `nfpm` and Flathub manifests read
+  one source.
+- **Deterministic, vendor-friendly deps.** The §9 dep list above
+  resolves cleanly under `cargo vendor`; pinning `getrandom`
+  (already required for the §4.4 CSPRNG contract) plus
+  `cargo build --locked` is sufficient for §11.6 reproducibility.
+  No build-time codegen depends on system clock, hostname, or
+  network.
+- **Stable `error_kind` taxonomy.** `PaladinError` exposes the §5
+  kinds verbatim (no internal renaming) so the `paladin` CLI can
+  serialize them under `--json` and the strict-output rule in §5
+  holds without any mapping layer. Add a `serde::Serialize` impl
+  guarded by a `serde` cargo feature, off by default, that the
+  CLI opts into; `paladin-core` itself has no JSON output paths.
+- **No platform-specific build steps.** Linux is the only target in
+  v0.1 (§2); the `perms_other.rs` stub keeps `cargo check
+  --target=…` clean on non-Unix without changing release behavior.
 
 ## Out of scope for this plan
 

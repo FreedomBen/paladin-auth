@@ -191,8 +191,26 @@ strings, then validated against the minimums above.
   - `save_durability_unconfirmed`: `committed: true`.
 - The JSON schema (success and error envelopes) is captured in golden
   snapshots so additions are an explicit, reviewable change.
-- Text-mode warnings, including short-secret validation warnings and the
-  plaintext-export warning, are written to stderr.
+- Under `--json`, `paladin` writes **only** the JSON envelope: the
+  success document to stdout, the failure document to stderr, and no
+  other bytes on either stream. This is the script contract per §5 —
+  JSON consumers can `parse(stdout)` on exit 0 and `parse(stderr)` on
+  non-zero exit without filtering. The strict-mode rule applies to
+  every output path: short-secret validation warnings flow into the
+  `warnings` array of the `add` / `import` success envelope; the
+  plaintext-export advisory is suppressed because the caller opted in
+  via `--plaintext`; clap diagnostics are rerouted by the argv
+  pre-scan above; status / progress text is never emitted; and
+  passphrase prompts read from `/dev/tty` via `rpassword` so prompt
+  strings never reach stdout or stderr. Missing confirmation flags
+  (`remove --yes`, `passphrase remove --yes-i-know`) reject at parse
+  time as `validation_error` rather than silently blocking on a
+  prompt.
+- Text-mode warnings (`short_secret`, the plaintext-export advisory) are
+  written to stderr in **text mode only**; under `--json` they are
+  routed into the success envelope's `warnings` array (`add` /
+  `import`) or suppressed (plaintext-export advisory) per the rule
+  above.
 
 Exit codes: `0` success; clap's default usage/parse exit for syntax errors;
 `1` for Paladin runtime errors. `--json` does not change exit codes; it only
@@ -323,12 +341,62 @@ where relevant, and exit code.
 - **`--json` schema snapshots** for every command success, every
   `error_kind`, and representative syntax/usage failures rendered as
   JSON when `--json` is present. Locked via `insta`.
+- **`--json` stream cleanliness** — for every covered command, success
+  and error: assert stdout is exactly the success JSON document plus
+  one trailing newline (or empty on error) and stderr is exactly the
+  failure JSON document plus one trailing newline (or empty on
+  success). Specifically asserts no `short_secret` or plaintext-export
+  text appears on either stream when `--json` is set, no clap
+  diagnostics appear, and a `passphrase set` invocation under `--json`
+  with `/dev/tty` rerouted to the test harness keeps stdout/stderr
+  byte-clean (the prompt is consumed via `/dev/tty` only). One test
+  per output path (success-with-warnings via `add --uri` of a
+  short-secret URI; error-with-extra-fields via
+  `multiple_matches`; clap-rerouted via an unknown subcommand;
+  parse-time confirmation rejection via `remove --json` without
+  `--yes`).
 - **`--no-color`** disables ANSI; `NO_COLOR` env var honored.
 - **`paladin tui`** → spawns `paladin-tui` (a stub binary placed on `PATH`
   for the test asserts argv) and forwards `--vault` / `--no-color` in both
   accepted global-flag positions. `paladin tui --json` and `paladin --json
   tui` → rejected at parse time with JSON error envelopes. Missing
   `paladin-tui` → `io_error` with `operation: "exec_paladin_tui"`.
+
+## Packaging (per §11)
+
+The CLI ships in `.deb`, `.rpm`, Flatpak, and AppImage in v0.1
+(§11.1). Implementation owes the release pipeline:
+
+- **Man page.** Generate `paladin.1` from clap via `clap_mangen`,
+  driven by `cargo xtask man` (or a `build.rs` step) so the page
+  always tracks the live argument tree. The packaging configs ship
+  it gzipped at `/usr/share/man/man1/paladin.1.gz` per §11.3.
+- **Cargo.toml metadata.** `crates/paladin-cli/Cargo.toml` sets
+  `description`, `homepage`, `repository`, `keywords`, `categories`,
+  and `license = "AGPL-3.0-or-later"`. `nfpm` reads these directly
+  when building `.deb` / `.rpm` so the per-format configs in
+  `packaging/deb/paladin.yaml` and `packaging/rpm/paladin.yaml`
+  stay minimal. The Debian one-line description is short enough for
+  the 60-char limit; the long form is sourced from README.
+- **Flatpak.** `packaging/flatpak/paladin.yml` declares
+  `org.freedesktop.Platform//23.08`, no `--share=network`, and only
+  `xdg-data/paladin:create` plus `xdg-config/paladin:create`. No
+  D-Bus or session-bus access is requested. `flatpak run io.…Cli`
+  inherits the invoking terminal's stdin / stdout / stderr so
+  `--json` scripting works end-to-end via the Flatpak entry point.
+- **AppImage.** `linuxdeploy` assembles the AppDir; the bundled
+  `AppRun` forwards argv unchanged so the AppImage is a drop-in for
+  the bare binary. `paladin-<version>-x86_64.AppImage` per §11.5.
+  `--appimage-extract-and-run` is the documented fallback for
+  FUSE-less hosts (e.g. CI runners, headless servers).
+- **Reproducible builds.** The CLI binary is part of the workspace
+  build that consumes vendored deps under `vendor/` (§11.6) with
+  `cargo build --locked` and `SOURCE_DATE_EPOCH` exported from the
+  release tag. No build-time codegen depends on system clock,
+  hostname, or network.
+- **Signing.** `.deb`, `.rpm`, and AppImage artifacts are signed
+  with `minisign`; the signature plus the project's published
+  public key are uploaded alongside each artifact (§11.6).
 
 ## Definition of done
 

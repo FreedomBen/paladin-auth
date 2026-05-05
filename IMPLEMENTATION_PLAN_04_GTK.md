@@ -188,7 +188,12 @@ slug is `None` or unresolved. The CLI and TUI ignore the field entirely.
 `--vault <path>` and `--no-color` are accepted (parity with siblings).
 `--no-color` is a parser-level no-op in the GUI: there is no ANSI palette
 to disable, and theming is delegated to Adwaita / the system theme.
-`--json` is rejected at parse time — the GUI has no JSON mode.
+`--json` is rejected at parse time with clap's standard text
+diagnostic — `paladin-gtk` has no JSON output mode and never emits a
+JSON envelope, mirroring DESIGN §5. The rejection is text-only at
+clap's normal usage exit code; there is no argv pre-scan equivalent of
+the CLI's strict-mode behavior because the GUI is never expected to be
+scripted.
 
 ## Vault interaction
 
@@ -251,9 +256,87 @@ Effects update visible state only after the underlying mutation succeeds:
 
 ## Linux desktop integration
 
-- `data/paladin-gtk.desktop` shipped under `share/applications/`.
-- App icon under `share/icons/hicolor/scalable/apps/paladin-gtk.svg`.
+- `data/paladin-gtk.desktop` shipped at
+  `/usr/share/applications/paladin-gtk.desktop` per §11.3. Sets
+  `Categories=Utility;Security;`, the AGPL-aligned `Keywords=`, and
+  `Exec=paladin-gtk %F` so file managers can hand off `otpauth://`
+  files for import.
+- App icon at
+  `/usr/share/icons/hicolor/scalable/apps/paladin-gtk.svg`. Symbolic
+  variant at `…/symbolic/apps/paladin-gtk-symbolic.svg` if the
+  Adwaita-style symbolic palette warrants it; a `16`/`24`/`32`/`48`
+  PNG fallback set is shipped under
+  `/usr/share/icons/hicolor/<size>/apps/` for non-SVG icon
+  consumers.
 - Adwaita-style CSS in `data/style.css`, scoped via `gtk::CssProvider`.
+
+## Packaging (per §11)
+
+`paladin-gtk` ships in `.deb`, `.rpm`, Flatpak, and AppImage in v0.2
+(§11.1). Implementation owes the release pipeline:
+
+- **Cargo.toml metadata.** `crates/paladin-gtk/Cargo.toml` sets
+  `description`, `homepage`, `repository`, `keywords`, `categories`,
+  and `license = "AGPL-3.0-or-later"` so `nfpm` produces correct
+  Debian / RPM control metadata without per-format duplication.
+- **`.deb` / `.rpm` (via `nfpm`).** `packaging/deb/paladin-gtk.yaml`
+  and `packaging/rpm/paladin-gtk.yaml` install
+  `/usr/bin/paladin-gtk`, the desktop entry at
+  `/usr/share/applications/`, and the icon set under
+  `/usr/share/icons/hicolor/`. Debian declares `libgtk-4-1
+  (>= 4.10)` (and `libadwaita-1-0 (>= 1.4)` if the v0.2 build
+  depends on libadwaita — see "Open packaging question" below);
+  Fedora declares the matching `gtk4` (and `libadwaita`) package
+  names. No maintainer scripts: the vault is created on first use
+  under `$XDG_DATA_HOME/paladin/`. The desktop-entry validator
+  (`desktop-file-validate`) and the `gtk4-update-icon-cache` post-
+  install hook are run by the §11 packaging pipeline, not by the
+  package itself.
+- **Flatpak.** `packaging/flatpak/paladin-gtk.yml` declares
+  `org.gnome.Platform//46` (and the matching SDK), no
+  `--share=network`, and the §11.4 sandbox permissions:
+  `xdg-data/paladin:create`, `xdg-config/paladin:create`, plus the
+  Wayland and X11 fallback sockets and clipboard access required
+  for `gdk::Clipboard`. The Flatpak app ID is the §11.4
+  placeholder `io.github.paladin_otp.Gui`, finalized at
+  Flathub-submission time. `flatpak-builder` consumes the tagged
+  release tarball with vendored Cargo deps so Flathub builds
+  reproducibly without network access at build time.
+- **AppImage.** `linuxdeploy` plus
+  `linuxdeploy-plugin-gtk` assemble the AppDir so GTK4 modules,
+  schemas, and pixbuf loaders ship inside the bundle. The
+  `AppRun` is the linuxdeploy default which exports
+  `GTK_PATH` / `GDK_PIXBUF_MODULE_FILE` to the bundled paths
+  before invoking `paladin-gtk`. Output is
+  `paladin-gtk-<version>-x86_64.AppImage`; embedded `zsync` points
+  at the GitHub Releases feed for in-place updates (§11.5).
+- **Reproducible builds.** Same workspace pipeline as the CLI /
+  TUI: vendored deps, `cargo build --locked`,
+  `SOURCE_DATE_EPOCH` from the release tag. The `gresource`
+  bundle is built deterministically by `glib-compile-resources`
+  (input file order is fixed by `paladin-gtk.gresource.xml`).
+  `linuxdeploy` runs after `cargo build` and does not re-link.
+- **Signing.** `.deb`, `.rpm`, and AppImage are signed with
+  `minisign` per §11.6; the public key plus signature ride
+  alongside each artifact on GitHub Releases. Flatpak signing is
+  inherited from Flathub.
+- **CI sign-off.** Milestone 7 ships the
+  `xvfb-run` smoke test green plus a packaging dry-run that
+  produces `.deb`, `.rpm`, and AppImage artifacts and verifies
+  `desktop-file-validate` passes on the installed `.desktop`
+  entry.
+
+### Open packaging question — libadwaita
+
+DESIGN §11.3 declares `libadwaita-1-0 (>= 1.4)` as a Debian dependency
+for `paladin-gtk`, but this plan's "Dependencies" section says
+**No `libadwaita` for v0.2** — styling stays on `gtk::CssProvider`.
+The two are inconsistent: a runtime dep on libadwaita without a
+build-time dep is misleading. Resolve before Milestone 7 — either
+adopt `libadwaita` for v0.2 (and drop the §"No libadwaita" note) or
+drop the libadwaita line from §11.3 and the packaging configs. Flag
+the choice to the user; both paths are within the AGPL / GTK4
+constraints, but the choice changes the dep declaration above.
 
 ## Tests
 

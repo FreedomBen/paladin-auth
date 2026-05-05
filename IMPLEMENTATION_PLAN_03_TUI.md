@@ -21,8 +21,8 @@ don't need async I/O.
 crates/paladin-tui/
 ├── Cargo.toml             # license = "AGPL-3.0-or-later"; bin = "paladin-tui"
 ├── src/
-│   ├── main.rs            # parse args (clap), reject --json, hand off to app::run
-│   ├── cli.rs             # GlobalArgs (--vault, --no-color; --json rejected)
+│   ├── main.rs            # parse args (clap), reject --json (text-only diagnostic — TUI has no JSON mode), hand off to app::run
+│   ├── cli.rs             # GlobalArgs (--vault, --no-color; --json rejected at parse time with clap's text diagnostic)
 │   ├── app/
 │   │   ├── mod.rs         # App state machine + run loop
 │   │   ├── state.rs       # AppState: Missing / StartupError / Locked / Unlocked { vault, ui, modals }
@@ -458,6 +458,58 @@ captured with `insta` golden snapshots using `ratatui::backend::TestBackend`.
 transitive network crates (enforced by workspace `cargo deny`).
 
 Dev-dependencies: `insta` for golden snapshots.
+
+## Global flags
+
+`--vault <path>` and `--no-color` are accepted (parity with siblings).
+`--json` is rejected at parse time with clap's standard text
+diagnostic — `paladin-tui` has no JSON output mode and never emits a
+JSON envelope, mirroring DESIGN §5. This rejection is text-only and
+goes to stderr at clap's normal usage exit code; there is no argv
+pre-scan equivalent of the CLI's strict-mode behavior because the TUI
+is never expected to be scripted.
+
+## Packaging (per §11)
+
+`paladin-tui` ships in `.deb`, `.rpm`, Flatpak, and AppImage in v0.1
+(§11.1). Implementation owes the release pipeline:
+
+- **Man page.** Generate `paladin-tui.1` from clap via `clap_mangen`,
+  driven by the workspace `cargo xtask man` target. The packaging
+  configs ship it gzipped at `/usr/share/man/man1/paladin-tui.1.gz`
+  per §11.3. The page documents the global flags, keybindings,
+  modal behavior, and the §6 missing-vault / startup-error screens.
+- **Cargo.toml metadata.** `crates/paladin-tui/Cargo.toml` sets
+  `description`, `homepage`, `repository`, `keywords`, `categories`,
+  and `license = "AGPL-3.0-or-later"` so `nfpm` produces correct
+  Debian / RPM control metadata without per-format duplication.
+- **No desktop entry.** The TUI is launched from a terminal and does
+  not register a `.desktop` file (§11.3 only ships one for
+  `paladin-gtk`). No icon assets are required.
+- **Flatpak.** `packaging/flatpak/paladin-tui.yml` declares
+  `org.freedesktop.Platform//23.08`, no `--share=network`, and only
+  `xdg-data/paladin:create` plus `xdg-config/paladin:create`. No
+  D-Bus or session-bus access. `flatpak run io.…Tui` inherits the
+  invoking terminal's stdin / stdout / stderr so `crossterm` raw
+  mode and ANSI rendering work end-to-end against the host TTY.
+- **AppImage.** `linuxdeploy` assembles the AppDir; the `AppRun`
+  forwards argv unchanged so `paladin-tui-<version>-x86_64.AppImage`
+  acts as a drop-in for the bare binary. The
+  `linuxdeploy-plugin-gtk` is **not** used (TUI has no GTK
+  dependency). `--appimage-extract-and-run` is the documented
+  fallback for FUSE-less hosts.
+- **Reproducible builds.** Same workspace pipeline as the CLI:
+  vendored deps, `cargo build --locked`, `SOURCE_DATE_EPOCH` from
+  the release tag (§11.6).
+- **Signing.** `minisign`-signed artifacts uploaded to GitHub
+  Releases alongside the project's published public key (§11.6).
+- **`paladin tui` interaction.** The `paladin` CLI's `tui` subcommand
+  resolves `paladin-tui` via `PATH` and `execvp`s it; under any of
+  the §11 artifact formats both binaries land on `PATH` (`.deb` /
+  `.rpm` install both to `/usr/bin/`; the Flatpak entry points are
+  separate but documented; the AppImage build ships them as
+  separate AppImages and users on AppImage-only systems must invoke
+  `paladin-tui` directly).
 
 ## Implementation checklist
 
