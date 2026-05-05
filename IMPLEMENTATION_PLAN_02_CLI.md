@@ -1,6 +1,6 @@
 # Implementation Plan 02 — `paladin-cli` (`paladin`)
 
-Source of truth: [DESIGN.md](DESIGN.md) §3, §5, §10, §11 (Milestone 4).
+Source of truth: [DESIGN.md](DESIGN.md) §3, §5, §10, §12 (Milestone 4).
 Depends on: [`IMPLEMENTATION_PLAN_01_CORE.md`](IMPLEMENTATION_PLAN_01_CORE.md).
 
 ## Scope

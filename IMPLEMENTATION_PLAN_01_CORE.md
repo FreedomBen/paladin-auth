@@ -1,7 +1,7 @@
 # Implementation Plan 01 — `paladin-core`
 
 Source of truth: [DESIGN.md](DESIGN.md) §3, §4, §5 error taxonomy,
-§8–§10, §11 Milestones 1–3, and §13.
+§8–§10, §12 Milestones 1–3, and §14.
 Status: pre-implementation. This plan stays grounded in DESIGN.md and does not
 invent any public crate, public type, or public API beyond what is specified
 there. Internal module paths below are scoped implementation details.

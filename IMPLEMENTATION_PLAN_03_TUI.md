@@ -1,7 +1,7 @@
 # Implementation Plan 03 — `paladin-tui`
 
 Source of truth: [DESIGN.md](DESIGN.md) §3, §5 (global flags / `paladin tui`),
-§6, §10, §11 (Milestone 5), §12, §13.
+§6, §10, §12 (Milestone 5), §13, §14.
 Depends on: [`IMPLEMENTATION_PLAN_01_CORE.md`](IMPLEMENTATION_PLAN_01_CORE.md).
 
 ## Scope
@@ -12,7 +12,7 @@ modal dialogs for add / remove / passphrase / settings. Auto-lock and
 clipboard auto-clear are **opt-in** per `VaultSettings`. The TUI is also
 reachable via `paladin tui` which `execvp`s this binary.
 
-Runtime model (§12): plain threads + `mpsc`. **No `tokio`** — local TUIs
+Runtime model (§13): plain threads + `mpsc`. **No `tokio`** — local TUIs
 don't need async I/O.
 
 ## Crate layout

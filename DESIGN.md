@@ -42,7 +42,8 @@ paladin/
 │   ├── paladin-cli/          # bin: `paladin`
 │   ├── paladin-tui/          # bin: `paladin-tui`
 │   └── paladin-gtk/          # planned v0.2 bin: `paladin-gtk`
-└── xtask/                    # optional: build/release helpers
+├── packaging/                # .deb / .rpm / Flatpak / AppImage metadata (§11)
+└── xtask/                    # build/release helpers, incl. `cargo xtask package` (§11)
 ```
 
 Binaries depend only on `paladin-core`. They never reach into each other.
@@ -1171,7 +1172,133 @@ Concrete obligations and explicit user-controlled tradeoffs:
 - **CI:** `cargo fmt --check`, `cargo clippy -- -D warnings`,
   `cargo test --all`, `cargo deny check`, `cargo audit`.
 
-## 11. Roadmap & checklist
+## 11. Packaging & distribution
+
+Linux-only in v0.1, consistent with §2. Each shipped front-end is published in
+four artifact formats: a Debian package (`.deb`), an RPM package (`.rpm`),
+a Flatpak, and an AppImage. v0.1 ships artifacts for `paladin` (CLI) and
+`paladin-tui`; `paladin-gtk` joins the matrix in v0.2 alongside the GUI.
+
+### 11.1 Artifact matrix
+
+| Front-end       | `.deb` | `.rpm` | Flatpak | AppImage | Ships in |
+| --------------- | :----: | :----: | :-----: | :------: | -------- |
+| `paladin` (CLI) |   ✓    |   ✓    |    ✓    |    ✓     | v0.1     |
+| `paladin-tui`   |   ✓    |   ✓    |    ✓    |    ✓     | v0.1     |
+| `paladin-gtk`   |   ✓    |   ✓    |    ✓    |    ✓     | v0.2     |
+
+All artifacts are `x86_64` in v0.1; `aarch64` is added when CI gains an
+`aarch64` runner. macOS and Windows packaging stays out of scope (§2).
+
+### 11.2 Repository layout
+
+Packaging metadata lives at the workspace root, parallel to `crates/`:
+
+```
+paladin/
+├── crates/
+├── packaging/
+│   ├── deb/          # nfpm config, one file per front-end
+│   ├── rpm/          # nfpm config, one file per front-end
+│   ├── flatpak/      # one manifest per front-end
+│   └── appimage/     # AppDir recipes + linuxdeploy invocations
+└── xtask/            # `cargo xtask package` orchestrates all four formats
+```
+
+`xtask` owns the orchestration so a release engineer runs a single
+`cargo xtask package --frontend <name>` per front-end and gets all four
+artifacts side by side.
+
+### 11.3 Native packages (`.deb` and `.rpm`)
+
+- **Tooling.** [`nfpm`](https://nfpm.goreleaser.com/) is the unified
+  producer for both formats so per-front-end metadata is written once.
+- **Per-front-end packages.** One package per front-end keeps install size
+  small for headless servers (CLI) and minimal desktop installs (TUI):
+  - `paladin` — installs `/usr/bin/paladin` and a man page at
+    `/usr/share/man/man1/paladin.1.gz`.
+  - `paladin-tui` — installs `/usr/bin/paladin-tui` and
+    `/usr/share/man/man1/paladin-tui.1.gz`.
+  - `paladin-gtk` *(v0.2)* — installs `/usr/bin/paladin-gtk`, a desktop
+    entry at `/usr/share/applications/`, and scalable icons under
+    `/usr/share/icons/hicolor/scalable/apps/`.
+- **Dependencies.**
+  - `paladin` and `paladin-tui` depend only on `libc6` (Debian) /
+    `glibc` (Fedora). The Rust binaries are otherwise statically linked
+    where possible — no OpenSSL, no libsqlite, no libcurl.
+  - `paladin-gtk` declares `libgtk-4-1 (>= 4.10)` and
+    `libadwaita-1-0 (>= 1.4)` on Debian, with the matching `gtk4` /
+    `libadwaita` packages on Fedora.
+- **Maintainer scripts.** None. The vault lives under
+  `$XDG_DATA_HOME/paladin/` and is created on first use, so install and
+  removal touch nothing global.
+- **Conflicts / replaces.** The three packages coexist; they do not
+  shadow each other's binaries, and a user can install any subset.
+- **License metadata.** Every control file declares
+  `License: AGPL-3.0-or-later` (Debian `Copyright`, RPM spec `License`),
+  matching §13 of this document.
+
+### 11.4 Flatpak
+
+- **App IDs** (reverse-DNS, placeholder pending publish):
+  `io.github.paladin_otp.Cli`, `io.github.paladin_otp.Tui`,
+  `io.github.paladin_otp.Gui`. The final namespace is finalized at
+  Flathub-submission time and recorded here.
+- **Runtimes.**
+  - CLI and TUI: `org.freedesktop.Platform` 23.08 (small, no GUI bits).
+  - GUI: `org.gnome.Platform` 46 with the matching SDK.
+- **Sandbox permissions.** No `--share=network` for any front-end (§8 / §2).
+  - CLI and TUI: filesystem access scoped to `xdg-data/paladin:create`
+    (vault) and `xdg-config/paladin:create` (settings). The TUI inherits
+    the host terminal's stdio when launched via `flatpak run` — no D-Bus
+    or session-bus access is requested.
+  - GUI: the same vault and settings paths plus the standard Wayland /
+    X11 / clipboard sockets.
+- **Build.** `flatpak-builder` consuming
+  `packaging/flatpak/<frontend>.yml`. Source is pulled from the tagged
+  release tarball with vendored Cargo dependencies (see §11.6) so
+  Flathub builds reproducibly without network access at build time.
+- **Publication.** Flathub. Each front-end is its own Flathub submission
+  with its own review thread and update cadence.
+
+### 11.5 AppImage
+
+- **Tooling.** [`linuxdeploy`](https://github.com/linuxdeploy/linuxdeploy)
+  assembles the AppDir; `appimagetool` seals it. The
+  `linuxdeploy-plugin-gtk` is used for `paladin-gtk` only.
+- **Naming.** `paladin-<version>-x86_64.AppImage`,
+  `paladin-tui-<version>-x86_64.AppImage`,
+  `paladin-gtk-<version>-x86_64.AppImage`.
+- **Update channel.** Each AppImage embeds `AppImageUpdate` `zsync`
+  metadata pointing at the GitHub Releases feed so users update in place
+  without reinstalling.
+- **CLI / TUI AppImages.** Unusual but supported: the AppImage is invoked
+  exactly like the bare binary, and the embedded `AppRun` forwards argv
+  unchanged. Headless users on FUSE-less hosts can run them with
+  `--appimage-extract-and-run`.
+
+### 11.6 Build, signing, and publication
+
+- **Reproducible builds.** Toolchain pinned via `rust-toolchain.toml`,
+  `SOURCE_DATE_EPOCH` exported from the release tag, `cargo build
+  --locked`, and a frozen vendored dependency tree (`cargo vendor` into
+  `vendor/`). Re-running the release pipeline on a clean checkout of the
+  same tag must produce byte-identical `.deb`, `.rpm`, and AppImage
+  artifacts; Flatpak reproducibility is delegated to Flathub's pipeline.
+- **Signatures.** All GitHub-hosted artifacts (`.deb`, `.rpm`, AppImage)
+  are signed with [`minisign`](https://jedisct1.github.io/minisign/);
+  the signature plus the project's published public key are uploaded
+  alongside each artifact. Flatpak releases inherit Flathub's signing,
+  and we ship an SHA-256 manifest covering the source tarball Flathub
+  consumes.
+- **CI.** A tag-driven release workflow runs the full §10 gate
+  (`cargo fmt --check`, `cargo clippy -- -D warnings`,
+  `cargo test --all`, `cargo deny check`, `cargo audit`), then invokes
+  `cargo xtask package --frontend <name>` for each front-end shipped in
+  that release. Artifact upload to GitHub Releases is scripted; Flathub
+  publication is a manual review step after the GitHub release lands.
+
+## 12. Roadmap & checklist
 
 ### Milestone 0 — Skeleton *(v0.1)*
 - [ ] Initialize workspace `Cargo.toml`, `rust-toolchain.toml`, `.gitignore`.
@@ -1234,7 +1361,14 @@ Concrete obligations and explicit user-controlled tradeoffs:
 ### Milestone 6 — Hardening & release *(v0.1)*
 - [ ] `SECURITY.md` with threat model covering both vault modes.
 - [ ] `cargo deny` + `cargo audit` clean in CI.
-- [ ] Reproducible release builds; signed checksums.
+- [ ] Reproducible release builds; signed checksums (§11.6).
+- [ ] `packaging/` tree (`deb/`, `rpm/`, `flatpak/`, `appimage/`) and
+  `cargo xtask package` orchestration per §11.2.
+- [ ] `.deb`, `.rpm`, Flatpak, and AppImage artifacts for `paladin` and
+  `paladin-tui`, signed with `minisign` and uploaded to GitHub Releases
+  per §11.3–§11.6.
+- [ ] Flathub submissions filed for the `paladin` and `paladin-tui`
+  Flatpaks (§11.4).
 - [ ] v0.1.0 tag.
 
 ### Milestone 7 — GUI *(v0.2)*
@@ -1242,10 +1376,13 @@ Concrete obligations and explicit user-controlled tradeoffs:
 - [ ] Relm4 component tree (Unlock / List / Row / Add / Remove / Import / Export / Passphrase / Settings).
 - [ ] Conditional unlock view (encrypted vaults only).
 - [ ] Clipboard + auto-lock parity with TUI (opt-in).
-- [ ] Linux desktop file + icon.
+- [ ] Linux desktop file + icon (consumed by the §11.3 native packages
+  and the §11.4 Flatpak manifest).
+- [ ] `.deb`, `.rpm`, Flatpak, and AppImage artifacts for `paladin-gtk`,
+  signed and published per §11.3–§11.6; Flathub submission filed.
 - [ ] Manual test plan documented.
 
-## 12. Open questions
+## 13. Open questions
 
 **Decided at sign-off (2026-05-04):**
 - AEAD = **XChaCha20-Poly1305** (24-byte nonce, AEAD ID 1).
@@ -1292,7 +1429,7 @@ Concrete obligations and explicit user-controlled tradeoffs:
 
 No open questions remain.
 
-## 13. License
+## 14. License
 
 This project is licensed under **AGPL-3.0-or-later**. The canonical text
 lives in [`LICENSE`](LICENSE) at the repo root.

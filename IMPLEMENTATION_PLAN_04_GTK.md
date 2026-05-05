@@ -1,9 +1,9 @@
 # Implementation Plan 04 — `paladin-gtk`
 
-Source of truth: [DESIGN.md](DESIGN.md) §3, §4.6–§4.7, §5–§13.
+Source of truth: [DESIGN.md](DESIGN.md) §3, §4.6–§4.7, §5–§14.
 Depends on: [`IMPLEMENTATION_PLAN_01_CORE.md`](IMPLEMENTATION_PLAN_01_CORE.md).
 
-> **Status: deferred to v0.2.** Per §12, the GUI is deferred to v0.2; the
+> **Status: deferred to v0.2.** Per §13, the GUI is deferred to v0.2; the
 > TUI ships in v0.1. This plan describes the v0.2 work and is included in the
 > initial planning batch so the workspace shape and API contract on
 > `paladin-core` accommodate it.
@@ -65,7 +65,7 @@ crates/paladin-gtk/
 
 Every new Rust source file carries the standard SPDX header
 `// SPDX-License-Identifier: AGPL-3.0-or-later`. Vendored desktop assets
-(icons, `.desktop`, CSS) require license-compat vetting per §13 before
+(icons, `.desktop`, CSS) require license-compat vetting per §14 before
 inclusion.
 
 ## Component tree (per §7)
@@ -279,7 +279,7 @@ The GUI itself is hard to test without a display server. Tests are split:
   overwrite without confirmation; settings persist; passphrase
   set/change/remove; icon theme resolution + fallback.
 
-## Milestone 7 checklist (expanded from §11)
+## Milestone 7 checklist (expanded from §12)
 
 - [ ] Relm4 component tree (Unlock / List / Row / Add / Remove /
   Import / Export / Passphrase / Settings).
