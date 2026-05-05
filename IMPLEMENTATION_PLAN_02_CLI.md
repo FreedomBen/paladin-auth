@@ -158,7 +158,7 @@ strings, then validated against the minimums above.
   bundles reject with
   `unsupported_plaintext_vault` immediately (no passphrase prompt), and
   only encrypted-mode bundles trigger the bundle-passphrase prompt before
-  the call to `paladin_core::import::paladin`.
+  the call to `paladin_core::import::from_file`.
 - Prompted **twice (must match)**: `init` with a non-empty first
   passphrase entry, `passphrase set`, `passphrase change` new passphrase,
   `export --encrypted`.
@@ -191,9 +191,10 @@ strings, then validated against the minimums above.
 
 ## Import merge details
 
-The CLI delegates content sniffing to `paladin_core::import::detect` when
-`--format` is omitted, and forced formats call the matching importer directly.
-Auto-detection follows the §4.6 fixed order: Paladin magic, image magic, Aegis
+The CLI delegates content sniffing and forced-format dispatch to
+`paladin_core::import::from_file`. `--format` becomes
+`ImportOptions::format = Some(format)`; omitted `--format` uses `None` so the
+facade auto-detects in the §4.6 fixed order: Paladin magic, image magic, Aegis
 JSON shape, `otpauth://` URI text or JSON string array, then unknown.
 
 Each import parses and validates the full input before mutating the vault. Any
@@ -294,13 +295,12 @@ envelope carry the detailed `kind`.
 
 Every vault-opening command except `init`:
 
-1. Resolve vault path (`--vault` or
-   `directories::ProjectDirs::data_dir()/vault.bin`).
+1. Resolve vault path (`--vault` or `paladin_core::default_vault_path()`).
 2. `paladin_core::inspect(path)` to learn the mode.
 3. If encrypted, prompt once via `/dev/tty`.
 4. `paladin_core::open(path, lock)` — propagates `unsafe_permissions`;
    text mode renders the human-readable `chmod` repair string via
-   `paladin_core::format_unsafe_permissions(&err)` so the CLI and GUI
+   `paladin_core::format_unsafe_permissions(&err)` so the CLI, TUI, and GUI
    share a single source of wording.
 5. Perform the operation. For `show`/`copy` on HOTP, call `hotp_advance`
    (which persists before returning). For `peek` on HOTP, call `hotp_peek`.

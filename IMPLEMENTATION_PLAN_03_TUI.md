@@ -81,8 +81,7 @@ so it is unit-testable without a terminal. Effects are executed by `app::run`.
 
 Startup mirrors the CLI's vault inspection path:
 
-1. Resolve vault path (`--vault` or
-   `directories::ProjectDirs::data_dir()/vault.bin`).
+1. Resolve vault path (`--vault` or `paladin_core::default_vault_path()`).
 2. Call `paladin_core::inspect(path)`.
 3. `VaultStatus::Missing` opens a non-mutating missing-vault screen with a
    status message telling the user to run `paladin init`; v0.1 TUI does not
@@ -98,7 +97,7 @@ Startup mirrors the CLI's vault inspection path:
    `wrong_vault_lock`, `io_error`) renders a non-mutating
    startup-error screen with the error text and quits on `q` /
    `Ctrl-C`. `unsafe_permissions` errors render
-   `paladin_core::format_unsafe_permissions(&err)` so the TUI and CLI
+   `paladin_core::format_unsafe_permissions(&err)` so all front ends
    show identical wording. The unlock screen handles only
    `decrypt_failed` inline; every other `open` error replaces the
    unlock screen with the startup-error screen.
@@ -219,7 +218,7 @@ closes it.
   Paladin headers (`mode == 0`) surface `unsupported_plaintext_vault`
   without a passphrase prompt; malformed Paladin headers fail inline
   before any passphrase prompt. The selected
-  `paladin_core::import::*` returns `Vec<ValidatedAccount>`; on
+  `paladin_core::import::from_file` call returns `Vec<ValidatedAccount>`; on
   success, `Vault::import_accounts(accounts, conflict)` is called
   inside `Vault::mutate_and_save` with the user's policy. The modal
   reports
@@ -421,10 +420,9 @@ captured with `insta` golden snapshots using `ratatui::backend::TestBackend`.
   with a fresh ID; clipboard QR import uses `ImportConflict::Skip`,
   reports imported/skipped counts, handles validation warnings, and
   rejects no-image / no-QR / invalid-QR cases inline.
-- **Import modal**: format auto-detect routes to the correct
-  `paladin_core::import::*` (otpauth / aegis / paladin / qr); explicit
-  format selector override honored; Paladin header-probing happens before
-  any passphrase prompt; encrypted-Paladin path prompts for the bundle
+- **Import modal**: format auto-detect and explicit format overrides route
+  through `paladin_core::import::from_file`; Paladin header-probing happens
+  before any passphrase prompt; encrypted-Paladin path prompts for the bundle
   passphrase before invoking the importer; plaintext-Paladin path returns
   `unsupported_plaintext_vault` without prompting; malformed Paladin headers
   fail inline without prompting; on-conflict policy
@@ -503,7 +501,7 @@ captured with `insta` golden snapshots using `ratatui::backend::TestBackend`.
 ## Dependencies
 
 `ratatui`, `crossterm`, `tui-input`, `clap` (for arg parsing only),
-`arboard`, `directories`, `secrecy`, `zeroize`, plus `paladin-core`.
+`arboard`, `secrecy`, `zeroize`, plus `paladin-core`.
 **No `tokio`.** No transitive network crates (enforced by workspace
 `cargo deny`).
 

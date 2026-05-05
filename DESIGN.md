@@ -212,14 +212,15 @@ decoding or KDF/AEAD work. `header_size` is **10 bytes** in plaintext mode
 (the plaintext header plus `kdf_id`, 12 bytes of Argon2 params, 16-byte
 salt, `aead_id`, and 24-byte nonce).
 
-- **Location.** Resolved via `directories::ProjectDirs::data_dir()`,
-  which on Linux follows the XDG Base Directory spec and on macOS /
-  Windows follows the platform conventions baked into the
-  `directories` crate. The vault is application data (a secrets
-  store), not user-editable configuration, so it lives under
-  `XDG_DATA_HOME` — **not** `XDG_CONFIG_HOME`. The latter is reserved
-  for any future preferences file that ships separately from the
-  vault.
+- **Location.** Resolved by `paladin-core` through
+  `default_vault_path()`, which uses
+  `directories::ProjectDirs::data_dir()`. On Linux this follows the XDG
+  Base Directory spec; on macOS / Windows it follows the platform
+  conventions baked into the `directories` crate. The vault is
+  application data (a secrets store), not user-editable configuration,
+  so it lives under `XDG_DATA_HOME` — **not** `XDG_CONFIG_HOME`. The
+  latter is reserved for any future preferences file that ships
+  separately from the vault.
   - Linux (v0.1 target):
     `${XDG_DATA_HOME:-~/.local/share}/paladin/vault.bin`.
   - macOS / Windows: whatever `ProjectDirs::data_dir()` returns under
@@ -231,8 +232,12 @@ salt, `aead_id`, and 24-byte nonce).
   The filename is always `vault.bin`; the on-disk encoding is the
   private bincode format described above (it is binary regardless of
   mode and is not interop with any other tool). A `--vault <path>`
-  flag on every binary overrides the resolved location for testing
-  and for users who keep their vault on removable media.
+  flag on every binary overrides the core-resolved location for testing
+  and for users who keep their vault on removable media. Presentation
+  crates never duplicate `ProjectDirs` logic; when `--vault` is absent
+  they call `default_vault_path()` and propagate its `io_error`
+  (`operation: "resolve_default_vault_path"`) if the platform path
+  cannot be resolved.
 - **Permissions.** File is created `0600` regardless of mode; temporary
   files and backups are also `0600`. The parent directory, if we create
   it, is `0700`. In plaintext mode these permissions are the *only*
@@ -479,14 +484,27 @@ Plaintext exports land in the `Otpauth` branch by design — they share
 the same on-disk format as a JSON `otpauth://` array.
 
 Each importer is tested with sample fixture files committed under
-`crates/paladin-core/tests/fixtures/`. The byte-oriented importers
-(`aegis`, `otpauth`) take `&[u8]` plus `import_time` when the source
-format does not carry timestamps; the encrypted Paladin importer
-additionally takes a passphrase (`SecretString`). QR import exposes both a
-path form and a raw-RGBA byte form; both decode every QR via `rqrr` and
-feed each resulting URI through `parse_otpauth`. When `import::paladin`
-sees a valid Paladin header with `mode == 0`, it returns a typed
-unsupported-plaintext-vault error without importing accounts.
+`crates/paladin-core/tests/fixtures/`. Presentation crates normally call
+the import facade, `import::from_file` for path-backed imports or
+`import::from_bytes` for already-loaded encoded content. The facade
+accepts an optional `ImportFormat`: `None` auto-detects with `detect`,
+while `Some(format)` forces the dispatch. An unknown detected format or
+an invalid forced/source combination returns `unsupported_import_format`
+with the requested/detected `format` value. When dispatch selects
+`Paladin`, callers must supply the encrypted bundle passphrase in
+`ImportOptions`; omitting it returns `invalid_state`
+(`operation: "import_paladin"`, `state: "missing_passphrase"`). The
+lower-level byte-oriented importers (`aegis_plaintext`, `otpauth`) remain
+available for tests and specialized callers; they take `&[u8]` plus
+`import_time` when the source format does not carry timestamps. The
+encrypted Paladin importer additionally takes a passphrase
+(`SecretString`). QR import exposes path, encoded-image bytes through
+the facade, and a raw-RGBA byte form for clipboard/image buffers; all
+decode every QR via `rqrr` and feed each resulting URI through
+`parse_otpauth`. When
+`import::paladin` sees a valid Paladin header with `mode == 0`, it
+returns a typed unsupported-plaintext-vault error without importing
+accounts.
 
 Importer timestamps are deterministic by source format. `otpauth`, QR,
 and Aegis imports set `created_at = updated_at = import_time` for each
@@ -504,12 +522,15 @@ policy).
 ### 4.7 Public API sketch
 
 ```rust
+pub enum PaladinError { /* core-returnable §5 error kinds */ }
+pub type Result<T> = std::result::Result<T, PaladinError>;
 pub enum VaultLock { Plaintext, Encrypted(SecretString) }
 pub enum VaultStatus { Plaintext, Encrypted, Missing }
 pub enum ValidationWarning { ShortSecret { decoded_len: usize, recommended_min: usize } }
 pub struct ValidatedAccount { pub account: Account, pub warnings: Vec<ValidationWarning> }
 pub enum ImportConflict { Skip, Replace, Append }
 pub struct ImportWarning { pub source_index: usize, pub warning: ValidationWarning }
+pub enum AccountKindInput { Totp, Hotp }
 
 pub struct ImportReport {
     pub imported: usize,
@@ -520,6 +541,7 @@ pub struct ImportReport {
     pub warnings: Vec<ImportWarning>,
 }
 
+pub fn default_vault_path() -> Result<PathBuf>;                           // shared §4.3 path resolver; appends vault.bin under ProjectDirs::data_dir()
 pub fn inspect(path: &Path) -> Result<VaultStatus>;                       // header probe; no decryption. Ok(Missing) iff the file does not exist; other I/O errors and unrecognized magic are Err. Deliberately does **not** enforce the §4.3 permissions check — only `open` and `create` do — so callers can probe a vault's mode before fixing perms.
 pub fn open(path: &Path, lock: VaultLock) -> Result<(Vault, Store)>;      // errors if `lock` doesn't match the file mode
 pub fn create(path: &Path, lock: VaultLock) -> Result<(Vault, Store)>;    // errors if `path` already exists; for the `init --force` clobber semantics use `create_force`
@@ -528,9 +550,9 @@ pub fn create_force(path: &Path, lock: VaultLock) -> Result<(Vault, Store)>;  //
 /// Format the human-readable §4.3 `unsafe_permissions` text — failing
 /// path, `subject`, `actual_mode`, `expected_mode`, and the `chmod`
 /// repair command. Returns `None` for any other error kind. Lives in
-/// `paladin-core` so the CLI and GUI render identical wording without
-/// re-implementing it (and without the GUI depending on `paladin-cli`).
-pub fn format_unsafe_permissions(err: &Error) -> Option<String>;
+/// `paladin-core` so the CLI, TUI, and GUI render identical wording
+/// without re-implementing it.
+pub fn format_unsafe_permissions(err: &PaladinError) -> Option<String>;
 
 impl Vault {
     pub fn add(&mut self, account: Account) -> AccountId;
@@ -574,7 +596,7 @@ pub struct AccountInput {
     pub secret: SecretString,
     pub algorithm: Algorithm,
     pub digits: u8,
-    pub kind: OtpKind,
+    pub kind: AccountKindInput,
     pub period_secs: Option<u32>,  // TOTP-only; None defaults to 30 seconds
     pub counter: Option<u64>,      // HOTP-only; None defaults to 0
     pub icon_hint: Option<String>,
@@ -584,6 +606,13 @@ pub fn validate_manual(input: AccountInput, now: SystemTime) -> Result<Validated
 
 pub mod import {
     pub enum ImportFormat { Otpauth, Aegis, Paladin, Qr, Unknown }
+    pub struct ImportOptions<'a> {
+        pub format: Option<ImportFormat>,  // None = auto-detect
+        pub import_time: SystemTime,
+        pub paladin_passphrase: Option<&'a SecretString>,
+    }
+    pub fn from_file(path: &Path, options: ImportOptions<'_>) -> Result<Vec<ValidatedAccount>>;  // facade: reads/detects path content, dispatches to the matching importer, and supports QR image files
+    pub fn from_bytes(bytes: &[u8], options: ImportOptions<'_>) -> Result<Vec<ValidatedAccount>>;  // facade for already-loaded encoded content; image-format bytes are decoded and treated as QR input
     pub fn otpauth(bytes: &[u8], import_time: SystemTime) -> Result<Vec<ValidatedAccount>>;  // single URI, line-list, or JSON array of URIs; errors when the input decodes to zero accounts (empty array, blank file, etc.)
     pub fn aegis_plaintext(bytes: &[u8], import_time: SystemTime) -> Result<Vec<ValidatedAccount>>;
     pub fn paladin(bytes: &[u8], passphrase: &SecretString) -> Result<Vec<ValidatedAccount>>;  // encrypted Paladin bundle only
@@ -1202,6 +1231,9 @@ Concrete obligations and explicit user-controlled tradeoffs:
   - File-permission enforcement (`0600` on primary, backup, and temp files;
     `0700` on dir) post-save and during staged writes, plus rejection of
     unsafe existing primary/backup/directory paths with `unsafe_permissions`.
+  - `default_vault_path()` resolves the §4.3 data path and reports
+    `io_error` with `operation: "resolve_default_vault_path"` if the
+    platform data path cannot be resolved.
   - `write_secret_file_atomic` export writes: `0600`, same-directory
     tempfile, pre-rename `save_not_committed`, post-rename
     `save_durability_unconfirmed`, and no `.bak` rotation.
@@ -1215,7 +1247,9 @@ Concrete obligations and explicit user-controlled tradeoffs:
   - Account validation rejects out-of-range digits, TOTP periods, HOTP
     counter overflow, empty labels, malformed icon hints, mismatched
     otpauth issuers, and invalid timestamps; short secrets in the 10-15
-    byte range produce `short_secret` warnings.
+    byte range produce `short_secret` warnings. Manual `AccountInput`
+    tests cover the `AccountKindInput` selector plus period/counter
+    defaults and kind-specific rejection.
   - Zeroize-on-drop assertions for `Secret` and `SecretString`.
   - Importers: Aegis plaintext TOTP/HOTP mapping, unsupported Aegis entry
     type rejection, our own export round-trip with fresh destination IDs,
@@ -1223,7 +1257,10 @@ Concrete obligations and explicit user-controlled tradeoffs:
     image decode (single-QR and multi-QR image files plus raw RGBA buffers)
     — fixture files in `tests/fixtures/`. Also covers the "zero accounts"
     rejection path (empty JSON array, blank otpauth file, empty Aegis
-    `entries`, image with no decodable QRs).
+    `entries`, image with no decodable QRs). The `import::from_file` /
+    `from_bytes` facade is tested for auto-detect, forced-format dispatch,
+    unknown/invalid dispatch, missing Paladin bundle passphrases, and
+    encoded-image QR bytes.
 - **Property tests** (`proptest`) for the URI parser and base32 secret
   decoding.
 - **Integration tests** for each shipped binary using `assert_cmd` (CLI)
@@ -1516,11 +1553,18 @@ artifacts side by side.
 - `otpauth://` text imports trim outer whitespace and ignore blank lines
   in URI-list mode (§4.6).
 
-**Decided during TUI plan review (2026-05-05):**
+**Decided during plan review (2026-05-05):**
 - Core exposes `Vault::mutate_and_save` so front ends do not hand-roll
   rollback for add / remove / import / settings mutations.
-- Core `AccountInput` carries optional TOTP `period_secs` and HOTP
-  `counter` fields for manual add flows.
+- Core `AccountInput` uses an `AccountKindInput` selector plus optional
+  TOTP `period_secs` and HOTP `counter` fields for manual add flows.
+- Core exposes `default_vault_path()` so presentation crates do not
+  duplicate `ProjectDirs` vault-location logic.
+- Core exposes `format_unsafe_permissions(&PaladinError)` so permission
+  repair wording consumes the concrete shared error type.
+- Core exposes an import facade (`import::from_file` / `from_bytes`) so
+  auto-detect and forced-format dispatch, including
+  `unsupported_import_format`, live in one place.
 - TUI Flatpak grants the minimal display clipboard permissions needed for
   clipboard copy and QR-from-clipboard.
 - Core exposes `write_secret_file_atomic` for plaintext and encrypted export

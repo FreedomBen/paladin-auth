@@ -115,9 +115,9 @@ inclusion.
   plaintext Paladin vaults (`mode == 0`) return
   `unsupported_plaintext_vault` inline without prompting, and malformed
   Paladin headers fail inline before any passphrase prompt. The
-  selected `paladin_core::import::*` runs on `gio::spawn_blocking`
-  (the encrypted-Paladin variant runs Argon2id) with results delivered
-  back via Relm4 messages. On success,
+  selected `paladin_core::import::from_file` call runs on
+  `gio::spawn_blocking` (the encrypted-Paladin variant runs Argon2id),
+  with results delivered back via Relm4 messages. On success,
   `Vault::import_accounts(accounts, conflict)` is called with the
   user's policy inside `Vault::mutate_and_save`;
   imported/skipped/replaced/appended/warning counts surface inline.
@@ -218,7 +218,7 @@ start from `ImportDialog`.
 ## Vault interaction
 
 - Resolve vault path from `--vault` or
-  `directories::ProjectDirs::data_dir()/vault.bin`, then call
+  `paladin_core::default_vault_path()`, then call
   `paladin_core::inspect(path)` to resolve the mode.
 - Plaintext → call `paladin_core::open(path, VaultLock::Plaintext)` directly,
   then jump to `AccountListComponent`.
@@ -229,7 +229,7 @@ start from `ImportDialog`.
   completes. Wrong passphrase surfaces inline; `unsafe_permissions` shows
   a dialog whose body is rendered via
   `paladin_core::format_unsafe_permissions(&err)` (§4.7) so the wording
-  matches the CLI exactly and the GUI never depends on `paladin-cli`.
+  matches the CLI and TUI exactly.
 - Missing → show a non-mutating dialog telling the user to run
   `paladin init`. The GUI does not create vaults in v0.2 (parity with §6).
 - Operations route through `Vault` and `Store` methods — no GUI-side
@@ -405,7 +405,7 @@ The GUI itself is hard to test without a display server. Tests are split:
 
 `relm4`, `gtk4` (via `gtk4-rs`), `libadwaita` (via `libadwaita-rs`,
 baseline 1.4 to match the §11.3 Debian dep declaration), `glib`,
-`gio`, `gdk4`, `clap`, `directories`, plus `paladin-core`. GDK
+`gio`, `gdk4`, `clap`, plus `paladin-core`. GDK
 clipboard is the canonical Wayland/X11 path; `arboard` is **not** a
 hard dependency for v0.2 and is only added if GDK clipboard proves
 insufficient during implementation.

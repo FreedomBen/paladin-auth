@@ -42,9 +42,10 @@ crates/paladin-core/
 │   │   ├── mod.rs        # otpauth:// parser + emitter
 │   │   └── tests.rs      # round-trip + edge cases
 │   ├── storage/
-│   │   ├── mod.rs        # Store, atomic-write pipeline, .bak rotation, export secret-file writer
+│   │   ├── mod.rs        # Store, default_vault_path, atomic-write pipeline, .bak rotation, export secret-file writer
 │   │   ├── header.rs     # PALADIN\0 magic, format_ver, mode, KDF/AEAD ids, AAD
 │   │   ├── payload.rs    # bincode v2 VaultPayload encode/decode (16 MiB cap)
+│   │   ├── path.rs       # ProjectDirs data_dir resolver + vault.bin filename
 │   │   ├── secret_file.rs # write_secret_file_atomic (0600 export output; no .bak)
 │   │   ├── perms_unix.rs # 0600/0700 enforcement (Linux v0.1)
 │   │   └── perms_other.rs # Stubs for non-Unix targets
@@ -56,7 +57,7 @@ crates/paladin-core/
 │   ├── settings.rs       # VaultSettings (auto-lock, clipboard) + setters
 │   ├── passphrase.rs     # set / change / remove transitions, rollback
 │   ├── import/
-│   │   ├── mod.rs        # detect(), facade
+│   │   ├── mod.rs        # detect(), from_file/from_bytes facade
 │   │   ├── otpauth.rs    # URI / line-list / JSON-array (handles Gnome plaintext)
 │   │   ├── aegis.rs      # plaintext JSON; encrypted returns unsupported error
 │   │   ├── paladin.rs    # Paladin bundle import; plaintext returns unsupported
@@ -111,11 +112,12 @@ Each step lands as its own commit. Tests come first.
   render time since uniqueness depends on full vault contents the library
   doesn't curate), `Secret` newtype with `Zeroize + Drop`, `Algorithm`,
   `OtpKind`, `Code`, `ValidationWarning`, `ValidatedAccount`,
-  `AccountInput` (including TOTP-only `period_secs` and HOTP-only
-  `counter`, both optional so defaults are applied by `validate_manual`),
-  and the public `validate_manual(input, now)` entry point that routes
-  manual flag-driven input through the same validation table as
-  `parse_otpauth` and the importers.
+  `AccountKindInput`, `AccountInput` (including the kind selector plus
+  TOTP-only `period_secs` and HOTP-only `counter`, both optional so
+  defaults are applied by `validate_manual`), and the public
+  `validate_manual(input, now)` entry point that routes manual
+  flag-driven input through the same validation table as `parse_otpauth`
+  and the importers.
 - [ ] No `Debug` impls that print secret bytes — wire compile-fail coverage
   proving `Secret` cannot be formatted with `Debug`, plus runtime assertions
   that any public `Debug` output for secret-bearing types omits or redacts the
@@ -190,6 +192,10 @@ Each step lands as its own commit. Tests come first.
   is absent, reports plaintext/encrypted mode from the header without
   decryption, returns an error for unrecognized magic, and deliberately skips
   permission checks.
+- [ ] Tests: `default_vault_path()` appends `vault.bin` under the
+  `ProjectDirs::data_dir()` location from §4.3 and surfaces `io_error`
+  with `operation: "resolve_default_vault_path"` if the platform path
+  cannot be resolved.
 - [ ] Tests: header version and ID handling — v0.1 writes `format_ver = 1`;
   unsupported versions return `unsupported_format_version`; unknown `mode`,
   `kdf_id`, or `aead_id` values return `invalid_header` before constructing a
@@ -222,6 +228,8 @@ Each step lands as its own commit. Tests come first.
   touching vault content with `io_error` and
   `operation: "unsupported_platform_permissions"`),
   atomic-write pipeline.
+- [ ] Implement `default_vault_path()` in `storage::path` so presentation
+  crates do not duplicate `ProjectDirs` logic.
 - [ ] Implement `inspect(path)` (header probe, no decryption, no perms check).
 - [ ] Implement `create_force(path, lock)` in `storage` per the §5 init
   clobber sequence.
@@ -356,6 +364,18 @@ Each step lands as its own commit. Tests come first.
   `export::encrypted` (wraps `VaultSettings::default()`, round-trips with the
   importer, and rejects empty passphrase), and front-end-style export writes
   that pass the resulting bytes through `write_secret_file_atomic`.
+- [ ] Tests for import facade dispatch: `import::from_file` and
+  `import::from_bytes` auto-detect with `format: None`, honor forced
+  `ImportFormat` values, return `unsupported_import_format` for `Unknown`
+  or invalid forced/source combinations, decode encoded image bytes as QR
+  input in `from_bytes`, use the path form for QR files in `from_file`,
+  and return `invalid_state` with `operation: "import_paladin"` /
+  `state: "missing_passphrase"` when Paladin dispatch lacks a bundle
+  passphrase.
+- [ ] Implement `ImportOptions`, `import::from_file`, and
+  `import::from_bytes` as the public facade over `detect` and the
+  format-specific importers. `from_bytes` decodes image-format bytes with
+  `image` to RGBA8 before routing through `read_qr_image_bytes`.
 - [ ] Implement `read_qr_image(path) -> Result<Vec<String>>` and
   `read_qr_image_bytes(width, height, rgba) -> Result<Vec<String>>` in
   `import/qr.rs`. The path form loads the image from disk; the byte form
@@ -406,9 +426,9 @@ is a separate `#[test]` or `cases![]` family.
   `Secret` zeroization, `Secret` non-`Debug` compile-fail coverage, and no
   secret bytes in any public `Debug` output for secret-bearing types.
 - Account validation matrix — every branch in §4.1.
-- Manual `AccountInput` validation — TOTP period defaults / overrides,
-  HOTP counter defaults / overrides, and rejection of period-on-HOTP or
-  counter-on-TOTP.
+- Manual `AccountInput` validation — `AccountKindInput` TOTP/HOTP
+  selection, TOTP period defaults / overrides, HOTP counter defaults /
+  overrides, and rejection of period-on-HOTP or counter-on-TOTP.
 - Short-secret warning surfaces in `ValidatedAccount.warnings`.
 - `otpauth://` round-trip — TOTP and HOTP, with and without issuer prefix,
   case-insensitive scheme/algo/type, base32 padding/casing, duplicate known
@@ -421,6 +441,8 @@ is a separate `#[test]` or `cases![]` family.
 - `inspect(path)` header probe: missing primary returns `Missing`, plaintext
   and encrypted headers report the correct mode without decryption, invalid
   magic errors, permission checks skipped.
+- `default_vault_path()` returns the §4.3 `vault.bin` data path or
+  `io_error` with `operation: "resolve_default_vault_path"`.
 - Header version / ID errors: unsupported `format_ver`, unknown `mode`,
   unknown `kdf_id`, and unknown `aead_id`.
 - Header byte-flip matrix on encrypted vault — every AAD-bound byte fails
@@ -466,6 +488,10 @@ is a separate `#[test]` or `cases![]` family.
 - `import::detect`: Paladin magic, QR image magic, Aegis plaintext/encrypted
   shapes, single/list/JSON-array `otpauth://`, empty otpauth JSON array shape,
   and `Unknown`.
+- Import facade: `from_file` / `from_bytes` auto-detect and forced-format
+  dispatch, `unsupported_import_format` for unknown or invalid dispatch,
+  missing Paladin bundle passphrase as `invalid_state`, and encoded image
+  bytes routed through QR decoding.
 - Importers: Aegis plaintext field mapping, defaults, and required fields;
   Aegis encrypted → typed `unsupported_encrypted_aegis`; Aegis
   non-`totp`/`hotp` entry type →
