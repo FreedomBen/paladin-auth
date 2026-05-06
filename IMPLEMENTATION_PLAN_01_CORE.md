@@ -330,10 +330,10 @@ Each step lands as its own commit. Tests come first.
 ### Phase F — Encrypted storage (Milestone 1, part 5)
 
 - [ ] Tests: header byte layout (10-byte plaintext header, 64-byte
-  encrypted-mode header before ciphertext); on-disk size cap
-  (`header_size + 16 MiB [+ 16-byte tag]`) before any KDF/AEAD work; decrypted
-  encrypted payloads above the 16 MiB payload limit are rejected before
-  constructing a `Vault`.
+  encrypted-mode header before ciphertext); encrypted on-disk size cap
+  (`header_size + 16 MiB + 16-byte AEAD tag`) before any KDF/AEAD work;
+  decrypted encrypted payloads above the 16 MiB payload limit are rejected
+  before constructing a `Vault`.
 - [ ] Tests: AAD binding — flipping any byte in `format_ver`, `mode`,
   `kdf_id`, Argon2 params, `salt`, `aead_id`, or `nonce` causes `open` to
   fail without returning a vault; flipping a ciphertext byte fails; flipping

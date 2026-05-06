@@ -1548,6 +1548,15 @@ Concrete obligations and explicit user-controlled tradeoffs:
 | `thiserror`, `anyhow`              | Error types                      |
 | `base32`                           | Secret encoding                  |
 | `url`                              | `otpauth://` URI parsing         |
+| `uuid`                             | `AccountId` (UUIDv4) generation and display |
+| `getrandom`                        | CSPRNG source for §4.4 salts and nonces; pinned in `paladin-core` so the random source does not drift across transitive minor versions |
+
+`paladin-core` also pulls in dev-only dependencies that are not part of
+the runtime supply chain: `proptest` for property tests against the
+`otpauth://` parser and base32 secret decoding, `trybuild` for `Secret`
+non-`Debug` compile-fail coverage, and `tempfile` for storage and
+permission fixtures. Binary crates additionally use `assert_cmd` and
+`insta` (§10).
 
 ## 10. Testing strategy
 
