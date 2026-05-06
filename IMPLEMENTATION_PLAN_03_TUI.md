@@ -1,8 +1,8 @@
 # Implementation Plan 03 — `paladin-tui`
 
-Source of truth: [DESIGN.md](DESIGN.md) §3, §4.1, §4.2, §4.4, §4.5,
-§4.6, §5 (global flags / `paladin tui`), §6, §8, §9, §10, §11,
-§12 (Milestone 5), §13, §14.
+Source of truth: [DESIGN.md](DESIGN.md) §3, §4.1, §4.2, §4.3, §4.4,
+§4.5, §4.6, §4.7, §5 (global flags / `paladin tui`), §6, §8, §9,
+§10, §11, §12 (Milestone 5), §13, and §14 (license).
 Depends on: [`IMPLEMENTATION_PLAN_01_CORE.md`](IMPLEMENTATION_PLAN_01_CORE.md).
 The final `paladin tui` integration check also depends on
 [`IMPLEMENTATION_PLAN_02_CLI.md`](IMPLEMENTATION_PLAN_02_CLI.md).
@@ -30,7 +30,7 @@ crates/paladin-tui/
 │   ├── app/
 │   │   ├── mod.rs         # App state machine + run loop
 │   │   ├── state.rs       # AppState variants + vault/store ownership
-│   │   ├── event.rs       # AppEvent enum (Input, Tick, EffectResult, ClipboardClear, AutoLock)
+│   │   ├── event.rs       # AppEvent enum (Input, Tick, EffectResult, ClipboardClear)
 │   │   ├── input.rs       # crossterm event → AppEvent translation
 │   │   ├── ticker.rs      # 250ms tick thread, sleeps, mpsc producer
 │   │   └── reducer.rs     # pure (state, event) → (state, side_effects)
@@ -49,7 +49,7 @@ crates/paladin-tui/
 │   │       └── settings.rs     # auto_lock + clipboard toggles + timeouts
 │   ├── search.rs          # incremental filter over Vault::iter() (§4.7 public surface, yielding &Account in insertion order) using paladin_core::account_matches_search; rows render AccountSummary projections via Account::summary()
 │   ├── clipboard.rs       # arboard wrapper + scheduled clear (only-if-unchanged)
-│   ├── auto_lock.rs       # idle-timer; encrypted-only; plaintext is no-op
+│   ├── auto_lock.rs       # idle-deadline logic; encrypted-only; plaintext is no-op
 │   ├── hotp_reveal.rs     # reveal window per row using paladin_core::HOTP_REVEAL_SECS
 │   ├── terminal.rs        # raw mode / alternate-screen guard; restores terminal on exit
 │   ├── theme.rs           # color palette; --no-color / NO_COLOR disables styling
@@ -70,15 +70,19 @@ Every new Rust source file carries the standard SPDX header
 ## Event loop (per §6)
 
 Single thread runs the reducer. Events arrive on `mpsc<AppEvent>` from two
-long-lived producer threads plus effect-owned one-shot timer threads:
+long-lived producer threads plus effect-owned clipboard timer threads:
 
 - **Input thread** — `crossterm::event::read()` in a loop, maps to
   `AppEvent::Input(KeyEvent | ResizeEvent | …)`.
-- **Ticker thread** — sleeps 250 ms, emits `AppEvent::Tick(now)`.
-- **Timer side effects** — clipboard auto-clear and auto-lock effects spawn
-  one-shot timer threads that later send
-  `AppEvent::ClipboardClear { token, value }` /
-  `AppEvent::AutoLock { token }`.
+- **Ticker thread** — sleeps 250 ms, emits
+  `AppEvent::Tick { wall_clock, monotonic }`; TOTP generation uses
+  `SystemTime` (`wall_clock`), while UI deadlines such as HOTP reveal
+  expiry use monotonic `Instant` values.
+- **Timer side effects** — clipboard auto-clear effects spawn one-shot
+  timer threads that later send
+  `AppEvent::ClipboardClear { token, value }`. Auto-lock does not spawn
+  timer threads; the reducer stores an `idle_deadline: Option<Instant>` and
+  checks it on each `Tick`.
 
 The reducer is a pure function over `(state, event) → (state, Vec<Effect>)`
 so it is unit-testable without a terminal. Effects are executed by `app::run`,
@@ -88,8 +92,8 @@ APIs (`mutate_and_save`, `hotp_advance`, or passphrase transitions), then send
 an `AppEvent::EffectResult(...)` back through the same `mpsc` channel. The
 reducer owns all non-core visible state updates (status text, reveal windows,
 modal close/count panels, and inline errors) from that result, while trusting
-core rollback semantics for the `Vault` value. Timer effects remain the only
-effects that send delayed non-result events (`ClipboardClear` / `AutoLock`).
+core rollback semantics for the `Vault` value. Clipboard timer effects are
+the only effects that send delayed non-result events (`ClipboardClear`).
 `app::run` owns terminal setup and teardown: enable raw mode, enter the
 alternate screen, install a drop guard before the first draw, and always
 restore raw mode / alternate-screen state on normal exit, startup failure
@@ -164,8 +168,8 @@ header per §4.4, so opening is unaffected.
   `paladin_core::HOTP_REVEAL_SECS` window (120 seconds), after
   which the row returns to the hidden state. Reveal expiry is detected
   on the next 250 ms `Tick` event (no separate timer thread or
-  `AppEvent` variant; the reveal carries a deadline timestamp checked
-  at tick time). `n` always advances and
+  `AppEvent` variant; the reveal carries a monotonic deadline checked
+  against the tick's `Instant`). `n` always advances and
   re-reveals (it's the "give me the next code" key) — pressing `n` again
   during an open reveal advances to the next counter rather than
   no-op'ing. During the reveal window, the label-suffix counter switches
@@ -220,16 +224,17 @@ Other keys, including the action keys `a` / `r` / `R` / `i` /
 `e` / `n` / `p` / `s` / `?` and the bare-letter vim navigation keys
 `j` / `k` / `g` / `G` / `z`, the search-focus key `/`, and the quit key `q`,
 are routed to the search field as character input while it has focus;
-the user must defocus the search (`Esc` to clear) to use them as actions. `Ctrl-C` is the exception and
+the user must defocus the search (`Tab` to preserve the query or
+`Esc` to clear it) to use them as actions. `Ctrl-C` is the exception and
 always quits. `Esc` clears the search query and returns focus to the list;
-on the list, `Esc` is a no-op. Modal dialogs trap focus while open
-and intercept `Esc` to close themselves. The missing-vault and
-startup-error screens accept `Esc` / `q` / `Ctrl-C` to quit (the
-screens are read-only dead-ends with no input or state to discard, so
-all three keys behave identically). The unlock screen accepts character
-input (passphrase) and `Enter` (submit), and quits on `Esc` or
-`Ctrl-C` (`q` is a valid passphrase character, so it is not bound to
-quit there).
+on the list, `Esc` only clears pending vim chord state and is otherwise a
+no-op. Modal dialogs trap focus while open and intercept `Esc` to close
+themselves. The missing-vault and startup-error screens accept `Esc` / `q` /
+`Ctrl-C` to quit (the screens are read-only dead-ends with no input or state
+to discard, so all three keys behave identically). The unlock screen accepts
+character input (passphrase) and `Enter` (submit), and quits on `Esc` or
+`Ctrl-C` (`q` is a valid passphrase character, so it is not bound to quit
+there).
 
 When the filter changes, preserve the selected account by `AccountId` if it
 is still present; otherwise select the first matching row. Empty result sets
@@ -276,9 +281,10 @@ Rename, Export, Passphrase, and Settings close the modal and publish a
 status-line confirmation (unless Settings Confirm found no changes, which
 closes without saving). Import and clipboard-QR Add stay in the modal on a
 post-success counts panel so imported/skipped/replaced/appended/warning
-counts remain visible; `Esc` closes that panel. Durability-unconfirmed
-outcomes are not treated as success closes: the modal stays open and surfaces
-the warning inline so the user can retry or dismiss deliberately.
+counts and any validation-warning messages remain visible; `Esc` closes that
+panel. Durability-unconfirmed outcomes are not treated as success closes: the
+modal stays open and surfaces the warning inline so the user can retry or
+dismiss deliberately.
 
 - **Add** — three input modes selected via a segmented header inside
   the modal: manual fields, paste of an `otpauth://` URI, and a
@@ -309,12 +315,14 @@ the warning inline so the user can retry or dismiss deliberately.
   through `arboard::Clipboard::get_image()`, whose `ImageData` already
   carries raw RGBA8 bytes plus width/height; the TUI calls
   `paladin_core::import::qr_image_bytes(width, height, rgba_bytes, submit_time)`
-  per the §14 signature, which takes `import_time` directly rather than
+  per the §4.7 signature, which takes `import_time` directly rather than
   the `ImportOptions` accepted by `import::from_file` /
   `import::from_bytes`.
-  Validation warnings are shown inline with
-  `paladin_core::format_validation_warning()` and do
-  not block creation. Because `Vault::add` is infallible and duplicate
+  Validation warnings are rendered with
+  `paladin_core::format_validation_warning()` and do not block creation:
+  manual / URI additions include them in the status-line confirmation, while
+  clipboard-QR additions include them in the post-success counts panel.
+  Because `Vault::add` is infallible and duplicate
   presentation policy is owned by the front ends, manual and URI duplicate
   collisions call `Vault::find_duplicate(&validated)` before mutation. A
   collision initially rejects with the existing account in the modal and
@@ -323,8 +331,8 @@ the warning inline so the user can retry or dismiss deliberately.
   `--allow-duplicate`, appending a new account that shares the
   `(secret, issuer, label)` triple). QR imports
   call `Vault::import_accounts` with
-  `ImportConflict::Skip` and report imported/skipped/warning counts in the
-  post-success counts panel.
+  `ImportConflict::Skip` and report imported/skipped/warning counts plus any
+  warning messages in the post-success counts panel.
   Successful additions are wrapped in `Vault::mutate_and_save`, which
   runs the `Vault::add` / `Vault::import_accounts` mutation and save
   under core-owned rollback. If save fails before the primary-file
@@ -376,8 +384,9 @@ the warning inline so the user can retry or dismiss deliberately.
   success, `Vault::import_accounts(accounts, conflict, import_time)` is called
   inside `Vault::mutate_and_save` with the user's policy and the same
   `import_time` passed to `ImportOptions`. The modal reports
-  imported/skipped/replaced/appended/warning counts in a post-success counts
-  panel.
+  imported/skipped/replaced/appended/warning counts plus validation-warning
+  messages rendered through `paladin_core::format_validation_warning()` in a
+  post-success counts panel.
   Pre-commit save failures (`save_not_committed`) restore
   core's pre-attempt snapshot so memory matches disk and
   the modal stays open with the inline error; durability-unconfirmed
@@ -474,11 +483,14 @@ the workspace `cargo xtask man` target appends into the man page
   and pending clipboard-clear state needed for unlock / scheduled clear, and
   shows the unlock screen for encrypted vaults.
 - **Plaintext vaults are a no-op** — there's no credential to require, so
-  the timer is not even armed. The setting is still persisted so it takes
+  no idle deadline is set. The setting is still persisted so it takes
   effect if the vault is later encrypted via `passphrase set`.
-- Idle is reset by any `AppEvent::Input`. Timer is implemented as a
-  monotonic token + timer thread; on wake, stale `AutoLock { token }`
-  events are ignored by the reducer.
+- Idle is reset by any `AppEvent::Input`. The reducer owns an
+  `idle_deadline: Option<Instant>` derived from the last input time plus
+  `auto_lock.timeout_secs`; on each 250 ms `Tick`, an expired deadline
+  transitions to `Locked`. Plaintext vaults, disabled auto-lock, and encrypted
+  vaults that have just locked keep the deadline as `None`, so no background
+  auto-lock timer threads or stale auto-lock tokens can accumulate.
 - Locking discards all secret-bearing UI state alongside the vault except
   pending clipboard auto-clear state: any open HOTP reveal window is
   closed and its in-memory code zeroized, the search query is cleared,
@@ -504,19 +516,22 @@ the workspace `cargo xtask man` target appends into the man page
 Effects update visible state only after the underlying mutation succeeds or
 reaches the primary-file commit point with durability still uncertain:
 
-- HOTP `n`: the effect calls `Vault::hotp_advance`, stages the returned
-  `Code` (whose `counter_used` is the pre-advance counter) in zeroizing
-  pending state, and publishes it to the reveal slot only if the call
-  succeeds or returns `save_durability_unconfirmed`.
+- HOTP `n`: the effect first calls `Vault::hotp_peek` to stage the
+  would-be visible `Code` (whose `counter_used` is the pre-advance counter)
+  in zeroizing pending state, then calls `Vault::hotp_advance` to advance
+  and save. It publishes the staged code to the reveal slot only if the
+  advance succeeds or returns `save_durability_unconfirmed`; this avoids
+  requiring the error type to carry a `Code`.
   Pre-commit save failures (`save_not_committed`) leave the in-memory
-  counter and reveal state unchanged (per DESIGN §4.2 rollback) and
-  surface a status-line error. Durability-unconfirmed failures
-  (`save_durability_unconfirmed`) reveal the new code and
-  `Code.counter_used` label and report the committed-but-uncertain status
+  counter and reveal state unchanged (per DESIGN §4.2 rollback), zeroize
+  the staged code, and surface a status-line error.
+  Durability-unconfirmed failures (`save_durability_unconfirmed`) reveal the
+  new code and `Code.counter_used` label and report the
+  committed-but-uncertain status
   in the status line — the user has the new code in hand even though
   durability is in question. All other failures show a status-line error
   and leave the previous reveal state unchanged (hidden if no reveal was
-  open).
+  open), zeroizing the staged code before returning.
 - Copy: show a status-line error if clipboard write fails; do not schedule
   auto-clear.
 - Add / remove / rename / settings saves: validation and setter failures happen
@@ -571,7 +586,7 @@ reaches the primary-file commit point with durability still uncertain:
 | `i`                                | Open Import modal                                                                                     |
 | `e`                                | Open Export modal                                                                                     |
 | `/`                                | Focus search bar                                                                                      |
-| `Tab` `Shift-Tab`                  | Cycle focus between search bar and list (commits active query when leaving search)                    |
+| `Tab` `Shift-Tab`                  | Cycle focus between search bar and list (preserves active query when leaving search)                  |
 | `Ctrl-N` `Ctrl-P`                  | In modals: next / previous control (aliases for `Tab` / `Shift-Tab`); no effect outside modals        |
 | `p`                                | Open Passphrase modal                                                                                 |
 | `s`                                | Open Settings modal                                                                                   |
@@ -619,10 +634,11 @@ captured with `insta` golden snapshots using `ratatui::backend::TestBackend`.
   keys that require a selected row surface the "no account selected"
   status-line error. The `id:` prefix form is CLI-only and is **not**
   honored by the TUI search.
-- **Auto-lock**: timer arms on `Unlocked` + `enabled` + encrypted; resets
-  on input; transitions to `Locked` on expiry; **no-op** for plaintext
-  vaults (timer never arms); stale timer tokens are ignored. Setting
-  persists across saves. Locking discards the `Vault` / `Store`, open HOTP
+- **Auto-lock**: `idle_deadline` is set on `Unlocked` + `enabled` +
+  encrypted; resets on input; transitions to `Locked` when a 250 ms
+  `Tick` observes expiry; **no-op** for plaintext vaults (deadline stays
+  `None`). Setting persists across saves. Locking discards the
+  `Vault` / `Store`, open HOTP
   reveal windows, the search query, and any modal while retaining the
   resolved vault path for the next unlock attempt; a clipboard auto-clear
   timer scheduled before lock survives lock and still fires only-if-unchanged.
@@ -657,6 +673,8 @@ captured with `insta` golden snapshots using `ratatui::backend::TestBackend`.
   surface `invalid_header` inline; on-conflict policy
   (`skip` / `replace` / `append`) is forwarded to
   `Vault::import_accounts` and reflected in the report counts;
+  validation warnings are rendered through
+  `paladin_core::format_validation_warning()`;
   importer error kinds listed under "Effect errors", including
   `unsupported_import_format`, surface inline without mutation;
   successful imports persist via `Vault::mutate_and_save`
@@ -701,7 +719,8 @@ captured with `insta` golden snapshots using `ratatui::backend::TestBackend`.
   visible vault-mode flag (sourced from `Vault::is_encrypted()`) tracks
   the transition outcome without inspecting private key/cache material.
 - **HOTP reveal window**: reveal closes after
-  `paladin_core::HOTP_REVEAL_SECS`; `n` during an open
+  `paladin_core::HOTP_REVEAL_SECS` measured on a monotonic clock;
+  `n` during an open
   reveal advances again (does not no-op); hidden rows show the stored next
   counter, while revealed rows show the counter that produced the visible
   code until expiry.
@@ -736,6 +755,8 @@ captured with `insta` golden snapshots using `ratatui::backend::TestBackend`.
   `confirmation_mismatch` and `zero_length` inline errors;
   status-line confirmations after manual Add, URI Add, Remove, Rename,
   Export, Passphrase set/change/remove, and Settings save;
+  manual / URI Add status-line confirmations with validation warnings;
+  Import and QR-add counts panels with validation-warning messages;
   startup-error screen rendered with `unsafe_permissions` (the `Some(text)`
   from `format_unsafe_permissions`).
 - **Plaintext vault**: opens directly to list (no unlock screen).
@@ -765,9 +786,10 @@ key/event handling (`crossterm`), the search-bar widget (`tui-input`),
 and clipboard access (`arboard`) do not drift across transitive minor
 updates; `arboard` is pinned explicitly because it sits on the
 clipboard security boundary (copy + image-import paths). `crossterm`
-must match the version `ratatui` re-exports so the input/event types
-line up. `insta` is similarly pinned for snapshot stability across
-runs. This mirrors the `paladin-core` pinning of `getrandom` /
+is pinned alongside `ratatui` so direct input/event handling and the
+terminal backend are tested as a compatible pair. `insta` is similarly
+pinned for snapshot stability across runs. This mirrors the
+`paladin-core` pinning of `getrandom` /
 `bincode v2` and the `paladin-cli` pinning convention.
 
 ## Global flags
@@ -793,17 +815,19 @@ is never expected to be scripted.
   by the workspace `cargo xtask man` target. The packaging configs ship it
   gzipped at `/usr/share/man/man1/paladin-tui.1.gz` per §11.3.
 - **Cargo.toml metadata.** `crates/paladin-tui/Cargo.toml` inherits
-  `description`, `repository`, `license = "AGPL-3.0-or-later"`,
-  `edition`, and `rust-version` from `[workspace.package]` via per-field
+  `description`, `repository`, `homepage`, `license` (set to
+  `"AGPL-3.0-or-later"` at the workspace), `edition`, and
+  `rust-version` from `[workspace.package]` via per-field
   Cargo inheritance (`description.workspace = true`,
-  `repository.workspace = true`, and so on) so `nfpm` and Flathub
-  manifests read one source. It additionally sets the binary-specific
-  `homepage`, `keywords`, and `categories` fields locally. The
+  `repository.workspace = true`, `homepage.workspace = true`, and so on)
+  so `nfpm` and Flathub manifests read one source. It additionally sets
+  the binary-specific `keywords` and `categories` fields locally. The
   packaging pipeline sources these values from Cargo metadata when
   building `.deb` / `.rpm` so the per-format configs in
   `packaging/deb/paladin-tui.yaml` and `packaging/rpm/paladin-tui.yaml`
-  stay minimal. The Debian one-line description is short enough for
-  the 60-char limit; the long form is sourced from README.
+  stay minimal. The Debian one-line description fits the conventional
+  ~60-character synopsis display width (Debian Policy §5.6.13 caps the
+  synopsis under 80); the long form is sourced from README.
 - **No desktop entry.** The TUI is launched from a terminal and does
   not register a `.desktop` file (§11.3 only ships one for
   `paladin-gtk`). No icon assets are required.
@@ -849,7 +873,8 @@ is never expected to be scripted.
   (including `format_unsafe_permissions` rendering).
 - [ ] Implement terminal raw-mode / alternate-screen lifecycle with guarded
   restoration on exit, error, `Ctrl-C`, and panic unwind.
-- [ ] Implement reducer, event producers, effect execution, and timer tokens.
+- [ ] Implement reducer, event producers, effect execution, clipboard timer
+  tokens, and auto-lock idle deadlines.
 - [ ] Implement list layout from `AccountSummary` projections, search,
   TOTP gauges, HOTP reveal/copy behavior,
   HOTP `Code.counter_used` labels, and status-line errors.
@@ -869,7 +894,7 @@ is never expected to be scripted.
   `paladin_core::format_plaintext_export_warning()` so wording stays
   identical to the CLI / GUI; gate `set` vs `change` / `remove`
   sub-flows on `Vault::is_encrypted()` and use the same getter to
-  arm or skip the auto-lock timer.
+  maintain or clear the auto-lock idle deadline.
 - [ ] Implement the read-only Help overlay (`?` from list focus,
   `Esc` to close); render its content from the same keybindings table
   used to generate the man page so the two stay in sync; suppress
