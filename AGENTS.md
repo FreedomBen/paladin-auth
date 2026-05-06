@@ -2,7 +2,7 @@
 
 ## Agent Instructions
 
-- For commit messages, use clear subjects without `feat:` or `bug:` prefixes. Add a body that explains what changed and why.  Use lists with - markers when appropriate.  Do not create or switch branches unless asked, and never push from an agent session.
+- For commit messages, use clear subjects without `feat:` or `bug:` prefixes. Add a body that explains what changed and why.  Use lists with - markers when appropriate.  Do not create or switch branches unless asked, and never push from an agent session.  Respect the conventional line length of 72 characters for commit message bodies.
 - `DESIGN.md` is the source of truth for how the application and library should work.  If the user requests a change that conflicts, update DESIGN.md so it stays in sync.
 - Write exhaustive tests that cover base functionality and any edge cases, particularly for the core shared library.
 - Use a Test Driven Development (TDD) approach: write failing tests before implementing features, then implement the code to make the tests pass.

@@ -76,13 +76,16 @@ flags from §5:
 They apply to `init`, `passphrase set`, `passphrase change`, and
 `export --encrypted`. Omitted flags use the §4.4 defaults (`64`, `3`, `1`).
 Supplied values are converted to `paladin_core::Argon2Params`
-(`m_kib = mib * 1024`) and validated before the CLI prompts for
-new-passphrase confirmation or generates salt / nonce. Out-of-range values
-return `kdf_params_out_of_bounds`; invalid integers or `mib * 1024` overflow
-return `validation_error` with the corresponding flag as `field`. For `init`,
-validation happens before the first passphrase prompt. If the user then enters
-an empty passphrase to select plaintext storage, valid custom KDF values are
-accepted but unused.
+(`m_kib = mib * 1024`) and validated before the CLI inspects, opens, or
+unlocks a vault, before wrong-state checks, before any prompt, and before salt
+/ nonce generation. Invalid KDF input therefore wins over `vault_missing`,
+`invalid_state`, unlock passphrase prompts, and new-passphrase prompts.
+Out-of-range values return
+`kdf_params_out_of_bounds`; invalid integers or `mib * 1024` overflow return
+`validation_error` with the corresponding flag as `field`. For `init`,
+validation happens before the existence pre-check and before the first
+passphrase prompt. If the user then enters an empty passphrase to select
+plaintext storage, valid custom KDF values are accepted but unused.
 
 ## Commands (per §5 table)
 
@@ -106,7 +109,14 @@ accepted but unused.
 
 `paladin add` accepts exactly one of:
 
-1. **Interactive** — no account-definition flags; prompts the user.
+1. **Interactive** — no account-definition flags; prompts the user once for
+   the same fields as manual mode. Label and secret are required; issuer is
+   optional. The secret prompt uses hidden terminal input. Algorithm, digits,
+   kind, period, counter, and icon-hint prompts offer the same defaults and
+   constraints as the manual flags. After collecting the form once, the CLI
+   builds `AccountInput` and calls `paladin_core::validate_manual(input,
+   now)`. Any validation error exits with that `validation_error`; the CLI
+   does not loop, reprompt, or partially save.
 2. `--uri <otpauth-uri>` — single URI parsed by
    `paladin_core::parse_otpauth`.
 3. **Manual flags** — `--label` and `--secret` required; optional
@@ -127,13 +137,12 @@ accepted but unused.
 4. `--qr <path>` — every decoded QR added; collisions use a fixed
    `--on-conflict=skip`; errors if no QR decodes.
 
-Combining input modes rejects at parse time. Interactive prompts
-(label, issuer, secret, etc.) read from `/dev/tty` like passphrase
-prompts, never from stdin/stdout. If `/dev/tty` is unavailable for
-interactive account entry, exit with `io_error` and `operation:
-"account_prompt"`. Under `--json`, interactive mode is additionally
-rejected at parse time — one of `--uri`, `--qr`, or the manual flags must
-be supplied — mirroring the no-prompt rule on `remove --json` and
+Combining input modes rejects at parse time. Interactive prompts read from
+`/dev/tty` like passphrase prompts, never from stdin/stdout. If `/dev/tty` is
+unavailable for interactive account entry, exit with `io_error` and
+`operation: "account_prompt"`. Under `--json`, interactive mode is
+additionally rejected at parse time — one of `--uri`, `--qr`, or the manual
+flags must be supplied — mirroring the no-prompt rule on `remove --json` and
 `passphrase remove --json`. Single-entry `add` rejects an existing
 `(secret, issuer, label)` collision with `duplicate_account` unless
 `--allow-duplicate` is passed. The collision check calls
@@ -230,7 +239,8 @@ alike, and is enforced before any value parsing.
   `invalid_passphrase` `reason: "zero_length"`.
 - Confirmation mismatch exits before mutation with `invalid_passphrase`
   `reason: "confirmation_mismatch"`.
-- Wrong starting states for `passphrase set`, `passphrase change`, and
+- After KDF validation succeeds for commands that accept KDF flags, wrong
+  starting states for `passphrase set`, `passphrase change`, and
   `passphrase remove` surface `invalid_state` before any new-passphrase
   prompt, destructive confirmation, or crypto material generation.
 - `passphrase remove` in text mode prints the plaintext-storage warning and
@@ -248,6 +258,10 @@ alike, and is enforced before any value parsing.
   `passphrase remove` without `--yes`) read from `/dev/tty`. If
   `/dev/tty` is unavailable, exit with `io_error` and `operation:
   "confirmation_prompt"`.
+- Destructive confirmations require the exact string `yes` after trimming
+  surrounding Unicode whitespace. Any other response exits before mutation
+  with `validation_error` (`field: "confirmation"`,
+  `reason: "declined"`). The CLI does not reprompt.
 - Under `--json`, interactive `add` and missing destructive confirmation
   flags reject at parse time as `validation_error` and do not attempt to open
   `/dev/tty`.
@@ -406,6 +420,13 @@ Every vault-opening command except `init`:
 6. Drop the `Vault` (zeroizes secrets on drop).
 7. Exit.
 
+Commands that accept encrypted-write KDF flags (`passphrase set`,
+`passphrase change`, and `export --encrypted`) run the KDF parse / conversion /
+validation step after resolving the selected vault path and before step 2. A
+malformed or out-of-policy KDF flag returns its KDF error before vault
+existence checks, unlock prompts, wrong-state checks, or command-specific
+prompts.
+
 `init` resolves the same path. The existence pre-check calls
 `paladin_core::inspect(path)`. `Ok(Missing)` is the only "clear path" result;
 any other outcome — `Ok(Plaintext)`, `Ok(Encrypted)`, or `Err(...)` for
@@ -534,7 +555,9 @@ where relevant, and exit code.
 - **`init` + unsafe parent dir** → `unsafe_permissions` with `chmod` hint.
 - **`add --uri`** → account appears in `list`. **`add` interactive** with
   scripted `/dev/tty` (via `script` or `pty-process` test helper), plus
-  no-TTY failure as `io_error` with `operation: "account_prompt"`.
+  no-TTY failure as `io_error` with `operation: "account_prompt"`. Interactive
+  add covers the manual-mode defaults, hidden secret entry, one-shot
+  validation through `validate_manual`, and no reprompt on invalid input.
 - **`add` mode-combination rejection** (e.g. `--uri` + `--qr`,
   `--qr` + `--allow-duplicate`) plus manual kind-specific validation
   (`--period` on HOTP and `--counter` on TOTP reject with
@@ -574,8 +597,11 @@ where relevant, and exit code.
   a clipboard write.
 - **`remove`** with and without `--yes`; no-TTY confirmation failure as
   `io_error` with `operation: "confirmation_prompt"`; `--json` without
-  `--yes` rejects at parse time (no confirmation prompt). `multiple_matches`
-  includes `candidates` with `disambiguator` `id:<hex>` strings.
+  `--yes` rejects at parse time (no confirmation prompt). Confirmation input
+  accepts only exact `yes` after whitespace trimming; any other response exits
+  before mutation with `validation_error` (`field: "confirmation"`,
+  `reason: "declined"`). `multiple_matches` includes `candidates` with
+  `disambiguator` `id:<hex>` strings.
 - **`rename`** updates `updated_at` (compared via `--json` snapshot).
 - **`passphrase set/change/remove`** end-to-end against an open vault.
   `passphrase remove` covers the text-mode warning confirmation, no-TTY
@@ -588,7 +614,9 @@ where relevant, and exit code.
   encrypted, `change`/`remove` on plaintext) surface the stable
   DESIGN §4.7 `invalid_state` operation/state pair before new-passphrase
   prompts or mutation. `set` and `change` cover default and custom KDF
-  params plus invalid / out-of-range flag errors.
+  params plus invalid / out-of-range flag errors, including precedence cases
+  where invalid KDF input wins before vault unlock prompts and wrong-state
+  checks.
   Durability-unconfirmed is surfaced as `save_durability_unconfirmed` (with
   `committed: true`) when the post-commit fsync fails; pre-commit failure
   surfaces as `save_not_committed` with `committed: false`. Process-level CLI
@@ -611,8 +639,9 @@ where relevant, and exit code.
   unencrypted-secrets warning; encrypted export round-trips through
   `import` with an export-bundle passphrase independent of the vault unlock
   passphrase, covers default and custom KDF params, and rejects invalid /
-  out-of-range KDF flags before export crypto material is generated; injected
-  writer failures surface `save_not_committed` before the final rename and
+  out-of-range KDF flags before vault existence checks, vault unlock, or
+  export crypto material is generated; injected writer failures surface
+  `save_not_committed` before the final rename and
   `save_durability_unconfirmed` after the final rename.
 - **`settings get/set`** covers default values, every dotted key through
   `paladin_core::parse_setting_key` / `parse_setting_patch`, bool/u32 value

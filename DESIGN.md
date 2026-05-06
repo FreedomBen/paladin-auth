@@ -863,13 +863,17 @@ Encrypted-write CLI commands accept the advanced Argon2id flags
 `--kdf-parallelism <lanes>`: `init`, `passphrase set`,
 `passphrase change`, and `export --encrypted`. Omitted flags use the §4.4
 defaults (`64`, `3`, `1`). Supplied values are converted to `Argon2Params`
-(`m_kib = mib * 1024`) and validated against the §4.4 bounds before prompting
-twice for the new passphrase or generating salt/nonce. Out-of-range values
-return `kdf_params_out_of_bounds`; invalid integers or `mib * 1024` overflow
-return `validation_error` with the corresponding flag as `field`. For `init`,
-the KDF flags are parsed and validated before the first passphrase prompt. If
-the user then enters an empty passphrase to select plaintext storage, valid
-custom KDF values are accepted but unused.
+(`m_kib = mib * 1024`) and validated against the §4.4 bounds before
+inspecting, opening, or unlocking a vault, before wrong-state checks, before
+any prompt, and before salt/nonce generation. Invalid KDF input therefore wins
+over `vault_missing`, `invalid_state`, unlock passphrase prompts, and
+new-passphrase prompts. Out-of-range values return `kdf_params_out_of_bounds`;
+invalid integers or
+`mib * 1024` overflow return `validation_error` with the corresponding flag as
+`field`. For `init`, the KDF flags are parsed and validated before the
+existence pre-check and before the first passphrase prompt. If the user then
+enters an empty passphrase to select plaintext storage, valid custom KDF values
+are accepted but unused.
 
 All interactive CLI prompts read from `/dev/tty`, never from stdin/stdout, in
 both text and `--json` modes. Passphrase prompts use `rpassword`. Existing
@@ -886,7 +890,10 @@ passphrase prompt, the CLI exits with `io_error` and operation
 `"passphrase_prompt"`. If `/dev/tty` is unavailable for interactive account
 entry, it exits with `io_error` and operation `"account_prompt"`. If
 `/dev/tty` is unavailable for a destructive confirmation prompt, it exits with
-`io_error` and operation `"confirmation_prompt"`.
+`io_error` and operation `"confirmation_prompt"`. Destructive confirmations
+require the exact string `yes` after trimming surrounding Unicode whitespace;
+any other response exits before mutation with `validation_error`
+(`field: "confirmation"`, `reason: "declined"`). The CLI does not reprompt.
 
 `paladin add` supports exactly one input mode per invocation:
 interactive prompts (no account-definition flags), `--uri <otpauth-uri>`,
@@ -894,6 +901,12 @@ manual flags, or `--qr <path>`. Combining input modes (e.g. `--uri`
 together with manual flags or `--qr`, or `--qr` together with manual
 flags) is rejected at parse time. Under `--json`, interactive mode is rejected
 at parse time: one of `--uri`, `--qr`, or the manual flags must be supplied.
+Interactive mode prompts once for the same fields as manual mode, with
+required label and hidden secret entry, optional issuer, and the same defaults
+and constraints for algorithm, digits, kind, period, counter, and icon-hint.
+After collecting the form once, the CLI builds `AccountInput` and calls
+`paladin_core::validate_manual(input, now)`. Any validation error exits with
+that `validation_error`; the CLI does not loop, reprompt, or partially save.
 Manual mode requires `--label` and `--secret`; optional
 fields are `--issuer`, `--algorithm sha1|sha256|sha512`, `--digits 6|7|8`,
 `--kind totp|hotp`, `--period <secs>`, `--counter <u64>`, and optionally
@@ -1964,6 +1977,14 @@ artifacts side by side.
 - Core-owned `invalid_state.operation` / `state` pairs are stable for
   account-ID method failures, passphrase wrong-state failures, and missing
   Paladin import passphrases.
+
+**Decided during CLI plan review (2026-05-06):**
+- Interactive `paladin add` prompts mirror manual flags, collect the form once,
+  and return validation errors without reprompt loops.
+- Text-mode destructive confirmations accept only exact `yes` after trimming
+  surrounding Unicode whitespace; any other response exits before mutation.
+- Encrypted-write KDF flags are validated before vault inspection, unlock
+  prompts, wrong-state checks, or command-specific prompts.
 
 No open questions remain.
 
