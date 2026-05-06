@@ -857,6 +857,9 @@ Global flags: `--vault <path>`, `--no-color`, `--json` (for scripting).
 `--vault` and `--no-color` are accepted by every binary in the workspace
 (`paladin`, `paladin-tui`, and the v0.2 `paladin-gtk`); `--json` is
 `paladin`-only — `paladin-tui` and `paladin-gtk` reject it at parse time.
+For terminal front ends, `--no-color` disables ANSI/styled output. The CLI
+also disables ANSI when stdout is not a TTY, and both the CLI and TUI honor
+the `NO_COLOR` environment variable.
 
 Encrypted-write CLI commands accept the advanced Argon2id flags
 `--kdf-memory-mib <mib>`, `--kdf-time <iterations>`, and
@@ -1362,6 +1365,11 @@ Layout (single-screen MVP):
   `Vault::mutate_and_save` so pre-commit save failures restore the
   pre-attempt vault state in memory; durability-unconfirmed failures leave
   the committed state visible with an inline warning.
+  Manual Add, URI Add, Remove, Rename, Export, Passphrase, and Settings
+  close on confirmed success with a status-line confirmation. Import and
+  clipboard-QR Add remain on a post-success counts panel so the
+  imported/skipped/replaced/appended/warning counts stay visible until the
+  user dismisses them.
 - **Auto-lock:** **off by default.** When `auto_lock.enabled = true`, the TUI
   clears the in-memory vault after `auto_lock.timeout_secs` of no input and
   shows the unlock screen for encrypted vaults. For plaintext vaults,

@@ -28,8 +28,8 @@ crates/paladin-tui/
 │   ├── cli.rs             # GlobalArgs (--vault, --no-color; --json rejected at parse time with clap's text diagnostic)
 │   ├── app/
 │   │   ├── mod.rs         # App state machine + run loop
-│   │   ├── state.rs       # AppState: Missing / StartupError / Locked / Unlocked { vault, ui, modals }
-│   │   ├── event.rs       # AppEvent enum (Input, Tick, ClipboardClear, AutoLock)
+│   │   ├── state.rs       # AppState variants + vault/store ownership
+│   │   ├── event.rs       # AppEvent enum (Input, Tick, EffectResult, ClipboardClear, AutoLock)
 │   │   ├── input.rs       # crossterm event → AppEvent translation
 │   │   ├── ticker.rs      # 250ms tick thread, sleeps, mpsc producer
 │   │   └── reducer.rs     # pure (state, event) → (state, side_effects)
@@ -51,7 +51,7 @@ crates/paladin-tui/
 │   ├── auto_lock.rs       # idle-timer; encrypted-only; plaintext is no-op
 │   ├── hotp_reveal.rs     # reveal window per row using paladin_core::HOTP_REVEAL_SECS
 │   ├── terminal.rs        # raw mode / alternate-screen guard; restores terminal on exit
-│   ├── theme.rs           # color palette; --no-color disables styling
+│   ├── theme.rs           # color palette; --no-color / NO_COLOR disables styling
 │   └── prompt.rs          # passphrase prompt inside the TUI (modal, not /dev/tty)
 └── tests/
     ├── reducer_tests.rs
@@ -76,10 +76,19 @@ long-lived producer threads plus effect-owned one-shot timer threads:
 - **Ticker thread** — sleeps 250 ms, emits `AppEvent::Tick(now)`.
 - **Timer side effects** — clipboard auto-clear and auto-lock effects spawn
   one-shot timer threads that later send
-  `AppEvent::ClipboardClear { token, value }` / `AppEvent::AutoLock`.
+  `AppEvent::ClipboardClear { token, value }` /
+  `AppEvent::AutoLock { token }`.
 
 The reducer is a pure function over `(state, event) → (state, Vec<Effect>)`
-so it is unit-testable without a terminal. Effects are executed by `app::run`.
+so it is unit-testable without a terminal. Effects are executed by `app::run`,
+which is the only boundary that may call impure core / clipboard / writer
+functions. Save-bearing effects mutate the current `Vault` only through core
+APIs (`mutate_and_save`, `hotp_advance`, or passphrase transitions), then send
+an `AppEvent::EffectResult(...)` back through the same `mpsc` channel. The
+reducer owns all non-core visible state updates (status text, reveal windows,
+modal close/count panels, and inline errors) from that result, while trusting
+core rollback semantics for the `Vault` value. Timer effects remain the only
+effects that send delayed non-result events (`ClipboardClear` / `AutoLock`).
 `app::run` owns terminal setup and teardown: enable raw mode, enter the
 alternate screen, install a drop guard before the first draw, and always
 restore raw mode / alternate-screen state on normal exit, startup failure
@@ -111,6 +120,14 @@ Startup mirrors the CLI's vault inspection path:
    the formatter unexpectedly returns `None`. The unlock screen handles only
    `decrypt_failed` inline; every other `open` error replaces the
    unlock screen with the startup-error screen.
+
+`Unlocked` state keeps both the `Vault` and `Store` returned by `open` so
+save-bearing effects can call `Vault::mutate_and_save`, `Vault::hotp_advance`,
+and passphrase-transition methods without reconstructing persistence state.
+`Locked` state keeps the resolved vault path and pending clipboard-clear state,
+but no `Vault`, `Store`, cached key, passphrase, HOTP reveal, or modal-local
+secret state; both initial encrypted startup and later auto-lock unlock attempts
+call `open(path, VaultLock::Encrypted(secret))` from that state.
 
 **Argon2id parameters: defaults only.** Encrypted-write paths reachable
 from the TUI — passphrase `set` / `change` inside the Passphrase modal
@@ -199,7 +216,10 @@ All passphrase-entry fields (unlock, encrypted Paladin import, encrypted
 export, passphrase set/change) and the Add modal's secret-bearing
 fields (manual-secret field and the URI-mode entry) keep typed bytes in
 zeroizing buffers, convert to `secrecy::SecretString` only for core
-calls, and zeroize on submit, cancel, modal close, and auto-lock. If
+calls, and zeroize on submit, cancel, modal close, and auto-lock.
+Passphrase buffers preserve the typed bytes exactly: no trimming,
+case-folding, or Unicode normalization is applied before constructing the
+`SecretString`; an empty passphrase means zero bytes. If
 Add submit reaches a duplicate-account gate, the modal keeps the
 already validated account in secret-bearing pending-add state so "add
 anyway" can proceed after the typed input buffers are zeroized; that
@@ -219,6 +239,15 @@ editing keys. `Esc` cancels the modal and discards pending modal-local edits
 unless the modal is showing a post-success counts panel, where `Esc` simply
 closes it.
 
+Successful modal outcomes are consistent: manual Add, URI Add, Remove,
+Rename, Export, Passphrase, and Settings close the modal and publish a
+status-line confirmation (unless Settings Confirm found no changes, which
+closes without saving). Import and clipboard-QR Add stay in the modal on a
+post-success counts panel so imported/skipped/replaced/appended/warning
+counts remain visible; `Esc` closes that panel. Durability-unconfirmed
+outcomes are not treated as success closes: the modal stays open and surfaces
+the warning inline so the user can retry or dismiss deliberately.
+
 - **Add** — three input modes selected via a segmented header inside
   the modal: manual fields, paste of an `otpauth://` URI, and a
   focused "scan from clipboard image" control (CLI parity with `add`
@@ -230,13 +259,16 @@ closes it.
   icon-hint mode (`Default from issuer`, `No icon`, or explicit slug);
   defaults follow the CLI manual-add defaults in DESIGN §5 (TOTP, SHA1,
   6 digits, 30 s period, HOTP counter 0, icon-hint defaulted from the
-  issuer per §4.1). The modes map to `IconHintInput::Default`,
-  `IconHintInput::Clear`, and `IconHintInput::Slug`. Manual entries route
-  through `paladin_core::validate_manual`. URI mode is a single text
-  field; on submit the entered string is passed to
-  `paladin_core::parse_otpauth`, and on success the resulting
-  `ValidatedAccount` shares the manual path's duplicate-detection,
-  "add anyway" override, and `Vault::mutate_and_save` insertion.
+  issuer per §4.1). Each submit captures one `submit_time` used for
+  account validation/import timestamps. The modes map to
+  `IconHintInput::Default`, `IconHintInput::Clear`, and
+  `IconHintInput::Slug`. Manual entries route through
+  `paladin_core::validate_manual(input, submit_time)`. URI mode is a
+  single text field; on submit the entered string is passed to
+  `paladin_core::parse_otpauth(uri, submit_time)`, and on success
+  the resulting `ValidatedAccount` shares the manual path's
+  duplicate-detection, "add anyway" override, and
+  `Vault::mutate_and_save` insertion.
   Parser errors (`unsupported_import_format`, `validation_error`)
   stay in the modal as inline errors and never mutate the vault. The
   URI text field is treated as a secret-bearing buffer and zeroized on
@@ -244,7 +276,7 @@ closes it.
   the Base32 secret. Clipboard images are read
   through `arboard::Clipboard::get_image()`, whose `ImageData` already
   carries raw RGBA8 bytes plus width/height; the TUI passes
-  `(width, height, rgba, current_import_time)` to
+  `(width, height, rgba, submit_time)` to
   `paladin_core::import::qr_image_bytes`.
   Validation warnings are shown inline with
   `paladin_core::format_validation_warning()` and do
@@ -257,7 +289,8 @@ closes it.
   `--allow-duplicate`, appending a new account that shares the
   `(secret, issuer, label)` triple). QR imports
   call `Vault::import_accounts` with
-  `ImportConflict::Skip` and report imported/skipped/warning counts.
+  `ImportConflict::Skip` and report imported/skipped/warning counts in the
+  post-success counts panel.
   Successful additions are wrapped in `Vault::mutate_and_save`, which
   runs the `Vault::add` / `Vault::import_accounts` mutation and save
   under core-owned rollback. If save fails before the primary-file
@@ -290,23 +323,28 @@ closes it.
 - **Import** — text field for the source path, a format selector
   (auto-detect or explicit `otpauth` / `aegis` / `paladin` / `qr`),
   and an on-conflict selector (`skip` / `replace` / `append`).
-  Paladin sources are header-probed via `paladin_core::inspect(path)`
-  before any passphrase prompt (mirroring the CLI's import probe in
-  DESIGN §5):
-  encrypted bundles (`VaultStatus::Encrypted`, whether explicit
-  `format == paladin` or auto-detected via the Paladin header) prompt
-  for the bundle passphrase inside the modal before invoking the
-  importer; plaintext Paladin headers (`VaultStatus::Plaintext`) surface
-  `unsupported_plaintext_vault` without a passphrase prompt; malformed
-  Paladin headers (`invalid_header` from `inspect`) fail inline before
-  any passphrase prompt. The selected
+  Before any Paladin-bundle passphrase prompt, the TUI mirrors the CLI's
+  import probe from DESIGN §5. When the selected format is auto-detect
+  or explicit `paladin`, `paladin_core::inspect(path)` is used only to
+  decide whether a bundle passphrase is needed:
+  encrypted bundles (`VaultStatus::Encrypted`) prompt for the bundle
+  passphrase inside the modal before invoking the importer, and
+  plaintext Paladin headers (`VaultStatus::Plaintext`) surface
+  `unsupported_plaintext_vault` without a passphrase prompt. Explicit
+  non-`paladin` forced formats skip this passphrase path entirely. Missing
+  files, non-Paladin content, and probe errors that do not identify an
+  encrypted/plaintext Paladin bundle do not consume a passphrase; the
+  modal continues through
+  `paladin_core::import::from_file` so the import facade owns `io_error`,
+  `unsupported_import_format`, and any format-specific `invalid_header`
+  errors. The selected
   `paladin_core::import::from_file` call returns `Vec<ValidatedAccount>`; on
   success, `Vault::import_accounts(accounts, conflict, import_time)` is called
   inside `Vault::mutate_and_save` with the user's policy and the same
-  `import_time` passed to `ImportOptions`. The modal
-  reports
-  imported/skipped/replaced/appended/warning counts inline on
-  success. Pre-commit save failures (`save_not_committed`) restore
+  `import_time` passed to `ImportOptions`. The modal reports
+  imported/skipped/replaced/appended/warning counts in a post-success counts
+  panel.
+  Pre-commit save failures (`save_not_committed`) restore
   core's pre-attempt snapshot so memory matches disk and
   the modal stays open with the inline error; durability-unconfirmed
   saves leave the merged accounts in memory (matching the committed
@@ -383,14 +421,16 @@ closes it.
 ## Auto-lock (per §6)
 
 - **Off by default.** When `auto_lock.enabled = true`, the TUI clears the
-  in-memory vault (`AppState::Locked`) after `auto_lock.timeout_secs` of no
-  input and shows the unlock screen for encrypted vaults.
+  in-memory vault and store (`AppState::Locked`) after
+  `auto_lock.timeout_secs` of no input, retaining only the resolved vault path
+  and pending clipboard-clear state needed for unlock / scheduled clear, and
+  shows the unlock screen for encrypted vaults.
 - **Plaintext vaults are a no-op** — there's no credential to require, so
   the timer is not even armed. The setting is still persisted so it takes
   effect if the vault is later encrypted via `passphrase set`.
 - Idle is reset by any `AppEvent::Input`. Timer is implemented as a
-  cancel-token + timer thread; on cancellation, the next scheduled wake is
-  ignored.
+  monotonic token + timer thread; on wake, stale `AutoLock { token }`
+  events are ignored by the reducer.
 - Locking discards all secret-bearing UI state alongside the vault except
   pending clipboard auto-clear state: any open HOTP reveal window is
   closed and its in-memory code zeroized, the search query is cleared,
@@ -430,17 +470,17 @@ reaches the primary-file commit point with durability still uncertain:
   open).
 - Copy: show a status-line error if clipboard write fails; do not schedule
   auto-clear.
-- Add / remove / settings saves: validation and setter failures happen
+- Add / remove / rename / settings saves: validation and setter failures happen
   inside or before `Vault::mutate_and_save`; core restores its
   pre-attempt snapshot on closure errors and no save is attempted.
   Pre-commit save failures (`save_not_committed`) are rolled back by
   `Vault::mutate_and_save` so memory matches disk (Add removes the
   just-inserted account(s); Remove restores the removed account at its
-  previous position; Settings restores the prior values), and the modal
-  stays open with the inline error so the user can retry. Durability-
-  unconfirmed save errors leave the new state in memory (matching the
-  committed on-disk state) and are shown as committed-but-uncertain,
-  matching the core error.
+  previous position; Rename restores the prior label; Settings restores
+  the prior values), and the modal stays open with the inline error so
+  the user can retry. Durability-unconfirmed save errors leave the new
+  state in memory (matching the committed on-disk state) and are shown
+  as committed-but-uncertain, matching the core error.
 - Passphrase set/change/remove: pre-commit and durability-unconfirmed
   handling lives in `Vault` itself per DESIGN §4.5 — the in-memory
   mode/key reverts on `save_not_committed` and is replaced on
@@ -456,7 +496,7 @@ reaches the primary-file commit point with durability still uncertain:
   `invalid_header`, `invalid_payload`, `unsupported_format_version`,
   `kdf_params_out_of_bounds`, `io_error`) stay in the Import modal as
   inline errors and never mutate vault state. Save errors follow the
-  Add/Remove/Settings rule:
+  Add/Remove/Rename/Settings rule:
   pre-commit (`save_not_committed`) restores the
   `Vault::mutate_and_save` snapshot; durability-unconfirmed leaves the
   merged accounts and surfaces the warning.
@@ -495,10 +535,11 @@ captured with `insta` golden snapshots using `ratatui::backend::TestBackend`.
 
 - **Reducer**: every keybinding maps to the expected state transition.
   Search filter; selection navigation; modal open/close; HOTP `n` triggers a
-  `HotpAdvance` effect; pre-commit effect failures leave visible state
-  unchanged and surface inline/status-line errors, while
-  durability-unconfirmed failures follow the committed-state behavior in
-  "Effect errors". Modal-local navigation covers `Tab` / `Shift-Tab`,
+  `HotpAdvance` effect; `AppEvent::EffectResult(...)` variants are the only
+  path for effect outcomes to change non-core UI state; pre-commit effect
+  failures leave visible state unchanged and surface inline/status-line
+  errors, while durability-unconfirmed failures follow the committed-state
+  behavior in "Effect errors". Modal-local navigation covers `Tab` / `Shift-Tab`,
   `Enter`, `Space`, arrows, text-field editing, and `Esc` cancel / close
   behavior for every modal.
 - **Search**: case-insensitive substring through
@@ -513,10 +554,11 @@ captured with `insta` golden snapshots using `ratatui::backend::TestBackend`.
   honored by the TUI search.
 - **Auto-lock**: timer arms on `Unlocked` + `enabled` + encrypted; resets
   on input; transitions to `Locked` on expiry; **no-op** for plaintext
-  vaults (timer never arms). Setting persists across saves. Locking
-  discards open HOTP reveal windows, the search query, and any modal;
-  a clipboard auto-clear timer scheduled before lock survives lock and
-  still fires only-if-unchanged.
+  vaults (timer never arms); stale timer tokens are ignored. Setting
+  persists across saves. Locking discards the `Vault` / `Store`, open HOTP
+  reveal windows, the search query, and any modal while retaining the
+  resolved vault path for the next unlock attempt; a clipboard auto-clear
+  timer scheduled before lock survives lock and still fires only-if-unchanged.
 - **Clipboard auto-clear**: timer schedules; stale tokens are ignored;
   "only-if-unchanged" honored when an external copy mutates the clipboard
   between copy and wake; pending copied values are zeroized after the clear
@@ -527,8 +569,8 @@ captured with `insta` golden snapshots using `ratatui::backend::TestBackend`.
   and alternate-screen state on normal exit, startup failure after setup,
   `Ctrl-C`, and panic unwind.
 - **Global args**: `--vault` selects the inspected/opened vault path,
-  `--no-color` disables styling, and `--json` is rejected at parse time
-  with clap's text diagnostic and no JSON envelope.
+  `--no-color` and `NO_COLOR` disable styling, and `--json` is rejected at
+  parse time with clap's text diagnostic and no JSON envelope.
 - **Add modal**: manual and URI duplicate collisions are detected through
   `Vault::find_duplicate(&validated)`, reject with the existing account,
   and the follow-up "add anyway" confirmation inserts the pending validated
@@ -539,11 +581,13 @@ captured with `insta` golden snapshots using `ratatui::backend::TestBackend`.
   `paladin_core::format_validation_warning()`, and rejects no-image /
   no-QR / invalid-QR cases inline.
 - **Import modal**: format auto-detect and explicit format overrides route
-  through `paladin_core::import::from_file`; Paladin header-probing happens
-  before any passphrase prompt; encrypted-Paladin path prompts for the bundle
-  passphrase before invoking the importer; plaintext-Paladin path returns
-  `unsupported_plaintext_vault` without prompting; malformed Paladin headers
-  fail inline without prompting; on-conflict policy
+  through `paladin_core::import::from_file`; the pre-prompt Paladin probe
+  only prompts when auto-detect or explicit `paladin` sees an encrypted
+  Paladin bundle; plaintext-Paladin path returns
+  `unsupported_plaintext_vault` without prompting; missing files,
+  non-Paladin content, and forced-format mismatches do not consume a
+  passphrase and surface through the import facade; malformed Paladin headers
+  surface `invalid_header` inline; on-conflict policy
   (`skip` / `replace` / `append`) is forwarded to
   `Vault::import_accounts` and reflected in the report counts;
   importer error kinds listed under "Effect errors", including
@@ -618,9 +662,12 @@ captured with `insta` golden snapshots using `ratatui::backend::TestBackend`.
   `clipboard_write_failed` after a failed copy; unlock screen with
   inline wrong-passphrase error; Add modal with QR-import inline
   errors (no clipboard image, image decode failure, zero decoded QRs,
-  invalid QR payload); Add modal with `duplicate_account` and the
+  invalid QR payload) plus the post-QR-import counts panel; Add modal with
+  `duplicate_account` and the
   follow-up "add anyway" confirmation; Passphrase modal with
   `confirmation_mismatch` and `zero_length` inline errors;
+  status-line confirmations after manual Add, URI Add, Remove, Rename,
+  Export, Passphrase set/change/remove, and Settings save;
   startup-error screen rendered with `unsafe_permissions` (the `Some(text)`
   from `format_unsafe_permissions`).
 - **Plaintext vault**: opens directly to list (no unlock screen).
@@ -647,6 +694,8 @@ Dev-dependencies: `insta` for golden snapshots.
 ## Global flags
 
 `--vault <path>` and `--no-color` are accepted (parity with siblings).
+`--no-color` disables ratatui styling; the `NO_COLOR` environment variable
+does the same when `--no-color` is absent, matching CLI text-output behavior.
 `--json` is rejected at parse time with clap's standard text
 diagnostic — `paladin-tui` has no JSON output mode and never emits a
 JSON envelope, mirroring DESIGN §5. This rejection is text-only and
@@ -666,10 +715,10 @@ is never expected to be scripted.
   gzipped at `/usr/share/man/man1/paladin-tui.1.gz` per §11.3.
 - **Cargo.toml metadata.** `crates/paladin-tui/Cargo.toml` inherits
   `description`, `repository`, `license = "AGPL-3.0-or-later"`,
-  `edition`, and `rust-version` from `[workspace.package]` via
-  `package.workspace = true` (the workspace shape established by
-  IMPLEMENTATION_PLAN_01_CORE.md Phase A so `nfpm` and Flathub
-  manifests read one source). It additionally sets the binary-specific
+  `edition`, and `rust-version` from `[workspace.package]` via per-field
+  Cargo inheritance (`description.workspace = true`,
+  `repository.workspace = true`, and so on) so `nfpm` and Flathub
+  manifests read one source. It additionally sets the binary-specific
   `homepage`, `keywords`, and `categories` fields locally. The
   packaging pipeline sources these values from Cargo metadata when
   building `.deb` / `.rpm` so the per-format configs in

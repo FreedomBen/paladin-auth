@@ -57,7 +57,8 @@ crates/paladin-cli/
 ## Global flags (per §5)
 
 - `--vault <path>` — overrides the resolved vault path.
-- `--no-color` — disables ANSI in text output.
+- `--no-color` — disables ANSI in text output; `NO_COLOR` does the same
+  when the flag is absent, and ANSI is also disabled when stdout is not a TTY.
 - `--json` — emits the §5 stable JSON schema. Rejected by `paladin-tui` /
   `paladin-gtk`.
 
@@ -509,7 +510,8 @@ with `counter_used: null`.
   `ImportConflict::Skip` policy. The CLI never re-implements §4.1
   validation.
 - [ ] Implement text and JSON output renderers with stable success/error
-  envelopes and stderr warnings.
+  envelopes and stderr warnings. Text rendering honors `--no-color`,
+  `NO_COLOR`, and non-TTY stdout.
 - [ ] Implement `paladin tui` as an `execvp` wrapper.
 - [ ] Wire the `paladin-core` `test-fault-injection` cargo feature into
   the test build of the `paladin` binary so process-level integration
