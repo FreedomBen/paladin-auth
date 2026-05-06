@@ -103,7 +103,8 @@ Startup mirrors the CLI's vault inspection path:
 3. `VaultStatus::Missing` opens a non-mutating missing-vault screen with a
    status message telling the user to run `paladin init`; v0.1 TUI does not
    create vaults.
-4. `VaultStatus::Plaintext` opens directly to the list view.
+4. `VaultStatus::Plaintext` calls `open(path, VaultLock::Plaintext)` and
+   opens directly to the list view.
 5. `VaultStatus::Encrypted` opens the unlock screen and prompts inside the
    TUI; wrong passphrases (`decrypt_failed`) keep the user on the unlock
    screen with an inline error.
@@ -160,7 +161,10 @@ header per §4.4, so opening is unaffected.
   `Vault::hotp_advance` (advances counter and saves) and reveals the
   generated code in place of the prompt for the shared
   `paladin_core::HOTP_REVEAL_SECS` window (120 seconds), after
-  which the row returns to the hidden state. `n` always advances and
+  which the row returns to the hidden state. Reveal expiry is detected
+  on the next 250 ms `Tick` event (no separate timer thread or
+  `AppEvent` variant; the reveal carries a deadline timestamp checked
+  at tick time). `n` always advances and
   re-reveals (it's the "give me the next code" key) — pressing `n` again
   during an open reveal advances to the next counter rather than
   no-op'ing. During the reveal window, the label-suffix counter switches
@@ -189,8 +193,12 @@ the active query when leaving the search bar (modals have their own
 trapped focus, see below). While the search bar is focused, `↑`/`↓`
 still move the list selection and `Enter` copies the selected entry —
 the selection is always navigable so the user does not need to
-unfocus the search to act on a result. Other keys, including the action keys `a` / `r` / `R` / `i` /
-`e` / `n` / `p` / `s` and the quit key `q`, are routed to the search field
+unfocus the search to act on a result. The other list-navigation keys
+(`PgUp`, `PgDn`, `Home`, `End`, `Ctrl-D`, `Ctrl-U`) likewise pass
+through to the list while the search bar has focus; they are
+navigation, not text editing, and `tui-input` does not consume them.
+Other keys, including the action keys `a` / `r` / `R` / `i` /
+`e` / `n` / `p` / `s` / `?` and the quit key `q`, are routed to the search field
 as character input while it has focus; the user must defocus the search
 (`Esc` to clear) to use them as actions. `Ctrl-C` is the exception and
 always quits. `Esc` clears the search query and returns focus to the list;
@@ -275,9 +283,11 @@ the warning inline so the user can retry or dismiss deliberately.
   submit, cancel, modal close, and auto-lock because the URI embeds
   the Base32 secret. Clipboard images are read
   through `arboard::Clipboard::get_image()`, whose `ImageData` already
-  carries raw RGBA8 bytes plus width/height; the TUI passes
-  `(width, height, rgba, submit_time)` to
-  `paladin_core::import::qr_image_bytes`.
+  carries raw RGBA8 bytes plus width/height; the TUI calls
+  `paladin_core::import::qr_image_bytes` with `width`, `height`, the
+  RGBA bytes, and an `ImportOptions { import_time: submit_time, .. }`
+  (matching the `ImportOptions`-bearing signature shared with
+  `import::from_file` and `import::from_bytes`).
   Validation warnings are shown inline with
   `paladin_core::format_validation_warning()` and do
   not block creation. Because `Vault::add` is infallible and duplicate
@@ -418,6 +428,18 @@ the warning inline so the user can retry or dismiss deliberately.
   state) and surface the warning inline. If no fields changed, Confirm
   closes without invoking save.
 
+## Help overlay
+
+`?` from list focus opens a read-only Help overlay listing every
+keybinding from the table below; `Esc` closes the overlay and
+restores list focus. The overlay has no inputs and never mutates
+vault state. While the search bar is focused or any modal is open,
+`?` is consumed as character input by text fields (parity with the
+other action keys); the overlay is list-focus-only. The unlock,
+missing-vault, and startup-error screens do not bind `?`. The
+overlay's content is generated from the same keybindings table that
+`clap_mangen` feeds into the man page so the two cannot drift.
+
 ## Auto-lock (per §6)
 
 - **Off by default.** When `auto_lock.enabled = true`, the TUI clears the
@@ -524,7 +546,8 @@ reaches the primary-file commit point with durability still uncertain:
 | `Tab` `Shift-Tab`   | Cycle focus between search bar and list (commits active query when leaving search)      |
 | `p`                 | Open Passphrase modal                                                                   |
 | `s`                 | Open Settings modal                                                                     |
-| `Esc`               | Close modal / clear search; quit on unlock, missing-vault, and startup-error screens    |
+| `?`                 | Open Help overlay (lists all keybindings); `Esc` closes                                 |
+| `Esc`               | Close modal / clear search; close Help overlay; quit on unlock, missing-vault, startup-error screens |
 | `q`                 | Quit from list, missing-vault, and startup-error screens; text input in text fields     |
 | `Ctrl-C`            | Quit (any screen)                                                                       |
 
@@ -649,7 +672,7 @@ captured with `insta` golden snapshots using `ratatui::backend::TestBackend`.
 - **Insta snapshots** for every screen state: empty vault, single TOTP,
   mixed TOTP/HOTP with hidden + revealed rows, search-active, every modal
   (Add / Remove / Rename / Import / Export / Passphrase set/change/remove /
-  Settings), unlock screen, missing-vault screen, status-line error
+  Settings), Help overlay, unlock screen, missing-vault screen, status-line error
   after rejected copy, `--no-color` variants. Error-state snapshots:
   inline `save_not_committed` and `save_durability_unconfirmed`
   rendered in each mutating modal (Add, Remove, Rename, Import, Passphrase
@@ -783,6 +806,10 @@ is never expected to be scripted.
   identical to the CLI / GUI; gate `set` vs `change` / `remove`
   sub-flows on `Vault::is_encrypted()` and use the same getter to
   arm or skip the auto-lock timer.
+- [ ] Implement the read-only Help overlay (`?` from list focus,
+  `Esc` to close); render its content from the same keybindings table
+  used to generate the man page so the two stay in sync; suppress
+  `?` on the unlock, missing-vault, and startup-error screens.
 - [ ] Use `paladin_core::account_matches_search` for `search.rs` substring
   filtering so the TUI shares issuer/label matching semantics with the CLI
   and GUI.

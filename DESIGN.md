@@ -1370,6 +1370,9 @@ Layout (single-screen MVP):
   clipboard-QR Add remain on a post-success counts panel so the
   imported/skipped/replaced/appended/warning counts stay visible until the
   user dismisses them.
+- `?` from list focus opens a read-only Help overlay listing every
+  keybinding; `Esc` closes it. The overlay never mutates state and is
+  not bound on the unlock, missing-vault, or startup-error screens.
 - **Auto-lock:** **off by default.** When `auto_lock.enabled = true`, the TUI
   clears the in-memory vault after `auto_lock.timeout_secs` of no input and
   shows the unlock screen for encrypted vaults. For plaintext vaults,
