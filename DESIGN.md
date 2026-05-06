@@ -831,14 +831,16 @@ Global flags: `--vault <path>`, `--no-color`, `--json` (for scripting).
 
 Encrypted-write CLI commands accept the advanced Argon2id flags
 `--kdf-memory-mib <mib>`, `--kdf-time <iterations>`, and
-`--kdf-parallelism <lanes>`: `init` when a non-empty passphrase is chosen,
-`passphrase set`, `passphrase change`, and `export --encrypted`. Omitted
-flags use the §4.4 defaults (`64`, `3`, `1`). Supplied values are converted
-to `Argon2Params` (`m_kib = mib * 1024`) and validated against the §4.4
-bounds before prompting twice for the new passphrase or generating salt/nonce.
-Out-of-range values return `kdf_params_out_of_bounds`; invalid integers or
-`mib * 1024` overflow return `validation_error` with the corresponding flag
-as `field`.
+`--kdf-parallelism <lanes>`: `init`, `passphrase set`,
+`passphrase change`, and `export --encrypted`. Omitted flags use the §4.4
+defaults (`64`, `3`, `1`). Supplied values are converted to `Argon2Params`
+(`m_kib = mib * 1024`) and validated against the §4.4 bounds before prompting
+twice for the new passphrase or generating salt/nonce. Out-of-range values
+return `kdf_params_out_of_bounds`; invalid integers or `mib * 1024` overflow
+return `validation_error` with the corresponding flag as `field`. For `init`,
+the KDF flags are parsed and validated before the first passphrase prompt. If
+the user then enters an empty passphrase to select plaintext storage, valid
+custom KDF values are accepted but unused.
 
 All interactive CLI prompts read from `/dev/tty`, never from stdin/stdout, in
 both text and `--json` modes. Passphrase prompts use `rpassword`. Existing
@@ -846,9 +848,10 @@ vault passphrases and encrypted Paladin bundle import passphrases are prompted
 once. New passphrases (`init` when the first entry is non-empty,
 `passphrase set`, `passphrase change`, and `export --encrypted`) are prompted
 twice and must match. For `init`, an empty first entry selects plaintext
-storage and skips confirmation; every other empty new passphrase is rejected
-with `invalid_passphrase` (`reason: "zero_length"`). Confirmation mismatch
-exits before mutation with `invalid_passphrase`
+storage and skips confirmation; any already-validated KDF flags are unused in
+that plaintext path. Every other empty new passphrase is rejected with
+`invalid_passphrase` (`reason: "zero_length"`). Confirmation mismatch exits
+before mutation with `invalid_passphrase`
 (`reason: "confirmation_mismatch"`). If `/dev/tty` is unavailable for a
 passphrase prompt, the CLI exits with `io_error` and operation
 `"passphrase_prompt"`. If `/dev/tty` is unavailable for interactive account
@@ -928,29 +931,35 @@ when present, syntax/usage failures also render the JSON error envelope
 to stderr instead of clap's text diagnostics. Those parse failures keep
 clap's normal syntax-error exit code and use `kind: "validation_error"`;
 when no more specific parser-side validation field is available, they use
-`field: "argv"` and `reason: "usage"`. This JSON parse-error behavior is
-only for the `paladin` binary; `paladin-tui` and `paladin-gtk` reject
-`--json` without implementing JSON output (their rejection is plain
-text — there is no JSON envelope). `code` values are strings so
-leading zeroes are preserved.
+`field: "argv"` and `reason: "usage"`. Help and version requests are success
+terminal requests, not syntax failures: when `--json` is present, `--help`
+/ `-h` / subcommand help write the JSON help shape to stdout with exit code
+0, and `--version` / `-V` writes the JSON version shape to stdout with exit
+code 0. Text mode keeps clap's normal help/version rendering. This JSON
+parse-error and help/version behavior is only for the `paladin` binary;
+`paladin-tui` and `paladin-gtk` reject `--json` without implementing JSON
+output (their rejection is plain text — there is no JSON envelope). `code`
+values are strings so leading zeroes are preserved.
 
 Under `--json`, `paladin` writes **only** the JSON envelope: the success
 document to stdout, the failure document to stderr, and no other bytes
 on either stream. The strict-mode rule covers every output path: text-
-mode warnings (`short_secret`) flow into the success envelope's
-`warnings` array for `add` and `import`; the plaintext-export advisory
-is suppressed because the caller opted in by passing `--plaintext`;
-clap diagnostics are rerouted via the argv pre-scan above; and progress
-or status text is never emitted. Interactive `add` is rejected at parse time
-under `--json`, so account-entry prompt strings cannot appear on stdout or
-stderr. Confirmation flags (`remove --yes`, `passphrase remove --yes`) are
-required under `--json` since no interactive confirmation
-channel is available, and missing confirmations reject at parse time as
-`validation_error`. Passphrase prompts continue to read from `/dev/tty` via
-`rpassword`; the prompt string is written to `/dev/tty`, never to stdout or
-stderr, so a script that redirects both streams sees only the JSON envelope.
-This rule is the script contract — JSON consumers can `parse(stdout)` on exit
-0 and `parse(stderr)` on non-zero exit without filtering.
+mode validation warnings (`short_secret`) flow into the success envelope's
+`warnings` array for `add` and `import`; import skip warnings are represented
+by the `skipped` count; the plaintext-export advisory is suppressed because
+the caller opted in by passing `--plaintext`; clap diagnostics are rerouted
+via the argv pre-scan above; help/version text is wrapped in JSON success
+documents; and progress or status text is never emitted. Interactive `add` is
+rejected at parse time under `--json`, so account-entry prompt strings cannot
+appear on stdout or stderr. Confirmation flags (`remove --yes`,
+`passphrase remove --yes`) are required under `--json` since no interactive
+confirmation channel is available, and missing
+confirmations reject at parse time as `validation_error`. Passphrase prompts
+continue to read from `/dev/tty` via `rpassword`; the prompt string is written
+to `/dev/tty`, never to stdout or stderr, so a script that redirects both
+streams sees only the JSON envelope. This rule is the script contract — JSON
+consumers can `parse(stdout)` on exit 0 and `parse(stderr)` on non-zero exit
+without filtering.
 
 The common account shape is `paladin_core::AccountSummary` serialized by the
 CLI's `error-serde` build. It is also the read-only projection used by TUI and
@@ -993,11 +1002,17 @@ Success shapes:
 | `export`                      | `{ "written": "/path/to/out", "format": "otpauth_or_paladin" }`                |
 | `settings get`, `settings set` | `{ "settings": VaultSettings }` (always full settings; `[key]` on `get` only filters text-mode display, never the JSON shape) |
 | `init`, `passphrase *`        | `{ "ok": true, "status": "plaintext_or_encrypted" }`                           |
+| `--help` / subcommand help    | `{ "help": { "command": "paladin ...", "text": "..." } }`                      |
+| `--version`                   | `{ "version": { "name": "paladin", "version": "x.y.z" } }`                     |
 
 Pseudo-values such as `number_or_null` and `plaintext_or_encrypted`
 document allowed values; concrete output uses actual numbers, `null`, or
-enum strings. For `import`, every input row falls into exactly one of
-four buckets: `imported` counts non-colliding rows written as new
+enum strings. For help requests, `command` is the clap command path whose help
+was requested (for example `"paladin"` or `"paladin add"`) and `text` is the
+same generated help text that text mode would print for that command. For
+version requests, `name` and `version` come from Cargo package metadata. For
+`import`, every input row falls into exactly one of four buckets:
+`imported` counts non-colliding rows written as new
 entries, `skipped` counts collisions kept under `--on-conflict=skip`,
 `replaced` counts collisions overwritten under `--on-conflict=replace`,
 and `appended` counts collisions inserted as additional entries under
@@ -1551,10 +1566,12 @@ Concrete obligations and explicit user-controlled tradeoffs:
   transitions, and `write_secret_file_atomic`, is not linked into
   production builds, and is excluded from the stable §4.7 API surface.
   - CLI `--json` success/error shapes, warning payloads, durability error
-    fields, HOTP post-advance account summaries, clipboard-write failure
-    behavior, passphrase no-TTY / confirmation-mismatch failures, export
-    overwrite guards, Argon2id custom-cost flags for encrypted writes, and
-    export writer durability failures.
+    fields, help/version JSON success shapes, HOTP post-advance account
+    summaries, clipboard-write failure behavior, passphrase no-TTY /
+    confirmation-mismatch failures, export overwrite guards, Argon2id
+    custom-cost flags for encrypted writes (including `init` validating
+    before the first prompt and accepting-but-ignoring valid custom params on
+    the plaintext path), and export writer durability failures.
   - CLI `add` input modes, mutual-exclusion errors, duplicate-account
     rejection, and `--allow-duplicate`.
   - CLI query resolution, including `str::to_lowercase()` matching,

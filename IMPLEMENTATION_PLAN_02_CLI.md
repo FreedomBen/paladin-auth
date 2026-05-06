@@ -64,11 +64,31 @@ crates/paladin-cli/
 `--vault` and `--no-color` are accepted by every binary; `--json` is
 `paladin`-only.
 
+## Encrypted-write KDF flags (per §5)
+
+Commands that create new encrypted material accept the advanced Argon2id
+flags from §5:
+
+- `--kdf-memory-mib <mib>`
+- `--kdf-time <iterations>`
+- `--kdf-parallelism <lanes>`
+
+They apply to `init`, `passphrase set`, `passphrase change`, and
+`export --encrypted`. Omitted flags use the §4.4 defaults (`64`, `3`, `1`).
+Supplied values are converted to `paladin_core::Argon2Params`
+(`m_kib = mib * 1024`) and validated before the CLI prompts for
+new-passphrase confirmation or generates salt / nonce. Out-of-range values
+return `kdf_params_out_of_bounds`; invalid integers or `mib * 1024` overflow
+return `validation_error` with the corresponding flag as `field`. For `init`,
+validation happens before the first passphrase prompt. If the user then enters
+an empty passphrase to select plaintext storage, valid custom KDF values are
+accepted but unused.
+
 ## Commands (per §5 table)
 
 | Command                                                | Notes |
 |--------------------------------------------------------|-------|
-| `init [--force]`                                       | Without `--force`, checks for an existing primary and surfaces `vault_exists` before prompting for the new-vault passphrase. With `--force`, prints `paladin_core::format_init_force_warning(path)` (text mode) before any prompt, then calls `paladin_core::create_force` (which performs the §5 staged clobber: stages the new vault, then rotates the old primary verbatim to `.bak`, overwriting any existing backup). |
+| `init [--force]`                                       | Without `--force`, checks for an existing primary and surfaces `vault_exists` before prompting for the new-vault passphrase. With `--force`, prints `paladin_core::format_init_force_warning(path)` in text mode before any prompt only when an existing primary is present, then calls `paladin_core::create_force` (which performs the §5 staged clobber: stages the new vault, then rotates the old primary verbatim to `.bak`, overwriting any existing backup). Accepts and validates the KDF flags above before prompting; valid custom KDF values are used only when the new-vault passphrase is non-empty. |
 | `add` (interactive / `--uri` / manual flags / `--qr`)  | Exactly one input mode; combinations rejected at parse time. Under `--json`, interactive mode is rejected at parse time — one of `--uri`, `--qr`, or the manual flags must be supplied. |
 | `list`                                                 | Account metadata only — no codes. |
 | `show <query>`                                         | Advances HOTP; persists before printing. Matching queries print all matches when every match is TOTP; if any match is HOTP, requires a single match. |
@@ -76,9 +96,9 @@ crates/paladin-cli/
 | `copy <query>`                                         | Advances HOTP; copies to clipboard via `arboard`. **No auto-clear.** Single-match required. |
 | `remove <query>`                                       | Confirmation prompt unless `--yes`. `--yes` is required under `--json` (no confirmation prompt). Single-match required. |
 | `rename <query> <new-label>`                           | Updates `updated_at`. Single-match required. |
-| `passphrase set | change | remove`                     | `passphrase remove` prints `paladin_core::format_plaintext_storage_warning()` and confirms in text mode unless `--yes` is passed; `--yes` is required under `--json`. |
+| `passphrase set | change | remove`                     | `set` and `change` accept the KDF flags above. `passphrase remove` prints `paladin_core::format_plaintext_storage_warning()` and confirms in text mode unless `--yes` is passed; `--yes` is required under `--json`. |
 | `import <path> [--format <fmt>] [--on-conflict <p>]`   | Auto-detects when `--format` is omitted; forced formats are `otpauth`/`aegis`/`paladin` (encrypted bundle only)/`qr`; conflict policies are `skip` (default)/`replace`/`append`. |
-| `export --plaintext <path> | --encrypted <path>`       | Refuses overwrite without `--force`; both modes write through `paladin_core::write_secret_file_atomic` and create output `0600`; plaintext export prints `paladin_core::format_plaintext_export_warning()` before writing unencrypted secrets. |
+| `export --plaintext <path> | --encrypted <path>`       | Refuses overwrite without `--force`; both modes write through `paladin_core::write_secret_file_atomic` and create output `0600`; plaintext export prints `paladin_core::format_plaintext_export_warning()` before writing unencrypted secrets; encrypted export accepts the KDF flags above. |
 | `settings get [key] | set <key> <value>`               | CLI persists `clipboard.clear_enabled` for TUI/GUI to honor but **ignores it at runtime** for `paladin copy`. `get [key]` filters text-mode display only; the `--json` shape is always the full `VaultSettings`. |
 | `tui`                                                  | `execvp` `paladin-tui`; rejects `--json`; forwards `--vault` / `--no-color`. |
 
@@ -98,8 +118,9 @@ crates/paladin-cli/
    matches `[a-z0-9_-]+` up to 64 bytes, and `--secret` is Base32 text.
    `--kind` is **not** inferred from `--period` or `--counter`: passing
    `--counter` without `--kind hotp` defaults to TOTP and rejects with
-   `validation_error` (and likewise for `--period` without `--kind totp`).
-   Explicit-kind selection avoids silently classifying an account based on
+   `validation_error`. Passing `--period` without `--kind` is valid because
+   TOTP is the default; passing `--period` with `--kind hotp` rejects.
+   Explicit HOTP selection avoids silently classifying an account based on
    which optional flag the caller happened to pass.
 4. `--qr <path>` — every decoded QR added; collisions use a fixed
    `--on-conflict=skip`; errors if no QR decodes.
@@ -180,10 +201,22 @@ alike, and is enforced before any value parsing.
   bundles reject with
   `unsupported_plaintext_vault` immediately (no passphrase prompt), and
   only encrypted-mode bundles trigger the bundle-passphrase prompt before
-  the call to `paladin_core::import::from_file`.
+  the call to `paladin_core::import::from_file`. Probe results that are not
+  encrypted Paladin bundles do not consume a passphrase: a plaintext Paladin
+  header returns the typed unsupported error above, while missing files,
+  non-Paladin content, and forced-format mismatches continue through
+  `import::from_file` so the import facade owns `read_import_file`,
+  auto-detect, and `unsupported_import_format` behavior.
 - Prompted **twice (must match)**: `init` with a non-empty first
   passphrase entry, `passphrase set`, `passphrase change` new passphrase,
   `export --encrypted`.
+- The `export --encrypted` passphrase protects only the exported Paladin
+  bundle. It is independent of the selected vault's own passphrase, which is
+  still prompted once during vault unlock when the vault is encrypted.
+- KDF flags for encrypted-write commands are parsed and validated before
+  new-passphrase confirmation prompts or crypto material generation. For
+  `init`, this happens before the first passphrase prompt; if the first entry
+  is empty, the validated custom KDF values are accepted but unused.
 - Empty new passphrase on the first `init` passphrase entry selects
   plaintext storage and skips confirmation. Any other empty new passphrase
   rejects with `invalid_passphrase` `reason: "zero_length"`.
@@ -237,6 +270,9 @@ The collision check runs against the running import state, so duplicates within
 one input obey the same policy. Paladin encrypted bundles preserve source
 timestamps for inserted/appended rows but never insert source `AccountId`s;
 non-colliding and appended Paladin rows receive fresh UUIDv4 IDs at merge time.
+`Vault::import_accounts` returns `ImportReport.accounts` as `AccountId`s; the
+CLI resolves those IDs back through the post-merge vault and emits §5
+`AccountSummary` objects in the `import` / `add --qr` JSON success envelope.
 
 ## Output
 
@@ -251,6 +287,13 @@ non-colliding and appended Paladin rows receive fresh UUIDv4 IDs at merge time.
   diagnostics. They keep clap's normal syntax-error exit code and use
   `kind: "validation_error"`; when no more specific parser-side field is
   available, use `field: "argv"` and `reason: "usage"`.
+- Help and version requests are success terminal paths, not syntax failures.
+  With `--json`, `--help` / `-h` / subcommand help render
+  `{ "help": { "command": "paladin ...", "text": "..." } }` to stdout and
+  exit 0; `--version` / `-V` renders
+  `{ "version": { "name": "paladin", "version": "x.y.z" } }` to stdout and
+  exit 0. Text mode keeps clap's normal help/version rendering. The `help`
+  `text` field is the generated clap help text for the requested command path.
 - The error envelope uses the full v0.1 `kind` taxonomy from §5 verbatim —
   the CLI never invents new kinds or renames existing ones:
   `validation_error`, `invalid_passphrase`, `invalid_state`,
@@ -286,17 +329,19 @@ non-colliding and appended Paladin rows receive fresh UUIDv4 IDs at merge time.
   `warnings` array of the `add` / `import` success envelope; the
   plaintext-export advisory is suppressed because the caller opted in
   via `--plaintext`; clap diagnostics are rerouted by the argv
-  pre-scan above; status / progress text is never emitted; and
-  passphrase prompts read from `/dev/tty` via `rpassword` so prompt
-  strings never reach stdout or stderr. Missing required `--yes`
+  pre-scan above; help/version text is wrapped in JSON success documents;
+  status / progress text is never emitted; and passphrase prompts read from
+  `/dev/tty` via `rpassword` so prompt strings never reach stdout or stderr.
+  Missing required `--yes`
   confirmation flags for `remove` and `passphrase remove` reject at
   parse time as `validation_error` rather than silently blocking on a
   prompt.
-- Text-mode warnings (`short_secret`, the plaintext-export advisory) are
-  written to stderr in **text mode only**; under `--json` they are
-  routed into the success envelope's `warnings` array (`add` /
-  `import`) or suppressed (plaintext-export advisory) per the rule
-  above. `short_secret` warning messages in both text and JSON are
+- Text-mode warnings (`short_secret`, import-collision skips, the
+  plaintext-export advisory) are written to stderr in **text mode only**;
+  under `--json`, validation warnings are routed into the success envelope's
+  `warnings` array (`add` / `import`), skipped collisions are represented by
+  the `skipped` count, and the plaintext-export advisory is suppressed per the
+  rule above. `short_secret` warning messages in both text and JSON are
   rendered with `paladin_core::format_validation_warning()`.
 
 Exit codes: `0` success; clap's default usage/parse exit for syntax errors;
@@ -348,9 +393,12 @@ Every vault-opening command except `init`:
 `init` resolves the same path. Without `--force`, it checks for an existing
 primary first and returns `vault_exists` before prompting for the new-vault
 passphrase. When the path is clear, it prompts for the new-vault passphrase
-and uses `paladin_core::create`. `init --force` prompts for the new-vault
-passphrase and calls `paladin_core::create_force` (which owns the §5 staged
-clobber sequence) without opening or decrypting the old primary.
+and uses `paladin_core::create`. `init --force` checks whether an existing
+primary is present; if so, text mode prints
+`paladin_core::format_init_force_warning(path)` before any prompt. It then
+prompts for the new-vault passphrase and calls `paladin_core::create_force`
+(which owns the §5 staged clobber sequence) without opening or decrypting the
+old primary.
 
 ## Implementation checklist
 
@@ -361,10 +409,12 @@ clobber sequence) without opening or decrypting the old primary.
 - [ ] Depend on `paladin-core` with the off-by-default `error-serde`
   feature enabled so the CLI can serialize shared error kinds and the
   account-shape types referenced from §5 success / error envelopes
-  (`AccountSummary`, `AccountKindSummary`, `Algorithm`, `Code`,
+  (`AccountSummary`, `AccountKindSummary`, `AccountId`, `Algorithm`, `Code`,
   `ImportReport`, `ValidationWarning`, `ImportWarning`, `VaultSettings`)
-  without a hand-written mapping layer. The CLI never serializes
-  secret-bearing `Account` or `Secret`.
+  without a hand-written mapping layer for those core types. The CLI still
+  builds command envelopes around them; for `import` / `add --qr`, it resolves
+  `ImportReport.accounts` IDs to `AccountSummary` objects per §5. The CLI
+  never serializes secret-bearing `Account` or `Secret`.
 - [ ] Use `paladin_core::parse_account_query`, `Vault::matching_accounts`,
   `paladin_core::account_matches_search`, and
   `Vault::shortest_unique_id_prefix` in `select.rs`; keep only the
@@ -380,6 +430,9 @@ clobber sequence) without opening or decrypting the old primary.
   the TUI / GUI wording.
 - [ ] Implement `/dev/tty` passphrase, account-entry, and confirmation
   prompting with no-TTY error handling.
+- [ ] Parse and validate encrypted-write KDF flags for `init`,
+  `passphrase set`, `passphrase change`, and `export --encrypted`, producing
+  `Argon2Params` / `EncryptionOptions` for the core calls.
 - [ ] Implement the thin `select.rs` wrapper that applies CLI cardinality
   policy to the core account-query matches and converts candidates to
   `AccountSummary` plus core-computed disambiguators.
@@ -404,7 +457,12 @@ where relevant, and exit code.
 - **`init`**: empty passphrase → plaintext file, mode `0600`, dir `0700`.
   Non-empty passphrase → encrypted; second invocation refuses to clobber with
   `vault_exists` before prompting for a new passphrase; `--force` rotates old
-  primary verbatim into `.bak`. With the `paladin-core`
+  primary verbatim into `.bak`; text-mode `--force` emits the clobber warning
+  only when a primary exists. Custom KDF flags write the requested in-range
+  Argon2 params for encrypted init; invalid / out-of-range values reject with
+  the §5 error kinds before the first passphrase prompt, and valid custom KDF
+  values are accepted but unused when an empty passphrase selects plaintext.
+  With the `paladin-core`
   `test-fault-injection` feature wired into the test build (see the
   passphrase bullet), `init --force` under `PALADIN_FAULT_INJECT=pre_commit`
   surfaces `save_not_committed` with `backup_path` set to `vault.bin.bak`
@@ -462,11 +520,12 @@ where relevant, and exit code.
   surfaces as `invalid_passphrase` with
   `reason: "confirmation_mismatch"`. Wrong starting states (`set` on
   encrypted, `change`/`remove` on plaintext) surface `invalid_state`
-  before new-passphrase prompts or mutation. Durability-unconfirmed is
-  surfaced as `save_durability_unconfirmed` (with `committed: true`) when
-  the post-commit fsync fails; pre-commit failure surfaces as
-  `save_not_committed` with `committed: false`. Process-level CLI tests
-  opt the test build of the `paladin` binary into the `paladin-core`
+  before new-passphrase prompts or mutation. `set` and `change` cover default
+  and custom KDF params plus invalid / out-of-range flag errors.
+  Durability-unconfirmed is surfaced as `save_durability_unconfirmed` (with
+  `committed: true`) when the post-commit fsync fails; pre-commit failure
+  surfaces as `save_not_committed` with `committed: false`. Process-level CLI
+  tests opt the test build of the `paladin` binary into the `paladin-core`
   `test-fault-injection` cargo feature; the env var
   `PALADIN_FAULT_INJECT=pre_commit|post_commit` selects which `Store`
   failure path fires so `save_not_committed` and
@@ -474,25 +533,29 @@ where relevant, and exit code.
 - **`import`** for each format with each `--on-conflict` policy; omitting
   `--on-conflict` defaults to `skip`. Covers auto-detection order, forced
   format errors, encrypted-Aegis unsupported errors, no-entry inputs, warning
-  propagation for skipped duplicates, Paladin bundle fresh-ID behavior, and
-  HOTP-to-HOTP counter preservation under `replace`. Atomic failure on any
-  invalid entry.
+  propagation for skipped duplicates, encrypted Paladin bundle passphrase
+  prompting, plaintext Paladin vault rejection without a bundle-passphrase
+  prompt, text-mode skip warnings for `--on-conflict=skip`, Paladin bundle
+  fresh-ID behavior, and HOTP-to-HOTP counter preservation under `replace`.
+  Atomic failure on any invalid entry.
 - **`export --plaintext` / `--encrypted`** refuses overwrite without
   `--force` and writes output `0600` through
   `paladin_core::write_secret_file_atomic`. Plaintext export prints the
   unencrypted-secrets warning; encrypted export round-trips through
-  `import`; injected writer failures surface `save_not_committed` before
-  the final rename and `save_durability_unconfirmed` after the final
-  rename.
+  `import` with an export-bundle passphrase independent of the vault unlock
+  passphrase, covers default and custom KDF params, and rejects invalid /
+  out-of-range KDF flags before export crypto material is generated; injected
+  writer failures surface `save_not_committed` before the final rename and
+  `save_durability_unconfirmed` after the final rename.
 - **`settings get/set`** covers default values, every dotted key through
   `paladin_core::parse_setting_key` / `parse_setting_patch`, bool/u32 value
   parsing, minimum-value validation, text-mode filtering, full
   `VaultSettings` JSON output, and unknown-dotted-key rejection with
   `validation_error` (`field: "key"`, `reason: "unknown_setting"`) for both
   `settings get <key>` and `settings set <key> <value>`.
-- **`--json` schema snapshots** for every command success, every
-  `error_kind`, and representative syntax/usage failures rendered as
-  JSON when `--json` is present. Locked via `insta`.
+- **`--json` schema snapshots** for every command success, help/version
+  terminal success, every `error_kind`, and representative syntax/usage
+  failures rendered as JSON when `--json` is present. Locked via `insta`.
 - **`--json` stream cleanliness** — for every covered command, success
   and error: assert stdout is exactly the success JSON document plus
   one trailing newline (or empty on error) and stderr is exactly the
@@ -503,7 +566,7 @@ where relevant, and exit code.
   with `/dev/tty` rerouted to the test harness keeps stdout/stderr
   byte-clean (the prompt is consumed via `/dev/tty` only). One test
   per output path (success-with-warnings via `add --uri` of a
-  short-secret URI; error-with-extra-fields via
+  short-secret URI; help/version success; error-with-extra-fields via
   `multiple_matches`; clap-rerouted via an unknown subcommand;
   parse-time confirmation rejection via `remove --json` without
   `--yes`).
