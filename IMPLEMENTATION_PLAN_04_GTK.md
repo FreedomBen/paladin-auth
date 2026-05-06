@@ -171,10 +171,10 @@ inclusion.
   the entry is passed to `paladin_core::parse_otpauth` on the main
   thread (no I/O, cheap), the resulting `ValidatedAccount` shares the
   manual path's duplicate detection, "add anyway" override, and
-  `Vault::mutate_and_save` insertion, and parser errors
-  (`unsupported_import_format`, `validation_error`) stay inline in the
-  dialog without mutating the vault. The URI text is secret-bearing because
-  it embeds the Base32 secret, so it is never carried in `AppMsg` /
+  `Vault::mutate_and_save` insertion, and `validation_error` parser failures
+  stay inline in the dialog without mutating the vault. The URI text is
+  secret-bearing because it embeds the Base32 secret, so it is never carried
+  in `AppMsg` /
   `AppOutput`; inline errors may name the failing field or reason but never
   echo the URI text. The entry buffer is zeroized on submit / cancel /
   dialog close. The "scan from clipboard image" path reads
@@ -195,9 +195,9 @@ inclusion.
   `paladin_core::validate_manual`; validation warnings show inline with
   `paladin_core::format_validation_warning()` and do
   not block creation, while field-level parse errors (invalid Base32,
-  empty label, out-of-range digits / period / counter) and any
-  `validation_error` returned by core block submission and stay inline
-  without mutating the vault — same rule as the import dialog. Manual
+  empty label, out-of-range digits / period / counter), plus any
+  core-returned `validation_error`, block submission and stay inline
+  without mutating the vault — same rule as the import dialog. Manual and URI
   duplicate collisions call
   `Vault::find_duplicate(&validated)` before mutation, initially reject with
   the existing account in the dialog, and offer an "add anyway" confirmation
@@ -205,7 +205,7 @@ inclusion.
   (CLI parity with `--allow-duplicate`, appending a new account that shares the
   `(secret, issuer, label)` triple). Multi-QR imports use a fixed
   `ImportConflict::Skip` and report imported/skipped/warning counts (parity
-  with §6). Successful manual and QR additions run the insertions inside
+  with §6). Successful manual, URI, and QR additions run the insertions inside
   `Vault::mutate_and_save`.
 - `RemoveDialog` — confirmation gate before calling `Vault::remove` inside
   `Vault::mutate_and_save`. Save errors surface inline.
@@ -214,7 +214,7 @@ inclusion.
   `Vault::rename(id, new_label, now)` inside `Vault::mutate_and_save`
   with the trimmed input regardless of whether the new label equals
   the current one — `Vault::rename` always bumps `updated_at`, so the
-  GUI matches CLI / TUI semantics rather than silently short-circuiting
+  GUI matches the CLI rename behavior rather than silently short-circuiting
   on a no-op rename. Same label validation as Add (non-empty,
   §4.1 length limits). Issuer is **not** editable here — parity with
   the CLI's `rename` taking only `<new-label>`; deeper edits use
@@ -229,12 +229,19 @@ inclusion.
 - `ImportDialog` — `gtk::FileChooserNative` for the source file, a format
   selector (auto-detect or explicit `otpauth` / `aegis` / `paladin` /
   `qr`), and an on-conflict selector (`skip` / `replace` / `append`).
-  Paladin sources are header-probed before any passphrase prompt: encrypted
-  bundles (`mode == 1`) prompt for the bundle passphrase inside the dialog,
-  plaintext Paladin vaults (`mode == 0`) return
-  `unsupported_plaintext_vault` inline without prompting, and malformed
-  Paladin headers fail inline before any passphrase prompt. The
-  selected `paladin_core::import::from_file` call runs on
+  Before any Paladin-bundle passphrase prompt, the GUI mirrors the CLI / TUI
+  import probe from DESIGN §5. When the selected format is auto-detect or
+  explicit `paladin`, Paladin headers are probed only to decide whether a
+  bundle passphrase is needed: encrypted bundles (`mode == 1`) prompt for
+  the bundle passphrase inside the dialog, plaintext Paladin vaults
+  (`mode == 0`) return `unsupported_plaintext_vault` inline without
+  prompting, and malformed Paladin headers fail inline before any passphrase
+  prompt. Missing files, non-Paladin content, and probe errors that do not
+  identify an encrypted/plaintext Paladin bundle do not consume a passphrase;
+  the dialog continues through `paladin_core::import::from_file` so the
+  import facade owns `io_error`, `unsupported_import_format`, and any
+  format-specific `invalid_header` behavior. The selected
+  `paladin_core::import::from_file` call runs on
   `gio::spawn_blocking` (the encrypted-Paladin variant runs Argon2id),
   with results delivered back via Relm4 messages. On success,
   `Vault::import_accounts(accounts, conflict, import_time)` is called with
@@ -372,14 +379,14 @@ start from `ImportDialog`.
   `paladin_core::open(path, VaultLock::Encrypted(secret))` on
   `gio::spawn_blocking` so the §4.4 Argon2 KDF (m=64 MiB defaults) does not
   block the GTK main loop; the dialog shows a spinner until the join
-  completes. Wrong passphrase surfaces inline; `unsafe_permissions` shows
-  a dialog whose body is rendered via
-  `paladin_core::format_unsafe_permissions(&err)` (§4.7) so the wording
-  matches the CLI and TUI exactly. Other non-authentication open errors
+  completes. Wrong passphrase surfaces inline. `unsafe_permissions` and other
+  non-authentication open errors
   (`wrong_vault_lock`, `invalid_header`, `invalid_payload`,
   `unsupported_format_version`, `kdf_params_out_of_bounds`, `io_error`)
   transition to `StartupErrorComponent` with a retry action that re-runs
-  vault-path resolution and `inspect`.
+  vault-path resolution and `inspect`; `unsafe_permissions` renders
+  `paladin_core::format_unsafe_permissions(&err)` (§4.7) verbatim so the
+  wording matches the CLI and TUI exactly.
 - Missing → present `InitDialog`. v0.2 GUI creates vaults in-app on
   explicit user confirmation (DESIGN §6, §7). Plaintext path: empty
   passphrase fields plus the unencrypted-storage warning. Encrypted
@@ -486,8 +493,9 @@ switches and spin rows, are reverted on pre-commit failure:
 - **Cargo.toml metadata.** `crates/paladin-gtk/Cargo.toml` inherits
   `description`, `repository`, `license = "AGPL-3.0-or-later"`,
   `edition`, and `rust-version` from `[workspace.package]` via
-  `package.workspace = true` (the workspace shape established by
-  IMPLEMENTATION_PLAN_01_CORE.md Phase A so `nfpm` and Flathub
+  per-field Cargo inheritance (`description.workspace = true`,
+  `repository.workspace = true`, and so on; the workspace shape established by
+  IMPLEMENTATION_PLAN_01_CORE.md Phase A) so `nfpm` and Flathub
   manifests read one source). It additionally sets the
   binary-specific `homepage`, `keywords`, and `categories` fields
   locally so `nfpm` produces correct Debian / RPM control metadata
@@ -577,7 +585,7 @@ The GUI itself is hard to test without a display server. Tests are split:
   existing vault intact and zeroizing the pending `VaultInit`), and
   `unsafe_permissions` routing back to inline errors),
   rename dialog logic (label validation, always-call-`mutate_and_save`
-  parity with CLI / TUI even when the new label equals the current one,
+  behavior matching the CLI when the new label equals the current one,
   prior-label restore on `save_not_committed`),
   otpauth URI paste logic (parse success → shared duplicate-detection
   with manual mode, parse-error mapping for malformed URIs and
