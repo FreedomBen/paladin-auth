@@ -229,10 +229,12 @@ Each step lands as its own commit. Tests come first.
   `backup_file`), `actual_mode`, and `expected_mode` (mode strings as
   four-digit octal, e.g. `"0644"`).
 - [ ] Tests: leftover `vault.bin.tmp` / `vault.bin.bak.tmp` files from a prior
-  partial save are unlinked by the next `open` (`vault.bin.bak.tmp` only
-  arises from passphrase set/change transitions where the backup is
-  rewritten under the new key — see Phase H); non-crash save errors unlink
-  remaining temp files before returning; completed renames are not rolled back.
+  partial save are unlinked by the next `open` (per §4.3 step 2,
+  `vault.bin.bak.tmp` is staged whenever a prior primary exists — regular
+  saves stage a verbatim copy of the soon-to-be-replaced primary, and
+  passphrase set/change transitions stage the backup re-encrypted under the
+  new key — see Phase H); non-crash save errors unlink remaining temp files
+  before returning; completed renames are not rolled back.
 - [ ] Tests: `format_unsafe_permissions(&err)` returns `Some(text)` for
   `unsafe_permissions` errors and `None` for any other kind. The text
   names the failing path, the actual and expected modes, and the exact
