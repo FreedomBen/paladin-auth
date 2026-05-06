@@ -103,9 +103,10 @@ Each step lands as its own commit. Tests come first.
   this point; binaries added in their own plans). Populate
   `[workspace.package]` with the shared metadata required by §11
   (`license = "AGPL-3.0-or-later"`, `edition`, `rust-version`,
-  `repository`, `homepage = "https://paladin.tamx.org"`, `description`)
-  so binary crates added later can inherit it via per-field Cargo
-  inheritance (`description.workspace = true`,
+  `repository = "https://github.com/FreedomBen/paladin"`,
+  `homepage = "https://paladin.tamx.org"`, `description`) so binary crates
+  added later can inherit it via per-field Cargo inheritance
+  (`description.workspace = true`,
   `license.workspace = true`, `edition.workspace = true`,
   `rust-version.workspace = true`, `repository.workspace = true`,
   `homepage.workspace = true`).
@@ -129,6 +130,9 @@ Each step lands as its own commit. Tests come first.
   deny known network-stack crates (`tokio`, `reqwest`, `hyper`, etc.).
   Document manual review for new dependencies. This supports the §8
   "no network" rule; tests and code review cover runtime behavior.
+- [ ] Add `xtask/dev-tools.toml` as the workspace dev-tooling manifest and
+  pin `cargo-public-api` there so CI and local API snapshots do not float to
+  the latest released cargo subcommand.
 - [ ] CI workflow stub: `fmt --check`, `clippy -- -D warnings`, `test --all`,
   `cargo deny check`, `cargo audit`.
 
@@ -387,7 +391,8 @@ Each step lands as its own commit. Tests come first.
   `Option<&Account>` for exact `(secret, issuer, label)` collisions and
   returns `None` for non-colliding entries; `get` returns accounts by
   `AccountId`; `summaries` returns insertion-order `AccountSummary` values
-  with no secret bytes; `Vault::settings` returns the live `&VaultSettings`;
+  with no secret bytes; `Vault::settings` returns the live `&VaultSettings`
+  and `VaultSettings` read-only getters return the stored values;
   `VaultSettings` defaults are off with `auto_lock.timeout_secs = 300`
   and `clipboard.clear_secs = 20`; settings setters reject
   `auto_lock.timeout_secs` outside `30..=86_400` (24 h) and
@@ -458,7 +463,8 @@ Each step lands as its own commit. Tests come first.
 - [ ] Implement `Vault` operations, `Vault::save`, `Vault::get`,
   `Vault::summaries`, `Vault::find_duplicate`, `Vault::import_accounts`,
   `Vault::totp_code`, `Vault::hotp_peek`, `Vault::hotp_advance`,
-  `Vault::is_encrypted`, `Vault::settings`, `VaultSettings` setters,
+  `Vault::is_encrypted`, `Vault::settings`, `VaultSettings` read-only
+  getters and setters,
   `SettingKey`, `SettingPatch`, `parse_setting_key`, `parse_setting_patch`,
   `Vault::apply_setting_patch`, and
   `Vault::mutate_and_save` per §4.7. Implement `account_match_key`,
@@ -592,8 +598,8 @@ Each step lands as its own commit. Tests come first.
 
 - [ ] Lock default `lib.rs` re-exports to exactly the §4.7 surface; anything
   else is `pub(crate)`.
-- [ ] Run `cargo public-api` (the `cargo-public-api` crate, pinned in the
-  workspace's dev-tooling lockfile) to capture the surface; commit the
+- [ ] Run `cargo public-api` (the `cargo-public-api` crate, pinned in
+  `xtask/dev-tools.toml`) to capture the surface; commit the
   snapshot under `crates/paladin-core/public-api.txt` and gate it in CI
   so unintended surface changes fail the build.
 - [ ] Document and test that `Vault` and `Store` are `Send` so front
@@ -719,8 +725,9 @@ is a separate `#[test]` or table-driven case family.
   `get` / `summaries` / `rename` label validation and timestamp update;
   `find_duplicate` exact
   collision behavior returning `Option<&Account>`; `Vault::settings`
-  getter returning the live `&VaultSettings`; settings defaults, exact
-  timeout minimums, `parse_setting_key` (the four §5 keys
+  getter returning the live `&VaultSettings`; `VaultSettings` read-only
+  getters; settings defaults, exact timeout minimums, `parse_setting_key`
+  (the four §5 keys
   `auto_lock.enabled`, `auto_lock.timeout_secs`,
   `clipboard.clear_enabled`, `clipboard.clear_secs`),
   `parse_setting_patch`, and `Vault::apply_setting_patch`.
@@ -808,7 +815,8 @@ the v0.1 / v0.2 packaging pipeline depends on the workspace shape it
 defines. Implementation owes:
 
 - **Cargo.toml metadata.** `crates/paladin-core/Cargo.toml` carries
-  `description`, `repository`, `homepage = "https://paladin.tamx.org"`,
+  `description`, `repository = "https://github.com/FreedomBen/paladin"`,
+  `homepage = "https://paladin.tamx.org"`,
   `license = "AGPL-3.0-or-later"`, and
   pinned `rust-version`. Binary crates inherit consistent values via
   per-field Cargo inheritance (`description.workspace = true`,

@@ -597,6 +597,8 @@ pub enum SettingPatch {
     ClipboardClearSecs(u32),
 }
 
+pub struct VaultSettings { /* private fields */ }
+
 pub struct ImportReport {
     pub imported: usize,
     pub skipped: usize,
@@ -614,6 +616,13 @@ impl Argon2Params {
 impl EncryptionOptions {
     pub fn new(passphrase: SecretString) -> Self;                          // default Argon2Params
     pub fn with_params(passphrase: SecretString, kdf_params: Argon2Params) -> Result<Self>;
+}
+
+impl VaultSettings {
+    pub fn auto_lock_enabled(&self) -> bool;
+    pub fn auto_lock_timeout_secs(&self) -> u32;
+    pub fn clipboard_clear_enabled(&self) -> bool;
+    pub fn clipboard_clear_secs(&self) -> u32;
 }
 
 pub fn default_vault_path() -> Result<PathBuf>;                           // shared §4.3 path resolver; appends vault.bin under ProjectDirs::from("", "", "paladin").data_dir()
@@ -800,8 +809,9 @@ substring predicate for search bars. `parse_setting_key`,
 `parse_setting_patch`, and `Vault::apply_setting_patch` own the dotted
 settings grammar used by the CLI, while TUI / GUI controls may call the typed
 setters directly. `VaultSettings` fields are private for the same reason:
-settings changes go through validated setters or patches so timeout minimums
-cannot be bypassed.
+readers use `Vault::settings()` plus the read-only `VaultSettings` getters,
+and settings changes go through validated setters or patches so timeout
+minimums cannot be bypassed.
 
 Core methods that accept an `AccountId` return stable `invalid_state`
 operation/state pairs for account-state failures; presentation crates still
@@ -1753,6 +1763,8 @@ artifacts side by side.
   `org.tamx.Paladin.Gui`. Derived from the project domain
   `paladin.tamx.org`; the homepage URL `https://paladin.tamx.org`
   is also the value of the `homepage` Cargo workspace metadata field.
+  The repository URL `https://github.com/FreedomBen/paladin` is the value
+  of the `repository` Cargo workspace metadata field.
 - **Runtimes.**
   - CLI and TUI: `org.freedesktop.Platform` 23.08 (small, no GUI bits).
   - GUI: `org.gnome.Platform` 47 with the matching SDK (bundles
@@ -1814,6 +1826,8 @@ artifacts side by side.
   `cargo xtask package --frontend <name>` for each front-end shipped in
   that release. Artifact upload to GitHub Releases is scripted; Flathub
   publication is a manual review step after the GitHub release lands.
+  CI-installed cargo subcommands are pinned in `xtask/dev-tools.toml`;
+  v0.1 pins `cargo-public-api` there for the core public API snapshot gate.
 
 ## 12. Roadmap & checklist
 
@@ -2006,6 +2020,15 @@ artifacts side by side.
 - Core-owned `invalid_state.operation` / `state` pairs are stable for
   account-ID method failures, passphrase wrong-state failures, and missing
   Paladin import passphrases.
+
+**Decided during core plan follow-up (2026-05-06):**
+- `VaultSettings` keeps private fields but exposes read-only getters for
+  each persisted setting.
+- Cargo workspace metadata uses `repository =
+  "https://github.com/FreedomBen/paladin"` and `homepage =
+  "https://paladin.tamx.org"`.
+- CI-installed cargo subcommands are pinned in `xtask/dev-tools.toml`;
+  v0.1 pins `cargo-public-api` there for the public API snapshot gate.
 
 **Decided during CLI plan review (2026-05-06):**
 - Interactive `paladin add` prompts mirror manual flags, collect the form once,
