@@ -30,6 +30,7 @@ crates/paladin-gtk/
 │   ├── paladin-gtk.gresource.xml
 │   ├── ui/                # *.ui templates
 │   ├── icons/             # app icon + fallbacks
+│   ├── metainfo/          # AppStream metadata; Flatpak/native IDs updated with the final §11.4 app ID
 │   ├── style.css
 │   └── paladin-gtk.desktop
 ├── src/
@@ -38,10 +39,11 @@ crates/paladin-gtk/
 │   ├── cli.rs             # GlobalArgs (--vault, --no-color); reject --json
 │   ├── app/
 │   │   ├── mod.rs         # AppModel + AppMsg + AppOutput
-│   │   └── state.rs       # AppState: Missing / Locked / Unlocked { vault, store }
+│   │   └── state.rs       # AppState: Missing / Locked / Unlocked { vault, store } / StartupError { path: Option<PathBuf>, error }
 │   ├── components/
 │   │   ├── init.rs        # InitDialog — vault creation (incl. create_force clobber confirmation)
 │   │   ├── unlock.rs      # UnlockComponent — encrypted vaults only
+│   │   ├── startup_error.rs # non-mutating startup/open error view
 │   │   ├── account_list.rs    # AccountListComponent (gtk::ListView + factory)
 │   │   ├── account_row.rs     # AccountRowComponent (label, code, gauge/next, copy, kebab → rename)
 │   │   ├── add_account.rs     # AddAccountComponent (manual fields + otpauth:// URI paste + paste image)
@@ -65,6 +67,7 @@ crates/paladin-gtk/
     ├── clipboard_clear_logic.rs  # pure logic; no display required
     ├── hotp_reveal_logic.rs
     ├── secret_fields_logic.rs
+    ├── startup_error_logic.rs
     ├── qr_clipboard_logic.rs
     ├── init_dialog_logic.rs
     ├── rename_dialog_logic.rs
@@ -83,22 +86,30 @@ inclusion.
 ## Component tree (per §7)
 
 - `AppModel` — owns the resolved vault path plus the `Missing`, `Locked`,
-  or `Unlocked` state. Startup runs `paladin_core::inspect(path)` and
+  `Unlocked`, or `StartupError` state. Startup runs
+  `paladin_core::inspect(path)` and
   routes the result: `VaultStatus::Plaintext` opens directly to
   `AccountListComponent`, `Encrypted` presents `UnlockComponent`, and
-  `Missing` presents `InitDialog`.
+  `Missing` presents `InitDialog`. `default_vault_path`, `inspect`, or
+  startup `open` failures that are not wrong-passphrase retries route to
+  `StartupErrorComponent`, which never creates, overwrites, or repairs vault
+  files; `unsafe_permissions` renders
+  `paladin_core::format_unsafe_permissions(&err)` verbatim.
 - `InitDialog` — only path that creates a vault from the GUI (v0.2;
   parity with DESIGN §6, §7). Two `AdwPasswordEntryRow` passphrase
   fields (twice-confirmed; empty selects plaintext) plus an explicit
   "create vault" confirmation button. The plaintext path renders
   `paladin_core::format_plaintext_storage_warning()` verbatim — the
   same wording `PassphraseDialog`'s remove flow and the CLI / TUI use —
-  and the user must tick the confirmation before submission is enabled. Encrypted submission rejects empty new entries inline with
+  and the user must tick the confirmation before submission is enabled.
+  Encrypted submission rejects empty new entries inline with
   `invalid_passphrase` (`reason: "zero_length"`) and rejects mismatch
-  with `reason: "confirmation_mismatch"`. On submit, calls
-  `paladin_core::create(path, VaultLock::Plaintext | Encrypted(secret))`
-  on `gio::spawn_blocking` (the encrypted path runs the §4.4 Argon2id
-  KDF). On success, swaps `AppModel` to `Unlocked` with the returned
+  with `reason: "confirmation_mismatch"`. On submit, builds a
+  `VaultInit` (`VaultInit::Plaintext` or
+  `VaultInit::Encrypted(EncryptionOptions::new(secret))`) and calls
+  `paladin_core::create(path, init)` on `gio::spawn_blocking` (the
+  encrypted path runs the §4.4 Argon2id KDF). On success, swaps
+  `AppModel` to `Unlocked` with the returned
   `(Vault, Store)` and routes to `AccountListComponent`. The dialog
   stays open and surfaces `unsafe_permissions` (rendered via
   `paladin_core::format_unsafe_permissions(&err)`),
@@ -109,8 +120,9 @@ inclusion.
   `paladin_core::format_init_force_warning(existing_path)` so wording
   stays identical to the CLI `init --force` confirmation. On
   confirm, the dialog re-runs the operation with
-  `paladin_core::create_force(path, lock)` on `gio::spawn_blocking`,
-  reusing the passphrase choice already entered; on cancel, the
+  `paladin_core::create_force(path, init)` on `gio::spawn_blocking`,
+  consuming the pending `VaultInit` created from the already-entered
+  passphrase choice; on cancel, the
   destructive dialog closes and `InitDialog` returns to its
   `vault_exists` state without mutating the existing vault.
   `create_force` errors map identically to `create`
@@ -126,12 +138,15 @@ inclusion.
   `paladin_core::AccountSummary` projections. Search uses a
   `gtk::SearchEntry` hosted inside a `gtk::SearchBar` whose
   `search-mode-enabled` is bound to the header bar's search-toggle button
-  (see "libadwaita usage" below). The entry applies the same
-  case-insensitive substring matching as §5 / §6 through
-  `paladin_core::account_matches_search`; no Unicode normalization. Empty
-  issuer is allowed and the colon is still present in the match key;
-  insertion order is preserved among matches. The CLI's `id:` prefix form is
-  **not** honored by the GUI search (parity with the TUI).
+  (see "libadwaita usage" below). Filtering rebuilds the list from
+  `Vault::iter()` so it can call
+  `paladin_core::account_matches_search(&Account, query)` before projecting
+  matches to `AccountSummary`; the `gio::ListStore` never stores secret
+  fields. The entry applies the same case-insensitive substring matching as
+  §5 / §6; no Unicode normalization. Empty issuer is allowed and the colon
+  is still present in the match key; insertion order is preserved among
+  matches. The CLI's `id:` prefix form is **not** honored by the GUI search
+  (parity with the TUI).
 - `AccountRowComponent` — label, code, progress (TOTP) / "next" button
   (HOTP), copy button, and a kebab `gtk::MenuButton` whose `gio::Menu`
   exposes "Rename…" (opens `RenameDialog` for that row's account) and
@@ -148,7 +163,7 @@ inclusion.
   the visible code and does not advance again.
 - `AddAccountComponent` — three input paths in a single dialog:
   manual fields, paste of an `otpauth://` URI, and "scan from clipboard
-  image" (an `AdwViewSwitcher` or radio segmented control selects the
+  image" (an `AdwViewStack` controlled by an `AdwViewSwitcher` selects the
   active path; CLI parity with `add` interactive / `--uri` / `--qr`).
   The URI path uses an `AdwEntryRow` for the URI string; on submit
   the entry is passed to `paladin_core::parse_otpauth` on the main
@@ -156,11 +171,11 @@ inclusion.
   manual path's duplicate detection, "add anyway" override, and
   `Vault::mutate_and_save` insertion, and parser errors
   (`unsupported_import_format`, `validation_error`) stay inline in the
-  dialog without mutating the vault. The URI text is treated as
-  non-secret-by-itself in `AppMsg`/`AppOutput` (it fails open if the
-  user pastes the wrong string), but the entry buffer is still
-  zeroized on submit / cancel / dialog close because the secret is
-  embedded in it. The "scan from clipboard image" path reads
+  dialog without mutating the vault. The URI text is secret-bearing because
+  it embeds the Base32 secret, so it is never carried in `AppMsg` /
+  `AppOutput`; inline errors may name the failing field or reason but never
+  echo the URI text. The entry buffer is zeroized on submit / cancel /
+  dialog close. The "scan from clipboard image" path reads
   a `gdk::Texture` from the GDK clipboard, allocates an exact
   `width * height * 4` straight (non-premultiplied) RGBA8 buffer with
   overflow-checked multiplication, and downloads via a
@@ -171,7 +186,10 @@ inclusion.
   `paladin_core::import::qr_image_bytes`. Manual fields cover label,
   optional issuer, Base32 secret, algorithm, digits, kind, TOTP period,
   HOTP counter, and optional icon hint, matching
-  `paladin_core::AccountInput`. Manual entries use
+  `paladin_core::AccountInput`. UI defaults match the CLI manual-add
+  defaults in DESIGN §5: TOTP, SHA1, 6 digits, 30 s period, HOTP counter 0,
+  and icon hint derived from issuer when the user leaves it unset. Manual
+  entries use
   `paladin_core::validate_manual`; validation warnings show inline with
   `paladin_core::format_validation_warning()` and do
   not block creation, while field-level parse errors (invalid Base32,
@@ -181,8 +199,8 @@ inclusion.
   duplicate collisions call
   `Vault::find_duplicate(&validated)` before mutation, initially reject with
   the existing account in the dialog, and offer an "add anyway" confirmation
-  that re-submits the same input on the duplicate-allowed path (CLI parity
-  with `--allow-duplicate`, appending a new account that shares the
+  that consumes the pending `ValidatedAccount` on the duplicate-allowed path
+  (CLI parity with `--allow-duplicate`, appending a new account that shares the
   `(secret, issuer, label)` triple). Multi-QR imports use a fixed
   `ImportConflict::Skip` and report imported/skipped/warning counts (parity
   with §6). Successful manual and QR additions run the insertions inside
@@ -233,7 +251,10 @@ inclusion.
   encrypted Paladin bundle) and `gtk::FileChooserNative` for the
   destination path. Overwriting an existing file is rejected unless
   the user confirms an inline overwrite gate (parity with CLI
-  `--force`). Encrypted exports prompt twice for the bundle passphrase
+  `--force`). Any overwrite gate is resolved before encrypted-bundle
+  passphrase rows are accepted; if the destination or format changes
+  after passphrase entry, password rows are cleared and the user is
+  re-prompted. Encrypted exports prompt twice for the bundle passphrase
   and reject mismatch (`invalid_passphrase`
   `reason: "confirmation_mismatch"`) or empty entry
   (`reason: "zero_length"`) inline; both the encrypted-bundle and
@@ -242,7 +263,8 @@ inclusion.
   symmetry, since `write_secret_file_atomic` chains multiple `fsync`s).
   Plaintext exports render
   `paladin_core::format_plaintext_export_warning()` verbatim and the
-  user must confirm before the write proceeds. Writes go through `paladin_core::write_secret_file_atomic`.
+  user must confirm before the write proceeds. Writes go through
+  `paladin_core::write_secret_file_atomic`.
   On success the dialog closes and surfaces the written path in the main
   status/toast surface;
   `io_error`, `save_not_committed`, `save_durability_unconfirmed`,
@@ -283,7 +305,18 @@ buffer is the unavoidable UI boundary; Paladin-owned copies are created only
 at submit time, immediately wrapped in `secrecy::SecretString` for core
 calls, and zeroized when dropped. Submit, cancel, dialog close, and auto-lock
 clear the relevant GTK entry widgets before the component returns to its idle
-state. Validation/status messages never include secret values.
+state. Two short-lived modal-local exceptions are required for confirmation
+round trips: `AddAccountComponent` keeps a duplicate-collision
+`ValidatedAccount` in a zeroizing pending-add slot after clearing the input
+buffers, and `InitDialog` keeps the pending `VaultInit` (secret-bearing only
+for encrypted creation) in a zeroizing pending-create slot while the
+`vault_exists` destructive-confirmation gate is open. The pending value is
+consumed on "add anyway" / `create_force` and zeroized on cancel, close,
+replacement, or auto-lock. HOTP reveal codes and pending clipboard-clear
+values are likewise stored in Paladin-owned zeroizing buffers. GTK/GDK still
+receive ordinary UI or clipboard copies at the display boundary; the
+Paladin-owned buffers are cleared when expired, replaced, or dropped.
+Validation/status messages never include secret values.
 
 ## Auto-lock and clipboard auto-clear (per §7)
 
@@ -338,7 +371,11 @@ start from `ImportDialog`.
   completes. Wrong passphrase surfaces inline; `unsafe_permissions` shows
   a dialog whose body is rendered via
   `paladin_core::format_unsafe_permissions(&err)` (§4.7) so the wording
-  matches the CLI and TUI exactly.
+  matches the CLI and TUI exactly. Other non-authentication open errors
+  (`wrong_vault_lock`, `invalid_header`, `invalid_payload`,
+  `unsupported_format_version`, `kdf_params_out_of_bounds`, `io_error`)
+  transition to `StartupErrorComponent` with a retry action that re-runs
+  vault-path resolution and `inspect`.
 - Missing → present `InitDialog`. v0.2 GUI creates vaults in-app on
   explicit user confirmation (DESIGN §6, §7). Plaintext path: empty
   passphrase fields plus the unencrypted-storage warning. Encrypted
@@ -353,10 +390,16 @@ start from `ImportDialog`.
   existing vault intact.
 - Operations route through `Vault` and `Store` methods — no GUI-side
   duplication of OTP, validation, or import logic.
+- Startup/open errors are non-mutating. `StartupErrorComponent` offers only
+  retry and quit; choosing a different vault path is out of scope for v0.2
+  because the global `--vault` flag is the only path-selection contract.
 
 ## Effect errors
 
-Effects update visible state only after the underlying mutation succeeds:
+Effects keep visible state consistent with the committed outcome. Most
+mutations update visible state only after success; controls that move
+optimistically because GTK/Adwaita owns the interaction, such as settings
+switches and spin rows, are reverted on pre-commit failure:
 
 - HOTP `next`: pre-commit save failures (`save_not_committed`) leave the
   in-memory counter and reveal state unchanged (per DESIGN §4.2 rollback)
@@ -405,10 +448,14 @@ Effects update visible state only after the underlying mutation succeeds:
 
 - `data/paladin-gtk.desktop` shipped at
   `/usr/share/applications/paladin-gtk.desktop` per §11.3. Sets
-  `Categories=Utility;Security;` and security/authenticator terms in
+  `Name=Paladin`, `Icon=paladin-gtk`, `StartupWMClass=io.github.paladin_otp.Gui`,
+  `Categories=Utility;Security;`, and security/authenticator terms in
   `Keywords=`, and uses `Exec=paladin-gtk` with no file/URI placeholders.
   v0.2 does not register a MIME type or URI handler; imports start inside
-  `ImportDialog`, matching the global-flag parser contract above.
+  `ImportDialog`, matching the global-flag parser contract above. Native
+  packages keep the `paladin-gtk.desktop` filename; the Flatpak manifest
+  installs desktop and AppStream metadata under the finalized §11.4 app ID
+  so Flathub's desktop-ID checks match the application ID.
 - App icon at
   `/usr/share/icons/hicolor/scalable/apps/paladin-gtk.svg`. Symbolic
   variant at `…/symbolic/apps/paladin-gtk-symbolic.svg` if the
@@ -453,7 +500,9 @@ Effects update visible state only after the underlying mutation succeeds:
   finalized at Flathub-submission time. The same string is passed to
   `RelmApp::new(...)` in `main.rs` and set as `StartupWMClass` in
   `data/paladin-gtk.desktop`, so window-to-launcher mapping works
-  identically in both Flatpak and native installs. `flatpak-builder` consumes the
+  identically in both Flatpak and native installs. The manifest exports the
+  matching AppStream metainfo file from `data/metainfo/` and validates it
+  during the packaging dry-run. `flatpak-builder` consumes the
   tagged release tarball with vendored Cargo deps so Flathub builds
   reproducibly without network access at build time.
 - **AppImage.** `linuxdeploy` plus
@@ -497,6 +546,7 @@ The GUI itself is hard to test without a display server. Tests are split:
   decision** (`None`/empty slug → placeholder; failed lookup → placeholder;
   the actual `gtk::IconTheme` lookup is exercised by the smoke test),
   search filtering through `paladin_core::account_matches_search`,
+  startup-error routing for default-path / inspect / open failures,
   auto-lock state machine, clipboard "clear if unchanged"
   decision logic plus pending-value zeroization, HOTP reveal window timing
   via `paladin_core::HOTP_REVEAL_SECS` + counter labels,
@@ -506,14 +556,15 @@ The GUI itself is hard to test without a display server. Tests are split:
   / zero-length / mismatch handling, plaintext-warning gate,
   `vault_exists` triggering the destructive-confirmation gate that
   routes through `create_force` (with cancellation leaving the
-  existing vault intact), and `unsafe_permissions` routing back to
-  inline errors),
+  existing vault intact and zeroizing the pending `VaultInit`), and
+  `unsafe_permissions` routing back to inline errors),
   rename dialog logic (label validation, no-op short-circuit when the
   trimmed input equals the current label, prior-label restore on
   `save_not_committed`),
   otpauth URI paste logic (parse success → shared duplicate-detection
   with manual mode, parse-error mapping for malformed URIs and
-  unsupported types, zeroize-on-cancel of the URI entry buffer),
+  unsupported types, duplicate "add anyway" consuming a pending
+  `ValidatedAccount`, zeroize-on-cancel of the URI entry buffer),
   import format-selector routing + on-conflict policy threading +
   post-merge counts mapping, export overwrite-gate + encrypted
   twice-confirm match logic + export writer error mapping.
@@ -546,7 +597,7 @@ The GUI itself is hard to test without a display server. Tests are split:
 
 - [ ] Add the `paladin-gtk` crate to the workspace.
 - [ ] Relm4 component tree (Init / Unlock / List / Row / Add / Remove /
-  Rename / Import / Export / Passphrase / Settings).
+  Rename / Import / Export / Passphrase / Settings / StartupError).
 - [ ] In-app vault initialization (`InitDialog` for missing vaults;
   plaintext + encrypted paths; explicit confirmation; plaintext-path
   warning sourced from
@@ -570,7 +621,7 @@ The GUI itself is hard to test without a display server. Tests are split:
   messages, and `paladin_core::format_plaintext_export_warning()` for the
   `ExportDialog` plaintext path so the GUI never re-implements shared text
   or match-key logic.
-- [ ] Linux desktop file + icon.
+- [ ] Linux desktop file, AppStream metadata, and icon.
 - [ ] `.deb`, `.rpm`, Flatpak, and AppImage artifacts for `paladin-gtk`,
   signed and published per §11.3–§11.6; Flathub submission filed.
 - [ ] Manual test plan documented.
@@ -584,7 +635,10 @@ baseline 1.4 to match the §11.3 Debian dep declaration), `glib`,
 `gio`, `gdk4`, `clap`, plus `paladin-core`. GDK
 clipboard is the canonical Wayland/X11 path; `arboard` is **not** a
 hard dependency for v0.2 and is only added if GDK clipboard proves
-insufficient during implementation.
+insufficient during implementation. Build-time tooling includes
+`glib-compile-resources` (via the GLib development package or an equivalent
+Rust build helper such as `glib-build-tools`) for the gresource bundle and
+AppStream validation tooling for the Flatpak/native metadata dry-run.
 
 `libadwaita` is adopted for v0.2 (decision 2026-05-05) so the GUI
 follows the GNOME HIG out of the box and the §11.3 packaging
@@ -607,7 +661,8 @@ back into vanilla GTK4 widgets where Adwaita is idiomatic:
   whose content is an `AdwToolbarView`: the top bar holds an
   `AdwHeaderBar`, and the content slot holds the `AdwToastOverlay`
   (see below) wrapping whichever screen is active (`InitDialog` /
-  `UnlockComponent` / `AccountListComponent`). The header bar carries
+  `UnlockComponent` / `StartupErrorComponent` /
+  `AccountListComponent`). The header bar carries
   the search-toggle button and a primary menu (`gtk::MenuButton`
   driven by `gio::Menu`). No custom title-bar drawing.
 - **Toast surface.** `AppModel` wraps the main content in an
@@ -625,10 +680,14 @@ back into vanilla GTK4 widgets where Adwaita is idiomatic:
 - **Preferences.** `SettingsComponent` renders inside an
   `AdwPreferencesWindow` with one `AdwPreferencesGroup` for
   auto-lock and one for clipboard-clear. Toggles use
-  `AdwSwitchRow` / `AdwActionRow`; spinners use `AdwSpinRow`.
+  `AdwSwitchRow`; spinners use `AdwSpinRow`.
   Live-apply (per the existing component description) still drives a
   `Vault::mutate_and_save` per change; the prior
   validate-revert-on-failure behavior is preserved.
+- **Startup/open errors.** `StartupErrorComponent` uses an
+  `AdwStatusPage` inside the main window content, with Retry and Quit
+  actions. It is a display-only state and never creates, overwrites, or
+  chmods vault files.
 - **Passphrase entry.** `UnlockComponent` and `PassphraseDialog`
   use `AdwPasswordEntryRow` for passphrase inputs, including the
   twice-confirmed entries on `set` / `change` and on
@@ -663,7 +722,8 @@ section just pins which Adwaita class fills each role.
   unlock; missing vault opens `InitDialog` and can create plaintext or
   encrypted vaults on explicit user confirmation. `vault_exists`
   triggers an in-dialog destructive-confirmation gate that runs
-  `create_force` on confirm. No implicit creation.
+  `create_force` on confirm. Startup/open failures render a non-mutating
+  startup-error view. No implicit creation.
 - Account rename available from the row kebab menu; URI paste available
   in Add. GUI users no longer need to drop to the CLI for `rename` or
   `add --uri`.
@@ -672,6 +732,8 @@ section just pins which Adwaita class fills each role.
 - HOTP reveal rows show the counter used for the visible code, then return
   to the stored next counter when hidden.
 - Icon resolution works against system theme with placeholder fallback.
+- Desktop file, AppStream metadata, and icon assets validate in the packaging
+  dry-run.
 - `xvfb-run` headless smoke test green in CI.
 - Manual test plan executes cleanly on a Wayland and an X11 session.
 - `.deb`, `.rpm`, Flatpak, and AppImage artifacts build through the
