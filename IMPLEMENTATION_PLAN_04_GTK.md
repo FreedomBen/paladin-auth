@@ -32,7 +32,7 @@ crates/paladin-gtk/
 │   ├── icons/             # app icon + fallbacks
 │   ├── metainfo/          # AppStream metadata; file is named `<app-id>.metainfo.xml` (`io.github.paladin_otp.Gui.metainfo.xml`) so Flathub's reproducible-build check matches; installs to `/usr/share/metainfo/<app-id>.metainfo.xml`
 │   ├── style.css
-│   └── paladin-gtk.desktop
+│   └── io.github.paladin_otp.Gui.desktop  # named after the §11.4 app ID so the same file installs verbatim in native and Flatpak builds
 ├── src/
 │   ├── lib.rs             # re-exports internal modules so integration tests in tests/ can reach them; binary entry stays in main.rs
 │   ├── main.rs            # adw::init, register resources, RelmApp::new("io.github.paladin_otp.Gui").run(...) — ID matches the §11.4 Flatpak app ID and the desktop file's StartupWMClass
@@ -519,18 +519,20 @@ switches and spin rows, are reverted on pre-commit failure:
 
 ## Linux desktop integration
 
-- `data/paladin-gtk.desktop` shipped at
-  `/usr/share/applications/paladin-gtk.desktop` per §11.3. Sets
-  `Name=Paladin`, `Icon=io.github.paladin_otp.Gui` (the icon-theme name
-  resolves to the app-ID-named files installed below),
+- `data/io.github.paladin_otp.Gui.desktop` shipped at
+  `/usr/share/applications/io.github.paladin_otp.Gui.desktop` per §11.3.
+  Sets `Name=Paladin`, `Icon=io.github.paladin_otp.Gui` (the icon-theme
+  name resolves to the app-ID-named files installed below),
   `StartupWMClass=io.github.paladin_otp.Gui`,
   `Categories=Utility;Security;`, and security/authenticator terms in
   `Keywords=`, and uses `Exec=paladin-gtk` with no file/URI placeholders.
   v0.2 does not register a MIME type or URI handler; imports start inside
-  `ImportDialog`, matching the global-flag parser contract above. Native
-  packages keep the `paladin-gtk.desktop` filename; the Flatpak manifest
-  installs the desktop entry as `<app-id>.desktop` so Flathub's
-  desktop-ID checks match the application ID.
+  `ImportDialog`, matching the global-flag parser contract above. Both
+  native (`.deb` / `.rpm`) and Flatpak builds install the desktop entry
+  verbatim with this app-ID-based filename so AppStream's
+  `<launchable type="desktop-id">io.github.paladin_otp.Gui.desktop</launchable>`
+  resolves identically and a single metainfo file works in every
+  packaging format.
 - App icon at
   `/usr/share/icons/hicolor/scalable/apps/io.github.paladin_otp.Gui.svg`,
   named after the §11.4 app ID so the same files satisfy native and
@@ -565,8 +567,10 @@ switches and spin rows, are reverted on pre-commit failure:
 - **`.deb` / `.rpm` (via `nfpm`).** `packaging/deb/paladin-gtk.yaml`
   and `packaging/rpm/paladin-gtk.yaml` install
   `/usr/bin/paladin-gtk`, the desktop entry at
-  `/usr/share/applications/`, and the icon set under
-  `/usr/share/icons/hicolor/`. Debian declares `libgtk-4-1
+  `/usr/share/applications/`, the AppStream metainfo file at
+  `/usr/share/metainfo/io.github.paladin_otp.Gui.metainfo.xml`
+  (same source file the Flatpak manifest exports), and the icon set
+  under `/usr/share/icons/hicolor/`. Debian declares `libgtk-4-1
   (>= 4.16)` and `libadwaita-1-0 (>= 1.6)`; Fedora declares the
   matching `gtk4` and `libadwaita` package names.
   Distributions whose stable channel ships older GTK / libadwaita
@@ -578,7 +582,9 @@ switches and spin rows, are reverted on pre-commit failure:
   `$XDG_DATA_HOME/paladin/` when created by `paladin init` or by the
   GUI's `InitDialog`. The §11
   packaging pipeline validates the
-  installed desktop entry with `desktop-file-validate` and verifies the
+  installed desktop entry with `desktop-file-validate`, validates the
+  installed metainfo file with the AppStream validator (same check the
+  Flatpak dry-run runs), and verifies the
   hicolor icon install layout; it does not add package-owned
   post-install hooks.
 - **Flatpak.** `packaging/flatpak/paladin-gtk.yml` declares
@@ -594,8 +600,8 @@ switches and spin rows, are reverted on pre-commit failure:
   Flatpak app ID is the §11.4 placeholder `io.github.paladin_otp.Gui`,
   finalized at Flathub-submission time. The same string is passed to
   `RelmApp::new(...)` in `main.rs` and set as `StartupWMClass` in
-  `data/paladin-gtk.desktop`, so window-to-launcher mapping works
-  identically in both Flatpak and native installs. The manifest exports
+  `data/io.github.paladin_otp.Gui.desktop`, so window-to-launcher
+  mapping works identically in both Flatpak and native installs. The manifest exports
   `data/metainfo/io.github.paladin_otp.Gui.metainfo.xml` to
   `/usr/share/metainfo/` and validates it during the packaging dry-run.
   `flatpak-builder` consumes the
