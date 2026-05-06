@@ -100,7 +100,7 @@ plaintext storage, valid custom KDF values are accepted but unused.
 | `copy <query>`                                         | Advances HOTP; copies to clipboard via `arboard`. **No auto-clear.** Single-match required. |
 | `remove <query>`                                       | Confirmation prompt unless `--yes`. `--yes` is required under `--json` (no confirmation prompt). Single-match required. |
 | `rename <query> <new-label>`                           | Updates `updated_at`. Single-match required. |
-| `passphrase set | change | remove`                     | `set` and `change` accept the KDF flags above. `passphrase remove` prints `paladin_core::format_plaintext_storage_warning()` and confirms in text mode unless `--yes` is passed; `--yes` is required under `--json`. |
+| `passphrase set | change | remove`                     | `set` and `change` accept the KDF flags above. `passphrase remove` in text mode always prints `paladin_core::format_plaintext_storage_warning()`, then confirms unless `--yes` is passed; `--yes` is required under `--json`. |
 | `import <path> [--format <fmt>] [--on-conflict <p>]`   | Auto-detects when `--format` is omitted; forced formats are `otpauth`/`aegis`/`paladin` (encrypted bundle only)/`qr`; conflict policies are `skip` (default)/`replace`/`append`. |
 | `export --plaintext <path> | --encrypted <path>`       | Refuses overwrite without `--force`; both modes write through `paladin_core::write_secret_file_atomic` and create output `0600`; plaintext export prints `paladin_core::format_plaintext_export_warning()` before writing unencrypted secrets; encrypted export accepts the KDF flags above. |
 | `settings get [key] | set <key> <value>`               | CLI persists `clipboard.clear_enabled` for TUI/GUI to honor but **ignores it at runtime** for `paladin copy`. `get [key]` filters text-mode display only. The `--json` shape is always the full nested `VaultSettings`: `get` returns the current settings, and `set` returns the post-mutation settings after `apply_setting_patch` commits. |
@@ -114,7 +114,12 @@ plaintext storage, valid custom KDF values are accepted but unused.
    the same fields as manual mode. Label and secret are required; issuer is
    optional. The secret prompt uses hidden terminal input. Algorithm, digits,
    kind, period, counter, and icon-hint prompts offer the same defaults and
-   constraints as the manual flags. After collecting the form once, the CLI
+   constraints as the manual flags. The icon-hint prompt accepts an empty
+   line to mean default-derive (`IconHintInput::Default`), the literal
+   token `none` (case-insensitive, after Unicode-whitespace trim) to mean
+   clear (`IconHintInput::Clear`), or a slug matching `[a-z0-9_-]+` up to
+   64 bytes (`IconHintInput::Slug`); any other input is rejected by
+   `validate_manual`. After collecting the form once, the CLI
    builds `AccountInput` and calls `paladin_core::validate_manual(input,
    now)`. Any validation error exits with that `validation_error`; the CLI
    does not loop, reprompt, or partially save.
@@ -244,10 +249,11 @@ alike, and is enforced before any value parsing.
   starting states for `passphrase set`, `passphrase change`, and
   `passphrase remove` surface `invalid_state` before any new-passphrase
   prompt, destructive confirmation, or crypto material generation.
-- `passphrase remove` in text mode prints the plaintext-storage warning and
-  requires destructive confirmation unless `--yes` is passed. Under
-  `--json`, `--yes` is required at parse time because the command must
-  not block on a confirmation prompt.
+- `passphrase remove` in text mode always prints the plaintext-storage
+  warning to stderr, then requires destructive confirmation unless `--yes`
+  is passed. Under `--json`, `--yes` is required at parse time because the
+  command must not block on a confirmation prompt, and the plaintext-storage
+  advisory is suppressed because the caller opted in with `--yes`.
 - If `/dev/tty` is unavailable for a passphrase prompt, exit with `io_error`
   and `operation: "passphrase_prompt"`.
 
@@ -316,7 +322,11 @@ CLI resolves those IDs back through the post-merge vault and emits §5
   exit 0; `--version` / `-V` renders
   `{ "version": { "name": "paladin", "version": "x.y.z" } }` to stdout and
   exit 0. Text mode keeps clap's normal help/version rendering. The `help`
-  `text` field is the generated clap help text for the requested command path.
+  `command` field is the resolved subcommand path (`"paladin"`,
+  `"paladin add"`, `"paladin tui"`, and so on) with no flags and no
+  trailing `--help`; the `text` field is the generated clap help text for
+  that command path. Both fields are locked via insta golden snapshots so
+  additions are reviewable.
 - The error envelope uses the full v0.1 `kind` taxonomy from §5 verbatim —
   the CLI never invents new kinds or renames existing ones:
   `validation_error`, `invalid_passphrase`, `invalid_state`,
@@ -405,7 +415,12 @@ Every vault-opening command except `init`:
 1. Resolve vault path (`--vault` or `paladin_core::default_vault_path()`).
 2. `paladin_core::inspect(path)` to learn the mode.
 3. If `inspect` returns `Missing`, return `vault_missing` immediately
-   without prompting. If encrypted, prompt once via `/dev/tty`.
+   without prompting. If `inspect` returns any other `Err(...)` (e.g.
+   `invalid_header`, `unsupported_format_version`, `io_error`, or a future
+   `unsafe_permissions` once `inspect` probes permissions), propagate it
+   verbatim without prompting — the CLI never falls through to step 4 with
+   a known-broken file. If `Encrypted`, prompt once via `/dev/tty`. If
+   `Plaintext`, fall through without prompting.
 4. `paladin_core::open(path, lock)` — propagates `unsafe_permissions`;
    text mode renders the human-readable `chmod` repair string via
    `paladin_core::format_unsafe_permissions(&err)` so the CLI, TUI, and GUI
@@ -481,15 +496,16 @@ with `counter_used: null`.
   `ImportReport.accounts` IDs to `AccountSummary` objects per §5. The CLI
   never serializes secret-bearing `Account` or `Secret`.
 - [ ] Use `paladin_core::parse_account_query`, `Vault::matching_accounts`,
-  `paladin_core::account_matches_search`, and
-  `Vault::shortest_unique_id_prefix` in `select.rs`; keep only the
+  and `Vault::shortest_unique_id_prefix` in `select.rs`; keep only the
   command-specific cardinality decisions (`show` all-TOTP vs single,
   `peek` all, `copy` / `remove` / `rename` single) and text / JSON error
   rendering in the CLI.
 - [ ] Source human-facing destructive / advisory text from
   `paladin_core::format_init_force_warning(path)`,
   `paladin_core::format_plaintext_storage_warning()`, and
-  `paladin_core::format_plaintext_export_warning()`, and source
+  `paladin_core::format_plaintext_export_warning()`; source the
+  `unsafe_permissions` `chmod` repair string from
+  `paladin_core::format_unsafe_permissions(&err)`; and source
   validation-warning messages from
   `paladin_core::format_validation_warning()` so the CLI cannot drift from
   the TUI / GUI wording.
@@ -517,17 +533,19 @@ with `counter_used: null`.
   envelopes and stderr warnings. Text rendering honors `--no-color`,
   `NO_COLOR`, and non-TTY stdout.
 - [ ] Implement `paladin tui` as an `execvp` wrapper.
-- [ ] Wire the `paladin-core` `test-fault-injection` cargo feature into
-  the test build of the `paladin` binary so process-level integration
-  tests can drive pre-commit and post-commit save failures via the
+- [ ] Add a `paladin-cli/test-hooks` cargo feature that is **off by default**
+  in production builds and enabled only by the test build of the `paladin`
+  binary. `paladin-cli/test-hooks` transitively enables
+  `paladin-core/test-fault-injection` so process-level integration tests
+  can drive pre-commit and post-commit save failures via the
   `PALADIN_FAULT_INJECT` env var.
 - [ ] Wire a test-build-only `PALADIN_CLIPBOARD_DRYRUN=1` short-circuit
   in the CLI clipboard adapter that bypasses `arboard` and records the
-  intended payload, gated behind the same test cargo feature so production
-  builds never link the hook. Lets CI exercise `copy` end-to-end (including
-  the post-`hotp_advance` ordering and the never-schedules-auto-clear
-  invariant) without a clipboard server. The env var is honored only when
-  the test feature is enabled.
+  intended payload, gated behind the same `paladin-cli/test-hooks` feature
+  so production builds never link the hook. Lets CI exercise `copy`
+  end-to-end (including the post-`hotp_advance` ordering and the
+  never-schedules-auto-clear invariant) without a clipboard server. The
+  env var is honored only when `paladin-cli/test-hooks` is enabled.
 - [ ] Add the CLI integration tests and JSON golden snapshots below.
 - [ ] Run the definition-of-done checks.
 
@@ -554,9 +572,8 @@ where relevant, and exit code.
   Argon2 params for encrypted init; invalid / out-of-range values reject with
   the §5 error kinds before the first passphrase prompt, and valid custom KDF
   values are accepted but unused when an empty passphrase selects plaintext.
-  With the `paladin-core`
-  `test-fault-injection` feature wired into the test build (see the
-  passphrase bullet), `init --force` under `PALADIN_FAULT_INJECT=pre_commit`
+  With the `paladin-cli/test-hooks` feature wired into the test build (see
+  the passphrase bullet), `init --force` under `PALADIN_FAULT_INJECT=pre_commit`
   surfaces `save_not_committed` with `backup_path` set to `vault.bin.bak`
   after backup rotation, and under `PALADIN_FAULT_INJECT=post_commit`
   surfaces `save_durability_unconfirmed` with `committed: true` — covering
@@ -595,10 +612,11 @@ where relevant, and exit code.
   prefix routes to UUID match, never substring; prefixes shorter than 8
   hex chars, longer than 32 hex chars, or containing non-hex characters
   reject with `validation_error`.
-- **`copy` writes to clipboard** — gated behind a test-only build cfg/feature
-  because CI may not have a clipboard server; otherwise dry-run via a
-  `PALADIN_CLIPBOARD_DRYRUN=1` env var honored only by the test build before
-  the CLI clipboard adapter calls `arboard`.
+- **`copy` writes to clipboard** — gated behind the
+  `paladin-cli/test-hooks` feature because CI may not have a clipboard
+  server; otherwise dry-run via a `PALADIN_CLIPBOARD_DRYRUN=1` env var
+  honored only by the test build before the CLI clipboard adapter calls
+  `arboard`.
   Asserts the CLI **never** schedules an auto-clear regardless of
   `clipboard.clear_enabled` in the vault. Clipboard failure after a
   committed HOTP advance returns `clipboard_write_failed` and leaves the
@@ -629,8 +647,9 @@ where relevant, and exit code.
   Durability-unconfirmed is surfaced as `save_durability_unconfirmed` (with
   `committed: true`) when the post-commit fsync fails; pre-commit failure
   surfaces as `save_not_committed` with `committed: false`. Process-level CLI
-  tests opt the test build of the `paladin` binary into the `paladin-core`
-  `test-fault-injection` cargo feature; the env var
+  tests opt the test build of the `paladin` binary into the
+  `paladin-cli/test-hooks` cargo feature (which transitively enables
+  `paladin-core/test-fault-injection`); the env var
   `PALADIN_FAULT_INJECT=pre_commit|post_commit` selects which `Store`
   failure path fires so `save_not_committed` and
   `save_durability_unconfirmed` envelopes can be exercised end-to-end.
