@@ -146,15 +146,24 @@ Startup mirrors the CLI's vault inspection path:
 - Copying a hidden HOTP row is **rejected** with a status-line message.
   Copying during the reveal window copies the visible code and does not
   advance again.
+- The list scrolls its viewport so the selected row stays visible.
+  `PgUp` / `PgDn` move by viewport height, `Home` / `End` jump to the
+  first / last row of the filtered set, and `Ctrl-D` / `Ctrl-U` move
+  by half a viewport (vim-style). Selection clamps to the bounds of
+  the filtered result set and never goes off-list.
 
 ## Focus model
 
-Focus alternates between the search bar and the account list. `/`
-focuses the search bar; typing narrows the filtered list in place.
-While the search bar is focused, `↑`/`↓` still move the list selection
-and `Enter` copies the selected entry — the selection is always
-navigable so the user does not need to unfocus the search to act on a
-result. Other keys, including the action keys `a` / `r` / `R` / `i` /
+Focus alternates between the search bar and the account list. On
+list-view entry, focus starts on the account list; on the unlock
+screen, focus starts on the passphrase entry. `/` focuses the search
+bar; typing narrows the filtered list in place. `Tab` and `Shift-Tab`
+cycle focus between the search bar and the account list, preserving
+the active query when leaving the search bar (modals have their own
+trapped focus, see below). While the search bar is focused, `↑`/`↓`
+still move the list selection and `Enter` copies the selected entry —
+the selection is always navigable so the user does not need to
+unfocus the search to act on a result. Other keys, including the action keys `a` / `r` / `R` / `i` /
 `e` / `n` / `p` / `s` and the quit key `q`, are routed to the search field
 as character input while it has focus; the user must defocus the search
 (`Esc` to clear) to use them as actions. `Ctrl-C` is the exception and
@@ -333,8 +342,8 @@ closes it.
   rollback per DESIGN §4.5 (the in-memory mode/key reverts to its
   previous state on `save_not_committed` and is replaced on
   `save_durability_unconfirmed`); the TUI surfaces both failure
-  classes inline, updates its own vault-mode flag according to the
-  transition outcome (unchanged on `save_not_committed`, changed on
+  classes inline, re-reads `Vault::is_encrypted()` to refresh its
+  visible vault-mode flag (unchanged on `save_not_committed`, changed on
   `save_durability_unconfirmed`), and otherwise leaves the in-memory vault
   as the core left it.
 - **Settings** — toggles for `auto_lock.enabled` and
@@ -344,7 +353,11 @@ closes it.
   modal accumulates pending edits in modal-local state and only commits
   on Confirm: pending values are applied through the same setters
   (`set_auto_lock_*`, `set_clipboard_clear_*`) inside a single
-  `Vault::mutate_and_save` transaction. The UI controls clamp to valid
+  `Vault::mutate_and_save` transaction. (This Confirm-gated commit is
+  intentional and diverges from the GTK plan's per-control live-apply
+  semantics; in a keyboard-only UI, modal-local Confirm + `Esc` gives
+  a cleaner cancel path than per-toggle persistence.) The UI controls
+  clamp to valid
   ranges, but any defensive setter validation failure restores the
   pre-attempt settings snapshot, surfaces inline against the offending
   field, and blocks the save. Closing the modal with `Esc` discards
@@ -443,22 +456,26 @@ reaches the primary-file commit point with durability still uncertain:
 
 ## Keybindings (initial v0.1)
 
-| Key       | Action                                                                                  |
-| --------- | --------------------------------------------------------------------------------------- |
-| `↑` `↓`   | Move selection                                                                          |
-| `Enter`   | Copy selected code (TOTP: current; HOTP: visible only)                                  |
-| `n`       | HOTP next-code (advances + reveals `HOTP_REVEAL_SECS`)                                  |
-| `a`       | Open Add modal                                                                          |
-| `r`       | Open Remove confirmation                                                                |
-| `R`       | Open Rename modal (Shift+R; `r` stays bound to Remove)                                  |
-| `i`       | Open Import modal                                                                       |
-| `e`       | Open Export modal                                                                       |
-| `/`       | Focus search bar                                                                        |
-| `p`       | Open Passphrase modal                                                                   |
-| `s`       | Open Settings modal                                                                     |
-| `Esc`     | Close modal / clear search; quit on unlock, missing-vault, and startup-error screens    |
-| `q`       | Quit from list, missing-vault, and startup-error screens; text input in text fields     |
-| `Ctrl-C`  | Quit (any screen)                                                                       |
+| Key                 | Action                                                                                  |
+| ------------------- | --------------------------------------------------------------------------------------- |
+| `↑` `↓`             | Move selection                                                                          |
+| `PgUp` `PgDn`       | Page up / page down (viewport height)                                                   |
+| `Home` `End`        | Jump to first / last row of the filtered set                                            |
+| `Ctrl-D` `Ctrl-U`   | Half-page down / up (vim-style)                                                         |
+| `Enter`             | Copy selected code (TOTP: current; HOTP: visible only)                                  |
+| `n`                 | HOTP next-code (advances + reveals `HOTP_REVEAL_SECS`)                                  |
+| `a`                 | Open Add modal                                                                          |
+| `r`                 | Open Remove confirmation                                                                |
+| `R`                 | Open Rename modal (Shift+R; `r` stays bound to Remove)                                  |
+| `i`                 | Open Import modal                                                                       |
+| `e`                 | Open Export modal                                                                       |
+| `/`                 | Focus search bar                                                                        |
+| `Tab` `Shift-Tab`   | Cycle focus between search bar and list (commits active query when leaving search)      |
+| `p`                 | Open Passphrase modal                                                                   |
+| `s`                 | Open Settings modal                                                                     |
+| `Esc`               | Close modal / clear search; quit on unlock, missing-vault, and startup-error screens    |
+| `q`                 | Quit from list, missing-vault, and startup-error screens; text input in text fields     |
+| `Ctrl-C`            | Quit (any screen)                                                                       |
 
 ## Tests
 
@@ -492,7 +509,9 @@ captured with `insta` golden snapshots using `ratatui::backend::TestBackend`.
 - **Clipboard auto-clear**: timer schedules; stale tokens are ignored;
   "only-if-unchanged" honored when an external copy mutates the clipboard
   between copy and wake; pending copied values are zeroized after the clear
-  attempt or stale-token drop.
+  attempt or stale-token drop. CI tests drive these flows through the
+  `PALADIN_CLIPBOARD_DRYRUN=1` adapter hook so they run without a
+  clipboard server.
 - **Terminal lifecycle**: terminal setup uses a guard that restores raw mode
   and alternate-screen state on normal exit, startup failure after setup,
   `Ctrl-C`, and panic unwind.
@@ -556,9 +575,9 @@ captured with `insta` golden snapshots using `ratatui::backend::TestBackend`.
   open with the typed inline error, and `save_durability_unconfirmed`
   leaves the new state in memory while still surfacing the warning.
   Passphrase rollback is exercised in the `paladin-core` plan; the TUI
-  test asserts that the inline error surfaces and the TUI's visible
-  vault-mode flag tracks the transition outcome without inspecting private
-  key/cache material.
+  test asserts that the inline error surfaces and that the TUI's
+  visible vault-mode flag (sourced from `Vault::is_encrypted()`) tracks
+  the transition outcome without inspecting private key/cache material.
 - **HOTP reveal window**: reveal closes after
   `paladin_core::HOTP_REVEAL_SECS`; `n` during an open
   reveal advances again (does not no-op); hidden rows show the stored next
@@ -634,10 +653,18 @@ is never expected to be scripted.
   modal behavior, and the §6 missing-vault / startup-error screens, driven
   by the workspace `cargo xtask man` target. The packaging configs ship it
   gzipped at `/usr/share/man/man1/paladin-tui.1.gz` per §11.3.
-- **Cargo.toml metadata.** `crates/paladin-tui/Cargo.toml` sets
-  `description`, `homepage`, `repository`, `keywords`, `categories`,
-  and `license = "AGPL-3.0-or-later"` so `nfpm` produces correct
-  Debian / RPM control metadata without per-format duplication.
+- **Cargo.toml metadata.** `crates/paladin-tui/Cargo.toml` inherits
+  `description`, `repository`, `license = "AGPL-3.0-or-later"`,
+  `edition`, and `rust-version` from `[workspace.package]` via
+  `package.workspace = true` (the workspace shape established by
+  IMPLEMENTATION_PLAN_01_CORE.md Phase A so `nfpm` and Flathub
+  manifests read one source). It additionally sets the binary-specific
+  `homepage`, `keywords`, and `categories` fields locally. The
+  packaging pipeline sources these values from Cargo metadata when
+  building `.deb` / `.rpm` so the per-format configs in
+  `packaging/deb/paladin-tui.yaml` and `packaging/rpm/paladin-tui.yaml`
+  stay minimal. The Debian one-line description is short enough for
+  the 60-char limit; the long form is sourced from README.
 - **No desktop entry.** The TUI is launched from a terminal and does
   not register a `.desktop` file (§11.3 only ships one for
   `paladin-gtk`). No icon assets are required.
@@ -648,10 +675,10 @@ is never expected to be scripted.
   `--socket=wayland`, `--socket=fallback-x11`, and `--share=ipc`.
   It does not request `--socket=session-bus` or `--socket=system-bus`;
   Flatpak's filtered portal bus access remains the default.
-  `flatpak run io.…Tui` inherits the invoking terminal's stdin /
-  stdout / stderr so `crossterm` raw mode and ANSI rendering work
-  end-to-end against the host TTY while clipboard copy and clipboard
-  image import work through the granted display socket.
+  `flatpak run io.github.paladin_otp.Tui` inherits the invoking
+  terminal's stdin / stdout / stderr so `crossterm` raw mode and ANSI
+  rendering work end-to-end against the host TTY while clipboard copy
+  and clipboard image import work through the granted display socket.
 - **AppImage.** `linuxdeploy` assembles the AppDir; the `AppRun`
   forwards argv unchanged so `paladin-tui-<version>-x86_64.AppImage`
   acts as a drop-in for the bare binary. The
@@ -708,9 +735,16 @@ is never expected to be scripted.
   the test build of the `paladin-tui` binary so reducer / effect-layer
   integration tests can drive pre-commit and durability-unconfirmed
   save failures via the `PALADIN_FAULT_INJECT` env var.
-- [ ] Verify the `paladin tui` wrapper launches `paladin-tui` successfully
-  in native/shared-`PATH` installs and returns the documented
-  `exec_paladin_tui` error in the CLI Flatpak.
+- [ ] Wire a test-build-only `PALADIN_CLIPBOARD_DRYRUN=1` short-circuit
+  in the TUI clipboard adapter that bypasses `arboard` and records the
+  intended copy payload plus the auto-clear schedule, gated behind a
+  test cargo feature so production builds never link the hook. Lets CI
+  exercise the copy → schedule → only-if-unchanged auto-clear loop
+  end-to-end without a clipboard server.
+- [ ] Add a TUI-side smoke test that spawns `paladin tui` (CLI) and
+  asserts it execs `paladin-tui` on shared-`PATH` installs; the
+  Flatpak `exec_paladin_tui` failure mode is exercised by the CLI
+  plan's tests.
 
 ## Definition of done
 
