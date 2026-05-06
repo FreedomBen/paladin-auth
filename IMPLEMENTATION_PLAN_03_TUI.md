@@ -11,8 +11,9 @@ The final `paladin tui` integration check also depends on
 Standalone binary `paladin-tui`. Single-screen MVP per §6: search bar,
 account list with live TOTP gauges and HOTP reveal-on-`n`, status line, and
 modal dialogs for add / remove / rename / import / export / passphrase / settings.
-Auto-lock and clipboard auto-clear are **opt-in** per `VaultSettings`. The
-TUI is also reachable via `paladin tui` which `execvp`s this binary.
+Auto-lock and clipboard auto-clear are **opt-in** per `VaultSettings`. In
+native/shared-`PATH` installs, the TUI is also reachable via `paladin tui`
+which `execvp`s this binary.
 
 Runtime model (§13): plain threads + `mpsc`. **No `tokio`** — local TUIs
 don't need async I/O.
@@ -97,12 +98,13 @@ Startup mirrors the CLI's vault inspection path:
 5. `VaultStatus::Encrypted` opens the unlock screen and prompts inside the
    TUI; wrong passphrases (`decrypt_failed`) keep the user on the unlock
    screen with an inline error.
-6. Any other error from `inspect` (e.g. `invalid_header` from
-   unrecognized magic, or `io_error`) or from `open`
+6. Any error from vault-path resolution (`default_vault_path`), or any
+   other error from `inspect` (e.g. `invalid_header` from unrecognized
+   magic, or `io_error`) or from `open`
    (`vault_missing`, `unsafe_permissions`, `invalid_header`, `invalid_payload`,
    `unsupported_format_version`, `kdf_params_out_of_bounds`,
    `wrong_vault_lock`, `io_error`) renders a non-mutating
-   startup-error screen with the error text and quits on `q` /
+   startup-error screen with the error text and quits on `Esc`, `q`, or
    `Ctrl-C`. `unsafe_permissions` errors render the `Some(text)` from
    `paladin_core::format_unsafe_permissions(&err)` so all front ends
    show identical wording, falling back to the generic error text only if
@@ -179,14 +181,20 @@ All passphrase-entry fields (unlock, encrypted Paladin import, encrypted
 export, passphrase set/change) and the Add modal's secret-bearing
 fields (manual-secret field and the URI-mode entry) keep typed bytes in
 zeroizing buffers, convert to `secrecy::SecretString` only for core
-calls, and zeroize on submit, cancel, modal close, and auto-lock. Any OTP code retained after generation (HOTP reveal state and
+calls, and zeroize on submit, cancel, modal close, and auto-lock. If
+Add submit reaches a duplicate-account gate, the modal keeps the
+already validated account in secret-bearing pending-add state so "add
+anyway" can proceed after the typed input buffers are zeroized; that
+pending-add state is zeroized on add-anyway, cancel, modal close, and
+auto-lock. Any OTP code retained after generation (HOTP reveal state and
 clipboard auto-clear values) is also kept in zeroizing storage and zeroized
 when replaced, cleared, expired, or dropped.
 
-Modal-local navigation is consistent across Add / Remove / Import / Export /
-Passphrase / Settings: `Tab` moves to the next control, `Shift-Tab` moves to
-the previous control, `Enter` activates the focused button or the modal's
-default confirm action, `Space` toggles the focused checkbox / toggle, `←` /
+Modal-local navigation is consistent across Add / Remove / Rename / Import /
+Export / Passphrase / Settings: `Tab` moves to the next control,
+`Shift-Tab` moves to the previous control, `Enter` activates the focused
+button or the modal's default confirm action, `Space` toggles the focused
+checkbox / toggle, `←` /
 `→` change segmented selectors, and `↑` / `↓` adjust spinners or move within
 multi-line field groups. Text fields consume printable characters and standard
 editing keys. `Esc` cancels the modal and discards pending modal-local edits
@@ -215,17 +223,19 @@ closes it.
   submit, cancel, modal close, and auto-lock because the URI embeds
   the Base32 secret. Clipboard images are read
   through `arboard::Clipboard::get_image()`, whose `ImageData` already
-  carries raw RGBA8 bytes plus width/height, and passed to
-  `paladin_core::import::qr_image_bytes` with the current import time.
+  carries raw RGBA8 bytes plus width/height; the TUI passes
+  `(width, height, rgba, current_import_time)` to
+  `paladin_core::import::qr_image_bytes`.
   Validation warnings are shown inline with
   `paladin_core::format_validation_warning()` and do
   not block creation. Because `Vault::add` is infallible and duplicate
   presentation policy is owned by the front ends, manual and URI duplicate
   collisions call `Vault::find_duplicate(&validated)` before mutation. A
   collision initially rejects with the existing account in the modal and
-  offers an "add anyway" confirmation that re-submits the same input on the
-  duplicate-allowed path (CLI parity with `--allow-duplicate`, appending a
-  new account that shares the `(secret, issuer, label)` triple). QR imports
+  offers an "add anyway" confirmation that inserts the pending validated
+  account on the duplicate-allowed path (CLI parity with
+  `--allow-duplicate`, appending a new account that shares the
+  `(secret, issuer, label)` triple). QR imports
   call `Vault::import_accounts` with
   `ImportConflict::Skip` and report imported/skipped/warning counts.
   Successful additions are wrapped in `Vault::mutate_and_save`, which
@@ -357,12 +367,15 @@ closes it.
 - Idle is reset by any `AppEvent::Input`. Timer is implemented as a
   cancel-token + timer thread; on cancellation, the next scheduled wake is
   ignored.
-- Locking discards all secret-bearing UI state alongside the vault: any
-  open HOTP reveal window is closed and its in-memory code zeroized, the
-  search query is cleared, and any modal is closed. The clipboard
-  auto-clear timer is preserved across lock so that a copy made just
+- Locking discards all secret-bearing UI state alongside the vault except
+  pending clipboard auto-clear state: any open HOTP reveal window is
+  closed and its in-memory code zeroized, the search query is cleared,
+  and any modal is closed. The clipboard auto-clear token/value is
+  preserved in zeroizing storage across lock so that a copy made just
   before lock still gets wiped at its scheduled time, but lock itself
-  does not pre-emptively wipe (per DESIGN §6 "only-if-unchanged").
+  does not pre-emptively wipe (per DESIGN §6 "only-if-unchanged"). The
+  pending clipboard value is zeroized when its timer fires, is superseded,
+  or is dropped.
 
 ## Clipboard auto-clear (per §6)
 
@@ -379,14 +392,18 @@ closes it.
 Effects update visible state only after the underlying mutation succeeds or
 reaches the primary-file commit point with durability still uncertain:
 
-- HOTP `n`: pre-commit save failures (`save_not_committed`) leave the
-  in-memory counter and reveal state unchanged (per DESIGN §4.2
-  rollback) and surface a status-line error. Durability-unconfirmed
-  failures (`save_durability_unconfirmed`) reveal the new code and
-  `Code.counter_used` label and report the committed-but-uncertain status in the
-  status line — the user has the new code in hand even though durability is
-  in question. All other failures show a status-line error and leave the row
-  hidden.
+- HOTP `n`: the effect captures the pre-advance `Code` needed for a
+  reveal in zeroizing pending state, then publishes it only if
+  `Vault::hotp_advance` succeeds or reaches the primary-file commit point.
+  Pre-commit save failures (`save_not_committed`) leave the in-memory
+  counter and reveal state unchanged (per DESIGN §4.2 rollback) and
+  surface a status-line error. Durability-unconfirmed failures
+  (`save_durability_unconfirmed`) reveal the new code and
+  `Code.counter_used` label and report the committed-but-uncertain status
+  in the status line — the user has the new code in hand even though
+  durability is in question. All other failures show a status-line error
+  and leave the previous reveal state unchanged (hidden if no reveal was
+  open).
 - Copy: show a status-line error if clipboard write fails; do not schedule
   auto-clear.
 - Add / remove / settings saves: validation and setter failures happen
@@ -426,22 +443,22 @@ reaches the primary-file commit point with durability still uncertain:
 
 ## Keybindings (initial v0.1)
 
-| Key       | Action                                                  |
-| --------- | ------------------------------------------------------- |
-| `↑` `↓`   | Move selection                                          |
-| `Enter`   | Copy selected code (TOTP: current; HOTP: visible only)  |
-| `n`       | HOTP next-code (advances + reveals `HOTP_REVEAL_SECS`)  |
-| `a`       | Open Add modal                                          |
-| `r`       | Open Remove confirmation                                |
-| `R`       | Open Rename modal (Shift+R; `r` stays bound to Remove)  |
-| `i`       | Open Import modal                                       |
-| `e`       | Open Export modal                                       |
-| `/`       | Focus search bar                                        |
-| `p`       | Open Passphrase modal                                   |
-| `s`       | Open Settings modal                                     |
-| `Esc`     | Close modal / clear search; quit on unlock, missing-vault, and startup-error screens |
-| `q`       | Quit (typed as input when search bar or unlock passphrase has focus) |
-| `Ctrl-C`  | Quit (any screen)                                       |
+| Key       | Action                                                                                  |
+| --------- | --------------------------------------------------------------------------------------- |
+| `↑` `↓`   | Move selection                                                                          |
+| `Enter`   | Copy selected code (TOTP: current; HOTP: visible only)                                  |
+| `n`       | HOTP next-code (advances + reveals `HOTP_REVEAL_SECS`)                                  |
+| `a`       | Open Add modal                                                                          |
+| `r`       | Open Remove confirmation                                                                |
+| `R`       | Open Rename modal (Shift+R; `r` stays bound to Remove)                                  |
+| `i`       | Open Import modal                                                                       |
+| `e`       | Open Export modal                                                                       |
+| `/`       | Focus search bar                                                                        |
+| `p`       | Open Passphrase modal                                                                   |
+| `s`       | Open Settings modal                                                                     |
+| `Esc`     | Close modal / clear search; quit on unlock, missing-vault, and startup-error screens    |
+| `q`       | Quit from list, missing-vault, and startup-error screens; text input in text fields     |
+| `Ctrl-C`  | Quit (any screen)                                                                       |
 
 ## Tests
 
@@ -479,10 +496,14 @@ captured with `insta` golden snapshots using `ratatui::backend::TestBackend`.
 - **Terminal lifecycle**: terminal setup uses a guard that restores raw mode
   and alternate-screen state on normal exit, startup failure after setup,
   `Ctrl-C`, and panic unwind.
-- **Add modal**: manual duplicate collision is detected through
-  `Vault::find_duplicate(&validated)`, rejects with existing account, and
-  the follow-up "add anyway" confirmation re-submits the same input on the
-  duplicate-allowed path so the new entry is appended with a fresh ID;
+- **Global args**: `--vault` selects the inspected/opened vault path,
+  `--no-color` disables styling, and `--json` is rejected at parse time
+  with clap's text diagnostic and no JSON envelope.
+- **Add modal**: manual and URI duplicate collisions are detected through
+  `Vault::find_duplicate(&validated)`, reject with the existing account,
+  and the follow-up "add anyway" confirmation inserts the pending validated
+  account on the duplicate-allowed path so the new entry is appended with a
+  fresh ID;
   clipboard QR import uses `ImportConflict::Skip`, reports imported/skipped
   counts, handles validation warnings rendered through
   `paladin_core::format_validation_warning()`, and rejects no-image /
@@ -544,9 +565,13 @@ captured with `insta` golden snapshots using `ratatui::backend::TestBackend`.
   counter, while revealed rows show the counter that produced the visible
   code until expiry.
 - **Sensitive UI buffers**: unlock, encrypted Paladin import, encrypted export,
-  passphrase set/change, the Add modal's manual-secret field, HOTP reveal,
+  passphrase set/change, the Add modal's manual-secret field, the Add
+  URI-mode entry, pending duplicate-add validated accounts, HOTP reveal,
   and pending clipboard-clear buffers zeroize on submit, cancel, modal close,
-  expiry, replacement, drop, and auto-lock as applicable.
+  expiry, replacement, drop, and auto-lock as applicable. Pending
+  clipboard-clear buffers are the auto-lock exception: they survive lock
+  only until the scheduled clear attempt, stale-token drop, replacement, or
+  app shutdown, and are zeroized at that point.
 - **Insta snapshots** for every screen state: empty vault, single TOTP,
   mixed TOTP/HOTP with hidden + revealed rows, search-active, every modal
   (Add / Remove / Rename / Import / Export / Passphrase set/change/remove /
@@ -573,9 +598,10 @@ captured with `insta` golden snapshots using `ratatui::backend::TestBackend`.
   inline error; correct passphrase advances to list.
 - **Missing vault**: opens the missing-vault screen and does not create or
   mutate files.
-- **Startup errors**: non-`decrypt_failed` errors from `inspect` /
-  `open` (including `unsafe_permissions`) open the non-mutating
-  startup-error screen and do not create or mutate files;
+- **Startup errors**: vault-path resolution failures and
+  non-`decrypt_failed` errors from `inspect` / `open` (including
+  `unsafe_permissions`) open the non-mutating startup-error screen and do
+  not create or mutate files;
   `unsafe_permissions` rendering uses the `Some(text)` from
   `format_unsafe_permissions` verbatim.
 
@@ -641,8 +667,11 @@ is never expected to be scripted.
   inherit Flathub's signing.
 - **`paladin tui` interaction.** The `paladin` CLI's `tui` subcommand
   resolves `paladin-tui` via `PATH` and `execvp`s it. Native `.deb` /
-  `.rpm` installs put both binaries in `/usr/bin/`; Flatpak entry
-  points are separate but documented; AppImage builds ship separate
+  `.rpm` installs put both binaries in `/usr/bin/`. Flatpak entry
+  points are separate apps; the CLI Flatpak has no shared `PATH` to the
+  TUI Flatpak, so `paladin tui` inside the CLI Flatpak returns the
+  documented `exec_paladin_tui` `io_error` and users invoke the TUI
+  directly via its Flatpak app ID. AppImage builds ship separate
   AppImages, so AppImage-only users invoke `paladin-tui` directly.
 
 ## Implementation checklist
@@ -679,7 +708,9 @@ is never expected to be scripted.
   the test build of the `paladin-tui` binary so reducer / effect-layer
   integration tests can drive pre-commit and durability-unconfirmed
   save failures via the `PALADIN_FAULT_INJECT` env var.
-- [ ] Verify the `paladin tui` wrapper launches `paladin-tui` successfully.
+- [ ] Verify the `paladin tui` wrapper launches `paladin-tui` successfully
+  in native/shared-`PATH` installs and returns the documented
+  `exec_paladin_tui` error in the CLI Flatpak.
 
 ## Definition of done
 
@@ -689,10 +720,11 @@ is never expected to be scripted.
 - HOTP reveal rows show the counter used for the visible code, then return
   to the stored next counter when hidden.
 - Insta snapshots locked for every screen state.
-- `paladin tui` (CLI exec wrapper) launches this binary successfully.
+- `paladin tui` (CLI exec wrapper) launches this binary successfully in
+  native/shared-`PATH` installs and has the documented Flatpak failure mode.
 - Missing vaults show the non-mutating `paladin init` guidance screen.
-- Non-`decrypt_failed` `inspect` / `open` errors surface on the
-  non-mutating startup-error screen, with `unsafe_permissions`
-  rendered via `format_unsafe_permissions`.
+- Vault-path resolution failures and non-`decrypt_failed` `inspect` /
+  `open` errors surface on the non-mutating startup-error screen, with
+  `unsafe_permissions` rendered via `format_unsafe_permissions`.
 - `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo test --all`,
   `cargo deny check`, `cargo audit` clean.
