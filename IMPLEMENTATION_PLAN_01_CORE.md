@@ -103,16 +103,18 @@ Each step lands as its own commit. Tests come first.
   this point; binaries added in their own plans). Populate
   `[workspace.package]` with the shared metadata required by §11
   (`license = "AGPL-3.0-or-later"`, `edition`, `rust-version`,
-  `repository`, `description`) so binary crates added later can inherit
-  it via per-field Cargo inheritance (`description.workspace = true`,
+  `repository`, `homepage = "https://paladin.tamx.org"`, `description`)
+  so binary crates added later can inherit it via per-field Cargo
+  inheritance (`description.workspace = true`,
   `license.workspace = true`, `edition.workspace = true`,
-  `rust-version.workspace = true`, `repository.workspace = true`).
+  `rust-version.workspace = true`, `repository.workspace = true`,
+  `homepage.workspace = true`).
 - [ ] Create `rust-toolchain.toml` and `crates/paladin-core/Cargo.toml`;
   the crate manifest pulls each shared metadata field from the
   workspace via per-field Cargo inheritance (`description.workspace = true`
   and the matching lines for `license`, `edition`, `rust-version`,
-  `repository`). (MSRV decision: pin to current stable at scaffold
-  time and record it in CLAUDE.md.)
+  `repository`, and `homepage`). (MSRV decision: pin to current stable
+  at scaffold time and record it in CLAUDE.md.)
 - [ ] Extend `.gitignore` for the Rust workspace: ignore `/target` and any
   other build/test artifacts the repo will produce. The existing entries
   (`TODO.md`, `.claude/settings.local.json`, `.codex`) stay.
@@ -123,10 +125,10 @@ Each step lands as its own commit. Tests come first.
   `ProjectDirs::from("", "", "paladin")`, then appends `vault.bin` under the
   returned `data_dir()`.
 - [ ] Add SPDX header to every source file.
-- [ ] Wire `cargo deny` policy: deny known network-stack crates (`tokio`,
-  `reqwest`, `hyper`, etc.) and document manual review for new dependencies.
-  This supports the §8 "no network" rule; tests and code review cover runtime
-  behavior.
+- [ ] Wire `cargo deny` policy for dependency license / advisory checks and
+  deny known network-stack crates (`tokio`, `reqwest`, `hyper`, etc.).
+  Document manual review for new dependencies. This supports the §8
+  "no network" rule; tests and code review cover runtime behavior.
 - [ ] CI workflow stub: `fmt --check`, `clippy -- -D warnings`, `test --all`,
   `cargo deny check`, `cargo audit`.
 
@@ -312,9 +314,9 @@ Each step lands as its own commit. Tests come first.
   byte-identical.
 - [ ] Tests: `format_plaintext_storage_warning()` and
   `format_plaintext_export_warning()` return stable text — locked via
-  fixture so CLI text-mode `passphrase remove`, the TUI Passphrase /
-  Export modals, and the GUI `PassphraseDialog` / `InitDialog` /
-  `ExportDialog` plaintext paths render identical wording.
+  fixture so CLI text-mode plaintext `init` and `passphrase remove`,
+  the TUI Passphrase / Export modals, and the GUI `PassphraseDialog` /
+  `InitDialog` / `ExportDialog` plaintext paths render identical wording.
 - [ ] Implement `format_init_force_warning(&Path) -> String`,
   `format_plaintext_storage_warning() -> String`, and
   `format_plaintext_export_warning() -> String` per §4.7. Co-locate
@@ -505,6 +507,10 @@ Each step lands as its own commit. Tests come first.
   bytes (PNG, JPEG, GIF, BMP, WebP);
   non-matching inputs return `Unknown`. Detection inspects shape only and
   never rejects on emptiness.
+- [ ] Fixture hygiene: any committed third-party import fixture (for example
+  Aegis or authenticator-export samples) records source and license
+  compatibility per §14; prefer synthetic fixtures when they cover the same
+  parser behavior.
 - [ ] Tests for zero-account inputs rejected uniformly with
   `no_entries_to_import` at the importer call site: empty JSON `otpauth`
   array, blank / whitespace-only otpauth file, Aegis with empty
@@ -516,10 +522,12 @@ Each step lands as its own commit. Tests come first.
   rejected; field mapping from `name`, `issuer`, `info.secret`, `info.algo`,
   `info.digits`, `info.period`, and `info.counter`; TOTP period defaulting to
   30; HOTP counter required; missing required `name` or `info.secret`
-  rejected with `validation_error` + `source_index`),
+  rejected with `validation_error` + `source_index`; Aegis icon fields ignored
+  and `icon_hint` derived from issuer),
   `import::paladin` (encrypted bundle round-trip; plaintext-mode Paladin
   file → `unsupported_plaintext_vault`; wrong bundle passphrase →
-  `decrypt_failed`; source `VaultSettings` discarded),
+  `decrypt_failed`; stored `icon_hint` values preserved; source
+  `VaultSettings` discarded),
   `import::qr_image` and `import::qr_image_bytes` (decoded QRs that are not
   `otpauth://` URIs reject the batch with `validation_error` +
   `source_index`; raw RGBA byte buffers reject zero dimensions, checked
@@ -681,7 +689,7 @@ is a separate `#[test]` or table-driven case family.
   `format_plaintext_export_warning()`, and `format_validation_warning()`
   return locked fixture text so
   CLI / TUI / GUI render identical wording for the §5 init clobber gate,
-  the `passphrase remove` plaintext-storage advisory, and the
+  the plaintext `init` / `passphrase remove` storage advisory, and the
   unencrypted-export advisory / validation warnings respectively.
 - `account_match_key(&Account)` produces the canonical
   `"{issuer}:{label}"` key (empty issuer keeps the colon, casing
@@ -751,9 +759,10 @@ is a separate `#[test]` or table-driven case family.
   `unsupported_aegis_entry_type` with `source_index` and `entry_type` (batch
   rejected);
   missing required Aegis fields reject with `validation_error` +
-  `source_index`;
-  Paladin bundle round-trip with timestamps preserved and source
-  `VaultSettings` discarded; plaintext-mode Paladin file →
+  `source_index`; Aegis icon fields ignored and `icon_hint` derived from
+  issuer; non-Paladin `otpauth` / QR imports derive `icon_hint` from issuer;
+  Paladin bundle round-trip with timestamps and stored `icon_hint` values
+  preserved and source `VaultSettings` discarded; plaintext-mode Paladin file →
   `unsupported_plaintext_vault`; wrong bundle passphrase →
   `decrypt_failed`; QR image path and raw RGBA byte buffer with N codes;
   raw RGBA zero dimensions, multiplication overflow, and length mismatch;
@@ -799,11 +808,12 @@ the v0.1 / v0.2 packaging pipeline depends on the workspace shape it
 defines. Implementation owes:
 
 - **Cargo.toml metadata.** `crates/paladin-core/Cargo.toml` carries
-  `description`, `repository`, `license = "AGPL-3.0-or-later"`, and
+  `description`, `repository`, `homepage = "https://paladin.tamx.org"`,
+  `license = "AGPL-3.0-or-later"`, and
   pinned `rust-version`. Binary crates inherit consistent values via
   per-field Cargo inheritance (`description.workspace = true`,
-  `repository.workspace = true`, and so on) so `nfpm` and Flathub
-  manifests read one source.
+  `repository.workspace = true`, `homepage.workspace = true`, and so on)
+  so `nfpm` and Flathub manifests read one source.
 - **Deterministic, vendor-friendly deps.** The §9 dep list above
   resolves cleanly under `cargo vendor`; pinning `getrandom`
   (already required for the §4.4 CSPRNG contract) plus
