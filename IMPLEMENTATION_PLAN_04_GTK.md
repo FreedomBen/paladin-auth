@@ -74,6 +74,8 @@ crates/paladin-gtk/
     ├── otpauth_uri_paste_logic.rs
     ├── import_dialog_logic.rs
     ├── export_dialog_logic.rs
+    ├── passphrase_dialog_logic.rs
+    ├── settings_logic.rs
     ├── gtk_smoke.rs              # xvfb-run integration smoke test
     └── manual/MANUAL_TEST_PLAN.md
 ```
@@ -210,11 +212,13 @@ inclusion.
 - `RenameDialog` — single `AdwEntryRow` pre-populated with the
   account's current label, plus Save / Cancel buttons. Calls
   `Vault::rename(id, new_label, now)` inside `Vault::mutate_and_save`
-  with the trimmed input. Same label validation as Add (non-empty,
-  §4.1 length limits); a no-op rename (new label equal to current
-  after trimming) closes the dialog without calling `mutate_and_save`.
-  Issuer is **not** editable here — parity with the CLI's `rename`
-  taking only `<new-label>`; deeper edits use Remove + Add.
+  with the trimmed input regardless of whether the new label equals
+  the current one — `Vault::rename` always bumps `updated_at`, so the
+  GUI matches CLI / TUI semantics rather than silently short-circuiting
+  on a no-op rename. Same label validation as Add (non-empty,
+  §4.1 length limits). Issuer is **not** editable here — parity with
+  the CLI's `rename` taking only `<new-label>`; deeper edits use
+  Remove + Add.
   Pre-commit save failures (`save_not_committed`) restore the prior
   label in memory and keep the dialog open with the inline error;
   durability-unconfirmed failures
@@ -393,6 +397,15 @@ start from `ImportDialog`.
 - Startup/open errors are non-mutating. `StartupErrorComponent` offers only
   retry and quit; choosing a different vault path is out of scope for v0.2
   because the global `--vault` flag is the only path-selection contract.
+- **Argon2id parameters: defaults only.** Encrypted vault creation
+  (`InitDialog`), passphrase set/change (`PassphraseDialog`), and
+  encrypted-bundle export (`ExportDialog`) all build
+  `EncryptionOptions::new(secret)` with the §4.4 defaults
+  (m=64 MiB, t=3, p=1) — no GUI surface exposes
+  `--kdf-memory-mib` / `--kdf-time` / `--kdf-parallelism`. Power
+  users wanting custom KDF tuning use the CLI. Vaults the GUI opens
+  that were created with custom params still read those params from
+  the on-disk header per §4.4, so opening is unaffected.
 
 ## Effect errors
 
@@ -470,10 +483,15 @@ switches and spin rows, are reverted on pre-commit failure:
 `paladin-gtk` ships in `.deb`, `.rpm`, Flatpak, and AppImage in v0.2
 (§11.1). Implementation owes the release pipeline:
 
-- **Cargo.toml metadata.** `crates/paladin-gtk/Cargo.toml` sets
-  `description`, `homepage`, `repository`, `keywords`, `categories`,
-  and `license = "AGPL-3.0-or-later"` so `nfpm` produces correct
-  Debian / RPM control metadata without per-format duplication.
+- **Cargo.toml metadata.** `crates/paladin-gtk/Cargo.toml` inherits
+  `description`, `repository`, `license = "AGPL-3.0-or-later"`,
+  `edition`, and `rust-version` from `[workspace.package]` via
+  `package.workspace = true` (the workspace shape established by
+  IMPLEMENTATION_PLAN_01_CORE.md Phase A so `nfpm` and Flathub
+  manifests read one source). It additionally sets the
+  binary-specific `homepage`, `keywords`, and `categories` fields
+  locally so `nfpm` produces correct Debian / RPM control metadata
+  without per-format duplication.
 - **`.deb` / `.rpm` (via `nfpm`).** `packaging/deb/paladin-gtk.yaml`
   and `packaging/rpm/paladin-gtk.yaml` install
   `/usr/bin/paladin-gtk`, the desktop entry at
@@ -558,16 +576,26 @@ The GUI itself is hard to test without a display server. Tests are split:
   routes through `create_force` (with cancellation leaving the
   existing vault intact and zeroizing the pending `VaultInit`), and
   `unsafe_permissions` routing back to inline errors),
-  rename dialog logic (label validation, no-op short-circuit when the
-  trimmed input equals the current label, prior-label restore on
-  `save_not_committed`),
+  rename dialog logic (label validation, always-call-`mutate_and_save`
+  parity with CLI / TUI even when the new label equals the current one,
+  prior-label restore on `save_not_committed`),
   otpauth URI paste logic (parse success → shared duplicate-detection
   with manual mode, parse-error mapping for malformed URIs and
   unsupported types, duplicate "add anyway" consuming a pending
   `ValidatedAccount`, zeroize-on-cancel of the URI entry buffer),
   import format-selector routing + on-conflict policy threading +
   post-merge counts mapping, export overwrite-gate + encrypted
-  twice-confirm match logic + export writer error mapping.
+  twice-confirm match logic + export writer error mapping,
+  passphrase dialog logic (sub-flow gating against
+  `Vault::is_encrypted()`, `set` / `change` twice-confirm match,
+  `zero_length` and `confirmation_mismatch` rejections, `remove`
+  plaintext-storage warning gate, secret-buffer zeroize on
+  submit / cancel / close), settings logic (live-apply path through
+  `Vault::mutate_and_save`, spinner clamping at the §5 minimums
+  (`auto_lock.timeout_secs >= 30`, `clipboard.clear_secs >= 5`),
+  500 ms debounce of repeated spinner changes, and pre-commit
+  rollback that reverts the visible widget value on
+  `save_not_committed`).
 - **Smoke test** in CI under `xvfb-run`: app launches, opens a prepared
   plaintext vault, the list renders. Required for Milestone 7 sign-off.
 - **Manual test plan** (`tests/manual/MANUAL_TEST_PLAN.md`) per Milestone 7
@@ -588,8 +616,9 @@ The GUI itself is hard to test without a display server. Tests are split:
   plaintext (warning + confirmation, `0600` output) and encrypted
   Paladin bundle (twice-confirm, round-trip via Import); refused
   overwrite without confirmation; rename an account via the row
-  kebab menu (label persists on reopen, no-op rename closes silently,
-  pre-commit fault injection rolls the label back); settings persist;
+  kebab menu (label persists on reopen; renaming to the same label
+  still saves and bumps `updated_at`; pre-commit fault injection rolls
+  the label back); settings persist;
   passphrase set/change/remove; secret fields clear on cancel, submit,
   and auto-lock; icon theme resolution + fallback.
 
@@ -649,7 +678,11 @@ palette.
 
 **No `tokio`.** GTK's main loop is the executor; long work runs on
 `gio::spawn_blocking` with results delivered back to the main thread via
-Relm4 messages.
+Relm4 messages. This relies on `paladin_core::Vault` and
+`paladin_core::Store` being `Send` so they can move across thread
+boundaries during encrypted `open` / `create` / `create_force` and any
+save-bearing dialog operation; the core plan documents `Send` as part
+of their public contract.
 
 ## libadwaita usage
 

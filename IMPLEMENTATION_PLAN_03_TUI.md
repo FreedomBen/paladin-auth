@@ -112,6 +112,15 @@ Startup mirrors the CLI's vault inspection path:
    `decrypt_failed` inline; every other `open` error replaces the
    unlock screen with the startup-error screen.
 
+**Argon2id parameters: defaults only.** Encrypted-write paths reachable
+from the TUI — passphrase `set` / `change` inside the Passphrase modal
+and encrypted-bundle Export — build `EncryptionOptions::new(secret)` with
+the §4.4 defaults (m=64 MiB, t=3, p=1) and surface no UI for
+`--kdf-memory-mib` / `--kdf-time` / `--kdf-parallelism`. Power users
+wanting custom KDF tuning use the CLI. Vaults the TUI opens that were
+created with custom params still read those params from the on-disk
+header per §4.4, so opening is unaffected.
+
 ## Layout (per §6)
 
 ```

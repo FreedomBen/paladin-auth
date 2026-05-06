@@ -557,6 +557,13 @@ Each step lands as its own commit. Tests come first.
   workspace's dev-tooling lockfile) to capture the surface; commit the
   snapshot under `crates/paladin-core/public-api.txt` and gate it in CI
   so unintended surface changes fail the build.
+- [ ] Document and test that `Vault` and `Store` are `Send` so front
+  ends (notably `paladin-gtk`) can move them across thread boundaries
+  via `gio::spawn_blocking` for encrypted `open` / `create` /
+  `create_force` and any save-bearing operation. Static `Send` assertions
+  (`fn _assert_send<T: Send>() {}` calls in a test module) gate this in
+  CI so a future change introducing `Rc` or another non-`Send` type
+  fails the build instead of silently breaking the GTK plan.
 - [ ] Doc-comment every public item with a one-line summary and a link back to
   the relevant DESIGN.md section.
 - [ ] Add a `test-fault-injection` cargo feature (off by default) that
