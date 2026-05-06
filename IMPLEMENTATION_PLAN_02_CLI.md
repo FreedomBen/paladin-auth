@@ -16,7 +16,7 @@ binary.
 
 ```
 crates/paladin-cli/
-├── Cargo.toml            # inherits workspace metadata via per-field Cargo inheritance (description.workspace = true, repository.workspace = true, license.workspace = true, edition.workspace = true, rust-version.workspace = true); bin name = "paladin"
+├── Cargo.toml            # inherits workspace metadata via per-field Cargo inheritance (description, repository, homepage, license, edition, rust-version); bin name = "paladin"
 ├── src/
 │   ├── main.rs           # entry: parse, dispatch, exit code map
 │   ├── cli.rs            # clap derive: GlobalArgs + Command enum
@@ -83,24 +83,27 @@ unlocks a vault, before wrong-state checks, before any prompt, and before salt
 `invalid_state`, unlock passphrase prompts, and new-passphrase prompts.
 Out-of-range values return
 `kdf_params_out_of_bounds`; invalid integers or `mib * 1024` overflow return
-`validation_error` with the corresponding flag as `field`. For `init`,
-validation happens before the existence pre-check and before the first
-passphrase prompt. If the user then enters an empty passphrase to select
-plaintext storage, valid custom KDF values are accepted but unused.
+`validation_error` with `field` set to the hyphenated flag name without
+leading dashes (`"kdf-memory-mib"`, `"kdf-time"`, or
+`"kdf-parallelism"`). The `reason` is `"invalid_integer"` for parse
+failures and `"overflow"` for `mib * 1024` overflow. For `init`, validation
+happens before the existence pre-check and before the first passphrase prompt.
+If the user then enters an empty passphrase to select plaintext storage,
+valid custom KDF values are accepted but unused.
 
 ## Commands (per §5 table)
 
 | Command                                                | Notes |
 |--------------------------------------------------------|-------|
 | `init [--force]`                                       | The pre-check uses `paladin_core::inspect(path)` and maps outcomes as follows: `Ok(Missing)` is a clear path; `Ok(Plaintext)`, `Ok(Encrypted)`, `Err(invalid_header)`, and `Err(unsupported_format_version)` are existing files; any other `Err(...)` (notably `io_error` from probe failures such as permission-denied) propagates verbatim rather than being reinterpreted as `vault_exists`. Without `--force`, an existing-file pre-check surfaces `vault_exists` before prompting for the new-vault passphrase. With `--force`, prints `paladin_core::format_init_force_warning(path)` in text mode before any prompt whenever the pre-check sees an existing file (Paladin or not), then calls `paladin_core::create_force` (which performs the §5 staged clobber: stages the new vault, then rotates the old file verbatim to `.bak`, overwriting any existing backup). The verbatim rotation matches `create_force`'s file-type-agnostic semantics. Accepts and validates the KDF flags above before prompting; valid custom KDF values are used only when the new-vault passphrase is non-empty. If the first passphrase entry is empty, text mode prints `paladin_core::format_plaintext_storage_warning()` before creating the plaintext vault. |
-| `add` (interactive / `--uri` / manual flags / `--qr`)  | Exactly one input mode; combinations rejected at parse time. Under `--json`, interactive mode is rejected at parse time — one of `--uri`, `--qr`, or the manual flags must be supplied. |
+| `add` (interactive / `--uri` / manual flags / `--qr`)  | Exactly one input mode; combinations rejected at parse time. Under `--json`, interactive mode is rejected at parse time — one of `--uri`, `--qr`, or a complete manual flag set (`--label` and `--secret`, plus optional manual fields) must be supplied. |
 | `list`                                                 | Account metadata only — no codes. |
 | `show <query>`                                         | Advances HOTP; persists before printing. Matching queries print all matches when every match is TOTP; if any match is HOTP, requires a single match. |
 | `peek <query>`                                         | Never advances. Prints all matches unconditionally. |
 | `copy <query>`                                         | Advances HOTP; copies to clipboard via `arboard`. **No auto-clear.** Single-match required. |
 | `remove <query>`                                       | Confirmation prompt unless `--yes`. `--yes` is required under `--json` (no confirmation prompt). Single-match required. |
 | `rename <query> <new-label>`                           | Updates `updated_at`. Single-match required. |
-| `passphrase set | change | remove`                     | `set` and `change` accept the KDF flags above. `passphrase remove` in text mode always prints `paladin_core::format_plaintext_storage_warning()`, then confirms unless `--yes` is passed; `--yes` is required under `--json`. |
+| `passphrase set | change | remove`                     | `set` and `change` accept the KDF flags above. `passphrase remove` first verifies that the vault is encrypted. In text mode, it then prints `paladin_core::format_plaintext_storage_warning()` and confirms unless `--yes` is passed; `--yes` skips only the confirmation. `--yes` is required under `--json`. |
 | `import <path> [--format <fmt>] [--on-conflict <p>]`   | Auto-detects when `--format` is omitted; forced formats are `otpauth`/`aegis`/`paladin` (encrypted bundle only)/`qr`; conflict policies are `skip` (default)/`replace`/`append`. |
 | `export --plaintext <path> | --encrypted <path>`       | Refuses overwrite without `--force`; both modes write through `paladin_core::write_secret_file_atomic` and create output `0600`; plaintext export prints `paladin_core::format_plaintext_export_warning()` before writing unencrypted secrets; encrypted export accepts the KDF flags above. |
 | `settings get [key] | set <key> <value>`               | CLI persists `clipboard.clear_enabled` for TUI/GUI to honor but **ignores it at runtime** for `paladin copy`. `get [key]` filters text-mode display only. The `--json` shape is always the full nested `VaultSettings`: `get` returns the current settings, and `set` returns the post-mutation settings after `apply_setting_patch` commits. |
@@ -113,9 +116,10 @@ plaintext storage, valid custom KDF values are accepted but unused.
 1. **Interactive** — no account-definition flags; prompts the user once for
    the same fields as manual mode. Label and secret are required; issuer is
    optional. The secret prompt uses hidden terminal input. Algorithm, digits,
-   kind, period, counter, and icon-hint prompts offer the same defaults and
-   constraints as the manual flags. The icon-hint prompt accepts an empty
-   line to mean default-derive (`IconHintInput::Default`), the literal
+   kind, period, and counter prompts offer the same defaults and constraints
+   as the manual flags. The icon-hint prompt uses the same slug validation,
+   but reserves prompt-specific tokens: it accepts an empty line to mean
+   default-derive (`IconHintInput::Default`), the literal
    token `none` (case-insensitive, after Unicode-whitespace trim) to mean
    clear (`IconHintInput::Clear`), or a slug matching `[a-z0-9_-]+` up to
    64 bytes (`IconHintInput::Slug`); any other input is rejected by
@@ -147,8 +151,9 @@ Combining input modes rejects at parse time. Interactive prompts read from
 `/dev/tty` like passphrase prompts, never from stdin/stdout. If `/dev/tty` is
 unavailable for interactive account entry, exit with `io_error` and
 `operation: "account_prompt"`. Under `--json`, interactive mode is
-additionally rejected at parse time — one of `--uri`, `--qr`, or the manual
-flags must be supplied — mirroring the no-prompt rule on `remove --json` and
+additionally rejected at parse time — one of `--uri`, `--qr`, or a complete
+manual flag set (`--label` and `--secret`, plus optional manual fields) must
+be supplied — mirroring the no-prompt rule on `remove --json` and
 `passphrase remove --json`. Single-entry `add` rejects an existing
 `(secret, issuer, label)` collision with `duplicate_account` unless
 `--allow-duplicate` is passed. The collision check calls
@@ -199,7 +204,7 @@ current settings, and `set` returns the post-mutation settings after
 `apply_setting_patch` commits — and dotted key names never appear in JSON
 output. Boolean values are accepted only as lowercase `true` or `false`;
 numeric settings are accepted only as base-10 `u32` strings, then validated
-against the minimums above. `settings set` parses
+against the bounds above. `settings set` parses
 and validates key/value pairs through `paladin_core::parse_setting_patch` and
 applies the result through `Vault::apply_setting_patch` inside
 `Vault::mutate_and_save`; text-mode `settings get [key]` uses
@@ -245,15 +250,17 @@ alike, and is enforced before any value parsing.
   `invalid_passphrase` `reason: "zero_length"`.
 - Confirmation mismatch exits before mutation with `invalid_passphrase`
   `reason: "confirmation_mismatch"`.
-- After KDF validation succeeds for commands that accept KDF flags, wrong
-  starting states for `passphrase set`, `passphrase change`, and
-  `passphrase remove` surface `invalid_state` before any new-passphrase
-  prompt, destructive confirmation, or crypto material generation.
-- `passphrase remove` in text mode always prints the plaintext-storage
-  warning to stderr, then requires destructive confirmation unless `--yes`
-  is passed. Under `--json`, `--yes` is required at parse time because the
-  command must not block on a confirmation prompt, and the plaintext-storage
-  advisory is suppressed because the caller opted in with `--yes`.
+- After any applicable KDF validation succeeds and after the selected vault
+  mode has been inspected, wrong starting states for `passphrase set`,
+  `passphrase change`, and `passphrase remove` surface `invalid_state` before
+  the plaintext-storage warning, any new-passphrase prompt, destructive
+  confirmation, or crypto material generation.
+- `passphrase remove` in text mode prints the plaintext-storage warning to
+  stderr only after confirming an encrypted starting state, then requires
+  destructive confirmation unless `--yes` is passed. Under `--json`, `--yes`
+  is required at parse time because the command must not block on a
+  confirmation prompt, and the plaintext-storage advisory is suppressed
+  because the caller opted in with `--yes`.
 - If `/dev/tty` is unavailable for a passphrase prompt, exit with `io_error`
   and `operation: "passphrase_prompt"`.
 
@@ -419,8 +426,12 @@ Every vault-opening command except `init`:
    `invalid_header`, `unsupported_format_version`, `io_error`, or a future
    `unsafe_permissions` once `inspect` probes permissions), propagate it
    verbatim without prompting — the CLI never falls through to step 4 with
-   a known-broken file. If `Encrypted`, prompt once via `/dev/tty`. If
-   `Plaintext`, fall through without prompting.
+   a known-broken file. For passphrase transition commands, the inspected
+   mode is also the wrong-state gate: `passphrase set` on `Encrypted` and
+   `passphrase change` / `passphrase remove` on `Plaintext` return
+   `invalid_state` here, before any unlock prompt. Otherwise, if
+   `Encrypted`, prompt once via `/dev/tty`. If `Plaintext`, fall through
+   without prompting.
 4. `paladin_core::open(path, lock)` — propagates `unsafe_permissions`;
    text mode renders the human-readable `chmod` repair string via
    `paladin_core::format_unsafe_permissions(&err)` so the CLI, TUI, and GUI
@@ -570,8 +581,10 @@ where relevant, and exit code.
   (regardless of whether it is a recognized Paladin header) and skips the
   warning only when the path is clear. Custom KDF flags write the requested in-range
   Argon2 params for encrypted init; invalid / out-of-range values reject with
-  the §5 error kinds before the first passphrase prompt, and valid custom KDF
-  values are accepted but unused when an empty passphrase selects plaintext.
+  the §5 error kinds before the first passphrase prompt, including stable
+  `validation_error` `field` / `reason` values for invalid integer and
+  overflow cases, and valid custom KDF values are accepted but unused when an
+  empty passphrase selects plaintext.
   With the `paladin-cli/test-hooks` feature wired into the test build (see
   the passphrase bullet), `init --force` under `PALADIN_FAULT_INJECT=pre_commit`
   surfaces `save_not_committed` with `backup_path` set to `vault.bin.bak`
@@ -589,8 +602,8 @@ where relevant, and exit code.
   (`--period` on HOTP and `--counter` on TOTP reject with
   `validation_error`) and icon-hint validation (`--icon-hint` malformed
   rejects; `--icon-hint` plus `--no-icon-hint` rejects at parse time);
-  also `add --json` without an input flag (no `--uri` / `--qr` / manual
-  flags) rejects at parse time with a JSON error envelope.
+  also `add --json` without an input mode (no `--uri`, no `--qr`, and no
+  complete manual flag set) rejects at parse time with a JSON error envelope.
 - **`add --qr`** with synthetic QR image (multi-entry path uses fixed
   `--on-conflict=skip`).
 - **`add` duplicate behavior** — `Vault::find_duplicate(&validated)`
@@ -639,11 +652,13 @@ where relevant, and exit code.
   surfaces as `invalid_passphrase` with
   `reason: "confirmation_mismatch"`. Wrong starting states (`set` on
   encrypted, `change`/`remove` on plaintext) surface the stable
-  DESIGN §4.7 `invalid_state` operation/state pair before new-passphrase
-  prompts or mutation. `set` and `change` cover default and custom KDF
-  params plus invalid / out-of-range flag errors, including precedence cases
-  where invalid KDF input wins before vault unlock prompts and wrong-state
-  checks.
+  DESIGN §4.7 `invalid_state` operation/state pair before the
+  unlock prompt, plaintext-storage warning, new-passphrase prompts,
+  destructive confirmations, or mutation. `set` and `change` cover default
+  and custom KDF params plus invalid / out-of-range flag errors, including
+  stable `validation_error` `field` / `reason` values for invalid integer and
+  overflow cases, and precedence cases where invalid KDF input wins before
+  vault unlock prompts and wrong-state checks.
   Durability-unconfirmed is surfaced as `save_durability_unconfirmed` (with
   `committed: true`) when the post-commit fsync fails; pre-commit failure
   surfaces as `save_not_committed` with `committed: false`. Process-level CLI
@@ -670,12 +685,15 @@ where relevant, and exit code.
   out-of-range KDF flags before vault existence checks, vault unlock, or
   export crypto material is generated; injected writer failures surface
   `save_not_committed` before the final rename and
-  `save_durability_unconfirmed` after the final rename.
+  `save_durability_unconfirmed` after the final rename. Invalid integer and
+  overflow cases assert the same stable KDF `validation_error` `field` /
+  `reason` payloads as `init` and passphrase commands.
 - **`settings get/set`** covers default values, every dotted key through
   `paladin_core::parse_setting_key` / `parse_setting_patch`, bool/u32 value
-  parsing, minimum-value validation, text-mode filtering, full
+  parsing, range validation at both bounds, text-mode filtering, full
   `VaultSettings` JSON output for both `get` (current settings) and `set`
-  (post-mutation settings), and unknown-dotted-key rejection with
+  (post-mutation settings), and
+  unknown-dotted-key rejection with
   `validation_error` (`field: "key"`, `reason: "unknown_setting"`) for both
   `settings get <key>` and `settings set <key> <value>`.
 - **`--json` schema snapshots** for every command success, help/version
@@ -716,14 +734,14 @@ The CLI ships in `.deb`, `.rpm`, Flatpak, and AppImage in v0.1
   argument tree. The packaging configs ship it gzipped at
   `/usr/share/man/man1/paladin.1.gz` per §11.3.
 - **Cargo.toml metadata.** `crates/paladin-cli/Cargo.toml` inherits
-  `description`, `repository`, `license` (set to
+  `description`, `repository`, `homepage`, `license` (set to
   `"AGPL-3.0-or-later"` at the workspace), `edition`, and
   `rust-version` from the workspace's `[workspace.package]` table
   (defined per IMPLEMENTATION_PLAN_01_CORE.md Phase A) via per-field
   Cargo inheritance (`description.workspace = true`,
-  `repository.workspace = true`, and so on) so `nfpm` and Flathub
-  manifests read one source. It additionally sets the binary-specific
-  `homepage`, `keywords`, and `categories` fields locally. The
+  `repository.workspace = true`, `homepage.workspace = true`, and so on)
+  so `nfpm` and Flathub manifests read one source. It additionally sets
+  the binary-specific `keywords` and `categories` fields locally. The
   packaging pipeline sources these values from Cargo metadata when
   building `.deb` / `.rpm` so the per-format configs in
   `packaging/deb/paladin.yaml` and `packaging/rpm/paladin.yaml`
