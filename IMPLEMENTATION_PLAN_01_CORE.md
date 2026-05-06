@@ -30,7 +30,7 @@ crates/paladin-core/
 │   ├── lib.rs            # re-exports public surface from §4.7
 │   ├── error.rs          # PaladinError + Result alias; carries core-returnable §5 error_kind values verbatim so the CLI can emit them under --json without renaming or mapping
 │   ├── domain/
-│   │   ├── mod.rs        # Account, AccountId, AccountSummary, AccountKindSummary, Algorithm, OtpKind, Code
+│   │   ├── mod.rs        # Public: Account, AccountId, AccountSummary, AccountKindSummary, Algorithm, Code. pub(crate): OtpKind.
 │   │   ├── secret.rs     # Secret newtype with Zeroize + Drop
 │   │   ├── validation.rs # Shared Account validation (labels, secrets, periods…)
 │   │   ├── view.rs       # Account::summary(), Vault::summaries(); non-secret account projection for all front ends
@@ -76,6 +76,7 @@ crates/paladin-core/
     ├── rfc_vectors.rs    # RFC 6238 App. B, RFC 4226 App. D
     ├── otpauth_roundtrip.rs
     ├── vault_roundtrip.rs   # both modes
+    ├── vault_lifecycle.rs   # inspect, default_vault_path, create_force, mutate_and_save, is_encrypted
     ├── tamper.rs            # AAD-bound header byte-flip matrix
     ├── perms.rs             # 0600/0700 + unsafe_permissions rejection
     ├── shared_text.rs       # format_init_force_warning / format_plaintext_storage_warning / format_plaintext_export_warning / format_validation_warning text fixtures
@@ -98,11 +99,16 @@ Each step lands as its own commit. Tests come first.
 
 ### Phase A — Scaffolding (Milestone 0)
 
-- [ ] Create virtual workspace `Cargo.toml` (members: `paladin-core` only at this
-  point; binaries added in their own plans).
-- [ ] Create `rust-toolchain.toml` and `crates/paladin-core/Cargo.toml` with
-  `license`, `rust-version` (MSRV decision: pin to current stable at scaffold
-  time and record it in CLAUDE.md).
+- [ ] Create virtual workspace `Cargo.toml` (members: `paladin-core` only at
+  this point; binaries added in their own plans). Populate
+  `[workspace.package]` with the shared metadata required by §11
+  (`license = "AGPL-3.0-or-later"`, `edition`, `rust-version`,
+  `repository`, `description`) so binary crates added later can inherit
+  via `package.workspace = true`.
+- [ ] Create `rust-toolchain.toml` and `crates/paladin-core/Cargo.toml`;
+  the crate manifest sets `package.workspace = true` for the inherited
+  metadata fields. (MSRV decision: pin to current stable at scaffold
+  time and record it in CLAUDE.md.)
 - [ ] Extend `.gitignore` for the Rust workspace: ignore `/target` and any
   other build/test artifacts the repo will produce. The existing entries
   (`TODO.md`, `.claude/settings.local.json`, `.codex`) stay.
@@ -187,7 +193,9 @@ Each step lands as its own commit. Tests come first.
 
 ### Phase D — `otpauth://` parser/emitter (Milestone 1, part 3)
 
-- [ ] Tests: scheme/type case-insensitivity; required label trimming +
+- [ ] Tests: scheme/type case-insensitivity; non-`otpauth://` schemes
+  (e.g. `https://`, `mailto:`, `paladin://`) rejected with
+  `validation_error` before any further parsing; required label trimming +
   percent-decoding; first-`:` issuer split + issuer-rule normalization;
   base32 RFC 4648 with optional `=` padding; algorithm/digits/period defaults
   and ranges; ASCII whitespace inside `secret` rejected; HOTP `counter`
@@ -217,7 +225,9 @@ Each step lands as its own commit. Tests come first.
   `backup_file`), `actual_mode`, and `expected_mode` (mode strings as
   four-digit octal, e.g. `"0644"`).
 - [ ] Tests: leftover `vault.bin.tmp` / `vault.bin.bak.tmp` files from a prior
-  partial save are unlinked by the next `open`; non-crash save errors unlink
+  partial save are unlinked by the next `open` (`vault.bin.bak.tmp` only
+  arises from passphrase set/change transitions where the backup is
+  rewritten under the new key — see Phase H); non-crash save errors unlink
   remaining temp files before returning; completed renames are not rolled back.
 - [ ] Tests: `format_unsafe_permissions(&err)` returns `Some(text)` for
   `unsafe_permissions` errors and `None` for any other kind. The text
@@ -321,11 +331,12 @@ Each step lands as its own commit. Tests come first.
   without constructing a vault.
 - [ ] Tests: Argon2 parameter bounds rejected before any KDF work (`m_kib`
   8192–1048576, `t` 1–10, `p` 1–4).
-- [ ] Tests: `Argon2Params::default()` yields m=65536 KiB, t=3, p=1;
-  `Argon2Params::validate` accepts in-range custom values and rejects
-  out-of-range values with `kdf_params_out_of_bounds`; `EncryptionOptions`
-  defaults to the default params and rejects zero-length passphrases on
-  encrypted write paths with `invalid_passphrase`.
+- [ ] Tests: `Argon2Params::default()` yields `m_kib = 65536` (64 MiB),
+  `t = 3`, `p = 1`; `Argon2Params::validate` accepts in-range custom
+  values and rejects out-of-range values with
+  `kdf_params_out_of_bounds`; `EncryptionOptions` defaults to the default
+  params and rejects zero-length passphrases on encrypted write paths
+  with `invalid_passphrase`.
 - [ ] Tests: regular encrypted saves preserve the in-header Argon2 params
   and `salt`, and use a freshly generated random `nonce` per save (drawn
   from the OS CSPRNG).
@@ -345,28 +356,32 @@ Each step lands as its own commit. Tests come first.
   follow the same precondition, parent-permission, staged-clobber,
   commit-point, and durability-error semantics as plaintext storage.
 - [ ] Implement `crypto::argon2` with public `Argon2Params`,
-  `EncryptionOptions`, and `VaultInit` support (defaults m=64 MiB, t=3, p=1
-  with the §4.4 read/write bounds: `m_kib` 8192–1048576, `t` 1–10, `p` 1–4),
-  `crypto::aead` (XChaCha20-Poly1305 with header bytes serialized as AAD),
-  encrypted `Store` save/open/create/create_force paths, and the cached-key
-  data model on `Vault`.
+  `EncryptionOptions`, and `VaultInit` support (defaults `m_kib = 65536`
+  (64 MiB), `t = 3`, `p = 1`; §4.4 read/write bounds `m_kib` 8192–1048576,
+  `t` 1–10, `p` 1–4), `crypto::aead` (XChaCha20-Poly1305 with header bytes
+  serialized as AAD), encrypted `Store` save/open/create/create_force
+  paths, and the cached-key data model on `Vault`.
 
 ### Phase G — Vault behavior + settings (Milestone 1, part 6)
 
 - [ ] Tests: `add` / `remove` / `iter` (insertion order) / `rename` semantics;
-  `rename` updates `updated_at`; `find_duplicate` detects exact
-  `(secret, issuer, label)` collisions and ignores non-colliding entries;
-  `get` returns accounts by `AccountId`; `summaries` returns insertion-order
-  `AccountSummary` values with no secret bytes; `VaultSettings` defaults are
-  off with `auto_lock.timeout_secs = 300` and `clipboard.clear_secs = 20`;
-  settings setters reject `auto_lock.timeout_secs < 30` and
-  `clipboard.clear_secs < 5`.
+  `rename` updates `updated_at`; `find_duplicate` returns
+  `Option<&Account>` for exact `(secret, issuer, label)` collisions and
+  returns `None` for non-colliding entries; `get` returns accounts by
+  `AccountId`; `summaries` returns insertion-order `AccountSummary` values
+  with no secret bytes; `Vault::settings` returns the live `&VaultSettings`;
+  `VaultSettings` defaults are off with `auto_lock.timeout_secs = 300`
+  and `clipboard.clear_secs = 20`; settings setters reject
+  `auto_lock.timeout_secs < 30` and `clipboard.clear_secs < 5`.
 - [ ] Tests: `hotp_advance` rollback — inject a `Store` save error before
   primary commit point and assert in-memory counter and `updated_at` revert
   to pre-call values; durability-unconfirmed surfaced as a typed error after
   commit point.
 - [ ] Tests: `hotp_advance` at `u64::MAX` returns `counter_overflow` before
   mutating memory or attempting a save.
+- [ ] Tests: `Vault::hotp_peek` after a committed `Vault::hotp_advance`
+  returns the code for the new (post-advance) counter; `Vault::totp_code`
+  is read-only and never mutates the vault or touches the `Store`.
 - [ ] Tests: `Vault::mutate_and_save` captures an internal snapshot, restores
   it when the mutation closure returns an error, restores it when
   `Vault::save` returns `save_not_committed`, leaves the mutated state in
@@ -404,18 +419,20 @@ Each step lands as its own commit. Tests come first.
   32-character hex prefix when needed, and returns `None` for an ID not
   present in the vault.
 - [ ] Tests: `parse_setting_key(key)` accepts exactly the four §5 dotted
-  keys and rejects unknown keys with `validation_error`; `parse_setting_patch(key, value)`
+  keys (`auto_lock.enabled`, `auto_lock.timeout_secs`,
+  `clipboard.clear_enabled`, `clipboard.clear_secs`) and rejects unknown
+  keys with `validation_error`; `parse_setting_patch(key, value)`
   reuses that parser, accepts lowercase bool values (`true` / `false`) for
-  toggle keys and base-10 `u32` values for timeout keys, and rejects malformed
-  / below-minimum values with `validation_error`. `Vault::apply_setting_patch`
-  routes through the same typed setters so direct setters and CLI-style
-  dotted patches cannot diverge.
+  the two toggle keys and base-10 `u32` values for the two timeout keys,
+  and rejects malformed / below-minimum values with `validation_error`.
+  `Vault::apply_setting_patch` routes through the same typed setters so
+  direct setters and CLI-style dotted patches cannot diverge.
 - [ ] Tests: `HOTP_REVEAL_SECS == 120`, locked as the shared TUI / GUI reveal
   duration so both front ends consume the same constant.
 - [ ] Implement `Vault` operations, `Vault::save`, `Vault::get`,
   `Vault::summaries`, `Vault::find_duplicate`, `Vault::import_accounts`,
-  `Vault::is_encrypted`, `VaultSettings` setters, `SettingKey`,
-  `SettingPatch`, `parse_setting_key`, `parse_setting_patch`,
+  `Vault::is_encrypted`, `Vault::settings`, `VaultSettings` setters,
+  `SettingKey`, `SettingPatch`, `parse_setting_key`, `parse_setting_patch`,
   `Vault::apply_setting_patch`, and
   `Vault::mutate_and_save` per §4.7. Implement `account_match_key`,
   `account_matches_search`, `parse_account_query`,
@@ -459,8 +476,9 @@ Each step lands as its own commit. Tests come first.
   never rejects on emptiness.
 - [ ] Tests for zero-account inputs rejected uniformly with
   `no_entries_to_import` at the importer call site: empty JSON `otpauth`
-  array, blank otpauth file, Aegis with empty `entries`, image with no
-  decoded QRs.
+  array, blank / whitespace-only otpauth file, Aegis with empty
+  `entries`, Paladin bundle that decodes to zero accounts, and image with
+  no decoded QRs.
 - [ ] Tests for `import::otpauth`, `import::aegis_plaintext` (encrypted
   Aegis → typed `unsupported_encrypted_aegis`; non-`totp`/`hotp` entry →
   `unsupported_aegis_entry_type` with `source_index` and `entry_type`, batch
@@ -480,11 +498,11 @@ Each step lands as its own commit. Tests come first.
   import_time`; timestamps preserved for Paladin bundle imports and fresh IDs
   assigned for inserted/appended rows; replacements keep destination ID and
   `created_at` while setting `updated_at = import_time`.
-- [ ] Tests for merge policy `Skip` / `Replace` / `Append` against running
-  state, with collisions defined by the exact `(secret, issuer, label)` triple,
-  including HOTP-to-HOTP `Replace` preserving `Hotp.counter` and cross-kind
-  replace swapping the whole `kind`; `Replace` preserves the destination `id`
-  and `created_at`.
+- [ ] Tests for `ImportConflict` policies (`Skip` / `Replace` / `Append`)
+  against running state, with collisions defined by the exact
+  `(secret, issuer, label)` triple, including HOTP-to-HOTP `Replace`
+  preserving `Hotp.counter` and cross-kind replace swapping the whole
+  `kind`; `Replace` preserves the destination `id` and `created_at`.
 - [ ] Tests for `Vault::import_accounts` / `ImportReport`: imported, skipped,
   replaced, and appended counts match the merge outcome; `accounts` lists IDs
   for imported / replaced / appended rows only, never skipped rows; warnings
@@ -535,8 +553,10 @@ Each step lands as its own commit. Tests come first.
 
 - [ ] Lock default `lib.rs` re-exports to exactly the §4.7 surface; anything
   else is `pub(crate)`.
-- [ ] Run `cargo public-api` (or equivalent) to capture the surface; commit
-  the snapshot.
+- [ ] Run `cargo public-api` (the `cargo-public-api` crate, pinned in the
+  workspace's dev-tooling lockfile) to capture the surface; commit the
+  snapshot under `crates/paladin-core/public-api.txt` and gate it in CI
+  so unintended surface changes fail the build.
 - [ ] Doc-comment every public item with a one-line summary and a link back to
   the relevant DESIGN.md section.
 - [ ] Add a `test-fault-injection` cargo feature (off by default) that
@@ -600,10 +620,11 @@ is a separate `#[test]` or table-driven case family.
 - Wrong encrypted-vault passphrase returns `decrypt_failed` without
   returning a vault.
 - Argon2 param bounds — out-of-range `m_kib`, `t`, or `p` rejected pre-KDF.
-- Argon2 custom params — default m=65536 KiB / t=3 / p=1, in-range custom
-  params accepted for encrypted create / create_force / passphrase set/change
-  / encrypted export, and out-of-range custom params rejected before
-  prompting for or accepting a new encrypted write.
+- Argon2 custom params — default `m_kib = 65536` (64 MiB) / `t = 3` /
+  `p = 1`, in-range custom params accepted for encrypted create /
+  create_force / passphrase set/change / encrypted export, and
+  out-of-range custom params rejected before prompting for or accepting a
+  new encrypted write.
 - Encrypted save invariants — size cap pre-KDF/AEAD, Argon2 params and salt
   preserved on regular saves, fresh nonce per save, ciphertext/tag tamper
   rejection.
@@ -647,9 +668,12 @@ is a separate `#[test]` or table-driven case family.
   those semantics.
 - Vault behavior and settings: `add` / `remove` / `iter` insertion order /
   `get` / `summaries` / `rename` timestamp update; `find_duplicate` exact
-  collision behavior; settings defaults, exact timeout minimums,
-  `parse_setting_key`, `parse_setting_patch`, and
-  `Vault::apply_setting_patch`.
+  collision behavior returning `Option<&Account>`; `Vault::settings`
+  getter returning the live `&VaultSettings`; settings defaults, exact
+  timeout minimums, `parse_setting_key` (the four §5 keys
+  `auto_lock.enabled`, `auto_lock.timeout_secs`,
+  `clipboard.clear_enabled`, `clipboard.clear_secs`),
+  `parse_setting_patch`, and `Vault::apply_setting_patch`.
 - `Vault::mutate_and_save`: rollback on closure error and
   `save_not_committed`, durability-unconfirmed leaves mutated state, and
   success returns the closure value; the rollback snapshot is zeroized.
@@ -690,11 +714,11 @@ is a separate `#[test]` or table-driven case family.
   URI-list trimming and blank-line handling; non-Paladin imports use
   `import_time`; zero-account inputs rejected uniformly with
   `no_entries_to_import`.
-- Merge policy: `Skip` / `Replace` / `Append` including running-state
-  collisions on the `(secret, issuer, label)` triple, destination `id` /
-  `created_at` preservation on replace, HOTP counter preservation, cross-kind
-  replacement, `ImportReport` counts / account IDs, batch atomicity, and
-  warnings retained even for skipped rows.
+- `ImportConflict` policies (`Skip` / `Replace` / `Append`) including
+  running-state collisions on the `(secret, issuer, label)` triple,
+  destination `id` / `created_at` preservation on replace, HOTP counter
+  preservation, cross-kind replacement, `ImportReport` counts /
+  account IDs, batch atomicity, and warnings retained even for skipped rows.
 - Exporters: `otpauth_list(&Vault)` emits an infallible JSON array of URIs;
   `encrypted(&Vault, EncryptionOptions)` wraps default settings, writes
   default or custom Argon2 params, round-trips through the importer, and
