@@ -141,9 +141,11 @@ Each step lands as its own commit. Tests come first.
   full vault contents), `Secret` newtype with `Zeroize + Drop`, `Algorithm`,
   `OtpKind`, `Code`, `AccountKindSummary`, `AccountSummary`,
   `ValidationWarning`, `ValidatedAccount`,
-  `AccountKindInput`, `AccountInput` (including the kind selector plus
+  `AccountKindInput`, `IconHintInput`, `AccountInput` (including the
+  kind selector plus
   TOTP-only `period_secs` and HOTP-only `counter`, both optional so
-  defaults are applied by `validate_manual`), and the public
+  defaults are applied by `validate_manual`, and the icon-hint tri-state
+  `Default` / `Clear` / `Slug`), and the public
   `validate_manual(input, now)` entry point that routes manual
   flag-driven input through the same validation table as `parse_otpauth`
   and the importers.
@@ -171,8 +173,9 @@ Each step lands as its own commit. Tests come first.
   `time_range`, `save_not_committed`, `save_durability_unconfirmed`, and
   `io_error`. Each included kind carries the stable extra fields from §5
   exactly, including field names, optionality, value formats,
-  `unsupported_import_format.format` semantics, and the stable
-  core-owned `io_error.operation` strings. The
+  `unsupported_import_format.format` semantics, stable core-owned
+  `invalid_state.operation` / `state` pairs, and the stable core-owned
+  `io_error.operation` strings. The
   presentation-only kinds (`clipboard_write_failed`, `no_match`,
   `multiple_matches`, `duplicate_account`) are never returned from core.
   `duplicate_account` is emitted by front ends after they call
@@ -387,6 +390,11 @@ Each step lands as its own commit. Tests come first.
 - [ ] Tests: `Vault::hotp_peek` after a committed `Vault::hotp_advance`
   returns the code for the new (post-advance) counter; `Vault::totp_code`
   is read-only and never mutates the vault or touches the `Store`.
+- [ ] Tests: account-ID method failures return stable `invalid_state`
+  operation/state pairs from DESIGN §4.7: `rename` / `totp_code` /
+  `hotp_peek` / `hotp_advance` use `account_not_found` for missing IDs,
+  `totp_code` uses `not_totp` for HOTP accounts, and `hotp_peek` /
+  `hotp_advance` use `not_hotp` for TOTP accounts.
 - [ ] Tests: `Vault::mutate_and_save` captures an internal snapshot, restores
   it when the mutation closure returns an error, restores it when
   `Vault::save` returns `save_not_committed`, leaves the mutated state in
@@ -463,11 +471,14 @@ Each step lands as its own commit. Tests come first.
   encrypted, no cache for plaintext); successful commit (or
   durability-unconfirmed) replaces the cache to match the new on-disk
   mode and zeroizes the old key bytes and old passphrase.
-- [ ] Tests: wrong-starting-state calls return `invalid_state` before
-  generating new crypto material; `set_passphrase` and `change_passphrase`
-  reject zero-length passphrases with `invalid_passphrase` and
-  `reason: "zero_length"`; non-empty whitespace-only and Unicode passphrases
-  are treated as bytes and are not trimmed or normalized.
+- [ ] Tests: wrong-starting-state calls return the stable DESIGN §4.7
+  `invalid_state` operation/state pairs (`set_passphrase` /
+  `already_encrypted`, `change_passphrase` / `not_encrypted`,
+  `remove_passphrase` / `not_encrypted`) before generating new crypto
+  material; `set_passphrase` and `change_passphrase` reject zero-length
+  passphrases with `invalid_passphrase` and `reason: "zero_length"`;
+  non-empty whitespace-only and Unicode passphrases are treated as bytes
+  and are not trimmed or normalized.
 - [ ] Implement `set_passphrase(store, options)`,
   `change_passphrase(store, options)`, and `remove_passphrase(store)` on
   `Vault` going through the §4.3 atomic-write + backup pipeline.
@@ -614,7 +625,9 @@ is a separate `#[test]` or table-driven case family.
 - Manual `AccountInput` validation — `AccountKindInput` TOTP/HOTP
   selection, TOTP period defaults / overrides, HOTP counter defaults /
   overrides, manual Base32 secret decoding / ASCII-whitespace rejection, and
-  rejection of period-on-HOTP or counter-on-TOTP.
+  rejection of period-on-HOTP or counter-on-TOTP; `IconHintInput::Default`
+  derives from issuer, `IconHintInput::Clear` stores `None`, and
+  `IconHintInput::Slug` validates and stores the supplied slug.
 - Short-secret warning surfaces in `ValidatedAccount.warnings`.
 - `otpauth://` round-trip — TOTP and HOTP, with and without issuer prefix,
   case-insensitive scheme/algo/type, base32 padding/casing, duplicate known
@@ -699,6 +712,8 @@ is a separate `#[test]` or table-driven case family.
 - HOTP `hotp_advance` rollback, durability-unconfirmed post-commit behavior,
   and `counter_overflow` at `u64::MAX` with the §5 `account` summary before
   mutation or save; invalid supplied timestamps reject before mutation or save.
+- Account-ID method failures return stable `invalid_state` operation/state
+  pairs for missing IDs and wrong OTP kind, matching DESIGN §4.7.
 - HOTP `hotp_peek` after a committed `hotp_advance` returns the code for
   the new (post-advance) counter.
 - `HOTP_REVEAL_SECS == 120` exported as the shared TUI / GUI reveal-window
@@ -707,9 +722,10 @@ is a separate `#[test]` or table-driven case family.
   durability-unconfirmed post-commit; default/custom Argon2 params for
   encrypted targets; fresh salt/nonce behavior; backup rewritten under the
   target mode/key; cache lifecycle and old-material zeroization;
-  wrong-starting-state `invalid_state`; zero-length new passphrase rejection
-  with `reason: "zero_length"`; no trimming or Unicode normalization of
-  non-empty passphrase bytes.
+  wrong-starting-state `invalid_state` operation/state pairs matching
+  DESIGN §4.7; zero-length new passphrase rejection with
+  `reason: "zero_length"`; no trimming or Unicode normalization of non-empty
+  passphrase bytes.
 - `import::detect`: fixed §4.6 detection order, Paladin magic, QR image
   magic (PNG, JPEG, GIF, BMP, WebP), Aegis plaintext/encrypted shapes,
   single/list/JSON-array `otpauth://`, empty otpauth JSON array shape, and
@@ -786,9 +802,11 @@ defines. Implementation owes:
 - **Stable `error_kind` taxonomy.** `PaladinError` exposes the
   core-returnable §5 kinds verbatim (no internal renaming) so the
   `paladin` CLI can serialize them under `--json` and the strict-output
-  rule in §5 holds without any mapping layer. Add a `serde::Serialize` impl
-  guarded by an `error-serde` cargo feature, off by default, that the
-  CLI opts into; `paladin-core` itself has no JSON output paths. The
+  rule in §5 holds without any mapping layer. The stable
+  `invalid_state.operation` / `state` pairs from DESIGN §4.7 are part of
+  that contract. Add a `serde::Serialize` impl guarded by an `error-serde`
+  cargo feature, off by default, that the CLI opts into; `paladin-core`
+  itself has no JSON output paths. The
   same feature flag also gates `serde::Serialize` for the public
   non-secret view/report types referenced from error variants and §5
   success envelopes (`AccountSummary`, `AccountKindSummary`, `AccountId`,

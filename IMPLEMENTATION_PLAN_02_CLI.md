@@ -112,10 +112,12 @@ accepted but unused.
 3. **Manual flags** — `--label` and `--secret` required; optional
    `--issuer`, `--algorithm sha1|sha256|sha512`, `--digits 6|7|8`,
    `--kind totp|hotp`, `--period <secs>` (TOTP-only), `--counter <u64>`
-   (HOTP-only, default 0), `--icon-hint <slug>` (when omitted, derived
-   from issuer per §4.1). Defaults: TOTP, SHA1, 6, 30s. Manual fields
-   use §4.1 validation: `--period` is 1..=300 seconds, `--icon-hint`
-   matches `[a-z0-9_-]+` up to 64 bytes, and `--secret` is Base32 text.
+   (HOTP-only, default 0), and optionally one of `--icon-hint <slug>` or
+   `--no-icon-hint` (when both are omitted, derived from issuer per §4.1).
+   Defaults: TOTP, SHA1, 6, 30s. Manual fields use §4.1 validation:
+   `--period` is 1..=300 seconds, `--icon-hint` matches `[a-z0-9_-]+`
+   up to 64 bytes, `--icon-hint` and `--no-icon-hint` are mutually
+   exclusive, and `--secret` is Base32 text.
    `--kind` is **not** inferred from `--period` or `--counter`: passing
    `--counter` without `--kind hotp` defaults to TOTP and rejects with
    `validation_error`. Passing `--period` without `--kind` is valid because
@@ -451,7 +453,10 @@ staged clobber sequence) without opening or decrypting the old file.
   an `AccountInput` from the parsed flags and routes it through
   `paladin_core::validate_manual(input, now)` so §4.1 validation
   (label / issuer / secret / digits / period / counter / icon-hint)
-  lives in core; `--uri` routes through `paladin_core::parse_otpauth`;
+  lives in core; omitted icon flags map to `IconHintInput::Default`,
+  `--icon-hint <slug>` maps to `IconHintInput::Slug`, and
+  `--no-icon-hint` maps to `IconHintInput::Clear`; `--uri` routes
+  through `paladin_core::parse_otpauth`;
   `--qr` routes through `paladin_core::import::from_file` with a fixed
   `ImportConflict::Skip` policy. The CLI never re-implements §4.1
   validation.
@@ -505,9 +510,10 @@ where relevant, and exit code.
 - **`add` mode-combination rejection** (e.g. `--uri` + `--qr`,
   `--qr` + `--allow-duplicate`) plus manual kind-specific validation
   (`--period` on HOTP and `--counter` on TOTP reject with
-  `validation_error`); also `add --json` without an input flag (no
-  `--uri` / `--qr` / manual flags) rejects at parse time with a JSON
-  error envelope.
+  `validation_error`) and icon-hint validation (`--icon-hint` malformed
+  rejects; `--icon-hint` plus `--no-icon-hint` rejects at parse time);
+  also `add --json` without an input flag (no `--uri` / `--qr` / manual
+  flags) rejects at parse time with a JSON error envelope.
 - **`add --qr`** with synthetic QR image (multi-entry path uses fixed
   `--on-conflict=skip`).
 - **`add` duplicate behavior** — `Vault::find_duplicate(&validated)`
@@ -548,9 +554,10 @@ where relevant, and exit code.
   `io_error` with `operation: "passphrase_prompt"`; confirmation mismatch
   surfaces as `invalid_passphrase` with
   `reason: "confirmation_mismatch"`. Wrong starting states (`set` on
-  encrypted, `change`/`remove` on plaintext) surface `invalid_state`
-  before new-passphrase prompts or mutation. `set` and `change` cover default
-  and custom KDF params plus invalid / out-of-range flag errors.
+  encrypted, `change`/`remove` on plaintext) surface the stable
+  DESIGN §4.7 `invalid_state` operation/state pair before new-passphrase
+  prompts or mutation. `set` and `change` cover default and custom KDF
+  params plus invalid / out-of-range flag errors.
   Durability-unconfirmed is surfaced as `save_durability_unconfirmed` (with
   `committed: true`) when the post-commit fsync fails; pre-commit failure
   surfaces as `save_not_committed` with `committed: false`. Process-level CLI

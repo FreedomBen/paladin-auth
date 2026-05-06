@@ -69,17 +69,20 @@ file header — so settings can't be tampered with on an encrypted vault.
 
 `Account.icon_hint` is an `Option<String>` icon-name slug. The slug
 matches `[a-z0-9_-]+` (freedesktop icon-naming-spec convention) and is
-at most 64 bytes. On `add` we default it from the issuer, when present, by
-lowercasing and replacing each run of disallowed characters with a
+at most 64 bytes. Manual account construction uses the tri-state
+`IconHintInput`: `Default` derives a slug from the issuer, when present,
+by lowercasing and replacing each run of disallowed characters with a
 single `-`, then trimming leading/trailing `-` (e.g. `"GitHub"` →
 `"github"`, `"Google Cloud"` → `"google-cloud"`); if the result is
 empty, exceeds 64 bytes, or if the issuer is `None`, the field stays
-`None`. The user can
-override or clear it. The slug is a hint, not a guarantee: GUIs resolve
-it (§7); the CLI and TUI ignore the field. We deliberately do not store
-icon bytes — that would
-inflate the vault and complicate the bincode payload without offering
-meaningful benefit over icon-theme lookup.
+`None`. `Slug(value)` validates and stores the supplied slug. `Clear`
+stores `None` even when the issuer could have produced a default. Importers
+that do not carry a Paladin-native `icon_hint` use the defaulting rule;
+Paladin bundle imports preserve the stored value. The slug is a hint, not
+a guarantee: GUIs resolve it (§7); the CLI and TUI ignore the field. We
+deliberately do not store icon bytes — that would inflate the vault and
+complicate the bincode payload without offering meaningful benefit over
+icon-theme lookup.
 
 `Account` fields are private; manual entry, URI parsing, importers, and any
 constructors all go through the same validation path:
@@ -542,6 +545,7 @@ pub enum ImportConflict { Skip, Replace, Append }
 pub struct ImportWarning { pub source_index: usize, pub warning: ValidationWarning }
 pub enum AccountKindInput { Totp, Hotp }
 pub enum AccountKindSummary { Totp, Hotp }
+pub enum IconHintInput { Default, Clear, Slug(String) }
 pub const HOTP_REVEAL_SECS: u64 = 120;
 
 /// Non-secret account projection used by all presentation crates for list
@@ -735,7 +739,7 @@ pub struct AccountInput {
     pub kind: AccountKindInput,
     pub period_secs: Option<u32>,  // TOTP-only; None defaults to 30 seconds
     pub counter: Option<u64>,      // HOTP-only; None defaults to 0
-    pub icon_hint: Option<String>,
+    pub icon_hint: IconHintInput,  // Default derives from issuer; Clear stores None; Slug validates §4.1
 }
 
 pub fn validate_manual(input: AccountInput, now: SystemTime) -> Result<ValidatedAccount>;
@@ -797,6 +801,30 @@ settings grammar used by the CLI, while TUI / GUI controls may call the typed
 setters directly. `VaultSettings` fields are private for the same reason:
 settings changes go through validated setters or patches so timeout minimums
 cannot be bypassed.
+
+Core methods that accept an `AccountId` return stable `invalid_state`
+operation/state pairs for account-state failures; presentation crates still
+own query cardinality errors such as `no_match` and `multiple_matches` before
+calling these methods:
+
+| Operation      | State               | Meaning                         |
+| -------------- | ------------------- | ------------------------------- |
+| `rename`       | `account_not_found` | No account exists for the ID.   |
+| `totp_code`    | `account_not_found` | No account exists for the ID.   |
+| `totp_code`    | `not_totp`          | The account is HOTP.            |
+| `hotp_peek`    | `account_not_found` | No account exists for the ID.   |
+| `hotp_peek`    | `not_hotp`          | The account is TOTP.            |
+| `hotp_advance` | `account_not_found` | No account exists for the ID.   |
+| `hotp_advance` | `not_hotp`          | The account is TOTP.            |
+
+Other core-owned `invalid_state` operation/state pairs are also stable:
+
+| Operation           | State                 | Meaning                         |
+| ------------------- | --------------------- | ------------------------------- |
+| `set_passphrase`    | `already_encrypted`   | The vault is already encrypted. |
+| `change_passphrase` | `not_encrypted`       | The vault is plaintext.         |
+| `remove_passphrase` | `not_encrypted`       | The vault is plaintext.         |
+| `import_paladin`    | `missing_passphrase`  | No bundle passphrase supplied.  |
 
 ## 5. CLI (`paladin`)
 
@@ -867,16 +895,20 @@ flags) is rejected at parse time. Under `--json`, interactive mode is rejected
 at parse time: one of `--uri`, `--qr`, or the manual flags must be supplied.
 Manual mode requires `--label` and `--secret`; optional
 fields are `--issuer`, `--algorithm sha1|sha256|sha512`, `--digits 6|7|8`,
-`--kind totp|hotp`, `--period <secs>`, `--counter <u64>`, and
-`--icon-hint <slug>`. Manual mode defaults to TOTP, SHA1, 6 digits, and a
-30-second period. HOTP manual entries default to counter 0 when `--counter`
-is omitted. Manual `--secret` is Base32 text using the same rules as the
-`otpauth://` `secret` parameter; the decoded bytes must pass the §4.1 secret
-validation. `--period` is TOTP-only, `--counter` is HOTP-only, and
-`--icon-hint` must pass the §4.1 slug validation; when omitted, `icon_hint`
-is derived from the issuer using the §4.1 defaulting rule. All add modes use
-the shared account validation path and return validation warnings in the
-success payload. A single-entry `add` rejects an existing
+`--kind totp|hotp`, `--period <secs>`, `--counter <u64>`, and optionally
+one of `--icon-hint <slug>` or `--no-icon-hint`. Manual mode defaults to
+TOTP, SHA1, 6 digits, and a 30-second period. HOTP manual entries default to
+counter 0 when `--counter` is omitted. Manual `--secret` is Base32 text using
+the same rules as the `otpauth://` `secret` parameter; the decoded bytes must
+pass the §4.1 secret validation. `--period` is TOTP-only, `--counter` is
+HOTP-only, and `--icon-hint` must pass the §4.1 slug validation.
+`--icon-hint` and `--no-icon-hint` are mutually exclusive. When neither is
+present, `AccountInput.icon_hint = IconHintInput::Default` derives from the
+issuer using the §4.1 defaulting rule. `--icon-hint <slug>` maps to
+`IconHintInput::Slug(slug)`, and `--no-icon-hint` maps to
+`IconHintInput::Clear`. All add modes use the shared account validation path
+and return validation warnings in the success payload. A single-entry `add`
+rejects an existing
 `(secret, issuer, label)` collision with `duplicate_account` and the existing
 `account` summary unless `--allow-duplicate` is supplied, in which case it
 appends a new account. The collision check uses
@@ -1530,7 +1562,9 @@ Concrete obligations and explicit user-controlled tradeoffs:
     and durability-unconfirmed failures after the primary-file commit point.
   - HOTP counter advances on `hotp_advance`, not on `hotp_peek` or
     `totp_code`; `hotp_advance` also updates `updated_at` and persists the
-    new counter to disk before returning.
+    new counter to disk before returning. Account-ID methods return stable
+    `invalid_state` operation/state pairs for missing accounts and wrong OTP
+    kind.
   - `Vault::find_duplicate` detects exact `(secret, issuer, label)`
     collisions for single-entry add flows without exposing secret bytes to
     presentation crates.
@@ -1539,7 +1573,8 @@ Concrete obligations and explicit user-controlled tradeoffs:
     otpauth issuers, and invalid timestamps; short secrets in the 10-15
     byte range produce `short_secret` warnings. Manual `AccountInput`
     tests cover the `AccountKindInput` selector plus period/counter
-    defaults and kind-specific rejection.
+    defaults and kind-specific rejection, and the `IconHintInput`
+    `Default` / `Clear` / `Slug` branches.
   - Zeroize-on-drop assertions for `Secret` and `SecretString`.
   - Importers: Aegis plaintext TOTP/HOTP mapping, unsupported Aegis entry
     type rejection, our own export round-trip with fresh destination IDs,
@@ -1877,8 +1912,9 @@ artifacts side by side.
 **Decided during plan review (2026-05-05):**
 - Core exposes `Vault::mutate_and_save` so front ends do not hand-roll
   rollback for add / remove / import / settings mutations.
-- Core `AccountInput` uses an `AccountKindInput` selector plus optional
-  TOTP `period_secs` and HOTP `counter` fields for manual add flows.
+- Core `AccountInput` uses an `AccountKindInput` selector, optional
+  TOTP `period_secs` and HOTP `counter` fields, and an `IconHintInput`
+  tri-state (`Default`, `Clear`, `Slug`) for manual add flows.
 - Core exposes `default_vault_path()` so presentation crates do not
   duplicate `ProjectDirs` vault-location logic.
 - Core exposes `Vault::find_duplicate(&ValidatedAccount)` so single-entry
@@ -1922,6 +1958,9 @@ artifacts side by side.
 - Core-owned `io_error.operation` strings and
   `unsupported_import_format.format` semantics are stable and enumerated in
   §5.
+- Core-owned `invalid_state.operation` / `state` pairs are stable for
+  account-ID method failures, passphrase wrong-state failures, and missing
+  Paladin import passphrases.
 
 No open questions remain.
 

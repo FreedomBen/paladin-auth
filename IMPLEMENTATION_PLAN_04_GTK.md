@@ -187,11 +187,11 @@ inclusion.
   Width, height, bytes, and `import_time` are then passed to
   `paladin_core::import::qr_image_bytes`. Manual fields cover label,
   optional issuer, Base32 secret, algorithm, digits, kind, TOTP period,
-  HOTP counter, and optional icon hint, matching
-  `paladin_core::AccountInput`. UI defaults match the CLI manual-add
-  defaults in DESIGN §5: TOTP, SHA1, 6 digits, 30 s period, HOTP counter 0,
-  and icon hint derived from issuer when the user leaves it unset. Manual
-  entries use
+  HOTP counter, and the icon-hint mode (`Default from issuer`, `No icon`,
+  or explicit slug), matching `paladin_core::AccountInput` and
+  `IconHintInput`. UI defaults match the CLI manual-add defaults in DESIGN
+  §5: TOTP, SHA1, 6 digits, 30 s period, HOTP counter 0, and icon hint
+  derived from issuer when the user leaves it unset. Manual entries use
   `paladin_core::validate_manual`; validation warnings show inline with
   `paladin_core::format_validation_warning()` and do
   not block creation, while field-level parse errors (invalid Base32,

@@ -227,9 +227,11 @@ closes it.
   (Base32 RFC 4648, case-insensitive, optional `=` padding), algorithm
   (`sha1` / `sha256` / `sha512`), digits (6 / 7 / 8), kind (`totp` or
   `hotp`), period (TOTP-only) or counter (HOTP-only), and optional
-  icon-hint slug; defaults follow the CLI manual-add defaults in
-  DESIGN §5 (TOTP, SHA1, 6 digits, 30 s period, HOTP counter 0,
-  icon-hint defaulted from the issuer per §4.1). Manual entries route
+  icon-hint mode (`Default from issuer`, `No icon`, or explicit slug);
+  defaults follow the CLI manual-add defaults in DESIGN §5 (TOTP, SHA1,
+  6 digits, 30 s period, HOTP counter 0, icon-hint defaulted from the
+  issuer per §4.1). The modes map to `IconHintInput::Default`,
+  `IconHintInput::Clear`, and `IconHintInput::Slug`. Manual entries route
   through `paladin_core::validate_manual`. URI mode is a single text
   field; on submit the entered string is passed to
   `paladin_core::parse_otpauth`, and on success the resulting
