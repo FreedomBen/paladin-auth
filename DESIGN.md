@@ -1720,9 +1720,14 @@ artifacts side by side.
   - `paladin` and `paladin-tui` depend only on `libc6` (Debian) /
     `glibc` (Fedora). The Rust binaries are otherwise statically linked
     where possible — no OpenSSL, no libsqlite, no libcurl.
-  - `paladin-gtk` declares `libgtk-4-1 (>= 4.10)` and
-    `libadwaita-1-0 (>= 1.4)` on Debian, with the matching `gtk4` /
-    `libadwaita` packages on Fedora.
+  - `paladin-gtk` declares `libgtk-4-1 (>= 4.16)` and
+    `libadwaita-1-0 (>= 1.6)` on Debian, with the matching `gtk4` /
+    `libadwaita` packages on Fedora. The 1.6 floor is set so the GUI
+    uses the current Adwaita widget set (`AdwAlertDialog` from
+    libadwaita 1.5; `AdwAboutDialog` from libadwaita 1.6) without a
+    deprecated-widget compatibility shim; distributions whose stable
+    channel ships older GTK / libadwaita cannot install
+    `paladin-gtk` until their baseline rises.
 - **Maintainer scripts.** None. The vault lives under
   `$XDG_DATA_HOME/paladin/` and is created on first use, so install and
   removal touch nothing global.
@@ -1740,7 +1745,9 @@ artifacts side by side.
   Flathub-submission time and recorded here.
 - **Runtimes.**
   - CLI and TUI: `org.freedesktop.Platform` 23.08 (small, no GUI bits).
-  - GUI: `org.gnome.Platform` 46 with the matching SDK.
+  - GUI: `org.gnome.Platform` 47 with the matching SDK (bundles
+    GTK 4.16 and libadwaita 1.6, matching the §11.3 packaging
+    baseline).
 - **Sandbox permissions.** No `--share=network` for any front-end (§8 / §2).
   - CLI and TUI: filesystem access scoped to `xdg-data/paladin:create`
     (vault) and `xdg-config/paladin:create` (settings). Both inherit the

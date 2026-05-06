@@ -120,7 +120,7 @@ inclusion.
   falling back to the generic error text if it returns `None`),
   `save_not_committed`, and `save_durability_unconfirmed` inline.
   `vault_exists` (if a vault appeared between `inspect` and `create`)
-  opens an in-dialog `AdwMessageDialog` with `destructive-action`
+  opens an in-dialog `AdwAlertDialog` with `destructive-action`
   styling whose body is rendered from
   `paladin_core::format_init_force_warning(existing_path)` so wording
   stays identical to the CLI `init --force` confirmation. On
@@ -130,10 +130,12 @@ inclusion.
   passphrase choice; on cancel, the
   destructive dialog closes and `InitDialog` returns to its
   `vault_exists` state without mutating the existing vault.
-  `create_force` errors map identically to `create`
-  (`save_not_committed` with `backup_path` set when the failure
-  follows backup rotation; `save_durability_unconfirmed` after the
-  primary rename) and stay inline. Passphrase entries are zeroized on
+  `create_force` returns the same typed error kinds as `create`,
+  with the additional create_force-only `backup_path` field on
+  `save_not_committed` when the failure occurs after the existing
+  vault has already been rotated to `vault.bin.bak`;
+  `save_durability_unconfirmed` is reported after the primary
+  rename. Both stay inline. Passphrase entries are zeroized on
   submit, cancel, destructive-confirmation cancel, and dialog close
   per §"Secret entry handling".
 - `UnlockComponent` — passphrase entry, **shown only when the vault is
@@ -378,8 +380,10 @@ start from `ImportDialog`.
 - Resolve vault path from `--vault` or
   `paladin_core::default_vault_path()`, then call
   `paladin_core::inspect(path)` to resolve the mode.
-- Plaintext → call `paladin_core::open(path, VaultLock::Plaintext)` directly,
-  then jump to `AccountListComponent`.
+- Plaintext → call `paladin_core::open(path, VaultLock::Plaintext)` directly
+  on the GTK main loop (no Argon2; just bincode decode and the §4.3 perm
+  check, fast enough that the spawn-blocking thread hop costs more than the
+  call itself), then jump to `AccountListComponent`.
 - Encrypted → present `UnlockComponent`. On submit, call
   `paladin_core::open(path, VaultLock::Encrypted(secret))` on
   `gio::spawn_blocking` so the §4.4 Argon2 KDF (m=64 MiB defaults) does not
@@ -399,7 +403,7 @@ start from `ImportDialog`.
   path: twice-confirmed passphrase. Both go through
   `paladin_core::create` on `gio::spawn_blocking`. If `create` returns
   `vault_exists` (a vault appeared between `inspect` and `create`), the
-  dialog opens an `AdwMessageDialog` destructive-confirmation gate
+  dialog opens an `AdwAlertDialog` destructive-confirmation gate
   worded the same as the CLI `init --force` warning; on confirm it
   re-runs the operation through `paladin_core::create_force` on
   `gio::spawn_blocking` (rotating the existing vault to `vault.bin.bak`
@@ -546,11 +550,12 @@ switches and spin rows, are reverted on pre-commit failure:
 (§11.1). Implementation owes the release pipeline:
 
 - **Cargo.toml metadata.** `crates/paladin-gtk/Cargo.toml` inherits
-  `description`, `repository`, `license = "AGPL-3.0-or-later"`,
-  `edition`, and `rust-version` from `[workspace.package]` via
-  per-field Cargo inheritance (`description.workspace = true`,
-  `repository.workspace = true`, and so on; the workspace shape established by
-  IMPLEMENTATION_PLAN_01_CORE.md Phase A) so `nfpm` and Flathub
+  `description`, `repository`, `license` (set to
+  `"AGPL-3.0-or-later"` at the workspace), `edition`, and
+  `rust-version` from the workspace's `[workspace.package]` table
+  (defined per IMPLEMENTATION_PLAN_01_CORE.md Phase A) via per-field
+  Cargo inheritance (`description.workspace = true`,
+  `repository.workspace = true`, and so on) so `nfpm` and Flathub
   manifests read one source. It additionally sets the binary-specific
   `homepage`, `keywords`, and `categories` fields locally. The
   packaging pipeline sources these values from Cargo metadata when
@@ -562,8 +567,13 @@ switches and spin rows, are reverted on pre-commit failure:
   `/usr/bin/paladin-gtk`, the desktop entry at
   `/usr/share/applications/`, and the icon set under
   `/usr/share/icons/hicolor/`. Debian declares `libgtk-4-1
-  (>= 4.10)` and `libadwaita-1-0 (>= 1.4)`; Fedora declares the
-  matching `gtk4` and `libadwaita` package names. No maintainer
+  (>= 4.16)` and `libadwaita-1-0 (>= 1.6)`; Fedora declares the
+  matching `gtk4` and `libadwaita` package names.
+  Distributions whose stable channel ships older GTK / libadwaita
+  cannot install `paladin-gtk` until their baseline rises — this is
+  intentional so the GUI uses the current Adwaita widget set
+  (`AdwAlertDialog`, `AdwAboutDialog`) without a deprecated-widget
+  shim. No maintainer
   scripts: packages do not create or alter vaults; vault files live under
   `$XDG_DATA_HOME/paladin/` when created by `paladin init` or by the
   GUI's `InitDialog`. The §11
@@ -572,9 +582,11 @@ switches and spin rows, are reverted on pre-commit failure:
   hicolor icon install layout; it does not add package-owned
   post-install hooks.
 - **Flatpak.** `packaging/flatpak/paladin-gtk.yml` declares
-  `org.gnome.Platform//46` (and the matching SDK) — that runtime
-  bundles GTK 4.14+ and libadwaita 1.5+, both ahead of the
-  packaging baseline. No `--share=network`, and the §11.4 sandbox
+  `org.gnome.Platform//47` (and the matching SDK) — that runtime
+  bundles GTK 4.16 and libadwaita 1.6, matching the
+  packaging baseline so the Adwaita widget set
+  (`AdwAlertDialog`, `AdwAboutDialog`) is available identically in
+  native and Flatpak builds. No `--share=network`, and the §11.4 sandbox
   permissions:
   `xdg-data/paladin:create`, `xdg-config/paladin:create`, plus the
   Wayland and X11 fallback clipboard path required for `gdk::Clipboard`
@@ -613,14 +625,22 @@ switches and spin rows, are reverted on pre-commit failure:
   `desktop-file-validate` passes on the installed `.desktop`
   entry.
 
-### libadwaita decision (2026-05-05)
+### libadwaita decision (2026-05-05, baseline raised 2026-05-06)
 
-Resolved: **adopt `libadwaita` for v0.2.** The runtime declaration in
-§11.3 (`libadwaita-1-0 (>= 1.4)`) now matches the build-time crate
-dependency in §"Dependencies" below; the GUI uses Adwaita widgets
-where the GNOME HIG calls for them (see §"libadwaita usage" below).
-No further action needed beyond keeping the build-time and
-runtime-declared baselines aligned.
+Resolved: **adopt `libadwaita` for v0.2.** The build-time crate
+dependency in §"Dependencies" below pins the libadwaita 1.6 baseline
+to match the §11.3 runtime declaration (`libadwaita-1-0 (>= 1.6)`) and
+the matching GTK 4.16 floor; the GUI uses Adwaita widgets where the
+GNOME HIG calls for them (see §"libadwaita usage" below).
+
+The 1.6 floor is set so the GUI uses the current widget set
+(`AdwAlertDialog` from libadwaita 1.5; `AdwAboutDialog` from
+libadwaita 1.6) without reaching for the deprecated `AdwMessageDialog`
+/ `AdwAboutWindow`. Distributions whose stable channel ships older
+GTK / libadwaita cannot install `paladin-gtk` until their baseline
+rises — accepted as a deliberate trade-off rather than maintain a
+deprecated-widget compatibility shim. Keep the build-time and
+runtime-declared baselines aligned on any future bump.
 
 ## Tests
 
@@ -735,8 +755,11 @@ The GUI itself is hard to test without a display server. Tests are split:
 
 ## Dependencies (per §9)
 
-`relm4`, `gtk4` (via `gtk4-rs`), `libadwaita` (via `libadwaita-rs`,
-baseline 1.4 to match the §11.3 Debian dep declaration), `glib`,
+`relm4`, `gtk4` (via the `gtk4` crate from gtk-rs, baseline 4.16 so
+the libadwaita 1.6 floor below is satisfiable), `libadwaita` (via the
+`libadwaita` crate from gtk-rs, baseline 1.6 to match the §11.3
+Debian dep declaration and to make `AdwAlertDialog` and
+`AdwAboutDialog` available without a compatibility shim), `glib`,
 `gio`, `gdk4`, `clap`, plus `paladin-core`. GDK
 clipboard is the canonical Wayland/X11 path; `arboard` is **not** a
 hard dependency for v0.2 and is only added if GDK clipboard proves
@@ -745,12 +768,12 @@ insufficient during implementation. Build-time tooling includes
 Rust build helper such as `glib-build-tools`) for the gresource bundle and
 AppStream validation tooling for the Flatpak/native metadata dry-run.
 
-`libadwaita` is adopted for v0.2 (decision 2026-05-05) so the GUI
-follows the GNOME HIG out of the box and the §11.3 packaging
-declaration matches the actual binary dependency. `data/style.css`
-(scoped via `gtk::CssProvider`) carries only Paladin-specific tweaks
-on top of Adwaita defaults — it never tries to recreate the Adwaita
-palette.
+`libadwaita` is adopted for v0.2 (decision 2026-05-05; baseline
+raised to 1.6 on 2026-05-06) so the GUI follows the GNOME HIG out
+of the box and the §11.3 packaging declaration matches the actual
+binary dependency. `data/style.css` (scoped via `gtk::CssProvider`)
+carries only Paladin-specific tweaks on top of Adwaita defaults — it
+never tries to recreate the Adwaita palette.
 
 **No `tokio`.** GTK's main loop is the executor; long work runs on
 `gio::spawn_blocking` with results delivered back to the main thread via
@@ -782,7 +805,7 @@ back into vanilla GTK4 widgets where Adwaita is idiomatic:
   further interaction stay inline in the affected dialog.
 - **Confirmation dialogs.** `RemoveDialog`, the plaintext-export
   consent step, and the export overwrite gate are
-  `AdwMessageDialog`s with `destructive-action` styling on the
+  `AdwAlertDialog`s with `destructive-action` styling on the
   destructive button. The §6 wording (e.g. the plaintext-export
   "this writes unencrypted secrets to disk" warning) is reused
   verbatim so the UX matches the TUI.
@@ -804,7 +827,7 @@ back into vanilla GTK4 widgets where Adwaita is idiomatic:
   (`confirmation_mismatch`, `zero_length`, `decrypt_failed`) attach
   to the row via `AdwEntryRow::add-css-class("error")` plus a
   status-line label below the row.
-- **About / help.** `AdwAboutWindow` is wired to the application
+- **About / help.** `AdwAboutDialog` is wired to the application
   menu and pulls program metadata from Cargo package metadata embedded
   at compile time; the AGPL-3.0-or-later license text ships in the
   gresource bundle.

@@ -16,7 +16,7 @@ binary.
 
 ```
 crates/paladin-cli/
-├── Cargo.toml            # inherits workspace metadata via package.workspace = true; bin name = "paladin"
+├── Cargo.toml            # inherits workspace metadata via per-field Cargo inheritance (description.workspace = true, repository.workspace = true, license.workspace = true, edition.workspace = true, rust-version.workspace = true); bin name = "paladin"
 ├── src/
 │   ├── main.rs           # entry: parse, dispatch, exit code map
 │   ├── cli.rs            # clap derive: GlobalArgs + Command enum
@@ -697,11 +697,13 @@ The CLI ships in `.deb`, `.rpm`, Flatpak, and AppImage in v0.1
   argument tree. The packaging configs ship it gzipped at
   `/usr/share/man/man1/paladin.1.gz` per §11.3.
 - **Cargo.toml metadata.** `crates/paladin-cli/Cargo.toml` inherits
-  `description`, `repository`, `license = "AGPL-3.0-or-later"`,
-  `edition`, and `rust-version` from `[workspace.package]` via
-  `package.workspace = true` (the workspace shape established by
-  IMPLEMENTATION_PLAN_01_CORE.md Phase A so `nfpm` and Flathub
-  manifests read one source). It additionally sets the binary-specific
+  `description`, `repository`, `license` (set to
+  `"AGPL-3.0-or-later"` at the workspace), `edition`, and
+  `rust-version` from the workspace's `[workspace.package]` table
+  (defined per IMPLEMENTATION_PLAN_01_CORE.md Phase A) via per-field
+  Cargo inheritance (`description.workspace = true`,
+  `repository.workspace = true`, and so on) so `nfpm` and Flathub
+  manifests read one source. It additionally sets the binary-specific
   `homepage`, `keywords`, and `categories` fields locally. The
   packaging pipeline sources these values from Cargo metadata when
   building `.deb` / `.rpm` so the per-format configs in

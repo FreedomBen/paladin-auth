@@ -104,10 +104,14 @@ Each step lands as its own commit. Tests come first.
   `[workspace.package]` with the shared metadata required by §11
   (`license = "AGPL-3.0-or-later"`, `edition`, `rust-version`,
   `repository`, `description`) so binary crates added later can inherit
-  via `package.workspace = true`.
+  it via per-field Cargo inheritance (`description.workspace = true`,
+  `license.workspace = true`, `edition.workspace = true`,
+  `rust-version.workspace = true`, `repository.workspace = true`).
 - [ ] Create `rust-toolchain.toml` and `crates/paladin-core/Cargo.toml`;
-  the crate manifest sets `package.workspace = true` for the inherited
-  metadata fields. (MSRV decision: pin to current stable at scaffold
+  the crate manifest pulls each shared metadata field from the
+  workspace via per-field Cargo inheritance (`description.workspace = true`
+  and the matching lines for `license`, `edition`, `rust-version`,
+  `repository`). (MSRV decision: pin to current stable at scaffold
   time and record it in CLAUDE.md.)
 - [ ] Extend `.gitignore` for the Rust workspace: ignore `/target` and any
   other build/test artifacts the repo will produce. The existing entries
@@ -341,9 +345,12 @@ Each step lands as its own commit. Tests come first.
 - [ ] Tests: `Argon2Params::default()` yields `m_kib = 65536` (64 MiB),
   `t = 3`, `p = 1`; `Argon2Params::validate` accepts in-range custom
   values and rejects out-of-range values with
-  `kdf_params_out_of_bounds`; `EncryptionOptions` defaults to the default
-  params and rejects zero-length passphrases on encrypted write paths
-  with `invalid_passphrase`.
+  `kdf_params_out_of_bounds`; `EncryptionOptions::new(passphrase)`
+  populates `kdf_params` with `Argon2Params::default()`;
+  `EncryptionOptions::with_params(passphrase, params)` accepts in-range
+  custom params and propagates `kdf_params_out_of_bounds` when the
+  supplied params fail `validate()`; encrypted write paths reject
+  zero-length passphrases with `invalid_passphrase`.
 - [ ] Tests: regular encrypted saves preserve the in-header Argon2 params
   and `salt`, and use a freshly generated random `nonce` per save (drawn
   from the OS CSPRNG).
@@ -794,8 +801,9 @@ defines. Implementation owes:
 - **Cargo.toml metadata.** `crates/paladin-core/Cargo.toml` carries
   `description`, `repository`, `license = "AGPL-3.0-or-later"`, and
   pinned `rust-version`. Binary crates inherit consistent values via
-  `package.workspace = true` so `nfpm` and Flathub manifests read
-  one source.
+  per-field Cargo inheritance (`description.workspace = true`,
+  `repository.workspace = true`, and so on) so `nfpm` and Flathub
+  manifests read one source.
 - **Deterministic, vendor-friendly deps.** The §9 dep list above
   resolves cleanly under `cargo vendor`; pinning `getrandom`
   (already required for the §4.4 CSPRNG contract) plus
