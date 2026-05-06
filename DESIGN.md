@@ -630,7 +630,7 @@ impl VaultSettings {
 }
 
 pub fn default_vault_path() -> Result<PathBuf>;                           // shared §4.3 path resolver; appends vault.bin under ProjectDirs::from("", "", "paladin").data_dir()
-pub fn inspect(path: &Path) -> Result<VaultStatus>;                       // header probe; no decryption. Ok(Missing) iff the file does not exist; other I/O errors and unrecognized magic are Err. Deliberately does **not** enforce the §4.3 permissions check — only `open` and `create` do — so callers can probe a vault's mode before fixing perms.
+pub fn inspect(path: &Path) -> Result<VaultStatus>;                       // header probe; no decryption. Ok(Missing) iff the file does not exist; other I/O errors and unrecognized magic are Err. Deliberately does **not** enforce the §4.3 permissions check — only `open`, `create`, and `create_force` do — so callers can probe a vault's mode before fixing perms.
 pub fn open(path: &Path, lock: VaultLock) -> Result<(Vault, Store)>;      // errors if `lock` doesn't match the file mode
 pub fn create(path: &Path, init: VaultInit) -> Result<(Vault, Store)>;    // errors if `path` already exists; encrypted init uses `EncryptionOptions` default or custom Argon2 params; for the `init --force` clobber semantics use `create_force`
 pub fn create_force(path: &Path, init: VaultInit) -> Result<(Vault, Store)>;  // §5 `init --force` staged clobber: stages the new vault to `vault.bin.tmp` and `fsync`s it; if staging succeeds and a primary already exists, renames `vault.bin` → `vault.bin.bak` verbatim (overwriting any existing backup) without re-encryption; renames `vault.bin.tmp` → `vault.bin`; `fsync`s the parent directory. Pre-rename failures leave the previous primary recoverable — when failure occurs after backup rotation, the old vault is at `vault.bin.bak` and the error is `save_not_committed` with `backup_path` set. Post-commit failures surface as `save_durability_unconfirmed`. Identical to `create` when no primary exists at `path`.
@@ -788,6 +788,13 @@ encrypted initialization carries `EncryptionOptions` so callers can choose the
 default Argon2id cost or a validated custom cost. Passphrase set/change and
 encrypted export also take `EncryptionOptions` because they create new
 encrypted material. Plaintext paths never carry KDF parameters.
+
+`Vault` and `Store` are `Send` so front ends can move them across thread
+boundaries — for example `paladin-gtk` running encrypted `open` /
+`create` / `create_force` and any save-bearing operation inside
+`gio::spawn_blocking`. The core enforces this with static assertions in
+CI so a future change introducing a non-`Send` field fails the build
+instead of silently breaking the GTK front end.
 
 Because `Account` fields are private, presentation crates use
 `Account::summary` / `Vault::summaries` for non-secret display data and

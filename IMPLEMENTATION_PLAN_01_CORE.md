@@ -80,7 +80,7 @@ crates/paladin-core/
     ├── tamper.rs            # AAD-bound header byte-flip matrix
     ├── perms.rs             # 0600/0700 + unsafe_permissions rejection
     ├── shared_text.rs       # format_unsafe_permissions / format_init_force_warning / format_plaintext_storage_warning / format_plaintext_export_warning / format_validation_warning text fixtures
-    ├── account_summary.rs   # AccountSummary and Code expose no secret bytes; Code is the core projection paired with AccountSummary by CLI CodeResult
+    ├── account_summary.rs   # AccountSummary and Code expose no secret bytes; Code is the core projection paired with AccountSummary by CLI show / peek / copy commands
     ├── match_key.rs         # account_match_key + account_matches_search behavior (empty issuer keeps colon; case preserved)
     ├── query.rs             # parse_account_query, matching_accounts, shortest_unique_id_prefix
     ├── settings_patch.rs    # parse_setting_key / parse_setting_patch + apply_setting_patch dotted key/value grammar
@@ -253,8 +253,9 @@ Each step lands as its own commit. Tests come first.
   re-implementing it.
 - [ ] Tests: `inspect(path)` returns `Ok(Missing)` only when the primary file
   is absent, reports plaintext/encrypted mode from the header without
-  decryption, returns an error for unrecognized magic, and deliberately skips
-  permission checks.
+  decryption, returns an error for unrecognized magic and for other I/O
+  errors (e.g. permission-denied opening the path), and deliberately skips
+  the §4.3 permissions check.
 - [ ] Tests: `default_vault_path()` calls
   `ProjectDirs::from("", "", "paladin")`, appends `vault.bin` under the
   returned `data_dir()` location from §4.3, and surfaces `io_error` with
