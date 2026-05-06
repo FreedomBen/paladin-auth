@@ -636,8 +636,9 @@ pub fn format_unsafe_permissions(err: &PaladinError) -> Option<String>;
 /// `InitDialog` destructive gate render identical wording.
 pub fn format_init_force_warning(existing_vault: &Path) -> String;
 
-/// Format the plaintext-storage warning shown by `passphrase remove`
-/// (CLI / TUI / GUI) and by the GUI `InitDialog`'s plaintext path.
+/// Format the plaintext-storage warning shown by CLI `init` when the first
+/// passphrase entry is empty, by `passphrase remove` (CLI / TUI / GUI), and
+/// by the GUI `InitDialog`'s plaintext path.
 /// Static text — no parameters — so all three front ends share a
 /// single source.
 pub fn format_plaintext_storage_warning() -> String;
@@ -832,7 +833,7 @@ Built with `clap` (derive). Commands:
 
 | Command                                     | Behavior                                                         |
 | ------------------------------------------- | ---------------------------------------------------------------- |
-| `paladin init [--force]`                    | Create a new vault. Without `--force`, checks for an existing primary and returns `vault_exists` before prompting for a new-vault passphrase. Prompts: passphrase? (empty = plaintext). Refuses to clobber an existing vault unless `--force` (which stages the new vault first, then rotates the old file to `vault.bin.bak`, overwriting any existing backup). The rotated `.bak` is preserved verbatim — a plaintext-to-encrypted clobber leaves plaintext secrets in `.bak` until the user removes it manually. |
+| `paladin init [--force]`                    | Create a new vault. Without `--force`, checks for an existing primary and returns `vault_exists` before prompting for a new-vault passphrase. Prompts: passphrase? (empty = plaintext; text mode prints the plaintext-storage warning). Refuses to clobber an existing vault unless `--force` (which stages the new vault first, then rotates the old file to `vault.bin.bak`, overwriting any existing backup). The rotated `.bak` is preserved verbatim — a plaintext-to-encrypted clobber leaves plaintext secrets in `.bak` until the user removes it manually. |
 | `paladin add`                               | Add an account interactively (or via flags / URI).               |
 | `paladin add --qr <path>`                   | Add by scanning a QR image file. Every decoded QR in the image is added (errors if none decode); collisions use the default `import` merge policy (`skip`). For other policies, use `import --format=qr`. |
 | `paladin list`                              | List accounts (no codes).                                        |
@@ -978,10 +979,12 @@ document to stdout, the failure document to stderr, and no other bytes
 on either stream. The strict-mode rule covers every output path: text-
 mode validation warnings (`short_secret`) flow into the success envelope's
 `warnings` array for `add` and `import`; import skip warnings are represented
-by the `skipped` count; the plaintext-export advisory is suppressed because
-the caller opted in by passing `--plaintext`; clap diagnostics are rerouted
-via the argv pre-scan above; help/version text is wrapped in JSON success
-documents; and progress or status text is never emitted. Interactive `add` is
+by the `skipped` count; the `init --force`, plaintext `init`,
+`passphrase remove --yes`, and plaintext-export advisories are suppressed
+because the caller opted in via `--force`, an empty `init` passphrase, `--yes`,
+or `--plaintext`; clap diagnostics are rerouted via the argv pre-scan above;
+help/version text is wrapped in JSON success documents; and progress or
+status text is never emitted. Interactive `add` is
 rejected at parse time under `--json`, so account-entry prompt strings cannot
 appear on stdout or stderr. Confirmation flags (`remove --yes`,
 `passphrase remove --yes`) are required under `--json` since no interactive
