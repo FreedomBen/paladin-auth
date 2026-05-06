@@ -178,10 +178,20 @@ header per §4.4, so opening is unaffected.
   Copying during the reveal window copies the visible code and does not
   advance again.
 - The list scrolls its viewport so the selected row stays visible.
-  `PgUp` / `PgDn` move by viewport height, `Home` / `End` jump to the
-  first / last row of the filtered set, and `Ctrl-D` / `Ctrl-U` move
-  by half a viewport (vim-style). Selection clamps to the bounds of
-  the filtered result set and never goes off-list.
+  `↑` / `↓` and `j` / `k` move by one row, `PgUp` / `PgDn` and
+  `Ctrl-B` / `Ctrl-F` move by viewport height, `Home` / `End` and
+  `gg` / `G` jump to the first / last row of the filtered set,
+  `Ctrl-U` / `Ctrl-D` move by half a viewport, and `zz` recenters
+  the viewport so the selected row sits in the middle (all
+  vim-style). `gg` and `zz` are two-press chords: the first press
+  sets a pending-leader state in the reducer, a matching second
+  press executes the action, and any other key — including a
+  non-matching letter, a focus change, modal open, or auto-lock —
+  clears the pending state. There is no timeout; the chord is
+  committed by the next keypress, matching vim's `nottimeout`
+  semantics. Selection clamps to the bounds of the filtered result
+  set and never goes off-list. With an empty filtered set, every
+  list-navigation key (including the vim chords) is a silent no-op.
 
 ## Focus model
 
@@ -195,14 +205,20 @@ trapped focus, see below). While the search bar is focused, `↑`/`↓`
 still move the list selection and `Enter` copies the selected entry —
 the selection is always navigable so the user does not need to
 unfocus the search to act on a result. The other list-navigation keys
-(`PgUp`, `PgDn`, `Home`, `End`, `Ctrl-D`, `Ctrl-U`) likewise pass
-through to the list while the search bar has focus; they are
-navigation, not text editing, so the TUI's input router dispatches
-them to the list before they reach `tui-input`'s key handler (which
-would otherwise treat `Home`/`End` as cursor moves and `Ctrl-U` as
-delete-to-start-of-line).
+(`PgUp`, `PgDn`, `Home`, `End`, `Ctrl-B`, `Ctrl-F`, `Ctrl-D`,
+`Ctrl-U`) likewise pass through to the list while the search bar
+has focus; they are navigation, not text editing, so the TUI's
+input router dispatches them to the list before they reach
+`tui-input`'s key handler (which would otherwise treat `Home` /
+`End` as cursor moves, `Ctrl-U` as delete-to-start-of-line, and
+`Ctrl-F` / `Ctrl-B` as forward / back-char cursor moves). The
+bare-letter vim navigation keys (`j`, `k`, `g`, `G`, `z`) do
+**not** pass through and are consumed by the search field as
+character input when it has focus, matching the treatment of the
+action keys.
 Other keys, including the action keys `a` / `r` / `R` / `i` /
-`e` / `n` / `p` / `s` / `?`, the search-focus key `/`, and the quit key `q`,
+`e` / `n` / `p` / `s` / `?` and the bare-letter vim navigation keys
+`j` / `k` / `g` / `G` / `z`, the search-focus key `/`, and the quit key `q`,
 are routed to the search field as character input while it has focus;
 the user must defocus the search (`Esc` to clear) to use them as actions. `Ctrl-C` is the exception and
 always quits. `Esc` clears the search query and returns focus to the list;
@@ -241,12 +257,16 @@ clipboard auto-clear values) is also kept in zeroizing storage and zeroized
 when replaced, cleared, expired, or dropped.
 
 Modal-local navigation is consistent across Add / Remove / Rename / Import /
-Export / Passphrase / Settings: `Tab` moves to the next control,
-`Shift-Tab` moves to the previous control, `Enter` activates the focused
+Export / Passphrase / Settings: `Tab` and `Ctrl-N` move to the next
+control, `Shift-Tab` and `Ctrl-P` move to the previous control
+(vim insert-mode parity), `Enter` activates the focused
 button or the modal's default confirm action, `Space` toggles the focused
 checkbox / toggle, `←` /
 `→` change segmented selectors, and `↑` / `↓` adjust spinners or move within
-multi-line field groups. Text fields consume printable characters and standard
+multi-line field groups. `Ctrl-N` / `Ctrl-P` are field-navigation
+aliases only; spinner increment / decrement stays bound to `↑` /
+`↓`, and they do not advance through post-success counts panels
+(those still close on `Esc`). Text fields consume printable characters and standard
 editing keys. `Esc` cancels the modal and discards pending modal-local edits
 unless the modal is showing a post-success counts panel, where `Esc` simply
 closes it.
@@ -536,27 +556,29 @@ reaches the primary-file commit point with durability still uncertain:
 
 ## Keybindings (initial v0.1)
 
-| Key                 | Action                                                                                  |
-| ------------------- | --------------------------------------------------------------------------------------- |
-| `↑` `↓`             | Move selection                                                                          |
-| `PgUp` `PgDn`       | Page up / page down (viewport height)                                                   |
-| `Home` `End`        | Jump to first / last row of the filtered set                                            |
-| `Ctrl-D` `Ctrl-U`   | Half-page down / up (vim-style)                                                         |
-| `Enter`             | Copy selected code (TOTP: current; HOTP: visible only)                                  |
-| `n`                 | HOTP next-code (advances + reveals `HOTP_REVEAL_SECS`)                                  |
-| `a`                 | Open Add modal                                                                          |
-| `r`                 | Open Remove confirmation                                                                |
-| `R`                 | Open Rename modal (Shift+R; `r` stays bound to Remove)                                  |
-| `i`                 | Open Import modal                                                                       |
-| `e`                 | Open Export modal                                                                       |
-| `/`                 | Focus search bar                                                                        |
-| `Tab` `Shift-Tab`   | Cycle focus between search bar and list (commits active query when leaving search)      |
-| `p`                 | Open Passphrase modal                                                                   |
-| `s`                 | Open Settings modal                                                                     |
-| `?`                 | Open Help overlay (lists all keybindings); `Esc` closes                                 |
-| `Esc`               | Close modal / clear search; close Help overlay; quit on unlock, missing-vault, startup-error screens |
-| `q`                 | Quit from list, missing-vault, and startup-error screens; text input in text fields     |
-| `Ctrl-C`            | Quit (any screen)                                                                       |
+| Key                                | Action                                                                                                |
+| ---------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `↑` `↓` / `j` `k`                  | Move selection up / down (vim-style `j` / `k`)                                                        |
+| `PgUp` `PgDn` / `Ctrl-B` `Ctrl-F`  | Page up / page down by viewport height (vim-style `Ctrl-B` / `Ctrl-F`)                                |
+| `Home` `End` / `gg` `G`            | Jump to first / last row of the filtered set (vim-style `gg` two-press chord and `G`)                 |
+| `Ctrl-U` `Ctrl-D`                  | Half-page up / down (vim-style)                                                                       |
+| `zz`                               | Recenter viewport on selected row (vim-style two-press chord)                                         |
+| `Enter`                            | Copy selected code (TOTP: current; HOTP: visible only)                                                |
+| `n`                                | HOTP next-code (advances + reveals `HOTP_REVEAL_SECS`)                                                |
+| `a`                                | Open Add modal                                                                                        |
+| `r`                                | Open Remove confirmation                                                                              |
+| `R`                                | Open Rename modal (Shift+R; `r` stays bound to Remove)                                                |
+| `i`                                | Open Import modal                                                                                     |
+| `e`                                | Open Export modal                                                                                     |
+| `/`                                | Focus search bar                                                                                      |
+| `Tab` `Shift-Tab`                  | Cycle focus between search bar and list (commits active query when leaving search)                    |
+| `Ctrl-N` `Ctrl-P`                  | In modals: next / previous control (aliases for `Tab` / `Shift-Tab`); no effect outside modals        |
+| `p`                                | Open Passphrase modal                                                                                 |
+| `s`                                | Open Settings modal                                                                                   |
+| `?`                                | Open Help overlay (lists all keybindings); `Esc` closes                                               |
+| `Esc`                              | Close modal / clear search; close Help overlay; clear pending vim chord; quit on unlock, missing-vault, startup-error screens |
+| `q`                                | Quit from list, missing-vault, and startup-error screens; text input in text fields                   |
+| `Ctrl-C`                           | Quit (any screen)                                                                                     |
 
 ## Tests
 
@@ -569,9 +591,24 @@ captured with `insta` golden snapshots using `ratatui::backend::TestBackend`.
   path for effect outcomes to change non-core UI state; pre-commit effect
   failures leave visible state unchanged and surface inline/status-line
   errors, while durability-unconfirmed failures follow the committed-state
-  behavior in "Effect errors". Modal-local navigation covers `Tab` / `Shift-Tab`,
-  `Enter`, `Space`, arrows, text-field editing, and `Esc` cancel / close
-  behavior for every modal.
+  behavior in "Effect errors". Modal-local navigation covers `Tab` /
+  `Shift-Tab`, the `Ctrl-N` / `Ctrl-P` aliases, `Enter`, `Space`, arrows,
+  text-field editing, and `Esc` cancel / close behavior for every modal.
+- **Vim-style navigation**: `j` / `k` mirror `↓` / `↑`; `Ctrl-F` /
+  `Ctrl-B` mirror `PgDn` / `PgUp`; `G` mirrors `End`; `gg` chord
+  jumps to first row and `zz` chord recenters the viewport on the
+  selected row; the pending-leader chord state is held by the
+  reducer, committed on the matching second press, and cleared by
+  any non-matching key, focus change, modal open, `Esc`, or
+  auto-lock. Search-focus pass-through covers `PgUp` / `PgDn` /
+  `Home` / `End` / `Ctrl-B` / `Ctrl-F` / `Ctrl-D` / `Ctrl-U`;
+  bare-letter vim keys (`j`, `k`, `g`, `G`, `z`) are consumed by
+  the search field as text input and never trigger chord state from
+  the search field. Empty filtered set: every list-navigation key
+  including the chords is a silent no-op. `Ctrl-N` / `Ctrl-P` inside
+  modals advance / retreat focus the same as `Tab` / `Shift-Tab`,
+  do not advance through post-success counts panels, and do not
+  override `↑` / `↓` spinner adjustments.
 - **Search**: case-insensitive substring through
   `paladin_core::account_matches_search` (using the same base match key as
   CLI query resolution in DESIGN §5; empty issuer is allowed and the colon is
@@ -677,7 +714,8 @@ captured with `insta` golden snapshots using `ratatui::backend::TestBackend`.
   only until the scheduled clear attempt, stale-token drop, replacement, or
   app shutdown, and are zeroized at that point.
 - **Insta snapshots** for every screen state: empty vault, single TOTP,
-  mixed TOTP/HOTP with hidden + revealed rows, search-active, every modal
+  mixed TOTP/HOTP with hidden + revealed rows, search-active, list view
+  after a `zz` recenter (selected row in viewport middle), every modal
   (Add / Remove / Rename / Import / Export / Passphrase set/change/remove /
   Settings), Help overlay, unlock screen, missing-vault screen, status-line error
   after rejected copy, `--no-color` variants. Error-state snapshots:
@@ -815,6 +853,14 @@ is never expected to be scripted.
 - [ ] Implement list layout from `AccountSummary` projections, search,
   TOTP gauges, HOTP reveal/copy behavior,
   HOTP `Code.counter_used` labels, and status-line errors.
+- [ ] Implement vim-style list navigation (`j` / `k`, `Ctrl-F` /
+  `Ctrl-B`, `G`, plus `gg` and `zz` two-press chords) in the
+  reducer. Hold pending-chord state with no timeout; clear it on any
+  non-matching key, focus change to search, modal open, `Esc`, or
+  auto-lock. Add `Ctrl-B` / `Ctrl-F` to the search-focus
+  pass-through list alongside the existing `Ctrl-D` / `Ctrl-U` /
+  `PgUp` / `PgDn` / `Home` / `End`. Add `Ctrl-N` / `Ctrl-P` as
+  modal-local `Tab` / `Shift-Tab` aliases.
 - [ ] Implement add / remove / rename / import / export / passphrase / settings modals
   with persistence through `Vault::mutate_and_save` where the core owns
   rollback. Source the `passphrase remove` warning from
