@@ -250,6 +250,9 @@ export, passphrase set/change) and the Add modal's secret-bearing
 fields (manual-secret field and the URI-mode entry) keep typed bytes in
 zeroizing buffers, convert to `secrecy::SecretString` only for core
 calls, and zeroize on submit, cancel, modal close, and auto-lock.
+The Add modal also zeroizes hidden secret-bearing fields when the user
+switches input modes, so stale manual secrets or `otpauth://` URI text are
+not retained behind the active mode.
 Passphrase buffers preserve the typed bytes exactly: no trimming,
 case-folding, or Unicode normalization is applied before constructing the
 `SecretString`; an empty passphrase means zero bytes. If
@@ -289,7 +292,9 @@ dismiss deliberately.
 - **Add** — three input modes selected via a segmented header inside
   the modal: manual fields, paste of an `otpauth://` URI, and a
   focused "scan from clipboard image" control (CLI parity with `add`
-  interactive / `--uri` / `--qr`).
+  interactive / `--uri` / `--qr`). Switching modes clears the hidden
+  secret-bearing fields for the modes being left: the manual Base32
+  secret, the URI text, and any pending duplicate/add-anyway state.
   Manual mode collects label, issuer, secret
   (Base32 RFC 4648, case-insensitive, optional `=` padding), algorithm
   (`sha1` / `sha256` / `sha512`), digits (6 / 7 / 8), kind (`totp` or
@@ -317,7 +322,8 @@ dismiss deliberately.
   `paladin_core::import::qr_image_bytes(width, height, rgba_bytes, submit_time)`
   per the §4.7 signature, which takes `import_time` directly rather than
   the `ImportOptions` accepted by `import::from_file` /
-  `import::from_bytes`.
+  `import::from_bytes`. The Add modal surfaces the shared
+  `QR_RGBA_MAX_BYTES` rejection (`image_too_large`) inline before decode.
   Validation warnings are rendered with
   `paladin_core::format_validation_warning()` and do not block creation:
   manual / URI additions include them in the status-line confirmation, while
@@ -351,13 +357,13 @@ dismiss deliberately.
 - **Rename** — single text field pre-populated with the selected
   account's current label. Confirm wraps
   `Vault::rename(id, new_label, now)` in `Vault::mutate_and_save` with
-  the trimmed input; same label validation as Add (non-empty, §4.1
-  length limits). A no-op rename (trimmed input equals the current
-  label) closes the modal without invoking `mutate_and_save`. Issuer
-  is **not** editable here — parity with the CLI's `rename` taking
-  only `<new-label>`; deeper edits use Remove + Add. Pre-commit save
-  failures (`save_not_committed`) restore the prior label so memory
-  matches disk and the modal stays open with the inline error;
+  the trimmed input regardless of whether it equals the current label;
+  same label validation as Add (non-empty, §4.1 length limits). Same-label
+  renames still call `Vault::rename`, save, and bump `updated_at`, matching
+  the CLI. Issuer is **not** editable here — parity with the CLI's
+  `rename` taking only `<new-label>`; deeper edits use Remove + Add.
+  Pre-commit save failures (`save_not_committed`) restore the prior label so
+  memory matches disk and the modal stays open with the inline error;
   durability-unconfirmed saves leave the new label in memory and
   surface the warning inline. Rename does not handle secret material;
   the label buffer is cleared on submit, cancel, modal close, and
@@ -700,10 +706,10 @@ captured with `insta` golden snapshots using `ratatui::backend::TestBackend`.
   modal open with the inline error; a durability-unconfirmed save leaves the
   new values in memory; Confirm with no changes closes without saving.
 - **Rename modal**: opens with the selected account's current label
-  pre-populated; trimmed-equal input short-circuits without calling
-  `Vault::rename` or `Vault::mutate_and_save`; non-empty trimmed
-  changes route through `Vault::rename` inside
-  `Vault::mutate_and_save`; pre-commit `save_not_committed` restores
+  pre-populated; non-empty trimmed input always routes through
+  `Vault::rename` inside `Vault::mutate_and_save`, including when the
+  trimmed input equals the current label so `updated_at` still matches CLI
+  behavior; pre-commit `save_not_committed` restores
   the prior label and the modal stays open with the inline error;
   `save_durability_unconfirmed` leaves the new label in memory and
   surfaces the warning. Empty / out-of-range labels surface inline
@@ -749,7 +755,8 @@ captured with `insta` golden snapshots using `ratatui::backend::TestBackend`.
   `clipboard_write_failed` after a failed copy; unlock screen with
   inline wrong-passphrase error; Add modal with QR-import inline
   errors (no clipboard image, image decode failure, zero decoded QRs,
-  invalid QR payload) plus the post-QR-import counts panel; Add modal with
+  oversized raw RGBA buffer, invalid QR payload) plus the post-QR-import
+  counts panel; Add modal with
   `duplicate_account` and the
   follow-up "add anyway" confirmation; Passphrase modal with
   `confirmation_mismatch` and `zero_length` inline errors;

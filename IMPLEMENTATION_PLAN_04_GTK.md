@@ -13,11 +13,11 @@ Depends on: [`IMPLEMENTATION_PLAN_01_CORE.md`](IMPLEMENTATION_PLAN_01_CORE.md).
 Standalone GTK4 binary `paladin-gtk` built with **Relm4** on **GTK4** per
 §7, using `libadwaita` widgets per §9.
 Exposes the same operations as the TUI: search/list of accounts, copy code,
-HOTP `next` with reveal window, add account (manual or scan-from-clipboard
-image), remove account, import/export, settings (auto-lock +
-clipboard-clear), passphrase set/change/remove.
+HOTP `next` with reveal window, add account (manual, `otpauth://` URI
+paste, or scan-from-clipboard image), remove account, import/export,
+settings (auto-lock + clipboard-clear), passphrase set/change/remove.
 
-Per §3 / CLAUDE.md: depends only on `paladin-core`. Never reaches into
+Per DESIGN §3: depends only on `paladin-core`. Never reaches into
 `paladin-cli` or `paladin-tui`.
 
 ## Crate layout
@@ -101,14 +101,14 @@ inclusion.
   generic error text only if the formatter unexpectedly returns `None`.
 - `InitDialog` — only path that creates a vault from the GUI (v0.2;
   parity with DESIGN §6, §7). Two `AdwPasswordEntryRow` passphrase
-  fields (twice-confirmed; empty selects plaintext) plus an explicit
-  "create vault" confirmation button. The plaintext path renders
+  fields (twice-confirmed; both fields empty select plaintext) plus an
+  explicit "create vault" confirmation button. The plaintext path renders
   `paladin_core::format_plaintext_storage_warning()` verbatim — the
   same wording `PassphraseDialog`'s remove flow and the CLI / TUI use —
   and the user must tick the confirmation before submission is enabled.
-  Encrypted submission rejects empty new entries inline with
-  `invalid_passphrase` (`reason: "zero_length"`) and rejects mismatch
-  with `reason: "confirmation_mismatch"`. On submit, builds a
+  Encrypted submission requires two non-empty matching entries; one-empty
+  or mismatched pairs reject inline with `invalid_passphrase`
+  (`reason: "confirmation_mismatch"`). On submit, builds a
   `VaultInit` (`VaultInit::Plaintext` or
   `VaultInit::Encrypted(EncryptionOptions::new(secret))`) and calls
   `paladin_core::create(path, init)` on `gio::spawn_blocking` (the
@@ -171,7 +171,10 @@ inclusion.
 - `AddAccountComponent` — three input paths in a single dialog:
   manual fields, paste of an `otpauth://` URI, and "scan from clipboard
   image" (an `AdwViewStack` controlled by an `AdwViewSwitcher` selects the
-  active path; CLI parity with `add` interactive / `--uri` / `--qr`).
+  active path; operation parity with `add` interactive / `--uri` / QR add).
+  Switching paths clears the hidden secret-bearing fields for the paths
+  being left: the manual Base32 secret, the URI text, and any pending
+  duplicate/add-anyway state.
   The URI path uses an `AdwEntryRow` for the URI string; on submit
   the entry is passed to `paladin_core::parse_otpauth` on the main
   thread (no I/O, cheap), the resulting `ValidatedAccount` shares the
@@ -185,9 +188,10 @@ inclusion.
   dialog close. The "scan from clipboard image" path reads
   a `gdk::Texture` from the GDK clipboard, allocates an exact
   `width * height * 4` straight (non-premultiplied) RGBA8 buffer with
-  overflow-checked multiplication, and downloads via a
-  `gdk::TextureDownloader` set to `gdk::MemoryFormat::R8g8b8a8` with row
-  stride `width * 4`. The default `Texture::download` path is avoided
+  overflow-checked multiplication, rejects sizes above
+  `paladin_core::QR_RGBA_MAX_BYTES` before allocation / download, and downloads
+  via a `gdk::TextureDownloader` set to `gdk::MemoryFormat::R8g8b8a8` with
+  row stride `width * 4`. The default `Texture::download` path is avoided
   because it yields premultiplied pixels the QR decoder cannot consume.
   Width, height, bytes, and `import_time` are then passed to
   `paladin_core::import::qr_image_bytes`. Manual fields cover label,
@@ -246,13 +250,15 @@ inclusion.
   identify an encrypted/plaintext Paladin bundle do not consume a passphrase;
   the dialog continues through `paladin_core::import::from_file` so the
   import facade owns `io_error`, `unsupported_import_format`, and any
-  format-specific `invalid_header` behavior. The selected
-  `paladin_core::import::from_file` call runs on
-  `gio::spawn_blocking` (the encrypted-Paladin variant runs Argon2id),
-  with results delivered back via Relm4 messages. On success,
-  `Vault::import_accounts(accounts, conflict, import_time)` is called with
-  the user's policy and the same `import_time` used by `ImportOptions`
-  inside `Vault::mutate_and_save`;
+  format-specific `invalid_header` behavior. If the source path or forced
+  format changes after a bundle passphrase has been entered, the passphrase
+  row is cleared and the probe / prompt flow starts over. The selected
+  `paladin_core::import::from_file` call, the
+  `Vault::import_accounts(accounts, conflict, import_time)` merge, and
+  the surrounding `Vault::mutate_and_save` run as one serialized
+  `gio::spawn_blocking` vault effect (the encrypted-Paladin variant runs
+  Argon2id). The merge uses the user's policy and the same `import_time`
+  used by `ImportOptions`;
   imported/skipped/replaced/appended/warning counts surface inline.
   Pre-commit save failures (`save_not_committed`) restore core's
   pre-attempt snapshot; durability-unconfirmed saves leave the merged
@@ -270,9 +276,10 @@ inclusion.
   the user confirms an inline overwrite gate (parity with CLI
   `--force`). Any overwrite gate is resolved before encrypted-bundle
   passphrase rows are accepted; if the destination or format changes
-  after passphrase entry, password rows are cleared and the user is
-  re-prompted. Encrypted exports prompt twice for the bundle passphrase
-  and reject mismatch (`invalid_passphrase`
+  after overwrite or plaintext-warning confirmation, those confirmations are
+  reset; if either changes after passphrase entry, password rows are cleared
+  and the user is re-prompted. Encrypted exports prompt twice for the
+  bundle passphrase and reject mismatch (`invalid_passphrase`
   `reason: "confirmation_mismatch"`) or empty entry
   (`reason: "zero_length"`) inline; both the encrypted-bundle and
   plaintext writes run on `gio::spawn_blocking` (encrypted-bundle to
@@ -297,8 +304,9 @@ inclusion.
   requires explicit confirmation before mutation. The available
   sub-flow is gated by `Vault::is_encrypted()`: `set` is enabled only
   when the getter returns `false`; `change` and `remove` only when it
-  returns `true`. Any stale invalid-state error stays in the dialog and does not
-  mutate visible state.
+  returns `true`. Switching sub-flows clears all passphrase rows and any
+  pending plaintext-removal confirmation. Any stale invalid-state error stays
+  in the dialog and does not mutate visible state.
 - `SettingsComponent` — toggles for auto-lock and clipboard-clear, with
   spinners for timeouts. Spinners clamp to the §5 bounds
   (`30 <= auto_lock.timeout_secs <= 86_400`,
@@ -323,8 +331,10 @@ buffer is the unavoidable UI boundary; Paladin-owned copies are created only
 at submit time, immediately wrapped in `secrecy::SecretString` for core
 calls, and zeroized when dropped. Submit, cancel, dialog close, and auto-lock
 clear the relevant GTK entry widgets before the component returns to its idle
-state. Two short-lived modal-local exceptions are required for confirmation
-round trips: `AddAccountComponent` keeps a duplicate-collision
+state. Switching Add paths also clears hidden manual-secret and URI entry
+buffers before the new path becomes active. Two short-lived modal-local
+exceptions are required for confirmation round trips:
+`AddAccountComponent` keeps a duplicate-collision
 `ValidatedAccount` in a zeroizing pending-add slot after clearing the input
 buffers, and `InitDialog` keeps the pending `VaultInit` (secret-bearing only
 for encrypted creation) in a zeroizing pending-create slot while the
@@ -474,15 +484,21 @@ mutations update visible state only after success; controls that move
 optimistically because GTK/Adwaita owns the interaction, such as settings
 switches and spin rows, are reverted on pre-commit failure:
 
-- HOTP `next`: pre-commit save failures (`save_not_committed`) leave the
-  in-memory counter and reveal state unchanged (per DESIGN §4.2 rollback)
-  and surface an inline/status error. Durability-unconfirmed failures
-  (`save_durability_unconfirmed`) reveal the new code with its
-  `Code.counter_used` label and post an `AdwToast` carrying the
-  committed-but-uncertain status — the user has the new code in hand
-  even though durability is in question, and the toast is the
-  surface that conveys the warning so the row stays usable. All
-  other failures show an inline/status error and leave the row hidden.
+- HOTP `next`: the worker first calls `hotp_peek` and keeps the would-be
+  visible `Code` in a zeroizing pending slot, then calls
+  `Vault::hotp_advance` to advance and save. The staged code is published
+  to the reveal slot only if the advance succeeds or returns
+  `save_durability_unconfirmed`, so the error type does not need to carry
+  a `Code`. Pre-commit save failures (`save_not_committed`) leave the
+  in-memory counter and reveal state unchanged (per DESIGN §4.2 rollback),
+  zeroize the staged code, and surface an inline/status error.
+  Durability-unconfirmed failures (`save_durability_unconfirmed`) reveal
+  the new code with its `Code.counter_used` label and post an `AdwToast`
+  carrying the committed-but-uncertain status — the user has the new code
+  in hand even though durability is in question, and the toast is the
+  surface that conveys the warning so the row stays usable. All other
+  failures show an inline/status error, leave the previous reveal state
+  unchanged (hidden if no reveal was open), and zeroize the staged code.
 - Copy: if the GDK clipboard write fails, show an inline/status error and do
   not schedule clipboard auto-clear.
 - Add / remove / rename / settings saves: validation and setter failures happen
@@ -552,14 +568,14 @@ switches and spin rows, are reverted on pre-commit failure:
 (§11.1). Implementation owes the release pipeline:
 
 - **Cargo.toml metadata.** `crates/paladin-gtk/Cargo.toml` inherits
-  `description`, `repository`, `license` (set to
+  `description`, `repository`, `homepage`, `license` (set to
   `"AGPL-3.0-or-later"` at the workspace), `edition`, and
   `rust-version` from the workspace's `[workspace.package]` table
   (defined per IMPLEMENTATION_PLAN_01_CORE.md Phase A) via per-field
   Cargo inheritance (`description.workspace = true`,
   `repository.workspace = true`, and so on) so `nfpm` and Flathub
   manifests read one source. It additionally sets the binary-specific
-  `homepage`, `keywords`, and `categories` fields locally. The
+  `keywords` and `categories` fields locally. The
   packaging pipeline sources these values from Cargo metadata when
   building `.deb` / `.rpm` so the per-format configs in
   `packaging/deb/paladin-gtk.yaml` and `packaging/rpm/paladin-gtk.yaml`
@@ -659,11 +675,17 @@ The GUI itself is hard to test without a display server. Tests are split:
   startup-error routing for default-path / inspect / open failures,
   auto-lock state machine, clipboard "clear if unchanged"
   decision logic plus pending-value zeroization, HOTP reveal window timing
-  via `paladin_core::HOTP_REVEAL_SECS` + counter labels,
-  secret-field clearing/redaction invariants, QR RGBA
-  byte-length/stride preparation,
-  init dialog logic (plaintext vs encrypted routing, twice-confirm match
-  / zero-length / mismatch handling, plaintext-warning gate,
+  via `paladin_core::HOTP_REVEAL_SECS` + counter labels, staged-code
+  publication on success / `save_durability_unconfirmed`, and staged-code
+  zeroization with prior reveal-state retention on pre-commit / other
+  failures,
+  secret-field clearing/redaction invariants, Add path-switch clearing for
+  hidden secret-bearing fields and pending duplicate state, QR RGBA
+  byte-length/stride preparation plus `QR_RGBA_MAX_BYTES` rejection before
+  allocation / download,
+  init dialog logic (plaintext vs encrypted routing, both-empty
+  plaintext selection, twice-confirm match / one-empty mismatch handling,
+  plaintext-warning gate,
   `vault_exists` triggering the destructive-confirmation gate that
   routes through `create_force` (with cancellation leaving the
   existing vault intact and zeroizing the pending `VaultInit`), and
@@ -676,13 +698,16 @@ The GUI itself is hard to test without a display server. Tests are split:
   unsupported types, duplicate "add anyway" consuming a pending
   `ValidatedAccount`, zeroize-on-cancel of the URI entry buffer),
   import format-selector routing + on-conflict policy threading +
-  post-merge counts mapping, export overwrite-gate + encrypted
-  twice-confirm match logic + export writer error mapping,
+  bundle-passphrase clearing when source / format changes,
+  post-merge counts mapping, export overwrite / plaintext-warning gate reset
+  on destination / format changes + encrypted twice-confirm match logic +
+  export writer error mapping,
   passphrase dialog logic (sub-flow gating against
   `Vault::is_encrypted()`, `set` / `change` twice-confirm match,
   `zero_length` and `confirmation_mismatch` rejections, `remove`
-  plaintext-storage warning gate, secret-buffer zeroize on
-  submit / cancel / close), settings logic (live-apply path through
+  plaintext-storage warning gate, sub-flow switch clearing,
+  secret-buffer zeroize on submit / cancel / close), settings logic
+  (live-apply path through
   `Vault::mutate_and_save`, spinner clamping at the §5 bounds
   (`30 <= auto_lock.timeout_secs <= 86_400`,
   `5 <= clipboard.clear_secs <= 600`),
@@ -697,7 +722,8 @@ The GUI itself is hard to test without a display server. Tests are split:
 - **Smoke test** in CI under `xvfb-run`: app launches, opens a prepared
   plaintext vault, the list renders. Required for Milestone 7 sign-off.
 - **Manual test plan** (`tests/manual/MANUAL_TEST_PLAN.md`) per Milestone 7
-  checklist: init plaintext vault (empty passphrase + warning gate); init
+  checklist: init plaintext vault (both passphrase fields empty + warning
+  gate); init
   encrypted vault (twice-confirm); init when a vault already exists at
   the path opens the destructive-confirmation gate, confirm runs
   `create_force` and rotates the prior vault to `vault.bin.bak`,
@@ -707,8 +733,9 @@ The GUI itself is hard to test without a display server. Tests are split:
   TOTP; HOTP next reveals + copies while showing the counter used;
   reveal expires; auto-lock fires; clipboard auto-clear honors
   if-unchanged; add manual; add via `otpauth://` URI paste (success +
-  malformed-URI rejection + duplicate "add anyway" round-trip); add
-  via clipboard image;
+  malformed-URI rejection + duplicate "add anyway" round-trip); switching
+  Add paths clears hidden secret fields and pending duplicate state; add
+  via clipboard image, including oversized-image rejection before download;
   import each format (otpauth, aegis plaintext, encrypted Paladin bundle,
   QR image file) with each on-conflict policy and verify reported counts; export
   plaintext (warning + confirmation, `0600` output) and encrypted
@@ -809,12 +836,12 @@ back into vanilla GTK4 widgets where Adwaita is idiomatic:
   advance, clipboard-clear-fired notice, settings-saved confirmation
   — is delivered via `AdwToast`. Status-line errors that block
   further interaction stay inline in the affected dialog.
-- **Confirmation dialogs.** `RemoveDialog`, the plaintext-export
-  consent step, and the export overwrite gate are
-  `AdwAlertDialog`s with `destructive-action` styling on the
-  destructive button. The §6 wording (e.g. the plaintext-export
-  "this writes unencrypted secrets to disk" warning) is reused
-  verbatim so the UX matches the TUI.
+- **Confirmation dialogs.** `InitDialog`'s `create_force` clobber gate,
+  `RemoveDialog`, the plaintext-export consent step, and the export
+  overwrite gate are `AdwAlertDialog`s with `destructive-action` styling on the
+  destructive button. Shared warning text (for example the plaintext-export
+  "this writes unencrypted secrets to disk" warning) is reused verbatim so the
+  UX matches the TUI.
 - **Preferences.** `SettingsComponent` renders inside an
   `AdwPreferencesWindow` with one `AdwPreferencesGroup` for
   auto-lock and one for clipboard-clear. Toggles use
@@ -831,8 +858,8 @@ back into vanilla GTK4 widgets where Adwaita is idiomatic:
   twice-confirmed entries on `set` / `change` and on
   `ExportDialog`'s encrypted bundle path. Inline validation errors
   (`confirmation_mismatch`, `zero_length`, `decrypt_failed`) attach
-  to the row via `AdwEntryRow::add-css-class("error")` plus a
-  status-line label below the row.
+  to the row by adding the `error` CSS class plus a status-line label
+  below the row.
 - **About / help.** `AdwAboutDialog` is wired to the application
   menu and pulls program metadata from Cargo package metadata embedded
   at compile time; the AGPL-3.0-or-later license text ships in the

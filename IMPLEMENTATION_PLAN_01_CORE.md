@@ -458,8 +458,10 @@ Each step lands as its own commit. Tests come first.
   and rejects malformed / below-minimum values with `validation_error`.
   `Vault::apply_setting_patch` routes through the same typed setters so
   direct setters and CLI-style dotted patches cannot diverge.
-- [ ] Tests: `HOTP_REVEAL_SECS == 120`, locked as the shared TUI / GUI reveal
-  duration so both front ends consume the same constant.
+- [ ] Tests: `HOTP_REVEAL_SECS == 120` and
+  `QR_RGBA_MAX_BYTES == 64 * 1024 * 1024`, locked as shared TUI / GUI
+  constants so both front ends consume the same reveal duration and raw-RGBA
+  clipboard-image cap.
 - [ ] Implement `Vault` operations, `Vault::save`, `Vault::get`,
   `Vault::summaries`, `Vault::find_duplicate`, `Vault::import_accounts`,
   `Vault::totp_code`, `Vault::hotp_peek`, `Vault::hotp_advance`,
@@ -537,8 +539,9 @@ Each step lands as its own commit. Tests come first.
   `import::qr_image` and `import::qr_image_bytes` (decoded QRs that are not
   `otpauth://` URIs reject the batch with `validation_error` +
   `source_index`; raw RGBA byte buffers reject zero dimensions, checked
-  multiplication overflow, and length mismatches before decoding, then
-  return `no_entries_to_import` when no QR decodes), including
+  multiplication overflow, length mismatches, and buffers larger than
+  `QR_RGBA_MAX_BYTES` (64 MiB) before decoding, then return
+  `no_entries_to_import` when no QR decodes), including
   `otpauth`, QR, and Aegis imports setting `created_at = updated_at =
   import_time`; timestamps preserved for Paladin bundle imports and fresh IDs
   assigned for inserted/appended rows; replacements keep destination ID and
@@ -586,13 +589,16 @@ Each step lands as its own commit. Tests come first.
   `read_qr_image_bytes(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<String>>` in
   `import/qr.rs`. The path form loads the image from disk; the byte form
   accepts raw RGBA8 clipboard/image buffers, rejects zero dimensions,
-  rejects overflow in `width * height * 4`, and rejects any buffer length
-  other than that exact byte count. Both decode every QR via `rqrr`, return
-  one payload string per decoded QR, and return an empty `Vec` when the image
-  contains no QRs — the wrapping `import::qr_image` /
+  rejects overflow in `width * height * 4`, rejects any buffer length
+  other than that exact byte count, and rejects buffers larger than
+  `QR_RGBA_MAX_BYTES` (64 MiB) with `validation_error`
+  (`field: "qr_image"`, `reason: "image_too_large"`). Both decode every QR
+  via `rqrr`, return one payload string per decoded QR, and return an empty
+  `Vec` when the image contains no QRs — the wrapping `import::qr_image` /
   `import::qr_image_bytes` functions are what turn that into
-  `no_entries_to_import`. Re-exported at the crate root per §4.7 alongside
-  `parse_otpauth` and `validate_manual`.
+  `no_entries_to_import`. `QR_RGBA_MAX_BYTES` is re-exported at the crate
+  root alongside the QR helpers so front ends can reject oversize clipboard
+  images before allocation / decode.
 
 ### Phase J — Public API freeze + library polish
 
@@ -741,8 +747,9 @@ is a separate `#[test]` or table-driven case family.
   pairs for missing IDs and wrong OTP kind, matching DESIGN §4.7.
 - HOTP `hotp_peek` after a committed `hotp_advance` returns the code for
   the new (post-advance) counter.
-- `HOTP_REVEAL_SECS == 120` exported as the shared TUI / GUI reveal-window
-  duration.
+- `HOTP_REVEAL_SECS == 120` and
+  `QR_RGBA_MAX_BYTES == 64 * 1024 * 1024` exported as shared TUI / GUI
+  constants.
 - Passphrase transitions: `set`, `change`, `remove`; pre-commit rollback;
   durability-unconfirmed post-commit; default/custom Argon2 params for
   encrypted targets; fresh salt/nonce behavior; backup rewritten under the

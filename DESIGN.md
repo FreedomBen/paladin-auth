@@ -471,13 +471,16 @@ Auto-detect format by content sniffing, with `--format` to override:
   no QRs are decoded. File imports load an image from disk. UI clipboard
   imports pass raw RGBA bytes plus width/height. The raw-RGBA path rejects
   zero dimensions and buffers whose length is not exactly
-  `width * height * 4` bytes, using overflow-checked multiplication. Both
-  paths use `rqrr` to decode every QR and feed each resulting payload
-  through the `otpauth://` URI parser. Decoded QRs that are not valid
-  `otpauth://` URIs reject the whole batch via `validation_error` with
-  `source_index`, matching the import atomicity rule below. The TUI and GTK
-  GUI accept a QR image pasted from the clipboard, decoded via the raw-RGBA
-  path.
+  `width * height * 4` bytes, using overflow-checked multiplication. It
+  also rejects buffers larger than `QR_RGBA_MAX_BYTES` (64 MiB) before
+  decode with `validation_error` (`field: "qr_image"`,
+  `reason: "image_too_large"`). Front ends that allocate clipboard RGBA
+  buffers themselves check the same cap before allocation. Both paths use
+  `rqrr` to decode every QR and feed each resulting payload through the
+  `otpauth://` URI parser. Decoded QRs that are not valid `otpauth://` URIs
+  reject the whole batch via `validation_error` with `source_index`,
+  matching the import atomicity rule below. The TUI and GTK GUI accept a QR
+  image pasted from the clipboard, decoded via the raw-RGBA path.
 
 `detect` resolves the format in this fixed order, returning the first
 match: file starts with the `PALADIN\0` magic → `Paladin`; image-format
@@ -547,6 +550,7 @@ pub enum AccountKindInput { Totp, Hotp }
 pub enum AccountKindSummary { Totp, Hotp }
 pub enum IconHintInput { Default, Clear, Slug(String) }
 pub const HOTP_REVEAL_SECS: u64 = 120;
+pub const QR_RGBA_MAX_BYTES: usize = 64 * 1024 * 1024;
 
 /// Non-secret account projection used by all presentation crates for list
 /// rows, duplicate-account errors, JSON output, and import reports. This is
@@ -733,7 +737,7 @@ impl Vault {
 pub fn write_secret_file_atomic(path: &Path, bytes: &[u8]) -> Result<()>;  // shared export writer: same-directory tempfile, 0600, file fsync, rename, parent fsync; no .bak; save_not_committed before rename, save_durability_unconfirmed after rename; caller handles overwrite policy
 pub fn parse_otpauth(uri: &str, import_time: SystemTime) -> Result<ValidatedAccount>;
 pub fn read_qr_image(path: &Path) -> Result<Vec<String>>;                 // one URI per decoded QR; returns an empty Vec when the image contains no QRs (the `import::qr_image` wrapper turns that into an error)
-pub fn read_qr_image_bytes(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<String>>;  // raw RGBA8 clipboard/image buffer; validates nonzero dimensions and exact byte length; returns an empty Vec when the image contains no QRs
+pub fn read_qr_image_bytes(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<String>>;  // raw RGBA8 clipboard/image buffer; validates nonzero dimensions, exact byte length, and QR_RGBA_MAX_BYTES; returns an empty Vec when the image contains no QRs
 
 /// Unvalidated manual input from the CLI's flag-driven `add` mode (or any
 /// other caller that doesn't already have an `otpauth://` URI). `secret`
@@ -1405,14 +1409,15 @@ Layout (single-screen MVP):
 Library: **Relm4** on **GTK4**. Component tree:
 
 - `AppModel` — owns the resolved vault path plus the `Missing` /
-  `Locked` / `Unlocked` state. Startup runs
+  `Locked` / `Unlocked` / `StartupError` state. Startup runs
   `paladin_core::inspect(path)`: plaintext vaults open directly to the
   list, encrypted vaults show `UnlockComponent`, and missing vaults
   open `InitDialog` so the user can create a vault from inside the
-  app.
+  app. Default-path, inspect, or non-authentication open failures render
+  a non-mutating startup-error view with retry and quit actions.
 - `InitDialog` — in-app vault initialization (v0.2 GUI only; TUI and
   CLI keep their existing behavior). Two passphrase fields
-  (twice-confirmed; empty selects plaintext, with the same
+  (twice-confirmed; both fields empty select plaintext, with the same
   unencrypted-storage warning used by `passphrase remove`) plus an
   explicit "create vault" confirmation. Calls
   `paladin_core::create(path, init)` on `gio::spawn_blocking`
@@ -1444,19 +1449,20 @@ Library: **Relm4** on **GTK4**. Component tree:
   (decoded via `paladin_core::parse_otpauth`) + "scan from clipboard
   image" decoded through the core raw-RGBA QR import path. URI and
   manual entries share the same validation, duplicate-detection, and
-  `Vault::mutate_and_save` paths.
+  `Vault::mutate_and_save` paths. Switching input paths clears hidden
+  secret-bearing fields and any pending duplicate override state.
 - `RemoveDialog` — confirmation gate before `Vault::remove` + save.
 - `RenameDialog` — single text entry pre-populated with the account's
   current label. Calls `Vault::rename(id, new_label, now)` inside
   `Vault::mutate_and_save`. Issuer is not editable here (parity with
   `paladin rename`); deeper edits use remove + re-add.
-- `ImportDialog` — `gtk::FileChooserNative` for the source path, format
+- `ImportDialog` — `gtk::FileDialog` for the source path, format
   selector (auto-detect or explicit `otpauth` / `aegis` / `paladin` /
   `qr`), on-conflict policy (`skip` / `replace` / `append`), and a
   passphrase prompt for encrypted Paladin bundles. Reports
   imported/skipped/replaced/appended/warning counts on success.
 - `ExportDialog` — format selector (plaintext `otpauth://` JSON list or
-  encrypted Paladin bundle), `gtk::FileChooserNative` for the
+  encrypted Paladin bundle), `gtk::FileDialog` for the
   destination path, overwrite confirmation, twice-entered passphrase
   for the encrypted variant, and an explicit unencrypted-secrets
   warning before plaintext writes. Writes through
@@ -1538,28 +1544,28 @@ Concrete obligations and explicit user-controlled tradeoffs:
 
 ## 9. Key dependencies (proposed)
 
-| Crate                              | Use                              |
-| ---------------------------------- | -------------------------------- |
-| `ratatui`                          | TUI rendering                    |
-| `crossterm`                        | TUI backend                      |
-| `tui-input`                        | TUI text input widget            |
-| `relm4`, `gtk4`, `libadwaita`      | GUI (v0.2) — Adwaita widgets, HIG dialogs, toasts |
-| `clap`                             | CLI parsing                      |
-| `serde`, `serde_json`, `bincode` (v2) | Vault and JSON I/O             |
-| `hmac`, `sha1`, `sha2`             | TOTP / HOTP primitives           |
-| `chacha20poly1305`                 | AEAD (XChaCha20-Poly1305)        |
-| `argon2`                           | KDF                              |
-| `secrecy`, `zeroize`               | Memory hygiene                   |
-| `rpassword`                        | CLI passphrase prompt            |
-| `arboard`                          | Clipboard (cross-platform)       |
-| `rqrr`, `image`                    | QR decode from files/buffers    |
-| `qrcode`                           | (Optional) display QR for setup  |
-| `directories`                      | XDG / platform paths             |
-| `thiserror`, `anyhow`              | Error types                      |
-| `base32`                           | Secret encoding                  |
-| `url`                              | `otpauth://` URI parsing         |
-| `uuid`                             | `AccountId` (UUIDv4) generation and display |
-| `getrandom`                        | CSPRNG source for §4.4 salts and nonces; pinned in `paladin-core` so the random source does not drift across transitive minor versions |
+| Crate                                  | Use                                                                                                                               |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `ratatui`                              | TUI rendering                                                                                                                     |
+| `crossterm`                            | TUI backend                                                                                                                       |
+| `tui-input`                            | TUI text input widget                                                                                                             |
+| `relm4`, `gtk4`, `gdk4`, `libadwaita`  | GUI (v0.2) — Adwaita widgets, HIG dialogs, toasts, clipboard                                                                      |
+| `clap`                                 | CLI parsing                                                                                                                       |
+| `serde`, `serde_json`, `bincode` (v2)  | Vault and JSON I/O                                                                                                                |
+| `hmac`, `sha1`, `sha2`                 | TOTP / HOTP primitives                                                                                                            |
+| `chacha20poly1305`                     | AEAD (XChaCha20-Poly1305)                                                                                                         |
+| `argon2`                               | KDF                                                                                                                               |
+| `secrecy`, `zeroize`                   | Memory hygiene                                                                                                                    |
+| `rpassword`                            | CLI passphrase prompt                                                                                                             |
+| `arboard`                              | CLI / TUI clipboard where needed; GUI uses GDK clipboard                                                                          |
+| `rqrr`, `image`                        | QR decode from files/buffers                                                                                                      |
+| `qrcode`                               | (Optional) display QR for setup                                                                                                   |
+| `directories`                          | XDG / platform paths                                                                                                              |
+| `thiserror`, `anyhow`                  | Error types                                                                                                                       |
+| `base32`                               | Secret encoding                                                                                                                   |
+| `url`                                  | `otpauth://` URI parsing                                                                                                          |
+| `uuid`                                 | `AccountId` (UUIDv4) generation and display                                                                                       |
+| `getrandom`                            | CSPRNG source for §4.4 salts and nonces; pinned in `paladin-core` so the random source does not drift across transitive minor versions |
 
 `paladin-core` also pulls in dev-only dependencies that are not part of
 the runtime supply chain: `proptest` for property tests against the
@@ -1626,7 +1632,8 @@ permission fixtures. Binary crates additionally use `assert_cmd` and
   - Importers: Aegis plaintext TOTP/HOTP mapping, unsupported Aegis entry
     type rejection, our own export round-trip with fresh destination IDs,
     plaintext Paladin vault rejection, encrypted-Aegis rejection, and QR
-    image decode (single-QR and multi-QR image files plus raw RGBA buffers)
+    image decode (single-QR and multi-QR image files plus raw RGBA buffers,
+    including the `QR_RGBA_MAX_BYTES` rejection path)
     — fixture files in `tests/fixtures/`. Also covers the "zero accounts"
     rejection path (empty JSON array, blank otpauth file, empty Aegis
     `entries`, image with no decodable QRs). The `import::from_file` /
@@ -1664,7 +1671,7 @@ permission fixtures. Binary crates additionally use `assert_cmd` and
   - TUI missing-vault state: shows `paladin init` guidance and does not
     create or mutate files.
   - GUI missing-vault state: opens `InitDialog`; covers plaintext
-    (empty passphrase + unencrypted-storage warning) and encrypted
+    (both passphrase fields empty + unencrypted-storage warning) and encrypted
     (twice-confirm) creation, `vault_exists` triggering the in-dialog
     `create_force` clobber confirmation (with `vault.bin` rotated to
     `vault.bin.bak`), `unsafe_permissions` rendered via
@@ -1678,8 +1685,8 @@ permission fixtures. Binary crates additionally use `assert_cmd` and
   - TUI add-via-URI + rename: paste-`otpauth://`-URI Add route through
     `paladin_core::parse_otpauth` with the same duplicate /
     validation behavior as manual mode; rename modal round-trips
-    through `Vault::rename` with no-op short-circuit on unchanged
-    label and prior-label restore on `save_not_committed`.
+    through `Vault::rename`, including unchanged labels so `updated_at`
+    matches CLI behavior, with prior-label restore on `save_not_committed`.
   - Plaintext-vault auto-lock is a no-op in TUI state handling now, with
     GUI parity when the GUI ships.
 - **CI:** `cargo fmt --check`, `cargo clippy -- -D warnings`,
@@ -1733,8 +1740,9 @@ artifacts side by side.
   - `paladin-tui` — installs `/usr/bin/paladin-tui` and
     `/usr/share/man/man1/paladin-tui.1.gz`.
   - `paladin-gtk` *(v0.2)* — installs `/usr/bin/paladin-gtk`, a desktop
-    entry at `/usr/share/applications/`, and scalable icons under
-    `/usr/share/icons/hicolor/scalable/apps/`.
+    entry at `/usr/share/applications/`, AppStream metadata under
+    `/usr/share/metainfo/`, and the hicolor app icon set under
+    `/usr/share/icons/hicolor/`.
 - **Dependencies.**
   - `paladin` and `paladin-tui` depend only on `libc6` (Debian) /
     `glibc` (Fedora). The Rust binaries are otherwise statically linked
@@ -1910,9 +1918,13 @@ artifacts side by side.
 
 ### Milestone 7 — GUI *(v0.2)*
 - [ ] Add the `paladin-gtk` crate to the workspace (placeholder for v0.2 work).
-- [ ] Relm4 component tree (Init / Unlock / List / Row / Add / Remove / Rename / Import / Export / Passphrase / Settings).
-- [ ] In-app vault initialization (`InitDialog`) for missing vaults — plaintext + encrypted paths, explicit confirmation, in-dialog `create_force` clobber confirmation when a vault already exists.
-- [ ] In-app account rename (`RenameDialog`) and Add-from-`otpauth://`-URI paste path (parity with CLI `rename` and `add --uri`).
+- [ ] Relm4 component tree (Init / Unlock / List / Row / Add / Remove /
+  Rename / Import / Export / Passphrase / Settings / StartupError).
+- [ ] In-app vault initialization (`InitDialog`) for missing vaults —
+  plaintext + encrypted paths, explicit confirmation, in-dialog
+  `create_force` clobber confirmation when a vault already exists.
+- [ ] In-app account rename (`RenameDialog`) and Add-from-`otpauth://`-URI
+  paste path (parity with CLI `rename` and `add --uri`).
 - [ ] Conditional unlock view (encrypted vaults only).
 - [ ] Clipboard + auto-lock parity with TUI (opt-in).
 - [ ] Linux desktop file + icon (consumed by the §11.3 native packages
@@ -1999,8 +2011,9 @@ artifacts side by side.
 - Core exposes `parse_setting_key`, `parse_setting_patch`, and
   `Vault::apply_setting_patch` so the CLI's dotted settings grammar shares
   the same validation as TUI / GUI typed settings controls.
-- Core exposes `format_validation_warning` and `HOTP_REVEAL_SECS` so warning
-  text and the TUI / GUI HOTP reveal duration cannot drift.
+- Core exposes `format_validation_warning`, `HOTP_REVEAL_SECS`, and
+  `QR_RGBA_MAX_BYTES` so warning text, the TUI / GUI HOTP reveal duration,
+  and raw-RGBA QR clipboard limits cannot drift.
 
 **Decided during core plan review (2026-05-05):**
 - Core exposes a feature-gated `test-fault-injection` hook for binary
