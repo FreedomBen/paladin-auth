@@ -39,7 +39,7 @@ crates/paladin-gtk/
 │   ├── cli.rs             # GlobalArgs (--vault, --no-color); reject --json
 │   ├── app/
 │   │   ├── mod.rs         # AppModel + AppMsg + AppOutput
-│   │   └── state.rs       # AppState: Missing / Locked / Unlocked { vault, store } / StartupError { path: Option<PathBuf>, error }
+│   │   └── state.rs       # AppState variants: Missing / Locked / Unlocked / UnlockedBusy / StartupError
 │   ├── components/
 │   │   ├── init.rs        # InitDialog — vault creation (incl. create_force clobber confirmation)
 │   │   ├── unlock.rs      # UnlockComponent — encrypted vaults only
@@ -88,7 +88,7 @@ inclusion.
 ## Component tree (per §7)
 
 - `AppModel` — owns the resolved vault path plus the `Missing`, `Locked`,
-  `Unlocked`, or `StartupError` state. Startup runs
+  `Unlocked`, `UnlockedBusy`, or `StartupError` state. Startup runs
   `paladin_core::inspect(path)` and
   routes the result: `VaultStatus::Plaintext` opens directly to
   `AccountListComponent`, `Encrypted` presents `UnlockComponent`, and
@@ -414,6 +414,49 @@ start from `ImportDialog`.
   that were created with custom params still read those params from
   the on-disk header per §4.4, so opening is unaffected.
 
+## In-flight effect ownership
+
+`AppModel` serializes all vault-touching blocking effects. While unlocked, the
+model owns exactly one `(Vault, Store)` pair. When an effect needs that pair on
+`gio::spawn_blocking` — HOTP `next`, add / remove / rename / import /
+settings saves, passphrase transitions, and export flows that read the vault
+before writing — the model moves `(Vault, Store)` into the worker and enters an
+`UnlockedBusy { effect, ui_snapshot }` state.
+
+While `UnlockedBusy` is active:
+
+- No second vault-touching effect starts. Row `next` buttons, mutating dialog
+  submit buttons, passphrase actions, import/export actions, and settings
+  controls are disabled and show the active spinner / busy affordance for the
+  current surface.
+- Non-mutating navigation and already-rendered list display may remain
+  responsive using `ui_snapshot`, but anything that would need fresh `Vault`
+  access waits for the worker result. Quit / window-close requests are deferred
+  until the worker returns, so Paladin does not intentionally abandon a
+  save-bearing operation mid-flight.
+- Settings live-apply never runs parallel saves. Spinner debouncing keeps only
+  the latest value seen before a save starts; toggle changes that would overlap
+  an active vault effect are not accepted until the control is re-enabled, at
+  which point the visible value still reflects the last committed or rolled-back
+  state.
+- Dialog close/cancel is disabled for the surface that owns the in-flight
+  mutation until the worker returns, so modal-local pending state cannot be
+  dropped while core still owns the vault operation.
+- If an auto-lock timer fires while `UnlockedBusy` is active, `AppModel` records
+  a lock-after-effect request instead of trying to drop the vault out from under
+  the worker. When the worker returns, the app applies the typed outcome, then
+  locks only if the returned vault is still encrypted; if the operation changed
+  the vault to plaintext, the plaintext auto-lock no-op rule discards the
+  pending lock request. Pending clipboard-clear timers keep their existing
+  only-if-unchanged behavior.
+
+Every worker returns `(Vault, Store, EffectOutcome)` on both success and typed
+failure. `AppModel` reinstalls the returned `(Vault, Store)` before applying
+the UI outcome, so core's rollback / durability-unconfirmed semantics remain
+authoritative. A worker that fails before it can return the pair is a fatal
+startup-style error: the app drops back to `StartupErrorComponent` without
+attempting to reconstruct in-memory vault state.
+
 ## Effect errors
 
 Effects keep visible state consistent with the committed outcome. Most
@@ -603,7 +646,12 @@ The GUI itself is hard to test without a display server. Tests are split:
   (`auto_lock.timeout_secs >= 30`, `clipboard.clear_secs >= 5`),
   500 ms debounce of repeated spinner changes, and pre-commit
   rollback that reverts the visible widget value on
-  `save_not_committed`).
+  `save_not_committed`), in-flight effect ownership (only one
+  vault-touching worker at a time, mutating controls disabled while busy,
+  quit / window-close deferred while busy, auto-lock expiry deferred until the
+  worker returns, `(Vault, Store)` reinstalled before UI outcome handling,
+  settings debounce coalescing to the latest pre-save value, and fatal routing
+  to `StartupErrorComponent` if a worker cannot return the vault/store pair).
 - **Smoke test** in CI under `xvfb-run`: app launches, opens a prepared
   plaintext vault, the list renders. Required for Milestone 7 sign-off.
 - **Manual test plan** (`tests/manual/MANUAL_TEST_PLAN.md`) per Milestone 7
@@ -653,6 +701,10 @@ The GUI itself is hard to test without a display server. Tests are split:
   `Vault::is_encrypted()` to decide whether to arm the auto-lock
   timer (encrypted only) and to track the visible vault-mode flag
   across passphrase transitions.
+- [ ] Serialized in-flight vault effects: one vault-touching worker at a time,
+  mutating controls disabled while busy, and worker results restore
+  `(Vault, Store)` before UI state applies success / typed failure handling;
+  quit and auto-lock requests are deferred until the worker returns.
 - [ ] Use `paladin_core::account_matches_search` for `search.rs` filtering,
   `paladin_core::format_validation_warning()` for validation-warning
   messages, and `paladin_core::format_plaintext_export_warning()` for the
