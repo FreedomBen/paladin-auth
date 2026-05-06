@@ -92,7 +92,7 @@ plaintext storage, valid custom KDF values are accepted but unused.
 
 | Command                                                | Notes |
 |--------------------------------------------------------|-------|
-| `init [--force]`                                       | The pre-check uses `paladin_core::inspect(path)`: `Ok(Missing)` is treated as a clear path; any non-`Missing` result (including `Err` for unrecognized magic at the path) is treated as an existing file. Without `--force`, an existing-file pre-check surfaces `vault_exists` before prompting for the new-vault passphrase. With `--force`, prints `paladin_core::format_init_force_warning(path)` in text mode before any prompt whenever the pre-check sees an existing file (Paladin or not), then calls `paladin_core::create_force` (which performs the §5 staged clobber: stages the new vault, then rotates the old file verbatim to `.bak`, overwriting any existing backup). The verbatim rotation matches `create_force`'s file-type-agnostic semantics. Accepts and validates the KDF flags above before prompting; valid custom KDF values are used only when the new-vault passphrase is non-empty. If the first passphrase entry is empty, text mode prints `paladin_core::format_plaintext_storage_warning()` before creating the plaintext vault. |
+| `init [--force]`                                       | The pre-check uses `paladin_core::inspect(path)` and maps outcomes as follows: `Ok(Missing)` is a clear path; `Ok(Plaintext)`, `Ok(Encrypted)`, `Err(invalid_header)`, and `Err(unsupported_format_version)` are existing files; any other `Err(...)` (notably `io_error` from probe failures such as permission-denied) propagates verbatim rather than being reinterpreted as `vault_exists`. Without `--force`, an existing-file pre-check surfaces `vault_exists` before prompting for the new-vault passphrase. With `--force`, prints `paladin_core::format_init_force_warning(path)` in text mode before any prompt whenever the pre-check sees an existing file (Paladin or not), then calls `paladin_core::create_force` (which performs the §5 staged clobber: stages the new vault, then rotates the old file verbatim to `.bak`, overwriting any existing backup). The verbatim rotation matches `create_force`'s file-type-agnostic semantics. Accepts and validates the KDF flags above before prompting; valid custom KDF values are used only when the new-vault passphrase is non-empty. If the first passphrase entry is empty, text mode prints `paladin_core::format_plaintext_storage_warning()` before creating the plaintext vault. |
 | `add` (interactive / `--uri` / manual flags / `--qr`)  | Exactly one input mode; combinations rejected at parse time. Under `--json`, interactive mode is rejected at parse time — one of `--uri`, `--qr`, or the manual flags must be supplied. |
 | `list`                                                 | Account metadata only — no codes. |
 | `show <query>`                                         | Advances HOTP; persists before printing. Matching queries print all matches when every match is TOTP; if any match is HOTP, requires a single match. |
@@ -429,12 +429,16 @@ existence checks, unlock prompts, wrong-state checks, or command-specific
 prompts.
 
 `init` resolves the same path. The existence pre-check calls
-`paladin_core::inspect(path)`. `Ok(Missing)` is the only "clear path" result;
-any other outcome — `Ok(Plaintext)`, `Ok(Encrypted)`, or `Err(...)` for
-unrecognized magic / I/O errors — is treated as an existing file. Without
-`--force`, an existing-file pre-check returns `vault_exists` before prompting
-for the new-vault passphrase. When the pre-check is clear, it prompts for
-the new-vault passphrase and uses `paladin_core::create`.
+`paladin_core::inspect(path)` and maps outcomes as follows: `Ok(Missing)` is
+the "clear path" result; `Ok(Plaintext)`, `Ok(Encrypted)`,
+`Err(invalid_header)`, and `Err(unsupported_format_version)` are treated as
+existing files; any other `Err(...)` (e.g. `io_error` from a probe failure
+such as permission-denied, or `unsafe_permissions` if a future release adds
+permission probing) propagates verbatim rather than being reinterpreted as
+`vault_exists`. Without `--force`, an existing-file pre-check returns
+`vault_exists` before prompting for the new-vault passphrase. When the
+pre-check is clear, it prompts for the new-vault passphrase and uses
+`paladin_core::create`.
 
 `init --force` runs the same pre-check. When the pre-check sees an existing
 file (Paladin header or not), text mode prints
@@ -538,12 +542,15 @@ where relevant, and exit code.
   Non-empty passphrase → encrypted; second invocation refuses to clobber with
   `vault_exists` before prompting for a new passphrase, including when the
   existing file at the vault path is non-Paladin (unrecognized magic) — the
-  pre-check treats any non-`Missing` `inspect()` result as existing. `--force`
-  rotates the old file verbatim into `.bak` for both Paladin-format and
-  non-Paladin existing files; text-mode `--force` emits the clobber warning
-  whenever the pre-check sees an existing file (regardless of whether it is
-  a recognized Paladin header) and skips the warning only when the path is
-  clear. Custom KDF flags write the requested in-range
+  pre-check treats `Ok(Plaintext)`, `Ok(Encrypted)`, `Err(invalid_header)`,
+  and `Err(unsupported_format_version)` as existing. Probe failures with
+  `Err(io_error)` (e.g. permission-denied reading the candidate path) are
+  propagated as the underlying `io_error` instead of being reinterpreted as
+  `vault_exists`. `--force` rotates the old file verbatim into `.bak` for
+  both Paladin-format and non-Paladin existing files; text-mode `--force`
+  emits the clobber warning whenever the pre-check sees an existing file
+  (regardless of whether it is a recognized Paladin header) and skips the
+  warning only when the path is clear. Custom KDF flags write the requested in-range
   Argon2 params for encrypted init; invalid / out-of-range values reject with
   the §5 error kinds before the first passphrase prompt, and valid custom KDF
   values are accepted but unused when an empty passphrase selects plaintext.
@@ -699,8 +706,9 @@ The CLI ships in `.deb`, `.rpm`, Flatpak, and AppImage in v0.1
   packaging pipeline sources these values from Cargo metadata when
   building `.deb` / `.rpm` so the per-format configs in
   `packaging/deb/paladin.yaml` and `packaging/rpm/paladin.yaml`
-  stay minimal. The Debian one-line description is short enough for
-  the 60-char limit; the long form is sourced from README.
+  stay minimal. The Debian one-line description fits the conventional
+  ~60-character synopsis display width (Debian Policy §5.6.13 caps the
+  synopsis under 80); the long form is sourced from README.
 - **Flatpak.** `packaging/flatpak/paladin.yml` declares
   `org.freedesktop.Platform//23.08`, no `--share=network`,
   filesystem access scoped to `xdg-data/paladin:create` plus
