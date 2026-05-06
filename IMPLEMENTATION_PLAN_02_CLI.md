@@ -1,7 +1,7 @@
 # Implementation Plan 02 — `paladin-cli` (`paladin`)
 
 Source of truth: [DESIGN.md](DESIGN.md) §3-§5, §8, §10-§12
-(Milestone 4).
+(Milestone 4), and §14 (License / SPDX header rule).
 Depends on: [`IMPLEMENTATION_PLAN_01_CORE.md`](IMPLEMENTATION_PLAN_01_CORE.md).
 
 ## Scope
@@ -16,7 +16,7 @@ binary.
 
 ```
 crates/paladin-cli/
-├── Cargo.toml            # license = "AGPL-3.0-or-later"; bin name = "paladin"
+├── Cargo.toml            # inherits workspace metadata via package.workspace = true; bin name = "paladin"
 ├── src/
 │   ├── main.rs           # entry: parse, dispatch, exit code map
 │   ├── cli.rs            # clap derive: GlobalArgs + Command enum
@@ -88,7 +88,7 @@ accepted but unused.
 
 | Command                                                | Notes |
 |--------------------------------------------------------|-------|
-| `init [--force]`                                       | Without `--force`, checks for an existing primary and surfaces `vault_exists` before prompting for the new-vault passphrase. With `--force`, prints `paladin_core::format_init_force_warning(path)` in text mode before any prompt only when an existing primary is present, then calls `paladin_core::create_force` (which performs the §5 staged clobber: stages the new vault, then rotates the old primary verbatim to `.bak`, overwriting any existing backup). Accepts and validates the KDF flags above before prompting; valid custom KDF values are used only when the new-vault passphrase is non-empty. |
+| `init [--force]`                                       | The pre-check uses `paladin_core::inspect(path)`: `Ok(Missing)` is treated as a clear path; any non-`Missing` result (including `Err` for unrecognized magic at the path) is treated as an existing file. Without `--force`, an existing-file pre-check surfaces `vault_exists` before prompting for the new-vault passphrase. With `--force`, prints `paladin_core::format_init_force_warning(path)` in text mode before any prompt whenever the pre-check sees an existing file (Paladin or not), then calls `paladin_core::create_force` (which performs the §5 staged clobber: stages the new vault, then rotates the old file verbatim to `.bak`, overwriting any existing backup). The verbatim rotation matches `create_force`'s file-type-agnostic semantics. Accepts and validates the KDF flags above before prompting; valid custom KDF values are used only when the new-vault passphrase is non-empty. |
 | `add` (interactive / `--uri` / manual flags / `--qr`)  | Exactly one input mode; combinations rejected at parse time. Under `--json`, interactive mode is rejected at parse time — one of `--uri`, `--qr`, or the manual flags must be supplied. |
 | `list`                                                 | Account metadata only — no codes. |
 | `show <query>`                                         | Advances HOTP; persists before printing. Matching queries print all matches when every match is TOTP; if any match is HOTP, requires a single match. |
@@ -99,7 +99,7 @@ accepted but unused.
 | `passphrase set | change | remove`                     | `set` and `change` accept the KDF flags above. `passphrase remove` prints `paladin_core::format_plaintext_storage_warning()` and confirms in text mode unless `--yes` is passed; `--yes` is required under `--json`. |
 | `import <path> [--format <fmt>] [--on-conflict <p>]`   | Auto-detects when `--format` is omitted; forced formats are `otpauth`/`aegis`/`paladin` (encrypted bundle only)/`qr`; conflict policies are `skip` (default)/`replace`/`append`. |
 | `export --plaintext <path> | --encrypted <path>`       | Refuses overwrite without `--force`; both modes write through `paladin_core::write_secret_file_atomic` and create output `0600`; plaintext export prints `paladin_core::format_plaintext_export_warning()` before writing unencrypted secrets; encrypted export accepts the KDF flags above. |
-| `settings get [key] | set <key> <value>`               | CLI persists `clipboard.clear_enabled` for TUI/GUI to honor but **ignores it at runtime** for `paladin copy`. `get [key]` filters text-mode display only; the `--json` shape is always the full `VaultSettings`. |
+| `settings get [key] | set <key> <value>`               | CLI persists `clipboard.clear_enabled` for TUI/GUI to honor but **ignores it at runtime** for `paladin copy`. `get [key]` filters text-mode display only. The `--json` shape is always the full nested `VaultSettings`: `get` returns the current settings, and `set` returns the post-mutation settings after `apply_setting_patch` commits. |
 | `tui`                                                  | `execvp` `paladin-tui`; rejects `--json`; forwards `--vault` / `--no-color`. |
 
 ## Add modes (per §5)
@@ -177,10 +177,12 @@ core owns parsing, matching, and candidate disambiguators.
 | `clipboard.clear_secs`    | u32  | `20`    | `5`     |
 
 Text-mode `settings get [key]` may filter to one dotted key. `--json`
-always returns the full nested `VaultSettings` object, and dotted key names
-never appear in JSON output. Boolean values are accepted only as lowercase
-`true` or `false`; numeric settings are accepted only as base-10 `u32`
-strings, then validated against the minimums above. `settings set` parses
+always returns the full nested `VaultSettings` object — `get` returns the
+current settings, and `set` returns the post-mutation settings after
+`apply_setting_patch` commits — and dotted key names never appear in JSON
+output. Boolean values are accepted only as lowercase `true` or `false`;
+numeric settings are accepted only as base-10 `u32` strings, then validated
+against the minimums above. `settings set` parses
 and validates key/value pairs through `paladin_core::parse_setting_patch` and
 applies the result through `Vault::apply_setting_patch` inside
 `Vault::mutate_and_save`; text-mode `settings get [key]` uses
@@ -390,15 +392,23 @@ Every vault-opening command except `init`:
 6. Drop the `Vault` (zeroizes secrets on drop).
 7. Exit.
 
-`init` resolves the same path. Without `--force`, it checks for an existing
-primary first and returns `vault_exists` before prompting for the new-vault
-passphrase. When the path is clear, it prompts for the new-vault passphrase
-and uses `paladin_core::create`. `init --force` checks whether an existing
-primary is present; if so, text mode prints
-`paladin_core::format_init_force_warning(path)` before any prompt. It then
-prompts for the new-vault passphrase and calls `paladin_core::create_force`
-(which owns the §5 staged clobber sequence) without opening or decrypting the
-old primary.
+`init` resolves the same path. The existence pre-check calls
+`paladin_core::inspect(path)`. `Ok(Missing)` is the only "clear path" result;
+any other outcome — `Ok(Plaintext)`, `Ok(Encrypted)`, or `Err(...)` for
+unrecognized magic / I/O errors — is treated as an existing file. Without
+`--force`, an existing-file pre-check returns `vault_exists` before prompting
+for the new-vault passphrase. When the pre-check is clear, it prompts for
+the new-vault passphrase and uses `paladin_core::create`.
+
+`init --force` runs the same pre-check. When the pre-check sees an existing
+file (Paladin header or not), text mode prints
+`paladin_core::format_init_force_warning(path)` before any prompt. The
+warning text names the path and `vault.bin.bak` and warns that any prior
+backup will be overwritten — wording that applies uniformly because
+`create_force` rotates the old file verbatim into `vault.bin.bak`
+regardless of its content. The CLI then prompts for the new-vault
+passphrase and calls `paladin_core::create_force` (which owns the §5
+staged clobber sequence) without opening or decrypting the old file.
 
 ## Implementation checklist
 
@@ -437,7 +447,14 @@ old primary.
   policy to the core account-query matches and converts candidates to
   `AccountSummary` plus core-computed disambiguators.
 - [ ] Implement `init`, account CRUD, `show`/`peek`/`copy`, passphrase,
-  import/export, and settings commands per §5.
+  import/export, and settings commands per §5. Manual-flag `add` builds
+  an `AccountInput` from the parsed flags and routes it through
+  `paladin_core::validate_manual(input, now)` so §4.1 validation
+  (label / issuer / secret / digits / period / counter / icon-hint)
+  lives in core; `--uri` routes through `paladin_core::parse_otpauth`;
+  `--qr` routes through `paladin_core::import::from_file` with a fixed
+  `ImportConflict::Skip` policy. The CLI never re-implements §4.1
+  validation.
 - [ ] Implement text and JSON output renderers with stable success/error
   envelopes and stderr warnings.
 - [ ] Implement `paladin tui` as an `execvp` wrapper.
@@ -445,6 +462,13 @@ old primary.
   the test build of the `paladin` binary so process-level integration
   tests can drive pre-commit and post-commit save failures via the
   `PALADIN_FAULT_INJECT` env var.
+- [ ] Wire a test-build-only `PALADIN_CLIPBOARD_DRYRUN=1` short-circuit
+  in the CLI clipboard adapter that bypasses `arboard` and records the
+  intended payload, gated behind the same test cargo feature so production
+  builds never link the hook. Lets CI exercise `copy` end-to-end (including
+  the post-`hotp_advance` ordering and the never-schedules-auto-clear
+  invariant) without a clipboard server. The env var is honored only when
+  the test feature is enabled.
 - [ ] Add the CLI integration tests and JSON golden snapshots below.
 - [ ] Run the definition-of-done checks.
 
@@ -456,9 +480,14 @@ where relevant, and exit code.
 
 - **`init`**: empty passphrase → plaintext file, mode `0600`, dir `0700`.
   Non-empty passphrase → encrypted; second invocation refuses to clobber with
-  `vault_exists` before prompting for a new passphrase; `--force` rotates old
-  primary verbatim into `.bak`; text-mode `--force` emits the clobber warning
-  only when a primary exists. Custom KDF flags write the requested in-range
+  `vault_exists` before prompting for a new passphrase, including when the
+  existing file at the vault path is non-Paladin (unrecognized magic) — the
+  pre-check treats any non-`Missing` `inspect()` result as existing. `--force`
+  rotates the old file verbatim into `.bak` for both Paladin-format and
+  non-Paladin existing files; text-mode `--force` emits the clobber warning
+  whenever the pre-check sees an existing file (regardless of whether it is
+  a recognized Paladin header) and skips the warning only when the path is
+  clear. Custom KDF flags write the requested in-range
   Argon2 params for encrypted init; invalid / out-of-range values reject with
   the §5 error kinds before the first passphrase prompt, and valid custom KDF
   values are accepted but unused when an empty passphrase selects plaintext.
@@ -550,7 +579,8 @@ where relevant, and exit code.
 - **`settings get/set`** covers default values, every dotted key through
   `paladin_core::parse_setting_key` / `parse_setting_patch`, bool/u32 value
   parsing, minimum-value validation, text-mode filtering, full
-  `VaultSettings` JSON output, and unknown-dotted-key rejection with
+  `VaultSettings` JSON output for both `get` (current settings) and `set`
+  (post-mutation settings), and unknown-dotted-key rejection with
   `validation_error` (`field: "key"`, `reason: "unknown_setting"`) for both
   `settings get <key>` and `settings set <key> <value>`.
 - **`--json` schema snapshots** for every command success, help/version
@@ -588,11 +618,15 @@ The CLI ships in `.deb`, `.rpm`, Flatpak, and AppImage in v0.1
   driven by `cargo xtask man` so the page always tracks the live
   argument tree. The packaging configs ship it gzipped at
   `/usr/share/man/man1/paladin.1.gz` per §11.3.
-- **Cargo.toml metadata.** `crates/paladin-cli/Cargo.toml` sets
-  `description`, `homepage`, `repository`, `keywords`, `categories`,
-  and `license = "AGPL-3.0-or-later"`. The packaging pipeline sources
-  these values from Cargo metadata when building `.deb` / `.rpm` so the
-  per-format configs in
+- **Cargo.toml metadata.** `crates/paladin-cli/Cargo.toml` inherits
+  `description`, `repository`, `license = "AGPL-3.0-or-later"`,
+  `edition`, and `rust-version` from `[workspace.package]` via
+  `package.workspace = true` (the workspace shape established by
+  IMPLEMENTATION_PLAN_01_CORE.md Phase A so `nfpm` and Flathub
+  manifests read one source). It additionally sets the binary-specific
+  `homepage`, `keywords`, and `categories` fields locally. The
+  packaging pipeline sources these values from Cargo metadata when
+  building `.deb` / `.rpm` so the per-format configs in
   `packaging/deb/paladin.yaml` and `packaging/rpm/paladin.yaml`
   stay minimal. The Debian one-line description is short enough for
   the 60-char limit; the long form is sourced from README.
