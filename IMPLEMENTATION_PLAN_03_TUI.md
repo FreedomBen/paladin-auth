@@ -1,8 +1,8 @@
 # Implementation Plan 03 — `paladin-tui`
 
 Source of truth: [DESIGN.md](DESIGN.md) §3, §4.1, §4.2, §4.4, §4.5,
-§5 (global flags / `paladin tui`), §6, §8, §9, §10, §11, §12 (Milestone 5),
-§13, §14.
+§4.6, §5 (global flags / `paladin tui`), §6, §8, §9, §10, §11,
+§12 (Milestone 5), §13, §14.
 Depends on: [`IMPLEMENTATION_PLAN_01_CORE.md`](IMPLEMENTATION_PLAN_01_CORE.md).
 The final `paladin tui` integration check also depends on
 [`IMPLEMENTATION_PLAN_02_CLI.md`](IMPLEMENTATION_PLAN_02_CLI.md).
@@ -47,7 +47,7 @@ crates/paladin-tui/
 │   │       ├── export.rs       # format + path + overwrite + (encrypted) twice-confirmed passphrase
 │   │       ├── passphrase.rs   # set/change/remove sub-flows
 │   │       └── settings.rs     # auto_lock + clipboard toggles + timeouts
-│   ├── search.rs          # incremental filter over Vault::iter() using paladin_core::account_matches_search; rows render AccountSummary projections
+│   ├── search.rs          # incremental filter over Vault::iter() (§4.7 public surface, yielding &Account in insertion order) using paladin_core::account_matches_search; rows render AccountSummary projections via Account::summary()
 │   ├── clipboard.rs       # arboard wrapper + scheduled clear (only-if-unchanged)
 │   ├── auto_lock.rs       # idle-timer; encrypted-only; plaintext is no-op
 │   ├── hotp_reveal.rs     # reveal window per row using paladin_core::HOTP_REVEAL_SECS
@@ -197,7 +197,10 @@ the selection is always navigable so the user does not need to
 unfocus the search to act on a result. The other list-navigation keys
 (`PgUp`, `PgDn`, `Home`, `End`, `Ctrl-D`, `Ctrl-U`) likewise pass
 through to the list while the search bar has focus; they are
-navigation, not text editing, and `tui-input` does not consume them.
+navigation, not text editing, so the TUI's input router dispatches
+them to the list before they reach `tui-input`'s key handler (which
+would otherwise treat `Home`/`End` as cursor moves and `Ctrl-U` as
+delete-to-start-of-line).
 Other keys, including the action keys `a` / `r` / `R` / `i` /
 `e` / `n` / `p` / `s` / `?`, the search-focus key `/`, and the quit key `q`,
 are routed to the search field as character input while it has focus;
@@ -718,6 +721,17 @@ captured with `insta` golden snapshots using `ratatui::backend::TestBackend`.
 
 Dev-dependencies: `insta` for golden snapshots.
 
+The TUI-specific deps are pinned to specific minor versions in
+`crates/paladin-tui/Cargo.toml` so terminal rendering (`ratatui`),
+key/event handling (`crossterm`), the search-bar widget (`tui-input`),
+and clipboard access (`arboard`) do not drift across transitive minor
+updates; `arboard` is pinned explicitly because it sits on the
+clipboard security boundary (copy + image-import paths). `crossterm`
+must match the version `ratatui` re-exports so the input/event types
+line up. `insta` is similarly pinned for snapshot stability across
+runs. This mirrors the `paladin-core` pinning of `getrandom` /
+`bincode v2` and the `paladin-cli` pinning convention.
+
 ## Global flags
 
 `--vault <path>` and `--no-color` are accepted (parity with siblings).
@@ -822,16 +836,18 @@ is never expected to be scripted.
   only-if-unchanged auto-clear.
 - [ ] Add reducer, search, auto-lock, clipboard, HOTP reveal, terminal
   lifecycle, sensitive-buffer, and snapshot coverage.
-- [ ] Wire the `paladin-core` `test-fault-injection` cargo feature into
-  the test build of the `paladin-tui` binary so reducer / effect-layer
+- [ ] Add a `paladin-tui/test-hooks` cargo feature that is **off by
+  default** in production builds and enabled only by the test build of
+  the `paladin-tui` binary. `paladin-tui/test-hooks` transitively
+  enables `paladin-core/test-fault-injection` so reducer / effect-layer
   integration tests can drive pre-commit and durability-unconfirmed
   save failures via the `PALADIN_FAULT_INJECT` env var.
 - [ ] Wire a test-build-only `PALADIN_CLIPBOARD_DRYRUN=1` short-circuit
   in the TUI clipboard adapter that bypasses `arboard` and records the
-  intended copy payload plus the auto-clear schedule, gated behind a
-  test cargo feature so production builds never link the hook. Lets CI
-  exercise the copy → schedule → only-if-unchanged auto-clear loop
-  end-to-end without a clipboard server.
+  intended copy payload plus the auto-clear schedule, gated behind the
+  same `paladin-tui/test-hooks` feature so production builds never link
+  the hook. Lets CI exercise the copy → schedule → only-if-unchanged
+  auto-clear loop end-to-end without a clipboard server.
 - [ ] Add a TUI-side smoke test that spawns `paladin tui` (CLI) and
   asserts it execs `paladin-tui` on shared-`PATH` installs; the
   Flatpak `exec_paladin_tui` failure mode is exercised by the CLI
