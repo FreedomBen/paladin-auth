@@ -1,7 +1,8 @@
 # Implementation Plan 03 — `paladin-tui`
 
-Source of truth: [DESIGN.md](DESIGN.md) §3, §5 (global flags / `paladin tui`),
-§6, §8, §9, §10, §11, §12 (Milestone 5), §13, §14.
+Source of truth: [DESIGN.md](DESIGN.md) §3, §4.1, §4.2, §4.4, §4.5,
+§5 (global flags / `paladin tui`), §6, §8, §9, §10, §11, §12 (Milestone 5),
+§13, §14.
 Depends on: [`IMPLEMENTATION_PLAN_01_CORE.md`](IMPLEMENTATION_PLAN_01_CORE.md).
 The final `paladin tui` integration check also depends on
 [`IMPLEMENTATION_PLAN_02_CLI.md`](IMPLEMENTATION_PLAN_02_CLI.md).
@@ -52,7 +53,7 @@ crates/paladin-tui/
 │   ├── hotp_reveal.rs     # reveal window per row using paladin_core::HOTP_REVEAL_SECS
 │   ├── terminal.rs        # raw mode / alternate-screen guard; restores terminal on exit
 │   ├── theme.rs           # color palette; --no-color / NO_COLOR disables styling
-│   └── prompt.rs          # passphrase prompt inside the TUI (modal, not /dev/tty)
+│   └── prompt.rs          # shared zeroizing passphrase-input widget reused by unlock.rs and modals/passphrase.rs
 └── tests/
     ├── reducer_tests.rs
     ├── search_tests.rs
@@ -198,9 +199,9 @@ unfocus the search to act on a result. The other list-navigation keys
 through to the list while the search bar has focus; they are
 navigation, not text editing, and `tui-input` does not consume them.
 Other keys, including the action keys `a` / `r` / `R` / `i` /
-`e` / `n` / `p` / `s` / `?` and the quit key `q`, are routed to the search field
-as character input while it has focus; the user must defocus the search
-(`Esc` to clear) to use them as actions. `Ctrl-C` is the exception and
+`e` / `n` / `p` / `s` / `?`, the search-focus key `/`, and the quit key `q`,
+are routed to the search field as character input while it has focus;
+the user must defocus the search (`Esc` to clear) to use them as actions. `Ctrl-C` is the exception and
 always quits. `Esc` clears the search query and returns focus to the list;
 on the list, `Esc` is a no-op. Modal dialogs trap focus while open
 and intercept `Esc` to close themselves. The missing-vault and
@@ -284,10 +285,10 @@ the warning inline so the user can retry or dismiss deliberately.
   the Base32 secret. Clipboard images are read
   through `arboard::Clipboard::get_image()`, whose `ImageData` already
   carries raw RGBA8 bytes plus width/height; the TUI calls
-  `paladin_core::import::qr_image_bytes` with `width`, `height`, the
-  RGBA bytes, and an `ImportOptions { import_time: submit_time, .. }`
-  (matching the `ImportOptions`-bearing signature shared with
-  `import::from_file` and `import::from_bytes`).
+  `paladin_core::import::qr_image_bytes(width, height, rgba_bytes, submit_time)`
+  per the §14 signature, which takes `import_time` directly rather than
+  the `ImportOptions` accepted by `import::from_file` /
+  `import::from_bytes`.
   Validation warnings are shown inline with
   `paladin_core::format_validation_warning()` and do
   not block creation. Because `Vault::add` is infallible and duplicate
@@ -407,8 +408,9 @@ the warning inline so the user can retry or dismiss deliberately.
   as the core left it.
 - **Settings** — toggles for `auto_lock.enabled` and
   `clipboard.clear_enabled`, spinners for `auto_lock.timeout_secs` and
-  `clipboard.clear_secs`. The spinners clamp to the §5 minimums
-  (`auto_lock.timeout_secs >= 30`, `clipboard.clear_secs >= 5`). The
+  `clipboard.clear_secs`. The spinners clamp to the §5 bounds
+  (`30 <= auto_lock.timeout_secs <= 86_400`,
+  `5 <= clipboard.clear_secs <= 600`). The
   modal accumulates pending edits in modal-local state and only commits
   on Confirm: pending values are applied through the same setters
   (`set_auto_lock_*`, `set_clipboard_clear_*`) inside a single
@@ -438,7 +440,8 @@ vault state. While the search bar is focused or any modal is open,
 other action keys); the overlay is list-focus-only. The unlock,
 missing-vault, and startup-error screens do not bind `?`. The
 overlay's content is generated from the same keybindings table that
-`clap_mangen` feeds into the man page so the two cannot drift.
+the workspace `cargo xtask man` target appends into the man page
+(after the clap-derived synopsis) so the two cannot drift.
 
 ## Auto-lock (per §6)
 
@@ -478,9 +481,10 @@ overlay's content is generated from the same keybindings table that
 Effects update visible state only after the underlying mutation succeeds or
 reaches the primary-file commit point with durability still uncertain:
 
-- HOTP `n`: the effect captures the pre-advance `Code` needed for a
-  reveal in zeroizing pending state, then publishes it only if
-  `Vault::hotp_advance` succeeds or reaches the primary-file commit point.
+- HOTP `n`: the effect calls `Vault::hotp_advance`, stages the returned
+  `Code` (whose `counter_used` is the pre-advance counter) in zeroizing
+  pending state, and publishes it to the reveal slot only if the call
+  succeeds or returns `save_durability_unconfirmed`.
   Pre-commit save failures (`save_not_committed`) leave the in-memory
   counter and reveal state unchanged (per DESIGN §4.2 rollback) and
   surface a status-line error. Durability-unconfirmed failures

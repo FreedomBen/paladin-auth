@@ -181,12 +181,12 @@ core owns parsing, matching, and candidate disambiguators.
 
 `settings set` accepts the §5 dotted keys only:
 
-| Key                       | Type | Default | Minimum |
-| ------------------------- | ---- | ------- | ------- |
-| `auto_lock.enabled`       | bool | `false` | n/a     |
-| `auto_lock.timeout_secs`  | u32  | `300`   | `30`    |
-| `clipboard.clear_enabled` | bool | `false` | n/a     |
-| `clipboard.clear_secs`    | u32  | `20`    | `5`     |
+| Key                       | Type | Default | Range          |
+| ------------------------- | ---- | ------- | -------------- |
+| `auto_lock.enabled`       | bool | `false` | n/a            |
+| `auto_lock.timeout_secs`  | u32  | `300`   | `30..=86_400`  |
+| `clipboard.clear_enabled` | bool | `false` | n/a            |
+| `clipboard.clear_secs`    | u32  | `20`    | `5..=600`      |
 
 Text-mode `settings get [key]` may filter to one dotted key. `--json`
 always returns the full nested `VaultSettings` object — `get` returns the

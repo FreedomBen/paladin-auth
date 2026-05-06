@@ -298,8 +298,9 @@ inclusion.
   returns `true`. Any stale invalid-state error stays in the dialog and does not
   mutate visible state.
 - `SettingsComponent` — toggles for auto-lock and clipboard-clear, with
-  spinners for timeouts. Spinners clamp to the §5 minimums
-  (`auto_lock.timeout_secs >= 30`, `clipboard.clear_secs >= 5`). Uses
+  spinners for timeouts. Spinners clamp to the §5 bounds
+  (`30 <= auto_lock.timeout_secs <= 86_400`,
+  `5 <= clipboard.clear_secs <= 600`). Uses
   **live-apply** (each toggle change immediately invokes the matching
   setter inside `Vault::mutate_and_save`; spinner changes are debounced
   500 ms via `glib::timeout_add_local` so holding +/- does not fire one
@@ -656,8 +657,9 @@ The GUI itself is hard to test without a display server. Tests are split:
   `zero_length` and `confirmation_mismatch` rejections, `remove`
   plaintext-storage warning gate, secret-buffer zeroize on
   submit / cancel / close), settings logic (live-apply path through
-  `Vault::mutate_and_save`, spinner clamping at the §5 minimums
-  (`auto_lock.timeout_secs >= 30`, `clipboard.clear_secs >= 5`),
+  `Vault::mutate_and_save`, spinner clamping at the §5 bounds
+  (`30 <= auto_lock.timeout_secs <= 86_400`,
+  `5 <= clipboard.clear_secs <= 600`),
   500 ms debounce of repeated spinner changes, and pre-commit
   rollback that reverts the visible widget value on
   `save_not_committed`), in-flight effect ownership (only one

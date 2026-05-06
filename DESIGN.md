@@ -1233,9 +1233,10 @@ Vault settings keys (subject to extension):
 | `clipboard.clear_enabled` | bool             | `false` | TUI/GUI: schedule a clipboard wipe after copy. (CLI ignores.) |
 | `clipboard.clear_secs`    | u32              | `20`    | Wipe timeout when enabled.                   |
 
-Minimum values: `auto_lock.timeout_secs >= 30`, `clipboard.clear_secs
->= 5`. `VaultSettings` fields are private; `settings set` and the core
-settings setters reject lower values with a validation error. The CLI's
+Bounds: `30 <= auto_lock.timeout_secs <= 86_400` (24 h),
+`5 <= clipboard.clear_secs <= 600` (10 min). `VaultSettings` fields are private;
+`settings set` and the core settings setters reject out-of-range values with a
+validation error. The CLI's
 dotted key/value grammar is parsed by `paladin_core::parse_setting_patch`
 so key names, lowercase bool parsing, base-10 `u32` parsing, and minimum
 checks stay in core. `parse_setting_key` is the same key-name source for

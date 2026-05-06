@@ -381,7 +381,8 @@ Each step lands as its own commit. Tests come first.
   with no secret bytes; `Vault::settings` returns the live `&VaultSettings`;
   `VaultSettings` defaults are off with `auto_lock.timeout_secs = 300`
   and `clipboard.clear_secs = 20`; settings setters reject
-  `auto_lock.timeout_secs < 30` and `clipboard.clear_secs < 5`.
+  `auto_lock.timeout_secs` outside `30..=86_400` (24 h) and
+  `clipboard.clear_secs` outside `5..=600` (10 min).
 - [ ] Tests: `hotp_advance` rollback — inject a `Store` save error before
   primary commit point and assert in-memory counter and `updated_at` revert
   to pre-call values; durability-unconfirmed surfaced as a typed error after
