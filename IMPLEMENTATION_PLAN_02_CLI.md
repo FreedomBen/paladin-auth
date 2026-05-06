@@ -399,11 +399,11 @@ envelope carry the detailed `kind`.
   `operation: "exec_paladin_tui"`.
 - Flatpak limitation: the §11.4 publication ships `paladin` and
   `paladin-tui` as separate Flatpak apps
-  (`io.github.paladin_otp.Cli` vs `io.github.paladin_otp.Tui`) with no
+  (`org.tamx.Paladin.Cli` vs `org.tamx.Paladin.Tui`) with no
   shared `PATH` between sandboxes, so `paladin tui` inside the CLI
   Flatpak always exits with the `exec_paladin_tui` `io_error`. Flatpak
   users invoke the TUI directly via `flatpak run
-  io.github.paladin_otp.Tui`. The CLI does not attempt to dispatch to
+  org.tamx.Paladin.Tui`. The CLI does not attempt to dispatch to
   the TUI app via `flatpak-spawn` or any portal call.
 - Keeps the §3 "binaries don't reach into each other" rule intact — no
   in-process re-implementation of the TUI.
@@ -737,7 +737,7 @@ The CLI ships in `.deb`, `.rpm`, Flatpak, and AppImage in v0.1
   required by `paladin copy`: `--socket=wayland`,
   `--socket=fallback-x11`, and `--share=ipc`. No direct D-Bus or
   session-bus access is requested.
-  `flatpak run io.github.paladin_otp.Cli` inherits the invoking
+  `flatpak run org.tamx.Paladin.Cli` inherits the invoking
   terminal's stdin / stdout / stderr so `--json` scripting works
   end-to-end via the Flatpak entry point.
 - **AppImage.** `linuxdeploy` assembles the AppDir; the bundled

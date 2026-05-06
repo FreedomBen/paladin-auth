@@ -30,12 +30,12 @@ crates/paladin-gtk/
 │   ├── paladin-gtk.gresource.xml
 │   ├── ui/                # *.ui templates
 │   ├── icons/             # app icon + fallbacks
-│   ├── metainfo/          # AppStream metadata; file is named `<app-id>.metainfo.xml` (`io.github.paladin_otp.Gui.metainfo.xml`) so Flathub's reproducible-build check matches; installs to `/usr/share/metainfo/<app-id>.metainfo.xml`
+│   ├── metainfo/          # AppStream metadata; file is named `<app-id>.metainfo.xml` (`org.tamx.Paladin.Gui.metainfo.xml`) so Flathub's reproducible-build check matches; installs to `/usr/share/metainfo/<app-id>.metainfo.xml`
 │   ├── style.css
-│   └── io.github.paladin_otp.Gui.desktop  # named after the §11.4 app ID so the same file installs verbatim in native and Flatpak builds
+│   └── org.tamx.Paladin.Gui.desktop  # named after the §11.4 app ID so the same file installs verbatim in native and Flatpak builds
 ├── src/
 │   ├── lib.rs             # re-exports internal modules so integration tests in tests/ can reach them; binary entry stays in main.rs
-│   ├── main.rs            # adw::init, register resources, RelmApp::new("io.github.paladin_otp.Gui").run(...) — ID matches the §11.4 Flatpak app ID and the desktop file's StartupWMClass
+│   ├── main.rs            # adw::init, register resources, RelmApp::new("org.tamx.Paladin.Gui").run(...) — ID matches the §11.4 Flatpak app ID and the desktop file's StartupWMClass
 │   ├── cli.rs             # GlobalArgs (--vault, --no-color); reject --json
 │   ├── app/
 │   │   ├── mod.rs         # AppModel + AppMsg + AppOutput
@@ -519,28 +519,28 @@ switches and spin rows, are reverted on pre-commit failure:
 
 ## Linux desktop integration
 
-- `data/io.github.paladin_otp.Gui.desktop` shipped at
-  `/usr/share/applications/io.github.paladin_otp.Gui.desktop` per §11.3.
-  Sets `Name=Paladin`, `Icon=io.github.paladin_otp.Gui` (the icon-theme
+- `data/org.tamx.Paladin.Gui.desktop` shipped at
+  `/usr/share/applications/org.tamx.Paladin.Gui.desktop` per §11.3.
+  Sets `Name=Paladin`, `Icon=org.tamx.Paladin.Gui` (the icon-theme
   name resolves to the app-ID-named files installed below),
-  `StartupWMClass=io.github.paladin_otp.Gui`,
+  `StartupWMClass=org.tamx.Paladin.Gui`,
   `Categories=Utility;Security;`, and security/authenticator terms in
   `Keywords=`, and uses `Exec=paladin-gtk` with no file/URI placeholders.
   v0.2 does not register a MIME type or URI handler; imports start inside
   `ImportDialog`, matching the global-flag parser contract above. Both
   native (`.deb` / `.rpm`) and Flatpak builds install the desktop entry
   verbatim with this app-ID-based filename so AppStream's
-  `<launchable type="desktop-id">io.github.paladin_otp.Gui.desktop</launchable>`
+  `<launchable type="desktop-id">org.tamx.Paladin.Gui.desktop</launchable>`
   resolves identically and a single metainfo file works in every
   packaging format.
 - App icon at
-  `/usr/share/icons/hicolor/scalable/apps/io.github.paladin_otp.Gui.svg`,
+  `/usr/share/icons/hicolor/scalable/apps/org.tamx.Paladin.Gui.svg`,
   named after the §11.4 app ID so the same files satisfy native and
   Flathub install-layout checks without per-format renaming. Symbolic
   variant at
-  `…/symbolic/apps/io.github.paladin_otp.Gui-symbolic.svg` if the
+  `…/symbolic/apps/org.tamx.Paladin.Gui-symbolic.svg` if the
   Adwaita-style symbolic palette warrants it; a `16`/`24`/`32`/`48`
-  PNG fallback set named `io.github.paladin_otp.Gui.png` is shipped
+  PNG fallback set named `org.tamx.Paladin.Gui.png` is shipped
   under `/usr/share/icons/hicolor/<size>/apps/` for non-SVG icon
   consumers. The packaging dry-run validates this layout in both the
   native and Flatpak builds.
@@ -568,7 +568,7 @@ switches and spin rows, are reverted on pre-commit failure:
   and `packaging/rpm/paladin-gtk.yaml` install
   `/usr/bin/paladin-gtk`, the desktop entry at
   `/usr/share/applications/`, the AppStream metainfo file at
-  `/usr/share/metainfo/io.github.paladin_otp.Gui.metainfo.xml`
+  `/usr/share/metainfo/org.tamx.Paladin.Gui.metainfo.xml`
   (same source file the Flatpak manifest exports), and the icon set
   under `/usr/share/icons/hicolor/`. Debian declares `libgtk-4-1
   (>= 4.16)` and `libadwaita-1-0 (>= 1.6)`; Fedora declares the
@@ -597,12 +597,12 @@ switches and spin rows, are reverted on pre-commit failure:
   `xdg-data/paladin:create`, `xdg-config/paladin:create`, plus the
   Wayland and X11 fallback clipboard path required for `gdk::Clipboard`
   (`--socket=wayland`, `--socket=fallback-x11`, `--share=ipc`). The
-  Flatpak app ID is the §11.4 placeholder `io.github.paladin_otp.Gui`,
-  finalized at Flathub-submission time. The same string is passed to
+  Flatpak app ID is the §11.4 ID `org.tamx.Paladin.Gui`. The same
+  string is passed to
   `RelmApp::new(...)` in `main.rs` and set as `StartupWMClass` in
-  `data/io.github.paladin_otp.Gui.desktop`, so window-to-launcher
+  `data/org.tamx.Paladin.Gui.desktop`, so window-to-launcher
   mapping works identically in both Flatpak and native installs. The manifest exports
-  `data/metainfo/io.github.paladin_otp.Gui.metainfo.xml` to
+  `data/metainfo/org.tamx.Paladin.Gui.metainfo.xml` to
   `/usr/share/metainfo/` and validates it during the packaging dry-run.
   `flatpak-builder` consumes the
   tagged release tarball with vendored Cargo deps so Flathub builds

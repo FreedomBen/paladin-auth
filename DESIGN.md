@@ -1748,10 +1748,11 @@ artifacts side by side.
 
 ### 11.4 Flatpak
 
-- **App IDs** (reverse-DNS, placeholder pending publish):
-  `io.github.paladin_otp.Cli`, `io.github.paladin_otp.Tui`,
-  `io.github.paladin_otp.Gui`. The final namespace is finalized at
-  Flathub-submission time and recorded here.
+- **App IDs** (reverse-DNS):
+  `org.tamx.Paladin.Cli`, `org.tamx.Paladin.Tui`,
+  `org.tamx.Paladin.Gui`. Derived from the project domain
+  `paladin.tamx.org`; the homepage URL `https://paladin.tamx.org`
+  is also the value of the `homepage` Cargo workspace metadata field.
 - **Runtimes.**
   - CLI and TUI: `org.freedesktop.Platform` 23.08 (small, no GUI bits).
   - GUI: `org.gnome.Platform` 47 with the matching SDK (bundles

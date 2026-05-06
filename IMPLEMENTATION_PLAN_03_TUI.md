@@ -776,7 +776,7 @@ is never expected to be scripted.
   `--socket=wayland`, `--socket=fallback-x11`, and `--share=ipc`.
   It does not request `--socket=session-bus` or `--socket=system-bus`;
   Flatpak's filtered portal bus access remains the default.
-  `flatpak run io.github.paladin_otp.Tui` inherits the invoking
+  `flatpak run org.tamx.Paladin.Tui` inherits the invoking
   terminal's stdin / stdout / stderr so `crossterm` raw mode and ANSI
   rendering work end-to-end against the host TTY while clipboard copy
   and clipboard image import work through the granted display socket.
