@@ -57,7 +57,7 @@ crates/paladin-core/
 │   │   ├── argon2.rs     # Argon2id params/options, defaults, bounds check
 │   │   └── aead.rs       # XChaCha20-Poly1305 with header-AAD wiring
 │   ├── vault.rs          # Vault impl: add/remove/iter/rename/import_accounts/totp_code/hotp_*; save/mutate_and_save; is_encrypted() mode getter
-│   ├── shared_text.rs    # format_init_force_warning / format_plaintext_storage_warning / format_plaintext_export_warning / format_validation_warning helpers (CLI / TUI / GUI parity)
+│   ├── shared_text.rs    # format_unsafe_permissions / format_init_force_warning / format_plaintext_storage_warning / format_plaintext_export_warning / format_validation_warning helpers (CLI / TUI / GUI parity)
 │   ├── settings.rs       # VaultSettings (auto-lock, clipboard), SettingKey / SettingPatch parsers, setters
 │   ├── passphrase.rs     # set / change / remove transitions, rollback
 │   ├── import/
@@ -79,7 +79,7 @@ crates/paladin-core/
     ├── vault_lifecycle.rs   # inspect, default_vault_path, create_force, mutate_and_save, is_encrypted
     ├── tamper.rs            # AAD-bound header byte-flip matrix
     ├── perms.rs             # 0600/0700 + unsafe_permissions rejection
-    ├── shared_text.rs       # format_init_force_warning / format_plaintext_storage_warning / format_plaintext_export_warning / format_validation_warning text fixtures
+    ├── shared_text.rs       # format_unsafe_permissions / format_init_force_warning / format_plaintext_storage_warning / format_plaintext_export_warning / format_validation_warning text fixtures
     ├── account_summary.rs   # AccountSummary and Code expose no secret bytes; Code is the core projection paired with AccountSummary by CLI CodeResult
     ├── match_key.rs         # account_match_key + account_matches_search behavior (empty issuer keeps colon; case preserved)
     ├── query.rs             # parse_account_query, matching_accounts, shortest_unique_id_prefix
@@ -132,8 +132,9 @@ Each step lands as its own commit. Tests come first.
   TOTP period bounds, HOTP counter bounds, label and issuer 128-byte caps,
   empty labels, manual Base32 secret decoding / ASCII-whitespace rejection,
   secret length rejection below 10 bytes and above 1024 bytes, malformed
-  icon-hint slugs, mismatched otpauth issuers, invalid timestamps;
-  short-secret warnings in 10–15 byte range).
+  icon-hint slugs, issuer-derived icon-hint defaulting, empty / overlong
+  derived icon hints staying `None`, mismatched otpauth issuers, invalid
+  timestamps; short-secret warnings in 10–15 byte range).
 - [ ] Implement `Account`, `AccountId` (UUIDv4 stored as 16 bytes, hyphenated
   canonical `Display`; shortest unique `id:<hex>` disambiguators are computed
   by `Vault::shortest_unique_id_prefix` because uniqueness depends on the
@@ -265,8 +266,9 @@ Each step lands as its own commit. Tests come first.
   before any staged write.
 - [ ] Tests: `write_secret_file_atomic(path, bytes)` creates the final file
   `0600`, writes through a same-directory tempfile, `fsync`s the temp file
-  and parent directory, atomically renames into place, overwrites only when
-  the caller has chosen to call it, and never creates or rotates `.bak`.
+  and parent directory, atomically renames into place, replaces an existing
+  destination only by virtue of the caller invoking it, implements no
+  prompt / `--force` policy in core, and never creates or rotates `.bak`.
   Missing parents surface as `io_error`; injected write / fsync failures
   before rename surface as `save_not_committed` and do not leave the
   destination partially written; injected parent-fsync failures after rename
@@ -365,7 +367,9 @@ Each step lands as its own commit. Tests come first.
 ### Phase G — Vault behavior + settings (Milestone 1, part 6)
 
 - [ ] Tests: `add` / `remove` / `iter` (insertion order) / `rename` semantics;
-  `rename` updates `updated_at`; `find_duplicate` returns
+  `rename` reuses label validation (trim, empty rejection, 128-byte cap),
+  validates the supplied timestamp, and updates `updated_at`;
+  `find_duplicate` returns
   `Option<&Account>` for exact `(secret, issuer, label)` collisions and
   returns `None` for non-colliding entries; `get` returns accounts by
   `AccountId`; `summaries` returns insertion-order `AccountSummary` values
@@ -376,9 +380,10 @@ Each step lands as its own commit. Tests come first.
 - [ ] Tests: `hotp_advance` rollback — inject a `Store` save error before
   primary commit point and assert in-memory counter and `updated_at` revert
   to pre-call values; durability-unconfirmed surfaced as a typed error after
-  commit point.
-- [ ] Tests: `hotp_advance` at `u64::MAX` returns `counter_overflow` before
-  mutating memory or attempting a save.
+  commit point; invalid supplied timestamps return `time_range` before
+  mutation or save.
+- [ ] Tests: `hotp_advance` at `u64::MAX` returns `counter_overflow` with
+  the §5 `account` summary before mutating memory or attempting a save.
 - [ ] Tests: `Vault::hotp_peek` after a committed `Vault::hotp_advance`
   returns the code for the new (post-advance) counter; `Vault::totp_code`
   is read-only and never mutates the vault or touches the `Store`.
@@ -408,9 +413,10 @@ Each step lands as its own commit. Tests come first.
   substring matching, matches the empty query, keeps empty-issuer colon
   behavior, and performs no Unicode normalization or locale-specific casing.
 - [ ] Tests: `parse_account_query(query)` maps non-`id:` input to
-  `AccountQuery::Search`, accepts `id:` prefixes of 8..=32 hex characters
-  case-insensitively while normalizing the stored prefix to lowercase, and
-  rejects short, long, or non-hex `id:` prefixes with `validation_error`
+  `AccountQuery::Search`, accepts lowercase `id:` followed by 8..=32 hex
+  characters, accepts uppercase `A`–`F` within the hex prefix while
+  normalizing the stored prefix to lowercase, and rejects short, long, or
+  non-hex `id:` prefixes with `validation_error`
   (`field: "query"`). `Vault::matching_accounts` handles both search and
   id-prefix queries in insertion order.
 - [ ] Tests: `Vault::shortest_unique_id_prefix(id)` returns the minimum
@@ -431,6 +437,7 @@ Each step lands as its own commit. Tests come first.
   duration so both front ends consume the same constant.
 - [ ] Implement `Vault` operations, `Vault::save`, `Vault::get`,
   `Vault::summaries`, `Vault::find_duplicate`, `Vault::import_accounts`,
+  `Vault::totp_code`, `Vault::hotp_peek`, `Vault::hotp_advance`,
   `Vault::is_encrypted`, `Vault::settings`, `VaultSettings` setters,
   `SettingKey`, `SettingPatch`, `parse_setting_key`, `parse_setting_patch`,
   `Vault::apply_setting_patch`, and
@@ -461,17 +468,20 @@ Each step lands as its own commit. Tests come first.
   reject zero-length passphrases with `invalid_passphrase` and
   `reason: "zero_length"`; non-empty whitespace-only and Unicode passphrases
   are treated as bytes and are not trimmed or normalized.
-- [ ] Implement `set_passphrase(options)`, `change_passphrase(options)`, and
-  `remove_passphrase` on `Vault` going through the §4.3 atomic-write +
-  backup pipeline.
+- [ ] Implement `set_passphrase(store, options)`,
+  `change_passphrase(store, options)`, and `remove_passphrase(store)` on
+  `Vault` going through the §4.3 atomic-write + backup pipeline.
 
 ### Phase I — Import / export (Milestone 3)
 
-- [ ] Tests for `import::detect` content sniffing → `ImportFormat` for each
+- [ ] Tests for `import::detect` content sniffing in the fixed §4.6 order
+  (Paladin magic, image magic, Aegis JSON shape, otpauth text/JSON, then
+  `Unknown`) → `ImportFormat` for each
   of: single `otpauth://` URI (with surrounding whitespace), `otpauth://`
   line list (blank lines tolerated), JSON array of URIs, Aegis JSON
   (plaintext + encrypted shapes both return `Aegis`), Paladin files by magic
-  (plaintext + encrypted shapes both return `Paladin`), QR image;
+  (plaintext + encrypted shapes both return `Paladin`), QR image magic
+  bytes (PNG, JPEG, GIF, BMP, WebP);
   non-matching inputs return `Unknown`. Detection inspects shape only and
   never rejects on emptiness.
 - [ ] Tests for zero-account inputs rejected uniformly with
@@ -537,8 +547,8 @@ Each step lands as its own commit. Tests come first.
 - [ ] Implement `export::otpauth_list(&Vault)` using the internal
   `otpauth://` emitter and `export::encrypted(&Vault, EncryptionOptions)`
   using the Paladin encrypted bundle format with default `VaultSettings`.
-- [ ] Implement `read_qr_image(path) -> Result<Vec<String>>` and
-  `read_qr_image_bytes(width, height, rgba) -> Result<Vec<String>>` in
+- [ ] Implement `read_qr_image(path: &Path) -> Result<Vec<String>>` and
+  `read_qr_image_bytes(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<String>>` in
   `import/qr.rs`. The path form loads the image from disk; the byte form
   accepts raw RGBA8 clipboard/image buffers, rejects zero dimensions,
   rejects overflow in `width * height * 4`, and rejects any buffer length
@@ -600,7 +610,7 @@ is a separate `#[test]` or table-driven case family.
 - Account validation matrix — every branch in §4.1, including secret length
   rejection at `<10` and `>1024` decoded bytes, label and issuer 128-byte
   caps, TOTP period bounds, HOTP counter bounds, digits range, icon-hint
-  slug rules, and timestamp upper bound.
+  slug rules, issuer-derived icon-hint defaulting, and timestamp upper bound.
 - Manual `AccountInput` validation — `AccountKindInput` TOTP/HOTP
   selection, TOTP period defaults / overrides, HOTP counter defaults /
   overrides, manual Base32 secret decoding / ASCII-whitespace rejection, and
@@ -657,9 +667,10 @@ is a separate `#[test]` or table-driven case family.
 - `account_matches_search(&Account, query)`, `parse_account_query`,
   `Vault::matching_accounts`, and `Vault::shortest_unique_id_prefix`
   implement the shared selector pieces: case-insensitive substring
-  matching with no Unicode normalization, `id:` prefix validation and
-  matching, insertion-order match lists, and shortest-unique
-  `id:<hex>` candidate disambiguators.
+  matching with no Unicode normalization, lowercase `id:` prefix validation
+  with uppercase hex digits normalized to lowercase, id-prefix matching,
+  insertion-order match lists, and shortest-unique `id:<hex>` candidate
+  disambiguators.
 - `Vault::is_encrypted()` reflects the open lock mode / create init mode and
   every passphrase-transition outcome (unchanged on
   `save_not_committed`, changed on success and
@@ -674,7 +685,8 @@ is a separate `#[test]` or table-driven case family.
   reports `save_durability_unconfirmed`; encrypted and plaintext locks share
   those semantics.
 - Vault behavior and settings: `add` / `remove` / `iter` insertion order /
-  `get` / `summaries` / `rename` timestamp update; `find_duplicate` exact
+  `get` / `summaries` / `rename` label validation and timestamp update;
+  `find_duplicate` exact
   collision behavior returning `Option<&Account>`; `Vault::settings`
   getter returning the live `&VaultSettings`; settings defaults, exact
   timeout minimums, `parse_setting_key` (the four §5 keys
@@ -685,7 +697,8 @@ is a separate `#[test]` or table-driven case family.
   `save_not_committed`, durability-unconfirmed leaves mutated state, and
   success returns the closure value; the rollback snapshot is zeroized.
 - HOTP `hotp_advance` rollback, durability-unconfirmed post-commit behavior,
-  and `counter_overflow` at `u64::MAX` before mutation or save.
+  and `counter_overflow` at `u64::MAX` with the §5 `account` summary before
+  mutation or save; invalid supplied timestamps reject before mutation or save.
 - HOTP `hotp_peek` after a committed `hotp_advance` returns the code for
   the new (post-advance) counter.
 - `HOTP_REVEAL_SECS == 120` exported as the shared TUI / GUI reveal-window
@@ -697,9 +710,10 @@ is a separate `#[test]` or table-driven case family.
   wrong-starting-state `invalid_state`; zero-length new passphrase rejection
   with `reason: "zero_length"`; no trimming or Unicode normalization of
   non-empty passphrase bytes.
-- `import::detect`: Paladin magic, QR image magic, Aegis plaintext/encrypted
-  shapes, single/list/JSON-array `otpauth://`, empty otpauth JSON array shape,
-  and `Unknown`.
+- `import::detect`: fixed §4.6 detection order, Paladin magic, QR image
+  magic (PNG, JPEG, GIF, BMP, WebP), Aegis plaintext/encrypted shapes,
+  single/list/JSON-array `otpauth://`, empty otpauth JSON array shape, and
+  `Unknown`.
 - Import facade: `from_file` / `from_bytes` auto-detect and forced-format
   dispatch, `unsupported_import_format` for unknown or invalid dispatch,
   `format` set to `"unknown"` for auto-detect failures and to the requested
