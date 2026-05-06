@@ -30,7 +30,7 @@ crates/paladin-gtk/
 │   ├── paladin-gtk.gresource.xml
 │   ├── ui/                # *.ui templates
 │   ├── icons/             # app icon + fallbacks
-│   ├── metainfo/          # AppStream metadata; Flatpak/native IDs updated with the final §11.4 app ID
+│   ├── metainfo/          # AppStream metadata; file is named `<app-id>.metainfo.xml` (`io.github.paladin_otp.Gui.metainfo.xml`) so Flathub's reproducible-build check matches; installs to `/usr/share/metainfo/<app-id>.metainfo.xml`
 │   ├── style.css
 │   └── paladin-gtk.desktop
 ├── src/
@@ -45,7 +45,7 @@ crates/paladin-gtk/
 │   │   ├── unlock.rs      # UnlockComponent — encrypted vaults only
 │   │   ├── startup_error.rs # non-mutating startup/open error view
 │   │   ├── account_list.rs    # AccountListComponent (gtk::ListView + factory)
-│   │   ├── account_row.rs     # AccountRowComponent (label, code, gauge/next, copy, kebab → rename)
+│   │   ├── account_row.rs     # AccountRowComponent (label, code, gauge/next, copy, kebab → rename / remove)
 │   │   ├── add_account.rs     # AddAccountComponent (manual fields + otpauth:// URI paste + paste image)
 │   │   ├── remove.rs          # RemoveDialog (confirmation gate)
 │   │   ├── rename.rs          # RenameDialog (label edit; calls Vault::rename)
@@ -76,6 +76,7 @@ crates/paladin-gtk/
     ├── export_dialog_logic.rs
     ├── passphrase_dialog_logic.rs
     ├── settings_logic.rs
+    ├── effect_ownership_logic.rs
     ├── gtk_smoke.rs              # xvfb-run integration smoke test
     └── manual/MANUAL_TEST_PLAN.md
 ```
@@ -95,8 +96,9 @@ inclusion.
   `Missing` presents `InitDialog`. `default_vault_path`, `inspect`, or
   startup `open` failures that are not wrong-passphrase retries route to
   `StartupErrorComponent`, which never creates, overwrites, or repairs vault
-  files; `unsafe_permissions` renders
-  `paladin_core::format_unsafe_permissions(&err)` verbatim.
+  files; `unsafe_permissions` renders the `Some(text)` from
+  `paladin_core::format_unsafe_permissions(&err)`, falling back to the
+  generic error text only if the formatter unexpectedly returns `None`.
 - `InitDialog` — only path that creates a vault from the GUI (v0.2;
   parity with DESIGN §6, §7). Two `AdwPasswordEntryRow` passphrase
   fields (twice-confirmed; empty selects plaintext) plus an explicit
@@ -113,8 +115,9 @@ inclusion.
   encrypted path runs the §4.4 Argon2id KDF). On success, swaps
   `AppModel` to `Unlocked` with the returned
   `(Vault, Store)` and routes to `AccountListComponent`. The dialog
-  stays open and surfaces `unsafe_permissions` (rendered via
-  `paladin_core::format_unsafe_permissions(&err)`),
+  stays open and surfaces `unsafe_permissions` (rendered as the
+  `Some(text)` from `paladin_core::format_unsafe_permissions(&err)`,
+  falling back to the generic error text if it returns `None`),
   `save_not_committed`, and `save_durability_unconfirmed` inline.
   `vault_exists` (if a vault appeared between `inspect` and `create`)
   opens an in-dialog `AdwMessageDialog` with `destructive-action`
@@ -226,7 +229,8 @@ inclusion.
   surface the warning. `RenameDialog` does not handle secret material,
   so no zeroize obligation beyond the standard widget-buffer reset on
   cancel / submit / close.
-- `ImportDialog` — `gtk::FileChooserNative` for the source file, a format
+- `ImportDialog` — `gtk::FileDialog` (the GTK 4.10+ replacement for the
+  deprecated `gtk::FileChooserNative`) for the source file, a format
   selector (auto-detect or explicit `otpauth` / `aegis` / `paladin` /
   `qr`), and an on-conflict selector (`skip` / `replace` / `append`).
   Before any Paladin-bundle passphrase prompt, the GUI mirrors the CLI / TUI
@@ -259,7 +263,7 @@ inclusion.
   `kdf_params_out_of_bounds`, `io_error`) stay in the dialog as inline
   errors and never mutate vault state.
 - `ExportDialog` — format selector (plaintext `otpauth://` JSON list or
-  encrypted Paladin bundle) and `gtk::FileChooserNative` for the
+  encrypted Paladin bundle) and `gtk::FileDialog` for the
   destination path. Overwriting an existing file is rejected unless
   the user confirms an inline overwrite gate (parity with CLI
   `--force`). Any overwrite gate is resolved before encrypted-bundle
@@ -384,8 +388,9 @@ start from `ImportDialog`.
   (`wrong_vault_lock`, `invalid_header`, `invalid_payload`,
   `unsupported_format_version`, `kdf_params_out_of_bounds`, `io_error`)
   transition to `StartupErrorComponent` with a retry action that re-runs
-  vault-path resolution and `inspect`; `unsafe_permissions` renders
-  `paladin_core::format_unsafe_permissions(&err)` (§4.7) verbatim so the
+  vault-path resolution and `inspect`; `unsafe_permissions` renders the
+  `Some(text)` from `paladin_core::format_unsafe_permissions(&err)` (§4.7),
+  falling back to the generic error text if it returns `None`, so the
   wording matches the CLI and TUI exactly.
 - Missing → present `InitDialog`. v0.2 GUI creates vaults in-app on
   explicit user confirmation (DESIGN §6, §7). Plaintext path: empty
@@ -511,21 +516,27 @@ switches and spin rows, are reverted on pre-commit failure:
 
 - `data/paladin-gtk.desktop` shipped at
   `/usr/share/applications/paladin-gtk.desktop` per §11.3. Sets
-  `Name=Paladin`, `Icon=paladin-gtk`, `StartupWMClass=io.github.paladin_otp.Gui`,
+  `Name=Paladin`, `Icon=io.github.paladin_otp.Gui` (the icon-theme name
+  resolves to the app-ID-named files installed below),
+  `StartupWMClass=io.github.paladin_otp.Gui`,
   `Categories=Utility;Security;`, and security/authenticator terms in
   `Keywords=`, and uses `Exec=paladin-gtk` with no file/URI placeholders.
   v0.2 does not register a MIME type or URI handler; imports start inside
   `ImportDialog`, matching the global-flag parser contract above. Native
   packages keep the `paladin-gtk.desktop` filename; the Flatpak manifest
-  installs desktop and AppStream metadata under the finalized §11.4 app ID
-  so Flathub's desktop-ID checks match the application ID.
+  installs the desktop entry as `<app-id>.desktop` so Flathub's
+  desktop-ID checks match the application ID.
 - App icon at
-  `/usr/share/icons/hicolor/scalable/apps/paladin-gtk.svg`. Symbolic
-  variant at `…/symbolic/apps/paladin-gtk-symbolic.svg` if the
+  `/usr/share/icons/hicolor/scalable/apps/io.github.paladin_otp.Gui.svg`,
+  named after the §11.4 app ID so the same files satisfy native and
+  Flathub install-layout checks without per-format renaming. Symbolic
+  variant at
+  `…/symbolic/apps/io.github.paladin_otp.Gui-symbolic.svg` if the
   Adwaita-style symbolic palette warrants it; a `16`/`24`/`32`/`48`
-  PNG fallback set is shipped under
-  `/usr/share/icons/hicolor/<size>/apps/` for non-SVG icon
-  consumers.
+  PNG fallback set named `io.github.paladin_otp.Gui.png` is shipped
+  under `/usr/share/icons/hicolor/<size>/apps/` for non-SVG icon
+  consumers. The packaging dry-run validates this layout in both the
+  native and Flatpak builds.
 - Adwaita-style CSS in `data/style.css`, scoped via `gtk::CssProvider`.
 
 ## Packaging (per §11)
@@ -539,10 +550,12 @@ switches and spin rows, are reverted on pre-commit failure:
   per-field Cargo inheritance (`description.workspace = true`,
   `repository.workspace = true`, and so on; the workspace shape established by
   IMPLEMENTATION_PLAN_01_CORE.md Phase A) so `nfpm` and Flathub
-  manifests read one source). It additionally sets the
-  binary-specific `homepage`, `keywords`, and `categories` fields
-  locally so `nfpm` produces correct Debian / RPM control metadata
-  without per-format duplication.
+  manifests read one source. It additionally sets the binary-specific
+  `homepage`, `keywords`, and `categories` fields locally. The
+  packaging pipeline sources these values from Cargo metadata when
+  building `.deb` / `.rpm` so the per-format configs in
+  `packaging/deb/paladin-gtk.yaml` and `packaging/rpm/paladin-gtk.yaml`
+  stay minimal.
 - **`.deb` / `.rpm` (via `nfpm`).** `packaging/deb/paladin-gtk.yaml`
   and `packaging/rpm/paladin-gtk.yaml` install
   `/usr/bin/paladin-gtk`, the desktop entry at
@@ -569,9 +582,10 @@ switches and spin rows, are reverted on pre-commit failure:
   finalized at Flathub-submission time. The same string is passed to
   `RelmApp::new(...)` in `main.rs` and set as `StartupWMClass` in
   `data/paladin-gtk.desktop`, so window-to-launcher mapping works
-  identically in both Flatpak and native installs. The manifest exports the
-  matching AppStream metainfo file from `data/metainfo/` and validates it
-  during the packaging dry-run. `flatpak-builder` consumes the
+  identically in both Flatpak and native installs. The manifest exports
+  `data/metainfo/io.github.paladin_otp.Gui.metainfo.xml` to
+  `/usr/share/metainfo/` and validates it during the packaging dry-run.
+  `flatpak-builder` consumes the
   tagged release tarball with vendored Cargo deps so Flathub builds
   reproducibly without network access at build time.
 - **AppImage.** `linuxdeploy` plus
@@ -794,7 +808,7 @@ back into vanilla GTK4 widgets where Adwaita is idiomatic:
   gresource bundle.
 
 GTK-only widgets (`gtk::ListView`, `gtk::SearchEntry`,
-`gtk::FileChooserNative`, `gtk::IconTheme`, `gdk::Clipboard`) keep
+`gtk::FileDialog`, `gtk::IconTheme`, `gdk::Clipboard`) keep
 their existing roles — Adwaita does not replace those. The component
 tree section above remains the source of truth for behavior; this
 section just pins which Adwaita class fills each role.
