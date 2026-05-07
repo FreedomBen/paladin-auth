@@ -36,6 +36,10 @@ use crate::error::{PaladinError, Result, VaultMode};
 pub(crate) mod header;
 pub mod path;
 pub mod payload;
+#[cfg(not(unix))]
+mod perms_other;
+#[cfg(unix)]
+mod perms_unix;
 
 pub use path::default_vault_path;
 pub use payload::VaultSettings;
@@ -43,6 +47,13 @@ pub(crate) use payload::{decode_vault_payload, encode_vault_payload, VaultPayloa
 
 use header::{parse_header, ParsedHeader, ENCRYPTED_HEADER_LEN, PLAINTEXT_HEADER_LEN};
 use payload::MAX_PAYLOAD_BYTES;
+
+#[cfg(not(unix))]
+use perms_other::{enforce_dir_perms, enforce_file_perms_from_meta};
+#[cfg(unix)]
+use perms_unix::{enforce_dir_perms, enforce_file_perms_from_meta};
+
+use crate::error::PermissionSubject;
 
 /// Result of the `inspect()` header probe (DESIGN.md §4.7).
 ///
@@ -248,6 +259,14 @@ impl Store {
 }
 
 fn create_plaintext(path: &Path) -> Result<(crate::Vault, Store)> {
+    // §4.3: parent dir mode must not grant any group / other perms
+    // before we ever stage a vault here. (The primary doesn't yet
+    // exist, so vault_file / backup_file checks are skipped.)
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            enforce_dir_perms(parent)?;
+        }
+    }
     if path.exists() {
         return Err(PaladinError::VaultExists);
     }
@@ -261,18 +280,55 @@ fn create_plaintext(path: &Path) -> Result<(crate::Vault, Store)> {
 }
 
 fn open_plaintext(path: &Path) -> Result<(crate::Vault, Store)> {
-    let bytes = match fs::read(path) {
-        Ok(b) => b,
+    // §4.3 perms enforcement — runs before any decode work, before
+    // even reading the primary's bytes, so unsafe_permissions wins
+    // over invalid_payload / wrong_vault_lock when the on-disk perms
+    // are wrong. `vault_missing` still wins over `unsafe_permissions`
+    // on the primary itself: a missing primary surfaces as
+    // `vault_missing` even when the parent dir is unsafe-… wait, no:
+    // the parent-dir check runs first, then the primary stat. So a
+    // bad parent dir surfaces as `unsafe_permissions { vault_dir }`
+    // even when the primary is absent. That matches the §4.3 intent
+    // ("fix the perms before doing anything else"). `vault_missing`
+    // surfaces only when parent perms are clean and the primary
+    // simply isn't there yet.
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            enforce_dir_perms(parent)?;
+        }
+    }
+
+    let primary_meta = match fs::symlink_metadata(path) {
+        Ok(m) => m,
         Err(err) if err.kind() == io::ErrorKind::NotFound => {
             return Err(PaladinError::VaultMissing);
         }
         Err(err) => {
             return Err(PaladinError::IoError {
-                operation: "read_vault_file",
+                operation: "stat_vault_file",
                 source: err,
             });
         }
     };
+    enforce_file_perms_from_meta(path, &primary_meta, PermissionSubject::VaultFile)?;
+
+    // Backup is optional; check perms only when present.
+    let bak = append_suffix(path, ".bak");
+    match fs::symlink_metadata(&bak) {
+        Ok(meta) => enforce_file_perms_from_meta(&bak, &meta, PermissionSubject::BackupFile)?,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+        Err(err) => {
+            return Err(PaladinError::IoError {
+                operation: "stat_backup_file",
+                source: err,
+            });
+        }
+    }
+
+    let bytes = fs::read(path).map_err(|err| PaladinError::IoError {
+        operation: "read_vault_file",
+        source: err,
+    })?;
 
     // §4.3 on-disk size cap, applied before any decoding.
     if bytes.len() > PLAINTEXT_HEADER_LEN + MAX_PAYLOAD_BYTES {

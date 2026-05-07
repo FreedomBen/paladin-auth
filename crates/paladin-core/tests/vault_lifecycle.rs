@@ -14,7 +14,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use paladin_core::{
     classify_init_precheck, default_vault_path, inspect, parse_otpauth, Account, ErrorKind,
-    InitPrecheck, PaladinError, Store, VaultInit, VaultLock, VaultStatus,
+    InitPrecheck, PaladinError, PermissionSubject, Store, VaultInit, VaultLock, VaultStatus,
 };
 use tempfile::TempDir;
 
@@ -33,6 +33,15 @@ fn make_account(label: &str, issuer: Option<&str>) -> Account {
     let issuer_part = issuer.map(|i| format!("{i}:")).unwrap_or_default();
     let uri = format!("otpauth://totp/{issuer_part}{label}?secret=JBSWY3DPEHPK3PXP");
     parse_otpauth(&uri, fixture_now()).unwrap().account
+}
+
+/// Allocate a temp directory and force its mode to `0700` so the
+/// §4.3 perms check passes regardless of the host's `mkdtemp`
+/// default (sandbox/test runners sometimes hand back `0770`).
+fn vault_test_dir() -> TempDir {
+    let dir = TempDir::new().expect("create tempdir");
+    fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).expect("chmod tempdir 0700");
+    dir
 }
 
 /// Bytes of a valid 10-byte plaintext header.
@@ -77,21 +86,21 @@ fn default_vault_path_resolves_under_paladin_with_vault_bin_filename() {
 
 #[test]
 fn inspect_missing_returns_status_missing() {
-    let dir = TempDir::new().unwrap();
+    let dir = vault_test_dir();
     let path = dir.path().join("vault.bin");
     assert_eq!(inspect(&path).unwrap(), VaultStatus::Missing);
 }
 
 #[test]
 fn inspect_plaintext_returns_plaintext() {
-    let dir = TempDir::new().unwrap();
+    let dir = vault_test_dir();
     let path = write(&dir, "vault.bin", &plaintext_header_bytes());
     assert_eq!(inspect(&path).unwrap(), VaultStatus::Plaintext);
 }
 
 #[test]
 fn inspect_encrypted_returns_encrypted() {
-    let dir = TempDir::new().unwrap();
+    let dir = vault_test_dir();
     let path = write(&dir, "vault.bin", &encrypted_header_bytes());
     assert_eq!(inspect(&path).unwrap(), VaultStatus::Encrypted);
 }
@@ -100,7 +109,7 @@ fn inspect_encrypted_returns_encrypted() {
 fn inspect_does_not_enforce_permissions() {
     // §4.7: inspect deliberately skips the §4.3 permissions check so
     // callers can probe vault mode before fixing perms.
-    let dir = TempDir::new().unwrap();
+    let dir = vault_test_dir();
     let path = write(&dir, "vault.bin", &plaintext_header_bytes());
     fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
     fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o755)).unwrap();
@@ -109,14 +118,14 @@ fn inspect_does_not_enforce_permissions() {
 
 #[test]
 fn inspect_unrecognized_magic_is_invalid_header() {
-    let dir = TempDir::new().unwrap();
+    let dir = vault_test_dir();
     let path = write(&dir, "vault.bin", b"NOTPALADIN\0\x01\x00");
     assert_eq!(inspect(&path).unwrap_err().kind(), ErrorKind::InvalidHeader);
 }
 
 #[test]
 fn inspect_unsupported_format_version_propagates() {
-    let dir = TempDir::new().unwrap();
+    let dir = vault_test_dir();
     let mut bytes = plaintext_header_bytes();
     bytes[8] = 99;
     let path = write(&dir, "vault.bin", &bytes);
@@ -164,7 +173,7 @@ fn classify_init_precheck_truth_table() {
 
 #[test]
 fn store_open_returns_vault_missing_when_path_absent() {
-    let dir = TempDir::new().unwrap();
+    let dir = vault_test_dir();
     let path = dir.path().join("vault.bin");
     let err = Store::open(&path, VaultLock::Plaintext).unwrap_err();
     assert_eq!(err.kind(), ErrorKind::VaultMissing);
@@ -172,7 +181,7 @@ fn store_open_returns_vault_missing_when_path_absent() {
 
 #[test]
 fn store_create_returns_vault_exists_when_primary_already_present() {
-    let dir = TempDir::new().unwrap();
+    let dir = vault_test_dir();
     let path = write(&dir, "vault.bin", &plaintext_header_bytes());
     let err = Store::create(&path, VaultInit::Plaintext).unwrap_err();
     assert_eq!(err.kind(), ErrorKind::VaultExists);
@@ -180,7 +189,7 @@ fn store_create_returns_vault_exists_when_primary_already_present() {
 
 #[test]
 fn first_save_writes_primary_and_creates_no_backup() {
-    let dir = TempDir::new().unwrap();
+    let dir = vault_test_dir();
     let path = dir.path().join("vault.bin");
     let (vault, store) = Store::create(&path, VaultInit::Plaintext).unwrap();
     vault.save(&store).unwrap();
@@ -195,7 +204,7 @@ fn first_save_writes_primary_and_creates_no_backup() {
 
 #[test]
 fn second_save_rotates_backup_to_pre_save_primary_bytes() {
-    let dir = TempDir::new().unwrap();
+    let dir = vault_test_dir();
     let path = dir.path().join("vault.bin");
     let (vault, store) = Store::create(&path, VaultInit::Plaintext).unwrap();
     vault.save(&store).unwrap();
@@ -216,7 +225,7 @@ fn second_save_rotates_backup_to_pre_save_primary_bytes() {
 
 #[test]
 fn save_reopen_round_trip_preserves_account_insertion_order() {
-    let dir = TempDir::new().unwrap();
+    let dir = vault_test_dir();
     let path = dir.path().join("vault.bin");
     let (mut vault, store) = Store::create(&path, VaultInit::Plaintext).unwrap();
     vault.add(make_account("alice", None));
@@ -233,7 +242,7 @@ fn save_reopen_round_trip_preserves_account_insertion_order() {
 
 #[test]
 fn empty_vault_round_trips_through_save_reopen() {
-    let dir = TempDir::new().unwrap();
+    let dir = vault_test_dir();
     let path = dir.path().join("vault.bin");
     let (vault, store) = Store::create(&path, VaultInit::Plaintext).unwrap();
     vault.save(&store).unwrap();
@@ -251,15 +260,160 @@ fn empty_vault_round_trips_through_save_reopen() {
 
 #[test]
 fn open_with_plaintext_lock_against_encrypted_file_returns_wrong_vault_lock() {
-    let dir = TempDir::new().unwrap();
+    let dir = vault_test_dir();
     let path = write(&dir, "vault.bin", &encrypted_header_bytes());
+    // §4.3 perms enforcement runs before mode classification, so make
+    // sure the on-disk file passes the permission check; the
+    // encrypted-shape rejection is what we are pinning here.
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
     let err = Store::open(&path, VaultLock::Plaintext).unwrap_err();
     assert_eq!(err.kind(), ErrorKind::WrongVaultLock);
 }
 
+// ---------- §4.3 permissions enforcement ----------
+
+#[test]
+fn open_rejects_when_parent_directory_grants_group_or_other() {
+    let dir = vault_test_dir();
+    let path = dir.path().join("vault.bin");
+    let (vault, store) = Store::create(&path, VaultInit::Plaintext).unwrap();
+    vault.save(&store).unwrap();
+    drop(vault);
+    drop(store);
+    fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o755)).unwrap();
+    let err = Store::open(&path, VaultLock::Plaintext).unwrap_err();
+    match err {
+        PaladinError::UnsafePermissions {
+            subject,
+            actual_mode,
+            expected_mode,
+            ..
+        } => {
+            assert_eq!(subject, PermissionSubject::VaultDir);
+            assert_eq!(actual_mode, "0755");
+            assert_eq!(expected_mode, "0700");
+        }
+        other => panic!("expected UnsafePermissions, got {other:?}"),
+    }
+}
+
+#[test]
+fn open_rejects_when_primary_grants_group_or_other() {
+    let dir = vault_test_dir();
+    let path = dir.path().join("vault.bin");
+    let (vault, store) = Store::create(&path, VaultInit::Plaintext).unwrap();
+    vault.save(&store).unwrap();
+    drop(vault);
+    drop(store);
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+    let err = Store::open(&path, VaultLock::Plaintext).unwrap_err();
+    match err {
+        PaladinError::UnsafePermissions {
+            subject,
+            actual_mode,
+            expected_mode,
+            ..
+        } => {
+            assert_eq!(subject, PermissionSubject::VaultFile);
+            assert_eq!(actual_mode, "0644");
+            assert_eq!(expected_mode, "0600");
+        }
+        other => panic!("expected UnsafePermissions, got {other:?}"),
+    }
+}
+
+#[test]
+fn open_rejects_when_backup_grants_group_or_other() {
+    let dir = vault_test_dir();
+    let path = dir.path().join("vault.bin");
+    let (vault, store) = Store::create(&path, VaultInit::Plaintext).unwrap();
+    vault.save(&store).unwrap();
+    // Second save rotates a .bak that we then loosen on disk.
+    vault.save(&store).unwrap();
+    drop(vault);
+    drop(store);
+    let bak = dir.path().join("vault.bin.bak");
+    assert!(bak.exists(), "second save should produce vault.bin.bak");
+    fs::set_permissions(&bak, fs::Permissions::from_mode(0o640)).unwrap();
+    let err = Store::open(&path, VaultLock::Plaintext).unwrap_err();
+    match err {
+        PaladinError::UnsafePermissions {
+            subject,
+            actual_mode,
+            expected_mode,
+            path: bad_path,
+        } => {
+            assert_eq!(subject, PermissionSubject::BackupFile);
+            assert_eq!(actual_mode, "0640");
+            assert_eq!(expected_mode, "0600");
+            assert_eq!(bad_path, bak);
+        }
+        other => panic!("expected UnsafePermissions, got {other:?}"),
+    }
+}
+
+#[test]
+fn create_rejects_when_parent_directory_grants_group_or_other() {
+    let dir = vault_test_dir();
+    fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o755)).unwrap();
+    let path = dir.path().join("vault.bin");
+    let err = Store::create(&path, VaultInit::Plaintext).unwrap_err();
+    match err {
+        PaladinError::UnsafePermissions {
+            subject,
+            actual_mode,
+            expected_mode,
+            ..
+        } => {
+            assert_eq!(subject, PermissionSubject::VaultDir);
+            assert_eq!(actual_mode, "0755");
+            assert_eq!(expected_mode, "0700");
+        }
+        other => panic!("expected UnsafePermissions, got {other:?}"),
+    }
+}
+
+#[test]
+fn create_succeeds_when_parent_directory_is_0700() {
+    let dir = vault_test_dir();
+    fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let path = dir.path().join("vault.bin");
+    let _ = Store::create(&path, VaultInit::Plaintext).unwrap();
+}
+
+#[test]
+fn unsafe_permissions_actual_mode_is_four_digit_octal() {
+    // Even when the failing mode is e.g. 0700 with a stray sticky bit
+    // (0701, encoded as four digits), the actual_mode field is exactly
+    // four octal digits — the CLI / TUI / GUI helpers depend on the
+    // `0NNN` shape to render the §5 "chmod NNN" repair hint.
+    let dir = vault_test_dir();
+    let path = dir.path().join("vault.bin");
+    let (vault, store) = Store::create(&path, VaultInit::Plaintext).unwrap();
+    vault.save(&store).unwrap();
+    drop(vault);
+    drop(store);
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o604)).unwrap();
+    let err = Store::open(&path, VaultLock::Plaintext).unwrap_err();
+    match err {
+        PaladinError::UnsafePermissions {
+            actual_mode,
+            expected_mode,
+            ..
+        } => {
+            assert_eq!(actual_mode.len(), 4);
+            assert!(actual_mode.starts_with('0'));
+            assert_eq!(actual_mode, "0604");
+            assert_eq!(expected_mode.len(), 4);
+            assert!(expected_mode.starts_with('0'));
+        }
+        other => panic!("expected UnsafePermissions, got {other:?}"),
+    }
+}
+
 #[test]
 fn open_unlinks_leftover_temp_files_from_prior_partial_save() {
-    let dir = TempDir::new().unwrap();
+    let dir = vault_test_dir();
     let path = dir.path().join("vault.bin");
     let (vault, store) = Store::create(&path, VaultInit::Plaintext).unwrap();
     vault.save(&store).unwrap();
@@ -284,7 +438,7 @@ fn open_unlinks_leftover_temp_files_from_prior_partial_save() {
 
 #[test]
 fn saved_primary_starts_with_plaintext_header_bytes() {
-    let dir = TempDir::new().unwrap();
+    let dir = vault_test_dir();
     let path = dir.path().join("vault.bin");
     let (vault, store) = Store::create(&path, VaultInit::Plaintext).unwrap();
     vault.save(&store).unwrap();
@@ -297,7 +451,7 @@ fn saved_primary_starts_with_plaintext_header_bytes() {
 
 #[test]
 fn saved_primary_file_has_0600_permissions() {
-    let dir = TempDir::new().unwrap();
+    let dir = vault_test_dir();
     let path = dir.path().join("vault.bin");
     let (vault, store) = Store::create(&path, VaultInit::Plaintext).unwrap();
     vault.save(&store).unwrap();
