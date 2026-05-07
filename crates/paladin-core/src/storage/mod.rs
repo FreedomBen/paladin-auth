@@ -486,18 +486,17 @@ fn save_plaintext(path: &Path, payload: &VaultPayload) -> Result<()> {
 
     // Step 4: commit point. The fault hook short-circuits the rename
     // when `PALADIN_FAULT_INJECT=pre_commit` so the failure is
-    // indistinguishable from a real rename error: primary unchanged,
-    // primary_tmp cleaned up best-effort, typed `save_not_committed`
-    // with the rotated `backup_path` when applicable.
+    // indistinguishable from a real rename error: the old primary is
+    // still authoritative at `vault.bin`, primary_tmp is cleaned up
+    // best-effort, and the typed error is `save_not_committed` with
+    // `backup_path: None` per DESIGN.md §5 — `backup_path` is only
+    // populated for save sites where the old primary was rotated away
+    // (see `save_plaintext_clobber` for `init --force`).
     if fault::pre_commit_should_fail() || fs::rename(&primary_tmp, path).is_err() {
         let _ = fs::remove_file(&primary_tmp);
         return Err(PaladinError::SaveNotCommitted {
             committed: false,
-            backup_path: if primary_existed {
-                Some(bak_path)
-            } else {
-                None
-            },
+            backup_path: None,
         });
     }
 

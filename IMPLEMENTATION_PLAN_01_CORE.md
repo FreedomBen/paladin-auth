@@ -322,12 +322,12 @@ Each step lands as its own commit. Tests come first.
   field reorder in `VaultPayload`, or any other non-deterministic
   encoding regression fails the test instead of silently corrupting AAD
   reproducibility.
-- [ ] Tests: plaintext save → reopen preserves account insertion order —
+- [x] Tests: plaintext save → reopen preserves account insertion order —
   add accounts in order A, B, C, save, drop the `Vault`, `open` it
   again, and assert `iter()` and `summaries()` yield A, B, C in that
   order. Pins the on-disk `VaultPayload.accounts` field as an ordered
   `Vec<Account>` rather than an unordered collection.
-- [ ] Tests: primary, temp, and backup files written `0600`, parent created
+- [x] Tests: primary, temp, and backup files written `0600`, parent created
   `0700`, atomic write via same-directory tempfile + rename, `.bak` rotated on
   each save after a primary exists (one generation), `unsafe_permissions`
   rejection at `open`
@@ -337,7 +337,7 @@ Each step lands as its own commit. Tests come first.
   carries `path`, `subject` (one of `vault_dir`, `vault_file`,
   `backup_file`), `actual_mode`, and `expected_mode` (mode strings as
   four-digit octal, e.g. `"0644"`).
-- [ ] Tests: leftover `vault.bin.tmp` / `vault.bin.bak.tmp` files from a prior
+- [x] Tests: leftover `vault.bin.tmp` / `vault.bin.bak.tmp` files from a prior
   partial save are unlinked by the next `open` (per §4.3 step 2,
   `vault.bin.bak.tmp` is staged whenever a prior primary exists — regular
   saves stage a verbatim copy of the soon-to-be-replaced primary, and
@@ -353,7 +353,7 @@ Each step lands as its own commit. Tests come first.
   explicitly does **not** create `vault.bin.bak.tmp` (no prior primary
   to copy) — assert directory contents post-save contain neither
   `.tmp` nor `.bak` siblings.
-- [ ] Tests: regular-save pre-commit recoverable state — inject a save
+- [x] Tests: regular-save pre-commit recoverable state — inject a save
   error after step 3 (rename `vault.bin.bak.tmp` →
   `vault.bin.bak`) but before step 4 (rename `vault.bin.tmp` →
   `vault.bin`). On disk after the failure: the old primary remains
@@ -365,19 +365,19 @@ Each step lands as its own commit. Tests come first.
   while the primary path still contains the old vault. The `init
   --force` / `create_force` clobber path, where backup rotation can leave
   no primary before the new primary rename, is covered separately below.
-- [ ] Tests: post-commit success replay — after a successful regular save,
+- [x] Tests: post-commit success replay — after a successful regular save,
   a fresh `open(path, lock)` reads the new primary and the on-disk
   `nonce` differs from the pre-save value; `vault.bin.bak` contains the
   *previous* primary verbatim (or no `.bak` if this was the first save).
-- [ ] Tests: post-commit durability-unconfirmed semantics — inject a
+- [x] Tests: post-commit durability-unconfirmed semantics — inject a
   parent-directory `fsync` failure after the primary rename. The error
   is `save_durability_unconfirmed` (`committed: true`); a fresh
   `open(path, lock)` succeeds and returns the *new* state because the
   primary rename did commit even though durability was unconfirmed.
-- [ ] Tests: `.bak` is never read on the success path — corrupting
+- [x] Tests: `.bak` is never read on the success path — corrupting
   `vault.bin.bak` to garbage bytes does not affect a clean `open(path,
   lock)`. The backup is recovery-only; `open` reads only the primary.
-- [ ] Tests: `format_unsafe_permissions(&err)` returns `Some(text)` for
+- [x] Tests: `format_unsafe_permissions(&err)` returns `Some(text)` for
   `unsafe_permissions` errors and `None` for any other kind. The text
   names the failing path, the actual and expected modes, and the exact
   `chmod` command that would repair it (`0700` for directories, `0600`
@@ -385,19 +385,19 @@ Each step lands as its own commit. Tests come first.
   re-implementing it. The `actual_mode` / `expected_mode` strings on the
   error itself are exactly four-digit octal (e.g. `"0644"`, not `"644"`)
   and the test asserts that literal format.
-- [ ] Tests: per-subject `unsafe_permissions` discriminator — three
+- [x] Tests: per-subject `unsafe_permissions` discriminator — three
   fixtures exercise each `subject` value end-to-end on `open`: bad
   parent-directory perms surface `subject: "vault_dir"`, bad primary
   perms surface `subject: "vault_file"`, bad backup perms (with both
   primary and backup present and the primary OK) surface
   `subject: "backup_file"`. A fourth fixture confirms `create` only
   inspects the parent directory.
-- [ ] Tests: `inspect(path)` returns `Ok(Missing)` only when the primary file
+- [x] Tests: `inspect(path)` returns `Ok(Missing)` only when the primary file
   is absent, reports plaintext/encrypted mode from the header without
   decryption, returns an error for unrecognized magic and for other I/O
   errors (e.g. permission-denied opening the path), and deliberately skips
   the §4.3 permissions check.
-- [ ] Tests: symbolic-link rejection on `open` / `create` / `create_force` —
+- [x] Tests: symbolic-link rejection on `open` / `create` / `create_force` —
   using `symlink_metadata` (so the probe never follows the link), a
   `vault.bin` that is a symlink is rejected with `io_error` and
   `operation: "vault_file_is_symlink"`, a `vault.bin.bak` that is a symlink
@@ -412,19 +412,19 @@ Each step lands as its own commit. Tests come first.
   `create_force`, the symlink check applies to the *existing* `vault.bin`
   before staging the new tempfile so a hostile symlink at `vault.bin`
   cannot capture the rename target.
-- [ ] Tests: `default_vault_path()` calls
+- [x] Tests: `default_vault_path()` calls
   `ProjectDirs::from("", "", "paladin")`, appends `vault.bin` under the
   returned `data_dir()` location from §4.3, and surfaces `io_error` with
   `operation: "resolve_default_vault_path"` if the platform path cannot be
   resolved.
-- [ ] Tests: header version and ID handling — v0.1 writes `format_ver = 1`;
+- [x] Tests: header version and ID handling — v0.1 writes `format_ver = 1`;
   unsupported versions return `unsupported_format_version`; unknown `mode`,
   `kdf_id`, or `aead_id` values return `invalid_header` before constructing a
   vault.
-- [ ] Tests: `open` returns `vault_missing` when the primary file is
+- [x] Tests: `open` returns `vault_missing` when the primary file is
   absent; `create` returns `vault_exists` when the primary already
   exists (rotation belongs to `create_force`, see below).
-- [ ] Tests: `create_force(path, VaultInit::Plaintext)` staged clobber per
+- [x] Tests: `create_force(path, VaultInit::Plaintext)` staged clobber per
   §5: writes `vault.bin.tmp` and `fsync`s it before moving any existing primary;
   staging-step failure leaves the old primary and `.bak` untouched;
   once staged, rotates an existing `vault.bin` → `vault.bin.bak`
@@ -436,7 +436,7 @@ Each step lands as its own commit. Tests come first.
   behaves identically to `create`. `create_force` reuses the
   parent-directory `unsafe_permissions` check from `create` and rejects
   before any staged write.
-- [ ] Tests: `write_secret_file_atomic(path, bytes)` creates the final file
+- [x] Tests: `write_secret_file_atomic(path, bytes)` creates the final file
   `0600`, writes through a same-directory tempfile, `fsync`s the temp file
   and parent directory, atomically renames into place, replaces an existing
   destination only by virtue of the caller invoking it, implements no
@@ -445,21 +445,21 @@ Each step lands as its own commit. Tests come first.
   before rename surface as `save_not_committed` and do not leave the
   destination partially written; injected parent-fsync failures after rename
   surface as `save_durability_unconfirmed`.
-- [ ] Tests: core-owned `io_error.operation` strings match the §5 table for
+- [x] Tests: core-owned `io_error.operation` strings match the §5 table for
   default path resolution, permission metadata reads, vault reads/writes,
   import-file reads, image decoding, QR extraction, export writes, and
   unsupported non-Unix permission stubs.
-- [ ] Implement `Store`, crate-root `open` / `create` storage facades,
+- [x] Implement `Store`, crate-root `open` / `create` storage facades,
   permissions module (Unix path; non-Unix stubs that compile but reject
   `open` / `create` / `create_force` before touching vault content with
   `io_error` and
   `operation: "unsupported_platform_permissions"`),
   atomic-write pipeline.
-- [ ] Implement `default_vault_path()` in `storage::path` with
+- [x] Implement `default_vault_path()` in `storage::path` with
   `ProjectDirs::from("", "", "paladin")` so presentation crates do not
   duplicate `ProjectDirs` logic.
-- [ ] Implement `inspect(path)` (header probe, no decryption, no perms check).
-- [ ] Tests: `classify_init_precheck` truth table —
+- [x] Implement `inspect(path)` (header probe, no decryption, no perms check).
+- [x] Tests: `classify_init_precheck` truth table —
   `Ok(VaultStatus::Missing)` → `InitPrecheck::Clear`;
   `Ok(VaultStatus::Plaintext)`, `Ok(VaultStatus::Encrypted)`,
   `Err(invalid_header { .. })`, and
@@ -470,38 +470,38 @@ Each step lands as its own commit. Tests come first.
   `io_error { operation: "open_vault_file", .. }`). The mapping is
   locked here so CLI init, GUI `InitDialog`, and any future init-capable
   front end share one truth table.
-- [ ] Implement `classify_init_precheck(probe: Result<VaultStatus>) ->
+- [x] Implement `classify_init_precheck(probe: Result<VaultStatus>) ->
   InitPrecheck` plus `pub enum InitPrecheck { Clear, Existing,
   Propagate(PaladinError) }` in `storage/mod.rs`. Re-export both at the
   crate root.
-- [ ] Implement `create_force(path, init)` in `storage` per the §5 init
+- [x] Implement `create_force(path, init)` in `storage` per the §5 init
   clobber sequence.
-- [ ] Implement `write_secret_file_atomic(path, bytes)` by factoring the
+- [x] Implement `write_secret_file_atomic(path, bytes)` by factoring the
   vault save pipeline's tempfile / chmod `0600` / fsync / rename /
   parent-fsync pieces without the vault-specific header, permissions
   enforcement, or `.bak` rotation.
-- [ ] Implement `format_unsafe_permissions(&PaladinError) -> Option<String>`
+- [x] Implement `format_unsafe_permissions(&PaladinError) -> Option<String>`
   per §4.7, sourcing all wording from the `unsafe_permissions` fields so
   CLI, TUI, and GUI never diverge.
-- [ ] Tests: `format_init_force_warning(path)` returns text that names
+- [x] Tests: `format_init_force_warning(path)` returns text that names
   the supplied path, mentions `vault.bin.bak`, and warns that any
   prior backup will be overwritten — locked via fixture string compare
   so CLI `init --force` and the GUI `InitDialog` destructive gate stay
   byte-identical.
-- [ ] Tests: `format_plaintext_storage_warning()` and
+- [x] Tests: `format_plaintext_storage_warning()` and
   `format_plaintext_export_warning()` return stable text — locked via
   fixture so CLI text-mode plaintext `init` and `passphrase remove`,
   the TUI Passphrase / Export modals, and the GUI `PassphraseDialog` /
   `InitDialog` / `ExportDialog` plaintext paths render identical wording.
-- [ ] Implement `format_init_force_warning(&Path) -> String`,
+- [x] Implement `format_init_force_warning(&Path) -> String`,
   `format_plaintext_storage_warning() -> String`, and
   `format_plaintext_export_warning() -> String` per §4.7. Co-locate
   with `format_unsafe_permissions` so all front-end text helpers live
   in one module and presentation crates never re-implement the wording.
-- [ ] Tests: `format_validation_warning(&ValidationWarning)` returns stable
+- [x] Tests: `format_validation_warning(&ValidationWarning)` returns stable
   fixture text for `short_secret`, using decoded length and recommended
   minimum values from the warning.
-- [ ] Implement `format_validation_warning(&ValidationWarning) -> String`
+- [x] Implement `format_validation_warning(&ValidationWarning) -> String`
   in the same shared text module so CLI JSON/text warnings, TUI inline
   warnings, and GUI inline warnings share one message source.
 

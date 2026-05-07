@@ -12,9 +12,12 @@
 //   `save_not_committed` error path. The destination is left
 //   unchanged from the operation's perspective: any leftover tempfile
 //   is best-effort unlinked, and the typed error reports
-//   `committed: false` plus the rotated `backup_path` (when the save
-//   site rotates a `.bak` ahead of the rename) so the caller can
-//   reason about commit state without inspecting a source error.
+//   `committed: false` plus an optional `backup_path` (set when the
+//   save site rotates the old primary out of `vault.bin` ahead of the
+//   rename — e.g. `init --force`'s clobber — so the caller knows
+//   where to find the previous vault content; regular saves leave the
+//   old primary at `vault.bin` and report `backup_path: None` per
+//   DESIGN.md §5).
 //
 // * `post_commit` — return true at the post-rename / parent-fsync
 //   injection point so the surrounding save site bails out via its

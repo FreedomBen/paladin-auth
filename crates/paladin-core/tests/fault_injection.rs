@@ -26,7 +26,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use paladin_core::{
-    write_secret_file_atomic, ErrorKind, PaladinError, Store, VaultInit, VaultMode,
+    write_secret_file_atomic, ErrorKind, PaladinError, Store, VaultInit, VaultLock, VaultMode,
 };
 use tempfile::TempDir;
 
@@ -142,11 +142,27 @@ fn regular_save_pre_commit_surfaces_save_not_committed() {
         let primary_before = std::fs::read(&path).unwrap();
 
         let err = with_fault(PRE, || vault.save(&store)).expect_err("pre_commit must fail");
-        assert_save_not_committed(&err, true);
+        // §5: regular-save pre-commit leaves the old primary at
+        // `vault.bin` authoritative, so the user does not need
+        // backup-file recovery — `backup_path` is None.
+        assert_save_not_committed(&err, false);
 
-        // Primary unchanged: the rename never happened.
+        // Primary unchanged: the step-4 rename never happened.
         assert_eq!(std::fs::read(&path).unwrap(), primary_before);
+        // Step 3 (rename `.bak.tmp` → `.bak`) ran before the fault, so
+        // the rotated `.bak` exists and contains the pre-save primary
+        // bytes verbatim.
+        let bak_path = path.with_file_name("vault.bin.bak");
+        assert_eq!(
+            std::fs::read(&bak_path).unwrap(),
+            primary_before,
+            "vault.bin.bak must hold the pre-save primary bytes",
+        );
         no_tmp_residue(&path);
+
+        // A fresh open after the fault reads the pre-save state.
+        let (_reopened_vault, _reopened_store) =
+            Store::open(&path, VaultLock::Plaintext).expect("reopen after pre_commit must succeed");
     });
 }
 
@@ -162,9 +178,18 @@ fn regular_save_post_commit_surfaces_save_durability_unconfirmed() {
         assert_save_durability_unconfirmed(&err);
 
         // Primary is in place after a post-commit fault — only durability
-        // is in question.
+        // is in question. The step-4 rename committed even though the
+        // parent fsync did not, so `vault.bin` is the freshly renamed
+        // primary; for an unmutated plaintext payload the bytes are
+        // byte-identical to the prior primary, which is fine — the
+        // contract is "rename committed, durability unclear".
         assert!(path.exists(), "primary must be in place post-commit");
         no_tmp_residue(&path);
+
+        // A fresh open after the fault reads the new state — the rename
+        // committed even though the parent fsync did not.
+        let (_reopened_vault, _reopened_store) = Store::open(&path, VaultLock::Plaintext)
+            .expect("reopen after post_commit must succeed");
     });
 }
 
@@ -339,7 +364,9 @@ fn repeated_pre_commit_does_not_leak_state() {
         let primary_after_first = std::fs::read(&path).unwrap();
 
         let first = with_fault(PRE, || vault.save(&store)).expect_err("first must fail");
-        assert_save_not_committed(&first, true);
+        // Regular-save pre-commit: primary stays authoritative, so
+        // `backup_path` is None per §5.
+        assert_save_not_committed(&first, false);
         assert_eq!(
             std::fs::read(&path).unwrap(),
             primary_after_first,
@@ -348,7 +375,7 @@ fn repeated_pre_commit_does_not_leak_state() {
         no_tmp_residue(&path);
 
         let second = with_fault(PRE, || vault.save(&store)).expect_err("second must fail");
-        assert_save_not_committed(&second, true);
+        assert_save_not_committed(&second, false);
         assert_eq!(
             std::fs::read(&path).unwrap(),
             primary_after_first,
@@ -401,6 +428,9 @@ fn store_for_test_constructor_drives_fault_hook() {
 
         let err = with_fault(PRE, || vault.save(&synthetic))
             .expect_err("pre_commit must fail through synthetic Store");
-        assert_save_not_committed(&err, true);
+        // Regular save through the synthetic Store still routes through
+        // `save_plaintext`, which leaves the old primary authoritative
+        // and reports `backup_path: None` per §5.
+        assert_save_not_committed(&err, false);
     });
 }
