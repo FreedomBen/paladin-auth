@@ -12,6 +12,7 @@ pub mod error;
 pub mod otp;
 pub mod otpauth;
 pub mod storage;
+pub mod vault;
 
 pub use domain::validation::AccountInput;
 pub use domain::{
@@ -22,5 +23,7 @@ pub use domain::{
 pub use error::{ErrorKind, PaladinError, PermissionSubject, Result, TimeRangeKind, VaultMode};
 pub use otpauth::parse_otpauth;
 pub use storage::{
-    classify_init_precheck, default_vault_path, inspect, InitPrecheck, VaultSettings, VaultStatus,
+    classify_init_precheck, default_vault_path, inspect, InitPrecheck, Store, VaultInit, VaultLock,
+    VaultSettings, VaultStatus,
 };
+pub use vault::Vault;

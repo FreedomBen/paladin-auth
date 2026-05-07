@@ -2,13 +2,18 @@
 //
 // Vault storage (DESIGN.md §4.3).
 //
-// Phase E lands the in-memory `VaultPayload` and the bincode v2 codec
-// pinned by §4.3 (little-endian, fixed-int, 16 MiB cap, full-input
-// consumption), the on-disk header parser, the default vault-path
-// resolver, the `inspect` header probe, and the `classify_init_precheck`
-// truth table that CLI and GUI init flows share. Filesystem I/O
-// (atomic writes, permissions, backup rotation, `Store::open` /
-// `Store::create`) lands in subsequent commits.
+// Phase E ships the in-memory `VaultPayload` + bincode v2 codec
+// (little-endian, fixed-int, 16 MiB cap, full-input consumption), the
+// on-disk header parser, the default vault-path resolver, the
+// `inspect` header probe, the `classify_init_precheck` truth table,
+// and the plaintext-mode `Store` lifecycle (`open` / `create` /
+// atomic-write save with `.bak` rotation and leftover-tmp cleanup).
+//
+// Phase E.2 layers the §4.3 permissions enforcement on top
+// (`unsafe_permissions` with `vault_dir` / `vault_file` /
+// `backup_file` discriminator); E.3 adds `create_force` semantics and
+// symlink rejection; Phase F adds the encrypted variants of
+// `VaultLock` / `VaultInit` and the AEAD save/open paths.
 //
 // Public surface from this module (re-exported at the crate root via
 // `lib.rs`):
@@ -18,12 +23,15 @@
 // * `VaultStatus`
 // * `VaultSettings` (already published from `payload`)
 // * `InitPrecheck` + `classify_init_precheck`
+// * `Store` + `VaultLock` + `VaultInit`
 
-use std::fs::File;
-use std::io::Read;
-use std::path::Path;
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Read, Write};
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
+use std::path::{Path, PathBuf};
 
-use crate::error::{PaladinError, Result};
+use crate::error::{PaladinError, Result, VaultMode};
 
 pub(crate) mod header;
 pub mod path;
@@ -31,13 +39,10 @@ pub mod payload;
 
 pub use path::default_vault_path;
 pub use payload::VaultSettings;
-// Re-exported for use by upcoming Phase E filesystem code (Store, open,
-// create_force, atomic-write pipeline). The codec itself lives in
-// `payload`; callers within the crate go through these aliases.
-#[allow(unused_imports)]
 pub(crate) use payload::{decode_vault_payload, encode_vault_payload, VaultPayload};
 
-use header::{parse_header, ParsedHeader, ENCRYPTED_HEADER_LEN};
+use header::{parse_header, ParsedHeader, ENCRYPTED_HEADER_LEN, PLAINTEXT_HEADER_LEN};
+use payload::MAX_PAYLOAD_BYTES;
 
 /// Result of the `inspect()` header probe (DESIGN.md §4.7).
 ///
@@ -146,6 +151,292 @@ pub fn classify_init_precheck(probe: Result<VaultStatus>) -> InitPrecheck {
         }
         Err(other) => InitPrecheck::Propagate(other),
     }
+}
+
+// ---------- Store + VaultLock + VaultInit (DESIGN.md §4.7) ----------
+
+/// Caller-supplied lock used by [`Store::open`] to assert the on-disk
+/// vault mode the caller expects. A mismatch surfaces
+/// `wrong_vault_lock` before any payload work.
+///
+/// The encrypted variant — which carries the user passphrase — lands
+/// in Phase F and is intentionally elided here so the v0.1 plaintext
+/// build cannot accidentally type-check against a stub passphrase
+/// API.
+#[non_exhaustive]
+#[derive(Debug)]
+pub enum VaultLock {
+    /// Plaintext-mode vault.
+    Plaintext,
+}
+
+/// Caller-supplied initialization mode for [`Store::create`] /
+/// [`Store::create_force`]. The encrypted variant (passphrase +
+/// optional Argon2 overrides) lands in Phase F.
+#[non_exhaustive]
+#[derive(Debug)]
+pub enum VaultInit {
+    /// Initialize a plaintext-mode vault.
+    Plaintext,
+}
+
+/// Per-vault filesystem context.
+///
+/// Created by [`Store::open`] / [`Store::create`] and consumed by
+/// `Vault::save`. Holds the on-disk vault path and the negotiated
+/// mode; Phase F extends it with cached crypto material (Argon2 salt
+/// / params + derived AEAD key) for encrypted vaults.
+#[derive(Debug)]
+pub struct Store {
+    path: PathBuf,
+    mode: VaultMode,
+}
+
+impl Store {
+    /// Open an existing vault at `path`.
+    ///
+    /// * `vault_missing` if the primary file is absent.
+    /// * `wrong_vault_lock` if the file mode does not match `lock`
+    ///   (e.g. encrypted file opened with `VaultLock::Plaintext`).
+    /// * `invalid_header` / `unsupported_format_version` /
+    ///   `invalid_payload` for malformed files.
+    /// * `io_error { operation: "read_vault_file" }` for any other
+    ///   filesystem failure.
+    ///
+    /// On success, leftover `vault.bin.tmp` / `vault.bin.bak.tmp`
+    /// from a prior partial save are unlinked (best-effort) before
+    /// returning, per §4.3.
+    // `lock` is taken by value so the encrypted variant (Phase F)
+    // can move its passphrase `SecretString` into the call without an
+    // extra clone or borrow gymnastics.
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn open(path: &Path, lock: VaultLock) -> Result<(crate::Vault, Self)> {
+        match lock {
+            VaultLock::Plaintext => open_plaintext(path),
+        }
+    }
+
+    /// Create a brand-new vault at `path`.
+    ///
+    /// Returns `vault_exists` when a primary file is already present
+    /// (use `create_force` for the §5 `init --force` clobber path —
+    /// landing in Phase E.3). The actual file is not written until
+    /// the caller invokes `Vault::save`.
+    // Same rationale as `open`: encrypted `VaultInit` (Phase F) carries
+    // a `SecretString` passphrase that we want to move, not clone.
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn create(path: &Path, init: VaultInit) -> Result<(crate::Vault, Self)> {
+        match init {
+            VaultInit::Plaintext => create_plaintext(path),
+        }
+    }
+
+    /// Encode `payload` and run the §4.3 atomic-write pipeline against
+    /// this `Store`'s path. Crate-private; called via `Vault::save`.
+    pub(crate) fn save_payload(&self, payload: &VaultPayload) -> Result<()> {
+        match self.mode {
+            VaultMode::Plaintext => save_plaintext(&self.path, payload),
+            VaultMode::Encrypted => Err(PaladinError::IoError {
+                operation: "save_encrypted",
+                source: io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "encrypted save lands in Phase F",
+                ),
+            }),
+        }
+    }
+}
+
+fn create_plaintext(path: &Path) -> Result<(crate::Vault, Store)> {
+    if path.exists() {
+        return Err(PaladinError::VaultExists);
+    }
+    Ok((
+        crate::Vault::empty(),
+        Store {
+            path: path.to_path_buf(),
+            mode: VaultMode::Plaintext,
+        },
+    ))
+}
+
+fn open_plaintext(path: &Path) -> Result<(crate::Vault, Store)> {
+    let bytes = match fs::read(path) {
+        Ok(b) => b,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            return Err(PaladinError::VaultMissing);
+        }
+        Err(err) => {
+            return Err(PaladinError::IoError {
+                operation: "read_vault_file",
+                source: err,
+            });
+        }
+    };
+
+    // §4.3 on-disk size cap, applied before any decoding.
+    if bytes.len() > PLAINTEXT_HEADER_LEN + MAX_PAYLOAD_BYTES {
+        return Err(PaladinError::InvalidPayload {
+            reason: "exceeds_size_limit",
+        });
+    }
+
+    match parse_header(&bytes)? {
+        ParsedHeader::Plaintext => {}
+        ParsedHeader::Encrypted(_) => {
+            return Err(PaladinError::WrongVaultLock {
+                expected: VaultMode::Plaintext,
+                actual: VaultMode::Encrypted,
+            });
+        }
+    }
+
+    let payload_bytes = &bytes[PLAINTEXT_HEADER_LEN..];
+    let payload = decode_vault_payload(payload_bytes)?;
+
+    // §4.3: any leftover `.tmp` / `.bak.tmp` from a prior partial save
+    // is unlinked by the next successful open. Best effort — failures
+    // here are not surfaced because the open itself has already
+    // succeeded and the next save will overwrite them anyway.
+    cleanup_leftover_temps(path);
+
+    Ok((
+        crate::Vault::from_payload(payload),
+        Store {
+            path: path.to_path_buf(),
+            mode: VaultMode::Plaintext,
+        },
+    ))
+}
+
+/// §4.3 atomic write pipeline for a plaintext vault.
+///
+/// Steps:
+/// 1. write new primary content to `vault.bin.tmp` + fsync
+/// 2. (skipped on first-ever save) stage existing primary's bytes
+///    into `vault.bin.bak.tmp` + fsync
+/// 3. rename `vault.bin.bak.tmp` → `vault.bin.bak`
+/// 4. rename `vault.bin.tmp` → `vault.bin` (commit point)
+/// 5. fsync parent directory
+fn save_plaintext(path: &Path, payload: &VaultPayload) -> Result<()> {
+    let parent = path.parent().ok_or_else(|| PaladinError::IoError {
+        operation: "resolve_vault_parent",
+        source: io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "vault path has no parent directory",
+        ),
+    })?;
+
+    let payload_bytes = encode_vault_payload(payload)?;
+    let mut on_disk = Vec::with_capacity(PLAINTEXT_HEADER_LEN + payload_bytes.len());
+    header::write_plaintext_header(&mut on_disk);
+    on_disk.extend_from_slice(&payload_bytes);
+
+    let primary_tmp = append_suffix(path, ".tmp");
+    let bak_path = append_suffix(path, ".bak");
+    let bak_tmp = append_suffix(path, ".bak.tmp");
+
+    // Step 1: stage new primary.
+    if let Err(err) = stage_temp_file(&primary_tmp, &on_disk) {
+        let _ = fs::remove_file(&primary_tmp);
+        return Err(err);
+    }
+
+    // Steps 2-3: rotate backup if an old primary exists at `path`.
+    let primary_existed = path.exists();
+    if primary_existed {
+        let primary_bytes = match fs::read(path) {
+            Ok(b) => b,
+            Err(err) => {
+                let _ = fs::remove_file(&primary_tmp);
+                return Err(PaladinError::IoError {
+                    operation: "read_vault_file",
+                    source: err,
+                });
+            }
+        };
+        if let Err(err) = stage_temp_file(&bak_tmp, &primary_bytes) {
+            let _ = fs::remove_file(&primary_tmp);
+            let _ = fs::remove_file(&bak_tmp);
+            return Err(err);
+        }
+        if let Err(err) = fs::rename(&bak_tmp, &bak_path) {
+            let _ = fs::remove_file(&primary_tmp);
+            let _ = fs::remove_file(&bak_tmp);
+            return Err(PaladinError::IoError {
+                operation: "rename_temp_to_backup",
+                source: err,
+            });
+        }
+    }
+
+    // Step 4: commit point.
+    if fs::rename(&primary_tmp, path).is_err() {
+        let _ = fs::remove_file(&primary_tmp);
+        return Err(PaladinError::SaveNotCommitted {
+            committed: false,
+            backup_path: if primary_existed {
+                Some(bak_path)
+            } else {
+                None
+            },
+        });
+    }
+
+    // Step 5: durability fence on the parent directory.
+    if fsync_dir(parent).is_err() {
+        return Err(PaladinError::SaveDurabilityUnconfirmed);
+    }
+
+    Ok(())
+}
+
+/// Open `path` as a fresh tempfile, write `content`, and fsync. The
+/// file is opened with `0600` mode on Unix targets so secrets are
+/// never world-readable, even transiently.
+fn stage_temp_file(path: &Path, content: &[u8]) -> Result<()> {
+    let mut opts = OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    opts.mode(0o600);
+    let mut f = opts.open(path).map_err(|err| PaladinError::IoError {
+        operation: "write_temp_file",
+        source: err,
+    })?;
+    f.write_all(content).map_err(|err| PaladinError::IoError {
+        operation: "write_temp_file",
+        source: err,
+    })?;
+    f.sync_all().map_err(|err| PaladinError::IoError {
+        operation: "fsync_temp_file",
+        source: err,
+    })?;
+    Ok(())
+}
+
+/// fsync the directory file descriptor so renames inside it become
+/// durable across power loss (Linux semantics).
+fn fsync_dir(dir: &Path) -> io::Result<()> {
+    File::open(dir)?.sync_all()
+}
+
+/// Append `suffix` to the full path string.
+///
+/// `Path::with_extension` would drop the existing `.bin` extension —
+/// not what we want for the `.tmp` / `.bak` / `.bak.tmp` siblings of
+/// `vault.bin`.
+fn append_suffix(path: &Path, suffix: &str) -> PathBuf {
+    let mut s = path.as_os_str().to_os_string();
+    s.push(suffix);
+    PathBuf::from(s)
+}
+
+/// Best-effort unlink of leftover save tempfiles per §4.3. Errors are
+/// ignored: a stale tmp that we cannot remove will simply be
+/// overwritten by the next save.
+fn cleanup_leftover_temps(path: &Path) {
+    let _ = fs::remove_file(append_suffix(path, ".tmp"));
+    let _ = fs::remove_file(append_suffix(path, ".bak.tmp"));
 }
 
 #[cfg(test)]

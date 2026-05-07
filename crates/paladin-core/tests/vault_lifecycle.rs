@@ -10,11 +10,30 @@ use std::fs;
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
 use paladin_core::{
-    classify_init_precheck, default_vault_path, inspect, ErrorKind, InitPrecheck, PaladinError,
-    VaultStatus,
+    classify_init_precheck, default_vault_path, inspect, parse_otpauth, Account, ErrorKind,
+    InitPrecheck, PaladinError, Store, VaultInit, VaultLock, VaultStatus,
 };
 use tempfile::TempDir;
+
+/// Fixed import-time timestamp used for round-trip tests so accounts
+/// with identical labels still have stable `created_at` / `updated_at`
+/// values.
+fn fixture_now() -> SystemTime {
+    UNIX_EPOCH + Duration::from_secs(1_700_000_000)
+}
+
+/// Build an `Account` via the public otpauth parser. The label and
+/// (optional) issuer are caller-controlled; secret / algorithm /
+/// digits are fixed because Phase E only exercises the storage
+/// round-trip — the §4.1 validation matrix lives in Phase B / D.
+fn make_account(label: &str, issuer: Option<&str>) -> Account {
+    let issuer_part = issuer.map(|i| format!("{i}:")).unwrap_or_default();
+    let uri = format!("otpauth://totp/{issuer_part}{label}?secret=JBSWY3DPEHPK3PXP");
+    parse_otpauth(&uri, fixture_now()).unwrap().account
+}
 
 /// Bytes of a valid 10-byte plaintext header.
 fn plaintext_header_bytes() -> Vec<u8> {
@@ -139,4 +158,149 @@ fn classify_init_precheck_truth_table() {
         InitPrecheck::Propagate(PaladinError::VaultMissing) => {}
         other => panic!("expected Propagate(VaultMissing), got {other:?}"),
     }
+}
+
+// ---------- Store::open / Store::create / Vault::save (plaintext) ----------
+
+#[test]
+fn store_open_returns_vault_missing_when_path_absent() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("vault.bin");
+    let err = Store::open(&path, VaultLock::Plaintext).unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::VaultMissing);
+}
+
+#[test]
+fn store_create_returns_vault_exists_when_primary_already_present() {
+    let dir = TempDir::new().unwrap();
+    let path = write(&dir, "vault.bin", &plaintext_header_bytes());
+    let err = Store::create(&path, VaultInit::Plaintext).unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::VaultExists);
+}
+
+#[test]
+fn first_save_writes_primary_and_creates_no_backup() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("vault.bin");
+    let (vault, store) = Store::create(&path, VaultInit::Plaintext).unwrap();
+    vault.save(&store).unwrap();
+    assert!(path.exists(), "primary should be written");
+    assert!(
+        !dir.path().join("vault.bin.bak").exists(),
+        "first-ever save must not produce a backup"
+    );
+    assert!(!dir.path().join("vault.bin.tmp").exists());
+    assert!(!dir.path().join("vault.bin.bak.tmp").exists());
+}
+
+#[test]
+fn second_save_rotates_backup_to_pre_save_primary_bytes() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("vault.bin");
+    let (vault, store) = Store::create(&path, VaultInit::Plaintext).unwrap();
+    vault.save(&store).unwrap();
+    let primary_v1 = fs::read(&path).unwrap();
+    // No mutations between saves, but the §4.3 atomic-write pipeline
+    // still rotates `.bak` from the soon-to-be-replaced primary.
+    vault.save(&store).unwrap();
+    let bak = dir.path().join("vault.bin.bak");
+    assert!(bak.exists(), "second save should rotate .bak");
+    assert_eq!(
+        fs::read(&bak).unwrap(),
+        primary_v1,
+        ".bak must hold the pre-save primary bytes verbatim"
+    );
+    assert!(!dir.path().join("vault.bin.tmp").exists());
+    assert!(!dir.path().join("vault.bin.bak.tmp").exists());
+}
+
+#[test]
+fn save_reopen_round_trip_preserves_account_insertion_order() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = Store::create(&path, VaultInit::Plaintext).unwrap();
+    vault.add(make_account("alice", None));
+    vault.add(make_account("bob", None));
+    vault.add(make_account("carol", None));
+    vault.save(&store).unwrap();
+    drop(vault);
+    drop(store);
+
+    let (reopened, _store) = Store::open(&path, VaultLock::Plaintext).unwrap();
+    let labels: Vec<&str> = reopened.accounts().iter().map(Account::label).collect();
+    assert_eq!(labels, ["alice", "bob", "carol"]);
+}
+
+#[test]
+fn empty_vault_round_trips_through_save_reopen() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("vault.bin");
+    let (vault, store) = Store::create(&path, VaultInit::Plaintext).unwrap();
+    vault.save(&store).unwrap();
+    drop(vault);
+    drop(store);
+
+    let (reopened, _) = Store::open(&path, VaultLock::Plaintext).unwrap();
+    assert!(reopened.accounts().is_empty());
+    // Default settings round-trip too.
+    assert!(!reopened.settings().auto_lock_enabled());
+    assert_eq!(reopened.settings().auto_lock_timeout_secs(), 300);
+    assert!(!reopened.settings().clipboard_clear_enabled());
+    assert_eq!(reopened.settings().clipboard_clear_secs(), 20);
+}
+
+#[test]
+fn open_with_plaintext_lock_against_encrypted_file_returns_wrong_vault_lock() {
+    let dir = TempDir::new().unwrap();
+    let path = write(&dir, "vault.bin", &encrypted_header_bytes());
+    let err = Store::open(&path, VaultLock::Plaintext).unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::WrongVaultLock);
+}
+
+#[test]
+fn open_unlinks_leftover_temp_files_from_prior_partial_save() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("vault.bin");
+    let (vault, store) = Store::create(&path, VaultInit::Plaintext).unwrap();
+    vault.save(&store).unwrap();
+    drop(vault);
+    drop(store);
+
+    // Stage stale tmp siblings as if a prior save crashed before
+    // committing.
+    fs::write(dir.path().join("vault.bin.tmp"), b"stale primary tmp").unwrap();
+    fs::write(dir.path().join("vault.bin.bak.tmp"), b"stale backup tmp").unwrap();
+
+    let _ = Store::open(&path, VaultLock::Plaintext).unwrap();
+    assert!(
+        !dir.path().join("vault.bin.tmp").exists(),
+        "open must unlink leftover vault.bin.tmp"
+    );
+    assert!(
+        !dir.path().join("vault.bin.bak.tmp").exists(),
+        "open must unlink leftover vault.bin.bak.tmp"
+    );
+}
+
+#[test]
+fn saved_primary_starts_with_plaintext_header_bytes() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("vault.bin");
+    let (vault, store) = Store::create(&path, VaultInit::Plaintext).unwrap();
+    vault.save(&store).unwrap();
+    let bytes = fs::read(&path).unwrap();
+    assert!(bytes.len() >= 10);
+    assert_eq!(&bytes[0..8], b"PALADIN\0");
+    assert_eq!(bytes[8], 1, "format_ver should be 1");
+    assert_eq!(bytes[9], 0, "mode should be 0 (plaintext)");
+}
+
+#[test]
+fn saved_primary_file_has_0600_permissions() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("vault.bin");
+    let (vault, store) = Store::create(&path, VaultInit::Plaintext).unwrap();
+    vault.save(&store).unwrap();
+    let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600, "primary file must be written 0600");
 }
