@@ -503,21 +503,25 @@ while `Some(format)` forces the dispatch. An unknown detected format or
 an invalid forced/source combination returns `unsupported_import_format`
 with a single `format` field: for auto-detect failures it is the detected
 format (`"unknown"`), and for forced-format failures it is the requested
-forced format. When dispatch selects
-`Paladin`, callers must supply the encrypted bundle passphrase in
-`ImportOptions`; omitting it returns `invalid_state`
-(`operation: "import_paladin"`, `state: "missing_passphrase"`). The
-lower-level byte-oriented importers (`aegis_plaintext`, `otpauth`) remain
-available for tests and specialized callers; they take `&[u8]` plus
-`import_time` when the source format does not carry timestamps. The
-encrypted Paladin importer additionally takes a passphrase
-(`SecretString`). QR import exposes path, encoded-image bytes through
-the facade, and a raw-RGBA byte form for clipboard/image buffers; all
-decode every QR via `rqrr` and feed each resulting URI through
-`parse_otpauth`. When
-`import::paladin` sees a valid Paladin header with `mode == 0`, it
-returns a typed unsupported-plaintext-vault error without importing
-accounts.
+forced format. When dispatch selects `Paladin`, callers must supply the
+encrypted bundle passphrase in `ImportOptions`; omitting it returns
+`invalid_state` (`operation: "import_paladin"`,
+`state: "missing_passphrase"`). Front ends that need to decide whether to
+prompt before calling the facade use `classify_paladin_import_precheck(path,
+forced_format)`. That helper owns the shared Paladin-header decision table:
+encrypted Paladin headers prompt, plaintext Paladin headers reject with
+`unsupported_plaintext_vault`, malformed Paladin headers reject with the
+typed header/version error, and non-Paladin or unreadable files fall through
+so `import::from_file` owns the final read/dispatch error. The lower-level
+byte-oriented importers (`aegis_plaintext`, `otpauth`) remain available for
+tests and specialized callers; they take `&[u8]` plus `import_time` when the
+source format does not carry timestamps. The encrypted Paladin importer
+additionally takes a passphrase (`SecretString`). QR import exposes path,
+encoded-image bytes through the facade, and a raw-RGBA byte form for
+clipboard/image buffers; all decode every QR via `rqrr` and feed each
+resulting URI through `parse_otpauth`. When `import::paladin` sees a valid
+Paladin header with `mode == 0`, it returns a typed
+unsupported-plaintext-vault error without importing accounts.
 
 Importer timestamps are deterministic by source format. `otpauth`, QR,
 and Aegis imports set `created_at = updated_at = import_time` for each
@@ -550,6 +554,7 @@ pub enum AccountKindInput { Totp, Hotp }
 pub enum AccountKindSummary { Totp, Hotp }
 pub enum IconHintInput { Default, Clear, Slug(String) }
 pub enum InitPrecheck { Clear, Existing, Propagate(PaladinError) }
+pub enum PaladinImportPrecheck { NoPrompt, PromptForPassphrase, Reject(PaladinError) }
 pub const HOTP_REVEAL_SECS: u64 = 120;
 pub const QR_RGBA_MAX_BYTES: usize = 64 * 1024 * 1024;
 /// Shared TUI / GUI tick cadence for TOTP gauge refresh and clipboard
@@ -721,7 +726,7 @@ pub fn parse_setting_patch(key: &str, value: &str) -> Result<SettingPatch>;
 pub fn parse_icon_hint_token(token: &str) -> Result<IconHintInput>;
 
 /// Classify the result of `inspect(path)` for the §5 init flow shared by
-/// CLI `init`, TUI initialization, and GUI `InitDialog`. `VaultStatus::Missing`
+/// CLI `init` and GUI `InitDialog`. `VaultStatus::Missing`
 /// → `InitPrecheck::Clear`; an existing primary file in any decodable shape
 /// (`Plaintext`, `Encrypted`, `invalid_header`,
 /// `unsupported_format_version`) → `InitPrecheck::Existing`, requiring the
@@ -730,6 +735,21 @@ pub fn parse_icon_hint_token(token: &str) -> Result<IconHintInput>;
 /// `InitPrecheck::Propagate(err)` so the front end can bubble the
 /// underlying cause without misclassifying it as "vault exists."
 pub fn classify_init_precheck(probe: Result<VaultStatus>) -> InitPrecheck;
+
+/// Shared pre-prompt classifier for imports that may be Paladin bundles.
+/// Front ends call this before asking for an encrypted-bundle passphrase.
+/// Forced non-Paladin formats return `NoPrompt`; auto-detect or forced
+/// Paladin probes read only enough of the file to classify a Paladin header.
+/// Encrypted Paladin headers return `PromptForPassphrase`; plaintext Paladin
+/// headers, malformed Paladin headers, and unsupported Paladin format
+/// versions return `Reject(err)` with the exact core error the front end should
+/// surface. Missing files, unreadable files, and non-Paladin magic return
+/// `NoPrompt` so `import::from_file` remains the owner of
+/// `read_import_file`, auto-detect, and `unsupported_import_format` errors.
+pub fn classify_paladin_import_precheck(
+    path: &Path,
+    forced_format: Option<import::ImportFormat>,
+) -> PaladinImportPrecheck;
 
 /// Decide which account should be selected after a TUI / GUI search
 /// filter narrows the visible list. Returns `prev` when it appears in
@@ -874,7 +894,8 @@ is `Send`. The CI-gated `Send` set covers `Vault`, `Store`, `Account`,
 `EncryptionOptions`, `Argon2Params`, `VaultLock`, `VaultInit`,
 `VaultStatus`, `VaultSettings`, `SettingKey`, `SettingPatch`,
 `AccountKindInput`, `IconHintInput`, `AccountInput`, `AccountQuery`,
-`InitPrecheck`, and `PaladinError` — so `paladin-gtk` can drive
+`InitPrecheck`, `PaladinImportPrecheck`, and `PaladinError` — so
+`paladin-gtk` can drive
 encrypted `open` / `create` / `create_force` and any save-bearing
 operation inside `gio::spawn_blocking`, and `paladin-tui` can drive
 QR / image import on a worker thread. Static assertions in CI gate
@@ -924,7 +945,8 @@ the CLI, while TUI / GUI controls may call the typed setters directly.
 settings changes go through validated setters or patches so timeout
 minimums cannot be bypassed.
 
-Add-account input and init-precheck logic are shared too.
+Add-account input, init-precheck logic, and Paladin-bundle import prompt
+classification are shared too.
 `parse_icon_hint_token` is the single source for the empty-default /
 case-insensitive `none` / slug grammar that CLI prompts and TUI / GUI
 add modals all collect. `classify_init_precheck` is the truth table
@@ -932,7 +954,12 @@ that maps `inspect()` results onto the §5 init flow: `Missing`
 clears, `Plaintext` / `Encrypted` / `invalid_header` /
 `unsupported_format_version` are existing-vault decisions requiring
 the `init --force` confirmation gate, and any other error propagates
-verbatim. Front ends never reimplement either grammar.
+verbatim. `classify_paladin_import_precheck` is the shared pre-prompt
+truth table for path-backed Paladin imports: it decides whether an
+encrypted-bundle passphrase is needed, whether a plaintext or malformed
+Paladin header should be rejected immediately, or whether the import
+facade should handle the file normally. Front ends never reimplement
+these grammars or header-probe decisions.
 
 The `policy` module shares the timer math and decision protocols that
 the TUI and GUI both need but that depend only on `VaultSettings` and
@@ -1100,11 +1127,14 @@ primary authoritative, while a durability-unconfirmed failure after the
 primary-file commit point may leave the new primary in place. In both
 cases `.bak` may have rotated as described in §4.3, so CLI error text and
 JSON include whether the primary commit point was reached. Imports of
-encrypted Paladin bundles prompt
-for the bundle passphrase, which is independent of the vault passphrase.
-For files with `PALADIN\0` magic, the CLI probes the mode first: `mode == 0`
-returns the unsupported-plaintext-vault error without a passphrase prompt,
-and `mode == 1` prompts for the bundle passphrase.
+encrypted Paladin bundles prompt for the bundle passphrase, which is
+independent of the vault passphrase. Before prompting, the CLI calls
+`paladin_core::classify_paladin_import_precheck(path, forced_format)` so the
+shared core classifier owns the Paladin-header decision: encrypted bundles
+prompt, plaintext Paladin vaults return `unsupported_plaintext_vault` without
+a passphrase prompt, malformed Paladin headers return the typed
+header/version error, and non-Paladin or unreadable files continue through
+`import::from_file` so the import facade owns the final read/dispatch error.
 
 `copy` has a deliberate HOTP side-effect order: resolve account, generate
 code, call `hotp_advance` (which saves), then write to the clipboard. If
@@ -1498,8 +1528,9 @@ Layout (single-screen MVP):
   imported/skipped/warning counts. Rename calls `Vault::rename(id,
   new_label, now)` inside `Vault::mutate_and_save`; issuer is not
   editable here (parity with `paladin rename`). Import takes a file path and
-  optional explicit format, prompts for the bundle passphrase on
-  encrypted-Paladin sources, applies a user-selected on-conflict
+  optional explicit format, calls `classify_paladin_import_precheck` before
+  any Paladin bundle passphrase prompt, prompts only for encrypted-Paladin
+  sources, applies a user-selected on-conflict
   policy (`skip` / `replace` / `append`), and reports
   imported/skipped/replaced/appended/warning counts. Export writes
   either the plaintext `otpauth://` JSON list (with an explicit
@@ -1589,7 +1620,8 @@ Library: **Relm4** on **GTK4**. Component tree:
 - `ImportDialog` — `gtk::FileDialog` for the source path, format
   selector (auto-detect or explicit `otpauth` / `aegis` / `paladin` /
   `qr`), on-conflict policy (`skip` / `replace` / `append`), and a
-  passphrase prompt for encrypted Paladin bundles. Reports
+  passphrase prompt for encrypted Paladin bundles gated by
+  `classify_paladin_import_precheck`. Reports
   imported/skipped/replaced/appended/warning counts on success.
 - `ExportDialog` — format selector (plaintext `otpauth://` JSON list or
   encrypted Paladin bundle), `gtk::FileDialog` for the
@@ -1723,11 +1755,21 @@ permission fixtures. Binary crates additionally use `assert_cmd` and
   - Tamper detection on encrypted vault: flip a ciphertext byte → fail;
     flip any byte in the AAD-bound header (`format_ver`, `mode`, `kdf_id`,
     Argon2 params, `salt`, `aead_id`, `nonce`) → fail.
+  - Published crypto known-answer vectors: Argon2id derives the expected
+    32-byte key for a fixed passphrase / salt / parameter fixture, and
+    XChaCha20-Poly1305 encrypts/decrypts a fixed key / nonce / AAD /
+    plaintext fixture to the expected ciphertext and tag. The expected bytes
+    are committed fixtures, not values recomputed by the implementation under
+    test.
   - Argon2 parameter bounds reject headers outside the v0.1 limits before
     KDF work begins.
   - Argon2 custom write params: defaults, accepted in-range values, rejected
     out-of-range values, and headers written by encrypted create /
     `create_force` / passphrase set/change / encrypted export.
+  - Fresh crypto material: repeated encrypted creates, `create_force`
+    operations, passphrase transitions, and encrypted exports with identical
+    logical inputs produce fresh salts and nonces where §4.4 / §4.5 require
+    them, while regular encrypted saves preserve salt and rotate only nonce.
   - File-permission enforcement (`0600` on primary, backup, and temp files;
     `0700` on dir) post-save and during staged writes, plus rejection of
     unsafe existing primary/backup/directory paths with `unsafe_permissions`.
@@ -1770,6 +1812,10 @@ permission fixtures. Binary crates additionally use `assert_cmd` and
     `from_bytes` facade is tested for auto-detect, forced-format dispatch,
     unknown/invalid dispatch, `unsupported_import_format.format` semantics,
     missing Paladin bundle passphrases, and encoded-image QR bytes.
+  - `classify_paladin_import_precheck` covers auto-detect and forced-format
+    cases so CLI / TUI / GUI import dialogs share the same decision about
+    whether to prompt for a Paladin bundle passphrase, reject a plaintext or
+    malformed Paladin header, or continue through `import::from_file`.
 - **Property tests** (`proptest`) for the URI parser and base32 secret
   decoding.
 - **Integration tests** for each shipped binary using `assert_cmd` (CLI)

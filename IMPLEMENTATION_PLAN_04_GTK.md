@@ -104,7 +104,8 @@ inclusion.
   fields (twice-confirmed; both fields empty select plaintext) plus an
   explicit "create vault" confirmation button. Initial routing of the
   user-supplied path runs through `paladin_core::classify_init_precheck`
-  (matching the CLI/TUI init flow); the dialog renders the
+  (matching the CLI init flow and the core §5 truth table); the dialog
+  renders the
   `InitPrecheck::Clear` case as the normal create path,
   `InitPrecheck::Existing` as the destructive-confirmation gate
   (see below), and `InitPrecheck::Propagate` as a non-mutating inline
@@ -256,18 +257,16 @@ inclusion.
   deprecated `gtk::FileChooserNative`) for the source file, a format
   selector (auto-detect or explicit `otpauth` / `aegis` / `paladin` /
   `qr`), and an on-conflict selector (`skip` / `replace` / `append`).
-  Before any Paladin-bundle passphrase prompt, the GUI mirrors the CLI / TUI
-  import probe from DESIGN §5. When the selected format is auto-detect or
-  explicit `paladin`, Paladin headers are probed only to decide whether a
-  bundle passphrase is needed: encrypted bundles (`mode == 1`) prompt for
-  the bundle passphrase inside the dialog, plaintext Paladin vaults
-  (`mode == 0`) return `unsupported_plaintext_vault` inline without
-  prompting, and malformed Paladin headers fail inline before any passphrase
-  prompt. Missing files, non-Paladin content, and probe errors that do not
-  identify an encrypted/plaintext Paladin bundle do not consume a passphrase;
-  the dialog continues through `paladin_core::import::from_file` so the
-  import facade owns `io_error`, `unsupported_import_format`, and any
-  format-specific `invalid_header` behavior. If the source path or forced
+  Before any Paladin-bundle passphrase prompt, the GUI calls
+  `paladin_core::classify_paladin_import_precheck(path, forced_format)` so
+  it shares the CLI / TUI prompt decision table. `PromptForPassphrase`
+  prompts for the bundle passphrase inside the dialog; `Reject(err)`
+  surfaces that exact core error inline without prompting (for example
+  `unsupported_plaintext_vault`, `invalid_header`, or
+  `unsupported_format_version`); and `NoPrompt` consumes no passphrase and
+  continues through `paladin_core::import::from_file` so the import facade
+  owns `io_error`, `unsupported_import_format`, and format-specific
+  validation errors. If the source path or forced
   format changes after a bundle passphrase has been entered, the passphrase
   row is cleared and the probe / prompt flow starts over. The selected
   `paladin_core::import::from_file` call, the
@@ -744,6 +743,10 @@ The GUI itself is hard to test without a display server. Tests are split:
   unsupported types, duplicate "add anyway" consuming a pending
   `ValidatedAccount`, zeroize-on-cancel of the URI entry buffer),
   import format-selector routing + on-conflict policy threading +
+  `paladin_core::classify_paladin_import_precheck` routing
+  (`PromptForPassphrase`, `Reject(err)`, `NoPrompt`) for encrypted
+  Paladin, plaintext Paladin, malformed/unsupported Paladin headers,
+  missing files, non-Paladin content, and forced-format mismatches,
   bundle-passphrase clearing when source / format changes,
   post-merge counts mapping, export overwrite / plaintext-warning gate reset
   on destination / format changes + encrypted twice-confirm match logic +
@@ -830,6 +833,9 @@ The GUI itself is hard to test without a display server. Tests are split:
   messages, and `paladin_core::format_plaintext_export_warning()` for the
   `ExportDialog` plaintext path so the GUI never re-implements shared text
   or match-key logic.
+- [ ] Use `paladin_core::classify_paladin_import_precheck` before any
+  encrypted-Paladin-bundle import prompt so the GUI shares the CLI / TUI
+  Paladin header decision table.
 - [ ] Linux desktop file, AppStream metadata, and icon.
 - [ ] `.deb`, `.rpm`, Flatpak, and AppImage artifacts for `paladin-gtk`,
   signed and published per §11.3–§11.6; Flathub submission filed.
@@ -868,7 +874,8 @@ Relm4 messages. The `gio::spawn_blocking` worker contract types
 `ImportFormat`, `ImportOptions`, `EncryptionOptions`, `Argon2Params`,
 `VaultLock`, `VaultInit`, `VaultStatus`, `VaultSettings`, `SettingKey`,
 `SettingPatch`, `AccountKindInput`, `IconHintInput`, `AccountInput`,
-`AccountQuery`, `InitPrecheck`, and `PaladinError`) are all part of the
+`AccountQuery`, `InitPrecheck`, `PaladinImportPrecheck`, and
+`PaladinError`) are all part of the
 §4.7 worker-boundary `Send` set that Phase J of the core plan asserts
 via CI, so the GUI can move them across thread boundaries during
 encrypted `open` / `create` / `create_force` and any save-bearing

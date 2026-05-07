@@ -219,16 +219,16 @@ alike, and is enforced before any value parsing.
 - Prompted **once per prompt target**: existing-vault unlock,
   encrypted-Paladin-bundle import.
 - For Paladin-bundle imports the CLI calls
-  `paladin_core::inspect(import_path)` before prompting: plaintext-mode
-  bundles reject with
-  `unsupported_plaintext_vault` immediately (no passphrase prompt), and
-  only encrypted-mode bundles trigger the bundle-passphrase prompt before
-  the call to `paladin_core::import::from_file`. Probe results that are not
-  encrypted Paladin bundles do not consume a passphrase: a plaintext Paladin
-  header returns the typed unsupported error above, while missing files,
-  non-Paladin content, and forced-format mismatches continue through
-  `import::from_file` so the import facade owns `read_import_file`,
-  auto-detect, and `unsupported_import_format` behavior.
+  `paladin_core::classify_paladin_import_precheck(import_path,
+  forced_format)` before prompting. `PromptForPassphrase` triggers the
+  bundle-passphrase prompt before the call to
+  `paladin_core::import::from_file`; `Reject(err)` exits with that exact
+  core error (for example `unsupported_plaintext_vault`, `invalid_header`,
+  or `unsupported_format_version`) and does not prompt; `NoPrompt` consumes
+  no passphrase and continues through `import::from_file` so the import
+  facade owns `read_import_file`, auto-detect, and
+  `unsupported_import_format` behavior. The CLI never re-implements the
+  Paladin header prompt decision locally.
 - Prompted **twice (must match)**: `init` with a non-empty first
   passphrase entry, `passphrase set`, `passphrase change` new passphrase,
   `export --encrypted`.
@@ -283,6 +283,9 @@ The CLI delegates content sniffing and forced-format dispatch to
 `ImportOptions::format = Some(format)`; omitted `--format` uses `None` so the
 facade auto-detects in the §4.6 fixed order: Paladin magic, image magic, Aegis
 JSON shape, `otpauth://` URI text or JSON string array, then unknown.
+The only pre-facade import decision is whether an encrypted Paladin bundle
+needs a passphrase; that decision is delegated to
+`paladin_core::classify_paladin_import_precheck`, not implemented in the CLI.
 
 Each import parses and validates the full input before mutating the vault. Any
 invalid entry rejects the whole batch with the core error kind and
@@ -519,6 +522,9 @@ with `counter_used: null`.
 - [ ] Parse and validate encrypted-write KDF flags for `init`,
   `passphrase set`, `passphrase change`, and `export --encrypted`, producing
   `Argon2Params` / `EncryptionOptions` for the core calls.
+- [ ] Use `paladin_core::classify_paladin_import_precheck` before any
+  encrypted-Paladin-bundle prompt so plaintext/malformed Paladin headers and
+  non-Paladin fallthrough behavior stay shared with the TUI and GUI.
 - [ ] Implement the thin `select.rs` wrapper that applies CLI cardinality
   policy to the core account-query matches and converts candidates to
   `AccountSummary` plus core-computed disambiguators.
@@ -669,9 +675,11 @@ where relevant, and exit code.
 - **`import`** for each format with each `--on-conflict` policy; omitting
   `--on-conflict` defaults to `skip`. Covers auto-detection order, forced
   format errors, encrypted-Aegis unsupported errors, no-entry inputs, warning
-  propagation for skipped duplicates, encrypted Paladin bundle passphrase
-  prompting, plaintext Paladin vault rejection without a bundle-passphrase
-  prompt, text-mode skip warnings for `--on-conflict=skip`, Paladin bundle
+  propagation for skipped duplicates,
+  `paladin_core::classify_paladin_import_precheck` routing for encrypted
+  Paladin bundle passphrase prompting, plaintext / malformed Paladin rejection
+  without a bundle-passphrase prompt, non-Paladin fallthrough to the import
+  facade, text-mode skip warnings for `--on-conflict=skip`, Paladin bundle
   fresh-ID behavior, and HOTP-to-HOTP counter preservation under `replace`.
   Atomic failure on any invalid entry.
 - **`export --plaintext` / `--encrypted`** refuses overwrite without

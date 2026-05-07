@@ -46,7 +46,7 @@ crates/paladin-core/
 │   │   ├── mod.rs        # otpauth:// parser + emitter
 │   │   └── tests.rs      # round-trip + edge cases
 │   ├── storage/
-│   │   ├── mod.rs        # Store, default_vault_path, atomic-write pipeline, .bak rotation, export secret-file writer, classify_init_precheck() + InitPrecheck enum shared by CLI / TUI / GUI init flows
+│   │   ├── mod.rs        # Store, default_vault_path, atomic-write pipeline, .bak rotation, export secret-file writer, classify_init_precheck() + InitPrecheck enum shared by CLI init and GUI InitDialog
 │   │   ├── header.rs     # PALADIN\0 magic, format_ver, mode, KDF/AEAD ids, AAD
 │   │   ├── payload.rs    # bincode v2 VaultPayload encode/decode (16 MiB cap)
 │   │   ├── path.rs       # ProjectDirs data_dir resolver + vault.bin filename
@@ -67,7 +67,7 @@ crates/paladin-core/
 │   ├── settings.rs       # VaultSettings (auto-lock, clipboard), SettingKey / SettingPatch parsers, setters
 │   ├── passphrase.rs     # set / change / remove transitions, rollback
 │   ├── import/
-│   │   ├── mod.rs        # detect(), from_file/from_bytes facade
+│   │   ├── mod.rs        # detect(), classify_paladin_import_precheck(), from_file/from_bytes facade
 │   │   ├── otpauth.rs    # URI / line-list / JSON-array (handles Gnome plaintext)
 │   │   ├── aegis.rs      # plaintext JSON; encrypted returns unsupported error
 │   │   ├── paladin.rs    # Paladin bundle import; plaintext returns unsupported
@@ -85,6 +85,7 @@ crates/paladin-core/
     ├── vault_lifecycle.rs   # inspect, default_vault_path, create_force, mutate_and_save, is_encrypted
     ├── init_precheck.rs     # classify_init_precheck mapping for §5 init flow
     ├── tamper.rs            # AAD-bound header byte-flip matrix (per-field named cases)
+    ├── crypto_vectors.rs    # Argon2id + XChaCha20-Poly1305 known-answer vectors
     ├── perms.rs             # 0600/0700 + unsafe_permissions rejection (per-subject discriminated)
     ├── shared_text.rs       # format_unsafe_permissions / format_init_force_warning / format_plaintext_storage_warning / format_plaintext_export_warning / format_validation_warning text fixtures
     ├── account_summary.rs   # AccountSummary and Code expose no secret bytes; Code is the core projection paired with AccountSummary by CLI show / peek / copy commands
@@ -98,6 +99,7 @@ crates/paladin-core/
     ├── import_otpauth.rs
     ├── import_aegis.rs
     ├── import_paladin.rs
+    ├── import_paladin_precheck.rs # shared CLI / TUI / GUI encrypted-bundle prompt classifier
     ├── import_qr.rs
     ├── export_writer.rs
     ├── error_matrix.rs      # one test per §5 core-returnable error_kind asserting kind + every stable extra field
@@ -424,7 +426,8 @@ Each step lands as its own commit. Tests come first.
   every other `Err(_)` → `InitPrecheck::Propagate(err)` so the front end
   bubbles the underlying error (e.g. `unsafe_permissions`,
   `io_error { operation: "open_vault_file", .. }`). The mapping is
-  locked here so CLI / TUI / GUI init flows share one truth table.
+  locked here so CLI init, GUI `InitDialog`, and any future init-capable
+  front end share one truth table.
 - [ ] Implement `classify_init_precheck(probe: Result<VaultStatus>) ->
   InitPrecheck` plus `pub enum InitPrecheck { Clear, Existing,
   Propagate(PaladinError) }` in `storage/mod.rs`. Re-export both at the
@@ -499,6 +502,14 @@ Each step lands as its own commit. Tests come first.
   (i.e. truncated file where the body cannot form a valid tag)
   surfaces `invalid_payload` with `reason: "ciphertext_too_short"`,
   not a panic.
+- [ ] Tests: published crypto known-answer vectors (KATs) — Argon2id
+  derives the expected 32-byte AEAD key for a fixed passphrase / salt /
+  parameter fixture using the exact crate configuration Paladin wires, and
+  XChaCha20-Poly1305 encrypts/decrypts a fixed key / 24-byte nonce / AAD /
+  plaintext fixture to the expected ciphertext and tag. Expected bytes are
+  committed fixture constants from the reference vectors, not values
+  recomputed by the implementation under test. Negative rows mutate AAD and
+  tag bytes and assert authentication failure.
 - [ ] Tests: KDF determinism — `argon2id_derive_key(passphrase, salt,
   &Argon2Params::default()) == argon2id_derive_key(passphrase, salt,
   &Argon2Params::default())` bit-for-bit for the same inputs across
@@ -550,6 +561,12 @@ Each step lands as its own commit. Tests come first.
 - [ ] Tests: encrypted `create` / `create_force`, `set_passphrase`,
   `change_passphrase`, and `export::encrypted` write custom validated Argon2
   params into the header when supplied through `EncryptionOptions`.
+- [ ] Tests: encrypted `create` / `create_force` fresh-material generation —
+  across `N = 64` creates with the same passphrase, payload, and Argon2
+  params, every observed 16-byte `salt` and 24-byte primary `nonce` is
+  pairwise distinct, and every resulting vault opens successfully. This
+  catches accidental fixed salt/nonce use separately from the regular-save
+  nonce-rotation tests above.
 - [ ] Tests: AEAD key caching — `open` derives the 32-byte key once into
   a `Zeroizing<[u8; 32]>` cached on `Vault` alongside the `SecretString`
   passphrase; subsequent saves reuse the cached key without re-running
@@ -841,6 +858,22 @@ Each step lands as its own commit. Tests come first.
   `Otpauth`, the importer parses every URI, and the resulting
   `Vec<ValidatedAccount>` matches the source vault's accounts modulo
   the timestamp rule (`created_at = updated_at = import_time`).
+- [ ] Tests: encrypted export fresh-material generation — across `N = 64`
+  encrypted exports of the same vault with the same passphrase and Argon2
+  params, every observed bundle `salt` and `nonce` is pairwise distinct,
+  every bundle imports successfully with the passphrase, and the exported
+  account set is identical. This catches fixed-salt / fixed-nonce regressions
+  in the export-only crypto path, which is separate from `Store` saves.
+- [ ] Tests for `classify_paladin_import_precheck(path, forced_format)`:
+  forced `otpauth` / `aegis` / `qr` return `NoPrompt` without probing for a
+  Paladin passphrase; auto-detect and forced `paladin` return
+  `PromptForPassphrase` for encrypted Paladin headers; return
+  `Reject(unsupported_plaintext_vault)` for plaintext Paladin headers;
+  return `Reject(invalid_header)` / `Reject(unsupported_format_version)` for
+  malformed Paladin headers that start with `PALADIN\0`; and return
+  `NoPrompt` for missing files, unreadable files, and non-Paladin magic so
+  `import::from_file` remains the owner of `read_import_file`,
+  auto-detect, and `unsupported_import_format` errors.
 - [ ] Tests for import facade dispatch: `import::from_file` and
   `import::from_bytes` auto-detect with `format: None`, honor forced
   `ImportFormat` values, return `unsupported_import_format` for `Unknown`
@@ -858,6 +891,12 @@ Each step lands as its own commit. Tests come first.
   `import::from_bytes` as the public facade over `detect` and the
   format-specific importers. `from_bytes` decodes image-format bytes with
   `image` to RGBA8 before routing through `read_qr_image_bytes`.
+- [ ] Implement `PaladinImportPrecheck` and
+  `classify_paladin_import_precheck(path, forced_format)` in the import
+  facade module, re-exported at the crate root. It reads only enough bytes to
+  classify Paladin magic/header state and returns `NoPrompt`,
+  `PromptForPassphrase`, or `Reject(PaladinError)` per the test table above
+  so CLI / TUI / GUI import flows never duplicate Paladin bundle prompt logic.
 - [ ] Implement `export::otpauth_list(&Vault)` using the internal
   `otpauth://` emitter and `export::encrypted(&Vault, EncryptionOptions)`
   using the Paladin encrypted bundle format with default `VaultSettings`.
@@ -880,8 +919,9 @@ Each step lands as its own commit. Tests come first.
 
 - [ ] Lock default `lib.rs` re-exports to exactly the §4.7 surface; anything
   else is `pub(crate)`. The §4.7 surface explicitly includes the
-  Phase B / E / G additions: `parse_icon_hint_token`, `IconHintInput`
+  Phase B / E / G / I additions: `parse_icon_hint_token`, `IconHintInput`
   (already), `classify_init_precheck`, `InitPrecheck`,
+  `classify_paladin_import_precheck`, `PaladinImportPrecheck`,
   `select_after_filter`, `policy::auto_lock::IdlePolicy`,
   `policy::clipboard_clear::ClipboardClearPolicy`,
   `policy::clipboard_clear::ClipboardClearToken`,
@@ -938,7 +978,8 @@ Each step lands as its own commit. Tests come first.
   `EncryptionOptions`, `Argon2Params`, `VaultLock`, `VaultInit`,
   `VaultStatus`, `VaultSettings`, `SettingKey`, `SettingPatch`,
   `AccountKindInput`, `IconHintInput`, `AccountInput`,
-  `AccountQuery`, `InitPrecheck`, and `PaladinError`.
+  `AccountQuery`, `InitPrecheck`, `PaladinImportPrecheck`, and
+  `PaladinError`.
 - [ ] Tests: `Sync` posture — pin which of the above types are
   `Sync` and which are not. The non-secret projection types
   (`AccountSummary`, `Code`, `ImportReport`, `ImportWarning`,
@@ -1141,6 +1182,12 @@ is a separate `#[test]` or table-driven case family.
   `format` set to `"unknown"` for auto-detect failures and to the requested
   format for forced-format failures, missing Paladin bundle passphrase as
   `invalid_state`, and encoded image bytes routed through QR decoding.
+- `classify_paladin_import_precheck`: forced non-Paladin formats skip the
+  prompt classifier; auto-detect / forced-Paladin encrypted headers return
+  `PromptForPassphrase`; plaintext or malformed Paladin headers return
+  `Reject(...)` with the typed core error; missing files, unreadable files,
+  and non-Paladin magic return `NoPrompt` so the import facade owns final
+  read/dispatch errors.
 - Importers: Aegis plaintext field mapping, defaults, and required fields;
   Aegis encrypted → typed `unsupported_encrypted_aegis`; Aegis
   non-`totp`/`hotp` entry type →
@@ -1185,11 +1232,19 @@ is a separate `#[test]` or table-driven case family.
   pinned per region (e.g. magic flip → `invalid_header`,
   unsupported `format_ver` → `unsupported_format_version`,
   in-bounds Argon2 param flip → `decrypt_failed`).
+- Published crypto KATs: Argon2id fixed passphrase / salt / params →
+  expected 32-byte key, and XChaCha20-Poly1305 fixed key / nonce /
+  AAD / plaintext → expected ciphertext + tag, with mutated AAD/tag
+  rows proving authentication failure.
 - Argon2 param boundary table at exact accept/reject edges
   (`m_kib` 8191/8192/1048576/1048577, `t` 0/1/10/11, `p` 0/1/4/5)
   with `kdf_params_out_of_bounds` payload field assertions.
 - KDF determinism: identical (passphrase, salt, params) inputs
   produce a bit-identical 32-byte AEAD key across two derivations.
+- Fresh salt/nonce generation: repeated encrypted create/create_force
+  operations and repeated encrypted exports over identical logical inputs
+  produce pairwise-distinct salts and nonces while all outputs still
+  open/import successfully.
 - Malformed ciphertext shorter than the 16-byte AEAD tag returns
   `invalid_payload { reason: "ciphertext_too_short" }`, not a panic.
 - Send / Sync matrix: every public type listed under Phase J is

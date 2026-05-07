@@ -381,21 +381,18 @@ dismiss deliberately.
 - **Import** — text field for the source path, a format selector
   (auto-detect or explicit `otpauth` / `aegis` / `paladin` / `qr`),
   and an on-conflict selector (`skip` / `replace` / `append`).
-  Before any Paladin-bundle passphrase prompt, the TUI mirrors the CLI's
-  import probe from DESIGN §5. When the selected format is auto-detect
-  or explicit `paladin`, `paladin_core::inspect(path)` is used only to
-  decide whether a bundle passphrase is needed:
-  encrypted bundles (`VaultStatus::Encrypted`) prompt for the bundle
-  passphrase inside the modal before invoking the importer, and
-  plaintext Paladin headers (`VaultStatus::Plaintext`) surface
-  `unsupported_plaintext_vault` without a passphrase prompt. Explicit
-  non-`paladin` forced formats skip this passphrase path entirely. Missing
-  files, non-Paladin content, and probe errors that do not identify an
-  encrypted/plaintext Paladin bundle do not consume a passphrase; the
-  modal continues through
+  Before any Paladin-bundle passphrase prompt, the TUI calls
+  `paladin_core::classify_paladin_import_precheck(path, forced_format)` so
+  it shares the CLI / GUI prompt decision table. `PromptForPassphrase`
+  prompts for the bundle passphrase inside the modal before invoking the
+  importer; `Reject(err)` surfaces that exact core error inline without a
+  passphrase prompt (for example `unsupported_plaintext_vault`,
+  `invalid_header`, or `unsupported_format_version`); and `NoPrompt`
+  consumes no passphrase and continues through
   `paladin_core::import::from_file` so the import facade owns `io_error`,
-  `unsupported_import_format`, and any format-specific `invalid_header`
-  errors. The selected
+  `unsupported_import_format`, and format-specific validation errors.
+  Explicit non-`paladin` forced formats are therefore a core-classified
+  `NoPrompt` path rather than local TUI branching. The selected
   `paladin_core::import::from_file` call returns `Vec<ValidatedAccount>`; on
   success, `Vault::import_accounts(accounts, conflict, import_time)` is called
   inside `Vault::mutate_and_save` with the user's policy and the same
@@ -692,13 +689,13 @@ captured with `insta` golden snapshots using `ratatui::backend::TestBackend`.
   `paladin_core::format_validation_warning()`, and rejects no-image /
   no-QR / invalid-QR cases inline.
 - **Import modal**: format auto-detect and explicit format overrides route
-  through `paladin_core::import::from_file`; the pre-prompt Paladin probe
-  only prompts when auto-detect or explicit `paladin` sees an encrypted
-  Paladin bundle; plaintext-Paladin path returns
-  `unsupported_plaintext_vault` without prompting; missing files,
-  non-Paladin content, and forced-format mismatches do not consume a
-  passphrase and surface through the import facade; malformed Paladin headers
-  surface `invalid_header` inline; on-conflict policy
+  through `paladin_core::import::from_file`; the pre-prompt Paladin decision
+  routes through `paladin_core::classify_paladin_import_precheck`, prompting
+  only on `PromptForPassphrase`, surfacing `Reject(err)` inline without a
+  passphrase prompt, and letting `NoPrompt` continue through the import
+  facade. Tests cover encrypted Paladin, plaintext Paladin,
+  malformed/unsupported Paladin headers, missing files, non-Paladin content,
+  and forced-format mismatches through that shared helper; on-conflict policy
   (`skip` / `replace` / `append`) is forwarded to
   `Vault::import_accounts` and reflected in the report counts;
   validation warnings are rendered through
@@ -936,6 +933,9 @@ is never expected to be scripted.
 - [ ] Use `paladin_core::account_matches_search` for `search.rs` substring
   filtering so the TUI shares issuer/label matching semantics with the CLI
   and GUI.
+- [ ] Use `paladin_core::classify_paladin_import_precheck` before any
+  encrypted-Paladin-bundle import prompt so the TUI does not duplicate the
+  CLI / GUI Paladin header decision table.
 - [ ] Route export writes through `paladin_core::write_secret_file_atomic`.
 - [ ] Implement clipboard wrapper (arboard reads/writes), QR image
   import from clipboard bytes, and only-if-unchanged auto-clear via
