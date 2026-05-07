@@ -21,4 +21,6 @@ pub use domain::{
 };
 pub use error::{ErrorKind, PaladinError, PermissionSubject, Result, TimeRangeKind, VaultMode};
 pub use otpauth::parse_otpauth;
-pub use storage::VaultSettings;
+pub use storage::{
+    classify_init_precheck, default_vault_path, inspect, InitPrecheck, VaultSettings, VaultStatus,
+};
