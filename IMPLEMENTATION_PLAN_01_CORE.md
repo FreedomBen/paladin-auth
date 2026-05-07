@@ -311,10 +311,10 @@ Each step lands as its own commit. Tests come first.
 
 ### Phase E — Plaintext storage (Milestone 1, part 4)
 
-- [ ] Tests: round-trip of `VaultPayload` through bincode v2 with the exact
+- [x] Tests: round-trip of `VaultPayload` through bincode v2 with the exact
   config from §4.3; full-input-consumption rejection; 16 MiB serialized payload
   limit; plaintext on-disk size cap rejected before bincode decode.
-- [ ] Tests: bincode encoding determinism — encoding the **same**
+- [x] Tests: bincode encoding determinism — encoding the **same**
   `VaultPayload` value twice produces bit-identical bytes, and a fixture
   with a fixed account list + `VaultSettings::default()` matches a
   committed expected byte string. Pins the §4.3 wire format so a future

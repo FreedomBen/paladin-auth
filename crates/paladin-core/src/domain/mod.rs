@@ -19,11 +19,15 @@ pub use validation::{validate_manual, AccountInput, ValidatedAccount, Validation
 use std::fmt;
 use std::time::SystemTime;
 
+use bincode::de::{BorrowDecoder, Decoder};
+use bincode::enc::Encoder;
+use bincode::error::{DecodeError, EncodeError};
+use bincode::{BorrowDecode, Decode, Encode};
 use uuid::Uuid;
 
 /// HMAC algorithm used for OTP code generation. `Sha1` is the default
 /// per DESIGN.md §4.1 / RFC 6238.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Encode, Decode)]
 pub enum Algorithm {
     #[default]
     Sha1,
@@ -56,7 +60,7 @@ impl fmt::Display for Algorithm {
 /// Crate-private: front ends inspect accounts via `AccountSummary` /
 /// `AccountKindSummary` (see `view`), which exposes the same fields
 /// in a public, non-secret-bearing shape.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 pub(crate) enum OtpKind {
     Totp { period: u32 },
     Hotp { counter: u64 },
@@ -181,6 +185,29 @@ impl fmt::Debug for AccountId {
     }
 }
 
+// Encoded as the 16 raw UUID bytes — fixed-width and stable across
+// rebuilds, matching the §4.1 "16 bytes on disk" rule.
+impl Encode for AccountId {
+    fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
+        Encode::encode(self.as_bytes(), encoder)
+    }
+}
+
+impl<C> Decode<C> for AccountId {
+    fn decode<D: Decoder<Context = C>>(decoder: &mut D) -> Result<Self, DecodeError> {
+        let bytes: [u8; 16] = Decode::decode(decoder)?;
+        Ok(Self::from_bytes(bytes))
+    }
+}
+
+impl<'de, C> BorrowDecode<'de, C> for AccountId {
+    fn borrow_decode<D: BorrowDecoder<'de, Context = C>>(
+        decoder: &mut D,
+    ) -> Result<Self, DecodeError> {
+        Decode::decode(decoder)
+    }
+}
+
 /// A fully validated OTP account. Constructable only through the
 /// validation entry points; raw secret bytes are not exposed.
 ///
@@ -188,7 +215,7 @@ impl fmt::Debug for AccountId {
 /// payload (DESIGN.md §4.3) is encoded via the bincode-driven
 /// `storage::payload` codec, which has explicit, audited access to
 /// the private fields.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Encode, Decode)]
 pub struct Account {
     pub(crate) id: AccountId,
     pub(crate) label: String,

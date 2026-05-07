@@ -9,6 +9,10 @@
 // (bincode v2) so it can serialize the inner bytes without exposing them
 // through the public surface; see DESIGN.md §8.
 
+use bincode::de::{BorrowDecoder, Decoder};
+use bincode::enc::Encoder;
+use bincode::error::{DecodeError, EncodeError};
+use bincode::{BorrowDecode, Decode, Encode};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// Raw OTP shared secret (the decoded base32 bytes). Zeroized on drop.
@@ -70,6 +74,30 @@ impl Eq for Secret {}
 impl Zeroize for Secret {
     fn zeroize(&mut self) {
         self.0.zeroize();
+    }
+}
+
+// Hand-rolled bincode codecs so the secret bytes never flow through a
+// public `Debug` / `Display` / `serde::Serialize` impl. The encoded form
+// matches `Vec<u8>` (length-prefix + bytes) under the §4.3 vault config.
+impl Encode for Secret {
+    fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
+        Encode::encode(&self.0, encoder)
+    }
+}
+
+impl<C> Decode<C> for Secret {
+    fn decode<D: Decoder<Context = C>>(decoder: &mut D) -> Result<Self, DecodeError> {
+        let bytes: Vec<u8> = Decode::decode(decoder)?;
+        Ok(Self(bytes))
+    }
+}
+
+impl<'de, C> BorrowDecode<'de, C> for Secret {
+    fn borrow_decode<D: BorrowDecoder<'de, Context = C>>(
+        decoder: &mut D,
+    ) -> Result<Self, DecodeError> {
+        Decode::decode(decoder)
     }
 }
 
