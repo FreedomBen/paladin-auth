@@ -1,0 +1,19 @@
+# Dev-tooling versions pinned for the Paladin workspace.
+#
+# CI and local snapshots install the cargo subcommands listed here at the
+# pinned version so behavior does not float across releases. `xtask` is
+# the orchestrator that consumes this file (see DESIGN.md §11.2).
+#
+# Install all pinned tools:
+#   cargo install --locked cargo-public-api@<pinned-version>
+#   cargo install --locked cargo-deny@<pinned-version>
+#   cargo install --locked cargo-audit@<pinned-version>
+
+[tools.cargo-public-api]
+version = "0.42"
+
+[tools.cargo-deny]
+version = "0.16"
+
+[tools.cargo-audit]
+version = "0.21"

@@ -1,0 +1,72 @@
+# cargo-deny policy for the Paladin workspace.
+#
+# DESIGN.md §8 ("no network, no telemetry") is enforced here:
+#   * License hygiene -- AGPL-compatible permissive licenses only.
+#   * No advisories ride along.
+#   * Network-stack crates are denied outright; new dependencies require
+#     manual review before being added to any Cargo.toml.
+
+[advisories]
+yanked = "deny"
+ignore = []
+
+[licenses]
+allow = [
+    "AGPL-3.0",
+    "AGPL-3.0-or-later",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "MIT",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "Zlib",
+    "CC0-1.0",
+    "OpenSSL",
+]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+deny = [
+    # Async runtimes / network stacks have no place in paladin-core or any
+    # binary front-end; the §8 "no network" rule is enforced here.
+    { name = "tokio" },
+    { name = "tokio-util" },
+    { name = "tokio-rustls" },
+    { name = "tokio-native-tls" },
+    { name = "async-std" },
+    { name = "smol" },
+    { name = "reqwest" },
+    { name = "hyper" },
+    { name = "hyper-tls" },
+    { name = "hyper-rustls" },
+    { name = "actix-web" },
+    { name = "actix-http" },
+    { name = "warp" },
+    { name = "axum" },
+    { name = "rocket" },
+    { name = "ureq" },
+    { name = "isahc" },
+    { name = "curl" },
+    { name = "curl-sys" },
+    { name = "libcurl-sys" },
+    { name = "native-tls" },
+    { name = "openssl" },
+    { name = "openssl-sys" },
+    { name = "rustls" },
+    { name = "rustls-native-certs" },
+    { name = "trust-dns-resolver" },
+    { name = "hickory-resolver" },
+    { name = "h2" },
+    { name = "h3" },
+    { name = "quinn" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
