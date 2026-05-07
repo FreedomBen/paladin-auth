@@ -256,7 +256,6 @@ pub(crate) fn system_time_to_secs(now: SystemTime) -> Result<u64, PaladinError> 
 /// (Phase D / I). `id` is generated, timestamps come from the
 /// import-time clock, and the secret is supplied as already-decoded
 /// bytes.
-#[allow(dead_code)] // Wired up in Phase D (otpauth parser).
 pub(crate) struct ParsedAccount {
     pub label: String,
     pub issuer: Option<String>,
@@ -267,7 +266,6 @@ pub(crate) struct ParsedAccount {
     pub icon_hint: Option<String>,
 }
 
-#[allow(dead_code)] // Wired up in Phase D (otpauth parser).
 impl ParsedAccount {
     pub(crate) fn into_validated(
         self,

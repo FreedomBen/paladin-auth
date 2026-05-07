@@ -10,6 +10,7 @@
 pub mod domain;
 pub mod error;
 pub mod otp;
+pub mod otpauth;
 
 pub use domain::validation::AccountInput;
 pub use domain::{
@@ -18,3 +19,4 @@ pub use domain::{
     ValidationWarning,
 };
 pub use error::{ErrorKind, PaladinError, PermissionSubject, Result, TimeRangeKind, VaultMode};
+pub use otpauth::parse_otpauth;

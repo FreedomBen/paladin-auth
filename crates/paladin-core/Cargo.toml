@@ -25,6 +25,7 @@ getrandom = "0.2"
 # Encoding
 base32 = "0.5"
 url = "2.5"
+percent-encoding = "2"
 bincode = { version = "2.0", default-features = false, features = ["std", "serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
