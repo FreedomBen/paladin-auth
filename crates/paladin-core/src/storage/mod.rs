@@ -45,6 +45,12 @@ mod perms_other;
 #[cfg(unix)]
 mod perms_unix;
 
+// Save-pipeline fault injection. Compiles to no-op stubs unless the
+// `test-fault-injection` cargo feature is enabled (DESIGN.md §10 /
+// Phase E.7). The two checks are wired into every atomic-write site
+// in this module so the hook reaches them uniformly.
+mod fault;
+
 pub use path::default_vault_path;
 pub use payload::VaultSettings;
 pub(crate) use payload::{decode_vault_payload, encode_vault_payload, VaultPayload};
@@ -286,6 +292,27 @@ impl Store {
     }
 }
 
+/// Test-only `Store` constructor (DESIGN.md §10 / Phase E.7).
+///
+/// Builds a `Store` directly from `path` and `mode` without performing
+/// any filesystem I/O — bypasses the `open` / `create` / `create_force`
+/// paths so binary integration tests can drive `Vault::save` against a
+/// synthetic vault layout and exercise the shared fault-injection hook
+/// in `storage::fault` end-to-end. Excluded from the stable §4.7 API:
+/// only compiled in under `#[cfg(feature = "test-fault-injection")]`,
+/// which is off by default and never enabled in production builds.
+#[cfg(feature = "test-fault-injection")]
+impl Store {
+    /// Construct a `Store` for fault-injection tests. The caller is
+    /// responsible for ensuring `path`'s parent directory exists with
+    /// permissions appropriate for the test scenario; this constructor
+    /// does no validation.
+    #[must_use]
+    pub fn for_test_fault_injection(path: PathBuf, mode: VaultMode) -> Self {
+        Self { path, mode }
+    }
+}
+
 fn create_plaintext(path: &Path) -> Result<(crate::Vault, Store)> {
     // §4.3: parent dir mode must not grant any group / other perms
     // before we ever stage a vault here. (The primary doesn't yet
@@ -457,8 +484,12 @@ fn save_plaintext(path: &Path, payload: &VaultPayload) -> Result<()> {
         }
     }
 
-    // Step 4: commit point.
-    if fs::rename(&primary_tmp, path).is_err() {
+    // Step 4: commit point. The fault hook short-circuits the rename
+    // when `PALADIN_FAULT_INJECT=pre_commit` so the failure is
+    // indistinguishable from a real rename error: primary unchanged,
+    // primary_tmp cleaned up best-effort, typed `save_not_committed`
+    // with the rotated `backup_path` when applicable.
+    if fault::pre_commit_should_fail() || fs::rename(&primary_tmp, path).is_err() {
         let _ = fs::remove_file(&primary_tmp);
         return Err(PaladinError::SaveNotCommitted {
             committed: false,
@@ -470,8 +501,11 @@ fn save_plaintext(path: &Path, payload: &VaultPayload) -> Result<()> {
         });
     }
 
-    // Step 5: durability fence on the parent directory.
-    if fsync_dir(parent).is_err() {
+    // Step 5: durability fence on the parent directory. The fault
+    // hook fires after the rename so the typed error matches a real
+    // post-commit fsync failure: primary in place but durability not
+    // confirmed.
+    if fault::post_commit_should_fail() || fsync_dir(parent).is_err() {
         return Err(PaladinError::SaveDurabilityUnconfirmed);
     }
 
@@ -654,8 +688,10 @@ fn save_plaintext_clobber(path: &Path, payload: &VaultPayload) -> Result<()> {
         }
     }
 
-    // Step 3: commit point — rename staged primary into place.
-    if fs::rename(&primary_tmp, path).is_err() {
+    // Step 3: commit point — rename staged primary into place. Fault
+    // hook short-circuits the rename for `PALADIN_FAULT_INJECT=pre_commit`
+    // so the surface is identical to a real rename failure.
+    if fault::pre_commit_should_fail() || fs::rename(&primary_tmp, path).is_err() {
         let _ = fs::remove_file(&primary_tmp);
         return Err(PaladinError::SaveNotCommitted {
             committed: false,
@@ -667,8 +703,9 @@ fn save_plaintext_clobber(path: &Path, payload: &VaultPayload) -> Result<()> {
         });
     }
 
-    // Step 4: durability fence.
-    if fsync_dir(parent).is_err() {
+    // Step 4: durability fence. Fault hook fires after the commit so
+    // `save_durability_unconfirmed` matches a real parent-fsync failure.
+    if fault::post_commit_should_fail() || fsync_dir(parent).is_err() {
         return Err(PaladinError::SaveDurabilityUnconfirmed);
     }
 
@@ -729,7 +766,11 @@ pub fn write_secret_file_atomic(path: &Path, content: &[u8]) -> Result<()> {
         });
     }
 
-    if fs::rename(&tmp, path).is_err() {
+    // Pre-commit injection point: fault hook short-circuits the rename
+    // for `PALADIN_FAULT_INJECT=pre_commit` so the surface is identical
+    // to a real rename failure. `backup_path` is always `None` here —
+    // this writer never rotates a `.bak`, by §4.7 contract.
+    if fault::pre_commit_should_fail() || fs::rename(&tmp, path).is_err() {
         let _ = cleanup_leftover_temp(&tmp);
         return Err(PaladinError::SaveNotCommitted {
             committed: false,
@@ -737,7 +778,9 @@ pub fn write_secret_file_atomic(path: &Path, content: &[u8]) -> Result<()> {
         });
     }
 
-    if fsync_dir(parent).is_err() {
+    // Post-commit injection point: fault hook fires after the rename so
+    // `save_durability_unconfirmed` matches a real parent-fsync failure.
+    if fault::post_commit_should_fail() || fsync_dir(parent).is_err() {
         return Err(PaladinError::SaveDurabilityUnconfirmed);
     }
 
