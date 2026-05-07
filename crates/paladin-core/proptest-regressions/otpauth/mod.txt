@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 351ac81376a8435974feeb54c435ae6a30c2997eb7cb73c6f204821f7c509fc4 # shrinks to label = ".", issuer = None, secret = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], algorithm = Sha1, digits = 6, is_hotp = false, counter = 0, period = 1

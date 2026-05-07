@@ -871,6 +871,15 @@ mod proptests {
             if let Some(i) = &issuer {
                 prop_assume!(i.len() <= 128);
             }
+            // URL path normalization (RFC 3986 / WHATWG) removes "."
+            // and ".." segments, even when percent-encoded as "%2E" /
+            // "%2E%2E". When `issuer` is None, the entire path segment
+            // *is* the label, so labels of "." or ".." cannot survive
+            // any URL round-trip. The `validate_label` rule itself
+            // still accepts these strings; they just cannot appear as
+            // a standalone path segment in an otpauth URI. Filter the
+            // pathological combination here.
+            prop_assume!(!(issuer.is_none() && matches!(label.as_str(), "." | "..")));
 
             // Build a URI by hand using the same encode path the
             // emitter does — but starting from raw bytes, not from a
