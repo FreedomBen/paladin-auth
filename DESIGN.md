@@ -261,6 +261,15 @@ salt, `aead_id`, and 24-byte nonce).
   as `"0644"`, with expected repair modes `"0700"` for directories and
   `"0600"` for files. `subject` is one of `vault_dir`, `vault_file`, or
   `backup_file`.
+  As defense in depth alongside the permissions check, `open`, `create`,
+  and `create_force` also reject any of the three storage paths
+  (`vault.bin`, `vault.bin.bak`, parent data directory) being a symbolic
+  link, regardless of target. The probe uses `symlink_metadata` so it
+  never follows the link, and rejection happens before any read, write, or
+  staged tempfile so a hostile symlink cannot redirect the vault save to a
+  chosen file. Rejection surfaces as `io_error` with one of the stable
+  operations `vault_file_is_symlink`, `backup_file_is_symlink`, or
+  `vault_dir_is_symlink` from §5.
 - **Atomic writes.** Each save stages both the new primary and the new
   backup, then commits with renames:
   1. Write the new primary content to `vault.bin.tmp` and `fsync` it.
@@ -1384,6 +1393,11 @@ Core-returned `io_error.operation` values are stable strings:
 | `fsync_secret_file_tmp`            | Syncing the export/secret staged file failed.             |
 | `rename_secret_file`               | Moving export/secret bytes to the final path failed.      |
 | `fsync_secret_file_dir`            | Syncing the export/secret parent directory failed.        |
+| `csprng_read`                      | OS CSPRNG read for salt or nonce generation failed.       |
+| `kdf_allocation`                   | Argon2id memory allocation failed (read or write path).   |
+| `vault_file_is_symlink`            | `vault.bin` exists at the resolved path as a symlink and is rejected before any read or write. |
+| `backup_file_is_symlink`           | `vault.bin.bak` exists at the resolved path as a symlink and is rejected before any read or write. |
+| `vault_dir_is_symlink`             | The vault parent directory is a symlink and is rejected before any read or write. |
 
 Binary crates may add presentation-specific operations such as
 `passphrase_prompt`, `account_prompt`, `confirmation_prompt`, and
@@ -1761,6 +1775,27 @@ permission fixtures. Binary crates additionally use `assert_cmd` and
     plaintext fixture to the expected ciphertext and tag. The expected bytes
     are committed fixtures, not values recomputed by the implementation under
     test.
+  - Algorithm-choice locks: the same KAT inputs run through Argon2i /
+    Argon2d produce keys distinct from the committed Argon2id key, and
+    the same inputs run through ChaCha20-Poly1305 (12-byte nonce IETF
+    construct) produce ciphertext and tag distinct from the committed
+    XChaCha20-Poly1305 fixture, so a silent swap of variant or AEAD
+    construct fails the test instead of regressing the format.
+  - AEAD output shape: encrypted-body length equals `plaintext_len + 16`
+    (Poly1305 tag) and the in-header `nonce` slot is exactly 24 bytes.
+  - Pre-AEAD plaintext-payload zeroization on encrypt and post-AEAD
+    plaintext-payload zeroization on decrypt (success and decode failure)
+    proven byte-precisely, matching the existing zeroization posture for
+    `Secret`, mutate-and-save rollback snapshots, cached AEAD keys, and
+    retained passphrases.
+  - CSPRNG failure surfaces as `io_error` with
+    `operation: "csprng_read"` on every encrypted-write site without a
+    partial vault file on disk; Argon2id allocation failure surfaces as
+    `io_error` with `operation: "kdf_allocation"` on encrypted read and
+    write paths without panic or partial write.
+  - Symbolic-link rejection on `open` / `create` / `create_force` for
+    `vault.bin`, `vault.bin.bak`, and the parent data directory using
+    `symlink_metadata` so the probe never follows the link.
   - Argon2 parameter bounds reject headers outside the v0.1 limits before
     KDF work begins.
   - Argon2 custom write params: defaults, accepted in-range values, rejected

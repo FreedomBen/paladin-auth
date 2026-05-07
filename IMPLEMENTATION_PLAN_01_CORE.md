@@ -370,6 +370,21 @@ Each step lands as its own commit. Tests come first.
   decryption, returns an error for unrecognized magic and for other I/O
   errors (e.g. permission-denied opening the path), and deliberately skips
   the §4.3 permissions check.
+- [ ] Tests: symbolic-link rejection on `open` / `create` / `create_force` —
+  using `symlink_metadata` (so the probe never follows the link), a
+  `vault.bin` that is a symlink is rejected with `io_error` and
+  `operation: "vault_file_is_symlink"`, a `vault.bin.bak` that is a symlink
+  at `open` time is rejected with `operation: "backup_file_is_symlink"`,
+  and a parent data directory that is a symlink is rejected with
+  `operation: "vault_dir_is_symlink"`. Each rejection happens before any
+  read, write, or staged tempfile so a hostile symlink cannot redirect
+  reads or writes to a chosen file. Cover the case where the parent
+  directory has `0700` perms but a hostile symlink was nonetheless seeded:
+  the symlink rejection still fires (defense in depth — perms enforcement
+  is the primary guard, but symlink rejection is a backstop). On
+  `create_force`, the symlink check applies to the *existing* `vault.bin`
+  before staging the new tempfile so a hostile symlink at `vault.bin`
+  cannot capture the rename target.
 - [ ] Tests: `default_vault_path()` calls
   `ProjectDirs::from("", "", "paladin")`, appends `vault.bin` under the
   returned `data_dir()` location from §4.3, and surfaces `io_error` with
@@ -510,6 +525,21 @@ Each step lands as its own commit. Tests come first.
   committed fixture constants from the reference vectors, not values
   recomputed by the implementation under test. Negative rows mutate AAD and
   tag bytes and assert authentication failure.
+- [ ] Tests: algorithm-choice locks — the same KAT inputs run through
+  `argon2::Variant::Argon2i` and `argon2::Variant::Argon2d` produce keys
+  that **differ** from the committed Argon2id key, and the same plaintext /
+  key / nonce inputs run through `chacha20poly1305::ChaCha20Poly1305`
+  (12-byte nonce IETF construct) produce ciphertext / tag that **differ**
+  from the committed XChaCha20-Poly1305 fixture. Pins the Argon2id (not
+  Argon2i / Argon2d) and XChaCha20-Poly1305 (not ChaCha20-Poly1305) choices
+  against silent-misconfig regressions in the `crypto::argon2` /
+  `crypto::aead` wrappers. The negative-variant rows are committed fixtures,
+  not values recomputed at test time.
+- [ ] Tests: AEAD output shape — the encrypted on-disk body length equals
+  `plaintext_len + 16` (Poly1305 tag), and the in-header `nonce` slot is
+  exactly 24 bytes. Asserted as named cases against a fresh encrypted
+  vault so any future swap to a different AEAD construct (e.g. AES-GCM,
+  ChaCha20-Poly1305) fails the test instead of silently re-encoding.
 - [ ] Tests: KDF determinism — `argon2id_derive_key(passphrase, salt,
   &Argon2Params::default()) == argon2id_derive_key(passphrase, salt,
   &Argon2Params::default())` bit-for-bit for the same inputs across
@@ -573,6 +603,30 @@ Each step lands as its own commit. Tests come first.
   Argon2id (assert via deterministic test instrumentation); both
   fields are zeroized when `Vault` drops. Plaintext vaults hold no cached
   key or passphrase.
+- [ ] Tests: pre-AEAD plaintext-payload zeroization — the bincode-serialized
+  `VaultPayload` buffer that is fed into `crypto::aead::encrypt` is held in
+  a `Zeroizing<Vec<u8>>` (or equivalent) and its bytes are wiped before the
+  buffer is freed. Byte-precise assertion: hold a raw pointer to the
+  buffer's backing allocation through a `#[cfg(test)]` hook, run an
+  encrypted save, and verify the bytes are all zero before deallocation.
+  A "buffer dropped without zeroization" regression must fail this test.
+  The same assertion runs for the symmetric decrypt path: the post-AEAD
+  plaintext buffer that bincode decodes is wiped after decode (success
+  path) and after decode failure.
+- [ ] Tests: CSPRNG failure surfaces — inject a `getrandom::Error` through
+  a `#[cfg(test)]` salt/nonce source override and assert encrypted
+  `create` / `create_force` / `set_passphrase` / `change_passphrase` /
+  `export::encrypted` / regular encrypted save each return `io_error` with
+  `operation: "csprng_read"` (added to the §5 stable operation table) and
+  do not write any partial vault file or leak intermediate plaintext.
+- [ ] Tests: Argon2id allocation failure — inject an Argon2 memory-allocation
+  failure (via a `#[cfg(test)]` allocator hook or an unrealistically large
+  `m_kib` that the underlying crate refuses) and assert encrypted-write paths
+  surface `io_error` with `operation: "kdf_allocation"` (added to the §5
+  stable operation table) without writing a partial vault file or panicking.
+  Read paths route the same allocation failure through the same operation
+  string so unlocking on a memory-constrained host fails cleanly instead of
+  panicking.
 - [ ] Tests: `open` rejects `VaultLock` mismatches with `wrong_vault_lock`
   before any KDF work — `VaultLock::Plaintext` against an encrypted file,
   and `VaultLock::Encrypted(_)` against a plaintext file.
@@ -1236,6 +1290,31 @@ is a separate `#[test]` or table-driven case family.
   expected 32-byte key, and XChaCha20-Poly1305 fixed key / nonce /
   AAD / plaintext → expected ciphertext + tag, with mutated AAD/tag
   rows proving authentication failure.
+- Algorithm-choice locks: same KAT inputs through Argon2i / Argon2d
+  produce keys distinct from the committed Argon2id key, and same
+  inputs through ChaCha20-Poly1305 (12-byte nonce IETF) produce
+  ciphertext / tag distinct from the committed XChaCha20-Poly1305
+  fixture — pinning Argon2id and XChaCha20-Poly1305 against silent
+  swap regressions.
+- AEAD output shape: ciphertext-body length equals `plaintext_len + 16`
+  (Poly1305 tag) and the in-header `nonce` slot is exactly 24 bytes,
+  asserted against a fresh encrypted vault.
+- Pre-AEAD plaintext-payload zeroization (encrypt) and post-AEAD
+  plaintext-payload zeroization (decrypt success and decode failure)
+  proven byte-precisely via a `#[cfg(test)]` raw-pointer hook,
+  matching the existing rollback-snapshot / cached-key zeroization
+  posture.
+- CSPRNG failure surfaces: injected `getrandom::Error` on every
+  encrypted-write save site routes through `io_error` with
+  `operation: "csprng_read"` and does not write a partial vault file.
+- Argon2id allocation failure: injected memory-allocation failure on
+  encrypted read and write paths surfaces `io_error` with
+  `operation: "kdf_allocation"` without panic or partial write.
+- Symbolic-link rejection on `open` / `create` / `create_force` for
+  `vault.bin`, `vault.bin.bak`, and the parent data directory, using
+  `symlink_metadata` so the probe never follows the link; the typed
+  rejection fires even when permissions look correct (defense in
+  depth).
 - Argon2 param boundary table at exact accept/reject edges
   (`m_kib` 8191/8192/1048576/1048577, `t` 0/1/10/11, `p` 0/1/4/5)
   with `kdf_params_out_of_bounds` payload field assertions.
