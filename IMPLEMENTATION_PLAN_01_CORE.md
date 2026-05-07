@@ -252,27 +252,29 @@ Each step lands as its own commit. Tests come first.
 
 ### Phase C — OTP generation (Milestone 1, part 2)
 
-- [ ] Tests: RFC 6238 Appendix B vectors (SHA1/256/512); RFC 4226 Appendix D.
+- [x] Tests: RFC 6238 Appendix B vectors (SHA1/256/512); RFC 4226 Appendix D.
   Coverage is the **explicit cross-product** of digits ∈ {6, 7, 8} ×
   algorithm ∈ {SHA1, SHA256, SHA512} for at least one TOTP vector, so
   zero-padding and HMAC truncation regressions are caught per algorithm.
-- [ ] Tests: HOTP counter-0 baseline against RFC 4226 Appendix D's
+- [x] Tests: HOTP counter-0 baseline against RFC 4226 Appendix D's
   `Count = 0` value; `hotp_advance` from `counter = 0` produces
   `counter_used = 0` and post-advance `counter = 1`.
+  *(Counter-0 baseline tested here; the advance-and-persist behavior
+  lands with `Vault::hotp_advance` in Phase G.)*
 - [ ] Tests: HOTP overflow boundary chain — `counter = u64::MAX - 1`
   advances successfully to `u64::MAX` (the off-by-one fence post in the
   overflow check); a subsequent advance from `u64::MAX` returns
   `counter_overflow` with the §5 `account` summary before any mutation
   or save (re-asserted here for completeness because Phase G also tests
   this through `Vault::hotp_advance`).
-- [ ] Tests: TOTP boundary semantics — half-open `[valid_from, valid_until)`,
+- [x] Tests: TOTP boundary semantics — half-open `[valid_from, valid_until)`,
   `seconds_remaining ∈ 1..=period`, exact-boundary selects new counter and
   reports full period (i.e. at the exact boundary `seconds_remaining ==
   period`, never `period - 1`), pre-epoch rejection (returns `time_range`
   with the kind asserted), `valid_until` overflow rejection at the exact
   boundary where `valid_until` would equal `u64::MAX` (accept) and
   `u64::MAX + 1` (reject).
-- [ ] Implement pure OTP primitives in `otp/`: TOTP code given (secret,
+- [x] Implement pure OTP primitives in `otp/`: TOTP code given (secret,
   algorithm, period, digits, now); HOTP code given (secret, algorithm,
   digits, counter). These are state-free and never persist. The Vault
   methods `totp_code`, `hotp_peek`, and `hotp_advance` (Phase G) route

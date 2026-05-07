@@ -9,6 +9,7 @@
 
 pub mod domain;
 pub mod error;
+pub mod otp;
 
 pub use domain::validation::AccountInput;
 pub use domain::{
