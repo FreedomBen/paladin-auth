@@ -675,6 +675,94 @@ fn save_plaintext_clobber(path: &Path, payload: &VaultPayload) -> Result<()> {
     Ok(())
 }
 
+/// Atomically write `content` to `path` with a same-directory tempfile,
+/// fsync, rename, and parent-directory fsync (DESIGN.md §4.3 / §4.7).
+/// On Unix targets the final file is `0600`. This is the shared writer
+/// used by export and other secret-file surfaces; it does **not**
+/// enforce the §4.3 directory permissions check, does **not** reject an
+/// existing destination, and does **not** create or rotate `.bak`. Each
+/// front end (CLI `--force`, GUI `ExportDialog`) gates overwrite policy
+/// before calling this helper so user-facing confirmation wording stays
+/// local to that front end.
+///
+/// Errors:
+/// * `path` has no parent component: `io_error` with
+///   `operation: "resolve_secret_file_parent"`.
+/// * Any pre-commit failure — tempfile open, write, fsync, or the
+///   rename into place — returns
+///   `save_not_committed { committed: false, backup_path: None }`. The
+///   destination at `path` is left untouched and any leftover tempfile
+///   is best-effort unlinked.
+/// * Post-commit parent-directory fsync failure returns
+///   `save_durability_unconfirmed`. The destination is in place but may
+///   not survive a power loss until the next durable write to that
+///   directory.
+///
+/// Stable §5 op strings reserved for this surface
+/// (`write_secret_file_tmp`, `fsync_secret_file_tmp`,
+/// `rename_secret_file`, `fsync_secret_file_dir`) are intentionally
+/// **not** returned by this helper today: pre-commit failures collapse
+/// into the typed `save_not_committed` discriminator so callers can
+/// reason about commit state without inspecting the source error, and
+/// post-commit fsync failures collapse into `save_durability_unconfirmed`
+/// for the same reason. The op strings remain in the §5 table as
+/// reserved labels for future fault-injection diagnostics (Phase E.7).
+pub fn write_secret_file_atomic(path: &Path, content: &[u8]) -> Result<()> {
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .ok_or_else(|| PaladinError::IoError {
+            operation: "resolve_secret_file_parent",
+            source: io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "secret file path has no parent directory",
+            ),
+        })?;
+
+    let tmp = append_suffix(path, ".tmp");
+
+    if !stage_secret_tempfile(&tmp, content) {
+        let _ = cleanup_leftover_temp(&tmp);
+        return Err(PaladinError::SaveNotCommitted {
+            committed: false,
+            backup_path: None,
+        });
+    }
+
+    if fs::rename(&tmp, path).is_err() {
+        let _ = cleanup_leftover_temp(&tmp);
+        return Err(PaladinError::SaveNotCommitted {
+            committed: false,
+            backup_path: None,
+        });
+    }
+
+    if fsync_dir(parent).is_err() {
+        return Err(PaladinError::SaveDurabilityUnconfirmed);
+    }
+
+    Ok(())
+}
+
+/// Stage `content` into `tmp` with `0600` mode and an `fsync`. Returns
+/// `false` on any open / write / fsync failure so the caller can wrap
+/// the result in `save_not_committed` without losing track of which
+/// step failed (the source `io::Error` is intentionally dropped — the
+/// commit-state guarantee is what matters to callers).
+fn stage_secret_tempfile(tmp: &Path, content: &[u8]) -> bool {
+    let mut opts = OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    opts.mode(0o600);
+    let Ok(mut f) = opts.open(tmp) else {
+        return false;
+    };
+    if f.write_all(content).is_err() {
+        return false;
+    }
+    f.sync_all().is_ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

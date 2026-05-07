@@ -14,8 +14,9 @@ use std::os::unix::fs::PermissionsExt;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use paladin_core::{
-    classify_init_precheck, default_vault_path, inspect, parse_otpauth, Account, ErrorKind,
-    InitPrecheck, PaladinError, PermissionSubject, Store, VaultInit, VaultLock, VaultStatus,
+    classify_init_precheck, default_vault_path, inspect, parse_otpauth, write_secret_file_atomic,
+    Account, ErrorKind, InitPrecheck, PaladinError, PermissionSubject, Store, VaultInit, VaultLock,
+    VaultStatus,
 };
 use tempfile::TempDir;
 
@@ -794,4 +795,137 @@ fn open_cleanup_unlinks_leftover_symlink_without_following_target() {
     // The symlink target is preserved (we unlinked the link, not the
     // file the link pointed to).
     assert_eq!(fs::read(&preserve_target).unwrap(), b"do not delete this");
+}
+
+// -----------------------------------------------------------------
+// E.6 — `write_secret_file_atomic` shared export writer.
+// -----------------------------------------------------------------
+
+#[test]
+fn write_secret_file_atomic_creates_destination_with_zero_six_zero_zero_mode_and_content() {
+    let dir = vault_test_dir();
+    let path = dir.path().join("export.bin");
+    let bytes = b"PALADIN-EXPORT-PAYLOAD-FIXTURE";
+
+    write_secret_file_atomic(&path, bytes).expect("export write should succeed");
+
+    assert_eq!(fs::read(&path).unwrap(), bytes);
+    let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600, "export must be created 0600, got {mode:o}");
+}
+
+#[test]
+fn write_secret_file_atomic_overwrites_existing_destination_in_place() {
+    let dir = vault_test_dir();
+    let path = dir.path().join("export.bin");
+
+    write_secret_file_atomic(&path, b"v1-bytes").unwrap();
+    write_secret_file_atomic(&path, b"v2-replaced-content").unwrap();
+
+    assert_eq!(fs::read(&path).unwrap(), b"v2-replaced-content");
+    let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600);
+}
+
+#[test]
+fn write_secret_file_atomic_never_creates_bak_or_leaves_tmp_residue() {
+    // The export writer is intentionally `.bak`-free — callers own
+    // the keep-or-discard policy on the prior file. A successful
+    // commit also leaves no `.tmp` siblings around: the rename
+    // consumes the staged tempfile.
+    let dir = vault_test_dir();
+    let path = dir.path().join("export.bin");
+    fs::write(&path, b"original").unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+
+    write_secret_file_atomic(&path, b"replacement").unwrap();
+
+    assert_eq!(fs::read(&path).unwrap(), b"replacement");
+    assert!(
+        !dir.path().join("export.bin.bak").exists(),
+        "export writer must never rotate a .bak"
+    );
+    assert!(
+        !dir.path().join("export.bin.tmp").exists(),
+        "staged tempfile must be consumed by the rename"
+    );
+}
+
+#[test]
+fn write_secret_file_atomic_returns_io_error_for_path_with_no_parent() {
+    // A bare basename has parent component `""` — treated as no
+    // parent so the helper does not silently fall back to the
+    // current working directory, which would surprise callers and
+    // hide configuration mistakes.
+    let err = write_secret_file_atomic(std::path::Path::new("export.bin"), b"x").unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::IoError);
+    match err {
+        PaladinError::IoError { operation, .. } => {
+            assert_eq!(operation, "resolve_secret_file_parent");
+        }
+        other => panic!("expected io_error, got {other:?}"),
+    }
+}
+
+#[test]
+fn write_secret_file_atomic_returns_save_not_committed_when_parent_is_read_only() {
+    // chmod 0500 on the parent dir denies the tempfile creation. The
+    // stage failure collapses into `save_not_committed` (committed
+    // false, no backup) so callers can rely on the typed error to
+    // know the destination was untouched, regardless of which
+    // pre-rename step actually failed.
+    let dir = vault_test_dir();
+    let path = dir.path().join("export.bin");
+    fs::write(&path, b"original-content-must-survive").unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o500)).unwrap();
+
+    let err = write_secret_file_atomic(&path, b"new-content-must-not-land").unwrap_err();
+
+    // Restore perms before any further filesystem assertions so the
+    // tempdir cleanup at the end of the test can succeed regardless
+    // of how the read-only window was exercised.
+    fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
+
+    assert_eq!(err.kind(), ErrorKind::SaveNotCommitted);
+    match err {
+        PaladinError::SaveNotCommitted {
+            committed,
+            backup_path,
+        } => {
+            assert!(!committed, "stage failures must report committed=false");
+            assert!(
+                backup_path.is_none(),
+                "export writer must never claim a .bak rotation"
+            );
+        }
+        other => panic!("expected SaveNotCommitted, got {other:?}"),
+    }
+
+    // Pre-existing destination content is preserved.
+    assert_eq!(fs::read(&path).unwrap(), b"original-content-must-survive");
+    let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600);
+
+    // No tempfile was committed and no .bak was created as a side effect.
+    assert!(!dir.path().join("export.bin.bak").exists());
+    assert!(!dir.path().join("export.bin.tmp").exists());
+}
+
+#[test]
+fn write_secret_file_atomic_does_not_enforce_directory_perms_on_caller_dir() {
+    // Unlike `Store::open` / `Store::create`, the export writer does
+    // not enforce the §4.3 0700-or-better directory check. Each
+    // front-end gates its own warning surface (the GUI / TUI export
+    // dialogs). Verify a 0750 parent — which `Store::create` would
+    // reject — accepts an export write here.
+    let dir = vault_test_dir();
+    fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o750)).unwrap();
+    let path = dir.path().join("export.bin");
+
+    write_secret_file_atomic(&path, b"loose-perms-ok").expect("export must succeed at 0750 parent");
+
+    // Restore perms so TempDir cleanup is unconstrained.
+    fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(fs::read(&path).unwrap(), b"loose-perms-ok");
 }
