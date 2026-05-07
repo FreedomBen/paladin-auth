@@ -730,6 +730,48 @@ where relevant, and exit code.
   tui --help` emits the JSON help envelope and does not inspect `PATH`.
   Missing `paladin-tui` → `io_error` with `operation: "exec_paladin_tui"`.
 
+## Dependencies
+
+`clap` (with `derive` feature for the argument tree), `rpassword` (for
+`/dev/tty` passphrase entry per §5), `arboard` (for `paladin copy`
+clipboard writes — no auto-clear), `secrecy`, `zeroize`, plus
+`paladin-core`. **No `tokio`.** No transitive network crates (enforced
+by workspace `cargo deny`).
+
+Dev-dependencies: `assert_cmd` (CLI process integration), `predicates`
+(stdout/stderr expectation matchers), `insta` (golden snapshots for
+`--json` envelopes and `--help` text), and `tempfile` (per-test vault
+fixtures). The `paladin-core/test-fault-injection` cargo feature is
+enabled under `[dev-dependencies.paladin-core]` so process-level fault
+tests can drive `save_not_committed` / `save_durability_unconfirmed`
+through real `paladin` invocations.
+
+The CLI-specific deps are pinned to specific minor versions in
+`crates/paladin-cli/Cargo.toml` so argument parsing (`clap`),
+passphrase entry (`rpassword`), and clipboard access (`arboard`) do
+not drift across transitive minor updates; `arboard` is pinned
+explicitly because it sits on the clipboard security boundary
+(`paladin copy`). `assert_cmd` and `insta` are pinned for snapshot
+stability across runs. This mirrors the `paladin-core` pinning of
+`getrandom` / `bincode v2` and the `paladin-tui` / `paladin-gtk`
+pinning convention.
+
+## Thinness contract
+
+The `paladin` binary is a presentation layer. Crypto, storage,
+import/export, and OTP primitives must never be re-implemented or
+imported directly here — they belong in `paladin-core` per DESIGN §3.
+
+- [ ] Tests: `tests/thinness.rs` — a source-level guard that scans
+  `crates/paladin-cli/src/` for forbidden crate-name spellings:
+  `argon2`, `chacha20poly1305`, `bincode`, `hmac`, `sha1`, `sha2`,
+  `rqrr`, `image`, `getrandom`, `directories`, `url`. Any direct
+  reference fails the test with a message pointing at the file and
+  the symbol so the offending logic can be moved into `paladin-core`.
+  The crate manifest is also checked: `paladin-cli` must not declare
+  any of those crates as a direct `[dependencies]` entry. Keeps the
+  CLI a thin shell over `paladin_core::*`.
+
 ## Packaging (per §11)
 
 The CLI ships in `.deb`, `.rpm`, Flatpak, and AppImage in v0.1

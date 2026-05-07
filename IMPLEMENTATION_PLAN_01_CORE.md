@@ -303,6 +303,19 @@ Each step lands as its own commit. Tests come first.
 - [ ] Tests: round-trip of `VaultPayload` through bincode v2 with the exact
   config from §4.3; full-input-consumption rejection; 16 MiB serialized payload
   limit; plaintext on-disk size cap rejected before bincode decode.
+- [ ] Tests: bincode encoding determinism — encoding the **same**
+  `VaultPayload` value twice produces bit-identical bytes, and a fixture
+  with a fixed account list + `VaultSettings::default()` matches a
+  committed expected byte string. Pins the §4.3 wire format so a future
+  swap of `Vec<Account>` for `HashMap<AccountId, Account>`, an unstable
+  field reorder in `VaultPayload`, or any other non-deterministic
+  encoding regression fails the test instead of silently corrupting AAD
+  reproducibility.
+- [ ] Tests: plaintext save → reopen preserves account insertion order —
+  add accounts in order A, B, C, save, drop the `Vault`, `open` it
+  again, and assert `iter()` and `summaries()` yield A, B, C in that
+  order. Pins the on-disk `VaultPayload.accounts` field as an ordered
+  `Vec<Account>` rather than an unordered collection.
 - [ ] Tests: primary, temp, and backup files written `0600`, parent created
   `0700`, atomic write via same-directory tempfile + rename, `.bak` rotated on
   each save after a primary exists (one generation), `unsafe_permissions`
@@ -488,6 +501,13 @@ Each step lands as its own commit. Tests come first.
   (`header_size + 16 MiB + 16-byte AEAD tag`) before any KDF/AEAD work;
   decrypted encrypted payloads above the 16 MiB payload limit are rejected
   before constructing a `Vault`.
+- [ ] Tests: encrypted save → reopen preserves account insertion order —
+  add accounts in order A, B, C to an encrypted vault, save, drop the
+  `Vault`, re-`open` with the same passphrase, and assert `iter()` and
+  `summaries()` yield A, B, C in that order. Mirrors the Phase E
+  plaintext insertion-order assertion to pin that the bincode
+  `VaultPayload.accounts` field is an ordered `Vec<Account>` for both
+  vault modes.
 - [ ] Tests: encrypted-file tamper matrix — table-driven per-field
   byte-flip coverage for header, AAD-bound fields, ciphertext, and tag.
   One named test row per region, each asserting `open` returns the
@@ -587,6 +607,29 @@ Each step lands as its own commit. Tests come first.
   passphrase set/change/remove transition, the next regular save also
   preserves the *new* salt (cross-checks Phase H) so transition + save
   do not silently regenerate state.
+- [ ] Tests: two consecutive saves of an unmodified `Vault` produce
+  byte-distinct ciphertext-and-tag regions (proves the per-save fresh
+  nonce, not just the fresh salt) while both files re-open to the
+  byte-identical `VaultPayload`. Pins the §4.4 "fresh nonce per save"
+  contract with a positive assertion in addition to the
+  pairwise-distinct nonce property.
+- [ ] Tests: header endianness fixture — write a vault with
+  `Argon2Params { m_kib: 65_536, t: 3, p: 1 }` and assert the exact
+  little-endian bytes at the `m_kib` / `t` / `p` header offsets
+  (`00 00 01 00`, `03 00 00 00`, `01 00 00 00`) regardless of host
+  byte order. A second fixture covers `m_kib: 8_192` (`00 20 00 00`).
+  Pins the §4.3 wire format so a regression to native endianness fails
+  the test instead of silently producing vaults that fail to open on
+  big-endian hosts.
+- [ ] Tests: custom `Argon2Params` round-trip via the encrypted header —
+  for several in-range parameter triples (e.g. `(8_192, 1, 1)`,
+  `(65_536, 3, 1)`, `(262_144, 4, 2)`, `(1_048_576, 10, 4)`), call
+  `create` (or `set_passphrase` / `change_passphrase` /
+  `export::encrypted`) with the params, drop the `Vault`, re-`open`
+  with the same passphrase, and assert the in-memory header reports
+  the same `(m_kib, t, p)` triple bit-identical to what was written.
+  Pins that custom KDF cost survives write → header → read so an
+  encrypted vault opened on a different machine derives the same key.
 - [ ] Tests: `EncryptionOptions::new` and `EncryptionOptions::with_params`
   reject zero-length passphrase with `invalid_passphrase` /
   `reason: "zero_length"`; `export::encrypted` independently rejects
@@ -685,6 +728,16 @@ Each step lands as its own commit. Tests come first.
   rollback snapshot is zeroized when dropped. Exercise add, remove, import
   merge (`skip` / `replace` / `append`), and settings changes so presentation
   crates do not need their own rollback machinery.
+- [ ] Tests: `Vault::mutate_and_save` rollback covers **both** accounts
+  and `VaultSettings`. A closure that mutates accounts (e.g. adds an
+  entry) **and** mutates settings (e.g. flips `auto_lock.enabled` and
+  changes `clipboard.clear_secs`), then returns `Err`, restores both
+  the accounts list and every `VaultSettings` field to its pre-mutation
+  value. A separate row covers the `save_not_committed` path with the
+  same cross-field rollback; a third row covers
+  `save_durability_unconfirmed`, where both account and settings
+  mutations remain in memory because the primary-file commit point may
+  have been reached.
 - [ ] Tests: `Vault::is_encrypted()` returns `false` for vaults opened
   with `VaultLock::Plaintext` / created with `VaultInit::Plaintext`,
   returns `true` for vaults opened with `VaultLock::Encrypted` / created with
@@ -1127,7 +1180,13 @@ is a separate `#[test]` or table-driven case family.
 - `proptest` property coverage for URI parsing and base32 secret decoding.
 - Bincode payload contract — fixed v2 config, trailing-bytes reject, 16 MiB
   reject (plaintext on-disk and plaintext/encrypted decoded).
-- Vault round-trip in both modes.
+- Bincode encoding determinism — same `VaultPayload` value encodes to
+  bit-identical bytes across two encodes; a fixture vault matches a
+  committed expected byte string so a regression to a non-deterministic
+  encoding (HashMap-based or otherwise) fails the test.
+- Vault round-trip in both modes, including save → drop → reopen
+  preservation of `Vec<Account>` insertion order in plaintext **and**
+  encrypted modes.
 - `inspect(path)` header probe: missing primary returns `Missing`, plaintext
   and encrypted headers report the correct mode without decryption, invalid
   magic errors, permission checks skipped.
@@ -1151,6 +1210,20 @@ is a separate `#[test]` or table-driven case family.
 - Encrypted save invariants — size cap pre-KDF/AEAD, Argon2 params and salt
   preserved on regular saves, fresh nonce per save, ciphertext/tag tamper
   rejection.
+- Sequential identical-content saves produce byte-distinct
+  ciphertext-and-tag regions while both files re-open to byte-identical
+  `VaultPayload` — pins per-save fresh nonce as a positive assertion.
+- Header endianness fixture — encrypted vaults written with
+  `Argon2Params { m_kib: 65_536, t: 3, p: 1 }` produce exact
+  little-endian header bytes (`00 00 01 00`, `03 00 00 00`,
+  `01 00 00 00`) regardless of host byte order; a second fixture
+  pins `m_kib: 8_192` (`00 20 00 00`).
+- Custom `Argon2Params` round-trip via the encrypted header — for
+  several in-range triples (e.g. `(8_192, 1, 1)`, `(65_536, 3, 1)`,
+  `(262_144, 4, 2)`, `(1_048_576, 10, 4)`), `(m_kib, t, p)` survive
+  write → header → read bit-identically across `create` /
+  `create_force` / `set_passphrase` / `change_passphrase` /
+  `export::encrypted`.
 - AEAD key caching — one Argon2id derivation at `open`, cached key reused on
   save, no cache for plaintext vaults, cached key/passphrase zeroized on drop.
 - File / dir permissions — post-save permissions, `unsafe_permissions`
@@ -1203,6 +1276,13 @@ is a separate `#[test]` or table-driven case family.
 - `Vault::mutate_and_save`: rollback on closure error and
   `save_not_committed`, durability-unconfirmed leaves mutated state, and
   success returns the closure value; the rollback snapshot is zeroized.
+- `Vault::mutate_and_save` cross-field rollback: a closure that mutates
+  both accounts and `VaultSettings` then errors restores **both** the
+  accounts list and every `VaultSettings` field to their pre-mutation
+  values; the same cross-field restoration applies on
+  `save_not_committed`; on `save_durability_unconfirmed` both account
+  and settings mutations remain in memory because the primary-file
+  commit point may have been reached.
 - HOTP `hotp_advance` rollback, durability-unconfirmed post-commit behavior,
   and `counter_overflow` at `u64::MAX` with the §5 `account` summary before
   mutation or save; invalid supplied timestamps reject before mutation or save.

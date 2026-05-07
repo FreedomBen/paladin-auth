@@ -1766,9 +1766,26 @@ permission fixtures. Binary crates additionally use `assert_cmd` and
   - Bincode payload contract: fixed v2 config, full-input-consumption
     rejection, and 16 MiB payload-limit rejection for plaintext and
     encrypted vaults.
+  - Bincode encoding determinism: the same `VaultPayload` value encodes
+    to bit-identical bytes across two encodes; a fixture vault matches
+    a committed expected byte string.
+  - Vault save → reopen preserves account insertion order in plaintext
+    and encrypted modes (pins `VaultPayload.accounts` as an ordered
+    `Vec<Account>`).
+  - Header endianness fixture: encrypted vaults written with default
+    Argon2 params produce exact little-endian header bytes regardless
+    of host byte order.
+  - Custom `Argon2Params` round-trip via the encrypted header — several
+    in-range `(m_kib, t, p)` triples survive write → header → read
+    bit-identically across `create` / `create_force` / `set_passphrase`
+    / `change_passphrase` / `export::encrypted`.
   - Tamper detection on encrypted vault: flip a ciphertext byte → fail;
     flip any byte in the AAD-bound header (`format_ver`, `mode`, `kdf_id`,
     Argon2 params, `salt`, `aead_id`, `nonce`) → fail.
+  - Sequential encrypted saves of identical content produce
+    byte-distinct ciphertext-and-tag regions while both files re-open
+    to the byte-identical `VaultPayload`, pinning per-save fresh nonce
+    as a positive assertion.
   - Published crypto known-answer vectors: Argon2id derives the expected
     32-byte key for a fixed passphrase / salt / parameter fixture, and
     XChaCha20-Poly1305 encrypts/decrypts a fixed key / nonce / AAD /
@@ -1825,6 +1842,9 @@ permission fixtures. Binary crates additionally use `assert_cmd` and
     `save_durability_unconfirmed`, and no `.bak` rotation.
   - `Vault::mutate_and_save` rollback on mutation closure failure and
     pre-commit save failure, plus durability-unconfirmed state retention.
+    Cross-field rollback covers both accounts and `VaultSettings`: a
+    closure that mutates both then errors restores both to the
+    pre-mutation snapshot.
   - Passphrase set/change/remove transitions, including pre-commit rollback
     and durability-unconfirmed failures after the primary-file commit point.
   - HOTP counter advances on `hotp_advance`, not on `hotp_peek` or

@@ -884,6 +884,25 @@ via CI, so the GUI can move them across thread boundaries during
 encrypted `open` / `create` / `create_force` and any save-bearing
 dialog operation without re-asserting `Send` itself.
 
+## Thinness contract
+
+`paladin-gtk` is a presentation layer. Crypto, storage, import/export,
+and OTP primitives must never be re-implemented or imported directly
+here — they belong in `paladin-core` per DESIGN §3.
+
+- [ ] Tests: `tests/thinness.rs` — a source-level guard that scans
+  `crates/paladin-gtk/src/` for forbidden crate-name spellings:
+  `argon2`, `chacha20poly1305`, `bincode`, `hmac`, `sha1`, `sha2`,
+  `rqrr`, `image`, `getrandom`, `directories`, `url`. Any direct
+  reference fails the test with a message pointing at the file and
+  the symbol so the offending logic can be moved into `paladin-core`.
+  The crate manifest is also checked: `paladin-gtk` must not declare
+  any of those crates as a direct `[dependencies]` entry. (GUI image
+  clipboard imports route raw RGBA buffers through
+  `paladin_core::import::qr_image_bytes`, so neither `image` nor
+  `rqrr` belong in the GTK crate.) Keeps the GUI a thin shell over
+  `paladin_core::*` plus the GTK / Adwaita / GLib stack.
+
 ## libadwaita usage
 
 Components map to Adwaita widgets where the HIG calls for them; the

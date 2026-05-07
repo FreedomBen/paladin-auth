@@ -822,6 +822,22 @@ pinned for snapshot stability across runs. This mirrors the
 `paladin-core` pinning of `getrandom` /
 `bincode v2` and the `paladin-cli` pinning convention.
 
+## Thinness contract
+
+`paladin-tui` is a presentation layer. Crypto, storage, import/export,
+and OTP primitives must never be re-implemented or imported directly
+here — they belong in `paladin-core` per DESIGN §3.
+
+- [ ] Tests: `tests/thinness.rs` — a source-level guard that scans
+  `crates/paladin-tui/src/` for forbidden crate-name spellings:
+  `argon2`, `chacha20poly1305`, `bincode`, `hmac`, `sha1`, `sha2`,
+  `rqrr`, `image`, `getrandom`, `directories`, `url`. Any direct
+  reference fails the test with a message pointing at the file and
+  the symbol so the offending logic can be moved into `paladin-core`.
+  The crate manifest is also checked: `paladin-tui` must not declare
+  any of those crates as a direct `[dependencies]` entry. Keeps the
+  TUI a thin shell over `paladin_core::*`.
+
 ## Global flags
 
 `--vault <path>` and `--no-color` are accepted (parity with siblings).
