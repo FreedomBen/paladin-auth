@@ -549,8 +549,22 @@ pub struct ImportWarning { pub source_index: usize, pub warning: ValidationWarni
 pub enum AccountKindInput { Totp, Hotp }
 pub enum AccountKindSummary { Totp, Hotp }
 pub enum IconHintInput { Default, Clear, Slug(String) }
+pub enum InitPrecheck { Clear, Existing, Propagate(PaladinError) }
 pub const HOTP_REVEAL_SECS: u64 = 120;
 pub const QR_RGBA_MAX_BYTES: usize = 64 * 1024 * 1024;
+/// Shared TUI / GUI tick cadence for TOTP gauge refresh and clipboard
+/// staleness checks. 250 ms keeps the TOTP "seconds remaining" display
+/// honest without burning CPU. Front ends consume this constant; they
+/// never hard-code a different value.
+pub const TICK_INTERVAL_MS: u64 = 250;
+/// `Vault::set_auto_lock_timeout_secs` rejection bounds; mirrored on the
+/// CLI / TUI / GUI settings widgets.
+pub const AUTO_LOCK_SECS_MIN: u32 = 30;
+pub const AUTO_LOCK_SECS_MAX: u32 = 86_400;
+/// `Vault::set_clipboard_clear_secs` rejection bounds; mirrored on the
+/// CLI / TUI / GUI settings widgets.
+pub const CLIPBOARD_CLEAR_SECS_MIN: u32 = 5;
+pub const CLIPBOARD_CLEAR_SECS_MAX: u32 = 600;
 
 /// Non-secret account projection used by all presentation crates for list
 /// rows, duplicate-account errors, JSON output, and import reports. This is
@@ -697,6 +711,69 @@ pub fn parse_setting_key(key: &str) -> Result<SettingKey>;
 /// `validation_error`.
 pub fn parse_setting_patch(key: &str, value: &str) -> Result<SettingPatch>;
 
+/// Parse the prompt-grammar token used by the CLI `add` interactive
+/// prompt and the TUI / GUI add-account modals when collecting an
+/// optional `icon_hint`. Empty input (after Unicode-whitespace trim)
+/// becomes `IconHintInput::Default`; a case-insensitive `none` token
+/// becomes `IconHintInput::Clear`; any other input is validated as a
+/// slug per §4.1 and becomes `IconHintInput::Slug`. Invalid slugs
+/// return `validation_error` with `field: "icon_hint"`.
+pub fn parse_icon_hint_token(token: &str) -> Result<IconHintInput>;
+
+/// Classify the result of `inspect(path)` for the §5 init flow shared by
+/// CLI `init`, TUI initialization, and GUI `InitDialog`. `VaultStatus::Missing`
+/// → `InitPrecheck::Clear`; an existing primary file in any decodable shape
+/// (`Plaintext`, `Encrypted`, `invalid_header`,
+/// `unsupported_format_version`) → `InitPrecheck::Existing`, requiring the
+/// caller to confirm the destructive `init --force` (or equivalent) gate;
+/// any other error (e.g. `unsafe_permissions`, `io_error`) →
+/// `InitPrecheck::Propagate(err)` so the front end can bubble the
+/// underlying cause without misclassifying it as "vault exists."
+pub fn classify_init_precheck(probe: Result<VaultStatus>) -> InitPrecheck;
+
+/// Decide which account should be selected after a TUI / GUI search
+/// filter narrows the visible list. Returns `prev` when it appears in
+/// `filtered`; otherwise the first id in `filtered`; otherwise `None`.
+/// Pins the §6 / §7 selection-preservation rule so both front ends
+/// behave identically.
+pub fn select_after_filter(prev: Option<AccountId>, filtered: &[AccountId]) -> Option<AccountId>;
+
+pub mod policy {
+    /// Auto-lock idle-deadline math shared by TUI and GUI. The
+    /// front ends own raw input handling and timer plumbing; the
+    /// policy module owns the encrypted-only gating, the next-deadline
+    /// arithmetic, and the monotonic expiry comparison.
+    pub mod auto_lock {
+        pub struct IdlePolicy;
+        impl IdlePolicy {
+            pub fn should_arm(is_encrypted: bool, settings: &VaultSettings) -> bool;
+            pub fn next_deadline(now: std::time::Instant, settings: &VaultSettings) -> Option<std::time::Instant>;
+            pub fn is_expired(deadline: std::time::Instant, now: std::time::Instant) -> bool;
+        }
+    }
+
+    /// Clipboard auto-clear policy shared by TUI and GUI. Front ends
+    /// own the OS clipboard surface (`arboard`, `gdk::Clipboard`); the
+    /// policy module owns the schedule decision, monotonic token issuance,
+    /// and the only-if-unchanged byte-equality decision.
+    pub mod clipboard_clear {
+        #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
+        pub struct ClipboardClearToken(/* private monotonic counter */);
+        pub struct ClipboardClearPolicy;
+        impl ClipboardClearPolicy {
+            pub fn schedule(now: std::time::Instant, settings: &VaultSettings) -> Option<(ClipboardClearToken, std::time::Instant)>;
+            pub fn should_clear(captured: &[u8], current: &[u8]) -> bool;
+        }
+    }
+
+    /// HOTP reveal countdown deadline. Computes `now +
+    /// Duration::from_secs(HOTP_REVEAL_SECS)` so TUI and GUI countdowns
+    /// share one source.
+    pub mod hotp_reveal {
+        pub fn deadline(now: std::time::Instant) -> std::time::Instant;
+    }
+}
+
 impl Account {
     pub fn summary(&self) -> AccountSummary;
 }
@@ -789,12 +866,33 @@ default Argon2id cost or a validated custom cost. Passphrase set/change and
 encrypted export also take `EncryptionOptions` because they create new
 encrypted material. Plaintext paths never carry KDF parameters.
 
-`Vault` and `Store` are `Send` so front ends can move them across thread
-boundaries — for example `paladin-gtk` running encrypted `open` /
-`create` / `create_force` and any save-bearing operation inside
-`gio::spawn_blocking`. The core enforces this with static assertions in
-CI so a future change introducing a non-`Send` field fails the build
-instead of silently breaking the GTK front end.
+Every public type that a front end may move across a thread boundary
+is `Send`. The CI-gated `Send` set covers `Vault`, `Store`, `Account`,
+`AccountId`, `AccountSummary`, `AccountKindSummary`, `Algorithm`,
+`Code`, `ValidatedAccount`, `ValidationWarning`, `ImportReport`,
+`ImportWarning`, `ImportConflict`, `ImportFormat`, `ImportOptions<'_>`,
+`EncryptionOptions`, `Argon2Params`, `VaultLock`, `VaultInit`,
+`VaultStatus`, `VaultSettings`, `SettingKey`, `SettingPatch`,
+`AccountKindInput`, `IconHintInput`, `AccountInput`, `AccountQuery`,
+`InitPrecheck`, and `PaladinError` — so `paladin-gtk` can drive
+encrypted `open` / `create` / `create_force` and any save-bearing
+operation inside `gio::spawn_blocking`, and `paladin-tui` can drive
+QR / image import on a worker thread. Static assertions in CI gate
+the full set so a future change introducing a non-`Send` field fails
+the build instead of silently breaking either front end.
+
+The non-secret projection types (`AccountSummary`, `Code`,
+`ImportReport`, `ImportWarning`, `VaultStatus`, `VaultSettings`,
+`Algorithm`, `AccountKindSummary`, `Argon2Params`, `SettingKey`,
+`SettingPatch`, `IconHintInput`, `AccountKindInput`, `AccountQuery`,
+`InitPrecheck`, `AccountId`) are also `Sync`. Secret-bearing types
+(`Vault`, `Store`, `Account`, `Secret`, `EncryptionOptions`,
+`AccountInput`, `ValidatedAccount`, `VaultLock`, `VaultInit`,
+`PaladinError`) are deliberately *not* asserted `Sync` — `SecretString`
+is `!Sync` in `secrecy` and core does not promote any secret-bearing
+type past that posture. CI also pins this decision so a future change
+cannot accidentally promote a secret-bearing type to `Sync` without
+review.
 
 Because `Account` fields are private, presentation crates use
 `Account::summary` / `Vault::summaries` for non-secret display data and
@@ -812,17 +910,42 @@ is secret-bearing and is zeroized when dropped.
 
 Account selection and settings edits are split so core owns reusable
 semantics while front ends own presentation policy. `parse_account_query`,
-`Vault::matching_accounts`, `account_matches_search`, and
-`Vault::shortest_unique_id_prefix` implement the shared §5 selector and
-issuer/label matching rules; the CLI still decides which command cardinality
-rules produce `no_match` or `multiple_matches`, and the TUI / GUI use only the
-substring predicate for search bars. `parse_setting_key`,
-`parse_setting_patch`, and `Vault::apply_setting_patch` own the dotted
-settings grammar used by the CLI, while TUI / GUI controls may call the typed
-setters directly. `VaultSettings` fields are private for the same reason:
-readers use `Vault::settings()` plus the read-only `VaultSettings` getters,
-and settings changes go through validated setters or patches so timeout
+`Vault::matching_accounts`, `account_matches_search`,
+`Vault::shortest_unique_id_prefix`, and `select_after_filter` implement
+the shared §5 selector, issuer/label matching, and TUI / GUI search
+selection-preservation rules; the CLI still decides which command
+cardinality rules produce `no_match` or `multiple_matches`, and the
+TUI / GUI use only the substring predicate plus `select_after_filter`
+for search bars. `parse_setting_key`, `parse_setting_patch`, and
+`Vault::apply_setting_patch` own the dotted settings grammar used by
+the CLI, while TUI / GUI controls may call the typed setters directly.
+`VaultSettings` fields are private for the same reason: readers use
+`Vault::settings()` plus the read-only `VaultSettings` getters, and
+settings changes go through validated setters or patches so timeout
 minimums cannot be bypassed.
+
+Add-account input and init-precheck logic are shared too.
+`parse_icon_hint_token` is the single source for the empty-default /
+case-insensitive `none` / slug grammar that CLI prompts and TUI / GUI
+add modals all collect. `classify_init_precheck` is the truth table
+that maps `inspect()` results onto the §5 init flow: `Missing`
+clears, `Plaintext` / `Encrypted` / `invalid_header` /
+`unsupported_format_version` are existing-vault decisions requiring
+the `init --force` confirmation gate, and any other error propagates
+verbatim. Front ends never reimplement either grammar.
+
+The `policy` module shares the timer math and decision protocols that
+the TUI and GUI both need but that depend only on `VaultSettings` and
+`Instant`: `policy::auto_lock::IdlePolicy` owns the encrypted-only
+gating, idle-deadline arithmetic, and monotonic-expiry comparison;
+`policy::clipboard_clear::ClipboardClearPolicy` owns the schedule
+decision, monotonic `ClipboardClearToken` issuance, and the
+only-if-unchanged byte-equality decision used to avoid clobbering a
+clipboard the user has since changed; `policy::hotp_reveal::deadline`
+owns the `now + HOTP_REVEAL_SECS` computation. Front ends still own
+raw input event handling, timer plumbing (`gio::timeout_add_local`
+or crossterm tick polling), and the OS clipboard adapters
+(`arboard`, `gdk::Clipboard`).
 
 Core methods that accept an `AccountId` return stable `invalid_state`
 operation/state pairs for account-state failures; presentation crates still

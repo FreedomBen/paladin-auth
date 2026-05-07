@@ -95,7 +95,7 @@ valid custom KDF values are accepted but unused.
 
 | Command                                                | Notes |
 |--------------------------------------------------------|-------|
-| `init [--force]`                                       | The pre-check uses `paladin_core::inspect(path)` and maps outcomes as follows: `Ok(Missing)` is a clear path; `Ok(Plaintext)`, `Ok(Encrypted)`, `Err(invalid_header)`, and `Err(unsupported_format_version)` are existing files; any other `Err(...)` (notably `io_error` from probe failures such as permission-denied) propagates verbatim rather than being reinterpreted as `vault_exists`. Without `--force`, an existing-file pre-check surfaces `vault_exists` before prompting for the new-vault passphrase. With `--force`, prints `paladin_core::format_init_force_warning(path)` in text mode before any prompt whenever the pre-check sees an existing file (Paladin or not), then calls `paladin_core::create_force` (which performs the §5 staged clobber: stages the new vault, then rotates the old file verbatim to `.bak`, overwriting any existing backup). The verbatim rotation matches `create_force`'s file-type-agnostic semantics. Accepts and validates the KDF flags above before prompting; valid custom KDF values are used only when the new-vault passphrase is non-empty. If the first passphrase entry is empty, text mode prints `paladin_core::format_plaintext_storage_warning()` before creating the plaintext vault. |
+| `init [--force]`                                       | The pre-check routes `paladin_core::inspect(path)` through `paladin_core::classify_init_precheck`, which returns `InitPrecheck::{ Clear, Existing, Propagate(err) }`; the CLI surfaces `vault_exists` (or, with `--force`, the clobber path) on `Existing` and propagates verbatim on `Propagate`. Without `--force`, `Existing` surfaces `vault_exists` before prompting for the new-vault passphrase. With `--force`, prints `paladin_core::format_init_force_warning(path)` in text mode before any prompt whenever the pre-check returns `Existing` (Paladin or not), then calls `paladin_core::create_force` (which performs the §5 staged clobber: stages the new vault, then rotates the old file verbatim to `.bak`, overwriting any existing backup). The verbatim rotation matches `create_force`'s file-type-agnostic semantics. Accepts and validates the KDF flags above before prompting; valid custom KDF values are used only when the new-vault passphrase is non-empty. If the first passphrase entry is empty, text mode prints `paladin_core::format_plaintext_storage_warning()` before creating the plaintext vault. |
 | `add` (interactive / `--uri` / manual flags / `--qr`)  | Exactly one input mode; combinations rejected at parse time. Under `--json`, interactive mode is rejected at parse time — one of `--uri`, `--qr`, or a complete manual flag set (`--label` and `--secret`, plus optional manual fields) must be supplied. |
 | `list`                                                 | Account metadata only — no codes. |
 | `show <query>`                                         | Advances HOTP; persists before printing. Matching queries print all matches when every match is TOTP; if any match is HOTP, requires a single match. |
@@ -117,13 +117,9 @@ valid custom KDF values are accepted but unused.
    the same fields as manual mode. Label and secret are required; issuer is
    optional. The secret prompt uses hidden terminal input. Algorithm, digits,
    kind, period, and counter prompts offer the same defaults and constraints
-   as the manual flags. The icon-hint prompt uses the same slug validation,
-   but reserves prompt-specific tokens: it accepts an empty line to mean
-   default-derive (`IconHintInput::Default`), the literal
-   token `none` (case-insensitive, after Unicode-whitespace trim) to mean
-   clear (`IconHintInput::Clear`), or a slug matching `[a-z0-9_-]+` up to
-   64 bytes (`IconHintInput::Slug`); any other input is rejected by
-   `validate_manual`. After collecting the form once, the CLI
+   as the manual flags. The icon-hint prompt routes its line through
+   `paladin_core::parse_icon_hint_token` (Default/Clear/Slug); invalid input
+   is rejected by `validate_manual`. After collecting the form once, the CLI
    builds `AccountInput` and calls `paladin_core::validate_manual(input,
    now)`. Any validation error exits with that `validation_error`; the CLI
    does not loop, reprompt, or partially save.
@@ -456,20 +452,16 @@ malformed or out-of-policy KDF flag returns its KDF error before vault
 existence checks, unlock prompts, wrong-state checks, or command-specific
 prompts.
 
-`init` resolves the same path. The existence pre-check calls
-`paladin_core::inspect(path)` and maps outcomes as follows: `Ok(Missing)` is
-the "clear path" result; `Ok(Plaintext)`, `Ok(Encrypted)`,
-`Err(invalid_header)`, and `Err(unsupported_format_version)` are treated as
-existing files; any other `Err(...)` (e.g. `io_error` from a probe failure
-such as permission-denied, or `unsafe_permissions` if a future release adds
-permission probing) propagates verbatim rather than being reinterpreted as
-`vault_exists`. Without `--force`, an existing-file pre-check returns
-`vault_exists` before prompting for the new-vault passphrase. When the
-pre-check is clear, it prompts for the new-vault passphrase and uses
-`paladin_core::create`.
+`init` resolves the same path. The existence pre-check routes
+`paladin_core::inspect(path)` through `paladin_core::classify_init_precheck`,
+which returns `InitPrecheck::{ Clear, Existing, Propagate(err) }`; the CLI
+treats `Propagate` as a verbatim error and never reinterprets it as
+`vault_exists`. Without `--force`, `Existing` returns `vault_exists` before
+prompting for the new-vault passphrase. When the pre-check returns `Clear`,
+it prompts for the new-vault passphrase and uses `paladin_core::create`.
 
-`init --force` runs the same pre-check. When the pre-check sees an existing
-file (Paladin header or not), text mode prints
+`init --force` runs the same pre-check. When the pre-check returns
+`Existing` (Paladin header or not), text mode prints
 `paladin_core::format_init_force_warning(path)` before any prompt. The
 warning text names the path and `vault.bin.bak` and warns that any prior
 backup will be overwritten — wording that applies uniformly because
@@ -573,15 +565,14 @@ where relevant, and exit code.
   Non-empty passphrase → encrypted; second invocation refuses to clobber with
   `vault_exists` before prompting for a new passphrase, including when the
   existing file at the vault path is non-Paladin (unrecognized magic) — the
-  pre-check treats `Ok(Plaintext)`, `Ok(Encrypted)`, `Err(invalid_header)`,
-  and `Err(unsupported_format_version)` as existing. Probe failures with
-  `Err(io_error)` (e.g. permission-denied reading the candidate path) are
-  propagated as the underlying `io_error` instead of being reinterpreted as
-  `vault_exists`. `--force` rotates the old file verbatim into `.bak` for
-  both Paladin-format and non-Paladin existing files; text-mode `--force`
-  emits the clobber warning whenever the pre-check sees an existing file
-  (regardless of whether it is a recognized Paladin header) and skips the
-  warning only when the path is clear. Custom KDF flags write the requested in-range
+  pre-check delegates classification to `paladin_core::classify_init_precheck`,
+  so `InitPrecheck::Existing` covers Plaintext, Encrypted, invalid-header, and
+  unsupported-format-version cases alike. Probe failures classified as
+  `InitPrecheck::Propagate` (e.g. permission-denied `io_error`) propagate
+  verbatim instead of being reinterpreted as `vault_exists`. `--force` rotates
+  the old file verbatim into `.bak` for both Paladin-format and non-Paladin
+  existing files; text-mode `--force` emits the clobber warning whenever the
+  pre-check returns `Existing` and skips the warning only on `Clear`. Custom KDF flags write the requested in-range
   Argon2 params for encrypted init; invalid / out-of-range values reject with
   the §5 error kinds before the first passphrase prompt, including stable
   `validation_error` `field` / `reason` values for invalid integer and

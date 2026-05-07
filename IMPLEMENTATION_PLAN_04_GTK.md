@@ -53,13 +53,13 @@ crates/paladin-gtk/
 │   │   ├── export.rs          # ExportDialog (file picker + format + overwrite + encrypted passphrase)
 │   │   ├── passphrase.rs      # PassphraseDialog (set / change / remove flows)
 │   │   └── settings.rs        # SettingsComponent (toggles + spinners)
-│   ├── clipboard.rs       # gdk Clipboard + opt-in "clear if unchanged" wipe
-│   ├── auto_lock.rs       # GLib idle/timeout source; encrypted-only; plaintext no-op
-│   ├── hotp_reveal.rs     # per-row reveal window using paladin_core::HOTP_REVEAL_SECS
+│   ├── clipboard.rs       # gdk::Clipboard plumbing driving paladin_core::policy::clipboard_clear::ClipboardClearPolicy
+│   ├── auto_lock.rs       # GLib idle/timeout plumbing driving paladin_core::policy::auto_lock::IdlePolicy (encrypted-only; plaintext no-op)
+│   ├── hotp_reveal.rs     # per-row reveal window via paladin_core::policy::hotp_reveal::deadline (uses paladin_core::HOTP_REVEAL_SECS)
 │   ├── icons.rs           # gtk::IconTheme lookup against AccountSummary.icon_hint
 │   ├── secret_fields.rs   # extract/clear passphrase + manual-secret entries
 │   ├── search.rs          # case-insensitive issuer/label filtering using paladin_core::account_matches_search (parity with CLI / TUI)
-│   └── ticker.rs          # 250ms timeout source for TOTP gauge updates
+│   └── ticker.rs          # paladin_core::TICK_INTERVAL_MS timeout source for TOTP gauge updates and clipboard staleness checks
 └── tests/
     ├── icon_resolution.rs
     ├── search_logic.rs
@@ -102,7 +102,13 @@ inclusion.
 - `InitDialog` — only path that creates a vault from the GUI (v0.2;
   parity with DESIGN §6, §7). Two `AdwPasswordEntryRow` passphrase
   fields (twice-confirmed; both fields empty select plaintext) plus an
-  explicit "create vault" confirmation button. The plaintext path renders
+  explicit "create vault" confirmation button. Initial routing of the
+  user-supplied path runs through `paladin_core::classify_init_precheck`
+  (matching the CLI/TUI init flow); the dialog renders the
+  `InitPrecheck::Clear` case as the normal create path,
+  `InitPrecheck::Existing` as the destructive-confirmation gate
+  (see below), and `InitPrecheck::Propagate` as a non-mutating inline
+  error. The plaintext path renders
   `paladin_core::format_plaintext_storage_warning()` verbatim — the
   same wording `PassphraseDialog`'s remove flow and the CLI / TUI use —
   and the user must tick the confirmation before submission is enabled.
@@ -119,8 +125,9 @@ inclusion.
   `Some(text)` from `paladin_core::format_unsafe_permissions(&err)`,
   falling back to the generic error text if it returns `None`),
   `save_not_committed`, and `save_durability_unconfirmed` inline.
-  `vault_exists` (if a vault appeared between `inspect` and `create`)
-  opens an in-dialog `AdwAlertDialog` with `destructive-action`
+  `vault_exists` (if a vault appeared between `inspect` and `create`,
+  i.e. the precheck reported `Clear` but the race resolved to
+  `Existing`) opens an in-dialog `AdwAlertDialog` with `destructive-action`
   styling whose body is rendered from
   `paladin_core::format_init_force_warning(existing_path)` so wording
   stays identical to the CLI `init --force` confirmation. On
@@ -152,14 +159,18 @@ inclusion.
   fields. The entry applies the same case-insensitive substring matching as
   §5 / §6; no Unicode normalization. Empty issuer is allowed and the colon
   is still present in the match key; insertion order is preserved among
-  matches. The CLI's `id:` prefix form is **not** honored by the GUI search
+  matches. After a filter rebuild, selection is computed by
+  `paladin_core::select_after_filter(prev, filtered)` (preserve prior
+  selection if still present, else first match) — parity with the TUI.
+  The CLI's `id:` prefix form is **not** honored by the GUI search
   (parity with the TUI).
 - `AccountRowComponent` — label, code, progress (TOTP) / "next" button
   (HOTP), copy button, and a kebab `gtk::MenuButton` whose `gio::Menu`
   exposes "Rename…" (opens `RenameDialog` for that row's account) and
   "Remove…" (opens `RemoveDialog`). HOTP rows hide their code until the user activates
-  "next" (advances counter and saves); after the shared
-  `paladin_core::HOTP_REVEAL_SECS` reveal window (120 seconds) the code
+  "next" (advances counter and saves); the reveal window deadline comes
+  from `paladin_core::policy::hotp_reveal::deadline(now)` (built on the
+  shared `paladin_core::HOTP_REVEAL_SECS`), and after expiry the code
   returns to the hidden state, matching the TUI. Activating "next"
   during an open reveal advances to the next counter and restarts the
   shared reveal window with the newly committed code (matches §6 —
@@ -198,7 +209,9 @@ inclusion.
   optional issuer, Base32 secret, algorithm, digits, kind, TOTP period,
   HOTP counter, and the icon-hint mode (`Default from issuer`, `No icon`,
   or explicit slug), matching `paladin_core::AccountInput` and
-  `IconHintInput`. UI defaults match the CLI manual-add defaults in DESIGN
+  `IconHintInput`; the icon-hint entry text is normalized through
+  `paladin_core::parse_icon_hint_token` so the slug / `default` / `none`
+  parsing matches the CLI/TUI add modals exactly. UI defaults match the CLI manual-add defaults in DESIGN
   §5: TOTP, SHA1, 6 digits, 30 s period, HOTP counter 0, and icon hint
   derived from issuer when the user leaves it unset. Manual entries use
   `paladin_core::validate_manual`; validation warnings show inline with
@@ -312,9 +325,11 @@ inclusion.
   pending plaintext-removal confirmation. Any stale invalid-state error stays
   in the dialog and does not mutate visible state.
 - `SettingsComponent` — toggles for auto-lock and clipboard-clear, with
-  spinners for timeouts. Spinners clamp to the §5 bounds
-  (`30 <= auto_lock.timeout_secs <= 86_400`,
-  `5 <= clipboard.clear_secs <= 600`). Uses
+  spinners for timeouts. Spinners clamp to
+  `paladin_core::AUTO_LOCK_SECS_MIN..=paladin_core::AUTO_LOCK_SECS_MAX`
+  and
+  `paladin_core::CLIPBOARD_CLEAR_SECS_MIN..=paladin_core::CLIPBOARD_CLEAR_SECS_MAX`
+  (the §5 bounds, sourced from `paladin_core::ui_contract`). Uses
   **live-apply** (each toggle change immediately invokes the matching
   setter inside `Vault::mutate_and_save`; spinner changes are debounced
   500 ms via `glib::timeout_add_local` so holding +/- does not fire one
@@ -353,27 +368,32 @@ Validation/status messages never include secret values.
 ## Auto-lock and clipboard auto-clear (per §7)
 
 Behave the same as the TUI, including **opt-in default** and the
-**plaintext-vault auto-lock no-op**. Implemented with GLib timeout sources
-(`glib::timeout_add_local`) so they integrate with the GTK main loop.
+**plaintext-vault auto-lock no-op**. GTK owns the idle-event sourcing
+(`gtk::EventControllerKey`, motion controllers) and timer plumbing
+(`glib::timeout_add_local` integrated with the GTK main loop); the
+policy decisions route through `paladin-core`.
 
-- Auto-lock: idle timer reset on any input event sourced through
-  `gtk::EventControllerKey` / pointer controllers wired at the `AppModel`
-  root. On expiry, drop `Vault` and switch `AppModel` to `Locked`,
-  re-presenting `UnlockComponent`. Locking discards open HOTP reveal
-  windows, the search query, and any open dialog; a clipboard auto-clear
-  timer scheduled before lock survives lock and still fires
-  only-if-unchanged. For plaintext vaults the timer is never armed; the
-  setting still persists for the encrypted-later case. The arm/disarm
-  decision re-evaluates after any successful PassphraseDialog transition:
-  PassphraseDialog::set arms the timer when auto-lock is enabled, and
-  PassphraseDialog::remove cancels any active idle deadline. AppModel reads
-  `Vault::is_encrypted()` to make the determination so the timer state
-  tracks the on-disk vault mode without re-inspecting the file.
+- Auto-lock: idle events sourced through `gtk::EventControllerKey` /
+  pointer controllers wired at the `AppModel` root drive
+  `paladin_core::policy::auto_lock::IdlePolicy`
+  (`should_arm` / `next_deadline` / `is_expired`), which owns the
+  encrypted-only gating and timer math. On expiry, drop `Vault` and
+  switch `AppModel` to `Locked`, re-presenting `UnlockComponent`.
+  Locking discards open HOTP reveal windows, the search query, and any
+  open dialog; a clipboard auto-clear timer scheduled before lock survives
+  lock and still fires only-if-unchanged. The arm/disarm decision
+  re-evaluates after any successful PassphraseDialog transition by
+  re-asking `IdlePolicy::should_arm`, which reads `Vault::is_encrypted()`
+  so the timer state tracks the on-disk vault mode without re-inspecting
+  the file (plaintext vaults remain unarmed even though the setting still
+  persists for the encrypted-later case).
 - Clipboard auto-clear: mode-agnostic — runs in both plaintext and
-  encrypted vaults. At copy time, capture `(token, value)`. On wake,
-  ignore stale tokens first, then read the current `gdk::Clipboard` text;
-  if it equals `value`, clear; otherwise no-op. Pending copied values are
-  zeroized after the clear attempt or stale-token drop.
+  encrypted vaults. GTK owns the `gdk::Clipboard.read_text` / `set_text`
+  calls; the only-if-unchanged decision routes through
+  `paladin_core::policy::clipboard_clear::ClipboardClearPolicy`
+  (`schedule` at copy time, `should_clear` on wake against the current
+  clipboard text). Stale tokens are dropped first by the policy; pending
+  copied values are zeroized after the clear attempt or stale-token drop.
 
 ## Icons (per §7)
 
@@ -689,25 +709,33 @@ The GUI itself is hard to test without a display server. Tests are split:
 - **Pure-logic unit tests** (no display): icon resolution **fallback
   decision** (`None`/empty slug → placeholder; failed lookup → placeholder;
   the actual `gtk::IconTheme` lookup is exercised by the smoke test),
-  search filtering through `paladin_core::account_matches_search`,
+  search filtering through `paladin_core::account_matches_search` plus
+  post-filter selection through `paladin_core::select_after_filter`,
   startup-error routing for default-path / inspect / open failures,
-  auto-lock state machine, clipboard "clear if unchanged"
-  decision logic plus pending-value zeroization, HOTP reveal window timing
-  via `paladin_core::HOTP_REVEAL_SECS` + counter labels, staged-code
+  auto-lock plumbing (idle-event source → `IdlePolicy` arm/disarm/expiry
+  outcome) and clipboard plumbing (capture → `ClipboardClearPolicy::schedule`,
+  wake → `should_clear` over `gdk::Clipboard` text) plus pending-value
+  zeroization, HOTP reveal window timing via
+  `paladin_core::policy::hotp_reveal::deadline` (uses
+  `paladin_core::HOTP_REVEAL_SECS`) + counter labels, staged-code
   publication on success / `save_durability_unconfirmed`, and staged-code
   zeroization with prior reveal-state retention on pre-commit / other
   failures,
   secret-field clearing/redaction invariants, Add path-switch clearing for
   hidden secret-bearing fields and pending duplicate state, QR RGBA
   byte-length/stride preparation plus `QR_RGBA_MAX_BYTES` rejection before
-  allocation / download,
+  allocation / download, icon-hint token parsing through
+  `paladin_core::parse_icon_hint_token`,
   init dialog logic (plaintext vs encrypted routing, both-empty
   plaintext selection, twice-confirm match / one-empty mismatch handling,
-  plaintext-warning gate,
-  `vault_exists` triggering the destructive-confirmation gate that
-  routes through `create_force` (with cancellation leaving the
-  existing vault intact and zeroizing the pending `VaultInit`), and
-  `unsafe_permissions` routing back to inline errors),
+  plaintext-warning gate, routing of
+  `paladin_core::classify_init_precheck` results
+  (`InitPrecheck::Clear` → normal create, `Existing` → destructive gate,
+  `Propagate` → inline error), `vault_exists` (race after a `Clear`
+  precheck) triggering the destructive-confirmation gate that routes
+  through `create_force` (with cancellation leaving the existing vault
+  intact and zeroizing the pending `VaultInit`), and `unsafe_permissions`
+  routing back to inline errors),
   rename dialog logic (label validation, always-call-`mutate_and_save`
   behavior matching the CLI when the new label equals the current one,
   prior-label restore on `save_not_committed`),
@@ -726,9 +754,10 @@ The GUI itself is hard to test without a display server. Tests are split:
   plaintext-storage warning gate, sub-flow switch clearing,
   secret-buffer zeroize on submit / cancel / close), settings logic
   (live-apply path through
-  `Vault::mutate_and_save`, spinner clamping at the §5 bounds
-  (`30 <= auto_lock.timeout_secs <= 86_400`,
-  `5 <= clipboard.clear_secs <= 600`),
+  `Vault::mutate_and_save`, spinner clamping at
+  `paladin_core::AUTO_LOCK_SECS_MIN..=paladin_core::AUTO_LOCK_SECS_MAX`
+  and
+  `paladin_core::CLIPBOARD_CLEAR_SECS_MIN..=paladin_core::CLIPBOARD_CLEAR_SECS_MAX`,
   500 ms debounce of repeated spinner changes, and pre-commit
   rollback that reverts the visible widget value on
   `save_not_committed`), in-flight effect ownership (only one
@@ -832,11 +861,18 @@ never tries to recreate the Adwaita palette.
 
 **No `tokio`.** GTK's main loop is the executor; long work runs on
 `gio::spawn_blocking` with results delivered back to the main thread via
-Relm4 messages. This relies on `paladin_core::Vault` and
-`paladin_core::Store` being `Send` so they can move across thread
-boundaries during encrypted `open` / `create` / `create_force` and any
-save-bearing dialog operation; the core plan documents `Send` as part
-of their public contract.
+Relm4 messages. The `gio::spawn_blocking` worker contract types
+(including `Vault`, `Store`, `Account`, `AccountId`, `AccountSummary`,
+`AccountKindSummary`, `Algorithm`, `Code`, `ValidatedAccount`,
+`ValidationWarning`, `ImportReport`, `ImportWarning`, `ImportConflict`,
+`ImportFormat`, `ImportOptions`, `EncryptionOptions`, `Argon2Params`,
+`VaultLock`, `VaultInit`, `VaultStatus`, `VaultSettings`, `SettingKey`,
+`SettingPatch`, `AccountKindInput`, `IconHintInput`, `AccountInput`,
+`AccountQuery`, `InitPrecheck`, and `PaladinError`) are all part of the
+§4.7 worker-boundary `Send` set that Phase J of the core plan asserts
+via CI, so the GUI can move them across thread boundaries during
+encrypted `open` / `create` / `create_force` and any save-bearing
+dialog operation without re-asserting `Send` itself.
 
 ## libadwaita usage
 

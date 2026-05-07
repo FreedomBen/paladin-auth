@@ -32,7 +32,7 @@ crates/paladin-tui/
 │   │   ├── state.rs       # AppState variants + vault/store ownership
 │   │   ├── event.rs       # AppEvent enum (Input, Tick, EffectResult, ClipboardClear)
 │   │   ├── input.rs       # crossterm event → AppEvent translation
-│   │   ├── ticker.rs      # 250ms tick thread, sleeps, mpsc producer
+│   │   ├── ticker.rs      # `paladin_core::TICK_INTERVAL_MS` tick thread, sleeps, mpsc producer
 │   │   └── reducer.rs     # pure (state, event) → (state, side_effects)
 │   ├── ui/
 │   │   ├── mod.rs         # ratatui draw entry; routes to screen
@@ -48,9 +48,9 @@ crates/paladin-tui/
 │   │       ├── passphrase.rs   # set/change/remove sub-flows
 │   │       └── settings.rs     # auto_lock + clipboard toggles + timeouts
 │   ├── search.rs          # incremental filter over Vault::iter() (§4.7 public surface, yielding &Account in insertion order) using paladin_core::account_matches_search; rows render AccountSummary projections via Account::summary()
-│   ├── clipboard.rs       # arboard wrapper + scheduled clear (only-if-unchanged)
-│   ├── auto_lock.rs       # idle-deadline logic; encrypted-only; plaintext is no-op
-│   ├── hotp_reveal.rs     # reveal window per row using paladin_core::HOTP_REVEAL_SECS
+│   ├── clipboard.rs       # arboard writer; schedule + only-if-unchanged decisions route through `paladin_core::policy::clipboard_clear::ClipboardClearPolicy`
+│   ├── auto_lock.rs       # crossterm tick plumbing; idle-deadline math routes through `paladin_core::policy::auto_lock::IdlePolicy` (encrypted-only gating + timer math owned by core)
+│   ├── hotp_reveal.rs     # reveal window per row using `paladin_core::policy::hotp_reveal::deadline(now)`
 │   ├── terminal.rs        # raw mode / alternate-screen guard; restores terminal on exit
 │   ├── theme.rs           # color palette; --no-color / NO_COLOR disables styling
 │   └── prompt.rs          # shared zeroizing passphrase-input widget reused by unlock.rs, modals/passphrase.rs, modals/import.rs (encrypted Paladin bundle), and modals/export.rs (twice-confirmed encrypted bundle)
@@ -74,15 +74,16 @@ long-lived producer threads plus effect-owned clipboard timer threads:
 
 - **Input thread** — `crossterm::event::read()` in a loop, maps to
   `AppEvent::Input(KeyEvent | ResizeEvent | …)`.
-- **Ticker thread** — sleeps 250 ms, emits
+- **Ticker thread** — sleeps `paladin_core::TICK_INTERVAL_MS`, emits
   `AppEvent::Tick { wall_clock, monotonic }`; TOTP generation uses
   `SystemTime` (`wall_clock`), while UI deadlines such as HOTP reveal
   expiry use monotonic `Instant` values.
 - **Timer side effects** — clipboard auto-clear effects spawn one-shot
   timer threads that later send
   `AppEvent::ClipboardClear { token, value }`. Auto-lock does not spawn
-  timer threads; the reducer stores an `idle_deadline: Option<Instant>` and
-  checks it on each `Tick`.
+  timer threads; the reducer stores an `idle_deadline: Option<Instant>`
+  obtained from `paladin_core::policy::auto_lock::IdlePolicy::next_deadline`
+  and checks expiry via `IdlePolicy::is_expired` on each `Tick`.
 
 The reducer is a pure function over `(state, event) → (state, Vec<Effect>)`
 so it is unit-testable without a terminal. Effects are executed by `app::run`,
@@ -158,18 +159,20 @@ header per §4.4, so opening is unaffected.
 └──────────────────────────────────────────────────────────┘
 ```
 
-- TOTP rows render a live `Gauge` countdown; re-rendered on every 250 ms tick.
+- TOTP rows render a live `Gauge` countdown; re-rendered on every `paladin_core::TICK_INTERVAL_MS` tick.
 - HOTP rows: when hidden, the code area shows the prompt
   `▸ press n to advance` and the row's `(#counter)` is shown in the
   label-suffix slot using the stored next counter (matching DESIGN §6).
   Pressing `n` calls
   `Vault::hotp_advance` (advances counter and saves) and reveals the
   generated code in place of the prompt for the shared
-  `paladin_core::HOTP_REVEAL_SECS` window (120 seconds), after
+  `paladin_core::HOTP_REVEAL_SECS` window (120 seconds); the row's
+  monotonic expiry is computed via
+  `paladin_core::policy::hotp_reveal::deadline(now)`, after
   which the row returns to the hidden state. Reveal expiry is detected
-  on the next 250 ms `Tick` event (no separate timer thread or
-  `AppEvent` variant; the reveal carries a monotonic deadline checked
-  against the tick's `Instant`). `n` always advances and
+  on the next `paladin_core::TICK_INTERVAL_MS` `Tick` event (no separate
+  timer thread or `AppEvent` variant; the reveal's `deadline(now)` value
+  is checked against the tick's `Instant`). `n` always advances and
   re-reveals (it's the "give me the next code" key) — pressing `n` again
   during an open reveal advances to the next counter rather than
   no-op'ing. During the reveal window, the label-suffix counter switches
@@ -236,9 +239,10 @@ character input (passphrase) and `Enter` (submit), and quits on `Esc` or
 `Ctrl-C` (`q` is a valid passphrase character, so it is not bound to quit
 there).
 
-When the filter changes, preserve the selected account by `AccountId` if it
-is still present; otherwise select the first matching row. Empty result sets
-render an empty-state row and have no selection. With no selection, `Enter`,
+When the filter changes, the new selection is computed via
+`paladin_core::select_after_filter(prev, &filtered)` (preserve by `AccountId`
+if still present, otherwise the first match, `None` if empty). Empty result
+sets render an empty-state row and have no selection. With no selection, `Enter`,
 `n`, `r`, and `R` produce a status-line "no account selected" error and no effect;
 Add / Import / Export / Passphrase / Settings remain available from list
 focus.
@@ -303,7 +307,9 @@ dismiss deliberately.
   defaults follow the CLI manual-add defaults in DESIGN §5 (TOTP, SHA1,
   6 digits, 30 s period, HOTP counter 0, icon-hint defaulted from the
   issuer per §4.1). Each submit captures one `submit_time` used for
-  account validation/import timestamps. The modes map to
+  account validation/import timestamps. The icon-hint field accepts a
+  free-form token parsed by `paladin_core::parse_icon_hint_token` (shared
+  with the CLI add prompts); the resulting `IconHintInput` variants are
   `IconHintInput::Default`, `IconHintInput::Clear`, and
   `IconHintInput::Slug`. Manual entries route through
   `paladin_core::validate_manual(input, submit_time)`. URI mode is a
@@ -450,9 +456,9 @@ dismiss deliberately.
   as the core left it.
 - **Settings** — toggles for `auto_lock.enabled` and
   `clipboard.clear_enabled`, spinners for `auto_lock.timeout_secs` and
-  `clipboard.clear_secs`. The spinners clamp to the §5 bounds
-  (`30 <= auto_lock.timeout_secs <= 86_400`,
-  `5 <= clipboard.clear_secs <= 600`). The
+  `clipboard.clear_secs`. The spinners clamp to the shared core bounds
+  (`paladin_core::AUTO_LOCK_SECS_MIN..=paladin_core::AUTO_LOCK_SECS_MAX`,
+  `paladin_core::CLIPBOARD_CLEAR_SECS_MIN..=paladin_core::CLIPBOARD_CLEAR_SECS_MAX`). The
   modal accumulates pending edits in modal-local state and only commits
   on Confirm: pending values are applied through the same setters
   (`set_auto_lock_*`, `set_clipboard_clear_*`) inside a single
@@ -492,15 +498,18 @@ the workspace `cargo xtask man` target appends into the man page
   `auto_lock.timeout_secs` of no input, retaining only the resolved vault path
   and pending clipboard-clear state needed for unlock / scheduled clear, and
   shows the unlock screen for encrypted vaults.
-- **Plaintext vaults are a no-op** — there's no credential to require, so
-  no idle deadline is set. The setting is still persisted so it takes
-  effect if the vault is later encrypted via `passphrase set`.
-- Idle is reset by any `AppEvent::Input`. The reducer owns an
-  `idle_deadline: Option<Instant>` derived from the last input time plus
-  `auto_lock.timeout_secs`; on each 250 ms `Tick`, an expired deadline
-  transitions to `Locked`. Plaintext vaults, disabled auto-lock, and encrypted
-  vaults that have just locked keep the deadline as `None`, so no background
-  auto-lock timer threads or stale auto-lock tokens can accumulate.
+- Encrypted-only gating, idle-deadline math, and expiry checking route
+  through `paladin_core::policy::auto_lock::IdlePolicy` (`should_arm`,
+  `next_deadline`, `is_expired`). Plaintext vaults are a no-op via
+  `should_arm`; the setting is still persisted so it takes effect if the
+  vault is later encrypted via `passphrase set`.
+- Idle is reset by any `AppEvent::Input`. The reducer owns the
+  `idle_deadline: Option<Instant>` slot, the input event source, and the
+  `Locked` transition; on input it refreshes the slot with
+  `IdlePolicy::next_deadline(now, settings)`, and on each
+  `paladin_core::TICK_INTERVAL_MS` `Tick` it asks
+  `IdlePolicy::is_expired(deadline, now)` before transitioning. No
+  background auto-lock timer threads or stale auto-lock tokens accumulate.
 - Locking discards all secret-bearing UI state alongside the vault except
   pending clipboard auto-clear state: any open HOTP reveal window is
   closed and its in-memory code zeroized, the search query is cleared,
@@ -515,11 +524,16 @@ the workspace `cargo xtask man` target appends into the man page
 
 - **Off by default.** When `clipboard.clear_enabled = true`, copying a code
   schedules a wipe after `clipboard.clear_secs`.
-- The wipe **only fires if the clipboard still holds the value we wrote** —
-  we never stomp something the user copied afterwards. Implementation: at
-  copy time, capture `(token, value)` and store the latest token in UI
-  state; on wake, ignore stale tokens first, then read current clipboard,
-  and if it equals `value`, write empty; otherwise no-op.
+- Schedule decision, monotonic token issuance, and the only-if-unchanged
+  byte-equality check route through
+  `paladin_core::policy::clipboard_clear::ClipboardClearPolicy`
+  (`schedule(now, settings) -> Option<(ClipboardClearToken, Instant)>` and
+  `should_clear(captured, current) -> bool`). The TUI keeps the `arboard`
+  reads/writes and the timer that wakes the policy decision: at copy time
+  it stores the latest `ClipboardClearToken` plus the captured bytes in UI
+  state; on wake, it ignores stale tokens, reads the current clipboard,
+  asks `ClipboardClearPolicy::should_clear`, and writes empty when the
+  policy returns `true`.
 
 ## Effect errors
 
@@ -638,15 +652,19 @@ captured with `insta` golden snapshots using `ratatui::backend::TestBackend`.
   `paladin_core::account_matches_search` (using the same base match key as
   CLI query resolution in DESIGN §5; empty issuer is allowed and the colon is
   still present in the match key), with no Unicode normalization; insertion
-  order preserved among matches. Filter changes
-  preserve the selected `AccountId` when it remains visible, otherwise
-  select the first match; empty result sets have no selection and action
-  keys that require a selected row surface the "no account selected"
-  status-line error. The `id:` prefix form is CLI-only and is **not**
+  order preserved among matches. Filter changes route through
+  `paladin_core::select_after_filter` (preserve the selected `AccountId`
+  when it remains visible, otherwise select the first match, `None` when
+  empty); empty result sets have no selection and action keys that
+  require a selected row surface the "no account selected" status-line
+  error. The `id:` prefix form is CLI-only and is **not**
   honored by the TUI search.
-- **Auto-lock**: `idle_deadline` is set on `Unlocked` + `enabled` +
-  encrypted; resets on input; transitions to `Locked` when a 250 ms
-  `Tick` observes expiry; **no-op** for plaintext vaults (deadline stays
+- **Auto-lock**: `idle_deadline` is set via
+  `paladin_core::policy::auto_lock::IdlePolicy::next_deadline` on
+  `Unlocked` + `enabled` + encrypted (i.e. `IdlePolicy::should_arm` is
+  `true`); resets on input; transitions to `Locked` when a
+  `paladin_core::TICK_INTERVAL_MS` `Tick` observes
+  `IdlePolicy::is_expired`; **no-op** for plaintext vaults (deadline stays
   `None`). Setting persists across saves. Locking discards the
   `Vault` / `Store`, open HOTP
   reveal windows, the search query, and any modal while retaining the
@@ -728,8 +746,9 @@ captured with `insta` golden snapshots using `ratatui::backend::TestBackend`.
   test asserts that the inline error surfaces and that the TUI's
   visible vault-mode flag (sourced from `Vault::is_encrypted()`) tracks
   the transition outcome without inspecting private key/cache material.
-- **HOTP reveal window**: reveal closes after
-  `paladin_core::HOTP_REVEAL_SECS` measured on a monotonic clock;
+- **HOTP reveal window**: reveal closes after the deadline returned by
+  `paladin_core::policy::hotp_reveal::deadline(now)`
+  (`paladin_core::HOTP_REVEAL_SECS` measured on a monotonic clock);
   `n` during an open
   reveal advances again (does not no-op); hidden rows show the stored next
   counter, while revealed rows show the counter that produced the visible
@@ -884,8 +903,11 @@ is never expected to be scripted.
   (including `format_unsafe_permissions` rendering).
 - [ ] Implement terminal raw-mode / alternate-screen lifecycle with guarded
   restoration on exit, error, `Ctrl-C`, and panic unwind.
-- [ ] Implement reducer, event producers, effect execution, clipboard timer
-  tokens, and auto-lock idle deadlines.
+- [ ] Implement reducer, event producers, effect execution, clipboard
+  timer tokens (issued by
+  `paladin_core::policy::clipboard_clear::ClipboardClearPolicy::schedule`),
+  and auto-lock idle deadlines (computed by
+  `paladin_core::policy::auto_lock::IdlePolicy::next_deadline`).
 - [ ] Implement list layout from `AccountSummary` projections, search,
   TOTP gauges, HOTP reveal/copy behavior,
   HOTP `Code.counter_used` labels, and status-line errors.
@@ -904,8 +926,9 @@ is never expected to be scripted.
   plaintext-export warning from
   `paladin_core::format_plaintext_export_warning()` so wording stays
   identical to the CLI / GUI; gate `set` vs `change` / `remove`
-  sub-flows on `Vault::is_encrypted()` and use the same getter to
-  maintain or clear the auto-lock idle deadline.
+  sub-flows on `Vault::is_encrypted()` and feed the same getter into
+  `paladin_core::policy::auto_lock::IdlePolicy::should_arm` to maintain
+  or clear the auto-lock idle deadline.
 - [ ] Implement the read-only Help overlay (`?` from list focus,
   `Esc` to close); render its content from the same keybindings table
   used to generate the man page so the two stay in sync; suppress
@@ -914,8 +937,9 @@ is never expected to be scripted.
   filtering so the TUI shares issuer/label matching semantics with the CLI
   and GUI.
 - [ ] Route export writes through `paladin_core::write_secret_file_atomic`.
-- [ ] Implement clipboard wrapper, QR image import from clipboard bytes, and
-  only-if-unchanged auto-clear.
+- [ ] Implement clipboard wrapper (arboard reads/writes), QR image
+  import from clipboard bytes, and only-if-unchanged auto-clear via
+  `paladin_core::policy::clipboard_clear::ClipboardClearPolicy::should_clear`.
 - [ ] Add reducer, search, auto-lock, clipboard, HOTP reveal, terminal
   lifecycle, sensitive-buffer, and snapshot coverage.
 - [ ] Add a `paladin-tui/test-hooks` cargo feature that is **off by
