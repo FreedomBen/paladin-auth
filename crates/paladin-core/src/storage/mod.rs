@@ -11,9 +11,13 @@
 //
 // Phase E.2 layers the §4.3 permissions enforcement on top
 // (`unsafe_permissions` with `vault_dir` / `vault_file` /
-// `backup_file` discriminator); E.3 adds `create_force` semantics and
-// symlink rejection; Phase F adds the encrypted variants of
-// `VaultLock` / `VaultInit` and the AEAD save/open paths.
+// `backup_file` discriminator); E.3 adds the `init --force` staged
+// clobber (`Store::create_force`), symbolic-link rejection on the
+// three storage paths, and propagation of `cleanup_temp_file` errors
+// when a leftover `vault.bin.tmp` / `vault.bin.bak.tmp` is something
+// `fs::remove_file` cannot handle (e.g. a directory). Phase F adds the
+// encrypted variants of `VaultLock` / `VaultInit` and the AEAD
+// save/open paths.
 //
 // Public surface from this module (re-exported at the crate root via
 // `lib.rs`):
@@ -230,15 +234,39 @@ impl Store {
     /// Create a brand-new vault at `path`.
     ///
     /// Returns `vault_exists` when a primary file is already present
-    /// (use `create_force` for the §5 `init --force` clobber path —
-    /// landing in Phase E.3). The actual file is not written until
-    /// the caller invokes `Vault::save`.
+    /// (use `create_force` for the §5 `init --force` clobber path).
+    /// The actual file is not written until the caller invokes
+    /// `Vault::save`.
     // Same rationale as `open`: encrypted `VaultInit` (Phase F) carries
     // a `SecretString` passphrase that we want to move, not clone.
     #[allow(clippy::needless_pass_by_value)]
     pub fn create(path: &Path, init: VaultInit) -> Result<(crate::Vault, Self)> {
         match init {
             VaultInit::Plaintext => create_plaintext(path),
+        }
+    }
+
+    /// `init --force` staged clobber per DESIGN.md §5.
+    ///
+    /// Stages the new vault to `vault.bin.tmp` and `fsync`s it before
+    /// touching any existing primary. If staging succeeds and a
+    /// primary already exists, the primary is renamed verbatim to
+    /// `vault.bin.bak` (overwriting any prior backup), then the staged
+    /// new primary is renamed into place and the parent directory is
+    /// `fsync`ed. With no existing primary at `path`, behaves
+    /// identically to `create` followed by an immediate save.
+    ///
+    /// Pre-rename failures leave the prior primary recoverable:
+    /// after backup rotation but before primary rename surfaces
+    /// `save_not_committed` with `backup_path` set; post-commit
+    /// `fsync` failure surfaces `save_durability_unconfirmed`.
+    /// Symbolic-link rejection on the existing `vault.bin` happens
+    /// before any staged write so a hostile symlink cannot capture the
+    /// rename target.
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn create_force(path: &Path, init: VaultInit) -> Result<(crate::Vault, Self)> {
+        match init {
+            VaultInit::Plaintext => create_force_plaintext(path),
         }
     }
 
@@ -351,10 +379,13 @@ fn open_plaintext(path: &Path) -> Result<(crate::Vault, Store)> {
     let payload = decode_vault_payload(payload_bytes)?;
 
     // §4.3: any leftover `.tmp` / `.bak.tmp` from a prior partial save
-    // is unlinked by the next successful open. Best effort — failures
-    // here are not surfaced because the open itself has already
-    // succeeded and the next save will overwrite them anyway.
-    cleanup_leftover_temps(path);
+    // is unlinked by the next successful open. Best-effort for the
+    // happy paths (regular file or symlink → unlink), but a leftover
+    // that is a directory or that errors on stat surfaces
+    // `io_error { operation: "cleanup_temp_file" }` so a misconfigured
+    // sibling cannot silently linger.
+    cleanup_leftover_temp(&append_suffix(path, ".tmp"))?;
+    cleanup_leftover_temp(&append_suffix(path, ".bak.tmp"))?;
 
     Ok((
         crate::Vault::from_payload(payload),
@@ -487,12 +518,155 @@ fn append_suffix(path: &Path, suffix: &str) -> PathBuf {
     PathBuf::from(s)
 }
 
-/// Best-effort unlink of leftover save tempfiles per §4.3. Errors are
-/// ignored: a stale tmp that we cannot remove will simply be
-/// overwritten by the next save.
-fn cleanup_leftover_temps(path: &Path) {
-    let _ = fs::remove_file(append_suffix(path, ".tmp"));
-    let _ = fs::remove_file(append_suffix(path, ".bak.tmp"));
+/// Unlink a single leftover tempfile per §4.3.
+///
+/// * Regular file or symbolic link → unlink (`fs::remove_file` removes
+///   the symlink itself, not its target — confirmed by the
+///   integration test `open_cleanup_unlinks_leftover_symlink_*`).
+/// * Directory → surfaces `io_error { operation: "cleanup_temp_file" }`
+///   rather than silently leaving it (and `remove_file` would have
+///   errored anyway with `EISDIR`); the operator must investigate
+///   before reopening.
+/// * Absent → success.
+fn cleanup_leftover_temp(path: &Path) -> Result<()> {
+    let meta = match fs::symlink_metadata(path) {
+        Ok(m) => m,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => {
+            return Err(PaladinError::IoError {
+                operation: "cleanup_temp_file",
+                source: err,
+            });
+        }
+    };
+    if meta.file_type().is_dir() {
+        return Err(PaladinError::IoError {
+            operation: "cleanup_temp_file",
+            source: io::Error::other("leftover temp file is a directory"),
+        });
+    }
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(PaladinError::IoError {
+            operation: "cleanup_temp_file",
+            source: err,
+        }),
+    }
+}
+
+fn create_force_plaintext(path: &Path) -> Result<(crate::Vault, Store)> {
+    // §4.3: parent dir checks (symlink + perms) fire before we ever
+    // touch the file — same gate as `create`.
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            enforce_dir_perms(parent)?;
+        }
+    }
+    // Symlink rejection on the existing primary, if any. We deliberately
+    // do *not* enforce the §4.3 perms check on the existing primary
+    // here: `create_force` is going to clobber the file regardless of
+    // its current mode, and the user already said `--force`. The
+    // symlink check is the load-bearing gate — without it a hostile
+    // symlink at `vault.bin` could capture the rename target.
+    match fs::symlink_metadata(path) {
+        Ok(meta) => {
+            if meta.file_type().is_symlink() {
+                return Err(PaladinError::IoError {
+                    operation: "vault_file_is_symlink",
+                    source: io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "vault file is a symbolic link",
+                    ),
+                });
+            }
+        }
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+        Err(err) => {
+            return Err(PaladinError::IoError {
+                operation: "stat_vault_file",
+                source: err,
+            });
+        }
+    }
+
+    // The post-clobber state is an empty plaintext vault. Encode it now
+    // and run the §5 staged-clobber pipeline.
+    let vault = crate::Vault::empty();
+    let payload = vault.snapshot_payload();
+    save_plaintext_clobber(path, &payload)?;
+
+    Ok((
+        vault,
+        Store {
+            path: path.to_path_buf(),
+            mode: VaultMode::Plaintext,
+        },
+    ))
+}
+
+/// §5 `init --force` clobber pipeline.
+///
+/// Differs from the regular save path: there is no `.bak.tmp` step —
+/// the existing primary is renamed verbatim to `.bak` (overwriting any
+/// prior backup) only after the new primary has been staged and
+/// `fsync`ed. Failure between backup rotation and the primary commit
+/// leaves the previous vault recoverable at `vault.bin.bak`.
+fn save_plaintext_clobber(path: &Path, payload: &VaultPayload) -> Result<()> {
+    let parent = path.parent().ok_or_else(|| PaladinError::IoError {
+        operation: "resolve_vault_parent",
+        source: io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "vault path has no parent directory",
+        ),
+    })?;
+
+    let payload_bytes = encode_vault_payload(payload)?;
+    let mut on_disk = Vec::with_capacity(PLAINTEXT_HEADER_LEN + payload_bytes.len());
+    header::write_plaintext_header(&mut on_disk);
+    on_disk.extend_from_slice(&payload_bytes);
+
+    let primary_tmp = append_suffix(path, ".tmp");
+    let bak_path = append_suffix(path, ".bak");
+
+    // Step 1: stage new primary + fsync.
+    if let Err(err) = stage_temp_file(&primary_tmp, &on_disk) {
+        let _ = fs::remove_file(&primary_tmp);
+        return Err(err);
+    }
+
+    // Step 2: rotate the existing primary verbatim → .bak (overwriting
+    // any existing backup) only if a primary actually exists.
+    let primary_existed = path.exists();
+    if primary_existed {
+        if let Err(err) = fs::rename(path, &bak_path) {
+            let _ = fs::remove_file(&primary_tmp);
+            return Err(PaladinError::IoError {
+                operation: "rename_backup",
+                source: err,
+            });
+        }
+    }
+
+    // Step 3: commit point — rename staged primary into place.
+    if fs::rename(&primary_tmp, path).is_err() {
+        let _ = fs::remove_file(&primary_tmp);
+        return Err(PaladinError::SaveNotCommitted {
+            committed: false,
+            backup_path: if primary_existed {
+                Some(bak_path)
+            } else {
+                None
+            },
+        });
+    }
+
+    // Step 4: durability fence.
+    if fsync_dir(parent).is_err() {
+        return Err(PaladinError::SaveDurabilityUnconfirmed);
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

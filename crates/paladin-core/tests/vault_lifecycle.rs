@@ -8,6 +8,7 @@
 
 use std::fs;
 use std::io::Write;
+use std::os::unix::fs as unix_fs;
 use std::os::unix::fs::PermissionsExt;
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -457,4 +458,309 @@ fn saved_primary_file_has_0600_permissions() {
     vault.save(&store).unwrap();
     let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode, 0o600, "primary file must be written 0600");
+}
+
+// ---------- §4.3 symbolic-link rejection (defense in depth) ----------
+
+#[test]
+fn open_rejects_when_parent_directory_is_symlink() {
+    // Path layout:
+    //   real_dir/vault.bin  (the actual file)
+    //   link_root/link → real_dir
+    // Open(link_root/link/vault.bin) — parent ("link_root/link") is a
+    // symlink. §4.3 rejects with `vault_dir_is_symlink` before reading.
+    let real_dir = vault_test_dir();
+    let link_root = vault_test_dir();
+    let link_path = link_root.path().join("link");
+    unix_fs::symlink(real_dir.path(), &link_path).unwrap();
+
+    let real_vault = real_dir.path().join("vault.bin");
+    fs::write(&real_vault, plaintext_header_bytes()).unwrap();
+    fs::set_permissions(&real_vault, fs::Permissions::from_mode(0o600)).unwrap();
+
+    let opened_path = link_path.join("vault.bin");
+    let err = Store::open(&opened_path, VaultLock::Plaintext).unwrap_err();
+    match err {
+        PaladinError::IoError { operation, .. } => assert_eq!(operation, "vault_dir_is_symlink"),
+        other => panic!("expected vault_dir_is_symlink io_error, got {other:?}"),
+    }
+}
+
+#[test]
+fn open_rejects_when_primary_file_is_symlink() {
+    let dir = vault_test_dir();
+    let real_target = dir.path().join("real_vault.bin");
+    fs::write(&real_target, plaintext_header_bytes()).unwrap();
+    fs::set_permissions(&real_target, fs::Permissions::from_mode(0o600)).unwrap();
+
+    let path = dir.path().join("vault.bin");
+    unix_fs::symlink(&real_target, &path).unwrap();
+
+    let err = Store::open(&path, VaultLock::Plaintext).unwrap_err();
+    match err {
+        PaladinError::IoError { operation, .. } => assert_eq!(operation, "vault_file_is_symlink"),
+        other => panic!("expected vault_file_is_symlink io_error, got {other:?}"),
+    }
+}
+
+#[test]
+fn open_rejects_when_backup_file_is_symlink() {
+    let dir = vault_test_dir();
+    let path = dir.path().join("vault.bin");
+    let (vault, store) = Store::create(&path, VaultInit::Plaintext).unwrap();
+    vault.save(&store).unwrap();
+    drop(vault);
+    drop(store);
+
+    // Plant a symlink at vault.bin.bak pointing to a sibling file.
+    let real_bak_target = dir.path().join("real_bak_target.bin");
+    fs::write(&real_bak_target, plaintext_header_bytes()).unwrap();
+    fs::set_permissions(&real_bak_target, fs::Permissions::from_mode(0o600)).unwrap();
+    let bak = dir.path().join("vault.bin.bak");
+    unix_fs::symlink(&real_bak_target, &bak).unwrap();
+
+    let err = Store::open(&path, VaultLock::Plaintext).unwrap_err();
+    match err {
+        PaladinError::IoError { operation, .. } => assert_eq!(operation, "backup_file_is_symlink"),
+        other => panic!("expected backup_file_is_symlink io_error, got {other:?}"),
+    }
+}
+
+#[test]
+fn create_rejects_when_parent_directory_is_symlink() {
+    let real_dir = vault_test_dir();
+    let link_root = vault_test_dir();
+    let link_path = link_root.path().join("link");
+    unix_fs::symlink(real_dir.path(), &link_path).unwrap();
+
+    let path = link_path.join("vault.bin");
+    let err = Store::create(&path, VaultInit::Plaintext).unwrap_err();
+    match err {
+        PaladinError::IoError { operation, .. } => assert_eq!(operation, "vault_dir_is_symlink"),
+        other => panic!("expected vault_dir_is_symlink io_error, got {other:?}"),
+    }
+}
+
+#[test]
+fn create_force_rejects_when_existing_primary_is_symlink() {
+    // A hostile symlink at vault.bin must not capture the rename target
+    // during the §5 staged-clobber sequence. The symlink is rejected
+    // before any read, write, or staged tempfile.
+    let dir = vault_test_dir();
+    let victim = dir.path().join("victim.bin");
+    fs::write(&victim, b"victim contents").unwrap();
+    fs::set_permissions(&victim, fs::Permissions::from_mode(0o600)).unwrap();
+
+    let path = dir.path().join("vault.bin");
+    unix_fs::symlink(&victim, &path).unwrap();
+
+    let err = Store::create_force(&path, VaultInit::Plaintext).unwrap_err();
+    match err {
+        PaladinError::IoError { operation, .. } => assert_eq!(operation, "vault_file_is_symlink"),
+        other => panic!("expected vault_file_is_symlink io_error, got {other:?}"),
+    }
+
+    // The symlink itself should still be in place — we rejected before
+    // writing — and the victim contents must be untouched.
+    assert!(fs::symlink_metadata(&path)
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    assert_eq!(fs::read(&victim).unwrap(), b"victim contents");
+    assert!(!dir.path().join("vault.bin.tmp").exists());
+    assert!(!dir.path().join("vault.bin.bak").exists());
+}
+
+#[test]
+fn symlink_rejection_fires_before_perms_check() {
+    // The symlink itself has the typical lrwxrwxrwx (0o777) mode, so
+    // the perms check would also reject it. But the symlink rejection
+    // must surface as the more specific `vault_dir_is_symlink` error,
+    // not as `unsafe_permissions { actual_mode: "0777" }`.
+    //
+    // The link target is a clean 0700 directory — defense in depth says
+    // we still reject the symlink even when the resolved dir would pass.
+    let real_dir = vault_test_dir();
+    fs::set_permissions(real_dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let link_root = vault_test_dir();
+    let link_path = link_root.path().join("link");
+    unix_fs::symlink(real_dir.path(), &link_path).unwrap();
+
+    let real_vault = real_dir.path().join("vault.bin");
+    fs::write(&real_vault, plaintext_header_bytes()).unwrap();
+    fs::set_permissions(&real_vault, fs::Permissions::from_mode(0o600)).unwrap();
+
+    let opened_path = link_path.join("vault.bin");
+    let err = Store::open(&opened_path, VaultLock::Plaintext).unwrap_err();
+    match err {
+        PaladinError::IoError { operation, .. } => assert_eq!(operation, "vault_dir_is_symlink"),
+        PaladinError::UnsafePermissions { .. } => {
+            panic!("symlink check must win over the perms check")
+        }
+        other => panic!("expected vault_dir_is_symlink io_error, got {other:?}"),
+    }
+}
+
+// ---------- §5 `init --force` clobber semantics (`create_force`) ----------
+
+#[test]
+fn create_force_with_no_existing_primary_writes_fresh_vault() {
+    let dir = vault_test_dir();
+    let path = dir.path().join("vault.bin");
+    let (vault, store) = Store::create_force(&path, VaultInit::Plaintext).unwrap();
+    // Per §4.7, create_force itself stages and commits the new vault.
+    assert!(path.exists(), "create_force must write the primary");
+    assert!(
+        !dir.path().join("vault.bin.bak").exists(),
+        "no prior primary → no rotation → no .bak"
+    );
+    assert!(!dir.path().join("vault.bin.tmp").exists());
+    drop(vault);
+    drop(store);
+
+    let (reopened, _) = Store::open(&path, VaultLock::Plaintext).unwrap();
+    assert!(reopened.accounts().is_empty());
+}
+
+#[test]
+fn create_force_rotates_existing_primary_to_bak_verbatim() {
+    let dir = vault_test_dir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = Store::create(&path, VaultInit::Plaintext).unwrap();
+    vault.add(make_account("alice", None));
+    vault.add(make_account("bob", None));
+    vault.save(&store).unwrap();
+    let pre_clobber_primary = fs::read(&path).unwrap();
+    drop(vault);
+    drop(store);
+
+    let (clobbered, _) = Store::create_force(&path, VaultInit::Plaintext).unwrap();
+    let bak = dir.path().join("vault.bin.bak");
+    assert!(
+        bak.exists(),
+        "create_force must rotate prior primary → .bak"
+    );
+    assert_eq!(
+        fs::read(&bak).unwrap(),
+        pre_clobber_primary,
+        ".bak must hold the pre-clobber primary verbatim (no re-encryption)"
+    );
+    // The new primary differs from the old (it's an empty vault).
+    assert_ne!(fs::read(&path).unwrap(), pre_clobber_primary);
+    assert!(clobbered.accounts().is_empty());
+    assert!(!dir.path().join("vault.bin.tmp").exists());
+    assert!(!dir.path().join("vault.bin.bak.tmp").exists());
+}
+
+#[test]
+fn create_force_overwrites_existing_backup_during_rotation() {
+    let dir = vault_test_dir();
+    let path = dir.path().join("vault.bin");
+    let (vault, store) = Store::create(&path, VaultInit::Plaintext).unwrap();
+    vault.save(&store).unwrap();
+    vault.save(&store).unwrap(); // produces a real .bak
+    drop(vault);
+    drop(store);
+
+    let bak = dir.path().join("vault.bin.bak");
+    let pre_primary = fs::read(&path).unwrap();
+    // Replace .bak with poisoned bytes so we can detect rotation.
+    fs::write(&bak, b"poisoned previous backup").unwrap();
+    fs::set_permissions(&bak, fs::Permissions::from_mode(0o600)).unwrap();
+
+    let _ = Store::create_force(&path, VaultInit::Plaintext).unwrap();
+    let new_bak = fs::read(&bak).unwrap();
+    assert_eq!(
+        new_bak, pre_primary,
+        ".bak must be the rotated pre-clobber primary, overwriting any prior backup"
+    );
+    assert_ne!(new_bak, b"poisoned previous backup".to_vec());
+}
+
+#[test]
+fn create_force_rejects_when_parent_directory_grants_group_or_other() {
+    let dir = vault_test_dir();
+    fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o755)).unwrap();
+    let path = dir.path().join("vault.bin");
+    let err = Store::create_force(&path, VaultInit::Plaintext).unwrap_err();
+    match err {
+        PaladinError::UnsafePermissions {
+            subject,
+            actual_mode,
+            expected_mode,
+            ..
+        } => {
+            assert_eq!(subject, PermissionSubject::VaultDir);
+            assert_eq!(actual_mode, "0755");
+            assert_eq!(expected_mode, "0700");
+        }
+        other => panic!("expected UnsafePermissions, got {other:?}"),
+    }
+    assert!(!path.exists(), "create_force must reject before writing");
+    assert!(!dir.path().join("vault.bin.tmp").exists());
+}
+
+#[test]
+fn create_force_writes_primary_with_0600_permissions() {
+    let dir = vault_test_dir();
+    let path = dir.path().join("vault.bin");
+    let _ = Store::create_force(&path, VaultInit::Plaintext).unwrap();
+    let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600, "create_force must write the primary 0600");
+}
+
+// ---------- §4.3 leftover-`.tmp` cleanup edge cases ----------
+
+#[test]
+fn open_cleanup_surfaces_io_error_when_leftover_tmp_is_directory() {
+    let dir = vault_test_dir();
+    let path = dir.path().join("vault.bin");
+    let (vault, store) = Store::create(&path, VaultInit::Plaintext).unwrap();
+    vault.save(&store).unwrap();
+    drop(vault);
+    drop(store);
+
+    // Plant a *directory* at vault.bin.tmp. fs::remove_file would error
+    // with EISDIR; the cleanup helper must surface this as
+    // io_error/cleanup_temp_file rather than silently swallowing it.
+    let stale_dir = dir.path().join("vault.bin.tmp");
+    fs::create_dir(&stale_dir).unwrap();
+    fs::set_permissions(&stale_dir, fs::Permissions::from_mode(0o700)).unwrap();
+
+    let err = Store::open(&path, VaultLock::Plaintext).unwrap_err();
+    match err {
+        PaladinError::IoError { operation, .. } => assert_eq!(operation, "cleanup_temp_file"),
+        other => panic!("expected cleanup_temp_file io_error, got {other:?}"),
+    }
+    // The leftover dir must still be there — the cleanup didn't recurse.
+    assert!(stale_dir.exists());
+    assert!(stale_dir.is_dir());
+}
+
+#[test]
+fn open_cleanup_unlinks_leftover_symlink_without_following_target() {
+    let dir = vault_test_dir();
+    let path = dir.path().join("vault.bin");
+    let (vault, store) = Store::create(&path, VaultInit::Plaintext).unwrap();
+    vault.save(&store).unwrap();
+    drop(vault);
+    drop(store);
+
+    // Plant a symlink at vault.bin.tmp pointing to an external file we
+    // must NOT delete during cleanup.
+    let preserve_target = dir.path().join("important_target_data");
+    fs::write(&preserve_target, b"do not delete this").unwrap();
+    let stale_link = dir.path().join("vault.bin.tmp");
+    unix_fs::symlink(&preserve_target, &stale_link).unwrap();
+
+    let _ = Store::open(&path, VaultLock::Plaintext).unwrap();
+
+    // The symlink itself was unlinked.
+    assert!(
+        fs::symlink_metadata(&stale_link).is_err(),
+        "leftover symlink must be unlinked"
+    );
+    // The symlink target is preserved (we unlinked the link, not the
+    // file the link pointed to).
+    assert_eq!(fs::read(&preserve_target).unwrap(), b"do not delete this");
 }
