@@ -53,7 +53,7 @@ crates/paladin-tui/
 │   ├── hotp_reveal.rs     # reveal window per row using paladin_core::HOTP_REVEAL_SECS
 │   ├── terminal.rs        # raw mode / alternate-screen guard; restores terminal on exit
 │   ├── theme.rs           # color palette; --no-color / NO_COLOR disables styling
-│   └── prompt.rs          # shared zeroizing passphrase-input widget reused by unlock.rs and modals/passphrase.rs
+│   └── prompt.rs          # shared zeroizing passphrase-input widget reused by unlock.rs, modals/passphrase.rs, modals/import.rs (encrypted Paladin bundle), and modals/export.rs (twice-confirmed encrypted bundle)
 └── tests/
     ├── reducer_tests.rs
     ├── search_tests.rs
@@ -273,8 +273,8 @@ checkbox / toggle, `←` /
 `→` change segmented selectors, and `↑` / `↓` adjust spinners or move within
 multi-line field groups. `Ctrl-N` / `Ctrl-P` are field-navigation
 aliases only; spinner increment / decrement stays bound to `↑` /
-`↓`, and they do not advance through post-success counts panels
-(those still close on `Esc`). Text fields consume printable characters and standard
+`↓`, and they have no effect on a post-success counts panel
+(which has no fields to focus and closes only on `Esc`). Text fields consume printable characters and standard
 editing keys. `Esc` cancels the modal and discards pending modal-local edits
 unless the modal is showing a post-success counts panel, where `Esc` simply
 closes it.
@@ -322,8 +322,12 @@ dismiss deliberately.
   `paladin_core::import::qr_image_bytes(width, height, rgba_bytes, submit_time)`
   per the §4.7 signature, which takes `import_time` directly rather than
   the `ImportOptions` accepted by `import::from_file` /
-  `import::from_bytes`. The Add modal surfaces the shared
-  `QR_RGBA_MAX_BYTES` rejection (`image_too_large`) inline before decode.
+  `import::from_bytes`. Per DESIGN §4.6, the Add modal checks
+  `width * height * 4` against `paladin_core::QR_RGBA_MAX_BYTES`
+  before allocating or copying the clipboard buffer and surfaces the
+  same `validation_error` (`field: "qr_image"`,
+  `reason: "image_too_large"`) inline that the core decoder would
+  return for an oversized buffer.
   Validation warnings are rendered with
   `paladin_core::format_validation_warning()` and do not block creation:
   manual / URI additions include them in the status-line confirmation, while
@@ -424,9 +428,9 @@ dismiss deliberately.
   `passphrase set / change / remove`. The available sub-flow is gated
   by `Vault::is_encrypted()`: `set` is offered only on plaintext
   vaults (plaintext → encrypted), and `change` / `remove` are offered
-  only on encrypted vaults; opening the modal in a state with no
-  available sub-flow surfaces an inline message instead of mutation
-  controls. The `remove` sub-flow renders
+  only on encrypted vaults. The modal opens to the sub-flow set
+  available for the current vault mode; sub-flows that do not match
+  the current mode are not selectable. The `remove` sub-flow renders
   `paladin_core::format_plaintext_storage_warning()` verbatim so the
   TUI shares wording with the CLI / GUI.
   New passphrases (`set`, `change`) are prompted twice and confirmed;
@@ -628,7 +632,7 @@ captured with `insta` golden snapshots using `ratatui::backend::TestBackend`.
   the search field. Empty filtered set: every list-navigation key
   including the chords is a silent no-op. `Ctrl-N` / `Ctrl-P` inside
   modals advance / retreat focus the same as `Tab` / `Shift-Tab`,
-  do not advance through post-success counts panels, and do not
+  have no effect on a post-success counts panel, and do not
   override `↑` / `↓` spinner adjustments.
 - **Search**: case-insensitive substring through
   `paladin_core::account_matches_search` (using the same base match key as
