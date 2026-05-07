@@ -212,9 +212,13 @@ inclusion.
   the existing account in the dialog, and offer an "add anyway" confirmation
   that consumes the pending `ValidatedAccount` on the duplicate-allowed path
   (CLI parity with `--allow-duplicate`, appending a new account that shares the
-  `(secret, issuer, label)` triple). Multi-QR imports use a fixed
+  `(secret, issuer, label)` triple). Clipboard QR imports always go through
+  `paladin_core::import::qr_image_bytes` (which returns
+  `Vec<ValidatedAccount>` regardless of QR count) with a fixed
   `ImportConflict::Skip` and report imported/skipped/warning counts (parity
-  with §6). Successful manual, URI, and QR additions run the insertions inside
+  with §6); a single-QR clipboard image is the degenerate one-element case
+  of that same path. Successful manual, URI, and QR additions run the
+  insertions inside
   `Vault::mutate_and_save`.
 - `RemoveDialog` — confirmation gate before calling `Vault::remove` inside
   `Vault::mutate_and_save`. Save errors surface inline.
@@ -359,7 +363,12 @@ Behave the same as the TUI, including **opt-in default** and the
   windows, the search query, and any open dialog; a clipboard auto-clear
   timer scheduled before lock survives lock and still fires
   only-if-unchanged. For plaintext vaults the timer is never armed; the
-  setting still persists for the encrypted-later case.
+  setting still persists for the encrypted-later case. The arm/disarm
+  decision re-evaluates after any successful PassphraseDialog transition:
+  PassphraseDialog::set arms the timer when auto-lock is enabled, and
+  PassphraseDialog::remove cancels any active idle deadline. AppModel reads
+  `Vault::is_encrypted()` to make the determination so the timer state
+  tracks the on-disk vault mode without re-inspecting the file.
 - Clipboard auto-clear: mode-agnostic — runs in both plaintext and
   encrypted vaults. At copy time, capture `(token, value)`. On wake,
   ignore stale tokens first, then read the current `gdk::Clipboard` text;
@@ -510,8 +519,15 @@ switches and spin rows, are reverted on pre-commit failure:
   previous position; Rename restores the prior label; Settings restores
   the prior values), and the dialog stays open with the inline error
   so the user can retry. Durability-unconfirmed save errors leave the
-  new state in memory (matching the committed on-disk state) and are
-  shown as committed-but-uncertain, matching the core error.
+  new state in memory (matching the committed on-disk state) and surface
+  inline as a committed-but-uncertain warning the user explicitly
+  dismisses: dialog-bearing operations (Add / Remove / Rename) keep the
+  dialog open with the warning attached to the dialog body, and Settings
+  (live-apply, no dialog) attaches the warning to the changed
+  `AdwPreferencesGroup` row inside the `AdwPreferencesDialog`. The
+  dialog does not auto-close on durability-unconfirmed; only HOTP `next`
+  (above) uses an `AdwToast` instead, because the row stays usable and
+  the user already has the new code in hand.
 - Passphrase set/change/remove: pre-commit and durability-unconfirmed
   handling lives in `Vault` itself per DESIGN §4.5 — the in-memory mode/key
   reverts on `save_not_committed` and is replaced on
@@ -592,8 +608,8 @@ switches and spin rows, are reverted on pre-commit failure:
   Distributions whose stable channel ships older GTK / libadwaita
   cannot install `paladin-gtk` until their baseline rises — this is
   intentional so the GUI uses the current Adwaita widget set
-  (`AdwAlertDialog`, `AdwAboutDialog`) without a deprecated-widget
-  shim. No maintainer
+  (`AdwAlertDialog`, `AdwAboutDialog`, `AdwPreferencesDialog`) without
+  a deprecated-widget shim. No maintainer
   scripts: packages do not create or alter vaults; vault files live under
   `$XDG_DATA_HOME/paladin/` when created by `paladin init` or by the
   GUI's `InitDialog`. The §11
@@ -607,8 +623,8 @@ switches and spin rows, are reverted on pre-commit failure:
   `org.gnome.Platform//47` (and the matching SDK) — that runtime
   bundles GTK 4.16 and libadwaita 1.6, matching the
   packaging baseline so the Adwaita widget set
-  (`AdwAlertDialog`, `AdwAboutDialog`) is available identically in
-  native and Flatpak builds. No `--share=network`, and the §11.4 sandbox
+  (`AdwAlertDialog`, `AdwAboutDialog`, `AdwPreferencesDialog`) is
+  available identically in native and Flatpak builds. No `--share=network`, and the §11.4 sandbox
   permissions:
   `xdg-data/paladin:create`, `xdg-config/paladin:create`, plus the
   Wayland and X11 fallback clipboard path required for `gdk::Clipboard`
@@ -656,9 +672,11 @@ the matching GTK 4.16 floor; the GUI uses Adwaita widgets where the
 GNOME HIG calls for them (see §"libadwaita usage" below).
 
 The 1.6 floor is set so the GUI uses the current widget set
-(`AdwAlertDialog` from libadwaita 1.5; `AdwAboutDialog` from
-libadwaita 1.6) without reaching for the deprecated `AdwMessageDialog`
-/ `AdwAboutWindow`. Distributions whose stable channel ships older
+(`AdwAlertDialog` and `AdwPreferencesDialog` from libadwaita 1.5;
+`AdwAboutDialog` from libadwaita 1.6) without reaching for the
+deprecated `AdwMessageDialog` / `AdwAboutWindow` /
+`AdwPreferencesWindow` (the last of which is deprecated as of
+libadwaita 1.6). Distributions whose stable channel ships older
 GTK / libadwaita cannot install `paladin-gtk` until their baseline
 rises — accepted as a deliberate trade-off rather than maintain a
 deprecated-widget compatibility shim. Keep the build-time and
@@ -766,6 +784,10 @@ The GUI itself is hard to test without a display server. Tests are split:
   decoded via `paladin_core::parse_otpauth` and sharing the manual
   duplicate / validation paths.
 - [ ] Conditional unlock view (encrypted vaults only).
+- [ ] Header-bar `+` button and primary menu wired with the pinned
+  entries (Import…, Export…, Passphrase…, Preferences, About Paladin,
+  Quit) per §"libadwaita usage", with Unlocked / `UnlockedBusy` gating
+  applied to the mutating entries.
 - [ ] Clipboard + auto-lock parity with TUI (opt-in). Use
   `Vault::is_encrypted()` to decide whether to arm the auto-lock
   timer (encrypted only) and to track the visible vault-mode flag
@@ -827,9 +849,23 @@ back into vanilla GTK4 widgets where Adwaita is idiomatic:
   `AdwHeaderBar`, and the content slot holds the `AdwToastOverlay`
   (see below) wrapping whichever screen is active (`InitDialog` /
   `UnlockComponent` / `StartupErrorComponent` /
-  `AccountListComponent`). The header bar carries
-  the search-toggle button and a primary menu (`gtk::MenuButton`
-  driven by `gio::Menu`). No custom title-bar drawing.
+  `AccountListComponent`). The header bar carries, at the start of
+  the right-hand side, a primary "Add account" `+` button (icon
+  `list-add-symbolic`, tooltip "Add account") that opens
+  `AddAccountComponent`; followed by the search-toggle button (which
+  toggles the `gtk::SearchBar` in `AccountListComponent`); followed by
+  the primary menu (`gtk::MenuButton` driven by `gio::Menu`). The
+  primary menu's entries are fixed: **Import…** (opens
+  `ImportDialog`), **Export…** (opens `ExportDialog`), **Passphrase…**
+  (opens `PassphraseDialog` with the sub-flow gated by
+  `Vault::is_encrypted()`), **Preferences** (opens
+  `SettingsComponent`'s `AdwPreferencesDialog`), **About Paladin**
+  (opens `AdwAboutDialog`), and **Quit**. The `+` button and the
+  Import / Export / Passphrase / Preferences entries are **disabled
+  when `AppModel` is not in `Unlocked`** (so they are off in
+  `Missing` / `Locked` / `StartupError`) and disabled while
+  `UnlockedBusy` is active per §"In-flight effect ownership"; About
+  and Quit stay enabled in every state. No custom title-bar drawing.
 - **Toast surface.** `AppModel` wraps the main content in an
   `AdwToastOverlay`. Transient feedback that does not need a modal —
   copy confirmation, `save_durability_unconfirmed` after a HOTP
@@ -843,9 +879,10 @@ back into vanilla GTK4 widgets where Adwaita is idiomatic:
   "this writes unencrypted secrets to disk" warning) is reused verbatim so the
   UX matches the TUI.
 - **Preferences.** `SettingsComponent` renders inside an
-  `AdwPreferencesWindow` with one `AdwPreferencesGroup` for
-  auto-lock and one for clipboard-clear. Toggles use
-  `AdwSwitchRow`; spinners use `AdwSpinRow`.
+  `AdwPreferencesDialog` with one `AdwPreferencesGroup` for
+  auto-lock and one for clipboard-clear. `AdwPreferencesWindow` is
+  the libadwaita 1.6-deprecated predecessor and is **not** used.
+  Toggles use `AdwSwitchRow`; spinners use `AdwSpinRow`.
   Live-apply (per the existing component description) still drives a
   `Vault::mutate_and_save` per change; the prior
   validate-revert-on-failure behavior is preserved.
