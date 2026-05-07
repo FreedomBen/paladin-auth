@@ -2,8 +2,18 @@
 //
 // Paladin core library.
 //
-// Until Phase B lands the full domain model, this crate exposes only the
-// minimal scaffolding required by the workspace gates (`cargo fmt`,
-// `cargo clippy -- -D warnings`, `cargo test --all`).
+// Public surface tracks DESIGN.md §4.7. Anything not re-exported here
+// is `pub(crate)` and an implementation detail.
 
 #![forbid(unsafe_code)]
+
+pub mod domain;
+pub mod error;
+
+pub use domain::validation::AccountInput;
+pub use domain::{
+    parse_icon_hint_token, validate_manual, Account, AccountId, AccountKindInput,
+    AccountKindSummary, AccountSummary, Algorithm, Code, IconHintInput, Secret, ValidatedAccount,
+    ValidationWarning,
+};
+pub use error::{ErrorKind, PaladinError, PermissionSubject, Result, TimeRangeKind, VaultMode};

@@ -115,7 +115,7 @@ Each step lands as its own commit. Tests come first.
 
 ### Phase A — Scaffolding (Milestone 0)
 
-- [ ] Create virtual workspace `Cargo.toml` (members: `paladin-core` only at
+- [x] Create virtual workspace `Cargo.toml` (members: `paladin-core` only at
   this point; binaries added in their own plans). Populate
   `[workspace.package]` with the shared metadata required by §11
   (`license = "AGPL-3.0-or-later"`, `edition`, `rust-version`,
@@ -126,35 +126,35 @@ Each step lands as its own commit. Tests come first.
   `license.workspace = true`, `edition.workspace = true`,
   `rust-version.workspace = true`, `repository.workspace = true`,
   `homepage.workspace = true`).
-- [ ] Create `rust-toolchain.toml` and `crates/paladin-core/Cargo.toml`;
+- [x] Create `rust-toolchain.toml` and `crates/paladin-core/Cargo.toml`;
   the crate manifest pulls each shared metadata field from the
   workspace via per-field Cargo inheritance (`description.workspace = true`
   and the matching lines for `license`, `edition`, `rust-version`,
   `repository`, and `homepage`). (MSRV decision: pin to current stable
   at scaffold time and record it in CLAUDE.md.)
-- [ ] Extend `.gitignore` for the Rust workspace: ignore `/target` and any
+- [x] Extend `.gitignore` for the Rust workspace: ignore `/target` and any
   other build/test artifacts the repo will produce. The existing entries
   (`TODO.md`, `.claude/settings.local.json`, `.codex`) stay.
-- [ ] Write `README.md` with build instructions covering the §10 CI gate
+- [x] Write `README.md` with build instructions covering the §10 CI gate
   (`cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo test --all`,
   `cargo deny check`, `cargo audit`) — the §12 Milestone 0 README deliverable.
 - [ ] Document that `default_vault_path()` uses
   `ProjectDirs::from("", "", "paladin")`, then appends `vault.bin` under the
   returned `data_dir()`.
-- [ ] Add SPDX header to every source file.
-- [ ] Wire `cargo deny` policy for dependency license / advisory checks and
+- [x] Add SPDX header to every source file.
+- [x] Wire `cargo deny` policy for dependency license / advisory checks and
   deny known network-stack crates (`tokio`, `reqwest`, `hyper`, etc.).
   Document manual review for new dependencies. This supports the §8
   "no network" rule; tests and code review cover runtime behavior.
-- [ ] Add `xtask/dev-tools.toml` as the workspace dev-tooling manifest and
+- [x] Add `xtask/dev-tools.toml` as the workspace dev-tooling manifest and
   pin `cargo-public-api` there so CI and local API snapshots do not float to
   the latest released cargo subcommand.
-- [ ] CI workflow stub: `fmt --check`, `clippy -- -D warnings`, `test --all`,
+- [x] CI workflow stub: `fmt --check`, `clippy -- -D warnings`, `test --all`,
   `cargo deny check`, `cargo audit`.
 
 ### Phase B — Domain model + validation (Milestone 1, part 1)
 
-- [ ] Tests: `domain/validation.rs` covering every branch in §4.1 (digits range,
+- [x] Tests: `domain/validation.rs` covering every branch in §4.1 (digits range,
   TOTP period bounds, HOTP counter bounds, label and issuer 128-byte caps,
   empty labels, manual Base32 secret decoding including lowercase input,
   optional `=` padding, malformed alphabet / padding, and ASCII-whitespace rejection,
@@ -175,7 +175,10 @@ Each step lands as its own commit. Tests come first.
   exactly `64` / `65` bytes; mismatched otpauth issuer cases differing
   only by ASCII case rejected; `created_at` / `updated_at` at exactly
   `253402300799` (accept) and `253402300800` (reject).
-- [ ] Implement `Account`, `AccountId` (UUIDv4 stored as 16 bytes, hyphenated
+  *(Note: mismatched-otpauth-issuer cases land in Phase D alongside the
+  parser; everything else is exercised in `domain/validation.rs` /
+  `domain/secret.rs` / `domain/slug.rs` unit tests.)*
+- [x] Implement `Account`, `AccountId` (UUIDv4 stored as 16 bytes, hyphenated
   canonical `Display`; shortest unique `id:<hex>` disambiguators are computed
   by `Vault::shortest_unique_id_prefix` because uniqueness depends on the
   full vault contents), `Secret` newtype with `Zeroize + Drop`, `Algorithm`,
@@ -189,19 +192,20 @@ Each step lands as its own commit. Tests come first.
   `validate_manual(input, now)` entry point that routes manual
   flag-driven input through the same validation table as `parse_otpauth`
   and the importers.
-- [ ] Implement `parse_icon_hint_token(token: &str) -> Result<IconHintInput>`
+- [x] Implement `parse_icon_hint_token(token: &str) -> Result<IconHintInput>`
   in `domain/prompt_input.rs` and re-export from `lib.rs`. CLI prompts and
   TUI / GUI add modals call this helper instead of re-implementing the
   empty / `none` / slug grammar.
-- [ ] Implement `Account::summary()` as the only public non-secret account
+- [x] Implement `Account::summary()` as the only public non-secret account
   projection. `AccountSummary` matches the §5 account shape exactly
   (`issuer` / `icon_hint` as `Option`, `period` and `counter` as
   mutually-exclusive options, no secret field) so CLI JSON output, TUI rows,
   GUI rows, duplicate-account presentation, and import reports never inspect
   private `Account` fields or risk serializing secret bytes.
-- [ ] Implement `Code` as the §5 code projection: zero-padded `code`, TOTP
+- [x] Implement `Code` as the §5 code projection: zero-padded `code`, TOTP
   validity fields as `Some` with `counter_used = None`, and HOTP
   `counter_used = Some(pre_advance_counter)` with validity fields `None`.
+  *(Struct only; OTP module in Phase C populates it.)*
 - [ ] No `Debug` impls that print secret bytes — wire compile-fail coverage
   proving `Secret` cannot be formatted with `Debug`, plus runtime assertions
   that any public `Debug` output for secret-bearing types omits or redacts the
@@ -216,7 +220,7 @@ Each step lands as its own commit. Tests come first.
   byte pattern. `Serialize` audit: a `trybuild` compile-fail test
   proves `Account: !Serialize` and `Secret: !Serialize` even with the
   `error-serde` cargo feature enabled.
-- [ ] Tests: `parse_icon_hint_token(s)` returns `IconHintInput::Default`
+- [x] Tests: `parse_icon_hint_token(s)` returns `IconHintInput::Default`
   for `""` and for any input whose Unicode whitespace trim is empty;
   returns `IconHintInput::Clear` for the case-insensitive token `none`
   after Unicode-whitespace trim (`"none"`, `" NONE\t"`, `"None"`);
@@ -225,7 +229,7 @@ Each step lands as its own commit. Tests come first.
   slugs with `validation_error` (`field: "icon_hint"`). Co-locate the
   test fixtures with `tests/prompt_input.rs` so CLI add prompts and
   TUI / GUI add modals share the same input grammar.
-- [ ] Define `error.rs` `PaladinError` to carry only the core-returnable
+- [x] Define `error.rs` `PaladinError` to carry only the core-returnable
   §5 kinds: `validation_error`, `invalid_passphrase`, `invalid_state`,
   `vault_missing`, `vault_exists`, `unsafe_permissions`, `wrong_vault_lock`,
   `decrypt_failed`, `invalid_header`, `invalid_payload`,
