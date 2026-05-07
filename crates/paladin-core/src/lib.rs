@@ -12,6 +12,7 @@ pub mod error;
 pub mod otp;
 pub mod otpauth;
 pub mod storage;
+pub mod text;
 pub mod vault;
 
 pub use domain::validation::AccountInput;
@@ -25,5 +26,9 @@ pub use otpauth::parse_otpauth;
 pub use storage::{
     classify_init_precheck, default_vault_path, inspect, InitPrecheck, Store, VaultInit, VaultLock,
     VaultSettings, VaultStatus,
+};
+pub use text::{
+    format_init_force_warning, format_plaintext_export_warning, format_plaintext_storage_warning,
+    format_unsafe_permissions, format_validation_warning,
 };
 pub use vault::Vault;
