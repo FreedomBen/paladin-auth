@@ -738,6 +738,37 @@ fn open_cleanup_surfaces_io_error_when_leftover_tmp_is_directory() {
 }
 
 #[test]
+fn open_does_not_read_bak_on_success_path() {
+    // The §4.3 backup is recovery-only — `open` reads only the primary.
+    // Corrupting the .bak to garbage must not affect a clean open.
+    let dir = vault_test_dir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = Store::create(&path, VaultInit::Plaintext).unwrap();
+    vault.add(make_account("alice", None));
+    vault.save(&store).unwrap();
+    vault.save(&store).unwrap(); // second save rotates a real .bak
+    drop(vault);
+    drop(store);
+
+    let bak = dir.path().join("vault.bin.bak");
+    assert!(bak.exists(), "second save should produce vault.bin.bak");
+    // Replace .bak with bytes that would fail every layer of decode if
+    // anyone ever tried to read them — header parse, payload size cap,
+    // bincode decode would all reject. The clean open must not even
+    // try.
+    fs::write(&bak, b"NOTPALADIN garbage bytes that are not a vault").unwrap();
+    fs::set_permissions(&bak, fs::Permissions::from_mode(0o600)).unwrap();
+
+    let (reopened, _) = Store::open(&path, VaultLock::Plaintext).unwrap();
+    let labels: Vec<&str> = reopened.accounts().iter().map(Account::label).collect();
+    assert_eq!(
+        labels,
+        ["alice"],
+        "open must read only the primary; .bak is recovery-only"
+    );
+}
+
+#[test]
 fn open_cleanup_unlinks_leftover_symlink_without_following_target() {
     let dir = vault_test_dir();
     let path = dir.path().join("vault.bin");

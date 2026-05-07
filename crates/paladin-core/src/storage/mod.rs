@@ -424,7 +424,7 @@ fn save_plaintext(path: &Path, payload: &VaultPayload) -> Result<()> {
     let bak_tmp = append_suffix(path, ".bak.tmp");
 
     // Step 1: stage new primary.
-    if let Err(err) = stage_temp_file(&primary_tmp, &on_disk) {
+    if let Err(err) = stage_temp_file(&primary_tmp, &on_disk, "write_vault_tmp") {
         let _ = fs::remove_file(&primary_tmp);
         return Err(err);
     }
@@ -442,7 +442,7 @@ fn save_plaintext(path: &Path, payload: &VaultPayload) -> Result<()> {
                 });
             }
         };
-        if let Err(err) = stage_temp_file(&bak_tmp, &primary_bytes) {
+        if let Err(err) = stage_temp_file(&bak_tmp, &primary_bytes, "write_backup_tmp") {
             let _ = fs::remove_file(&primary_tmp);
             let _ = fs::remove_file(&bak_tmp);
             return Err(err);
@@ -451,7 +451,7 @@ fn save_plaintext(path: &Path, payload: &VaultPayload) -> Result<()> {
             let _ = fs::remove_file(&primary_tmp);
             let _ = fs::remove_file(&bak_tmp);
             return Err(PaladinError::IoError {
-                operation: "rename_temp_to_backup",
+                operation: "rename_backup",
                 source: err,
             });
         }
@@ -481,17 +481,23 @@ fn save_plaintext(path: &Path, payload: &VaultPayload) -> Result<()> {
 /// Open `path` as a fresh tempfile, write `content`, and fsync. The
 /// file is opened with `0600` mode on Unix targets so secrets are
 /// never world-readable, even transiently.
-fn stage_temp_file(path: &Path, content: &[u8]) -> Result<()> {
+///
+/// `write_op` selects the §5 `io_error.operation` discriminator for
+/// write failures: `"write_vault_tmp"` when staging the new primary,
+/// `"write_backup_tmp"` when staging the rotated backup. fsync
+/// failures share the single §5 `"fsync_temp_file"` op so the
+/// durability-vs-encoding distinction stays clear.
+fn stage_temp_file(path: &Path, content: &[u8], write_op: &'static str) -> Result<()> {
     let mut opts = OpenOptions::new();
     opts.write(true).create(true).truncate(true);
     #[cfg(unix)]
     opts.mode(0o600);
     let mut f = opts.open(path).map_err(|err| PaladinError::IoError {
-        operation: "write_temp_file",
+        operation: write_op,
         source: err,
     })?;
     f.write_all(content).map_err(|err| PaladinError::IoError {
-        operation: "write_temp_file",
+        operation: write_op,
         source: err,
     })?;
     f.sync_all().map_err(|err| PaladinError::IoError {
@@ -630,7 +636,7 @@ fn save_plaintext_clobber(path: &Path, payload: &VaultPayload) -> Result<()> {
     let bak_path = append_suffix(path, ".bak");
 
     // Step 1: stage new primary + fsync.
-    if let Err(err) = stage_temp_file(&primary_tmp, &on_disk) {
+    if let Err(err) = stage_temp_file(&primary_tmp, &on_disk, "write_vault_tmp") {
         let _ = fs::remove_file(&primary_tmp);
         return Err(err);
     }
@@ -676,6 +682,29 @@ mod tests {
     use std::fs;
     use std::io::Write;
     use tempfile::TempDir;
+
+    /// `stage_temp_file` must surface its caller-supplied write op
+    /// string verbatim so `save_plaintext` / `create_force_plaintext`
+    /// / Phase F's encrypted save paths each map to the correct §5
+    /// op discriminator. Triggered by writing into a non-existent
+    /// directory so `OpenOptions::open` fails with `ENOENT`.
+    #[test]
+    fn stage_temp_file_surfaces_caller_supplied_write_op_string() {
+        let dir = TempDir::new().unwrap();
+        let unreachable = dir.path().join("missing_subdir").join("file.tmp");
+
+        let err = stage_temp_file(&unreachable, b"x", "write_vault_tmp").unwrap_err();
+        match err {
+            PaladinError::IoError { operation, .. } => assert_eq!(operation, "write_vault_tmp"),
+            other => panic!("expected IoError, got {other:?}"),
+        }
+
+        let err = stage_temp_file(&unreachable, b"x", "write_backup_tmp").unwrap_err();
+        match err {
+            PaladinError::IoError { operation, .. } => assert_eq!(operation, "write_backup_tmp"),
+            other => panic!("expected IoError, got {other:?}"),
+        }
+    }
 
     fn write_bytes(dir: &TempDir, name: &str, bytes: &[u8]) -> std::path::PathBuf {
         let p = dir.path().join(name);
