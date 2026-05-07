@@ -117,9 +117,10 @@ inclusion.
   or mismatched pairs reject inline with `invalid_passphrase`
   (`reason: "confirmation_mismatch"`). On submit, builds a
   `VaultInit` (`VaultInit::Plaintext` or
-  `VaultInit::Encrypted(EncryptionOptions::new(secret))`) and calls
+  `VaultInit::Encrypted(EncryptionOptions::new(secret)?)`) and calls
   `paladin_core::create(path, init)` on `gio::spawn_blocking` (the
-  encrypted path runs the §4.4 Argon2id KDF). On success, swaps
+  encrypted path validates the passphrase and runs the §4.4 Argon2id KDF).
+  On success, swaps
   `AppModel` to `Unlocked` with the returned
   `(Vault, Store)` and routes to `AccountListComponent`. The dialog
   stays open and surfaces `unsafe_permissions` (rendered as the
@@ -376,7 +377,9 @@ policy decisions route through `paladin-core`.
   pointer controllers wired at the `AppModel` root drive
   `paladin_core::policy::auto_lock::IdlePolicy`
   (`should_arm` / `next_deadline` / `is_expired`), which owns the
-  encrypted-only gating and timer math. On expiry, drop `Vault` and
+  encrypted-only gating and timer math. The deadline call passes
+  `Vault::is_encrypted()` so plaintext vaults return `None` in core, not
+  by GUI-side convention. On expiry, drop `Vault` and
   switch `AppModel` to `Locked`, re-presenting `UnlockComponent`.
   Locking discards open HOTP reveal windows, the search query, and any
   open dialog; a clipboard auto-clear timer scheduled before lock survives
@@ -454,9 +457,9 @@ start from `ImportDialog`.
   because the global `--vault` flag is the only path-selection contract.
 - **Argon2id parameters: defaults only.** Encrypted vault creation
   (`InitDialog`), passphrase set/change (`PassphraseDialog`), and
-  encrypted-bundle export (`ExportDialog`) all build
-  `EncryptionOptions::new(secret)` with the §4.4 defaults
-  (m=64 MiB, t=3, p=1) — no GUI surface exposes
+  encrypted-bundle export (`ExportDialog`) all call
+  `EncryptionOptions::new(secret)`, which validates non-empty passphrases
+  and uses the §4.4 defaults (m=64 MiB, t=3, p=1) — no GUI surface exposes
   `--kdf-memory-mib` / `--kdf-time` / `--kdf-parallelism`. Power
   users wanting custom KDF tuning use the CLI. Vaults the GUI opens
   that were created with custom params still read those params from

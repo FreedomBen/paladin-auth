@@ -138,8 +138,9 @@ call `open(path, VaultLock::Encrypted(secret))` from that state.
 
 **Argon2id parameters: defaults only.** Encrypted-write paths reachable
 from the TUI — passphrase `set` / `change` inside the Passphrase modal
-and encrypted-bundle Export — build `EncryptionOptions::new(secret)` with
-the §4.4 defaults (m=64 MiB, t=3, p=1) and surface no UI for
+and encrypted-bundle Export — call `EncryptionOptions::new(secret)`,
+which validates non-empty passphrases and uses the §4.4 defaults
+(m=64 MiB, t=3, p=1), and surface no UI for
 `--kdf-memory-mib` / `--kdf-time` / `--kdf-parallelism`. Power users
 wanting custom KDF tuning use the CLI. Vaults the TUI opens that were
 created with custom params still read those params from the on-disk
@@ -497,13 +498,14 @@ the workspace `cargo xtask man` target appends into the man page
   shows the unlock screen for encrypted vaults.
 - Encrypted-only gating, idle-deadline math, and expiry checking route
   through `paladin_core::policy::auto_lock::IdlePolicy` (`should_arm`,
-  `next_deadline`, `is_expired`). Plaintext vaults are a no-op via
-  `should_arm`; the setting is still persisted so it takes effect if the
-  vault is later encrypted via `passphrase set`.
+  `next_deadline`, `is_expired`). Plaintext vaults are a no-op because
+  both `should_arm` and `next_deadline(now, is_encrypted, settings)` take
+  the current vault mode; the setting is still persisted so it takes effect
+  if the vault is later encrypted via `passphrase set`.
 - Idle is reset by any `AppEvent::Input`. The reducer owns the
   `idle_deadline: Option<Instant>` slot, the input event source, and the
   `Locked` transition; on input it refreshes the slot with
-  `IdlePolicy::next_deadline(now, settings)`, and on each
+  `IdlePolicy::next_deadline(now, vault.is_encrypted(), settings)`, and on each
   `paladin_core::TICK_INTERVAL_MS` `Tick` it asks
   `IdlePolicy::is_expired(deadline, now)` before transitioning. No
   background auto-lock timer threads or stale auto-lock tokens accumulate.
@@ -657,9 +659,10 @@ captured with `insta` golden snapshots using `ratatui::backend::TestBackend`.
   error. The `id:` prefix form is CLI-only and is **not**
   honored by the TUI search.
 - **Auto-lock**: `idle_deadline` is set via
-  `paladin_core::policy::auto_lock::IdlePolicy::next_deadline` on
-  `Unlocked` + `enabled` + encrypted (i.e. `IdlePolicy::should_arm` is
-  `true`); resets on input; transitions to `Locked` when a
+  `paladin_core::policy::auto_lock::IdlePolicy::next_deadline(now,
+  vault.is_encrypted(), settings)` on `Unlocked` + `enabled` + encrypted
+  (i.e. `IdlePolicy::should_arm` is `true`); resets on input; transitions
+  to `Locked` when a
   `paladin_core::TICK_INTERVAL_MS` `Tick` observes
   `IdlePolicy::is_expired`; **no-op** for plaintext vaults (deadline stays
   `None`). Setting persists across saves. Locking discards the

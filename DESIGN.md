@@ -646,7 +646,7 @@ impl Argon2Params {
 }
 
 impl EncryptionOptions {
-    pub fn new(passphrase: SecretString) -> Self;                          // default Argon2Params
+    pub fn new(passphrase: SecretString) -> Result<Self>;                  // default Argon2Params; rejects zero-length passphrases
     pub fn with_params(passphrase: SecretString, kdf_params: Argon2Params) -> Result<Self>;
 }
 
@@ -776,7 +776,7 @@ pub mod policy {
         pub struct IdlePolicy;
         impl IdlePolicy {
             pub fn should_arm(is_encrypted: bool, settings: &VaultSettings) -> bool;
-            pub fn next_deadline(now: std::time::Instant, settings: &VaultSettings) -> Option<std::time::Instant>;
+            pub fn next_deadline(now: std::time::Instant, is_encrypted: bool, settings: &VaultSettings) -> Option<std::time::Instant>;
             pub fn is_expired(deadline: std::time::Instant, now: std::time::Instant) -> bool;
         }
     }
@@ -1773,8 +1773,9 @@ permission fixtures. Binary crates additionally use `assert_cmd` and
     32-byte key for a fixed passphrase / salt / parameter fixture, and
     XChaCha20-Poly1305 encrypts/decrypts a fixed key / nonce / AAD /
     plaintext fixture to the expected ciphertext and tag. The expected bytes
-    are committed fixtures, not values recomputed by the implementation under
-    test.
+    are committed fixtures from named external references with source and
+    license notes recorded beside the fixture, not values recomputed by the
+    implementation under test.
   - Algorithm-choice locks: the same KAT inputs run through Argon2i /
     Argon2d produce keys distinct from the committed Argon2id key, and
     the same inputs run through ChaCha20-Poly1305 (12-byte nonce IETF
@@ -1805,6 +1806,12 @@ permission fixtures. Binary crates additionally use `assert_cmd` and
     operations, passphrase transitions, and encrypted exports with identical
     logical inputs produce fresh salts and nonces where §4.4 / §4.5 require
     them, while regular encrypted saves preserve salt and rotate only nonce.
+  - No-network guard: a source-level `paladin-core` test scans the core
+    production source tree (`src/`) and manifest for direct network API
+    spellings such as `std::net`, `TcpStream`, `UdpSocket`,
+    `ToSocketAddrs`, `tokio`, `reqwest`, and `hyper`, and a metadata
+    fixture checks resolved runtime dependencies against the `cargo deny`
+    network-stack denylist.
   - File-permission enforcement (`0600` on primary, backup, and temp files;
     `0700` on dir) post-save and during staged writes, plus rejection of
     unsafe existing primary/backup/directory paths with `unsafe_permissions`.
@@ -2261,6 +2268,21 @@ artifacts side by side.
   surrounding Unicode whitespace; any other response exits before mutation.
 - Encrypted-write KDF flags are validated before vault inspection, unlock
   prompts, wrong-state checks, or command-specific prompts.
+
+**Decided during final implementation-plan review (2026-05-07):**
+- `EncryptionOptions::new` returns `Result<Self>` and validates the same
+  zero-length passphrase rejection as `with_params`, so all default-cost
+  encrypted-write paths have one core-owned validation gate.
+- `IdlePolicy::next_deadline` takes the current encrypted/plaintext mode,
+  not only `VaultSettings`, so the plaintext-vault auto-lock no-op is
+  enforced in core instead of by front-end convention.
+- Regular-save pre-commit failures after backup commit but before primary
+  commit leave the old primary authoritative at `vault.bin`; the
+  no-primary recoverable state is specific to the `create_force` clobber
+  sequence after verbatim backup rotation.
+- The no-network hardening test is a concrete source / metadata guard over
+  production `paladin-core`, complementing `cargo deny` instead of relying
+  on a missing-symbol compile-fail.
 
 No open questions remain.
 

@@ -59,7 +59,7 @@ crates/paladin-core/
 │   │   └── aead.rs       # XChaCha20-Poly1305 with header-AAD wiring
 │   ├── policy/
 │   │   ├── mod.rs        # Re-exports: IdlePolicy, ClipboardClearPolicy, ClipboardClearToken, hotp_reveal_deadline
-│   │   ├── auto_lock.rs  # IdlePolicy: should_arm(is_encrypted, &VaultSettings), next_deadline(now, &VaultSettings), is_expired(deadline, now). Pure timer math; raw input handling stays in front ends.
+│   │   ├── auto_lock.rs  # IdlePolicy: should_arm(is_encrypted, &VaultSettings), next_deadline(now, is_encrypted, &VaultSettings), is_expired(deadline, now). Pure timer math and encrypted-only gating; raw input handling stays in front ends.
 │   │   ├── clipboard_clear.rs # ClipboardClearPolicy: schedule(now, &VaultSettings) → Option<(token, deadline)>, should_clear(captured_value, current_clipboard) → bool. Token issuance is monotonic; the only-if-unchanged decision is shared so TUI/GUI can drive arboard / gdk::Clipboard with identical semantics.
 │   │   └── hotp_reveal.rs # hotp_reveal_deadline(now: Instant) -> Instant using HOTP_REVEAL_SECS; shared by TUI reveal countdown and GUI reveal countdown.
 │   ├── vault.rs          # Vault impl: add/remove/iter/rename/import_accounts/totp_code/hotp_*; save/mutate_and_save; is_encrypted() mode getter
@@ -84,7 +84,7 @@ crates/paladin-core/
     ├── vault_roundtrip.rs   # both modes
     ├── vault_lifecycle.rs   # inspect, default_vault_path, create_force, mutate_and_save, is_encrypted
     ├── init_precheck.rs     # classify_init_precheck mapping for §5 init flow
-    ├── tamper.rs            # AAD-bound header byte-flip matrix (per-field named cases)
+    ├── tamper.rs            # encrypted header / ciphertext / tag tamper matrix (per-field named cases)
     ├── crypto_vectors.rs    # Argon2id + XChaCha20-Poly1305 known-answer vectors
     ├── perms.rs             # 0600/0700 + unsafe_permissions rejection (per-subject discriminated)
     ├── shared_text.rs       # format_unsafe_permissions / format_init_force_warning / format_plaintext_storage_warning / format_plaintext_export_warning / format_validation_warning text fixtures
@@ -104,7 +104,7 @@ crates/paladin-core/
     ├── export_writer.rs
     ├── error_matrix.rs      # one test per §5 core-returnable error_kind asserting kind + every stable extra field
     ├── send_assertions.rs   # static Send (and Sync where required) assertions for every public type that crosses a thread boundary
-    ├── no_network.rs        # trybuild compile-fail proving paladin-core cannot reference std::net (defense-in-depth on top of cargo deny)
+    ├── no_network.rs        # source / metadata guard proving production paladin-core has no network API or network-stack deps
     ├── fault_injection.rs   # cross-save-site coverage for the test-fault-injection feature
     └── zeroize.rs           # controlled zeroize assertions
 ```
@@ -156,7 +156,8 @@ Each step lands as its own commit. Tests come first.
 
 - [ ] Tests: `domain/validation.rs` covering every branch in §4.1 (digits range,
   TOTP period bounds, HOTP counter bounds, label and issuer 128-byte caps,
-  empty labels, manual Base32 secret decoding / ASCII-whitespace rejection,
+  empty labels, manual Base32 secret decoding including lowercase input,
+  optional `=` padding, malformed alphabet / padding, and ASCII-whitespace rejection,
   secret length rejection below 10 bytes and above 1024 bytes, malformed
   icon-hint slugs, issuer-derived icon-hint defaulting, empty / overlong
   derived icon hints staying `None`, mismatched otpauth issuers, invalid
@@ -328,16 +329,18 @@ Each step lands as its own commit. Tests come first.
   explicitly does **not** create `vault.bin.bak.tmp` (no prior primary
   to copy) — assert directory contents post-save contain neither
   `.tmp` nor `.bak` siblings.
-- [ ] Tests: pre-commit recoverable state — inject a save error after step 3
-  (rename `vault.bin` → `vault.bin.bak`) but before step 4 (rename new
-  tmp → `vault.bin`). On disk after the failure: the old primary content
-  lives in `vault.bin.bak`, no primary exists at the regular path, and a
-  subsequent `open(path, lock)` invocation finds no primary (returns
-  `vault_missing`) — per §4.3 the front end surfaces this as
-  `save_not_committed` with `backup_path = "vault.bin.bak"`. A direct
-  decode of the `.bak` file through `Store::open_backup_for_recovery`
-  (an internal-only helper, not part of the §4.7 surface) yields the
-  pre-save state.
+- [ ] Tests: regular-save pre-commit recoverable state — inject a save
+  error after step 3 (rename `vault.bin.bak.tmp` →
+  `vault.bin.bak`) but before step 4 (rename `vault.bin.tmp` →
+  `vault.bin`). On disk after the failure: the old primary remains
+  authoritative at `vault.bin`, `vault.bin.bak` contains the same
+  pre-save primary bytes, no temp files remain after cleanup, and a
+  subsequent `open(path, lock)` reads the pre-save state. The returned
+  error is `save_not_committed` with `committed: false` and no
+  `backup_path`, because the user does not need backup-file recovery
+  while the primary path still contains the old vault. The `init
+  --force` / `create_force` clobber path, where backup rotation can leave
+  no primary before the new primary rename, is covered separately below.
 - [ ] Tests: post-commit success replay — after a successful regular save,
   a fresh `open(path, lock)` reads the new primary and the on-disk
   `nonce` differs from the pre-save value; `vault.bin.bak` contains the
@@ -485,10 +488,11 @@ Each step lands as its own commit. Tests come first.
   (`header_size + 16 MiB + 16-byte AEAD tag`) before any KDF/AEAD work;
   decrypted encrypted payloads above the 16 MiB payload limit are rejected
   before constructing a `Vault`.
-- [ ] Tests: AAD binding — table-driven per-field byte-flip matrix.
-  One named test row per AAD-bound region, each asserting `open`
-  returns the discriminating error kind and never returns a vault. The
-  expected kind per region:
+- [ ] Tests: encrypted-file tamper matrix — table-driven per-field
+  byte-flip coverage for header, AAD-bound fields, ciphertext, and tag.
+  One named test row per region, each asserting `open` returns the
+  discriminating error kind and never returns a vault. The expected kind
+  per region:
   - `magic` (8 bytes, `PALADIN\0`): flip any byte → `invalid_header`
     (the magic is checked before AEAD decode, so this is a header
     rejection, not `decrypt_failed`).
@@ -522,9 +526,12 @@ Each step lands as its own commit. Tests come first.
   parameter fixture using the exact crate configuration Paladin wires, and
   XChaCha20-Poly1305 encrypts/decrypts a fixed key / 24-byte nonce / AAD /
   plaintext fixture to the expected ciphertext and tag. Expected bytes are
-  committed fixture constants from the reference vectors, not values
-  recomputed by the implementation under test. Negative rows mutate AAD and
-  tag bytes and assert authentication failure.
+  committed fixture constants from named external references (for example
+  RFC 9106 Argon2id vectors and XChaCha20-Poly1305 vectors from the
+  upstream `chacha20poly1305` / libsodium test corpus), with the source and
+  license recorded beside the fixture. They are never values recomputed by
+  the implementation under test. Negative rows mutate AAD and tag bytes and
+  assert authentication failure.
 - [ ] Tests: algorithm-choice locks — the same KAT inputs run through
   `argon2::Variant::Argon2i` and `argon2::Variant::Argon2d` produce keys
   that **differ** from the committed Argon2id key, and the same plaintext /
@@ -566,7 +573,7 @@ Each step lands as its own commit. Tests come first.
   `t = 3`, `p = 1`; `Argon2Params::validate` accepts in-range custom
   values and rejects out-of-range values with
   `kdf_params_out_of_bounds`; `EncryptionOptions::new(passphrase)`
-  populates `kdf_params` with `Argon2Params::default()`;
+  returns `Ok` with `kdf_params = Argon2Params::default()`;
   `EncryptionOptions::with_params(passphrase, params)` accepts in-range
   custom params and propagates `kdf_params_out_of_bounds` when the
   supplied params fail `validate()`; encrypted write paths reject
@@ -620,8 +627,8 @@ Each step lands as its own commit. Tests come first.
   `operation: "csprng_read"` (added to the §5 stable operation table) and
   do not write any partial vault file or leak intermediate plaintext.
 - [ ] Tests: Argon2id allocation failure — inject an Argon2 memory-allocation
-  failure (via a `#[cfg(test)]` allocator hook or an unrealistically large
-  `m_kib` that the underlying crate refuses) and assert encrypted-write paths
+  failure after parameter bounds have already passed (via a `#[cfg(test)]`
+  allocator hook) and assert encrypted-write paths
   surface `io_error` with `operation: "kdf_allocation"` (added to the §5
   stable operation table) without writing a partial vault file or panicking.
   Read paths route the same allocation failure through the same operation
@@ -731,7 +738,8 @@ Each step lands as its own commit. Tests come first.
 - [ ] Tests: `policy::auto_lock::IdlePolicy` —
   `IdlePolicy::should_arm(is_encrypted: bool, settings: &VaultSettings)`
   returns `true` iff `is_encrypted == true && settings.auto_lock_enabled()`;
-  `IdlePolicy::next_deadline(now: Instant, settings: &VaultSettings)`
+  `IdlePolicy::next_deadline(now: Instant, is_encrypted: bool,
+  settings: &VaultSettings)`
   returns `Some(now + Duration::from_secs(settings.auto_lock_timeout_secs()
   as u64))` when armed, `None` otherwise; `IdlePolicy::is_expired(deadline,
   now)` does monotonic comparison (`now >= deadline`). Negative case:
@@ -1047,16 +1055,15 @@ Each step lands as its own commit. Tests come first.
   module includes a comment locking that decision so a future
   change does not accidentally promote a secret-bearing type to
   `Sync` without review.
-- [ ] Tests: `tests/no_network.rs` is a `trybuild` compile-fail
-  fixture proving that within `paladin-core`'s public surface,
-  symbols from `std::net` are not reachable. The fixture uses a
-  small crate that depends on `paladin-core` only, sets
-  `#![deny(unsafe_code)]`, and tries to call
-  `paladin_core::__internal_tcp_connect` (deliberately missing)
-  to assert the symbol does not exist; it also includes a positive
-  control referencing a real `paladin_core` symbol so the fixture
-  is not vacuously green. Defense-in-depth on top of `cargo deny`'s
-  network-stack denylist.
+- [ ] Tests: `tests/no_network.rs` is a source-level guard that scans the
+  `paladin-core` manifest and production source tree (`src/`) and fails
+  on direct references to network APIs (`std::net`, `TcpStream`,
+  `UdpSocket`, `ToSocketAddrs`, `tokio`, `reqwest`, `hyper`, and similar
+  denylisted spellings). It also asserts via `cargo metadata` fixtures
+  that no runtime dependency resolves to the workspace `cargo deny`
+  network-stack denylist. This is
+  defense-in-depth on top of dependency review; it is intentionally a
+  concrete source scan rather than a vacuous missing-symbol compile-fail.
 - [ ] Tests: fault-injection cross-save-site coverage table. With the
   `test-fault-injection` cargo feature enabled, a single integration
   test iterates over `(save_site, fault_phase)` ∈ `{ regular_save,
@@ -1107,7 +1114,8 @@ is a separate `#[test]` or table-driven case family.
   slug rules, issuer-derived icon-hint defaulting, and timestamp upper bound.
 - Manual `AccountInput` validation — `AccountKindInput` TOTP/HOTP
   selection, TOTP period defaults / overrides, HOTP counter defaults /
-  overrides, manual Base32 secret decoding / ASCII-whitespace rejection, and
+  overrides, manual Base32 lowercase / padded decoding plus malformed
+  alphabet / padding / ASCII-whitespace rejection, and
   rejection of period-on-HOTP or counter-on-TOTP; `IconHintInput::Default`
   derives from issuer, `IconHintInput::Clear` stores `None`, and
   `IconHintInput::Slug` validates and stores the supplied slug.
@@ -1128,8 +1136,10 @@ is a separate `#[test]` or table-driven case family.
   `operation: "resolve_default_vault_path"`.
 - Header version / ID errors: unsupported `format_ver`, unknown `mode`,
   unknown `kdf_id`, and unknown `aead_id`.
-- Header byte-flip matrix on encrypted vault — every AAD-bound byte fails
-  without returning a vault.
+- Header / ciphertext byte-flip matrix on encrypted vault — magic and
+  unsupported header IDs fail with discriminating header errors, and every
+  AAD-bound field, ciphertext byte, and tag byte fails without returning a
+  vault.
 - Wrong encrypted-vault passphrase returns `decrypt_failed` without
   returning a vault.
 - Argon2 param bounds — out-of-range `m_kib`, `t`, or `p` rejected pre-KDF.
@@ -1330,8 +1340,9 @@ is a separate `#[test]` or table-driven case family.
   asserted `Send`; the non-secret projections are also asserted
   `Sync`; secret-bearing types are deliberately not `Sync` and the
   test pins that decision.
-- `tests/no_network.rs` trybuild compile-fail proves `paladin-core`'s
-  public surface does not reach `std::net`.
+- `tests/no_network.rs` source / metadata guard proves production
+  `paladin-core` has no direct network API use and no runtime
+  network-stack dependencies.
 - `tests/error_matrix.rs` produces every core-returnable §5
   `error_kind` at least once with full extra-field assertions.
 - Fault injection cross-save-site coverage table covers
@@ -1339,11 +1350,14 @@ is a separate `#[test]` or table-driven case family.
   remove_passphrase, write_secret_file_atomic } × { pre_commit,
   post_commit }` plus a back-to-back fault test proving no leaked
   half-state between two failures on the same `Store`.
-- Pre-commit recoverable state: after a save failure between rotation
-  and primary commit, `vault.bin.bak` holds the old primary verbatim
-  and the regular path has no primary; post-commit success replay
-  shows fresh nonce on disk and old primary moved verbatim to `.bak`;
-  `.bak` corruption never affects success-path `open`.
+- Pre-commit recoverable state: regular-save failure after backup commit
+  but before primary commit leaves the old primary authoritative at
+  `vault.bin`, leaves `vault.bin.bak` containing the old primary bytes,
+  and cleans temp files; `create_force` failure after verbatim backup
+  rotation but before primary commit is the separate clobber case where
+  the primary path can be absent and `backup_path` is set. Post-commit
+  success replay shows fresh nonce on disk and old primary moved verbatim
+  to `.bak`; `.bak` corruption never affects success-path `open`.
 - HOTP at counter `u64::MAX - 1` advances successfully to `MAX`; a
   subsequent advance returns `counter_overflow` before any mutation
   or save (off-by-one fence-post pin).
@@ -1373,9 +1387,10 @@ doesn't drift across transitive minor versions), `base32`, `url`,
 
 Dev/test only: `proptest` (parser/base32 properties), `trybuild`
 (compile-fail coverage for `Secret: !Debug`, `Account: !Serialize` /
-`Secret: !Serialize` even with the `error-serde` feature on, and
-`tests/no_network.rs` proving `paladin-core` cannot reach `std::net`),
-and `tempfile` (storage and permission fixtures).
+`Secret: !Serialize` even with the `error-serde` feature on), and
+`tempfile` (storage and permission fixtures). `tests/no_network.rs` uses
+the standard library plus the already-present manifest / JSON tooling to
+scan production source and metadata for network API or dependency drift.
 
 ## Packaging support (per §11)
 
