@@ -256,7 +256,7 @@ alike, and is enforced before any value parsing.
   the plaintext-storage warning, any new-passphrase prompt, destructive
   confirmation, or crypto material generation.
 - `passphrase remove` in text mode prints the plaintext-storage warning to
-  stderr only after confirming an encrypted starting state, then requires
+  stderr only after verifying an encrypted starting state, then requires
   destructive confirmation unless `--yes` is passed. Under `--json`, `--yes`
   is required at parse time because the command must not block on a
   confirmation prompt, and the plaintext-storage advisory is suppressed
@@ -436,11 +436,13 @@ Every vault-opening command except `init`:
    text mode renders the human-readable `chmod` repair string via
    `paladin_core::format_unsafe_permissions(&err)` so the CLI, TUI, and GUI
    share a single source of wording.
-5. Perform the operation. For `show`/`copy` on HOTP, call `hotp_advance`
-   (which persists before returning). For `peek` on HOTP, call `hotp_peek`.
-   Other mutating vault operations use `Vault::mutate_and_save` so
-   pre-commit save failures restore the in-memory pre-attempt state before
-   the command renders its error.
+5. Perform the operation. For `show`/`peek`/`copy` on TOTP, call
+   `Vault::totp_code` — it is read-only and does not touch `&Store`. For
+   `show`/`copy` on HOTP, call `hotp_advance` (which persists before
+   returning). For `peek` on HOTP, call `hotp_peek`. Other mutating vault
+   operations use `Vault::mutate_and_save` so pre-commit save failures
+   restore the in-memory pre-attempt state before the command renders its
+   error.
    Passphrase transitions (`set_passphrase`, `change_passphrase`,
    `remove_passphrase`) save themselves through `&Store` and do not require
    a follow-up `Vault::save`.
@@ -610,6 +612,11 @@ where relevant, and exit code.
   detects `(secret, issuer, label)` collisions; the CLI rejects with
   `duplicate_account` and the existing `account` summary unless
   `--allow-duplicate` is passed.
+- **`list`** — empty vault returns `{ "accounts": [] }` under `--json` and
+  produces no rows in text mode; populated vault returns insertion-order
+  `AccountSummary` values with no secret bytes and no codes; HOTP and TOTP
+  rows expose the kind-specific `period` / `counter` shape from §5
+  (`period` set and `counter: null` for TOTP, vice versa for HOTP).
 - **`show` vs `peek` on HOTP** — `show` persists counter advance (verified
   by re-opening and re-running `peek`); `peek` does not. `show` on a
   multi-match query containing any HOTP entry rejects with
