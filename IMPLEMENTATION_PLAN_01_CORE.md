@@ -632,7 +632,7 @@ Each step lands as its own commit. Tests come first.
   Pins the §4.3 wire format so a regression to native endianness fails
   the test instead of silently producing vaults that fail to open on
   big-endian hosts.
-- [ ] Tests: custom `Argon2Params` round-trip via the encrypted header —
+- [x] Tests: custom `Argon2Params` round-trip via the encrypted header —
   for several in-range parameter triples (e.g. `(8_192, 1, 1)`,
   `(65_536, 3, 1)`, `(262_144, 4, 2)`, `(1_048_576, 10, 4)`), call
   `create` (or `set_passphrase` / `change_passphrase` /

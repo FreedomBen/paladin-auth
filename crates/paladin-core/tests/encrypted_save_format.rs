@@ -252,6 +252,89 @@ fn header_writes_argon2_params_in_little_endian_for_floor_m_kib() {
 }
 
 #[test]
+fn header_round_trips_custom_argon2_params_across_in_range_triples() {
+    // §4.4 round-trip — for several in-range parameter triples,
+    // create with custom params, drop the `Vault`, re-open, and then
+    // re-save. The bytes after the second save reflect the in-memory
+    // header that was reconstructed from disk during `open`, so a
+    // bit-identical match against the input triple proves the
+    // `(m_kib, t, p)` fields survive write → header → read
+    // losslessly. The successful re-open additionally proves the
+    // parsed params re-derive the same AEAD key — any silent
+    // narrowing (e.g. u16 instead of u32 for m_kib) or endianness
+    // flip would surface here as `decrypt_failed` on re-open or a
+    // mismatched LE byte block after re-save.
+    //
+    // Pins the §4.4 contract that an encrypted vault opened on a
+    // different machine derives the same key. Triples cover the
+    // §4.4 acceptance floor, default, mid-high, and ceiling — the
+    // ceiling case in particular exercises the upper `m_kib` bytes
+    // that no fixed-cost test exercises.
+    let triples = [
+        (8_192u32, 1u32, 1u32),
+        (65_536, 3, 1),
+        (262_144, 4, 2),
+        (1_048_576, 10, 4),
+    ];
+    for (m_kib, t, p) in triples {
+        let triple = (m_kib, t, p);
+        let dir = vault_test_dir();
+        let path = dir.path().join("vault.bin");
+        let opts = EncryptionOptions::with_params(pp("hunter2"), Argon2Params { m_kib, t, p })
+            .expect("triple is in §4.4 bounds");
+        let (vault, store) = Store::create(&path, VaultInit::Encrypted(opts)).expect("create");
+
+        // Sanity: the initial create wrote the requested params.
+        let bytes_after_create = fs::read(&path).expect("read vault after create");
+        assert_eq!(
+            &bytes_after_create[M_KIB_RANGE.clone()],
+            &m_kib.to_le_bytes(),
+            "create-time m_kib LE encoding for {triple:?}",
+        );
+        assert_eq!(
+            &bytes_after_create[T_RANGE.clone()],
+            &t.to_le_bytes(),
+            "create-time t LE encoding for {triple:?}",
+        );
+        assert_eq!(
+            &bytes_after_create[P_RANGE.clone()],
+            &p.to_le_bytes(),
+            "create-time p LE encoding for {triple:?}",
+        );
+
+        drop(vault);
+        drop(store);
+
+        // Re-open parses the header into the in-memory `Store`. A
+        // successful open additionally proves the parsed params
+        // re-derive the same AEAD key (otherwise `decrypt_failed`).
+        let (vault, store) = Store::open(&path, VaultLock::Encrypted(pp("hunter2")))
+            .expect("re-open succeeds with the persisted params");
+
+        // Re-save writes the in-memory params back to disk; bytes
+        // after this save reflect the parsed in-memory state, not
+        // the original create-time write.
+        vault.save(&store).expect("re-save");
+        let bytes_after_resave = fs::read(&path).expect("read vault after re-save");
+        assert_eq!(
+            &bytes_after_resave[M_KIB_RANGE.clone()],
+            &m_kib.to_le_bytes(),
+            "in-memory m_kib bit-identical after re-open + re-save for {triple:?}",
+        );
+        assert_eq!(
+            &bytes_after_resave[T_RANGE.clone()],
+            &t.to_le_bytes(),
+            "in-memory t bit-identical after re-open + re-save for {triple:?}",
+        );
+        assert_eq!(
+            &bytes_after_resave[P_RANGE.clone()],
+            &p.to_le_bytes(),
+            "in-memory p bit-identical after re-open + re-save for {triple:?}",
+        );
+    }
+}
+
+#[test]
 fn encrypted_header_lays_out_24_byte_nonce_slot_at_offset_40() {
     // §4.4 AEAD output shape — XChaCha20-Poly1305 uses a 24-byte
     // nonce, not the IETF ChaCha20-Poly1305 12-byte construct. Pin

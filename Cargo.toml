@@ -30,3 +30,21 @@ lto = "thin"
 codegen-units = 1
 strip = "symbols"
 panic = "abort"
+
+# Compile crypto primitives with optimizations even in dev/test builds.
+# Argon2id at the §4.4 ceiling (`m_kib = 1_048_576`, `t = 10`, `p = 4`)
+# is exercised in the F.10 round-trip test; without these tweaks the
+# test takes minutes in debug mode purely from unoptimized
+# Blake2b/AES-NI/SIMD-shaped inner loops.
+[profile.dev.package.argon2]
+opt-level = 3
+[profile.dev.package.blake2]
+opt-level = 3
+[profile.dev.package.chacha20]
+opt-level = 3
+[profile.dev.package.chacha20poly1305]
+opt-level = 3
+[profile.dev.package.poly1305]
+opt-level = 3
+[profile.dev.package.sha2]
+opt-level = 3
