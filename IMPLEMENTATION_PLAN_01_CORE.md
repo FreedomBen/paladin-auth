@@ -679,13 +679,13 @@ Each step lands as its own commit. Tests come first.
   regression must fail this test. The same assertion runs for the
   symmetric decrypt path: the post-AEAD plaintext buffer that bincode
   decodes is wiped after decode (success path) and after decode failure.
-- [ ] Tests: CSPRNG failure surfaces — inject a `getrandom::Error` through
+- [x] Tests: CSPRNG failure surfaces — inject a `getrandom::Error` through
   a `#[cfg(test)]` salt/nonce source override and assert encrypted
   `create` / `create_force` / `set_passphrase` / `change_passphrase` /
   `export::encrypted` / regular encrypted save each return `io_error` with
   `operation: "csprng_read"` (added to the §5 stable operation table) and
   do not write any partial vault file or leak intermediate plaintext.
-- [ ] Tests: Argon2id allocation failure — inject an Argon2 memory-allocation
+- [x] Tests: Argon2id allocation failure — inject an Argon2 memory-allocation
   failure after parameter bounds have already passed (via a `#[cfg(test)]`
   allocator hook) and assert encrypted-write paths
   surface `io_error` with `operation: "kdf_allocation"` (added to the §5

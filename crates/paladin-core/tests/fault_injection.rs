@@ -36,6 +36,7 @@ const ENV: &str = "PALADIN_FAULT_INJECT";
 const PRE: &str = "pre_commit";
 const POST: &str = "post_commit";
 const CSPRNG: &str = "csprng_read";
+const KDF: &str = "kdf_allocation";
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 
@@ -652,6 +653,275 @@ fn csprng_fault_value_does_not_trip_pre_or_post_commit_paths() {
         vault.save(&store).unwrap();
         with_fault(CSPRNG, || vault.save(&store))
             .expect("plaintext save must succeed under csprng_read fault");
+        no_tmp_residue(&path);
+    });
+}
+
+// ──────────────────────────────────────────────────────────────────
+// Argon2id allocation failure surface (Phase F.16 / DESIGN.md §5).
+//
+// Every encrypted save / open path runs Argon2id to derive the 32-byte
+// AEAD key. On a memory-constrained host the underlying allocator can
+// fail after the §4.4 bounds have already passed; that failure must
+// surface as `io_error { operation: "kdf_allocation" }` without
+// panicking, must not write a partial vault file, must not rotate or
+// clobber any pre-existing primary on write paths, and must not
+// construct a `Vault` on the open path. The fault-injection hook
+// reuses the existing `PALADIN_FAULT_INJECT` env-var contract with a
+// new `kdf_allocation` value (see `storage::fault`).
+//
+// Phase H (`set_passphrase` / `change_passphrase` / `remove_passphrase`)
+// and Phase I (`export::encrypted`) extend this matrix when they land.
+// ──────────────────────────────────────────────────────────────────
+
+const KDF_PASSPHRASE: &str = "kdf-fault-pass";
+
+fn kdf_encrypted_options() -> EncryptionOptions {
+    // §4.4 acceptance floor (`m_kib >= 8192`, `t >= 1`, `p >= 1`).
+    let params = Argon2Params {
+        m_kib: 8_192,
+        t: 1,
+        p: 1,
+    };
+    EncryptionOptions::with_params(SecretString::from(KDF_PASSPHRASE.to_string()), params)
+        .expect("cheap_params are in §4.4 bounds")
+}
+
+fn assert_kdf_allocation_io_error(err: &PaladinError) {
+    assert_eq!(
+        err.kind(),
+        ErrorKind::IoError,
+        "expected io_error, got {err:?}"
+    );
+    match err {
+        PaladinError::IoError { operation, .. } => {
+            assert_eq!(
+                *operation, "kdf_allocation",
+                "expected operation=kdf_allocation, got {operation:?}"
+            );
+        }
+        _ => unreachable!(),
+    }
+}
+
+#[test]
+fn encrypted_create_kdf_allocation_failure_surfaces_io_error() {
+    run_serial(|| {
+        let dir = TempDir::new().unwrap();
+        let path = vault_path_in(&dir);
+        let opts = kdf_encrypted_options();
+
+        let err = with_fault(KDF, || Store::create(&path, VaultInit::Encrypted(opts)))
+            .map(|_| ())
+            .expect_err("kdf_allocation fault must fail Store::create");
+
+        assert_kdf_allocation_io_error(&err);
+        // No partial primary or temp/backup siblings on disk: the KDF
+        // runs before any tempfile staging, so a fault must abort
+        // before touching the filesystem.
+        assert!(!path.exists(), "vault.bin must not be created");
+        no_tmp_residue(&path);
+        let bak_path = {
+            let mut s = path.as_os_str().to_os_string();
+            s.push(".bak");
+            PathBuf::from(s)
+        };
+        assert!(!bak_path.exists(), "vault.bin.bak must not be created");
+    });
+}
+
+#[test]
+fn encrypted_create_force_kdf_allocation_failure_preserves_primary() {
+    run_serial(|| {
+        let dir = TempDir::new().unwrap();
+        let path = vault_path_in(&dir);
+        // Establish a committed encrypted primary so the fault path
+        // exercises the staged-clobber branch (vs. the empty-dir branch
+        // covered above).
+        let _ = Store::create(&path, VaultInit::Encrypted(kdf_encrypted_options()))
+            .expect("setup: create encrypted primary");
+        let primary_before = std::fs::read(&path).expect("read primary before fault");
+        let bak_path = {
+            let mut s = path.as_os_str().to_os_string();
+            s.push(".bak");
+            PathBuf::from(s)
+        };
+        let bak_before = bak_path.exists().then(|| std::fs::read(&bak_path).unwrap());
+
+        let err = with_fault(KDF, || {
+            Store::create_force(&path, VaultInit::Encrypted(kdf_encrypted_options()))
+        })
+        .map(|_| ())
+        .expect_err("kdf_allocation fault must fail Store::create_force");
+
+        assert_kdf_allocation_io_error(&err);
+        // Primary remains byte-identical to its pre-fault state — the
+        // KDF runs before any rotation, staging, or rename, so the
+        // fault must not perturb on-disk state.
+        let primary_after = std::fs::read(&path).expect("read primary after fault");
+        assert_eq!(
+            primary_after, primary_before,
+            "primary must be unchanged by kdf_allocation fault on create_force"
+        );
+        no_tmp_residue(&path);
+        match bak_before {
+            Some(before) => {
+                let after = std::fs::read(&bak_path).expect("read .bak after fault");
+                assert_eq!(after, before, ".bak must be unchanged");
+            }
+            None => assert!(!bak_path.exists(), ".bak must not be created by fault"),
+        }
+    });
+}
+
+#[test]
+fn encrypted_regular_save_kdf_allocation_failure_preserves_primary() {
+    run_serial(|| {
+        let dir = TempDir::new().unwrap();
+        let path = vault_path_in(&dir);
+        // Establish a committed encrypted primary, drop, reopen so the
+        // follow-up `vault.save` exercises the regular-save path.
+        // `Store::open` uses the AEAD key cache (Phase F.13), but a
+        // future swap to a re-derive-on-save path must still surface
+        // the KDF allocation failure cleanly — explicit coverage here
+        // documents the expected operation string at the save site.
+        let _ = Store::create(&path, VaultInit::Encrypted(kdf_encrypted_options()))
+            .expect("setup: create encrypted primary");
+        let primary_before = std::fs::read(&path).expect("read primary before fault");
+        let (vault, store) = Store::open(
+            &path,
+            VaultLock::Encrypted(SecretString::from(KDF_PASSPHRASE.to_string())),
+        )
+        .expect("reopen encrypted vault");
+
+        // The cached AEAD key means a regular save under the
+        // `kdf_allocation` fault commits successfully today (no KDF
+        // call on the save path). Either outcome is acceptable as a
+        // surface check: success means the cache short-circuited the
+        // fault, while a returned error must carry the
+        // `kdf_allocation` operation string. Pin the pre-existing
+        // cache invariant explicitly so a regression that re-derives
+        // on every save is forced to surface the §5 string.
+        let result = with_fault(KDF, || vault.save(&store));
+        match result {
+            Ok(()) => {
+                // Cache hit: the save did not run the KDF, so the
+                // primary is rotated normally.
+                no_tmp_residue(&path);
+            }
+            Err(err) => {
+                assert_kdf_allocation_io_error(&err);
+                let primary_after = std::fs::read(&path).expect("read primary after fault");
+                assert_eq!(
+                    primary_after, primary_before,
+                    "regular encrypted save kdf_allocation fault must not modify the primary",
+                );
+                no_tmp_residue(&path);
+            }
+        }
+    });
+}
+
+#[test]
+fn encrypted_open_kdf_allocation_failure_surfaces_io_error() {
+    run_serial(|| {
+        let dir = TempDir::new().unwrap();
+        let path = vault_path_in(&dir);
+        // Establish a committed encrypted primary so the fault fires
+        // during the unlock KDF derivation, not during create.
+        let _ = Store::create(&path, VaultInit::Encrypted(kdf_encrypted_options()))
+            .expect("setup: create encrypted primary");
+        let primary_before = std::fs::read(&path).expect("read primary before fault");
+
+        let err = with_fault(KDF, || {
+            Store::open(
+                &path,
+                VaultLock::Encrypted(SecretString::from(KDF_PASSPHRASE.to_string())),
+            )
+        })
+        .map(|_| ())
+        .expect_err("kdf_allocation fault must fail Store::open");
+
+        assert_kdf_allocation_io_error(&err);
+        // Open is a read-only path: the KDF runs after the header is
+        // parsed but before any `Vault` is constructed, so the file
+        // bytes must be byte-identical and no temp siblings appear.
+        let primary_after = std::fs::read(&path).expect("read primary after fault");
+        assert_eq!(
+            primary_after, primary_before,
+            "encrypted open must not mutate the primary on a kdf_allocation fault",
+        );
+        no_tmp_residue(&path);
+
+        // A subsequent unfaulted open must succeed — the fault did not
+        // corrupt the on-disk header, the AEAD key cache, or any
+        // intermediate state.
+        let (_vault, _store) = Store::open(
+            &path,
+            VaultLock::Encrypted(SecretString::from(KDF_PASSPHRASE.to_string())),
+        )
+        .expect("unfaulted reopen must succeed after kdf_allocation fault");
+    });
+}
+
+#[test]
+fn kdf_allocation_fault_reaches_every_encrypted_kdf_site() {
+    run_serial(|| {
+        // Coverage row: each currently-implemented Argon2id derivation
+        // site must surface the same `io_error { operation:
+        // "kdf_allocation" }` when the hook fires. Phase H / Phase I
+        // will extend this list with `set_passphrase`,
+        // `change_passphrase`, `remove_passphrase`, and
+        // `export::encrypted` rows.
+        let dir = TempDir::new().unwrap();
+
+        // Site 1: encrypted create on a fresh path.
+        let path1 = vault_path_in(&dir);
+        let err1 = with_fault(KDF, || {
+            Store::create(&path1, VaultInit::Encrypted(kdf_encrypted_options()))
+        })
+        .map(|_| ())
+        .expect_err("create");
+        assert_kdf_allocation_io_error(&err1);
+
+        // Site 2: encrypted create_force over an existing primary.
+        let dir2 = TempDir::new().unwrap();
+        let path2 = vault_path_in(&dir2);
+        let _ = Store::create(&path2, VaultInit::Encrypted(kdf_encrypted_options())).unwrap();
+        let err2 = with_fault(KDF, || {
+            Store::create_force(&path2, VaultInit::Encrypted(kdf_encrypted_options()))
+        })
+        .map(|_| ())
+        .expect_err("create_force");
+        assert_kdf_allocation_io_error(&err2);
+
+        // Site 3: encrypted open on a committed primary.
+        let dir3 = TempDir::new().unwrap();
+        let path3 = vault_path_in(&dir3);
+        let _ = Store::create(&path3, VaultInit::Encrypted(kdf_encrypted_options())).unwrap();
+        let err3 = with_fault(KDF, || {
+            Store::open(
+                &path3,
+                VaultLock::Encrypted(SecretString::from(KDF_PASSPHRASE.to_string())),
+            )
+        })
+        .map(|_| ())
+        .expect_err("open");
+        assert_kdf_allocation_io_error(&err3);
+    });
+}
+
+#[test]
+fn kdf_allocation_fault_value_does_not_trip_pre_or_post_commit_paths() {
+    run_serial(|| {
+        // Plaintext save has no KDF — the `kdf_allocation` fault value
+        // must not accidentally fire a pre/post-commit hook there.
+        let dir = TempDir::new().unwrap();
+        let path = vault_path_in(&dir);
+        let (vault, store) = Store::create(&path, VaultInit::Plaintext).unwrap();
+        vault.save(&store).unwrap();
+        with_fault(KDF, || vault.save(&store))
+            .expect("plaintext save must succeed under kdf_allocation fault");
         no_tmp_residue(&path);
     });
 }

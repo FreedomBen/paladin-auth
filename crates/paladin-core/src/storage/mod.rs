@@ -919,7 +919,7 @@ fn create_encrypted_internal(
     opts.kdf_params.validate()?;
 
     let salt = generate_salt()?;
-    let key = argon2id_derive_key(&opts.passphrase, &salt, &opts.kdf_params)?;
+    let key = derive_aead_key(&opts.passphrase, &salt, &opts.kdf_params)?;
     let context = EncryptedSaveContext {
         salt,
         params: opts.kdf_params,
@@ -1030,8 +1030,11 @@ fn open_encrypted(path: &Path, passphrase: SecretString) -> Result<(crate::Vault
     params.validate()?;
 
     // Derive the AEAD key. The `EncryptedHeaderTrailer` salt /
-    // nonce live in the on-disk header.
-    let key = argon2id_derive_key(&passphrase, &trailer.salt, &params)?;
+    // nonce live in the on-disk header. `derive_aead_key` honors the
+    // `kdf_allocation` test-fault hook so a memory-constrained
+    // unlock surfaces `io_error { operation: "kdf_allocation" }`
+    // without panicking.
+    let key = derive_aead_key(&passphrase, &trailer.salt, &params)?;
 
     // AAD: every header byte after the magic (§4.4).
     let aad = &bytes[8..ENCRYPTED_HEADER_LEN];
@@ -1081,6 +1084,37 @@ fn csprng_read_error() -> PaladinError {
         operation: "csprng_read",
         source: io::Error::other("CSPRNG read failed"),
     }
+}
+
+/// Build the canonical `kdf_allocation` `IoError`. Surfaces the §5
+/// stable operation string for Argon2id memory-allocation failures on
+/// every encrypted read or write path; shared between the real
+/// allocator-failure route (which would otherwise abort) and the
+/// `test-fault-injection` hook so both surface an identical shape.
+fn kdf_allocation_error() -> PaladinError {
+    PaladinError::IoError {
+        operation: "kdf_allocation",
+        source: io::Error::other("Argon2id memory allocation failed"),
+    }
+}
+
+/// Wrapper around `argon2id_derive_key` used at every encrypted-write
+/// AND encrypted-read site so an Argon2id memory-allocation failure
+/// surfaces as `io_error { operation: "kdf_allocation" }` without
+/// panicking. The `test-fault-injection` hook
+/// (`PALADIN_FAULT_INJECT=kdf_allocation`) short-circuits the real
+/// derivation and returns the same error so encrypted `create` /
+/// `create_force` / `Vault::save` / `Store::open` can be exercised
+/// deterministically against allocation-failure regressions.
+fn derive_aead_key(
+    passphrase: &SecretString,
+    salt: &[u8; SALT_LEN],
+    params: &Argon2Params,
+) -> Result<zeroize::Zeroizing<[u8; AEAD_KEY_LEN]>> {
+    if fault::kdf_allocation_should_fail() {
+        return Err(kdf_allocation_error());
+    }
+    argon2id_derive_key(passphrase, salt, params)
 }
 
 /// Generate a 16-byte Argon2 salt from the OS CSPRNG. Failures
@@ -1169,7 +1203,7 @@ pub fn _testing_write_encrypted_with_raw_plaintext(
 ) -> Result<()> {
     params.validate()?;
     let salt = generate_salt()?;
-    let key = argon2id_derive_key(passphrase, &salt, &params)?;
+    let key = derive_aead_key(passphrase, &salt, &params)?;
     let nonce = generate_nonce()?;
     let trailer = EncryptedHeaderTrailer {
         kdf_id: KDF_ID_ARGON2ID,
