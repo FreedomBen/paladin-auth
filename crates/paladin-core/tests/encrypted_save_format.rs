@@ -335,6 +335,79 @@ fn header_round_trips_custom_argon2_params_across_in_range_triples() {
 }
 
 #[test]
+fn create_generates_fresh_salt_and_nonce_across_n_creates() {
+    // F.12 — `Store::create` must draw a fresh CSPRNG `salt` and a
+    // fresh `nonce` per creation. With the same passphrase, payload
+    // (empty after create), and Argon2 params, two creates that
+    // collide on `salt` would derive the same AEAD key — defeating
+    // the §4.4 contract that each new encrypted vault has independent
+    // crypto material — and two creates that collide on `nonce` would
+    // expose related-message attacks if any future regression caused
+    // a key collision. Both must be pairwise distinct, separately
+    // from the regular-save nonce-rotation property pinned in
+    // `regular_save_preserves_argon2_params_and_salt_across_n_saves`
+    // (which fixes the salt and rotates only the nonce). Each
+    // resulting vault is also re-opened to prove the freshly written
+    // header is self-consistent (no bytes off-by-offset).
+    const N: usize = 64;
+    let mut observed_salts: HashSet<Vec<u8>> = HashSet::with_capacity(N);
+    let mut observed_nonces: HashSet<Vec<u8>> = HashSet::with_capacity(N);
+    for i in 0..N {
+        let dir = vault_test_dir();
+        let path = dir.path().join("vault.bin");
+        let (_v, _s) = Store::create(&path, VaultInit::Encrypted(cheap_options("hunter2")))
+            .unwrap_or_else(|e| panic!("create iteration {i}: {e:?}"));
+        let bytes = fs::read(&path).expect("read vault");
+        let salt = bytes[SALT_RANGE.clone()].to_vec();
+        let nonce = bytes[NONCE_RANGE.clone()].to_vec();
+        assert!(
+            observed_salts.insert(salt),
+            "salt collision at iteration {i}: §4.4 fresh-material contract violated",
+        );
+        assert!(
+            observed_nonces.insert(nonce),
+            "nonce collision at iteration {i}: §4.4 fresh-material contract violated",
+        );
+        let (_v2, _s2) = Store::open(&path, VaultLock::Encrypted(pp("hunter2")))
+            .unwrap_or_else(|e| panic!("re-open iteration {i}: {e:?}"));
+    }
+    assert_eq!(observed_salts.len(), N);
+    assert_eq!(observed_nonces.len(), N);
+}
+
+#[test]
+fn create_force_generates_fresh_salt_and_nonce_across_n_creates() {
+    // F.12 — same fresh-material contract for the staged-clobber
+    // entry point. Each iteration uses a fresh tempdir with no prior
+    // primary so this exercises `create_force`'s own randomness path
+    // rather than reusing the `Store::create` material covered above.
+    const N: usize = 64;
+    let mut observed_salts: HashSet<Vec<u8>> = HashSet::with_capacity(N);
+    let mut observed_nonces: HashSet<Vec<u8>> = HashSet::with_capacity(N);
+    for i in 0..N {
+        let dir = vault_test_dir();
+        let path = dir.path().join("vault.bin");
+        let (_v, _s) = Store::create_force(&path, VaultInit::Encrypted(cheap_options("hunter2")))
+            .unwrap_or_else(|e| panic!("create_force iteration {i}: {e:?}"));
+        let bytes = fs::read(&path).expect("read vault");
+        let salt = bytes[SALT_RANGE.clone()].to_vec();
+        let nonce = bytes[NONCE_RANGE.clone()].to_vec();
+        assert!(
+            observed_salts.insert(salt),
+            "salt collision at iteration {i}: §4.4 fresh-material contract violated",
+        );
+        assert!(
+            observed_nonces.insert(nonce),
+            "nonce collision at iteration {i}: §4.4 fresh-material contract violated",
+        );
+        let (_v2, _s2) = Store::open(&path, VaultLock::Encrypted(pp("hunter2")))
+            .unwrap_or_else(|e| panic!("re-open iteration {i}: {e:?}"));
+    }
+    assert_eq!(observed_salts.len(), N);
+    assert_eq!(observed_nonces.len(), N);
+}
+
+#[test]
 fn create_force_writes_custom_argon2_params_to_header_with_no_prior_file() {
     // F.11 — `Store::create_force` accepts custom validated Argon2
     // params via `EncryptionOptions::with_params` and persists them

@@ -655,7 +655,7 @@ Each step lands as its own commit. Tests come first.
   params into the header when supplied through `EncryptionOptions`.
   *(`set_passphrase` / `change_passphrase` portions deferred to Phase H;
   `export::encrypted` portion deferred to Phase I.)*
-- [ ] Tests: encrypted `create` / `create_force` fresh-material generation —
+- [x] Tests: encrypted `create` / `create_force` fresh-material generation —
   across `N = 64` creates with the same passphrase, payload, and Argon2
   params, every observed 16-byte `salt` and 24-byte primary `nonce` is
   pairwise distinct, and every resulting vault opens successfully. This
