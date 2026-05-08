@@ -250,3 +250,47 @@ fn header_writes_argon2_params_in_little_endian_for_floor_m_kib() {
         "p = 1 little-endian"
     );
 }
+
+#[test]
+fn encrypted_header_lays_out_24_byte_nonce_slot_at_offset_40() {
+    // §4.4 AEAD output shape — XChaCha20-Poly1305 uses a 24-byte
+    // nonce, not the IETF ChaCha20-Poly1305 12-byte construct. Pin
+    // the on-disk layout so a swap to a different AEAD construct
+    // (which would shorten the header) fails this test instead of
+    // silently re-shaping the file format.
+    //
+    // §4.3 encrypted-mode header layout (10 + 54 = 64 bytes):
+    //   magic(8) format_ver(1) mode(1)            → offsets  0..10
+    //   kdf_id(1)                                 → offset  10..11
+    //   m_kib(4) t(4) p(4)                        → offsets 11..23
+    //   salt(16)                                  → offsets 23..39
+    //   aead_id(1)                                → offset  39..40
+    //   nonce(24)                                 → offsets 40..64
+    let dir = vault_test_dir();
+    let path = dir.path().join("vault.bin");
+    let (_v, _s) =
+        Store::create(&path, VaultInit::Encrypted(cheap_options("hunter2"))).expect("create");
+    let bytes = fs::read(&path).expect("read vault");
+
+    assert_eq!(ENCRYPTED_HEADER_LEN, 64, "encrypted header length is 64");
+    assert_eq!(NONCE_RANGE.start, 40, "nonce slot starts at byte 40");
+    assert_eq!(
+        NONCE_RANGE.end, 64,
+        "nonce slot ends at byte 64 (exclusive)"
+    );
+    assert_eq!(
+        NONCE_RANGE.end - NONCE_RANGE.start,
+        24,
+        "XChaCha20-Poly1305 nonce slot is exactly 24 bytes wide"
+    );
+
+    // The on-disk file must include at least the full encrypted
+    // header so the nonce slot is fully present.
+    assert!(
+        bytes.len() >= ENCRYPTED_HEADER_LEN,
+        "encrypted vault file must be at least {ENCRYPTED_HEADER_LEN} bytes (header), got {}",
+        bytes.len()
+    );
+    let nonce_slot = &bytes[NONCE_RANGE];
+    assert_eq!(nonce_slot.len(), 24, "on-disk nonce slot is 24 bytes wide");
+}

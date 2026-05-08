@@ -1436,4 +1436,111 @@ mod tests {
             other => panic!("expected Propagate(DecryptFailed), got {other:?}"),
         }
     }
+
+    /// §4.4 AEAD output shape — the on-disk encrypted body is
+    /// **exactly** the bincode-serialized `VaultPayload` plus the
+    /// 16-byte Poly1305 tag. Pins XChaCha20-Poly1305 (24-byte nonce,
+    /// 16-byte tag) end-to-end so a swap to a different AEAD construct
+    /// (e.g. AES-GCM, IETF ChaCha20-Poly1305) fails this assertion
+    /// before silent re-encoding can ship.
+    #[test]
+    fn encrypted_save_writes_body_equal_to_payload_plus_aead_tag() {
+        use crate::crypto::AEAD_TAG_LEN;
+        use std::os::unix::fs::PermissionsExt;
+        let dir = TempDir::new().unwrap();
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let path = dir.path().join("vault.bin");
+
+        let cheap = Argon2Params {
+            m_kib: 8_192,
+            t: 1,
+            p: 1,
+        };
+        let opts = EncryptionOptions::with_params(
+            secrecy::SecretString::from("hunter2".to_string()),
+            cheap,
+        )
+        .expect("cheap params and non-empty passphrase are valid");
+        let (vault, _store) = Store::create(&path, VaultInit::Encrypted(opts)).unwrap();
+
+        let bytes = fs::read(&path).expect("read encrypted primary");
+        let payload = vault.snapshot_payload();
+        let encoded = encode_vault_payload(&payload).expect("encode VaultPayload");
+
+        assert_eq!(
+            bytes.len(),
+            header::ENCRYPTED_HEADER_LEN + encoded.len() + AEAD_TAG_LEN,
+            "on-disk file should equal 64-byte header + bincode-serialized payload + 16-byte AEAD tag"
+        );
+    }
+
+    /// §4.4 AEAD output shape — adding plaintext bytes grows the
+    /// encrypted body by exactly the same number of bytes
+    /// (`XChaCha20` is a stream cipher, so
+    /// `ciphertext_len == plaintext_len`). A regression to a
+    /// block-cipher AEAD with padding (e.g. AES-CBC plus HMAC) would
+    /// round the body up to a block boundary and fail this delta
+    /// assertion.
+    #[test]
+    fn encrypted_save_body_grows_one_byte_per_plaintext_byte() {
+        use crate::crypto::AEAD_TAG_LEN;
+        use crate::otpauth::parse_otpauth;
+        use std::os::unix::fs::PermissionsExt;
+        use std::time::{Duration, UNIX_EPOCH};
+        let dir = TempDir::new().unwrap();
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let path = dir.path().join("vault.bin");
+
+        let cheap = Argon2Params {
+            m_kib: 8_192,
+            t: 1,
+            p: 1,
+        };
+        let opts = EncryptionOptions::with_params(
+            secrecy::SecretString::from("hunter2".to_string()),
+            cheap,
+        )
+        .expect("cheap params and non-empty passphrase are valid");
+        let (mut vault, store) = Store::create(&path, VaultInit::Encrypted(opts)).unwrap();
+
+        let baseline_encoded =
+            encode_vault_payload(&vault.snapshot_payload()).expect("encode baseline payload");
+        let baseline_file = fs::read(&path).expect("read baseline primary");
+        assert_eq!(
+            baseline_file.len(),
+            header::ENCRYPTED_HEADER_LEN + baseline_encoded.len() + AEAD_TAG_LEN,
+            "baseline shape: header + plaintext + tag"
+        );
+
+        // Add an account, save, and re-check the shape. The on-disk
+        // body should grow by exactly the bincode encoding delta.
+        let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let parsed = parse_otpauth(
+            "otpauth://totp/Acme:alice@example.com?secret=JBSWY3DPEHPK3PXP&issuer=Acme",
+            now,
+        )
+        .expect("parse otpauth fixture");
+        vault.add(parsed.account);
+        vault.save(&store).expect("encrypted save with one account");
+
+        let bumped_encoded =
+            encode_vault_payload(&vault.snapshot_payload()).expect("encode payload+account");
+        let bumped_file = fs::read(&path).expect("read bumped primary");
+
+        let plaintext_delta = bumped_encoded.len() - baseline_encoded.len();
+        assert!(
+            plaintext_delta > 0,
+            "adding an account must grow the bincode-encoded payload"
+        );
+        assert_eq!(
+            bumped_file.len() - baseline_file.len(),
+            plaintext_delta,
+            "encrypted body delta must equal plaintext delta (stream cipher, no padding)"
+        );
+        assert_eq!(
+            bumped_file.len(),
+            header::ENCRYPTED_HEADER_LEN + bumped_encoded.len() + AEAD_TAG_LEN,
+            "post-add shape: header + plaintext + tag"
+        );
+    }
 }

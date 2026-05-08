@@ -253,4 +253,64 @@ mod tests {
         let pt = aead_decrypt(&key, &nonce, b"aad", &ct).expect("empty round-trip");
         assert!(pt.is_empty());
     }
+
+    /// Algorithm-choice lock — same KAT key / aad / plaintext run through
+    /// the IETF `chacha20poly1305::ChaCha20Poly1305` (12-byte nonce)
+    /// must produce ciphertext + tag that **differ** from the committed
+    /// XChaCha20-Poly1305 RFC fixture. Pins the §4.4 choice of
+    /// XChaCha20-Poly1305 (24-byte nonce) over the IETF
+    /// ChaCha20-Poly1305 against silent-misconfig regressions in
+    /// `aead_encrypt`. The negative-variant fixture is committed, not
+    /// recomputed at test time.
+    #[test]
+    fn xchacha20_kat_inputs_through_chacha20_poly1305_produce_distinct_committed_output() {
+        use chacha20poly1305::{
+            aead::{Aead, KeyInit, Payload},
+            ChaCha20Poly1305, Key as ChachaKey, Nonce as ChachaNonce,
+        };
+
+        let v = rfc_xchacha20_poly1305_vector();
+        // ChaCha20-Poly1305 (IETF) takes a 12-byte nonce, not the 24-byte
+        // XChaCha20 nonce. The first 12 bytes of the XChaCha20 KAT nonce
+        // are the canonical "same nonce inputs" projection per §4.4.
+        let nonce_ietf: [u8; 12] = v.nonce[..12]
+            .try_into()
+            .expect("12-byte slice of 24-byte nonce");
+
+        let cipher = ChaCha20Poly1305::new(ChachaKey::from_slice(&v.key));
+        let actual = cipher
+            .encrypt(
+                ChachaNonce::from_slice(&nonce_ietf),
+                Payload {
+                    msg: &v.plaintext,
+                    aad: &v.aad,
+                },
+            )
+            .expect("ChaCha20-Poly1305 encrypt KAT");
+
+        // Pinned bytes captured from `chacha20poly1305 = "0.10"` running
+        // `ChaCha20Poly1305` (IETF, 12-byte nonce) on the same KAT
+        // key / aad / plaintext as `rfc_xchacha20_poly1305_vector` with
+        // the first 12 bytes of that vector's 24-byte nonce.
+        let expected_chacha20: [u8; 130] = [
+            0x11, 0xE1, 0x36, 0x53, 0xFB, 0x6A, 0x1B, 0x94, 0x47, 0xCB, 0x3B, 0x36, 0xA1, 0xB7,
+            0x73, 0x09, 0x72, 0x75, 0xEB, 0x2C, 0xFE, 0xBB, 0xA4, 0xAA, 0xAF, 0xCF, 0x70, 0xD8,
+            0x48, 0xE0, 0xE9, 0xB3, 0x4B, 0x3E, 0xDD, 0x5C, 0x46, 0x6D, 0x23, 0x9D, 0x6D, 0x1B,
+            0x83, 0xBD, 0xA2, 0x5B, 0x12, 0x93, 0x20, 0xA1, 0x47, 0x51, 0x77, 0x28, 0x28, 0x91,
+            0x75, 0x2B, 0xC9, 0x74, 0x8A, 0x74, 0x7B, 0xDF, 0x02, 0x17, 0x68, 0x32, 0xB3, 0x9B,
+            0xBA, 0xFC, 0x01, 0xCD, 0x1F, 0x4F, 0x82, 0xBF, 0x77, 0x01, 0x72, 0x39, 0x73, 0xEB,
+            0x1E, 0x76, 0x89, 0xB1, 0xA9, 0x35, 0xBB, 0xDF, 0xD2, 0xB5, 0x46, 0x0B, 0x4A, 0xFC,
+            0xFC, 0xD9, 0xDE, 0xD8, 0x26, 0xCE, 0xAB, 0x20, 0x8F, 0x51, 0x34, 0x59, 0x2E, 0xA2,
+            0xCC, 0x3D, 0x84, 0x11, 0x4A, 0xD9, 0xA2, 0x36, 0xD5, 0xFD, 0xAF, 0x9A, 0xA8, 0xF7,
+            0x13, 0xEE, 0x39, 0x93,
+        ];
+        assert_eq!(
+            actual, expected_chacha20,
+            "ChaCha20-Poly1305 committed fixture mismatch (drop-in regression?)"
+        );
+        assert_ne!(
+            actual, v.ciphertext_and_tag,
+            "ChaCha20-Poly1305 (IETF, 12-byte nonce) must differ from XChaCha20-Poly1305 KAT"
+        );
+    }
 }

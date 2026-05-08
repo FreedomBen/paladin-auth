@@ -563,7 +563,7 @@ Each step lands as its own commit. Tests come first.
   license recorded beside the fixture. They are never values recomputed by
   the implementation under test. Negative rows mutate AAD and tag bytes and
   assert authentication failure.
-- [ ] Tests: algorithm-choice locks — the same KAT inputs run through
+- [x] Tests: algorithm-choice locks — the same KAT inputs run through
   `argon2::Variant::Argon2i` and `argon2::Variant::Argon2d` produce keys
   that **differ** from the committed Argon2id key, and the same plaintext /
   key / nonce inputs run through `chacha20poly1305::ChaCha20Poly1305`
@@ -573,7 +573,7 @@ Each step lands as its own commit. Tests come first.
   against silent-misconfig regressions in the `crypto::argon2` /
   `crypto::aead` wrappers. The negative-variant rows are committed fixtures,
   not values recomputed at test time.
-- [ ] Tests: AEAD output shape — the encrypted on-disk body length equals
+- [x] Tests: AEAD output shape — the encrypted on-disk body length equals
   `plaintext_len + 16` (Poly1305 tag), and the in-header `nonce` slot is
   exactly 24 bytes. Asserted as named cases against a fresh encrypted
   vault so any future swap to a different AEAD construct (e.g. AES-GCM,

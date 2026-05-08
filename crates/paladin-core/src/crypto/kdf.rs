@@ -568,4 +568,97 @@ mod tests {
             "Argon2id KAT mismatch (drop-in regression?)"
         );
     }
+
+    /// KAT inputs from `argon2id_derive_key_known_answer_self_pinned`.
+    fn kat_passphrase() -> SecretString {
+        pp("paladin-test-passphrase")
+    }
+
+    fn kat_salt() -> [u8; 16] {
+        [
+            0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD,
+            0xEE, 0xFF,
+        ]
+    }
+
+    /// Committed Argon2id KAT output (mirrored from
+    /// `argon2id_derive_key_known_answer_self_pinned`). Duplicated as a
+    /// committed fixture so the algorithm-choice-lock tests below assert
+    /// inequality against a frozen value, not a recomputed one.
+    const ARGON2ID_KAT_KEY: [u8; 32] = [
+        0x7C, 0x90, 0xAC, 0x83, 0x75, 0x4D, 0xEF, 0x82, 0x07, 0x44, 0xC1, 0x97, 0xAB, 0x78, 0xF5,
+        0x7B, 0xC5, 0x56, 0xB4, 0x73, 0x8B, 0x50, 0x95, 0x23, 0x1E, 0xC9, 0xEC, 0x88, 0x65, 0xDC,
+        0x0C, 0x80,
+    ];
+
+    /// Run the Argon2id KAT inputs through a non-Argon2id variant. Mirrors
+    /// the `argon2id_derive_key` wiring (Version V0x13, 32-byte output) but
+    /// flips the algorithm so the algorithm-choice-lock tests can pin
+    /// negative variants.
+    fn derive_key_with_variant(alg: Algorithm) -> [u8; 32] {
+        let params =
+            Params::new(8192, 1, 1, Some(AEAD_KEY_LEN)).expect("KAT params are in argon2 bounds");
+        let argon2 = Argon2::new(alg, Version::V0x13, params);
+        let mut out = [0u8; 32];
+        argon2
+            .hash_password_into(
+                kat_passphrase().expose_secret().as_bytes(),
+                &kat_salt(),
+                &mut out,
+            )
+            .expect("argon2 derivation succeeds for in-bounds params");
+        out
+    }
+
+    /// Algorithm-choice lock — Argon2i variant must produce a key that
+    /// differs from the committed Argon2id KAT. Pins the §4.4 choice of
+    /// Argon2id over Argon2i against silent-misconfig regressions in
+    /// `argon2id_derive_key`. The Argon2i fixture is committed, not
+    /// recomputed at test time.
+    #[test]
+    fn argon2id_kat_inputs_through_argon2i_produce_distinct_committed_key() {
+        // Pinned bytes captured from `argon2 = "0.5"` with
+        // `Algorithm::Argon2i, Version::V0x13` and the same KAT inputs as
+        // the Argon2id self-pinned fixture above.
+        let expected_argon2i: [u8; 32] = [
+            0x0B, 0x7B, 0x17, 0xC9, 0x1B, 0xA0, 0x17, 0x95, 0x13, 0x1A, 0x1B, 0xFD, 0xE2, 0x4E,
+            0xB5, 0xDA, 0xBC, 0x57, 0x43, 0x08, 0x55, 0x30, 0x96, 0x2C, 0x2E, 0xE3, 0x25, 0xC9,
+            0x62, 0x8A, 0x8C, 0x65,
+        ];
+        let actual = derive_key_with_variant(Algorithm::Argon2i);
+        assert_eq!(
+            actual, expected_argon2i,
+            "Argon2i committed fixture mismatch (drop-in regression?)"
+        );
+        assert_ne!(
+            expected_argon2i, ARGON2ID_KAT_KEY,
+            "Argon2i and Argon2id must derive distinct keys"
+        );
+    }
+
+    /// Algorithm-choice lock — Argon2d variant must produce a key that
+    /// differs from the committed Argon2id KAT. Pins the §4.4 choice of
+    /// Argon2id over Argon2d against silent-misconfig regressions in
+    /// `argon2id_derive_key`. The Argon2d fixture is committed, not
+    /// recomputed at test time.
+    #[test]
+    fn argon2id_kat_inputs_through_argon2d_produce_distinct_committed_key() {
+        // Pinned bytes captured from `argon2 = "0.5"` with
+        // `Algorithm::Argon2d, Version::V0x13` and the same KAT inputs as
+        // the Argon2id self-pinned fixture above.
+        let expected_argon2d: [u8; 32] = [
+            0xF9, 0x26, 0x2D, 0xA0, 0xE1, 0xFA, 0x08, 0x8A, 0x2E, 0xC6, 0xAB, 0xF5, 0x74, 0x47,
+            0x44, 0xFC, 0xBA, 0x41, 0xA0, 0xE5, 0x44, 0xB1, 0x00, 0xC7, 0xB2, 0x33, 0x3A, 0x10,
+            0xE0, 0x9C, 0xED, 0x0C,
+        ];
+        let actual = derive_key_with_variant(Algorithm::Argon2d);
+        assert_eq!(
+            actual, expected_argon2d,
+            "Argon2d committed fixture mismatch (drop-in regression?)"
+        );
+        assert_ne!(
+            expected_argon2d, ARGON2ID_KAT_KEY,
+            "Argon2d and Argon2id must derive distinct keys"
+        );
+    }
 }
