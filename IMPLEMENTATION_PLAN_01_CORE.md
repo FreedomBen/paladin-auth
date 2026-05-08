@@ -667,16 +667,18 @@ Each step lands as its own commit. Tests come first.
   Argon2id (assert via deterministic test instrumentation); both
   fields are zeroized when `Vault` drops. Plaintext vaults hold no cached
   key or passphrase.
-- [ ] Tests: pre-AEAD plaintext-payload zeroization — the bincode-serialized
+- [x] Tests: pre-AEAD plaintext-payload zeroization — the bincode-serialized
   `VaultPayload` buffer that is fed into `crypto::aead::encrypt` is held in
   a `Zeroizing<Vec<u8>>` (or equivalent) and its bytes are wiped before the
-  buffer is freed. Byte-precise assertion: hold a raw pointer to the
-  buffer's backing allocation through a `#[cfg(test)]` hook, run an
-  encrypted save, and verify the bytes are all zero before deallocation.
-  A "buffer dropped without zeroization" regression must fail this test.
-  The same assertion runs for the symmetric decrypt path: the post-AEAD
-  plaintext buffer that bincode decodes is wiped after decode (success
-  path) and after decode failure.
+  buffer is freed. Byte-precise assertion: a `#[cfg(test)]` /
+  `feature = "test-zeroize-witness"` hook borrows the buffer as a safe
+  `&[u8]` between the in-place volatile zeroize and the inner `Vec<u8>`
+  auto-drop (the crate is `#![forbid(unsafe_code)]` so a raw pointer is
+  not used), runs an encrypted save / open, and verifies the bytes are
+  all zero before deallocation. A "buffer dropped without zeroization"
+  regression must fail this test. The same assertion runs for the
+  symmetric decrypt path: the post-AEAD plaintext buffer that bincode
+  decodes is wiped after decode (success path) and after decode failure.
 - [ ] Tests: CSPRNG failure surfaces — inject a `getrandom::Error` through
   a `#[cfg(test)]` salt/nonce source override and assert encrypted
   `create` / `create_force` / `set_passphrase` / `change_passphrase` /

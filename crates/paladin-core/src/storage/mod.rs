@@ -38,8 +38,8 @@ use std::path::{Path, PathBuf};
 use secrecy::SecretString;
 
 use crate::crypto::{
-    aead_decrypt, aead_encrypt, argon2id_derive_key, Argon2Params, EncryptionOptions, AEAD_KEY_LEN,
-    AEAD_NONCE_LEN,
+    aead_decrypt, aead_encrypt, argon2id_derive_key, Argon2Params, EncryptionOptions,
+    WitnessSite, ZeroizingBytes, AEAD_KEY_LEN, AEAD_NONCE_LEN,
 };
 use crate::error::{PaladinError, Result, VaultMode};
 
@@ -1036,7 +1036,15 @@ fn open_encrypted(path: &Path, passphrase: SecretString) -> Result<(crate::Vault
     // AAD: every header byte after the magic (§4.4).
     let aad = &bytes[8..ENCRYPTED_HEADER_LEN];
     let ct_and_tag = &bytes[ENCRYPTED_HEADER_LEN..];
-    let plaintext = aead_decrypt(&key, &trailer.nonce, aad, ct_and_tag)?;
+    // §4.4 / Phase F.14: hold the post-AEAD plaintext in a
+    // `ZeroizingBytes` so its bytes are wiped on drop. The wrapper
+    // covers both the success path below *and* the
+    // `decode_vault_payload` failure path because `?` drops every
+    // local owner on the way out of this scope.
+    let plaintext = ZeroizingBytes::from_vec(
+        aead_decrypt(&key, &trailer.nonce, aad, ct_and_tag)?,
+        WitnessSite::DecryptPostAead,
+    );
 
     // Decoded payload still bounded by the §4.3 16 MiB cap. Defensive
     // belt-and-suspenders against the on-disk cap above: AEAD is
@@ -1093,7 +1101,12 @@ fn build_encrypted_on_disk(
     params: Argon2Params,
     key: &[u8; AEAD_KEY_LEN],
 ) -> Result<Vec<u8>> {
-    let payload_bytes = encode_vault_payload(payload)?;
+    // §4.4 / Phase F.14: hold the bincode-serialized `VaultPayload`
+    // in a `ZeroizingBytes` so its bytes are wiped on drop *before*
+    // the underlying allocation is freed — both on the success path
+    // below and on any earlier `?`-propagated error.
+    let payload_bytes =
+        ZeroizingBytes::from_vec(encode_vault_payload(payload)?, WitnessSite::EncryptPreAead);
     // `encode_vault_payload` already enforces the 16 MiB plaintext
     // cap, so the AEAD encrypt below is well within the practical
     // limit.
@@ -1116,6 +1129,50 @@ fn build_encrypted_on_disk(
     on_disk.extend_from_slice(&header_bytes);
     on_disk.extend_from_slice(&ct_and_tag);
     Ok(on_disk)
+}
+
+/// Test-only: write an encrypted-mode vault file whose AEAD payload is
+/// `raw_plaintext` exactly — *not* a bincode-encoded `VaultPayload`.
+///
+/// Subsequent `Store::open(path, VaultLock::Encrypted(_))` with the
+/// same passphrase therefore drives `aead_decrypt` through the
+/// success path and `decode_vault_payload` through the failure path.
+/// That is the test seam used by the Phase F.14 zeroize-witness suite
+/// to assert the post-AEAD plaintext buffer is wiped *after* a decode
+/// failure (not just on the success path).
+///
+/// Excluded from the §4.7 stable public API; only available when the
+/// `test-zeroize-witness` cargo feature is enabled.
+#[cfg(feature = "test-zeroize-witness")]
+#[doc(hidden)]
+pub fn _testing_write_encrypted_with_raw_plaintext(
+    path: &Path,
+    passphrase: &SecretString,
+    params: Argon2Params,
+    raw_plaintext: &[u8],
+) -> Result<()> {
+    params.validate()?;
+    let salt = generate_salt()?;
+    let key = argon2id_derive_key(passphrase, &salt, &params)?;
+    let nonce = generate_nonce()?;
+    let trailer = EncryptedHeaderTrailer {
+        kdf_id: KDF_ID_ARGON2ID,
+        m_kib: params.m_kib,
+        t: params.t,
+        p: params.p,
+        salt,
+        aead_id: AEAD_ID_XCHACHA20_POLY1305,
+        nonce,
+    };
+    let mut header_bytes = Vec::with_capacity(ENCRYPTED_HEADER_LEN);
+    write_encrypted_header(&mut header_bytes, &trailer);
+    debug_assert_eq!(header_bytes.len(), ENCRYPTED_HEADER_LEN);
+    let aad = header_bytes[8..].to_vec();
+    let ct_and_tag = aead_encrypt(&key, &nonce, &aad, raw_plaintext);
+    let mut on_disk = Vec::with_capacity(ENCRYPTED_HEADER_LEN + ct_and_tag.len());
+    on_disk.extend_from_slice(&header_bytes);
+    on_disk.extend_from_slice(&ct_and_tag);
+    write_secret_file_atomic(path, &on_disk)
 }
 
 /// §4.3 atomic write pipeline for an encrypted vault. Mirrors

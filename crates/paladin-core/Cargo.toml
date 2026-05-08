@@ -21,6 +21,16 @@ default = []
 # stable §4.7 public API.
 test-fault-injection = []
 
+# Test-only zeroization witness (DESIGN.md §4.4 / Phase F.14). Off by
+# default; production builds compile the witness `observe()` calls
+# down to no-ops. When enabled, the `crypto::ZeroizingBytes` Drop impl
+# records every observation into a thread-local that integration
+# tests drain via `paladin_core::zeroize_witness::take_observations`.
+# Also exposes `_testing_replace_encrypted_payload_with_garbage` so
+# the AEAD-decrypt-but-bincode-fails path can be exercised end-to-end.
+# Excluded from the stable §4.7 public API.
+test-zeroize-witness = []
+
 [dependencies]
 # Crypto + memory hygiene
 hmac = "0.12"

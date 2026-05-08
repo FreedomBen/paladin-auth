@@ -20,6 +20,11 @@ pub use crypto::{Argon2Params, EncryptionOptions};
 
 #[cfg(feature = "test-fault-injection")]
 pub use crypto::argon2_derivation_count;
+
+#[cfg(feature = "test-zeroize-witness")]
+pub use crypto::zeroize_witness;
+#[cfg(feature = "test-zeroize-witness")]
+pub use storage::_testing_write_encrypted_with_raw_plaintext;
 pub use domain::validation::AccountInput;
 pub use domain::{
     parse_icon_hint_token, validate_manual, Account, AccountId, AccountKindInput,
