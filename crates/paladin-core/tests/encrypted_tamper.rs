@@ -448,3 +448,46 @@ fn tamper_aead_tag_last_byte_returns_decrypt_failed() {
     bytes[len - 1] ^= 0xFF;
     assert_kind(&bytes, ErrorKind::DecryptFailed);
 }
+
+// ---------- truncated body (< AEAD_TAG_LEN bytes after header) ----------
+//
+// A file with an intact 64-byte encrypted header but a body shorter
+// than the 16-byte AEAD tag cannot form a valid `ciphertext + tag`.
+// `Store::open` must surface `invalid_payload` /
+// `ciphertext_too_short` from the AEAD-decrypt entry point rather
+// than panic on a slice underflow inside the AEAD library.
+
+fn assert_ciphertext_too_short(bytes: &[u8]) {
+    let (_dir, path) = commit(bytes);
+    let err = open_after_tamper(&path);
+    match err {
+        PaladinError::InvalidPayload { reason } => assert_eq!(
+            reason, "ciphertext_too_short",
+            "expected reason `ciphertext_too_short`, got `{reason}`"
+        ),
+        other => panic!("expected InvalidPayload, got {other:?}"),
+    }
+}
+
+#[test]
+fn truncated_body_zero_bytes_returns_ciphertext_too_short() {
+    // Header only, body length 0 — fewer than 16 tag bytes.
+    let bytes = canonical_clone()[..ENCRYPTED_HEADER_LEN].to_vec();
+    assert_eq!(bytes.len(), ENCRYPTED_HEADER_LEN);
+    assert_ciphertext_too_short(&bytes);
+}
+
+#[test]
+fn truncated_body_one_byte_returns_ciphertext_too_short() {
+    let bytes = canonical_clone()[..=ENCRYPTED_HEADER_LEN].to_vec();
+    assert_eq!(bytes.len(), ENCRYPTED_HEADER_LEN + 1);
+    assert_ciphertext_too_short(&bytes);
+}
+
+#[test]
+fn truncated_body_fifteen_bytes_returns_ciphertext_too_short() {
+    // Body is one byte short of a complete AEAD tag.
+    let bytes = canonical_clone()[..ENCRYPTED_HEADER_LEN + AEAD_TAG_LEN - 1].to_vec();
+    assert_eq!(bytes.len(), ENCRYPTED_HEADER_LEN + AEAD_TAG_LEN - 1);
+    assert_ciphertext_too_short(&bytes);
+}

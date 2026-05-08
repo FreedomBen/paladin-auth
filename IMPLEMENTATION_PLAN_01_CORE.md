@@ -548,7 +548,7 @@ Each step lands as its own commit. Tests come first.
   - `ciphertext` (variable): flip first byte, middle byte, last byte
     before the tag → `decrypt_failed`.
   - `aead_tag` (16 bytes): flip first byte, last byte → `decrypt_failed`.
-- [ ] Tests: malformed ciphertext shorter than the 16-byte AEAD tag
+- [x] Tests: malformed ciphertext shorter than the 16-byte AEAD tag
   (i.e. truncated file where the body cannot form a valid tag)
   surfaces `invalid_payload` with `reason: "ciphertext_too_short"`,
   not a panic.
