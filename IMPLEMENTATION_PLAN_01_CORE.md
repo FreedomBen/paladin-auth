@@ -650,9 +650,11 @@ Each step lands as its own commit. Tests come first.
   differing only in NFC vs NFD normalization derive **different** keys
   (i.e. byte-equality is the only equality; no trim, no normalize).
   *(`export::encrypted` portion deferred to Phase I.)*
-- [ ] Tests: encrypted `create` / `create_force`, `set_passphrase`,
+- [x] Tests: encrypted `create` / `create_force`, `set_passphrase`,
   `change_passphrase`, and `export::encrypted` write custom validated Argon2
   params into the header when supplied through `EncryptionOptions`.
+  *(`set_passphrase` / `change_passphrase` portions deferred to Phase H;
+  `export::encrypted` portion deferred to Phase I.)*
 - [ ] Tests: encrypted `create` / `create_force` fresh-material generation —
   across `N = 64` creates with the same passphrase, payload, and Argon2
   params, every observed 16-byte `salt` and 24-byte primary `nonce` is

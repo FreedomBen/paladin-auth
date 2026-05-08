@@ -335,6 +335,83 @@ fn header_round_trips_custom_argon2_params_across_in_range_triples() {
 }
 
 #[test]
+fn create_force_writes_custom_argon2_params_to_header_with_no_prior_file() {
+    // F.11 — `Store::create_force` accepts custom validated Argon2
+    // params via `EncryptionOptions::with_params` and persists them
+    // verbatim into the on-disk header. The `create` side is pinned
+    // by `header_round_trips_custom_argon2_params_across_in_range_triples`;
+    // without a parallel `create_force` assertion, the staged-clobber
+    // entry point could silently fall back to defaults. `cheap_params`
+    // differs from §4.4 defaults (`65_536, 3, 1`), so a fall-back
+    // surfaces as a mismatching `m_kib` / `t` byte block.
+    let dir = vault_test_dir();
+    let path = dir.path().join("vault.bin");
+    assert!(!path.exists(), "no prior primary present");
+    let params = cheap_params();
+    let (_v, _s) =
+        Store::create_force(&path, VaultInit::Encrypted(cheap_options("hunter2")))
+            .expect("create_force");
+    let bytes = fs::read(&path).expect("read vault");
+    assert_eq!(
+        &bytes[M_KIB_RANGE.clone()],
+        &params.m_kib.to_le_bytes(),
+        "create_force-time m_kib LE encoding"
+    );
+    assert_eq!(
+        &bytes[T_RANGE.clone()],
+        &params.t.to_le_bytes(),
+        "create_force-time t LE encoding"
+    );
+    assert_eq!(
+        &bytes[P_RANGE.clone()],
+        &params.p.to_le_bytes(),
+        "create_force-time p LE encoding"
+    );
+    // Re-open with the parsed in-header params re-derives the same
+    // AEAD key — silent narrowing or an endianness flip would surface
+    // here as `decrypt_failed`.
+    let (_v2, _s2) =
+        Store::open(&path, VaultLock::Encrypted(pp("hunter2"))).expect("re-open succeeds");
+}
+
+#[test]
+fn create_force_writes_custom_argon2_params_to_header_when_clobbering_existing_primary() {
+    // F.11 — clobber path: a plaintext primary already exists at the
+    // vault path; `create_force` replaces it with an encrypted vault
+    // built from custom validated Argon2 params. The post-clobber
+    // on-disk header bytes must reflect the supplied params, not the
+    // prior plaintext file (which had no Argon2 cost) and not the
+    // §4.4 defaults.
+    let dir = vault_test_dir();
+    let path = dir.path().join("vault.bin");
+    let (pv, ps) = Store::create(&path, VaultInit::Plaintext).expect("seed plaintext primary");
+    pv.save(&ps).expect("plaintext save");
+    assert!(path.exists(), "plaintext primary staged");
+
+    let params = cheap_params();
+    let (_v, _s) = Store::create_force(&path, VaultInit::Encrypted(cheap_options("hunter2")))
+        .expect("create_force clobber");
+    let bytes = fs::read(&path).expect("read vault after clobber");
+    assert_eq!(
+        &bytes[M_KIB_RANGE.clone()],
+        &params.m_kib.to_le_bytes(),
+        "post-clobber m_kib LE encoding"
+    );
+    assert_eq!(
+        &bytes[T_RANGE.clone()],
+        &params.t.to_le_bytes(),
+        "post-clobber t LE encoding"
+    );
+    assert_eq!(
+        &bytes[P_RANGE.clone()],
+        &params.p.to_le_bytes(),
+        "post-clobber p LE encoding"
+    );
+    let (_v2, _s2) =
+        Store::open(&path, VaultLock::Encrypted(pp("hunter2"))).expect("re-open succeeds");
+}
+
+#[test]
 fn encrypted_header_lays_out_24_byte_nonce_slot_at_offset_40() {
     // §4.4 AEAD output shape — XChaCha20-Poly1305 uses a 24-byte
     // nonce, not the IETF ChaCha20-Poly1305 12-byte construct. Pin
