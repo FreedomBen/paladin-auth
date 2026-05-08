@@ -7,6 +7,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod crypto;
 pub mod domain;
 pub mod error;
 pub mod otp;
@@ -15,6 +16,7 @@ pub mod storage;
 pub mod text;
 pub mod vault;
 
+pub use crypto::{Argon2Params, EncryptionOptions};
 pub use domain::validation::AccountInput;
 pub use domain::{
     parse_icon_hint_token, validate_manual, Account, AccountId, AccountKindInput,
