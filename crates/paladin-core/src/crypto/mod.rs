@@ -11,6 +11,9 @@ pub(crate) mod kdf;
 
 pub use kdf::{Argon2Params, EncryptionOptions};
 
+#[cfg(feature = "test-fault-injection")]
+pub use kdf::argon2_derivation_count;
+
 #[allow(unused_imports)] // Wired into encrypted save/open in later F-series commits.
 pub(crate) use aead::{aead_decrypt, aead_encrypt, AEAD_NONCE_LEN, AEAD_TAG_LEN};
 #[allow(unused_imports)] // Wired into encrypted save/open in later F-series commits.

@@ -137,6 +137,40 @@ impl fmt::Debug for EncryptionOptions {
     }
 }
 
+// Test-only Argon2id derivation counter (DESIGN.md §10 / Phase F.13).
+// Every call to `argon2id_derive_key` increments this counter when the
+// `test-fault-injection` cargo feature is enabled, so integration tests
+// can assert the AEAD key cache is hit by saves: a run of `Vault::save`
+// calls following `Store::open` / `Store::create` must leave the
+// counter unchanged. Production builds compile the increment away.
+#[cfg(feature = "test-fault-injection")]
+mod test_counter {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static COUNT: AtomicU64 = AtomicU64::new(0);
+
+    pub(crate) fn increment() {
+        COUNT.fetch_add(1, Ordering::SeqCst);
+    }
+
+    pub(crate) fn read() -> u64 {
+        COUNT.load(Ordering::SeqCst)
+    }
+}
+
+/// Read the test-only Argon2id derivation counter (DESIGN.md §10 /
+/// Phase F.13). Every call to `argon2id_derive_key` since process start
+/// has incremented this counter. Tests should use the *delta* between
+/// reads — never the absolute value — because parallel tests within the
+/// same test binary share the static.
+///
+/// Excluded from the stable §4.7 public API; only compiled when the
+/// `test-fault-injection` cargo feature is enabled.
+#[cfg(feature = "test-fault-injection")]
+pub fn argon2_derivation_count() -> u64 {
+    test_counter::read()
+}
+
 /// Derive a 32-byte AEAD key from `passphrase`, `salt`, and `params`.
 ///
 /// Pure function: equal inputs always produce equal outputs. Output
@@ -152,6 +186,8 @@ pub(crate) fn argon2id_derive_key(
     salt: &[u8; 16],
     params: &Argon2Params,
 ) -> Result<Zeroizing<[u8; AEAD_KEY_LEN]>> {
+    #[cfg(feature = "test-fault-injection")]
+    test_counter::increment();
     let argon_params =
         Params::new(params.m_kib, params.t, params.p, Some(AEAD_KEY_LEN)).map_err(|_| {
             PaladinError::KdfParamsOutOfBounds {

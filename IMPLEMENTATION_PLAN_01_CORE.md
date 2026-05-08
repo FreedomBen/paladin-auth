@@ -661,7 +661,7 @@ Each step lands as its own commit. Tests come first.
   pairwise distinct, and every resulting vault opens successfully. This
   catches accidental fixed salt/nonce use separately from the regular-save
   nonce-rotation tests above.
-- [ ] Tests: AEAD key caching — `open` derives the 32-byte key once into
+- [x] Tests: AEAD key caching — `open` derives the 32-byte key once into
   a `Zeroizing<[u8; 32]>` cached on `Vault` alongside the `SecretString`
   passphrase; subsequent saves reuse the cached key without re-running
   Argon2id (assert via deterministic test instrumentation); both

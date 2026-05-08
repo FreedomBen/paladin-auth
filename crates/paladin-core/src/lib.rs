@@ -17,6 +17,9 @@ pub mod text;
 pub mod vault;
 
 pub use crypto::{Argon2Params, EncryptionOptions};
+
+#[cfg(feature = "test-fault-injection")]
+pub use crypto::argon2_derivation_count;
 pub use domain::validation::AccountInput;
 pub use domain::{
     parse_icon_hint_token, validate_manual, Account, AccountId, AccountKindInput,

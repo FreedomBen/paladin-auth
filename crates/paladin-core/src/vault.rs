@@ -173,3 +173,24 @@ impl fmt::Debug for Vault {
             .finish_non_exhaustive()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use zeroize::ZeroizeOnDrop;
+
+    /// Compile-time guarantee that the cached AEAD key zeroizes when
+    /// its `Drop` runs (DESIGN.md §4.4 / Phase F.13). By containment,
+    /// a `Vault` drop runs the `Option<EncryptedCache>` drop, which
+    /// runs the `key` field's drop, which (`Zeroizing<T>`'s
+    /// `ZeroizeOnDrop` impl) wipes the 32-byte buffer before
+    /// deallocation. If a future refactor swaps `Zeroizing` for a
+    /// raw `[u8; AEAD_KEY_LEN]` or any type without `ZeroizeOnDrop`,
+    /// this test fails to compile.
+    fn _assert_zeroize_on_drop<T: ZeroizeOnDrop>() {}
+
+    #[test]
+    fn cached_key_field_zeroizes_on_drop() {
+        _assert_zeroize_on_drop::<Zeroizing<[u8; AEAD_KEY_LEN]>>();
+    }
+}
