@@ -19,7 +19,7 @@ use secrecy::SecretString;
 use zeroize::Zeroizing;
 
 use crate::crypto::AEAD_KEY_LEN;
-use crate::domain::Account;
+use crate::domain::{Account, AccountId, AccountSummary};
 use crate::error::Result;
 use crate::storage::payload::VaultPayload;
 use crate::storage::{Store, VaultSettings};
@@ -123,6 +123,24 @@ impl Vault {
         &self.accounts
     }
 
+    /// Iterate accounts in insertion order (DESIGN.md §4.7).
+    pub fn iter(&self) -> impl Iterator<Item = &Account> {
+        self.accounts.iter()
+    }
+
+    /// Iterate non-secret [`AccountSummary`] projections in insertion
+    /// order. Front ends use this for list rows, JSON output, and
+    /// import reports without ever touching `Account` secret fields.
+    pub fn summaries(&self) -> impl Iterator<Item = AccountSummary> + '_ {
+        self.accounts.iter().map(Account::summary)
+    }
+
+    /// Look up an account by ID. Returns `None` for unknown IDs.
+    #[must_use]
+    pub fn get(&self, id: AccountId) -> Option<&Account> {
+        self.accounts.iter().find(|a| a.id() == id)
+    }
+
     /// Borrow the live `VaultSettings`.
     #[must_use]
     pub fn settings(&self) -> &VaultSettings {
@@ -136,14 +154,25 @@ impl Vault {
         self.cache.is_some()
     }
 
-    /// Append an account.
+    /// Append an account; returns its stable [`AccountId`].
     ///
-    /// Phase E ships only the API needed by the storage round-trip.
-    /// Phase G layers `(secret, issuer, label)` collision detection,
-    /// `find_duplicate`, and the import merge-policy hooks on top of
-    /// the same underlying `Vec<Account>`.
-    pub fn add(&mut self, account: Account) {
+    /// Phase E shipped a `()` return; Phase G.1 widens this to the ID
+    /// per DESIGN.md §4.7 so callers can immediately reference the
+    /// freshly-inserted account without scanning `iter`.
+    /// `(secret, issuer, label)` collision detection lives on
+    /// [`Vault::find_duplicate`] (Phase G.3).
+    pub fn add(&mut self, account: Account) -> AccountId {
+        let id = account.id();
         self.accounts.push(account);
+        id
+    }
+
+    /// Remove and return the account with the given ID. Returns `None`
+    /// if no such account is present, leaving the vault unchanged.
+    /// Insertion order of the remaining accounts is preserved.
+    pub fn remove(&mut self, id: AccountId) -> Option<Account> {
+        let position = self.accounts.iter().position(|a| a.id() == id)?;
+        Some(self.accounts.remove(position))
     }
 
     /// Persist the vault through the supplied `Store`.
