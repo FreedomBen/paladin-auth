@@ -21,8 +21,9 @@ use zeroize::Zeroizing;
 
 use crate::crypto::AEAD_KEY_LEN;
 use crate::domain::validation::{system_time_to_secs_for, validate_label};
-use crate::domain::{Account, AccountId, AccountSummary, ValidatedAccount};
-use crate::error::{PaladinError, Result};
+use crate::domain::{Account, AccountId, AccountSummary, Code, OtpKind, ValidatedAccount};
+use crate::error::{ErrorKind, PaladinError, Result};
+use crate::otp::hotp;
 use crate::storage::payload::VaultPayload;
 use crate::storage::{Store, VaultSettings};
 
@@ -241,14 +242,14 @@ impl Vault {
     pub fn rename(&mut self, id: AccountId, label: &str, now: SystemTime) -> Result<()> {
         let trimmed_label = validate_label(label)?;
         let now_secs = system_time_to_secs_for("rename", now)?;
-        let account = self
-            .accounts
-            .iter_mut()
-            .find(|a| a.id() == id)
-            .ok_or(PaladinError::InvalidState {
-                operation: "rename",
-                state: "account_not_found",
-            })?;
+        let account =
+            self.accounts
+                .iter_mut()
+                .find(|a| a.id() == id)
+                .ok_or(PaladinError::InvalidState {
+                    operation: "rename",
+                    state: "account_not_found",
+                })?;
         account.label = trimmed_label;
         account.updated_at = now_secs;
         Ok(())
@@ -262,6 +263,86 @@ impl Vault {
     /// `save_durability_unconfirmed`.
     pub fn save(&self, store: &Store) -> Result<()> {
         store.save_payload(&self.snapshot_payload(), self.cached_key())
+    }
+
+    /// Compute the HOTP code at the current counter, advance the
+    /// stored counter, bump `updated_at`, and persist the vault
+    /// atomically through `store` (DESIGN.md §4.7).
+    ///
+    /// Validation order is locked so the §5 error taxonomy stays
+    /// stable: invalid timestamps return `time_range` before any
+    /// account lookup or mutation; missing IDs return
+    /// `invalid_state { operation: "hotp_advance", state: "account_not_found" }`;
+    /// TOTP accounts return
+    /// `invalid_state { operation: "hotp_advance", state: "not_hotp" }`;
+    /// counters at `u64::MAX` return `counter_overflow` before
+    /// touching memory or attempting a save.
+    ///
+    /// On a successful save the in-memory counter is `prev + 1` and
+    /// the returned [`Code`] reflects the *pre-advance* counter
+    /// (RFC 4226: emit-then-increment), so a subsequent
+    /// `hotp_peek` returns the next code in the sequence. When the
+    /// `Store` save returns `save_not_committed` (pre-rename
+    /// failure), the in-memory counter and `updated_at` are reverted
+    /// to their pre-call values so the user does not see a counter
+    /// advance that was never persisted. When the save returns
+    /// `save_durability_unconfirmed` (post-rename, parent-fsync
+    /// failure), the mutated state is left in place because the
+    /// primary file is already on disk and a subsequent
+    /// `hotp_peek` must match the on-disk counter.
+    pub fn hotp_advance(&mut self, store: &Store, id: AccountId, now: SystemTime) -> Result<Code> {
+        let now_secs = system_time_to_secs_for("hotp_advance", now)?;
+        let pos =
+            self.accounts
+                .iter()
+                .position(|a| a.id() == id)
+                .ok_or(PaladinError::InvalidState {
+                    operation: "hotp_advance",
+                    state: "account_not_found",
+                })?;
+        let counter = match self.accounts[pos].kind {
+            OtpKind::Hotp { counter } => counter,
+            OtpKind::Totp { .. } => {
+                return Err(PaladinError::InvalidState {
+                    operation: "hotp_advance",
+                    state: "not_hotp",
+                });
+            }
+        };
+        if counter == u64::MAX {
+            return Err(PaladinError::CounterOverflow);
+        }
+        let account = &self.accounts[pos];
+        let code = hotp::compute(
+            account.secret(),
+            account.algorithm(),
+            account.digits(),
+            counter,
+        );
+        let prev_updated_at = account.updated_at;
+
+        self.accounts[pos].kind = OtpKind::Hotp {
+            counter: counter + 1,
+        };
+        self.accounts[pos].updated_at = now_secs;
+
+        match self.save(store) {
+            Ok(()) => Ok(code),
+            Err(err) => {
+                if err.kind() == ErrorKind::SaveNotCommitted {
+                    // Pre-rename failure: the on-disk primary is
+                    // unchanged, so revert the in-memory mutation
+                    // to keep memory and disk consistent.
+                    self.accounts[pos].kind = OtpKind::Hotp { counter };
+                    self.accounts[pos].updated_at = prev_updated_at;
+                }
+                // `save_durability_unconfirmed` and any other error
+                // kind leave the mutation in place: the rename has
+                // committed, so the on-disk vault already carries
+                // the post-advance counter.
+                Err(err)
+            }
+        }
     }
 }
 

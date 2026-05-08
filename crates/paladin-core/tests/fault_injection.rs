@@ -26,10 +26,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use paladin_core::{
-    write_secret_file_atomic, Argon2Params, EncryptionOptions, ErrorKind, PaladinError, Store,
-    VaultInit, VaultLock, VaultMode,
+    parse_otpauth, write_secret_file_atomic, Account, Argon2Params, EncryptionOptions, ErrorKind,
+    PaladinError, Store, VaultInit, VaultLock, VaultMode,
 };
 use secrecy::SecretString;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tempfile::TempDir;
 
 const ENV: &str = "PALADIN_FAULT_INJECT";
@@ -279,7 +280,10 @@ fn encrypted_create_pre_commit_surfaces_save_not_committed() {
         assert_save_not_committed(&err, false);
 
         // No primary or `.bak` survives the failed create.
-        assert!(!path.exists(), "primary must not exist after pre_commit fault");
+        assert!(
+            !path.exists(),
+            "primary must not exist after pre_commit fault"
+        );
         assert!(!path.with_file_name("vault.bin.bak").exists());
         no_tmp_residue(&path);
     });
@@ -1063,5 +1067,94 @@ fn kdf_allocation_fault_value_does_not_trip_pre_or_post_commit_paths() {
         with_fault(KDF, || vault.save(&store))
             .expect("plaintext save must succeed under kdf_allocation fault");
         no_tmp_residue(&path);
+    });
+}
+
+// ──────────────────────────────────────────────────────────────────
+// Vault::hotp_advance rollback / durability (Phase G.5)
+//
+// `hotp_advance` mutates the in-memory counter and `updated_at` then
+// routes through `Vault::save`. A pre-commit save fault must roll
+// the in-memory state back to its pre-call values so the user does
+// not see a counter advance that was never persisted; a post-commit
+// fault leaves the mutated state in place because the primary file
+// has already been renamed into position and a subsequent peek must
+// match the on-disk counter.
+// ──────────────────────────────────────────────────────────────────
+
+const HOTP_SECRET_B32: &str = "JBSWY3DPEHPK3PXP";
+
+fn fixture_now() -> SystemTime {
+    UNIX_EPOCH + Duration::from_secs(1_700_000_000)
+}
+
+fn later_now() -> SystemTime {
+    UNIX_EPOCH + Duration::from_secs(1_700_001_000)
+}
+
+fn make_hotp_account(label: &str, counter: u64) -> Account {
+    let uri = format!("otpauth://hotp/{label}?secret={HOTP_SECRET_B32}&counter={counter}");
+    parse_otpauth(&uri, fixture_now()).unwrap().account
+}
+
+#[test]
+fn hotp_advance_pre_commit_rolls_counter_and_updated_at_back() {
+    run_serial(|| {
+        let dir = TempDir::new().unwrap();
+        let path = vault_path_in(&dir);
+        let (mut vault, store) = Store::create(&path, VaultInit::Plaintext).unwrap();
+        let id = vault.add(make_hotp_account("alice", 5));
+        // Persist the baseline so the pre-commit fault has a primary
+        // to leave authoritative.
+        vault.save(&store).unwrap();
+        let pre_counter = vault.get(id).unwrap().counter();
+        let pre_updated_at = vault.get(id).unwrap().updated_at();
+        let primary_before = std::fs::read(&path).unwrap();
+
+        let err = with_fault(PRE, || vault.hotp_advance(&store, id, later_now()))
+            .map(|_| ())
+            .expect_err("pre_commit must fail");
+        assert_save_not_committed(&err, false);
+
+        // In-memory state reverted to pre-call values.
+        assert_eq!(vault.get(id).unwrap().counter(), pre_counter);
+        assert_eq!(vault.get(id).unwrap().updated_at(), pre_updated_at);
+        // On-disk primary unchanged.
+        assert_eq!(std::fs::read(&path).unwrap(), primary_before);
+    });
+}
+
+#[test]
+fn hotp_advance_post_commit_keeps_mutation_and_surfaces_durability_unconfirmed() {
+    run_serial(|| {
+        let dir = TempDir::new().unwrap();
+        let path = vault_path_in(&dir);
+        let (mut vault, store) = Store::create(&path, VaultInit::Plaintext).unwrap();
+        let id = vault.add(make_hotp_account("alice", 5));
+        vault.save(&store).unwrap();
+        let pre_counter = vault.get(id).unwrap().counter().unwrap();
+
+        let err = with_fault(POST, || vault.hotp_advance(&store, id, later_now()))
+            .map(|_| ())
+            .expect_err("post_commit must fail");
+        assert_save_durability_unconfirmed(&err);
+
+        // Mutated state remains in memory because the primary file
+        // commit point was reached — a subsequent peek would need to
+        // match the on-disk counter.
+        assert_eq!(vault.get(id).unwrap().counter(), Some(pre_counter + 1));
+        assert_eq!(vault.get(id).unwrap().updated_at(), 1_700_001_000);
+
+        // The primary file holds the post-advance bytes; reopening
+        // surfaces the new counter to confirm the post-commit fault
+        // fired after the rename.
+        drop(vault);
+        drop(store);
+        let (reopened, _store) = Store::open(&path, VaultLock::Plaintext).unwrap();
+        assert_eq!(
+            reopened.get(id).unwrap().counter(),
+            Some(pre_counter + 1),
+            "post-commit fault must leave the renamed primary in place",
+        );
     });
 }
