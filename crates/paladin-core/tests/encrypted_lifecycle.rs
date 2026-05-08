@@ -10,12 +10,13 @@
 
 use std::fs;
 use std::io::Write;
+use std::os::unix::fs as unix_fs;
 use std::os::unix::fs::PermissionsExt;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use paladin_core::{
     inspect, parse_otpauth, Account, Argon2Params, EncryptionOptions, ErrorKind, PaladinError,
-    Store, VaultInit, VaultLock, VaultMode, VaultStatus,
+    PermissionSubject, Store, VaultInit, VaultLock, VaultMode, VaultStatus,
 };
 use secrecy::SecretString;
 use tempfile::TempDir;
@@ -244,4 +245,206 @@ fn encrypted_vault_reports_is_encrypted_true() {
     let path = dir.path().join("vault.bin");
     let (vault, _) = Store::create(&path, VaultInit::Encrypted(cheap_options("hunter2"))).unwrap();
     assert!(vault.is_encrypted());
+}
+
+// ──────────────────────────────────────────────────────────────────
+// Phase F.17 — encrypted `create` / `create_force` semantic parity
+// with plaintext storage. Each row mirrors a plaintext bullet from
+// Phase E (precondition, parent-permission, staged-clobber). The
+// commit-point and durability-error rows live in
+// `tests/fault_injection.rs` because they require the
+// `test-fault-injection` cargo feature.
+// ──────────────────────────────────────────────────────────────────
+
+#[test]
+fn encrypted_create_rejects_when_parent_directory_grants_group_or_other() {
+    let dir = vault_test_dir();
+    fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o755)).unwrap();
+    let path = dir.path().join("vault.bin");
+    let err =
+        Store::create(&path, VaultInit::Encrypted(cheap_options("hunter2"))).unwrap_err();
+    match err {
+        PaladinError::UnsafePermissions {
+            subject,
+            actual_mode,
+            expected_mode,
+            ..
+        } => {
+            assert_eq!(subject, PermissionSubject::VaultDir);
+            assert_eq!(actual_mode, "0755");
+            assert_eq!(expected_mode, "0700");
+        }
+        other => panic!("expected UnsafePermissions, got {other:?}"),
+    }
+    assert!(!path.exists(), "encrypted create must reject before writing");
+}
+
+#[test]
+fn encrypted_create_succeeds_when_parent_directory_is_0700() {
+    let dir = vault_test_dir();
+    fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let path = dir.path().join("vault.bin");
+    let _ = Store::create(&path, VaultInit::Encrypted(cheap_options("hunter2"))).unwrap();
+    assert!(path.exists());
+}
+
+#[test]
+fn encrypted_create_rejects_when_parent_directory_is_symlink() {
+    let real_dir = vault_test_dir();
+    let link_root = vault_test_dir();
+    let link_path = link_root.path().join("link");
+    unix_fs::symlink(real_dir.path(), &link_path).unwrap();
+
+    let path = link_path.join("vault.bin");
+    let err =
+        Store::create(&path, VaultInit::Encrypted(cheap_options("hunter2"))).unwrap_err();
+    match err {
+        PaladinError::IoError { operation, .. } => assert_eq!(operation, "vault_dir_is_symlink"),
+        other => panic!("expected vault_dir_is_symlink io_error, got {other:?}"),
+    }
+    assert!(!real_dir.path().join("vault.bin").exists());
+}
+
+#[test]
+fn encrypted_create_force_rejects_when_parent_directory_grants_group_or_other() {
+    let dir = vault_test_dir();
+    fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o755)).unwrap();
+    let path = dir.path().join("vault.bin");
+    let err = Store::create_force(&path, VaultInit::Encrypted(cheap_options("hunter2")))
+        .unwrap_err();
+    match err {
+        PaladinError::UnsafePermissions {
+            subject,
+            actual_mode,
+            expected_mode,
+            ..
+        } => {
+            assert_eq!(subject, PermissionSubject::VaultDir);
+            assert_eq!(actual_mode, "0755");
+            assert_eq!(expected_mode, "0700");
+        }
+        other => panic!("expected UnsafePermissions, got {other:?}"),
+    }
+    assert!(!path.exists(), "encrypted create_force must reject before writing");
+    assert!(!dir.path().join("vault.bin.tmp").exists());
+}
+
+#[test]
+fn encrypted_create_force_writes_primary_with_0600_permissions() {
+    let dir = vault_test_dir();
+    let path = dir.path().join("vault.bin");
+    let _ =
+        Store::create_force(&path, VaultInit::Encrypted(cheap_options("hunter2"))).unwrap();
+    let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(
+        mode, 0o600,
+        "encrypted create_force must write the primary 0600",
+    );
+}
+
+#[test]
+fn encrypted_create_force_with_no_existing_primary_writes_fresh_vault() {
+    let dir = vault_test_dir();
+    let path = dir.path().join("vault.bin");
+    let (vault, store) =
+        Store::create_force(&path, VaultInit::Encrypted(cheap_options("hunter2"))).unwrap();
+    assert!(path.exists(), "encrypted create_force must write the primary");
+    assert!(
+        !dir.path().join("vault.bin.bak").exists(),
+        "no prior primary → no rotation → no .bak"
+    );
+    assert!(!dir.path().join("vault.bin.tmp").exists());
+    drop(vault);
+    drop(store);
+
+    let (reopened, _) = Store::open(&path, VaultLock::Encrypted(pp("hunter2"))).unwrap();
+    assert!(reopened.accounts().is_empty());
+    assert!(reopened.is_encrypted());
+}
+
+#[test]
+fn encrypted_create_force_rotates_existing_encrypted_primary_to_bak_verbatim() {
+    let dir = vault_test_dir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) =
+        Store::create(&path, VaultInit::Encrypted(cheap_options("hunter2"))).unwrap();
+    vault.add(make_account("alice", None));
+    vault.add(make_account("bob", None));
+    vault.save(&store).unwrap();
+    let pre_clobber_primary = fs::read(&path).unwrap();
+    drop(vault);
+    drop(store);
+
+    // Clobber with a fresh encrypted vault under a different passphrase
+    // so the new ciphertext cannot collide with the old by accident.
+    let (clobbered, _) =
+        Store::create_force(&path, VaultInit::Encrypted(cheap_options("rotated"))).unwrap();
+    let bak = dir.path().join("vault.bin.bak");
+    assert!(
+        bak.exists(),
+        "encrypted create_force must rotate prior primary → .bak",
+    );
+    assert_eq!(
+        fs::read(&bak).unwrap(),
+        pre_clobber_primary,
+        ".bak must hold the pre-clobber encrypted primary verbatim (no re-encryption)",
+    );
+    // The new primary differs from the old (fresh salt + nonce + key).
+    assert_ne!(fs::read(&path).unwrap(), pre_clobber_primary);
+    assert!(clobbered.accounts().is_empty());
+    assert!(clobbered.is_encrypted());
+    assert!(!dir.path().join("vault.bin.tmp").exists());
+    assert!(!dir.path().join("vault.bin.bak.tmp").exists());
+}
+
+#[test]
+fn encrypted_create_force_overwrites_existing_backup_during_rotation() {
+    let dir = vault_test_dir();
+    let path = dir.path().join("vault.bin");
+    let (vault, store) =
+        Store::create(&path, VaultInit::Encrypted(cheap_options("hunter2"))).unwrap();
+    vault.save(&store).unwrap();
+    vault.save(&store).unwrap(); // produces a real .bak from the regular-save path
+    drop(vault);
+    drop(store);
+
+    let bak = dir.path().join("vault.bin.bak");
+    let pre_primary = fs::read(&path).unwrap();
+    fs::write(&bak, b"poisoned previous backup").unwrap();
+    fs::set_permissions(&bak, fs::Permissions::from_mode(0o600)).unwrap();
+
+    let _ =
+        Store::create_force(&path, VaultInit::Encrypted(cheap_options("rotated"))).unwrap();
+    let new_bak = fs::read(&bak).unwrap();
+    assert_eq!(
+        new_bak, pre_primary,
+        ".bak must be the rotated pre-clobber primary, overwriting any prior backup",
+    );
+    assert_ne!(new_bak, b"poisoned previous backup".to_vec());
+}
+
+#[test]
+fn encrypted_create_force_rejects_when_existing_primary_is_symlink() {
+    let dir = vault_test_dir();
+    let victim = dir.path().join("victim.bin");
+    fs::write(&victim, b"victim contents").unwrap();
+    fs::set_permissions(&victim, fs::Permissions::from_mode(0o600)).unwrap();
+
+    let path = dir.path().join("vault.bin");
+    unix_fs::symlink(&victim, &path).unwrap();
+
+    let err =
+        Store::create_force(&path, VaultInit::Encrypted(cheap_options("hunter2"))).unwrap_err();
+    match err {
+        PaladinError::IoError { operation, .. } => assert_eq!(operation, "vault_file_is_symlink"),
+        other => panic!("expected vault_file_is_symlink io_error, got {other:?}"),
+    }
+
+    assert!(fs::symlink_metadata(&path)
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    assert_eq!(fs::read(&victim).unwrap(), b"victim contents");
+    assert!(!dir.path().join("vault.bin.tmp").exists());
+    assert!(!dir.path().join("vault.bin.bak").exists());
 }

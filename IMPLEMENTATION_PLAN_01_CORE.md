@@ -696,7 +696,7 @@ Each step lands as its own commit. Tests come first.
 - [x] Tests: `open` rejects `VaultLock` mismatches with `wrong_vault_lock`
   before any KDF work — `VaultLock::Plaintext` against an encrypted file,
   and `VaultLock::Encrypted(_)` against a plaintext file.
-- [ ] Tests: encrypted `create` and `create_force` through `VaultInit`
+- [x] Tests: encrypted `create` and `create_force` through `VaultInit`
   follow the same precondition, parent-permission, staged-clobber,
   commit-point, and durability-error semantics as plaintext storage.
 - [ ] Implement `crypto::argon2` with public `Argon2Params`,

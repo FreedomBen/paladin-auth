@@ -238,6 +238,146 @@ fn create_force_post_commit_surfaces_save_durability_unconfirmed() {
 }
 
 // ──────────────────────────────────────────────────────────────────
+// Phase F.17 — encrypted `create` / `create_force` follow the same
+// pre/post-commit semantics as plaintext: `pre_commit` →
+// `save_not_committed` (with `backup_path` empty when no prior
+// primary exists, populated when create_force rotates one), and
+// `post_commit` → `save_durability_unconfirmed`. The hook fires
+// inside `save_encrypted` / `save_encrypted_clobber`, the same
+// shared rename/fsync sites that drive the plaintext pre/post-commit
+// rows above.
+//
+// Cheap Argon2 params keep wall time bounded (§4.4 acceptance floor:
+// `m_kib >= 8192`, `t >= 1`, `p >= 1`).
+// ──────────────────────────────────────────────────────────────────
+
+const F17_PASSPHRASE: &str = "f17-fault-pass";
+
+fn f17_encrypted_options() -> EncryptionOptions {
+    let params = Argon2Params {
+        m_kib: 8_192,
+        t: 1,
+        p: 1,
+    };
+    EncryptionOptions::with_params(SecretString::from(F17_PASSPHRASE.to_string()), params)
+        .expect("cheap_params are in §4.4 bounds")
+}
+
+#[test]
+fn encrypted_create_pre_commit_surfaces_save_not_committed() {
+    run_serial(|| {
+        let dir = TempDir::new().unwrap();
+        let path = vault_path_in(&dir);
+
+        let err = with_fault(PRE, || {
+            Store::create(&path, VaultInit::Encrypted(f17_encrypted_options()))
+        })
+        .map(|_| ())
+        .expect_err("pre_commit must fail");
+        // Encrypted `create` (non-clobber) routes through `save_encrypted`,
+        // which never rotates a `.bak` — `backup_path` is None.
+        assert_save_not_committed(&err, false);
+
+        // No primary or `.bak` survives the failed create.
+        assert!(!path.exists(), "primary must not exist after pre_commit fault");
+        assert!(!path.with_file_name("vault.bin.bak").exists());
+        no_tmp_residue(&path);
+    });
+}
+
+#[test]
+fn encrypted_create_post_commit_surfaces_save_durability_unconfirmed() {
+    run_serial(|| {
+        let dir = TempDir::new().unwrap();
+        let path = vault_path_in(&dir);
+
+        let err = with_fault(POST, || {
+            Store::create(&path, VaultInit::Encrypted(f17_encrypted_options()))
+        })
+        .map(|_| ())
+        .expect_err("post_commit must fail");
+        assert_save_durability_unconfirmed(&err);
+
+        // Post-commit means the rename happened — the primary exists and
+        // a fresh open with the same passphrase reads back an empty
+        // encrypted vault.
+        assert!(path.exists(), "primary must be in place post-commit");
+        no_tmp_residue(&path);
+        let (reopened, _) = Store::open(
+            &path,
+            VaultLock::Encrypted(SecretString::from(F17_PASSPHRASE.to_string())),
+        )
+        .expect("reopen after post_commit must succeed");
+        assert!(reopened.accounts().is_empty());
+        assert!(reopened.is_encrypted());
+    });
+}
+
+#[test]
+fn encrypted_create_force_pre_commit_surfaces_save_not_committed() {
+    run_serial(|| {
+        let dir = TempDir::new().unwrap();
+        let path = vault_path_in(&dir);
+        let _ = Store::create(&path, VaultInit::Encrypted(f17_encrypted_options()))
+            .expect("setup: create encrypted primary");
+
+        // create_force rotates the existing primary → `.bak` before
+        // staging the new primary; pre_commit fault fires after that
+        // rotation, so `backup_path` is Some.
+        let err = with_fault(PRE, || {
+            Store::create_force(&path, VaultInit::Encrypted(f17_encrypted_options()))
+        })
+        .map(|_| ())
+        .expect_err("pre_commit must fail");
+        assert_save_not_committed(&err, true);
+        no_tmp_residue(&path);
+
+        // The pre-commit fault left the rotated `.bak` on disk; the
+        // primary path no longer holds an encrypted vault, so a fresh
+        // `Store::open` against `vault.bin` should fail with
+        // `vault_missing` (the rotation moved it to .bak).
+        let bak = path.with_file_name("vault.bin.bak");
+        assert!(bak.exists(), "rotated .bak must be in place");
+        let reopen_err = Store::open(
+            &path,
+            VaultLock::Encrypted(SecretString::from(F17_PASSPHRASE.to_string())),
+        )
+        .map(|_| ())
+        .unwrap_err();
+        assert_eq!(reopen_err.kind(), ErrorKind::VaultMissing);
+    });
+}
+
+#[test]
+fn encrypted_create_force_post_commit_surfaces_save_durability_unconfirmed() {
+    run_serial(|| {
+        let dir = TempDir::new().unwrap();
+        let path = vault_path_in(&dir);
+        let _ = Store::create(&path, VaultInit::Encrypted(f17_encrypted_options()))
+            .expect("setup: create encrypted primary");
+
+        let err = with_fault(POST, || {
+            Store::create_force(&path, VaultInit::Encrypted(f17_encrypted_options()))
+        })
+        .map(|_| ())
+        .expect_err("post_commit must fail");
+        assert_save_durability_unconfirmed(&err);
+
+        // Post-commit means the rename committed — the primary is the
+        // freshly clobbered encrypted vault and reopens cleanly.
+        assert!(path.exists(), "primary must be in place post-commit");
+        no_tmp_residue(&path);
+        let (reopened, _) = Store::open(
+            &path,
+            VaultLock::Encrypted(SecretString::from(F17_PASSPHRASE.to_string())),
+        )
+        .expect("reopen after post_commit must succeed");
+        assert!(reopened.accounts().is_empty());
+        assert!(reopened.is_encrypted());
+    });
+}
+
+// ──────────────────────────────────────────────────────────────────
 // write_secret_file_atomic (shared export writer)
 // ──────────────────────────────────────────────────────────────────
 
