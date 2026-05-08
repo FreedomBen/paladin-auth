@@ -9,7 +9,7 @@
 // (the retained `SecretString` passphrase + the cached 32-byte AEAD
 // key) so encrypted saves reuse the Argon2id derivation rather than
 // re-running the KDF on every HOTP advance. Account-level mutation
-// helpers (find_duplicate, rename, hotp_advance, totp_code,
+// helpers (find_duplicate, rename, hotp_advance, hotp_peek, totp_code,
 // mutate_and_save, import_accounts) and passphrase transitions land
 // in Phase G / H.
 
@@ -23,7 +23,7 @@ use crate::crypto::AEAD_KEY_LEN;
 use crate::domain::validation::{system_time_to_secs_for, validate_label};
 use crate::domain::{Account, AccountId, AccountSummary, Code, OtpKind, ValidatedAccount};
 use crate::error::{ErrorKind, PaladinError, Result};
-use crate::otp::hotp;
+use crate::otp::{hotp, totp};
 use crate::storage::payload::VaultPayload;
 use crate::storage::{Store, VaultSettings};
 
@@ -263,6 +263,83 @@ impl Vault {
     /// `save_durability_unconfirmed`.
     pub fn save(&self, store: &Store) -> Result<()> {
         store.save_payload(&self.snapshot_payload(), self.cached_key())
+    }
+
+    /// Compute the TOTP code for an account at the supplied wall-clock
+    /// time. Read-only — never mutates the vault and never touches the
+    /// `Store` (DESIGN.md §4.2 / §4.7).
+    ///
+    /// Missing IDs return
+    /// `invalid_state { operation: "totp_code", state: "account_not_found" }`;
+    /// HOTP accounts return
+    /// `invalid_state { operation: "totp_code", state: "not_totp" }`.
+    /// Pre-Unix-epoch / `valid_until`-overflow timestamps surface as
+    /// `time_range` from the underlying [`crate::otp::totp::compute`].
+    pub fn totp_code(&self, id: AccountId, now: SystemTime) -> Result<Code> {
+        let account =
+            self.accounts
+                .iter()
+                .find(|a| a.id() == id)
+                .ok_or(PaladinError::InvalidState {
+                    operation: "totp_code",
+                    state: "account_not_found",
+                })?;
+        let period = match account.kind {
+            OtpKind::Totp { period } => period,
+            OtpKind::Hotp { .. } => {
+                return Err(PaladinError::InvalidState {
+                    operation: "totp_code",
+                    state: "not_totp",
+                });
+            }
+        };
+        totp::compute(
+            account.secret(),
+            account.algorithm(),
+            period,
+            account.digits(),
+            now,
+        )
+    }
+
+    /// Compute the HOTP code at the current stored counter without
+    /// advancing it. Read-only — never mutates the vault and never
+    /// touches the `Store` (DESIGN.md §4.2 / §4.7).
+    ///
+    /// A `hotp_peek` immediately following a successful `hotp_advance`
+    /// observes the post-advance counter (`prev + 1`), so successive
+    /// calls without an intervening `hotp_advance` return the same
+    /// code, while a `hotp_advance` between them shifts to the next
+    /// code in the RFC 4226 sequence.
+    ///
+    /// Missing IDs return
+    /// `invalid_state { operation: "hotp_peek", state: "account_not_found" }`;
+    /// TOTP accounts return
+    /// `invalid_state { operation: "hotp_peek", state: "not_hotp" }`.
+    pub fn hotp_peek(&self, id: AccountId) -> Result<Code> {
+        let account =
+            self.accounts
+                .iter()
+                .find(|a| a.id() == id)
+                .ok_or(PaladinError::InvalidState {
+                    operation: "hotp_peek",
+                    state: "account_not_found",
+                })?;
+        let counter = match account.kind {
+            OtpKind::Hotp { counter } => counter,
+            OtpKind::Totp { .. } => {
+                return Err(PaladinError::InvalidState {
+                    operation: "hotp_peek",
+                    state: "not_hotp",
+                });
+            }
+        };
+        Ok(hotp::compute(
+            account.secret(),
+            account.algorithm(),
+            account.digits(),
+            counter,
+        ))
     }
 
     /// Compute the HOTP code at the current counter, advance the

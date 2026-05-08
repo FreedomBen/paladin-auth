@@ -728,7 +728,7 @@ Each step lands as its own commit. Tests come first.
   mutation or save.
 - [x] Tests: `hotp_advance` at `u64::MAX` returns `counter_overflow` with
   the §5 `account` summary before mutating memory or attempting a save.
-- [ ] Tests: `Vault::hotp_peek` after a committed `Vault::hotp_advance`
+- [x] Tests: `Vault::hotp_peek` after a committed `Vault::hotp_advance`
   returns the code for the new (post-advance) counter; `Vault::totp_code`
   is read-only and never mutates the vault or touches the `Store`.
 - [ ] Tests: account-ID method failures return stable `invalid_state`
