@@ -164,25 +164,42 @@ fn tamper_magic_last_byte_returns_invalid_header() {
 
 // ---------- format_ver (byte 8) → unsupported_format_version ----------
 
+/// Drive `Store::open` against a tampered file and assert that the
+/// returned error is `UnsupportedFormatVersion` carrying the offending
+/// `format_ver` value as a §5 extra field.
+fn assert_unsupported_format_ver(bytes: &[u8], expected_ver: u8) {
+    let (_dir, path) = commit(bytes);
+    let err = open_after_tamper(&path);
+    match err {
+        PaladinError::UnsupportedFormatVersion { format_ver } => {
+            assert_eq!(
+                format_ver, expected_ver,
+                "format_ver field must carry the offending value"
+            );
+        }
+        other => panic!("expected UnsupportedFormatVersion, got {other:?}"),
+    }
+}
+
 #[test]
 fn tamper_format_ver_to_zero_returns_unsupported_format_version() {
     let mut bytes = canonical_clone();
     bytes[FORMAT_VER_OFFSET] = 0;
-    assert_kind(&bytes, ErrorKind::UnsupportedFormatVersion);
+    assert_unsupported_format_ver(&bytes, 0);
 }
 
 #[test]
 fn tamper_format_ver_to_two_returns_unsupported_format_version() {
     let mut bytes = canonical_clone();
     bytes[FORMAT_VER_OFFSET] = 2;
-    assert_kind(&bytes, ErrorKind::UnsupportedFormatVersion);
+    assert_unsupported_format_ver(&bytes, 2);
 }
 
 #[test]
 fn tamper_format_ver_to_max_returns_unsupported_format_version() {
     let mut bytes = canonical_clone();
     bytes[FORMAT_VER_OFFSET] = 0xFF;
-    assert_kind(&bytes, ErrorKind::UnsupportedFormatVersion);
+    assert_unsupported_format_ver(&bytes, 0xFF);
 }
 
 // ---------- mode (byte 9) ----------

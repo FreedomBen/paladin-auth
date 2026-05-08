@@ -117,7 +117,9 @@ impl EncryptionOptions {
 
     fn ensure_non_empty(passphrase: &SecretString) -> Result<()> {
         if passphrase.expose_secret().is_empty() {
-            return Err(PaladinError::InvalidPassphrase { reason: "empty" });
+            return Err(PaladinError::InvalidPassphrase {
+                reason: "zero_length",
+            });
         }
         Ok(())
     }
@@ -454,9 +456,58 @@ mod tests {
     fn encryption_options_new_rejects_empty_passphrase() {
         match EncryptionOptions::new(pp("")) {
             Ok(_) => panic!("expected InvalidPassphrase"),
-            Err(PaladinError::InvalidPassphrase { reason }) => assert_eq!(reason, "empty"),
+            Err(PaladinError::InvalidPassphrase { reason }) => assert_eq!(reason, "zero_length"),
             Err(other) => panic!("unexpected variant: {other:?}"),
         }
+    }
+
+    #[test]
+    fn encryption_options_with_params_rejects_empty_passphrase_with_zero_length_reason() {
+        match EncryptionOptions::with_params(pp(""), Argon2Params::default()) {
+            Ok(_) => panic!("expected InvalidPassphrase"),
+            Err(PaladinError::InvalidPassphrase { reason }) => assert_eq!(reason, "zero_length"),
+            Err(other) => panic!("unexpected variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn encryption_options_accepts_whitespace_only_passphrases_without_trim() {
+        // §4.4: passphrase bytes are taken verbatim — no trim, no normalize.
+        // Three ASCII spaces and the ideographic space are non-empty bytes and
+        // must construct successfully.
+        for raw in ["   ", "\u{3000}", "\t\n\r"] {
+            let opts =
+                EncryptionOptions::new(pp(raw)).expect("non-empty whitespace must be accepted");
+            assert_eq!(opts.passphrase.expose_secret(), raw);
+        }
+    }
+
+    #[test]
+    fn encryption_options_accepts_unicode_only_passphrases_without_normalize() {
+        // §4.4: bytes-only equality. Combining marks, RTL marks, and zero-width
+        // joiners are non-empty byte sequences and must be accepted as-is.
+        for raw in ["a\u{0301}", "\u{200F}abc", "a\u{200D}b"] {
+            let opts = EncryptionOptions::new(pp(raw)).expect("non-empty unicode must be accepted");
+            assert_eq!(opts.passphrase.expose_secret(), raw);
+        }
+    }
+
+    #[test]
+    fn nfc_and_nfd_passphrases_derive_different_keys() {
+        // U+00E9 (NFC) and U+0065 U+0301 (NFD) render identically but their
+        // byte sequences differ — §4.4 explicitly forbids normalization, so
+        // the derived AEAD keys must also differ.
+        let nfc = pp("caf\u{00E9}");
+        let nfd = pp("caf\u{0065}\u{0301}");
+        assert_ne!(
+            nfc.expose_secret().as_bytes(),
+            nfd.expose_secret().as_bytes(),
+            "NFC vs NFD bytes must differ for this fixture"
+        );
+        let salt = [0x07u8; 16];
+        let composed = argon2id_derive_key(&nfc, &salt, &cheap_params()).unwrap();
+        let decomposed = argon2id_derive_key(&nfd, &salt, &cheap_params()).unwrap();
+        assert_ne!(composed.as_slice(), decomposed.as_slice());
     }
 
     #[test]

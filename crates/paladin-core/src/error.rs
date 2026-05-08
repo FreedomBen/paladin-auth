@@ -168,8 +168,8 @@ pub enum PaladinError {
     #[error("invalid vault payload: {reason}")]
     InvalidPayload { reason: &'static str },
 
-    #[error("unsupported vault format version")]
-    UnsupportedFormatVersion,
+    #[error("unsupported vault format version: {format_ver}")]
+    UnsupportedFormatVersion { format_ver: u8 },
 
     #[error("Argon2 KDF parameters out of bounds: m_kib={m_kib} t={t} p={p}")]
     KdfParamsOutOfBounds { m_kib: u32, t: u32, p: u32 },
@@ -233,7 +233,7 @@ impl PaladinError {
             Self::DecryptFailed => ErrorKind::DecryptFailed,
             Self::InvalidHeader => ErrorKind::InvalidHeader,
             Self::InvalidPayload { .. } => ErrorKind::InvalidPayload,
-            Self::UnsupportedFormatVersion => ErrorKind::UnsupportedFormatVersion,
+            Self::UnsupportedFormatVersion { .. } => ErrorKind::UnsupportedFormatVersion,
             Self::KdfParamsOutOfBounds { .. } => ErrorKind::KdfParamsOutOfBounds,
             Self::UnsupportedImportFormat { .. } => ErrorKind::UnsupportedImportFormat,
             Self::UnsupportedPlaintextVault => ErrorKind::UnsupportedPlaintextVault,
@@ -382,7 +382,7 @@ mod tests {
             (PaladinError::DecryptFailed, ErrorKind::DecryptFailed),
             (PaladinError::InvalidHeader, ErrorKind::InvalidHeader),
             (
-                PaladinError::UnsupportedFormatVersion,
+                PaladinError::UnsupportedFormatVersion { format_ver: 99 },
                 ErrorKind::UnsupportedFormatVersion,
             ),
             (

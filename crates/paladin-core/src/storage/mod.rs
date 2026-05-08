@@ -179,7 +179,7 @@ pub fn classify_init_precheck(probe: Result<VaultStatus>) -> InitPrecheck {
     match probe {
         Ok(VaultStatus::Missing) => InitPrecheck::Clear,
         Ok(VaultStatus::Plaintext | VaultStatus::Encrypted) => InitPrecheck::Existing,
-        Err(PaladinError::InvalidHeader | PaladinError::UnsupportedFormatVersion) => {
+        Err(PaladinError::InvalidHeader | PaladinError::UnsupportedFormatVersion { .. }) => {
             InitPrecheck::Existing
         }
         Err(other) => InitPrecheck::Propagate(other),
@@ -1413,7 +1413,9 @@ mod tests {
             InitPrecheck::Existing
         ));
         assert!(matches!(
-            classify_init_precheck(Err(PaladinError::UnsupportedFormatVersion)),
+            classify_init_precheck(Err(PaladinError::UnsupportedFormatVersion {
+                format_ver: 99
+            })),
             InitPrecheck::Existing
         ));
 

@@ -512,14 +512,14 @@ Each step lands as its own commit. Tests come first.
   (`header_size + 16 MiB + 16-byte AEAD tag`) before any KDF/AEAD work;
   decrypted encrypted payloads above the 16 MiB payload limit are rejected
   before constructing a `Vault`.
-- [ ] Tests: encrypted save → reopen preserves account insertion order —
+- [x] Tests: encrypted save → reopen preserves account insertion order —
   add accounts in order A, B, C to an encrypted vault, save, drop the
   `Vault`, re-`open` with the same passphrase, and assert `iter()` and
   `summaries()` yield A, B, C in that order. Mirrors the Phase E
   plaintext insertion-order assertion to pin that the bincode
   `VaultPayload.accounts` field is an ordered `Vec<Account>` for both
   vault modes.
-- [ ] Tests: encrypted-file tamper matrix — table-driven per-field
+- [x] Tests: encrypted-file tamper matrix — table-driven per-field
   byte-flip coverage for header, AAD-bound fields, ciphertext, and tag.
   One named test row per region, each asserting `open` returns the
   discriminating error kind and never returns a vault. The expected kind
@@ -552,7 +552,7 @@ Each step lands as its own commit. Tests come first.
   (i.e. truncated file where the body cannot form a valid tag)
   surfaces `invalid_payload` with `reason: "ciphertext_too_short"`,
   not a panic.
-- [ ] Tests: published crypto known-answer vectors (KATs) — Argon2id
+- [x] Tests: published crypto known-answer vectors (KATs) — Argon2id
   derives the expected 32-byte AEAD key for a fixed passphrase / salt /
   parameter fixture using the exact crate configuration Paladin wires, and
   XChaCha20-Poly1305 encrypts/decrypts a fixed key / 24-byte nonce / AAD /
@@ -578,29 +578,29 @@ Each step lands as its own commit. Tests come first.
   exactly 24 bytes. Asserted as named cases against a fresh encrypted
   vault so any future swap to a different AEAD construct (e.g. AES-GCM,
   ChaCha20-Poly1305) fails the test instead of silently re-encoding.
-- [ ] Tests: KDF determinism — `argon2id_derive_key(passphrase, salt,
+- [x] Tests: KDF determinism — `argon2id_derive_key(passphrase, salt,
   &Argon2Params::default()) == argon2id_derive_key(passphrase, salt,
   &Argon2Params::default())` bit-for-bit for the same inputs across
   two derivations. Pin the §4.4 contract that the 32-byte AEAD key is
   a pure function of `(passphrase, salt, params)`.
-- [ ] Tests: `kdf_params_out_of_bounds` carries `m_kib`, `t`, `p`
+- [x] Tests: `kdf_params_out_of_bounds` carries `m_kib`, `t`, `p`
   fields populated with the offending values (one test per field; the
   other two carry whatever in-range value was supplied).
-- [ ] Tests: `wrong_vault_lock` carries `expected` and `actual` fields
+- [x] Tests: `wrong_vault_lock` carries `expected` and `actual` fields
   with stable string values (`"plaintext"` / `"encrypted"`); both
   cross-mode directions exercised.
-- [ ] Tests: `unsupported_format_version` carries the offending
+- [x] Tests: `unsupported_format_version` carries the offending
   `format_ver` value as a §5 extra field.
-- [ ] Tests: wrong encrypted-vault passphrase returns `decrypt_failed`
+- [x] Tests: wrong encrypted-vault passphrase returns `decrypt_failed`
   without constructing a vault.
-- [ ] Tests: Argon2 parameter bounds rejected before any KDF work (`m_kib`
+- [x] Tests: Argon2 parameter bounds rejected before any KDF work (`m_kib`
   8192–1048576, `t` 1–10, `p` 1–4). **Explicit boundary table** —
   `m_kib` at exactly `8191` (reject), `8192` (accept), `1048576` (accept),
   `1048577` (reject); `t` at `0` (reject), `1` (accept), `10` (accept),
   `11` (reject); `p` at `0` (reject), `1` (accept), `4` (accept), `5`
   (reject). Every rejection returns `kdf_params_out_of_bounds` with
   the offending field populated.
-- [ ] Tests: `Argon2Params::default()` yields `m_kib = 65536` (64 MiB),
+- [x] Tests: `Argon2Params::default()` yields `m_kib = 65536` (64 MiB),
   `t = 3`, `p = 1`; `Argon2Params::validate` accepts in-range custom
   values and rejects out-of-range values with
   `kdf_params_out_of_bounds`; `EncryptionOptions::new(passphrase)`
@@ -641,7 +641,7 @@ Each step lands as its own commit. Tests come first.
   the same `(m_kib, t, p)` triple bit-identical to what was written.
   Pins that custom KDF cost survives write → header → read so an
   encrypted vault opened on a different machine derives the same key.
-- [ ] Tests: `EncryptionOptions::new` and `EncryptionOptions::with_params`
+- [x] Tests: `EncryptionOptions::new` and `EncryptionOptions::with_params`
   reject zero-length passphrase with `invalid_passphrase` /
   `reason: "zero_length"`; `export::encrypted` independently rejects
   zero-length passphrase via the same path; non-empty whitespace-only
@@ -649,6 +649,7 @@ Each step lands as its own commit. Tests come first.
   (combining marks, RTL marks, zero-width joiners), and passphrases
   differing only in NFC vs NFD normalization derive **different** keys
   (i.e. byte-equality is the only equality; no trim, no normalize).
+  *(`export::encrypted` portion deferred to Phase I.)*
 - [ ] Tests: encrypted `create` / `create_force`, `set_passphrase`,
   `change_passphrase`, and `export::encrypted` write custom validated Argon2
   params into the header when supplied through `EncryptionOptions`.
@@ -688,7 +689,7 @@ Each step lands as its own commit. Tests come first.
   Read paths route the same allocation failure through the same operation
   string so unlocking on a memory-constrained host fails cleanly instead of
   panicking.
-- [ ] Tests: `open` rejects `VaultLock` mismatches with `wrong_vault_lock`
+- [x] Tests: `open` rejects `VaultLock` mismatches with `wrong_vault_lock`
   before any KDF work — `VaultLock::Plaintext` against an encrypted file,
   and `VaultLock::Encrypted(_)` against a plaintext file.
 - [ ] Tests: encrypted `create` and `create_force` through `VaultInit`

@@ -161,7 +161,9 @@ fn classify_init_precheck_truth_table() {
     ));
     // UnsupportedFormatVersion → Existing
     assert!(matches!(
-        classify_init_precheck(Err(PaladinError::UnsupportedFormatVersion)),
+        classify_init_precheck(Err(PaladinError::UnsupportedFormatVersion {
+            format_ver: 99
+        })),
         InitPrecheck::Existing
     ));
     // Other Err → Propagate

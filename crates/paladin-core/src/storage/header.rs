@@ -127,7 +127,7 @@ pub(crate) fn parse_header(bytes: &[u8]) -> Result<ParsedHeader> {
     }
     let format_ver = bytes[8];
     if format_ver != FORMAT_VER {
-        return Err(PaladinError::UnsupportedFormatVersion);
+        return Err(PaladinError::UnsupportedFormatVersion { format_ver });
     }
     match bytes[9] {
         MODE_PLAINTEXT => Ok(ParsedHeader::Plaintext),

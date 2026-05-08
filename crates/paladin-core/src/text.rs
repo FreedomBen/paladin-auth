@@ -195,7 +195,7 @@ mod tests {
             PaladinError::VaultExists,
             PaladinError::DecryptFailed,
             PaladinError::InvalidHeader,
-            PaladinError::UnsupportedFormatVersion,
+            PaladinError::UnsupportedFormatVersion { format_ver: 99 },
             PaladinError::CounterOverflow,
             PaladinError::SaveDurabilityUnconfirmed,
             PaladinError::TimeRange {
