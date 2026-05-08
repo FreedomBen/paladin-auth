@@ -23,8 +23,6 @@ pub use crypto::argon2_derivation_count;
 
 #[cfg(feature = "test-zeroize-witness")]
 pub use crypto::zeroize_witness;
-#[cfg(feature = "test-zeroize-witness")]
-pub use storage::_testing_write_encrypted_with_raw_plaintext;
 pub use domain::validation::AccountInput;
 pub use domain::{
     parse_icon_hint_token, validate_manual, Account, AccountId, AccountKindInput,
@@ -33,6 +31,8 @@ pub use domain::{
 };
 pub use error::{ErrorKind, PaladinError, PermissionSubject, Result, TimeRangeKind, VaultMode};
 pub use otpauth::parse_otpauth;
+#[cfg(feature = "test-zeroize-witness")]
+pub use storage::_testing_write_encrypted_with_raw_plaintext;
 pub use storage::{
     classify_init_precheck, default_vault_path, inspect, write_secret_file_atomic, InitPrecheck,
     Store, VaultInit, VaultLock, VaultSettings, VaultStatus,

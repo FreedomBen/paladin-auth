@@ -38,8 +38,8 @@ use std::path::{Path, PathBuf};
 use secrecy::SecretString;
 
 use crate::crypto::{
-    aead_decrypt, aead_encrypt, argon2id_derive_key, Argon2Params, EncryptionOptions,
-    WitnessSite, ZeroizingBytes, AEAD_KEY_LEN, AEAD_NONCE_LEN,
+    aead_decrypt, aead_encrypt, argon2id_derive_key, Argon2Params, EncryptionOptions, WitnessSite,
+    ZeroizingBytes, AEAD_KEY_LEN, AEAD_NONCE_LEN,
 };
 use crate::error::{PaladinError, Result, VaultMode};
 
@@ -1072,24 +1072,40 @@ fn open_encrypted(path: &Path, passphrase: SecretString) -> Result<(crate::Vault
     ))
 }
 
-/// Generate a 16-byte Argon2 salt from the OS CSPRNG. Failures
-/// surface as `io_error { operation: "csprng_read" }`.
-fn generate_salt() -> Result<[u8; SALT_LEN]> {
-    let mut salt = [0u8; SALT_LEN];
-    getrandom::getrandom(&mut salt).map_err(|_| PaladinError::IoError {
+/// Build the canonical `csprng_read` `IoError`. Shared between the
+/// real `getrandom` failure path and the `test-fault-injection`
+/// hook so both routes surface the §5 stable operation string with
+/// the same error shape.
+fn csprng_read_error() -> PaladinError {
+    PaladinError::IoError {
         operation: "csprng_read",
         source: io::Error::other("CSPRNG read failed"),
-    })?;
+    }
+}
+
+/// Generate a 16-byte Argon2 salt from the OS CSPRNG. Failures
+/// surface as `io_error { operation: "csprng_read" }`. The
+/// `test-fault-injection` hook (`PALADIN_FAULT_INJECT=csprng_read`)
+/// short-circuits the `getrandom` call and returns the same error so
+/// every encrypted-write site can be exercised deterministically.
+fn generate_salt() -> Result<[u8; SALT_LEN]> {
+    if fault::csprng_read_should_fail() {
+        return Err(csprng_read_error());
+    }
+    let mut salt = [0u8; SALT_LEN];
+    getrandom::getrandom(&mut salt).map_err(|_| csprng_read_error())?;
     Ok(salt)
 }
 
 /// Generate a 24-byte XChaCha20-Poly1305 nonce from the OS CSPRNG.
+/// Honors the `test-fault-injection` `csprng_read` hook on the same
+/// terms as `generate_salt`.
 fn generate_nonce() -> Result<[u8; AEAD_NONCE_LEN]> {
+    if fault::csprng_read_should_fail() {
+        return Err(csprng_read_error());
+    }
     let mut nonce = [0u8; AEAD_NONCE_LEN];
-    getrandom::getrandom(&mut nonce).map_err(|_| PaladinError::IoError {
-        operation: "csprng_read",
-        source: io::Error::other("CSPRNG read failed"),
-    })?;
+    getrandom::getrandom(&mut nonce).map_err(|_| csprng_read_error())?;
     Ok(nonce)
 }
 

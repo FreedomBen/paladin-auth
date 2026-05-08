@@ -26,13 +26,16 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use paladin_core::{
-    write_secret_file_atomic, ErrorKind, PaladinError, Store, VaultInit, VaultLock, VaultMode,
+    write_secret_file_atomic, Argon2Params, EncryptionOptions, ErrorKind, PaladinError, Store,
+    VaultInit, VaultLock, VaultMode,
 };
+use secrecy::SecretString;
 use tempfile::TempDir;
 
 const ENV: &str = "PALADIN_FAULT_INJECT";
 const PRE: &str = "pre_commit";
 const POST: &str = "post_commit";
+const CSPRNG: &str = "csprng_read";
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 
@@ -432,5 +435,223 @@ fn store_for_test_constructor_drives_fault_hook() {
         // `save_plaintext`, which leaves the old primary authoritative
         // and reports `backup_path: None` per §5.
         assert_save_not_committed(&err, false);
+    });
+}
+
+// ──────────────────────────────────────────────────────────────────
+// CSPRNG failure surface (Phase F.15 / DESIGN.md §5).
+//
+// Every encrypted-write site reads the OS CSPRNG to draw a fresh salt
+// (encrypted `create` / `create_force`) or fresh nonce (every encrypted
+// save, including the freshly-built initial save inside `create*`). A
+// `getrandom::Error` from either call must surface as
+// `io_error { operation: "csprng_read" }`, must not write a partial
+// vault file, must not rotate or clobber any pre-existing primary, and
+// must not leak intermediate plaintext to disk. The fault-injection
+// hook reuses the existing `PALADIN_FAULT_INJECT` env-var contract with
+// a new `csprng_read` value (see `storage::fault`).
+//
+// Phase H (`set_passphrase` / `change_passphrase` / `remove_passphrase`)
+// and Phase I (`export::encrypted`) extend this matrix when they land.
+// ──────────────────────────────────────────────────────────────────
+
+const CSPRNG_PASSPHRASE: &str = "csprng-fault-pass";
+
+fn cheap_encrypted_options() -> EncryptionOptions {
+    // §4.4 acceptance floor (`m_kib >= 8192`, `t >= 1`, `p >= 1`).
+    let params = Argon2Params {
+        m_kib: 8_192,
+        t: 1,
+        p: 1,
+    };
+    EncryptionOptions::with_params(SecretString::from(CSPRNG_PASSPHRASE.to_string()), params)
+        .expect("cheap_params are in §4.4 bounds")
+}
+
+fn assert_csprng_io_error(err: &PaladinError) {
+    assert_eq!(
+        err.kind(),
+        ErrorKind::IoError,
+        "expected io_error, got {err:?}"
+    );
+    match err {
+        PaladinError::IoError { operation, .. } => {
+            assert_eq!(
+                *operation, "csprng_read",
+                "expected operation=csprng_read, got {operation:?}"
+            );
+        }
+        _ => unreachable!(),
+    }
+}
+
+#[test]
+fn encrypted_create_csprng_failure_surfaces_io_error() {
+    run_serial(|| {
+        let dir = TempDir::new().unwrap();
+        let path = vault_path_in(&dir);
+        let opts = cheap_encrypted_options();
+
+        let err = with_fault(CSPRNG, || Store::create(&path, VaultInit::Encrypted(opts)))
+            .map(|_| ())
+            .expect_err("csprng_read fault must fail Store::create");
+
+        assert_csprng_io_error(&err);
+        // No partial primary or temp/backup siblings on disk: the salt
+        // is drawn before any staging, so a CSPRNG fault must abort
+        // before touching the filesystem.
+        assert!(!path.exists(), "vault.bin must not be created");
+        no_tmp_residue(&path);
+        let bak_path = {
+            let mut s = path.as_os_str().to_os_string();
+            s.push(".bak");
+            PathBuf::from(s)
+        };
+        assert!(!bak_path.exists(), "vault.bin.bak must not be created");
+    });
+}
+
+#[test]
+fn encrypted_create_force_csprng_failure_preserves_primary() {
+    run_serial(|| {
+        let dir = TempDir::new().unwrap();
+        let path = vault_path_in(&dir);
+        // Establish a committed encrypted primary so the fault path
+        // exercises the staged-clobber branch (vs. the empty-dir branch
+        // covered above).
+        let _ = Store::create(&path, VaultInit::Encrypted(cheap_encrypted_options()))
+            .expect("setup: create encrypted primary");
+        let primary_before = std::fs::read(&path).expect("read primary before fault");
+        let bak_path = {
+            let mut s = path.as_os_str().to_os_string();
+            s.push(".bak");
+            PathBuf::from(s)
+        };
+        let bak_before = bak_path.exists().then(|| std::fs::read(&bak_path).unwrap());
+
+        let err = with_fault(CSPRNG, || {
+            Store::create_force(&path, VaultInit::Encrypted(cheap_encrypted_options()))
+        })
+        .map(|_| ())
+        .expect_err("csprng_read fault must fail Store::create_force");
+
+        assert_csprng_io_error(&err);
+        // Primary remains byte-identical to its pre-fault state — the
+        // CSPRNG draw is the very first crypto step so no rotation,
+        // staging, or rename has happened.
+        let primary_after = std::fs::read(&path).expect("read primary after fault");
+        assert_eq!(
+            primary_after, primary_before,
+            "create_force csprng fault must not modify the primary"
+        );
+        // No temp residue, and the .bak (if any) is unchanged.
+        no_tmp_residue(&path);
+        match bak_before {
+            Some(before) => {
+                let after = std::fs::read(&bak_path).expect("read .bak after fault");
+                assert_eq!(after, before, ".bak must be unchanged");
+            }
+            None => assert!(!bak_path.exists(), ".bak must not be created by fault"),
+        }
+    });
+}
+
+#[test]
+fn encrypted_regular_save_csprng_failure_preserves_primary() {
+    run_serial(|| {
+        let dir = TempDir::new().unwrap();
+        let path = vault_path_in(&dir);
+        // Establish a committed encrypted primary, drop, reopen so the
+        // follow-up `vault.save` exercises the regular-save path with a
+        // fresh nonce draw inside `build_encrypted_on_disk`.
+        let _ = Store::create(&path, VaultInit::Encrypted(cheap_encrypted_options()))
+            .expect("setup: create encrypted primary");
+        let primary_before = std::fs::read(&path).expect("read primary before fault");
+        let (vault, store) = Store::open(
+            &path,
+            VaultLock::Encrypted(SecretString::from(CSPRNG_PASSPHRASE.to_string())),
+        )
+        .expect("reopen encrypted vault");
+
+        let err = with_fault(CSPRNG, || vault.save(&store))
+            .expect_err("csprng_read fault must fail Vault::save");
+
+        assert_csprng_io_error(&err);
+        // The nonce is drawn before any tempfile is staged, so the
+        // primary must be unchanged byte-for-byte.
+        let primary_after = std::fs::read(&path).expect("read primary after fault");
+        assert_eq!(
+            primary_after, primary_before,
+            "regular encrypted save csprng fault must not modify the primary"
+        );
+        no_tmp_residue(&path);
+        // A subsequent unfaulted save must succeed and produce a
+        // byte-distinct primary (fresh nonce) — proves the fault did
+        // not corrupt the cached key or in-memory state.
+        vault
+            .save(&store)
+            .expect("save without fault must succeed after csprng fault");
+        let primary_recovered = std::fs::read(&path).expect("read primary after recovery save");
+        assert_ne!(
+            primary_recovered, primary_before,
+            "post-recovery save must rotate ciphertext (fresh nonce)"
+        );
+    });
+}
+
+#[test]
+fn csprng_fault_reaches_every_encrypted_write_site() {
+    run_serial(|| {
+        // Coverage row: each currently-implemented encrypted-write site
+        // must surface the same `io_error { operation: "csprng_read" }`
+        // when the hook fires. Phase H / Phase I will extend this list.
+        let dir = TempDir::new().unwrap();
+
+        // Site 1: encrypted create on a fresh path.
+        let path1 = vault_path_in(&dir);
+        let err1 = with_fault(CSPRNG, || {
+            Store::create(&path1, VaultInit::Encrypted(cheap_encrypted_options()))
+        })
+        .map(|_| ())
+        .expect_err("create");
+        assert_csprng_io_error(&err1);
+
+        // Site 2: encrypted create_force over an existing primary.
+        let dir2 = TempDir::new().unwrap();
+        let path2 = vault_path_in(&dir2);
+        let _ = Store::create(&path2, VaultInit::Encrypted(cheap_encrypted_options())).unwrap();
+        let err2 = with_fault(CSPRNG, || {
+            Store::create_force(&path2, VaultInit::Encrypted(cheap_encrypted_options()))
+        })
+        .map(|_| ())
+        .expect_err("create_force");
+        assert_csprng_io_error(&err2);
+
+        // Site 3: regular encrypted save on a reopened vault.
+        let dir3 = TempDir::new().unwrap();
+        let path3 = vault_path_in(&dir3);
+        let _ = Store::create(&path3, VaultInit::Encrypted(cheap_encrypted_options())).unwrap();
+        let (vault, store) = Store::open(
+            &path3,
+            VaultLock::Encrypted(SecretString::from(CSPRNG_PASSPHRASE.to_string())),
+        )
+        .unwrap();
+        let err3 = with_fault(CSPRNG, || vault.save(&store)).expect_err("regular save");
+        assert_csprng_io_error(&err3);
+    });
+}
+
+#[test]
+fn csprng_fault_value_does_not_trip_pre_or_post_commit_paths() {
+    run_serial(|| {
+        // Plaintext save has no CSPRNG draw — the `csprng_read` fault
+        // value must not accidentally fire a pre/post-commit hook there.
+        let dir = TempDir::new().unwrap();
+        let path = vault_path_in(&dir);
+        let (vault, store) = Store::create(&path, VaultInit::Plaintext).unwrap();
+        vault.save(&store).unwrap();
+        with_fault(CSPRNG, || vault.save(&store))
+            .expect("plaintext save must succeed under csprng_read fault");
+        no_tmp_residue(&path);
     });
 }

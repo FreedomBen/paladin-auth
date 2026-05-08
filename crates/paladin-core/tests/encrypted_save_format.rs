@@ -421,9 +421,8 @@ fn create_force_writes_custom_argon2_params_to_header_with_no_prior_file() {
     let path = dir.path().join("vault.bin");
     assert!(!path.exists(), "no prior primary present");
     let params = cheap_params();
-    let (_v, _s) =
-        Store::create_force(&path, VaultInit::Encrypted(cheap_options("hunter2")))
-            .expect("create_force");
+    let (_v, _s) = Store::create_force(&path, VaultInit::Encrypted(cheap_options("hunter2")))
+        .expect("create_force");
     let bytes = fs::read(&path).expect("read vault");
     assert_eq!(
         &bytes[M_KIB_RANGE.clone()],

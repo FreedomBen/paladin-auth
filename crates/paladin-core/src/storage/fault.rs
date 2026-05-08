@@ -5,7 +5,7 @@
 // Compiled in only when the `test-fault-injection` cargo feature is
 // enabled — production builds get the no-op stubs at the bottom so
 // the fault checks compile away. The hook honors the
-// `PALADIN_FAULT_INJECT=pre_commit|post_commit` env var:
+// `PALADIN_FAULT_INJECT=pre_commit|post_commit|csprng_read` env var:
 //
 // * `pre_commit` — return true at the pre-rename injection point so
 //   the surrounding save site bails out via its existing
@@ -25,6 +25,14 @@
 //   destination is in place but a power loss before the next durable
 //   write to its parent directory may lose the rename.
 //
+// * `csprng_read` — return true at every OS CSPRNG draw used to
+//   generate Argon2 salts and XChaCha20-Poly1305 nonces in the
+//   encrypted-write pipeline (Phase F.15 / DESIGN.md §5). The
+//   surrounding generator surfaces `io_error { operation:
+//   "csprng_read" }` and the encrypted save / create / create_force
+//   path bails out before staging any tempfile, so no partial vault
+//   bytes hit disk and pre-existing primaries are left untouched.
+//
 // The hook applies uniformly to every atomic-write site in
 // `paladin-core`: regular `save_plaintext`, `save_plaintext_clobber`
 // (the `init --force` clobber path), and `write_secret_file_atomic`
@@ -33,7 +41,9 @@
 // `change_passphrase`, `remove_passphrase`), those sites call into
 // these same two checks so the cross-save-site coverage test in
 // `tests/fault_injection.rs` extends with two more rows per surface
-// without changing the hook.
+// without changing the hook. The `csprng_read` value extends the same
+// matrix to every encrypted-write surface that draws fresh salt or
+// nonce bytes from the OS.
 //
 // Excluded from the stable §4.7 public API — the constants and
 // behavior here are an internal contract between the test surface
@@ -47,6 +57,9 @@ const PRE_COMMIT_VALUE: &str = "pre_commit";
 
 #[cfg(feature = "test-fault-injection")]
 const POST_COMMIT_VALUE: &str = "post_commit";
+
+#[cfg(feature = "test-fault-injection")]
+const CSPRNG_READ_VALUE: &str = "csprng_read";
 
 /// Returns `true` when the pre-commit fault should fire at the call
 /// site — i.e. the `test-fault-injection` cargo feature is enabled and
@@ -73,6 +86,25 @@ pub(crate) fn post_commit_should_fail() -> bool {
     #[cfg(feature = "test-fault-injection")]
     {
         std::env::var(ENV).as_deref() == Ok(POST_COMMIT_VALUE)
+    }
+    #[cfg(not(feature = "test-fault-injection"))]
+    {
+        false
+    }
+}
+
+/// Returns `true` when the CSPRNG-read fault should fire at the call
+/// site — i.e. the `test-fault-injection` cargo feature is enabled and
+/// `PALADIN_FAULT_INJECT=csprng_read` is set in the process
+/// environment. Wired into every Argon2 salt / AEAD nonce generator in
+/// the encrypted save pipeline so the surrounding code can surface
+/// `io_error { operation: "csprng_read" }` deterministically. Always
+/// `false` on production builds.
+#[inline]
+pub(crate) fn csprng_read_should_fail() -> bool {
+    #[cfg(feature = "test-fault-injection")]
+    {
+        std::env::var(ENV).as_deref() == Ok(CSPRNG_READ_VALUE)
     }
     #[cfg(not(feature = "test-fault-injection"))]
     {
@@ -110,6 +142,7 @@ mod tests {
         with_env(Some(PRE_COMMIT_VALUE), || {
             assert!(pre_commit_should_fail());
             assert!(!post_commit_should_fail());
+            assert!(!csprng_read_should_fail());
         });
     }
 
@@ -118,18 +151,29 @@ mod tests {
         with_env(Some(POST_COMMIT_VALUE), || {
             assert!(!pre_commit_should_fail());
             assert!(post_commit_should_fail());
+            assert!(!csprng_read_should_fail());
+        });
+    }
+
+    #[test]
+    fn csprng_read_fires_only_for_csprng_read_value() {
+        with_env(Some(CSPRNG_READ_VALUE), || {
+            assert!(!pre_commit_should_fail());
+            assert!(!post_commit_should_fail());
+            assert!(csprng_read_should_fail());
         });
     }
 
     #[test]
     fn unknown_value_fires_neither() {
-        // Garbage values are silently ignored — only the two reserved
-        // strings activate the hook so a stray `PALADIN_FAULT_INJECT=1`
-        // in the environment cannot accidentally drive a save into a
-        // failure mode.
+        // Garbage values are silently ignored — only the three
+        // reserved strings activate the hook so a stray
+        // `PALADIN_FAULT_INJECT=1` in the environment cannot
+        // accidentally drive a save into a failure mode.
         with_env(Some("garbage"), || {
             assert!(!pre_commit_should_fail());
             assert!(!post_commit_should_fail());
+            assert!(!csprng_read_should_fail());
         });
     }
 
@@ -138,6 +182,7 @@ mod tests {
         with_env(None, || {
             assert!(!pre_commit_should_fail());
             assert!(!post_commit_should_fail());
+            assert!(!csprng_read_should_fail());
         });
     }
 }
