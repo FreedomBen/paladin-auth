@@ -609,7 +609,7 @@ Each step lands as its own commit. Tests come first.
   custom params and propagates `kdf_params_out_of_bounds` when the
   supplied params fail `validate()`; encrypted write paths reject
   zero-length passphrases with `invalid_passphrase`.
-- [ ] Tests: regular encrypted saves preserve the in-header Argon2 params
+- [x] Tests: regular encrypted saves preserve the in-header Argon2 params
   and `salt`, and use a freshly generated random `nonce` per save (drawn
   from the OS CSPRNG). Property-style assertion — across `N = 64`
   consecutive saves of the same vault, all observed on-disk `nonce`
@@ -618,13 +618,13 @@ Each step lands as its own commit. Tests come first.
   passphrase set/change/remove transition, the next regular save also
   preserves the *new* salt (cross-checks Phase H) so transition + save
   do not silently regenerate state.
-- [ ] Tests: two consecutive saves of an unmodified `Vault` produce
+- [x] Tests: two consecutive saves of an unmodified `Vault` produce
   byte-distinct ciphertext-and-tag regions (proves the per-save fresh
   nonce, not just the fresh salt) while both files re-open to the
   byte-identical `VaultPayload`. Pins the §4.4 "fresh nonce per save"
   contract with a positive assertion in addition to the
   pairwise-distinct nonce property.
-- [ ] Tests: header endianness fixture — write a vault with
+- [x] Tests: header endianness fixture — write a vault with
   `Argon2Params { m_kib: 65_536, t: 3, p: 1 }` and assert the exact
   little-endian bytes at the `m_kib` / `t` / `p` header offsets
   (`00 00 01 00`, `03 00 00 00`, `01 00 00 00`) regardless of host
