@@ -149,6 +149,37 @@ impl Vault {
         &self.settings
     }
 
+    /// Toggle the encrypted-only auto-lock-on-idle preference. The CLI
+    /// ignores this; the TUI / GUI consult it via
+    /// [`crate::VaultSettings::auto_lock_enabled`].
+    pub fn set_auto_lock_enabled(&mut self, enabled: bool) {
+        self.settings.set_auto_lock_enabled(enabled);
+    }
+
+    /// Set the auto-lock idle timeout in seconds. Rejects values
+    /// outside the inclusive range
+    /// [`crate::AUTO_LOCK_SECS_MIN`]..=[`crate::AUTO_LOCK_SECS_MAX`]
+    /// with a `validation_error` for `auto_lock.timeout_secs`. The
+    /// prior value is left unchanged on rejection.
+    pub fn set_auto_lock_timeout_secs(&mut self, secs: u32) -> Result<()> {
+        self.settings.set_auto_lock_timeout_secs(secs)
+    }
+
+    /// Toggle the wipe-after-copy clipboard preference (TUI / GUI
+    /// only — CLI ignores).
+    pub fn set_clipboard_clear_enabled(&mut self, enabled: bool) {
+        self.settings.set_clipboard_clear_enabled(enabled);
+    }
+
+    /// Set the clipboard wipe-after-copy delay in seconds. Rejects
+    /// values outside the inclusive range
+    /// [`crate::CLIPBOARD_CLEAR_SECS_MIN`]..=[`crate::CLIPBOARD_CLEAR_SECS_MAX`]
+    /// with a `validation_error` for `clipboard.clear_secs`. The
+    /// prior value is left unchanged on rejection.
+    pub fn set_clipboard_clear_secs(&mut self, secs: u32) -> Result<()> {
+        self.settings.set_clipboard_clear_secs(secs)
+    }
+
     /// `true` iff the vault was opened in encrypted mode (or created
     /// with an encrypted [`crate::VaultInit`]).
     #[must_use]

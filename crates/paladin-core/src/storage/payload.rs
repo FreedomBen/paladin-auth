@@ -18,6 +18,22 @@ use bincode::{Decode, Encode};
 use crate::domain::Account;
 use crate::error::PaladinError;
 
+/// Inclusive lower bound for `Vault::set_auto_lock_timeout_secs`
+/// (DESIGN.md §4.7). Mirrored on CLI / TUI / GUI settings widgets.
+pub const AUTO_LOCK_SECS_MIN: u32 = 30;
+
+/// Inclusive upper bound for `Vault::set_auto_lock_timeout_secs`
+/// (24 h, DESIGN.md §4.7).
+pub const AUTO_LOCK_SECS_MAX: u32 = 86_400;
+
+/// Inclusive lower bound for `Vault::set_clipboard_clear_secs`
+/// (DESIGN.md §4.7).
+pub const CLIPBOARD_CLEAR_SECS_MIN: u32 = 5;
+
+/// Inclusive upper bound for `Vault::set_clipboard_clear_secs`
+/// (10 min, DESIGN.md §4.7).
+pub const CLIPBOARD_CLEAR_SECS_MAX: u32 = 600;
+
 /// Maximum serialized `VaultPayload` size, in bytes (DESIGN.md §4.3).
 ///
 /// Applies to the bincode-encoded payload — i.e. excludes the §4.3
@@ -76,6 +92,36 @@ impl VaultSettings {
     #[must_use]
     pub fn clipboard_clear_secs(&self) -> u32 {
         self.clipboard_clear_secs
+    }
+
+    pub(crate) fn set_auto_lock_enabled(&mut self, enabled: bool) {
+        self.auto_lock_enabled = enabled;
+    }
+
+    pub(crate) fn set_auto_lock_timeout_secs(&mut self, secs: u32) -> crate::error::Result<()> {
+        if !(AUTO_LOCK_SECS_MIN..=AUTO_LOCK_SECS_MAX).contains(&secs) {
+            return Err(PaladinError::validation(
+                "auto_lock.timeout_secs",
+                "out_of_range",
+            ));
+        }
+        self.auto_lock_timeout_secs = secs;
+        Ok(())
+    }
+
+    pub(crate) fn set_clipboard_clear_enabled(&mut self, enabled: bool) {
+        self.clipboard_clear_enabled = enabled;
+    }
+
+    pub(crate) fn set_clipboard_clear_secs(&mut self, secs: u32) -> crate::error::Result<()> {
+        if !(CLIPBOARD_CLEAR_SECS_MIN..=CLIPBOARD_CLEAR_SECS_MAX).contains(&secs) {
+            return Err(PaladinError::validation(
+                "clipboard.clear_secs",
+                "out_of_range",
+            ));
+        }
+        self.clipboard_clear_secs = secs;
+        Ok(())
     }
 }
 

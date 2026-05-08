@@ -58,7 +58,10 @@ mod perms_unix;
 mod fault;
 
 pub use path::default_vault_path;
-pub use payload::VaultSettings;
+pub use payload::{
+    VaultSettings, AUTO_LOCK_SECS_MAX, AUTO_LOCK_SECS_MIN, CLIPBOARD_CLEAR_SECS_MAX,
+    CLIPBOARD_CLEAR_SECS_MIN,
+};
 pub(crate) use payload::{decode_vault_payload, encode_vault_payload, VaultPayload};
 
 use header::{
