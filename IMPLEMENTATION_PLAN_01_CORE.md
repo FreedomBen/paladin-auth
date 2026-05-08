@@ -261,7 +261,7 @@ Each step lands as its own commit. Tests come first.
   `counter_used = 0` and post-advance `counter = 1`.
   *(Counter-0 baseline tested here; the advance-and-persist behavior
   lands with `Vault::hotp_advance` in Phase G.)*
-- [ ] Tests: HOTP overflow boundary chain — `counter = u64::MAX - 1`
+- [x] Tests: HOTP overflow boundary chain — `counter = u64::MAX - 1`
   advances successfully to `u64::MAX` (the off-by-one fence post in the
   overflow check); a subsequent advance from `u64::MAX` returns
   `counter_overflow` with the §5 `account` summary before any mutation
@@ -726,7 +726,7 @@ Each step lands as its own commit. Tests come first.
   to pre-call values; durability-unconfirmed surfaced as a typed error after
   commit point; invalid supplied timestamps return `time_range` before
   mutation or save.
-- [ ] Tests: `hotp_advance` at `u64::MAX` returns `counter_overflow` with
+- [x] Tests: `hotp_advance` at `u64::MAX` returns `counter_overflow` with
   the §5 `account` summary before mutating memory or attempting a save.
 - [ ] Tests: `Vault::hotp_peek` after a committed `Vault::hotp_advance`
   returns the code for the new (post-advance) counter; `Vault::totp_code`

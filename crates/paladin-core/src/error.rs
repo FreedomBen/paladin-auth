@@ -11,6 +11,8 @@ use std::path::PathBuf;
 
 use thiserror::Error;
 
+use crate::domain::AccountSummary;
+
 pub type Result<T> = std::result::Result<T, PaladinError>;
 
 /// Stable §5 `error_kind` discriminator. Each variant maps 1:1 to a
@@ -193,7 +195,12 @@ pub enum PaladinError {
     NoEntriesToImport,
 
     #[error("HOTP counter overflow")]
-    CounterOverflow,
+    CounterOverflow {
+        /// Non-secret §5 `account` summary for the entry whose
+        /// counter is at `u64::MAX`. Carried so callers can render
+        /// the offending account without re-fetching by ID.
+        account: AccountSummary,
+    },
 
     #[error("time out of range: {operation}: {kind}")]
     TimeRange {
@@ -240,7 +247,7 @@ impl PaladinError {
             Self::UnsupportedEncryptedAegis => ErrorKind::UnsupportedEncryptedAegis,
             Self::UnsupportedAegisEntryType { .. } => ErrorKind::UnsupportedAegisEntryType,
             Self::NoEntriesToImport => ErrorKind::NoEntriesToImport,
-            Self::CounterOverflow => ErrorKind::CounterOverflow,
+            Self::CounterOverflow { .. } => ErrorKind::CounterOverflow,
             Self::TimeRange { .. } => ErrorKind::TimeRange,
             Self::SaveNotCommitted { .. } => ErrorKind::SaveNotCommitted,
             Self::SaveDurabilityUnconfirmed => ErrorKind::SaveDurabilityUnconfirmed,
@@ -312,6 +319,24 @@ impl fmt::Display for TimeRangeKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use crate::domain::{AccountId, AccountKindSummary, Algorithm};
+
+    fn fixture_account_summary() -> AccountSummary {
+        AccountSummary {
+            id: AccountId::new(),
+            issuer: Some("issuer".to_string()),
+            label: "label".to_string(),
+            kind: AccountKindSummary::Hotp,
+            algorithm: Algorithm::Sha1,
+            digits: 6,
+            period: None,
+            counter: Some(u64::MAX),
+            icon_hint: None,
+            created_at: 0,
+            updated_at: 0,
+        }
+    }
 
     #[test]
     fn error_kind_strings_match_section_5() {
@@ -397,7 +422,12 @@ mod tests {
                 PaladinError::NoEntriesToImport,
                 ErrorKind::NoEntriesToImport,
             ),
-            (PaladinError::CounterOverflow, ErrorKind::CounterOverflow),
+            (
+                PaladinError::CounterOverflow {
+                    account: fixture_account_summary(),
+                },
+                ErrorKind::CounterOverflow,
+            ),
             (
                 PaladinError::SaveDurabilityUnconfirmed,
                 ErrorKind::SaveDurabilityUnconfirmed,

@@ -123,6 +123,7 @@ pub fn format_validation_warning(warning: &ValidationWarning) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::{AccountId, AccountKindSummary, AccountSummary, Algorithm};
     use crate::error::{PaladinError, PermissionSubject, TimeRangeKind};
     use std::path::PathBuf;
 
@@ -196,7 +197,21 @@ mod tests {
             PaladinError::DecryptFailed,
             PaladinError::InvalidHeader,
             PaladinError::UnsupportedFormatVersion { format_ver: 99 },
-            PaladinError::CounterOverflow,
+            PaladinError::CounterOverflow {
+                account: AccountSummary {
+                    id: AccountId::new(),
+                    issuer: None,
+                    label: "x".to_string(),
+                    kind: AccountKindSummary::Hotp,
+                    algorithm: Algorithm::Sha1,
+                    digits: 6,
+                    period: None,
+                    counter: Some(u64::MAX),
+                    icon_hint: None,
+                    created_at: 0,
+                    updated_at: 0,
+                },
+            },
             PaladinError::SaveDurabilityUnconfirmed,
             PaladinError::TimeRange {
                 operation: "totp_code",

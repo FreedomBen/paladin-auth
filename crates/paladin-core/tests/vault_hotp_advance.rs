@@ -15,6 +15,9 @@ use paladin_core::{
     parse_otpauth, Account, AccountKindSummary, ErrorKind, PaladinError, Store, TimeRangeKind,
     Vault, VaultInit, VaultLock,
 };
+// `AccountSummary` is referenced in the destructured `CounterOverflow`
+// pattern below so the test confirms the §5 `account` field is present
+// without re-fetching the account from the vault.
 use tempfile::TempDir;
 
 const HOTP_SECRET_B32: &str = "JBSWY3DPEHPK3PXP";
@@ -149,5 +152,62 @@ fn hotp_advance_time_range_does_not_write_to_the_store() {
         std::fs::read(&path).unwrap(),
         primary_before,
         "primary vault file must not have been rewritten",
+    );
+}
+
+#[test]
+fn hotp_advance_from_u64_max_minus_one_advances_to_u64_max() {
+    // Phase C / Phase G off-by-one fence post: the overflow check is
+    // `counter == u64::MAX`, so `u64::MAX - 1` must still advance.
+    // The returned code reflects the pre-advance counter
+    // (`u64::MAX - 1`); the post-advance in-memory counter is
+    // `u64::MAX`.
+    let (mut vault, store, _dir) = vault_with_path();
+    let id = vault.add(make_hotp_account("alice", u64::MAX - 1));
+    assert_eq!(vault.get(id).unwrap().counter(), Some(u64::MAX - 1));
+
+    let code = vault
+        .hotp_advance(&store, id, later_now())
+        .expect("hotp_advance from u64::MAX - 1 must succeed");
+    assert_eq!(code.counter_used, Some(u64::MAX - 1));
+    assert_eq!(vault.get(id).unwrap().counter(), Some(u64::MAX));
+}
+
+#[test]
+fn hotp_advance_at_u64_max_returns_counter_overflow_with_account_summary() {
+    // Phase G / Phase C: a second advance from `u64::MAX` returns
+    // `counter_overflow` carrying the §5 `account` summary, before
+    // mutating memory or attempting a save. The summary reflects the
+    // current on-record state of the offending account so callers can
+    // render it without re-fetching by ID.
+    let (mut vault, store, dir) = vault_with_path();
+    let id = vault.add(make_hotp_account("alice", u64::MAX));
+    vault.save(&store).expect("baseline save");
+    let path = dir.path().join("vault.bin");
+    let primary_before = std::fs::read(&path).unwrap();
+    let pre_counter = vault.get(id).unwrap().counter();
+    let pre_updated_at = vault.get(id).unwrap().updated_at();
+
+    let err = vault.hotp_advance(&store, id, later_now()).unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::CounterOverflow);
+    match err {
+        PaladinError::CounterOverflow { account } => {
+            assert_eq!(account.id, id);
+            assert_eq!(account.label, "alice");
+            assert_eq!(account.kind, AccountKindSummary::Hotp);
+            assert_eq!(account.counter, Some(u64::MAX));
+        }
+        other => panic!("expected counter_overflow with account summary, got {other:?}"),
+    }
+
+    // §5 "before mutating memory or attempting a save": the in-memory
+    // counter and `updated_at` are unchanged, and the on-disk vault
+    // file is byte-identical to the pre-call snapshot.
+    assert_eq!(vault.get(id).unwrap().counter(), pre_counter);
+    assert_eq!(vault.get(id).unwrap().updated_at(), pre_updated_at);
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        primary_before,
+        "primary vault file must not have been rewritten on counter_overflow",
     );
 }

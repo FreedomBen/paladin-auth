@@ -310,7 +310,9 @@ impl Vault {
             }
         };
         if counter == u64::MAX {
-            return Err(PaladinError::CounterOverflow);
+            return Err(PaladinError::CounterOverflow {
+                account: self.accounts[pos].summary(),
+            });
         }
         let account = &self.accounts[pos];
         let code = hotp::compute(
