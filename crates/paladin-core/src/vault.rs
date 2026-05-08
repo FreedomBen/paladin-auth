@@ -14,13 +14,15 @@
 // in Phase G / H.
 
 use std::fmt;
+use std::time::SystemTime;
 
 use secrecy::SecretString;
 use zeroize::Zeroizing;
 
 use crate::crypto::AEAD_KEY_LEN;
+use crate::domain::validation::{system_time_to_secs_for, validate_label};
 use crate::domain::{Account, AccountId, AccountSummary};
-use crate::error::Result;
+use crate::error::{PaladinError, Result};
 use crate::storage::payload::VaultPayload;
 use crate::storage::{Store, VaultSettings};
 
@@ -173,6 +175,32 @@ impl Vault {
     pub fn remove(&mut self, id: AccountId) -> Option<Account> {
         let position = self.accounts.iter().position(|a| a.id() == id)?;
         Some(self.accounts.remove(position))
+    }
+
+    /// Rename an account's label.
+    ///
+    /// Re-runs the §4.1 label validation (Unicode-whitespace trim,
+    /// empty rejection, 128-byte cap) before any mutation, validates
+    /// `now` against the §4.1 timestamp range, and bumps
+    /// `updated_at` on success. Missing IDs return
+    /// `invalid_state { operation: "rename", state: "account_not_found" }`
+    /// per DESIGN.md §4.7. Inputs are validated before the account
+    /// lookup so invalid label / timestamp surfaces consistently
+    /// even when the ID is unknown.
+    pub fn rename(&mut self, id: AccountId, label: &str, now: SystemTime) -> Result<()> {
+        let trimmed_label = validate_label(label)?;
+        let now_secs = system_time_to_secs_for("rename", now)?;
+        let account = self
+            .accounts
+            .iter_mut()
+            .find(|a| a.id() == id)
+            .ok_or(PaladinError::InvalidState {
+                operation: "rename",
+                state: "account_not_found",
+            })?;
+        account.label = trimmed_label;
+        account.updated_at = now_secs;
+        Ok(())
     }
 
     /// Persist the vault through the supplied `Store`.

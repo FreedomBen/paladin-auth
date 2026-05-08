@@ -236,16 +236,25 @@ fn trim_padding_bytes(input: &[u8]) -> &[u8] {
 /// Convert a `SystemTime` into Unix seconds, rejecting pre-epoch and
 /// timestamps beyond the §4.1 year-9999 cap.
 pub(crate) fn system_time_to_secs(now: SystemTime) -> Result<u64, PaladinError> {
+    system_time_to_secs_for("validate_manual", now)
+}
+
+/// `system_time_to_secs` variant whose `time_range` errors carry the
+/// caller's `operation` label (e.g. `"rename"`, `"hotp_advance"`).
+pub(crate) fn system_time_to_secs_for(
+    operation: &'static str,
+    now: SystemTime,
+) -> Result<u64, PaladinError> {
     let secs = now
         .duration_since(UNIX_EPOCH)
         .map_err(|_| PaladinError::TimeRange {
-            operation: "validate_manual",
+            operation,
             kind: TimeRangeKind::PreEpoch,
         })?
         .as_secs();
     if secs > TIMESTAMP_MAX_INCLUSIVE {
         return Err(PaladinError::TimeRange {
-            operation: "validate_manual",
+            operation,
             kind: TimeRangeKind::OutOfRange,
         });
     }
