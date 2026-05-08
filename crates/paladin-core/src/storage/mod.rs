@@ -35,6 +35,12 @@ use std::io::{self, Read, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
+use secrecy::SecretString;
+
+use crate::crypto::{
+    aead_decrypt, aead_encrypt, argon2id_derive_key, Argon2Params, EncryptionOptions, AEAD_KEY_LEN,
+    AEAD_NONCE_LEN,
+};
 use crate::error::{PaladinError, Result, VaultMode};
 
 pub(crate) mod header;
@@ -55,7 +61,10 @@ pub use path::default_vault_path;
 pub use payload::VaultSettings;
 pub(crate) use payload::{decode_vault_payload, encode_vault_payload, VaultPayload};
 
-use header::{parse_header, ParsedHeader, ENCRYPTED_HEADER_LEN, PLAINTEXT_HEADER_LEN};
+use header::{
+    parse_header, write_encrypted_header, EncryptedHeaderTrailer, ParsedHeader,
+    AEAD_ID_XCHACHA20_POLY1305, ENCRYPTED_HEADER_LEN, KDF_ID_ARGON2ID, PLAINTEXT_HEADER_LEN,
+};
 use payload::MAX_PAYLOAD_BYTES;
 
 #[cfg(not(unix))]
@@ -64,6 +73,9 @@ use perms_other::{enforce_dir_perms, enforce_file_perms_from_meta};
 use perms_unix::{enforce_dir_perms, enforce_file_perms_from_meta};
 
 use crate::error::PermissionSubject;
+
+/// Argon2 salt length in bytes (matches the encrypted header `salt`).
+const SALT_LEN: usize = 16;
 
 /// Result of the `inspect()` header probe (DESIGN.md §4.7).
 ///
@@ -179,38 +191,49 @@ pub fn classify_init_precheck(probe: Result<VaultStatus>) -> InitPrecheck {
 /// Caller-supplied lock used by [`Store::open`] to assert the on-disk
 /// vault mode the caller expects. A mismatch surfaces
 /// `wrong_vault_lock` before any payload work.
-///
-/// The encrypted variant — which carries the user passphrase — lands
-/// in Phase F and is intentionally elided here so the v0.1 plaintext
-/// build cannot accidentally type-check against a stub passphrase
-/// API.
 #[non_exhaustive]
 #[derive(Debug)]
 pub enum VaultLock {
     /// Plaintext-mode vault.
     Plaintext,
+    /// Encrypted-mode vault, unlocked with the supplied passphrase.
+    Encrypted(SecretString),
 }
 
 /// Caller-supplied initialization mode for [`Store::create`] /
-/// [`Store::create_force`]. The encrypted variant (passphrase +
-/// optional Argon2 overrides) lands in Phase F.
+/// [`Store::create_force`].
 #[non_exhaustive]
 #[derive(Debug)]
 pub enum VaultInit {
     /// Initialize a plaintext-mode vault.
     Plaintext,
+    /// Initialize an encrypted-mode vault with the supplied
+    /// passphrase + Argon2id parameters.
+    Encrypted(EncryptionOptions),
+}
+
+/// Crypto state preserved across regular encrypted saves
+/// (DESIGN.md §4.4): Argon2id `salt` and cost `params` are reused; the
+/// nonce is regenerated per save and lives in the encrypted header.
+/// Reset on passphrase transitions (Phase H).
+#[derive(Debug, Clone)]
+pub(crate) struct EncryptedSaveContext {
+    pub(crate) salt: [u8; SALT_LEN],
+    pub(crate) params: Argon2Params,
 }
 
 /// Per-vault filesystem context.
 ///
 /// Created by [`Store::open`] / [`Store::create`] and consumed by
 /// `Vault::save`. Holds the on-disk vault path and the negotiated
-/// mode; Phase F extends it with cached crypto material (Argon2 salt
-/// / params + derived AEAD key) for encrypted vaults.
+/// mode; the encrypted variant additionally carries the in-header
+/// Argon2 `salt` + cost `params` so regular saves preserve them
+/// (§4.4).
 #[derive(Debug)]
 pub struct Store {
     path: PathBuf,
     mode: VaultMode,
+    encrypted_context: Option<EncryptedSaveContext>,
 }
 
 impl Store {
@@ -234,6 +257,7 @@ impl Store {
     pub fn open(path: &Path, lock: VaultLock) -> Result<(crate::Vault, Self)> {
         match lock {
             VaultLock::Plaintext => open_plaintext(path),
+            VaultLock::Encrypted(passphrase) => open_encrypted(path, passphrase),
         }
     }
 
@@ -249,6 +273,7 @@ impl Store {
     pub fn create(path: &Path, init: VaultInit) -> Result<(crate::Vault, Self)> {
         match init {
             VaultInit::Plaintext => create_plaintext(path),
+            VaultInit::Encrypted(opts) => create_encrypted(path, opts),
         }
     }
 
@@ -273,21 +298,31 @@ impl Store {
     pub fn create_force(path: &Path, init: VaultInit) -> Result<(crate::Vault, Self)> {
         match init {
             VaultInit::Plaintext => create_force_plaintext(path),
+            VaultInit::Encrypted(opts) => create_force_encrypted(path, opts),
         }
     }
 
     /// Encode `payload` and run the §4.3 atomic-write pipeline against
     /// this `Store`'s path. Crate-private; called via `Vault::save`.
-    pub(crate) fn save_payload(&self, payload: &VaultPayload) -> Result<()> {
-        match self.mode {
-            VaultMode::Plaintext => save_plaintext(&self.path, payload),
-            VaultMode::Encrypted => Err(PaladinError::IoError {
-                operation: "save_encrypted",
-                source: io::Error::new(
-                    io::ErrorKind::Unsupported,
-                    "encrypted save lands in Phase F",
-                ),
-            }),
+    ///
+    /// `cached_key` MUST be `Some` for encrypted vaults (the AEAD key
+    /// derived once at `open` / `create` and held on the [`Vault`])
+    /// and `None` for plaintext vaults; a mismatch is a programmer
+    /// error and panics.
+    pub(crate) fn save_payload(
+        &self,
+        payload: &VaultPayload,
+        cached_key: Option<&[u8; AEAD_KEY_LEN]>,
+    ) -> Result<()> {
+        match (self.mode, cached_key, self.encrypted_context.as_ref()) {
+            (VaultMode::Plaintext, None, None) => save_plaintext(&self.path, payload),
+            (VaultMode::Encrypted, Some(key), Some(ctx)) => {
+                save_encrypted(&self.path, payload, &ctx.salt, ctx.params, key)
+            }
+            _ => unreachable!(
+                "Vault mode / cached-key / encrypted-context tuple is invariant: \
+                 plaintext stores carry no key or context; encrypted stores carry both"
+            ),
         }
     }
 }
@@ -306,10 +341,20 @@ impl Store {
     /// Construct a `Store` for fault-injection tests. The caller is
     /// responsible for ensuring `path`'s parent directory exists with
     /// permissions appropriate for the test scenario; this constructor
-    /// does no validation.
+    /// does no validation. `mode = VaultMode::Encrypted` is rejected
+    /// — encrypted save tests use the real `Store::create` path so
+    /// fresh salt + params live in the `Store` correctly.
     #[must_use]
     pub fn for_test_fault_injection(path: PathBuf, mode: VaultMode) -> Self {
-        Self { path, mode }
+        assert!(
+            matches!(mode, VaultMode::Plaintext),
+            "fault-injection harness only constructs plaintext Stores"
+        );
+        Self {
+            path,
+            mode,
+            encrypted_context: None,
+        }
     }
 }
 
@@ -330,6 +375,7 @@ fn create_plaintext(path: &Path) -> Result<(crate::Vault, Store)> {
         Store {
             path: path.to_path_buf(),
             mode: VaultMode::Plaintext,
+            encrypted_context: None,
         },
     ))
 }
@@ -419,6 +465,7 @@ fn open_plaintext(path: &Path) -> Result<(crate::Vault, Store)> {
         Store {
             path: path.to_path_buf(),
             mode: VaultMode::Plaintext,
+            encrypted_context: None,
         },
     ))
 }
@@ -640,6 +687,7 @@ fn create_force_plaintext(path: &Path) -> Result<(crate::Vault, Store)> {
         Store {
             path: path.to_path_buf(),
             mode: VaultMode::Plaintext,
+            encrypted_context: None,
         },
     ))
 }
@@ -803,6 +851,379 @@ fn stage_secret_tempfile(tmp: &Path, content: &[u8]) -> bool {
         return false;
     }
     f.sync_all().is_ok()
+}
+
+// ---------- Encrypted-mode lifecycle (DESIGN.md §4.3 + §4.4) ----------
+
+fn create_encrypted(path: &Path, opts: EncryptionOptions) -> Result<(crate::Vault, Store)> {
+    create_encrypted_internal(path, opts, /* allow_clobber */ false)
+}
+
+fn create_force_encrypted(path: &Path, opts: EncryptionOptions) -> Result<(crate::Vault, Store)> {
+    // §4.3 parent-dir check + §5 staged-clobber path. Symlink rejection
+    // on the existing primary mirrors the plaintext clobber path.
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            enforce_dir_perms(parent)?;
+        }
+    }
+    match fs::symlink_metadata(path) {
+        Ok(meta) => {
+            if meta.file_type().is_symlink() {
+                return Err(PaladinError::IoError {
+                    operation: "vault_file_is_symlink",
+                    source: io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "vault file is a symbolic link",
+                    ),
+                });
+            }
+        }
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+        Err(err) => {
+            return Err(PaladinError::IoError {
+                operation: "stat_vault_file",
+                source: err,
+            });
+        }
+    }
+    create_encrypted_internal(path, opts, /* allow_clobber */ true)
+}
+
+/// Shared helper for `create_encrypted` / `create_force_encrypted`.
+/// Generates fresh salt, derives the AEAD key once, builds an empty
+/// `Vault` + `Store`, and immediately writes the initial encrypted
+/// vault to disk so the on-disk file is left consistent with the
+/// returned in-memory state.
+fn create_encrypted_internal(
+    path: &Path,
+    opts: EncryptionOptions,
+    allow_clobber: bool,
+) -> Result<(crate::Vault, Store)> {
+    if !allow_clobber {
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                enforce_dir_perms(parent)?;
+            }
+        }
+        if path.exists() {
+            return Err(PaladinError::VaultExists);
+        }
+    }
+
+    // §4.4: bounds re-check on opts.kdf_params is already enforced by
+    // `EncryptionOptions::with_params`, but `EncryptionOptions::new`
+    // uses the validated default. Validate once more here so any
+    // hand-rolled construction (e.g. a future direct field
+    // initialization within the crate) cannot bypass the bound.
+    opts.kdf_params.validate()?;
+
+    let salt = generate_salt()?;
+    let key = argon2id_derive_key(&opts.passphrase, &salt, &opts.kdf_params)?;
+    let context = EncryptedSaveContext {
+        salt,
+        params: opts.kdf_params,
+    };
+    let store = Store {
+        path: path.to_path_buf(),
+        mode: VaultMode::Encrypted,
+        encrypted_context: Some(context.clone()),
+    };
+    let vault = crate::Vault::empty_encrypted(opts.passphrase, key.clone());
+
+    if allow_clobber {
+        let payload = vault.snapshot_payload();
+        save_encrypted_clobber(path, &payload, &context.salt, context.params, &key)?;
+    } else {
+        let payload = vault.snapshot_payload();
+        save_encrypted(path, &payload, &context.salt, context.params, &key)?;
+    }
+    Ok((vault, store))
+}
+
+fn open_encrypted(path: &Path, passphrase: SecretString) -> Result<(crate::Vault, Store)> {
+    // §4.3 perms gate (parent dir, primary, optional backup). Mirrors
+    // open_plaintext so unsafe_permissions wins over decrypt_failed
+    // when the on-disk perms are wrong.
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            enforce_dir_perms(parent)?;
+        }
+    }
+    let primary_meta = match fs::symlink_metadata(path) {
+        Ok(m) => m,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            return Err(PaladinError::VaultMissing);
+        }
+        Err(err) => {
+            return Err(PaladinError::IoError {
+                operation: "stat_vault_file",
+                source: err,
+            });
+        }
+    };
+    enforce_file_perms_from_meta(path, &primary_meta, PermissionSubject::VaultFile)?;
+    let bak = append_suffix(path, ".bak");
+    match fs::symlink_metadata(&bak) {
+        Ok(meta) => enforce_file_perms_from_meta(&bak, &meta, PermissionSubject::BackupFile)?,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+        Err(err) => {
+            return Err(PaladinError::IoError {
+                operation: "stat_backup_file",
+                source: err,
+            });
+        }
+    }
+
+    let bytes = fs::read(path).map_err(|err| PaladinError::IoError {
+        operation: "read_vault_file",
+        source: err,
+    })?;
+
+    // §4.3 on-disk size cap, applied before any AEAD/KDF work.
+    if bytes.len() > ENCRYPTED_HEADER_LEN + MAX_PAYLOAD_BYTES + 16 {
+        return Err(PaladinError::InvalidPayload {
+            reason: "exceeds_size_limit",
+        });
+    }
+
+    // Header parse + cross-mode lock check.
+    let trailer = match parse_header(&bytes)? {
+        ParsedHeader::Plaintext => {
+            return Err(PaladinError::WrongVaultLock {
+                expected: VaultMode::Encrypted,
+                actual: VaultMode::Plaintext,
+            });
+        }
+        ParsedHeader::Encrypted(t) => t,
+    };
+
+    // §4.4 Argon2 bounds re-check before running the KDF.
+    let params = Argon2Params {
+        m_kib: trailer.m_kib,
+        t: trailer.t,
+        p: trailer.p,
+    };
+    params.validate()?;
+
+    // Derive the AEAD key. The `EncryptedHeaderTrailer` salt /
+    // nonce live in the on-disk header.
+    let key = argon2id_derive_key(&passphrase, &trailer.salt, &params)?;
+
+    // AAD: every header byte after the magic (§4.4).
+    let aad = &bytes[8..ENCRYPTED_HEADER_LEN];
+    let ct_and_tag = &bytes[ENCRYPTED_HEADER_LEN..];
+    let plaintext = aead_decrypt(&key, &trailer.nonce, aad, ct_and_tag)?;
+
+    // Decoded payload still bounded by the §4.3 16 MiB cap.
+    if plaintext.len() > MAX_PAYLOAD_BYTES {
+        return Err(PaladinError::InvalidPayload {
+            reason: "exceeds_size_limit",
+        });
+    }
+
+    let payload = decode_vault_payload(&plaintext)?;
+
+    cleanup_leftover_temp(&append_suffix(path, ".tmp"))?;
+    cleanup_leftover_temp(&append_suffix(path, ".bak.tmp"))?;
+
+    let store = Store {
+        path: path.to_path_buf(),
+        mode: VaultMode::Encrypted,
+        encrypted_context: Some(EncryptedSaveContext {
+            salt: trailer.salt,
+            params,
+        }),
+    };
+    Ok((
+        crate::Vault::from_payload_encrypted(payload, passphrase, key),
+        store,
+    ))
+}
+
+/// Generate a 16-byte Argon2 salt from the OS CSPRNG. Failures
+/// surface as `io_error { operation: "csprng_read" }`.
+fn generate_salt() -> Result<[u8; SALT_LEN]> {
+    let mut salt = [0u8; SALT_LEN];
+    getrandom::getrandom(&mut salt).map_err(|_| PaladinError::IoError {
+        operation: "csprng_read",
+        source: io::Error::other("CSPRNG read failed"),
+    })?;
+    Ok(salt)
+}
+
+/// Generate a 24-byte XChaCha20-Poly1305 nonce from the OS CSPRNG.
+fn generate_nonce() -> Result<[u8; AEAD_NONCE_LEN]> {
+    let mut nonce = [0u8; AEAD_NONCE_LEN];
+    getrandom::getrandom(&mut nonce).map_err(|_| PaladinError::IoError {
+        operation: "csprng_read",
+        source: io::Error::other("CSPRNG read failed"),
+    })?;
+    Ok(nonce)
+}
+
+/// Build the on-disk encrypted bytes (64-byte header + ciphertext+tag)
+/// from a payload + crypto context. Fresh nonce per call.
+fn build_encrypted_on_disk(
+    payload: &VaultPayload,
+    salt: &[u8; SALT_LEN],
+    params: Argon2Params,
+    key: &[u8; AEAD_KEY_LEN],
+) -> Result<Vec<u8>> {
+    let payload_bytes = encode_vault_payload(payload)?;
+    // `encode_vault_payload` already enforces the 16 MiB plaintext
+    // cap, so the AEAD encrypt below is well within the practical
+    // limit.
+    let nonce = generate_nonce()?;
+    let trailer = EncryptedHeaderTrailer {
+        kdf_id: KDF_ID_ARGON2ID,
+        m_kib: params.m_kib,
+        t: params.t,
+        p: params.p,
+        salt: *salt,
+        aead_id: AEAD_ID_XCHACHA20_POLY1305,
+        nonce,
+    };
+    let mut header_bytes = Vec::with_capacity(ENCRYPTED_HEADER_LEN);
+    write_encrypted_header(&mut header_bytes, &trailer);
+    debug_assert_eq!(header_bytes.len(), ENCRYPTED_HEADER_LEN);
+    let aad = header_bytes[8..].to_vec();
+    let ct_and_tag = aead_encrypt(key, &nonce, &aad, &payload_bytes);
+    let mut on_disk = Vec::with_capacity(ENCRYPTED_HEADER_LEN + ct_and_tag.len());
+    on_disk.extend_from_slice(&header_bytes);
+    on_disk.extend_from_slice(&ct_and_tag);
+    Ok(on_disk)
+}
+
+/// §4.3 atomic write pipeline for an encrypted vault. Mirrors
+/// `save_plaintext` step-for-step; the only difference is the on-disk
+/// byte construction (encrypted header + AEAD ciphertext-and-tag
+/// instead of the 10-byte plaintext header + bincode payload).
+fn save_encrypted(
+    path: &Path,
+    payload: &VaultPayload,
+    salt: &[u8; SALT_LEN],
+    params: Argon2Params,
+    key: &[u8; AEAD_KEY_LEN],
+) -> Result<()> {
+    let parent = path.parent().ok_or_else(|| PaladinError::IoError {
+        operation: "resolve_vault_parent",
+        source: io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "vault path has no parent directory",
+        ),
+    })?;
+
+    let on_disk = build_encrypted_on_disk(payload, salt, params, key)?;
+
+    let primary_tmp = append_suffix(path, ".tmp");
+    let bak_path = append_suffix(path, ".bak");
+    let bak_tmp = append_suffix(path, ".bak.tmp");
+
+    if let Err(err) = stage_temp_file(&primary_tmp, &on_disk, "write_vault_tmp") {
+        let _ = fs::remove_file(&primary_tmp);
+        return Err(err);
+    }
+
+    let primary_existed = path.exists();
+    if primary_existed {
+        let primary_bytes = match fs::read(path) {
+            Ok(b) => b,
+            Err(err) => {
+                let _ = fs::remove_file(&primary_tmp);
+                return Err(PaladinError::IoError {
+                    operation: "read_vault_file",
+                    source: err,
+                });
+            }
+        };
+        if let Err(err) = stage_temp_file(&bak_tmp, &primary_bytes, "write_backup_tmp") {
+            let _ = fs::remove_file(&primary_tmp);
+            let _ = fs::remove_file(&bak_tmp);
+            return Err(err);
+        }
+        if let Err(err) = fs::rename(&bak_tmp, &bak_path) {
+            let _ = fs::remove_file(&primary_tmp);
+            let _ = fs::remove_file(&bak_tmp);
+            return Err(PaladinError::IoError {
+                operation: "rename_backup",
+                source: err,
+            });
+        }
+    }
+
+    if fault::pre_commit_should_fail() || fs::rename(&primary_tmp, path).is_err() {
+        let _ = fs::remove_file(&primary_tmp);
+        return Err(PaladinError::SaveNotCommitted {
+            committed: false,
+            backup_path: None,
+        });
+    }
+
+    if fault::post_commit_should_fail() || fsync_dir(parent).is_err() {
+        return Err(PaladinError::SaveDurabilityUnconfirmed);
+    }
+
+    Ok(())
+}
+
+/// §5 `init --force` clobber pipeline for an encrypted vault. Mirrors
+/// `save_plaintext_clobber`: stage new primary, rotate the existing
+/// primary verbatim to `.bak` (overwriting any prior backup), then
+/// commit + fsync.
+fn save_encrypted_clobber(
+    path: &Path,
+    payload: &VaultPayload,
+    salt: &[u8; SALT_LEN],
+    params: Argon2Params,
+    key: &[u8; AEAD_KEY_LEN],
+) -> Result<()> {
+    let parent = path.parent().ok_or_else(|| PaladinError::IoError {
+        operation: "resolve_vault_parent",
+        source: io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "vault path has no parent directory",
+        ),
+    })?;
+
+    let on_disk = build_encrypted_on_disk(payload, salt, params, key)?;
+
+    let primary_tmp = append_suffix(path, ".tmp");
+    let bak_path = append_suffix(path, ".bak");
+
+    if let Err(err) = stage_temp_file(&primary_tmp, &on_disk, "write_vault_tmp") {
+        let _ = fs::remove_file(&primary_tmp);
+        return Err(err);
+    }
+
+    let primary_existed = path.exists();
+    if primary_existed {
+        if let Err(err) = fs::rename(path, &bak_path) {
+            let _ = fs::remove_file(&primary_tmp);
+            return Err(PaladinError::IoError {
+                operation: "rename_backup",
+                source: err,
+            });
+        }
+    }
+
+    if fault::pre_commit_should_fail() || fs::rename(&primary_tmp, path).is_err() {
+        let _ = fs::remove_file(&primary_tmp);
+        return Err(PaladinError::SaveNotCommitted {
+            committed: false,
+            backup_path: if primary_existed {
+                Some(bak_path)
+            } else {
+                None
+            },
+        });
+    }
+
+    if fault::post_commit_should_fail() || fsync_dir(parent).is_err() {
+        return Err(PaladinError::SaveDurabilityUnconfirmed);
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

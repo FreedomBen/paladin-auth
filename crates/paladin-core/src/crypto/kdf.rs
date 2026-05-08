@@ -10,6 +10,8 @@
 //
 // Defaults (§4.4): `m_kib = 65_536` (64 MiB), `t = 3`, `p = 1`.
 
+use std::fmt;
+
 use argon2::{Algorithm, Argon2, Params, Version};
 use secrecy::{ExposeSecret, SecretString};
 use zeroize::Zeroizing;
@@ -121,8 +123,17 @@ impl EncryptionOptions {
     }
 }
 
-// `Debug` is omitted so a stray `dbg!(opts)` cannot leak the
-// passphrase. The compile-fail audit in Phase B asserts this.
+// Manual `Debug` redacts the passphrase so a stray `dbg!(opts)`
+// surfaces structural metadata only. The Phase B audit pins that the
+// raw `SecretString` field is never printed.
+impl fmt::Debug for EncryptionOptions {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("EncryptionOptions")
+            .field("passphrase", &"[REDACTED]")
+            .field("kdf_params", &self.kdf_params)
+            .finish()
+    }
+}
 
 /// Derive a 32-byte AEAD key from `passphrase`, `salt`, and `params`.
 ///
