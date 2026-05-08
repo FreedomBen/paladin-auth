@@ -21,7 +21,7 @@ use zeroize::Zeroizing;
 
 use crate::crypto::AEAD_KEY_LEN;
 use crate::domain::validation::{system_time_to_secs_for, validate_label};
-use crate::domain::{Account, AccountId, AccountSummary};
+use crate::domain::{Account, AccountId, AccountSummary, ValidatedAccount};
 use crate::error::{PaladinError, Result};
 use crate::storage::payload::VaultPayload;
 use crate::storage::{Store, VaultSettings};
@@ -175,6 +175,26 @@ impl Vault {
     pub fn remove(&mut self, id: AccountId) -> Option<Account> {
         let position = self.accounts.iter().position(|a| a.id() == id)?;
         Some(self.accounts.remove(position))
+    }
+
+    /// Return the first stored account whose `(secret, issuer, label)`
+    /// tuple exactly matches the candidate's, or `None` if no
+    /// collision is found.
+    ///
+    /// Comparison is byte-for-byte on the secret bytes and
+    /// case-sensitive on the issuer / label strings; the §5
+    /// case-insensitive search semantics live in
+    /// `account_matches_search`, not here. Front ends use this
+    /// helper to render the §5 `duplicate_account` error and to
+    /// drive the `--allow-duplicate` / "add anyway" policy.
+    #[must_use]
+    pub fn find_duplicate(&self, account: &ValidatedAccount) -> Option<&Account> {
+        let candidate = &account.account;
+        self.accounts.iter().find(|existing| {
+            existing.secret() == candidate.secret()
+                && existing.issuer() == candidate.issuer()
+                && existing.label() == candidate.label()
+        })
     }
 
     /// Rename an account's label.
