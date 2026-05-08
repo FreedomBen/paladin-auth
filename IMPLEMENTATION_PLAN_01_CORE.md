@@ -708,7 +708,7 @@ Each step lands as its own commit. Tests come first.
 
 ### Phase G — Vault behavior + settings (Milestone 1, part 6)
 
-- [ ] Tests: `add` / `remove` / `iter` (insertion order) / `rename` semantics;
+- [x] Tests: `add` / `remove` / `iter` (insertion order) / `rename` semantics;
   `rename` reuses label validation (trim, empty rejection, 128-byte cap),
   validates the supplied timestamp, and updates `updated_at`;
   `find_duplicate` returns
