@@ -262,6 +262,40 @@ fn empty_vault_round_trips_through_save_reopen() {
     assert_eq!(reopened.settings().clipboard_clear_secs(), 20);
 }
 
+/// §4.3 wire format — a freshly written plaintext vault places its
+/// 10-byte plaintext header (`PALADIN\0` + `format_ver` + `mode`)
+/// at offsets `0..10`, with the bincode-serialized payload starting
+/// at byte 10. Pin the boundary so a regression that grows or shrinks
+/// the plaintext header fails this assertion before silently changing
+/// the on-disk format.
+#[test]
+fn plaintext_save_writes_exact_10_byte_header_then_payload() {
+    const PLAINTEXT_HEADER_LEN: usize = 10;
+
+    let dir = vault_test_dir();
+    let path = dir.path().join("vault.bin");
+    let (vault, store) = Store::create(&path, VaultInit::Plaintext).unwrap();
+    vault.save(&store).unwrap();
+    drop(vault);
+    drop(store);
+
+    let bytes = fs::read(&path).expect("read plaintext vault");
+    assert!(
+        bytes.len() >= PLAINTEXT_HEADER_LEN,
+        "vault file must contain at least the 10-byte header, got {} bytes",
+        bytes.len()
+    );
+    assert_eq!(
+        &bytes[..PLAINTEXT_HEADER_LEN],
+        plaintext_header_bytes().as_slice(),
+        "first 10 bytes must be the §4.3 plaintext header (magic + format_ver=1 + mode=0)"
+    );
+    assert!(
+        bytes.len() > PLAINTEXT_HEADER_LEN,
+        "plaintext payload (bincode-serialized empty VaultPayload) must follow the header"
+    );
+}
+
 #[test]
 fn open_with_plaintext_lock_against_encrypted_file_returns_wrong_vault_lock() {
     let dir = vault_test_dir();

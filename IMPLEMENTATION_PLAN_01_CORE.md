@@ -507,7 +507,7 @@ Each step lands as its own commit. Tests come first.
 
 ### Phase F — Encrypted storage (Milestone 1, part 5)
 
-- [ ] Tests: header byte layout (10-byte plaintext header, 64-byte
+- [x] Tests: header byte layout (10-byte plaintext header, 64-byte
   encrypted-mode header before ciphertext); encrypted on-disk size cap
   (`header_size + 16 MiB + 16-byte AEAD tag`) before any KDF/AEAD work;
   decrypted encrypted payloads above the 16 MiB payload limit are rejected

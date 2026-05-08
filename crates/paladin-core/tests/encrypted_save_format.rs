@@ -294,3 +294,145 @@ fn encrypted_header_lays_out_24_byte_nonce_slot_at_offset_40() {
     let nonce_slot = &bytes[NONCE_RANGE];
     assert_eq!(nonce_slot.len(), 24, "on-disk nonce slot is 24 bytes wide");
 }
+
+/// §4.3 wire format — a freshly written encrypted vault places its
+/// 64-byte encrypted-mode header (10-byte plaintext header + KDF/AEAD
+/// trailer) at offsets `0..64`, with the AEAD ciphertext+tag starting
+/// at byte 64. Mirrors the plaintext-header layout test in
+/// `vault_lifecycle.rs` and complements
+/// `encrypted_save_writes_body_equal_to_payload_plus_aead_tag` by
+/// pinning the header/ciphertext boundary independently of the body
+/// shape assertion.
+#[test]
+fn encrypted_save_writes_exact_64_byte_header_then_ciphertext() {
+    const PLAINTEXT_HEADER_LEN: usize = 10;
+    const AEAD_TAG_LEN: usize = 16;
+
+    let dir = vault_test_dir();
+    let path = dir.path().join("vault.bin");
+    let (_v, _s) =
+        Store::create(&path, VaultInit::Encrypted(cheap_options("hunter2"))).expect("create");
+    let bytes = fs::read(&path).expect("read encrypted vault");
+
+    // The encrypted header is exactly 64 bytes: 10-byte plaintext
+    // header + 54-byte KDF/AEAD trailer.
+    assert!(
+        bytes.len() >= ENCRYPTED_HEADER_LEN,
+        "encrypted vault must contain at least the 64-byte header, got {} bytes",
+        bytes.len()
+    );
+    // First 8 bytes are the magic, byte 8 is format_ver, byte 9 is mode.
+    assert_eq!(&bytes[0..8], b"PALADIN\0", "magic at bytes 0..8");
+    assert_eq!(bytes[8], 1, "format_ver=1 at byte 8");
+    assert_eq!(bytes[9], 1, "mode=1 (encrypted) at byte 9");
+    assert_eq!(
+        bytes[..PLAINTEXT_HEADER_LEN].len(),
+        PLAINTEXT_HEADER_LEN,
+        "plaintext header occupies bytes 0..10"
+    );
+    // Byte 10 is the kdf_id (= Argon2id = 1).
+    assert_eq!(bytes[10], 1, "kdf_id=Argon2id at byte 10");
+    // Byte 39 is the aead_id (= XChaCha20-Poly1305 = 1).
+    assert_eq!(bytes[39], 1, "aead_id=XChaCha20-Poly1305 at byte 39");
+    // The AEAD ciphertext+tag begins at byte 64.
+    assert!(
+        bytes.len() >= ENCRYPTED_HEADER_LEN + AEAD_TAG_LEN,
+        "file must contain at least the 16-byte AEAD tag past the header"
+    );
+    let ct_and_tag = &bytes[ENCRYPTED_HEADER_LEN..];
+    assert!(
+        !ct_and_tag.is_empty(),
+        "ciphertext+tag region after the 64-byte header must not be empty"
+    );
+}
+
+/// §4.3 on-disk size cap — any encrypted vault file whose total size
+/// exceeds `ENCRYPTED_HEADER_LEN + 16 MiB + 16-byte AEAD tag` is
+/// rejected with `invalid_payload` / `exceeds_size_limit` *before*
+/// the header parse, KDF derivation, or AEAD decryption runs. The
+/// pre-KDF guarantee is asserted by feeding the same oversized file
+/// to `Store::open` with the *wrong* passphrase: a regression that
+/// moved the cap below the header parse or after the AEAD step would
+/// surface `invalid_header`, `kdf_params_out_of_bounds`, or
+/// `decrypt_failed` instead.
+#[test]
+fn encrypted_open_rejects_file_above_on_disk_size_cap_before_kdf_and_aead() {
+    use paladin_core::ErrorKind;
+
+    const AEAD_TAG_LEN: usize = 16;
+    const MAX_PAYLOAD_BYTES: usize = 16 * 1024 * 1024;
+
+    // Build a real encrypted header so the only failure axis is the
+    // file size, not the header bytes themselves.
+    let header_dir = vault_test_dir();
+    let header_path = header_dir.path().join("vault.bin");
+    let (_v, _s) = Store::create(&header_path, VaultInit::Encrypted(cheap_options("hunter2")))
+        .expect("seed encrypted header");
+    let real_bytes = fs::read(&header_path).expect("read seed vault");
+    assert!(
+        real_bytes.len() >= ENCRYPTED_HEADER_LEN,
+        "seed vault must include the full 64-byte encrypted header"
+    );
+    let real_header: [u8; ENCRYPTED_HEADER_LEN] = real_bytes[..ENCRYPTED_HEADER_LEN]
+        .try_into()
+        .expect("first 64 bytes of seed vault");
+
+    // Construct an oversized file: header + 16 MiB + 17 bytes (the
+    // smallest possible value > the cap). The body is filler — no
+    // valid AEAD payload — but that should not matter because the
+    // size check fires before AEAD ever sees the bytes.
+    let oversize_len = ENCRYPTED_HEADER_LEN + MAX_PAYLOAD_BYTES + AEAD_TAG_LEN + 1;
+    let mut oversize = vec![0u8; oversize_len];
+    oversize[..ENCRYPTED_HEADER_LEN].copy_from_slice(&real_header);
+
+    let dir = vault_test_dir();
+    let path = dir.path().join("vault.bin");
+    fs::write(&path, &oversize).expect("write oversize encrypted vault");
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("0600 vault perms");
+
+    // Right passphrase — must surface invalid_payload before any KDF
+    // or AEAD work.
+    let err_right = Store::open(&path, VaultLock::Encrypted(pp("hunter2")))
+        .expect_err("oversized file must not open even with the right passphrase");
+    assert_eq!(
+        err_right.kind(),
+        ErrorKind::InvalidPayload,
+        "oversize file must surface invalid_payload, got {err_right:?}"
+    );
+
+    // Wrong passphrase — must surface the same error code, proving
+    // the size check fires before any KDF/AEAD work (otherwise we'd
+    // see decrypt_failed here).
+    let err_wrong = Store::open(&path, VaultLock::Encrypted(pp("not-the-right-one")))
+        .expect_err("oversized file must not open with wrong passphrase either");
+    assert_eq!(
+        err_wrong.kind(),
+        ErrorKind::InvalidPayload,
+        "oversize file must reject before AEAD; got {err_wrong:?}"
+    );
+    assert_eq!(
+        err_right.kind(),
+        err_wrong.kind(),
+        "right and wrong passphrase must hit the same pre-KDF size guard"
+    );
+
+    // Boundary check: a file exactly at the cap (header + 16 MiB +
+    // 16 tag) is accepted by the on-disk cap and proceeds past the
+    // size guard. The body is still garbage so the open will fail
+    // later — we just need it NOT to be invalid_payload, proving the
+    // cap is `>` not `>=`.
+    let at_cap_len = ENCRYPTED_HEADER_LEN + MAX_PAYLOAD_BYTES + AEAD_TAG_LEN;
+    let mut at_cap = vec![0u8; at_cap_len];
+    at_cap[..ENCRYPTED_HEADER_LEN].copy_from_slice(&real_header);
+    let dir2 = vault_test_dir();
+    let path2 = dir2.path().join("vault.bin");
+    fs::write(&path2, &at_cap).expect("write at-cap encrypted vault");
+    fs::set_permissions(&path2, fs::Permissions::from_mode(0o600)).expect("0600 vault perms");
+    let err_at_cap = Store::open(&path2, VaultLock::Encrypted(pp("hunter2")))
+        .expect_err("at-cap file with garbage body must still fail to open");
+    assert_ne!(
+        err_at_cap.kind(),
+        ErrorKind::InvalidPayload,
+        "at-cap file must clear the on-disk size guard; failure should come from AEAD or decode, not invalid_payload (got {err_at_cap:?})"
+    );
+}

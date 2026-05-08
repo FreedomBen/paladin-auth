@@ -941,6 +941,33 @@ fn create_encrypted_internal(
     Ok((vault, store))
 }
 
+/// §4.3 on-disk size cap for encrypted vaults. The maximum admissible
+/// file size is `ENCRYPTED_HEADER_LEN + MAX_PAYLOAD_BYTES + AEAD_TAG_LEN`
+/// (64 + 16 MiB + 16 bytes); anything larger is rejected with
+/// `invalid_payload` / `exceeds_size_limit` *before* any header parse,
+/// KDF, or AEAD work runs.
+fn enforce_on_disk_encrypted_size_cap(bytes_len: usize) -> Result<()> {
+    if bytes_len > ENCRYPTED_HEADER_LEN + MAX_PAYLOAD_BYTES + 16 {
+        return Err(PaladinError::InvalidPayload {
+            reason: "exceeds_size_limit",
+        });
+    }
+    Ok(())
+}
+
+/// §4.3 decrypted-plaintext cap. After AEAD decryption succeeds, the
+/// recovered plaintext must still fit within the 16 MiB payload limit
+/// before bincode decode and `Vault` construction. Returns
+/// `invalid_payload` / `exceeds_size_limit` when exceeded.
+fn enforce_decrypted_payload_cap(plaintext_len: usize) -> Result<()> {
+    if plaintext_len > MAX_PAYLOAD_BYTES {
+        return Err(PaladinError::InvalidPayload {
+            reason: "exceeds_size_limit",
+        });
+    }
+    Ok(())
+}
+
 fn open_encrypted(path: &Path, passphrase: SecretString) -> Result<(crate::Vault, Store)> {
     // §4.3 perms gate (parent dir, primary, optional backup). Mirrors
     // open_plaintext so unsafe_permissions wins over decrypt_failed
@@ -981,11 +1008,7 @@ fn open_encrypted(path: &Path, passphrase: SecretString) -> Result<(crate::Vault
     })?;
 
     // §4.3 on-disk size cap, applied before any AEAD/KDF work.
-    if bytes.len() > ENCRYPTED_HEADER_LEN + MAX_PAYLOAD_BYTES + 16 {
-        return Err(PaladinError::InvalidPayload {
-            reason: "exceeds_size_limit",
-        });
-    }
+    enforce_on_disk_encrypted_size_cap(bytes.len())?;
 
     // Header parse + cross-mode lock check.
     let trailer = match parse_header(&bytes)? {
@@ -1015,12 +1038,12 @@ fn open_encrypted(path: &Path, passphrase: SecretString) -> Result<(crate::Vault
     let ct_and_tag = &bytes[ENCRYPTED_HEADER_LEN..];
     let plaintext = aead_decrypt(&key, &trailer.nonce, aad, ct_and_tag)?;
 
-    // Decoded payload still bounded by the §4.3 16 MiB cap.
-    if plaintext.len() > MAX_PAYLOAD_BYTES {
-        return Err(PaladinError::InvalidPayload {
-            reason: "exceeds_size_limit",
-        });
-    }
+    // Decoded payload still bounded by the §4.3 16 MiB cap. Defensive
+    // belt-and-suspenders against the on-disk cap above: AEAD is
+    // length-preserving so this branch is unreachable through the
+    // normal open path, but it is unit-tested directly to pin the
+    // invariant if a future construct ever decoupled them.
+    enforce_decrypted_payload_cap(plaintext.len())?;
 
     let payload = decode_vault_payload(&plaintext)?;
 
@@ -1544,5 +1567,52 @@ mod tests {
             header::ENCRYPTED_HEADER_LEN + bumped_encoded.len() + AEAD_TAG_LEN,
             "post-add shape: header + plaintext + tag"
         );
+    }
+
+    /// §4.3 on-disk size cap helper accepts any file at or below
+    /// the threshold (`ENCRYPTED_HEADER_LEN + MAX_PAYLOAD_BYTES + 16`,
+    /// i.e. header + 16 MiB + Poly1305 tag) and rejects anything
+    /// strictly larger with `invalid_payload` / `exceeds_size_limit`.
+    #[test]
+    fn enforce_on_disk_encrypted_size_cap_accepts_at_and_below_threshold() {
+        let cap = header::ENCRYPTED_HEADER_LEN + MAX_PAYLOAD_BYTES + 16;
+        enforce_on_disk_encrypted_size_cap(0).expect("zero-length accepted");
+        enforce_on_disk_encrypted_size_cap(header::ENCRYPTED_HEADER_LEN)
+            .expect("bare header accepted");
+        enforce_on_disk_encrypted_size_cap(cap - 1).expect("one byte under cap accepted");
+        enforce_on_disk_encrypted_size_cap(cap).expect("exactly-at-cap accepted");
+    }
+
+    #[test]
+    fn enforce_on_disk_encrypted_size_cap_rejects_one_byte_over_threshold() {
+        let cap = header::ENCRYPTED_HEADER_LEN + MAX_PAYLOAD_BYTES + 16;
+        let err = enforce_on_disk_encrypted_size_cap(cap + 1)
+            .expect_err("one byte over cap must be rejected");
+        match err {
+            PaladinError::InvalidPayload { reason } => assert_eq!(reason, "exceeds_size_limit"),
+            other => panic!("expected InvalidPayload, got {other:?}"),
+        }
+    }
+
+    /// §4.3 decrypted-plaintext cap helper accepts plaintexts at or
+    /// below 16 MiB and rejects anything larger with `invalid_payload`
+    /// / `exceeds_size_limit`. Pins the post-AEAD guard against a
+    /// future regression where the on-disk cap is loosened or a
+    /// non-length-preserving construct is wired in.
+    #[test]
+    fn enforce_decrypted_payload_cap_accepts_at_and_below_max_payload() {
+        enforce_decrypted_payload_cap(0).expect("zero-length plaintext accepted");
+        enforce_decrypted_payload_cap(MAX_PAYLOAD_BYTES - 1).expect("one byte under max accepted");
+        enforce_decrypted_payload_cap(MAX_PAYLOAD_BYTES).expect("exactly-at-max accepted");
+    }
+
+    #[test]
+    fn enforce_decrypted_payload_cap_rejects_one_byte_over_max_payload() {
+        let err = enforce_decrypted_payload_cap(MAX_PAYLOAD_BYTES + 1)
+            .expect_err("one byte over max must be rejected");
+        match err {
+            PaladinError::InvalidPayload { reason } => assert_eq!(reason, "exceeds_size_limit"),
+            other => panic!("expected InvalidPayload, got {other:?}"),
+        }
     }
 }
