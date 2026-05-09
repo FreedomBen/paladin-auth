@@ -73,6 +73,16 @@ pub enum CliError {
         /// Match set with stable disambiguators, in insertion order.
         candidates: Vec<Candidate>,
     },
+    /// `add` collided with an existing `(secret, issuer, label)` entry
+    /// and `--allow-duplicate` was not supplied. Presentation-only
+    /// `error_kind` per DESIGN.md §5 — `paladin-core` exposes
+    /// [`paladin_core::Vault::find_duplicate`] for the comparison but
+    /// never returns this kind.
+    DuplicateAccount {
+        /// Existing account that collides with the candidate. Carried
+        /// verbatim into the §5 `account` field of the JSON envelope.
+        account: AccountSummary,
+    },
     /// Scaffold sentinel: a command body has not been implemented yet.
     /// Removed as commands land — this branch never appears in shipped
     /// builds.
@@ -99,6 +109,13 @@ impl std::fmt::Display for CliError {
                     write!(f, "\n  {} ({})", display_label(&c.summary), c.disambiguator)?;
                 }
                 Ok(())
+            }
+            Self::DuplicateAccount { account } => {
+                write!(
+                    f,
+                    "account already exists with the same (secret, issuer, label): {} (re-run with --allow-duplicate to add anyway)",
+                    display_label(account),
+                )
             }
             Self::NotYetImplemented(name) => {
                 write!(f, "command '{name}' is not yet implemented")
@@ -160,6 +177,14 @@ pub fn render(err: &CliError, mode: Mode, mut out: impl Write) -> std::io::Resul
             serde_json::to_writer(&mut out, &envelope).map_err(std::io::Error::other)?;
             writeln!(out)?;
         }
+        (Mode::Json, CliError::DuplicateAccount { account }) => {
+            let envelope = serde_json::json!({
+                "error_kind": "duplicate_account",
+                "account": account,
+            });
+            serde_json::to_writer(&mut out, &envelope).map_err(std::io::Error::other)?;
+            writeln!(out)?;
+        }
         (Mode::Json, CliError::NotYetImplemented(_)) => {
             // Scaffold-only: this branch is never reached from a
             // production build. We still emit valid JSON so callers
@@ -176,7 +201,10 @@ pub fn render(err: &CliError, mode: Mode, mut out: impl Write) -> std::io::Resul
             // Clap's render() already terminates with a newline.
             write!(out, "{text_message}")?;
         }
-        (Mode::Text { .. }, CliError::Paladin(_) | CliError::NoMatch { .. }) => {
+        (
+            Mode::Text { .. },
+            CliError::Paladin(_) | CliError::NoMatch { .. } | CliError::DuplicateAccount { .. },
+        ) => {
             writeln!(out, "paladin: {err}")?;
         }
         (Mode::Text { .. }, CliError::MultipleMatches { .. }) => {
@@ -312,6 +340,31 @@ mod tests {
         // Schema is locked: no `query` and no nested `summary` object.
         assert!(v.get("query").is_none());
         assert!(cands[0].get("summary").is_none());
+    }
+
+    #[test]
+    fn json_mode_duplicate_account_envelope_carries_account_summary() {
+        let err = CliError::DuplicateAccount {
+            account: fixture_summary("alice", Some("Acme")),
+        };
+        let s = render_to_string(&err, Mode::Json);
+        let v: serde_json::Value = serde_json::from_str(s.trim()).unwrap();
+        assert_eq!(v["error_kind"], serde_json::json!("duplicate_account"));
+        assert_eq!(v["account"]["label"], serde_json::json!("alice"));
+        assert_eq!(v["account"]["issuer"], serde_json::json!("Acme"));
+        assert!(s.ends_with('\n'));
+    }
+
+    #[test]
+    fn text_mode_duplicate_account_includes_label_and_recovery_hint() {
+        let err = CliError::DuplicateAccount {
+            account: fixture_summary("alice", Some("Acme")),
+        };
+        let s = render_to_string(&err, Mode::Text { color: false });
+        assert!(s.starts_with("paladin: "), "got {s:?}");
+        assert!(s.contains("Acme:alice"), "missing label: {s:?}");
+        assert!(s.contains("--allow-duplicate"), "missing hint: {s:?}");
+        assert!(s.ends_with('\n'));
     }
 
     #[test]

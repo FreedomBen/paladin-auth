@@ -8,7 +8,10 @@
 use std::io::Write;
 use std::path::Path;
 
-use paladin_core::{AccountKindSummary, AccountSummary, Algorithm, VaultMode};
+use paladin_core::{
+    format_validation_warning, AccountKindSummary, AccountSummary, Algorithm, ImportReport,
+    ValidationWarning, VaultMode,
+};
 
 /// Print the success line for `paladin init` to stdout, e.g.
 /// "Created plaintext vault at /path/to/vault.bin." Mirrors the §5 JSON
@@ -82,6 +85,46 @@ fn display_label(s: &AccountSummary) -> String {
         Some(issuer) => format!("{issuer}:{}", s.label),
         None => s.label.clone(),
     }
+}
+
+/// Print the success line for `paladin add` (single-entry) to stdout,
+/// e.g. "Added Acme:alice (id:abcdef01).". `disambiguator` is the
+/// shortest unique `id:<hex>` prefix from
+/// `Vault::shortest_unique_id_prefix`.
+pub fn write_add_success(
+    account: &AccountSummary,
+    disambiguator: &str,
+    mut out: impl Write,
+) -> std::io::Result<()> {
+    writeln!(out, "Added {} ({}).", display_label(account), disambiguator)
+}
+
+/// Print the success summary for `paladin add --qr` (multi-entry) to
+/// stdout. Mirrors the §5 JSON envelope counts so text and JSON paths
+/// stay in sync. `--on-conflict=skip` is fixed for `add --qr`, so
+/// `replaced` / `appended` are zero on this path.
+pub fn write_qr_import_success(report: &ImportReport, mut out: impl Write) -> std::io::Result<()> {
+    writeln!(
+        out,
+        "Imported {} account(s) (skipped {}).",
+        report.imported, report.skipped,
+    )
+}
+
+/// Write a single `short_secret` validation-warning advisory to the
+/// supplied stream, prefixed with `paladin: warning:`. The CLI calls
+/// this in text mode only — under `--json` warnings flow through the
+/// success envelope's `warnings` array (per the strict-mode rule in
+/// `IMPLEMENTATION_PLAN_02_CLI.md`).
+pub fn write_validation_warning(
+    warning: &ValidationWarning,
+    mut out: impl Write,
+) -> std::io::Result<()> {
+    writeln!(
+        out,
+        "paladin: warning: {}",
+        format_validation_warning(warning)
+    )
 }
 
 #[cfg(test)]
@@ -165,6 +208,52 @@ mod tests {
         }];
         let s = render_list(&rows);
         assert_eq!(s, "id:fedcba98\thotp/sha1/6\tc=42\tbob\n");
+    }
+
+    #[test]
+    fn add_success_includes_label_disambiguator_and_trailing_newline() {
+        let acct = make_totp("alice", Some("Acme"));
+        let summary = acct.summary();
+        let mut buf: Vec<u8> = Vec::new();
+        write_add_success(&summary, "id:abcdef01", &mut buf).expect("render");
+        let s = String::from_utf8(buf).expect("utf-8");
+        assert_eq!(s, "Added Acme:alice (id:abcdef01).\n");
+    }
+
+    #[test]
+    fn add_success_falls_back_to_bare_label_when_issuer_empty() {
+        let acct = make_totp("bob", None);
+        let summary = acct.summary();
+        let mut buf: Vec<u8> = Vec::new();
+        write_add_success(&summary, "id:fedcba98", &mut buf).expect("render");
+        let s = String::from_utf8(buf).expect("utf-8");
+        assert_eq!(s, "Added bob (id:fedcba98).\n");
+    }
+
+    #[test]
+    fn qr_import_success_reports_imported_and_skipped_counts() {
+        let report = ImportReport {
+            imported: 3,
+            skipped: 1,
+            ..ImportReport::default()
+        };
+        let mut buf: Vec<u8> = Vec::new();
+        write_qr_import_success(&report, &mut buf).expect("render");
+        let s = String::from_utf8(buf).expect("utf-8");
+        assert_eq!(s, "Imported 3 account(s) (skipped 1).\n");
+    }
+
+    #[test]
+    fn validation_warning_writes_paladin_warning_prefix_to_stream() {
+        let warning = ValidationWarning::ShortSecret {
+            decoded_len: 10,
+            recommended_min: 16,
+        };
+        let mut buf: Vec<u8> = Vec::new();
+        write_validation_warning(&warning, &mut buf).expect("render");
+        let s = String::from_utf8(buf).expect("utf-8");
+        assert!(s.starts_with("paladin: warning: "), "got {s:?}");
+        assert!(s.ends_with('\n'));
     }
 
     #[test]

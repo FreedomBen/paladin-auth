@@ -170,6 +170,11 @@ pub struct AddArgs {
     /// Manual: clear the icon hint.
     #[arg(long, conflicts_with = "icon_hint")]
     pub no_icon_hint: bool,
+
+    /// Append a new account even when an existing entry has the same
+    /// `(secret, issuer, label)`. Mutually exclusive with `--qr`.
+    #[arg(long, conflicts_with = "qr")]
+    pub allow_duplicate: bool,
 }
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
