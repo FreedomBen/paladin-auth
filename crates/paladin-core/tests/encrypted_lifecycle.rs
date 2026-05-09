@@ -231,8 +231,24 @@ fn encrypted_save_reuses_argon2_key_without_re_deriving() {
     assert_eq!(reopened.accounts().len(), 2);
 }
 
+// ──────────────────────────────────────────────────────────────────
+// Phase G.11 — `Vault::is_encrypted()` matrix.
+//
+// Four explicit rows cover the §4.7 axis cross-product so a refactor
+// that breaks the cache-presence projection cannot pass quietly:
+//   * `VaultInit::Plaintext`              via `Store::create`  → false
+//   * `VaultInit::Encrypted`              via `Store::create`  → true
+//   * `VaultLock::Plaintext`              via `Store::open`    → false
+//   * `VaultLock::Encrypted(passphrase)`  via `Store::open`    → true
+//
+// Phase H exercises the `set_passphrase` / `change_passphrase` /
+// `remove_passphrase` transition cases (unchanged on
+// `save_not_committed`, flipped on success or
+// `save_durability_unconfirmed`) against this same getter.
+// ──────────────────────────────────────────────────────────────────
+
 #[test]
-fn plaintext_vault_reports_is_encrypted_false() {
+fn plaintext_create_reports_is_encrypted_false() {
     let dir = vault_test_dir();
     let path = dir.path().join("vault.bin");
     let (vault, _) = Store::create(&path, VaultInit::Plaintext).unwrap();
@@ -240,11 +256,36 @@ fn plaintext_vault_reports_is_encrypted_false() {
 }
 
 #[test]
-fn encrypted_vault_reports_is_encrypted_true() {
+fn encrypted_create_reports_is_encrypted_true() {
     let dir = vault_test_dir();
     let path = dir.path().join("vault.bin");
     let (vault, _) = Store::create(&path, VaultInit::Encrypted(cheap_options("hunter2"))).unwrap();
     assert!(vault.is_encrypted());
+}
+
+#[test]
+fn plaintext_open_reports_is_encrypted_false() {
+    let dir = vault_test_dir();
+    let path = dir.path().join("vault.bin");
+    let (vault, store) = Store::create(&path, VaultInit::Plaintext).unwrap();
+    vault.save(&store).unwrap();
+    drop(vault);
+
+    let (reopened, _) = Store::open(&path, VaultLock::Plaintext).unwrap();
+    assert!(!reopened.is_encrypted());
+}
+
+#[test]
+fn encrypted_open_reports_is_encrypted_true() {
+    let dir = vault_test_dir();
+    let path = dir.path().join("vault.bin");
+    let (vault, store) =
+        Store::create(&path, VaultInit::Encrypted(cheap_options("hunter2"))).unwrap();
+    vault.save(&store).unwrap();
+    drop(vault);
+
+    let (reopened, _) = Store::open(&path, VaultLock::Encrypted(pp("hunter2"))).unwrap();
+    assert!(reopened.is_encrypted());
 }
 
 // ──────────────────────────────────────────────────────────────────

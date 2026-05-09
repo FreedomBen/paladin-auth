@@ -754,7 +754,7 @@ Each step lands as its own commit. Tests come first.
   `save_durability_unconfirmed`, where both account and settings
   mutations remain in memory because the primary-file commit point may
   have been reached.
-- [ ] Tests: `Vault::is_encrypted()` returns `false` for vaults opened
+- [x] Tests: `Vault::is_encrypted()` returns `false` for vaults opened
   with `VaultLock::Plaintext` / created with `VaultInit::Plaintext`,
   returns `true` for vaults opened with `VaultLock::Encrypted` / created with
   encrypted `VaultInit`, and tracks `set_passphrase` / `change_passphrase` /
