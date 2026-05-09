@@ -1214,6 +1214,31 @@ fn open_encrypted(path: &Path, passphrase: SecretString) -> Result<(crate::Vault
     ))
 }
 
+/// Build the on-disk bytes for a Paladin export bundle (DESIGN.md
+/// §4.6 export path).
+///
+/// Wraps `VaultSettings::default()` around the supplied accounts (the
+/// source vault's settings are never persisted into the bundle), then
+/// reuses [`build_encrypted_on_disk`] so an exported bundle is byte-
+/// compatible with the on-disk encrypted vault format consumed by
+/// `Store::open` / `import::paladin`.
+///
+/// Generates a fresh salt and a fresh nonce per call, so two
+/// back-to-back exports of the same vault under the same passphrase
+/// produce distinct ciphertext bytes.
+pub(crate) fn build_encrypted_bundle_for_export(
+    accounts: Vec<crate::domain::Account>,
+    options: &EncryptionOptions,
+) -> Result<Vec<u8>> {
+    let payload = VaultPayload {
+        accounts,
+        settings: VaultSettings::default(),
+    };
+    let salt = generate_salt()?;
+    let key = derive_aead_key(&options.passphrase, &salt, &options.kdf_params)?;
+    build_encrypted_on_disk(&payload, &salt, options.kdf_params, &key)
+}
+
 /// Decrypt an in-memory Paladin bundle (DESIGN.md §4.6 import path).
 ///
 /// Mirrors the post-IO half of [`open_encrypted`] — header parse,

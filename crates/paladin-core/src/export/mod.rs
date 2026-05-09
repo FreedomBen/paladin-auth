@@ -13,6 +13,8 @@
 // through [`crate::write_secret_file_atomic`] for the §4.3 atomic-write
 // guarantees.
 
+mod encrypted;
 mod otpauth_list;
 
+pub use encrypted::encrypted;
 pub use otpauth_list::otpauth_list;
