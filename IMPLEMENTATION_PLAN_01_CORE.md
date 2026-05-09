@@ -767,7 +767,7 @@ Each step lands as its own commit. Tests come first.
   issuer/label pair. Cover ASCII, mixed case, and Unicode label
   characters so the helper does not silently apply `to_lowercase()` /
   Unicode normalization (callers do that at compare time per §5).
-- [ ] Tests: `account_matches_search(&Account, query)` applies
+- [x] Tests: `account_matches_search(&Account, query)` applies
   `str::to_lowercase()` to both the query and `account_match_key`, performs
   substring matching, matches the empty query, keeps empty-issuer colon
   behavior, and performs no Unicode normalization or locale-specific casing.
