@@ -141,18 +141,21 @@ fn text_syntax_error_uses_clap_diagnostic_and_exits_nonzero() {
 
 #[test]
 fn text_stub_command_writes_paladin_prefixed_message_to_stderr() {
+    // `peek` is still a scaffold; this test (and the JSON sibling
+    // below) is rotated to the next un-implemented command as each
+    // command lands.
     paladin()
-        .arg("show")
+        .arg("peek")
         .arg("query")
         .assert()
         .failure()
-        .stderr("paladin: command 'show' is not yet implemented\n");
+        .stderr("paladin: command 'peek' is not yet implemented\n");
 }
 
 #[test]
 fn json_stub_command_emits_synthetic_envelope_to_stderr() {
     let assert = paladin()
-        .args(["--json", "show", "query"])
+        .args(["--json", "peek", "query"])
         .assert()
         .failure();
     let stderr = std::str::from_utf8(&assert.get_output().stderr).unwrap();

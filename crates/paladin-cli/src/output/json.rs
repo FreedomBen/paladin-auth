@@ -7,7 +7,9 @@
 
 use std::io::Write;
 
-use paladin_core::{AccountSummary, ImportReport, ImportWarning, ValidationWarning, VaultMode};
+use paladin_core::{
+    AccountSummary, Code, ImportReport, ImportWarning, ValidationWarning, VaultMode,
+};
 use serde::Serialize;
 
 /// `init` and `passphrase {set,change,remove}` success envelope:
@@ -85,6 +87,40 @@ struct ImportSummary<'a> {
     appended: usize,
     accounts: &'a [AccountSummary],
     warnings: &'a [ImportWarning],
+}
+
+/// One `CodeResult` row in the `show` / `peek` success envelope per
+/// the §5 JSON shape table. The `account` summary reflects persisted
+/// state after the command — for `show` on HOTP that means the
+/// post-advance counter — and the [`Code`] timing fields are flattened
+/// alongside it (`code`, `valid_from`, `valid_until`,
+/// `seconds_remaining`, `counter_used`). TOTP rows have
+/// `counter_used: null`; HOTP rows have the validity fields `null`.
+#[derive(Debug, Serialize)]
+pub struct CodeRow<'a> {
+    /// Account state *after* the command (post-advance for HOTP `show`).
+    pub account: &'a AccountSummary,
+    /// Generated OTP projection — flattened so the row is a flat
+    /// `{ account, code, valid_from, valid_until, seconds_remaining,
+    /// counter_used }` object, matching the §5 `CodeResult` shape.
+    #[serde(flatten)]
+    pub code: &'a Code,
+}
+
+#[derive(Debug, Serialize)]
+struct ShowEnvelope<'a> {
+    codes: &'a [CodeRow<'a>],
+}
+
+/// Render the `paladin show` / `paladin peek` success envelope:
+/// `{ "codes": [CodeResult] }`. Always emits a single top-level
+/// document with the codes array — single-match commands still produce
+/// a one-element array so JSON consumers can use one parse path.
+pub fn write_show_codes(rows: &[CodeRow<'_>], mut out: impl Write) -> std::io::Result<()> {
+    let env = ShowEnvelope { codes: rows };
+    serde_json::to_writer(&mut out, &env).map_err(std::io::Error::other)?;
+    writeln!(out)?;
+    Ok(())
 }
 
 /// Render the `paladin add --qr` / `paladin import` success envelope.
@@ -212,6 +248,89 @@ mod tests {
         let warns = v["warnings"].as_array().expect("warnings is array");
         assert_eq!(warns.len(), 1);
         assert_eq!(warns[0]["kind"], serde_json::json!("short_secret"));
+    }
+
+    #[test]
+    fn show_codes_envelope_wraps_single_totp_row_under_codes_key() {
+        use paladin_core::parse_otpauth;
+        use std::time::{Duration, SystemTime};
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let acct = parse_otpauth(
+            "otpauth://totp/Acme:alice?secret=JBSWY3DPEHPK3PXP&digits=6&period=30",
+            now,
+        )
+        .unwrap()
+        .account;
+        let summary = acct.summary();
+        let code = Code {
+            code: "123456".into(),
+            valid_from: Some(1_700_000_000),
+            valid_until: Some(1_700_000_030),
+            seconds_remaining: Some(30),
+            counter_used: None,
+        };
+        let row = CodeRow {
+            account: &summary,
+            code: &code,
+        };
+        let mut buf: Vec<u8> = Vec::new();
+        write_show_codes(&[row], &mut buf).expect("render");
+        let s = String::from_utf8(buf).expect("utf-8");
+        assert!(s.ends_with('\n'), "expected single trailing newline");
+        let v: serde_json::Value = serde_json::from_str(s.trim()).expect("valid json");
+        let arr = v["codes"].as_array().expect("codes is array");
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["code"], serde_json::json!("123456"));
+        assert_eq!(arr[0]["valid_from"], serde_json::json!(1_700_000_000));
+        assert_eq!(arr[0]["valid_until"], serde_json::json!(1_700_000_030));
+        assert_eq!(arr[0]["seconds_remaining"], serde_json::json!(30));
+        assert_eq!(arr[0]["counter_used"], serde_json::Value::Null);
+        assert_eq!(arr[0]["account"]["label"], serde_json::json!("alice"));
+        assert_eq!(arr[0]["account"]["kind"], serde_json::json!("totp"));
+    }
+
+    #[test]
+    fn show_codes_envelope_emits_hotp_row_with_counter_used_and_null_validity() {
+        use paladin_core::parse_otpauth;
+        use std::time::{Duration, SystemTime};
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let acct = parse_otpauth(
+            "otpauth://hotp/Beta:bob?secret=JBSWY3DPEHPK3PXP&digits=6&counter=42",
+            now,
+        )
+        .unwrap()
+        .account;
+        let summary = acct.summary();
+        let code = Code {
+            code: "654321".into(),
+            valid_from: None,
+            valid_until: None,
+            seconds_remaining: None,
+            counter_used: Some(42),
+        };
+        let row = CodeRow {
+            account: &summary,
+            code: &code,
+        };
+        let mut buf: Vec<u8> = Vec::new();
+        write_show_codes(&[row], &mut buf).expect("render");
+        let s = String::from_utf8(buf).expect("utf-8");
+        let v: serde_json::Value = serde_json::from_str(s.trim()).expect("valid json");
+        let arr = v["codes"].as_array().expect("codes is array");
+        assert_eq!(arr[0]["valid_from"], serde_json::Value::Null);
+        assert_eq!(arr[0]["valid_until"], serde_json::Value::Null);
+        assert_eq!(arr[0]["seconds_remaining"], serde_json::Value::Null);
+        assert_eq!(arr[0]["counter_used"], serde_json::json!(42));
+        assert_eq!(arr[0]["account"]["kind"], serde_json::json!("hotp"));
+    }
+
+    #[test]
+    fn show_codes_envelope_empty_codes_array_when_no_rows() {
+        let mut buf: Vec<u8> = Vec::new();
+        write_show_codes(&[], &mut buf).expect("render");
+        let s = String::from_utf8(buf).expect("utf-8");
+        let v: serde_json::Value = serde_json::from_str(s.trim()).expect("valid json");
+        assert_eq!(v, serde_json::json!({ "codes": [] }));
     }
 
     #[test]

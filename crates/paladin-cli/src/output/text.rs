@@ -9,7 +9,7 @@ use std::io::Write;
 use std::path::Path;
 
 use paladin_core::{
-    format_validation_warning, AccountKindSummary, AccountSummary, Algorithm, ImportReport,
+    format_validation_warning, AccountKindSummary, AccountSummary, Algorithm, Code, ImportReport,
     ValidationWarning, VaultMode,
 };
 
@@ -85,6 +85,44 @@ fn display_label(s: &AccountSummary) -> String {
         Some(issuer) => format!("{issuer}:{}", s.label),
         None => s.label.clone(),
     }
+}
+
+/// One row in the `paladin show` / `paladin peek` text output.
+/// `disambiguator` is the shortest unique `id:<hex>` prefix from
+/// `Vault::shortest_unique_id_prefix`, so a multi-row response keeps
+/// the same selector shape as `list` and `multiple_matches` candidate
+/// lines.
+pub struct CodeRow<'a> {
+    pub disambiguator: &'a str,
+    pub account: &'a AccountSummary,
+    pub code: &'a Code,
+}
+
+/// Print one line per `CodeRow` to stdout. Format is tab-separated:
+/// `<id-prefix>` `<issuer:label>` `<code>` `<remaining-or-counter>`,
+/// mirroring the `list` row shape with the code replacing the
+/// `<kind>/<alg>/<digits>` column. TOTP rows render the trailing
+/// column as `<seconds_remaining>s` and HOTP rows render it as
+/// `c=<counter_used>`. An empty `rows` slice writes zero bytes; the
+/// CLI rejects empty match sets earlier with `no_match`.
+pub fn write_code_rows(rows: &[CodeRow<'_>], mut out: impl Write) -> std::io::Result<()> {
+    for row in rows {
+        let trailing = match (row.code.seconds_remaining, row.code.counter_used) {
+            (Some(secs), None) => format!("{secs}s"),
+            (None, Some(c)) => format!("c={c}"),
+            // Mirrors the `list` placeholder for the impossible
+            // (TOTP+HOTP / neither) case so a core invariant break
+            // surfaces a "-" instead of panicking.
+            _ => "-".to_string(),
+        };
+        let label = display_label(row.account);
+        writeln!(
+            out,
+            "{}\t{}\t{}\t{}",
+            row.disambiguator, label, row.code.code, trailing
+        )?;
+    }
+    Ok(())
 }
 
 /// Print the success line for `paladin add` (single-entry) to stdout,
@@ -241,6 +279,100 @@ mod tests {
         write_qr_import_success(&report, &mut buf).expect("render");
         let s = String::from_utf8(buf).expect("utf-8");
         assert_eq!(s, "Imported 3 account(s) (skipped 1).\n");
+    }
+
+    #[test]
+    fn code_row_totp_renders_seconds_remaining_with_s_suffix() {
+        let acct = make_totp("alice", Some("Acme"));
+        let summary = acct.summary();
+        let code = Code {
+            code: "123456".into(),
+            valid_from: Some(1_700_000_000),
+            valid_until: Some(1_700_000_030),
+            seconds_remaining: Some(25),
+            counter_used: None,
+        };
+        let row = CodeRow {
+            disambiguator: "id:abcdef01",
+            account: &summary,
+            code: &code,
+        };
+        let mut buf: Vec<u8> = Vec::new();
+        write_code_rows(&[row], &mut buf).expect("render");
+        let s = String::from_utf8(buf).expect("utf-8");
+        assert_eq!(s, "id:abcdef01\tAcme:alice\t123456\t25s\n");
+    }
+
+    #[test]
+    fn code_row_hotp_renders_c_prefix_with_pre_advance_counter_used() {
+        let acct = make_hotp("bob", None, 42);
+        let summary = acct.summary();
+        let code = Code {
+            code: "654321".into(),
+            valid_from: None,
+            valid_until: None,
+            seconds_remaining: None,
+            counter_used: Some(42),
+        };
+        let row = CodeRow {
+            disambiguator: "id:fedcba98",
+            account: &summary,
+            code: &code,
+        };
+        let mut buf: Vec<u8> = Vec::new();
+        write_code_rows(&[row], &mut buf).expect("render");
+        let s = String::from_utf8(buf).expect("utf-8");
+        assert_eq!(s, "id:fedcba98\tbob\t654321\tc=42\n");
+    }
+
+    #[test]
+    fn code_rows_empty_slice_writes_zero_bytes() {
+        let mut buf: Vec<u8> = Vec::new();
+        write_code_rows(&[], &mut buf).expect("render");
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn code_rows_emit_one_line_per_entry_in_supplied_order() {
+        let a = make_totp("alice", Some("Acme"));
+        let b = make_totp("alice", Some("Beta"));
+        let sa = a.summary();
+        let sb = b.summary();
+        let code_a = Code {
+            code: "111111".into(),
+            valid_from: Some(0),
+            valid_until: Some(30),
+            seconds_remaining: Some(10),
+            counter_used: None,
+        };
+        let code_b = Code {
+            code: "222222".into(),
+            valid_from: Some(0),
+            valid_until: Some(30),
+            seconds_remaining: Some(10),
+            counter_used: None,
+        };
+        let rows = [
+            CodeRow {
+                disambiguator: "id:11111111",
+                account: &sa,
+                code: &code_a,
+            },
+            CodeRow {
+                disambiguator: "id:22222222",
+                account: &sb,
+                code: &code_b,
+            },
+        ];
+        let mut buf: Vec<u8> = Vec::new();
+        write_code_rows(&rows, &mut buf).expect("render");
+        let s = String::from_utf8(buf).expect("utf-8");
+        let lines: Vec<&str> = s.lines().collect();
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].contains("Acme:alice"));
+        assert!(lines[0].contains("111111"));
+        assert!(lines[1].contains("Beta:alice"));
+        assert!(lines[1].contains("222222"));
     }
 
     #[test]
