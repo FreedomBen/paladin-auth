@@ -824,7 +824,7 @@ Each step lands as its own commit. Tests come first.
   (front ends pass the same secret bytes they wrote and the bytes
   currently in the clipboard). Pins the §6 / §7 only-if-unchanged
   protocol.
-- [ ] Tests: `policy::hotp_reveal::deadline(now: Instant) -> Instant`
+- [x] Tests: `policy::hotp_reveal::deadline(now: Instant) -> Instant`
   returns `now + Duration::from_secs(HOTP_REVEAL_SECS)` exactly so
   TUI countdown and GUI countdown share one source.
 - [ ] Tests: `domain::query::select_after_filter(prev: Option<AccountId>,

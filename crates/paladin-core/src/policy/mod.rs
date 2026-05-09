@@ -12,12 +12,14 @@
 //     monotonic token issuance, only-if-unchanged byte-equality
 //     decision.
 //   * `hotp_reveal::deadline` — HOTP reveal countdown deadline
-//     (later phase).
+//     pinned to `HOTP_REVEAL_SECS`.
 //
 // Each submodule's public symbols are re-exported at the crate root.
 
 pub mod auto_lock;
 pub mod clipboard_clear;
+pub mod hotp_reveal;
 
 pub use auto_lock::IdlePolicy;
 pub use clipboard_clear::{ClipboardClearPolicy, ClipboardClearToken};
+pub use hotp_reveal::deadline as hotp_reveal_deadline;

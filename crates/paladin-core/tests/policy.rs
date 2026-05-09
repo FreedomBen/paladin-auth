@@ -12,10 +12,8 @@
 //     decision, monotonic token issuance, only-if-unchanged
 //     byte-equality decision.
 //   * `policy::hotp_reveal::deadline` — HOTP reveal countdown
-//     deadline (later phase).
-//
-// This file pins the IdlePolicy and ClipboardClearPolicy contracts;
-// the hotp_reveal deadline lands with the next plan bullet.
+//     deadline shared by the TUI reveal panel and the GTK GUI
+//     reveal panel.
 
 #![cfg(unix)]
 
@@ -25,7 +23,10 @@ use std::time::{Duration, Instant};
 
 use paladin_core::policy::auto_lock::IdlePolicy;
 use paladin_core::policy::clipboard_clear::{ClipboardClearPolicy, ClipboardClearToken};
-use paladin_core::{Argon2Params, EncryptionOptions, Store, Vault, VaultInit, VaultSettings};
+use paladin_core::policy::hotp_reveal;
+use paladin_core::{
+    Argon2Params, EncryptionOptions, Store, Vault, VaultInit, VaultSettings, HOTP_REVEAL_SECS,
+};
 use secrecy::SecretString;
 
 // `ClipboardClearPolicy::schedule` advances a process-wide monotonic
@@ -448,4 +449,59 @@ fn clipboard_clear_policy_and_token_reachable_at_crate_root() {
     let _: paladin_core::ClipboardClearPolicy;
     let _: Option<(paladin_core::ClipboardClearToken, Instant)> =
         paladin_core::ClipboardClearPolicy::schedule(Instant::now(), &VaultSettings::default());
+}
+
+// ---------------------------------------------------------------------------
+// hotp_reveal::deadline — pure addition pinned to HOTP_REVEAL_SECS
+// ---------------------------------------------------------------------------
+
+#[test]
+fn hotp_reveal_deadline_is_now_plus_hotp_reveal_secs_exactly() {
+    // The TUI reveal countdown and the GUI reveal countdown both
+    // source their deadline through this function so a config change
+    // to `HOTP_REVEAL_SECS` updates both presentation crates without
+    // either having to hard-code the duration.
+    let now = Instant::now();
+    let got = hotp_reveal::deadline(now);
+    assert_eq!(got, now + Duration::from_secs(HOTP_REVEAL_SECS));
+}
+
+#[test]
+fn hotp_reveal_deadline_uses_pinned_120_second_horizon() {
+    // `HOTP_REVEAL_SECS` is pinned at 120 by `ui_contract`; the
+    // deadline must equal `now + 120 s` for that exact value, so a
+    // future refactor that moves the constant cannot silently change
+    // the reveal horizon.
+    assert_eq!(HOTP_REVEAL_SECS, 120);
+    let now = Instant::now();
+    assert_eq!(hotp_reveal::deadline(now), now + Duration::from_secs(120));
+}
+
+#[test]
+fn hotp_reveal_deadline_is_pure_with_respect_to_now() {
+    // Distinct `now` inputs produce deadlines that differ by exactly
+    // the same offset — proves the function is a pure addition with
+    // no hidden state and no clock sampling.
+    let now_a = Instant::now();
+    let now_b = now_a + Duration::from_secs(7);
+    let got_a = hotp_reveal::deadline(now_a);
+    let got_b = hotp_reveal::deadline(now_b);
+    assert_eq!(got_a, now_a + Duration::from_secs(HOTP_REVEAL_SECS));
+    assert_eq!(got_b, now_b + Duration::from_secs(HOTP_REVEAL_SECS));
+    // Same call with the same input is deterministic (idempotent).
+    assert_eq!(hotp_reveal::deadline(now_a), got_a);
+}
+
+#[test]
+fn hotp_reveal_deadline_reachable_at_crate_root_re_export() {
+    // The policy's deadline function must be reachable at the crate
+    // root as `paladin_core::hotp_reveal_deadline` so a refactor that
+    // moves the internal module cannot silently drop the surface
+    // (matches the IdlePolicy / ClipboardClearPolicy precedent).
+    let now = Instant::now();
+    let got: Instant = paladin_core::hotp_reveal_deadline(now);
+    assert_eq!(got, now + Duration::from_secs(HOTP_REVEAL_SECS));
+    // The submodule path must continue to resolve to the same function
+    // so callers can pick whichever import style fits their crate.
+    assert_eq!(got, paladin_core::policy::hotp_reveal::deadline(now));
 }

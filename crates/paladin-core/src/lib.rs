@@ -34,7 +34,7 @@ pub use domain::{
 };
 pub use error::{ErrorKind, PaladinError, PermissionSubject, Result, TimeRangeKind, VaultMode};
 pub use otpauth::parse_otpauth;
-pub use policy::{ClipboardClearPolicy, ClipboardClearToken, IdlePolicy};
+pub use policy::{hotp_reveal_deadline, ClipboardClearPolicy, ClipboardClearToken, IdlePolicy};
 #[cfg(feature = "test-zeroize-witness")]
 pub use storage::_testing_write_encrypted_with_raw_plaintext;
 pub use storage::{
