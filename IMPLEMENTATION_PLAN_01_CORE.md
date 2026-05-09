@@ -1091,10 +1091,10 @@ Each step lands as its own commit. Tests come first.
   already in per-feature test files; its purpose is to catch
   regressions where an `error_kind` is renamed or an extra field is
   dropped from a JSON-relevant variant.
-- [ ] Document and test that the public types front ends move across
+- [x] Document and test that the public types front ends move across
   thread boundaries (notably `paladin-gtk` via `gio::spawn_blocking`,
   and `paladin-tui` via the import worker thread) are all `Send`.
-  Static `Send` assertions (`fn _assert_send<T: Send>() {}` calls
+  Static `Send` assertions (`fn assert_send<T: Send>() {}` calls
   in `tests/send_assertions.rs`) gate the full set in CI so a
   future change introducing `Rc` or another non-`Send` field fails
   the build instead of silently breaking either front end. The
@@ -1102,7 +1102,7 @@ Each step lands as its own commit. Tests come first.
   `Vault`, `Store`, `Account`, `AccountId`, `AccountSummary`,
   `AccountKindSummary`, `Algorithm`, `Code`, `ValidatedAccount`,
   `ValidationWarning`, `ImportReport`, `ImportWarning`,
-  `ImportConflict`, `ImportFormat`, `ImportOptions<'_>`,
+  `ImportConflict`, `ImportFormat`, `ImportOptions`,
   `EncryptionOptions`, `Argon2Params`, `VaultLock`, `VaultInit`,
   `VaultStatus`, `VaultSettings`, `SettingKey`, `SettingPatch`,
   `AccountKindInput`, `IconHintInput`, `AccountInput`,
