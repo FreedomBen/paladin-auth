@@ -827,7 +827,7 @@ Each step lands as its own commit. Tests come first.
 - [x] Tests: `policy::hotp_reveal::deadline(now: Instant) -> Instant`
   returns `now + Duration::from_secs(HOTP_REVEAL_SECS)` exactly so
   TUI countdown and GUI countdown share one source.
-- [ ] Tests: `domain::query::select_after_filter(prev: Option<AccountId>,
+- [x] Tests: `domain::query::select_after_filter(prev: Option<AccountId>,
   filtered: &[AccountId]) -> Option<AccountId>` returns `prev` when
   `prev` appears in `filtered`, returns `Some(filtered[0])` when
   `prev` is `None` or missing and `filtered` is non-empty, and

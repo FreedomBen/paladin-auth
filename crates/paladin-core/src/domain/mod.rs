@@ -17,7 +17,7 @@ pub mod validation;
 
 pub use match_key::{account_match_key, account_matches_search};
 pub use prompt_input::parse_icon_hint_token;
-pub use query::{parse_account_query, AccountQuery};
+pub use query::{parse_account_query, select_after_filter, AccountQuery};
 pub use secret::Secret;
 pub use settings::{parse_setting_key, parse_setting_patch, SettingKey, SettingPatch};
 pub use validation::{validate_manual, AccountInput, ValidatedAccount, ValidationWarning};

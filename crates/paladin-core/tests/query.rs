@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// Phase G.14 / G.15 — `parse_account_query`, `Vault::matching_accounts`,
-// and `Vault::shortest_unique_id_prefix` (DESIGN.md §4.7, §5).
+// Phase G.14 / G.15 / G.21 — `parse_account_query`, `Vault::matching_accounts`,
+// `Vault::shortest_unique_id_prefix`, and `select_after_filter`
+// (DESIGN.md §4.7, §5, §6, §7).
 //
 // `parse_account_query`:
 //   * Non-`id:` input maps to `AccountQuery::Search(query.to_string())`,
@@ -37,7 +38,8 @@ use std::os::unix::fs::PermissionsExt;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use paladin_core::{
-    parse_account_query, parse_otpauth, Account, AccountId, AccountQuery, ErrorKind, Vault,
+    parse_account_query, parse_otpauth, select_after_filter, Account, AccountId, AccountQuery,
+    ErrorKind, Vault,
 };
 
 fn fixture_now() -> SystemTime {
@@ -420,4 +422,99 @@ fn shortest_unique_id_prefix_returns_lowercase_hex_only() {
         (8..=32).contains(&prefix.len()),
         "{prefix} length must be 8..=32"
     );
+}
+
+// ---------------------------------------------------------------------------
+// select_after_filter — search-selection preservation rule (DESIGN §6 / §7).
+//
+// Front ends rebuild the filtered account list every keystroke; this
+// helper decides which account stays selected so a typed selection is
+// not lost while still falling back to the first match when the
+// previous selection no longer applies.
+
+#[test]
+fn select_after_filter_preserves_prev_when_present_in_filtered() {
+    let a = AccountId::new();
+    let b = AccountId::new();
+    let c = AccountId::new();
+    let filtered = [a, b, c];
+    // Previous selection is in the filtered set — preserve it even when
+    // a different account would be the first match.
+    assert_eq!(select_after_filter(Some(b), &filtered), Some(b));
+    assert_eq!(select_after_filter(Some(c), &filtered), Some(c));
+}
+
+#[test]
+fn select_after_filter_preserves_prev_at_first_position() {
+    // Edge case: when `prev` is already the first element, preservation
+    // and first-fallback agree — but the function still returns the
+    // preserved value rather than re-deriving from `filtered[0]`.
+    let a = AccountId::new();
+    let b = AccountId::new();
+    let filtered = [a, b];
+    assert_eq!(select_after_filter(Some(a), &filtered), Some(a));
+}
+
+#[test]
+fn select_after_filter_falls_back_to_first_when_prev_is_none() {
+    // No previous selection — pick the first match so the user sees
+    // something selected immediately after a search applies.
+    let a = AccountId::new();
+    let b = AccountId::new();
+    let filtered = [a, b];
+    assert_eq!(select_after_filter(None, &filtered), Some(a));
+}
+
+#[test]
+fn select_after_filter_falls_back_to_first_when_prev_missing_from_filtered() {
+    // Previous selection has been filtered out (e.g., the user narrowed
+    // the search). Fall back to the first remaining match rather than
+    // leaving the UI with no selection.
+    let a = AccountId::new();
+    let b = AccountId::new();
+    let absent = AccountId::new();
+    let filtered = [a, b];
+    assert_eq!(select_after_filter(Some(absent), &filtered), Some(a));
+}
+
+#[test]
+fn select_after_filter_returns_none_when_filtered_is_empty_with_some_prev() {
+    // Empty filtered set means no possible selection regardless of
+    // whether `prev` was set.
+    let prev = AccountId::new();
+    let empty: [AccountId; 0] = [];
+    assert_eq!(select_after_filter(Some(prev), &empty), None);
+}
+
+#[test]
+fn select_after_filter_returns_none_when_filtered_is_empty_with_none_prev() {
+    let empty: [AccountId; 0] = [];
+    assert_eq!(select_after_filter(None, &empty), None);
+}
+
+#[test]
+fn select_after_filter_handles_single_element_filtered() {
+    // The filtered list has exactly one element; both code paths
+    // (preservation and fallback) collapse onto that element.
+    let only = AccountId::new();
+    let other = AccountId::new();
+    let filtered = [only];
+    assert_eq!(select_after_filter(Some(only), &filtered), Some(only));
+    assert_eq!(select_after_filter(Some(other), &filtered), Some(only));
+    assert_eq!(select_after_filter(None, &filtered), Some(only));
+}
+
+#[test]
+fn select_after_filter_is_pure_with_respect_to_inputs() {
+    // Repeated calls with identical inputs return identical outputs
+    // and do not mutate (or depend on) any hidden state.
+    let a = AccountId::new();
+    let b = AccountId::new();
+    let filtered = [a, b];
+    let first = select_after_filter(Some(b), &filtered);
+    let second = select_after_filter(Some(b), &filtered);
+    let third = select_after_filter(Some(b), &filtered);
+    assert_eq!(first, Some(b));
+    assert_eq!(first, second);
+    assert_eq!(second, third);
 }

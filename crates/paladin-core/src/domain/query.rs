@@ -118,6 +118,24 @@ pub(crate) fn shortest_unique_id_prefix(accounts: &[Account], id: AccountId) -> 
     Some(target)
 }
 
+/// Pick the surviving selection after a search filter rebuild
+/// (DESIGN.md §6 / §7 search-selection preservation rule).
+///
+/// Returns `prev` when `prev` is `Some` and that id appears in
+/// `filtered`. Otherwise — `prev` is `None`, or `prev` was filtered
+/// out — returns the first element of `filtered`, or `None` when
+/// `filtered` is empty. Pure: depends only on its arguments and never
+/// mutates either side.
+#[must_use]
+pub fn select_after_filter(prev: Option<AccountId>, filtered: &[AccountId]) -> Option<AccountId> {
+    if let Some(id) = prev {
+        if filtered.iter().any(|f| *f == id) {
+            return Some(id);
+        }
+    }
+    filtered.first().copied()
+}
+
 #[cfg(test)]
 mod tests {
     // Phase G.15 — `shortest_unique_id_prefix` collision-driven
