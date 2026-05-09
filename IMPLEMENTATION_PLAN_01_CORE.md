@@ -1108,19 +1108,22 @@ Each step lands as its own commit. Tests come first.
   `AccountKindInput`, `IconHintInput`, `AccountInput`,
   `AccountQuery`, `InitPrecheck`, `PaladinImportPrecheck`, and
   `PaladinError`.
-- [ ] Tests: `Sync` posture — pin which of the above types are
-  `Sync` and which are not. The non-secret projection types
-  (`AccountSummary`, `Code`, `ImportReport`, `ImportWarning`,
-  `VaultStatus`, `VaultSettings`, `Algorithm`, `AccountKindSummary`,
-  `Argon2Params`, `SettingKey`, `SettingPatch`, `IconHintInput`,
-  `AccountKindInput`, `AccountQuery`, `InitPrecheck`, `AccountId`)
-  are asserted `Sync`. `Vault`, `Store`, `Account`, `Secret`,
-  `EncryptionOptions`, `AccountInput`, `ValidatedAccount`,
-  `VaultLock`, `VaultInit`, and `PaladinError` are *not* asserted
-  `Sync` (`SecretString` is `!Sync` in `secrecy`); the test
-  module includes a comment locking that decision so a future
-  change does not accidentally promote a secret-bearing type to
-  `Sync` without review.
+- [x] Tests: `Sync` posture — pin which of the above types are
+  `Sync` and which are not, in the same `tests/send_assertions.rs`
+  module. Every type in the J.3 worker-boundary set is asserted
+  `Sync` *except* `Store`, which is `!Sync` because it carries
+  `Cell<VaultMode>` / `Cell<Option<EncryptedSaveContext>>` for
+  in-place save-pipeline state (DESIGN.md §4.3). The negative
+  posture is locked with `static_assertions::assert_not_impl_all!(
+  Store: Sync)`. The secret-bearing types (`Vault`, `Account`,
+  `Secret`, `EncryptionOptions`, `AccountInput`, `ValidatedAccount`,
+  `VaultLock`, `VaultInit`, `PaladinError`) are `Sync` because
+  `secrecy::SecretString` is `Sync` in `secrecy = "0.10"` —
+  `SecretBox<String>` is `Sync` whenever `String: Sync`, and zeroize
+  semantics fire on drop, not on read. The file's top doc comment
+  locks that rationale; promoting any of those types to `!Sync`
+  (or demoting `Store` to `Sync`) breaks the `cargo public-api`
+  snapshot in CI and requires explicit review.
 - [ ] Tests: `tests/no_network.rs` is a source-level guard that scans the
   `paladin-core` manifest and production source tree (`src/`) and fails
   on direct references to network APIs (`std::net`, `TcpStream`,
