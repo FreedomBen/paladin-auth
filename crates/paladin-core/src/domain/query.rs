@@ -129,7 +129,7 @@ pub(crate) fn shortest_unique_id_prefix(accounts: &[Account], id: AccountId) -> 
 #[must_use]
 pub fn select_after_filter(prev: Option<AccountId>, filtered: &[AccountId]) -> Option<AccountId> {
     if let Some(id) = prev {
-        if filtered.iter().any(|f| *f == id) {
+        if filtered.contains(&id) {
             return Some(id);
         }
     }

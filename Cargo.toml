@@ -23,6 +23,11 @@ module_name_repetitions = "allow"
 must_use_candidate = "allow"
 missing_errors_doc = "allow"
 missing_panics_doc = "allow"
+# `PaladinError` is the §5 unified error surface re-exported on the
+# §4.7 frozen public API. Boxing every `Result<T, PaladinError>` to
+# satisfy this lint would change ~215 call sites, perturb the public
+# surface, and add an allocation to every fallible path.
+result_large_err = "allow"
 
 [profile.release]
 opt-level = 3

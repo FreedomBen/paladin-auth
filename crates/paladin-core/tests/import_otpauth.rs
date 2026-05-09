@@ -27,7 +27,7 @@ fn single_uri_returns_one_validated_account() {
 
 #[test]
 fn single_uri_with_surrounding_whitespace_succeeds() {
-    let bytes = format!("\n  \t{}  \n", URI_TOTP_A);
+    let bytes = format!("\n  \t{URI_TOTP_A}  \n");
     let imported = import::otpauth(bytes.as_bytes(), import_time()).unwrap();
     assert_eq!(imported.len(), 1);
 }
@@ -44,7 +44,7 @@ fn single_uri_sets_created_at_equal_updated_at_equal_import_time() {
 
 #[test]
 fn line_list_two_uris_returns_two_accounts_in_order() {
-    let bytes = format!("{}\n{}\n", URI_TOTP_A, URI_HOTP_B);
+    let bytes = format!("{URI_TOTP_A}\n{URI_HOTP_B}\n");
     let imported = import::otpauth(bytes.as_bytes(), import_time()).unwrap();
     assert_eq!(imported.len(), 2);
     assert_eq!(imported[0].account.label(), "alice");
@@ -55,24 +55,21 @@ fn line_list_two_uris_returns_two_accounts_in_order() {
 
 #[test]
 fn line_list_blank_lines_are_tolerated() {
-    let bytes = format!(
-        "\n\n{}\n\n   \n{}\n\n",
-        URI_TOTP_A, URI_HOTP_B
-    );
+    let bytes = format!("\n\n{URI_TOTP_A}\n\n   \n{URI_HOTP_B}\n\n");
     let imported = import::otpauth(bytes.as_bytes(), import_time()).unwrap();
     assert_eq!(imported.len(), 2);
 }
 
 #[test]
 fn line_list_crlf_is_tolerated() {
-    let bytes = format!("{}\r\n{}\r\n", URI_TOTP_A, URI_HOTP_B);
+    let bytes = format!("{URI_TOTP_A}\r\n{URI_HOTP_B}\r\n");
     let imported = import::otpauth(bytes.as_bytes(), import_time()).unwrap();
     assert_eq!(imported.len(), 2);
 }
 
 #[test]
 fn line_list_with_invalid_uri_aborts_batch_with_source_index() {
-    let bytes = format!("{}\nnot-an-otpauth-uri\n{}\n", URI_TOTP_A, URI_HOTP_B);
+    let bytes = format!("{URI_TOTP_A}\nnot-an-otpauth-uri\n{URI_HOTP_B}\n");
     let err = import::otpauth(bytes.as_bytes(), import_time()).unwrap_err();
     let PaladinError::ValidationError { source_index, .. } = err else {
         panic!("expected ValidationError, got {err:?}");
@@ -109,7 +106,7 @@ fn line_list_embedded_nul_byte_aborts_with_source_index_before_decoding() {
 
 #[test]
 fn json_array_of_uris_returns_accounts_in_input_order() {
-    let json = format!(r#"["{}","{}"]"#, URI_TOTP_A, URI_HOTP_B);
+    let json = format!(r#"["{URI_TOTP_A}","{URI_HOTP_B}"]"#);
     let imported = import::otpauth(json.as_bytes(), import_time()).unwrap();
     assert_eq!(imported.len(), 2);
     assert_eq!(imported[0].account.label(), "alice");
@@ -136,7 +133,7 @@ fn empty_input_returns_no_entries_to_import() {
 
 #[test]
 fn json_array_with_non_string_element_rejects_with_source_index() {
-    let json = format!(r#"["{}",123,"{}"]"#, URI_TOTP_A, URI_HOTP_B);
+    let json = format!(r#"["{URI_TOTP_A}",123,"{URI_HOTP_B}"]"#);
     let err = import::otpauth(json.as_bytes(), import_time()).unwrap_err();
     let PaladinError::ValidationError {
         field,
@@ -154,7 +151,7 @@ fn json_array_with_non_string_element_rejects_with_source_index() {
 
 #[test]
 fn json_array_with_invalid_uri_string_propagates_source_index() {
-    let json = format!(r#"["{}","not-an-otpauth"]"#, URI_TOTP_A);
+    let json = format!(r#"["{URI_TOTP_A}","not-an-otpauth"]"#);
     let err = import::otpauth(json.as_bytes(), import_time()).unwrap_err();
     let PaladinError::ValidationError { source_index, .. } = err else {
         panic!("expected ValidationError, got {err:?}");
@@ -174,7 +171,7 @@ fn deeply_nested_json_does_not_panic() {
     // 1000 nested arrays — must not exhaust the stack and must
     // surface as validation_error rather than a panic.
     let mut bytes = vec![b'['; 1000];
-    bytes.extend(std::iter::repeat(b']').take(1000));
+    bytes.extend(std::iter::repeat_n(b']', 1000));
     let result = import::otpauth(&bytes, import_time());
     assert!(result.is_err());
     let err = result.unwrap_err();

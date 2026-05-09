@@ -932,7 +932,7 @@ mod tests {
     use static_assertions::assert_not_impl_all;
     use zeroize::ZeroizeOnDrop;
 
-    fn _assert_zeroize_on_drop<T: ZeroizeOnDrop>() {}
+    fn assert_zeroize_on_drop<T: ZeroizeOnDrop>() {}
 
     // Phase B audit (DESIGN.md §8 / IMPLEMENTATION_PLAN_01_CORE.md
     // Phase B): the rollback snapshot owns secret-bearing
@@ -952,7 +952,7 @@ mod tests {
     /// alongside its corresponding domain-level coverage.
     #[test]
     fn vault_snapshot_secret_field_zeroizes_on_drop() {
-        _assert_zeroize_on_drop::<crate::domain::Secret>();
+        assert_zeroize_on_drop::<crate::domain::Secret>();
     }
 
     /// `CachedAeadKey::drop` runs an in-place zeroize and fires the
@@ -963,9 +963,10 @@ mod tests {
     fn cached_aead_key_drop_zeroizes_and_witnesses() {
         clear_observations();
         let mut bytes = [0u8; AEAD_KEY_LEN];
-        bytes.iter_mut().enumerate().for_each(|(i, b)| {
-            *b = (i as u8).wrapping_add(1);
-        });
+        for (i, b) in bytes.iter_mut().enumerate() {
+            // i is bounded by AEAD_KEY_LEN = 32, so the cast is exact.
+            *b = u8::try_from(i).unwrap().wrapping_add(1);
+        }
         let key = CachedAeadKey::from_zeroizing(Zeroizing::new(bytes));
         drop(key);
         let obs = take_observations();

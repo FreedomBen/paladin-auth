@@ -24,6 +24,12 @@ use crate::storage::build_encrypted_bundle_for_export;
 use crate::vault::Vault;
 
 /// Encrypt and serialize `vault`'s accounts into a Paladin bundle.
+//
+// `options` is taken by value: the §4.7 frozen public surface
+// documents `EncryptionOptions` as moved-in, mirroring the rest of
+// the crypto API where the caller surrenders the secret-bearing
+// parameter at the call boundary.
+#[allow(clippy::needless_pass_by_value)]
 pub fn encrypted(vault: &Vault, options: EncryptionOptions) -> Result<Vec<u8>> {
     let accounts = vault.iter().cloned().collect::<Vec<_>>();
     build_encrypted_bundle_for_export(accounts, &options)

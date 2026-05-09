@@ -23,6 +23,7 @@ use paladin_core::{
 };
 use secrecy::SecretString;
 use static_assertions::assert_not_impl_all;
+use std::fmt::Write as _;
 use std::os::unix::fs::PermissionsExt;
 use std::time::{Duration, SystemTime};
 
@@ -80,14 +81,14 @@ fn assert_no_secret_substring_in(label: &str, haystack: &str) {
          haystack: {haystack:?}"
     );
 
-    let hex_lower: String = FIXTURE_SECRET_BYTES
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect();
-    let hex_upper: String = FIXTURE_SECRET_BYTES
-        .iter()
-        .map(|b| format!("{b:02X}"))
-        .collect();
+    let mut hex_lower = String::with_capacity(FIXTURE_SECRET_BYTES.len() * 2);
+    for b in FIXTURE_SECRET_BYTES {
+        write!(hex_lower, "{b:02x}").unwrap();
+    }
+    let mut hex_upper = String::with_capacity(FIXTURE_SECRET_BYTES.len() * 2);
+    for b in FIXTURE_SECRET_BYTES {
+        write!(hex_upper, "{b:02X}").unwrap();
+    }
     assert!(
         !haystack.contains(&hex_lower),
         "{label} Debug output leaked lowercase-hex secret bytes"

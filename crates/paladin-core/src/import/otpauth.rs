@@ -60,9 +60,8 @@ pub fn otpauth(bytes: &[u8], import_time: SystemTime) -> Result<Vec<ValidatedAcc
 fn collect_json_array(trimmed: &str) -> Result<Vec<String>> {
     let value: serde_json::Value = serde_json::from_str(trimmed)
         .map_err(|e| PaladinError::validation("input", format!("invalid_json: {e}")))?;
-    let arr = match value {
-        serde_json::Value::Array(a) => a,
-        _ => return Err(PaladinError::validation("input", "expected_array")),
+    let serde_json::Value::Array(arr) = value else {
+        return Err(PaladinError::validation("input", "expected_array"));
     };
     let mut out = Vec::with_capacity(arr.len());
     for (idx, item) in arr.into_iter().enumerate() {

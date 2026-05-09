@@ -123,7 +123,7 @@ fn buffer_at_exactly_qr_rgba_max_passes_dimension_check() {
 #[test]
 fn buffer_length_mismatch_rejected() {
     // 4 × 4 × 4 = 64 bytes expected. Provide 32.
-    let err = import::read_qr_image_bytes(4, 4, &vec![0u8; 32]).unwrap_err();
+    let err = import::read_qr_image_bytes(4, 4, &[0u8; 32]).unwrap_err();
     let PaladinError::ValidationError { reason, .. } = err else {
         panic!("expected ValidationError");
     };
@@ -236,20 +236,20 @@ fn qr_image_bytes_with_non_otpauth_payload_rejects_with_source_index() {
 /// Stitch two QR payloads side-by-side into one RGBA8 buffer with a
 /// generous quiet zone in between so rqrr detects both grids.
 fn make_side_by_side_rgba(left: &str, right: &str) -> (u32, u32, Vec<u8>) {
-    let l = QrCode::new(left.as_bytes())
+    let left_qr = QrCode::new(left.as_bytes())
         .unwrap()
         .render::<Luma<u8>>()
         .min_dimensions(160, 160)
         .quiet_zone(true)
         .build();
-    let r = QrCode::new(right.as_bytes())
+    let right_qr = QrCode::new(right.as_bytes())
         .unwrap()
         .render::<Luma<u8>>()
         .min_dimensions(160, 160)
         .quiet_zone(true)
         .build();
-    let (lw, lh) = l.dimensions();
-    let (rw, rh) = r.dimensions();
+    let (lw, lh) = left_qr.dimensions();
+    let (rw, rh) = right_qr.dimensions();
     // Pad each side to the taller height.
     let h = lh.max(rh);
     // Leave a 32-pixel white gutter between the two QRs.
@@ -258,22 +258,22 @@ fn make_side_by_side_rgba(left: &str, right: &str) -> (u32, u32, Vec<u8>) {
     let mut rgba = vec![0xFFu8; (w as usize) * (h as usize) * 4];
     for y in 0..lh {
         for x in 0..lw {
-            let v = l.get_pixel(x, y).0[0];
+            let luma = left_qr.get_pixel(x, y).0[0];
             let dst = ((y as usize) * (w as usize) + (x as usize)) * 4;
-            rgba[dst] = v;
-            rgba[dst + 1] = v;
-            rgba[dst + 2] = v;
+            rgba[dst] = luma;
+            rgba[dst + 1] = luma;
+            rgba[dst + 2] = luma;
             rgba[dst + 3] = 0xFF;
         }
     }
     for y in 0..rh {
         for x in 0..rw {
-            let v = r.get_pixel(x, y).0[0];
+            let luma = right_qr.get_pixel(x, y).0[0];
             let dx = lw + gutter + x;
             let dst = ((y as usize) * (w as usize) + (dx as usize)) * 4;
-            rgba[dst] = v;
-            rgba[dst + 1] = v;
-            rgba[dst + 2] = v;
+            rgba[dst] = luma;
+            rgba[dst + 1] = luma;
+            rgba[dst + 2] = luma;
             rgba[dst + 3] = 0xFF;
         }
     }

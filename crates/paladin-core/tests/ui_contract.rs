@@ -47,13 +47,12 @@ fn clipboard_clear_secs_max_is_600() {
 // Pin the inferred types so a presentation crate that builds a
 // `Duration::from_secs(AUTO_LOCK_SECS_MAX)` or a millisecond timer
 // from `TICK_INTERVAL_MS` does not need to guess the integer width.
-#[test]
-fn ui_contract_constant_types_are_stable() {
-    let _hotp_reveal: u64 = paladin_core::HOTP_REVEAL_SECS;
-    let _qr_rgba: usize = paladin_core::QR_RGBA_MAX_BYTES;
-    let _tick: u64 = paladin_core::TICK_INTERVAL_MS;
-    let _auto_min: u32 = paladin_core::AUTO_LOCK_SECS_MIN;
-    let _auto_max: u32 = paladin_core::AUTO_LOCK_SECS_MAX;
-    let _clip_min: u32 = paladin_core::CLIPBOARD_CLEAR_SECS_MIN;
-    let _clip_max: u32 = paladin_core::CLIPBOARD_CLEAR_SECS_MAX;
-}
+// Compile-time `const _: T = ...` forces the named integer width on
+// each constant.
+const _HOTP_REVEAL_SECS_IS_U64: u64 = paladin_core::HOTP_REVEAL_SECS;
+const _QR_RGBA_MAX_BYTES_IS_USIZE: usize = paladin_core::QR_RGBA_MAX_BYTES;
+const _TICK_INTERVAL_MS_IS_U64: u64 = paladin_core::TICK_INTERVAL_MS;
+const _AUTO_LOCK_SECS_MIN_IS_U32: u32 = paladin_core::AUTO_LOCK_SECS_MIN;
+const _AUTO_LOCK_SECS_MAX_IS_U32: u32 = paladin_core::AUTO_LOCK_SECS_MAX;
+const _CLIPBOARD_CLEAR_SECS_MIN_IS_U32: u32 = paladin_core::CLIPBOARD_CLEAR_SECS_MIN;
+const _CLIPBOARD_CLEAR_SECS_MAX_IS_U32: u32 = paladin_core::CLIPBOARD_CLEAR_SECS_MAX;

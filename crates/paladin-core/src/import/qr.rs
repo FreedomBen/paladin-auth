@@ -131,10 +131,13 @@ fn validate_rgba_dims(width: u32, height: u32, rgba: &[u8]) -> Result<()> {
 fn rgba_to_luma(width: u32, height: u32, rgba: &[u8]) -> GrayImage {
     let mut buf: Vec<u8> = Vec::with_capacity((width as usize) * (height as usize));
     for pixel in rgba.chunks_exact(4) {
-        let r = pixel[0] as u32;
-        let g = pixel[1] as u32;
-        let b = pixel[2] as u32;
-        // BT.601: Y = 0.299 R + 0.587 G + 0.114 B (×1024 in fixed point)
+        let r = u32::from(pixel[0]);
+        let g = u32::from(pixel[1]);
+        let b = u32::from(pixel[2]);
+        // BT.601: Y = 0.299 R + 0.587 G + 0.114 B (×1024 in fixed point).
+        // Coefficients sum to 1024, each input is ≤ 255, so the shifted
+        // result is in 0..=255 by construction.
+        #[allow(clippy::cast_possible_truncation)]
         let y = ((r * 306 + g * 601 + b * 117) >> 10) as u8;
         buf.push(y);
     }

@@ -1250,6 +1250,11 @@ pub(crate) fn build_encrypted_bundle_for_export(
 ///
 /// Used by `import::paladin` and `classify_paladin_import_precheck` so
 /// CLI / TUI / GUI bundle imports share one decrypt path.
+//
+// `passphrase` is taken by value: this matches the rest of the
+// crypto API (callers surrender the secret at the call boundary)
+// and mirrors `Vault::open` / `set_passphrase` etc.
+#[allow(clippy::needless_pass_by_value)]
 pub(crate) fn decrypt_paladin_bundle(
     bytes: &[u8],
     passphrase: SecretString,

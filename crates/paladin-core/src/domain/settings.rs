@@ -147,7 +147,7 @@ mod tests {
     use super::*;
     use crate::error::ErrorKind;
 
-    fn assert_validation(err: PaladinError, field: &str) {
+    fn assert_validation(err: &PaladinError, field: &str) {
         assert_eq!(err.kind(), ErrorKind::ValidationError);
         let s = format!("{err}");
         assert!(s.contains(field), "want field {field:?} in {s}");
@@ -204,7 +204,7 @@ mod tests {
             "passphrase.required",
         ] {
             let err = parse_setting_key(bad).expect_err(bad);
-            assert_validation(err, "key");
+            assert_validation(&err, "key");
         }
     }
 
@@ -235,11 +235,11 @@ mod tests {
         ] {
             let err =
                 parse_setting_patch("auto_lock.enabled", bad).expect_err(&format!("bool {bad:?}"));
-            assert_validation(err, "auto_lock.enabled");
+            assert_validation(&err, "auto_lock.enabled");
 
             let err = parse_setting_patch("clipboard.clear_enabled", bad)
                 .expect_err(&format!("bool {bad:?}"));
-            assert_validation(err, "clipboard.clear_enabled");
+            assert_validation(&err, "clipboard.clear_enabled");
         }
     }
 
@@ -279,16 +279,16 @@ mod tests {
     fn parse_setting_patch_rejects_below_minimum_u32_values() {
         let auto_lock_below = (AUTO_LOCK_SECS_MIN - 1).to_string();
         let err = parse_setting_patch("auto_lock.timeout_secs", &auto_lock_below).unwrap_err();
-        assert_validation(err, "auto_lock.timeout_secs");
+        assert_validation(&err, "auto_lock.timeout_secs");
 
         for s in ["0", "1", "29"] {
             let err = parse_setting_patch("auto_lock.timeout_secs", s).unwrap_err();
-            assert_validation(err, "auto_lock.timeout_secs");
+            assert_validation(&err, "auto_lock.timeout_secs");
         }
 
         for s in ["0", "1", "4"] {
             let err = parse_setting_patch("clipboard.clear_secs", s).unwrap_err();
-            assert_validation(err, "clipboard.clear_secs");
+            assert_validation(&err, "clipboard.clear_secs");
         }
     }
 
@@ -296,11 +296,11 @@ mod tests {
     fn parse_setting_patch_rejects_above_maximum_u32_values() {
         let auto_lock_above = (AUTO_LOCK_SECS_MAX + 1).to_string();
         let err = parse_setting_patch("auto_lock.timeout_secs", &auto_lock_above).unwrap_err();
-        assert_validation(err, "auto_lock.timeout_secs");
+        assert_validation(&err, "auto_lock.timeout_secs");
 
         let clipboard_above = (CLIPBOARD_CLEAR_SECS_MAX + 1).to_string();
         let err = parse_setting_patch("clipboard.clear_secs", &clipboard_above).unwrap_err();
-        assert_validation(err, "clipboard.clear_secs");
+        assert_validation(&err, "clipboard.clear_secs");
     }
 
     #[test]
@@ -321,7 +321,7 @@ mod tests {
         ] {
             let err = parse_setting_patch("auto_lock.timeout_secs", bad)
                 .expect_err(&format!("u32 {bad:?}"));
-            assert_validation(err, "auto_lock.timeout_secs");
+            assert_validation(&err, "auto_lock.timeout_secs");
         }
     }
 
@@ -330,6 +330,6 @@ mod tests {
         // Even with a syntactically valid value, the unknown-key error
         // surfaces from `parse_setting_key` first.
         let err = parse_setting_patch("auto_lock.unknown", "true").unwrap_err();
-        assert_validation(err, "key");
+        assert_validation(&err, "key");
     }
 }

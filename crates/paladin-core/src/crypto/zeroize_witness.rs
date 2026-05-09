@@ -58,6 +58,8 @@ mod active {
         /// an in-place zeroize that preserves length).
         pub original_len: usize,
         /// `Vec::capacity` at observation time (unchanged by zeroize).
+        // Read only by feature-gated integration tests.
+        #[allow(dead_code)]
         pub capacity: usize,
         /// `true` iff every byte in the observed slice read as zero
         /// (i.e. the in-place zeroize ran).

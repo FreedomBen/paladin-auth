@@ -67,17 +67,20 @@ pub fn classify_paladin_import_precheck(
     forced_format: Option<ImportFormat>,
 ) -> PaladinImportPrecheck {
     match forced_format {
-        Some(ImportFormat::Otpauth | ImportFormat::Aegis | ImportFormat::QrImage)
-        | Some(ImportFormat::Unknown) => return PaladinImportPrecheck::NoPrompt,
+        Some(
+            ImportFormat::Otpauth
+            | ImportFormat::Aegis
+            | ImportFormat::QrImage
+            | ImportFormat::Unknown,
+        ) => return PaladinImportPrecheck::NoPrompt,
         Some(ImportFormat::Paladin) | None => {}
     }
 
     // Read just enough bytes to classify the header. We pass through
     // the same parser the importer uses so the verdict is byte-stable
     // with the actual decrypt path.
-    let bytes = match std::fs::read(path) {
-        Ok(b) => b,
-        Err(_) => return PaladinImportPrecheck::NoPrompt,
+    let Ok(bytes) = std::fs::read(path) else {
+        return PaladinImportPrecheck::NoPrompt;
     };
 
     if !bytes.starts_with(&PALADIN_MAGIC) {

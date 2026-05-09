@@ -259,7 +259,7 @@ fn missing_db_field_returns_validation_error() {
 #[test]
 fn deeply_nested_json_does_not_panic() {
     let mut bytes = vec![b'['; 1000];
-    bytes.extend(std::iter::repeat(b']').take(1000));
+    bytes.extend(std::iter::repeat_n(b']', 1000));
     let err = import::aegis_plaintext(&bytes, import_time()).unwrap_err();
     assert_eq!(err.kind(), ErrorKind::ValidationError);
 }
