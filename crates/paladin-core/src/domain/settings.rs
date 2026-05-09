@@ -10,7 +10,7 @@
 // share one validation source.
 
 use crate::error::{PaladinError, Result};
-use crate::storage::{
+use crate::ui_contract::{
     AUTO_LOCK_SECS_MAX, AUTO_LOCK_SECS_MIN, CLIPBOARD_CLEAR_SECS_MAX, CLIPBOARD_CLEAR_SECS_MIN,
 };
 

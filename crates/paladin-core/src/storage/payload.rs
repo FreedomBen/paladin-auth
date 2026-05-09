@@ -17,22 +17,9 @@ use bincode::{Decode, Encode};
 
 use crate::domain::Account;
 use crate::error::PaladinError;
-
-/// Inclusive lower bound for `Vault::set_auto_lock_timeout_secs`
-/// (DESIGN.md §4.7). Mirrored on CLI / TUI / GUI settings widgets.
-pub const AUTO_LOCK_SECS_MIN: u32 = 30;
-
-/// Inclusive upper bound for `Vault::set_auto_lock_timeout_secs`
-/// (24 h, DESIGN.md §4.7).
-pub const AUTO_LOCK_SECS_MAX: u32 = 86_400;
-
-/// Inclusive lower bound for `Vault::set_clipboard_clear_secs`
-/// (DESIGN.md §4.7).
-pub const CLIPBOARD_CLEAR_SECS_MIN: u32 = 5;
-
-/// Inclusive upper bound for `Vault::set_clipboard_clear_secs`
-/// (10 min, DESIGN.md §4.7).
-pub const CLIPBOARD_CLEAR_SECS_MAX: u32 = 600;
+use crate::ui_contract::{
+    AUTO_LOCK_SECS_MAX, AUTO_LOCK_SECS_MIN, CLIPBOARD_CLEAR_SECS_MAX, CLIPBOARD_CLEAR_SECS_MIN,
+};
 
 /// Maximum serialized `VaultPayload` size, in bytes (DESIGN.md §4.3).
 ///

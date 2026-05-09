@@ -792,7 +792,7 @@ Each step lands as its own commit. Tests come first.
   and rejects malformed / below-minimum values with `validation_error`.
   `Vault::apply_setting_patch` routes through the same typed setters so
   direct setters and CLI-style dotted patches cannot diverge.
-- [ ] Tests: `ui_contract` constants locked by fixture so neither TUI
+- [x] Tests: `ui_contract` constants locked by fixture so neither TUI
   nor GUI hard-codes a divergent value:
   - `HOTP_REVEAL_SECS == 120`
   - `QR_RGBA_MAX_BYTES == 64 * 1024 * 1024`

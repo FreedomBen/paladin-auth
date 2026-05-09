@@ -1,0 +1,45 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
+// Shared front-end contract constants (DESIGN.md §6 / §7).
+//
+// All constants the TUI and GUI need to agree on live here so neither
+// crate hard-codes a divergent value. The CLI is stateless and ignores
+// `clipboard.clear_secs`, but the bound constants still apply when it
+// validates `settings set` patches against the same grammar the TUI
+// and GUI use.
+//
+// Pinned by fixture in `tests/ui_contract.rs`.
+
+/// HOTP reveal countdown duration, in seconds (DESIGN.md §6 / §7).
+///
+/// Both the TUI countdown and GUI reveal panel hide the displayed HOTP
+/// code after this many seconds.
+pub const HOTP_REVEAL_SECS: u64 = 120;
+
+/// Maximum decoded RGBA buffer size accepted by the GUI QR scanner,
+/// in bytes (DESIGN.md §7). 64 MiB chosen to comfortably bound a 4096
+/// × 4096 RGBA image (64 MiB exact) without forcing the scanner into
+/// a partial-decode path.
+pub const QR_RGBA_MAX_BYTES: usize = 64 * 1024 * 1024;
+
+/// TUI / GUI redraw cadence, in milliseconds (DESIGN.md §6 / §7).
+///
+/// Drives the TOTP countdown gauge and the clipboard staleness check
+/// timer in both presentation crates so they refresh at the same rate.
+pub const TICK_INTERVAL_MS: u64 = 250;
+
+/// Inclusive lower bound for `Vault::set_auto_lock_timeout_secs`
+/// (DESIGN.md §4.7 / §5).
+pub const AUTO_LOCK_SECS_MIN: u32 = 30;
+
+/// Inclusive upper bound for `Vault::set_auto_lock_timeout_secs`
+/// — 24 h (DESIGN.md §4.7 / §5).
+pub const AUTO_LOCK_SECS_MAX: u32 = 86_400;
+
+/// Inclusive lower bound for `Vault::set_clipboard_clear_secs`
+/// (DESIGN.md §4.7 / §5).
+pub const CLIPBOARD_CLEAR_SECS_MIN: u32 = 5;
+
+/// Inclusive upper bound for `Vault::set_clipboard_clear_secs`
+/// — 10 min (DESIGN.md §4.7 / §5).
+pub const CLIPBOARD_CLEAR_SECS_MAX: u32 = 600;
