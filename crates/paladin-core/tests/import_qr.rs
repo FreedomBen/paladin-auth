@@ -231,6 +231,83 @@ fn qr_image_bytes_with_non_otpauth_payload_rejects_with_source_index() {
     assert_eq!(source_index, Some(0));
 }
 
+// ---------- Mixed multi-QR image ----------
+
+/// Stitch two QR payloads side-by-side into one RGBA8 buffer with a
+/// generous quiet zone in between so rqrr detects both grids.
+fn make_side_by_side_rgba(left: &str, right: &str) -> (u32, u32, Vec<u8>) {
+    let l = QrCode::new(left.as_bytes())
+        .unwrap()
+        .render::<Luma<u8>>()
+        .min_dimensions(160, 160)
+        .quiet_zone(true)
+        .build();
+    let r = QrCode::new(right.as_bytes())
+        .unwrap()
+        .render::<Luma<u8>>()
+        .min_dimensions(160, 160)
+        .quiet_zone(true)
+        .build();
+    let (lw, lh) = l.dimensions();
+    let (rw, rh) = r.dimensions();
+    // Pad each side to the taller height.
+    let h = lh.max(rh);
+    // Leave a 32-pixel white gutter between the two QRs.
+    let gutter: u32 = 32;
+    let w = lw + gutter + rw;
+    let mut rgba = vec![0xFFu8; (w as usize) * (h as usize) * 4];
+    for y in 0..lh {
+        for x in 0..lw {
+            let v = l.get_pixel(x, y).0[0];
+            let dst = ((y as usize) * (w as usize) + (x as usize)) * 4;
+            rgba[dst] = v;
+            rgba[dst + 1] = v;
+            rgba[dst + 2] = v;
+            rgba[dst + 3] = 0xFF;
+        }
+    }
+    for y in 0..rh {
+        for x in 0..rw {
+            let v = r.get_pixel(x, y).0[0];
+            let dx = lw + gutter + x;
+            let dst = ((y as usize) * (w as usize) + (dx as usize)) * 4;
+            rgba[dst] = v;
+            rgba[dst + 1] = v;
+            rgba[dst + 2] = v;
+            rgba[dst + 3] = 0xFF;
+        }
+    }
+    (w, h, rgba)
+}
+
+#[test]
+fn image_with_two_qrs_one_non_otpauth_rejects_batch_with_source_index_for_offender() {
+    // Construct an image whose two QRs decode to (a) a non-otpauth
+    // string and (b) a valid otpauth URI. The wrapping import must
+    // reject the batch and tag the source_index for the non-otpauth
+    // payload, not the otpauth one.
+    let (w, h, rgba) = make_side_by_side_rgba("https://example.com/not-otpauth", URI_TOTP_A);
+    let payloads = import::read_qr_image_bytes(w, h, &rgba).unwrap();
+    assert_eq!(payloads.len(), 2, "both QRs must decode for the test to be meaningful");
+    let bad_idx = payloads
+        .iter()
+        .position(|s| !s.starts_with("otpauth://"))
+        .expect("at least one decoded payload must be non-otpauth");
+    let err = import::qr_image_bytes(w, h, &rgba, import_time()).unwrap_err();
+    let PaladinError::ValidationError {
+        field,
+        reason,
+        source_index,
+        ..
+    } = err
+    else {
+        panic!("expected ValidationError, got {err:?}");
+    };
+    assert_eq!(field, "qr_image");
+    assert_eq!(reason, "non_otpauth_payload");
+    assert_eq!(source_index, Some(bad_idx));
+}
+
 // ---------- import::qr_image (file path) ----------
 
 #[test]

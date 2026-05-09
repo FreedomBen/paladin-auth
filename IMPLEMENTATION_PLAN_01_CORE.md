@@ -904,7 +904,7 @@ Each step lands as its own commit. Tests come first.
   non-matching inputs return `Unknown`. Detection inspects shape only and
   never rejects on emptiness — `detect(b"")` returns `Unknown` without
   erroring; the importer is what later returns `no_entries_to_import`.
-- [ ] Tests for parser robustness against malformed inputs that must not
+- [x] Tests for parser robustness against malformed inputs that must not
   panic: deeply nested JSON (`[[[[ ... ]]]]` 1000 levels) returns
   `validation_error` from the otpauth/aegis parsers without exhausting
   stack; truncated PNG (only the 8-byte magic) routed through
@@ -918,16 +918,18 @@ Each step lands as its own commit. Tests come first.
   `validation_error { field: "qr_image", reason: "image_too_large" }`),
   and at dimensions where `width * height * 4` would overflow `usize`
   (reject with `reason: "dimensions_overflow"`).
-- [ ] Fixture hygiene: any committed third-party import fixture (for example
+- [x] Fixture hygiene: any committed third-party import fixture (for example
   Aegis or authenticator-export samples) records source and license
   compatibility per §14; prefer synthetic fixtures when they cover the same
   parser behavior.
-- [ ] Tests for zero-account inputs rejected uniformly with
+  *(No third-party import fixtures committed; QR fixtures are generated
+  at test time via the `qrcode` dev-dependency.)*
+- [x] Tests for zero-account inputs rejected uniformly with
   `no_entries_to_import` at the importer call site: empty JSON `otpauth`
   array, blank / whitespace-only otpauth file, Aegis with empty
   `entries`, Paladin bundle that decodes to zero accounts, and image with
   no decoded QRs.
-- [ ] Tests for `import::otpauth`, `import::aegis_plaintext` (encrypted
+- [x] Tests for `import::otpauth`, `import::aegis_plaintext` (encrypted
   Aegis → typed `unsupported_encrypted_aegis`; non-`totp`/`hotp` entry →
   `unsupported_aegis_entry_type` with `source_index` and `entry_type`, batch
   rejected; field mapping from `name`, `issuer`, `info.secret`, `info.algo`,
@@ -949,20 +951,20 @@ Each step lands as its own commit. Tests come first.
   import_time`; timestamps preserved for Paladin bundle imports and fresh IDs
   assigned for inserted/appended rows; replacements keep destination ID and
   `created_at` while setting `updated_at = import_time`.
-- [ ] Tests for `ImportConflict` policies (`Skip` / `Replace` / `Append`)
+- [x] Tests for `ImportConflict` policies (`Skip` / `Replace` / `Append`)
   against running state, with collisions defined by the exact
   `(secret, issuer, label)` triple, including HOTP-to-HOTP `Replace`
   preserving `Hotp.counter` and cross-kind replace swapping the whole
   `kind`; `Replace` preserves the destination `id` and `created_at`.
-- [ ] Tests for `Vault::import_accounts` / `ImportReport`: imported, skipped,
+- [x] Tests for `Vault::import_accounts` / `ImportReport`: imported, skipped,
   replaced, and appended counts match the merge outcome; `accounts` lists IDs
   for imported / replaced / appended rows only, never skipped rows; warnings
   retain zero-based `source_index` values collected before merge-policy
   application.
-- [ ] Tests for batch atomicity: any validation failure aborts the batch;
+- [x] Tests for batch atomicity: any validation failure aborts the batch;
   warnings do not, and warnings are collected before merge-policy application
   so skipped rows can still report warnings.
-- [ ] Tests for `export::otpauth_list(&Vault)` (infallible JSON array of
+- [x] Tests for `export::otpauth_list(&Vault)` (infallible JSON array of
   URIs), `export::encrypted(&Vault, EncryptionOptions)` (wraps
   `VaultSettings::default()`, writes default or custom Argon2 params,
   round-trips with the importer, and rejects empty passphrase), and
@@ -978,19 +980,19 @@ Each step lands as its own commit. Tests come first.
   failure modes are distinct from `unsupported_plaintext_vault`
   (plaintext-mode Paladin file detected and rejected without
   decrypting).
-- [ ] Tests: plaintext-export → re-import round-trip — write
+- [x] Tests: plaintext-export → re-import round-trip — write
   `export::otpauth_list(&vault)` to bytes, route those bytes through
   `import::from_bytes` with `format: None`; `detect` returns
   `Otpauth`, the importer parses every URI, and the resulting
   `Vec<ValidatedAccount>` matches the source vault's accounts modulo
   the timestamp rule (`created_at = updated_at = import_time`).
-- [ ] Tests: encrypted export fresh-material generation — across `N = 64`
+- [x] Tests: encrypted export fresh-material generation — across `N = 64`
   encrypted exports of the same vault with the same passphrase and Argon2
   params, every observed bundle `salt` and `nonce` is pairwise distinct,
   every bundle imports successfully with the passphrase, and the exported
   account set is identical. This catches fixed-salt / fixed-nonce regressions
   in the export-only crypto path, which is separate from `Store` saves.
-- [ ] Tests for `classify_paladin_import_precheck(path, forced_format)`:
+- [x] Tests for `classify_paladin_import_precheck(path, forced_format)`:
   forced `otpauth` / `aegis` / `qr` return `NoPrompt` without probing for a
   Paladin passphrase; auto-detect and forced `paladin` return
   `PromptForPassphrase` for encrypted Paladin headers; return
@@ -1000,7 +1002,7 @@ Each step lands as its own commit. Tests come first.
   `NoPrompt` for missing files, unreadable files, and non-Paladin magic so
   `import::from_file` remains the owner of `read_import_file`,
   auto-detect, and `unsupported_import_format` errors.
-- [ ] Tests for import facade dispatch: `import::from_file` and
+- [x] Tests for import facade dispatch: `import::from_file` and
   `import::from_bytes` auto-detect with `format: None`, honor forced
   `ImportFormat` values, return `unsupported_import_format` for `Unknown`
   with `format: "unknown"` and for invalid forced/source combinations with
@@ -1009,24 +1011,24 @@ Each step lands as its own commit. Tests come first.
   and return `invalid_state` with `operation: "import_paladin"` /
   `state: "missing_passphrase"` when Paladin dispatch lacks a bundle
   passphrase.
-- [ ] Implement format-specific importers (`import::otpauth`,
+- [x] Implement format-specific importers (`import::otpauth`,
   `import::aegis_plaintext`, `import::paladin`, `import::qr_image`, and
   `import::qr_image_bytes`) plus the `Vault::import_accounts` merge-policy
   engine that produces `ImportReport`.
-- [ ] Implement `ImportOptions`, `import::from_file`, and
+- [x] Implement `ImportOptions`, `import::from_file`, and
   `import::from_bytes` as the public facade over `detect` and the
   format-specific importers. `from_bytes` decodes image-format bytes with
   `image` to RGBA8 before routing through `read_qr_image_bytes`.
-- [ ] Implement `PaladinImportPrecheck` and
+- [x] Implement `PaladinImportPrecheck` and
   `classify_paladin_import_precheck(path, forced_format)` in the import
   facade module, re-exported at the crate root. It reads only enough bytes to
   classify Paladin magic/header state and returns `NoPrompt`,
   `PromptForPassphrase`, or `Reject(PaladinError)` per the test table above
   so CLI / TUI / GUI import flows never duplicate Paladin bundle prompt logic.
-- [ ] Implement `export::otpauth_list(&Vault)` using the internal
+- [x] Implement `export::otpauth_list(&Vault)` using the internal
   `otpauth://` emitter and `export::encrypted(&Vault, EncryptionOptions)`
   using the Paladin encrypted bundle format with default `VaultSettings`.
-- [ ] Implement `read_qr_image(path: &Path) -> Result<Vec<String>>` and
+- [x] Implement `read_qr_image(path: &Path) -> Result<Vec<String>>` and
   `read_qr_image_bytes(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<String>>` in
   `import/qr.rs`. The path form loads the image from disk; the byte form
   accepts raw RGBA8 clipboard/image buffers, rejects zero dimensions,
