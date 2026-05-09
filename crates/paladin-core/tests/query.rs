@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// Phase G.14 — `parse_account_query` and `Vault::matching_accounts`
-// (DESIGN.md §4.7, §5).
+// Phase G.14 / G.15 — `parse_account_query`, `Vault::matching_accounts`,
+// and `Vault::shortest_unique_id_prefix` (DESIGN.md §4.7, §5).
 //
 // `parse_account_query`:
 //   * Non-`id:` input maps to `AccountQuery::Search(query.to_string())`,
@@ -21,6 +21,17 @@
 //     hyphens) starts with the validated prefix and return them in
 //     insertion order.
 //   * Both query kinds return an empty vec on no-match.
+//
+// `Vault::shortest_unique_id_prefix`:
+//   * Returns the minimum-length `id:` hex disambiguator (≥ 8 chars)
+//     that uniquely identifies an account among the live vault. Random
+//     UUIDv4 collisions on 8 hex chars are astronomically unlikely, so
+//     the integration tests here pin the no-collision floor, the
+//     missing-id `None` case, and the prefix invariants. Collision-
+//     driven extension paths (9 chars, full 32 chars, multi-account
+//     resolution) are unit-tested in `domain::query` against
+//     deterministic `AccountId::from_bytes` ids that integration tests
+//     cannot construct (`Account.id` is `pub(crate)`).
 
 use std::os::unix::fs::PermissionsExt;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -313,4 +324,100 @@ fn matching_accounts_id_prefix_returns_empty_when_no_account_matches() {
     // Random UUID is overwhelmingly unlikely to start with the chosen
     // 16-char prefix; this pins the no-match path.
     assert!(matches.is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// Vault::shortest_unique_id_prefix — Phase G.15.
+
+#[test]
+fn shortest_unique_id_prefix_returns_eight_chars_on_single_account_vault() {
+    let mut vault = empty_plaintext_vault();
+    let alice_id = vault.add(make_account("alice", None));
+
+    let prefix = vault
+        .shortest_unique_id_prefix(alice_id)
+        .expect("present id");
+    assert_eq!(prefix.len(), 8, "single-account vault hits the 8-char floor");
+    let canonical = id_hex(alice_id);
+    assert!(
+        canonical.starts_with(&prefix),
+        "{prefix} must be a prefix of canonical hex {canonical}"
+    );
+    assert!(prefix.bytes().all(|b| b.is_ascii_hexdigit()));
+    assert!(prefix.bytes().all(|b| !b.is_ascii_uppercase()));
+}
+
+#[test]
+fn shortest_unique_id_prefix_returns_eight_chars_when_no_collision() {
+    // Two random UUIDv4s essentially never share an 8-char hex prefix,
+    // so this pins the typical no-collision floor across a multi-
+    // account vault.
+    let mut vault = empty_plaintext_vault();
+    let alice_id = vault.add(make_account("alice", Some("Acme")));
+    let bob_id = vault.add(make_account("bob", Some("OtherCorp")));
+    let carol_id = vault.add(make_account("carol", None));
+
+    for id in [alice_id, bob_id, carol_id] {
+        let prefix = vault.shortest_unique_id_prefix(id).expect("present id");
+        assert_eq!(prefix.len(), 8, "no collision → 8-char floor for {id}");
+        assert!(id_hex(id).starts_with(&prefix));
+    }
+}
+
+#[test]
+fn shortest_unique_id_prefix_returns_none_for_id_not_in_vault() {
+    let mut vault = empty_plaintext_vault();
+    vault.add(make_account("alice", None));
+
+    // A freshly generated AccountId is overwhelmingly unlikely to
+    // collide with any vault entry. This pins the missing-id `None`
+    // contract.
+    let missing = AccountId::new();
+    assert_eq!(vault.shortest_unique_id_prefix(missing), None);
+}
+
+#[test]
+fn shortest_unique_id_prefix_returns_none_on_empty_vault() {
+    let vault = empty_plaintext_vault();
+    let any_id = AccountId::new();
+    assert_eq!(vault.shortest_unique_id_prefix(any_id), None);
+}
+
+#[test]
+fn shortest_unique_id_prefix_uniquely_resolves_to_one_account() {
+    // Whatever length the function picks, `matching_accounts(id:<prefix>)`
+    // must return exactly one account — the one we asked about. This
+    // ties the prefix back to the matcher contract end-to-end without
+    // controlled-id construction.
+    let mut vault = empty_plaintext_vault();
+    let alice_id = vault.add(make_account("alice", Some("Acme")));
+    let bob_id = vault.add(make_account("bob", Some("OtherCorp")));
+
+    for id in [alice_id, bob_id] {
+        let prefix = vault.shortest_unique_id_prefix(id).expect("present id");
+        let q = parse_account_query(&format!("id:{prefix}")).unwrap();
+        let matches = vault.matching_accounts(&q);
+        let ids: Vec<AccountId> = matches.iter().map(|a| a.id()).collect();
+        assert_eq!(ids, vec![id], "prefix must resolve to a single account");
+    }
+}
+
+#[test]
+fn shortest_unique_id_prefix_returns_lowercase_hex_only() {
+    let mut vault = empty_plaintext_vault();
+    let id = vault.add(make_account("alice", None));
+
+    let prefix = vault.shortest_unique_id_prefix(id).expect("present id");
+    assert!(
+        prefix.bytes().all(|b| b.is_ascii_hexdigit()),
+        "{prefix} must be ASCII hex"
+    );
+    assert!(
+        prefix.bytes().all(|b| !b.is_ascii_uppercase()),
+        "{prefix} must be lowercase"
+    );
+    assert!(
+        (8..=32).contains(&prefix.len()),
+        "{prefix} length must be 8..=32"
+    );
 }

@@ -778,7 +778,7 @@ Each step lands as its own commit. Tests come first.
   non-hex `id:` prefixes with `validation_error`
   (`field: "query"`). `Vault::matching_accounts` handles both search and
   id-prefix queries in insertion order.
-- [ ] Tests: `Vault::shortest_unique_id_prefix(id)` returns the minimum
+- [x] Tests: `Vault::shortest_unique_id_prefix(id)` returns the minimum
   `id:<hex>` disambiguator of at least 8 hex characters among current
   vault IDs, extends just far enough for collisions, returns the full
   32-character hex prefix when needed, and returns `None` for an ID not

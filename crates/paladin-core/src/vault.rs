@@ -191,6 +191,20 @@ impl Vault {
         crate::domain::query::matching_accounts(&self.accounts, query)
     }
 
+    /// Compute the shortest `id:` hex disambiguator that uniquely
+    /// identifies `id` among the current vault accounts (DESIGN.md
+    /// §4.7).
+    ///
+    /// The returned string is the lowercase hex prefix only — callers
+    /// (CLI candidate lists in particular) format it as `id:<hex>`.
+    /// The prefix is at least 8 chars and at most the full 32-char
+    /// canonical hex; the function returns `None` when `id` is not
+    /// present in the vault.
+    #[must_use]
+    pub fn shortest_unique_id_prefix(&self, id: AccountId) -> Option<String> {
+        crate::domain::query::shortest_unique_id_prefix(&self.accounts, id)
+    }
+
     /// Borrow the live `VaultSettings`.
     #[must_use]
     pub fn settings(&self) -> &VaultSettings {
