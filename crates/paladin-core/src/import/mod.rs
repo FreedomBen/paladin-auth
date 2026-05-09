@@ -20,12 +20,14 @@ mod aegis;
 mod facade;
 mod otpauth;
 mod paladin;
+mod precheck;
 mod qr;
 
 pub use aegis::aegis_plaintext;
 pub use facade::{from_bytes, from_file, ImportOptions};
 pub use otpauth::otpauth;
 pub use paladin::paladin;
+pub use precheck::{classify_paladin_import_precheck, PaladinImportPrecheck};
 pub use qr::{qr_image, qr_image_bytes, read_qr_image, read_qr_image_bytes};
 
 use crate::storage::header::MAGIC as PALADIN_MAGIC;

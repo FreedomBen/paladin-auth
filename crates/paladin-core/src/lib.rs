@@ -35,7 +35,9 @@ pub use domain::{
     ValidatedAccount, ValidationWarning,
 };
 pub use error::{ErrorKind, PaladinError, PermissionSubject, Result, TimeRangeKind, VaultMode};
-pub use import::{detect, ImportFormat, ImportOptions};
+pub use import::{
+    classify_paladin_import_precheck, detect, ImportFormat, ImportOptions, PaladinImportPrecheck,
+};
 pub use otpauth::parse_otpauth;
 pub use policy::{hotp_reveal_deadline, ClipboardClearPolicy, ClipboardClearToken, IdlePolicy};
 #[cfg(feature = "test-zeroize-witness")]
