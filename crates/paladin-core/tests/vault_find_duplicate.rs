@@ -162,16 +162,12 @@ fn ignores_unrelated_fields_like_digits_or_period() {
     // different `digits` / `period` are still duplicates per §5 —
     // the secret-bearing tuple is the equivalence relation.
     let mut vault = empty_plaintext_vault();
-    let stored_uri = format!(
-        "otpauth://totp/Acme:alice?secret={SECRET_A}&digits=6&period=30"
-    );
+    let stored_uri = format!("otpauth://totp/Acme:alice?secret={SECRET_A}&digits=6&period=30");
     let stored = parse_otpauth(&stored_uri, fixture_now()).unwrap();
     let stored_id = stored.account.id();
     vault.add(stored.account);
 
-    let candidate_uri = format!(
-        "otpauth://totp/Acme:alice?secret={SECRET_A}&digits=8&period=60"
-    );
+    let candidate_uri = format!("otpauth://totp/Acme:alice?secret={SECRET_A}&digits=8&period=60");
     let candidate = parse_otpauth(&candidate_uri, fixture_now()).unwrap();
     let hit = vault.find_duplicate(&candidate).expect("expected match");
     assert_eq!(hit.id(), stored_id);

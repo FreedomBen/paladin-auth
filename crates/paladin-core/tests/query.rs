@@ -127,8 +127,8 @@ fn id_prefix_with_minimum_8_lowercase_hex_chars() {
 #[test]
 fn id_prefix_with_maximum_32_hex_chars() {
     // The full 32-char canonical hex (no hyphens) is the upper bound.
-    let parsed = parse_account_query("id:0123456789abcdef0123456789abcdef")
-        .expect("32 hex chars is valid");
+    let parsed =
+        parse_account_query("id:0123456789abcdef0123456789abcdef").expect("32 hex chars is valid");
     assert_eq!(
         parsed,
         AccountQuery::IdPrefix {
@@ -149,8 +149,8 @@ fn id_prefix_normalizes_uppercase_hex_to_lowercase() {
         }
     );
 
-    let parsed = parse_account_query("id:DeAdBeEf01234567")
-        .expect("mixed-case uppercase A-F is valid");
+    let parsed =
+        parse_account_query("id:DeAdBeEf01234567").expect("mixed-case uppercase A-F is valid");
     assert_eq!(
         parsed,
         AccountQuery::IdPrefix {
@@ -211,9 +211,13 @@ fn id_prefix_with_non_hex_chars_is_validation_error() {
 #[test]
 fn id_prefix_with_unicode_digits_is_validation_error() {
     // Devanagari digits look like numbers but are not ASCII hex.
-    assert_query_validation_error("id:\u{0966}\u{0967}\u{0968}\u{0969}\u{096A}\u{096B}\u{096C}\u{096D}");
+    assert_query_validation_error(
+        "id:\u{0966}\u{0967}\u{0968}\u{0969}\u{096A}\u{096B}\u{096C}\u{096D}",
+    );
     // Fullwidth ASCII A is not the same code point as ASCII A.
-    assert_query_validation_error("id:\u{FF21}\u{FF21}\u{FF21}\u{FF21}\u{FF21}\u{FF21}\u{FF21}\u{FF21}");
+    assert_query_validation_error(
+        "id:\u{FF21}\u{FF21}\u{FF21}\u{FF21}\u{FF21}\u{FF21}\u{FF21}\u{FF21}",
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -339,7 +343,11 @@ fn shortest_unique_id_prefix_returns_eight_chars_on_single_account_vault() {
     let prefix = vault
         .shortest_unique_id_prefix(alice_id)
         .expect("present id");
-    assert_eq!(prefix.len(), 8, "single-account vault hits the 8-char floor");
+    assert_eq!(
+        prefix.len(),
+        8,
+        "single-account vault hits the 8-char floor"
+    );
     let canonical = id_hex(alice_id);
     assert!(
         canonical.starts_with(&prefix),

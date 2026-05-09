@@ -302,8 +302,7 @@ fn encrypted_create_rejects_when_parent_directory_grants_group_or_other() {
     let dir = vault_test_dir();
     fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o755)).unwrap();
     let path = dir.path().join("vault.bin");
-    let err =
-        Store::create(&path, VaultInit::Encrypted(cheap_options("hunter2"))).unwrap_err();
+    let err = Store::create(&path, VaultInit::Encrypted(cheap_options("hunter2"))).unwrap_err();
     match err {
         PaladinError::UnsafePermissions {
             subject,
@@ -317,7 +316,10 @@ fn encrypted_create_rejects_when_parent_directory_grants_group_or_other() {
         }
         other => panic!("expected UnsafePermissions, got {other:?}"),
     }
-    assert!(!path.exists(), "encrypted create must reject before writing");
+    assert!(
+        !path.exists(),
+        "encrypted create must reject before writing"
+    );
 }
 
 #[test]
@@ -337,8 +339,7 @@ fn encrypted_create_rejects_when_parent_directory_is_symlink() {
     unix_fs::symlink(real_dir.path(), &link_path).unwrap();
 
     let path = link_path.join("vault.bin");
-    let err =
-        Store::create(&path, VaultInit::Encrypted(cheap_options("hunter2"))).unwrap_err();
+    let err = Store::create(&path, VaultInit::Encrypted(cheap_options("hunter2"))).unwrap_err();
     match err {
         PaladinError::IoError { operation, .. } => assert_eq!(operation, "vault_dir_is_symlink"),
         other => panic!("expected vault_dir_is_symlink io_error, got {other:?}"),
@@ -351,8 +352,8 @@ fn encrypted_create_force_rejects_when_parent_directory_grants_group_or_other() 
     let dir = vault_test_dir();
     fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o755)).unwrap();
     let path = dir.path().join("vault.bin");
-    let err = Store::create_force(&path, VaultInit::Encrypted(cheap_options("hunter2")))
-        .unwrap_err();
+    let err =
+        Store::create_force(&path, VaultInit::Encrypted(cheap_options("hunter2"))).unwrap_err();
     match err {
         PaladinError::UnsafePermissions {
             subject,
@@ -366,7 +367,10 @@ fn encrypted_create_force_rejects_when_parent_directory_grants_group_or_other() 
         }
         other => panic!("expected UnsafePermissions, got {other:?}"),
     }
-    assert!(!path.exists(), "encrypted create_force must reject before writing");
+    assert!(
+        !path.exists(),
+        "encrypted create_force must reject before writing"
+    );
     assert!(!dir.path().join("vault.bin.tmp").exists());
 }
 
@@ -374,8 +378,7 @@ fn encrypted_create_force_rejects_when_parent_directory_grants_group_or_other() 
 fn encrypted_create_force_writes_primary_with_0600_permissions() {
     let dir = vault_test_dir();
     let path = dir.path().join("vault.bin");
-    let _ =
-        Store::create_force(&path, VaultInit::Encrypted(cheap_options("hunter2"))).unwrap();
+    let _ = Store::create_force(&path, VaultInit::Encrypted(cheap_options("hunter2"))).unwrap();
     let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
     assert_eq!(
         mode, 0o600,
@@ -389,7 +392,10 @@ fn encrypted_create_force_with_no_existing_primary_writes_fresh_vault() {
     let path = dir.path().join("vault.bin");
     let (vault, store) =
         Store::create_force(&path, VaultInit::Encrypted(cheap_options("hunter2"))).unwrap();
-    assert!(path.exists(), "encrypted create_force must write the primary");
+    assert!(
+        path.exists(),
+        "encrypted create_force must write the primary"
+    );
     assert!(
         !dir.path().join("vault.bin.bak").exists(),
         "no prior primary → no rotation → no .bak"
@@ -454,8 +460,7 @@ fn encrypted_create_force_overwrites_existing_backup_during_rotation() {
     fs::write(&bak, b"poisoned previous backup").unwrap();
     fs::set_permissions(&bak, fs::Permissions::from_mode(0o600)).unwrap();
 
-    let _ =
-        Store::create_force(&path, VaultInit::Encrypted(cheap_options("rotated"))).unwrap();
+    let _ = Store::create_force(&path, VaultInit::Encrypted(cheap_options("rotated"))).unwrap();
     let new_bak = fs::read(&bak).unwrap();
     assert_eq!(
         new_bak, pre_primary,

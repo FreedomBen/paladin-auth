@@ -32,6 +32,15 @@ pub enum WitnessSite {
     /// The plaintext buffer returned by AEAD decrypt before / after
     /// `decode_vault_payload` consumes it.
     DecryptPostAead,
+    /// The 32-byte AEAD key cached on `Vault` (Phase H). Observed
+    /// from inside `EncryptedCache`'s key-buffer drop after the
+    /// in-place zeroize but before the inline storage is reused.
+    EncryptedCacheKeyDrop,
+    /// The retained passphrase bytes cached on `Vault` (Phase H).
+    /// Observed from inside `EncryptedCache`'s passphrase-buffer drop
+    /// after the in-place zeroize but before the heap allocation
+    /// is freed.
+    EncryptedCachePassphraseDrop,
 }
 
 #[cfg(any(test, feature = "test-zeroize-witness"))]

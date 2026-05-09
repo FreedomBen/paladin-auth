@@ -216,9 +216,8 @@ fn apply_setting_patch_matches_direct_setters_for_auto_lock_timeout() {
     );
 
     let direct_err = a.set_auto_lock_timeout_secs(AUTO_LOCK_SECS_MIN - 1);
-    let patch_err = b.apply_setting_patch(SettingPatch::AutoLockTimeoutSecs(
-        AUTO_LOCK_SECS_MIN - 1,
-    ));
+    let patch_err =
+        b.apply_setting_patch(SettingPatch::AutoLockTimeoutSecs(AUTO_LOCK_SECS_MIN - 1));
     assert!(direct_err.is_err() && patch_err.is_err());
     assert_eq!(direct_err.unwrap_err().kind(), ErrorKind::ValidationError);
     assert_eq!(patch_err.unwrap_err().kind(), ErrorKind::ValidationError);
@@ -229,7 +228,8 @@ fn apply_setting_patch_matches_direct_setters_for_clipboard_clear_secs() {
     let mut a = empty_plaintext_vault();
     let mut b = empty_plaintext_vault();
 
-    a.set_clipboard_clear_secs(CLIPBOARD_CLEAR_SECS_MAX).unwrap();
+    a.set_clipboard_clear_secs(CLIPBOARD_CLEAR_SECS_MAX)
+        .unwrap();
     b.apply_setting_patch(SettingPatch::ClipboardClearSecs(CLIPBOARD_CLEAR_SECS_MAX))
         .unwrap();
     assert_eq!(

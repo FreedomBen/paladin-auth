@@ -863,15 +863,15 @@ Each step lands as its own commit. Tests come first.
 
 ### Phase H — Passphrase management (Milestone 2)
 
-- [ ] Tests: `set_passphrase` (plaintext → encrypted), `change_passphrase`
+- [x] Tests: `set_passphrase` (plaintext → encrypted), `change_passphrase`
   (encrypted → encrypted), `remove_passphrase` (encrypted → plaintext); each
   encrypted transition takes `EncryptionOptions`, writes its default or custom
   Argon2 params, uses a fresh salt and primary nonce; encrypted `.bak` writes
   use their own fresh nonce under the new key (set / change), while remove
   writes `.bak` plaintext.
-- [ ] Tests: pre-commit failure leaves primary file untouched and rolls
+- [x] Tests: pre-commit failure leaves primary file untouched and rolls
   in-memory mode/key back; post-commit failure surfaces durability-unconfirmed.
-- [ ] Tests: cached key/passphrase lifecycle — pre-commit failure leaves
+- [x] Tests: cached key/passphrase lifecycle — pre-commit failure leaves
   the cache matching the previous mode (prior key+passphrase for
   encrypted, no cache for plaintext); successful commit (or
   durability-unconfirmed) replaces the cache to match the new on-disk
@@ -884,7 +884,7 @@ Each step lands as its own commit. Tests come first.
   allocation while old bytes leak" regression must fail this test.
   The same assertion is run for the cached `SecretString`
   passphrase.
-- [ ] Tests: wrong-starting-state calls return the stable DESIGN §4.7
+- [x] Tests: wrong-starting-state calls return the stable DESIGN §4.7
   `invalid_state` operation/state pairs (`set_passphrase` /
   `already_encrypted`, `change_passphrase` / `not_encrypted`,
   `remove_passphrase` / `not_encrypted`) before generating new crypto
@@ -892,7 +892,7 @@ Each step lands as its own commit. Tests come first.
   passphrases with `invalid_passphrase` and `reason: "zero_length"`;
   non-empty whitespace-only and Unicode passphrases are treated as bytes
   and are not trimmed or normalized.
-- [ ] Implement `set_passphrase(store, options)`,
+- [x] Implement `set_passphrase(store, options)`,
   `change_passphrase(store, options)`, and `remove_passphrase(store)` on
   `Vault` going through the §4.3 atomic-write + backup pipeline.
 

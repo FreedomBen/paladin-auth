@@ -69,14 +69,18 @@ fn set_auto_lock_enabled_does_not_disturb_other_fields() {
 #[test]
 fn set_auto_lock_timeout_secs_accepts_lower_bound() {
     let mut vault = empty_plaintext_vault();
-    vault.set_auto_lock_timeout_secs(AUTO_LOCK_SECS_MIN).unwrap();
+    vault
+        .set_auto_lock_timeout_secs(AUTO_LOCK_SECS_MIN)
+        .unwrap();
     assert_eq!(vault.settings().auto_lock_timeout_secs(), 30);
 }
 
 #[test]
 fn set_auto_lock_timeout_secs_accepts_upper_bound() {
     let mut vault = empty_plaintext_vault();
-    vault.set_auto_lock_timeout_secs(AUTO_LOCK_SECS_MAX).unwrap();
+    vault
+        .set_auto_lock_timeout_secs(AUTO_LOCK_SECS_MAX)
+        .unwrap();
     assert_eq!(vault.settings().auto_lock_timeout_secs(), 86_400);
 }
 

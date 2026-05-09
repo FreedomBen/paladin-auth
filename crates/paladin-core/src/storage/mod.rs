@@ -29,6 +29,8 @@
 // * `InitPrecheck` + `classify_init_precheck`
 // * `Store` + `VaultLock` + `VaultInit`
 
+use std::cell::Cell;
+use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 #[cfg(unix)]
@@ -36,12 +38,13 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 use secrecy::SecretString;
+use zeroize::Zeroizing;
 
 use crate::crypto::{
     aead_decrypt, aead_encrypt, argon2id_derive_key, Argon2Params, EncryptionOptions, WitnessSite,
     ZeroizingBytes, AEAD_KEY_LEN, AEAD_NONCE_LEN,
 };
-use crate::error::{PaladinError, Result, VaultMode};
+use crate::error::{ErrorKind, PaladinError, Result, VaultMode};
 
 pub(crate) mod header;
 pub mod path;
@@ -216,10 +219,26 @@ pub enum VaultInit {
 /// (DESIGN.md §4.4): Argon2id `salt` and cost `params` are reused; the
 /// nonce is regenerated per save and lives in the encrypted header.
 /// Reset on passphrase transitions (Phase H).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct EncryptedSaveContext {
     pub(crate) salt: [u8; SALT_LEN],
     pub(crate) params: Argon2Params,
+}
+
+/// Pre-staged crypto material for a passphrase transition that
+/// produces an encrypted vault (Phase H).
+///
+/// Built by [`Store::prepare_encryption`] from caller-supplied
+/// [`EncryptionOptions`]: a fresh CSPRNG salt, the new
+/// [`Argon2Params`], and the 32-byte AEAD key derived once via
+/// Argon2id. Consumed by [`Store::commit_encryption`] which performs
+/// the §4.3 atomic write under this material and updates the
+/// `Store`'s in-memory mode + crypto context on success or
+/// post-commit durability-unconfirmed.
+pub(crate) struct PendingEncryption {
+    pub(crate) salt: [u8; SALT_LEN],
+    pub(crate) params: Argon2Params,
+    pub(crate) key: Zeroizing<[u8; AEAD_KEY_LEN]>,
 }
 
 /// Per-vault filesystem context.
@@ -229,11 +248,27 @@ pub(crate) struct EncryptedSaveContext {
 /// mode; the encrypted variant additionally carries the in-header
 /// Argon2 `salt` + cost `params` so regular saves preserve them
 /// (§4.4).
-#[derive(Debug)]
+///
+/// The `mode` and `encrypted_context` fields use [`Cell`] for
+/// interior mutability so passphrase transitions
+/// ([`crate::Vault::set_passphrase`] / `change_passphrase` /
+/// `remove_passphrase`) can update the Store's routing state through
+/// a `&Store` reference (matching the public §4.7 surface) without
+/// taking `&mut Store` from the caller.
 pub struct Store {
     path: PathBuf,
-    mode: VaultMode,
-    encrypted_context: Option<EncryptedSaveContext>,
+    mode: Cell<VaultMode>,
+    encrypted_context: Cell<Option<EncryptedSaveContext>>,
+}
+
+impl fmt::Debug for Store {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Store")
+            .field("path", &self.path)
+            .field("mode", &self.mode.get())
+            .field("encrypted_context", &self.encrypted_context.get())
+            .finish()
+    }
 }
 
 impl Store {
@@ -314,7 +349,7 @@ impl Store {
         payload: &VaultPayload,
         cached_key: Option<&[u8; AEAD_KEY_LEN]>,
     ) -> Result<()> {
-        match (self.mode, cached_key, self.encrypted_context.as_ref()) {
+        match (self.mode.get(), cached_key, self.encrypted_context.get()) {
             (VaultMode::Plaintext, None, None) => save_plaintext(&self.path, payload),
             (VaultMode::Encrypted, Some(key), Some(ctx)) => {
                 save_encrypted(&self.path, payload, &ctx.salt, ctx.params, key)
@@ -324,6 +359,110 @@ impl Store {
                  plaintext stores carry no key or context; encrypted stores carry both"
             ),
         }
+    }
+
+    /// Pre-stage crypto material for a Phase H passphrase transition
+    /// that produces an encrypted vault.
+    ///
+    /// Validates the supplied [`Argon2Params`], generates a fresh
+    /// 16-byte salt from the CSPRNG, and derives the 32-byte AEAD key
+    /// once via Argon2id. The returned [`PendingEncryption`] is
+    /// consumed by [`Store::commit_encryption`].
+    ///
+    /// Surfaces:
+    ///
+    /// * `validation_error` from [`Argon2Params::validate`] for
+    ///   out-of-range params,
+    /// * `io_error { operation: "csprng_read" }` for a
+    ///   `getrandom` failure (or the `csprng_read` fault hook),
+    /// * `kdf_allocation_failure` from the Argon2id allocation
+    ///   path (or the `kdf_allocation` fault hook).
+    // Method on Store (rather than a free fn) so callers reach it
+    // via the same handle that holds the on-disk vault context;
+    // the body does not need any of `self`'s fields, but pairing it
+    // with `commit_encryption` keeps the transition entry points
+    // co-located with their state-update partners.
+    #[allow(clippy::unused_self)]
+    pub(crate) fn prepare_encryption(
+        &self,
+        options: &EncryptionOptions,
+    ) -> Result<PendingEncryption> {
+        options.kdf_params.validate()?;
+        let salt = generate_salt()?;
+        let key = derive_aead_key(&options.passphrase, &salt, &options.kdf_params)?;
+        Ok(PendingEncryption {
+            salt,
+            params: options.kdf_params,
+            key,
+        })
+    }
+
+    /// Run the §4.3 atomic-write pipeline for a passphrase transition
+    /// that ends in encrypted mode (`set_passphrase`,
+    /// `change_passphrase`).
+    ///
+    /// Stages a fresh primary file encrypted under
+    /// `pending.{salt,params,key}` (with a CSPRNG nonce N1) *and* a
+    /// fresh backup file encrypted under the same key (with a
+    /// separate CSPRNG nonce N2 ≠ N1) so the rotated `.bak` cannot
+    /// retain the prior plaintext / prior key's ciphertext. Both temp
+    /// files are `fsync`ed and renamed into place; commit point is
+    /// the primary rename.
+    ///
+    /// On `Ok(())` and on the post-commit `save_durability_unconfirmed`
+    /// error path, the Store's `mode` is set to
+    /// [`VaultMode::Encrypted`] and the in-memory
+    /// [`EncryptedSaveContext`] is replaced with `(salt, params)` so
+    /// subsequent `Vault::save` calls reuse the new crypto. On any
+    /// pre-commit error, Store state is unchanged so the rollback
+    /// matches the unchanged on-disk primary.
+    pub(crate) fn commit_encryption(
+        &self,
+        payload: &VaultPayload,
+        pending: &PendingEncryption,
+    ) -> Result<()> {
+        let result = save_encrypted_transition(
+            &self.path,
+            payload,
+            &pending.salt,
+            pending.params,
+            &pending.key,
+        );
+        let should_apply_state = match &result {
+            Ok(()) => true,
+            Err(err) => err.kind() == ErrorKind::SaveDurabilityUnconfirmed,
+        };
+        if should_apply_state {
+            self.mode.set(VaultMode::Encrypted);
+            self.encrypted_context.set(Some(EncryptedSaveContext {
+                salt: pending.salt,
+                params: pending.params,
+            }));
+        }
+        result
+    }
+
+    /// Run the §4.3 atomic-write pipeline for a passphrase transition
+    /// that ends in plaintext mode (`remove_passphrase`).
+    ///
+    /// Stages a fresh primary plaintext vault file *and* a fresh
+    /// plaintext backup carrying the same payload, so the rotated
+    /// `.bak` is recoverable without the just-removed passphrase.
+    /// Commit point is the primary rename. Same Store state-update
+    /// rule as [`Store::commit_encryption`]: applied on success or
+    /// post-commit durability-unconfirmed; unchanged on pre-commit
+    /// failure.
+    pub(crate) fn commit_plaintext(&self, payload: &VaultPayload) -> Result<()> {
+        let result = save_plaintext_transition(&self.path, payload);
+        let should_apply_state = match &result {
+            Ok(()) => true,
+            Err(err) => err.kind() == ErrorKind::SaveDurabilityUnconfirmed,
+        };
+        if should_apply_state {
+            self.mode.set(VaultMode::Plaintext);
+            self.encrypted_context.set(None);
+        }
+        result
     }
 }
 
@@ -352,8 +491,8 @@ impl Store {
         );
         Self {
             path,
-            mode,
-            encrypted_context: None,
+            mode: Cell::new(mode),
+            encrypted_context: Cell::new(None),
         }
     }
 }
@@ -374,8 +513,8 @@ fn create_plaintext(path: &Path) -> Result<(crate::Vault, Store)> {
         crate::Vault::empty(),
         Store {
             path: path.to_path_buf(),
-            mode: VaultMode::Plaintext,
-            encrypted_context: None,
+            mode: Cell::new(VaultMode::Plaintext),
+            encrypted_context: Cell::new(None),
         },
     ))
 }
@@ -464,8 +603,8 @@ fn open_plaintext(path: &Path) -> Result<(crate::Vault, Store)> {
         crate::Vault::from_payload(payload),
         Store {
             path: path.to_path_buf(),
-            mode: VaultMode::Plaintext,
-            encrypted_context: None,
+            mode: Cell::new(VaultMode::Plaintext),
+            encrypted_context: Cell::new(None),
         },
     ))
 }
@@ -686,8 +825,8 @@ fn create_force_plaintext(path: &Path) -> Result<(crate::Vault, Store)> {
         vault,
         Store {
             path: path.to_path_buf(),
-            mode: VaultMode::Plaintext,
-            encrypted_context: None,
+            mode: Cell::new(VaultMode::Plaintext),
+            encrypted_context: Cell::new(None),
         },
     ))
 }
@@ -926,8 +1065,8 @@ fn create_encrypted_internal(
     };
     let store = Store {
         path: path.to_path_buf(),
-        mode: VaultMode::Encrypted,
-        encrypted_context: Some(context.clone()),
+        mode: Cell::new(VaultMode::Encrypted),
+        encrypted_context: Cell::new(Some(context)),
     };
     let vault = crate::Vault::empty_encrypted(opts.passphrase, key.clone());
 
@@ -1063,11 +1202,11 @@ fn open_encrypted(path: &Path, passphrase: SecretString) -> Result<(crate::Vault
 
     let store = Store {
         path: path.to_path_buf(),
-        mode: VaultMode::Encrypted,
-        encrypted_context: Some(EncryptedSaveContext {
+        mode: Cell::new(VaultMode::Encrypted),
+        encrypted_context: Cell::new(Some(EncryptedSaveContext {
             salt: trailer.salt,
             params,
-        }),
+        })),
     };
     Ok((
         crate::Vault::from_payload_encrypted(payload, passphrase, key),
@@ -1346,6 +1485,140 @@ fn save_encrypted_clobber(
             } else {
                 None
             },
+        });
+    }
+
+    if fault::post_commit_should_fail() || fsync_dir(parent).is_err() {
+        return Err(PaladinError::SaveDurabilityUnconfirmed);
+    }
+
+    Ok(())
+}
+
+/// §4.3 atomic-write pipeline for a Phase H passphrase transition
+/// that ends in encrypted mode (`set_passphrase`,
+/// `change_passphrase`).
+///
+/// Stages a fresh primary file (encrypted under
+/// `(salt, params, key)` with a CSPRNG nonce) *and* a fresh backup
+/// file encrypted under the same key with a separately-generated
+/// CSPRNG nonce, so the rotated `.bak` does not retain the prior
+/// plaintext (set) or prior key's ciphertext (change). Both temp
+/// files are `fsync`ed and renamed into place; the primary rename is
+/// the commit point. Pre-commit failures surface as
+/// `save_not_committed`; post-commit `fsync` failures surface as
+/// `save_durability_unconfirmed` (the on-disk primary already
+/// carries the new mode/key).
+fn save_encrypted_transition(
+    path: &Path,
+    payload: &VaultPayload,
+    salt: &[u8; SALT_LEN],
+    params: Argon2Params,
+    key: &[u8; AEAD_KEY_LEN],
+) -> Result<()> {
+    let parent = path.parent().ok_or_else(|| PaladinError::IoError {
+        operation: "resolve_vault_parent",
+        source: io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "vault path has no parent directory",
+        ),
+    })?;
+
+    // build_encrypted_on_disk generates a fresh CSPRNG nonce on each
+    // call, so two calls produce two different on-disk byte strings
+    // even when the payload + key + salt + params are identical.
+    let primary_on_disk = build_encrypted_on_disk(payload, salt, params, key)?;
+    let backup_on_disk = build_encrypted_on_disk(payload, salt, params, key)?;
+
+    let primary_tmp = append_suffix(path, ".tmp");
+    let bak_path = append_suffix(path, ".bak");
+    let bak_tmp = append_suffix(path, ".bak.tmp");
+
+    if let Err(err) = stage_temp_file(&primary_tmp, &primary_on_disk, "write_vault_tmp") {
+        let _ = fs::remove_file(&primary_tmp);
+        return Err(err);
+    }
+
+    if let Err(err) = stage_temp_file(&bak_tmp, &backup_on_disk, "write_backup_tmp") {
+        let _ = fs::remove_file(&primary_tmp);
+        let _ = fs::remove_file(&bak_tmp);
+        return Err(err);
+    }
+
+    if let Err(err) = fs::rename(&bak_tmp, &bak_path) {
+        let _ = fs::remove_file(&primary_tmp);
+        let _ = fs::remove_file(&bak_tmp);
+        return Err(PaladinError::IoError {
+            operation: "rename_backup",
+            source: err,
+        });
+    }
+
+    if fault::pre_commit_should_fail() || fs::rename(&primary_tmp, path).is_err() {
+        let _ = fs::remove_file(&primary_tmp);
+        return Err(PaladinError::SaveNotCommitted {
+            committed: false,
+            backup_path: None,
+        });
+    }
+
+    if fault::post_commit_should_fail() || fsync_dir(parent).is_err() {
+        return Err(PaladinError::SaveDurabilityUnconfirmed);
+    }
+
+    Ok(())
+}
+
+/// §4.3 atomic-write pipeline for a Phase H passphrase transition
+/// that ends in plaintext mode (`remove_passphrase`).
+///
+/// Stages a fresh plaintext primary *and* a fresh plaintext backup
+/// (same payload bytes), so the rotated `.bak` is recoverable
+/// without the just-removed passphrase. Same pre-commit /
+/// post-commit error rules as `save_encrypted_transition`.
+fn save_plaintext_transition(path: &Path, payload: &VaultPayload) -> Result<()> {
+    let parent = path.parent().ok_or_else(|| PaladinError::IoError {
+        operation: "resolve_vault_parent",
+        source: io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "vault path has no parent directory",
+        ),
+    })?;
+
+    let payload_bytes = encode_vault_payload(payload)?;
+    let mut on_disk = Vec::with_capacity(PLAINTEXT_HEADER_LEN + payload_bytes.len());
+    header::write_plaintext_header(&mut on_disk);
+    on_disk.extend_from_slice(&payload_bytes);
+
+    let primary_tmp = append_suffix(path, ".tmp");
+    let bak_path = append_suffix(path, ".bak");
+    let bak_tmp = append_suffix(path, ".bak.tmp");
+
+    if let Err(err) = stage_temp_file(&primary_tmp, &on_disk, "write_vault_tmp") {
+        let _ = fs::remove_file(&primary_tmp);
+        return Err(err);
+    }
+
+    if let Err(err) = stage_temp_file(&bak_tmp, &on_disk, "write_backup_tmp") {
+        let _ = fs::remove_file(&primary_tmp);
+        let _ = fs::remove_file(&bak_tmp);
+        return Err(err);
+    }
+
+    if let Err(err) = fs::rename(&bak_tmp, &bak_path) {
+        let _ = fs::remove_file(&primary_tmp);
+        let _ = fs::remove_file(&bak_tmp);
+        return Err(PaladinError::IoError {
+            operation: "rename_backup",
+            source: err,
+        });
+    }
+
+    if fault::pre_commit_should_fail() || fs::rename(&primary_tmp, path).is_err() {
+        let _ = fs::remove_file(&primary_tmp);
+        return Err(PaladinError::SaveNotCommitted {
+            committed: false,
+            backup_path: None,
         });
     }
 

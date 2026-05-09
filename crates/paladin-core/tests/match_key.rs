@@ -121,10 +121,7 @@ fn distinct_issuer_or_label_produces_distinct_keys() {
         account_match_key(&alice_acme),
         account_match_key(&alice_other)
     );
-    assert_ne!(
-        account_match_key(&alice_acme),
-        account_match_key(&bob_acme)
-    );
+    assert_ne!(account_match_key(&alice_acme), account_match_key(&bob_acme));
     assert_ne!(
         account_match_key(&alice_acme),
         account_match_key(&alice_no_issuer)

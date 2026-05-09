@@ -16,10 +16,11 @@
 use std::fmt;
 use std::time::SystemTime;
 
-use secrecy::SecretString;
-use zeroize::Zeroizing;
+use secrecy::{ExposeSecret, SecretString};
+use zeroize::{Zeroize, Zeroizing};
 
-use crate::crypto::AEAD_KEY_LEN;
+use crate::crypto::zeroize_witness::{observe, WitnessSite};
+use crate::crypto::{EncryptionOptions, AEAD_KEY_LEN};
 use crate::domain::validation::{system_time_to_secs_for, validate_label};
 use crate::domain::{
     Account, AccountId, AccountSummary, Code, ImportConflict, ImportReport, ImportWarning, OtpKind,
@@ -30,19 +31,122 @@ use crate::otp::{hotp, totp};
 use crate::storage::payload::VaultPayload;
 use crate::storage::{Store, VaultSettings};
 
+/// Cached AEAD key bytes (DESIGN.md §4.4 / Phase H).
+///
+/// Inline 32-byte buffer wrapped so that `Drop` runs an in-place
+/// zeroize *and* fires the `EncryptedCacheKeyDrop` witness before the
+/// stack/inline storage is reused. A regression that swaps this for
+/// a raw `[u8; AEAD_KEY_LEN]` (or a buffer container that does not
+/// zeroize-before-deallocation) leaves the witness silent and fails
+/// the Phase H zeroize tests.
+pub(crate) struct CachedAeadKey {
+    bytes: [u8; AEAD_KEY_LEN],
+}
+
+impl CachedAeadKey {
+    // `value` is taken by value rather than by reference so the
+    // caller's outer `Zeroizing<[u8; AEAD_KEY_LEN]>` is moved into
+    // this constructor and dropped at the end of the call: that
+    // drop runs the upstream `Zeroizing` zeroize on the caller's
+    // copy *before* the function returns, leaving only this
+    // wrapper's `bytes` field as the live key buffer.
+    #[allow(clippy::needless_pass_by_value)]
+    pub(crate) fn from_zeroizing(value: Zeroizing<[u8; AEAD_KEY_LEN]>) -> Self {
+        Self { bytes: *value }
+    }
+
+    pub(crate) fn as_bytes(&self) -> &[u8; AEAD_KEY_LEN] {
+        &self.bytes
+    }
+}
+
+impl Drop for CachedAeadKey {
+    fn drop(&mut self) {
+        self.bytes.zeroize();
+        observe(
+            WitnessSite::EncryptedCacheKeyDrop,
+            &self.bytes,
+            AEAD_KEY_LEN,
+        );
+    }
+}
+
+/// Cached passphrase bytes (UTF-8) for an encrypted vault
+/// (DESIGN.md §4.4 / Phase H).
+///
+/// Heap-owned `Box<[u8]>` so the bytes live at a stable allocation
+/// across passphrase transitions. `Drop` runs an in-place zeroize and
+/// fires the `EncryptedCachePassphraseDrop` witness before the
+/// allocation is freed; a regression that "replaces with a new
+/// allocation while old bytes leak" leaves the witness silent.
+pub(crate) struct CachedPassphrase {
+    bytes: Box<[u8]>,
+}
+
+impl CachedPassphrase {
+    pub(crate) fn from_secret(secret: &SecretString) -> Self {
+        let bytes = secret
+            .expose_secret()
+            .as_bytes()
+            .to_vec()
+            .into_boxed_slice();
+        Self { bytes }
+    }
+
+    /// Reconstitute a `SecretString` from the retained bytes (the
+    /// original passphrase was supplied as a UTF-8 `SecretString`,
+    /// so the bytes are valid UTF-8 by construction). Reserved for
+    /// later phases / front ends that surface a confirm-old-passphrase
+    /// flow; v0.1 transitions do not currently call this, but the
+    /// retained-passphrase invariant is asserted by the §4.4 zeroize
+    /// witness tests.
+    #[allow(dead_code)]
+    pub(crate) fn to_secret(&self) -> SecretString {
+        let text = std::str::from_utf8(&self.bytes)
+            .expect("CachedPassphrase bytes were copied from a SecretString (UTF-8)");
+        SecretString::from(text.to_owned())
+    }
+}
+
+impl Drop for CachedPassphrase {
+    fn drop(&mut self) {
+        let len = self.bytes.len();
+        self.bytes.zeroize();
+        observe(WitnessSite::EncryptedCachePassphraseDrop, &self.bytes, len);
+    }
+}
+
 /// Cached crypto material for an encrypted vault (DESIGN.md §4.4).
 ///
-/// `passphrase` is retained so passphrase transitions can re-encrypt
-/// the rotated `.bak` and re-derive a key under the new salt;
-/// `key` is the 32-byte AEAD key derived from the in-header
-/// `(salt, params)` and the passphrase, cached so regular saves do
-/// not pay another Argon2id derivation. Both fields zeroize on drop.
+/// `passphrase` is retained so passphrase transitions / front-end
+/// confirm-old-passphrase flows can re-derive or compare without
+/// re-prompting; `key` is the 32-byte AEAD key derived from the
+/// in-header `(salt, params)` and the passphrase, cached so regular
+/// saves do not pay another Argon2id derivation. Both fields
+/// zeroize *and* fire a Phase H zeroize-witness observation before
+/// their backing storage is reused. The `passphrase` field is not
+/// read by the v0.1 transition code paths (see `to_secret` above);
+/// the §4.4 retain-and-zeroize invariant is asserted directly via
+/// the witness tests.
 pub(crate) struct EncryptedCache {
-    /// Retained passphrase. Read by passphrase transitions in Phase H
-    /// to compare against / re-derive under the same secret.
     #[allow(dead_code)]
-    pub(crate) passphrase: SecretString,
-    pub(crate) key: Zeroizing<[u8; AEAD_KEY_LEN]>,
+    pub(crate) passphrase: CachedPassphrase,
+    pub(crate) key: CachedAeadKey,
+}
+
+impl EncryptedCache {
+    // `passphrase` and `key` are taken by value to anchor the
+    // memory-hygiene invariant: the caller's `SecretString` /
+    // `Zeroizing<[u8; 32]>` are moved into this constructor and
+    // dropped at the end of the call, zeroizing any caller-side
+    // copies before the function returns.
+    #[allow(clippy::needless_pass_by_value)]
+    pub(crate) fn new(passphrase: SecretString, key: Zeroizing<[u8; AEAD_KEY_LEN]>) -> Self {
+        Self {
+            passphrase: CachedPassphrase::from_secret(&passphrase),
+            key: CachedAeadKey::from_zeroizing(key),
+        }
+    }
 }
 
 /// Top-level in-memory representation of a Paladin vault.
@@ -112,7 +216,7 @@ impl Vault {
         Self {
             accounts: Vec::new(),
             settings: VaultSettings::default(),
-            cache: Some(EncryptedCache { passphrase, key }),
+            cache: Some(EncryptedCache::new(passphrase, key)),
         }
     }
 
@@ -137,7 +241,7 @@ impl Vault {
         Self {
             accounts: payload.accounts,
             settings: payload.settings,
-            cache: Some(EncryptedCache { passphrase, key }),
+            cache: Some(EncryptedCache::new(passphrase, key)),
         }
     }
 
@@ -155,7 +259,7 @@ impl Vault {
 
     /// Borrow the cached AEAD key (encrypted vaults only).
     pub(crate) fn cached_key(&self) -> Option<&[u8; AEAD_KEY_LEN]> {
-        self.cache.as_ref().map(|c| &*c.key)
+        self.cache.as_ref().map(|c| c.key.as_bytes())
     }
 
     /// Borrow the stored accounts in insertion order.
@@ -459,6 +563,141 @@ impl Vault {
         store.save_payload(&self.snapshot_payload(), self.cached_key())
     }
 
+    /// Encrypt a previously-plaintext vault under `options`
+    /// (DESIGN.md §4.5 / Phase H).
+    ///
+    /// Wrong-state guard runs before any crypto: a vault that is
+    /// already encrypted returns
+    /// `invalid_state { operation: "set_passphrase", state: "already_encrypted" }`.
+    /// A zero-length passphrase (the user supplied an empty
+    /// `SecretString` directly into `EncryptionOptions`'s public
+    /// fields, bypassing the constructor) returns
+    /// `invalid_passphrase { reason: "zero_length" }`. Whitespace and
+    /// Unicode passphrases are accepted byte-for-byte (no trim, no
+    /// normalization). `kdf_params` is validated through
+    /// [`crate::Argon2Params::validate`].
+    ///
+    /// On success: the on-disk primary is replaced with an encrypted
+    /// vault under fresh `(salt, nonce_primary)`, and the rotated
+    /// `.bak` is also encrypted under the new key with a separate
+    /// fresh nonce so it does not retain the previous plaintext
+    /// secrets. The Store updates its mode to encrypted with the
+    /// new `(salt, params)`, and this `Vault`'s in-memory cache is
+    /// replaced with the new key + retained passphrase.
+    ///
+    /// On a pre-commit failure (`save_not_committed`): the on-disk
+    /// primary is unchanged, and this `Vault` and the `Store` remain
+    /// in plaintext mode (cache is still `None`). On a post-commit
+    /// `save_durability_unconfirmed`: the on-disk primary already
+    /// carries the new encrypted bytes, so the in-memory state is
+    /// updated to match (cache populated, Store marked encrypted)
+    /// and the error is propagated for the caller to surface.
+    pub fn set_passphrase(&mut self, store: &Store, options: EncryptionOptions) -> Result<()> {
+        if self.is_encrypted() {
+            return Err(PaladinError::InvalidState {
+                operation: "set_passphrase",
+                state: "already_encrypted",
+            });
+        }
+        if options.passphrase.expose_secret().is_empty() {
+            return Err(PaladinError::InvalidPassphrase {
+                reason: "zero_length",
+            });
+        }
+        let pending = store.prepare_encryption(&options)?;
+        let payload = self.snapshot_payload();
+        let result = store.commit_encryption(&payload, &pending);
+        match result {
+            Ok(()) => {
+                self.cache = Some(EncryptedCache::new(options.passphrase, pending.key));
+                Ok(())
+            }
+            Err(err) if err.kind() == ErrorKind::SaveDurabilityUnconfirmed => {
+                self.cache = Some(EncryptedCache::new(options.passphrase, pending.key));
+                Err(err)
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    /// Re-encrypt an encrypted vault under a new passphrase
+    /// (DESIGN.md §4.5 / Phase H).
+    ///
+    /// Wrong-state guard: a plaintext vault returns
+    /// `invalid_state { operation: "change_passphrase", state: "not_encrypted" }`.
+    /// Zero-length / params validation as per
+    /// [`Vault::set_passphrase`].
+    ///
+    /// On success the on-disk primary is rewritten under fresh
+    /// `(salt, nonce_primary)`, the rotated `.bak` is also encrypted
+    /// under the new key with a separate fresh nonce so the old
+    /// (possibly-compromised) key cannot recover prior contents from
+    /// the backup, and the in-memory cache is replaced with the new
+    /// key + retained passphrase. The previously-cached AEAD key
+    /// bytes and passphrase bytes are zeroized in place before the
+    /// underlying allocations are freed (witnessed under the
+    /// `test-zeroize-witness` feature).
+    pub fn change_passphrase(&mut self, store: &Store, options: EncryptionOptions) -> Result<()> {
+        if !self.is_encrypted() {
+            return Err(PaladinError::InvalidState {
+                operation: "change_passphrase",
+                state: "not_encrypted",
+            });
+        }
+        if options.passphrase.expose_secret().is_empty() {
+            return Err(PaladinError::InvalidPassphrase {
+                reason: "zero_length",
+            });
+        }
+        let pending = store.prepare_encryption(&options)?;
+        let payload = self.snapshot_payload();
+        let result = store.commit_encryption(&payload, &pending);
+        match result {
+            Ok(()) => {
+                self.cache = Some(EncryptedCache::new(options.passphrase, pending.key));
+                Ok(())
+            }
+            Err(err) if err.kind() == ErrorKind::SaveDurabilityUnconfirmed => {
+                self.cache = Some(EncryptedCache::new(options.passphrase, pending.key));
+                Err(err)
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    /// Drop encryption from an encrypted vault (DESIGN.md §4.5 /
+    /// Phase H).
+    ///
+    /// Wrong-state guard: a plaintext vault returns
+    /// `invalid_state { operation: "remove_passphrase", state: "not_encrypted" }`.
+    ///
+    /// On success the on-disk primary is rewritten as plaintext, and
+    /// the rotated `.bak` is also written as plaintext (so it
+    /// remains accessible without the just-removed passphrase per
+    /// §4.5). The in-memory encrypted cache (key + passphrase) is
+    /// dropped and zeroized (witnessed under `test-zeroize-witness`).
+    pub fn remove_passphrase(&mut self, store: &Store) -> Result<()> {
+        if !self.is_encrypted() {
+            return Err(PaladinError::InvalidState {
+                operation: "remove_passphrase",
+                state: "not_encrypted",
+            });
+        }
+        let payload = self.snapshot_payload();
+        let result = store.commit_plaintext(&payload);
+        match result {
+            Ok(()) => {
+                self.cache = None;
+                Ok(())
+            }
+            Err(err) if err.kind() == ErrorKind::SaveDurabilityUnconfirmed => {
+                self.cache = None;
+                Err(err)
+            }
+            Err(err) => Err(err),
+        }
+    }
+
     /// Run `mutator` against this vault and persist the result through
     /// `store`, with snapshot-based rollback (DESIGN.md §4.7).
     ///
@@ -689,22 +928,10 @@ impl fmt::Debug for Vault {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::crypto::zeroize_witness::{clear_observations, take_observations};
     use zeroize::ZeroizeOnDrop;
 
-    /// Compile-time guarantee that the cached AEAD key zeroizes when
-    /// its `Drop` runs (DESIGN.md §4.4 / Phase F.13). By containment,
-    /// a `Vault` drop runs the `Option<EncryptedCache>` drop, which
-    /// runs the `key` field's drop, which (`Zeroizing<T>`'s
-    /// `ZeroizeOnDrop` impl) wipes the 32-byte buffer before
-    /// deallocation. If a future refactor swaps `Zeroizing` for a
-    /// raw `[u8; AEAD_KEY_LEN]` or any type without `ZeroizeOnDrop`,
-    /// this test fails to compile.
     fn _assert_zeroize_on_drop<T: ZeroizeOnDrop>() {}
-
-    #[test]
-    fn cached_key_field_zeroizes_on_drop() {
-        _assert_zeroize_on_drop::<Zeroizing<[u8; AEAD_KEY_LEN]>>();
-    }
 
     /// Containment witness for `VaultSnapshot`'s secret-bearing field
     /// (DESIGN.md §4.7 / Phase G.9): the snapshot owns a
@@ -717,5 +944,57 @@ mod tests {
     #[test]
     fn vault_snapshot_secret_field_zeroizes_on_drop() {
         _assert_zeroize_on_drop::<crate::domain::Secret>();
+    }
+
+    /// `CachedAeadKey::drop` runs an in-place zeroize and fires the
+    /// Phase H key-drop witness with `all_zero == true` so a regression
+    /// that swaps the wrapper for a raw `[u8; 32]` (no Drop) silently
+    /// loses key bytes — and the witness goes silent.
+    #[test]
+    fn cached_aead_key_drop_zeroizes_and_witnesses() {
+        clear_observations();
+        let mut bytes = [0u8; AEAD_KEY_LEN];
+        bytes.iter_mut().enumerate().for_each(|(i, b)| {
+            *b = (i as u8).wrapping_add(1);
+        });
+        let key = CachedAeadKey::from_zeroizing(Zeroizing::new(bytes));
+        drop(key);
+        let obs = take_observations();
+        let key_obs: Vec<_> = obs
+            .iter()
+            .filter(|o| o.site == WitnessSite::EncryptedCacheKeyDrop)
+            .collect();
+        assert_eq!(key_obs.len(), 1, "exactly one key-drop observation");
+        assert!(
+            key_obs[0].all_zero,
+            "key bytes zeroized before deallocation"
+        );
+        assert_eq!(key_obs[0].original_len, AEAD_KEY_LEN);
+    }
+
+    /// `CachedPassphrase::drop` runs an in-place zeroize and fires the
+    /// Phase H passphrase-drop witness with `all_zero == true`.
+    #[test]
+    fn cached_passphrase_drop_zeroizes_and_witnesses() {
+        clear_observations();
+        let pp = CachedPassphrase::from_secret(&SecretString::from("hunter2".to_owned()));
+        drop(pp);
+        let obs = take_observations();
+        let pp_obs: Vec<_> = obs
+            .iter()
+            .filter(|o| o.site == WitnessSite::EncryptedCachePassphraseDrop)
+            .collect();
+        assert_eq!(pp_obs.len(), 1, "exactly one passphrase-drop observation");
+        assert!(
+            pp_obs[0].all_zero,
+            "passphrase bytes zeroized before deallocation"
+        );
+        assert_eq!(pp_obs[0].original_len, "hunter2".len());
+    }
+
+    #[test]
+    fn cached_passphrase_round_trips_through_secret_string() {
+        let pp = CachedPassphrase::from_secret(&SecretString::from("hunter2".to_owned()));
+        assert_eq!(pp.to_secret().expose_secret(), "hunter2");
     }
 }
