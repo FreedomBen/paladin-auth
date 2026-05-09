@@ -54,6 +54,41 @@ pub struct Vault {
     cache: Option<EncryptedCache>,
 }
 
+/// Internal rollback snapshot for [`Vault::mutate_and_save`]
+/// (DESIGN.md §4.7).
+///
+/// Captures the two non-cache fields whose mutations the helper
+/// rolls back (accounts and settings); the encrypted-cache material
+/// is invariant across `mutate_and_save` (passphrase transitions go
+/// through their own Phase H entry points), so the snapshot does
+/// not duplicate the cached AEAD key. `Account` owns a
+/// [`crate::domain::Secret`] whose `ZeroizeOnDrop` impl wipes the
+/// secret bytes when the `Vec<Account>` is dropped, so the snapshot
+/// itself zeroizes its secret-bearing data on drop without an
+/// explicit `Drop` impl.
+struct VaultSnapshot {
+    accounts: Vec<Account>,
+    settings: VaultSettings,
+}
+
+impl VaultSnapshot {
+    fn capture(vault: &Vault) -> Self {
+        Self {
+            accounts: vault.accounts.clone(),
+            settings: vault.settings,
+        }
+    }
+
+    /// Move the captured state back into `vault`, replacing the
+    /// current contents. Consumes the snapshot so the secret-bearing
+    /// `Vec<Account>` is dropped (and zeroized) immediately after
+    /// the move.
+    fn restore_into(self, vault: &mut Vault) {
+        vault.accounts = self.accounts;
+        vault.settings = self.settings;
+    }
+}
+
 impl Vault {
     /// Empty plaintext vault used by `Store::create` / `Store::create_force`.
     pub(crate) fn empty() -> Self {
@@ -265,6 +300,56 @@ impl Vault {
         store.save_payload(&self.snapshot_payload(), self.cached_key())
     }
 
+    /// Run `mutator` against this vault and persist the result through
+    /// `store`, with snapshot-based rollback (DESIGN.md §4.7).
+    ///
+    /// The internal snapshot captures the account list and every
+    /// `VaultSettings` field before `mutator` runs, so a closure that
+    /// touches both fields and then errors leaves the vault byte-for-
+    /// byte at its pre-call state. Each `Account` in the snapshot
+    /// owns a [`crate::domain::Secret`] whose `ZeroizeOnDrop` impl
+    /// wipes the secret bytes when the snapshot is dropped, so a
+    /// rollback path cannot leave secret-bearing copies on the stack.
+    ///
+    /// Resolution rules:
+    ///
+    /// - `mutator` returns `Err` → restore the snapshot, return the
+    ///   error. The `Store::save` path is **not** entered.
+    /// - `mutator` returns `Ok(value)` and `Vault::save` returns
+    ///   `Ok(())` → return `value`.
+    /// - `Vault::save` returns `save_not_committed` → restore the
+    ///   snapshot (memory matches the unchanged on-disk primary)
+    ///   and return the error.
+    /// - `Vault::save` returns `save_durability_unconfirmed` (or any
+    ///   other error after the rename commit point) → keep the
+    ///   mutated state in memory because the on-disk primary already
+    ///   carries it; return the error.
+    ///
+    /// Front ends (CLI, TUI, GUI) drive add / remove / settings /
+    /// import-merge flows through this single helper so each crate
+    /// does not duplicate snapshot machinery.
+    pub fn mutate_and_save<F, R>(&mut self, store: &Store, mutator: F) -> Result<R>
+    where
+        F: FnOnce(&mut Vault) -> Result<R>,
+    {
+        let snapshot = VaultSnapshot::capture(self);
+        let value = match mutator(self) {
+            Ok(v) => v,
+            Err(err) => {
+                snapshot.restore_into(self);
+                return Err(err);
+            }
+        };
+        match self.save(store) {
+            Ok(()) => Ok(value),
+            Err(err) if err.kind() == ErrorKind::SaveNotCommitted => {
+                snapshot.restore_into(self);
+                Err(err)
+            }
+            Err(err) => Err(err),
+        }
+    }
+
     /// Compute the TOTP code for an account at the supplied wall-clock
     /// time. Read-only — never mutates the vault and never touches the
     /// `Store` (DESIGN.md §4.2 / §4.7).
@@ -460,5 +545,18 @@ mod tests {
     #[test]
     fn cached_key_field_zeroizes_on_drop() {
         _assert_zeroize_on_drop::<Zeroizing<[u8; AEAD_KEY_LEN]>>();
+    }
+
+    /// Containment witness for `VaultSnapshot`'s secret-bearing field
+    /// (DESIGN.md §4.7 / Phase G.9): the snapshot owns a
+    /// `Vec<Account>`, whose drop runs each `Account`'s drop, which
+    /// runs the `Secret` field's `ZeroizeOnDrop` impl and wipes the
+    /// secret bytes before deallocation. If a future refactor swaps
+    /// the snapshot's secret-bearing field for a non-zeroizing
+    /// container, the per-`Secret` test here keeps failing
+    /// alongside its corresponding domain-level coverage.
+    #[test]
+    fn vault_snapshot_secret_field_zeroizes_on_drop() {
+        _assert_zeroize_on_drop::<crate::domain::Secret>();
     }
 }

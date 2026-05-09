@@ -736,7 +736,7 @@ Each step lands as its own commit. Tests come first.
   `hotp_peek` / `hotp_advance` use `account_not_found` for missing IDs,
   `totp_code` uses `not_totp` for HOTP accounts, and `hotp_peek` /
   `hotp_advance` use `not_hotp` for TOTP accounts.
-- [ ] Tests: `Vault::mutate_and_save` captures an internal snapshot, restores
+- [x] Tests: `Vault::mutate_and_save` captures an internal snapshot, restores
   it when the mutation closure returns an error, restores it when
   `Vault::save` returns `save_not_committed`, leaves the mutated state in
   memory when save returns `save_durability_unconfirmed`, and returns the
@@ -744,7 +744,7 @@ Each step lands as its own commit. Tests come first.
   rollback snapshot is zeroized when dropped. Exercise add, remove, import
   merge (`skip` / `replace` / `append`), and settings changes so presentation
   crates do not need their own rollback machinery.
-- [ ] Tests: `Vault::mutate_and_save` rollback covers **both** accounts
+- [x] Tests: `Vault::mutate_and_save` rollback covers **both** accounts
   and `VaultSettings`. A closure that mutates accounts (e.g. adds an
   entry) **and** mutates settings (e.g. flips `auto_lock.enabled` and
   changes `clipboard.clear_secs`), then returns `Err`, restores both

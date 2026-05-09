@@ -1158,3 +1158,161 @@ fn hotp_advance_post_commit_keeps_mutation_and_surfaces_durability_unconfirmed()
         );
     });
 }
+
+// ──────────────────────────────────────────────────────────────────
+// Vault::mutate_and_save (Phase G.9 / G.10).
+//
+// The closure-error rollback case is fault-free and lives in
+// `vault_mutate_and_save.rs`. The save-error rollback rows live
+// here because they require the `PALADIN_FAULT_INJECT` hook and
+// must serialize on the shared env-var mutex.
+//
+// Locked semantics, per DESIGN.md §4.7:
+//   - `save_not_committed`           → restore the snapshot
+//   - `save_durability_unconfirmed`  → keep the mutated state in memory
+//
+// G.10 covers the cross-field variant: a single closure that
+// mutates accounts AND every `VaultSettings` field must roll back
+// (or retain) both jointly, never half-applying.
+// ──────────────────────────────────────────────────────────────────
+
+fn make_totp_account_for_mutate(label: &str) -> Account {
+    let uri = format!("otpauth://totp/{label}?secret={HOTP_SECRET_B32}");
+    parse_otpauth(&uri, fixture_now()).unwrap().account
+}
+
+#[test]
+fn mutate_and_save_save_not_committed_restores_snapshot() {
+    run_serial(|| {
+        let dir = TempDir::new().unwrap();
+        let path = vault_path_in(&dir);
+        let (mut vault, store) = Store::create(&path, VaultInit::Plaintext).unwrap();
+        let alice_id = vault.add(make_totp_account_for_mutate("alice"));
+        vault.save(&store).unwrap();
+        let primary_before = std::fs::read(&path).unwrap();
+        let pre_settings = *vault.settings();
+
+        let err = with_fault(PRE, || {
+            vault.mutate_and_save(&store, |v| -> Result<(), PaladinError> {
+                v.add(make_totp_account_for_mutate("bob"));
+                Ok(())
+            })
+        })
+        .expect_err("pre_commit must fail");
+        // Regular-save pre-commit leaves the old primary authoritative,
+        // so `backup_path` is None per §5.
+        assert_save_not_committed(&err, false);
+
+        // Snapshot restore: the closure's mutation reverted in memory
+        // because the §4.3 atomic write pipeline did not commit.
+        let labels: Vec<_> = vault.iter().map(|a| a.label().to_string()).collect();
+        assert_eq!(labels, vec!["alice"]);
+        assert!(vault.get(alice_id).is_some());
+        assert_eq!(*vault.settings(), pre_settings);
+        // On-disk primary remains the pre-call snapshot byte-for-byte.
+        assert_eq!(std::fs::read(&path).unwrap(), primary_before);
+    });
+}
+
+#[test]
+fn mutate_and_save_save_durability_unconfirmed_keeps_mutated_state() {
+    run_serial(|| {
+        let dir = TempDir::new().unwrap();
+        let path = vault_path_in(&dir);
+        let (mut vault, store) = Store::create(&path, VaultInit::Plaintext).unwrap();
+        vault.add(make_totp_account_for_mutate("alice"));
+        vault.save(&store).unwrap();
+
+        let err = with_fault(POST, || {
+            vault.mutate_and_save(&store, |v| -> Result<(), PaladinError> {
+                v.add(make_totp_account_for_mutate("bob"));
+                Ok(())
+            })
+        })
+        .expect_err("post_commit must fail");
+        assert_save_durability_unconfirmed(&err);
+
+        // Post-commit fault: the primary-file rename succeeded before
+        // the parent fsync errored, so memory keeps the mutation to
+        // match the on-disk vault.
+        let labels: Vec<_> = vault.iter().map(|a| a.label().to_string()).collect();
+        assert_eq!(labels, vec!["alice", "bob"]);
+
+        // Reopen confirms the on-disk vault carries the new account.
+        drop(vault);
+        drop(store);
+        let (reopened, _store) = Store::open(&path, VaultLock::Plaintext).unwrap();
+        let reopened_labels: Vec<_> = reopened.iter().map(|a| a.label().to_string()).collect();
+        assert_eq!(reopened_labels, vec!["alice", "bob"]);
+    });
+}
+
+#[test]
+fn mutate_and_save_cross_field_save_not_committed_restores_both_fields() {
+    run_serial(|| {
+        let dir = TempDir::new().unwrap();
+        let path = vault_path_in(&dir);
+        let (mut vault, store) = Store::create(&path, VaultInit::Plaintext).unwrap();
+        let alice_id = vault.add(make_totp_account_for_mutate("alice"));
+        vault.save(&store).unwrap();
+        let pre_settings = *vault.settings();
+
+        let err = with_fault(PRE, || {
+            vault.mutate_and_save(&store, |v| -> Result<(), PaladinError> {
+                v.add(make_totp_account_for_mutate("bob"));
+                v.set_auto_lock_enabled(true);
+                v.set_clipboard_clear_secs(120)?;
+                Ok(())
+            })
+        })
+        .expect_err("pre_commit must fail");
+        // Regular-save pre-commit leaves the old primary authoritative,
+        // so `backup_path` is None per §5.
+        assert_save_not_committed(&err, false);
+
+        // Both accounts and settings reverted jointly.
+        let labels: Vec<_> = vault.iter().map(|a| a.label().to_string()).collect();
+        assert_eq!(labels, vec!["alice"]);
+        assert!(vault.get(alice_id).is_some());
+        assert_eq!(*vault.settings(), pre_settings);
+        assert!(!vault.settings().auto_lock_enabled());
+        assert_eq!(vault.settings().clipboard_clear_secs(), 20);
+    });
+}
+
+#[test]
+fn mutate_and_save_cross_field_save_durability_unconfirmed_keeps_both_fields() {
+    run_serial(|| {
+        let dir = TempDir::new().unwrap();
+        let path = vault_path_in(&dir);
+        let (mut vault, store) = Store::create(&path, VaultInit::Plaintext).unwrap();
+        vault.add(make_totp_account_for_mutate("alice"));
+        vault.save(&store).unwrap();
+
+        let err = with_fault(POST, || {
+            vault.mutate_and_save(&store, |v| -> Result<(), PaladinError> {
+                v.add(make_totp_account_for_mutate("bob"));
+                v.set_auto_lock_enabled(true);
+                v.set_clipboard_clear_secs(120)?;
+                Ok(())
+            })
+        })
+        .expect_err("post_commit must fail");
+        assert_save_durability_unconfirmed(&err);
+
+        // Both accounts and settings retained because the rename
+        // committed; in-memory state must match what's on disk.
+        let labels: Vec<_> = vault.iter().map(|a| a.label().to_string()).collect();
+        assert_eq!(labels, vec!["alice", "bob"]);
+        assert!(vault.settings().auto_lock_enabled());
+        assert_eq!(vault.settings().clipboard_clear_secs(), 120);
+
+        drop(vault);
+        drop(store);
+        let (reopened, _store) = Store::open(&path, VaultLock::Plaintext).unwrap();
+        let reopened_labels: Vec<_> = reopened.iter().map(|a| a.label().to_string()).collect();
+        assert_eq!(reopened_labels, vec!["alice", "bob"]);
+        assert!(reopened.settings().auto_lock_enabled());
+        assert_eq!(reopened.settings().clipboard_clear_secs(), 120);
+    });
+}
