@@ -25,9 +25,9 @@ pub use crypto::argon2_derivation_count;
 pub use crypto::zeroize_witness;
 pub use domain::validation::AccountInput;
 pub use domain::{
-    parse_icon_hint_token, validate_manual, Account, AccountId, AccountKindInput,
-    AccountKindSummary, AccountSummary, Algorithm, Code, IconHintInput, Secret, ValidatedAccount,
-    ValidationWarning,
+    account_match_key, parse_icon_hint_token, validate_manual, Account, AccountId,
+    AccountKindInput, AccountKindSummary, AccountSummary, Algorithm, Code, IconHintInput, Secret,
+    ValidatedAccount, ValidationWarning,
 };
 pub use error::{ErrorKind, PaladinError, PermissionSubject, Result, TimeRangeKind, VaultMode};
 pub use otpauth::parse_otpauth;

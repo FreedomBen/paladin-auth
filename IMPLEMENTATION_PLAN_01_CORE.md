@@ -761,7 +761,7 @@ Each step lands as its own commit. Tests come first.
   `remove_passphrase` outcomes (unchanged on `save_not_committed`,
   changed on a successful save or `save_durability_unconfirmed` —
   Phase H exercises the transition cases against this getter).
-- [ ] Tests: `account_match_key(&Account)` returns `"{issuer}:{label}"`
+- [x] Tests: `account_match_key(&Account)` returns `"{issuer}:{label}"`
   with the colon present even when issuer is empty, preserves the
   original casing, and round-trips equality for accounts that share an
   issuer/label pair. Cover ASCII, mixed case, and Unicode label
