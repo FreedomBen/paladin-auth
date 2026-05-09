@@ -63,3 +63,5 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 proptest = "1"
 trybuild = "1"
 tempfile = "3"
+# QR fixture generator for `import::qr_image*` tests (Phase I).
+qrcode = { version = "0.14", default-features = false, features = ["image"] }

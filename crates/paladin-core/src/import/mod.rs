@@ -19,10 +19,12 @@
 mod aegis;
 mod otpauth;
 mod paladin;
+mod qr;
 
 pub use aegis::aegis_plaintext;
 pub use otpauth::otpauth;
 pub use paladin::paladin;
+pub use qr::{qr_image, qr_image_bytes, read_qr_image, read_qr_image_bytes};
 
 use crate::storage::header::MAGIC as PALADIN_MAGIC;
 
