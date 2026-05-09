@@ -7,6 +7,7 @@
 // importers). All public field projections go through
 // `AccountSummary`; raw secret bytes never leave the crate.
 
+pub mod import;
 pub mod match_key;
 pub mod prompt_input;
 pub mod query;
@@ -15,6 +16,7 @@ pub mod settings;
 pub mod slug;
 pub mod validation;
 
+pub use import::{ImportConflict, ImportReport, ImportWarning};
 pub use match_key::{account_match_key, account_matches_search};
 pub use prompt_input::parse_icon_hint_token;
 pub use query::{parse_account_query, select_after_filter, AccountQuery};

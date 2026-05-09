@@ -30,7 +30,8 @@ pub use domain::{
     account_match_key, account_matches_search, parse_account_query, parse_icon_hint_token,
     parse_setting_key, parse_setting_patch, select_after_filter, validate_manual, Account,
     AccountId, AccountKindInput, AccountKindSummary, AccountQuery, AccountSummary, Algorithm, Code,
-    IconHintInput, Secret, SettingKey, SettingPatch, ValidatedAccount, ValidationWarning,
+    IconHintInput, ImportConflict, ImportReport, ImportWarning, Secret, SettingKey, SettingPatch,
+    ValidatedAccount, ValidationWarning,
 };
 pub use error::{ErrorKind, PaladinError, PermissionSubject, Result, TimeRangeKind, VaultMode};
 pub use otpauth::parse_otpauth;

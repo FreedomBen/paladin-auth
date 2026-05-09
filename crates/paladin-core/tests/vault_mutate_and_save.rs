@@ -23,7 +23,8 @@ use std::os::unix::fs::PermissionsExt;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use paladin_core::{
-    parse_otpauth, Account, AccountId, ErrorKind, PaladinError, Store, Vault, VaultInit, VaultLock,
+    parse_otpauth, Account, AccountId, ErrorKind, ImportConflict, PaladinError, Store,
+    ValidatedAccount, Vault, VaultInit, VaultLock,
 };
 use tempfile::TempDir;
 
@@ -151,6 +152,50 @@ fn mutate_and_save_restores_accounts_on_closure_error_after_remove() {
     // Both accounts still present, in original insertion order.
     let ids: Vec<_> = vault.iter().map(Account::id).collect();
     assert_eq!(ids, vec![alice_id, bob_id]);
+}
+
+#[test]
+fn mutate_and_save_restores_accounts_on_closure_error_after_import_merge() {
+    let (mut vault, store, _dir) = vault_with_path();
+    // Baseline: a single "alice" already in the vault.
+    let alice_id = vault.add(make_totp_account("alice"));
+    vault.save(&store).expect("baseline save");
+
+    // Inside the closure, run a Replace import that both replaces
+    // alice (collides on secret/label) and appends bob (no collision),
+    // then return Err so mutate_and_save rolls everything back.
+    let incoming: Vec<ValidatedAccount> = vec![
+        parse_otpauth(
+            &format!("otpauth://totp/alice?secret={SECRET_B32}"),
+            fixture_now(),
+        )
+        .unwrap(),
+        parse_otpauth(
+            &format!("otpauth://totp/bob?secret={SECRET_B32}"),
+            fixture_now(),
+        )
+        .unwrap(),
+    ];
+
+    let err = vault
+        .mutate_and_save(&store, |v| -> Result<(), PaladinError> {
+            let report = v
+                .import_accounts(incoming, ImportConflict::Replace, fixture_now())
+                .expect("import inside closure");
+            // Confirm the merge actually fired before we error out:
+            assert_eq!(report.replaced, 1);
+            assert_eq!(report.imported, 1);
+            assert_eq!(v.iter().count(), 2);
+            Err(synthetic_error())
+        })
+        .expect_err("closure error must propagate");
+    assert_eq!(err.kind(), ErrorKind::InvalidPayload);
+
+    // Rollback: only the original alice remains, with the original id.
+    let labels: Vec<_> = vault.iter().map(|a| a.label().to_string()).collect();
+    assert_eq!(labels, vec!["alice"]);
+    let ids: Vec<_> = vault.iter().map(Account::id).collect();
+    assert_eq!(ids, vec![alice_id]);
 }
 
 #[test]

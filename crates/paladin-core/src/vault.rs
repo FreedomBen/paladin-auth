@@ -21,7 +21,10 @@ use zeroize::Zeroizing;
 
 use crate::crypto::AEAD_KEY_LEN;
 use crate::domain::validation::{system_time_to_secs_for, validate_label};
-use crate::domain::{Account, AccountId, AccountSummary, Code, OtpKind, ValidatedAccount};
+use crate::domain::{
+    Account, AccountId, AccountSummary, Code, ImportConflict, ImportReport, ImportWarning, OtpKind,
+    ValidatedAccount,
+};
 use crate::error::{ErrorKind, PaladinError, Result};
 use crate::otp::{hotp, totp};
 use crate::storage::payload::VaultPayload;
@@ -313,6 +316,111 @@ impl Vault {
                 && existing.issuer() == candidate.issuer()
                 && existing.label() == candidate.label()
         })
+    }
+
+    /// Apply a batch of pre-validated rows to the in-memory vault using
+    /// the §5 `--on-conflict` merge policy (DESIGN.md §4.7).
+    ///
+    /// Collisions are determined by the exact `(secret, issuer, label)`
+    /// triple — the same predicate as [`Vault::find_duplicate`]. The
+    /// [`ImportConflict`] argument selects the merge action:
+    ///
+    /// - [`ImportConflict::Skip`] keeps the existing entry, increments
+    ///   `skipped`, and does **not** add the source row's ID to
+    ///   [`ImportReport::accounts`].
+    /// - [`ImportConflict::Replace`] overwrites the existing entry,
+    ///   preserving its `id` and `created_at`, sets `updated_at = now`,
+    ///   and (for HOTP-to-HOTP collisions) preserves the existing
+    ///   `Hotp.counter`. Cross-kind replacements swap the whole `kind`.
+    /// - [`ImportConflict::Append`] inserts the colliding row as an
+    ///   additional account with a fresh [`AccountId`].
+    ///
+    /// Non-colliding rows always receive a fresh [`AccountId`] at merge
+    /// time per §4.6, so source IDs from a Paladin bundle never leak
+    /// into the destination vault.
+    ///
+    /// Any [`crate::ValidationWarning`]s on the input rows are pushed
+    /// into [`ImportReport::warnings`] **before** the merge policy runs,
+    /// so a warning attached to a row that is later skipped under
+    /// `Skip` is still surfaced.
+    ///
+    /// `now` must be within the §4.1 timestamp range; out-of-range
+    /// values return `time_range` before any mutation. The method
+    /// itself does not persist — wrap the call in
+    /// [`Vault::mutate_and_save`] for atomic merge-and-save semantics.
+    pub fn import_accounts(
+        &mut self,
+        accounts: Vec<ValidatedAccount>,
+        policy: ImportConflict,
+        now: SystemTime,
+    ) -> Result<ImportReport> {
+        let now_secs = system_time_to_secs_for("import_accounts", now)?;
+        let mut report = ImportReport::default();
+
+        for (idx, va) in accounts.iter().enumerate() {
+            for warning in &va.warnings {
+                report.warnings.push(ImportWarning {
+                    source_index: idx,
+                    warning: warning.clone(),
+                });
+            }
+        }
+
+        for va in accounts {
+            let candidate = va.account;
+            let collision_pos = self.accounts.iter().position(|existing| {
+                existing.secret() == candidate.secret()
+                    && existing.issuer() == candidate.issuer()
+                    && existing.label() == candidate.label()
+            });
+
+            match (collision_pos, policy) {
+                (None, _) => {
+                    let mut acct = candidate;
+                    acct.id = AccountId::new();
+                    report.accounts.push(acct.id);
+                    self.accounts.push(acct);
+                    report.imported += 1;
+                }
+                (Some(_), ImportConflict::Skip) => {
+                    report.skipped += 1;
+                }
+                (Some(pos), ImportConflict::Replace) => {
+                    let existing = &self.accounts[pos];
+                    let preserved_id = existing.id;
+                    let preserved_created_at = existing.created_at;
+                    let new_kind = match (existing.kind, candidate.kind) {
+                        (OtpKind::Hotp { counter }, OtpKind::Hotp { .. }) => {
+                            OtpKind::Hotp { counter }
+                        }
+                        (_, incoming) => incoming,
+                    };
+                    self.accounts[pos] = Account {
+                        id: preserved_id,
+                        label: candidate.label,
+                        issuer: candidate.issuer,
+                        secret: candidate.secret,
+                        algorithm: candidate.algorithm,
+                        digits: candidate.digits,
+                        kind: new_kind,
+                        icon_hint: candidate.icon_hint,
+                        created_at: preserved_created_at,
+                        updated_at: now_secs,
+                    };
+                    report.accounts.push(preserved_id);
+                    report.replaced += 1;
+                }
+                (Some(_), ImportConflict::Append) => {
+                    let mut acct = candidate;
+                    acct.id = AccountId::new();
+                    report.accounts.push(acct.id);
+                    self.accounts.push(acct);
+                    report.appended += 1;
+                }
+            }
+        }
+
+        Ok(report)
     }
 
     /// Rename an account's label.

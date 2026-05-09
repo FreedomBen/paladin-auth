@@ -833,7 +833,7 @@ Each step lands as its own commit. Tests come first.
   `prev` is `None` or missing and `filtered` is non-empty, and
   returns `None` for an empty `filtered`. Pins the §6 / §7
   search-selection preservation rule.
-- [ ] Implement `Vault` operations, `Vault::save`, `Vault::get`,
+- [x] Implement `Vault` operations, `Vault::save`, `Vault::get`,
   `Vault::summaries`, `Vault::find_duplicate`, `Vault::import_accounts`,
   `Vault::totp_code`, `Vault::hotp_peek`, `Vault::hotp_advance`,
   `Vault::is_encrypted`, `Vault::settings`, `VaultSettings` read-only
