@@ -18,9 +18,11 @@
 
 mod aegis;
 mod otpauth;
+mod paladin;
 
 pub use aegis::aegis_plaintext;
 pub use otpauth::otpauth;
+pub use paladin::paladin;
 
 use crate::storage::header::MAGIC as PALADIN_MAGIC;
 

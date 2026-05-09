@@ -1214,6 +1214,45 @@ fn open_encrypted(path: &Path, passphrase: SecretString) -> Result<(crate::Vault
     ))
 }
 
+/// Decrypt an in-memory Paladin bundle (DESIGN.md §4.6 import path).
+///
+/// Mirrors the post-IO half of [`open_encrypted`] — header parse,
+/// Argon2id key derivation, AEAD decrypt + AAD verification, and
+/// bincode payload decode — but never touches the filesystem and
+/// never inspects permissions. Plaintext-mode Paladin bytes are
+/// rejected with [`PaladinError::UnsupportedPlaintextVault`] (the
+/// import-semantic mapping; vault-file callers use `WrongVaultLock`).
+///
+/// Used by `import::paladin` and `classify_paladin_import_precheck` so
+/// CLI / TUI / GUI bundle imports share one decrypt path.
+pub(crate) fn decrypt_paladin_bundle(
+    bytes: &[u8],
+    passphrase: SecretString,
+) -> Result<VaultPayload> {
+    enforce_on_disk_encrypted_size_cap(bytes.len())?;
+    let trailer = match parse_header(bytes)? {
+        ParsedHeader::Plaintext => {
+            return Err(PaladinError::UnsupportedPlaintextVault);
+        }
+        ParsedHeader::Encrypted(t) => t,
+    };
+    let params = Argon2Params {
+        m_kib: trailer.m_kib,
+        t: trailer.t,
+        p: trailer.p,
+    };
+    params.validate()?;
+    let key = derive_aead_key(&passphrase, &trailer.salt, &params)?;
+    let aad = &bytes[8..ENCRYPTED_HEADER_LEN];
+    let ct_and_tag = &bytes[ENCRYPTED_HEADER_LEN..];
+    let plaintext = ZeroizingBytes::from_vec(
+        aead_decrypt(&key, &trailer.nonce, aad, ct_and_tag)?,
+        WitnessSite::DecryptPostAead,
+    );
+    enforce_decrypted_payload_cap(plaintext.len())?;
+    decode_vault_payload(&plaintext)
+}
+
 /// Build the canonical `csprng_read` `IoError`. Shared between the
 /// real `getrandom` failure path and the `test-fault-injection`
 /// hook so both routes surface the §5 stable operation string with
