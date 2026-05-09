@@ -731,7 +731,7 @@ Each step lands as its own commit. Tests come first.
 - [x] Tests: `Vault::hotp_peek` after a committed `Vault::hotp_advance`
   returns the code for the new (post-advance) counter; `Vault::totp_code`
   is read-only and never mutates the vault or touches the `Store`.
-- [ ] Tests: account-ID method failures return stable `invalid_state`
+- [x] Tests: account-ID method failures return stable `invalid_state`
   operation/state pairs from DESIGN §4.7: `rename` / `totp_code` /
   `hotp_peek` / `hotp_advance` use `account_not_found` for missing IDs,
   `totp_code` uses `not_totp` for HOTP accounts, and `hotp_peek` /
