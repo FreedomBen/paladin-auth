@@ -242,6 +242,31 @@ impl Vault {
         self.settings.set_clipboard_clear_secs(secs)
     }
 
+    /// Apply a typed §5 [`crate::SettingPatch`] in place.
+    ///
+    /// Routes through the same typed setters
+    /// (`set_auto_lock_enabled`, `set_auto_lock_timeout_secs`,
+    /// `set_clipboard_clear_enabled`, `set_clipboard_clear_secs`) so
+    /// the CLI's dotted `settings set` patches and direct TUI / GUI
+    /// setters share one validation source. The prior
+    /// [`crate::VaultSettings`] is left unchanged on rejection;
+    /// callers persist accepted patches via
+    /// [`Vault::mutate_and_save`] or [`Vault::save`].
+    pub fn apply_setting_patch(&mut self, patch: crate::SettingPatch) -> Result<()> {
+        match patch {
+            crate::SettingPatch::AutoLockEnabled(v) => {
+                self.set_auto_lock_enabled(v);
+                Ok(())
+            }
+            crate::SettingPatch::AutoLockTimeoutSecs(secs) => self.set_auto_lock_timeout_secs(secs),
+            crate::SettingPatch::ClipboardClearEnabled(v) => {
+                self.set_clipboard_clear_enabled(v);
+                Ok(())
+            }
+            crate::SettingPatch::ClipboardClearSecs(secs) => self.set_clipboard_clear_secs(secs),
+        }
+    }
+
     /// `true` iff the vault was opened in encrypted mode (or created
     /// with an encrypted [`crate::VaultInit`]).
     #[must_use]

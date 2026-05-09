@@ -783,7 +783,7 @@ Each step lands as its own commit. Tests come first.
   vault IDs, extends just far enough for collisions, returns the full
   32-character hex prefix when needed, and returns `None` for an ID not
   present in the vault.
-- [ ] Tests: `parse_setting_key(key)` accepts exactly the four §5 dotted
+- [x] Tests: `parse_setting_key(key)` accepts exactly the four §5 dotted
   keys (`auto_lock.enabled`, `auto_lock.timeout_secs`,
   `clipboard.clear_enabled`, `clipboard.clear_secs`) and rejects unknown
   keys with `validation_error`; `parse_setting_patch(key, value)`
