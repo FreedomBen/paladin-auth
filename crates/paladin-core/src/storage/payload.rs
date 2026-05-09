@@ -112,6 +112,54 @@ impl VaultSettings {
     }
 }
 
+/// Hand-rolled serializer that emits the nested DESIGN.md §5 shape:
+///
+/// ```json
+/// { "auto_lock":  { "enabled": bool, "timeout_secs": number },
+///   "clipboard":  { "clear_enabled": bool, "clear_secs": number } }
+/// ```
+///
+/// The on-disk struct is intentionally flat (and its fields private)
+/// so we project into transient view structs at serialize time. Behind
+/// the off-by-default `error-serde` feature only.
+#[cfg(feature = "error-serde")]
+impl serde::Serialize for VaultSettings {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        #[derive(serde::Serialize)]
+        struct AutoLockView {
+            enabled: bool,
+            timeout_secs: u32,
+        }
+
+        #[derive(serde::Serialize)]
+        struct ClipboardView {
+            clear_enabled: bool,
+            clear_secs: u32,
+        }
+
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("VaultSettings", 2)?;
+        s.serialize_field(
+            "auto_lock",
+            &AutoLockView {
+                enabled: self.auto_lock_enabled,
+                timeout_secs: self.auto_lock_timeout_secs,
+            },
+        )?;
+        s.serialize_field(
+            "clipboard",
+            &ClipboardView {
+                clear_enabled: self.clipboard_clear_enabled,
+                clear_secs: self.clipboard_clear_secs,
+            },
+        )?;
+        s.end()
+    }
+}
+
 impl Default for VaultSettings {
     fn default() -> Self {
         // Defaults pinned by DESIGN.md §5 settings table:

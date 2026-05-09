@@ -59,6 +59,11 @@ pub struct AccountInput {
 
 /// Non-fatal warning surfaced alongside a validated account.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "error-serde", derive(serde::Serialize))]
+#[cfg_attr(
+    feature = "error-serde",
+    serde(tag = "kind", rename_all = "snake_case")
+)]
 pub enum ValidationWarning {
     /// Decoded secret is shorter than the recommended minimum (RFC 4226 §4 R6).
     ShortSecret {

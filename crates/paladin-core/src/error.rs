@@ -19,6 +19,8 @@ pub type Result<T> = std::result::Result<T, PaladinError>;
 /// Stable §5 `error_kind` discriminator. Each variant maps 1:1 to a
 /// JSON `error_kind` string. See DESIGN.md §5.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "error-serde", derive(serde::Serialize))]
+#[cfg_attr(feature = "error-serde", serde(rename_all = "snake_case"))]
 pub enum ErrorKind {
     /// `validation_error` — input failed §4.1 / §4.6 validation.
     ValidationError,
@@ -105,6 +107,8 @@ impl fmt::Display for ErrorKind {
 
 /// Vault-mode discriminator surfaced in `wrong_vault_lock` errors. See DESIGN.md §4.3.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "error-serde", derive(serde::Serialize))]
+#[cfg_attr(feature = "error-serde", serde(rename_all = "lowercase"))]
 pub enum VaultMode {
     /// Plaintext vault file (no header crypto, `0600` permissions only).
     Plaintext,
@@ -365,8 +369,123 @@ impl PaladinError {
     }
 }
 
+/// Hand-rolled serializer for the §5 error envelope. Behind the
+/// `error-serde` feature only; production builds never link this.
+///
+/// Wire shape: `{ "error_kind": "<snake_case>", ...variant_fields }`.
+/// Optional fields are omitted when `None`; the inner [`std::io::Error`]
+/// of [`PaladinError::IoError`] is *not* serialized — §5 carries
+/// `operation` (and an optional `path` not yet modeled here) but not
+/// the platform-specific message.
+#[cfg(feature = "error-serde")]
+impl serde::Serialize for PaladinError {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(None)?;
+        map.serialize_entry("error_kind", self.kind().as_str())?;
+        match self {
+            Self::ValidationError {
+                field,
+                reason,
+                source_index,
+                decoded_len,
+                recommended_min,
+                entry_type,
+            } => {
+                map.serialize_entry("field", field)?;
+                map.serialize_entry("reason", reason)?;
+                if let Some(v) = source_index {
+                    map.serialize_entry("source_index", v)?;
+                }
+                if let Some(v) = decoded_len {
+                    map.serialize_entry("decoded_len", v)?;
+                }
+                if let Some(v) = recommended_min {
+                    map.serialize_entry("recommended_min", v)?;
+                }
+                if let Some(v) = entry_type {
+                    map.serialize_entry("entry_type", v)?;
+                }
+            }
+            Self::InvalidPassphrase { reason } | Self::InvalidPayload { reason } => {
+                map.serialize_entry("reason", reason)?;
+            }
+            Self::InvalidState { operation, state } => {
+                map.serialize_entry("operation", operation)?;
+                map.serialize_entry("state", state)?;
+            }
+            Self::VaultMissing
+            | Self::VaultExists
+            | Self::DecryptFailed
+            | Self::InvalidHeader
+            | Self::UnsupportedPlaintextVault
+            | Self::UnsupportedEncryptedAegis
+            | Self::NoEntriesToImport
+            | Self::SaveDurabilityUnconfirmed => {}
+            Self::UnsafePermissions {
+                path,
+                subject,
+                actual_mode,
+                expected_mode,
+            } => {
+                map.serialize_entry("path", path)?;
+                map.serialize_entry("subject", subject)?;
+                map.serialize_entry("actual_mode", actual_mode)?;
+                map.serialize_entry("expected_mode", expected_mode)?;
+            }
+            Self::WrongVaultLock { expected, actual } => {
+                map.serialize_entry("expected", expected)?;
+                map.serialize_entry("actual", actual)?;
+            }
+            Self::UnsupportedFormatVersion { format_ver } => {
+                map.serialize_entry("format_ver", format_ver)?;
+            }
+            Self::KdfParamsOutOfBounds { m_kib, t, p } => {
+                map.serialize_entry("m_kib", m_kib)?;
+                map.serialize_entry("t", t)?;
+                map.serialize_entry("p", p)?;
+            }
+            Self::UnsupportedImportFormat { format } => {
+                map.serialize_entry("format", format)?;
+            }
+            Self::UnsupportedAegisEntryType {
+                source_index,
+                entry_type,
+            } => {
+                map.serialize_entry("source_index", source_index)?;
+                map.serialize_entry("entry_type", entry_type)?;
+            }
+            Self::CounterOverflow { account } => {
+                map.serialize_entry("account", account)?;
+            }
+            Self::TimeRange { operation, kind } => {
+                map.serialize_entry("operation", operation)?;
+                map.serialize_entry("kind", kind)?;
+            }
+            Self::SaveNotCommitted {
+                committed,
+                backup_path,
+            } => {
+                map.serialize_entry("committed", committed)?;
+                if let Some(path) = backup_path {
+                    map.serialize_entry("backup_path", path)?;
+                }
+            }
+            Self::IoError { operation, .. } => {
+                map.serialize_entry("operation", operation)?;
+            }
+        }
+        map.end()
+    }
+}
+
 /// Discriminator naming which path a §5 `unsafe_permissions` error refers to. See DESIGN.md §4.3.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "error-serde", derive(serde::Serialize))]
+#[cfg_attr(feature = "error-serde", serde(rename_all = "snake_case"))]
 pub enum PermissionSubject {
     /// Parent vault directory (expected mode `0700`).
     VaultDir,
@@ -396,6 +515,8 @@ impl fmt::Display for PermissionSubject {
 
 /// Discriminator for `time_range` errors. See DESIGN.md §4.7 / §5.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "error-serde", derive(serde::Serialize))]
+#[cfg_attr(feature = "error-serde", serde(rename_all = "snake_case"))]
 pub enum TimeRangeKind {
     /// Timestamp is before the Unix epoch.
     PreEpoch,

@@ -30,6 +30,8 @@ use crate::ValidationWarning;
 /// - `Append` inserts the colliding row as an additional account
 ///   with a fresh `AccountId`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "error-serde", derive(serde::Serialize))]
+#[cfg_attr(feature = "error-serde", serde(rename_all = "snake_case"))]
 pub enum ImportConflict {
     /// Keep the existing entry; the colliding source row is counted under `skipped`.
     Skip,
@@ -46,10 +48,12 @@ pub enum ImportConflict {
 /// short-secret warning on a row that is later skipped under
 /// `ImportConflict::Skip` is still surfaced to the front end.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "error-serde", derive(serde::Serialize))]
 pub struct ImportWarning {
     /// 0-based index of the warning's source row in the original input batch.
     pub source_index: usize,
     /// The non-fatal validation warning attached to that row.
+    #[cfg_attr(feature = "error-serde", serde(flatten))]
     pub warning: ValidationWarning,
 }
 
@@ -63,6 +67,7 @@ pub struct ImportWarning {
 /// order — so callers can format an `AccountSummary` list without
 /// re-scanning the vault.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "error-serde", derive(serde::Serialize))]
 pub struct ImportReport {
     /// Number of source rows added as new accounts (no collision).
     pub imported: usize,

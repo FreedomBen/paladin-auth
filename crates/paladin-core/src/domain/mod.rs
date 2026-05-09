@@ -36,6 +36,8 @@ use uuid::Uuid;
 /// HMAC algorithm used for OTP code generation. `Sha1` is the default
 /// per DESIGN.md §4.1 / RFC 6238.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Encode, Decode)]
+#[cfg_attr(feature = "error-serde", derive(serde::Serialize))]
+#[cfg_attr(feature = "error-serde", serde(rename_all = "lowercase"))]
 pub enum Algorithm {
     /// HMAC-SHA1 (default per RFC 6238).
     #[default]
@@ -79,6 +81,8 @@ pub(crate) enum OtpKind {
 
 /// Public projection of `OtpKind` for non-secret presentation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "error-serde", derive(serde::Serialize))]
+#[cfg_attr(feature = "error-serde", serde(rename_all = "lowercase"))]
 pub enum AccountKindSummary {
     /// Time-based OTP (RFC 6238).
     Totp,
@@ -140,6 +144,16 @@ impl fmt::Debug for IconHintInput {
 /// canonical Display).
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct AccountId(Uuid);
+
+#[cfg(feature = "error-serde")]
+impl serde::Serialize for AccountId {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.collect_str(&self.0.as_hyphenated())
+    }
+}
 
 impl AccountId {
     /// Generate a fresh `AccountId` (`UUIDv4`).
@@ -381,6 +395,7 @@ impl fmt::Debug for Account {
 /// presentation crates for list rows, JSON output, duplicate-account
 /// errors, and import reports. See DESIGN.md §4.1 / §5.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "error-serde", derive(serde::Serialize))]
 pub struct AccountSummary {
     /// Stable account identifier (`UUIDv4`).
     pub id: AccountId,
@@ -414,6 +429,7 @@ pub struct AccountSummary {
 ///
 /// `code` is zero-padded to the account's digit width.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "error-serde", derive(serde::Serialize))]
 pub struct Code {
     /// OTP digits, zero-padded to the account's `digits` width.
     pub code: String,
