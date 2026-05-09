@@ -253,7 +253,6 @@ pub(crate) fn parse_algorithm(text: &str) -> Result<Algorithm, PaladinError> {
 /// produces an account whose `(label, issuer, secret, algorithm,
 /// digits, kind, icon_hint)` are all equal to the input's.
 #[must_use]
-#[allow(dead_code)] // Wired up by export::otpauth_list (Phase I).
 pub(crate) fn emit_otpauth(account: &Account) -> String {
     use std::fmt::Write;
     let kind_token = match account.kind() {

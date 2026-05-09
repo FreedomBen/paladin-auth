@@ -10,6 +10,7 @@
 pub mod crypto;
 pub mod domain;
 pub mod error;
+pub mod export;
 pub mod import;
 pub mod otp;
 pub mod otpauth;
