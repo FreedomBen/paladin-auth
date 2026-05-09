@@ -847,14 +847,14 @@ Each step lands as its own commit. Tests come first.
   `domain/match_key.rs` / `domain/query.rs` and re-export them at the crate
   root so CLI selection plus TUI / GUI search all source matching semantics
   from core.
-- [ ] Implement the `policy` module per the test bullets above:
+- [x] Implement the `policy` module per the test bullets above:
   `policy::auto_lock::IdlePolicy` (with `should_arm`, `next_deadline`,
   `is_expired`), `policy::clipboard_clear::ClipboardClearPolicy` (with
   `schedule`, `should_clear`, and a `ClipboardClearToken` newtype that is
   `Copy + Eq + Ord` and monotonically issued), and
   `policy::hotp_reveal::deadline`. Re-export every public symbol at the
   crate root.
-- [ ] Implement the `ui_contract` constants per the test bullets above
+- [x] Implement the `ui_contract` constants per the test bullets above
   (`TICK_INTERVAL_MS`, `AUTO_LOCK_SECS_MIN/MAX`, `CLIPBOARD_CLEAR_SECS_MIN/MAX`).
   Wire `Vault::set_auto_lock_timeout_secs` and
   `Vault::set_clipboard_clear_secs` to use these constants as the
