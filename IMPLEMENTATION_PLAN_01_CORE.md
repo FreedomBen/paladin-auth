@@ -1045,7 +1045,7 @@ Each step lands as its own commit. Tests come first.
 
 ### Phase J — Public API freeze + library polish
 
-- [ ] Lock default `lib.rs` re-exports to exactly the §4.7 surface; anything
+- [x] Lock default `lib.rs` re-exports to exactly the §4.7 surface; anything
   else is `pub(crate)`. The §4.7 surface explicitly includes the
   Phase B / E / G / I additions: `parse_icon_hint_token`, `IconHintInput`
   (already), `classify_init_precheck`, `InitPrecheck`,

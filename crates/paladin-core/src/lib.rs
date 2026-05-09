@@ -7,18 +7,21 @@
 
 #![forbid(unsafe_code)]
 
-pub mod crypto;
-pub mod domain;
-pub mod error;
+// §4.7 mandates these three submodule namespaces; everything else is
+// reached through the `pub use` block below.
 pub mod export;
 pub mod import;
-pub mod otp;
-pub mod otpauth;
 pub mod policy;
-pub mod storage;
-pub mod text;
-pub mod ui_contract;
-pub mod vault;
+
+mod crypto;
+mod domain;
+mod error;
+mod otp;
+mod otpauth;
+mod storage;
+mod text;
+mod ui_contract;
+mod vault;
 
 pub use crypto::{Argon2Params, EncryptionOptions};
 

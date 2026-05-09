@@ -133,7 +133,6 @@ fn set_passphrase_writes_encrypted_backup_under_new_key() {
 
 #[test]
 fn set_passphrase_uses_distinct_nonces_for_primary_and_backup() {
-    use paladin_core::storage as _;
     let dir = vault_test_dir();
     let path = dir.path().join("vault.bin");
     let (mut vault, store) = Store::create(&path, VaultInit::Plaintext).unwrap();

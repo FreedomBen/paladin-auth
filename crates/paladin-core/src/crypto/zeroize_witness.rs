@@ -92,7 +92,13 @@ mod active {
 }
 
 #[cfg(any(test, feature = "test-zeroize-witness"))]
-pub use active::{clear_observations, take_observations, Observation};
+pub use active::{clear_observations, take_observations};
+
+// `Observation` is consumed only by the feature-gated integration tests
+// in `tests/passphrase_transitions_zeroize.rs` and `tests/zeroize_witness.rs`,
+// so it is re-exported only when the `test-zeroize-witness` feature is on.
+#[cfg(feature = "test-zeroize-witness")]
+pub use active::Observation;
 
 #[cfg(any(test, feature = "test-zeroize-witness"))]
 pub(crate) use active::observe;
