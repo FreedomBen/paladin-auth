@@ -1124,15 +1124,17 @@ Each step lands as its own commit. Tests come first.
   locks that rationale; promoting any of those types to `!Sync`
   (or demoting `Store` to `Sync`) breaks the `cargo public-api`
   snapshot in CI and requires explicit review.
-- [ ] Tests: `tests/no_network.rs` is a source-level guard that scans the
+- [x] Tests: `tests/no_network.rs` is a source-level guard that scans the
   `paladin-core` manifest and production source tree (`src/`) and fails
   on direct references to network APIs (`std::net`, `TcpStream`,
   `UdpSocket`, `ToSocketAddrs`, `tokio`, `reqwest`, `hyper`, and similar
-  denylisted spellings). It also asserts via `cargo metadata` fixtures
-  that no runtime dependency resolves to the workspace `cargo deny`
-  network-stack denylist. This is
-  defense-in-depth on top of dependency review; it is intentionally a
-  concrete source scan rather than a vacuous missing-symbol compile-fail.
+  denylisted spellings). It also reads the workspace `Cargo.lock` and
+  asserts that no resolved (direct or transitive) package name appears
+  on the `cargo deny` network-stack denylist (`deny.toml [bans]`). This
+  is defense-in-depth on top of dependency review; it is intentionally
+  a concrete file scan rather than a vacuous missing-symbol
+  compile-fail. The pattern set is mirrored from `deny.toml` — keep
+  both lockstep when adding a new banned crate.
 - [ ] Tests: fault-injection cross-save-site coverage table. With the
   `test-fault-injection` cargo feature enabled, a single integration
   test iterates over `(save_site, fault_phase)` ∈ `{ regular_save,
