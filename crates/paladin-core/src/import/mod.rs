@@ -16,8 +16,10 @@
 // never error here; the importer is what later returns
 // `no_entries_to_import`.
 
+mod aegis;
 mod otpauth;
 
+pub use aegis::aegis_plaintext;
 pub use otpauth::otpauth;
 
 use crate::storage::header::MAGIC as PALADIN_MAGIC;

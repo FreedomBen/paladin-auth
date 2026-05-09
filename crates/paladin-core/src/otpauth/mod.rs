@@ -235,7 +235,7 @@ fn resolve_kind(
     }
 }
 
-fn parse_algorithm(text: &str) -> Result<Algorithm, PaladinError> {
+pub(crate) fn parse_algorithm(text: &str) -> Result<Algorithm, PaladinError> {
     match text.to_ascii_uppercase().as_str() {
         "SHA1" => Ok(Algorithm::Sha1),
         "SHA256" => Ok(Algorithm::Sha256),
