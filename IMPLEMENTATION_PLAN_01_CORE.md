@@ -898,7 +898,7 @@ Each step lands as its own commit. Tests come first.
 
 ### Phase I — Import / export (Milestone 3)
 
-- [ ] Tests for `import::detect` content sniffing in the fixed §4.6 order
+- [x] Tests for `import::detect` content sniffing in the fixed §4.6 order
   (Paladin magic, image magic, Aegis JSON shape, otpauth text/JSON, then
   `Unknown`) → `ImportFormat` for each
   of: single `otpauth://` URI (with surrounding whitespace), `otpauth://`
