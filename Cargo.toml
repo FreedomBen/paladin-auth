@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/paladin-core",
+    "crates/paladin-cli",
 ]
 
 [workspace.package]
