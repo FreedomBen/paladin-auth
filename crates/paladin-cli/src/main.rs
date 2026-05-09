@@ -17,6 +17,7 @@ mod kdf;
 mod output;
 mod prompt;
 mod select;
+mod vault_open;
 
 use std::ffi::OsString;
 use std::io::Write;

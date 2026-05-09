@@ -26,12 +26,11 @@
 //!    under `--json`, a "Created … vault at …." line in text mode.
 
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use paladin_core::{
-    classify_init_precheck, default_vault_path, format_init_force_warning,
-    format_plaintext_storage_warning, inspect, EncryptionOptions, InitPrecheck, PaladinError,
-    Store, Vault, VaultInit, VaultMode,
+    classify_init_precheck, format_init_force_warning, format_plaintext_storage_warning, inspect,
+    EncryptionOptions, InitPrecheck, PaladinError, Store, Vault, VaultInit, VaultMode,
 };
 
 use crate::cli::{GlobalArgs, InitArgs};
@@ -39,11 +38,12 @@ use crate::kdf;
 use crate::output::error::CliError;
 use crate::output::{self, Mode};
 use crate::prompt::{self, NewPassphraseEmptyPolicy};
+use crate::vault_open;
 
 /// Entry point invoked from `main::dispatch`.
 pub fn run(global: &GlobalArgs, args: &InitArgs) -> Result<(), CliError> {
     let mode = Mode::resolve(global.json, global.no_color);
-    let path = resolve_vault_path(global)?;
+    let path = vault_open::resolve_vault_path(global)?;
 
     // KDF validation runs before *any* disk inspection or prompt so an
     // invalid flag wins over `vault_exists`, `unsafe_permissions`, and
@@ -92,13 +92,6 @@ pub fn run(global: &GlobalArgs, args: &InitArgs) -> Result<(), CliError> {
     };
 
     render_success(mode, &vault, &path)
-}
-
-fn resolve_vault_path(global: &GlobalArgs) -> Result<PathBuf, CliError> {
-    match &global.vault {
-        Some(p) => Ok(p.clone()),
-        None => Ok(default_vault_path()?),
-    }
 }
 
 fn render_success(mode: Mode, vault: &Vault, path: &Path) -> Result<(), CliError> {
