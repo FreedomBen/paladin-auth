@@ -45,8 +45,11 @@ pub(crate) const AEAD_KEY_LEN: usize = 32;
 /// trigger denial-of-service via excessive cost.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Argon2Params {
+    /// Memory cost in KiB (`8192..=1_048_576`, default `65_536`).
     pub m_kib: u32,
+    /// Time cost / number of passes (`1..=10`, default `3`).
     pub t: u32,
+    /// Parallelism / lanes (`1..=4`, default `1`).
     pub p: u32,
 }
 
@@ -89,7 +92,9 @@ impl Argon2Params {
 /// [`PaladinError::InvalidPassphrase`] (no trimming, no Unicode
 /// normalization).
 pub struct EncryptionOptions {
+    /// Passphrase used to derive the AEAD key (zeroized on drop).
     pub passphrase: SecretString,
+    /// Argon2id cost the new encrypted material will be written under.
     pub kdf_params: Argon2Params,
 }
 

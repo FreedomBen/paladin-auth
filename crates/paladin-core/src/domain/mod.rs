@@ -37,9 +37,12 @@ use uuid::Uuid;
 /// per DESIGN.md §4.1 / RFC 6238.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Encode, Decode)]
 pub enum Algorithm {
+    /// HMAC-SHA1 (default per RFC 6238).
     #[default]
     Sha1,
+    /// HMAC-SHA-256.
     Sha256,
+    /// HMAC-SHA-512.
     Sha512,
 }
 
@@ -77,14 +80,18 @@ pub(crate) enum OtpKind {
 /// Public projection of `OtpKind` for non-secret presentation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AccountKindSummary {
+    /// Time-based OTP (RFC 6238).
     Totp,
+    /// HMAC-based OTP (RFC 4226).
     Hotp,
 }
 
 /// Manual-input kind selector.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AccountKindInput {
+    /// Caller is adding a TOTP account.
     Totp,
+    /// Caller is adding an HOTP account.
     Hotp,
 }
 
@@ -95,8 +102,11 @@ pub enum AccountKindInput {
 /// - `Slug(value)`: validate and store the supplied slug.
 #[derive(Clone, PartialEq, Eq)]
 pub enum IconHintInput {
+    /// Derive a slug from the issuer (`slug::derive_default_from_issuer`).
     Default,
+    /// Force-store `None`, overriding any issuer-derived default.
     Clear,
+    /// Validate and store the supplied slug verbatim.
     Slug(String),
 }
 
@@ -369,19 +379,30 @@ impl fmt::Debug for Account {
 
 /// Public, non-secret projection of an `Account`. Used by all
 /// presentation crates for list rows, JSON output, duplicate-account
-/// errors, and import reports.
+/// errors, and import reports. See DESIGN.md §4.1 / §5.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountSummary {
+    /// Stable account identifier (`UUIDv4`).
     pub id: AccountId,
+    /// Optional issuer string (max 128 bytes).
     pub issuer: Option<String>,
+    /// Account label (max 128 bytes).
     pub label: String,
+    /// `Totp` or `Hotp`.
     pub kind: AccountKindSummary,
+    /// HMAC algorithm (SHA-1, SHA-256, SHA-512).
     pub algorithm: Algorithm,
+    /// Number of OTP digits (6, 7, or 8).
     pub digits: u8,
+    /// TOTP period in seconds; `None` for HOTP accounts.
     pub period: Option<u32>,
+    /// HOTP counter value; `None` for TOTP accounts.
     pub counter: Option<u64>,
+    /// Optional icon-hint slug (issuer-derived or user-supplied).
     pub icon_hint: Option<String>,
+    /// Account creation timestamp (Unix seconds).
     pub created_at: u64,
+    /// Last-modified timestamp (Unix seconds).
     pub updated_at: u64,
 }
 
@@ -394,10 +415,15 @@ pub struct AccountSummary {
 /// `code` is zero-padded to the account's digit width.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Code {
+    /// OTP digits, zero-padded to the account's `digits` width.
     pub code: String,
+    /// TOTP window start (Unix seconds); `None` for HOTP.
     pub valid_from: Option<u64>,
+    /// TOTP window end (Unix seconds); `None` for HOTP.
     pub valid_until: Option<u64>,
+    /// Seconds remaining in the current TOTP window; `None` for HOTP.
     pub seconds_remaining: Option<u32>,
+    /// HOTP counter that produced this code; `None` for TOTP.
     pub counter_used: Option<u64>,
 }
 

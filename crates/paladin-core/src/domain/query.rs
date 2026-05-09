@@ -27,8 +27,13 @@ const HEX_MAX: usize = 32;
 /// used to disambiguate accounts by `AccountId`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AccountQuery {
+    /// Free-text substring query (no normalization beyond `account_matches_search`).
     Search(String),
-    IdPrefix { hex_prefix: String },
+    /// Validated lowercase ASCII hex prefix (8..=32 chars) used to match `AccountId`.
+    IdPrefix {
+        /// Lowercase hex prefix (uppercase A–F accepted on input, stored lowercase).
+        hex_prefix: String,
+    },
 }
 
 /// Parse the shared account-selector grammar (DESIGN.md §5).

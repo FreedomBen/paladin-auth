@@ -37,22 +37,34 @@ pub const TIMESTAMP_MAX_INCLUSIVE: u64 = 253_402_300_799;
 /// this struct — they call the lower-level helpers in this module
 /// directly.
 pub struct AccountInput {
+    /// Account label (max 128 bytes after trimming).
     pub label: String,
+    /// Optional issuer (max 128 bytes).
     pub issuer: Option<String>,
+    /// Base32-encoded shared secret (zeroized on drop).
     pub secret: SecretString,
+    /// HMAC algorithm.
     pub algorithm: Algorithm,
+    /// Number of OTP digits (6, 7, or 8).
     pub digits: u8,
+    /// `Totp` or `Hotp`.
     pub kind: AccountKindInput,
+    /// TOTP period in seconds (TOTP only); rejected when `kind` is `Hotp`.
     pub period_secs: Option<u32>,
+    /// HOTP starting counter (HOTP only); rejected when `kind` is `Totp`.
     pub counter: Option<u64>,
+    /// Icon-hint tri-state (default-from-issuer, clear, or supplied slug).
     pub icon_hint: IconHintInput,
 }
 
 /// Non-fatal warning surfaced alongside a validated account.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ValidationWarning {
+    /// Decoded secret is shorter than the recommended minimum (RFC 4226 §4 R6).
     ShortSecret {
+        /// Length of the decoded secret in bytes.
         decoded_len: usize,
+        /// Recommended minimum length (`SHORT_SECRET_THRESHOLD_BYTES`).
         recommended_min: usize,
     },
 }
@@ -65,7 +77,9 @@ pub enum ValidationWarning {
 /// `tests/secret_audits.rs`.
 #[derive(Debug)]
 pub struct ValidatedAccount {
+    /// The validated account ready for insertion into the vault.
     pub account: Account,
+    /// Non-fatal warnings collected during validation (e.g. `ShortSecret`).
     pub warnings: Vec<ValidationWarning>,
 }
 

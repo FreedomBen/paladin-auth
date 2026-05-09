@@ -13,6 +13,7 @@
 pub(crate) mod aead;
 pub(crate) mod buffer;
 pub(crate) mod kdf;
+/// Test-only zeroization witness instrumentation (`test-zeroize-witness` feature, DESIGN.md §4.4 / Phase F.14).
 pub mod zeroize_witness;
 
 pub use kdf::{Argon2Params, EncryptionOptions};

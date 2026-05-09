@@ -31,8 +31,11 @@ use crate::ValidationWarning;
 ///   with a fresh `AccountId`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImportConflict {
+    /// Keep the existing entry; the colliding source row is counted under `skipped`.
     Skip,
+    /// Overwrite the existing entry, preserving `id`, `created_at`, and HOTP counter.
     Replace,
+    /// Insert the colliding row as an additional account with a fresh `AccountId`.
     Append,
 }
 
@@ -44,7 +47,9 @@ pub enum ImportConflict {
 /// `ImportConflict::Skip` is still surfaced to the front end.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImportWarning {
+    /// 0-based index of the warning's source row in the original input batch.
     pub source_index: usize,
+    /// The non-fatal validation warning attached to that row.
     pub warning: ValidationWarning,
 }
 
@@ -59,10 +64,16 @@ pub struct ImportWarning {
 /// re-scanning the vault.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ImportReport {
+    /// Number of source rows added as new accounts (no collision).
     pub imported: usize,
+    /// Number of source rows skipped under [`ImportConflict::Skip`].
     pub skipped: usize,
+    /// Number of source rows that overwrote an existing account under [`ImportConflict::Replace`].
     pub replaced: usize,
+    /// Number of source rows appended as fresh accounts under [`ImportConflict::Append`].
     pub appended: usize,
+    /// Vault IDs of every row that produced or modified an entry, in source order.
     pub accounts: Vec<AccountId>,
+    /// Non-fatal warnings collected before the merge policy was applied.
     pub warnings: Vec<ImportWarning>,
 }

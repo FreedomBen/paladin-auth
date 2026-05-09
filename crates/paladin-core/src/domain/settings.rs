@@ -17,9 +17,13 @@ use crate::ui_contract::{
 /// Stable §5 dotted key for the four `VaultSettings` fields.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingKey {
+    /// `auto_lock.enabled` (bool).
     AutoLockEnabled,
+    /// `auto_lock.timeout_secs` (u32, `30..=86_400`).
     AutoLockTimeoutSecs,
+    /// `clipboard.clear_enabled` (bool).
     ClipboardClearEnabled,
+    /// `clipboard.clear_secs` (u32, `5..=600`).
     ClipboardClearSecs,
 }
 
@@ -40,9 +44,13 @@ impl SettingKey {
 /// applied via [`crate::Vault::apply_setting_patch`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingPatch {
+    /// New value for `auto_lock.enabled`.
     AutoLockEnabled(bool),
+    /// New value for `auto_lock.timeout_secs` (validated `30..=86_400`).
     AutoLockTimeoutSecs(u32),
+    /// New value for `clipboard.clear_enabled`.
     ClipboardClearEnabled(bool),
+    /// New value for `clipboard.clear_secs` (validated `5..=600`).
     ClipboardClearSecs(u32),
 }
 

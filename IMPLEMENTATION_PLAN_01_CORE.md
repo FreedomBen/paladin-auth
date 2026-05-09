@@ -1148,7 +1148,7 @@ Each step lands as its own commit. Tests come first.
   `pre_commit` twice in a row on the same `Store` and asserts the
   second failure does not leak state from the first (no half-applied
   mutation, no leftover `.tmp` from the first attempt).
-- [ ] Doc-comment every public item with a one-line summary and a link back to
+- [x] Doc-comment every public item with a one-line summary and a link back to
   the relevant DESIGN.md section.
 - [ ] Add a `test-fault-injection` cargo feature (off by default) that
   exposes, only under `cfg(feature = "test-fault-injection")`, a test-only
