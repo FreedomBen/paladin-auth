@@ -804,7 +804,7 @@ Each step lands as its own commit. Tests come first.
   asserts both the value and that it is reachable through
   `paladin_core::HOTP_REVEAL_SECS` etc. so a refactor that moves
   internal modules cannot silently drop the surface.
-- [ ] Tests: `policy::auto_lock::IdlePolicy` —
+- [x] Tests: `policy::auto_lock::IdlePolicy` —
   `IdlePolicy::should_arm(is_encrypted: bool, settings: &VaultSettings)`
   returns `true` iff `is_encrypted == true && settings.auto_lock_enabled()`;
   `IdlePolicy::next_deadline(now: Instant, is_encrypted: bool,

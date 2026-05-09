@@ -12,6 +12,7 @@ pub mod domain;
 pub mod error;
 pub mod otp;
 pub mod otpauth;
+pub mod policy;
 pub mod storage;
 pub mod text;
 pub mod ui_contract;
@@ -33,6 +34,7 @@ pub use domain::{
 };
 pub use error::{ErrorKind, PaladinError, PermissionSubject, Result, TimeRangeKind, VaultMode};
 pub use otpauth::parse_otpauth;
+pub use policy::IdlePolicy;
 #[cfg(feature = "test-zeroize-witness")]
 pub use storage::_testing_write_encrypted_with_raw_plaintext;
 pub use storage::{
