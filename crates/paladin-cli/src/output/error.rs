@@ -8,12 +8,35 @@
 
 use std::io::Write;
 
-use paladin_core::PaladinError;
+use paladin_core::{AccountSummary, PaladinError};
+use serde::Serialize;
 
 use super::Mode;
 
+/// One row in a `multiple_matches` envelope. Embeds the public §5
+/// [`AccountSummary`] verbatim and adds the shortest `id:<hex>` prefix
+/// that uniquely identifies the entry in the current vault (computed
+/// by `Vault::shortest_unique_id_prefix`, ≥ 8 hex chars). The
+/// `disambiguator` lets a user re-issue the failing command with
+/// `id:<hex>` to pick exactly one of the matches.
+///
+/// JSON shape: the [`AccountSummary`] fields are flattened into the
+/// candidate object, with `disambiguator` appended — matching the
+/// stable §5 wire format called out in `IMPLEMENTATION_PLAN_02_CLI.md`.
+#[derive(Debug, Clone, Serialize)]
+pub struct Candidate {
+    /// Public account summary fields per §5 (`id`, `issuer`, `label`,
+    /// `kind`, `algorithm`, `digits`, `period`, `counter`, `icon_hint`,
+    /// `created_at`, `updated_at`).
+    #[serde(flatten)]
+    pub summary: AccountSummary,
+    /// Shortest unique `id:<hex>` prefix for this account, ≥ 8 hex chars.
+    pub disambiguator: String,
+}
+
 /// Errors that the CLI surfaces to the caller. Distinguished from
-/// `paladin_core::PaladinError` so we can route clap diagnostics and
+/// `paladin_core::PaladinError` so we can route clap diagnostics,
+/// presentation-only §5 kinds (`no_match`, `multiple_matches`), and
 /// scaffold-only stubs through the same rendering pipeline.
 #[derive(Debug)]
 pub enum CliError {
@@ -28,6 +51,27 @@ pub enum CliError {
     Usage {
         /// Verbatim clap diagnostic (already terminated) for text mode.
         text_message: String,
+    },
+    /// Query matched zero accounts. Presentation-only `error_kind`
+    /// per DESIGN.md §5 — `paladin-core` exposes the matching primitives
+    /// but never returns this kind; the CLI is responsible for
+    /// rejecting empty match sets.
+    NoMatch {
+        /// Original query text the user supplied. Reflected in the
+        /// text-mode message; the JSON envelope carries only
+        /// `error_kind` per the §5 stable schema.
+        query: String,
+    },
+    /// Query matched more than one account when the command requires
+    /// a single target (or for `show` when any HOTP account is in the
+    /// match set). Presentation-only `error_kind` per DESIGN.md §5.
+    MultipleMatches {
+        /// Original query text the user supplied. Reflected in the
+        /// text-mode message; the JSON envelope carries `error_kind`
+        /// and `candidates` per the §5 stable schema.
+        query: String,
+        /// Match set with stable disambiguators, in insertion order.
+        candidates: Vec<Candidate>,
     },
     /// Scaffold sentinel: a command body has not been implemented yet.
     /// Removed as commands land — this branch never appears in shipped
@@ -46,10 +90,29 @@ impl std::fmt::Display for CliError {
         match self {
             Self::Paladin(p) => std::fmt::Display::fmt(p, f),
             Self::Usage { text_message } => f.write_str(text_message),
+            Self::NoMatch { query } => {
+                write!(f, "no account matched query {query:?}")
+            }
+            Self::MultipleMatches { query, candidates } => {
+                write!(f, "query {query:?} matched {} accounts:", candidates.len())?;
+                for c in candidates {
+                    write!(f, "\n  {} ({})", display_label(&c.summary), c.disambiguator)?;
+                }
+                Ok(())
+            }
             Self::NotYetImplemented(name) => {
                 write!(f, "command '{name}' is not yet implemented")
             }
         }
+    }
+}
+
+/// Render a candidate's `issuer:label` (or just `label` when the issuer
+/// is empty) for the text-mode `multiple_matches` list.
+fn display_label(s: &AccountSummary) -> String {
+    match s.issuer.as_deref().filter(|i| !i.is_empty()) {
+        Some(issuer) => format!("{issuer}:{}", s.label),
+        None => s.label.clone(),
     }
 }
 
@@ -84,6 +147,19 @@ pub fn render(err: &CliError, mode: Mode, mut out: impl Write) -> std::io::Resul
             serde_json::to_writer(&mut out, &envelope).map_err(std::io::Error::other)?;
             writeln!(out)?;
         }
+        (Mode::Json, CliError::NoMatch { .. }) => {
+            let envelope = serde_json::json!({ "error_kind": "no_match" });
+            serde_json::to_writer(&mut out, &envelope).map_err(std::io::Error::other)?;
+            writeln!(out)?;
+        }
+        (Mode::Json, CliError::MultipleMatches { candidates, .. }) => {
+            let envelope = serde_json::json!({
+                "error_kind": "multiple_matches",
+                "candidates": candidates,
+            });
+            serde_json::to_writer(&mut out, &envelope).map_err(std::io::Error::other)?;
+            writeln!(out)?;
+        }
         (Mode::Json, CliError::NotYetImplemented(_)) => {
             // Scaffold-only: this branch is never reached from a
             // production build. We still emit valid JSON so callers
@@ -96,12 +172,16 @@ pub fn render(err: &CliError, mode: Mode, mut out: impl Write) -> std::io::Resul
             serde_json::to_writer(&mut out, &envelope).map_err(std::io::Error::other)?;
             writeln!(out)?;
         }
-        (Mode::Text { .. }, CliError::Paladin(p)) => {
-            writeln!(out, "paladin: {p}")?;
-        }
         (Mode::Text { .. }, CliError::Usage { text_message }) => {
             // Clap's render() already terminates with a newline.
             write!(out, "{text_message}")?;
+        }
+        (Mode::Text { .. }, CliError::Paladin(_) | CliError::NoMatch { .. }) => {
+            writeln!(out, "paladin: {err}")?;
+        }
+        (Mode::Text { .. }, CliError::MultipleMatches { .. }) => {
+            // Multi-line via `Display`; one trailing newline.
+            writeln!(out, "paladin: {err}")?;
         }
         (Mode::Text { .. }, CliError::NotYetImplemented(name)) => {
             writeln!(out, "paladin: command '{name}' is not yet implemented")?;
@@ -114,10 +194,35 @@ pub fn render(err: &CliError, mode: Mode, mut out: impl Write) -> std::io::Resul
 mod tests {
     use super::*;
 
+    use paladin_core::{AccountId, AccountKindSummary, Algorithm};
+
     fn render_to_string(err: &CliError, mode: Mode) -> String {
         let mut buf: Vec<u8> = Vec::new();
         render(err, mode, &mut buf).expect("render");
         String::from_utf8(buf).expect("utf-8")
+    }
+
+    fn fixture_summary(label: &str, issuer: Option<&str>) -> AccountSummary {
+        AccountSummary {
+            id: AccountId::new(),
+            issuer: issuer.map(str::to_string),
+            label: label.to_string(),
+            kind: AccountKindSummary::Totp,
+            algorithm: Algorithm::Sha1,
+            digits: 6,
+            period: Some(30),
+            counter: None,
+            icon_hint: None,
+            created_at: 0,
+            updated_at: 0,
+        }
+    }
+
+    fn fixture_candidate(label: &str, issuer: Option<&str>, disambig: &str) -> Candidate {
+        Candidate {
+            summary: fixture_summary(label, issuer),
+            disambiguator: disambig.to_string(),
+        }
     }
 
     #[test]
@@ -158,5 +263,78 @@ mod tests {
         };
         let s = render_to_string(&err, Mode::Text { color: false });
         assert_eq!(s, "error: missing <QUERY>\n");
+    }
+
+    #[test]
+    fn json_mode_no_match_envelope_carries_only_error_kind() {
+        let err = CliError::NoMatch {
+            query: "alice".into(),
+        };
+        let s = render_to_string(&err, Mode::Json);
+        let v: serde_json::Value = serde_json::from_str(s.trim()).unwrap();
+        assert_eq!(v["error_kind"], serde_json::json!("no_match"));
+        // §5 stable schema: query text is not on the wire.
+        assert!(v.get("query").is_none(), "unexpected `query` field: {v:?}");
+        assert!(s.ends_with('\n'));
+    }
+
+    #[test]
+    fn text_mode_no_match_includes_query_in_message() {
+        let err = CliError::NoMatch {
+            query: "alice".into(),
+        };
+        let s = render_to_string(&err, Mode::Text { color: false });
+        assert!(s.starts_with("paladin: "), "got {s:?}");
+        assert!(s.contains("alice"), "missing query in message: {s:?}");
+        assert!(s.ends_with('\n'));
+    }
+
+    #[test]
+    fn json_mode_multiple_matches_flattens_summary_and_appends_disambiguator() {
+        let err = CliError::MultipleMatches {
+            query: "alice".into(),
+            candidates: vec![
+                fixture_candidate("alice", Some("GitHub"), "id:abcdef01"),
+                fixture_candidate("alice", Some("GitLab"), "id:12345678"),
+            ],
+        };
+        let s = render_to_string(&err, Mode::Json);
+        let v: serde_json::Value = serde_json::from_str(s.trim()).unwrap();
+        assert_eq!(v["error_kind"], serde_json::json!("multiple_matches"));
+        let cands = v["candidates"].as_array().expect("array");
+        assert_eq!(cands.len(), 2);
+        // Flattened summary: top-level `issuer`, `label`, `kind`, …, plus `disambiguator`.
+        assert_eq!(cands[0]["issuer"], serde_json::json!("GitHub"));
+        assert_eq!(cands[0]["label"], serde_json::json!("alice"));
+        assert_eq!(cands[0]["kind"], serde_json::json!("totp"));
+        assert_eq!(cands[0]["disambiguator"], serde_json::json!("id:abcdef01"));
+        assert_eq!(cands[1]["disambiguator"], serde_json::json!("id:12345678"));
+        // Schema is locked: no `query` and no nested `summary` object.
+        assert!(v.get("query").is_none());
+        assert!(cands[0].get("summary").is_none());
+    }
+
+    #[test]
+    fn text_mode_multiple_matches_lists_each_candidate_with_disambiguator() {
+        let err = CliError::MultipleMatches {
+            query: "alice".into(),
+            candidates: vec![
+                fixture_candidate("alice", Some("GitHub"), "id:abcdef01"),
+                fixture_candidate("alice", None, "id:12345678"),
+            ],
+        };
+        let s = render_to_string(&err, Mode::Text { color: false });
+        assert!(s.starts_with("paladin: "), "got {s:?}");
+        assert!(s.contains("alice"), "missing query: {s:?}");
+        assert!(
+            s.contains("GitHub:alice (id:abcdef01)"),
+            "missing first candidate: {s:?}"
+        );
+        // Issuer-less candidate falls back to bare label.
+        assert!(
+            s.contains("alice (id:12345678)"),
+            "missing second candidate: {s:?}"
+        );
+        assert!(s.ends_with('\n'));
     }
 }

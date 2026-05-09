@@ -133,7 +133,7 @@ fn encrypted_open_zeroizes_post_aead_plaintext_on_decode_failure() {
     // cheap_params that the open path will derive, so AEAD
     // authenticates and the failure surfaces from
     // `decode_vault_payload`.
-    let garbage: Vec<u8> = (0..256u32).map(|i| (i as u8) ^ 0xA5).collect();
+    let garbage: Vec<u8> = (0..=u8::MAX).map(|i| i ^ 0xA5).collect();
     _testing_write_encrypted_with_raw_plaintext(&path, &pp("hunter2"), cheap_params(), &garbage)
         .expect("write encrypted vault with garbage plaintext");
 

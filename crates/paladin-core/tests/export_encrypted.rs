@@ -132,7 +132,7 @@ fn garbage_plaintext_under_right_key_returns_invalid_payload() {
     // the AEAD. Per-reason discriminator follows the existing
     // `zeroize_witness.rs` matrix: any of the three known
     // bincode-failure reasons is acceptable here.
-    let garbage: Vec<u8> = (0..256u32).map(|i| (i as u8) ^ 0xA5).collect();
+    let garbage: Vec<u8> = (0..=u8::MAX).map(|i| i ^ 0xA5).collect();
     _testing_write_encrypted_with_raw_plaintext(&path, &pp("hunter2"), cheap_params(), &garbage)
         .unwrap();
     let bytes = fs::read(&path).unwrap();
