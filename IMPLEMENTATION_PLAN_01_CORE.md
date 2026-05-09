@@ -814,7 +814,7 @@ Each step lands as its own commit. Tests come first.
   now)` does monotonic comparison (`now >= deadline`). Negative case:
   plaintext vault returns `None` regardless of `auto_lock_enabled`;
   this pins the §6 / §7 plaintext no-op rule in core, not in front ends.
-- [ ] Tests: `policy::clipboard_clear::ClipboardClearPolicy` —
+- [x] Tests: `policy::clipboard_clear::ClipboardClearPolicy` —
   `schedule(now: Instant, settings: &VaultSettings)` returns
   `Some((ClipboardClearToken, deadline))` when `clipboard_clear_enabled`
   is true and `None` otherwise; tokens are monotonically issued

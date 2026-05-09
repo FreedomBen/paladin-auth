@@ -10,12 +10,14 @@
 //     next-deadline arithmetic, and monotonic-expiry comparison.
 //   * `clipboard_clear::ClipboardClearPolicy` — schedule decision,
 //     monotonic token issuance, only-if-unchanged byte-equality
-//     decision (later phase).
+//     decision.
 //   * `hotp_reveal::deadline` — HOTP reveal countdown deadline
 //     (later phase).
 //
 // Each submodule's public symbols are re-exported at the crate root.
 
 pub mod auto_lock;
+pub mod clipboard_clear;
 
 pub use auto_lock::IdlePolicy;
+pub use clipboard_clear::{ClipboardClearPolicy, ClipboardClearToken};
