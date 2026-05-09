@@ -1056,7 +1056,7 @@ Each step lands as its own commit. Tests come first.
   `policy::hotp_reveal::deadline`, `TICK_INTERVAL_MS`,
   `AUTO_LOCK_SECS_MIN`, `AUTO_LOCK_SECS_MAX`,
   `CLIPBOARD_CLEAR_SECS_MIN`, `CLIPBOARD_CLEAR_SECS_MAX`.
-- [ ] Run `cargo public-api` (the `cargo-public-api` crate, pinned in
+- [x] Run `cargo public-api` (the `cargo-public-api` crate, pinned in
   `xtask/dev-tools.toml`) to capture the surface; commit the
   snapshot under `crates/paladin-core/public-api.txt` and gate it in CI
   so unintended surface changes fail the build.

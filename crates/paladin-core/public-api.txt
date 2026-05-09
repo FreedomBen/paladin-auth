@@ -1,0 +1,1068 @@
+pub mod paladin_core
+pub mod paladin_core::export
+pub fn paladin_core::export::encrypted(vault: &paladin_core::Vault, options: paladin_core::EncryptionOptions) -> paladin_core::Result<alloc::vec::Vec<u8>>
+pub fn paladin_core::export::otpauth_list(vault: &paladin_core::Vault) -> alloc::string::String
+pub mod paladin_core::import
+pub enum paladin_core::import::ImportFormat
+pub paladin_core::import::ImportFormat::Aegis
+pub paladin_core::import::ImportFormat::Otpauth
+pub paladin_core::import::ImportFormat::Paladin
+pub paladin_core::import::ImportFormat::QrImage
+pub paladin_core::import::ImportFormat::Unknown
+impl paladin_core::import::ImportFormat
+pub fn paladin_core::import::ImportFormat::as_str(&self) -> &'static str
+impl core::clone::Clone for paladin_core::import::ImportFormat
+pub fn paladin_core::import::ImportFormat::clone(&self) -> paladin_core::import::ImportFormat
+impl core::cmp::Eq for paladin_core::import::ImportFormat
+impl core::cmp::PartialEq for paladin_core::import::ImportFormat
+pub fn paladin_core::import::ImportFormat::eq(&self, other: &paladin_core::import::ImportFormat) -> bool
+impl core::fmt::Debug for paladin_core::import::ImportFormat
+pub fn paladin_core::import::ImportFormat::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for paladin_core::import::ImportFormat
+pub fn paladin_core::import::ImportFormat::hash<__H: core::hash::Hasher>(&self, state: &mut __H)
+impl core::marker::Copy for paladin_core::import::ImportFormat
+impl core::marker::StructuralPartialEq for paladin_core::import::ImportFormat
+impl core::marker::Freeze for paladin_core::import::ImportFormat
+impl core::marker::Send for paladin_core::import::ImportFormat
+impl core::marker::Sync for paladin_core::import::ImportFormat
+impl core::marker::Unpin for paladin_core::import::ImportFormat
+impl core::marker::UnsafeUnpin for paladin_core::import::ImportFormat
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_core::import::ImportFormat
+impl core::panic::unwind_safe::UnwindSafe for paladin_core::import::ImportFormat
+pub enum paladin_core::import::PaladinImportPrecheck
+pub paladin_core::import::PaladinImportPrecheck::NoPrompt
+pub paladin_core::import::PaladinImportPrecheck::PromptForPassphrase
+pub paladin_core::import::PaladinImportPrecheck::Reject(paladin_core::PaladinError)
+impl core::fmt::Debug for paladin_core::PaladinImportPrecheck
+pub fn paladin_core::PaladinImportPrecheck::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for paladin_core::PaladinImportPrecheck
+impl core::marker::Send for paladin_core::PaladinImportPrecheck
+impl core::marker::Sync for paladin_core::PaladinImportPrecheck
+impl core::marker::Unpin for paladin_core::PaladinImportPrecheck
+impl core::marker::UnsafeUnpin for paladin_core::PaladinImportPrecheck
+impl !core::panic::unwind_safe::RefUnwindSafe for paladin_core::PaladinImportPrecheck
+impl !core::panic::unwind_safe::UnwindSafe for paladin_core::PaladinImportPrecheck
+pub struct paladin_core::import::ImportOptions
+pub paladin_core::import::ImportOptions::format: core::option::Option<paladin_core::import::ImportFormat>
+pub paladin_core::import::ImportOptions::paladin_passphrase: core::option::Option<secrecy::SecretString>
+impl core::default::Default for paladin_core::ImportOptions
+pub fn paladin_core::ImportOptions::default() -> paladin_core::ImportOptions
+impl core::fmt::Debug for paladin_core::ImportOptions
+pub fn paladin_core::ImportOptions::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for paladin_core::ImportOptions
+impl core::marker::Send for paladin_core::ImportOptions
+impl core::marker::Sync for paladin_core::ImportOptions
+impl core::marker::Unpin for paladin_core::ImportOptions
+impl core::marker::UnsafeUnpin for paladin_core::ImportOptions
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_core::ImportOptions
+impl core::panic::unwind_safe::UnwindSafe for paladin_core::ImportOptions
+pub fn paladin_core::import::aegis_plaintext(bytes: &[u8], import_time: std::time::SystemTime) -> paladin_core::Result<alloc::vec::Vec<paladin_core::ValidatedAccount>>
+pub fn paladin_core::import::classify_paladin_import_precheck(path: &std::path::Path, forced_format: core::option::Option<paladin_core::import::ImportFormat>) -> paladin_core::PaladinImportPrecheck
+pub fn paladin_core::import::detect(bytes: &[u8]) -> paladin_core::import::ImportFormat
+pub fn paladin_core::import::from_bytes(bytes: &[u8], options: paladin_core::ImportOptions, import_time: std::time::SystemTime) -> paladin_core::Result<alloc::vec::Vec<paladin_core::ValidatedAccount>>
+pub fn paladin_core::import::from_file(path: &std::path::Path, options: paladin_core::ImportOptions, import_time: std::time::SystemTime) -> paladin_core::Result<alloc::vec::Vec<paladin_core::ValidatedAccount>>
+pub fn paladin_core::import::otpauth(bytes: &[u8], import_time: std::time::SystemTime) -> paladin_core::Result<alloc::vec::Vec<paladin_core::ValidatedAccount>>
+pub fn paladin_core::import::paladin(bytes: &[u8], passphrase: secrecy::SecretString) -> paladin_core::Result<alloc::vec::Vec<paladin_core::ValidatedAccount>>
+pub fn paladin_core::import::qr_image(path: &std::path::Path, import_time: std::time::SystemTime) -> paladin_core::Result<alloc::vec::Vec<paladin_core::ValidatedAccount>>
+pub fn paladin_core::import::qr_image_bytes(width: u32, height: u32, rgba: &[u8], import_time: std::time::SystemTime) -> paladin_core::Result<alloc::vec::Vec<paladin_core::ValidatedAccount>>
+pub fn paladin_core::import::read_qr_image(path: &std::path::Path) -> paladin_core::Result<alloc::vec::Vec<alloc::string::String>>
+pub fn paladin_core::import::read_qr_image_bytes(width: u32, height: u32, rgba: &[u8]) -> paladin_core::Result<alloc::vec::Vec<alloc::string::String>>
+pub mod paladin_core::policy
+pub mod paladin_core::policy::auto_lock
+pub struct paladin_core::policy::auto_lock::IdlePolicy
+impl paladin_core::policy::auto_lock::IdlePolicy
+pub fn paladin_core::policy::auto_lock::IdlePolicy::is_expired(deadline: std::time::Instant, now: std::time::Instant) -> bool
+pub fn paladin_core::policy::auto_lock::IdlePolicy::next_deadline(now: std::time::Instant, is_encrypted: bool, settings: &paladin_core::VaultSettings) -> core::option::Option<std::time::Instant>
+pub fn paladin_core::policy::auto_lock::IdlePolicy::should_arm(is_encrypted: bool, settings: &paladin_core::VaultSettings) -> bool
+impl core::marker::Freeze for paladin_core::policy::auto_lock::IdlePolicy
+impl core::marker::Send for paladin_core::policy::auto_lock::IdlePolicy
+impl core::marker::Sync for paladin_core::policy::auto_lock::IdlePolicy
+impl core::marker::Unpin for paladin_core::policy::auto_lock::IdlePolicy
+impl core::marker::UnsafeUnpin for paladin_core::policy::auto_lock::IdlePolicy
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_core::policy::auto_lock::IdlePolicy
+impl core::panic::unwind_safe::UnwindSafe for paladin_core::policy::auto_lock::IdlePolicy
+pub mod paladin_core::policy::clipboard_clear
+pub struct paladin_core::policy::clipboard_clear::ClipboardClearPolicy
+impl paladin_core::policy::clipboard_clear::ClipboardClearPolicy
+pub fn paladin_core::policy::clipboard_clear::ClipboardClearPolicy::schedule(now: std::time::Instant, settings: &paladin_core::VaultSettings) -> core::option::Option<(paladin_core::policy::clipboard_clear::ClipboardClearToken, std::time::Instant)>
+pub fn paladin_core::policy::clipboard_clear::ClipboardClearPolicy::should_clear(captured: &[u8], current: &[u8]) -> bool
+impl core::marker::Freeze for paladin_core::policy::clipboard_clear::ClipboardClearPolicy
+impl core::marker::Send for paladin_core::policy::clipboard_clear::ClipboardClearPolicy
+impl core::marker::Sync for paladin_core::policy::clipboard_clear::ClipboardClearPolicy
+impl core::marker::Unpin for paladin_core::policy::clipboard_clear::ClipboardClearPolicy
+impl core::marker::UnsafeUnpin for paladin_core::policy::clipboard_clear::ClipboardClearPolicy
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_core::policy::clipboard_clear::ClipboardClearPolicy
+impl core::panic::unwind_safe::UnwindSafe for paladin_core::policy::clipboard_clear::ClipboardClearPolicy
+pub struct paladin_core::policy::clipboard_clear::ClipboardClearToken(_)
+impl paladin_core::policy::clipboard_clear::ClipboardClearToken
+pub fn paladin_core::policy::clipboard_clear::ClipboardClearToken::successor(self) -> Self
+impl core::clone::Clone for paladin_core::policy::clipboard_clear::ClipboardClearToken
+pub fn paladin_core::policy::clipboard_clear::ClipboardClearToken::clone(&self) -> paladin_core::policy::clipboard_clear::ClipboardClearToken
+impl core::cmp::Eq for paladin_core::policy::clipboard_clear::ClipboardClearToken
+impl core::cmp::Ord for paladin_core::policy::clipboard_clear::ClipboardClearToken
+pub fn paladin_core::policy::clipboard_clear::ClipboardClearToken::cmp(&self, other: &paladin_core::policy::clipboard_clear::ClipboardClearToken) -> core::cmp::Ordering
+impl core::cmp::PartialEq for paladin_core::policy::clipboard_clear::ClipboardClearToken
+pub fn paladin_core::policy::clipboard_clear::ClipboardClearToken::eq(&self, other: &paladin_core::policy::clipboard_clear::ClipboardClearToken) -> bool
+impl core::cmp::PartialOrd for paladin_core::policy::clipboard_clear::ClipboardClearToken
+pub fn paladin_core::policy::clipboard_clear::ClipboardClearToken::partial_cmp(&self, other: &paladin_core::policy::clipboard_clear::ClipboardClearToken) -> core::option::Option<core::cmp::Ordering>
+impl core::fmt::Debug for paladin_core::policy::clipboard_clear::ClipboardClearToken
+pub fn paladin_core::policy::clipboard_clear::ClipboardClearToken::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for paladin_core::policy::clipboard_clear::ClipboardClearToken
+pub fn paladin_core::policy::clipboard_clear::ClipboardClearToken::hash<__H: core::hash::Hasher>(&self, state: &mut __H)
+impl core::marker::Copy for paladin_core::policy::clipboard_clear::ClipboardClearToken
+impl core::marker::StructuralPartialEq for paladin_core::policy::clipboard_clear::ClipboardClearToken
+impl core::marker::Freeze for paladin_core::policy::clipboard_clear::ClipboardClearToken
+impl core::marker::Send for paladin_core::policy::clipboard_clear::ClipboardClearToken
+impl core::marker::Sync for paladin_core::policy::clipboard_clear::ClipboardClearToken
+impl core::marker::Unpin for paladin_core::policy::clipboard_clear::ClipboardClearToken
+impl core::marker::UnsafeUnpin for paladin_core::policy::clipboard_clear::ClipboardClearToken
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_core::policy::clipboard_clear::ClipboardClearToken
+impl core::panic::unwind_safe::UnwindSafe for paladin_core::policy::clipboard_clear::ClipboardClearToken
+pub mod paladin_core::policy::hotp_reveal
+pub fn paladin_core::policy::hotp_reveal::deadline(now: std::time::Instant) -> std::time::Instant
+pub struct paladin_core::policy::ClipboardClearPolicy
+impl paladin_core::policy::clipboard_clear::ClipboardClearPolicy
+pub fn paladin_core::policy::clipboard_clear::ClipboardClearPolicy::schedule(now: std::time::Instant, settings: &paladin_core::VaultSettings) -> core::option::Option<(paladin_core::policy::clipboard_clear::ClipboardClearToken, std::time::Instant)>
+pub fn paladin_core::policy::clipboard_clear::ClipboardClearPolicy::should_clear(captured: &[u8], current: &[u8]) -> bool
+impl core::marker::Freeze for paladin_core::policy::clipboard_clear::ClipboardClearPolicy
+impl core::marker::Send for paladin_core::policy::clipboard_clear::ClipboardClearPolicy
+impl core::marker::Sync for paladin_core::policy::clipboard_clear::ClipboardClearPolicy
+impl core::marker::Unpin for paladin_core::policy::clipboard_clear::ClipboardClearPolicy
+impl core::marker::UnsafeUnpin for paladin_core::policy::clipboard_clear::ClipboardClearPolicy
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_core::policy::clipboard_clear::ClipboardClearPolicy
+impl core::panic::unwind_safe::UnwindSafe for paladin_core::policy::clipboard_clear::ClipboardClearPolicy
+pub struct paladin_core::policy::ClipboardClearToken(_)
+impl paladin_core::policy::clipboard_clear::ClipboardClearToken
+pub fn paladin_core::policy::clipboard_clear::ClipboardClearToken::successor(self) -> Self
+impl core::clone::Clone for paladin_core::policy::clipboard_clear::ClipboardClearToken
+pub fn paladin_core::policy::clipboard_clear::ClipboardClearToken::clone(&self) -> paladin_core::policy::clipboard_clear::ClipboardClearToken
+impl core::cmp::Eq for paladin_core::policy::clipboard_clear::ClipboardClearToken
+impl core::cmp::Ord for paladin_core::policy::clipboard_clear::ClipboardClearToken
+pub fn paladin_core::policy::clipboard_clear::ClipboardClearToken::cmp(&self, other: &paladin_core::policy::clipboard_clear::ClipboardClearToken) -> core::cmp::Ordering
+impl core::cmp::PartialEq for paladin_core::policy::clipboard_clear::ClipboardClearToken
+pub fn paladin_core::policy::clipboard_clear::ClipboardClearToken::eq(&self, other: &paladin_core::policy::clipboard_clear::ClipboardClearToken) -> bool
+impl core::cmp::PartialOrd for paladin_core::policy::clipboard_clear::ClipboardClearToken
+pub fn paladin_core::policy::clipboard_clear::ClipboardClearToken::partial_cmp(&self, other: &paladin_core::policy::clipboard_clear::ClipboardClearToken) -> core::option::Option<core::cmp::Ordering>
+impl core::fmt::Debug for paladin_core::policy::clipboard_clear::ClipboardClearToken
+pub fn paladin_core::policy::clipboard_clear::ClipboardClearToken::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for paladin_core::policy::clipboard_clear::ClipboardClearToken
+pub fn paladin_core::policy::clipboard_clear::ClipboardClearToken::hash<__H: core::hash::Hasher>(&self, state: &mut __H)
+impl core::marker::Copy for paladin_core::policy::clipboard_clear::ClipboardClearToken
+impl core::marker::StructuralPartialEq for paladin_core::policy::clipboard_clear::ClipboardClearToken
+impl core::marker::Freeze for paladin_core::policy::clipboard_clear::ClipboardClearToken
+impl core::marker::Send for paladin_core::policy::clipboard_clear::ClipboardClearToken
+impl core::marker::Sync for paladin_core::policy::clipboard_clear::ClipboardClearToken
+impl core::marker::Unpin for paladin_core::policy::clipboard_clear::ClipboardClearToken
+impl core::marker::UnsafeUnpin for paladin_core::policy::clipboard_clear::ClipboardClearToken
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_core::policy::clipboard_clear::ClipboardClearToken
+impl core::panic::unwind_safe::UnwindSafe for paladin_core::policy::clipboard_clear::ClipboardClearToken
+pub struct paladin_core::policy::IdlePolicy
+impl paladin_core::policy::auto_lock::IdlePolicy
+pub fn paladin_core::policy::auto_lock::IdlePolicy::is_expired(deadline: std::time::Instant, now: std::time::Instant) -> bool
+pub fn paladin_core::policy::auto_lock::IdlePolicy::next_deadline(now: std::time::Instant, is_encrypted: bool, settings: &paladin_core::VaultSettings) -> core::option::Option<std::time::Instant>
+pub fn paladin_core::policy::auto_lock::IdlePolicy::should_arm(is_encrypted: bool, settings: &paladin_core::VaultSettings) -> bool
+impl core::marker::Freeze for paladin_core::policy::auto_lock::IdlePolicy
+impl core::marker::Send for paladin_core::policy::auto_lock::IdlePolicy
+impl core::marker::Sync for paladin_core::policy::auto_lock::IdlePolicy
+impl core::marker::Unpin for paladin_core::policy::auto_lock::IdlePolicy
+impl core::marker::UnsafeUnpin for paladin_core::policy::auto_lock::IdlePolicy
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_core::policy::auto_lock::IdlePolicy
+impl core::panic::unwind_safe::UnwindSafe for paladin_core::policy::auto_lock::IdlePolicy
+pub fn paladin_core::policy::hotp_reveal_deadline(now: std::time::Instant) -> std::time::Instant
+pub enum paladin_core::AccountKindInput
+pub paladin_core::AccountKindInput::Hotp
+pub paladin_core::AccountKindInput::Totp
+impl core::clone::Clone for paladin_core::AccountKindInput
+pub fn paladin_core::AccountKindInput::clone(&self) -> paladin_core::AccountKindInput
+impl core::cmp::Eq for paladin_core::AccountKindInput
+impl core::cmp::PartialEq for paladin_core::AccountKindInput
+pub fn paladin_core::AccountKindInput::eq(&self, other: &paladin_core::AccountKindInput) -> bool
+impl core::fmt::Debug for paladin_core::AccountKindInput
+pub fn paladin_core::AccountKindInput::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for paladin_core::AccountKindInput
+impl core::marker::StructuralPartialEq for paladin_core::AccountKindInput
+impl core::marker::Freeze for paladin_core::AccountKindInput
+impl core::marker::Send for paladin_core::AccountKindInput
+impl core::marker::Sync for paladin_core::AccountKindInput
+impl core::marker::Unpin for paladin_core::AccountKindInput
+impl core::marker::UnsafeUnpin for paladin_core::AccountKindInput
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_core::AccountKindInput
+impl core::panic::unwind_safe::UnwindSafe for paladin_core::AccountKindInput
+pub enum paladin_core::AccountKindSummary
+pub paladin_core::AccountKindSummary::Hotp
+pub paladin_core::AccountKindSummary::Totp
+impl core::clone::Clone for paladin_core::AccountKindSummary
+pub fn paladin_core::AccountKindSummary::clone(&self) -> paladin_core::AccountKindSummary
+impl core::cmp::Eq for paladin_core::AccountKindSummary
+impl core::cmp::PartialEq for paladin_core::AccountKindSummary
+pub fn paladin_core::AccountKindSummary::eq(&self, other: &paladin_core::AccountKindSummary) -> bool
+impl core::fmt::Debug for paladin_core::AccountKindSummary
+pub fn paladin_core::AccountKindSummary::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for paladin_core::AccountKindSummary
+impl core::marker::StructuralPartialEq for paladin_core::AccountKindSummary
+impl core::marker::Freeze for paladin_core::AccountKindSummary
+impl core::marker::Send for paladin_core::AccountKindSummary
+impl core::marker::Sync for paladin_core::AccountKindSummary
+impl core::marker::Unpin for paladin_core::AccountKindSummary
+impl core::marker::UnsafeUnpin for paladin_core::AccountKindSummary
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_core::AccountKindSummary
+impl core::panic::unwind_safe::UnwindSafe for paladin_core::AccountKindSummary
+pub enum paladin_core::AccountQuery
+pub paladin_core::AccountQuery::IdPrefix
+pub paladin_core::AccountQuery::IdPrefix::hex_prefix: alloc::string::String
+pub paladin_core::AccountQuery::Search(alloc::string::String)
+impl core::clone::Clone for paladin_core::AccountQuery
+pub fn paladin_core::AccountQuery::clone(&self) -> paladin_core::AccountQuery
+impl core::cmp::Eq for paladin_core::AccountQuery
+impl core::cmp::PartialEq for paladin_core::AccountQuery
+pub fn paladin_core::AccountQuery::eq(&self, other: &paladin_core::AccountQuery) -> bool
+impl core::fmt::Debug for paladin_core::AccountQuery
+pub fn paladin_core::AccountQuery::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for paladin_core::AccountQuery
+impl core::marker::Freeze for paladin_core::AccountQuery
+impl core::marker::Send for paladin_core::AccountQuery
+impl core::marker::Sync for paladin_core::AccountQuery
+impl core::marker::Unpin for paladin_core::AccountQuery
+impl core::marker::UnsafeUnpin for paladin_core::AccountQuery
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_core::AccountQuery
+impl core::panic::unwind_safe::UnwindSafe for paladin_core::AccountQuery
+pub enum paladin_core::Algorithm
+pub paladin_core::Algorithm::Sha1
+pub paladin_core::Algorithm::Sha256
+pub paladin_core::Algorithm::Sha512
+impl paladin_core::Algorithm
+pub const fn paladin_core::Algorithm::as_str(self) -> &'static str
+impl bincode::enc::Encode for paladin_core::Algorithm
+pub fn paladin_core::Algorithm::encode<__E: bincode::enc::Encoder>(&self, encoder: &mut __E) -> core::result::Result<(), bincode::error::EncodeError>
+impl core::clone::Clone for paladin_core::Algorithm
+pub fn paladin_core::Algorithm::clone(&self) -> paladin_core::Algorithm
+impl core::cmp::Eq for paladin_core::Algorithm
+impl core::cmp::PartialEq for paladin_core::Algorithm
+pub fn paladin_core::Algorithm::eq(&self, other: &paladin_core::Algorithm) -> bool
+impl core::default::Default for paladin_core::Algorithm
+pub fn paladin_core::Algorithm::default() -> paladin_core::Algorithm
+impl core::fmt::Debug for paladin_core::Algorithm
+pub fn paladin_core::Algorithm::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for paladin_core::Algorithm
+pub fn paladin_core::Algorithm::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for paladin_core::Algorithm
+pub fn paladin_core::Algorithm::hash<__H: core::hash::Hasher>(&self, state: &mut __H)
+impl core::marker::Copy for paladin_core::Algorithm
+impl core::marker::StructuralPartialEq for paladin_core::Algorithm
+impl<'__de, __Context> bincode::de::BorrowDecode<'__de, __Context> for paladin_core::Algorithm
+pub fn paladin_core::Algorithm::borrow_decode<__D: bincode::de::BorrowDecoder<'__de, Context = __Context>>(decoder: &mut __D) -> core::result::Result<Self, bincode::error::DecodeError>
+impl<__Context> bincode::de::Decode<__Context> for paladin_core::Algorithm
+pub fn paladin_core::Algorithm::decode<__D: bincode::de::Decoder<Context = __Context>>(decoder: &mut __D) -> core::result::Result<Self, bincode::error::DecodeError>
+impl core::marker::Freeze for paladin_core::Algorithm
+impl core::marker::Send for paladin_core::Algorithm
+impl core::marker::Sync for paladin_core::Algorithm
+impl core::marker::Unpin for paladin_core::Algorithm
+impl core::marker::UnsafeUnpin for paladin_core::Algorithm
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_core::Algorithm
+impl core::panic::unwind_safe::UnwindSafe for paladin_core::Algorithm
+pub enum paladin_core::ErrorKind
+pub paladin_core::ErrorKind::CounterOverflow
+pub paladin_core::ErrorKind::DecryptFailed
+pub paladin_core::ErrorKind::InvalidHeader
+pub paladin_core::ErrorKind::InvalidPassphrase
+pub paladin_core::ErrorKind::InvalidPayload
+pub paladin_core::ErrorKind::InvalidState
+pub paladin_core::ErrorKind::IoError
+pub paladin_core::ErrorKind::KdfParamsOutOfBounds
+pub paladin_core::ErrorKind::NoEntriesToImport
+pub paladin_core::ErrorKind::SaveDurabilityUnconfirmed
+pub paladin_core::ErrorKind::SaveNotCommitted
+pub paladin_core::ErrorKind::TimeRange
+pub paladin_core::ErrorKind::UnsafePermissions
+pub paladin_core::ErrorKind::UnsupportedAegisEntryType
+pub paladin_core::ErrorKind::UnsupportedEncryptedAegis
+pub paladin_core::ErrorKind::UnsupportedFormatVersion
+pub paladin_core::ErrorKind::UnsupportedImportFormat
+pub paladin_core::ErrorKind::UnsupportedPlaintextVault
+pub paladin_core::ErrorKind::ValidationError
+pub paladin_core::ErrorKind::VaultExists
+pub paladin_core::ErrorKind::VaultMissing
+pub paladin_core::ErrorKind::WrongVaultLock
+impl paladin_core::ErrorKind
+pub const fn paladin_core::ErrorKind::as_str(self) -> &'static str
+impl core::clone::Clone for paladin_core::ErrorKind
+pub fn paladin_core::ErrorKind::clone(&self) -> paladin_core::ErrorKind
+impl core::cmp::Eq for paladin_core::ErrorKind
+impl core::cmp::PartialEq for paladin_core::ErrorKind
+pub fn paladin_core::ErrorKind::eq(&self, other: &paladin_core::ErrorKind) -> bool
+impl core::fmt::Debug for paladin_core::ErrorKind
+pub fn paladin_core::ErrorKind::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for paladin_core::ErrorKind
+pub fn paladin_core::ErrorKind::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for paladin_core::ErrorKind
+impl core::marker::StructuralPartialEq for paladin_core::ErrorKind
+impl core::marker::Freeze for paladin_core::ErrorKind
+impl core::marker::Send for paladin_core::ErrorKind
+impl core::marker::Sync for paladin_core::ErrorKind
+impl core::marker::Unpin for paladin_core::ErrorKind
+impl core::marker::UnsafeUnpin for paladin_core::ErrorKind
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_core::ErrorKind
+impl core::panic::unwind_safe::UnwindSafe for paladin_core::ErrorKind
+pub enum paladin_core::IconHintInput
+pub paladin_core::IconHintInput::Clear
+pub paladin_core::IconHintInput::Default
+pub paladin_core::IconHintInput::Slug(alloc::string::String)
+impl core::clone::Clone for paladin_core::IconHintInput
+pub fn paladin_core::IconHintInput::clone(&self) -> paladin_core::IconHintInput
+impl core::cmp::Eq for paladin_core::IconHintInput
+impl core::cmp::PartialEq for paladin_core::IconHintInput
+pub fn paladin_core::IconHintInput::eq(&self, other: &paladin_core::IconHintInput) -> bool
+impl core::fmt::Debug for paladin_core::IconHintInput
+pub fn paladin_core::IconHintInput::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for paladin_core::IconHintInput
+impl core::marker::Freeze for paladin_core::IconHintInput
+impl core::marker::Send for paladin_core::IconHintInput
+impl core::marker::Sync for paladin_core::IconHintInput
+impl core::marker::Unpin for paladin_core::IconHintInput
+impl core::marker::UnsafeUnpin for paladin_core::IconHintInput
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_core::IconHintInput
+impl core::panic::unwind_safe::UnwindSafe for paladin_core::IconHintInput
+pub enum paladin_core::ImportConflict
+pub paladin_core::ImportConflict::Append
+pub paladin_core::ImportConflict::Replace
+pub paladin_core::ImportConflict::Skip
+impl core::clone::Clone for paladin_core::ImportConflict
+pub fn paladin_core::ImportConflict::clone(&self) -> paladin_core::ImportConflict
+impl core::cmp::Eq for paladin_core::ImportConflict
+impl core::cmp::PartialEq for paladin_core::ImportConflict
+pub fn paladin_core::ImportConflict::eq(&self, other: &paladin_core::ImportConflict) -> bool
+impl core::fmt::Debug for paladin_core::ImportConflict
+pub fn paladin_core::ImportConflict::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for paladin_core::ImportConflict
+impl core::marker::StructuralPartialEq for paladin_core::ImportConflict
+impl core::marker::Freeze for paladin_core::ImportConflict
+impl core::marker::Send for paladin_core::ImportConflict
+impl core::marker::Sync for paladin_core::ImportConflict
+impl core::marker::Unpin for paladin_core::ImportConflict
+impl core::marker::UnsafeUnpin for paladin_core::ImportConflict
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_core::ImportConflict
+impl core::panic::unwind_safe::UnwindSafe for paladin_core::ImportConflict
+pub enum paladin_core::ImportFormat
+pub paladin_core::ImportFormat::Aegis
+pub paladin_core::ImportFormat::Otpauth
+pub paladin_core::ImportFormat::Paladin
+pub paladin_core::ImportFormat::QrImage
+pub paladin_core::ImportFormat::Unknown
+impl paladin_core::import::ImportFormat
+pub fn paladin_core::import::ImportFormat::as_str(&self) -> &'static str
+impl core::clone::Clone for paladin_core::import::ImportFormat
+pub fn paladin_core::import::ImportFormat::clone(&self) -> paladin_core::import::ImportFormat
+impl core::cmp::Eq for paladin_core::import::ImportFormat
+impl core::cmp::PartialEq for paladin_core::import::ImportFormat
+pub fn paladin_core::import::ImportFormat::eq(&self, other: &paladin_core::import::ImportFormat) -> bool
+impl core::fmt::Debug for paladin_core::import::ImportFormat
+pub fn paladin_core::import::ImportFormat::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for paladin_core::import::ImportFormat
+pub fn paladin_core::import::ImportFormat::hash<__H: core::hash::Hasher>(&self, state: &mut __H)
+impl core::marker::Copy for paladin_core::import::ImportFormat
+impl core::marker::StructuralPartialEq for paladin_core::import::ImportFormat
+impl core::marker::Freeze for paladin_core::import::ImportFormat
+impl core::marker::Send for paladin_core::import::ImportFormat
+impl core::marker::Sync for paladin_core::import::ImportFormat
+impl core::marker::Unpin for paladin_core::import::ImportFormat
+impl core::marker::UnsafeUnpin for paladin_core::import::ImportFormat
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_core::import::ImportFormat
+impl core::panic::unwind_safe::UnwindSafe for paladin_core::import::ImportFormat
+pub enum paladin_core::InitPrecheck
+pub paladin_core::InitPrecheck::Clear
+pub paladin_core::InitPrecheck::Existing
+pub paladin_core::InitPrecheck::Propagate(paladin_core::PaladinError)
+impl core::fmt::Debug for paladin_core::InitPrecheck
+pub fn paladin_core::InitPrecheck::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for paladin_core::InitPrecheck
+impl core::marker::Send for paladin_core::InitPrecheck
+impl core::marker::Sync for paladin_core::InitPrecheck
+impl core::marker::Unpin for paladin_core::InitPrecheck
+impl core::marker::UnsafeUnpin for paladin_core::InitPrecheck
+impl !core::panic::unwind_safe::RefUnwindSafe for paladin_core::InitPrecheck
+impl !core::panic::unwind_safe::UnwindSafe for paladin_core::InitPrecheck
+pub enum paladin_core::PaladinError
+pub paladin_core::PaladinError::CounterOverflow
+pub paladin_core::PaladinError::CounterOverflow::account: paladin_core::AccountSummary
+pub paladin_core::PaladinError::DecryptFailed
+pub paladin_core::PaladinError::InvalidHeader
+pub paladin_core::PaladinError::InvalidPassphrase
+pub paladin_core::PaladinError::InvalidPassphrase::reason: &'static str
+pub paladin_core::PaladinError::InvalidPayload
+pub paladin_core::PaladinError::InvalidPayload::reason: &'static str
+pub paladin_core::PaladinError::InvalidState
+pub paladin_core::PaladinError::InvalidState::operation: &'static str
+pub paladin_core::PaladinError::InvalidState::state: &'static str
+pub paladin_core::PaladinError::IoError
+pub paladin_core::PaladinError::IoError::operation: &'static str
+pub paladin_core::PaladinError::IoError::source: std::io::error::Error
+pub paladin_core::PaladinError::KdfParamsOutOfBounds
+pub paladin_core::PaladinError::KdfParamsOutOfBounds::m_kib: u32
+pub paladin_core::PaladinError::KdfParamsOutOfBounds::p: u32
+pub paladin_core::PaladinError::KdfParamsOutOfBounds::t: u32
+pub paladin_core::PaladinError::NoEntriesToImport
+pub paladin_core::PaladinError::SaveDurabilityUnconfirmed
+pub paladin_core::PaladinError::SaveNotCommitted
+pub paladin_core::PaladinError::SaveNotCommitted::backup_path: core::option::Option<std::path::PathBuf>
+pub paladin_core::PaladinError::SaveNotCommitted::committed: bool
+pub paladin_core::PaladinError::TimeRange
+pub paladin_core::PaladinError::TimeRange::kind: paladin_core::TimeRangeKind
+pub paladin_core::PaladinError::TimeRange::operation: &'static str
+pub paladin_core::PaladinError::UnsafePermissions
+pub paladin_core::PaladinError::UnsafePermissions::actual_mode: alloc::string::String
+pub paladin_core::PaladinError::UnsafePermissions::expected_mode: alloc::string::String
+pub paladin_core::PaladinError::UnsafePermissions::path: std::path::PathBuf
+pub paladin_core::PaladinError::UnsafePermissions::subject: paladin_core::PermissionSubject
+pub paladin_core::PaladinError::UnsupportedAegisEntryType
+pub paladin_core::PaladinError::UnsupportedAegisEntryType::entry_type: alloc::string::String
+pub paladin_core::PaladinError::UnsupportedAegisEntryType::source_index: usize
+pub paladin_core::PaladinError::UnsupportedEncryptedAegis
+pub paladin_core::PaladinError::UnsupportedFormatVersion
+pub paladin_core::PaladinError::UnsupportedFormatVersion::format_ver: u8
+pub paladin_core::PaladinError::UnsupportedImportFormat
+pub paladin_core::PaladinError::UnsupportedImportFormat::format: alloc::string::String
+pub paladin_core::PaladinError::UnsupportedPlaintextVault
+pub paladin_core::PaladinError::ValidationError
+pub paladin_core::PaladinError::ValidationError::decoded_len: core::option::Option<usize>
+pub paladin_core::PaladinError::ValidationError::entry_type: core::option::Option<alloc::string::String>
+pub paladin_core::PaladinError::ValidationError::field: &'static str
+pub paladin_core::PaladinError::ValidationError::reason: alloc::string::String
+pub paladin_core::PaladinError::ValidationError::recommended_min: core::option::Option<usize>
+pub paladin_core::PaladinError::ValidationError::source_index: core::option::Option<usize>
+pub paladin_core::PaladinError::VaultExists
+pub paladin_core::PaladinError::VaultMissing
+pub paladin_core::PaladinError::WrongVaultLock
+pub paladin_core::PaladinError::WrongVaultLock::actual: paladin_core::VaultMode
+pub paladin_core::PaladinError::WrongVaultLock::expected: paladin_core::VaultMode
+impl paladin_core::PaladinError
+pub fn paladin_core::PaladinError::kind(&self) -> paladin_core::ErrorKind
+impl core::error::Error for paladin_core::PaladinError
+pub fn paladin_core::PaladinError::source(&self) -> core::option::Option<&(dyn core::error::Error + 'static)>
+impl core::fmt::Debug for paladin_core::PaladinError
+pub fn paladin_core::PaladinError::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for paladin_core::PaladinError
+pub fn paladin_core::PaladinError::fmt(&self, __formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for paladin_core::PaladinError
+impl core::marker::Send for paladin_core::PaladinError
+impl core::marker::Sync for paladin_core::PaladinError
+impl core::marker::Unpin for paladin_core::PaladinError
+impl core::marker::UnsafeUnpin for paladin_core::PaladinError
+impl !core::panic::unwind_safe::RefUnwindSafe for paladin_core::PaladinError
+impl !core::panic::unwind_safe::UnwindSafe for paladin_core::PaladinError
+pub enum paladin_core::PaladinImportPrecheck
+pub paladin_core::PaladinImportPrecheck::NoPrompt
+pub paladin_core::PaladinImportPrecheck::PromptForPassphrase
+pub paladin_core::PaladinImportPrecheck::Reject(paladin_core::PaladinError)
+impl core::fmt::Debug for paladin_core::PaladinImportPrecheck
+pub fn paladin_core::PaladinImportPrecheck::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for paladin_core::PaladinImportPrecheck
+impl core::marker::Send for paladin_core::PaladinImportPrecheck
+impl core::marker::Sync for paladin_core::PaladinImportPrecheck
+impl core::marker::Unpin for paladin_core::PaladinImportPrecheck
+impl core::marker::UnsafeUnpin for paladin_core::PaladinImportPrecheck
+impl !core::panic::unwind_safe::RefUnwindSafe for paladin_core::PaladinImportPrecheck
+impl !core::panic::unwind_safe::UnwindSafe for paladin_core::PaladinImportPrecheck
+pub enum paladin_core::PermissionSubject
+pub paladin_core::PermissionSubject::BackupFile
+pub paladin_core::PermissionSubject::VaultDir
+pub paladin_core::PermissionSubject::VaultFile
+impl paladin_core::PermissionSubject
+pub const fn paladin_core::PermissionSubject::as_str(self) -> &'static str
+impl core::clone::Clone for paladin_core::PermissionSubject
+pub fn paladin_core::PermissionSubject::clone(&self) -> paladin_core::PermissionSubject
+impl core::cmp::Eq for paladin_core::PermissionSubject
+impl core::cmp::PartialEq for paladin_core::PermissionSubject
+pub fn paladin_core::PermissionSubject::eq(&self, other: &paladin_core::PermissionSubject) -> bool
+impl core::fmt::Debug for paladin_core::PermissionSubject
+pub fn paladin_core::PermissionSubject::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for paladin_core::PermissionSubject
+pub fn paladin_core::PermissionSubject::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for paladin_core::PermissionSubject
+impl core::marker::StructuralPartialEq for paladin_core::PermissionSubject
+impl core::marker::Freeze for paladin_core::PermissionSubject
+impl core::marker::Send for paladin_core::PermissionSubject
+impl core::marker::Sync for paladin_core::PermissionSubject
+impl core::marker::Unpin for paladin_core::PermissionSubject
+impl core::marker::UnsafeUnpin for paladin_core::PermissionSubject
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_core::PermissionSubject
+impl core::panic::unwind_safe::UnwindSafe for paladin_core::PermissionSubject
+pub enum paladin_core::SettingKey
+pub paladin_core::SettingKey::AutoLockEnabled
+pub paladin_core::SettingKey::AutoLockTimeoutSecs
+pub paladin_core::SettingKey::ClipboardClearEnabled
+pub paladin_core::SettingKey::ClipboardClearSecs
+impl paladin_core::SettingKey
+pub const fn paladin_core::SettingKey::dotted(self) -> &'static str
+impl core::clone::Clone for paladin_core::SettingKey
+pub fn paladin_core::SettingKey::clone(&self) -> paladin_core::SettingKey
+impl core::cmp::Eq for paladin_core::SettingKey
+impl core::cmp::PartialEq for paladin_core::SettingKey
+pub fn paladin_core::SettingKey::eq(&self, other: &paladin_core::SettingKey) -> bool
+impl core::fmt::Debug for paladin_core::SettingKey
+pub fn paladin_core::SettingKey::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for paladin_core::SettingKey
+impl core::marker::StructuralPartialEq for paladin_core::SettingKey
+impl core::marker::Freeze for paladin_core::SettingKey
+impl core::marker::Send for paladin_core::SettingKey
+impl core::marker::Sync for paladin_core::SettingKey
+impl core::marker::Unpin for paladin_core::SettingKey
+impl core::marker::UnsafeUnpin for paladin_core::SettingKey
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_core::SettingKey
+impl core::panic::unwind_safe::UnwindSafe for paladin_core::SettingKey
+pub enum paladin_core::SettingPatch
+pub paladin_core::SettingPatch::AutoLockEnabled(bool)
+pub paladin_core::SettingPatch::AutoLockTimeoutSecs(u32)
+pub paladin_core::SettingPatch::ClipboardClearEnabled(bool)
+pub paladin_core::SettingPatch::ClipboardClearSecs(u32)
+impl core::clone::Clone for paladin_core::SettingPatch
+pub fn paladin_core::SettingPatch::clone(&self) -> paladin_core::SettingPatch
+impl core::cmp::Eq for paladin_core::SettingPatch
+impl core::cmp::PartialEq for paladin_core::SettingPatch
+pub fn paladin_core::SettingPatch::eq(&self, other: &paladin_core::SettingPatch) -> bool
+impl core::fmt::Debug for paladin_core::SettingPatch
+pub fn paladin_core::SettingPatch::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for paladin_core::SettingPatch
+impl core::marker::StructuralPartialEq for paladin_core::SettingPatch
+impl core::marker::Freeze for paladin_core::SettingPatch
+impl core::marker::Send for paladin_core::SettingPatch
+impl core::marker::Sync for paladin_core::SettingPatch
+impl core::marker::Unpin for paladin_core::SettingPatch
+impl core::marker::UnsafeUnpin for paladin_core::SettingPatch
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_core::SettingPatch
+impl core::panic::unwind_safe::UnwindSafe for paladin_core::SettingPatch
+pub enum paladin_core::TimeRangeKind
+pub paladin_core::TimeRangeKind::OutOfRange
+pub paladin_core::TimeRangeKind::Overflow
+pub paladin_core::TimeRangeKind::PreEpoch
+impl paladin_core::TimeRangeKind
+pub const fn paladin_core::TimeRangeKind::as_str(self) -> &'static str
+impl core::clone::Clone for paladin_core::TimeRangeKind
+pub fn paladin_core::TimeRangeKind::clone(&self) -> paladin_core::TimeRangeKind
+impl core::cmp::Eq for paladin_core::TimeRangeKind
+impl core::cmp::PartialEq for paladin_core::TimeRangeKind
+pub fn paladin_core::TimeRangeKind::eq(&self, other: &paladin_core::TimeRangeKind) -> bool
+impl core::fmt::Debug for paladin_core::TimeRangeKind
+pub fn paladin_core::TimeRangeKind::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for paladin_core::TimeRangeKind
+pub fn paladin_core::TimeRangeKind::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for paladin_core::TimeRangeKind
+impl core::marker::StructuralPartialEq for paladin_core::TimeRangeKind
+impl core::marker::Freeze for paladin_core::TimeRangeKind
+impl core::marker::Send for paladin_core::TimeRangeKind
+impl core::marker::Sync for paladin_core::TimeRangeKind
+impl core::marker::Unpin for paladin_core::TimeRangeKind
+impl core::marker::UnsafeUnpin for paladin_core::TimeRangeKind
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_core::TimeRangeKind
+impl core::panic::unwind_safe::UnwindSafe for paladin_core::TimeRangeKind
+pub enum paladin_core::ValidationWarning
+pub paladin_core::ValidationWarning::ShortSecret
+pub paladin_core::ValidationWarning::ShortSecret::decoded_len: usize
+pub paladin_core::ValidationWarning::ShortSecret::recommended_min: usize
+impl core::clone::Clone for paladin_core::ValidationWarning
+pub fn paladin_core::ValidationWarning::clone(&self) -> paladin_core::ValidationWarning
+impl core::cmp::Eq for paladin_core::ValidationWarning
+impl core::cmp::PartialEq for paladin_core::ValidationWarning
+pub fn paladin_core::ValidationWarning::eq(&self, other: &paladin_core::ValidationWarning) -> bool
+impl core::fmt::Debug for paladin_core::ValidationWarning
+pub fn paladin_core::ValidationWarning::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for paladin_core::ValidationWarning
+impl core::marker::Freeze for paladin_core::ValidationWarning
+impl core::marker::Send for paladin_core::ValidationWarning
+impl core::marker::Sync for paladin_core::ValidationWarning
+impl core::marker::Unpin for paladin_core::ValidationWarning
+impl core::marker::UnsafeUnpin for paladin_core::ValidationWarning
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_core::ValidationWarning
+impl core::panic::unwind_safe::UnwindSafe for paladin_core::ValidationWarning
+#[non_exhaustive] pub enum paladin_core::VaultInit
+pub paladin_core::VaultInit::Encrypted(paladin_core::EncryptionOptions)
+pub paladin_core::VaultInit::Plaintext
+impl core::fmt::Debug for paladin_core::VaultInit
+pub fn paladin_core::VaultInit::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for paladin_core::VaultInit
+impl core::marker::Send for paladin_core::VaultInit
+impl core::marker::Sync for paladin_core::VaultInit
+impl core::marker::Unpin for paladin_core::VaultInit
+impl core::marker::UnsafeUnpin for paladin_core::VaultInit
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_core::VaultInit
+impl core::panic::unwind_safe::UnwindSafe for paladin_core::VaultInit
+#[non_exhaustive] pub enum paladin_core::VaultLock
+pub paladin_core::VaultLock::Encrypted(secrecy::SecretString)
+pub paladin_core::VaultLock::Plaintext
+impl core::fmt::Debug for paladin_core::VaultLock
+pub fn paladin_core::VaultLock::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for paladin_core::VaultLock
+impl core::marker::Send for paladin_core::VaultLock
+impl core::marker::Sync for paladin_core::VaultLock
+impl core::marker::Unpin for paladin_core::VaultLock
+impl core::marker::UnsafeUnpin for paladin_core::VaultLock
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_core::VaultLock
+impl core::panic::unwind_safe::UnwindSafe for paladin_core::VaultLock
+pub enum paladin_core::VaultMode
+pub paladin_core::VaultMode::Encrypted
+pub paladin_core::VaultMode::Plaintext
+impl paladin_core::VaultMode
+pub const fn paladin_core::VaultMode::as_str(self) -> &'static str
+impl core::clone::Clone for paladin_core::VaultMode
+pub fn paladin_core::VaultMode::clone(&self) -> paladin_core::VaultMode
+impl core::cmp::Eq for paladin_core::VaultMode
+impl core::cmp::PartialEq for paladin_core::VaultMode
+pub fn paladin_core::VaultMode::eq(&self, other: &paladin_core::VaultMode) -> bool
+impl core::fmt::Debug for paladin_core::VaultMode
+pub fn paladin_core::VaultMode::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for paladin_core::VaultMode
+pub fn paladin_core::VaultMode::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for paladin_core::VaultMode
+impl core::marker::StructuralPartialEq for paladin_core::VaultMode
+impl core::marker::Freeze for paladin_core::VaultMode
+impl core::marker::Send for paladin_core::VaultMode
+impl core::marker::Sync for paladin_core::VaultMode
+impl core::marker::Unpin for paladin_core::VaultMode
+impl core::marker::UnsafeUnpin for paladin_core::VaultMode
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_core::VaultMode
+impl core::panic::unwind_safe::UnwindSafe for paladin_core::VaultMode
+pub enum paladin_core::VaultStatus
+pub paladin_core::VaultStatus::Encrypted
+pub paladin_core::VaultStatus::Missing
+pub paladin_core::VaultStatus::Plaintext
+impl core::clone::Clone for paladin_core::VaultStatus
+pub fn paladin_core::VaultStatus::clone(&self) -> paladin_core::VaultStatus
+impl core::cmp::Eq for paladin_core::VaultStatus
+impl core::cmp::PartialEq for paladin_core::VaultStatus
+pub fn paladin_core::VaultStatus::eq(&self, other: &paladin_core::VaultStatus) -> bool
+impl core::fmt::Debug for paladin_core::VaultStatus
+pub fn paladin_core::VaultStatus::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for paladin_core::VaultStatus
+impl core::marker::StructuralPartialEq for paladin_core::VaultStatus
+impl core::marker::Freeze for paladin_core::VaultStatus
+impl core::marker::Send for paladin_core::VaultStatus
+impl core::marker::Sync for paladin_core::VaultStatus
+impl core::marker::Unpin for paladin_core::VaultStatus
+impl core::marker::UnsafeUnpin for paladin_core::VaultStatus
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_core::VaultStatus
+impl core::panic::unwind_safe::UnwindSafe for paladin_core::VaultStatus
+pub struct paladin_core::Account
+impl paladin_core::Account
+pub fn paladin_core::Account::algorithm(&self) -> paladin_core::Algorithm
+pub fn paladin_core::Account::counter(&self) -> core::option::Option<u64>
+pub fn paladin_core::Account::created_at(&self) -> u64
+pub fn paladin_core::Account::digits(&self) -> u8
+pub fn paladin_core::Account::icon_hint(&self) -> core::option::Option<&str>
+pub fn paladin_core::Account::id(&self) -> paladin_core::AccountId
+pub fn paladin_core::Account::issuer(&self) -> core::option::Option<&str>
+pub fn paladin_core::Account::kind(&self) -> paladin_core::AccountKindSummary
+pub fn paladin_core::Account::label(&self) -> &str
+pub fn paladin_core::Account::period(&self) -> core::option::Option<u32>
+pub fn paladin_core::Account::secret(&self) -> &paladin_core::Secret
+pub fn paladin_core::Account::summary(&self) -> paladin_core::AccountSummary
+pub fn paladin_core::Account::updated_at(&self) -> u64
+impl bincode::enc::Encode for paladin_core::Account
+pub fn paladin_core::Account::encode<__E: bincode::enc::Encoder>(&self, encoder: &mut __E) -> core::result::Result<(), bincode::error::EncodeError>
+impl core::clone::Clone for paladin_core::Account
+pub fn paladin_core::Account::clone(&self) -> paladin_core::Account
+impl core::cmp::Eq for paladin_core::Account
+impl core::cmp::PartialEq for paladin_core::Account
+pub fn paladin_core::Account::eq(&self, other: &paladin_core::Account) -> bool
+impl core::fmt::Debug for paladin_core::Account
+pub fn paladin_core::Account::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for paladin_core::Account
+impl<'__de, __Context> bincode::de::BorrowDecode<'__de, __Context> for paladin_core::Account
+pub fn paladin_core::Account::borrow_decode<__D: bincode::de::BorrowDecoder<'__de, Context = __Context>>(decoder: &mut __D) -> core::result::Result<Self, bincode::error::DecodeError>
+impl<__Context> bincode::de::Decode<__Context> for paladin_core::Account
+pub fn paladin_core::Account::decode<__D: bincode::de::Decoder<Context = __Context>>(decoder: &mut __D) -> core::result::Result<Self, bincode::error::DecodeError>
+impl core::marker::Freeze for paladin_core::Account
+impl core::marker::Send for paladin_core::Account
+impl core::marker::Sync for paladin_core::Account
+impl core::marker::Unpin for paladin_core::Account
+impl core::marker::UnsafeUnpin for paladin_core::Account
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_core::Account
+impl core::panic::unwind_safe::UnwindSafe for paladin_core::Account
+pub struct paladin_core::AccountId(_)
+impl paladin_core::AccountId
+pub fn paladin_core::AccountId::as_bytes(&self) -> &[u8; 16]
+pub fn paladin_core::AccountId::new() -> Self
+pub fn paladin_core::AccountId::to_hyphenated(&self) -> alloc::string::String
+impl bincode::enc::Encode for paladin_core::AccountId
+pub fn paladin_core::AccountId::encode<E: bincode::enc::Encoder>(&self, encoder: &mut E) -> core::result::Result<(), bincode::error::EncodeError>
+impl core::clone::Clone for paladin_core::AccountId
+pub fn paladin_core::AccountId::clone(&self) -> paladin_core::AccountId
+impl core::cmp::Eq for paladin_core::AccountId
+impl core::cmp::PartialEq for paladin_core::AccountId
+pub fn paladin_core::AccountId::eq(&self, other: &paladin_core::AccountId) -> bool
+impl core::default::Default for paladin_core::AccountId
+pub fn paladin_core::AccountId::default() -> Self
+impl core::fmt::Debug for paladin_core::AccountId
+pub fn paladin_core::AccountId::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for paladin_core::AccountId
+pub fn paladin_core::AccountId::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for paladin_core::AccountId
+pub fn paladin_core::AccountId::hash<__H: core::hash::Hasher>(&self, state: &mut __H)
+impl core::marker::Copy for paladin_core::AccountId
+impl core::marker::StructuralPartialEq for paladin_core::AccountId
+impl<'de, C> bincode::de::BorrowDecode<'de, C> for paladin_core::AccountId
+pub fn paladin_core::AccountId::borrow_decode<D: bincode::de::BorrowDecoder<'de, Context = C>>(decoder: &mut D) -> core::result::Result<Self, bincode::error::DecodeError>
+impl<C> bincode::de::Decode<C> for paladin_core::AccountId
+pub fn paladin_core::AccountId::decode<D: bincode::de::Decoder<Context = C>>(decoder: &mut D) -> core::result::Result<Self, bincode::error::DecodeError>
+impl core::marker::Freeze for paladin_core::AccountId
+impl core::marker::Send for paladin_core::AccountId
+impl core::marker::Sync for paladin_core::AccountId
+impl core::marker::Unpin for paladin_core::AccountId
+impl core::marker::UnsafeUnpin for paladin_core::AccountId
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_core::AccountId
+impl core::panic::unwind_safe::UnwindSafe for paladin_core::AccountId
+pub struct paladin_core::AccountInput
+pub paladin_core::AccountInput::algorithm: paladin_core::Algorithm
+pub paladin_core::AccountInput::counter: core::option::Option<u64>
+pub paladin_core::AccountInput::digits: u8
+pub paladin_core::AccountInput::icon_hint: paladin_core::IconHintInput
+pub paladin_core::AccountInput::issuer: core::option::Option<alloc::string::String>
+pub paladin_core::AccountInput::kind: paladin_core::AccountKindInput
+pub paladin_core::AccountInput::label: alloc::string::String
+pub paladin_core::AccountInput::period_secs: core::option::Option<u32>
+pub paladin_core::AccountInput::secret: secrecy::SecretString
+impl core::marker::Freeze for paladin_core::AccountInput
+impl core::marker::Send for paladin_core::AccountInput
+impl core::marker::Sync for paladin_core::AccountInput
+impl core::marker::Unpin for paladin_core::AccountInput
+impl core::marker::UnsafeUnpin for paladin_core::AccountInput
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_core::AccountInput
+impl core::panic::unwind_safe::UnwindSafe for paladin_core::AccountInput
+pub struct paladin_core::AccountSummary
+pub paladin_core::AccountSummary::algorithm: paladin_core::Algorithm
+pub paladin_core::AccountSummary::counter: core::option::Option<u64>
+pub paladin_core::AccountSummary::created_at: u64
+pub paladin_core::AccountSummary::digits: u8
+pub paladin_core::AccountSummary::icon_hint: core::option::Option<alloc::string::String>
+pub paladin_core::AccountSummary::id: paladin_core::AccountId
+pub paladin_core::AccountSummary::issuer: core::option::Option<alloc::string::String>
+pub paladin_core::AccountSummary::kind: paladin_core::AccountKindSummary
+pub paladin_core::AccountSummary::label: alloc::string::String
+pub paladin_core::AccountSummary::period: core::option::Option<u32>
+pub paladin_core::AccountSummary::updated_at: u64
+impl core::clone::Clone for paladin_core::AccountSummary
+pub fn paladin_core::AccountSummary::clone(&self) -> paladin_core::AccountSummary
+impl core::cmp::Eq for paladin_core::AccountSummary
+impl core::cmp::PartialEq for paladin_core::AccountSummary
+pub fn paladin_core::AccountSummary::eq(&self, other: &paladin_core::AccountSummary) -> bool
+impl core::fmt::Debug for paladin_core::AccountSummary
+pub fn paladin_core::AccountSummary::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for paladin_core::AccountSummary
+impl core::marker::Freeze for paladin_core::AccountSummary
+impl core::marker::Send for paladin_core::AccountSummary
+impl core::marker::Sync for paladin_core::AccountSummary
+impl core::marker::Unpin for paladin_core::AccountSummary
+impl core::marker::UnsafeUnpin for paladin_core::AccountSummary
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_core::AccountSummary
+impl core::panic::unwind_safe::UnwindSafe for paladin_core::AccountSummary
+pub struct paladin_core::Argon2Params
+pub paladin_core::Argon2Params::m_kib: u32
+pub paladin_core::Argon2Params::p: u32
+pub paladin_core::Argon2Params::t: u32
+impl paladin_core::Argon2Params
+pub fn paladin_core::Argon2Params::validate(&self) -> paladin_core::Result<()>
+impl core::clone::Clone for paladin_core::Argon2Params
+pub fn paladin_core::Argon2Params::clone(&self) -> paladin_core::Argon2Params
+impl core::cmp::Eq for paladin_core::Argon2Params
+impl core::cmp::PartialEq for paladin_core::Argon2Params
+pub fn paladin_core::Argon2Params::eq(&self, other: &paladin_core::Argon2Params) -> bool
+impl core::default::Default for paladin_core::Argon2Params
+pub fn paladin_core::Argon2Params::default() -> Self
+impl core::fmt::Debug for paladin_core::Argon2Params
+pub fn paladin_core::Argon2Params::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for paladin_core::Argon2Params
+impl core::marker::StructuralPartialEq for paladin_core::Argon2Params
+impl core::marker::Freeze for paladin_core::Argon2Params
+impl core::marker::Send for paladin_core::Argon2Params
+impl core::marker::Sync for paladin_core::Argon2Params
+impl core::marker::Unpin for paladin_core::Argon2Params
+impl core::marker::UnsafeUnpin for paladin_core::Argon2Params
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_core::Argon2Params
+impl core::panic::unwind_safe::UnwindSafe for paladin_core::Argon2Params
+pub struct paladin_core::ClipboardClearPolicy
+impl paladin_core::policy::clipboard_clear::ClipboardClearPolicy
+pub fn paladin_core::policy::clipboard_clear::ClipboardClearPolicy::schedule(now: std::time::Instant, settings: &paladin_core::VaultSettings) -> core::option::Option<(paladin_core::policy::clipboard_clear::ClipboardClearToken, std::time::Instant)>
+pub fn paladin_core::policy::clipboard_clear::ClipboardClearPolicy::should_clear(captured: &[u8], current: &[u8]) -> bool
+impl core::marker::Freeze for paladin_core::policy::clipboard_clear::ClipboardClearPolicy
+impl core::marker::Send for paladin_core::policy::clipboard_clear::ClipboardClearPolicy
+impl core::marker::Sync for paladin_core::policy::clipboard_clear::ClipboardClearPolicy
+impl core::marker::Unpin for paladin_core::policy::clipboard_clear::ClipboardClearPolicy
+impl core::marker::UnsafeUnpin for paladin_core::policy::clipboard_clear::ClipboardClearPolicy
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_core::policy::clipboard_clear::ClipboardClearPolicy
+impl core::panic::unwind_safe::UnwindSafe for paladin_core::policy::clipboard_clear::ClipboardClearPolicy
+pub struct paladin_core::ClipboardClearToken(_)
+impl paladin_core::policy::clipboard_clear::ClipboardClearToken
+pub fn paladin_core::policy::clipboard_clear::ClipboardClearToken::successor(self) -> Self
+impl core::clone::Clone for paladin_core::policy::clipboard_clear::ClipboardClearToken
+pub fn paladin_core::policy::clipboard_clear::ClipboardClearToken::clone(&self) -> paladin_core::policy::clipboard_clear::ClipboardClearToken
+impl core::cmp::Eq for paladin_core::policy::clipboard_clear::ClipboardClearToken
+impl core::cmp::Ord for paladin_core::policy::clipboard_clear::ClipboardClearToken
+pub fn paladin_core::policy::clipboard_clear::ClipboardClearToken::cmp(&self, other: &paladin_core::policy::clipboard_clear::ClipboardClearToken) -> core::cmp::Ordering
+impl core::cmp::PartialEq for paladin_core::policy::clipboard_clear::ClipboardClearToken
+pub fn paladin_core::policy::clipboard_clear::ClipboardClearToken::eq(&self, other: &paladin_core::policy::clipboard_clear::ClipboardClearToken) -> bool
+impl core::cmp::PartialOrd for paladin_core::policy::clipboard_clear::ClipboardClearToken
+pub fn paladin_core::policy::clipboard_clear::ClipboardClearToken::partial_cmp(&self, other: &paladin_core::policy::clipboard_clear::ClipboardClearToken) -> core::option::Option<core::cmp::Ordering>
+impl core::fmt::Debug for paladin_core::policy::clipboard_clear::ClipboardClearToken
+pub fn paladin_core::policy::clipboard_clear::ClipboardClearToken::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for paladin_core::policy::clipboard_clear::ClipboardClearToken
+pub fn paladin_core::policy::clipboard_clear::ClipboardClearToken::hash<__H: core::hash::Hasher>(&self, state: &mut __H)
+impl core::marker::Copy for paladin_core::policy::clipboard_clear::ClipboardClearToken
+impl core::marker::StructuralPartialEq for paladin_core::policy::clipboard_clear::ClipboardClearToken
+impl core::marker::Freeze for paladin_core::policy::clipboard_clear::ClipboardClearToken
+impl core::marker::Send for paladin_core::policy::clipboard_clear::ClipboardClearToken
+impl core::marker::Sync for paladin_core::policy::clipboard_clear::ClipboardClearToken
+impl core::marker::Unpin for paladin_core::policy::clipboard_clear::ClipboardClearToken
+impl core::marker::UnsafeUnpin for paladin_core::policy::clipboard_clear::ClipboardClearToken
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_core::policy::clipboard_clear::ClipboardClearToken
+impl core::panic::unwind_safe::UnwindSafe for paladin_core::policy::clipboard_clear::ClipboardClearToken
+pub struct paladin_core::Code
+pub paladin_core::Code::code: alloc::string::String
+pub paladin_core::Code::counter_used: core::option::Option<u64>
+pub paladin_core::Code::seconds_remaining: core::option::Option<u32>
+pub paladin_core::Code::valid_from: core::option::Option<u64>
+pub paladin_core::Code::valid_until: core::option::Option<u64>
+impl core::clone::Clone for paladin_core::Code
+pub fn paladin_core::Code::clone(&self) -> paladin_core::Code
+impl core::cmp::Eq for paladin_core::Code
+impl core::cmp::PartialEq for paladin_core::Code
+pub fn paladin_core::Code::eq(&self, other: &paladin_core::Code) -> bool
+impl core::fmt::Debug for paladin_core::Code
+pub fn paladin_core::Code::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for paladin_core::Code
+impl core::marker::Freeze for paladin_core::Code
+impl core::marker::Send for paladin_core::Code
+impl core::marker::Sync for paladin_core::Code
+impl core::marker::Unpin for paladin_core::Code
+impl core::marker::UnsafeUnpin for paladin_core::Code
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_core::Code
+impl core::panic::unwind_safe::UnwindSafe for paladin_core::Code
+pub struct paladin_core::EncryptionOptions
+pub paladin_core::EncryptionOptions::kdf_params: paladin_core::Argon2Params
+pub paladin_core::EncryptionOptions::passphrase: secrecy::SecretString
+impl paladin_core::EncryptionOptions
+pub fn paladin_core::EncryptionOptions::new(passphrase: secrecy::SecretString) -> paladin_core::Result<Self>
+pub fn paladin_core::EncryptionOptions::with_params(passphrase: secrecy::SecretString, kdf_params: paladin_core::Argon2Params) -> paladin_core::Result<Self>
+impl core::fmt::Debug for paladin_core::EncryptionOptions
+pub fn paladin_core::EncryptionOptions::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for paladin_core::EncryptionOptions
+impl core::marker::Send for paladin_core::EncryptionOptions
+impl core::marker::Sync for paladin_core::EncryptionOptions
+impl core::marker::Unpin for paladin_core::EncryptionOptions
+impl core::marker::UnsafeUnpin for paladin_core::EncryptionOptions
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_core::EncryptionOptions
+impl core::panic::unwind_safe::UnwindSafe for paladin_core::EncryptionOptions
+pub struct paladin_core::IdlePolicy
+impl paladin_core::policy::auto_lock::IdlePolicy
+pub fn paladin_core::policy::auto_lock::IdlePolicy::is_expired(deadline: std::time::Instant, now: std::time::Instant) -> bool
+pub fn paladin_core::policy::auto_lock::IdlePolicy::next_deadline(now: std::time::Instant, is_encrypted: bool, settings: &paladin_core::VaultSettings) -> core::option::Option<std::time::Instant>
+pub fn paladin_core::policy::auto_lock::IdlePolicy::should_arm(is_encrypted: bool, settings: &paladin_core::VaultSettings) -> bool
+impl core::marker::Freeze for paladin_core::policy::auto_lock::IdlePolicy
+impl core::marker::Send for paladin_core::policy::auto_lock::IdlePolicy
+impl core::marker::Sync for paladin_core::policy::auto_lock::IdlePolicy
+impl core::marker::Unpin for paladin_core::policy::auto_lock::IdlePolicy
+impl core::marker::UnsafeUnpin for paladin_core::policy::auto_lock::IdlePolicy
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_core::policy::auto_lock::IdlePolicy
+impl core::panic::unwind_safe::UnwindSafe for paladin_core::policy::auto_lock::IdlePolicy
+pub struct paladin_core::ImportOptions
+pub paladin_core::ImportOptions::format: core::option::Option<paladin_core::import::ImportFormat>
+pub paladin_core::ImportOptions::paladin_passphrase: core::option::Option<secrecy::SecretString>
+impl core::default::Default for paladin_core::ImportOptions
+pub fn paladin_core::ImportOptions::default() -> paladin_core::ImportOptions
+impl core::fmt::Debug for paladin_core::ImportOptions
+pub fn paladin_core::ImportOptions::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for paladin_core::ImportOptions
+impl core::marker::Send for paladin_core::ImportOptions
+impl core::marker::Sync for paladin_core::ImportOptions
+impl core::marker::Unpin for paladin_core::ImportOptions
+impl core::marker::UnsafeUnpin for paladin_core::ImportOptions
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_core::ImportOptions
+impl core::panic::unwind_safe::UnwindSafe for paladin_core::ImportOptions
+pub struct paladin_core::ImportReport
+pub paladin_core::ImportReport::accounts: alloc::vec::Vec<paladin_core::AccountId>
+pub paladin_core::ImportReport::appended: usize
+pub paladin_core::ImportReport::imported: usize
+pub paladin_core::ImportReport::replaced: usize
+pub paladin_core::ImportReport::skipped: usize
+pub paladin_core::ImportReport::warnings: alloc::vec::Vec<paladin_core::ImportWarning>
+impl core::clone::Clone for paladin_core::ImportReport
+pub fn paladin_core::ImportReport::clone(&self) -> paladin_core::ImportReport
+impl core::cmp::Eq for paladin_core::ImportReport
+impl core::cmp::PartialEq for paladin_core::ImportReport
+pub fn paladin_core::ImportReport::eq(&self, other: &paladin_core::ImportReport) -> bool
+impl core::default::Default for paladin_core::ImportReport
+pub fn paladin_core::ImportReport::default() -> paladin_core::ImportReport
+impl core::fmt::Debug for paladin_core::ImportReport
+pub fn paladin_core::ImportReport::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for paladin_core::ImportReport
+impl core::marker::Freeze for paladin_core::ImportReport
+impl core::marker::Send for paladin_core::ImportReport
+impl core::marker::Sync for paladin_core::ImportReport
+impl core::marker::Unpin for paladin_core::ImportReport
+impl core::marker::UnsafeUnpin for paladin_core::ImportReport
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_core::ImportReport
+impl core::panic::unwind_safe::UnwindSafe for paladin_core::ImportReport
+pub struct paladin_core::ImportWarning
+pub paladin_core::ImportWarning::source_index: usize
+pub paladin_core::ImportWarning::warning: paladin_core::ValidationWarning
+impl core::clone::Clone for paladin_core::ImportWarning
+pub fn paladin_core::ImportWarning::clone(&self) -> paladin_core::ImportWarning
+impl core::cmp::Eq for paladin_core::ImportWarning
+impl core::cmp::PartialEq for paladin_core::ImportWarning
+pub fn paladin_core::ImportWarning::eq(&self, other: &paladin_core::ImportWarning) -> bool
+impl core::fmt::Debug for paladin_core::ImportWarning
+pub fn paladin_core::ImportWarning::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for paladin_core::ImportWarning
+impl core::marker::Freeze for paladin_core::ImportWarning
+impl core::marker::Send for paladin_core::ImportWarning
+impl core::marker::Sync for paladin_core::ImportWarning
+impl core::marker::Unpin for paladin_core::ImportWarning
+impl core::marker::UnsafeUnpin for paladin_core::ImportWarning
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_core::ImportWarning
+impl core::panic::unwind_safe::UnwindSafe for paladin_core::ImportWarning
+pub struct paladin_core::Secret(_)
+impl paladin_core::Secret
+pub fn paladin_core::Secret::expose_secret(&self) -> &[u8]
+pub fn paladin_core::Secret::is_empty(&self) -> bool
+pub fn paladin_core::Secret::len(&self) -> usize
+impl bincode::enc::Encode for paladin_core::Secret
+pub fn paladin_core::Secret::encode<E: bincode::enc::Encoder>(&self, encoder: &mut E) -> core::result::Result<(), bincode::error::EncodeError>
+impl core::clone::Clone for paladin_core::Secret
+pub fn paladin_core::Secret::clone(&self) -> paladin_core::Secret
+impl core::cmp::Eq for paladin_core::Secret
+impl core::cmp::PartialEq for paladin_core::Secret
+pub fn paladin_core::Secret::eq(&self, other: &Self) -> bool
+impl core::ops::drop::Drop for paladin_core::Secret
+pub fn paladin_core::Secret::drop(&mut self)
+impl zeroize::Zeroize for paladin_core::Secret
+pub fn paladin_core::Secret::zeroize(&mut self)
+impl<'de, C> bincode::de::BorrowDecode<'de, C> for paladin_core::Secret
+pub fn paladin_core::Secret::borrow_decode<D: bincode::de::BorrowDecoder<'de, Context = C>>(decoder: &mut D) -> core::result::Result<Self, bincode::error::DecodeError>
+impl<C> bincode::de::Decode<C> for paladin_core::Secret
+pub fn paladin_core::Secret::decode<D: bincode::de::Decoder<Context = C>>(decoder: &mut D) -> core::result::Result<Self, bincode::error::DecodeError>
+impl core::marker::Freeze for paladin_core::Secret
+impl core::marker::Send for paladin_core::Secret
+impl core::marker::Sync for paladin_core::Secret
+impl core::marker::Unpin for paladin_core::Secret
+impl core::marker::UnsafeUnpin for paladin_core::Secret
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_core::Secret
+impl core::panic::unwind_safe::UnwindSafe for paladin_core::Secret
+pub struct paladin_core::Store
+impl paladin_core::Store
+pub fn paladin_core::Store::create(path: &std::path::Path, init: paladin_core::VaultInit) -> paladin_core::Result<(paladin_core::Vault, Self)>
+pub fn paladin_core::Store::create_force(path: &std::path::Path, init: paladin_core::VaultInit) -> paladin_core::Result<(paladin_core::Vault, Self)>
+pub fn paladin_core::Store::open(path: &std::path::Path, lock: paladin_core::VaultLock) -> paladin_core::Result<(paladin_core::Vault, Self)>
+impl core::fmt::Debug for paladin_core::Store
+pub fn paladin_core::Store::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl !core::marker::Freeze for paladin_core::Store
+impl core::marker::Send for paladin_core::Store
+impl !core::marker::Sync for paladin_core::Store
+impl core::marker::Unpin for paladin_core::Store
+impl core::marker::UnsafeUnpin for paladin_core::Store
+impl !core::panic::unwind_safe::RefUnwindSafe for paladin_core::Store
+impl core::panic::unwind_safe::UnwindSafe for paladin_core::Store
+pub struct paladin_core::ValidatedAccount
+pub paladin_core::ValidatedAccount::account: paladin_core::Account
+pub paladin_core::ValidatedAccount::warnings: alloc::vec::Vec<paladin_core::ValidationWarning>
+impl core::fmt::Debug for paladin_core::ValidatedAccount
+pub fn paladin_core::ValidatedAccount::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for paladin_core::ValidatedAccount
+impl core::marker::Send for paladin_core::ValidatedAccount
+impl core::marker::Sync for paladin_core::ValidatedAccount
+impl core::marker::Unpin for paladin_core::ValidatedAccount
+impl core::marker::UnsafeUnpin for paladin_core::ValidatedAccount
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_core::ValidatedAccount
+impl core::panic::unwind_safe::UnwindSafe for paladin_core::ValidatedAccount
+pub struct paladin_core::Vault
+impl paladin_core::Vault
+pub fn paladin_core::Vault::accounts(&self) -> &[paladin_core::Account]
+pub fn paladin_core::Vault::add(&mut self, account: paladin_core::Account) -> paladin_core::AccountId
+pub fn paladin_core::Vault::apply_setting_patch(&mut self, patch: paladin_core::SettingPatch) -> paladin_core::Result<()>
+pub fn paladin_core::Vault::change_passphrase(&mut self, store: &paladin_core::Store, options: paladin_core::EncryptionOptions) -> paladin_core::Result<()>
+pub fn paladin_core::Vault::find_duplicate(&self, account: &paladin_core::ValidatedAccount) -> core::option::Option<&paladin_core::Account>
+pub fn paladin_core::Vault::get(&self, id: paladin_core::AccountId) -> core::option::Option<&paladin_core::Account>
+pub fn paladin_core::Vault::hotp_advance(&mut self, store: &paladin_core::Store, id: paladin_core::AccountId, now: std::time::SystemTime) -> paladin_core::Result<paladin_core::Code>
+pub fn paladin_core::Vault::hotp_peek(&self, id: paladin_core::AccountId) -> paladin_core::Result<paladin_core::Code>
+pub fn paladin_core::Vault::import_accounts(&mut self, accounts: alloc::vec::Vec<paladin_core::ValidatedAccount>, policy: paladin_core::ImportConflict, now: std::time::SystemTime) -> paladin_core::Result<paladin_core::ImportReport>
+pub fn paladin_core::Vault::is_encrypted(&self) -> bool
+pub fn paladin_core::Vault::iter(&self) -> impl core::iter::traits::iterator::Iterator<Item = &paladin_core::Account>
+pub fn paladin_core::Vault::matching_accounts(&self, query: &paladin_core::AccountQuery) -> alloc::vec::Vec<&paladin_core::Account>
+pub fn paladin_core::Vault::mutate_and_save<F, R>(&mut self, store: &paladin_core::Store, mutator: F) -> paladin_core::Result<R> where F: core::ops::function::FnOnce(&mut paladin_core::Vault) -> paladin_core::Result<R>
+pub fn paladin_core::Vault::remove(&mut self, id: paladin_core::AccountId) -> core::option::Option<paladin_core::Account>
+pub fn paladin_core::Vault::remove_passphrase(&mut self, store: &paladin_core::Store) -> paladin_core::Result<()>
+pub fn paladin_core::Vault::rename(&mut self, id: paladin_core::AccountId, label: &str, now: std::time::SystemTime) -> paladin_core::Result<()>
+pub fn paladin_core::Vault::save(&self, store: &paladin_core::Store) -> paladin_core::Result<()>
+pub fn paladin_core::Vault::set_auto_lock_enabled(&mut self, enabled: bool)
+pub fn paladin_core::Vault::set_auto_lock_timeout_secs(&mut self, secs: u32) -> paladin_core::Result<()>
+pub fn paladin_core::Vault::set_clipboard_clear_enabled(&mut self, enabled: bool)
+pub fn paladin_core::Vault::set_clipboard_clear_secs(&mut self, secs: u32) -> paladin_core::Result<()>
+pub fn paladin_core::Vault::set_passphrase(&mut self, store: &paladin_core::Store, options: paladin_core::EncryptionOptions) -> paladin_core::Result<()>
+pub fn paladin_core::Vault::settings(&self) -> &paladin_core::VaultSettings
+pub fn paladin_core::Vault::shortest_unique_id_prefix(&self, id: paladin_core::AccountId) -> core::option::Option<alloc::string::String>
+pub fn paladin_core::Vault::summaries(&self) -> impl core::iter::traits::iterator::Iterator<Item = paladin_core::AccountSummary> + '_
+pub fn paladin_core::Vault::totp_code(&self, id: paladin_core::AccountId, now: std::time::SystemTime) -> paladin_core::Result<paladin_core::Code>
+impl core::fmt::Debug for paladin_core::Vault
+pub fn paladin_core::Vault::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for paladin_core::Vault
+impl core::marker::Send for paladin_core::Vault
+impl core::marker::Sync for paladin_core::Vault
+impl core::marker::Unpin for paladin_core::Vault
+impl core::marker::UnsafeUnpin for paladin_core::Vault
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_core::Vault
+impl core::panic::unwind_safe::UnwindSafe for paladin_core::Vault
+pub struct paladin_core::VaultSettings
+impl paladin_core::VaultSettings
+pub fn paladin_core::VaultSettings::auto_lock_enabled(&self) -> bool
+pub fn paladin_core::VaultSettings::auto_lock_timeout_secs(&self) -> u32
+pub fn paladin_core::VaultSettings::clipboard_clear_enabled(&self) -> bool
+pub fn paladin_core::VaultSettings::clipboard_clear_secs(&self) -> u32
+impl bincode::enc::Encode for paladin_core::VaultSettings
+pub fn paladin_core::VaultSettings::encode<__E: bincode::enc::Encoder>(&self, encoder: &mut __E) -> core::result::Result<(), bincode::error::EncodeError>
+impl core::clone::Clone for paladin_core::VaultSettings
+pub fn paladin_core::VaultSettings::clone(&self) -> paladin_core::VaultSettings
+impl core::cmp::Eq for paladin_core::VaultSettings
+impl core::cmp::PartialEq for paladin_core::VaultSettings
+pub fn paladin_core::VaultSettings::eq(&self, other: &paladin_core::VaultSettings) -> bool
+impl core::default::Default for paladin_core::VaultSettings
+pub fn paladin_core::VaultSettings::default() -> Self
+impl core::fmt::Debug for paladin_core::VaultSettings
+pub fn paladin_core::VaultSettings::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for paladin_core::VaultSettings
+impl core::marker::StructuralPartialEq for paladin_core::VaultSettings
+impl<'__de, __Context> bincode::de::BorrowDecode<'__de, __Context> for paladin_core::VaultSettings
+pub fn paladin_core::VaultSettings::borrow_decode<__D: bincode::de::BorrowDecoder<'__de, Context = __Context>>(decoder: &mut __D) -> core::result::Result<Self, bincode::error::DecodeError>
+impl<__Context> bincode::de::Decode<__Context> for paladin_core::VaultSettings
+pub fn paladin_core::VaultSettings::decode<__D: bincode::de::Decoder<Context = __Context>>(decoder: &mut __D) -> core::result::Result<Self, bincode::error::DecodeError>
+impl core::marker::Freeze for paladin_core::VaultSettings
+impl core::marker::Send for paladin_core::VaultSettings
+impl core::marker::Sync for paladin_core::VaultSettings
+impl core::marker::Unpin for paladin_core::VaultSettings
+impl core::marker::UnsafeUnpin for paladin_core::VaultSettings
+impl core::panic::unwind_safe::RefUnwindSafe for paladin_core::VaultSettings
+impl core::panic::unwind_safe::UnwindSafe for paladin_core::VaultSettings
+pub const paladin_core::AUTO_LOCK_SECS_MAX: u32
+pub const paladin_core::AUTO_LOCK_SECS_MIN: u32
+pub const paladin_core::CLIPBOARD_CLEAR_SECS_MAX: u32
+pub const paladin_core::CLIPBOARD_CLEAR_SECS_MIN: u32
+pub const paladin_core::HOTP_REVEAL_SECS: u64
+pub const paladin_core::QR_RGBA_MAX_BYTES: usize
+pub const paladin_core::TICK_INTERVAL_MS: u64
+pub fn paladin_core::account_match_key(account: &paladin_core::Account) -> alloc::string::String
+pub fn paladin_core::account_matches_search(account: &paladin_core::Account, query: &str) -> bool
+pub fn paladin_core::classify_init_precheck(probe: paladin_core::Result<paladin_core::VaultStatus>) -> paladin_core::InitPrecheck
+pub fn paladin_core::classify_paladin_import_precheck(path: &std::path::Path, forced_format: core::option::Option<paladin_core::import::ImportFormat>) -> paladin_core::PaladinImportPrecheck
+pub fn paladin_core::default_vault_path() -> paladin_core::Result<std::path::PathBuf>
+pub fn paladin_core::detect(bytes: &[u8]) -> paladin_core::import::ImportFormat
+pub fn paladin_core::format_init_force_warning(existing_vault: &std::path::Path) -> alloc::string::String
+pub fn paladin_core::format_plaintext_export_warning() -> alloc::string::String
+pub fn paladin_core::format_plaintext_storage_warning() -> alloc::string::String
+pub fn paladin_core::format_unsafe_permissions(err: &paladin_core::PaladinError) -> core::option::Option<alloc::string::String>
+pub fn paladin_core::format_validation_warning(warning: &paladin_core::ValidationWarning) -> alloc::string::String
+pub fn paladin_core::hotp_reveal_deadline(now: std::time::Instant) -> std::time::Instant
+pub fn paladin_core::inspect(path: &std::path::Path) -> paladin_core::Result<paladin_core::VaultStatus>
+pub fn paladin_core::parse_account_query(query: &str) -> paladin_core::Result<paladin_core::AccountQuery>
+pub fn paladin_core::parse_icon_hint_token(token: &str) -> core::result::Result<paladin_core::IconHintInput, paladin_core::PaladinError>
+pub fn paladin_core::parse_otpauth(uri: &str, import_time: std::time::SystemTime) -> core::result::Result<paladin_core::ValidatedAccount, paladin_core::PaladinError>
+pub fn paladin_core::parse_setting_key(key: &str) -> paladin_core::Result<paladin_core::SettingKey>
+pub fn paladin_core::parse_setting_patch(key: &str, value: &str) -> paladin_core::Result<paladin_core::SettingPatch>
+pub fn paladin_core::select_after_filter(prev: core::option::Option<paladin_core::AccountId>, filtered: &[paladin_core::AccountId]) -> core::option::Option<paladin_core::AccountId>
+pub fn paladin_core::validate_manual(input: paladin_core::AccountInput, now: std::time::SystemTime) -> core::result::Result<paladin_core::ValidatedAccount, paladin_core::PaladinError>
+pub fn paladin_core::write_secret_file_atomic(path: &std::path::Path, content: &[u8]) -> paladin_core::Result<()>
+pub type paladin_core::Result<T> = core::result::Result<T, paladin_core::PaladinError>

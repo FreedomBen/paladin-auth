@@ -7,6 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `DESIGN.md` is the source of truth for how the application and library should work.  If the user requests a change that conflicts, update DESIGN.md so it stays in sync.
 - Write exhaustive tests that cover base functionality and any edge cases, particularly for the core shared library.
 - Use a Test Driven Development (TDD) approach: write failing tests before implementing features, then implement the code to make the tests pass.
+- After changing code, format and lint it with `cargo fmt` and `cargo clippy`, ensuring no warnings remain.
 - Commit after making changes.  Do not push.
 - For containers, use Containerfile and compose.yaml and always build and run with rootless podman unless explicitly told otherwise.
 

@@ -757,7 +757,7 @@ impl Vault {
     /// HOTP accounts return
     /// `invalid_state { operation: "totp_code", state: "not_totp" }`.
     /// Pre-Unix-epoch / `valid_until`-overflow timestamps surface as
-    /// `time_range` from the underlying [`crate::otp::totp::compute`].
+    /// `time_range` from the underlying TOTP primitive.
     pub fn totp_code(&self, id: AccountId, now: SystemTime) -> Result<Code> {
         let account =
             self.accounts

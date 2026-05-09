@@ -10,7 +10,9 @@
 #   cargo install --locked cargo-audit@<pinned-version>
 
 [tools.cargo-public-api]
-version = "0.42"
+# 0.51 is the first release that parses the rustdoc-JSON format emitted by
+# nightlies contemporary with our pinned stable (rust-toolchain.toml = 1.94.1).
+version = "0.51"
 
 [tools.cargo-deny]
 version = "0.16"

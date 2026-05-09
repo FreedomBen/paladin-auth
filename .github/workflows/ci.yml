@@ -50,3 +50,23 @@ jobs:
       - name: Install cargo-audit
         run: cargo install --locked cargo-audit
       - run: cargo audit
+
+  public-api:
+    name: cargo public-api snapshot
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install stable Rust toolchain (respects rust-toolchain.toml)
+        run: rustup show
+      - name: Install nightly toolchain (cargo-public-api needs rustdoc JSON)
+        run: rustup toolchain install nightly --profile minimal
+      - name: Install pinned cargo-public-api
+        run: cargo install --locked 'cargo-public-api@^0.51'
+      - name: Regenerate snapshot
+        run: cargo public-api -p paladin-core --simplified --color=never > /tmp/public-api.txt
+      - name: Diff against committed snapshot
+        run: |
+          if ! diff -u crates/paladin-core/public-api.txt /tmp/public-api.txt; then
+            echo "::error::Public API surface changed. Update crates/paladin-core/public-api.txt or revert the change."
+            exit 1
+          fi
