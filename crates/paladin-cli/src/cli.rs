@@ -38,18 +38,25 @@ pub struct GlobalArgs {
 }
 
 /// Argon2id KDF flags shared by every encrypted-write command.
+///
+/// Captured as raw strings so the CLI can route integer-parse failures
+/// through the §5 `validation_error` envelope with the hyphenated flag
+/// name as `field` (`"kdf-memory-mib"`, `"kdf-time"`,
+/// `"kdf-parallelism"`) instead of clap's text diagnostic. See
+/// `IMPLEMENTATION_PLAN_02_CLI.md` "Encrypted-write KDF flags" and
+/// [`crate::kdf::parse_argon2_params`].
 #[derive(Debug, Args)]
 #[allow(clippy::struct_field_names)]
 pub struct KdfArgs {
     /// Argon2id memory cost, in MiB (default: 64).
     #[arg(long, value_name = "MIB")]
-    pub kdf_memory_mib: Option<u32>,
+    pub kdf_memory_mib: Option<String>,
     /// Argon2id time cost / iterations (default: 3).
     #[arg(long, value_name = "ITERATIONS")]
-    pub kdf_time: Option<u32>,
+    pub kdf_time: Option<String>,
     /// Argon2id parallelism / lanes (default: 1).
     #[arg(long, value_name = "LANES")]
-    pub kdf_parallelism: Option<u32>,
+    pub kdf_parallelism: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]

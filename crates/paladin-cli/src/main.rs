@@ -13,6 +13,7 @@
 mod cli;
 mod commands;
 mod exec_tui;
+mod kdf;
 mod output;
 mod prompt;
 mod select;
