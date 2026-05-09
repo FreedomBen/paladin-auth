@@ -59,7 +59,8 @@ fn make_account(uri: &str) -> Account {
 }
 
 const URI_TOTP_A: &str = "otpauth://totp/Acme:alice?secret=JBSWY3DPEHPK3PXP&issuer=Acme";
-const URI_HOTP_B: &str = "otpauth://hotp/Globex:bob?secret=NBSWY3DPEHPK3PXP&issuer=Globex&counter=7";
+const URI_HOTP_B: &str =
+    "otpauth://hotp/Globex:bob?secret=NBSWY3DPEHPK3PXP&issuer=Globex&counter=7";
 
 fn sample_vault() -> (TempDir, paladin_core::Vault, Store) {
     let dir = vault_test_dir();

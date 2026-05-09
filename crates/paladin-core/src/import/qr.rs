@@ -84,7 +84,7 @@ fn payloads_to_accounts(
         let trimmed = payload.trim();
         if !is_otpauth_uri(trimmed) {
             return Err(
-                PaladinError::validation("qr_image", "non_otpauth_payload").tag_source_index(idx),
+                PaladinError::validation("qr_image", "non_otpauth_payload").tag_source_index(idx)
             );
         }
         let va = parse_otpauth(trimmed, import_time).map_err(|e| e.tag_source_index(idx))?;

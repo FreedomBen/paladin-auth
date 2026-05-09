@@ -50,9 +50,7 @@ fn write_encrypted_paladin(dir: &TempDir, name: &str, passphrase: &str) -> PathB
     let path = dir.path().join(name);
     let (mut vault, store) =
         Store::create(&path, VaultInit::Encrypted(cheap_options(passphrase))).unwrap();
-    let _ = vault.add(make_account(
-        "otpauth://totp/A:a?secret=JBSWY3DPEHPK3PXP",
-    ));
+    let _ = vault.add(make_account("otpauth://totp/A:a?secret=JBSWY3DPEHPK3PXP"));
     vault.save(&store).unwrap();
     path
 }
@@ -60,9 +58,7 @@ fn write_encrypted_paladin(dir: &TempDir, name: &str, passphrase: &str) -> PathB
 fn write_plaintext_paladin(dir: &TempDir, name: &str) -> PathBuf {
     let path = dir.path().join(name);
     let (mut vault, store) = Store::create(&path, VaultInit::Plaintext).unwrap();
-    let _ = vault.add(make_account(
-        "otpauth://totp/A:a?secret=JBSWY3DPEHPK3PXP",
-    ));
+    let _ = vault.add(make_account("otpauth://totp/A:a?secret=JBSWY3DPEHPK3PXP"));
     vault.save(&store).unwrap();
     path
 }

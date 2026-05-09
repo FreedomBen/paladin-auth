@@ -68,9 +68,7 @@ fn collect_json_array(trimmed: &str) -> Result<Vec<String>> {
         match item {
             serde_json::Value::String(s) => out.push(s),
             _ => {
-                return Err(
-                    PaladinError::validation("uri", "expected_string").tag_source_index(idx)
-                )
+                return Err(PaladinError::validation("uri", "expected_string").tag_source_index(idx))
             }
         }
     }

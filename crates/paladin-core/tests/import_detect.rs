@@ -102,7 +102,9 @@ fn riff_without_webp_chunk_is_not_image() {
 #[test]
 fn aegis_plaintext_db_shape_returns_aegis() {
     // Aegis plaintext export: top-level `{"version":..., "db":{...}}`.
-    let bytes = br#"{"version":1,"header":{"slots":null,"params":null},"db":{"version":2,"entries":[]}}"#.to_vec();
+    let bytes =
+        br#"{"version":1,"header":{"slots":null,"params":null},"db":{"version":2,"entries":[]}}"#
+            .to_vec();
     assert_eq!(detect(&bytes), ImportFormat::Aegis);
 }
 
@@ -129,8 +131,7 @@ fn single_otpauth_uri_returns_otpauth() {
 
 #[test]
 fn otpauth_with_surrounding_whitespace_returns_otpauth() {
-    let bytes =
-        b"  \n\totpauth://totp/Acme:alice?secret=JBSWY3DPEHPK3PXP&issuer=Acme\n  ".to_vec();
+    let bytes = b"  \n\totpauth://totp/Acme:alice?secret=JBSWY3DPEHPK3PXP&issuer=Acme\n  ".to_vec();
     assert_eq!(detect(&bytes), ImportFormat::Otpauth);
 }
 

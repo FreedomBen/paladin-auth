@@ -51,7 +51,8 @@ fn make_account(uri: &str) -> Account {
 }
 
 const URI_TOTP_A: &str = "otpauth://totp/Acme:alice?secret=JBSWY3DPEHPK3PXP&issuer=Acme";
-const URI_HOTP_B: &str = "otpauth://hotp/Globex:bob?secret=NBSWY3DPEHPK3PXP&issuer=Globex&counter=7";
+const URI_HOTP_B: &str =
+    "otpauth://hotp/Globex:bob?secret=NBSWY3DPEHPK3PXP&issuer=Globex&counter=7";
 
 fn aegis_bytes_one_totp() -> Vec<u8> {
     br#"{"version":1,"header":{"slots":null,"params":null},"db":{"version":2,"entries":[{"type":"totp","name":"alice","issuer":"Acme","info":{"secret":"JBSWY3DPEHPK3PXP"}}]}}"#.to_vec()
@@ -108,9 +109,12 @@ fn default_import_options_has_no_format_or_passphrase() {
 
 #[test]
 fn from_bytes_auto_detects_otpauth() {
-    let imported =
-        import::from_bytes(URI_TOTP_A.as_bytes(), ImportOptions::default(), import_time())
-            .unwrap();
+    let imported = import::from_bytes(
+        URI_TOTP_A.as_bytes(),
+        ImportOptions::default(),
+        import_time(),
+    )
+    .unwrap();
     assert_eq!(imported.len(), 1);
     assert_eq!(imported[0].account.label(), "alice");
 }

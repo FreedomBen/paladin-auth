@@ -120,11 +120,9 @@ fn build_account(
     let name = entry
         .name
         .ok_or_else(|| PaladinError::validation("name", "missing").tag_source_index(idx))?;
-    let label =
-        validate_label(&name).map_err(|e| e.tag_source_index(idx))?;
+    let label = validate_label(&name).map_err(|e| e.tag_source_index(idx))?;
 
-    let issuer = validate_issuer(entry.issuer.as_deref())
-        .map_err(|e| e.tag_source_index(idx))?;
+    let issuer = validate_issuer(entry.issuer.as_deref()).map_err(|e| e.tag_source_index(idx))?;
 
     let info = entry
         .info

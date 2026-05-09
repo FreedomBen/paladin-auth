@@ -23,9 +23,7 @@
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use paladin_core::{
-    import, AccountKindSummary, Algorithm, ErrorKind, PaladinError,
-};
+use paladin_core::{import, AccountKindSummary, Algorithm, ErrorKind, PaladinError};
 
 fn import_time() -> SystemTime {
     UNIX_EPOCH + Duration::from_secs(1_700_000_000)

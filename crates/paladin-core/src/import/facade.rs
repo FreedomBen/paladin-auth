@@ -23,9 +23,7 @@ use secrecy::SecretString;
 use crate::domain::ValidatedAccount;
 use crate::error::{PaladinError, Result};
 
-use super::{
-    aegis_plaintext, detect, otpauth, paladin, qr_image, qr_image_bytes, ImportFormat,
-};
+use super::{aegis_plaintext, detect, otpauth, paladin, qr_image, qr_image_bytes, ImportFormat};
 
 /// Caller-supplied controls for [`from_bytes`] / [`from_file`].
 #[derive(Debug, Default)]

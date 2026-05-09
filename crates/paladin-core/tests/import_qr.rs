@@ -15,7 +15,8 @@ fn import_time() -> SystemTime {
 }
 
 const URI_TOTP_A: &str = "otpauth://totp/Acme:alice?secret=JBSWY3DPEHPK3PXP&issuer=Acme";
-const URI_HOTP_B: &str = "otpauth://hotp/Globex:bob?secret=NBSWY3DPEHPK3PXP&issuer=Globex&counter=7";
+const URI_HOTP_B: &str =
+    "otpauth://hotp/Globex:bob?secret=NBSWY3DPEHPK3PXP&issuer=Globex&counter=7";
 
 /// Render `payload` as a QR code into an RGBA8 buffer of `(width, height, rgba)`.
 fn make_qr_rgba(payload: &str) -> (u32, u32, Vec<u8>) {
@@ -44,7 +45,8 @@ fn write_qr_png(dir: &TempDir, name: &str, payload: &str) -> std::path::PathBuf 
         .build();
     let path = dir.path().join(format!("{name}.png"));
     let mut buf = Cursor::new(Vec::new());
-    luma.write_to(&mut buf, ImageFormat::Png).expect("encode PNG");
+    luma.write_to(&mut buf, ImageFormat::Png)
+        .expect("encode PNG");
     std::fs::write(&path, buf.into_inner()).expect("write PNG");
     path
 }
@@ -288,7 +290,11 @@ fn image_with_two_qrs_one_non_otpauth_rejects_batch_with_source_index_for_offend
     // payload, not the otpauth one.
     let (w, h, rgba) = make_side_by_side_rgba("https://example.com/not-otpauth", URI_TOTP_A);
     let payloads = import::read_qr_image_bytes(w, h, &rgba).unwrap();
-    assert_eq!(payloads.len(), 2, "both QRs must decode for the test to be meaningful");
+    assert_eq!(
+        payloads.len(),
+        2,
+        "both QRs must decode for the test to be meaningful"
+    );
     let bad_idx = payloads
         .iter()
         .position(|s| !s.starts_with("otpauth://"))

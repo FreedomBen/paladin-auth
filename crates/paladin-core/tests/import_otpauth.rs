@@ -12,7 +12,8 @@ fn import_time() -> SystemTime {
 }
 
 const URI_TOTP_A: &str = "otpauth://totp/Acme:alice?secret=JBSWY3DPEHPK3PXP&issuer=Acme";
-const URI_HOTP_B: &str = "otpauth://hotp/Globex:bob?secret=NBSWY3DPEHPK3PXP&issuer=Globex&counter=7";
+const URI_HOTP_B: &str =
+    "otpauth://hotp/Globex:bob?secret=NBSWY3DPEHPK3PXP&issuer=Globex&counter=7";
 
 // ---------- Single URI ----------
 
@@ -161,8 +162,11 @@ fn json_array_with_invalid_uri_string_propagates_source_index() {
 
 #[test]
 fn malformed_json_array_returns_validation_error_without_panic() {
-    let err = import::otpauth(b"[\"otpauth://totp/A:a?secret=JBSWY3DPEHPK3PXP\",", import_time())
-        .unwrap_err();
+    let err = import::otpauth(
+        b"[\"otpauth://totp/A:a?secret=JBSWY3DPEHPK3PXP\",",
+        import_time(),
+    )
+    .unwrap_err();
     assert_eq!(err.kind(), ErrorKind::ValidationError);
 }
 
