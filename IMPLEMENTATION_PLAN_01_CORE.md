@@ -138,7 +138,7 @@ Each step lands as its own commit. Tests come first.
 - [x] Write `README.md` with build instructions covering the §10 CI gate
   (`cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo test --all`,
   `cargo deny check`, `cargo audit`) — the §12 Milestone 0 README deliverable.
-- [ ] Document that `default_vault_path()` uses
+- [x] Document that `default_vault_path()` uses
   `ProjectDirs::from("", "", "paladin")`, then appends `vault.bin` under the
   returned `data_dir()`.
 - [x] Add SPDX header to every source file.
@@ -206,7 +206,7 @@ Each step lands as its own commit. Tests come first.
   validity fields as `Some` with `counter_used = None`, and HOTP
   `counter_used = Some(pre_advance_counter)` with validity fields `None`.
   *(Struct only; OTP module in Phase C populates it.)*
-- [ ] No `Debug` impls that print secret bytes — wire compile-fail coverage
+- [x] No `Debug` impls that print secret bytes — wire compile-fail coverage
   proving `Secret` cannot be formatted with `Debug`, plus runtime assertions
   that any public `Debug` output for secret-bearing types omits or redacts the
   secret bytes. The enumerated secret-bearing types are: `Secret`,
@@ -694,7 +694,7 @@ Each step lands as its own commit. Tests come first.
 - [x] Tests: encrypted `create` and `create_force` through `VaultInit`
   follow the same precondition, parent-permission, staged-clobber,
   commit-point, and durability-error semantics as plaintext storage.
-- [ ] Implement `crypto::argon2` with public `Argon2Params`,
+- [x] Implement `crypto::argon2` with public `Argon2Params`,
   `EncryptionOptions`, and `VaultInit` support (defaults `m_kib = 65536`
   (64 MiB), `t = 3`, `p = 1`; §4.4 read/write bounds `m_kib` 8192–1048576,
   `t` 1–10, `p` 1–4), `crypto::aead` (XChaCha20-Poly1305 with header bytes

@@ -929,9 +929,18 @@ impl fmt::Debug for Vault {
 mod tests {
     use super::*;
     use crate::crypto::zeroize_witness::{clear_observations, take_observations};
+    use static_assertions::assert_not_impl_all;
     use zeroize::ZeroizeOnDrop;
 
     fn _assert_zeroize_on_drop<T: ZeroizeOnDrop>() {}
+
+    // Phase B audit (DESIGN.md §8 / IMPLEMENTATION_PLAN_01_CORE.md
+    // Phase B): the rollback snapshot owns secret-bearing
+    // `Vec<Account>` data and must never gain a `Debug` derive.
+    // `VaultSnapshot` is `pub(super)`, so the equivalent trybuild
+    // proof in `tests/trybuild/` cannot reach it from an external
+    // crate; this in-tree assertion keeps the guarantee visible.
+    assert_not_impl_all!(VaultSnapshot: std::fmt::Debug);
 
     /// Containment witness for `VaultSnapshot`'s secret-bearing field
     /// (DESIGN.md §4.7 / Phase G.9): the snapshot owns a
