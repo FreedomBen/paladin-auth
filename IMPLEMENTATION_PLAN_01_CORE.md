@@ -1060,7 +1060,7 @@ Each step lands as its own commit. Tests come first.
   `xtask/dev-tools.toml`) to capture the surface; commit the
   snapshot under `crates/paladin-core/public-api.txt` and gate it in CI
   so unintended surface changes fail the build.
-- [ ] Tests: `tests/error_matrix.rs` produces every core-returnable §5
+- [x] Tests: `tests/error_matrix.rs` produces every core-returnable §5
   `error_kind` at least once and asserts the kind plus every stable
   extra field. Coverage rows: `validation_error` (one per `field` /
   `reason` site — manual `add`, otpauth parse, aegis import, qr
