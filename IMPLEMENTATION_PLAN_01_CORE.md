@@ -1135,17 +1135,19 @@ Each step lands as its own commit. Tests come first.
   a concrete file scan rather than a vacuous missing-symbol
   compile-fail. The pattern set is mirrored from `deny.toml` — keep
   both lockstep when adding a new banned crate.
-- [ ] Tests: fault-injection cross-save-site coverage table. With the
+- [x] Tests: fault-injection cross-save-site coverage table. With the
   `test-fault-injection` cargo feature enabled, a single integration
   test iterates over `(save_site, fault_phase)` ∈ `{ regular_save,
   create_force, set_passphrase, change_passphrase, remove_passphrase,
   write_secret_file_atomic } × { pre_commit, post_commit }`. Every
   cell either surfaces `save_not_committed` (pre_commit) or
   `save_durability_unconfirmed` (post_commit), proving the hook
-  reaches every save site uniformly. A second test fires `pre_commit`
-  twice in a row on the same `Store` and asserts the second failure
-  does not leak state from the first (no half-applied mutation, no
-  leftover `.tmp` from the first attempt).
+  reaches every save site uniformly
+  (`fault_hook_reaches_every_save_site` in `tests/fault_injection.rs`).
+  A second test (`repeated_pre_commit_does_not_leak_state`) fires
+  `pre_commit` twice in a row on the same `Store` and asserts the
+  second failure does not leak state from the first (no half-applied
+  mutation, no leftover `.tmp` from the first attempt).
 - [ ] Doc-comment every public item with a one-line summary and a link back to
   the relevant DESIGN.md section.
 - [ ] Add a `test-fault-injection` cargo feature (off by default) that

@@ -1,19 +1,21 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// Cross-save-site fault-injection coverage (DESIGN.md §10 / Phase E.7).
+// Cross-save-site fault-injection coverage (DESIGN.md §10 / Phase E.7
+// + Phase J.6 cross-save-site table).
 //
 // Compiles and runs only with the `test-fault-injection` cargo feature
 // enabled — production builds never see this surface. The shared hook
 // in `paladin_core::storage::fault` honors `PALADIN_FAULT_INJECT` and
 // must reach every atomic-write site uniformly. This file enumerates
-// the (save_site × fault_phase) cells that exist today and asserts
-// each one surfaces the right error: `pre_commit` →
-// `save_not_committed`, `post_commit` →
+// the (save_site × fault_phase) cells across the full §4.7 save
+// surface and asserts each one surfaces the right error: `pre_commit`
+// → `save_not_committed`, `post_commit` →
 // `save_durability_unconfirmed`.
 //
-// Phase F adds encrypted save and the passphrase-transition surfaces
-// (`set_passphrase`, `change_passphrase`, `remove_passphrase`); those
-// reuse the same hook and gain rows here when they land.
+// Per-cell rollback semantics (mode/key in-memory state, on-disk
+// authoritativeness) are pinned in `tests/passphrase_transitions_fault.rs`;
+// this file's job is the cross-product matrix proving the hook itself
+// reaches every site uniformly.
 //
 // Env-var manipulation is process-wide, so every test holds a single
 // shared mutex for its full duration (setup + fault + assertions).
@@ -432,6 +434,9 @@ fn write_secret_file_atomic_post_commit_surfaces_save_durability_unconfirmed() {
 enum SaveSite {
     RegularSave,
     CreateForce,
+    SetPassphrase,
+    ChangePassphrase,
+    RemovePassphrase,
     WriteSecretFileAtomic,
 }
 
@@ -463,6 +468,42 @@ fn drive(site: SaveSite, phase: Phase) -> PaladinError {
             .map(|_| ())
             .unwrap_err()
         }
+        SaveSite::SetPassphrase => {
+            // Plaintext → encrypted transition. The save site is the
+            // first encrypted write of the rotated vault.
+            let (mut vault, store) = Store::create(&path, VaultInit::Plaintext).unwrap();
+            vault.save(&store).unwrap();
+            with_fault(phase_str, || {
+                vault.set_passphrase(&store, f17_encrypted_options())
+            })
+            .unwrap_err()
+        }
+        SaveSite::ChangePassphrase => {
+            // Encrypted → encrypted transition (new key). The save
+            // site is the re-encrypted write under the new derived
+            // key.
+            let (mut vault, store) =
+                Store::create(&path, VaultInit::Encrypted(f17_encrypted_options())).unwrap();
+            vault.save(&store).unwrap();
+            let new_options = EncryptionOptions::with_params(
+                SecretString::from(format!("{F17_PASSPHRASE}-rotated")),
+                Argon2Params {
+                    m_kib: 8_192,
+                    t: 1,
+                    p: 1,
+                },
+            )
+            .expect("cheap_params are in §4.4 bounds");
+            with_fault(phase_str, || vault.change_passphrase(&store, new_options)).unwrap_err()
+        }
+        SaveSite::RemovePassphrase => {
+            // Encrypted → plaintext transition. The save site is the
+            // first plaintext write of the rotated vault.
+            let (mut vault, store) =
+                Store::create(&path, VaultInit::Encrypted(f17_encrypted_options())).unwrap();
+            vault.save(&store).unwrap();
+            with_fault(phase_str, || vault.remove_passphrase(&store)).unwrap_err()
+        }
         SaveSite::WriteSecretFileAtomic => {
             let target = dir.path().join("export.bin");
             with_fault(phase_str, || write_secret_file_atomic(&target, b"x")).unwrap_err()
@@ -478,6 +519,12 @@ fn fault_hook_reaches_every_save_site() {
             (SaveSite::RegularSave, Phase::PostCommit),
             (SaveSite::CreateForce, Phase::PreCommit),
             (SaveSite::CreateForce, Phase::PostCommit),
+            (SaveSite::SetPassphrase, Phase::PreCommit),
+            (SaveSite::SetPassphrase, Phase::PostCommit),
+            (SaveSite::ChangePassphrase, Phase::PreCommit),
+            (SaveSite::ChangePassphrase, Phase::PostCommit),
+            (SaveSite::RemovePassphrase, Phase::PreCommit),
+            (SaveSite::RemovePassphrase, Phase::PostCommit),
             (SaveSite::WriteSecretFileAtomic, Phase::PreCommit),
             (SaveSite::WriteSecretFileAtomic, Phase::PostCommit),
         ];
