@@ -16,6 +16,10 @@
 // never error here; the importer is what later returns
 // `no_entries_to_import`.
 
+mod otpauth;
+
+pub use otpauth::otpauth;
+
 use crate::storage::header::MAGIC as PALADIN_MAGIC;
 
 /// Discriminator returned by [`detect`] and accepted by the import

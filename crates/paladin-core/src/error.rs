@@ -265,6 +265,17 @@ impl PaladinError {
             entry_type: None,
         }
     }
+
+    /// Attach a zero-based `source_index` to a [`PaladinError::ValidationError`]
+    /// raised by a batch importer (otpauth list, Aegis entries, decoded
+    /// QR list). Non-validation variants pass through unchanged.
+    #[must_use]
+    pub(crate) fn tag_source_index(mut self, idx: usize) -> Self {
+        if let Self::ValidationError { source_index, .. } = &mut self {
+            *source_index = Some(idx);
+        }
+        self
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

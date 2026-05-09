@@ -290,17 +290,12 @@ Each step lands as its own commit. Tests come first.
   and ranges; ASCII whitespace inside `secret` rejected; HOTP `counter`
   required and range-checked; rejection of `period` on HOTP and `counter` on
   TOTP; duplicate known parameters rejected; unknown parameters ignored.
-- [ ] Tests: `import::otpauth` rejects JSON arrays containing non-string
+- [x] Tests: `import::otpauth` rejects JSON arrays containing non-string
   elements (`[123, "otpauth://..."]`) with `validation_error` +
   `source_index` rather than panicking on a type mismatch.
-  *(Deferred to Phase I — `import::otpauth` does not yet exist. The
-  underlying `parse_otpauth` rejection on bad inputs is covered at the
-  parser boundary; the wrapper-level `source_index` surfacing will be
-  tested when `import::otpauth` lands.)*
-- [ ] Tests: `import::otpauth` rejects line-list input containing embedded
+- [x] Tests: `import::otpauth` rejects line-list input containing embedded
   NUL bytes (`b"otpauth://...\nfoo\x00bar\n..."`) with `validation_error`
   + `source_index` for the offending row, before secret decoding.
-  *(Deferred to Phase I, same reason as above.)*
 - [x] Property tests (`proptest`): URI parser and base32 secret decoding
   round-trip valid generated cases and reject malformed generated cases without
   panics.
