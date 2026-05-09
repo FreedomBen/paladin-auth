@@ -10,6 +10,7 @@
 pub mod crypto;
 pub mod domain;
 pub mod error;
+pub mod import;
 pub mod otp;
 pub mod otpauth;
 pub mod policy;
@@ -34,6 +35,7 @@ pub use domain::{
     ValidatedAccount, ValidationWarning,
 };
 pub use error::{ErrorKind, PaladinError, PermissionSubject, Result, TimeRangeKind, VaultMode};
+pub use import::{detect, ImportFormat};
 pub use otpauth::parse_otpauth;
 pub use policy::{hotp_reveal_deadline, ClipboardClearPolicy, ClipboardClearToken, IdlePolicy};
 #[cfg(feature = "test-zeroize-witness")]
