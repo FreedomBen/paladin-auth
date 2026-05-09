@@ -179,6 +179,18 @@ impl Vault {
         self.accounts.iter().find(|a| a.id() == id)
     }
 
+    /// Filter accounts by the shared selector grammar (DESIGN.md §4.7).
+    ///
+    /// `Search` queries delegate to the case-insensitive substring
+    /// predicate; `IdPrefix` queries match accounts whose canonical
+    /// 32-char lowercase hex starts with the validated prefix. Both
+    /// kinds return matches in insertion order so callers can apply
+    /// command-specific cardinality rules without re-sorting.
+    #[must_use]
+    pub fn matching_accounts(&self, query: &crate::AccountQuery) -> Vec<&Account> {
+        crate::domain::query::matching_accounts(&self.accounts, query)
+    }
+
     /// Borrow the live `VaultSettings`.
     #[must_use]
     pub fn settings(&self) -> &VaultSettings {

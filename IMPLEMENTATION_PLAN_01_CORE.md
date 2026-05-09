@@ -771,7 +771,7 @@ Each step lands as its own commit. Tests come first.
   `str::to_lowercase()` to both the query and `account_match_key`, performs
   substring matching, matches the empty query, keeps empty-issuer colon
   behavior, and performs no Unicode normalization or locale-specific casing.
-- [ ] Tests: `parse_account_query(query)` maps non-`id:` input to
+- [x] Tests: `parse_account_query(query)` maps non-`id:` input to
   `AccountQuery::Search`, accepts lowercase `id:` followed by 8..=32 hex
   characters, accepts uppercase `A`–`F` within the hex prefix while
   normalizing the stored prefix to lowercase, and rejects short, long, or

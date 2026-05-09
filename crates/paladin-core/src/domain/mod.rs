@@ -9,11 +9,13 @@
 
 pub mod match_key;
 pub mod prompt_input;
+pub mod query;
 pub mod secret;
 pub mod slug;
 pub mod validation;
 
 pub use match_key::{account_match_key, account_matches_search};
+pub use query::{parse_account_query, AccountQuery};
 pub use prompt_input::parse_icon_hint_token;
 pub use secret::Secret;
 pub use validation::{validate_manual, AccountInput, ValidatedAccount, ValidationWarning};
