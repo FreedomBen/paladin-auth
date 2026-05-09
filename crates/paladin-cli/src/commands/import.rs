@@ -5,7 +5,7 @@
 //! `append`. See DESIGN.md §5. Stub.
 
 use crate::cli::{GlobalArgs, ImportArgs};
-use crate::CliError;
+use crate::output::error::CliError;
 
 pub fn run(_global: &GlobalArgs, _args: &ImportArgs) -> Result<(), CliError> {
     Err(CliError::NotYetImplemented("import"))

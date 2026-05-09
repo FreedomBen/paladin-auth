@@ -4,7 +4,7 @@
 //! `--yes`. See DESIGN.md §5. Stub.
 
 use crate::cli::{GlobalArgs, RemoveArgs};
-use crate::CliError;
+use crate::output::error::CliError;
 
 pub fn run(_global: &GlobalArgs, _args: &RemoveArgs) -> Result<(), CliError> {
     Err(CliError::NotYetImplemented("remove"))

@@ -5,7 +5,7 @@
 //! mode 0600. See DESIGN.md §5. Stub.
 
 use crate::cli::{ExportArgs, GlobalArgs};
-use crate::CliError;
+use crate::output::error::CliError;
 
 pub fn run(_global: &GlobalArgs, _args: &ExportArgs) -> Result<(), CliError> {
     Err(CliError::NotYetImplemented("export"))

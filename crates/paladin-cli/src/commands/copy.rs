@@ -6,7 +6,7 @@
 //! CLI ignores `clipboard.clear_enabled`. Stub.
 
 use crate::cli::{GlobalArgs, QueryArgs};
-use crate::CliError;
+use crate::output::error::CliError;
 
 pub fn run(_global: &GlobalArgs, _args: &QueryArgs) -> Result<(), CliError> {
     Err(CliError::NotYetImplemented("copy"))

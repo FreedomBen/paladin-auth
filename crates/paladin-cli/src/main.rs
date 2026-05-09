@@ -1,7 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-//! `paladin` binary entry point: parses argv, dispatches to command modules,
-//! and maps results to process exit codes per `IMPLEMENTATION_PLAN_02_CLI.md`.
+//! `paladin` binary entry point: argv pre-scan, parse, dispatch, and
+//! exit-code mapping per `IMPLEMENTATION_PLAN_02_CLI.md` and DESIGN.md
+//! §5.
+//!
+//! Syntax errors and `--help` / `--version` requests are intercepted
+//! upstream of `dispatch` so the JSON wire contract holds even when
+//! clap would otherwise write text diagnostics.
 
 #![forbid(unsafe_code)]
 
@@ -12,24 +17,40 @@ mod output;
 mod prompt;
 mod select;
 
+use std::ffi::OsString;
+use std::io::Write;
 use std::process::ExitCode;
 
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 
 use crate::cli::{Cli, Command, PassphraseCommand, SettingsCommand};
+use crate::output::error::CliError;
+use crate::output::Mode;
 
 fn main() -> ExitCode {
-    let cli = Cli::parse();
-    match dispatch(&cli) {
+    let argv: Vec<OsString> = std::env::args_os().collect();
+    let json_flag = output::argv_has_json_flag(&argv);
+
+    match Cli::try_parse_from(&argv) {
+        Ok(cli) => run(&cli),
+        Err(err) => handle_parse_err(&err, &argv, json_flag),
+    }
+}
+
+/// Dispatch a successfully parsed `Cli`. The mode is resolved here so
+/// every command body inherits a single, consistent renderer choice.
+fn run(cli: &Cli) -> ExitCode {
+    let mode = Mode::resolve(cli.global.json, cli.global.no_color);
+    match dispatch(cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
-            eprintln!("paladin: {err}");
+            let _ = output::error::render(&err, mode, std::io::stderr().lock());
             ExitCode::from(1)
         }
     }
 }
 
-/// Routes a parsed [`Cli`] to the matching command module.
+/// Routes a parsed `Cli` to the matching command module.
 fn dispatch(cli: &Cli) -> Result<(), CliError> {
     let global = &cli.global;
     match &cli.command {
@@ -56,23 +77,64 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
     }
 }
 
-/// CLI-internal error surface used while command bodies are stubbed. Once
-/// each command lands, it will return [`paladin_core::PaladinError`] directly
-/// and this enum will shrink accordingly.
-#[derive(Debug)]
-pub enum CliError {
-    /// The command's body has not yet been implemented in this scaffold.
-    NotYetImplemented(&'static str),
+/// Map a clap parse error onto the right exit code and renderer:
+/// success-terminal `--help` / `--version` are wrapped under `--json`,
+/// while syntax / usage failures are routed through the §5
+/// `validation_error` / `argv` / `usage` envelope.
+fn handle_parse_err(err: &clap::Error, argv: &[OsString], json_flag: bool) -> ExitCode {
+    use clap::error::ErrorKind as Ck;
+    let kind = err.kind();
+    let is_help = matches!(
+        kind,
+        Ck::DisplayHelp | Ck::DisplayHelpOnMissingArgumentOrSubcommand
+    );
+    let is_version = matches!(kind, Ck::DisplayVersion);
+
+    if json_flag && is_help {
+        let root = Cli::command();
+        let argv_strs: Vec<&str> = argv.iter().filter_map(|a| a.to_str()).collect();
+        let path = output::help::resolve_command_path(argv_strs.iter().copied(), &root);
+        let text = render_help_text_for_path(&path, root);
+        let _ = output::help::render_json(&path, &text, std::io::stdout().lock());
+        let _ = std::io::stdout().flush();
+        return ExitCode::SUCCESS;
+    }
+
+    if json_flag && is_version {
+        let _ = output::version::render_json(std::io::stdout().lock());
+        let _ = std::io::stdout().flush();
+        return ExitCode::SUCCESS;
+    }
+
+    if is_help || is_version {
+        // Text mode: clap renders help / version to stdout normally.
+        let _ = err.print();
+        return ExitCode::SUCCESS;
+    }
+
+    // Syntax / usage error.
+    if json_flag {
+        let usage = CliError::Usage {
+            text_message: err.render().to_string(),
+        };
+        let _ = output::error::render(&usage, Mode::Json, std::io::stderr().lock());
+    } else {
+        let _ = err.print();
+    }
+    let code = err.exit_code().clamp(0, i32::from(u8::MAX));
+    ExitCode::from(u8::try_from(code).unwrap_or(1))
 }
 
-impl std::fmt::Display for CliError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::NotYetImplemented(name) => {
-                write!(f, "command '{name}' is not yet implemented")
-            }
+/// Look up the resolved help text for a `paladin <subcommand...>` path.
+/// Takes the root by value so we can walk by re-binding `current`
+/// without fighting the borrow checker on `find_subcommand_mut`.
+fn render_help_text_for_path(path: &str, root: clap::Command) -> String {
+    let mut current = root;
+    for token in path.split_whitespace().skip(1) {
+        match current.find_subcommand(token).cloned() {
+            Some(sub) => current = sub,
+            None => break,
         }
     }
+    current.render_help().to_string()
 }
-
-impl std::error::Error for CliError {}

@@ -6,7 +6,7 @@
 //! real exec wiring lands with the matching command body.
 
 use crate::cli::GlobalArgs;
-use crate::CliError;
+use crate::output::error::CliError;
 
 pub fn run(_global: &GlobalArgs) -> Result<(), CliError> {
     Err(CliError::NotYetImplemented("tui"))

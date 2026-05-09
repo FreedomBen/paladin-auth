@@ -4,7 +4,7 @@
 //! See DESIGN.md §5. Stubs.
 
 use crate::cli::{GlobalArgs, KdfArgs};
-use crate::CliError;
+use crate::output::error::CliError;
 
 pub fn set(_global: &GlobalArgs, _kdf: &KdfArgs) -> Result<(), CliError> {
     Err(CliError::NotYetImplemented("passphrase set"))

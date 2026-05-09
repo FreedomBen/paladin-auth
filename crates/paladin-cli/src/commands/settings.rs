@@ -5,7 +5,7 @@
 //! `parse_setting_key` (DESIGN.md §5). Stubs.
 
 use crate::cli::GlobalArgs;
-use crate::CliError;
+use crate::output::error::CliError;
 
 pub fn get(_global: &GlobalArgs, _key: Option<&str>) -> Result<(), CliError> {
     Err(CliError::NotYetImplemented("settings get"))

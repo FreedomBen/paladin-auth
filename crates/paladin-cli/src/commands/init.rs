@@ -4,7 +4,7 @@
 //! `IMPLEMENTATION_PLAN_02_CLI.md`. Stub.
 
 use crate::cli::{GlobalArgs, InitArgs};
-use crate::CliError;
+use crate::output::error::CliError;
 
 pub fn run(_global: &GlobalArgs, _args: &InitArgs) -> Result<(), CliError> {
     Err(CliError::NotYetImplemented("init"))

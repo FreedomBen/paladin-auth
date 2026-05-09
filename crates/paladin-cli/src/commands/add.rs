@@ -5,7 +5,7 @@
 //! Stub.
 
 use crate::cli::{AddArgs, GlobalArgs};
-use crate::CliError;
+use crate::output::error::CliError;
 
 pub fn run(_global: &GlobalArgs, _args: &AddArgs) -> Result<(), CliError> {
     Err(CliError::NotYetImplemented("add"))
