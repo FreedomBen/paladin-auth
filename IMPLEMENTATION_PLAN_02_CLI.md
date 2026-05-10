@@ -697,12 +697,12 @@ can be ticked.
 ### `remove` / `rename` (`tests/cli_remove_rename.rs`)
 
 - [x] `remove --yes` succeeds and emits the `removed` envelope.
-- [ ] `[PTY]` `remove` without `--yes` reads the confirmation from
+- [x] `[PTY]` `remove` without `--yes` reads the confirmation from
   `/dev/tty`.
-- [ ] `[PTY]` `remove` confirmation accepts only exact `yes` after
+- [x] `[PTY]` `remove` confirmation accepts only exact `yes` after
   whitespace trim; any other response exits with `validation_error`
   (`field: "confirmation"`, `reason: "declined"`).
-- [ ] `[PTY]` `remove` with no `/dev/tty` surfaces `io_error`
+- [x] `[PTY]` `remove` with no `/dev/tty` surfaces `io_error`
   `operation: "confirmation_prompt"`.
 - [x] `remove --json` without `--yes` rejects at parse time with a
   `validation_error` envelope (no confirmation prompt).

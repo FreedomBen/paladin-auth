@@ -1,35 +1,25 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-//! End-to-end tests for `paladin remove` and `paladin rename`. These
-//! exercise the no-prompt paths only — `vault_missing`, no-match,
-//! multi-match, parse-time `--json` rejection of missing `--yes`, and
-//! the `--yes` happy path under both text and `--json`. Encrypted
-//! coverage and the no-`/dev/tty` confirmation failure path require a
-//! scripted `/dev/tty` and land with the PTY harness called out in
-//! `IMPLEMENTATION_PLAN_02_CLI.md`.
+//! End-to-end tests for `paladin remove` and `paladin rename`.
+//!
+//! No-prompt paths (`vault_missing`, no-match, multi-match, parse-time
+//! `--json` rejection of missing `--yes`, and the `--yes` happy path
+//! under both text and `--json`) live in plain `#[test]` functions.
+//! Prompt-driven flows — text-mode `remove` without `--yes`, the
+//! declined-confirmation `validation_error`, and the no-controlling-tty
+//! `confirmation_prompt` failure — drive the CLI through the shared
+//! `tests/common/mod.rs` PTY harness and the setsid-wrapped command
+//! from the same module.
 
-use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+mod common;
+
+use std::path::Path;
 use std::time::{Duration, SystemTime};
 
-use assert_cmd::Command;
 use paladin_core::{parse_otpauth, Account, Store, VaultInit};
 use serde_json::Value;
-use tempfile::TempDir;
 
-fn paladin() -> Command {
-    let mut cmd = Command::cargo_bin("paladin").expect("cargo bin");
-    cmd.env_remove("NO_COLOR");
-    cmd
-}
-
-fn fresh_vault_path() -> (TempDir, PathBuf) {
-    let dir = TempDir::new().expect("tempdir");
-    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700))
-        .expect("chmod tempdir 0700");
-    let path = dir.path().join("vault.bin");
-    (dir, path)
-}
+use common::{fresh_vault_path, paladin, paladin_command_without_tty, Pty};
 
 fn fixture_now() -> SystemTime {
     SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000)
@@ -498,4 +488,115 @@ fn json_rename_invalid_label_propagates_validation_error() {
     // Original account is intact on disk.
     let listed = list_accounts_json(&path);
     assert_eq!(listed["accounts"][0]["label"], serde_json::json!("alice"));
+}
+
+// =========================================================================
+// PTY: text-mode `remove` confirmation flows
+// =========================================================================
+
+/// The destructive-confirmation prompt string emitted by
+/// `commands::remove::run` for an `Acme:alice` target. Kept verbatim so
+/// the harness expect()s the same bytes the CLI writes.
+const PROMPT_REMOVE_CONFIRM_ACME_ALICE: &str = "Remove Acme:alice? Type 'yes' to confirm: ";
+
+#[test]
+fn pty_remove_without_yes_text_mode_reads_confirmation_from_dev_tty() {
+    // §5: `remove` without `--yes` in text mode must read the
+    // confirmation from `/dev/tty`. Drive the prompt with the PTY
+    // harness so the child reaches `prompt::prompt_destructive_confirmation`,
+    // type the literal `yes`, and verify the success line lands and
+    // the account is gone on disk.
+    let (_dir, path) = fresh_vault_path();
+    create_vault_with(vec![make_totp("alice", Some("Acme"))], &path);
+
+    let mut pty = Pty::spawn(["--vault", path.to_str().unwrap(), "remove", "alice"], &[]);
+    pty.expect(PROMPT_REMOVE_CONFIRM_ACME_ALICE);
+    pty.send_line("yes");
+    let exit = pty.wait_for_exit();
+    exit.assert_exit(0);
+    exit.assert_transcript_contains("Removed Acme:alice.");
+
+    // Post-state on disk: the account is gone.
+    let listed = list_accounts_json(&path);
+    assert!(listed["accounts"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn pty_remove_confirmation_rejects_non_yes_response_with_declined_validation_error() {
+    // §5: any response other than the exact `yes` (after Unicode
+    // whitespace trim) exits with a `validation_error` carrying
+    // `field: "confirmation"` / `reason: "declined"`. The CLI does
+    // **not** reprompt — the harness reaches EOF immediately after the
+    // bad response, which would otherwise hang past the per-call PTY
+    // timeout.
+    let (_dir, path) = fresh_vault_path();
+    create_vault_with(vec![make_totp("alice", Some("Acme"))], &path);
+
+    let mut pty = Pty::spawn(["--vault", path.to_str().unwrap(), "remove", "alice"], &[]);
+    pty.expect(PROMPT_REMOVE_CONFIRM_ACME_ALICE);
+    pty.send_line("no");
+    let exit = pty.wait_for_exit();
+    exit.assert_exit(1);
+    // Text-mode `paladin: <Display>` for a `validation_error` with
+    // field=confirmation reason=declined renders verbatim per
+    // `output::error::render` and the `thiserror` format on
+    // `PaladinError::ValidationError`.
+    exit.assert_transcript_contains("paladin: validation error: confirmation: declined");
+    // No reprompt: the success-line marker must never appear.
+    exit.assert_transcript_lacks("Removed Acme:alice.");
+
+    // Account is still present on disk.
+    let listed = list_accounts_json(&path);
+    let arr = listed["accounts"].as_array().unwrap();
+    assert_eq!(arr.len(), 1);
+    assert_eq!(arr[0]["label"], serde_json::json!("alice"));
+}
+
+#[test]
+fn pty_remove_without_dev_tty_surfaces_io_error_confirmation_prompt() {
+    // §5: when `/dev/tty` cannot be opened (no controlling terminal),
+    // the destructive confirmation must surface
+    // `io_error` `operation: "confirmation_prompt"`. Drive the path by
+    // exec-ing the binary through `setsid(1)` so the child is a fresh
+    // session leader and any `open("/dev/tty")` returns ENXIO.
+    use std::process::Stdio;
+
+    let (_dir, path) = fresh_vault_path();
+    create_vault_with(vec![make_totp("alice", Some("Acme"))], &path);
+
+    let output = paladin_command_without_tty()
+        .args(["--vault", path.to_str().unwrap(), "remove", "alice"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("spawn paladin via setsid(1)");
+
+    assert!(
+        !output.status.success(),
+        "expected non-zero exit without /dev/tty; status = {:?}, \
+         stdout = {:?}, stderr = {}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.starts_with("paladin: "),
+        "expected `paladin:` text-mode prefix, got {stderr:?}",
+    );
+    // Asserting the `confirmation_prompt` operation tag verbatim guards
+    // against the renderer ever dropping it (sibling to the
+    // `account_prompt` assertion in `cli_add.rs`).
+    assert!(
+        stderr.contains("I/O error during confirmation_prompt"),
+        "expected `confirmation_prompt` operation tag in the rendered \
+         text, got {stderr:?}",
+    );
+
+    // Account is still present — the prompt failed before any save.
+    let listed = list_accounts_json(&path);
+    let arr = listed["accounts"].as_array().unwrap();
+    assert_eq!(arr.len(), 1);
+    assert_eq!(arr[0]["label"], serde_json::json!("alice"));
 }
