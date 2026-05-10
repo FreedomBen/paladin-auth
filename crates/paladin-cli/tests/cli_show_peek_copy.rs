@@ -136,6 +136,119 @@ fn json_show_id_prefix_too_short_rejects_with_validation_error() {
     assert!(assert.get_output().stdout.is_empty());
 }
 
+#[test]
+fn json_show_id_prefix_too_long_rejects_with_validation_error() {
+    let (_dir, path) = fresh_vault_path();
+    create_vault_with(vec![make_totp("alice", Some("Acme"))], &path);
+
+    // 33 hex chars is one over the 32-char de-hyphenated UUID maximum.
+    let too_long = format!("id:{}", "0".repeat(33));
+    let assert = paladin()
+        .args([
+            "--json",
+            "--vault",
+            path.to_str().unwrap(),
+            "show",
+            &too_long,
+        ])
+        .assert()
+        .failure();
+    let stderr = std::str::from_utf8(&assert.get_output().stderr).unwrap();
+    let value: Value = serde_json::from_str(stderr.trim()).unwrap();
+    assert_eq!(value["error_kind"], serde_json::json!("validation_error"));
+    assert!(assert.get_output().stdout.is_empty());
+}
+
+#[test]
+fn json_show_id_prefix_non_hex_rejects_with_validation_error() {
+    let (_dir, path) = fresh_vault_path();
+    create_vault_with(vec![make_totp("alice", Some("Acme"))], &path);
+
+    // 8 chars (within the length bounds) but `g` is not hex, so the
+    // id: branch must reject without falling through to a substring
+    // match against the literal "gggggggg" text.
+    let assert = paladin()
+        .args([
+            "--json",
+            "--vault",
+            path.to_str().unwrap(),
+            "show",
+            "id:gggggggg",
+        ])
+        .assert()
+        .failure();
+    let stderr = std::str::from_utf8(&assert.get_output().stderr).unwrap();
+    let value: Value = serde_json::from_str(stderr.trim()).unwrap();
+    assert_eq!(value["error_kind"], serde_json::json!("validation_error"));
+    assert!(assert.get_output().stdout.is_empty());
+}
+
+#[test]
+fn json_show_substring_query_is_case_insensitive_and_empty_issuer_match_key_carries_colon() {
+    let (_dir, path) = fresh_vault_path();
+    create_vault_with(
+        vec![
+            // canonical match key: "Acme:Bob"
+            make_totp("Bob", Some("Acme")),
+            // canonical match key: ":alice" (empty issuer)
+            make_totp("alice", None),
+        ],
+        &path,
+    );
+
+    // Case-insensitive substring matching against the canonical
+    // "{issuer}:{label}" key — each query uniquely selects the Acme:Bob
+    // account regardless of its own casing.
+    for query in ["acme", "ACME", "AcMe", "BOB", "acme:bob", "ACME:BOB"] {
+        let assert = paladin()
+            .args(["--json", "--vault", path.to_str().unwrap(), "show", query])
+            .assert()
+            .success();
+        let value: Value = serde_json::from_str(
+            std::str::from_utf8(&assert.get_output().stdout)
+                .unwrap()
+                .trim(),
+        )
+        .unwrap();
+        let arr = value["codes"].as_array().expect("codes is array");
+        assert_eq!(arr.len(), 1, "query {query:?}");
+        assert_eq!(
+            arr[0]["account"]["label"],
+            serde_json::json!("Bob"),
+            "query {query:?}"
+        );
+        assert_eq!(
+            arr[0]["account"]["issuer"],
+            serde_json::json!("Acme"),
+            "query {query:?}"
+        );
+    }
+
+    // Empty-issuer match keys carry the colon: the alice account has
+    // canonical key ":alice", so a query of ":alice" selects it
+    // uniquely. The Acme:Bob key contains ":Bob", not ":alice", so
+    // this query is unambiguous.
+    let assert = paladin()
+        .args([
+            "--json",
+            "--vault",
+            path.to_str().unwrap(),
+            "show",
+            ":alice",
+        ])
+        .assert()
+        .success();
+    let value: Value = serde_json::from_str(
+        std::str::from_utf8(&assert.get_output().stdout)
+            .unwrap()
+            .trim(),
+    )
+    .unwrap();
+    let arr = value["codes"].as_array().expect("codes is array");
+    assert_eq!(arr.len(), 1);
+    assert_eq!(arr[0]["account"]["label"], serde_json::json!("alice"));
+}
+
 // --- single TOTP match ---------------------------------------------------
 
 #[test]

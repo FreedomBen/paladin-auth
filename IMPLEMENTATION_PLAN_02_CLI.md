@@ -676,11 +676,11 @@ can be ticked.
   substring branch would also match (no substring fallback).
 - [x] `id:<hex>` prefix shorter than 8 hex chars rejects with
   `validation_error`.
-- [ ] `id:<hex>` prefix longer than 32 hex chars rejects with
+- [x] `id:<hex>` prefix longer than 32 hex chars rejects with
   `validation_error`.
-- [ ] `id:<hex>` prefix with non-hex characters rejects with
+- [x] `id:<hex>` prefix with non-hex characters rejects with
   `validation_error`.
-- [ ] Case-insensitive `issuer:label` substring matching is asserted at
+- [x] Case-insensitive `issuer:label` substring matching is asserted at
   the CLI level (empty-issuer match keys carry the colon, no Unicode
   normalization).
 - [x] `copy` clipboard tests are gated behind the `test-hooks` feature
