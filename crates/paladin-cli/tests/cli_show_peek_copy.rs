@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-//! End-to-end tests for `paladin show`. These exercise the no-prompt
-//! paths only — `vault_missing`, single-match TOTP / HOTP, multi-match
-//! cardinality (all-TOTP allowed, any-HOTP rejected), and HOTP counter
-//! overflow against a plaintext vault. Encrypted coverage requires a
-//! scripted `/dev/tty` and lands with the dedicated PTY harness called
-//! out in `IMPLEMENTATION_PLAN_02_CLI.md`. `peek` and `copy` land in
-//! subsequent commits and reuse the helpers in this file.
+//! End-to-end tests for `paladin show` and `paladin peek`. These
+//! exercise the no-prompt paths only — `vault_missing`, single-match
+//! TOTP / HOTP, multi-match cardinality (all-TOTP allowed, any-HOTP
+//! rejected by `show` but unconditionally allowed by `peek`), and
+//! HOTP counter overflow against a plaintext vault. Encrypted coverage
+//! requires a scripted `/dev/tty` and lands with the dedicated PTY
+//! harness called out in `IMPLEMENTATION_PLAN_02_CLI.md`. `copy` lands
+//! in a subsequent commit and reuses the helpers in this file.
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -365,4 +366,201 @@ fn json_show_id_prefix_selects_unique_account_even_with_substring_collisions() {
     let arr = value["codes"].as_array().unwrap();
     assert_eq!(arr.len(), 1);
     assert_eq!(arr[0]["account"]["id"], serde_json::json!(id));
+}
+
+// --- peek ----------------------------------------------------------------
+
+#[test]
+fn json_peek_missing_vault_rejects_with_vault_missing_envelope() {
+    let (_dir, path) = fresh_vault_path();
+    let assert = paladin()
+        .args([
+            "--json",
+            "--vault",
+            path.to_str().unwrap(),
+            "peek",
+            "anything",
+        ])
+        .assert()
+        .failure();
+    let stderr = std::str::from_utf8(&assert.get_output().stderr).unwrap();
+    let value: Value = serde_json::from_str(stderr.trim()).unwrap();
+    assert_eq!(value["error_kind"], serde_json::json!("vault_missing"));
+    assert!(assert.get_output().stdout.is_empty());
+}
+
+#[test]
+fn json_peek_no_match_rejects_with_no_match_envelope() {
+    let (_dir, path) = fresh_vault_path();
+    create_empty_plaintext_vault(&path);
+
+    let assert = paladin()
+        .args(["--json", "--vault", path.to_str().unwrap(), "peek", "ghost"])
+        .assert()
+        .failure();
+    let stderr = std::str::from_utf8(&assert.get_output().stderr).unwrap();
+    let value: Value = serde_json::from_str(stderr.trim()).unwrap();
+    assert_eq!(value["error_kind"], serde_json::json!("no_match"));
+    assert!(assert.get_output().stdout.is_empty());
+}
+
+#[test]
+fn json_peek_single_totp_match_emits_codes_envelope_like_show() {
+    let (_dir, path) = fresh_vault_path();
+    create_vault_with(vec![make_totp("alice", Some("Acme"))], &path);
+
+    let assert = paladin()
+        .args(["--json", "--vault", path.to_str().unwrap(), "peek", "alice"])
+        .assert()
+        .success();
+    let value: Value = serde_json::from_str(
+        std::str::from_utf8(&assert.get_output().stdout)
+            .unwrap()
+            .trim(),
+    )
+    .unwrap();
+    let row = &value["codes"][0];
+    let code = row["code"].as_str().expect("code is string");
+    assert_eq!(code.len(), 6);
+    assert_eq!(row["counter_used"], serde_json::Value::Null);
+    assert!(row["valid_from"].is_number());
+    assert_eq!(row["account"]["kind"], serde_json::json!("totp"));
+}
+
+#[test]
+fn json_peek_single_hotp_does_not_advance_or_persist_counter() {
+    let (_dir, path) = fresh_vault_path();
+    create_vault_with(vec![make_hotp("bob", None, 42)], &path);
+
+    let assert = paladin()
+        .args(["--json", "--vault", path.to_str().unwrap(), "peek", "bob"])
+        .assert()
+        .success();
+    let value: Value = serde_json::from_str(
+        std::str::from_utf8(&assert.get_output().stdout)
+            .unwrap()
+            .trim(),
+    )
+    .unwrap();
+    let row = &value["codes"][0];
+    // peek reports the *stored* counter as `counter_used`; the
+    // persisted account counter is left untouched.
+    assert_eq!(row["counter_used"], serde_json::json!(42));
+    assert_eq!(row["account"]["counter"], serde_json::json!(42));
+    assert_eq!(row["valid_from"], serde_json::Value::Null);
+
+    // Re-running peek must produce identical persisted state and the
+    // same `counter_used` (i.e. no advance happened on either call).
+    let assert = paladin()
+        .args(["--json", "--vault", path.to_str().unwrap(), "peek", "bob"])
+        .assert()
+        .success();
+    let v2: Value = serde_json::from_str(
+        std::str::from_utf8(&assert.get_output().stdout)
+            .unwrap()
+            .trim(),
+    )
+    .unwrap();
+    assert_eq!(v2["codes"][0]["counter_used"], serde_json::json!(42));
+    assert_eq!(v2["codes"][0]["account"]["counter"], serde_json::json!(42));
+
+    // The on-disk counter is still 42 — no save fired.
+    let listed = list_accounts_json(&path);
+    let arr = listed["accounts"].as_array().unwrap();
+    assert_eq!(arr[0]["counter"], serde_json::json!(42));
+}
+
+#[test]
+fn json_peek_after_show_reflects_post_advance_counter_without_advancing_further() {
+    let (_dir, path) = fresh_vault_path();
+    create_vault_with(vec![make_hotp("bob", None, 42)], &path);
+
+    // `show` advances 42 → 43 and persists.
+    paladin()
+        .args(["--json", "--vault", path.to_str().unwrap(), "show", "bob"])
+        .assert()
+        .success();
+
+    // `peek` reports 43 as `counter_used` but leaves the stored
+    // counter at 43 — peek is read-only.
+    let assert = paladin()
+        .args(["--json", "--vault", path.to_str().unwrap(), "peek", "bob"])
+        .assert()
+        .success();
+    let value: Value = serde_json::from_str(
+        std::str::from_utf8(&assert.get_output().stdout)
+            .unwrap()
+            .trim(),
+    )
+    .unwrap();
+    assert_eq!(value["codes"][0]["counter_used"], serde_json::json!(43));
+    assert_eq!(
+        value["codes"][0]["account"]["counter"],
+        serde_json::json!(43)
+    );
+    let listed = list_accounts_json(&path);
+    assert_eq!(listed["accounts"][0]["counter"], serde_json::json!(43));
+}
+
+#[test]
+fn json_peek_multi_match_with_hotp_returns_all_rows_unconditionally() {
+    let (_dir, path) = fresh_vault_path();
+    create_vault_with(
+        vec![
+            make_totp("alice", Some("GitHub")),
+            make_hotp("alice", Some("GitLab"), 7),
+        ],
+        &path,
+    );
+
+    let assert = paladin()
+        .args(["--json", "--vault", path.to_str().unwrap(), "peek", "alice"])
+        .assert()
+        .success();
+    let value: Value = serde_json::from_str(
+        std::str::from_utf8(&assert.get_output().stdout)
+            .unwrap()
+            .trim(),
+    )
+    .unwrap();
+    let arr = value["codes"].as_array().expect("codes is array");
+    assert_eq!(arr.len(), 2);
+    // Insertion order: TOTP first, HOTP second.
+    assert_eq!(arr[0]["account"]["kind"], serde_json::json!("totp"));
+    assert_eq!(arr[0]["counter_used"], serde_json::Value::Null);
+    assert_eq!(arr[1]["account"]["kind"], serde_json::json!("hotp"));
+    // peek leaves the HOTP counter untouched even though it was in
+    // the multi-match set — the value `7` flows back as
+    // `counter_used` and the persisted counter stays at 7.
+    assert_eq!(arr[1]["counter_used"], serde_json::json!(7));
+    assert_eq!(arr[1]["account"]["counter"], serde_json::json!(7));
+
+    let listed = list_accounts_json(&path);
+    let hotp = listed["accounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["kind"] == serde_json::json!("hotp"))
+        .unwrap();
+    assert_eq!(hotp["counter"], serde_json::json!(7));
+}
+
+#[test]
+fn text_peek_single_hotp_writes_tab_separated_row_with_counter_marker() {
+    let (_dir, path) = fresh_vault_path();
+    create_vault_with(vec![make_hotp("bob", None, 7)], &path);
+
+    let assert = paladin()
+        .args(["--vault", path.to_str().unwrap(), "peek", "bob"])
+        .assert()
+        .success();
+    let stdout = std::str::from_utf8(&assert.get_output().stdout).unwrap();
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(lines.len(), 1, "got {lines:?}");
+    let fields: Vec<&str> = lines[0].split('\t').collect();
+    assert_eq!(fields.len(), 4, "{fields:?}");
+    assert!(fields[0].starts_with("id:"));
+    assert_eq!(fields[1], "bob");
+    assert_eq!(fields[2].len(), 6);
+    assert_eq!(fields[3], "c=7");
 }
