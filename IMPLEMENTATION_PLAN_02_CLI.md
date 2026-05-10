@@ -762,7 +762,7 @@ The `paladin` binary is a presentation layer. Crypto, storage,
 import/export, and OTP primitives must never be re-implemented or
 imported directly here — they belong in `paladin-core` per DESIGN §3.
 
-- [ ] Tests: `tests/thinness.rs` — a source-level guard that scans
+- [x] Tests: `tests/thinness.rs` — a source-level guard that scans
   `crates/paladin-cli/src/` for forbidden crate-name spellings:
   `argon2`, `chacha20poly1305`, `bincode`, `hmac`, `sha1`, `sha2`,
   `rqrr`, `image`, `getrandom`, `directories`, `url`. Any direct
