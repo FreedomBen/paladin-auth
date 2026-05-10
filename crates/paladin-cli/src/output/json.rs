@@ -205,6 +205,33 @@ pub fn write_qr_import_success(
     Ok(())
 }
 
+/// `paladin export` success envelope per the §5 JSON shape table:
+/// `{ "written": "/path/to/out", "format": "otpauth"|"paladin" }`.
+/// `format` reflects the exporter that produced the file: `"otpauth"`
+/// for plaintext exports (JSON `otpauth://` array) and `"paladin"` for
+/// encrypted Paladin bundles.
+#[derive(Debug, Serialize)]
+struct ExportSuccess<'a> {
+    written: &'a str,
+    format: &'a str,
+}
+
+/// Render the `paladin export` success envelope.
+pub fn write_export_success(
+    written_path: &std::path::Path,
+    format_label: &str,
+    mut out: impl Write,
+) -> std::io::Result<()> {
+    let written = written_path.to_string_lossy();
+    let env = ExportSuccess {
+        written: &written,
+        format: format_label,
+    };
+    serde_json::to_writer(&mut out, &env).map_err(std::io::Error::other)?;
+    writeln!(out)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -496,5 +523,27 @@ mod tests {
         assert_eq!(v["appended"], serde_json::json!(0));
         assert_eq!(v["accounts"], serde_json::json!([]));
         assert_eq!(v["warnings"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn export_success_envelope_carries_written_path_and_format() {
+        let path = std::path::Path::new("/tmp/example/creds.json");
+        let mut buf: Vec<u8> = Vec::new();
+        write_export_success(path, "otpauth", &mut buf).expect("render");
+        let s = String::from_utf8(buf).expect("utf-8");
+        assert!(s.ends_with('\n'), "expected single trailing newline");
+        let v: serde_json::Value = serde_json::from_str(s.trim()).expect("valid json");
+        assert_eq!(v["written"], serde_json::json!("/tmp/example/creds.json"));
+        assert_eq!(v["format"], serde_json::json!("otpauth"));
+    }
+
+    #[test]
+    fn export_success_envelope_uses_paladin_format_for_encrypted_bundle() {
+        let path = std::path::Path::new("/tmp/bundle.bin");
+        let mut buf: Vec<u8> = Vec::new();
+        write_export_success(path, "paladin", &mut buf).expect("render");
+        let v: serde_json::Value =
+            serde_json::from_str(String::from_utf8(buf).unwrap().trim()).unwrap();
+        assert_eq!(v["format"], serde_json::json!("paladin"));
     }
 }

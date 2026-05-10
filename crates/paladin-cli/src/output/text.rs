@@ -185,6 +185,29 @@ pub fn write_qr_import_success(report: &ImportReport, mut out: impl Write) -> st
     )
 }
 
+/// Print the success line for `paladin export` to stdout. `format_label`
+/// is the §5 stable string (`"otpauth"` for plaintext, `"paladin"` for
+/// encrypted) and is rendered as the human-readable mode prefix.
+pub fn write_export_success(
+    written_path: &Path,
+    format_label: &str,
+    mut out: impl Write,
+) -> std::io::Result<()> {
+    // Mirror the §5 JSON `format` strings so the human output and the
+    // wire envelope agree on which mode wrote the file.
+    let mode = match format_label {
+        "otpauth" => "plaintext",
+        "paladin" => "encrypted",
+        other => other,
+    };
+    writeln!(
+        out,
+        "Exported {} bundle to {}.",
+        mode,
+        written_path.display()
+    )
+}
+
 /// Write a single `short_secret` validation-warning advisory to the
 /// supplied stream, prefixed with `paladin: warning:`. The CLI calls
 /// this in text mode only — under `--json` warnings flow through the
@@ -394,6 +417,24 @@ mod tests {
         write_qr_import_success(&report, &mut buf).expect("render");
         let s = String::from_utf8(buf).expect("utf-8");
         assert_eq!(s, "Imported 3 account(s) (skipped 1).\n");
+    }
+
+    #[test]
+    fn export_success_renders_plaintext_mode_label_for_otpauth_format() {
+        let path = PathBuf::from("/tmp/example/creds.json");
+        let mut buf: Vec<u8> = Vec::new();
+        write_export_success(&path, "otpauth", &mut buf).expect("render");
+        let s = String::from_utf8(buf).expect("utf-8");
+        assert_eq!(s, "Exported plaintext bundle to /tmp/example/creds.json.\n");
+    }
+
+    #[test]
+    fn export_success_renders_encrypted_mode_label_for_paladin_format() {
+        let path = PathBuf::from("/tmp/bundle.bin");
+        let mut buf: Vec<u8> = Vec::new();
+        write_export_success(&path, "paladin", &mut buf).expect("render");
+        let s = String::from_utf8(buf).expect("utf-8");
+        assert_eq!(s, "Exported encrypted bundle to /tmp/bundle.bin.\n");
     }
 
     #[test]
