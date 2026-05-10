@@ -597,6 +597,59 @@ fn pty_remove_on_open_encrypted_vault_confirms_then_decrypts_to_plaintext() {
 }
 
 #[test]
+fn pty_remove_with_yes_skips_only_confirmation_not_unlock_prompt() {
+    // §5: `--yes` skips the destructive confirmation but **not** the
+    // unlock prompt. On an encrypted vault, `passphrase remove --yes`
+    // must still prompt for the unlock passphrase via `/dev/tty`
+    // before re-saving as plaintext. Text-mode `--yes` does not
+    // suppress the plaintext-storage advisory (the strict-mode
+    // suppression rule applies only under `--json`); it skips only
+    // the confirmation prompt.
+    let (_dir, path) = fresh_vault_path();
+    create_encrypted_vault(&path, "the-secret");
+
+    // Pre-state: file is encrypted.
+    let before = std::fs::read(&path).expect("read pre-remove vault");
+    assert_eq!(before[9], 1, "fixture should be encrypted");
+
+    let mut pty = Pty::spawn(
+        [
+            "--vault",
+            path.to_str().unwrap(),
+            "passphrase",
+            "remove",
+            "--yes",
+        ],
+        &[],
+    );
+    // No destructive confirmation prompt — `--yes` opts in. The unlock
+    // prompt is still required to decrypt the source vault before
+    // re-saving as plaintext.
+    pty.expect(PROMPT_UNLOCK);
+    pty.send_line("the-secret");
+    let exit = pty.wait_for_exit();
+    exit.assert_exit(0);
+    // Text-mode `--yes` skips only the confirmation, so the
+    // plaintext-storage advisory still appears on stderr and the
+    // success line still prints.
+    exit.assert_transcript_contains("Plaintext storage keeps account secrets unencrypted");
+    exit.assert_transcript_contains("Decrypted vault to plaintext.");
+    // The destructive-confirmation prompt must never appear.
+    exit.assert_transcript_lacks(PROMPT_REMOVE_CONFIRM);
+
+    // Post-state on disk: now plaintext, magic + format_ver intact,
+    // mode flipped to 0, file mode preserved at `0o600`.
+    let after = std::fs::read(&path).expect("read post-remove vault");
+    assert!(after.len() >= 10, "header too short: {} bytes", after.len());
+    assert_eq!(&after[..8], PALADIN_MAGIC);
+    assert_eq!(after[8], 1, "format_ver");
+    assert_eq!(after[9], 0, "mode == plaintext");
+
+    let perms = std::fs::metadata(&path).expect("metadata").permissions();
+    assert_eq!(perms.mode() & 0o7777, 0o600);
+}
+
+#[test]
 fn pty_remove_without_dev_tty_surfaces_io_error_confirmation_prompt() {
     // §5: when `/dev/tty` cannot be opened (no controlling terminal),
     // text-mode `passphrase remove` (no `--yes`) must surface
