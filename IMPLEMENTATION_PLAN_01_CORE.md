@@ -1198,7 +1198,7 @@ is a separate `#[test]` or table-driven case family.
   case-insensitive scheme/algo/type, base32 padding/casing, duplicate known
   parameter rejection, unknown parameter ignoring, secret whitespace rejection,
   and HOTP/TOTP-specific `counter`/`period` rejection.
-- [ ] `proptest` property coverage for URI parsing and base32 secret decoding.
+- [x] `proptest` property coverage for URI parsing and base32 secret decoding.
 - [x] Bincode payload contract — fixed v2 config, trailing-bytes reject, 16 MiB
   reject (plaintext on-disk and plaintext/encrypted decoded).
 - [x] Bincode encoding determinism — same `VaultPayload` value encodes to

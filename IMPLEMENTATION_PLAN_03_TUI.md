@@ -623,183 +623,378 @@ reaches the primary-file commit point with durability still uncertain:
 Reducer/state-machine logic is pure and tested directly. Rendered frames are
 captured with `insta` golden snapshots using `ratatui::backend::TestBackend`.
 
-- **Reducer**: every keybinding maps to the expected state transition.
-  Search filter; selection navigation; modal open/close; HOTP `n` triggers a
-  `HotpAdvance` effect; `AppEvent::EffectResult(...)` variants are the only
-  path for effect outcomes to change non-core UI state; pre-commit effect
-  failures leave visible state unchanged and surface inline/status-line
-  errors, while durability-unconfirmed failures follow the committed-state
-  behavior in "Effect errors". Modal-local navigation covers `Tab` /
-  `Shift-Tab`, the `Ctrl-N` / `Ctrl-P` aliases, `Enter`, `Space`, arrows,
-  text-field editing, and `Esc` cancel / close behavior for every modal.
-- **Vim-style navigation**: `j` / `k` mirror `↓` / `↑`; `Ctrl-F` /
-  `Ctrl-B` mirror `PgDn` / `PgUp`; `G` mirrors `End`; `gg` chord
-  jumps to first row and `zz` chord recenters the viewport on the
-  selected row; the pending-leader chord state is held by the
-  reducer, committed on the matching second press, and cleared by
-  any non-matching key, focus change, modal open, `Esc`, or
-  auto-lock. Search-focus pass-through covers `PgUp` / `PgDn` /
-  `Home` / `End` / `Ctrl-B` / `Ctrl-F` / `Ctrl-D` / `Ctrl-U`;
-  bare-letter vim keys (`j`, `k`, `g`, `G`, `z`) are consumed by
-  the search field as text input and never trigger chord state from
-  the search field. Empty filtered set: every list-navigation key
-  including the chords is a silent no-op. `Ctrl-N` / `Ctrl-P` inside
-  modals advance / retreat focus the same as `Tab` / `Shift-Tab`,
-  have no effect on a post-success counts panel, and do not
-  override `↑` / `↓` spinner adjustments.
-- **Search**: case-insensitive substring through
-  `paladin_core::account_matches_search` (using the same base match key as
-  CLI query resolution in DESIGN §5; empty issuer is allowed and the colon is
-  still present in the match key), with no Unicode normalization; insertion
-  order preserved among matches. Filter changes route through
-  `paladin_core::select_after_filter` (preserve the selected `AccountId`
-  when it remains visible, otherwise select the first match, `None` when
-  empty); empty result sets have no selection and action keys that
-  require a selected row surface the "no account selected" status-line
-  error. The `id:` prefix form is CLI-only and is **not**
-  honored by the TUI search.
-- **Auto-lock**: `idle_deadline` is set via
+The checklist below tracks coverage at the bullet level. A ticked box means
+at least one named `#[test]` in the indicated file asserts the behavior
+end-to-end.
+
+### Reducer (`tests/reducer_tests.rs`)
+
+- [ ] Every keybinding maps to the expected state transition.
+- [ ] Search filter narrows the visible list in place.
+- [ ] Selection navigation moves correctly under `↑` / `↓` / `j` / `k`,
+  `PgUp` / `PgDn` / `Ctrl-B` / `Ctrl-F`, `Ctrl-U` / `Ctrl-D`, and
+  `Home` / `End`.
+- [ ] Modal open / close transitions for every modal.
+- [ ] HOTP `n` triggers a `HotpAdvance` effect.
+- [ ] `AppEvent::EffectResult(...)` is the only path by which effect
+  outcomes change non-core UI state (status text, reveal windows, modal
+  close / counts panels, inline errors).
+- [ ] Pre-commit effect failures leave visible state unchanged and
+  surface inline / status-line errors.
+- [ ] Durability-unconfirmed failures follow the committed-state
+  behavior in "Effect errors".
+- [ ] Modal-local navigation covers `Tab` / `Shift-Tab`, the
+  `Ctrl-N` / `Ctrl-P` aliases, `Enter`, `Space`, arrows, text-field
+  editing, and `Esc` cancel / close behavior for every modal.
+
+### Vim-style navigation (`tests/reducer_tests.rs`)
+
+- [ ] `j` / `k` mirror `↓` / `↑`.
+- [ ] `Ctrl-F` / `Ctrl-B` mirror `PgDn` / `PgUp`.
+- [ ] `G` mirrors `End`.
+- [ ] `gg` two-press chord jumps to the first row of the filtered set.
+- [ ] `zz` two-press chord recenters the viewport on the selected row.
+- [ ] Pending-leader chord state is held by the reducer, committed on
+  the matching second press, and cleared by any non-matching key,
+  focus change, modal open, `Esc`, or auto-lock.
+- [ ] Search-focus pass-through routes `PgUp` / `PgDn` / `Home` / `End`
+  / `Ctrl-B` / `Ctrl-F` / `Ctrl-D` / `Ctrl-U` to the list before
+  `tui-input` sees them.
+- [ ] Bare-letter vim keys (`j`, `k`, `g`, `G`, `z`) are consumed by the
+  search field as text input and never trigger chord state from the
+  search field.
+- [ ] Empty filtered set: every list-navigation key including the
+  chords is a silent no-op.
+- [ ] `Ctrl-N` / `Ctrl-P` inside modals advance / retreat focus the
+  same as `Tab` / `Shift-Tab`, have no effect on a post-success counts
+  panel, and do not override `↑` / `↓` spinner adjustments.
+
+### Search (`tests/search_tests.rs`)
+
+- [ ] Case-insensitive substring match through
+  `paladin_core::account_matches_search` (same base match key as CLI
+  query resolution in DESIGN §5; empty issuer allowed and the colon is
+  still present in the match key); no Unicode normalization.
+- [ ] Insertion order is preserved among matches.
+- [ ] Filter changes route through `paladin_core::select_after_filter`:
+  preserve the selected `AccountId` when still visible, otherwise the
+  first match, `None` when empty.
+- [ ] Empty result sets have no selection; action keys that require a
+  selected row surface the "no account selected" status-line error.
+- [ ] The `id:` prefix form is CLI-only and is **not** honored by the
+  TUI search.
+
+### Auto-lock (`tests/auto_lock_tests.rs`)
+
+- [ ] `idle_deadline` is set via
   `paladin_core::policy::auto_lock::IdlePolicy::next_deadline(now,
-  vault.is_encrypted(), settings)` on `Unlocked` + `enabled` + encrypted
-  (i.e. `IdlePolicy::should_arm` is `true`); resets on input; transitions
-  to `Locked` when a
+  vault.is_encrypted(), settings)` on `Unlocked` + `enabled` +
+  encrypted (i.e. `IdlePolicy::should_arm` is `true`).
+- [ ] `idle_deadline` resets on any `AppEvent::Input`.
+- [ ] Transition to `Locked` fires when a
   `paladin_core::TICK_INTERVAL_MS` `Tick` observes
-  `IdlePolicy::is_expired`; **no-op** for plaintext vaults (deadline stays
-  `None`). Setting persists across saves. Locking discards the
-  `Vault` / `Store`, open HOTP
-  reveal windows, the search query, and any modal while retaining the
-  resolved vault path for the next unlock attempt; a clipboard auto-clear
-  timer scheduled before lock survives lock and still fires only-if-unchanged.
-- **Clipboard auto-clear**: timer schedules; stale tokens are ignored;
-  "only-if-unchanged" honored when an external copy mutates the clipboard
-  between copy and wake; pending copied values are zeroized after the clear
-  attempt or stale-token drop. CI tests drive these flows through the
+  `IdlePolicy::is_expired`.
+- [ ] No-op for plaintext vaults (deadline stays `None`).
+- [ ] Setting persists across saves.
+- [ ] Locking discards the `Vault` / `Store`, open HOTP reveal windows,
+  the search query, and any modal while retaining the resolved vault
+  path for the next unlock attempt.
+- [ ] A clipboard auto-clear timer scheduled before lock survives lock
+  and still fires only-if-unchanged.
+
+### Clipboard auto-clear (`tests/clipboard_tests.rs`)
+
+- [ ] Copy schedules a clear via
+  `paladin_core::policy::clipboard_clear::ClipboardClearPolicy::schedule`.
+- [ ] Stale tokens are ignored on wake.
+- [ ] "Only-if-unchanged" honored when an external copy mutates the
+  clipboard between copy and wake.
+- [ ] Pending copied values are zeroized after the clear attempt or
+  stale-token drop.
+- [ ] Clipboard flows are exercised through the
   `PALADIN_CLIPBOARD_DRYRUN=1` adapter hook so they run without a
   clipboard server.
-- **Terminal lifecycle**: terminal setup uses a guard that restores raw mode
-  and alternate-screen state on normal exit, startup failure after setup,
+
+### Terminal lifecycle (`tests/terminal_tests.rs`)
+
+- [ ] Terminal setup uses a guard that restores raw mode and
+  alternate-screen state on normal exit, startup failure after setup,
   `Ctrl-C`, and panic unwind.
-- **Global args**: `--vault` selects the inspected/opened vault path,
-  `--no-color` and `NO_COLOR` disable styling, and `--json` is rejected at
-  parse time with clap's text diagnostic and no JSON envelope.
-- **Add modal**: manual and URI duplicate collisions are detected through
-  `Vault::find_duplicate(&validated)`, reject with the existing account,
-  and the follow-up "add anyway" confirmation inserts the pending validated
-  account on the duplicate-allowed path so the new entry is appended with a
-  fresh ID;
-  clipboard QR import uses `ImportConflict::Skip`, reports imported/skipped
-  counts, handles validation warnings rendered through
-  `paladin_core::format_validation_warning()`, and rejects no-image /
-  no-QR / invalid-QR cases inline.
-- **Import modal**: format auto-detect and explicit format overrides route
-  through `paladin_core::import::from_file`; the pre-prompt Paladin decision
-  routes through `paladin_core::classify_paladin_import_precheck`, prompting
-  only on `PromptForPassphrase`, surfacing `Reject(err)` inline without a
-  passphrase prompt, and letting `NoPrompt` continue through the import
-  facade. Tests cover encrypted Paladin, plaintext Paladin,
-  malformed/unsupported Paladin headers, missing files, non-Paladin content,
-  and forced-format mismatches through that shared helper; on-conflict policy
-  (`skip` / `replace` / `append`) is forwarded to
-  `Vault::import_accounts` and reflected in the report counts;
-  validation warnings are rendered through
-  `paladin_core::format_validation_warning()`;
-  importer error kinds listed under "Effect errors", including
-  `unsupported_import_format`, surface inline without mutation;
-  successful imports persist via `Vault::mutate_and_save`
-  and a `save_not_committed` failure restores the core snapshot so
+
+### Global args (`tests/reducer_tests.rs`)
+
+- [ ] `--vault` selects the inspected / opened vault path.
+- [ ] `--no-color` disables ratatui styling.
+- [ ] `NO_COLOR` (when `--no-color` is absent) disables ratatui
+  styling.
+- [ ] `--json` is rejected at parse time with clap's text diagnostic
+  and no JSON envelope.
+
+### Add modal (`tests/reducer_tests.rs`)
+
+- [ ] Manual duplicate collision is detected through
+  `Vault::find_duplicate(&validated)` and rejects with the existing
+  account.
+- [ ] URI duplicate collision is detected through
+  `Vault::find_duplicate(&validated)` and rejects with the existing
+  account.
+- [ ] The follow-up "add anyway" confirmation inserts the pending
+  validated account on the duplicate-allowed path with a fresh ID.
+- [ ] Clipboard QR import uses `ImportConflict::Skip` and reports
+  imported / skipped counts.
+- [ ] QR-add validation warnings are rendered through
+  `paladin_core::format_validation_warning()` in the post-success
+  counts panel.
+- [ ] Manual / URI Add status-line confirmations include validation
+  warning text.
+- [ ] No-image, no-QR, and invalid-QR cases reject inline.
+
+### Import modal (`tests/reducer_tests.rs`)
+
+- [ ] Format auto-detect routes through
+  `paladin_core::import::from_file`.
+- [ ] Explicit format overrides (`otpauth` / `aegis` / `paladin` /
+  `qr`) route through `paladin_core::import::from_file`.
+- [ ] Pre-prompt Paladin decision routes through
+  `paladin_core::classify_paladin_import_precheck`, prompting only on
+  `PromptForPassphrase`.
+- [ ] `Reject(err)` from the precheck surfaces inline without a
+  passphrase prompt.
+- [ ] `NoPrompt` from the precheck continues through the import facade.
+- [ ] Coverage spans encrypted Paladin, plaintext Paladin,
+  malformed/unsupported Paladin headers, missing files, non-Paladin
+  content, and forced-format mismatches through the shared helper.
+- [ ] On-conflict policy (`skip` / `replace` / `append`) is forwarded
+  to `Vault::import_accounts` and reflected in the report counts.
+- [ ] Validation warnings are rendered through
+  `paladin_core::format_validation_warning()`.
+- [ ] Importer errors (`unsupported_import_format`,
+  `unsupported_plaintext_vault`, `unsupported_encrypted_aegis`,
+  `unsupported_aegis_entry_type`, `validation_error`,
+  `no_entries_to_import`, `decrypt_failed`, `invalid_header`,
+  `invalid_payload`, `unsupported_format_version`,
+  `kdf_params_out_of_bounds`, `io_error`) surface inline without
+  mutation.
+- [ ] Successful imports persist via `Vault::mutate_and_save`.
+- [ ] A `save_not_committed` failure restores the core snapshot so
   `Vault::iter()` matches its pre-attempt state.
-- **Export modal**: format selector routes to
-  `paladin_core::export::otpauth_list` or
-  `paladin_core::export::encrypted`; refused overwrite rejects without
-  writing; encrypted export prompts twice and rejects mismatch with
-  `confirmation_mismatch` and empty entry with `zero_length`;
-  plaintext export requires the unencrypted-secrets confirmation
-  before writing; output is written through
-  `paladin_core::write_secret_file_atomic` with mode `0600`; writer
-  `io_error`, `save_not_committed`, and `save_durability_unconfirmed`
-  surface inline and the modal stays open. Export performs no `Vault::save`
-  and leaves vault state unchanged across success and failure.
-- **Settings modal**: pending edits are buffered until Confirm; `Esc`
-  discards them without invoking setters or save; Confirm runs every
-  changed setter inside one `Vault::mutate_and_save` transaction; a
-  defensive setter validation failure restores the pre-attempt settings,
-  surfaces inline, blocks the save, and keeps the modal open; a pre-commit
-  save failure restores the prior settings values in memory and keeps the
-  modal open with the inline error; a durability-unconfirmed save leaves the
-  new values in memory; Confirm with no changes closes without saving.
-- **Rename modal**: opens with the selected account's current label
-  pre-populated; non-empty trimmed input always routes through
-  `Vault::rename` inside `Vault::mutate_and_save`, including when the
-  trimmed input equals the current label so `updated_at` still matches CLI
-  behavior; pre-commit `save_not_committed` restores
-  the prior label and the modal stays open with the inline error;
-  `save_durability_unconfirmed` leaves the new label in memory and
-  surfaces the warning. Empty / out-of-range labels surface inline
-  validation errors and never invoke the setter.
-- **Pre-commit save rollback**: Add, Remove, Rename, Import, and Settings modals
-  route mutations through `Vault::mutate_and_save`. Each case verifies
-  that a `save_not_committed` failure leaves `Vault::iter()` (or
-  `Vault::settings()`) matching its pre-attempt snapshot, the modal stays
-  open with the typed inline error, and `save_durability_unconfirmed`
-  leaves the new state in memory while still surfacing the warning.
-  Passphrase rollback is exercised in the `paladin-core` plan; the TUI
-  test asserts that the inline error surfaces and that the TUI's
-  visible vault-mode flag (sourced from `Vault::is_encrypted()`) tracks
-  the transition outcome without inspecting private key/cache material.
-- **HOTP reveal window**: reveal closes after the deadline returned by
+
+### Export modal (`tests/reducer_tests.rs`)
+
+- [ ] Plaintext format selector routes to
+  `paladin_core::export::otpauth_list`.
+- [ ] Encrypted format selector routes to
+  `paladin_core::export::encrypted`.
+- [ ] Refused overwrite gate rejects without writing.
+- [ ] Encrypted export prompts twice and rejects mismatch with
+  `confirmation_mismatch`.
+- [ ] Encrypted export rejects empty new passphrase with `zero_length`.
+- [ ] Plaintext export requires the unencrypted-secrets confirmation
+  before writing.
+- [ ] Output is written through
+  `paladin_core::write_secret_file_atomic` with mode `0600`.
+- [ ] Writer `io_error`, `save_not_committed`, and
+  `save_durability_unconfirmed` surface inline and the modal stays
+  open.
+- [ ] Export performs no `Vault::save` and leaves vault state
+  unchanged across success and failure.
+
+### Settings modal (`tests/reducer_tests.rs`)
+
+- [ ] Pending edits are buffered until Confirm.
+- [ ] `Esc` discards pending edits without invoking setters or save.
+- [ ] Confirm runs every changed setter inside one
+  `Vault::mutate_and_save` transaction.
+- [ ] A defensive setter validation failure restores the pre-attempt
+  settings, surfaces inline, blocks the save, and keeps the modal
+  open.
+- [ ] A pre-commit save failure restores the prior settings values in
+  memory and keeps the modal open with the inline error.
+- [ ] A durability-unconfirmed save leaves the new values in memory
+  and surfaces the warning inline.
+- [ ] Confirm with no changes closes the modal without invoking save.
+
+### Rename modal (`tests/reducer_tests.rs`)
+
+- [ ] Opens with the selected account's current label pre-populated.
+- [ ] Non-empty trimmed input routes through `Vault::rename` inside
+  `Vault::mutate_and_save`, including when the trimmed input equals
+  the current label so `updated_at` still matches CLI behavior.
+- [ ] Pre-commit `save_not_committed` restores the prior label and
+  keeps the modal open with the inline error.
+- [ ] `save_durability_unconfirmed` leaves the new label in memory and
+  surfaces the warning.
+- [ ] Empty / out-of-range labels surface inline validation errors and
+  never invoke the setter.
+
+### Pre-commit save rollback (`tests/reducer_tests.rs`)
+
+- [ ] Add modal `save_not_committed` leaves `Vault::iter()` matching
+  its pre-attempt snapshot and the modal stays open with the typed
+  inline error; `save_durability_unconfirmed` leaves the new state in
+  memory while surfacing the warning.
+- [ ] Remove modal: same coverage as Add, asserted on `Vault::iter()`.
+- [ ] Rename modal: same coverage as Add, asserted on `Vault::iter()`.
+- [ ] Import modal: same coverage as Add, asserted on `Vault::iter()`.
+- [ ] Settings modal: same coverage as Add, asserted on
+  `Vault::settings()`.
+- [ ] Passphrase modal: the inline error surfaces and the TUI's
+  visible vault-mode flag (sourced from `Vault::is_encrypted()`)
+  tracks the transition outcome without inspecting private key /
+  cache material. (End-to-end passphrase rollback is exercised in the
+  `paladin-core` plan.)
+
+### HOTP reveal window (`tests/hotp_reveal_tests.rs`)
+
+- [ ] Reveal closes after the deadline returned by
   `paladin_core::policy::hotp_reveal::deadline(now)`
-  (`paladin_core::HOTP_REVEAL_SECS` measured on a monotonic clock);
-  `n` during an open
-  reveal advances again (does not no-op); hidden rows show the stored next
-  counter, while revealed rows show the counter that produced the visible
-  code until expiry.
-- **Sensitive UI buffers**: unlock, encrypted Paladin import, encrypted export,
-  passphrase set/change, the Add modal's manual-secret field, the Add
-  URI-mode entry, pending duplicate-add validated accounts, HOTP reveal,
-  and pending clipboard-clear buffers zeroize on submit, cancel, modal close,
-  expiry, replacement, drop, and auto-lock as applicable. Pending
-  clipboard-clear buffers are the auto-lock exception: they survive lock
-  only until the scheduled clear attempt, stale-token drop, replacement, or
-  app shutdown, and are zeroized at that point.
-- **Insta snapshots** for every screen state: empty vault, single TOTP,
-  mixed TOTP/HOTP with hidden + revealed rows, search-active, list view
-  after a `zz` recenter (selected row in viewport middle), every modal
-  (Add / Remove / Rename / Import / Export / Passphrase set/change/remove /
-  Settings), Help overlay, unlock screen, missing-vault screen, status-line error
-  after rejected copy, `--no-color` variants. Error-state snapshots:
-  inline `save_not_committed` and `save_durability_unconfirmed`
-  rendered in each mutating modal (Add, Remove, Rename, Import, Passphrase
-  set/change/remove, Settings); Import modal with each importer error
-  kind and the post-import counts panel; Export modal with the refused
-  overwrite gate, `confirmation_mismatch`, `zero_length`, plaintext-export
-  warning, `io_error` writer failure, `save_not_committed`, and
-  `save_durability_unconfirmed`; status-line
-  `save_durability_unconfirmed` after HOTP `n`; status-line
-  `clipboard_write_failed` after a failed copy; unlock screen with
-  inline wrong-passphrase error; Add modal with QR-import inline
-  errors (no clipboard image, image decode failure, zero decoded QRs,
-  oversized raw RGBA buffer, invalid QR payload) plus the post-QR-import
-  counts panel; Add modal with
-  `duplicate_account` and the
-  follow-up "add anyway" confirmation; Passphrase modal with
-  `confirmation_mismatch` and `zero_length` inline errors;
-  status-line confirmations after manual Add, URI Add, Remove, Rename,
-  Export, Passphrase set/change/remove, and Settings save;
-  manual / URI Add status-line confirmations with validation warnings;
-  Import and QR-add counts panels with validation-warning messages;
-  startup-error screen rendered with `unsafe_permissions` (the `Some(text)`
-  from `format_unsafe_permissions`).
-- **Plaintext vault**: opens directly to list (no unlock screen).
-- **Encrypted vault**: opens to unlock screen; wrong passphrase shows
-  inline error; correct passphrase advances to list.
-- **Missing vault**: opens the missing-vault screen and does not create or
-  mutate files.
-- **Startup errors**: vault-path resolution failures and
-  non-`decrypt_failed` errors from `inspect` / `open` (including
-  `unsafe_permissions`) open the non-mutating startup-error screen and do
-  not create or mutate files;
-  `unsafe_permissions` rendering uses the `Some(text)` from
+  (`paladin_core::HOTP_REVEAL_SECS` measured on a monotonic clock).
+- [ ] `n` during an open reveal advances again (does not no-op).
+- [ ] Hidden rows show the stored next counter.
+- [ ] Revealed rows show the `Code.counter_used` that produced the
+  visible code until expiry.
+
+### Sensitive UI buffers (`tests/reducer_tests.rs`)
+
+- [ ] Unlock passphrase buffer zeroizes on submit, cancel, and
+  auto-lock.
+- [ ] Encrypted Paladin import passphrase buffer zeroizes on submit,
+  cancel, modal close, and auto-lock.
+- [ ] Encrypted export passphrase buffer zeroizes on submit, cancel,
+  modal close, and auto-lock.
+- [ ] Passphrase set / change buffers zeroize on submit, cancel, modal
+  close, and auto-lock.
+- [ ] Add modal manual-secret field zeroizes on submit, cancel, modal
+  close, mode switch, and auto-lock.
+- [ ] Add URI-mode entry zeroizes on submit, cancel, modal close, mode
+  switch, and auto-lock.
+- [ ] Pending duplicate-add validated accounts zeroize on add-anyway,
+  cancel, modal close, and auto-lock.
+- [ ] HOTP reveal state zeroizes on expiry, replacement, drop, and
+  auto-lock.
+- [ ] Pending clipboard-clear buffers survive lock until the scheduled
+  clear attempt, stale-token drop, replacement, or app shutdown, then
+  zeroize.
+
+### Vault modes and startup (`tests/reducer_tests.rs`)
+
+- [ ] Plaintext vault opens directly to the list (no unlock screen).
+- [ ] Encrypted vault opens to the unlock screen.
+- [ ] Encrypted vault wrong passphrase shows inline `decrypt_failed`
+  and stays on the unlock screen.
+- [ ] Encrypted vault correct passphrase advances to the list.
+- [ ] Missing vault opens the missing-vault screen and does not create
+  or mutate files.
+- [ ] Vault-path resolution failures from `default_vault_path` open
+  the non-mutating startup-error screen and do not create or mutate
+  files.
+- [ ] Non-`decrypt_failed` errors from `inspect` / `open` (including
+  `unsafe_permissions`) open the non-mutating startup-error screen
+  and do not create or mutate files.
+- [ ] `unsafe_permissions` rendering uses the `Some(text)` from
   `format_unsafe_permissions` verbatim.
+
+### Insta snapshots (`tests/snapshots/`)
+
+Layout / list views:
+
+- [ ] Empty vault list view.
+- [ ] Single-TOTP list view.
+- [ ] Mixed TOTP / HOTP list view with hidden + revealed rows.
+- [ ] Search-active list view.
+- [ ] List view after a `zz` recenter (selected row in viewport
+  middle).
+- [ ] `--no-color` variants of the list-view snapshots above.
+
+Modals and overlays:
+
+- [ ] Add modal.
+- [ ] Remove modal.
+- [ ] Rename modal.
+- [ ] Import modal.
+- [ ] Export modal.
+- [ ] Passphrase modal — `set` sub-flow.
+- [ ] Passphrase modal — `change` sub-flow.
+- [ ] Passphrase modal — `remove` sub-flow.
+- [ ] Settings modal.
+- [ ] Help overlay.
+- [ ] Unlock screen.
+- [ ] Missing-vault screen.
+
+Inline `save_not_committed` / `save_durability_unconfirmed`:
+
+- [ ] Add modal `save_not_committed`.
+- [ ] Add modal `save_durability_unconfirmed`.
+- [ ] Remove modal `save_not_committed`.
+- [ ] Remove modal `save_durability_unconfirmed`.
+- [ ] Rename modal `save_not_committed`.
+- [ ] Rename modal `save_durability_unconfirmed`.
+- [ ] Import modal `save_not_committed`.
+- [ ] Import modal `save_durability_unconfirmed`.
+- [ ] Passphrase set `save_not_committed`.
+- [ ] Passphrase set `save_durability_unconfirmed`.
+- [ ] Passphrase change `save_not_committed`.
+- [ ] Passphrase change `save_durability_unconfirmed`.
+- [ ] Passphrase remove `save_not_committed`.
+- [ ] Passphrase remove `save_durability_unconfirmed`.
+- [ ] Settings modal `save_not_committed`.
+- [ ] Settings modal `save_durability_unconfirmed`.
+
+Import error and counts states:
+
+- [ ] Import modal with each importer error kind.
+- [ ] Import modal post-import counts panel.
+- [ ] Import counts panel with validation-warning messages.
+
+Export error states:
+
+- [ ] Export modal refused overwrite gate.
+- [ ] Export modal `confirmation_mismatch`.
+- [ ] Export modal `zero_length`.
+- [ ] Export modal plaintext-export warning.
+- [ ] Export modal `io_error` writer failure.
+- [ ] Export modal `save_not_committed`.
+- [ ] Export modal `save_durability_unconfirmed`.
+
+Add (QR) error and counts states:
+
+- [ ] Add modal QR-import inline error: no clipboard image.
+- [ ] Add modal QR-import inline error: image decode failure.
+- [ ] Add modal QR-import inline error: zero decoded QRs.
+- [ ] Add modal QR-import inline error: oversized raw RGBA buffer.
+- [ ] Add modal QR-import inline error: invalid QR payload.
+- [ ] Add modal post-QR-import counts panel.
+- [ ] Add modal `duplicate_account`.
+- [ ] Add modal "add anyway" confirmation.
+- [ ] QR-add counts panel with validation-warning messages.
+
+Passphrase inline errors:
+
+- [ ] Passphrase modal `confirmation_mismatch` inline error.
+- [ ] Passphrase modal `zero_length` inline error.
+
+Status-line states:
+
+- [ ] Status-line error after rejected copy.
+- [ ] Status-line `save_durability_unconfirmed` after HOTP `n`.
+- [ ] Status-line `clipboard_write_failed` after a failed copy.
+- [ ] Unlock screen with inline wrong-passphrase error.
+- [ ] Status-line confirmation after manual Add.
+- [ ] Status-line confirmation after URI Add.
+- [ ] Status-line confirmation after Remove.
+- [ ] Status-line confirmation after Rename.
+- [ ] Status-line confirmation after Export.
+- [ ] Status-line confirmation after Passphrase set.
+- [ ] Status-line confirmation after Passphrase change.
+- [ ] Status-line confirmation after Passphrase remove.
+- [ ] Status-line confirmation after Settings save.
+- [ ] Manual Add status-line confirmation with validation warnings.
+- [ ] URI Add status-line confirmation with validation warnings.
+
+Startup error:
+
+- [ ] Startup-error screen rendered with `unsafe_permissions` (the
+  `Some(text)` from `format_unsafe_permissions`).
 
 ## Dependencies
 
@@ -960,7 +1155,9 @@ is never expected to be scripted.
   import from clipboard bytes, and only-if-unchanged auto-clear via
   `paladin_core::policy::clipboard_clear::ClipboardClearPolicy::should_clear`.
 - [ ] Add reducer, search, auto-lock, clipboard, HOTP reveal, terminal
-  lifecycle, sensitive-buffer, and snapshot coverage.
+  lifecycle, sensitive-buffer, and snapshot coverage. Tracked at the
+  bullet level in the Tests checklist; this top-level item only ticks
+  once every Tests sub-bullet is checked.
 - [ ] Add a `paladin-tui/test-hooks` cargo feature that is **off by
   default** in production builds and enabled only by the test build of
   the `paladin-tui` binary. `paladin-tui/test-hooks` transitively
@@ -981,6 +1178,15 @@ is never expected to be scripted.
 ## Definition of done
 
 - All keybindings + modals from §6 implemented.
+- **Every Tests checklist item above is ticked** — including the
+  reducer, vim-style navigation, search, auto-lock, clipboard
+  auto-clear, terminal lifecycle, global args, every modal (Add,
+  Import, Export, Settings, Rename), pre-commit save rollback, HOTP
+  reveal window, sensitive UI buffers, vault modes / startup, and
+  every insta snapshot. The "Add reducer, search, auto-lock,
+  clipboard, HOTP reveal, terminal lifecycle, sensitive-buffer, and
+  snapshot coverage" implementation-checklist item ticks only when
+  this gate is met.
 - Auto-lock + clipboard-clear are off by default and behave per §6 when
   enabled, including the plaintext-vault no-op.
 - HOTP reveal rows show the counter used for the visible code, then return
