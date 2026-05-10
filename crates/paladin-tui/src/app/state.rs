@@ -11,6 +11,8 @@ use std::path::{Path, PathBuf};
 
 use paladin_core::{format_unsafe_permissions, PaladinError, Store, Vault, VaultLock, VaultStatus};
 
+use crate::prompt::PassphraseBuffer;
+
 /// Top-level UI state.
 ///
 /// Variants other than [`AppState::Unlocked`] are deliberately
@@ -31,12 +33,17 @@ pub enum AppState {
     /// prompted for the passphrase inside the TUI. A
     /// `decrypt_failed` from a previous attempt is held in `error`
     /// for inline display; every other `open` error replaces this
-    /// state with [`AppState::StartupError`].
+    /// state with [`AppState::StartupError`]. Typed passphrase bytes
+    /// live in `passphrase`, a zeroizing buffer cleared on submit per
+    /// `IMPLEMENTATION_PLAN_03_TUI.md` "Tests > Sensitive UI buffers".
     Unlock {
         /// The vault path being unlocked.
         path: PathBuf,
         /// Inline error (most recently `decrypt_failed`), if any.
         error: Option<String>,
+        /// Typed passphrase characters; zeroized on submit, cancel,
+        /// modal close, and auto-lock.
+        passphrase: PassphraseBuffer,
     },
 
     /// Auto-locked: an encrypted vault that was previously unlocked
@@ -98,6 +105,7 @@ pub fn decide_state_from_inspect(
         Ok(VaultStatus::Encrypted) => Some(AppState::Unlock {
             path: path.to_path_buf(),
             error: None,
+            passphrase: PassphraseBuffer::new(),
         }),
         Ok(VaultStatus::Plaintext) => None,
         Err(err) => Some(AppState::StartupError {

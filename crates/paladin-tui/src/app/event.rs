@@ -5,7 +5,10 @@
 //!
 //! See `IMPLEMENTATION_PLAN_03_TUI.md` "Event loop (per §6)".
 
+use std::path::PathBuf;
 use std::time::{Instant, SystemTime};
+
+use secrecy::SecretString;
 
 use paladin_core::ClipboardClearToken;
 
@@ -58,11 +61,23 @@ pub enum AppEvent {
 /// `mpsc` channel; clipboard timer effects send a delayed
 /// [`AppEvent::ClipboardClear`].
 ///
-/// Variants are added incrementally as the reducer comes online; this
-/// initial spine carries only [`Effect::Quit`] so terminal screens
-/// (missing-vault / startup-error / unlock) can request shutdown.
+/// Variants are added incrementally as the reducer comes online.
 #[derive(Debug)]
 pub enum Effect {
     /// Tear down the terminal and exit the process cleanly.
     Quit,
+    /// Attempt to unlock the encrypted vault at `path` with the
+    /// supplied passphrase. The executor calls `Store::open(path,
+    /// VaultLock::Encrypted(passphrase))` and sends the outcome back
+    /// through an `AppEvent::EffectResult(...)` so the reducer can
+    /// transition to `Unlocked` on success or surface `decrypt_failed`
+    /// inline on failure. The passphrase zeroizes on drop because
+    /// `SecretString` owns its bytes through `secrecy`.
+    Unlock {
+        /// The vault path to open.
+        path: PathBuf,
+        /// Typed passphrase, taken from the Unlock screen's zeroizing
+        /// buffer.
+        passphrase: SecretString,
+    },
 }

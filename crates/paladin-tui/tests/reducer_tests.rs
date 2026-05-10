@@ -12,6 +12,8 @@ use clap::Parser;
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 
+use secrecy::ExposeSecret;
+
 use paladin_core::{PaladinError, PermissionSubject, Store, VaultInit, VaultLock, VaultStatus};
 use paladin_tui::app::event::{AppEvent, Effect};
 use paladin_tui::app::reducer::reduce;
@@ -19,6 +21,7 @@ use paladin_tui::app::state::{
     decide_state_from_inspect, decide_state_from_open, render_error_message, AppState,
 };
 use paladin_tui::cli::{should_disable_color, GlobalArgs};
+use paladin_tui::prompt::PassphraseBuffer;
 
 // ---------------------------------------------------------------------------
 // Reducer helpers shared by the per-key-binding tests below.
@@ -49,6 +52,19 @@ fn unlock(path: &str) -> AppState {
     AppState::Unlock {
         path: PathBuf::from(path),
         error: None,
+        passphrase: PassphraseBuffer::new(),
+    }
+}
+
+fn unlock_with(path: &str, typed: &str) -> AppState {
+    let mut buf = PassphraseBuffer::new();
+    for c in typed.chars() {
+        buf.push(c);
+    }
+    AppState::Unlock {
+        path: PathBuf::from(path),
+        error: None,
+        passphrase: buf,
     }
 }
 
@@ -157,8 +173,15 @@ fn encrypted_vault_inspect_yields_unlock_state_with_no_inline_error() {
         Some(AppState::Unlock {
             path: p,
             error: None,
-        }) => assert_eq!(p, path),
-        other => panic!("expected Unlock with no error, got {other:?}"),
+            passphrase,
+        }) => {
+            assert_eq!(p, path);
+            assert!(
+                passphrase.is_empty(),
+                "fresh Unlock state must start with an empty passphrase buffer"
+            );
+        }
+        other => panic!("expected Unlock with empty passphrase and no error, got {other:?}"),
     }
 }
 
@@ -391,13 +414,20 @@ fn q_on_startup_error_quits() {
 }
 
 #[test]
-fn q_on_unlock_does_not_quit() {
-    // `q` on the unlock screen is reserved for text input into the
-    // passphrase field (per the Keybindings table); it must not
-    // produce a Quit effect even though the field itself isn't wired
-    // up yet.
-    let (_, effects) = reduce(unlock("/tmp/v.bin"), key(KeyCode::Char('q')));
+fn q_on_unlock_does_not_quit_and_is_appended_to_the_passphrase_buffer() {
+    // `q` on the unlock screen is a valid passphrase character (per the
+    // Keybindings table + Focus model: "`q` is a valid passphrase
+    // character, so it is not bound to quit there"). It must not
+    // produce a Quit effect and must reach the passphrase buffer as
+    // ordinary text input.
+    let (state, effects) = reduce(unlock("/tmp/v.bin"), key(KeyCode::Char('q')));
     assert!(effects.is_empty(), "expected no effect, got {effects:?}");
+    match state {
+        AppState::Unlock { passphrase, .. } => {
+            assert_eq!(passphrase.as_str(), "q");
+        }
+        other => panic!("expected Unlock state, got {other:?}"),
+    }
 }
 
 #[test]
@@ -430,4 +460,212 @@ fn non_key_input_event_yields_no_effect() {
     let evt = AppEvent::Input(Event::Resize(80, 24));
     let (_, effects) = reduce(missing("/tmp/v.bin"), evt);
     assert!(effects.is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// Unlock passphrase buffer
+// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Sensitive UI buffers +
+//  IMPLEMENTATION_PLAN_03_TUI.md > Tests > Reducer +
+//  IMPLEMENTATION_PLAN_03_TUI.md > Focus model "The unlock screen
+//  accepts character input (passphrase) and Enter (submit), and quits
+//  on Esc or Ctrl-C")
+//
+// Behavior covered:
+//   * `AppState::Unlock` starts with an empty passphrase buffer.
+//   * Printable character input (no Ctrl/Alt modifier) appends to the
+//     buffer and never emits an Effect — including bare letters like
+//     `q`, the action keys, and the Tab/`/`/`?` keys that are actions
+//     elsewhere.
+//   * Ctrl-modified Char keys (other than Ctrl-C, which already quits)
+//     do NOT append to the buffer — Ctrl-A / Ctrl-U etc. are not
+//     passphrase characters.
+//   * Backspace pops the last typed char; backspace on an empty buffer
+//     is a silent no-op.
+//   * Enter on an empty buffer yields no effect.
+//   * Enter on a non-empty buffer emits a single
+//     `Effect::Unlock { path, passphrase: SecretString }` and clears
+//     the buffer (zeroized on submit per the Sensitive UI buffers
+//     bullet).
+//   * `PassphraseBuffer` redacts its `Debug` output so logs / panic
+//     messages never leak the typed bytes (per the "No `Debug` impls
+//     that leak bytes" rule in CLAUDE.md).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn fresh_unlock_state_has_empty_passphrase_buffer() {
+    let AppState::Unlock { passphrase, .. } = unlock("/tmp/v.bin") else {
+        panic!("expected Unlock state");
+    };
+    assert!(passphrase.is_empty());
+    assert_eq!(passphrase.as_str(), "");
+}
+
+#[test]
+fn typing_a_char_on_unlock_appends_to_passphrase_buffer() {
+    let (state, effects) = reduce(unlock("/tmp/v.bin"), key(KeyCode::Char('a')));
+    assert!(effects.is_empty(), "expected no effect, got {effects:?}");
+    match state {
+        AppState::Unlock { passphrase, .. } => assert_eq!(passphrase.as_str(), "a"),
+        other => panic!("expected Unlock state, got {other:?}"),
+    }
+}
+
+#[test]
+fn typing_multiple_chars_on_unlock_accumulates_in_typed_order() {
+    let mut state = unlock("/tmp/v.bin");
+    for c in ['p', 'a', 's', 's'] {
+        let (next, effects) = reduce(state, key(KeyCode::Char(c)));
+        assert!(effects.is_empty(), "char-input never emits an Effect");
+        state = next;
+    }
+    match state {
+        AppState::Unlock { passphrase, .. } => assert_eq!(passphrase.as_str(), "pass"),
+        other => panic!("expected Unlock state, got {other:?}"),
+    }
+}
+
+#[test]
+fn typing_uppercase_char_with_shift_modifier_appends_uppercase() {
+    // crossterm reports the resolved character (e.g. 'A' for Shift+a),
+    // so a Shift modifier on Char('A') must not block the append.
+    let evt = AppEvent::Input(Event::Key(KeyEvent::new(
+        KeyCode::Char('A'),
+        KeyModifiers::SHIFT,
+    )));
+    let (state, effects) = reduce(unlock("/tmp/v.bin"), evt);
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlock { passphrase, .. } => assert_eq!(passphrase.as_str(), "A"),
+        other => panic!("expected Unlock state, got {other:?}"),
+    }
+}
+
+#[test]
+fn ctrl_modified_char_other_than_ctrl_c_does_not_append_to_passphrase() {
+    // Ctrl-U / Ctrl-A / etc. are not passphrase text. The reducer must
+    // ignore them on the Unlock screen (Ctrl-C is handled earlier and
+    // is a Quit, so we use Ctrl-U here).
+    let (state, effects) = reduce(unlock("/tmp/v.bin"), ctrl(KeyCode::Char('u')));
+    assert!(
+        effects.is_empty(),
+        "Ctrl-modified non-quit chars on Unlock are no-ops, got {effects:?}"
+    );
+    match state {
+        AppState::Unlock { passphrase, .. } => assert!(
+            passphrase.is_empty(),
+            "Ctrl-U must not append to passphrase buffer"
+        ),
+        other => panic!("expected Unlock state, got {other:?}"),
+    }
+}
+
+#[test]
+fn backspace_on_unlock_pops_the_last_typed_char() {
+    let (state, effects) = reduce(unlock_with("/tmp/v.bin", "ab"), key(KeyCode::Backspace));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlock { passphrase, .. } => assert_eq!(passphrase.as_str(), "a"),
+        other => panic!("expected Unlock state, got {other:?}"),
+    }
+}
+
+#[test]
+fn backspace_on_empty_unlock_buffer_is_a_silent_no_op() {
+    let (state, effects) = reduce(unlock("/tmp/v.bin"), key(KeyCode::Backspace));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlock { passphrase, .. } => assert!(passphrase.is_empty()),
+        other => panic!("expected Unlock state, got {other:?}"),
+    }
+}
+
+#[test]
+fn enter_with_empty_passphrase_yields_no_effect_and_keeps_state() {
+    let (state, effects) = reduce(unlock("/tmp/v.bin"), key(KeyCode::Enter));
+    assert!(
+        effects.is_empty(),
+        "Enter on an empty passphrase must not submit; got {effects:?}"
+    );
+    match state {
+        AppState::Unlock { passphrase, .. } => assert!(passphrase.is_empty()),
+        other => panic!("expected Unlock state, got {other:?}"),
+    }
+}
+
+#[test]
+fn enter_with_non_empty_passphrase_emits_unlock_effect_and_clears_buffer() {
+    let (state, effects) = reduce(unlock_with("/tmp/v.bin", "hunter2"), key(KeyCode::Enter));
+
+    match effects.as_slice() {
+        [Effect::Unlock { path, passphrase }] => {
+            assert_eq!(path, &PathBuf::from("/tmp/v.bin"));
+            assert_eq!(passphrase.expose_secret(), "hunter2");
+        }
+        other => panic!("expected single Effect::Unlock, got {other:?}"),
+    }
+
+    match state {
+        AppState::Unlock { passphrase, .. } => assert!(
+            passphrase.is_empty(),
+            "passphrase buffer must zeroize (clear) on submit"
+        ),
+        other => panic!("expected Unlock state, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Sensitive UI buffers — PassphraseBuffer
+// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Sensitive UI buffers)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn passphrase_buffer_debug_redacts_typed_bytes() {
+    let mut buf = PassphraseBuffer::new();
+    for c in "topsecret".chars() {
+        buf.push(c);
+    }
+    let rendered = format!("{buf:?}");
+    assert!(
+        !rendered.contains("topsecret"),
+        "Debug must not leak typed bytes, got: {rendered}"
+    );
+    // The redaction marker should be unambiguous so reviewers know the
+    // omission is intentional.
+    assert!(
+        rendered.to_lowercase().contains("redacted"),
+        "Debug must indicate redaction, got: {rendered}"
+    );
+}
+
+#[test]
+fn passphrase_buffer_clear_empties_the_buffer() {
+    let mut buf = PassphraseBuffer::new();
+    buf.push('x');
+    buf.push('y');
+    assert!(!buf.is_empty());
+    buf.clear();
+    assert!(buf.is_empty());
+    assert_eq!(buf.as_str(), "");
+}
+
+#[test]
+fn passphrase_buffer_take_returns_secret_and_clears_buffer() {
+    let mut buf = PassphraseBuffer::new();
+    buf.push('p');
+    buf.push('w');
+    let secret = buf.take();
+    assert_eq!(secret.expose_secret(), "pw");
+    assert!(buf.is_empty(), "take must clear the buffer in place");
+}
+
+#[test]
+fn passphrase_buffer_pop_returns_last_char_and_shortens() {
+    let mut buf = PassphraseBuffer::new();
+    buf.push('a');
+    buf.push('b');
+    assert_eq!(buf.pop(), Some('b'));
+    assert_eq!(buf.as_str(), "a");
+    assert_eq!(buf.pop(), Some('a'));
+    assert!(buf.is_empty());
+    assert_eq!(buf.pop(), None, "pop on empty buffer returns None");
 }

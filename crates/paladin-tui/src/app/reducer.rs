@@ -17,15 +17,19 @@ use crate::app::state::AppState;
 /// Apply one event to the current state and return the new state plus
 /// any side effects.
 ///
-/// This slice covers the global quit keybindings from
-/// `IMPLEMENTATION_PLAN_03_TUI.md` "Keybindings (initial v0.1)":
+/// This slice covers the global quit keybindings and the Unlock
+/// screen's passphrase-input handling from
+/// `IMPLEMENTATION_PLAN_03_TUI.md` "Keybindings (initial v0.1)" and
+/// "Focus model":
 ///
 /// * `Ctrl-C` quits on any screen.
 /// * `Esc` quits on `MissingVault`, `StartupError`, and `Unlock`.
 /// * `q` quits on `MissingVault` and `StartupError`; on `Unlock` it
-///   will route into the passphrase field once that field exists, so
-///   the reducer must currently treat it as a no-op there rather
-///   than a quit.
+///   is a valid passphrase character and is appended to the buffer.
+/// * On `Unlock`, printable characters (no Ctrl/Alt modifier) append
+///   to the passphrase buffer, `Backspace` pops the last character,
+///   and `Enter` with a non-empty buffer emits a single
+///   [`Effect::Unlock`] and clears the buffer in place.
 ///
 /// Tick and clipboard-clear events are passthrough in terminal
 /// screens; their behavior fills in alongside the corresponding
@@ -51,9 +55,60 @@ fn reduce_input(state: AppState, event: &Event) -> (AppState, Vec<Effect>) {
         return (state, vec![Effect::Quit]);
     }
 
+    if matches!(key.code, KeyCode::Esc) && quits_on_esc(&state) {
+        return (state, vec![Effect::Quit]);
+    }
+
+    if matches!(state, AppState::Unlock { .. }) {
+        return reduce_unlock_input(state, key);
+    }
+
     match key.code {
-        KeyCode::Esc if quits_on_esc(&state) => (state, vec![Effect::Quit]),
         KeyCode::Char('q') if quits_on_q(&state) => (state, vec![Effect::Quit]),
+        _ => (state, Vec::new()),
+    }
+}
+
+/// Handle a key event on the Unlock screen.
+///
+/// Printable Char input (no Ctrl/Alt modifier) appends to the
+/// passphrase buffer. Backspace pops the last char. Enter on a
+/// non-empty buffer emits [`Effect::Unlock`] and clears the buffer in
+/// place; Enter on an empty buffer is a no-op. Any other key is a
+/// no-op.
+fn reduce_unlock_input(mut state: AppState, key: &KeyEvent) -> (AppState, Vec<Effect>) {
+    let AppState::Unlock {
+        ref path,
+        ref mut passphrase,
+        ..
+    } = state
+    else {
+        // Caller ensures we're in Unlock; defensive fall-through keeps
+        // the reducer total.
+        return (state, Vec::new());
+    };
+
+    match key.code {
+        KeyCode::Char(c)
+            if !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+        {
+            passphrase.push(c);
+            (state, Vec::new())
+        }
+        KeyCode::Backspace => {
+            passphrase.pop();
+            (state, Vec::new())
+        }
+        KeyCode::Enter if !passphrase.is_empty() => {
+            let secret = passphrase.take();
+            let effect = Effect::Unlock {
+                path: path.clone(),
+                passphrase: secret,
+            };
+            (state, vec![effect])
+        }
         _ => (state, Vec::new()),
     }
 }
