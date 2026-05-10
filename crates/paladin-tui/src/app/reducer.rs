@@ -9,12 +9,14 @@
 //! the `run` boundary; the reducer itself never touches the
 //! filesystem, clipboard, or core save paths.
 
+use std::time::Instant;
+
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 
 use paladin_core::{PaladinError, Store, Vault};
 
 use crate::app::event::{AppEvent, Effect, EffectResult};
-use crate::app::state::{render_error_message, AppState};
+use crate::app::state::{compute_idle_deadline, render_error_message, AppState};
 
 /// Apply one event to the current state and return the new state plus
 /// any side effects.
@@ -54,7 +56,9 @@ pub fn reduce(state: AppState, event: AppEvent) -> (AppState, Vec<Effect>) {
 /// Apply an `EffectResult` delivered by the `run` boundary.
 fn reduce_effect_result(state: AppState, result: EffectResult) -> (AppState, Vec<Effect>) {
     match result {
-        EffectResult::Unlock(open) => reduce_unlock_result(state, open),
+        EffectResult::Unlock { result, opened_at } => {
+            reduce_unlock_result(state, result, opened_at)
+        }
     }
 }
 
@@ -64,15 +68,31 @@ fn reduce_effect_result(state: AppState, result: EffectResult) -> (AppState, Vec
 /// the user navigated away (auto-lock, quit-in-flight, …) and the
 /// late result is dropped. The carried `(Vault, Store)` zeroizes on
 /// drop, so discarding is safe.
+///
+/// On `Ok`, the auto-lock idle deadline is seeded from the executor's
+/// `opened_at` instant via [`compute_idle_deadline`] (which delegates
+/// to [`paladin_core::IdlePolicy::next_deadline`]).
 fn reduce_unlock_result(
     state: AppState,
     open: Result<(Vault, Store), PaladinError>,
+    opened_at: Instant,
 ) -> (AppState, Vec<Effect>) {
     match state {
         AppState::Unlock {
             path, passphrase, ..
         } => match open {
-            Ok((vault, store)) => (AppState::Unlocked { path, vault, store }, Vec::new()),
+            Ok((vault, store)) => {
+                let idle_deadline = compute_idle_deadline(opened_at, &vault);
+                (
+                    AppState::Unlocked {
+                        path,
+                        vault,
+                        store,
+                        idle_deadline,
+                    },
+                    Vec::new(),
+                )
+            }
             Err(PaladinError::DecryptFailed) => (
                 AppState::Unlock {
                     path,

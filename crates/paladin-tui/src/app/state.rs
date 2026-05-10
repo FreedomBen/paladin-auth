@@ -8,8 +8,11 @@
 //! "Startup / vault modes" + "Auto-lock (per §6)".
 
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
-use paladin_core::{format_unsafe_permissions, PaladinError, Store, Vault, VaultLock, VaultStatus};
+use paladin_core::{
+    format_unsafe_permissions, IdlePolicy, PaladinError, Store, Vault, VaultLock, VaultStatus,
+};
 
 use crate::prompt::PassphraseBuffer;
 
@@ -68,6 +71,19 @@ pub enum AppState {
         vault: Vault,
         /// Persistence handle for the vault file.
         store: Store,
+        /// Auto-lock idle deadline (monotonic clock).
+        ///
+        /// `Some(now + timeout)` when
+        /// [`paladin_core::IdlePolicy::should_arm`] holds for the
+        /// current vault (encrypted **and** `auto_lock_enabled`);
+        /// `None` otherwise — plaintext vaults always stay `None`
+        /// per the §6 / §7 plaintext-no-op rule, and encrypted
+        /// vaults with auto-lock disabled also stay `None`.
+        ///
+        /// Re-set on every `AppEvent::Input` and checked against
+        /// monotonic `Tick` instants for the `Locked` transition.
+        /// See `IMPLEMENTATION_PLAN_03_TUI.md` "Auto-lock (per §6)".
+        idle_deadline: Option<Instant>,
     },
 
     /// Non-mutating startup-error screen. Used when vault-path
@@ -117,18 +133,45 @@ pub fn decide_state_from_inspect(
 
 /// Map a `Store::open` result onto the corresponding initial
 /// [`AppState`].
+///
+/// `now` is the monotonic instant sampled at the boundary (right
+/// after `Store::open` returns) and is used to compute the auto-lock
+/// [`AppState::Unlocked::idle_deadline`] via
+/// [`compute_idle_deadline`]. It is unused on the error branch.
 #[must_use]
 pub fn decide_state_from_open(
+    now: Instant,
     path: PathBuf,
     open: Result<(Vault, Store), PaladinError>,
 ) -> AppState {
     match open {
-        Ok((vault, store)) => AppState::Unlocked { path, vault, store },
+        Ok((vault, store)) => {
+            let idle_deadline = compute_idle_deadline(now, &vault);
+            AppState::Unlocked {
+                path,
+                vault,
+                store,
+                idle_deadline,
+            }
+        }
         Err(err) => AppState::StartupError {
             path: Some(path),
             message: render_error_message(&err),
         },
     }
+}
+
+/// Compute the auto-lock idle deadline for the given vault at `now`.
+///
+/// Thin wrapper around [`paladin_core::IdlePolicy::next_deadline`]
+/// that pulls `is_encrypted` and `settings()` off the [`Vault`] so
+/// every Unlocked-entry site uses the same call shape. Returns
+/// `None` for plaintext vaults (the §6 / §7 plaintext-no-op rule)
+/// and for encrypted vaults whose `auto_lock_enabled` setting is
+/// `false`; otherwise returns `Some(now + timeout)`.
+#[must_use]
+pub fn compute_idle_deadline(now: Instant, vault: &Vault) -> Option<Instant> {
+    IdlePolicy::next_deadline(now, vault.is_encrypted(), vault.settings())
 }
 
 /// Render an error for the startup-error screen.
@@ -174,5 +217,10 @@ pub fn build_initial_state(vault: Option<PathBuf>) -> AppState {
     }
     // `VaultStatus::Plaintext` — open immediately, no passphrase prompt.
     let open = Store::open(&path, VaultLock::Plaintext);
-    decide_state_from_open(path, open)
+    // Sample `now` at the boundary so the auto-lock deadline math
+    // sees the same instant the open completed at. For plaintext
+    // vaults the deadline is always `None`; the sample is still
+    // taken to keep the call shape uniform with encrypted unlock.
+    let now = Instant::now();
+    decide_state_from_open(now, path, open)
 }

@@ -18,6 +18,7 @@
 //! with the corresponding [`Effect`] variants.
 
 use std::sync::mpsc::Sender;
+use std::time::Instant;
 
 use paladin_core::{Store, VaultLock};
 
@@ -53,10 +54,17 @@ pub fn execute(effect: Effect, sender: &Sender<AppEvent>) -> EffectOutcome {
         Effect::Quit => EffectOutcome::Quit,
         Effect::Unlock { path, passphrase } => {
             let result = Store::open(&path, VaultLock::Encrypted(passphrase));
+            // Sample `opened_at` immediately after `Store::open`
+            // so the reducer can seed the auto-lock idle deadline
+            // off the same monotonic clock the `Tick` thread uses.
+            let opened_at = Instant::now();
             // `send` only fails if the receiver is gone; in that case
             // the app is already tearing down, so dropping the result
             // is correct.
-            let _ = sender.send(AppEvent::EffectResult(EffectResult::Unlock(result)));
+            let _ = sender.send(AppEvent::EffectResult(EffectResult::Unlock {
+                result,
+                opened_at,
+            }));
             EffectOutcome::Continue
         }
     }

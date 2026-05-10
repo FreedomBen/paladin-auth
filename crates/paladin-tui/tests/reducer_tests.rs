@@ -6,21 +6,23 @@
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{Instant, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use clap::Parser;
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 
-use secrecy::ExposeSecret;
+use secrecy::{ExposeSecret, SecretString};
 
 use paladin_core::{
-    PaladinError, PermissionSubject, Store, Vault, VaultInit, VaultLock, VaultStatus,
+    Argon2Params, EncryptionOptions, IdlePolicy, PaladinError, PermissionSubject, Store, Vault,
+    VaultInit, VaultLock, VaultStatus,
 };
 use paladin_tui::app::event::{AppEvent, Effect, EffectResult};
 use paladin_tui::app::reducer::reduce;
 use paladin_tui::app::state::{
-    decide_state_from_inspect, decide_state_from_open, render_error_message, AppState,
+    compute_idle_deadline, decide_state_from_inspect, decide_state_from_open, render_error_message,
+    AppState,
 };
 use paladin_tui::cli::{should_disable_color, GlobalArgs};
 use paladin_tui::prompt::PassphraseBuffer;
@@ -260,9 +262,20 @@ fn plaintext_open_yields_unlocked_state() {
     );
 
     let open = Store::open(&path, VaultLock::Plaintext);
-    let state = decide_state_from_open(path.clone(), open);
+    let now = Instant::now();
+    let state = decide_state_from_open(now, path.clone(), open);
     match state {
-        AppState::Unlocked { path: p, .. } => assert_eq!(p, path),
+        AppState::Unlocked {
+            path: p,
+            idle_deadline,
+            ..
+        } => {
+            assert_eq!(p, path);
+            assert_eq!(
+                idle_deadline, None,
+                "plaintext vault must never arm the auto-lock idle deadline"
+            );
+        }
         other => panic!("expected Unlocked, got {other:?}"),
     }
 }
@@ -280,7 +293,7 @@ fn open_error_yields_startup_error_with_path_retained() {
     let open = Store::open(&path, VaultLock::Plaintext);
     assert!(open.is_err(), "expected open error, got Ok");
 
-    let state = decide_state_from_open(path.clone(), open);
+    let state = decide_state_from_open(Instant::now(), path.clone(), open);
     match state {
         AppState::StartupError {
             path: Some(p),
@@ -380,6 +393,7 @@ fn ctrl_c_on_unlocked_quits() {
         path: path.clone(),
         vault,
         store,
+        idle_deadline: None,
     };
     let (_, effects) = reduce(unlocked, ctrl(KeyCode::Char('c')));
     assert!(matches!(effects.as_slice(), [Effect::Quit]));
@@ -691,7 +705,14 @@ fn passphrase_buffer_pop_returns_last_char_and_shortens() {
 // ---------------------------------------------------------------------------
 
 fn unlock_result(result: Result<(Vault, Store), PaladinError>) -> AppEvent {
-    AppEvent::EffectResult(EffectResult::Unlock(result))
+    // Off-the-shelf `opened_at` for tests that do not care about the
+    // post-unlock auto-lock deadline (e.g. error paths). The
+    // dedicated idle-deadline tests construct the event inline with
+    // a controlled instant instead.
+    AppEvent::EffectResult(EffectResult::Unlock {
+        result,
+        opened_at: Instant::now(),
+    })
 }
 
 fn open_plaintext_pair(tmp: &tempfile::TempDir) -> (PathBuf, (Vault, Store)) {
@@ -844,4 +865,204 @@ fn effect_result_unlock_decrypt_failed_off_unlock_screen_is_discarded() {
     );
     assert!(effects.is_empty());
     assert!(matches!(state, AppState::MissingVault { .. }));
+}
+
+// ---------------------------------------------------------------------------
+// Auto-lock — idle_deadline seeded on Unlocked entry
+// (IMPLEMENTATION_PLAN_03_TUI.md > Auto-lock (per §6) +
+//  IMPLEMENTATION_PLAN_03_TUI.md > Tests > Auto-lock —
+//  "idle_deadline is set via paladin_core::policy::auto_lock::
+//   IdlePolicy::next_deadline(now, vault.is_encrypted(), settings)
+//   on Unlocked + enabled + encrypted")
+//
+// Slice covered here: idle_deadline is seeded at both Unlocked-entry
+// sites — `decide_state_from_open` (plaintext direct-open path in
+// `build_initial_state`) and the `EffectResult::Unlock` Ok branch
+// (encrypted unlock path) — by delegating to
+// `paladin_core::IdlePolicy::next_deadline`. The plaintext-no-op
+// rule is enforced by `IdlePolicy::should_arm`; we verify the TUI
+// does not paper over it. (Input-driven resets and the Tick-driven
+// Locked transition land in follow-up slices.)
+// ---------------------------------------------------------------------------
+
+fn light_params() -> Argon2Params {
+    Argon2Params {
+        m_kib: 8192,
+        t: 1,
+        p: 1,
+    }
+}
+
+fn secure_tempdir() -> tempfile::TempDir {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700))
+            .expect("chmod tempdir 0700");
+    }
+    dir
+}
+
+fn create_encrypted_pair(path: &Path, passphrase: &str) -> (Vault, Store) {
+    let pp = SecretString::from(passphrase.to_string());
+    let opts = EncryptionOptions::with_params(pp, light_params()).expect("encryption opts");
+    let (vault, store) = Store::create(path, VaultInit::Encrypted(opts)).expect("create vault");
+    vault.save(&store).expect("commit initial vault");
+    (vault, store)
+}
+
+fn enable_auto_lock(vault: &mut Vault, store: &Store, timeout_secs: u32) {
+    vault.set_auto_lock_enabled(true);
+    vault
+        .set_auto_lock_timeout_secs(timeout_secs)
+        .expect("timeout within bounds");
+    vault.save(store).expect("commit settings");
+}
+
+#[test]
+fn compute_idle_deadline_plaintext_vault_is_none() {
+    // The plaintext-no-op rule (§6 / §7) must hold even if the
+    // user explicitly enabled auto-lock — `IdlePolicy::should_arm`
+    // gates on `is_encrypted` first.
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("plain.bin");
+    let (mut vault, store) = Store::create(&path, VaultInit::Plaintext).expect("create plaintext");
+    vault.set_auto_lock_enabled(true);
+    vault.set_auto_lock_timeout_secs(900).unwrap();
+    vault.save(&store).unwrap();
+
+    let now = Instant::now();
+    assert_eq!(
+        compute_idle_deadline(now, &vault),
+        None,
+        "plaintext vault must never produce an idle deadline"
+    );
+}
+
+#[test]
+fn compute_idle_deadline_encrypted_auto_lock_disabled_is_none() {
+    // Encrypted vault, default settings (auto_lock_enabled = false)
+    // → no deadline. The setting is opt-in per §6.
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (vault, _store) = create_encrypted_pair(&path, "pp");
+
+    let now = Instant::now();
+    assert!(
+        !vault.settings().auto_lock_enabled(),
+        "fixture must default to auto_lock_enabled = false"
+    );
+    assert_eq!(compute_idle_deadline(now, &vault), None);
+}
+
+#[test]
+fn compute_idle_deadline_encrypted_auto_lock_enabled_matches_idle_policy() {
+    // Encrypted vault with auto-lock enabled at a non-default
+    // timeout → deadline equals `IdlePolicy::next_deadline(now, ...)`
+    // exactly. The TUI must not reimplement the math.
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (mut vault, store) = create_encrypted_pair(&path, "pp");
+    enable_auto_lock(&mut vault, &store, 600);
+
+    let now = Instant::now();
+    let expected = IdlePolicy::next_deadline(now, true, vault.settings());
+    assert_eq!(expected, Some(now + Duration::from_secs(600)));
+    assert_eq!(compute_idle_deadline(now, &vault), expected);
+}
+
+#[test]
+fn decide_state_from_open_encrypted_auto_lock_disabled_seeds_no_idle_deadline() {
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let pair = create_encrypted_pair(&path, "pp");
+
+    let now = Instant::now();
+    let state = decide_state_from_open(now, path.clone(), Ok(pair));
+    match state {
+        AppState::Unlocked {
+            idle_deadline,
+            path: p,
+            ..
+        } => {
+            assert_eq!(p, path);
+            assert_eq!(idle_deadline, None);
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn decide_state_from_open_encrypted_auto_lock_enabled_seeds_idle_deadline() {
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (mut vault, store) = create_encrypted_pair(&path, "pp");
+    enable_auto_lock(&mut vault, &store, 600);
+
+    let now = Instant::now();
+    let state = decide_state_from_open(now, path.clone(), Ok((vault, store)));
+    match state {
+        AppState::Unlocked {
+            idle_deadline,
+            path: p,
+            ..
+        } => {
+            assert_eq!(p, path);
+            assert_eq!(
+                idle_deadline,
+                Some(now + Duration::from_secs(600)),
+                "deadline must equal `now + timeout_secs` for encrypted + enabled"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_unlock_ok_seeds_idle_deadline_from_opened_at() {
+    // The reducer must feed the executor's `opened_at` (not its own
+    // `Instant::now()`) into the deadline math so the TUI's auto-lock
+    // window measures from when `Store::open` actually returned.
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (mut vault, store) = create_encrypted_pair(&path, "pp");
+    enable_auto_lock(&mut vault, &store, 420);
+
+    let opened_at = Instant::now();
+    let event = AppEvent::EffectResult(EffectResult::Unlock {
+        result: Ok((vault, store)),
+        opened_at,
+    });
+    let (state, effects) = reduce(unlock(path.to_str().unwrap()), event);
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked { idle_deadline, .. } => {
+            assert_eq!(
+                idle_deadline,
+                Some(opened_at + Duration::from_secs(420)),
+                "idle_deadline must derive from EffectResult::Unlock.opened_at"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_unlock_ok_plaintext_seeds_no_idle_deadline() {
+    // Plaintext path through the same code: `IdlePolicy::should_arm`
+    // returns false, so the new Unlocked has no deadline even if the
+    // user previously toggled `auto_lock_enabled = true` (the setting
+    // persists but is inert for plaintext).
+    let tmp = secure_tempdir();
+    let (vault_path, pair) = open_plaintext_pair(&tmp);
+    let event = AppEvent::EffectResult(EffectResult::Unlock {
+        result: Ok(pair),
+        opened_at: Instant::now(),
+    });
+    let (state, _effects) = reduce(unlock(vault_path.to_str().unwrap()), event);
+    match state {
+        AppState::Unlocked { idle_deadline, .. } => assert_eq!(idle_deadline, None),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
 }

@@ -71,7 +71,19 @@ pub enum EffectResult {
     /// or a [`PaladinError`]. `decrypt_failed` surfaces inline on the
     /// unlock screen; every other error replaces the unlock screen
     /// with [`crate::app::state::AppState::StartupError`].
-    Unlock(Result<(Vault, Store), PaladinError>),
+    ///
+    /// `opened_at` is the monotonic instant the executor sampled
+    /// immediately after `Store::open` returned. On success the
+    /// reducer feeds it into
+    /// [`paladin_core::IdlePolicy::next_deadline`] to seed the new
+    /// `Unlocked` state's auto-lock `idle_deadline`; on error it is
+    /// unused.
+    Unlock {
+        /// The `Store::open` outcome carried back from the executor.
+        result: Result<(Vault, Store), PaladinError>,
+        /// Monotonic clock sampled immediately after `Store::open`.
+        opened_at: Instant,
+    },
 }
 
 /// Side effects produced by the reducer.

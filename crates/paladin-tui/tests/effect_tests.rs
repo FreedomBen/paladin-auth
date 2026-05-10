@@ -13,6 +13,7 @@
 
 use std::path::Path;
 use std::sync::mpsc;
+use std::time::Instant;
 
 use secrecy::SecretString;
 use tempfile::TempDir;
@@ -89,13 +90,26 @@ fn execute_unlock_with_correct_passphrase_sends_unlock_ok() {
         passphrase: SecretString::from(passphrase.to_string()),
     };
 
+    // Bound the executor's `opened_at` sample inside a window we
+    // control so we can assert the executor used a real monotonic
+    // sample rather than some default-constructed instant.
+    let before = Instant::now();
     let outcome = execute(effect, &tx);
+    let after = Instant::now();
     assert_eq!(outcome, EffectOutcome::Continue);
 
     let evt = rx.try_recv().expect("an AppEvent should be sent");
     match evt {
-        AppEvent::EffectResult(EffectResult::Unlock(Ok(_pair))) => {}
-        other => panic!("expected EffectResult::Unlock(Ok(..)), got {other:?}"),
+        AppEvent::EffectResult(EffectResult::Unlock {
+            result: Ok(_pair),
+            opened_at,
+        }) => {
+            assert!(
+                opened_at >= before && opened_at <= after,
+                "opened_at must be sampled inside [before, after] of execute()"
+            );
+        }
+        other => panic!("expected EffectResult::Unlock {{ Ok, .. }}, got {other:?}"),
     }
     assert!(
         rx.try_recv().is_err(),
@@ -125,8 +139,13 @@ fn execute_unlock_with_wrong_passphrase_sends_decrypt_failed() {
 
     let evt = rx.try_recv().expect("event should be sent");
     match evt {
-        AppEvent::EffectResult(EffectResult::Unlock(Err(PaladinError::DecryptFailed))) => {}
-        other => panic!("expected EffectResult::Unlock(Err(DecryptFailed)), got {other:?}"),
+        AppEvent::EffectResult(EffectResult::Unlock {
+            result: Err(PaladinError::DecryptFailed),
+            ..
+        }) => {}
+        other => {
+            panic!("expected EffectResult::Unlock {{ Err(DecryptFailed), .. }}, got {other:?}")
+        }
     }
 }
 
@@ -151,8 +170,11 @@ fn execute_unlock_against_missing_vault_sends_vault_missing() {
 
     let evt = rx.try_recv().expect("event should be sent");
     match evt {
-        AppEvent::EffectResult(EffectResult::Unlock(Err(PaladinError::VaultMissing))) => {}
-        other => panic!("expected EffectResult::Unlock(Err(VaultMissing)), got {other:?}"),
+        AppEvent::EffectResult(EffectResult::Unlock {
+            result: Err(PaladinError::VaultMissing),
+            ..
+        }) => {}
+        other => panic!("expected EffectResult::Unlock {{ Err(VaultMissing), .. }}, got {other:?}"),
     }
 }
 
@@ -173,10 +195,13 @@ fn execute_unlock_against_plaintext_vault_sends_wrong_vault_lock() {
 
     let evt = rx.try_recv().expect("event should be sent");
     match evt {
-        AppEvent::EffectResult(EffectResult::Unlock(Err(PaladinError::WrongVaultLock {
+        AppEvent::EffectResult(EffectResult::Unlock {
+            result: Err(PaladinError::WrongVaultLock { .. }),
             ..
-        }))) => {}
-        other => panic!("expected EffectResult::Unlock(Err(WrongVaultLock)), got {other:?}"),
+        }) => {}
+        other => {
+            panic!("expected EffectResult::Unlock {{ Err(WrongVaultLock), .. }}, got {other:?}")
+        }
     }
 }
 
