@@ -1172,118 +1172,118 @@ Each step lands as its own commit. Tests come first.
 This list is exhaustive per CLAUDE.md ("write exhaustive tests"). Every entry
 is a separate `#[test]` or table-driven case family.
 
-- RFC 6238 Appendix B vectors — SHA1/256/512 across multiple counters.
-- RFC 4226 Appendix D vectors.
-- TOTP boundary math: `seconds_remaining` exact-boundary, mid-window,
+- [x] RFC 6238 Appendix B vectors — SHA1/256/512 across multiple counters.
+- [x] RFC 4226 Appendix D vectors.
+- [x] TOTP boundary math: `seconds_remaining` exact-boundary, mid-window,
   pre-epoch reject, overflow reject.
-- Account identity / secret hygiene: UUIDv4 bytes + canonical display,
+- [x] Account identity / secret hygiene: UUIDv4 bytes + canonical display,
   `AccountSummary` and `Code` projections matching the §5 account/code fields
   with no secret bytes, `Secret` zeroization, `Secret` non-`Debug`
   compile-fail coverage, and no secret bytes in any public `Debug` output for
   secret-bearing types.
-- Account validation matrix — every branch in §4.1, including secret length
+- [x] Account validation matrix — every branch in §4.1, including secret length
   rejection at `<10` and `>1024` decoded bytes, label and issuer 128-byte
   caps, TOTP period bounds, HOTP counter bounds, digits range, icon-hint
   slug rules, issuer-derived icon-hint defaulting, and timestamp upper bound.
-- Manual `AccountInput` validation — `AccountKindInput` TOTP/HOTP
+- [x] Manual `AccountInput` validation — `AccountKindInput` TOTP/HOTP
   selection, TOTP period defaults / overrides, HOTP counter defaults /
   overrides, manual Base32 lowercase / padded decoding plus malformed
   alphabet / padding / ASCII-whitespace rejection, and
   rejection of period-on-HOTP or counter-on-TOTP; `IconHintInput::Default`
   derives from issuer, `IconHintInput::Clear` stores `None`, and
   `IconHintInput::Slug` validates and stores the supplied slug.
-- Short-secret warning surfaces in `ValidatedAccount.warnings`.
-- `otpauth://` round-trip — TOTP and HOTP, with and without issuer prefix,
+- [x] Short-secret warning surfaces in `ValidatedAccount.warnings`.
+- [x] `otpauth://` round-trip — TOTP and HOTP, with and without issuer prefix,
   case-insensitive scheme/algo/type, base32 padding/casing, duplicate known
   parameter rejection, unknown parameter ignoring, secret whitespace rejection,
   and HOTP/TOTP-specific `counter`/`period` rejection.
-- `proptest` property coverage for URI parsing and base32 secret decoding.
-- Bincode payload contract — fixed v2 config, trailing-bytes reject, 16 MiB
+- [ ] `proptest` property coverage for URI parsing and base32 secret decoding.
+- [x] Bincode payload contract — fixed v2 config, trailing-bytes reject, 16 MiB
   reject (plaintext on-disk and plaintext/encrypted decoded).
-- Bincode encoding determinism — same `VaultPayload` value encodes to
+- [x] Bincode encoding determinism — same `VaultPayload` value encodes to
   bit-identical bytes across two encodes; a fixture vault matches a
   committed expected byte string so a regression to a non-deterministic
   encoding (HashMap-based or otherwise) fails the test.
-- Vault round-trip in both modes, including save → drop → reopen
+- [x] Vault round-trip in both modes, including save → drop → reopen
   preservation of `Vec<Account>` insertion order in plaintext **and**
   encrypted modes.
-- `inspect(path)` header probe: missing primary returns `Missing`, plaintext
+- [x] `inspect(path)` header probe: missing primary returns `Missing`, plaintext
   and encrypted headers report the correct mode without decryption, invalid
   magic errors, permission checks skipped.
-- `default_vault_path()` uses `ProjectDirs::from("", "", "paladin")`,
+- [x] `default_vault_path()` uses `ProjectDirs::from("", "", "paladin")`,
   returns the §4.3 `vault.bin` data path, or `io_error` with
   `operation: "resolve_default_vault_path"`.
-- Header version / ID errors: unsupported `format_ver`, unknown `mode`,
+- [x] Header version / ID errors: unsupported `format_ver`, unknown `mode`,
   unknown `kdf_id`, and unknown `aead_id`.
-- Header / ciphertext byte-flip matrix on encrypted vault — magic and
+- [x] Header / ciphertext byte-flip matrix on encrypted vault — magic and
   unsupported header IDs fail with discriminating header errors, and every
   AAD-bound field, ciphertext byte, and tag byte fails without returning a
   vault.
-- Wrong encrypted-vault passphrase returns `decrypt_failed` without
+- [x] Wrong encrypted-vault passphrase returns `decrypt_failed` without
   returning a vault.
-- Argon2 param bounds — out-of-range `m_kib`, `t`, or `p` rejected pre-KDF.
-- Argon2 custom params — default `m_kib = 65536` (64 MiB) / `t = 3` /
+- [x] Argon2 param bounds — out-of-range `m_kib`, `t`, or `p` rejected pre-KDF.
+- [x] Argon2 custom params — default `m_kib = 65536` (64 MiB) / `t = 3` /
   `p = 1`, in-range custom params accepted for encrypted create /
   create_force / passphrase set/change / encrypted export, and
   out-of-range custom params rejected before prompting for or accepting a
   new encrypted write.
-- Encrypted save invariants — size cap pre-KDF/AEAD, Argon2 params and salt
+- [x] Encrypted save invariants — size cap pre-KDF/AEAD, Argon2 params and salt
   preserved on regular saves, fresh nonce per save, ciphertext/tag tamper
   rejection.
-- Sequential identical-content saves produce byte-distinct
+- [x] Sequential identical-content saves produce byte-distinct
   ciphertext-and-tag regions while both files re-open to byte-identical
   `VaultPayload` — pins per-save fresh nonce as a positive assertion.
-- Header endianness fixture — encrypted vaults written with
+- [x] Header endianness fixture — encrypted vaults written with
   `Argon2Params { m_kib: 65_536, t: 3, p: 1 }` produce exact
   little-endian header bytes (`00 00 01 00`, `03 00 00 00`,
   `01 00 00 00`) regardless of host byte order; a second fixture
   pins `m_kib: 8_192` (`00 20 00 00`).
-- Custom `Argon2Params` round-trip via the encrypted header — for
+- [x] Custom `Argon2Params` round-trip via the encrypted header — for
   several in-range triples (e.g. `(8_192, 1, 1)`, `(65_536, 3, 1)`,
   `(262_144, 4, 2)`, `(1_048_576, 10, 4)`), `(m_kib, t, p)` survive
   write → header → read bit-identically across `create` /
   `create_force` / `set_passphrase` / `change_passphrase` /
   `export::encrypted`.
-- AEAD key caching — one Argon2id derivation at `open`, cached key reused on
+- [x] AEAD key caching — one Argon2id derivation at `open`, cached key reused on
   save, no cache for plaintext vaults, cached key/passphrase zeroized on drop.
-- File / dir permissions — post-save permissions, `unsafe_permissions`
+- [x] File / dir permissions — post-save permissions, `unsafe_permissions`
   rejection on `open` (parent / primary / backup when present) and on
   `create` (parent only, since primary/backup do not yet exist),
   first-save backup skip, later one-generation `.bak` rotation, leftover temp
   cleanup on `open`, and temp cleanup on non-crash save errors.
-- `format_unsafe_permissions` returns shared repair text for
+- [x] `format_unsafe_permissions` returns shared repair text for
   `unsafe_permissions` and `None` for every other error kind.
-- `format_init_force_warning(path)`, `format_plaintext_storage_warning()`,
+- [x] `format_init_force_warning(path)`, `format_plaintext_storage_warning()`,
   `format_plaintext_export_warning()`, and `format_validation_warning()`
   return locked fixture text so
   CLI / TUI / GUI render identical wording for the §5 init clobber gate,
   the plaintext `init` / `passphrase remove` storage advisory, and the
   unencrypted-export advisory / validation warnings respectively.
-- `account_match_key(&Account)` produces the canonical
+- [x] `account_match_key(&Account)` produces the canonical
   `"{issuer}:{label}"` key (empty issuer keeps the colon, casing
   preserved) so CLI query resolution and TUI / GUI search filters
   share one match-key definition.
-- `account_matches_search(&Account, query)`, `parse_account_query`,
+- [x] `account_matches_search(&Account, query)`, `parse_account_query`,
   `Vault::matching_accounts`, and `Vault::shortest_unique_id_prefix`
   implement the shared selector pieces: case-insensitive substring
   matching with no Unicode normalization, lowercase `id:` prefix validation
   with uppercase hex digits normalized to lowercase, id-prefix matching,
   insertion-order match lists, and shortest-unique `id:<hex>` candidate
   disambiguators.
-- `Vault::is_encrypted()` reflects the open lock mode / create init mode and
+- [x] `Vault::is_encrypted()` reflects the open lock mode / create init mode and
   every passphrase-transition outcome (unchanged on
   `save_not_committed`, changed on success and
   `save_durability_unconfirmed`).
-- `open` / `create` precondition errors — `vault_missing` for absent
+- [x] `open` / `create` precondition errors — `vault_missing` for absent
   primary on `open`; `vault_exists` for existing primary on `create`;
   `wrong_vault_lock` on cross-mode `VaultLock` during `open` (both
   directions) before any KDF work.
-- `create_force` staged clobber — staging failure leaves existing primary and
+- [x] `create_force` staged clobber — staging failure leaves existing primary and
   `.bak` untouched; after backup rotation, pre-commit failure reports
   `save_not_committed` with `backup_path`; post-commit parent `fsync` failure
   reports `save_durability_unconfirmed`; encrypted and plaintext locks share
   those semantics.
-- Vault behavior and settings: `add` / `remove` / `iter` insertion order /
+- [x] Vault behavior and settings: `add` / `remove` / `iter` insertion order /
   `get` / `summaries` / `rename` label validation and timestamp update;
   `find_duplicate` exact
   collision behavior returning `Option<&Account>`; `Vault::settings`
@@ -1293,43 +1293,43 @@ is a separate `#[test]` or table-driven case family.
   `auto_lock.enabled`, `auto_lock.timeout_secs`,
   `clipboard.clear_enabled`, `clipboard.clear_secs`),
   `parse_setting_patch`, and `Vault::apply_setting_patch`.
-- `Vault::mutate_and_save`: rollback on closure error and
+- [x] `Vault::mutate_and_save`: rollback on closure error and
   `save_not_committed`, durability-unconfirmed leaves mutated state, and
   success returns the closure value; the rollback snapshot is zeroized.
-- `Vault::mutate_and_save` cross-field rollback: a closure that mutates
+- [x] `Vault::mutate_and_save` cross-field rollback: a closure that mutates
   both accounts and `VaultSettings` then errors restores **both** the
   accounts list and every `VaultSettings` field to their pre-mutation
   values; the same cross-field restoration applies on
   `save_not_committed`; on `save_durability_unconfirmed` both account
   and settings mutations remain in memory because the primary-file
   commit point may have been reached.
-- HOTP `hotp_advance` rollback, durability-unconfirmed post-commit behavior,
+- [x] HOTP `hotp_advance` rollback, durability-unconfirmed post-commit behavior,
   and `counter_overflow` at `u64::MAX` with the §5 `account` summary before
   mutation or save; invalid supplied timestamps reject before mutation or save.
-- Account-ID method failures return stable `invalid_state` operation/state
+- [x] Account-ID method failures return stable `invalid_state` operation/state
   pairs for missing IDs and wrong OTP kind, matching DESIGN §4.7.
-- HOTP `hotp_peek` after a committed `hotp_advance` returns the code for
+- [x] HOTP `hotp_peek` after a committed `hotp_advance` returns the code for
   the new (post-advance) counter.
-- `HOTP_REVEAL_SECS == 120`, `QR_RGBA_MAX_BYTES == 64 * 1024 * 1024`,
+- [x] `HOTP_REVEAL_SECS == 120`, `QR_RGBA_MAX_BYTES == 64 * 1024 * 1024`,
   `TICK_INTERVAL_MS == 250`, `AUTO_LOCK_SECS_MIN == 30`,
   `AUTO_LOCK_SECS_MAX == 86_400`, `CLIPBOARD_CLEAR_SECS_MIN == 5`,
   `CLIPBOARD_CLEAR_SECS_MAX == 600` exported as shared TUI / GUI
   constants and lock-by-fixture'd in `tests/ui_contract.rs`.
-- `policy::auto_lock::IdlePolicy` (should_arm / next_deadline /
+- [x] `policy::auto_lock::IdlePolicy` (should_arm / next_deadline /
   is_expired) — encrypted-and-enabled gating, plaintext no-op,
   monotonic-Instant comparison.
-- `policy::clipboard_clear::ClipboardClearPolicy` (schedule / token
+- [x] `policy::clipboard_clear::ClipboardClearPolicy` (schedule / token
   monotonicity / should_clear byte-equality decision).
-- `policy::hotp_reveal::deadline(now)` matches
+- [x] `policy::hotp_reveal::deadline(now)` matches
   `now + Duration::from_secs(HOTP_REVEAL_SECS)`.
-- `select_after_filter` selection-preservation rule shared by TUI / GUI
+- [x] `select_after_filter` selection-preservation rule shared by TUI / GUI
   search.
-- `parse_icon_hint_token` empty / case-insensitive `none` / slug grammar
+- [x] `parse_icon_hint_token` empty / case-insensitive `none` / slug grammar
   shared by CLI prompts and TUI / GUI add modals.
-- `classify_init_precheck` truth table (`Missing` → Clear; `Plaintext` /
+- [x] `classify_init_precheck` truth table (`Missing` → Clear; `Plaintext` /
   `Encrypted` / `invalid_header` / `unsupported_format_version` →
   Existing; everything else → Propagate).
-- Passphrase transitions: `set`, `change`, `remove`; pre-commit rollback;
+- [x] Passphrase transitions: `set`, `change`, `remove`; pre-commit rollback;
   durability-unconfirmed post-commit; default/custom Argon2 params for
   encrypted targets; fresh salt/nonce behavior; backup rewritten under the
   target mode/key; cache lifecycle and old-material zeroization;
@@ -1337,22 +1337,22 @@ is a separate `#[test]` or table-driven case family.
   DESIGN §4.7; zero-length new passphrase rejection with
   `reason: "zero_length"`; no trimming or Unicode normalization of non-empty
   passphrase bytes.
-- `import::detect`: fixed §4.6 detection order, Paladin magic, QR image
+- [x] `import::detect`: fixed §4.6 detection order, Paladin magic, QR image
   magic (PNG, JPEG, GIF, BMP, WebP), Aegis plaintext/encrypted shapes,
   single/list/JSON-array `otpauth://`, empty otpauth JSON array shape, and
   `Unknown`.
-- Import facade: `from_file` / `from_bytes` auto-detect and forced-format
+- [x] Import facade: `from_file` / `from_bytes` auto-detect and forced-format
   dispatch, `unsupported_import_format` for unknown or invalid dispatch,
   `format` set to `"unknown"` for auto-detect failures and to the requested
   format for forced-format failures, missing Paladin bundle passphrase as
   `invalid_state`, and encoded image bytes routed through QR decoding.
-- `classify_paladin_import_precheck`: forced non-Paladin formats skip the
+- [x] `classify_paladin_import_precheck`: forced non-Paladin formats skip the
   prompt classifier; auto-detect / forced-Paladin encrypted headers return
   `PromptForPassphrase`; plaintext or malformed Paladin headers return
   `Reject(...)` with the typed core error; missing files, unreadable files,
   and non-Paladin magic return `NoPrompt` so the import facade owns final
   read/dispatch errors.
-- Importers: Aegis plaintext field mapping, defaults, and required fields;
+- [x] Importers: Aegis plaintext field mapping, defaults, and required fields;
   Aegis encrypted → typed `unsupported_encrypted_aegis`; Aegis
   non-`totp`/`hotp` entry type →
   `unsupported_aegis_entry_type` with `source_index` and `entry_type` (batch
@@ -1369,88 +1369,88 @@ is a separate `#[test]` or table-driven case family.
   URI-list trimming and blank-line handling; non-Paladin imports use
   `import_time`; zero-account inputs rejected uniformly with
   `no_entries_to_import`.
-- `ImportConflict` policies (`Skip` / `Replace` / `Append`) including
+- [x] `ImportConflict` policies (`Skip` / `Replace` / `Append`) including
   running-state collisions on the `(secret, issuer, label)` triple,
   destination `id` / `created_at` preservation on replace, HOTP counter
   preservation, cross-kind replacement, `ImportReport` counts /
   account IDs, batch atomicity, and warnings retained even for skipped rows.
-- Exporters: `otpauth_list(&Vault)` emits an infallible JSON array of URIs;
+- [x] Exporters: `otpauth_list(&Vault)` emits an infallible JSON array of URIs;
   `encrypted(&Vault, EncryptionOptions)` wraps default settings, writes
   default or custom Argon2 params, round-trips through the importer, and
   rejects empty passphrases; `write_secret_file_atomic` writes export bytes
   `0600` via tempfile / fsync / rename without `.bak` rotation and reports
   pre-rename vs post-rename failures as `save_not_committed` vs
   `save_durability_unconfirmed`.
-- Core `io_error.operation` strings match the §5 stable operation table for
+- [x] Core `io_error.operation` strings match the §5 stable operation table for
   storage, import, image, QR, export, and unsupported-platform failures.
-- Zeroize-on-drop: drop-in-place in a controlled allocation proves bytes are
+- [x] Zeroize-on-drop: drop-in-place in a controlled allocation proves bytes are
   wiped before deallocation for `Secret`, mutate-and-save rollback
   snapshots, cached keys, and retained
   passphrases. Cached-key replacement on `change_passphrase` is
   byte-precisely zeroized (the previous buffer is all-zero before
   free, not just dropped) so a "replace pointer, leak old bytes"
   regression fails.
-- Per-AAD-field byte-flip matrix: named cases per region (magic,
+- [x] Per-AAD-field byte-flip matrix: named cases per region (magic,
   format_ver, mode, kdf_id, m_kib, t, p, salt edges, aead_id, nonce
   edges, ciphertext, AEAD tag) with the discriminating error kind
   pinned per region (e.g. magic flip → `invalid_header`,
   unsupported `format_ver` → `unsupported_format_version`,
   in-bounds Argon2 param flip → `decrypt_failed`).
-- Published crypto KATs: Argon2id fixed passphrase / salt / params →
+- [x] Published crypto KATs: Argon2id fixed passphrase / salt / params →
   expected 32-byte key, and XChaCha20-Poly1305 fixed key / nonce /
   AAD / plaintext → expected ciphertext + tag, with mutated AAD/tag
   rows proving authentication failure.
-- Algorithm-choice locks: same KAT inputs through Argon2i / Argon2d
+- [x] Algorithm-choice locks: same KAT inputs through Argon2i / Argon2d
   produce keys distinct from the committed Argon2id key, and same
   inputs through ChaCha20-Poly1305 (12-byte nonce IETF) produce
   ciphertext / tag distinct from the committed XChaCha20-Poly1305
   fixture — pinning Argon2id and XChaCha20-Poly1305 against silent
   swap regressions.
-- AEAD output shape: ciphertext-body length equals `plaintext_len + 16`
+- [x] AEAD output shape: ciphertext-body length equals `plaintext_len + 16`
   (Poly1305 tag) and the in-header `nonce` slot is exactly 24 bytes,
   asserted against a fresh encrypted vault.
-- Pre-AEAD plaintext-payload zeroization (encrypt) and post-AEAD
+- [x] Pre-AEAD plaintext-payload zeroization (encrypt) and post-AEAD
   plaintext-payload zeroization (decrypt success and decode failure)
   proven byte-precisely via a `#[cfg(test)]` raw-pointer hook,
   matching the existing rollback-snapshot / cached-key zeroization
   posture.
-- CSPRNG failure surfaces: injected `getrandom::Error` on every
+- [x] CSPRNG failure surfaces: injected `getrandom::Error` on every
   encrypted-write save site routes through `io_error` with
   `operation: "csprng_read"` and does not write a partial vault file.
-- Argon2id allocation failure: injected memory-allocation failure on
+- [x] Argon2id allocation failure: injected memory-allocation failure on
   encrypted read and write paths surfaces `io_error` with
   `operation: "kdf_allocation"` without panic or partial write.
-- Symbolic-link rejection on `open` / `create` / `create_force` for
+- [x] Symbolic-link rejection on `open` / `create` / `create_force` for
   `vault.bin`, `vault.bin.bak`, and the parent data directory, using
   `symlink_metadata` so the probe never follows the link; the typed
   rejection fires even when permissions look correct (defense in
   depth).
-- Argon2 param boundary table at exact accept/reject edges
+- [x] Argon2 param boundary table at exact accept/reject edges
   (`m_kib` 8191/8192/1048576/1048577, `t` 0/1/10/11, `p` 0/1/4/5)
   with `kdf_params_out_of_bounds` payload field assertions.
-- KDF determinism: identical (passphrase, salt, params) inputs
+- [x] KDF determinism: identical (passphrase, salt, params) inputs
   produce a bit-identical 32-byte AEAD key across two derivations.
-- Fresh salt/nonce generation: repeated encrypted create/create_force
+- [x] Fresh salt/nonce generation: repeated encrypted create/create_force
   operations and repeated encrypted exports over identical logical inputs
   produce pairwise-distinct salts and nonces while all outputs still
   open/import successfully.
-- Malformed ciphertext shorter than the 16-byte AEAD tag returns
+- [x] Malformed ciphertext shorter than the 16-byte AEAD tag returns
   `invalid_payload { reason: "ciphertext_too_short" }`, not a panic.
-- Send / Sync matrix: every public type listed under Phase J is
+- [x] Send / Sync matrix: every public type listed under Phase J is
   asserted `Send`; the non-secret projections are also asserted
   `Sync`; secret-bearing types are deliberately not `Sync` and the
   test pins that decision.
-- `tests/no_network.rs` source / metadata guard proves production
+- [x] `tests/no_network.rs` source / metadata guard proves production
   `paladin-core` has no direct network API use and no runtime
   network-stack dependencies.
-- `tests/error_matrix.rs` produces every core-returnable §5
+- [x] `tests/error_matrix.rs` produces every core-returnable §5
   `error_kind` at least once with full extra-field assertions.
-- Fault injection cross-save-site coverage table covers
+- [x] Fault injection cross-save-site coverage table covers
   `{ regular_save, create_force, set_passphrase, change_passphrase,
   remove_passphrase, write_secret_file_atomic } × { pre_commit,
   post_commit }` plus a back-to-back fault test proving no leaked
   half-state between two failures on the same `Store`.
-- Pre-commit recoverable state: regular-save failure after backup commit
+- [x] Pre-commit recoverable state: regular-save failure after backup commit
   but before primary commit leaves the old primary authoritative at
   `vault.bin`, leaves `vault.bin.bak` containing the old primary bytes,
   and cleans temp files; `create_force` failure after verbatim backup
@@ -1458,22 +1458,22 @@ is a separate `#[test]` or table-driven case family.
   the primary path can be absent and `backup_path` is set. Post-commit
   success replay shows fresh nonce on disk and old primary moved verbatim
   to `.bak`; `.bak` corruption never affects success-path `open`.
-- HOTP at counter `u64::MAX - 1` advances successfully to `MAX`; a
+- [x] HOTP at counter `u64::MAX - 1` advances successfully to `MAX`; a
   subsequent advance returns `counter_overflow` before any mutation
   or save (off-by-one fence-post pin).
-- TOTP digits × algorithm cross-product (digits ∈ {6, 7, 8} ×
+- [x] TOTP digits × algorithm cross-product (digits ∈ {6, 7, 8} ×
   algorithm ∈ {SHA1, SHA256, SHA512}) for at least one vector each.
-- Plaintext export → re-import round-trip via `import::from_bytes` /
+- [x] Plaintext export → re-import round-trip via `import::from_bytes` /
   `detect == Otpauth` produces accounts that match the source vault
   modulo `created_at = updated_at = import_time`.
-- Multi-QR mixed-payload image rejects the whole batch with
+- [x] Multi-QR mixed-payload image rejects the whole batch with
   `validation_error.source_index` for the non-otpauth payload.
-- QR cap boundary: exactly `QR_RGBA_MAX_BYTES` accepts; one byte
+- [x] QR cap boundary: exactly `QR_RGBA_MAX_BYTES` accepts; one byte
   over rejects with
   `validation_error { field: "qr_image", reason: "image_too_large" }`;
   dimensions overflowing `usize` reject with
   `reason: "dimensions_overflow"`.
-- Wrong-passphrase vs corrupt-bundle vs decode-failure distinction
+- [x] Wrong-passphrase vs corrupt-bundle vs decode-failure distinction
   on encrypted Paladin imports (decrypt_failed on wrong key, decrypt_failed
   on AEAD/AAD tamper, invalid_payload on garbage-but-valid-ciphertext).
 
