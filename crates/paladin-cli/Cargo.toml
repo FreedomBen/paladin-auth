@@ -48,5 +48,11 @@ serde_json = "1"
 assert_cmd = "2.0"
 predicates = "3.1"
 insta = { version = "1.40", features = ["json"] }
+# `rexpect` drives the scripted-`/dev/tty` PTY harness shared by every
+# `[PTY]`-tagged integration test (init / passphrase / add / remove /
+# import / export). Pinned to a specific minor version so the prompt /
+# expect transcript stays stable across transitive bumps, matching the
+# pinning convention for `clap` / `rpassword` / `arboard`.
+rexpect = "0.6.4"
 tempfile = "3"
 paladin-core = { path = "../paladin-core", features = ["error-serde", "test-fault-injection"] }

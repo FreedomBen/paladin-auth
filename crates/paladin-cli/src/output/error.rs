@@ -8,7 +8,7 @@
 
 use std::io::Write;
 
-use paladin_core::{AccountSummary, PaladinError};
+use paladin_core::{format_unsafe_permissions, AccountSummary, PaladinError};
 use serde::Serialize;
 
 use super::Mode;
@@ -218,6 +218,14 @@ pub fn render(err: &CliError, mode: Mode, mut out: impl Write) -> std::io::Resul
         (Mode::Text { .. }, CliError::Usage { text_message }) => {
             // Clap's render() already terminates with a newline.
             write!(out, "{text_message}")?;
+        }
+        (Mode::Text { .. }, CliError::Paladin(p @ PaladinError::UnsafePermissions { .. })) => {
+            // Source the §4.3 `chmod` repair hint from `paladin_core`
+            // so the CLI / TUI / GUI render the same wording. The
+            // `unwrap_or_else` is defense in depth: `format_unsafe_permissions`
+            // returns `Some(_)` for this variant by construction.
+            let body = format_unsafe_permissions(p).unwrap_or_else(|| format!("{p}"));
+            writeln!(out, "paladin: {body}")?;
         }
         (
             Mode::Text { .. },

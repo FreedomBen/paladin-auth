@@ -578,23 +578,23 @@ can be ticked.
 
 ### `init` (`tests/cli_init.rs`)
 
-- [ ] `[PTY]` Empty passphrase creates a plaintext file with mode `0600`,
+- [x] `[PTY]` Empty passphrase creates a plaintext file with mode `0600`,
   parent dir `0700`, and the plaintext-storage warning on stderr in text
   mode.
-- [ ] `[PTY]` Non-empty passphrase creates an encrypted vault.
+- [x] `[PTY]` Non-empty passphrase creates an encrypted vault.
 - [x] Second invocation without `--force` rejects with `vault_exists`
   before prompting (Plaintext existing file).
-- [ ] `vault_exists` pre-check covers `Encrypted`, `invalid-header`, and
+- [x] `vault_exists` pre-check covers `Encrypted`, `invalid-header`, and
   `unsupported-format-version` existing files (all map to
   `InitPrecheck::Existing`).
-- [ ] `InitPrecheck::Propagate` (e.g. permission-denied `io_error`)
+- [x] `InitPrecheck::Propagate` (e.g. permission-denied `io_error`)
   propagates verbatim and is **not** rewritten as `vault_exists`.
-- [ ] `[PTY]` `--force` rotates the existing file into `vault.bin.bak`
+- [x] `[PTY]` `--force` rotates the existing file into `vault.bin.bak`
   for Paladin-format and non-Paladin existing files alike, overwriting
   any prior backup.
-- [ ] `[PTY]` Text-mode `--force` emits the clobber warning whenever the
+- [x] `[PTY]` Text-mode `--force` emits the clobber warning whenever the
   pre-check returns `Existing` and suppresses it on `Clear`.
-- [ ] `[PTY]` Custom KDF flags write the requested in-range Argon2 params
+- [x] `[PTY]` Custom KDF flags write the requested in-range Argon2 params
   for encrypted `init`.
 - [x] Invalid / out-of-range KDF flag values reject before the first
   passphrase prompt with stable `validation_error` `field` / `reason`
@@ -602,15 +602,19 @@ can be ticked.
   `kdf_params_out_of_bounds` for in-range-syntax / out-of-policy values.
 - [x] KDF-flag rejection wins over `vault_exists` (precedence with and
   without `--force`).
-- [ ] `[PTY]` Valid custom KDF flags are accepted but unused when an
+- [x] `[PTY]` Valid custom KDF flags are accepted but unused when an
   empty passphrase selects plaintext storage.
-- [ ] `[PTY]` `init --force` under `PALADIN_FAULT_INJECT=pre_commit`
+- [x] `[PTY]` `init --force` under `PALADIN_FAULT_INJECT=pre_commit`
   surfaces `save_not_committed` with `backup_path` set to `vault.bin.bak`
   after backup rotation.
-- [ ] `[PTY]` `init --force` under `PALADIN_FAULT_INJECT=post_commit`
+- [x] `[PTY]` `init --force` under `PALADIN_FAULT_INJECT=post_commit`
   surfaces `save_durability_unconfirmed` with `committed: true`.
-- [ ] `init` + unsafe parent dir surfaces `unsafe_permissions` with
-  `subject: "vault_dir"` and the §4.3 `chmod` repair hint in text mode.
+- [x] `[PTY]` `init` + unsafe parent dir surfaces `unsafe_permissions`
+  with `subject: "vault_dir"` and the §4.3 `chmod` repair hint in text
+  mode (sourced from `paladin_core::format_unsafe_permissions`). The
+  perm check fires inside `Store::create*` after the new-passphrase
+  prompt, so this case requires the PTY harness even though the §5
+  precedence rule itself is non-prompt.
 
 ### `add` (`tests/cli_add.rs`)
 
