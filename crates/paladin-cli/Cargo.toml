@@ -47,7 +47,7 @@ serde_json = "1"
 [dev-dependencies]
 assert_cmd = "2.0"
 predicates = "3.1"
-insta = { version = "1.40", features = ["json"] }
+insta = { version = "1.40", features = ["json", "redactions"] }
 # `rexpect` drives the scripted-`/dev/tty` PTY harness shared by every
 # `[PTY]`-tagged integration test (init / passphrase / add / remove /
 # import / export). Pinned to a specific minor version so the prompt /

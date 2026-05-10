@@ -862,11 +862,11 @@ can be ticked.
 
 ### `--json` schema and stream cleanliness
 
-- [ ] Per-command success envelopes are locked via `insta` golden
+- [x] Per-command success envelopes are locked via `insta` golden
   snapshots.
-- [ ] Per-`error_kind` envelopes are locked via `insta` golden
+- [x] Per-`error_kind` envelopes are locked via `insta` golden
   snapshots.
-- [ ] Help / version success envelopes are locked via `insta` golden
+- [x] Help / version success envelopes are locked via `insta` golden
   snapshots.
 - [x] Help / version success envelopes are field-asserted in
   `cli_global_flags.rs`.

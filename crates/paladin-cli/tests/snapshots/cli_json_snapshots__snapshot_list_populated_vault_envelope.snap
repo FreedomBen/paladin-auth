@@ -1,0 +1,34 @@
+---
+source: crates/paladin-cli/tests/cli_json_snapshots.rs
+expression: parse_stdout_json(&assert)
+---
+{
+  "accounts": [
+    {
+      "algorithm": "sha1",
+      "counter": null,
+      "created_at": "[timestamp]",
+      "digits": 6,
+      "icon_hint": "acme",
+      "id": "[uuid]",
+      "issuer": "Acme",
+      "kind": "totp",
+      "label": "alice",
+      "period": 30,
+      "updated_at": "[timestamp]"
+    },
+    {
+      "algorithm": "sha1",
+      "counter": 42,
+      "created_at": "[timestamp]",
+      "digits": 6,
+      "icon_hint": null,
+      "id": "[uuid]",
+      "issuer": null,
+      "kind": "hotp",
+      "label": "bob",
+      "period": null,
+      "updated_at": "[timestamp]"
+    }
+  ]
+}
