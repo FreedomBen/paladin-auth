@@ -557,8 +557,11 @@ with `counter_used: null`.
   end-to-end (including the post-`hotp_advance` ordering and the
   never-schedules-auto-clear invariant) without a clipboard server. The
   env var is honored only when `paladin-cli/test-hooks` is enabled.
-- [x] Add the CLI integration tests and JSON golden snapshots below.
-- [x] Run the definition-of-done checks.
+- [ ] Add the CLI integration tests and JSON golden snapshots below.
+  Tracked at the bullet level in the Tests checklist; this top-level
+  item only ticks once every Tests sub-bullet is checked.
+- [ ] Run the definition-of-done checks (ticks only when every
+  Tests sub-bullet is also ticked).
 
 ## Tests (`assert_cmd` + temp dirs + insta golden where useful)
 
@@ -566,169 +569,351 @@ Test invariants matter more than command count. Each test creates a fresh
 temp dir, sets `--vault` to a path inside it, and asserts stdout, stderr
 where relevant, and exit code.
 
-- **`init`**: empty passphrase → plaintext file, mode `0600`, dir `0700`,
-  with the plaintext-storage warning emitted in text mode.
-  Non-empty passphrase → encrypted; second invocation refuses to clobber with
-  `vault_exists` before prompting for a new passphrase, including when the
-  existing file at the vault path is non-Paladin (unrecognized magic) — the
-  pre-check delegates classification to `paladin_core::classify_init_precheck`,
-  so `InitPrecheck::Existing` covers Plaintext, Encrypted, invalid-header, and
-  unsupported-format-version cases alike. Probe failures classified as
-  `InitPrecheck::Propagate` (e.g. permission-denied `io_error`) propagate
-  verbatim instead of being reinterpreted as `vault_exists`. `--force` rotates
-  the old file verbatim into `.bak` for both Paladin-format and non-Paladin
-  existing files; text-mode `--force` emits the clobber warning whenever the
-  pre-check returns `Existing` and skips the warning only on `Clear`. Custom KDF flags write the requested in-range
-  Argon2 params for encrypted init; invalid / out-of-range values reject with
-  the §5 error kinds before the first passphrase prompt, including stable
-  `validation_error` `field` / `reason` values for invalid integer and
-  overflow cases, and valid custom KDF values are accepted but unused when an
-  empty passphrase selects plaintext.
-  With the `paladin-cli/test-hooks` feature wired into the test build (see
-  the passphrase bullet), `init --force` under `PALADIN_FAULT_INJECT=pre_commit`
+The checklist below tracks coverage at the bullet / sub-bullet level. A
+ticked box means at least one named `#[test]` in the indicated file
+asserts the behavior end-to-end. Items tagged `[PTY]` require a scripted
+`/dev/tty` harness (e.g. `rexpect` / `pty-process`) which lands as a
+shared test helper before the encrypted-vault and prompt-driven bullets
+can be ticked.
+
+### `init` (`tests/cli_init.rs`)
+
+- [ ] `[PTY]` Empty passphrase creates a plaintext file with mode `0600`,
+  parent dir `0700`, and the plaintext-storage warning on stderr in text
+  mode.
+- [ ] `[PTY]` Non-empty passphrase creates an encrypted vault.
+- [x] Second invocation without `--force` rejects with `vault_exists`
+  before prompting (Plaintext existing file).
+- [ ] `vault_exists` pre-check covers `Encrypted`, `invalid-header`, and
+  `unsupported-format-version` existing files (all map to
+  `InitPrecheck::Existing`).
+- [ ] `InitPrecheck::Propagate` (e.g. permission-denied `io_error`)
+  propagates verbatim and is **not** rewritten as `vault_exists`.
+- [ ] `[PTY]` `--force` rotates the existing file into `vault.bin.bak`
+  for Paladin-format and non-Paladin existing files alike, overwriting
+  any prior backup.
+- [ ] `[PTY]` Text-mode `--force` emits the clobber warning whenever the
+  pre-check returns `Existing` and suppresses it on `Clear`.
+- [ ] `[PTY]` Custom KDF flags write the requested in-range Argon2 params
+  for encrypted `init`.
+- [x] Invalid / out-of-range KDF flag values reject before the first
+  passphrase prompt with stable `validation_error` `field` / `reason`
+  payloads for `invalid_integer` and `overflow` cases, plus
+  `kdf_params_out_of_bounds` for in-range-syntax / out-of-policy values.
+- [x] KDF-flag rejection wins over `vault_exists` (precedence with and
+  without `--force`).
+- [ ] `[PTY]` Valid custom KDF flags are accepted but unused when an
+  empty passphrase selects plaintext storage.
+- [ ] `[PTY]` `init --force` under `PALADIN_FAULT_INJECT=pre_commit`
   surfaces `save_not_committed` with `backup_path` set to `vault.bin.bak`
-  after backup rotation, and under `PALADIN_FAULT_INJECT=post_commit`
-  surfaces `save_durability_unconfirmed` with `committed: true` — covering
-  the `backup_path` field called out in the JSON envelope above.
-- **`init` + unsafe parent dir** → `unsafe_permissions` with `chmod` hint.
-- **`add --uri`** → account appears in `list`. **`add` interactive** with
-  scripted `/dev/tty` (via `script` or `pty-process` test helper), plus
-  no-TTY failure as `io_error` with `operation: "account_prompt"`. Interactive
-  add covers the manual-mode defaults, hidden secret entry, one-shot
-  validation through `validate_manual`, and no reprompt on invalid input.
-- **`add` mode-combination rejection** (e.g. `--uri` + `--qr`,
-  `--qr` + `--allow-duplicate`) plus manual kind-specific validation
-  (`--period` on HOTP and `--counter` on TOTP reject with
-  `validation_error`) and icon-hint validation (`--icon-hint` malformed
-  rejects; `--icon-hint` plus `--no-icon-hint` rejects at parse time);
-  also `add --json` without an input mode (no `--uri`, no `--qr`, and no
-  complete manual flag set) rejects at parse time with a JSON error envelope.
-- **`add --qr`** with synthetic QR image (multi-entry path uses fixed
-  `--on-conflict=skip`).
-- **`add` duplicate behavior** — `Vault::find_duplicate(&validated)`
-  detects `(secret, issuer, label)` collisions; the CLI rejects with
-  `duplicate_account` and the existing `account` summary unless
-  `--allow-duplicate` is passed.
-- **`list`** — empty vault returns `{ "accounts": [] }` under `--json` and
-  produces no rows in text mode; populated vault returns insertion-order
-  `AccountSummary` values with no secret bytes and no codes; HOTP and TOTP
-  rows expose the kind-specific `period` / `counter` shape from §5
-  (`period` set and `counter: null` for TOTP, vice versa for HOTP).
-- **`show` vs `peek` on HOTP** — `show` persists counter advance (verified
-  by re-opening and re-running `peek`); `peek` does not. `show` on a
-  multi-match query containing any HOTP entry rejects with
-  `multiple_matches`; multi-match TOTP-only `show` prints all matches.
-  `show` and `copy` on an HOTP account already at `u64::MAX` reject with
-  `counter_overflow`, including the stable `account` field, before any
-  save or clipboard write.
-- **Query resolution** — `select.rs` delegates parsing, substring matching,
-  ID-prefix matching, and shortest-unique disambiguators to
-  `paladin-core`; CLI tests cover the command cardinality policy on top:
-  case-insensitive `issuer:label` substring matching, empty-issuer match
-  keys with the colon present, and no Unicode normalization. `id:<hex>`
-  prefix routes to UUID match, never substring; prefixes shorter than 8
-  hex chars, longer than 32 hex chars, or containing non-hex characters
-  reject with `validation_error`.
-- **`copy` writes to clipboard** — gated behind the
-  `paladin-cli/test-hooks` feature because CI may not have a clipboard
-  server; otherwise dry-run via a `PALADIN_CLIPBOARD_DRYRUN=1` env var
-  honored only by the test build before the CLI clipboard adapter calls
-  `arboard`.
-  Asserts the CLI **never** schedules an auto-clear regardless of
-  `clipboard.clear_enabled` in the vault. Clipboard failure after a
-  committed HOTP advance returns `clipboard_write_failed` and leaves the
-  persisted counter advanced; pre-commit HOTP save failure does not attempt
-  a clipboard write.
-- **`remove`** with and without `--yes`; no-TTY confirmation failure as
-  `io_error` with `operation: "confirmation_prompt"`; `--json` without
-  `--yes` rejects at parse time (no confirmation prompt). Confirmation input
-  accepts only exact `yes` after whitespace trimming; any other response exits
-  before mutation with `validation_error` (`field: "confirmation"`,
-  `reason: "declined"`). `multiple_matches` includes `candidates` with
+  after backup rotation.
+- [ ] `[PTY]` `init --force` under `PALADIN_FAULT_INJECT=post_commit`
+  surfaces `save_durability_unconfirmed` with `committed: true`.
+- [ ] `init` + unsafe parent dir surfaces `unsafe_permissions` with
+  `subject: "vault_dir"` and the §4.3 `chmod` repair hint in text mode.
+
+### `add` (`tests/cli_add.rs`)
+
+- [x] `add --uri` succeeds and the account appears in `list`.
+- [ ] `[PTY]` Interactive `add` reads the manual fields once from
+  `/dev/tty` (hidden secret entry, manual-mode defaults), routes them
+  through `validate_manual`, and never reprompts on invalid input.
+- [ ] `[PTY]` Interactive `add` with no `/dev/tty` exits with `io_error`
+  `operation: "account_prompt"`.
+- [x] Mode combinations reject at parse time: `--uri` + `--qr`,
+  `--qr` + `--allow-duplicate`, `--icon-hint` + `--no-icon-hint`,
+  `--uri` + manual flags.
+- [x] Manual `--period` with `--kind hotp` rejects with
+  `validation_error`.
+- [x] Manual `--counter` without `--kind hotp` rejects with
+  `validation_error`.
+- [x] Manual `--icon-hint` with a malformed slug rejects with
+  `validation_error`.
+- [x] `add --json` with no input mode (no `--uri`, no `--qr`, no
+  complete manual flag set) rejects at parse time with a JSON
+  `validation_error` envelope.
+- [ ] `add --qr` against a synthetic multi-entry QR image uses fixed
+  `--on-conflict=skip` and emits the §5 `import`-shaped success envelope.
+- [x] Duplicate `(secret, issuer, label)` rejects with
+  `duplicate_account` plus the existing `account` summary.
+- [x] `--allow-duplicate` appends a second account when the duplicate
+  check would have rejected.
+- [x] Short-secret `add --uri` surfaces a `short_secret` warning in the
+  JSON `warnings` array (and in stderr in text mode).
+
+### `list` (`tests/cli_list.rs`)
+
+- [x] Empty vault returns `{ "accounts": [] }` under `--json`.
+- [x] Empty vault produces no rows in text mode.
+- [x] Populated vault returns insertion-order `AccountSummary` values
+  with no secret bytes and no codes.
+- [x] HOTP and TOTP rows expose the kind-specific `period` /
+  `counter` shape from §5 (`period` set + `counter: null` for TOTP,
+  vice versa for HOTP).
+
+### `show` / `peek` / `copy` (`tests/cli_show_peek_copy.rs`)
+
+- [x] `show` on a single HOTP match advances the counter and persists
+  before printing.
+- [x] `peek` on a single HOTP match never advances.
+- [x] `peek` after `show` reflects the post-advance counter without
+  advancing further.
+- [x] `show` on a multi-match query containing any HOTP entry rejects
+  with `multiple_matches`.
+- [x] `show` on a multi-match TOTP-only query prints one row per match
+  in insertion order.
+- [x] `show` on a multi-match query unconditionally returns all rows
+  for `peek`.
+- [x] `show` on an HOTP account already at `u64::MAX` rejects with
+  `counter_overflow` (with `account`) before any save.
+- [x] `copy` on an HOTP account already at `u64::MAX` rejects with
+  `counter_overflow` before any clipboard write.
+- [x] `id:<hex>` prefix selects a unique account even when the
+  substring branch would also match (no substring fallback).
+- [x] `id:<hex>` prefix shorter than 8 hex chars rejects with
+  `validation_error`.
+- [ ] `id:<hex>` prefix longer than 32 hex chars rejects with
+  `validation_error`.
+- [ ] `id:<hex>` prefix with non-hex characters rejects with
+  `validation_error`.
+- [ ] Case-insensitive `issuer:label` substring matching is asserted at
+  the CLI level (empty-issuer match keys carry the colon, no Unicode
+  normalization).
+- [x] `copy` clipboard tests are gated behind the `test-hooks` feature
+  and use `PALADIN_CLIPBOARD_DRYRUN=1` to bypass `arboard`.
+- [x] `copy` ignores `clipboard.clear_enabled` in the vault (never
+  schedules an auto-clear).
+- [x] `copy` clipboard failure on TOTP returns `clipboard_write_failed`
+  with `counter_used: null`.
+- [x] `copy` clipboard failure on HOTP leaves the persisted counter
+  advanced and reports the pre-advance `counter_used`.
+- [ ] Pre-commit HOTP save failure during `copy` does **not** attempt a
+  clipboard write.
+
+### `remove` / `rename` (`tests/cli_remove_rename.rs`)
+
+- [x] `remove --yes` succeeds and emits the `removed` envelope.
+- [ ] `[PTY]` `remove` without `--yes` reads the confirmation from
+  `/dev/tty`.
+- [ ] `[PTY]` `remove` confirmation accepts only exact `yes` after
+  whitespace trim; any other response exits with `validation_error`
+  (`field: "confirmation"`, `reason: "declined"`).
+- [ ] `[PTY]` `remove` with no `/dev/tty` surfaces `io_error`
+  `operation: "confirmation_prompt"`.
+- [x] `remove --json` without `--yes` rejects at parse time with a
+  `validation_error` envelope (no confirmation prompt).
+- [x] `remove` `multiple_matches` envelope includes `candidates` with
   `disambiguator` `id:<hex>` strings.
-- **`rename`** updates `updated_at` (compared via `--json` snapshot).
-- **`passphrase set/change/remove`** end-to-end against an open vault.
-  `passphrase remove` covers the text-mode warning confirmation, no-TTY
-  confirmation failure as `io_error` with `operation: "confirmation_prompt"`,
-  and the `--yes` bypass; `--json` without
-  `--yes` rejects at parse time. No-TTY prompt failures surface as
-  `io_error` with `operation: "passphrase_prompt"`; confirmation mismatch
-  surfaces as `invalid_passphrase` with
-  `reason: "confirmation_mismatch"`. Wrong starting states (`set` on
-  encrypted, `change`/`remove` on plaintext) surface the stable
-  DESIGN §4.7 `invalid_state` operation/state pair before the
-  unlock prompt, plaintext-storage warning, new-passphrase prompts,
-  destructive confirmations, or mutation. `set` and `change` cover default
-  and custom KDF params plus invalid / out-of-range flag errors, including
-  stable `validation_error` `field` / `reason` values for invalid integer and
-  overflow cases, and precedence cases where invalid KDF input wins before
-  vault unlock prompts and wrong-state checks.
-  Durability-unconfirmed is surfaced as `save_durability_unconfirmed` (with
-  `committed: true`) when the post-commit fsync fails; pre-commit failure
-  surfaces as `save_not_committed` with `committed: false`. Process-level CLI
-  tests opt the test build of the `paladin` binary into the
-  `paladin-cli/test-hooks` cargo feature (which transitively enables
-  `paladin-core/test-fault-injection`); the env var
-  `PALADIN_FAULT_INJECT=pre_commit|post_commit` selects which `Store`
-  failure path fires so `save_not_committed` and
-  `save_durability_unconfirmed` envelopes can be exercised end-to-end.
-- **`import`** for each format with each `--on-conflict` policy; omitting
-  `--on-conflict` defaults to `skip`. Covers auto-detection order, forced
-  format errors, encrypted-Aegis unsupported errors, no-entry inputs, warning
-  propagation for skipped duplicates,
-  `paladin_core::classify_paladin_import_precheck` routing for encrypted
-  Paladin bundle passphrase prompting, plaintext / malformed Paladin rejection
-  without a bundle-passphrase prompt, non-Paladin fallthrough to the import
-  facade, text-mode skip warnings for `--on-conflict=skip`, Paladin bundle
-  fresh-ID behavior, and HOTP-to-HOTP counter preservation under `replace`.
-  Atomic failure on any invalid entry.
-- **`export --plaintext` / `--encrypted`** refuses overwrite without
-  `--force` and writes output `0600` through
-  `paladin_core::write_secret_file_atomic`. Plaintext export prints the
-  unencrypted-secrets warning; encrypted export round-trips through
-  `import` with an export-bundle passphrase independent of the vault unlock
-  passphrase, covers default and custom KDF params, and rejects invalid /
-  out-of-range KDF flags before vault existence checks, vault unlock, or
-  export crypto material is generated; injected writer failures surface
-  `save_not_committed` before the final rename and
-  `save_durability_unconfirmed` after the final rename. Invalid integer and
-  overflow cases assert the same stable KDF `validation_error` `field` /
-  `reason` payloads as `init` and passphrase commands.
-- **`settings get/set`** covers default values, every dotted key through
-  `paladin_core::parse_setting_key` / `parse_setting_patch`, bool/u32 value
-  parsing, range validation at both bounds, text-mode filtering, full
-  `VaultSettings` JSON output for both `get` (current settings) and `set`
-  (post-mutation settings), and
-  unknown-dotted-key rejection with
-  `validation_error` (`field: "key"`, `reason: "unknown_setting_key"`) for
-  both `settings get <key>` and `settings set <key> <value>`.
-- **`--json` schema snapshots** for every command success, help/version
-  terminal success, every `error_kind`, and representative syntax/usage
-  failures rendered as JSON when `--json` is present. Locked via `insta`.
-- **`--json` stream cleanliness** — for every covered command, success
-  and error: assert stdout is exactly the success JSON document plus
-  one trailing newline (or empty on error) and stderr is exactly the
-  failure JSON document plus one trailing newline (or empty on
-  success). Specifically asserts no `short_secret` or plaintext-export
-  text appears on either stream when `--json` is set, no plaintext `init`,
-  `init --force`, or `passphrase remove --yes` advisory text appears under
-  `--json`, no clap diagnostics appear, and a `passphrase set` invocation under
-  `--json` with `/dev/tty` rerouted to the test harness keeps
-  stdout/stderr byte-clean (the prompt is consumed via `/dev/tty`
-  only). One test per output path (success-with-warnings via `add --uri`
-  of a short-secret URI; help/version success; error-with-extra-fields
-  via `multiple_matches`; clap-rerouted via an unknown subcommand;
-  parse-time confirmation rejection via `remove --json` without
-  `--yes`).
-- **`--no-color`** disables ANSI; `NO_COLOR` env var honored; ANSI also
-  disabled when stdout is not a TTY (covers the third trigger named in the
-  Output section).
-- **`paladin tui`** → spawns `paladin-tui` (a stub binary placed on `PATH`
-  for the test asserts argv) and forwards `--vault` / `--no-color` in both
-  accepted global-flag positions. `paladin tui --json` and `paladin --json
-  tui` → rejected at parse time with JSON error envelopes; `paladin --json
-  tui --help` emits the JSON help envelope and does not inspect `PATH`.
-  Missing `paladin-tui` → `io_error` with `operation: "exec_paladin_tui"`.
+- [x] `remove` `id:<hex>` prefix selects a unique account even with
+  substring collisions.
+- [x] `rename` succeeds and emits the post-rename `account` envelope.
+- [x] `rename` bumps `updated_at` above `created_at`.
+- [x] `rename` with an invalid label propagates a core
+  `validation_error`.
+
+### `passphrase set` / `change` / `remove` (`tests/cli_passphrase.rs`)
+
+- [ ] `[PTY]` `passphrase set` succeeds end-to-end against an open
+  plaintext vault.
+- [ ] `[PTY]` `passphrase change` succeeds end-to-end against an open
+  encrypted vault.
+- [ ] `[PTY]` `passphrase remove` succeeds end-to-end against an open
+  encrypted vault and confirms before mutation.
+- [ ] `[PTY]` `passphrase remove` with no `/dev/tty` surfaces `io_error`
+  `operation: "confirmation_prompt"`.
+- [x] `passphrase remove --json` without `--yes` rejects at parse time.
+- [ ] `[PTY]` `passphrase remove --yes` skips only the confirmation, not
+  the unlock prompt.
+- [ ] `[PTY]` Confirmation mismatch on the new passphrase surfaces
+  `invalid_passphrase` with `reason: "confirmation_mismatch"` before
+  mutation.
+- [ ] `[PTY]` No-`/dev/tty` passphrase prompt failure surfaces
+  `io_error` `operation: "passphrase_prompt"`.
+- [x] Wrong starting state — `passphrase set` on encrypted vault —
+  surfaces `invalid_state` before any unlock or new-passphrase prompt.
+- [x] Wrong starting state — `passphrase change` on plaintext vault —
+  surfaces `invalid_state` before any prompt.
+- [x] Wrong starting state — `passphrase remove` on plaintext vault —
+  surfaces `invalid_state` before any prompt.
+- [x] `passphrase set` / `change` invalid / out-of-range KDF flag
+  values reject with the same stable `validation_error` /
+  `kdf_params_out_of_bounds` payloads as `init`.
+- [x] KDF-flag rejection wins over `vault_missing` and over wrong-state
+  `invalid_state` (precedence).
+- [ ] `[PTY]` `passphrase set` / `change` with default and custom
+  in-range KDF params writes the requested Argon2 params on disk.
+- [ ] `[PTY]` `passphrase` mutations under `PALADIN_FAULT_INJECT=pre_commit`
+  surface `save_not_committed` with `committed: false`.
+- [ ] `[PTY]` `passphrase` mutations under
+  `PALADIN_FAULT_INJECT=post_commit` surface
+  `save_durability_unconfirmed` with `committed: true`.
+
+### `import` (`tests/cli_import.rs`)
+
+- [x] `import` with `--format otpauth` (text URI) imports an account.
+- [x] `import` with `--format otpauth` (JSON string array) imports
+  multiple accounts.
+- [x] `import` with `--format aegis` on a plaintext Aegis JSON imports.
+- [x] `import` of an encrypted Aegis JSON rejects with
+  `unsupported_encrypted_aegis`.
+- [x] `import` with a forced `--format` that does not match the input
+  rejects with `unsupported_import_format`.
+- [x] `import` with no `--format` auto-detects in the §4.6 fixed order.
+- [x] `import` with an empty otpauth array rejects with
+  `no_entries_to_import`.
+- [x] `import` with an unrecognized input rejects with
+  `unsupported_import_format`.
+- [x] `import` of a plaintext / malformed Paladin bundle rejects without
+  prompting for a bundle passphrase
+  (`paladin_core::classify_paladin_import_precheck` routing).
+- [ ] `[PTY]` `import` of an encrypted Paladin bundle prompts once for
+  the bundle passphrase before calling `import::from_file`.
+- [ ] `[PTY]` `import` of an encrypted Paladin bundle assigns fresh
+  UUIDv4 IDs to inserted/appended rows while preserving source
+  timestamps.
+- [x] `import` defaults to `--on-conflict=skip` when omitted.
+- [x] `import --on-conflict=replace` overwrites existing accounts.
+- [x] `import --on-conflict=replace` preserves the existing HOTP
+  counter for HOTP-to-HOTP collisions.
+- [x] `import --on-conflict=append` inserts a duplicate row.
+- [x] `import` text-mode `skip` collisions emit a stderr warning.
+- [x] `import` succeeds end-to-end and persists the imported accounts
+  to disk (`imported_account_is_persisted_to_disk`).
+- [x] `import` with `vault_missing` rejects before reading the source
+  file.
+- [ ] `import` rejects the whole batch atomically when any single entry
+  fails validation.
+
+### `export` (`tests/cli_export.rs`)
+
+- [x] Plaintext `export` against an empty vault writes an empty JSON
+  array.
+- [x] Plaintext `export` writes output with mode `0600`.
+- [x] Plaintext `export` writes one `otpauth://` URI per account in
+  insertion order.
+- [x] Plaintext `export` text-mode prints the unencrypted-secrets
+  warning to stderr.
+- [x] Plaintext `export` text-mode prints a success line naming the
+  output path and mode.
+- [x] Plaintext `export --json` emits the §5 envelope and keeps stderr
+  empty.
+- [x] `export` refuses to overwrite an existing target without
+  `--force`.
+- [x] `export --force` overwrites the existing target with the new
+  contents.
+- [x] Overwrite check fires before vault unlock under `--json`.
+- [x] `export` without a target rejects at parse time with
+  `validation_error` `field: "argv"`.
+- [x] `export` with both `--plaintext` and `--encrypted` rejects at
+  parse time.
+- [x] `export` rejects `vault_missing` when the source vault does not
+  exist.
+- [x] `export --encrypted` rejects invalid / out-of-range KDF flag
+  values with the same stable `validation_error` /
+  `kdf_params_out_of_bounds` payloads as `init`.
+- [x] `export --encrypted` KDF-flag rejection wins over `vault_missing`
+  and over the overwrite-existing-output check (precedence).
+- [ ] `[PTY]` `export --encrypted` round-trips through `import` with a
+  bundle passphrase that is independent of the vault unlock passphrase.
+- [ ] `[PTY]` `export --encrypted` accepts default and custom in-range
+  KDF params and writes them to the bundle header.
+- [ ] `export --encrypted` writer failure before the final rename
+  surfaces `save_not_committed`.
+- [ ] `export --encrypted` writer failure after the final rename
+  surfaces `save_durability_unconfirmed`.
+
+### `settings` (`tests/cli_settings.rs`)
+
+- [x] `settings get` returns the full nested `VaultSettings` defaults
+  for a fresh vault.
+- [x] `settings get <key>` under `--json` still returns the full
+  settings object (not the filtered key).
+- [x] `settings get` text mode lists every dotted key for a fresh
+  vault.
+- [x] `settings get <key>` text mode filters to a single dotted key.
+- [x] `settings set <bool-key>` under `--json` returns the full
+  post-mutation settings envelope.
+- [x] `settings set` persists across a follow-up `settings get` against
+  the same vault.
+- [x] `settings set` accepts the in-range minimum and maximum for each
+  `*_secs` key.
+- [x] `settings set` text mode renders the full post-mutation settings
+  table.
+- [x] `settings set <unknown-key>` rejects with `validation_error`
+  (`field: "key"`, `reason: "unknown_setting_key"`).
+- [x] `settings get <unknown-key>` rejects with `validation_error`
+  (`field: "key"`, `reason: "unknown_setting_key"`).
+- [x] Unknown-key rejection fires before the vault is opened (no
+  `vault_missing` shadow).
+- [x] `settings set <bool-key> <value>` requires lowercase `true` /
+  `false`.
+- [x] `settings set <u32-key> <value>` requires base-10 digits only.
+- [x] `settings set <u32-key>` rejects values below the documented
+  minimum with `out_of_range`.
+- [x] `settings set <u32-key>` rejects values above the documented
+  maximum with `out_of_range`.
+- [x] `settings get` with `vault_missing` rejects after key validation.
+- [x] `settings get` succeeds for each dotted key against the default
+  vault.
+
+### `--json` schema and stream cleanliness
+
+- [ ] Per-command success envelopes are locked via `insta` golden
+  snapshots.
+- [ ] Per-`error_kind` envelopes are locked via `insta` golden
+  snapshots.
+- [ ] Help / version success envelopes are locked via `insta` golden
+  snapshots.
+- [x] Help / version success envelopes are field-asserted in
+  `cli_global_flags.rs`.
+- [x] `paladin --json` syntax / usage failures reroute to
+  `validation_error` `field: "argv"` `reason: "usage"` (covered for
+  unknown subcommand and unknown top-level flag in
+  `cli_errors_json.rs`).
+- [x] `unsafe_permissions` envelope carries `path`, `subject`,
+  `actual_mode`, `expected_mode` (`cli_errors_json.rs`).
+- [x] `invalid_header` envelope is `error_kind`-only
+  (`cli_errors_json.rs`).
+- [x] `unsupported_format_version` envelope carries the offending
+  `format_ver` byte (`cli_errors_json.rs`).
+- [x] `vault_missing` envelope is `error_kind`-only
+  (`cli_errors_json.rs`).
+- [x] Stream cleanliness: stdout is byte-empty on `--json` error paths
+  (covered by `assert_json_error_streams` in `cli_errors_json.rs`).
+- [x] Stream cleanliness: stderr is exactly one JSON document plus a
+  single trailing newline on `--json` error paths.
+- [x] `add --uri` of a short-secret URI routes the warning into the
+  JSON `warnings` array (no stderr warning under `--json`).
+- [ ] `[PTY]` Stream cleanliness for `passphrase set` under `--json`:
+  with `/dev/tty` rerouted to the test harness, stdout / stderr stay
+  byte-clean (the prompt is consumed via `/dev/tty` only).
+- [ ] No `init` / `init --force` / `passphrase remove --yes` /
+  plaintext-export advisory text appears under `--json` (centralized
+  cross-command sweep).
+
+### `--no-color` / `NO_COLOR` (`tests/cli_global_flags.rs`)
+
+- [ ] `--no-color` disables ANSI in text-mode output.
+- [ ] `NO_COLOR` env var (when `--no-color` is absent) disables ANSI.
+- [ ] ANSI is also disabled when stdout is not a TTY.
+
+### `paladin tui` exec wrapper (`tests/cli_exec_tui.rs`)
+
+- [x] `paladin tui` execs `paladin-tui` with no extra flags when the
+  globals are default.
+- [x] `paladin tui` forwards `--vault` in the global position.
+- [x] `paladin tui` forwards `--vault` in the subcommand position.
+- [x] `paladin tui` forwards `--no-color` in the global position.
+- [x] `paladin tui` forwards `--no-color` in the subcommand position.
+- [x] `paladin tui` forwards both `--vault` and `--no-color`.
+- [x] `paladin --json tui` rejects at parse time with a
+  `validation_error` envelope.
+- [x] `paladin tui --json` rejects at parse time with a
+  `validation_error` envelope.
+- [x] `paladin --json tui --help` emits the help envelope and does
+  **not** inspect `PATH`.
+- [x] Missing `paladin-tui` on `PATH` surfaces `io_error`
+  `operation: "exec_paladin_tui"`.
 
 ## Dependencies
 
@@ -823,7 +1008,13 @@ The CLI ships in `.deb`, `.rpm`, Flatpak, and AppImage in v0.1
 ## Definition of done
 
 - All command behaviors from §5 implemented and tested via `assert_cmd`.
-- `--json` schema golden-locked.
+- **Every Tests checklist item above is ticked** — including the
+  `[PTY]`-tagged scripted-`/dev/tty` bullets, the `add --qr` synthetic
+  QR fixture, the `--no-color` / `NO_COLOR` triggers, and the `insta`
+  JSON-schema golden snapshots. The "Add the CLI integration tests
+  and JSON golden snapshots below" implementation-checklist item
+  ticks only when this gate is met.
+- `--json` schema golden-locked via `insta`.
 - `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo test --all`,
   `cargo deny check`, `cargo audit` clean.
 - CLI **never** schedules a clipboard auto-clear. Verified by test.
