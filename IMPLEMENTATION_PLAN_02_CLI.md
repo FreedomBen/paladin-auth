@@ -719,7 +719,7 @@ can be ticked.
 
 - [x] `[PTY]` `passphrase set` succeeds end-to-end against an open
   plaintext vault.
-- [ ] `[PTY]` `passphrase change` succeeds end-to-end against an open
+- [x] `[PTY]` `passphrase change` succeeds end-to-end against an open
   encrypted vault.
 - [ ] `[PTY]` `passphrase remove` succeeds end-to-end against an open
   encrypted vault and confirms before mutation.

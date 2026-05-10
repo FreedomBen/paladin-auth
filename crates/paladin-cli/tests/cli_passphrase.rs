@@ -40,6 +40,10 @@ const PROMPT_NEW_PASSPHRASE: &str = "New passphrase: ";
 /// Stable §5 prompt label for the new-passphrase confirmation entry.
 const PROMPT_CONFIRM: &str = "Confirm passphrase: ";
 
+/// Stable §5 prompt label fired by `vault_open::open` for any
+/// encrypted-vault unlock (`change` / `remove` / `add` / `list` / …).
+const PROMPT_UNLOCK: &str = "Vault passphrase: ";
+
 fn paladin() -> Command {
     let mut cmd = Command::cargo_bin("paladin").expect("cargo bin");
     cmd.env_remove("NO_COLOR");
@@ -371,6 +375,77 @@ fn json_change_kdf_validation_wins_over_invalid_state_not_encrypted() {
     assert_eq!(value["error_kind"], serde_json::json!("validation_error"));
     assert_eq!(value["field"], serde_json::json!("kdf-time"));
     assert_eq!(value["reason"], serde_json::json!("invalid_integer"));
+}
+
+#[test]
+fn pty_change_on_open_encrypted_vault_succeeds_and_rotates_salt_under_requested_kdf_params() {
+    // §5: `passphrase change` on an encrypted vault first prompts
+    // for the existing unlock passphrase, then for the new
+    // passphrase + a matching confirmation, all via `/dev/tty`.
+    // After re-encrypting, the on-disk vault stays in encrypted mode
+    // under the requested Argon2id parameters and the salt has
+    // rotated (DESIGN.md §4.4 — every save rolls fresh salt + nonce).
+    // The test fixture is created with the §4.4 minimum KDF params
+    // so both the unlock derivation and the post-change derivation
+    // stay fast in CI.
+    let (_dir, path) = fresh_vault_path();
+    create_encrypted_vault(&path, "old-secret");
+
+    // Salt before the change — proves the rotation actually happened.
+    let before = std::fs::read(&path).expect("read pre-change vault");
+    assert_eq!(before[9], 1, "fixture should be encrypted");
+    let salt_before: [u8; 16] = before[23..39].try_into().unwrap();
+
+    let mut pty = Pty::spawn(
+        [
+            "--vault",
+            path.to_str().unwrap(),
+            "passphrase",
+            "change",
+            "--kdf-memory-mib",
+            "8",
+            "--kdf-time",
+            "1",
+            "--kdf-parallelism",
+            "1",
+        ],
+        &[],
+    );
+    pty.expect(PROMPT_UNLOCK);
+    pty.send_line("old-secret");
+    pty.expect(PROMPT_NEW_PASSPHRASE);
+    pty.send_line("new-secret");
+    pty.expect(PROMPT_CONFIRM);
+    pty.send_line("new-secret");
+    let exit = pty.wait_for_exit();
+    exit.assert_exit(0);
+    exit.assert_transcript_contains("Re-encrypted vault.");
+
+    // Post-state on disk: still encrypted under the requested KDF
+    // params, with a fresh salt.
+    let after = std::fs::read(&path).expect("read post-change vault");
+    assert!(after.len() >= 64, "encrypted header should be ≥ 64 bytes");
+    assert_eq!(&after[..8], PALADIN_MAGIC);
+    assert_eq!(after[8], 1, "format_ver");
+    assert_eq!(after[9], 1, "mode == encrypted");
+    assert_eq!(after[10], 1, "kdf_id == Argon2id");
+    let m_kib = u32::from_le_bytes(after[11..15].try_into().unwrap());
+    let t = u32::from_le_bytes(after[15..19].try_into().unwrap());
+    let p = u32::from_le_bytes(after[19..23].try_into().unwrap());
+    assert_eq!(m_kib, 8 * 1024);
+    assert_eq!(t, 1);
+    assert_eq!(p, 1);
+    assert_eq!(after[39], 1, "aead_id == XChaCha20-Poly1305");
+
+    let salt_after: [u8; 16] = after[23..39].try_into().unwrap();
+    assert_ne!(
+        salt_before, salt_after,
+        "salt must rotate on every save (DESIGN.md §4.4)",
+    );
+
+    // File mode preserved at `0o600` across the rotation.
+    let perms = std::fs::metadata(&path).expect("metadata").permissions();
+    assert_eq!(perms.mode() & 0o7777, 0o600);
 }
 
 // =========================================================================
