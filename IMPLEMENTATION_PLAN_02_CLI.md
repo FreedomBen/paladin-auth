@@ -817,7 +817,7 @@ can be ticked.
   `kdf_params_out_of_bounds` payloads as `init`.
 - [x] `export --encrypted` KDF-flag rejection wins over `vault_missing`
   and over the overwrite-existing-output check (precedence).
-- [ ] `[PTY]` `export --encrypted` round-trips through `import` with a
+- [x] `[PTY]` `export --encrypted` round-trips through `import` with a
   bundle passphrase that is independent of the vault unlock passphrase.
 - [ ] `[PTY]` `export --encrypted` accepts default and custom in-range
   KDF params and writes them to the bundle header.

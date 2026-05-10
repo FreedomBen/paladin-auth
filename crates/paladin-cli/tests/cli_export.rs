@@ -20,9 +20,13 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use assert_cmd::Command;
-use paladin_core::{parse_otpauth, Store, VaultInit};
+use paladin_core::{parse_otpauth, Argon2Params, EncryptionOptions, Store, VaultInit};
+use secrecy::SecretString;
 use serde_json::Value;
 use tempfile::TempDir;
+
+mod common;
+use common::Pty;
 
 fn paladin() -> Command {
     let mut cmd = Command::cargo_bin("paladin").expect("cargo bin");
@@ -535,4 +539,130 @@ fn json_encrypted_export_kdf_validation_wins_over_overwrite_existing_output() {
     // The pre-existing destination must remain unmodified.
     let bytes = std::fs::read(&out).unwrap();
     assert_eq!(bytes, b"prev");
+}
+
+// ==========================================================================
+// Encrypted-export PTY round-trip
+// ==========================================================================
+
+/// §5 prompt label fired by `vault_open::open` for any encrypted-vault
+/// unlock.
+const PROMPT_UNLOCK: &str = "Vault passphrase: ";
+/// §5 prompt label fired by `paladin export --encrypted` for the new
+/// bundle passphrase.
+const PROMPT_EXPORT: &str = "Export passphrase: ";
+/// §5 prompt label fired right after `PROMPT_EXPORT` to confirm the
+/// bundle passphrase entry.
+const PROMPT_CONFIRM: &str = "Confirm passphrase: ";
+/// §5 prompt label fired by `paladin import` after
+/// `classify_paladin_import_precheck` returns `PromptForPassphrase` for
+/// an encrypted Paladin bundle.
+const PROMPT_BUNDLE: &str = "Bundle passphrase: ";
+
+/// Build an encrypted source vault under §4.4 minimum Argon2 params and
+/// preload it with `uris` so the export round-trip has something
+/// non-empty to ferry through the bundle. Min KDF params keep CI fast
+/// while still going through the real `Store::create` /
+/// `Vault::save` pipeline.
+fn create_encrypted_vault_with(path: &Path, passphrase: &str, uris: &[&str]) {
+    let pp = SecretString::from(passphrase.to_string());
+    let params = Argon2Params {
+        m_kib: 8192,
+        t: 1,
+        p: 1,
+    };
+    let opts = EncryptionOptions::with_params(pp, params).expect("opts");
+    let (mut vault, store) = Store::create(path, VaultInit::Encrypted(opts)).expect("create");
+    let now = SystemTime::now();
+    for uri in uris {
+        let validated = parse_otpauth(uri, now).expect("parse fixture");
+        let _id = vault.add(validated.account);
+    }
+    vault.save(&store).expect("save");
+}
+
+#[test]
+fn pty_encrypted_export_round_trips_through_import_with_independent_passphrases() {
+    // §5 / "Passphrase prompts": the `export --encrypted` bundle
+    // passphrase protects only the exported Paladin bundle. It is
+    // independent of the selected vault's own unlock passphrase. To
+    // lock that contract, drive a full export → import round-trip
+    // where the two passphrases are deliberately different and the
+    // import succeeds with the *bundle* passphrase only.
+    let (src_dir, src_vault_path) = fresh_vault_path();
+    let vault_pass = "vault-secret";
+    let bundle_pass = "bundle-secret-different";
+    assert_ne!(
+        vault_pass, bundle_pass,
+        "test fixture must use distinct passphrases to assert independence",
+    );
+    create_encrypted_vault_with(&src_vault_path, vault_pass, &[TOTP_URI_ALICE]);
+
+    let bundle_path = src_dir.path().join("alice.paladin");
+
+    // Export over PTY: vault unlock first, then bundle passphrase
+    // (twice to satisfy the new-passphrase confirmation rule).
+    // Pin the bundle KDF to §4.4 minimums so the test is fast.
+    let mut export_pty = Pty::spawn(
+        [
+            "--vault",
+            src_vault_path.to_str().unwrap(),
+            "export",
+            "--encrypted",
+            bundle_path.to_str().unwrap(),
+            "--kdf-memory-mib",
+            "8",
+            "--kdf-time",
+            "1",
+            "--kdf-parallelism",
+            "1",
+        ],
+        &[],
+    );
+    export_pty.expect(PROMPT_UNLOCK);
+    export_pty.send_line(vault_pass);
+    export_pty.expect(PROMPT_EXPORT);
+    export_pty.send_line(bundle_pass);
+    export_pty.expect(PROMPT_CONFIRM);
+    export_pty.send_line(bundle_pass);
+    let export_exit = export_pty.wait_for_exit();
+    export_exit.assert_exit(0);
+    assert!(
+        bundle_path.exists(),
+        "encrypted bundle file must exist after export, transcript:\n{}",
+        export_exit.transcript,
+    );
+
+    // Import the bundle into a fresh plaintext destination vault. The
+    // destination has no unlock passphrase, so the *only* prompt that
+    // fires is the bundle prompt — proving the bundle passphrase is
+    // not the source vault unlock passphrase.
+    let (_dst_dir, dst_path) = fresh_vault_path();
+    create_empty_plaintext_vault(&dst_path);
+
+    let mut import_pty = Pty::spawn(
+        [
+            "--vault",
+            dst_path.to_str().unwrap(),
+            "import",
+            bundle_path.to_str().unwrap(),
+        ],
+        &[],
+    );
+    import_pty.expect(PROMPT_BUNDLE);
+    import_pty.send_line(bundle_pass);
+    let import_exit = import_pty.wait_for_exit();
+    import_exit.assert_exit(0);
+
+    // Round-trip succeeded: the imported account matches the source.
+    let listed = paladin()
+        .args(["--json", "--vault", dst_path.to_str().unwrap(), "list"])
+        .assert()
+        .success();
+    let stdout = std::str::from_utf8(&listed.get_output().stdout).unwrap();
+    let v: Value = serde_json::from_str(stdout.trim()).unwrap();
+    let accounts = v["accounts"].as_array().expect("accounts array");
+    assert_eq!(accounts.len(), 1, "exactly one account round-tripped");
+    assert_eq!(accounts[0]["label"], serde_json::json!("alice"));
+    assert_eq!(accounts[0]["issuer"], serde_json::json!("Acme"));
 }
