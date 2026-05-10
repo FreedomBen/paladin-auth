@@ -772,7 +772,7 @@ can be ticked.
   (`paladin_core::classify_paladin_import_precheck` routing).
 - [x] `[PTY]` `import` of an encrypted Paladin bundle prompts once for
   the bundle passphrase before calling `import::from_file`.
-- [ ] `[PTY]` `import` of an encrypted Paladin bundle assigns fresh
+- [x] `[PTY]` `import` of an encrypted Paladin bundle assigns fresh
   UUIDv4 IDs to inserted/appended rows while preserving source
   timestamps.
 - [x] `import` defaults to `--on-conflict=skip` when omitted.

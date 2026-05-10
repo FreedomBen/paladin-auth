@@ -690,3 +690,100 @@ fn pty_encrypted_paladin_bundle_prompts_once_for_bundle_passphrase() {
     assert_eq!(accounts[0]["label"], serde_json::json!("alice"));
     assert_eq!(accounts[0]["issuer"], serde_json::json!("Acme"));
 }
+
+#[test]
+fn pty_encrypted_paladin_bundle_preserves_timestamps_and_assigns_fresh_uuids() {
+    // §4.6 / §5: Paladin encrypted bundles preserve each account's
+    // stored timestamps for inserted/appended rows but never insert
+    // source `AccountId`s — non-colliding rows receive fresh UUIDv4
+    // IDs at merge time. Build a source vault with a deterministic
+    // `created_at` and a *bumped* `updated_at` (via `rename`) so the
+    // assertion is meaningful: the two timestamps differ on the
+    // source, and both must come through to the destination
+    // unchanged.
+    let (src_dir, src_vault_path) = fresh_vault_path();
+    let created_at_secs: u64 = 1_700_000_000;
+    let updated_at_secs: u64 = 1_700_000_500;
+    let created_at_time = std::time::UNIX_EPOCH + std::time::Duration::from_secs(created_at_secs);
+    let updated_at_time = std::time::UNIX_EPOCH + std::time::Duration::from_secs(updated_at_secs);
+
+    // Source vault: one account whose `created_at` is `now1` and
+    // whose `updated_at` is bumped to `now2` by a rename.
+    let (mut src_vault, _src_store) =
+        Store::create(&src_vault_path, VaultInit::Plaintext).expect("create src vault");
+    let validated = parse_otpauth(TOTP_URI_ALICE, created_at_time).expect("parse");
+    let src_account_id = src_vault.add(validated.account);
+    src_vault
+        .rename(src_account_id, "alice-renamed", updated_at_time)
+        .expect("rename bumps updated_at");
+
+    // Sanity: the in-process source really does have distinct
+    // timestamps so the post-import assertion is non-trivial.
+    let src_account = src_vault
+        .accounts()
+        .iter()
+        .find(|a| a.id() == src_account_id)
+        .expect("src account present");
+    assert_eq!(src_account.created_at(), created_at_secs);
+    assert_eq!(src_account.updated_at(), updated_at_secs);
+
+    let bundle_bytes = build_encrypted_bundle(&src_vault, "bundle-secret");
+    let bundle_path = src_dir.path().join("alice.paladin");
+    write_file(&bundle_path, &bundle_bytes);
+
+    // Destination vault: plaintext, so the bundle prompt is the only
+    // prompt fired during import.
+    let (_dst_dir, dst_path) = fresh_vault_path();
+    create_empty_plaintext_vault(&dst_path);
+
+    let mut pty = Pty::spawn(
+        [
+            "--vault",
+            dst_path.to_str().unwrap(),
+            "import",
+            bundle_path.to_str().unwrap(),
+        ],
+        &[],
+    );
+    pty.expect(PROMPT_BUNDLE_PASSPHRASE);
+    pty.send_line("bundle-secret");
+    let exit = pty.wait_for_exit();
+    exit.assert_exit(0);
+
+    // Inspect the destination via the JSON list envelope so we
+    // exercise the §5 `AccountSummary` shape end-to-end.
+    let listed = list_accounts_json(&dst_path);
+    let accounts = listed["accounts"].as_array().expect("accounts array");
+    assert_eq!(accounts.len(), 1, "exactly one imported account");
+    let dst = &accounts[0];
+
+    // Timestamps preserved verbatim from the source bundle.
+    assert_eq!(
+        dst["created_at"],
+        serde_json::json!(created_at_secs),
+        "source `created_at` must be preserved on import",
+    );
+    assert_eq!(
+        dst["updated_at"],
+        serde_json::json!(updated_at_secs),
+        "source `updated_at` must be preserved on import",
+    );
+
+    // Label round-trips through the rename → bundle → import path.
+    assert_eq!(dst["label"], serde_json::json!("alice-renamed"));
+
+    // Fresh UUIDv4 at merge time — the destination ID must differ
+    // from the source ID in the canonical 36-char hyphenated form.
+    let src_id_str = src_account_id.to_string();
+    let dst_id_str = dst["id"].as_str().expect("id is a string").to_string();
+    assert_ne!(
+        dst_id_str, src_id_str,
+        "destination id must not equal source id (fresh UUIDv4 at merge)",
+    );
+    assert_eq!(dst_id_str.len(), 36, "canonical UUID is 36 chars");
+    assert_eq!(
+        dst_id_str.bytes().filter(|&b| b == b'-').count(),
+        4,
+        "canonical UUID has 4 hyphens",
+    );
+}
