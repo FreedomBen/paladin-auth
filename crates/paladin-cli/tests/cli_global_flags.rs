@@ -140,32 +140,6 @@ fn text_syntax_error_uses_clap_diagnostic_and_exits_nonzero() {
 }
 
 #[test]
-fn text_stub_command_writes_paladin_prefixed_message_to_stderr() {
-    // `tui` is still a scaffold; this test (and the JSON sibling below)
-    // is rotated to the next un-implemented command as each command
-    // lands.
-    paladin()
-        .args(["tui"])
-        .assert()
-        .failure()
-        .stderr("paladin: command 'tui' is not yet implemented\n");
-}
-
-#[test]
-fn json_stub_command_emits_synthetic_envelope_to_stderr() {
-    let assert = paladin().args(["--json", "tui"]).assert().failure();
-    let stderr = std::str::from_utf8(&assert.get_output().stderr).unwrap();
-    let value: Value = serde_json::from_str(stderr.trim()).unwrap();
-    // Stub-only envelope; replaced by real §5 errors as commands land.
-    assert_eq!(value["error_kind"], serde_json::json!("io_error"));
-    assert_eq!(
-        value["operation"],
-        serde_json::json!("command_not_implemented")
-    );
-    assert!(assert.get_output().stdout.is_empty());
-}
-
-#[test]
 fn json_help_short_flag_is_intercepted() {
     let assert = paladin().args(["--json", "-h"]).assert().success();
     let stdout = std::str::from_utf8(&assert.get_output().stdout).unwrap();

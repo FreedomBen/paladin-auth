@@ -98,10 +98,6 @@ pub enum CliError {
         /// `counter_used` in the §5 JSON envelope.
         counter_used: Option<u64>,
     },
-    /// Scaffold sentinel: a command body has not been implemented yet.
-    /// Removed as commands land — this branch never appears in shipped
-    /// builds.
-    NotYetImplemented(&'static str),
 }
 
 impl From<PaladinError> for CliError {
@@ -138,9 +134,6 @@ impl std::fmt::Display for CliError {
                     "clipboard write failed for {} (the OTP code was generated; for HOTP the counter advance was committed before the failed write)",
                     display_label(account),
                 )
-            }
-            Self::NotYetImplemented(name) => {
-                write!(f, "command '{name}' is not yet implemented")
             }
         }
     }
@@ -222,18 +215,6 @@ pub fn render(err: &CliError, mode: Mode, mut out: impl Write) -> std::io::Resul
             serde_json::to_writer(&mut out, &envelope).map_err(std::io::Error::other)?;
             writeln!(out)?;
         }
-        (Mode::Json, CliError::NotYetImplemented(_)) => {
-            // Scaffold-only: this branch is never reached from a
-            // production build. We still emit valid JSON so callers
-            // that mistakenly hit a stub under `--json` get a
-            // parseable document on stderr instead of plain text.
-            let envelope = serde_json::json!({
-                "error_kind": "io_error",
-                "operation": "command_not_implemented",
-            });
-            serde_json::to_writer(&mut out, &envelope).map_err(std::io::Error::other)?;
-            writeln!(out)?;
-        }
         (Mode::Text { .. }, CliError::Usage { text_message }) => {
             // Clap's render() already terminates with a newline.
             write!(out, "{text_message}")?;
@@ -250,9 +231,6 @@ pub fn render(err: &CliError, mode: Mode, mut out: impl Write) -> std::io::Resul
         (Mode::Text { .. }, CliError::MultipleMatches { .. }) => {
             // Multi-line via `Display`; one trailing newline.
             writeln!(out, "paladin: {err}")?;
-        }
-        (Mode::Text { .. }, CliError::NotYetImplemented(name)) => {
-            writeln!(out, "paladin: command '{name}' is not yet implemented")?;
         }
     }
     Ok(())
