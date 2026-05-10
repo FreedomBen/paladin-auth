@@ -897,9 +897,9 @@ can be ticked.
 
 ### `--no-color` / `NO_COLOR` (`tests/cli_global_flags.rs`)
 
-- [ ] `--no-color` disables ANSI in text-mode output.
-- [ ] `NO_COLOR` env var (when `--no-color` is absent) disables ANSI.
-- [ ] ANSI is also disabled when stdout is not a TTY.
+- [x] `--no-color` disables ANSI in text-mode output.
+- [x] `NO_COLOR` env var (when `--no-color` is absent) disables ANSI.
+- [x] ANSI is also disabled when stdout is not a TTY.
 
 ### `paladin tui` exec wrapper (`tests/cli_exec_tui.rs`)
 

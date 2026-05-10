@@ -4,9 +4,15 @@
 //! (`--vault`, `--no-color`, `--json`, plus `--help` / `--version`
 //! interception). See DESIGN.md §5 and `IMPLEMENTATION_PLAN_02_CLI.md`.
 
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
+use std::time::SystemTime;
+
 use assert_cmd::Command;
+use paladin_core::{parse_otpauth, Store, VaultInit};
 use predicates::prelude::*;
 use serde_json::Value;
+use tempfile::TempDir;
 
 const PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -16,6 +22,41 @@ fn paladin() -> Command {
     // env-driven branch is exercised explicitly below.
     cmd.env_remove("NO_COLOR");
     cmd
+}
+
+fn fresh_vault_path() -> (TempDir, PathBuf) {
+    let dir = TempDir::new().expect("tempdir");
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700))
+        .expect("chmod tempdir 0700");
+    let path = dir.path().join("vault.bin");
+    (dir, path)
+}
+
+fn seed_populated_plaintext_vault(path: &Path) {
+    let (mut vault, store) = Store::create(path, VaultInit::Plaintext).expect("create");
+    let now = SystemTime::now();
+    for uri in [
+        "otpauth://totp/Acme:alice?secret=JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP&digits=6&period=30",
+        "otpauth://hotp/Acme:bob?secret=KRSXG5DJN5XGS3DPMNQXG43JN5XGS3BB&digits=6&counter=11",
+    ] {
+        let validated = parse_otpauth(uri, now).expect("parse fixture");
+        let _ = vault.add(validated.account);
+    }
+    vault.save(&store).expect("save");
+}
+
+/// Assert the byte slice contains no ESC (`0x1B`) byte. The CLI's §5
+/// contract is that ANSI styling is suppressed under `--no-color`,
+/// `NO_COLOR`, or non-TTY stdout — and currently the CLI never emits
+/// ANSI in any path. These regression tests pin the absence so a
+/// future styling addition cannot quietly bypass the suppression
+/// triggers.
+fn assert_no_ansi_escapes(label: &str, bytes: &[u8]) {
+    assert!(
+        !bytes.contains(&0x1B),
+        "{label} must not contain ANSI ESC bytes; got: {:?}",
+        String::from_utf8_lossy(bytes),
+    );
 }
 
 #[test]
@@ -154,4 +195,70 @@ fn json_version_short_flag_is_intercepted() {
     let value: Value = serde_json::from_str(stdout.trim()).unwrap();
     assert_eq!(value["version"]["name"], serde_json::json!("paladin"));
     assert_eq!(value["version"]["version"], serde_json::json!(PKG_VERSION));
+}
+
+// =========================================================================
+// `--no-color` / `NO_COLOR` / non-TTY ANSI suppression
+//
+// `Mode::resolve` (in `output/mod.rs`) sets `color = false` when any of
+// `--no-color`, `NO_COLOR`, or non-TTY stdout fires. The current text
+// renderers do not emit any ANSI escapes regardless, but these tests
+// pin the contract end-to-end across each suppression trigger so a
+// future styling addition cannot regress one of the three paths.
+// `paladin list` against a populated plaintext vault is the cheapest
+// non-trivial text output to exercise (multi-row, no prompts).
+// =========================================================================
+
+#[test]
+fn text_no_color_flag_disables_ansi_in_text_mode_output() {
+    let (_dir, vault_path) = fresh_vault_path();
+    seed_populated_plaintext_vault(&vault_path);
+
+    let assert = paladin()
+        .args([
+            "--no-color",
+            "--vault",
+            vault_path.to_str().unwrap(),
+            "list",
+        ])
+        .assert()
+        .success();
+    assert_no_ansi_escapes("stdout", &assert.get_output().stdout);
+    assert_no_ansi_escapes("stderr", &assert.get_output().stderr);
+}
+
+#[test]
+fn text_no_color_env_var_disables_ansi_when_flag_is_absent() {
+    let (_dir, vault_path) = fresh_vault_path();
+    seed_populated_plaintext_vault(&vault_path);
+
+    let mut cmd = Command::cargo_bin("paladin").expect("cargo bin");
+    // Override the `paladin()` helper's `env_remove("NO_COLOR")` so
+    // this test exercises the env-var branch of `Mode::resolve`.
+    cmd.env("NO_COLOR", "1");
+    let assert = cmd
+        .args(["--vault", vault_path.to_str().unwrap(), "list"])
+        .assert()
+        .success();
+    assert_no_ansi_escapes("stdout", &assert.get_output().stdout);
+    assert_no_ansi_escapes("stderr", &assert.get_output().stderr);
+}
+
+#[test]
+fn text_non_tty_stdout_disables_ansi_without_flag_or_env() {
+    // `assert_cmd` always pipes the child's stdout to a buffer, so
+    // `std::io::stdout().is_terminal()` is `false` in this test
+    // process. With neither `--no-color` nor `NO_COLOR` set,
+    // `Mode::resolve` still picks `color = false` because the TTY
+    // probe fails. This locks the §5 "non-TTY → no ANSI" trigger
+    // independently of the other two.
+    let (_dir, vault_path) = fresh_vault_path();
+    seed_populated_plaintext_vault(&vault_path);
+
+    let assert = paladin()
+        .args(["--vault", vault_path.to_str().unwrap(), "list"])
+        .assert()
+        .success();
+    assert_no_ansi_escapes("stdout", &assert.get_output().stdout);
+    assert_no_ansi_escapes("stderr", &assert.get_output().stderr);
 }
