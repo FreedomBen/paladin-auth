@@ -490,11 +490,11 @@ with `counter_used: null`.
 
 ## Implementation checklist
 
-- [ ] Scaffold `crates/paladin-cli` with clap parsing, global flags, and
+- [x] Scaffold `crates/paladin-cli` with clap parsing, global flags, and
   command dispatch.
-- [ ] Ensure new Rust source files include
+- [x] Ensure new Rust source files include
   `// SPDX-License-Identifier: AGPL-3.0-or-later`.
-- [ ] Depend on `paladin-core` with the off-by-default `error-serde`
+- [x] Depend on `paladin-core` with the off-by-default `error-serde`
   feature enabled so the CLI can serialize shared error kinds and the
   account-shape types referenced from §5 success / error envelopes
   (`AccountSummary`, `AccountKindSummary`, `AccountId`, `Algorithm`, `Code`,
@@ -503,12 +503,12 @@ with `counter_used: null`.
   builds command envelopes around them; for `import` / `add --qr`, it resolves
   `ImportReport.accounts` IDs to `AccountSummary` objects per §5. The CLI
   never serializes secret-bearing `Account` or `Secret`.
-- [ ] Use `paladin_core::parse_account_query`, `Vault::matching_accounts`,
+- [x] Use `paladin_core::parse_account_query`, `Vault::matching_accounts`,
   and `Vault::shortest_unique_id_prefix` in `select.rs`; keep only the
   command-specific cardinality decisions (`show` all-TOTP vs single,
   `peek` all, `copy` / `remove` / `rename` single) and text / JSON error
   rendering in the CLI.
-- [ ] Source human-facing destructive / advisory text from
+- [x] Source human-facing destructive / advisory text from
   `paladin_core::format_init_force_warning(path)`,
   `paladin_core::format_plaintext_storage_warning()`, and
   `paladin_core::format_plaintext_export_warning()`; source the
@@ -517,18 +517,18 @@ with `counter_used: null`.
   validation-warning messages from
   `paladin_core::format_validation_warning()` so the CLI cannot drift from
   the TUI / GUI wording.
-- [ ] Implement `/dev/tty` passphrase, account-entry, and confirmation
+- [x] Implement `/dev/tty` passphrase, account-entry, and confirmation
   prompting with no-TTY error handling.
-- [ ] Parse and validate encrypted-write KDF flags for `init`,
+- [x] Parse and validate encrypted-write KDF flags for `init`,
   `passphrase set`, `passphrase change`, and `export --encrypted`, producing
   `Argon2Params` / `EncryptionOptions` for the core calls.
-- [ ] Use `paladin_core::classify_paladin_import_precheck` before any
+- [x] Use `paladin_core::classify_paladin_import_precheck` before any
   encrypted-Paladin-bundle prompt so plaintext/malformed Paladin headers and
   non-Paladin fallthrough behavior stay shared with the TUI and GUI.
-- [ ] Implement the thin `select.rs` wrapper that applies CLI cardinality
+- [x] Implement the thin `select.rs` wrapper that applies CLI cardinality
   policy to the core account-query matches and converts candidates to
   `AccountSummary` plus core-computed disambiguators.
-- [ ] Implement `init`, account CRUD, `show`/`peek`/`copy`, passphrase,
+- [x] Implement `init`, account CRUD, `show`/`peek`/`copy`, passphrase,
   import/export, and settings commands per §5. Manual-flag `add` builds
   an `AccountInput` from the parsed flags and routes it through
   `paladin_core::validate_manual(input, now)` so §4.1 validation
@@ -540,25 +540,25 @@ with `counter_used: null`.
   `--qr` routes through `paladin_core::import::from_file` with a fixed
   `ImportConflict::Skip` policy. The CLI never re-implements §4.1
   validation.
-- [ ] Implement text and JSON output renderers with stable success/error
+- [x] Implement text and JSON output renderers with stable success/error
   envelopes and stderr warnings. Text rendering honors `--no-color`,
   `NO_COLOR`, and non-TTY stdout.
-- [ ] Implement `paladin tui` as an `execvp` wrapper.
-- [ ] Add a `paladin-cli/test-hooks` cargo feature that is **off by default**
+- [x] Implement `paladin tui` as an `execvp` wrapper.
+- [x] Add a `paladin-cli/test-hooks` cargo feature that is **off by default**
   in production builds and enabled only by the test build of the `paladin`
   binary. `paladin-cli/test-hooks` transitively enables
   `paladin-core/test-fault-injection` so process-level integration tests
   can drive pre-commit and post-commit save failures via the
   `PALADIN_FAULT_INJECT` env var.
-- [ ] Wire a test-build-only `PALADIN_CLIPBOARD_DRYRUN=1` short-circuit
+- [x] Wire a test-build-only `PALADIN_CLIPBOARD_DRYRUN=1` short-circuit
   in the CLI clipboard adapter that bypasses `arboard` and records the
   intended payload, gated behind the same `paladin-cli/test-hooks` feature
   so production builds never link the hook. Lets CI exercise `copy`
   end-to-end (including the post-`hotp_advance` ordering and the
   never-schedules-auto-clear invariant) without a clipboard server. The
   env var is honored only when `paladin-cli/test-hooks` is enabled.
-- [ ] Add the CLI integration tests and JSON golden snapshots below.
-- [ ] Run the definition-of-done checks.
+- [x] Add the CLI integration tests and JSON golden snapshots below.
+- [x] Run the definition-of-done checks.
 
 ## Tests (`assert_cmd` + temp dirs + insta golden where useful)
 
