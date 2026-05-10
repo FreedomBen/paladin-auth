@@ -44,6 +44,11 @@ const PROMPT_CONFIRM: &str = "Confirm passphrase: ";
 /// encrypted-vault unlock (`change` / `remove` / `add` / `list` / …).
 const PROMPT_UNLOCK: &str = "Vault passphrase: ";
 
+/// Stable §5 destructive-confirmation prompt fired by
+/// `passphrase remove` (text mode, no `--yes`) before the vault is
+/// re-saved as plaintext.
+const PROMPT_REMOVE_CONFIRM: &str = "Decrypt vault to plaintext? Type 'yes' to confirm: ";
+
 fn paladin() -> Command {
     let mut cmd = Command::cargo_bin("paladin").expect("cargo bin");
     cmd.env_remove("NO_COLOR");
@@ -541,4 +546,51 @@ fn text_remove_without_yes_under_json_emits_validation_error_envelope() {
         stderr.contains("invalid state") && stderr.contains("not_encrypted"),
         "expected wrong-state error, got: {stderr:?}"
     );
+}
+
+#[test]
+fn pty_remove_on_open_encrypted_vault_confirms_then_decrypts_to_plaintext() {
+    // §5: text-mode `passphrase remove` (no `--yes`) on an encrypted
+    // vault prompts for the unlock passphrase, prints the
+    // plaintext-storage advisory, then prompts for the destructive
+    // confirmation. Only after the literal `yes` does the CLI re-save
+    // the vault as plaintext and print `Decrypted vault to plaintext.`.
+    // The advisory must be emitted *before* the confirmation prompt
+    // so the user sees the warning before deciding.
+    let (_dir, path) = fresh_vault_path();
+    create_encrypted_vault(&path, "the-secret");
+
+    // Pre-state: file is encrypted.
+    let before = std::fs::read(&path).expect("read pre-remove vault");
+    assert_eq!(before[9], 1, "fixture should be encrypted");
+
+    let mut pty = Pty::spawn(
+        ["--vault", path.to_str().unwrap(), "passphrase", "remove"],
+        &[],
+    );
+    pty.expect(PROMPT_UNLOCK);
+    pty.send_line("the-secret");
+    // The plaintext-storage advisory must land *before* the
+    // destructive prompt so the user sees the warning before deciding.
+    // `Pty::expect` on the prompt also captures the bytes preceding
+    // it into the transcript, so the post-exit
+    // `assert_transcript_contains("Plaintext storage keeps")` covers
+    // ordering as well as presence.
+    pty.expect(PROMPT_REMOVE_CONFIRM);
+    pty.send_line("yes");
+    let exit = pty.wait_for_exit();
+    exit.assert_exit(0);
+    exit.assert_transcript_contains("Plaintext storage keeps account secrets unencrypted");
+    exit.assert_transcript_contains("Decrypted vault to plaintext.");
+
+    // Post-state on disk: now plaintext, magic + format_ver intact,
+    // mode flipped to 0, file mode preserved at `0o600`.
+    let after = std::fs::read(&path).expect("read post-remove vault");
+    assert!(after.len() >= 10, "header too short: {} bytes", after.len());
+    assert_eq!(&after[..8], PALADIN_MAGIC);
+    assert_eq!(after[8], 1, "format_ver");
+    assert_eq!(after[9], 0, "mode == plaintext");
+
+    let perms = std::fs::metadata(&path).expect("metadata").permissions();
+    assert_eq!(perms.mode() & 0o7777, 0o600);
 }

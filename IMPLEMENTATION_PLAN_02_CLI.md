@@ -721,7 +721,7 @@ can be ticked.
   plaintext vault.
 - [x] `[PTY]` `passphrase change` succeeds end-to-end against an open
   encrypted vault.
-- [ ] `[PTY]` `passphrase remove` succeeds end-to-end against an open
+- [x] `[PTY]` `passphrase remove` succeeds end-to-end against an open
   encrypted vault and confirms before mutation.
 - [ ] `[PTY]` `passphrase remove` with no `/dev/tty` surfaces `io_error`
   `operation: "confirmation_prompt"`.
