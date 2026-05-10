@@ -11,16 +11,18 @@
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 
-use crate::app::event::{AppEvent, Effect};
-use crate::app::state::AppState;
+use paladin_core::{PaladinError, Store, Vault};
+
+use crate::app::event::{AppEvent, Effect, EffectResult};
+use crate::app::state::{render_error_message, AppState};
 
 /// Apply one event to the current state and return the new state plus
 /// any side effects.
 ///
-/// This slice covers the global quit keybindings and the Unlock
-/// screen's passphrase-input handling from
-/// `IMPLEMENTATION_PLAN_03_TUI.md` "Keybindings (initial v0.1)" and
-/// "Focus model":
+/// This slice covers the global quit keybindings, the Unlock screen's
+/// passphrase-input handling, and the [`EffectResult::Unlock`] outcome
+/// from `IMPLEMENTATION_PLAN_03_TUI.md` "Keybindings (initial v0.1)",
+/// "Focus model", and "Startup / vault modes":
 ///
 /// * `Ctrl-C` quits on any screen.
 /// * `Esc` quits on `MissingVault`, `StartupError`, and `Unlock`.
@@ -30,6 +32,12 @@ use crate::app::state::AppState;
 ///   to the passphrase buffer, `Backspace` pops the last character,
 ///   and `Enter` with a non-empty buffer emits a single
 ///   [`Effect::Unlock`] and clears the buffer in place.
+/// * [`EffectResult::Unlock`] on `Unlock` transitions to `Unlocked` on
+///   success, surfaces `decrypt_failed` inline on `Err(DecryptFailed)`,
+///   and transitions to `StartupError` for any other open error.
+///   Results delivered while not on `Unlock` (e.g. auto-locked between
+///   submit and result) are discarded and the carried `(Vault, Store)`
+///   drops.
 ///
 /// Tick and clipboard-clear events are passthrough in terminal
 /// screens; their behavior fills in alongside the corresponding
@@ -38,7 +46,50 @@ use crate::app::state::AppState;
 pub fn reduce(state: AppState, event: AppEvent) -> (AppState, Vec<Effect>) {
     match event {
         AppEvent::Input(input) => reduce_input(state, &input),
+        AppEvent::EffectResult(result) => reduce_effect_result(state, result),
         AppEvent::Tick { .. } | AppEvent::ClipboardClear { .. } => (state, Vec::new()),
+    }
+}
+
+/// Apply an `EffectResult` delivered by the `run` boundary.
+fn reduce_effect_result(state: AppState, result: EffectResult) -> (AppState, Vec<Effect>) {
+    match result {
+        EffectResult::Unlock(open) => reduce_unlock_result(state, open),
+    }
+}
+
+/// Handle the outcome of an [`Effect::Unlock`].
+///
+/// Only `AppState::Unlock` accepts the result; any other state means
+/// the user navigated away (auto-lock, quit-in-flight, …) and the
+/// late result is dropped. The carried `(Vault, Store)` zeroizes on
+/// drop, so discarding is safe.
+fn reduce_unlock_result(
+    state: AppState,
+    open: Result<(Vault, Store), PaladinError>,
+) -> (AppState, Vec<Effect>) {
+    match state {
+        AppState::Unlock {
+            path, passphrase, ..
+        } => match open {
+            Ok((vault, store)) => (AppState::Unlocked { path, vault, store }, Vec::new()),
+            Err(PaladinError::DecryptFailed) => (
+                AppState::Unlock {
+                    path,
+                    error: Some(render_error_message(&PaladinError::DecryptFailed)),
+                    passphrase,
+                },
+                Vec::new(),
+            ),
+            Err(err) => (
+                AppState::StartupError {
+                    path: Some(path),
+                    message: render_error_message(&err),
+                },
+                Vec::new(),
+            ),
+        },
+        other => (other, Vec::new()),
     }
 }
 

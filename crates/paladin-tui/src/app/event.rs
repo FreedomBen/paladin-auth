@@ -10,15 +10,16 @@ use std::time::{Instant, SystemTime};
 
 use secrecy::SecretString;
 
-use paladin_core::ClipboardClearToken;
+use paladin_core::{ClipboardClearToken, PaladinError, Store, Vault};
 
 /// Events delivered to the reducer over the `mpsc<AppEvent>` channel.
 ///
 /// `Input` and `Tick` arrive from long-lived producer threads;
 /// `ClipboardClear` arrives from one-shot timer threads spawned by
-/// clipboard auto-clear effects. `EffectResult` (added in subsequent
-/// slices) carries the outcome of save-bearing effects back to the
-/// reducer so it can update visible state.
+/// clipboard auto-clear effects. `EffectResult` carries the outcome of
+/// save-bearing effects (currently `Effect::Unlock`; more variants land
+/// alongside their corresponding effects) back to the reducer so it can
+/// update visible state.
 #[derive(Debug)]
 pub enum AppEvent {
     /// Terminal input (keystroke, resize, focus change, …) translated
@@ -37,6 +38,9 @@ pub enum AppEvent {
         monotonic: Instant,
     },
 
+    /// Outcome of a side effect executed by the `run` boundary.
+    EffectResult(EffectResult),
+
     /// Delayed clipboard auto-clear notification from a one-shot
     /// timer thread.
     ///
@@ -51,6 +55,23 @@ pub enum AppEvent {
         /// clipboard contents for the only-if-unchanged rule.
         value: Vec<u8>,
     },
+}
+
+/// Outcome of an [`Effect`] executed by the `run` boundary, delivered
+/// back to the reducer wrapped in [`AppEvent::EffectResult`].
+///
+/// Variants are added incrementally alongside the effects that produce
+/// them; trust core rollback semantics for the carried `Vault` value
+/// and let the reducer own non-core visible state (status text,
+/// reveal windows, modal close/count panels, inline errors).
+#[derive(Debug)]
+pub enum EffectResult {
+    /// Outcome of an [`Effect::Unlock`] attempt: either a fresh
+    /// `(Vault, Store)` pair to install in [`crate::app::state::AppState::Unlocked`],
+    /// or a [`PaladinError`]. `decrypt_failed` surfaces inline on the
+    /// unlock screen; every other error replaces the unlock screen
+    /// with [`crate::app::state::AppState::StartupError`].
+    Unlock(Result<(Vault, Store), PaladinError>),
 }
 
 /// Side effects produced by the reducer.

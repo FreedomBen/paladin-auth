@@ -14,8 +14,10 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 
 use secrecy::ExposeSecret;
 
-use paladin_core::{PaladinError, PermissionSubject, Store, VaultInit, VaultLock, VaultStatus};
-use paladin_tui::app::event::{AppEvent, Effect};
+use paladin_core::{
+    PaladinError, PermissionSubject, Store, Vault, VaultInit, VaultLock, VaultStatus,
+};
+use paladin_tui::app::event::{AppEvent, Effect, EffectResult};
 use paladin_tui::app::reducer::reduce;
 use paladin_tui::app::state::{
     decide_state_from_inspect, decide_state_from_open, render_error_message, AppState,
@@ -668,4 +670,178 @@ fn passphrase_buffer_pop_returns_last_char_and_shortens() {
     assert_eq!(buf.pop(), Some('a'));
     assert!(buf.is_empty());
     assert_eq!(buf.pop(), None, "pop on empty buffer returns None");
+}
+
+// ---------------------------------------------------------------------------
+// EffectResult::Unlock — outcome of an Effect::Unlock submission
+// (IMPLEMENTATION_PLAN_03_TUI.md > Startup / vault modes +
+//  IMPLEMENTATION_PLAN_03_TUI.md > Tests > Vault modes and startup +
+//  IMPLEMENTATION_PLAN_03_TUI.md > Event loop (per §6) — "Save-bearing
+//  effects ... send an AppEvent::EffectResult(...) back through the same
+//  mpsc channel.")
+//
+// Behavior covered:
+//   * Ok((vault, store)) on Unlock → AppState::Unlocked with same path.
+//   * Err(DecryptFailed)  on Unlock → stay on Unlock with inline error
+//     and preserve the (already-cleared) passphrase buffer.
+//   * Err(other)          on Unlock → StartupError preserving the path.
+//   * Result delivered while not on Unlock (auto-locked, navigated
+//     away, quit-in-flight) is discarded: state and effects unchanged
+//     and the carried (Vault, Store) drops.
+// ---------------------------------------------------------------------------
+
+fn unlock_result(result: Result<(Vault, Store), PaladinError>) -> AppEvent {
+    AppEvent::EffectResult(EffectResult::Unlock(result))
+}
+
+fn open_plaintext_pair(tmp: &tempfile::TempDir) -> (PathBuf, (Vault, Store)) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(tmp.path()).unwrap().permissions();
+        perms.set_mode(0o700);
+        fs::set_permissions(tmp.path(), perms).unwrap();
+    }
+    let path = tmp.path().join("plain.bin");
+    let (vault, store) = Store::create(&path, VaultInit::Plaintext).expect("create plaintext");
+    vault.save(&store).expect("commit empty vault");
+    drop(vault);
+    drop(store);
+    let pair = Store::open(&path, VaultLock::Plaintext).expect("reopen plaintext");
+    (path, pair)
+}
+
+#[test]
+fn effect_result_unlock_ok_transitions_unlock_to_unlocked_with_same_path() {
+    // Bullet: "Encrypted vault correct passphrase advances to the list."
+    // We use a plaintext-opened pair because the (Vault, Store) type
+    // signature is identical between modes and Argon2id KDF would
+    // dominate test runtime.
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (vault_path, pair) = open_plaintext_pair(&tmp);
+
+    // The Unlock state carries an inline `error` from a prior failed
+    // attempt; the success transition must drop it implicitly because
+    // `Unlocked` has no `error` field.
+    let unlock_state = AppState::Unlock {
+        path: vault_path.clone(),
+        error: Some("previous decrypt_failed".into()),
+        passphrase: PassphraseBuffer::new(),
+    };
+    let (state, effects) = reduce(unlock_state, unlock_result(Ok(pair)));
+
+    assert!(effects.is_empty(), "unlock result emits no effects");
+    match state {
+        AppState::Unlocked { path: p, .. } => assert_eq!(p, vault_path),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_unlock_decrypt_failed_stays_on_unlock_with_inline_error() {
+    // Bullet: "Encrypted vault wrong passphrase shows inline
+    // `decrypt_failed` and stays on the unlock screen."
+    let expected = render_error_message(&PaladinError::DecryptFailed);
+    let vault_path = PathBuf::from("/tmp/v.bin");
+    let (state, effects) = reduce(
+        AppState::Unlock {
+            path: vault_path.clone(),
+            error: None,
+            passphrase: PassphraseBuffer::new(),
+        },
+        unlock_result(Err(PaladinError::DecryptFailed)),
+    );
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlock {
+            path,
+            error,
+            passphrase,
+        } => {
+            assert_eq!(path, vault_path);
+            assert_eq!(
+                error.as_deref(),
+                Some(expected.as_str()),
+                "inline error must use render_error_message(DecryptFailed)"
+            );
+            assert!(
+                passphrase.is_empty(),
+                "buffer was zeroized at submit and must not be repopulated"
+            );
+        }
+        other => panic!("expected Unlock, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_unlock_non_decrypt_error_transitions_to_startup_error() {
+    // Bullet: "The unlock screen handles only `decrypt_failed` inline;
+    // every other `open` error replaces the unlock screen with the
+    // startup-error screen."
+    let tmp = tempfile::TempDir::new().unwrap();
+    let garbage = tmp.path().join("garbage.bin");
+    fs::write(&garbage, b"not a paladin vault").unwrap();
+    let err = paladin_core::inspect(&garbage).unwrap_err();
+    assert!(
+        !matches!(err, PaladinError::DecryptFailed),
+        "fixture must produce a non-decrypt_failed error"
+    );
+    let expected = render_error_message(&err);
+
+    let vault_path = PathBuf::from("/tmp/v.bin");
+    let (state, effects) = reduce(
+        AppState::Unlock {
+            path: vault_path.clone(),
+            error: None,
+            passphrase: PassphraseBuffer::new(),
+        },
+        unlock_result(Err(err)),
+    );
+    assert!(effects.is_empty());
+    match state {
+        AppState::StartupError {
+            path: Some(p),
+            message,
+        } => {
+            assert_eq!(p, vault_path);
+            assert_eq!(message, expected);
+        }
+        other => panic!("expected StartupError, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_unlock_ok_off_unlock_screen_is_discarded() {
+    // If the user navigated away (auto-lock, etc.) between submit and
+    // the result arriving, the late (Vault, Store) drops on the floor
+    // and the current screen is unchanged. Tested against `Locked`
+    // because auto-lock is the realistic race condition.
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (_vault_path, pair) = open_plaintext_pair(&tmp);
+
+    let locked_path = PathBuf::from("/tmp/locked.bin");
+    let (state, effects) = reduce(
+        AppState::Locked {
+            path: locked_path.clone(),
+        },
+        unlock_result(Ok(pair)),
+    );
+    assert!(effects.is_empty());
+    match state {
+        AppState::Locked { path } => assert_eq!(path, locked_path),
+        other => panic!("expected Locked unchanged, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_unlock_decrypt_failed_off_unlock_screen_is_discarded() {
+    // Same race condition, error branch: a wrong-passphrase result
+    // arriving after the user navigated away must NOT replace the
+    // current screen with StartupError.
+    let (state, effects) = reduce(
+        missing("/tmp/v.bin"),
+        unlock_result(Err(PaladinError::DecryptFailed)),
+    );
+    assert!(effects.is_empty());
+    assert!(matches!(state, AppState::MissingVault { .. }));
 }
