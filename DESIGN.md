@@ -549,6 +549,10 @@ policy).
 
 ```rust
 pub enum PaladinError { /* core-returnable §5 error kinds */ }
+pub enum ErrorKind { /* stable §5 `error_kind` discriminator (1:1 with PaladinError) */ }
+pub enum PermissionSubject { VaultDir, VaultFile, BackupFile } // §5 unsafe_permissions field
+pub enum TimeRangeKind { PreEpoch, Overflow, OutOfRange }      // §5 time_range field
+pub enum VaultMode { Plaintext, Encrypted }                    // §5 wrong_vault_lock fields
 pub type Result<T> = std::result::Result<T, PaladinError>;
 pub enum VaultLock { Plaintext, Encrypted(SecretString) }
 pub enum VaultInit { Plaintext, Encrypted(EncryptionOptions) }
