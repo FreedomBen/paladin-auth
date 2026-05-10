@@ -897,3 +897,142 @@ fn pty_remove_without_dev_tty_surfaces_io_error_confirmation_prompt() {
         "vault must remain encrypted on confirm failure"
     );
 }
+
+// --- Fault-injection PTY tests (gated on `test-hooks`) -------------------
+
+#[cfg(feature = "test-hooks")]
+mod fault_inject {
+    use super::*;
+
+    /// `passphrase set` on a plaintext vault is the cheapest fault
+    /// fixture for `passphrase` mutations: no unlock derivation,
+    /// minimum §4.4 KDF params for the new key, and a single rename
+    /// at commit time. The fault hook lives in `Vault::save`, which
+    /// is shared across `set` / `change` / `remove`, so covering one
+    /// subcommand verifies the wiring for all three.
+    #[test]
+    fn pty_set_pre_commit_surfaces_save_not_committed_with_committed_false() {
+        // §5: a `pre_commit` save fault on a `passphrase` mutation
+        // must surface the `save_not_committed` envelope with
+        // `committed: false`. The mutation is `passphrase set` on a
+        // plaintext fixture; minimum KDF params keep the Argon2
+        // derivation cheap so the test is dominated by the rename
+        // path that the fault hook intercepts.
+        let (_dir, path) = fresh_vault_path();
+        create_empty_plaintext_vault(&path);
+        let before = std::fs::read(&path).expect("read pre-set vault");
+
+        let mut pty = Pty::spawn(
+            [
+                "--json",
+                "--vault",
+                path.to_str().unwrap(),
+                "passphrase",
+                "set",
+                "--kdf-memory-mib",
+                "8",
+                "--kdf-time",
+                "1",
+                "--kdf-parallelism",
+                "1",
+            ],
+            &[("PALADIN_FAULT_INJECT", "pre_commit")],
+        );
+        pty.expect(PROMPT_NEW_PASSPHRASE);
+        pty.send_line("hunter2-newpass");
+        pty.expect(PROMPT_CONFIRM);
+        pty.send_line("hunter2-newpass");
+        let exit = pty.wait_for_exit();
+        exit.assert_exit(1);
+        let env = extract_json(&exit.transcript).expect("error envelope must appear in transcript");
+        assert_eq!(env["error_kind"], serde_json::json!("save_not_committed"));
+        assert_eq!(env["committed"], serde_json::json!(false));
+
+        // §8 rollback: the on-disk vault must remain byte-identical
+        // when the pre-commit rename never happened. `passphrase set`
+        // does not rotate the existing file, so there is no
+        // `backup_path` field on this envelope (unlike `init --force`).
+        let after = std::fs::read(&path).expect("read post-fault vault");
+        assert_eq!(
+            after, before,
+            "plaintext vault must remain byte-identical after pre-commit fault",
+        );
+    }
+
+    #[test]
+    fn pty_set_post_commit_surfaces_save_durability_unconfirmed() {
+        // §5: a `post_commit` save fault on a `passphrase` mutation
+        // must surface the `save_durability_unconfirmed` envelope —
+        // the rename succeeded, only the post-commit `fsync` of the
+        // parent directory failed. `SaveDurabilityUnconfirmed` is a
+        // unit variant in core, so the envelope carries no extra
+        // fields beyond `error_kind` (mirrors `cli_init.rs::
+        // fault_inject::pty_init_force_post_commit_surfaces_save_durability_unconfirmed`).
+        // The on-disk side proves the rename committed: the primary
+        // file is now encrypted (mode byte flipped to 1).
+        let (_dir, path) = fresh_vault_path();
+        create_empty_plaintext_vault(&path);
+
+        let mut pty = Pty::spawn(
+            [
+                "--json",
+                "--vault",
+                path.to_str().unwrap(),
+                "passphrase",
+                "set",
+                "--kdf-memory-mib",
+                "8",
+                "--kdf-time",
+                "1",
+                "--kdf-parallelism",
+                "1",
+            ],
+            &[("PALADIN_FAULT_INJECT", "post_commit")],
+        );
+        pty.expect(PROMPT_NEW_PASSPHRASE);
+        pty.send_line("hunter2-newpass");
+        pty.expect(PROMPT_CONFIRM);
+        pty.send_line("hunter2-newpass");
+        let exit = pty.wait_for_exit();
+        exit.assert_exit(1);
+        let env = extract_json(&exit.transcript).expect("error envelope must appear in transcript");
+        assert_eq!(
+            env["error_kind"],
+            serde_json::json!("save_durability_unconfirmed"),
+        );
+
+        // The post-commit fault fires after the primary rename, so
+        // the on-disk file is the new encrypted vault (mode byte
+        // flipped to 1). The rename actually landed even though the
+        // parent-directory `fsync` could not be confirmed.
+        let after = std::fs::read(&path).expect("read post-fault vault");
+        assert_eq!(&after[..8], PALADIN_MAGIC);
+        assert_eq!(after[9], 1, "primary rename must have committed");
+    }
+
+    /// Pull the JSON envelope out of a PTY transcript. Under `--json`
+    /// the error envelope is one document on stderr (and stdout is
+    /// empty), so the transcript ends with the JSON document followed
+    /// by a newline. Mirrors `cli_init.rs::fault_inject::extract_json`.
+    fn extract_json(transcript: &str) -> Option<serde_json::Value> {
+        let bytes = transcript.as_bytes();
+        let end = bytes.iter().rposition(|&b| b == b'}')?;
+        let mut depth = 0i32;
+        let mut start = end;
+        for i in (0..=end).rev() {
+            match bytes[i] {
+                b'}' => depth += 1,
+                b'{' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        start = i;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let s = &transcript[start..=end];
+        serde_json::from_str(s).ok()
+    }
+}

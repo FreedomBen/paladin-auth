@@ -746,9 +746,9 @@ can be ticked.
   `invalid_state` (precedence).
 - [x] `[PTY]` `passphrase set` / `change` with default and custom
   in-range KDF params writes the requested Argon2 params on disk.
-- [ ] `[PTY]` `passphrase` mutations under `PALADIN_FAULT_INJECT=pre_commit`
+- [x] `[PTY]` `passphrase` mutations under `PALADIN_FAULT_INJECT=pre_commit`
   surface `save_not_committed` with `committed: false`.
-- [ ] `[PTY]` `passphrase` mutations under
+- [x] `[PTY]` `passphrase` mutations under
   `PALADIN_FAULT_INJECT=post_commit` surface
   `save_durability_unconfirmed` with `committed: true`.
 
