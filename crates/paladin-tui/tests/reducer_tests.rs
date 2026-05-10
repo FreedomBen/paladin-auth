@@ -6,14 +6,57 @@
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{Instant, SystemTime};
 
 use clap::Parser;
 
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+
 use paladin_core::{PaladinError, PermissionSubject, Store, VaultInit, VaultLock, VaultStatus};
+use paladin_tui::app::event::{AppEvent, Effect};
+use paladin_tui::app::reducer::reduce;
 use paladin_tui::app::state::{
     decide_state_from_inspect, decide_state_from_open, render_error_message, AppState,
 };
 use paladin_tui::cli::{should_disable_color, GlobalArgs};
+
+// ---------------------------------------------------------------------------
+// Reducer helpers shared by the per-key-binding tests below.
+// ---------------------------------------------------------------------------
+
+fn key(code: KeyCode) -> AppEvent {
+    AppEvent::Input(Event::Key(KeyEvent::new(code, KeyModifiers::NONE)))
+}
+
+fn ctrl(code: KeyCode) -> AppEvent {
+    AppEvent::Input(Event::Key(KeyEvent::new(code, KeyModifiers::CONTROL)))
+}
+
+fn missing(path: &str) -> AppState {
+    AppState::MissingVault {
+        path: PathBuf::from(path),
+    }
+}
+
+fn startup_err(path: Option<&str>) -> AppState {
+    AppState::StartupError {
+        path: path.map(PathBuf::from),
+        message: "test error message".into(),
+    }
+}
+
+fn unlock(path: &str) -> AppState {
+    AppState::Unlock {
+        path: PathBuf::from(path),
+        error: None,
+    }
+}
+
+fn locked(path: &str) -> AppState {
+    AppState::Locked {
+        path: PathBuf::from(path),
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Global args (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Global args)
@@ -252,4 +295,139 @@ fn render_error_message_falls_back_to_display_for_non_unsafe_permissions_error()
 
     let rendered = render_error_message(&err);
     assert_eq!(rendered, err.to_string());
+}
+
+// ---------------------------------------------------------------------------
+// Reducer quit-key behavior
+// (IMPLEMENTATION_PLAN_03_TUI.md > Keybindings (initial v0.1) +
+//  IMPLEMENTATION_PLAN_03_TUI.md > Tests > Reducer)
+//
+// Keybinding rules covered here:
+//   * Ctrl-C quits on any screen.
+//   * Esc quits on unlock, missing-vault, startup-error screens.
+//   * `q` quits on missing-vault and startup-error screens; on the
+//     unlock screen it is text input (will route into the passphrase
+//     field in a follow-up slice — for now it is a no-op).
+//   * Tick events are passthrough (no effects) on terminal screens.
+//   * Unrecognized keys produce no effects.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn ctrl_c_on_missing_vault_quits() {
+    let (_, effects) = reduce(missing("/tmp/v.bin"), ctrl(KeyCode::Char('c')));
+    assert!(matches!(effects.as_slice(), [Effect::Quit]));
+}
+
+#[test]
+fn ctrl_c_on_startup_error_quits() {
+    let (_, effects) = reduce(startup_err(Some("/tmp/v.bin")), ctrl(KeyCode::Char('c')));
+    assert!(matches!(effects.as_slice(), [Effect::Quit]));
+}
+
+#[test]
+fn ctrl_c_on_unlock_quits() {
+    let (_, effects) = reduce(unlock("/tmp/v.bin"), ctrl(KeyCode::Char('c')));
+    assert!(matches!(effects.as_slice(), [Effect::Quit]));
+}
+
+#[test]
+fn ctrl_c_on_locked_quits() {
+    let (_, effects) = reduce(locked("/tmp/v.bin"), ctrl(KeyCode::Char('c')));
+    assert!(matches!(effects.as_slice(), [Effect::Quit]));
+}
+
+#[test]
+fn ctrl_c_on_unlocked_quits() {
+    // Build a real Unlocked state so we can verify Ctrl-C quits even
+    // from the main list view ("Ctrl-C quits on any screen").
+    let tmp = tempfile::TempDir::new().unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(tmp.path()).unwrap().permissions();
+        perms.set_mode(0o700);
+        fs::set_permissions(tmp.path(), perms).unwrap();
+    }
+    let path = tmp.path().join("plain.bin");
+    let (vault, store) = Store::create(&path, VaultInit::Plaintext).expect("create plaintext");
+    vault.save(&store).expect("commit empty vault");
+    let unlocked = AppState::Unlocked {
+        path: path.clone(),
+        vault,
+        store,
+    };
+    let (_, effects) = reduce(unlocked, ctrl(KeyCode::Char('c')));
+    assert!(matches!(effects.as_slice(), [Effect::Quit]));
+}
+
+#[test]
+fn esc_on_missing_vault_quits() {
+    let (_, effects) = reduce(missing("/tmp/v.bin"), key(KeyCode::Esc));
+    assert!(matches!(effects.as_slice(), [Effect::Quit]));
+}
+
+#[test]
+fn esc_on_startup_error_quits() {
+    let (_, effects) = reduce(startup_err(None), key(KeyCode::Esc));
+    assert!(matches!(effects.as_slice(), [Effect::Quit]));
+}
+
+#[test]
+fn esc_on_unlock_quits() {
+    let (_, effects) = reduce(unlock("/tmp/v.bin"), key(KeyCode::Esc));
+    assert!(matches!(effects.as_slice(), [Effect::Quit]));
+}
+
+#[test]
+fn q_on_missing_vault_quits() {
+    let (_, effects) = reduce(missing("/tmp/v.bin"), key(KeyCode::Char('q')));
+    assert!(matches!(effects.as_slice(), [Effect::Quit]));
+}
+
+#[test]
+fn q_on_startup_error_quits() {
+    let (_, effects) = reduce(startup_err(None), key(KeyCode::Char('q')));
+    assert!(matches!(effects.as_slice(), [Effect::Quit]));
+}
+
+#[test]
+fn q_on_unlock_does_not_quit() {
+    // `q` on the unlock screen is reserved for text input into the
+    // passphrase field (per the Keybindings table); it must not
+    // produce a Quit effect even though the field itself isn't wired
+    // up yet.
+    let (_, effects) = reduce(unlock("/tmp/v.bin"), key(KeyCode::Char('q')));
+    assert!(effects.is_empty(), "expected no effect, got {effects:?}");
+}
+
+#[test]
+fn tick_event_on_missing_vault_yields_no_effect() {
+    let tick = AppEvent::Tick {
+        wall_clock: SystemTime::now(),
+        monotonic: Instant::now(),
+    };
+    let (_, effects) = reduce(missing("/tmp/v.bin"), tick);
+    assert!(effects.is_empty());
+}
+
+#[test]
+fn unrecognized_key_on_missing_vault_yields_no_effect() {
+    let (_, effects) = reduce(missing("/tmp/v.bin"), key(KeyCode::Char('a')));
+    assert!(effects.is_empty());
+}
+
+#[test]
+fn ctrl_c_only_fires_with_control_modifier() {
+    // Bare `c` (no Ctrl) must not quit — Ctrl is what makes it Ctrl-C.
+    let (_, effects) = reduce(missing("/tmp/v.bin"), key(KeyCode::Char('c')));
+    assert!(effects.is_empty());
+}
+
+#[test]
+fn non_key_input_event_yields_no_effect() {
+    // Resize / focus / paste / mouse events on a terminal screen do
+    // not quit; they pass through with no effects.
+    let evt = AppEvent::Input(Event::Resize(80, 24));
+    let (_, effects) = reduce(missing("/tmp/v.bin"), evt);
+    assert!(effects.is_empty());
 }
