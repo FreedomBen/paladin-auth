@@ -557,7 +557,7 @@ with `counter_used: null`.
   end-to-end (including the post-`hotp_advance` ordering and the
   never-schedules-auto-clear invariant) without a clipboard server. The
   env var is honored only when `paladin-cli/test-hooks` is enabled.
-- [ ] Add the CLI integration tests and JSON golden snapshots below.
+- [x] Add the CLI integration tests and JSON golden snapshots below.
   Tracked at the bullet level in the Tests checklist; this top-level
   item only ticks once every Tests sub-bullet is checked.
 - [ ] Run the definition-of-done checks (ticks only when every
