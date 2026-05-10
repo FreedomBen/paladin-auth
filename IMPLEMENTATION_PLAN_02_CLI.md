@@ -691,7 +691,7 @@ can be ticked.
   with `counter_used: null`.
 - [x] `copy` clipboard failure on HOTP leaves the persisted counter
   advanced and reports the pre-advance `counter_used`.
-- [ ] Pre-commit HOTP save failure during `copy` does **not** attempt a
+- [x] Pre-commit HOTP save failure during `copy` does **not** attempt a
   clipboard write.
 
 ### `remove` / `rename` (`tests/cli_remove_rename.rs`)

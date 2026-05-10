@@ -931,4 +931,38 @@ mod copy {
         .unwrap();
         assert_eq!(value["copied"], serde_json::json!(true));
     }
+
+    #[test]
+    fn json_copy_pre_commit_hotp_save_failure_skips_clipboard_and_leaves_counter_unchanged() {
+        // The clipboard dryrun is set to "fail" so any clipboard write
+        // attempt would surface `clipboard_write_failed`. Getting
+        // `save_not_committed` here proves the CLI never reached the
+        // clipboard adapter — the pre-commit save failure during
+        // `hotp_advance` short-circuited the operation before the code
+        // could leak through `arboard`. Per DESIGN §8, pre-commit save
+        // failures also restore the in-memory counter to its
+        // pre-attempt value, so the on-disk counter must still be 42.
+        let (_dir, path) = fresh_vault_path();
+        create_vault_with(vec![make_hotp("bob", None, 42)], &path);
+
+        let assert = paladin_dryrun("fail")
+            .env("PALADIN_FAULT_INJECT", "pre_commit")
+            .args(["--json", "--vault", path.to_str().unwrap(), "copy", "bob"])
+            .assert()
+            .failure();
+        let stderr = std::str::from_utf8(&assert.get_output().stderr).unwrap();
+        let value: Value = serde_json::from_str(stderr.trim()).unwrap();
+        assert_eq!(
+            value["error_kind"],
+            serde_json::json!("save_not_committed"),
+            "pre_commit save failure must short-circuit before any clipboard write",
+        );
+        assert_eq!(value["committed"], serde_json::json!(false));
+        assert!(assert.get_output().stdout.is_empty());
+
+        // Counter on disk is still 42 — pre-commit save failure rolled
+        // back the in-memory advance and never wrote to disk.
+        let listed = list_accounts_json(&path);
+        assert_eq!(listed["accounts"][0]["counter"], serde_json::json!(42));
+    }
 }
