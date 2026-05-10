@@ -871,14 +871,15 @@ Each step lands as its own commit. Tests come first.
   encrypted, no cache for plaintext); successful commit (or
   durability-unconfirmed) replaces the cache to match the new on-disk
   mode and zeroizes the old key bytes and old passphrase. The
-  zeroization assertion is *byte-precise*: the test holds a raw
-  pointer (or a `*const [u8; 32]`-style fixture exposed only under
-  `#[cfg(test)]`) to the previous cached buffer's allocation and
-  verifies, after the transition, that those bytes are all zero
-  before the buffer is freed. A "buffer simply replaced by a new
-  allocation while old bytes leak" regression must fail this test.
-  The same assertion is run for the cached `SecretString`
-  passphrase.
+  zeroization assertion is *byte-precise*: the test borrows the
+  previous cached buffer as a safe `&[u8]` (exposed only under
+  `feature = "test-zeroize-witness"`, since the crate is
+  `#![forbid(unsafe_code)]` and a raw pointer is not used) between
+  the in-place volatile zeroize and the buffer's auto-drop, and
+  verifies those bytes are all zero before the buffer is freed.
+  A "buffer simply replaced by a new allocation while old bytes
+  leak" regression must fail this test. The same assertion is run
+  for the cached `SecretString` passphrase.
 - [x] Tests: wrong-starting-state calls return the stable DESIGN §4.7
   `invalid_state` operation/state pairs (`set_passphrase` /
   `already_encrypted`, `change_passphrase` / `not_encrypted`,
@@ -1411,7 +1412,8 @@ is a separate `#[test]` or table-driven case family.
   asserted against a fresh encrypted vault.
 - [x] Pre-AEAD plaintext-payload zeroization (encrypt) and post-AEAD
   plaintext-payload zeroization (decrypt success and decode failure)
-  proven byte-precisely via a `#[cfg(test)]` raw-pointer hook,
+  proven byte-precisely via a `feature = "test-zeroize-witness"` safe
+  `&[u8]` borrow witness (the crate is `#![forbid(unsafe_code)]`),
   matching the existing rollback-snapshot / cached-key zeroization
   posture.
 - [x] CSPRNG failure surfaces: injected `getrandom::Error` on every
