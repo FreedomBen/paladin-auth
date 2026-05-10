@@ -397,6 +397,48 @@ fn pty_set_without_dev_tty_surfaces_io_error_passphrase_prompt() {
     );
 }
 
+#[test]
+fn pty_set_with_default_kdf_writes_section_4_4_defaults_on_disk() {
+    // §5 + §4.4: when no `--kdf-*` flags are passed, `passphrase set`
+    // must encrypt under the §4.4 production defaults
+    // (`m_kib = 65_536`, `t = 3`, `p = 1`). The companion test at
+    // `pty_set_on_open_plaintext_vault_succeeds_and_writes_encrypted_with_requested_kdf_params`
+    // covers the custom-params path; this one covers the no-flags
+    // path. A single Argon2id derivation is performed (one for the
+    // new key — there is no unlock prompt on a plaintext source).
+    let (_dir, path) = fresh_vault_path();
+    create_empty_plaintext_vault(&path);
+
+    let mut pty = Pty::spawn(
+        ["--vault", path.to_str().unwrap(), "passphrase", "set"],
+        &[],
+    );
+    pty.expect(PROMPT_NEW_PASSPHRASE);
+    pty.send_line("hunter2-newpass");
+    pty.expect(PROMPT_CONFIRM);
+    pty.send_line("hunter2-newpass");
+    let exit = pty.wait_for_exit();
+    exit.assert_exit(0);
+    exit.assert_transcript_contains("Encrypted vault.");
+
+    let header = std::fs::read(&path).expect("read encrypted vault");
+    assert!(header.len() >= 64, "encrypted header should be ≥ 64 bytes");
+    assert_eq!(&header[..8], PALADIN_MAGIC);
+    assert_eq!(header[8], 1, "format_ver");
+    assert_eq!(header[9], 1, "mode == encrypted");
+    assert_eq!(header[10], 1, "kdf_id == Argon2id");
+    let m_kib = u32::from_le_bytes(header[11..15].try_into().unwrap());
+    let t = u32::from_le_bytes(header[15..19].try_into().unwrap());
+    let p = u32::from_le_bytes(header[19..23].try_into().unwrap());
+    assert_eq!(m_kib, 65_536, "default m_kib must match §4.4 (64 MiB)");
+    assert_eq!(t, 3, "default t must match §4.4");
+    assert_eq!(p, 1, "default p must match §4.4");
+    assert_eq!(header[39], 1, "aead_id == XChaCha20-Poly1305");
+
+    let perms = std::fs::metadata(&path).expect("metadata").permissions();
+    assert_eq!(perms.mode() & 0o7777, 0o600);
+}
+
 // =========================================================================
 // passphrase change
 // =========================================================================
@@ -557,6 +599,51 @@ fn pty_change_on_open_encrypted_vault_succeeds_and_rotates_salt_under_requested_
     );
 
     // File mode preserved at `0o600` across the rotation.
+    let perms = std::fs::metadata(&path).expect("metadata").permissions();
+    assert_eq!(perms.mode() & 0o7777, 0o600);
+}
+
+#[test]
+fn pty_change_with_default_kdf_writes_section_4_4_defaults_on_disk() {
+    // §5 + §4.4: when no `--kdf-*` flags are passed, `passphrase
+    // change` must re-encrypt under the §4.4 production defaults
+    // (`m_kib = 65_536`, `t = 3`, `p = 1`). The companion test at
+    // `pty_change_on_open_encrypted_vault_succeeds_and_rotates_salt_under_requested_kdf_params`
+    // covers the custom-params path; this one covers the no-flags
+    // path. The encrypted fixture itself is created with the §4.4
+    // minimum params so the unlock derivation stays cheap; only the
+    // new-key derivation runs at defaults.
+    let (_dir, path) = fresh_vault_path();
+    create_encrypted_vault(&path, "old-secret");
+
+    let mut pty = Pty::spawn(
+        ["--vault", path.to_str().unwrap(), "passphrase", "change"],
+        &[],
+    );
+    pty.expect(PROMPT_UNLOCK);
+    pty.send_line("old-secret");
+    pty.expect(PROMPT_NEW_PASSPHRASE);
+    pty.send_line("new-secret");
+    pty.expect(PROMPT_CONFIRM);
+    pty.send_line("new-secret");
+    let exit = pty.wait_for_exit();
+    exit.assert_exit(0);
+    exit.assert_transcript_contains("Re-encrypted vault.");
+
+    let after = std::fs::read(&path).expect("read post-change vault");
+    assert!(after.len() >= 64, "encrypted header should be ≥ 64 bytes");
+    assert_eq!(&after[..8], PALADIN_MAGIC);
+    assert_eq!(after[8], 1, "format_ver");
+    assert_eq!(after[9], 1, "mode == encrypted");
+    assert_eq!(after[10], 1, "kdf_id == Argon2id");
+    let m_kib = u32::from_le_bytes(after[11..15].try_into().unwrap());
+    let t = u32::from_le_bytes(after[15..19].try_into().unwrap());
+    let p = u32::from_le_bytes(after[19..23].try_into().unwrap());
+    assert_eq!(m_kib, 65_536, "default m_kib must match §4.4 (64 MiB)");
+    assert_eq!(t, 3, "default t must match §4.4");
+    assert_eq!(p, 1, "default p must match §4.4");
+    assert_eq!(after[39], 1, "aead_id == XChaCha20-Poly1305");
+
     let perms = std::fs::metadata(&path).expect("metadata").permissions();
     assert_eq!(perms.mode() & 0o7777, 0o600);
 }

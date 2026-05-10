@@ -744,7 +744,7 @@ can be ticked.
   `kdf_params_out_of_bounds` payloads as `init`.
 - [x] KDF-flag rejection wins over `vault_missing` and over wrong-state
   `invalid_state` (precedence).
-- [ ] `[PTY]` `passphrase set` / `change` with default and custom
+- [x] `[PTY]` `passphrase set` / `change` with default and custom
   in-range KDF params writes the requested Argon2 params on disk.
 - [ ] `[PTY]` `passphrase` mutations under `PALADIN_FAULT_INJECT=pre_commit`
   surface `save_not_committed` with `committed: false`.
