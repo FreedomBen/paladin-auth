@@ -791,3 +791,141 @@ fn pty_encrypted_export_with_default_kdf_writes_section_4_4_defaults_to_bundle_h
         .permissions();
     assert_eq!(perms.mode() & 0o7777, 0o600);
 }
+
+#[cfg(feature = "test-hooks")]
+mod fault_inject {
+    use super::*;
+
+    /// `export --encrypted` against a plaintext source vault is the
+    /// cheapest fault fixture: no unlock derivation, only the bundle
+    /// new-key derivation runs, and minimum KDF params keep that
+    /// cheap. The rename of the staged bundle file is what the
+    /// `pre_commit` / `post_commit` fault hooks intercept inside
+    /// `write_secret_file_atomic`.
+    #[test]
+    fn pty_encrypted_export_pre_commit_surfaces_save_not_committed() {
+        // §5: a `pre_commit` save fault on the bundle's atomic write
+        // must surface the `save_not_committed` envelope with
+        // `committed: false`. The bundle has no rotated backup (only
+        // `init --force` rotates a primary file) so `backup_path` is
+        // not present on this envelope.
+        let (dir, vault_path) = fresh_vault_path();
+        create_plaintext_vault_with(&vault_path, &[TOTP_URI_ALICE]);
+        let bundle_path = dir.path().join("bundle.paladin");
+
+        let mut pty = Pty::spawn(
+            [
+                "--json",
+                "--vault",
+                vault_path.to_str().unwrap(),
+                "export",
+                "--encrypted",
+                bundle_path.to_str().unwrap(),
+                "--kdf-memory-mib",
+                "8",
+                "--kdf-time",
+                "1",
+                "--kdf-parallelism",
+                "1",
+            ],
+            &[("PALADIN_FAULT_INJECT", "pre_commit")],
+        );
+        pty.expect(PROMPT_EXPORT);
+        pty.send_line("bundle-secret");
+        pty.expect(PROMPT_CONFIRM);
+        pty.send_line("bundle-secret");
+        let exit = pty.wait_for_exit();
+        exit.assert_exit(1);
+        let env = extract_json(&exit.transcript).expect("error envelope must appear in transcript");
+        assert_eq!(env["error_kind"], serde_json::json!("save_not_committed"));
+        assert_eq!(env["committed"], serde_json::json!(false));
+
+        // §4.3 atomic-write rollback: the destination must not exist
+        // because the rename never happened.
+        assert!(
+            !bundle_path.exists(),
+            "pre-commit fault must leave the bundle path untouched, transcript:\n{}",
+            exit.transcript,
+        );
+    }
+
+    #[test]
+    fn pty_encrypted_export_post_commit_surfaces_save_durability_unconfirmed() {
+        // §5: a `post_commit` save fault on the bundle's atomic write
+        // must surface the `save_durability_unconfirmed` envelope —
+        // the rename succeeded, only the post-commit `fsync` of the
+        // parent directory failed. `SaveDurabilityUnconfirmed` is a
+        // unit variant in core, so the envelope carries no extra
+        // fields beyond `error_kind`. The on-disk side proves the
+        // rename committed: the bundle now exists with the Paladin
+        // magic bytes at the head.
+        let (dir, vault_path) = fresh_vault_path();
+        create_plaintext_vault_with(&vault_path, &[TOTP_URI_ALICE]);
+        let bundle_path = dir.path().join("bundle.paladin");
+
+        let mut pty = Pty::spawn(
+            [
+                "--json",
+                "--vault",
+                vault_path.to_str().unwrap(),
+                "export",
+                "--encrypted",
+                bundle_path.to_str().unwrap(),
+                "--kdf-memory-mib",
+                "8",
+                "--kdf-time",
+                "1",
+                "--kdf-parallelism",
+                "1",
+            ],
+            &[("PALADIN_FAULT_INJECT", "post_commit")],
+        );
+        pty.expect(PROMPT_EXPORT);
+        pty.send_line("bundle-secret");
+        pty.expect(PROMPT_CONFIRM);
+        pty.send_line("bundle-secret");
+        let exit = pty.wait_for_exit();
+        exit.assert_exit(1);
+        let env = extract_json(&exit.transcript).expect("error envelope must appear in transcript");
+        assert_eq!(
+            env["error_kind"],
+            serde_json::json!("save_durability_unconfirmed"),
+        );
+
+        let bytes = std::fs::read(&bundle_path).expect("read bundle");
+        assert!(
+            bytes.len() >= 64,
+            "post-commit fault must leave the bundle on disk; got {} bytes",
+            bytes.len(),
+        );
+        assert_eq!(&bytes[..8], PALADIN_MAGIC);
+        assert_eq!(bytes[9], 1, "bundle mode == encrypted");
+    }
+
+    /// Pull the JSON envelope out of a PTY transcript. Under `--json`
+    /// the error envelope is one document on stderr (and stdout is
+    /// empty), so the transcript ends with the JSON document followed
+    /// by a newline. Mirrors `cli_init.rs::fault_inject::extract_json`
+    /// and `cli_passphrase.rs::fault_inject::extract_json`.
+    fn extract_json(transcript: &str) -> Option<serde_json::Value> {
+        let bytes = transcript.as_bytes();
+        let end = bytes.iter().rposition(|&b| b == b'}')?;
+        let mut depth = 0i32;
+        let mut start = end;
+        for i in (0..=end).rev() {
+            match bytes[i] {
+                b'}' => depth += 1,
+                b'{' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        start = i;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let s = &transcript[start..=end];
+        serde_json::from_str(s).ok()
+    }
+}

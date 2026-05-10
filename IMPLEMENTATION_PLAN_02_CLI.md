@@ -821,9 +821,9 @@ can be ticked.
   bundle passphrase that is independent of the vault unlock passphrase.
 - [x] `[PTY]` `export --encrypted` accepts default and custom in-range
   KDF params and writes them to the bundle header.
-- [ ] `export --encrypted` writer failure before the final rename
+- [x] `export --encrypted` writer failure before the final rename
   surfaces `save_not_committed`.
-- [ ] `export --encrypted` writer failure after the final rename
+- [x] `export --encrypted` writer failure after the final rename
   surfaces `save_durability_unconfirmed`.
 
 ### `settings` (`tests/cli_settings.rs`)
