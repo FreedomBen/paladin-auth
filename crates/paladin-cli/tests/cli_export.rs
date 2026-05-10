@@ -28,6 +28,8 @@ use tempfile::TempDir;
 mod common;
 use common::Pty;
 
+const PALADIN_MAGIC: &[u8; 8] = b"PALADIN\0";
+
 fn paladin() -> Command {
     let mut cmd = Command::cargo_bin("paladin").expect("cargo bin");
     cmd.env_remove("NO_COLOR");
@@ -665,4 +667,127 @@ fn pty_encrypted_export_round_trips_through_import_with_independent_passphrases(
     assert_eq!(accounts.len(), 1, "exactly one account round-tripped");
     assert_eq!(accounts[0]["label"], serde_json::json!("alice"));
     assert_eq!(accounts[0]["issuer"], serde_json::json!("Acme"));
+}
+
+#[test]
+fn pty_encrypted_export_with_custom_kdf_writes_requested_params_to_bundle_header() {
+    // §5 + §4.4: `export --encrypted` honors the supplied
+    // `--kdf-memory-mib` / `--kdf-time` / `--kdf-parallelism` flags
+    // and writes them verbatim into the bundle's encrypted header.
+    // The companion test
+    // `pty_encrypted_export_with_default_kdf_writes_section_4_4_defaults_to_bundle_header`
+    // covers the no-flags default path; this one pins the custom
+    // path. Source vault is plaintext so the only prompts are the
+    // bundle's new-passphrase + confirmation, and the only Argon2id
+    // derivation is the one for the bundle key — at §4.4 minimums,
+    // so CI stays fast.
+    let (dir, vault_path) = fresh_vault_path();
+    create_plaintext_vault_with(&vault_path, &[TOTP_URI_ALICE]);
+    let bundle_path = dir.path().join("alice-custom.paladin");
+
+    let mut pty = Pty::spawn(
+        [
+            "--vault",
+            vault_path.to_str().unwrap(),
+            "export",
+            "--encrypted",
+            bundle_path.to_str().unwrap(),
+            "--kdf-memory-mib",
+            "8",
+            "--kdf-time",
+            "1",
+            "--kdf-parallelism",
+            "1",
+        ],
+        &[],
+    );
+    pty.expect(PROMPT_EXPORT);
+    pty.send_line("bundle-secret");
+    pty.expect(PROMPT_CONFIRM);
+    pty.send_line("bundle-secret");
+    let exit = pty.wait_for_exit();
+    exit.assert_exit(0);
+    assert!(
+        bundle_path.exists(),
+        "encrypted bundle file must exist after export, transcript:\n{}",
+        exit.transcript,
+    );
+
+    // Bundle is byte-compatible with the on-disk encrypted vault
+    // header per `build_encrypted_bundle_for_export` (DESIGN.md
+    // §4.6): magic (8) + format_ver (1) + mode (1) + kdf_id (1) +
+    // m_kib LE u32 (4) + t LE u32 (4) + p LE u32 (4) + salt (16) +
+    // aead_id (1) + nonce (24).
+    let header = std::fs::read(&bundle_path).expect("read bundle");
+    assert!(header.len() >= 64, "encrypted header should be ≥ 64 bytes");
+    assert_eq!(&header[..8], PALADIN_MAGIC);
+    assert_eq!(header[8], 1, "format_ver");
+    assert_eq!(header[9], 1, "mode == encrypted");
+    assert_eq!(header[10], 1, "kdf_id == Argon2id");
+    let m_kib = u32::from_le_bytes(header[11..15].try_into().unwrap());
+    let t = u32::from_le_bytes(header[15..19].try_into().unwrap());
+    let p = u32::from_le_bytes(header[19..23].try_into().unwrap());
+    assert_eq!(m_kib, 8 * 1024);
+    assert_eq!(t, 1);
+    assert_eq!(p, 1);
+    assert_eq!(header[39], 1, "aead_id == XChaCha20-Poly1305");
+
+    let perms = std::fs::metadata(&bundle_path)
+        .expect("metadata")
+        .permissions();
+    assert_eq!(perms.mode() & 0o7777, 0o600);
+}
+
+#[test]
+fn pty_encrypted_export_with_default_kdf_writes_section_4_4_defaults_to_bundle_header() {
+    // §5 + §4.4: when no `--kdf-*` flags are passed,
+    // `export --encrypted` must build the bundle under the
+    // production defaults (`m_kib = 65_536`, `t = 3`, `p = 1`).
+    // Source vault is plaintext so the only Argon2id derivation
+    // performed in this test is the one for the bundle key at
+    // defaults; there is no unlock prompt.
+    let (dir, vault_path) = fresh_vault_path();
+    create_plaintext_vault_with(&vault_path, &[TOTP_URI_ALICE]);
+    let bundle_path = dir.path().join("alice-default.paladin");
+
+    let mut pty = Pty::spawn(
+        [
+            "--vault",
+            vault_path.to_str().unwrap(),
+            "export",
+            "--encrypted",
+            bundle_path.to_str().unwrap(),
+        ],
+        &[],
+    );
+    pty.expect(PROMPT_EXPORT);
+    pty.send_line("bundle-secret");
+    pty.expect(PROMPT_CONFIRM);
+    pty.send_line("bundle-secret");
+    let exit = pty.wait_for_exit();
+    exit.assert_exit(0);
+    assert!(
+        bundle_path.exists(),
+        "encrypted bundle file must exist after export, transcript:\n{}",
+        exit.transcript,
+    );
+
+    let header = std::fs::read(&bundle_path).expect("read bundle");
+    assert!(header.len() >= 64, "encrypted header should be ≥ 64 bytes");
+    assert_eq!(&header[..8], PALADIN_MAGIC);
+    assert_eq!(header[8], 1, "format_ver");
+    assert_eq!(header[9], 1, "mode == encrypted");
+    assert_eq!(header[10], 1, "kdf_id == Argon2id");
+    let m_kib = u32::from_le_bytes(header[11..15].try_into().unwrap());
+    let t = u32::from_le_bytes(header[15..19].try_into().unwrap());
+    let p = u32::from_le_bytes(header[19..23].try_into().unwrap());
+    assert_eq!(m_kib, 65_536, "default m_kib must match §4.4 (64 MiB)");
+    assert_eq!(t, 3, "default t must match §4.4");
+    assert_eq!(p, 1, "default p must match §4.4");
+    assert_eq!(header[39], 1, "aead_id == XChaCha20-Poly1305");
+
+    let perms = std::fs::metadata(&bundle_path)
+        .expect("metadata")
+        .permissions();
+    assert_eq!(perms.mode() & 0o7777, 0o600);
 }

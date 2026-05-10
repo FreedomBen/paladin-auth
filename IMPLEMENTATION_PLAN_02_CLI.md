@@ -819,7 +819,7 @@ can be ticked.
   and over the overwrite-existing-output check (precedence).
 - [x] `[PTY]` `export --encrypted` round-trips through `import` with a
   bundle passphrase that is independent of the vault unlock passphrase.
-- [ ] `[PTY]` `export --encrypted` accepts default and custom in-range
+- [x] `[PTY]` `export --encrypted` accepts default and custom in-range
   KDF params and writes them to the bundle header.
 - [ ] `export --encrypted` writer failure before the final rename
   surfaces `save_not_committed`.
