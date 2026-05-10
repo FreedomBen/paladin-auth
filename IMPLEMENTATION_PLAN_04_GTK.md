@@ -706,99 +706,354 @@ runtime-declared baselines aligned on any future bump.
 
 ## Tests
 
-The GUI itself is hard to test without a display server. Tests are split:
+The GUI itself is hard to test without a display server. Tests are
+split into pure-logic unit tests (no display required), an `xvfb-run`
+smoke test, and a manual test plan.
 
-- **Pure-logic unit tests** (no display): icon resolution **fallback
-  decision** (`None`/empty slug → placeholder; failed lookup → placeholder;
-  the actual `gtk::IconTheme` lookup is exercised by the smoke test),
-  search filtering through `paladin_core::account_matches_search` plus
-  post-filter selection through `paladin_core::select_after_filter`,
-  startup-error routing for default-path / inspect / open failures,
-  auto-lock plumbing (idle-event source → `IdlePolicy` arm/disarm/expiry
-  outcome) and clipboard plumbing (capture → `ClipboardClearPolicy::schedule`,
-  wake → `should_clear` over `gdk::Clipboard` text) plus pending-value
-  zeroization, HOTP reveal window timing via
+The checklists below track coverage at the test-file level. A ticked
+box means at least one named `#[test]` in the indicated file asserts
+the listed behavior end-to-end. Every box must be ticked before the
+Milestone 7 sign-off in §"Definition of done".
+
+### Pure-logic unit tests
+
+These run without a display server. Each lives under
+`crates/paladin-gtk/tests/`.
+
+#### `tests/icon_resolution.rs`
+
+- [ ] `None` / empty slug routes to the placeholder icon without
+  invoking `gtk::IconTheme` (the actual lookup is exercised by the
+  smoke test).
+- [ ] Failed `gtk::IconTheme` lookup falls back to the placeholder
+  icon.
+- [ ] Icon-hint token parsing through
+  `paladin_core::parse_icon_hint_token` (slug / `default` / `none`)
+  matches the CLI / TUI add-modal behavior.
+
+#### `tests/search_logic.rs`
+
+- [ ] Filtering routes through `paladin_core::account_matches_search`
+  with the same case-insensitive substring rules as the CLI / TUI
+  (empty issuer keeps the colon in the match key, no Unicode
+  normalization).
+- [ ] Post-filter selection routes through
+  `paladin_core::select_after_filter` (preserve prior selection if
+  still present, else first match).
+- [ ] CLI's `id:<hex>` prefix form is **not** honored by the GUI
+  search (parity with the TUI).
+
+#### `tests/auto_lock_logic.rs`
+
+- [ ] Idle-event source feeds
+  `paladin_core::policy::auto_lock::IdlePolicy::should_arm` /
+  `next_deadline` / `is_expired` outcomes correctly for both
+  encrypted and plaintext vaults (plaintext returns `None` from
+  core, not via a GUI shortcut).
+- [ ] Re-arm decision after a successful `PassphraseDialog`
+  transition re-asks `IdlePolicy::should_arm` against the new
+  `Vault::is_encrypted()` value.
+- [ ] On expiry, the model drops `Vault`, switches to `Locked`, and
+  discards open HOTP reveal windows, the search query, and any open
+  dialog.
+
+#### `tests/clipboard_clear_logic.rs`
+
+- [ ] Copy capture routes through
+  `paladin_core::policy::clipboard_clear::ClipboardClearPolicy::schedule`.
+- [ ] Wake routes through `should_clear` against the current
+  `gdk::Clipboard` text (only-if-unchanged).
+- [ ] Stale tokens are dropped first by the policy.
+- [ ] Pending copied value is zeroized after a clear attempt or
+  stale-token drop.
+- [ ] A clipboard auto-clear timer scheduled before lock survives
+  lock and still fires only-if-unchanged.
+
+#### `tests/hotp_reveal_logic.rs`
+
+- [ ] Reveal window timing routes through
   `paladin_core::policy::hotp_reveal::deadline` (uses
-  `paladin_core::HOTP_REVEAL_SECS`) + counter labels, staged-code
-  publication on success / `save_durability_unconfirmed`, and staged-code
-  zeroization with prior reveal-state retention on pre-commit / other
-  failures,
-  secret-field clearing/redaction invariants, Add path-switch clearing for
-  hidden secret-bearing fields and pending duplicate state, QR RGBA
-  byte-length/stride preparation plus `QR_RGBA_MAX_BYTES` rejection before
-  allocation / download, icon-hint token parsing through
-  `paladin_core::parse_icon_hint_token`,
-  init dialog logic (plaintext vs encrypted routing, both-empty
-  plaintext selection, twice-confirm match / one-empty mismatch handling,
-  plaintext-warning gate, routing of
-  `paladin_core::classify_init_precheck` results
-  (`InitPrecheck::Clear` → normal create, `Existing` → destructive gate,
-  `Propagate` → inline error), `vault_exists` (race after a `Clear`
-  precheck) triggering the destructive-confirmation gate that routes
-  through `create_force` (with cancellation leaving the existing vault
-  intact and zeroizing the pending `VaultInit`), and `unsafe_permissions`
-  routing back to inline errors),
-  rename dialog logic (label validation, always-call-`mutate_and_save`
-  behavior matching the CLI when the new label equals the current one,
-  prior-label restore on `save_not_committed`),
-  otpauth URI paste logic (parse success → shared duplicate-detection
-  with manual mode, parse-error mapping for malformed URIs and
-  unsupported types, duplicate "add anyway" consuming a pending
-  `ValidatedAccount`, zeroize-on-cancel of the URI entry buffer),
-  import format-selector routing + on-conflict policy threading +
-  `paladin_core::classify_paladin_import_precheck` routing
-  (`PromptForPassphrase`, `Reject(err)`, `NoPrompt`) for encrypted
-  Paladin, plaintext Paladin, malformed/unsupported Paladin headers,
-  missing files, non-Paladin content, and forced-format mismatches,
-  bundle-passphrase clearing when source / format changes,
-  post-merge counts mapping, export overwrite / plaintext-warning gate reset
-  on destination / format changes + encrypted twice-confirm match logic +
-  export writer error mapping,
-  passphrase dialog logic (sub-flow gating against
-  `Vault::is_encrypted()`, `set` / `change` twice-confirm match,
-  `zero_length` and `confirmation_mismatch` rejections, `remove`
-  plaintext-storage warning gate, sub-flow switch clearing,
-  secret-buffer zeroize on submit / cancel / close), settings logic
-  (live-apply path through
-  `Vault::mutate_and_save`, spinner clamping at
+  `paladin_core::HOTP_REVEAL_SECS`).
+- [ ] Visible counter label tracks `Code.counter_used` during reveal;
+  the row reverts to the stored next counter when hidden.
+- [ ] Activating "next" during an open reveal advances the counter
+  again and restarts the shared reveal window with the newly
+  committed code.
+- [ ] Staged code is published on success.
+- [ ] Staged code is published on `save_durability_unconfirmed` and
+  surfaces an `AdwToast` warning.
+- [ ] Staged code is zeroized and prior reveal state is retained on
+  `save_not_committed` and other failures.
+
+#### `tests/secret_fields_logic.rs`
+
+- [ ] Secret-field clearing / redaction invariants for passphrase,
+  manual-secret, and `otpauth://` URI entry buffers (submit, cancel,
+  close, auto-lock).
+- [ ] Add path-switch clears the hidden Base32 manual secret, the
+  URI text, and any pending duplicate-add state before the new path
+  becomes active.
+- [ ] Pending `ValidatedAccount` (Add duplicate-collision) and
+  pending `VaultInit` (Init `vault_exists` race) are zeroized on
+  cancel, close, replacement, and auto-lock.
+
+#### `tests/startup_error_logic.rs`
+
+- [ ] `default_vault_path` failure routes to
+  `StartupErrorComponent` without mutating disk.
+- [ ] `inspect` failure routes to `StartupErrorComponent`.
+- [ ] Open failure other than wrong passphrase
+  (`unsafe_permissions`, `wrong_vault_lock`, `invalid_header`,
+  `invalid_payload`, `unsupported_format_version`,
+  `kdf_params_out_of_bounds`, `io_error`) routes to
+  `StartupErrorComponent`.
+- [ ] `unsafe_permissions` rendering uses the `Some(text)` from
+  `paladin_core::format_unsafe_permissions(&err)`, falling back to
+  the generic error text only when the formatter returns `None`.
+- [ ] Retry from `StartupErrorComponent` re-runs vault-path
+  resolution + `inspect`.
+
+#### `tests/qr_clipboard_logic.rs`
+
+- [ ] RGBA byte-length / stride preparation matches `width * 4`
+  rows / `width * height * 4` total with overflow-checked
+  multiplication.
+- [ ] Sizes above `paladin_core::QR_RGBA_MAX_BYTES` reject before
+  allocation / download.
+- [ ] Decoded buffer is passed to
+  `paladin_core::import::qr_image_bytes` with `ImportConflict::Skip`
+  and reports imported / skipped / warning counts (parity with §6).
+
+#### `tests/init_dialog_logic.rs`
+
+- [ ] Plaintext vs encrypted routing: both passphrase fields empty
+  selects plaintext; non-empty selects encrypted.
+- [ ] Twice-confirm match accepts encrypted submission.
+- [ ] One-empty / mismatched encrypted entries reject inline with
+  `invalid_passphrase` (`reason: "confirmation_mismatch"`).
+- [ ] Plaintext-warning gate must be ticked before submission is
+  enabled; the rendered text matches
+  `paladin_core::format_plaintext_storage_warning()` verbatim.
+- [ ] `paladin_core::classify_init_precheck` routing:
+  `InitPrecheck::Clear` opens the normal create path,
+  `InitPrecheck::Existing` opens the destructive-confirmation gate,
+  `InitPrecheck::Propagate` shows an inline error.
+- [ ] `vault_exists` returned by `create` after a `Clear` precheck
+  (race) opens the destructive-confirmation gate worded by
+  `paladin_core::format_init_force_warning(existing_path)`.
+- [ ] Confirming the destructive gate routes through
+  `paladin_core::create_force` and consumes the pending
+  `VaultInit`.
+- [ ] Cancelling the destructive gate leaves the existing vault
+  intact and zeroizes the pending `VaultInit`.
+- [ ] `unsafe_permissions` from `create` / `create_force` routes
+  back to inline errors (does not transition out of the dialog).
+- [ ] `save_not_committed` and `save_durability_unconfirmed` from
+  `create` / `create_force` stay inline; `save_not_committed`
+  carries the `backup_path` field on the `create_force` path when
+  the failure occurs after backup rotation.
+
+#### `tests/rename_dialog_logic.rs`
+
+- [ ] Label validation (non-empty, §4.1 length limits) blocks
+  submit inline.
+- [ ] Issuer is not editable (CLI parity with `rename <new-label>`).
+- [ ] Submitting with the new label equal to the current label
+  still calls `Vault::rename` inside `Vault::mutate_and_save` (no
+  silent short-circuit, so `updated_at` always bumps).
+- [ ] `save_not_committed` restores the prior label in memory and
+  keeps the dialog open with the inline error.
+- [ ] `save_durability_unconfirmed` keeps the new label in memory
+  and surfaces the warning attached to the dialog body.
+
+#### `tests/otpauth_uri_paste_logic.rs`
+
+- [ ] Successful URI parse routes through
+  `paladin_core::parse_otpauth` and shares the manual path's
+  duplicate-detection logic.
+- [ ] Parse errors for malformed URIs, unsupported scheme,
+  unsupported `type=`, and `validation_error` stay inline without
+  mutating vault state.
+- [ ] Inline error messages may name the failing field or reason
+  but never echo the URI text.
+- [ ] Duplicate "add anyway" consumes the pending
+  `ValidatedAccount` on the duplicate-allowed path.
+- [ ] URI entry buffer zeroizes on submit / cancel / dialog close
+  and is never carried in `AppMsg` or `AppOutput`.
+
+#### `tests/import_dialog_logic.rs`
+
+- [ ] Format-selector routing (auto-detect / explicit `otpauth` /
+  `aegis` / `paladin` / `qr`) reaches the correct
+  `paladin_core::import::from_file` invocation.
+- [ ] On-conflict policy (`skip` / `replace` / `append`) threads
+  through `Vault::import_accounts` and is reflected in the merge
+  outcome.
+- [ ] `paladin_core::classify_paladin_import_precheck` routing for
+  `PromptForPassphrase`, `Reject(err)`, and `NoPrompt` covers
+  encrypted Paladin, plaintext Paladin, malformed / unsupported
+  Paladin headers, missing files, non-Paladin content, and
+  forced-format mismatches.
+- [ ] Bundle-passphrase row clears when the source path or forced
+  format changes after entry, and the probe / prompt flow restarts.
+- [ ] Post-merge counts (`imported` / `skipped` / `replaced` /
+  `appended` / `warnings`) map to inline display.
+- [ ] Importer errors stay inline and never mutate vault state:
+  `unsupported_import_format`, `unsupported_plaintext_vault`,
+  `unsupported_encrypted_aegis`, `unsupported_aegis_entry_type`,
+  `validation_error`, `no_entries_to_import`, `decrypt_failed`,
+  `invalid_header`, `invalid_payload`, `unsupported_format_version`,
+  `kdf_params_out_of_bounds`, `io_error`.
+- [ ] `save_not_committed` after a successful merge restores the
+  `Vault::mutate_and_save` snapshot;
+  `save_durability_unconfirmed` keeps the merged accounts and
+  surfaces the warning inline.
+
+#### `tests/export_dialog_logic.rs`
+
+- [ ] Overwrite gate resets when the destination or format changes.
+- [ ] Plaintext-warning gate resets when the destination or format
+  changes; the rendered text matches
+  `paladin_core::format_plaintext_export_warning()` verbatim.
+- [ ] Encrypted twice-confirm match accepts; mismatch rejects with
+  `invalid_passphrase` (`reason: "confirmation_mismatch"`).
+- [ ] Empty encrypted passphrase rejects with `invalid_passphrase`
+  (`reason: "zero_length"`).
+- [ ] Destination or format change after passphrase entry clears
+  the password rows and re-prompts.
+- [ ] Export writer errors (`io_error`, `save_not_committed`,
+  `save_durability_unconfirmed`) stay inline; export does not
+  mutate the vault, so no rollback path runs.
+
+#### `tests/passphrase_dialog_logic.rs`
+
+- [ ] Sub-flow gating against `Vault::is_encrypted()`: `set` is
+  available only when the getter returns `false`; `change` and
+  `remove` only when `true`.
+- [ ] `set` / `change` twice-confirm match accepts; mismatch
+  rejects with `invalid_passphrase`
+  (`reason: "confirmation_mismatch"`).
+- [ ] `set` / `change` reject zero-length new passphrases with
+  `invalid_passphrase` (`reason: "zero_length"`).
+- [ ] `remove` renders
+  `paladin_core::format_plaintext_storage_warning()` verbatim and
+  requires explicit confirmation before mutation.
+- [ ] Switching sub-flows clears all passphrase rows and pending
+  plaintext-removal confirmation.
+- [ ] Passphrase entry buffers zeroize on submit / cancel / dialog
+  close.
+
+#### `tests/settings_logic.rs`
+
+- [ ] Live-apply path runs `Vault::mutate_and_save` once per
+  accepted change.
+- [ ] Spinners clamp to
   `paladin_core::AUTO_LOCK_SECS_MIN..=paladin_core::AUTO_LOCK_SECS_MAX`
   and
-  `paladin_core::CLIPBOARD_CLEAR_SECS_MIN..=paladin_core::CLIPBOARD_CLEAR_SECS_MAX`,
-  500 ms debounce of repeated spinner changes, and pre-commit
-  rollback that reverts the visible widget value on
-  `save_not_committed`), in-flight effect ownership (only one
-  vault-touching worker at a time, mutating controls disabled while busy,
-  quit / window-close deferred while busy, auto-lock expiry deferred until the
-  worker returns, `(Vault, Store)` reinstalled before UI outcome handling,
-  settings debounce coalescing to the latest pre-save value, and fatal routing
-  to `StartupErrorComponent` if a worker cannot return the vault/store pair).
-- **Smoke test** in CI under `xvfb-run`: app launches, opens a prepared
-  plaintext vault, the list renders. Required for Milestone 7 sign-off.
-- **Manual test plan** (`tests/manual/MANUAL_TEST_PLAN.md`) per Milestone 7
-  checklist: init plaintext vault (both passphrase fields empty + warning
-  gate); init
-  encrypted vault (twice-confirm); init when a vault already exists at
-  the path opens the destructive-confirmation gate, confirm runs
-  `create_force` and rotates the prior vault to `vault.bin.bak`,
-  cancel leaves the prior vault intact; init under the §10
-  fault-injection hook surfaces `save_not_committed` and
-  `save_durability_unconfirmed` inline; unlock encrypted vault; copy
-  TOTP; HOTP next reveals + copies while showing the counter used;
-  reveal expires; auto-lock fires; clipboard auto-clear honors
-  if-unchanged; add manual; add via `otpauth://` URI paste (success +
-  malformed-URI rejection + duplicate "add anyway" round-trip); switching
-  Add paths clears hidden secret fields and pending duplicate state; add
-  via clipboard image, including oversized-image rejection before download;
-  import each format (otpauth, aegis plaintext, encrypted Paladin bundle,
-  QR image file) with each on-conflict policy and verify reported counts; export
-  plaintext (warning + confirmation, `0600` output) and encrypted
-  Paladin bundle (twice-confirm, round-trip via Import); refused
-  overwrite without confirmation; rename an account via the row
-  kebab menu (label persists on reopen; renaming to the same label
-  still saves and bumps `updated_at`; pre-commit fault injection rolls
-  the label back); settings persist;
-  passphrase set/change/remove; secret fields clear on cancel, submit,
-  and auto-lock; icon theme resolution + fallback.
+  `paladin_core::CLIPBOARD_CLEAR_SECS_MIN..=paladin_core::CLIPBOARD_CLEAR_SECS_MAX`.
+- [ ] 500 ms debounce coalesces repeated spinner changes so only
+  the most recent buffered value reaches `mutate_and_save`.
+- [ ] `save_not_committed` reverts the visible widget value to the
+  last committed state.
+- [ ] `save_durability_unconfirmed` keeps the new value visible and
+  attaches the warning to the changed `AdwPreferencesGroup` row
+  inside the `AdwPreferencesDialog`.
+
+#### `tests/effect_ownership_logic.rs`
+
+- [ ] Only one vault-touching worker is in flight at a time.
+- [ ] Mutating controls (row `next`, dialog submit buttons,
+  passphrase actions, import / export, settings) are disabled while
+  `UnlockedBusy` is active.
+- [ ] Quit / window-close requests are deferred until the worker
+  returns.
+- [ ] Auto-lock expiry while `UnlockedBusy` is active records a
+  lock-after-effect request and only locks if the returned vault is
+  still encrypted; if the operation changed the vault to plaintext,
+  the pending lock is discarded.
+- [ ] `(Vault, Store)` is reinstalled before UI outcome handling on
+  both success and typed failure.
+- [ ] Settings spinner debounce coalesces to the latest pre-save
+  value when an effect is in flight.
+- [ ] Toggle changes that would overlap an active vault effect are
+  not accepted until the control is re-enabled.
+- [ ] Worker that fails before returning the `(Vault, Store)` pair
+  routes the app to `StartupErrorComponent` without trying to
+  reconstruct in-memory vault state.
+
+### Smoke test (`tests/gtk_smoke.rs`)
+
+Required for Milestone 7 sign-off. Runs in CI under `xvfb-run`.
+
+- [ ] `xvfb-run` launches `paladin-gtk` and the process exits
+  cleanly.
+- [ ] App opens a prepared plaintext vault.
+- [ ] `AccountListComponent` renders the prepared accounts.
+
+### Thinness contract (`tests/thinness.rs`)
+
+Tracked under §"Thinness contract" above. The single checklist
+item there gates Milestone 7 sign-off alongside the checklists in
+this section.
+
+### Manual test plan (`tests/manual/MANUAL_TEST_PLAN.md`)
+
+Per Milestone 7. Each item executes cleanly on both a Wayland and
+an X11 session before sign-off.
+
+- [ ] Init plaintext vault: both passphrase fields empty + warning
+  gate before submit is enabled.
+- [ ] Init encrypted vault with twice-confirm.
+- [ ] Init when a vault already exists at the path opens the
+  destructive-confirmation gate; confirm runs `create_force` and
+  rotates the prior vault to `vault.bin.bak`; cancel leaves the
+  prior vault intact.
+- [ ] Init under the §10 fault-injection hook surfaces
+  `save_not_committed` and `save_durability_unconfirmed` inline.
+- [ ] Unlock encrypted vault with the correct passphrase.
+- [ ] Copy a TOTP code from a row.
+- [ ] HOTP `next` reveals and copies while showing the counter
+  used.
+- [ ] HOTP reveal window expires and the row returns to hidden.
+- [ ] Auto-lock fires after the configured idle interval (encrypted
+  vault).
+- [ ] Clipboard auto-clear honors the if-unchanged rule.
+- [ ] Add via manual fields.
+- [ ] Add via `otpauth://` URI paste — success path.
+- [ ] Add via `otpauth://` URI paste — malformed-URI rejection
+  stays inline.
+- [ ] Add via `otpauth://` URI paste — duplicate "add anyway"
+  round-trip.
+- [ ] Switching Add paths clears hidden secret fields and pending
+  duplicate state.
+- [ ] Add via clipboard image — success path.
+- [ ] Add via clipboard image — oversized-image rejection before
+  download.
+- [ ] Import otpauth JSON with each on-conflict policy; reported
+  counts match.
+- [ ] Import aegis plaintext with each on-conflict policy; reported
+  counts match.
+- [ ] Import encrypted Paladin bundle with each on-conflict policy;
+  reported counts match.
+- [ ] Import QR image file with each on-conflict policy; reported
+  counts match.
+- [ ] Export plaintext: warning + confirmation, `0600` output.
+- [ ] Export encrypted Paladin bundle: twice-confirm, round-trip
+  via Import.
+- [ ] Refused overwrite without confirmation leaves the destination
+  untouched.
+- [ ] Rename an account via the row kebab menu: label persists on
+  reopen.
+- [ ] Rename an account via the row kebab menu: renaming to the
+  same label still saves and bumps `updated_at`.
+- [ ] Rename an account via the row kebab menu: pre-commit fault
+  injection rolls the label back.
+- [ ] Settings persist across restart.
+- [ ] Passphrase `set` / `change` / `remove` flows complete
+  end-to-end.
+- [ ] Secret fields clear on cancel, submit, and auto-lock.
+- [ ] Icon theme resolution + fallback work against the system
+  theme.
 
 ## Milestone 7 checklist (expanded from §12)
 
@@ -1001,6 +1256,19 @@ section just pins which Adwaita class fills each role.
 - Icon resolution works against system theme with placeholder fallback.
 - Desktop file, AppStream metadata, and icon assets validate in the packaging
   dry-run.
+- **Every Tests checklist item above is ticked** — including each
+  bullet in the per-file pure-logic checklists
+  (`tests/icon_resolution.rs`, `tests/search_logic.rs`,
+  `tests/auto_lock_logic.rs`, `tests/clipboard_clear_logic.rs`,
+  `tests/hotp_reveal_logic.rs`, `tests/secret_fields_logic.rs`,
+  `tests/startup_error_logic.rs`, `tests/qr_clipboard_logic.rs`,
+  `tests/init_dialog_logic.rs`, `tests/rename_dialog_logic.rs`,
+  `tests/otpauth_uri_paste_logic.rs`, `tests/import_dialog_logic.rs`,
+  `tests/export_dialog_logic.rs`, `tests/passphrase_dialog_logic.rs`,
+  `tests/settings_logic.rs`, `tests/effect_ownership_logic.rs`), the
+  `tests/gtk_smoke.rs` smoke-test bullets, the `tests/thinness.rs`
+  source guard tracked under §"Thinness contract", and every step in
+  `tests/manual/MANUAL_TEST_PLAN.md`.
 - `xvfb-run` headless smoke test green in CI.
 - Manual test plan executes cleanly on a Wayland and an X11 session.
 - `.deb`, `.rpm`, Flatpak, and AppImage artifacts build through the
