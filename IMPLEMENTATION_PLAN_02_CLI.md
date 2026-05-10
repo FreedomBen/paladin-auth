@@ -206,7 +206,7 @@ applies the result through `Vault::apply_setting_patch` inside
 `Vault::mutate_and_save`; text-mode `settings get [key]` uses
 `paladin_core::parse_setting_key` for key validation. An unrecognized
 dotted key (any value not in the table above) rejects with `validation_error`
-(`field: "key"`, `reason: "unknown_setting"`) in both text and `--json`
+(`field: "key"`, `reason: "unknown_setting_key"`) in both text and `--json`
 modes — applies to `settings get <key>` and `settings set <key> <value>`
 alike, and is enforced before any value parsing.
 
@@ -700,8 +700,8 @@ where relevant, and exit code.
   `VaultSettings` JSON output for both `get` (current settings) and `set`
   (post-mutation settings), and
   unknown-dotted-key rejection with
-  `validation_error` (`field: "key"`, `reason: "unknown_setting"`) for both
-  `settings get <key>` and `settings set <key> <value>`.
+  `validation_error` (`field: "key"`, `reason: "unknown_setting_key"`) for
+  both `settings get <key>` and `settings set <key> <value>`.
 - **`--json` schema snapshots** for every command success, help/version
   terminal success, every `error_kind`, and representative syntax/usage
   failures rendered as JSON when `--json` is present. Locked via `insta`.

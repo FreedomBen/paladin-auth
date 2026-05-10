@@ -8,7 +8,7 @@
 use std::io::Write;
 
 use paladin_core::{
-    AccountSummary, Code, ImportReport, ImportWarning, ValidationWarning, VaultMode,
+    AccountSummary, Code, ImportReport, ImportWarning, ValidationWarning, VaultMode, VaultSettings,
 };
 use serde::Serialize;
 
@@ -228,6 +228,18 @@ pub fn write_export_success(
         format: format_label,
     };
     serde_json::to_writer(&mut out, &env).map_err(std::io::Error::other)?;
+    writeln!(out)?;
+    Ok(())
+}
+
+/// Render the `paladin settings {get,set}` success envelope per the §5
+/// JSON shape table: the full nested [`VaultSettings`] object — `get`
+/// renders the current settings, `set` renders the post-mutation
+/// settings after `apply_setting_patch` commits. Dotted key names never
+/// appear in the JSON output (they are CLI-side text-mode filters
+/// only).
+pub fn write_settings(settings: &VaultSettings, mut out: impl Write) -> std::io::Result<()> {
+    serde_json::to_writer(&mut out, settings).map_err(std::io::Error::other)?;
     writeln!(out)?;
     Ok(())
 }
@@ -545,5 +557,22 @@ mod tests {
         let v: serde_json::Value =
             serde_json::from_str(String::from_utf8(buf).unwrap().trim()).unwrap();
         assert_eq!(v["format"], serde_json::json!("paladin"));
+    }
+
+    #[test]
+    fn settings_envelope_emits_nested_section_5_shape_with_default_values() {
+        let settings = VaultSettings::default();
+        let mut buf: Vec<u8> = Vec::new();
+        write_settings(&settings, &mut buf).expect("render");
+        let s = String::from_utf8(buf).expect("utf-8");
+        assert!(s.ends_with('\n'), "expected single trailing newline");
+        let v: serde_json::Value = serde_json::from_str(s.trim()).expect("valid json");
+        assert_eq!(
+            v,
+            serde_json::json!({
+                "auto_lock":  { "enabled": false, "timeout_secs": 300 },
+                "clipboard":  { "clear_enabled": false, "clear_secs": 20 },
+            }),
+        );
     }
 }

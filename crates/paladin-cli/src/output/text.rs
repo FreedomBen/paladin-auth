@@ -10,7 +10,7 @@ use std::path::Path;
 
 use paladin_core::{
     format_validation_warning, AccountKindSummary, AccountSummary, Algorithm, Code, ImportReport,
-    ValidationWarning, VaultMode,
+    SettingKey, ValidationWarning, VaultMode, VaultSettings,
 };
 
 /// Print the success line for `paladin init` to stdout, e.g.
@@ -222,6 +222,42 @@ pub fn write_validation_warning(
         "paladin: warning: {}",
         format_validation_warning(warning)
     )
+}
+
+/// Print every `<dotted-key>=<value>` row in the §5 settings table to
+/// stdout, in the table order from `IMPLEMENTATION_PLAN_02_CLI.md`. Used
+/// for `paladin settings get` (no key filter) and as the post-mutation
+/// summary for `paladin settings set` in text mode.
+pub fn write_settings_all(settings: &VaultSettings, mut out: impl Write) -> std::io::Result<()> {
+    write_setting_row(SettingKey::AutoLockEnabled, settings, &mut out)?;
+    write_setting_row(SettingKey::AutoLockTimeoutSecs, settings, &mut out)?;
+    write_setting_row(SettingKey::ClipboardClearEnabled, settings, &mut out)?;
+    write_setting_row(SettingKey::ClipboardClearSecs, settings, &mut out)?;
+    Ok(())
+}
+
+/// Print one `<dotted-key>=<value>` row to stdout for the filtered
+/// `paladin settings get <key>` text-mode output.
+pub fn write_settings_one(
+    key: SettingKey,
+    settings: &VaultSettings,
+    mut out: impl Write,
+) -> std::io::Result<()> {
+    write_setting_row(key, settings, &mut out)
+}
+
+fn write_setting_row(
+    key: SettingKey,
+    settings: &VaultSettings,
+    mut out: impl Write,
+) -> std::io::Result<()> {
+    let value = match key {
+        SettingKey::AutoLockEnabled => settings.auto_lock_enabled().to_string(),
+        SettingKey::AutoLockTimeoutSecs => settings.auto_lock_timeout_secs().to_string(),
+        SettingKey::ClipboardClearEnabled => settings.clipboard_clear_enabled().to_string(),
+        SettingKey::ClipboardClearSecs => settings.clipboard_clear_secs().to_string(),
+    };
+    writeln!(out, "{}={value}", key.dotted())
 }
 
 #[cfg(test)]
@@ -542,6 +578,30 @@ mod tests {
         let s = String::from_utf8(buf).expect("utf-8");
         assert!(s.starts_with("paladin: warning: "), "got {s:?}");
         assert!(s.ends_with('\n'));
+    }
+
+    #[test]
+    fn settings_all_writes_default_values_in_section_5_key_order() {
+        let settings = VaultSettings::default();
+        let mut buf: Vec<u8> = Vec::new();
+        write_settings_all(&settings, &mut buf).expect("render");
+        let s = String::from_utf8(buf).expect("utf-8");
+        assert_eq!(
+            s,
+            "auto_lock.enabled=false\n\
+             auto_lock.timeout_secs=300\n\
+             clipboard.clear_enabled=false\n\
+             clipboard.clear_secs=20\n",
+        );
+    }
+
+    #[test]
+    fn settings_one_writes_only_the_selected_dotted_key() {
+        let settings = VaultSettings::default();
+        let mut buf: Vec<u8> = Vec::new();
+        write_settings_one(SettingKey::ClipboardClearSecs, &settings, &mut buf).expect("render");
+        let s = String::from_utf8(buf).expect("utf-8");
+        assert_eq!(s, "clipboard.clear_secs=20\n");
     }
 
     #[test]
