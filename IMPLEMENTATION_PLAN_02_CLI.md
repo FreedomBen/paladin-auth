@@ -723,7 +723,7 @@ can be ticked.
   encrypted vault.
 - [x] `[PTY]` `passphrase remove` succeeds end-to-end against an open
   encrypted vault and confirms before mutation.
-- [ ] `[PTY]` `passphrase remove` with no `/dev/tty` surfaces `io_error`
+- [x] `[PTY]` `passphrase remove` with no `/dev/tty` surfaces `io_error`
   `operation: "confirmation_prompt"`.
 - [x] `passphrase remove --json` without `--yes` rejects at parse time.
 - [ ] `[PTY]` `passphrase remove --yes` skips only the confirmation, not

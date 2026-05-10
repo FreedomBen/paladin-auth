@@ -551,12 +551,13 @@ fn text_remove_without_yes_under_json_emits_validation_error_envelope() {
 #[test]
 fn pty_remove_on_open_encrypted_vault_confirms_then_decrypts_to_plaintext() {
     // §5: text-mode `passphrase remove` (no `--yes`) on an encrypted
-    // vault prompts for the unlock passphrase, prints the
-    // plaintext-storage advisory, then prompts for the destructive
-    // confirmation. Only after the literal `yes` does the CLI re-save
-    // the vault as plaintext and print `Decrypted vault to plaintext.`.
-    // The advisory must be emitted *before* the confirmation prompt
-    // so the user sees the warning before deciding.
+    // vault prints the plaintext-storage advisory, prompts for the
+    // destructive confirmation, *then* prompts for the unlock
+    // passphrase. Only after the literal `yes` (and a successful
+    // unlock) does the CLI re-save the vault as plaintext and print
+    // `Decrypted vault to plaintext.`. The confirm-before-unlock
+    // ordering means a declined or no-`/dev/tty` confirmation never
+    // asks the user for the unlock passphrase first — see L726.
     let (_dir, path) = fresh_vault_path();
     create_encrypted_vault(&path, "the-secret");
 
@@ -568,8 +569,6 @@ fn pty_remove_on_open_encrypted_vault_confirms_then_decrypts_to_plaintext() {
         ["--vault", path.to_str().unwrap(), "passphrase", "remove"],
         &[],
     );
-    pty.expect(PROMPT_UNLOCK);
-    pty.send_line("the-secret");
     // The plaintext-storage advisory must land *before* the
     // destructive prompt so the user sees the warning before deciding.
     // `Pty::expect` on the prompt also captures the bytes preceding
@@ -578,6 +577,8 @@ fn pty_remove_on_open_encrypted_vault_confirms_then_decrypts_to_plaintext() {
     // ordering as well as presence.
     pty.expect(PROMPT_REMOVE_CONFIRM);
     pty.send_line("yes");
+    pty.expect(PROMPT_UNLOCK);
+    pty.send_line("the-secret");
     let exit = pty.wait_for_exit();
     exit.assert_exit(0);
     exit.assert_transcript_contains("Plaintext storage keeps account secrets unencrypted");
@@ -593,4 +594,58 @@ fn pty_remove_on_open_encrypted_vault_confirms_then_decrypts_to_plaintext() {
 
     let perms = std::fs::metadata(&path).expect("metadata").permissions();
     assert_eq!(perms.mode() & 0o7777, 0o600);
+}
+
+#[test]
+fn pty_remove_without_dev_tty_surfaces_io_error_confirmation_prompt() {
+    // §5: when `/dev/tty` cannot be opened (no controlling terminal),
+    // text-mode `passphrase remove` (no `--yes`) must surface
+    // `io_error` `operation: "confirmation_prompt"` — the destructive
+    // confirmation fires *before* the unlock prompt (see L724), so
+    // the user is never asked for the unlock passphrase. Drive the
+    // path by exec-ing the binary through `setsid(1)` so the child is
+    // a fresh session leader and any `open("/dev/tty")` returns ENXIO.
+    use std::process::Stdio;
+
+    use common::paladin_command_without_tty;
+
+    let (_dir, path) = fresh_vault_path();
+    create_encrypted_vault(&path, "the-secret");
+
+    let output = paladin_command_without_tty()
+        .args(["--vault", path.to_str().unwrap(), "passphrase", "remove"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("spawn paladin via setsid(1)");
+
+    assert!(
+        !output.status.success(),
+        "expected non-zero exit without /dev/tty; status = {:?}, \
+         stdout = {:?}, stderr = {}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.starts_with("paladin: ") || stderr.contains("\npaladin: "),
+        "expected `paladin:` text-mode prefix on the error line, got {stderr:?}",
+    );
+    // Asserting the `confirmation_prompt` operation tag verbatim
+    // guards the §5 ordering: if a future refactor moves the unlock
+    // ahead of the confirmation, this test will start surfacing
+    // `passphrase_prompt` instead and fail loudly.
+    assert!(
+        stderr.contains("I/O error during confirmation_prompt"),
+        "expected `confirmation_prompt` operation tag in the rendered \
+         text, got {stderr:?}",
+    );
+    // Vault on disk must be untouched (still encrypted).
+    let after = std::fs::read(&path).expect("read vault");
+    assert_eq!(
+        after[9], 1,
+        "vault must remain encrypted on confirm failure"
+    );
 }

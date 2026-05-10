@@ -21,18 +21,21 @@
 //!    `already_encrypted`; `change` / `remove` on `Plaintext` returns
 //!    `invalid_state` `not_encrypted`. `Missing` short-circuits to
 //!    `vault_missing`. Other `inspect` errors propagate verbatim.
-//! 5. Open the vault via [`vault_open::open`] (encrypted vaults prompt
+//! 5. (`remove` only, text mode) Print
+//!    `format_plaintext_storage_warning()` to stderr; if `--yes` is not
+//!    passed, prompt destructive confirmation **before** the unlock
+//!    prompt. A declined / no-`/dev/tty` confirmation surfaces
+//!    `validation_error` `confirmation` `declined` or `io_error`
+//!    `operation: "confirmation_prompt"` without ever asking for the
+//!    unlock passphrase. Under `--json` the advisory is suppressed
+//!    because the caller already opted in via `--yes`.
+//! 6. Open the vault via [`vault_open::open`] (encrypted vaults prompt
 //!    once for the existing passphrase via `/dev/tty`).
-//! 6. (`set` / `change` only) Prompt for the new passphrase plus a
+//! 7. (`set` / `change` only) Prompt for the new passphrase plus a
 //!    matching confirmation. The
 //!    [`NewPassphraseEmptyPolicy::Reject`] branch surfaces
 //!    `invalid_passphrase` `zero_length` for an empty entry and
 //!    `confirmation_mismatch` for any byte-level divergence.
-//! 7. (`remove` only, text mode) Print
-//!    `format_plaintext_storage_warning()` to stderr; if `--yes` is not
-//!    passed, prompt destructive confirmation. Under `--json` the
-//!    advisory is suppressed because the caller already opted in via
-//!    `--yes`.
 //! 8. Apply the transition through the matching
 //!    [`paladin_core::Vault`] method (`set_passphrase` /
 //!    `change_passphrase` / `remove_passphrase`), each of which saves
@@ -130,9 +133,13 @@ pub fn change(global: &GlobalArgs, kdf_args: &KdfArgs) -> Result<(), CliError> {
 
 /// `paladin passphrase remove`: decrypt an encrypted vault to plaintext.
 /// `--json` requires `--yes`. Text mode prints the plaintext-storage
-/// warning before the destructive confirmation prompt; `--yes` skips
-/// only the prompt. Wrong-state on a plaintext vault returns
-/// `invalid_state` `not_encrypted` before any prompt.
+/// warning and prompts for destructive confirmation **before** the
+/// unlock prompt — a declined or no-`/dev/tty` confirmation surfaces
+/// `validation_error` / `io_error` `operation: "confirmation_prompt"`
+/// without ever asking for the unlock passphrase. `--yes` skips only
+/// the confirmation; the unlock prompt still fires. Wrong-state on a
+/// plaintext vault returns `invalid_state` `not_encrypted` before any
+/// prompt.
 pub fn remove(global: &GlobalArgs, yes: bool) -> Result<(), CliError> {
     let mode = Mode::resolve(global.json, global.no_color);
     let path = vault_open::resolve_vault_path(global)?;
@@ -163,8 +170,6 @@ pub fn remove(global: &GlobalArgs, yes: bool) -> Result<(), CliError> {
         VaultStatus::Encrypted => {}
     }
 
-    let mut opened = vault_open::open(&path)?;
-
     if matches!(mode, Mode::Text { .. }) {
         let warning = format_plaintext_storage_warning();
         let _ = writeln!(std::io::stderr().lock(), "{warning}");
@@ -174,6 +179,8 @@ pub fn remove(global: &GlobalArgs, yes: bool) -> Result<(), CliError> {
             )?;
         }
     }
+
+    let mut opened = vault_open::open(&path)?;
 
     opened.vault.remove_passphrase(&opened.store)?;
 
