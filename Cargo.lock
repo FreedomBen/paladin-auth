@@ -1333,6 +1333,7 @@ dependencies = [
  "paladin-core",
  "ratatui",
  "secrecy",
+ "tempfile",
  "tui-input",
  "zeroize",
 ]

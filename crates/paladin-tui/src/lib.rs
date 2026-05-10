@@ -13,6 +13,7 @@
 
 use std::process::ExitCode;
 
+pub mod app;
 pub mod cli;
 
 /// Run the `paladin-tui` binary.
