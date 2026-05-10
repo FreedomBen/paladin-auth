@@ -13,6 +13,23 @@ categories = ["command-line-utilities", "authentication"]
 [lints]
 workspace = true
 
+[features]
+default = []
+# Test-only hooks. Off in production builds; opt in with
+# `cargo test -p paladin-cli --features test-hooks`.
+#
+# Currently enables:
+# * a `PALADIN_CLIPBOARD_DRYRUN=1|fail` env-var bypass in the CLI
+#   clipboard adapter so process-level tests can exercise `paladin
+#   copy` end-to-end without a system clipboard server (and force the
+#   `clipboard_write_failed` path), and
+# * the transitive `paladin-core/test-fault-injection` feature so
+#   process-level tests can drive `save_not_committed` /
+#   `save_durability_unconfirmed` via `PALADIN_FAULT_INJECT`.
+#
+# See `IMPLEMENTATION_PLAN_02_CLI.md` "Implementation checklist".
+test-hooks = ["paladin-core/test-fault-injection"]
+
 [[bin]]
 name = "paladin"
 path = "src/main.rs"

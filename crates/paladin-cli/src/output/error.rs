@@ -83,6 +83,21 @@ pub enum CliError {
         /// verbatim into the §5 `account` field of the JSON envelope.
         account: AccountSummary,
     },
+    /// `paladin copy` clipboard write failed *after* any HOTP advance
+    /// has already committed to disk. Presentation-only `error_kind`
+    /// per DESIGN.md §5 — the CLI does not roll the counter back
+    /// because the code may already have been exposed to the clipboard
+    /// provider. The carried `account` reflects the persisted
+    /// post-advance state and `counter_used` is the pre-advance counter
+    /// that produced the visible code (`None` for TOTP).
+    ClipboardWriteFailed {
+        /// Persisted account state after the (possibly committed) HOTP
+        /// advance — surfaced as `account` in the §5 JSON envelope.
+        account: AccountSummary,
+        /// Pre-advance counter for HOTP, `None` for TOTP. Surfaced as
+        /// `counter_used` in the §5 JSON envelope.
+        counter_used: Option<u64>,
+    },
     /// Scaffold sentinel: a command body has not been implemented yet.
     /// Removed as commands land — this branch never appears in shipped
     /// builds.
@@ -114,6 +129,13 @@ impl std::fmt::Display for CliError {
                 write!(
                     f,
                     "account already exists with the same (secret, issuer, label): {} (re-run with --allow-duplicate to add anyway)",
+                    display_label(account),
+                )
+            }
+            Self::ClipboardWriteFailed { account, .. } => {
+                write!(
+                    f,
+                    "clipboard write failed for {} (the OTP code was generated; for HOTP the counter advance was committed before the failed write)",
                     display_label(account),
                 )
             }
@@ -185,6 +207,21 @@ pub fn render(err: &CliError, mode: Mode, mut out: impl Write) -> std::io::Resul
             serde_json::to_writer(&mut out, &envelope).map_err(std::io::Error::other)?;
             writeln!(out)?;
         }
+        (
+            Mode::Json,
+            CliError::ClipboardWriteFailed {
+                account,
+                counter_used,
+            },
+        ) => {
+            let envelope = serde_json::json!({
+                "error_kind": "clipboard_write_failed",
+                "account": account,
+                "counter_used": counter_used,
+            });
+            serde_json::to_writer(&mut out, &envelope).map_err(std::io::Error::other)?;
+            writeln!(out)?;
+        }
         (Mode::Json, CliError::NotYetImplemented(_)) => {
             // Scaffold-only: this branch is never reached from a
             // production build. We still emit valid JSON so callers
@@ -203,7 +240,10 @@ pub fn render(err: &CliError, mode: Mode, mut out: impl Write) -> std::io::Resul
         }
         (
             Mode::Text { .. },
-            CliError::Paladin(_) | CliError::NoMatch { .. } | CliError::DuplicateAccount { .. },
+            CliError::Paladin(_)
+            | CliError::NoMatch { .. }
+            | CliError::DuplicateAccount { .. }
+            | CliError::ClipboardWriteFailed { .. },
         ) => {
             writeln!(out, "paladin: {err}")?;
         }
@@ -365,6 +405,49 @@ mod tests {
         assert!(s.contains("Acme:alice"), "missing label: {s:?}");
         assert!(s.contains("--allow-duplicate"), "missing hint: {s:?}");
         assert!(s.ends_with('\n'));
+    }
+
+    #[test]
+    fn json_mode_clipboard_write_failed_carries_account_and_counter_used_for_hotp() {
+        let mut summary = fixture_summary("bob", None);
+        summary.kind = AccountKindSummary::Hotp;
+        summary.period = None;
+        summary.counter = Some(43);
+        let err = CliError::ClipboardWriteFailed {
+            account: summary,
+            counter_used: Some(42),
+        };
+        let s = render_to_string(&err, Mode::Json);
+        let v: serde_json::Value = serde_json::from_str(s.trim()).unwrap();
+        assert_eq!(v["error_kind"], serde_json::json!("clipboard_write_failed"));
+        // post-advance summary in `account`, pre-advance in `counter_used`.
+        assert_eq!(v["account"]["counter"], serde_json::json!(43));
+        assert_eq!(v["counter_used"], serde_json::json!(42));
+        assert!(s.ends_with('\n'));
+    }
+
+    #[test]
+    fn json_mode_clipboard_write_failed_emits_null_counter_used_for_totp() {
+        let err = CliError::ClipboardWriteFailed {
+            account: fixture_summary("alice", Some("Acme")),
+            counter_used: None,
+        };
+        let s = render_to_string(&err, Mode::Json);
+        let v: serde_json::Value = serde_json::from_str(s.trim()).unwrap();
+        assert_eq!(v["error_kind"], serde_json::json!("clipboard_write_failed"));
+        assert_eq!(v["counter_used"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn text_mode_clipboard_write_failed_includes_label_and_advance_disclaimer() {
+        let err = CliError::ClipboardWriteFailed {
+            account: fixture_summary("alice", Some("Acme")),
+            counter_used: None,
+        };
+        let s = render_to_string(&err, Mode::Text { color: false });
+        assert!(s.starts_with("paladin: "), "got {s:?}");
+        assert!(s.contains("Acme:alice"), "missing label: {s:?}");
+        assert!(s.contains("counter advance"), "missing disclaimer: {s:?}");
     }
 
     #[test]

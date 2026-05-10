@@ -123,6 +123,34 @@ pub fn write_show_codes(rows: &[CodeRow<'_>], mut out: impl Write) -> std::io::R
     Ok(())
 }
 
+/// `paladin copy` success envelope per the §5 JSON shape table:
+/// `{ "copied": true, "account": AccountSummary, "counter_used":
+/// number_or_null }`. The `account` summary reflects persisted state
+/// after the (possibly committed) HOTP advance; for TOTP `counter_used`
+/// is `null`.
+#[derive(Debug, Serialize)]
+struct CopySuccess<'a> {
+    copied: bool,
+    account: &'a AccountSummary,
+    counter_used: Option<u64>,
+}
+
+/// Render the `paladin copy` success envelope.
+pub fn write_copy_success(
+    account: &AccountSummary,
+    counter_used: Option<u64>,
+    mut out: impl Write,
+) -> std::io::Result<()> {
+    let env = CopySuccess {
+        copied: true,
+        account,
+        counter_used,
+    };
+    serde_json::to_writer(&mut out, &env).map_err(std::io::Error::other)?;
+    writeln!(out)?;
+    Ok(())
+}
+
 /// Render the `paladin add --qr` / `paladin import` success envelope.
 pub fn write_qr_import_success(
     report: &ImportReport,
@@ -331,6 +359,50 @@ mod tests {
         let s = String::from_utf8(buf).expect("utf-8");
         let v: serde_json::Value = serde_json::from_str(s.trim()).expect("valid json");
         assert_eq!(v, serde_json::json!({ "codes": [] }));
+    }
+
+    #[test]
+    fn copy_success_envelope_carries_copied_account_and_counter_used_for_hotp() {
+        use paladin_core::parse_otpauth;
+        use std::time::{Duration, SystemTime};
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let acct = parse_otpauth(
+            "otpauth://hotp/Beta:bob?secret=JBSWY3DPEHPK3PXP&digits=6&counter=43",
+            now,
+        )
+        .unwrap()
+        .account;
+        let summary = acct.summary();
+        let mut buf: Vec<u8> = Vec::new();
+        write_copy_success(&summary, Some(42), &mut buf).expect("render");
+        let s = String::from_utf8(buf).expect("utf-8");
+        assert!(s.ends_with('\n'), "expected single trailing newline");
+        let v: serde_json::Value = serde_json::from_str(s.trim()).expect("valid json");
+        assert_eq!(v["copied"], serde_json::json!(true));
+        assert_eq!(v["account"]["counter"], serde_json::json!(43));
+        assert_eq!(v["account"]["kind"], serde_json::json!("hotp"));
+        assert_eq!(v["counter_used"], serde_json::json!(42));
+    }
+
+    #[test]
+    fn copy_success_envelope_renders_null_counter_used_for_totp() {
+        use paladin_core::parse_otpauth;
+        use std::time::{Duration, SystemTime};
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let acct = parse_otpauth(
+            "otpauth://totp/Acme:alice?secret=JBSWY3DPEHPK3PXP&digits=6&period=30",
+            now,
+        )
+        .unwrap()
+        .account;
+        let summary = acct.summary();
+        let mut buf: Vec<u8> = Vec::new();
+        write_copy_success(&summary, None, &mut buf).expect("render");
+        let v: serde_json::Value =
+            serde_json::from_str(String::from_utf8(buf).unwrap().trim()).unwrap();
+        assert_eq!(v["copied"], serde_json::json!(true));
+        assert_eq!(v["counter_used"], serde_json::Value::Null);
+        assert_eq!(v["account"]["kind"], serde_json::json!("totp"));
     }
 
     #[test]

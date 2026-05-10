@@ -11,6 +11,7 @@
 #![forbid(unsafe_code)]
 
 mod cli;
+mod clipboard;
 mod commands;
 mod exec_tui;
 mod kdf;

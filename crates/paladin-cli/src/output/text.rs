@@ -137,6 +137,14 @@ pub fn write_add_success(
     writeln!(out, "Added {} ({}).", display_label(account), disambiguator)
 }
 
+/// Print the `paladin copy` success line to stdout. Mirrors the §5
+/// JSON envelope's `copied: true` flag in human-readable form. The
+/// CLI never auto-clears the clipboard, so the wording is unchanged
+/// regardless of the vault's `clipboard.clear_enabled` setting.
+pub fn write_copy_success(account: &AccountSummary, mut out: impl Write) -> std::io::Result<()> {
+    writeln!(out, "Copied {} code to clipboard.", display_label(account))
+}
+
 /// Print the success summary for `paladin add --qr` (multi-entry) to
 /// stdout. Mirrors the §5 JSON envelope counts so text and JSON paths
 /// stay in sync. `--on-conflict=skip` is fixed for `add --qr`, so
@@ -266,6 +274,26 @@ mod tests {
         write_add_success(&summary, "id:fedcba98", &mut buf).expect("render");
         let s = String::from_utf8(buf).expect("utf-8");
         assert_eq!(s, "Added bob (id:fedcba98).\n");
+    }
+
+    #[test]
+    fn copy_success_includes_label_and_trailing_newline() {
+        let acct = make_totp("alice", Some("Acme"));
+        let summary = acct.summary();
+        let mut buf: Vec<u8> = Vec::new();
+        write_copy_success(&summary, &mut buf).expect("render");
+        let s = String::from_utf8(buf).expect("utf-8");
+        assert_eq!(s, "Copied Acme:alice code to clipboard.\n");
+    }
+
+    #[test]
+    fn copy_success_falls_back_to_bare_label_when_issuer_empty() {
+        let acct = make_totp("bob", None);
+        let summary = acct.summary();
+        let mut buf: Vec<u8> = Vec::new();
+        write_copy_success(&summary, &mut buf).expect("render");
+        let s = String::from_utf8(buf).expect("utf-8");
+        assert_eq!(s, "Copied bob code to clipboard.\n");
     }
 
     #[test]

@@ -1,13 +1,19 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-//! End-to-end tests for `paladin show` and `paladin peek`. These
-//! exercise the no-prompt paths only — `vault_missing`, single-match
-//! TOTP / HOTP, multi-match cardinality (all-TOTP allowed, any-HOTP
-//! rejected by `show` but unconditionally allowed by `peek`), and
-//! HOTP counter overflow against a plaintext vault. Encrypted coverage
-//! requires a scripted `/dev/tty` and lands with the dedicated PTY
-//! harness called out in `IMPLEMENTATION_PLAN_02_CLI.md`. `copy` lands
-//! in a subsequent commit and reuses the helpers in this file.
+//! End-to-end tests for `paladin show`, `paladin peek`, and (gated
+//! behind the `paladin-cli/test-hooks` cargo feature) `paladin copy`.
+//! These exercise the no-prompt paths only — `vault_missing`,
+//! single-match TOTP / HOTP, multi-match cardinality (all-TOTP allowed,
+//! any-HOTP rejected by `show` but unconditionally allowed by `peek`),
+//! and HOTP counter overflow against a plaintext vault. Encrypted
+//! coverage requires a scripted `/dev/tty` and lands with the
+//! dedicated PTY harness called out in `IMPLEMENTATION_PLAN_02_CLI.md`.
+//!
+//! The `copy` tests use the test-build-only
+//! `PALADIN_CLIPBOARD_DRYRUN=1|fail` env var honored only when
+//! `paladin-cli/test-hooks` is enabled, so CI can exercise the
+//! command end-to-end without a system clipboard server. Run them
+//! with `cargo test -p paladin-cli --features test-hooks`.
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -563,4 +569,253 @@ fn text_peek_single_hotp_writes_tab_separated_row_with_counter_marker() {
     assert_eq!(fields[1], "bob");
     assert_eq!(fields[2].len(), 6);
     assert_eq!(fields[3], "c=7");
+}
+
+// --- copy ----------------------------------------------------------------
+//
+// All copy integration tests require the `test-hooks` cargo feature so
+// the `PALADIN_CLIPBOARD_DRYRUN` env-var bypass is compiled into the
+// binary. Without the feature, the binary calls real arboard, which
+// CI typically cannot satisfy; the tests below would fail on every
+// machine without a clipboard provider.
+
+#[cfg(feature = "test-hooks")]
+mod copy {
+    use super::*;
+
+    /// Build a `paladin` command with `PALADIN_CLIPBOARD_DRYRUN` set.
+    /// Use `"1"` for the success-path bypass (no actual write) and
+    /// `"fail"` to exercise the `clipboard_write_failed` envelope.
+    fn paladin_dryrun(mode: &str) -> Command {
+        let mut cmd = paladin();
+        cmd.env("PALADIN_CLIPBOARD_DRYRUN", mode);
+        cmd
+    }
+
+    #[test]
+    fn json_copy_missing_vault_rejects_with_vault_missing_envelope() {
+        let (_dir, path) = fresh_vault_path();
+        let assert = paladin_dryrun("1")
+            .args([
+                "--json",
+                "--vault",
+                path.to_str().unwrap(),
+                "copy",
+                "anything",
+            ])
+            .assert()
+            .failure();
+        let stderr = std::str::from_utf8(&assert.get_output().stderr).unwrap();
+        let value: Value = serde_json::from_str(stderr.trim()).unwrap();
+        assert_eq!(value["error_kind"], serde_json::json!("vault_missing"));
+    }
+
+    #[test]
+    fn json_copy_no_match_rejects_with_no_match_envelope() {
+        let (_dir, path) = fresh_vault_path();
+        create_empty_plaintext_vault(&path);
+        let assert = paladin_dryrun("1")
+            .args(["--json", "--vault", path.to_str().unwrap(), "copy", "ghost"])
+            .assert()
+            .failure();
+        let value: Value = serde_json::from_str(
+            std::str::from_utf8(&assert.get_output().stderr)
+                .unwrap()
+                .trim(),
+        )
+        .unwrap();
+        assert_eq!(value["error_kind"], serde_json::json!("no_match"));
+    }
+
+    #[test]
+    fn json_copy_multi_match_rejects_with_multiple_matches_envelope() {
+        // Unlike `show`, `copy` always requires exactly one match
+        // even when every candidate is TOTP.
+        let (_dir, path) = fresh_vault_path();
+        create_vault_with(
+            vec![
+                make_totp("alice", Some("GitHub")),
+                make_totp("alice", Some("GitLab")),
+            ],
+            &path,
+        );
+        let assert = paladin_dryrun("1")
+            .args(["--json", "--vault", path.to_str().unwrap(), "copy", "alice"])
+            .assert()
+            .failure();
+        let value: Value = serde_json::from_str(
+            std::str::from_utf8(&assert.get_output().stderr)
+                .unwrap()
+                .trim(),
+        )
+        .unwrap();
+        assert_eq!(value["error_kind"], serde_json::json!("multiple_matches"));
+        assert_eq!(value["candidates"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn json_copy_single_totp_emits_copied_envelope_with_null_counter_used() {
+        let (_dir, path) = fresh_vault_path();
+        create_vault_with(vec![make_totp("alice", Some("Acme"))], &path);
+
+        let assert = paladin_dryrun("1")
+            .args(["--json", "--vault", path.to_str().unwrap(), "copy", "alice"])
+            .assert()
+            .success();
+        let value: Value = serde_json::from_str(
+            std::str::from_utf8(&assert.get_output().stdout)
+                .unwrap()
+                .trim(),
+        )
+        .unwrap();
+        assert_eq!(value["copied"], serde_json::json!(true));
+        assert_eq!(value["counter_used"], serde_json::Value::Null);
+        assert_eq!(value["account"]["label"], serde_json::json!("alice"));
+        assert_eq!(value["account"]["kind"], serde_json::json!("totp"));
+    }
+
+    #[test]
+    fn text_copy_single_totp_writes_human_friendly_success_line() {
+        let (_dir, path) = fresh_vault_path();
+        create_vault_with(vec![make_totp("alice", Some("Acme"))], &path);
+
+        let assert = paladin_dryrun("1")
+            .args(["--vault", path.to_str().unwrap(), "copy", "alice"])
+            .assert()
+            .success();
+        let stdout = std::str::from_utf8(&assert.get_output().stdout).unwrap();
+        assert_eq!(stdout, "Copied Acme:alice code to clipboard.\n");
+    }
+
+    #[test]
+    fn json_copy_single_hotp_advances_persists_then_reports_pre_advance_counter_used() {
+        let (_dir, path) = fresh_vault_path();
+        create_vault_with(vec![make_hotp("bob", None, 42)], &path);
+
+        let assert = paladin_dryrun("1")
+            .args(["--json", "--vault", path.to_str().unwrap(), "copy", "bob"])
+            .assert()
+            .success();
+        let value: Value = serde_json::from_str(
+            std::str::from_utf8(&assert.get_output().stdout)
+                .unwrap()
+                .trim(),
+        )
+        .unwrap();
+        // pre-advance counter (what produced the code)
+        assert_eq!(value["counter_used"], serde_json::json!(42));
+        // post-advance, persisted state
+        assert_eq!(value["account"]["counter"], serde_json::json!(43));
+        assert_eq!(value["account"]["kind"], serde_json::json!("hotp"));
+
+        // On-disk counter must reflect the advance.
+        let listed = list_accounts_json(&path);
+        assert_eq!(listed["accounts"][0]["counter"], serde_json::json!(43));
+    }
+
+    #[test]
+    fn json_copy_clipboard_failure_on_totp_emits_clipboard_write_failed_with_null_counter() {
+        let (_dir, path) = fresh_vault_path();
+        create_vault_with(vec![make_totp("alice", Some("Acme"))], &path);
+
+        let assert = paladin_dryrun("fail")
+            .args(["--json", "--vault", path.to_str().unwrap(), "copy", "alice"])
+            .assert()
+            .failure();
+        let stderr = std::str::from_utf8(&assert.get_output().stderr).unwrap();
+        let value: Value = serde_json::from_str(stderr.trim()).unwrap();
+        assert_eq!(
+            value["error_kind"],
+            serde_json::json!("clipboard_write_failed")
+        );
+        assert_eq!(value["counter_used"], serde_json::Value::Null);
+        assert_eq!(value["account"]["kind"], serde_json::json!("totp"));
+        assert!(assert.get_output().stdout.is_empty());
+    }
+
+    #[test]
+    fn json_copy_clipboard_failure_on_hotp_leaves_advanced_counter_persisted() {
+        let (_dir, path) = fresh_vault_path();
+        create_vault_with(vec![make_hotp("bob", None, 42)], &path);
+
+        let assert = paladin_dryrun("fail")
+            .args(["--json", "--vault", path.to_str().unwrap(), "copy", "bob"])
+            .assert()
+            .failure();
+        let value: Value = serde_json::from_str(
+            std::str::from_utf8(&assert.get_output().stderr)
+                .unwrap()
+                .trim(),
+        )
+        .unwrap();
+        assert_eq!(
+            value["error_kind"],
+            serde_json::json!("clipboard_write_failed")
+        );
+        // pre-advance counter on `counter_used`
+        assert_eq!(value["counter_used"], serde_json::json!(42));
+        // post-advance counter on `account.counter` — counter is NOT
+        // rolled back because the code may already have leaked.
+        assert_eq!(value["account"]["counter"], serde_json::json!(43));
+
+        // On-disk counter is the advanced value (43).
+        let listed = list_accounts_json(&path);
+        assert_eq!(listed["accounts"][0]["counter"], serde_json::json!(43));
+    }
+
+    #[test]
+    fn json_copy_hotp_at_u64_max_rejects_with_counter_overflow_before_clipboard() {
+        let (_dir, path) = fresh_vault_path();
+        create_vault_with(vec![make_hotp("bob", None, u64::MAX)], &path);
+
+        // Even with `fail` configured, the overflow check must fire
+        // before any clipboard write is attempted.
+        let assert = paladin_dryrun("fail")
+            .args(["--json", "--vault", path.to_str().unwrap(), "copy", "bob"])
+            .assert()
+            .failure();
+        let value: Value = serde_json::from_str(
+            std::str::from_utf8(&assert.get_output().stderr)
+                .unwrap()
+                .trim(),
+        )
+        .unwrap();
+        assert_eq!(value["error_kind"], serde_json::json!("counter_overflow"));
+
+        // Counter on disk is still u64::MAX — no save fired.
+        let listed = list_accounts_json(&path);
+        assert_eq!(
+            listed["accounts"][0]["counter"],
+            serde_json::json!(u64::MAX)
+        );
+    }
+
+    #[test]
+    fn json_copy_ignores_vault_clipboard_clear_enabled_setting() {
+        // Pre-set clipboard.clear_enabled = true via `settings set`
+        // and confirm `copy` succeeds without scheduling anything that
+        // would change behavior. CLI is stateless — there is no
+        // visible auto-clear hook to assert, so we assert the copy
+        // succeeds and exits cleanly (no follow-on output) regardless
+        // of the persisted preference.
+        let (_dir, path) = fresh_vault_path();
+        create_vault_with(vec![make_totp("alice", Some("Acme"))], &path);
+
+        // (settings set lands in a later commit; for now assert the
+        // copy still succeeds against a freshly initialized vault
+        // whose default `clipboard.clear_enabled` is false. When
+        // `settings set` is implemented, this test will be extended
+        // to flip the flag first.)
+        let assert = paladin_dryrun("1")
+            .args(["--json", "--vault", path.to_str().unwrap(), "copy", "alice"])
+            .assert()
+            .success();
+        let value: Value = serde_json::from_str(
+            std::str::from_utf8(&assert.get_output().stdout)
+                .unwrap()
+                .trim(),
+        )
+        .unwrap();
+        assert_eq!(value["copied"], serde_json::json!(true));
+    }
 }
