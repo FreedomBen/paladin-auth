@@ -770,7 +770,7 @@ can be ticked.
 - [x] `import` of a plaintext / malformed Paladin bundle rejects without
   prompting for a bundle passphrase
   (`paladin_core::classify_paladin_import_precheck` routing).
-- [ ] `[PTY]` `import` of an encrypted Paladin bundle prompts once for
+- [x] `[PTY]` `import` of an encrypted Paladin bundle prompts once for
   the bundle passphrase before calling `import::from_file`.
 - [ ] `[PTY]` `import` of an encrypted Paladin bundle assigns fresh
   UUIDv4 IDs to inserted/appended rows while preserving source

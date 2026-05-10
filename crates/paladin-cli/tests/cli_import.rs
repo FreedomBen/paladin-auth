@@ -15,13 +15,20 @@
 //! happy paths require a scripted `/dev/tty` and live in the
 //! dedicated PTY harness called out in `IMPLEMENTATION_PLAN_02_CLI.md`.
 
+mod common;
+
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use assert_cmd::Command;
-use paladin_core::{parse_otpauth, ImportConflict, Store, Vault, VaultInit};
+use paladin_core::{
+    export, parse_otpauth, Argon2Params, EncryptionOptions, ImportConflict, Store, Vault, VaultInit,
+};
+use secrecy::SecretString;
 use serde_json::Value;
 use tempfile::TempDir;
+
+use common::Pty;
 
 fn paladin() -> Command {
     let mut cmd = Command::cargo_bin("paladin").expect("cargo bin");
@@ -600,4 +607,86 @@ fn imported_account_is_persisted_to_disk() {
 fn default_import_conflict_constant_is_skip() {
     let policy: ImportConflict = ImportConflict::Skip;
     assert!(matches!(policy, ImportConflict::Skip));
+}
+
+// =========================================================================
+// Encrypted Paladin bundle PTY tests
+// =========================================================================
+
+/// §5 prompt label fired by `paladin import` after
+/// `classify_paladin_import_precheck` returns `PromptForPassphrase`
+/// for an encrypted Paladin bundle.
+const PROMPT_BUNDLE_PASSPHRASE: &str = "Bundle passphrase: ";
+
+/// Build an encrypted Paladin bundle whose contents are the accounts
+/// currently held in `src_vault`. Uses the §4.4 minimum Argon2id
+/// parameters so the test stays fast in CI; the bundle still goes
+/// through the real `paladin_core::export::encrypted` writer.
+fn build_encrypted_bundle(src_vault: &Vault, passphrase: &str) -> Vec<u8> {
+    let pp = SecretString::from(passphrase.to_string());
+    let params = Argon2Params {
+        m_kib: 8192,
+        t: 1,
+        p: 1,
+    };
+    let opts = EncryptionOptions::with_params(pp, params).expect("opts");
+    export::encrypted(src_vault, opts).expect("encrypt bundle")
+}
+
+#[test]
+fn pty_encrypted_paladin_bundle_prompts_once_for_bundle_passphrase() {
+    // §5: an encrypted Paladin bundle import must prompt exactly
+    // once via `/dev/tty` for the bundle passphrase before
+    // `import::from_file` is called. The destination vault is
+    // plaintext on purpose so the *only* prompt that fires is the
+    // bundle prompt — that keeps the "exactly once" assertion
+    // unambiguous.
+    let (src_dir, src_vault_path) = fresh_vault_path();
+    let now = std::time::SystemTime::now();
+
+    // Build an in-process source vault with one account, then
+    // serialize it as an encrypted Paladin bundle.
+    let (mut src_vault, _src_store) =
+        Store::create(&src_vault_path, VaultInit::Plaintext).expect("create src vault");
+    let validated = parse_otpauth(TOTP_URI_ALICE, now).expect("parse");
+    src_vault.add(validated.account);
+    let bundle_bytes = build_encrypted_bundle(&src_vault, "bundle-secret");
+
+    let bundle_path = src_dir.path().join("alice.paladin");
+    write_file(&bundle_path, &bundle_bytes);
+
+    // Destination vault: plaintext, so no unlock prompt fires.
+    let (_dst_dir, dst_path) = fresh_vault_path();
+    create_empty_plaintext_vault(&dst_path);
+
+    let mut pty = Pty::spawn(
+        [
+            "--vault",
+            dst_path.to_str().unwrap(),
+            "import",
+            bundle_path.to_str().unwrap(),
+        ],
+        &[],
+    );
+    pty.expect(PROMPT_BUNDLE_PASSPHRASE);
+    pty.send_line("bundle-secret");
+    let exit = pty.wait_for_exit();
+    exit.assert_exit(0);
+
+    // The bundle prompt must have fired *exactly once* — locks the
+    // §5 "prompted once per prompt target" rule for encrypted
+    // Paladin bundles.
+    let prompt_count = exit.transcript.matches(PROMPT_BUNDLE_PASSPHRASE).count();
+    assert_eq!(
+        prompt_count, 1,
+        "bundle passphrase prompt must fire exactly once, transcript:\n{}",
+        exit.transcript,
+    );
+
+    // The imported account is present on the destination vault.
+    let listed = list_accounts_json(&dst_path);
+    let accounts = listed["accounts"].as_array().expect("accounts array");
+    assert_eq!(accounts.len(), 1, "exactly one imported account");
+    assert_eq!(accounts[0]["label"], serde_json::json!("alice"));
+    assert_eq!(accounts[0]["issuer"], serde_json::json!("Acme"));
 }
