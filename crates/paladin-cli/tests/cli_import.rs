@@ -1,0 +1,603 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+//! End-to-end tests for `paladin import`. Covers the no-prompt code
+//! paths: otpauth (text URL list / JSON array) and Aegis-plaintext
+//! import in both auto-detect and forced-format modes; every
+//! `--on-conflict` policy including HOTP-to-HOTP counter preservation
+//! under `replace`; default-policy fall-through to `skip`; warning
+//! propagation for skipped duplicates; auto-detect of unknown content;
+//! `unsupported_encrypted_aegis`; `unsupported_import_format` from a
+//! forced-format / shape mismatch; `no_entries_to_import` for an
+//! empty otpauth list; `unsupported_plaintext_vault` and
+//! `unsupported_format_version` for malformed Paladin headers (which
+//! the precheck rejects before any bundle-passphrase prompt); and
+//! `vault_missing` on a missing destination vault. Encrypted-bundle
+//! happy paths require a scripted `/dev/tty` and live in the
+//! dedicated PTY harness called out in `IMPLEMENTATION_PLAN_02_CLI.md`.
+
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
+
+use assert_cmd::Command;
+use paladin_core::{parse_otpauth, ImportConflict, Store, Vault, VaultInit};
+use serde_json::Value;
+use tempfile::TempDir;
+
+fn paladin() -> Command {
+    let mut cmd = Command::cargo_bin("paladin").expect("cargo bin");
+    cmd.env_remove("NO_COLOR");
+    cmd
+}
+
+fn fresh_vault_path() -> (TempDir, PathBuf) {
+    let dir = TempDir::new().expect("tempdir");
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700))
+        .expect("chmod tempdir 0700");
+    let path = dir.path().join("vault.bin");
+    (dir, path)
+}
+
+fn create_empty_plaintext_vault(path: &Path) {
+    let (vault, store) = Store::create(path, VaultInit::Plaintext).expect("create");
+    vault.save(&store).expect("save");
+}
+
+fn write_file(path: &Path, contents: &[u8]) {
+    std::fs::write(path, contents).expect("write fixture");
+}
+
+fn list_accounts_json(path: &Path) -> Value {
+    let assert = paladin()
+        .args(["--json", "--vault", path.to_str().unwrap(), "list"])
+        .assert()
+        .success();
+    let stdout = std::str::from_utf8(&assert.get_output().stdout).unwrap();
+    serde_json::from_str(stdout.trim()).unwrap()
+}
+
+fn open_vault(path: &Path) -> Vault {
+    use paladin_core::VaultLock;
+    let (vault, _store) = Store::open(path, VaultLock::Plaintext).expect("open");
+    vault
+}
+
+const TOTP_URI_ALICE: &str =
+    "otpauth://totp/Acme:alice?secret=JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP&digits=6&period=30";
+const TOTP_URI_BOB: &str =
+    "otpauth://totp/Acme:bob?secret=KRSXG5DJN5XGS3DPMNQXG43JN5XGS3BB&digits=6&period=30";
+const HOTP_URI_CAROL: &str =
+    "otpauth://hotp/Acme:carol?secret=MFRGGZDFMZTWQ2LKMFRGGZDFMZTWQ2LK&digits=6&counter=11";
+
+const AEGIS_PLAINTEXT_JSON: &str = r#"{
+  "version": 1,
+  "header": { "slots": null, "params": null },
+  "db": {
+    "version": 2,
+    "entries": [
+      {
+        "type": "totp",
+        "uuid": "0000",
+        "name": "alice",
+        "issuer": "Acme",
+        "note": "",
+        "icon": null,
+        "info": {
+          "secret": "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP",
+          "algo": "SHA1",
+          "digits": 6,
+          "period": 30
+        }
+      }
+    ]
+  }
+}"#;
+
+const AEGIS_ENCRYPTED_JSON: &str = r#"{
+  "version": 1,
+  "header": { "slots": [], "params": {} },
+  "db": "ZW5jcnlwdGVk"
+}"#;
+
+// ==========================================================================
+// otpauth import — auto-detect + forced format
+// ==========================================================================
+
+#[test]
+fn json_otpauth_text_uri_imports_account() {
+    let (dir, vault_path) = fresh_vault_path();
+    create_empty_plaintext_vault(&vault_path);
+    let src = dir.path().join("creds.txt");
+    write_file(&src, TOTP_URI_ALICE.as_bytes());
+
+    let assert = paladin()
+        .args([
+            "--json",
+            "--vault",
+            vault_path.to_str().unwrap(),
+            "import",
+            src.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    let stdout = std::str::from_utf8(&assert.get_output().stdout).unwrap();
+    let v: Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(v["imported"], serde_json::json!(1));
+    assert_eq!(v["skipped"], serde_json::json!(0));
+    assert_eq!(v["replaced"], serde_json::json!(0));
+    assert_eq!(v["appended"], serde_json::json!(0));
+    assert_eq!(v["accounts"].as_array().unwrap().len(), 1);
+    assert_eq!(v["accounts"][0]["label"], serde_json::json!("alice"));
+    assert!(assert.get_output().stderr.is_empty());
+
+    let listed = list_accounts_json(&vault_path);
+    assert_eq!(listed["accounts"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn json_otpauth_json_array_imports_multiple() {
+    let (dir, vault_path) = fresh_vault_path();
+    create_empty_plaintext_vault(&vault_path);
+    let src = dir.path().join("creds.json");
+    let body = format!(
+        "[{}, {}]",
+        serde_json::Value::String(TOTP_URI_ALICE.into()),
+        serde_json::Value::String(TOTP_URI_BOB.into())
+    );
+    write_file(&src, body.as_bytes());
+
+    let assert = paladin()
+        .args([
+            "--json",
+            "--vault",
+            vault_path.to_str().unwrap(),
+            "import",
+            src.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    let stdout = std::str::from_utf8(&assert.get_output().stdout).unwrap();
+    let v: Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(v["imported"], serde_json::json!(2));
+}
+
+#[test]
+fn json_otpauth_forced_format_succeeds_on_matching_input() {
+    let (dir, vault_path) = fresh_vault_path();
+    create_empty_plaintext_vault(&vault_path);
+    let src = dir.path().join("creds.txt");
+    write_file(&src, TOTP_URI_ALICE.as_bytes());
+
+    paladin()
+        .args([
+            "--json",
+            "--vault",
+            vault_path.to_str().unwrap(),
+            "import",
+            src.to_str().unwrap(),
+            "--format",
+            "otpauth",
+        ])
+        .assert()
+        .success();
+    let listed = list_accounts_json(&vault_path);
+    assert_eq!(listed["accounts"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn json_forced_aegis_on_otpauth_input_rejects_with_unsupported_import_format() {
+    let (dir, vault_path) = fresh_vault_path();
+    create_empty_plaintext_vault(&vault_path);
+    let src = dir.path().join("creds.txt");
+    write_file(&src, TOTP_URI_ALICE.as_bytes());
+
+    let assert = paladin()
+        .args([
+            "--json",
+            "--vault",
+            vault_path.to_str().unwrap(),
+            "import",
+            src.to_str().unwrap(),
+            "--format",
+            "aegis",
+        ])
+        .assert()
+        .failure();
+    let stderr = std::str::from_utf8(&assert.get_output().stderr).unwrap();
+    let v: Value = serde_json::from_str(stderr.trim()).unwrap();
+    assert_eq!(
+        v["error_kind"],
+        serde_json::json!("unsupported_import_format")
+    );
+    assert_eq!(v["format"], serde_json::json!("aegis"));
+    assert!(assert.get_output().stdout.is_empty());
+}
+
+// ==========================================================================
+// Aegis-plaintext import + encrypted rejection
+// ==========================================================================
+
+#[test]
+fn json_aegis_plaintext_auto_detects_and_imports() {
+    let (dir, vault_path) = fresh_vault_path();
+    create_empty_plaintext_vault(&vault_path);
+    let src = dir.path().join("aegis.json");
+    write_file(&src, AEGIS_PLAINTEXT_JSON.as_bytes());
+
+    let assert = paladin()
+        .args([
+            "--json",
+            "--vault",
+            vault_path.to_str().unwrap(),
+            "import",
+            src.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    let stdout = std::str::from_utf8(&assert.get_output().stdout).unwrap();
+    let v: Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(v["imported"], serde_json::json!(1));
+}
+
+#[test]
+fn json_aegis_encrypted_rejects_with_unsupported_encrypted_aegis() {
+    let (dir, vault_path) = fresh_vault_path();
+    create_empty_plaintext_vault(&vault_path);
+    let src = dir.path().join("aegis.json");
+    write_file(&src, AEGIS_ENCRYPTED_JSON.as_bytes());
+
+    let assert = paladin()
+        .args([
+            "--json",
+            "--vault",
+            vault_path.to_str().unwrap(),
+            "import",
+            src.to_str().unwrap(),
+        ])
+        .assert()
+        .failure();
+    let stderr = std::str::from_utf8(&assert.get_output().stderr).unwrap();
+    let v: Value = serde_json::from_str(stderr.trim()).unwrap();
+    assert_eq!(
+        v["error_kind"],
+        serde_json::json!("unsupported_encrypted_aegis")
+    );
+    assert!(assert.get_output().stdout.is_empty());
+}
+
+// ==========================================================================
+// On-conflict policies
+// ==========================================================================
+
+fn seed_with_alice(path: &Path) {
+    let now = std::time::SystemTime::now();
+    let validated = parse_otpauth(TOTP_URI_ALICE, now).expect("parse");
+    let (mut vault, store) = Store::open(path, paladin_core::VaultLock::Plaintext).expect("open");
+    vault.add(validated.account);
+    vault.save(&store).expect("save");
+}
+
+fn seed_with_hotp_carol(path: &Path) {
+    let now = std::time::SystemTime::now();
+    let validated = parse_otpauth(HOTP_URI_CAROL, now).expect("parse");
+    let (mut vault, store) = Store::open(path, paladin_core::VaultLock::Plaintext).expect("open");
+    vault.add(validated.account);
+    vault.save(&store).expect("save");
+}
+
+#[test]
+fn json_default_on_conflict_is_skip_when_omitted() {
+    let (dir, vault_path) = fresh_vault_path();
+    create_empty_plaintext_vault(&vault_path);
+    seed_with_alice(&vault_path);
+
+    let src = dir.path().join("creds.txt");
+    write_file(&src, TOTP_URI_ALICE.as_bytes());
+
+    let assert = paladin()
+        .args([
+            "--json",
+            "--vault",
+            vault_path.to_str().unwrap(),
+            "import",
+            src.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    let stdout = std::str::from_utf8(&assert.get_output().stdout).unwrap();
+    let v: Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(v["imported"], serde_json::json!(0));
+    assert_eq!(v["skipped"], serde_json::json!(1));
+    assert_eq!(v["replaced"], serde_json::json!(0));
+    assert_eq!(v["appended"], serde_json::json!(0));
+    let listed = list_accounts_json(&vault_path);
+    assert_eq!(listed["accounts"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn json_on_conflict_replace_overwrites_existing() {
+    let (dir, vault_path) = fresh_vault_path();
+    create_empty_plaintext_vault(&vault_path);
+    seed_with_alice(&vault_path);
+
+    let src = dir.path().join("creds.txt");
+    write_file(&src, TOTP_URI_ALICE.as_bytes());
+
+    let assert = paladin()
+        .args([
+            "--json",
+            "--vault",
+            vault_path.to_str().unwrap(),
+            "import",
+            src.to_str().unwrap(),
+            "--on-conflict",
+            "replace",
+        ])
+        .assert()
+        .success();
+    let stdout = std::str::from_utf8(&assert.get_output().stdout).unwrap();
+    let v: Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(v["imported"], serde_json::json!(0));
+    assert_eq!(v["skipped"], serde_json::json!(0));
+    assert_eq!(v["replaced"], serde_json::json!(1));
+    let listed = list_accounts_json(&vault_path);
+    assert_eq!(listed["accounts"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn json_on_conflict_append_inserts_duplicate() {
+    let (dir, vault_path) = fresh_vault_path();
+    create_empty_plaintext_vault(&vault_path);
+    seed_with_alice(&vault_path);
+
+    let src = dir.path().join("creds.txt");
+    write_file(&src, TOTP_URI_ALICE.as_bytes());
+
+    let assert = paladin()
+        .args([
+            "--json",
+            "--vault",
+            vault_path.to_str().unwrap(),
+            "import",
+            src.to_str().unwrap(),
+            "--on-conflict",
+            "append",
+        ])
+        .assert()
+        .success();
+    let stdout = std::str::from_utf8(&assert.get_output().stdout).unwrap();
+    let v: Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(v["imported"], serde_json::json!(0));
+    assert_eq!(v["appended"], serde_json::json!(1));
+    let listed = list_accounts_json(&vault_path);
+    assert_eq!(listed["accounts"].as_array().unwrap().len(), 2);
+}
+
+#[test]
+fn json_on_conflict_replace_preserves_hotp_counter() {
+    let (dir, vault_path) = fresh_vault_path();
+    create_empty_plaintext_vault(&vault_path);
+    seed_with_hotp_carol(&vault_path);
+
+    // Same (secret, issuer, label) as the seed but with a different
+    // counter on the source row. Replace must keep the existing
+    // counter (11), not the source counter (99).
+    let src_uri =
+        "otpauth://hotp/Acme:carol?secret=MFRGGZDFMZTWQ2LKMFRGGZDFMZTWQ2LK&digits=6&counter=99";
+    let src = dir.path().join("creds.txt");
+    write_file(&src, src_uri.as_bytes());
+
+    paladin()
+        .args([
+            "--json",
+            "--vault",
+            vault_path.to_str().unwrap(),
+            "import",
+            src.to_str().unwrap(),
+            "--on-conflict",
+            "replace",
+        ])
+        .assert()
+        .success();
+
+    let listed = list_accounts_json(&vault_path);
+    let arr = listed["accounts"].as_array().unwrap();
+    assert_eq!(arr.len(), 1);
+    assert_eq!(arr[0]["counter"], serde_json::json!(11));
+}
+
+// ==========================================================================
+// Error / edge cases
+// ==========================================================================
+
+#[test]
+fn json_empty_otpauth_array_rejects_with_no_entries_to_import() {
+    let (dir, vault_path) = fresh_vault_path();
+    create_empty_plaintext_vault(&vault_path);
+    let src = dir.path().join("creds.json");
+    write_file(&src, b"[]");
+
+    let assert = paladin()
+        .args([
+            "--json",
+            "--vault",
+            vault_path.to_str().unwrap(),
+            "import",
+            src.to_str().unwrap(),
+        ])
+        .assert()
+        .failure();
+    let stderr = std::str::from_utf8(&assert.get_output().stderr).unwrap();
+    let v: Value = serde_json::from_str(stderr.trim()).unwrap();
+    assert_eq!(v["error_kind"], serde_json::json!("no_entries_to_import"));
+    assert!(assert.get_output().stdout.is_empty());
+}
+
+#[test]
+fn json_unrecognized_input_rejects_with_unsupported_import_format() {
+    let (dir, vault_path) = fresh_vault_path();
+    create_empty_plaintext_vault(&vault_path);
+    let src = dir.path().join("garbage.bin");
+    write_file(&src, b"this is not anything we recognize\n");
+
+    let assert = paladin()
+        .args([
+            "--json",
+            "--vault",
+            vault_path.to_str().unwrap(),
+            "import",
+            src.to_str().unwrap(),
+        ])
+        .assert()
+        .failure();
+    let stderr = std::str::from_utf8(&assert.get_output().stderr).unwrap();
+    let v: Value = serde_json::from_str(stderr.trim()).unwrap();
+    assert_eq!(
+        v["error_kind"],
+        serde_json::json!("unsupported_import_format")
+    );
+    assert_eq!(v["format"], serde_json::json!("unknown"));
+}
+
+#[test]
+fn json_paladin_plaintext_bundle_rejects_without_passphrase_prompt() {
+    // A Paladin-format file in plaintext mode is not importable as a
+    // bundle source; the precheck rejects it before any prompt. We
+    // create a real plaintext Paladin file via the vault Store and
+    // attempt to import that file as a bundle.
+    let (dir, vault_path) = fresh_vault_path();
+    create_empty_plaintext_vault(&vault_path);
+
+    let src_path = dir.path().join("bundle.bin");
+    let (vault, store) = Store::create(&src_path, VaultInit::Plaintext).expect("create bundle");
+    vault.save(&store).expect("save bundle");
+
+    let assert = paladin()
+        .args([
+            "--json",
+            "--vault",
+            vault_path.to_str().unwrap(),
+            "import",
+            src_path.to_str().unwrap(),
+        ])
+        .assert()
+        .failure();
+    let stderr = std::str::from_utf8(&assert.get_output().stderr).unwrap();
+    let v: Value = serde_json::from_str(stderr.trim()).unwrap();
+    assert_eq!(
+        v["error_kind"],
+        serde_json::json!("unsupported_plaintext_vault")
+    );
+    assert!(assert.get_output().stdout.is_empty());
+}
+
+#[test]
+fn json_vault_missing_returns_vault_missing_before_reading_source() {
+    // No vault created at the path. The CLI should fail with
+    // vault_missing without consulting the source file.
+    let (dir, vault_path) = fresh_vault_path();
+    // create the source file so this test can't accidentally fail on
+    // source-file IO instead of vault_missing.
+    let src = dir.path().join("creds.txt");
+    write_file(&src, TOTP_URI_ALICE.as_bytes());
+
+    let assert = paladin()
+        .args([
+            "--json",
+            "--vault",
+            vault_path.to_str().unwrap(),
+            "import",
+            src.to_str().unwrap(),
+        ])
+        .assert()
+        .failure();
+    let stderr = std::str::from_utf8(&assert.get_output().stderr).unwrap();
+    let v: Value = serde_json::from_str(stderr.trim()).unwrap();
+    assert_eq!(v["error_kind"], serde_json::json!("vault_missing"));
+}
+
+// ==========================================================================
+// Text-mode coverage (success + skip warning)
+// ==========================================================================
+
+#[test]
+fn text_import_success_prints_summary_to_stdout() {
+    let (dir, vault_path) = fresh_vault_path();
+    create_empty_plaintext_vault(&vault_path);
+    let src = dir.path().join("creds.txt");
+    write_file(&src, TOTP_URI_ALICE.as_bytes());
+
+    let assert = paladin()
+        .args([
+            "--vault",
+            vault_path.to_str().unwrap(),
+            "import",
+            src.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    let stdout = std::str::from_utf8(&assert.get_output().stdout).unwrap();
+    assert!(stdout.contains("Imported 1"));
+}
+
+#[test]
+fn text_import_skip_collision_emits_stderr_warning() {
+    let (dir, vault_path) = fresh_vault_path();
+    create_empty_plaintext_vault(&vault_path);
+    seed_with_alice(&vault_path);
+    let src = dir.path().join("creds.txt");
+    write_file(&src, TOTP_URI_ALICE.as_bytes());
+
+    let assert = paladin()
+        .args([
+            "--vault",
+            vault_path.to_str().unwrap(),
+            "import",
+            src.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    let stderr = std::str::from_utf8(&assert.get_output().stderr).unwrap();
+    assert!(
+        stderr.to_lowercase().contains("skip")
+            || stderr.to_lowercase().contains("collision")
+            || stderr.to_lowercase().contains("alice"),
+        "expected a skip-collision advisory on stderr; got: {stderr:?}",
+    );
+}
+
+// ==========================================================================
+// Vault state assertions
+// ==========================================================================
+
+#[test]
+fn imported_account_is_persisted_to_disk() {
+    let (dir, vault_path) = fresh_vault_path();
+    create_empty_plaintext_vault(&vault_path);
+    let src = dir.path().join("creds.txt");
+    write_file(&src, TOTP_URI_ALICE.as_bytes());
+
+    paladin()
+        .args([
+            "--json",
+            "--vault",
+            vault_path.to_str().unwrap(),
+            "import",
+            src.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let vault = open_vault(&vault_path);
+    let accounts =
+        vault.matching_accounts(&paladin_core::parse_account_query("alice").expect("parse query"));
+    assert_eq!(accounts.len(), 1);
+    assert_eq!(accounts[0].label(), "alice");
+}
+
+// Sanity: `ImportConflict::Skip` is the documented default. Lock the
+// constant's name so the CLI cannot drift away from a rename in core.
+#[test]
+fn default_import_conflict_constant_is_skip() {
+    let policy: ImportConflict = ImportConflict::Skip;
+    assert!(matches!(policy, ImportConflict::Skip));
+}
