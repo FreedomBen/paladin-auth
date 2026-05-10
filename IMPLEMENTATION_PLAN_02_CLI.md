@@ -619,7 +619,7 @@ can be ticked.
 ### `add` (`tests/cli_add.rs`)
 
 - [x] `add --uri` succeeds and the account appears in `list`.
-- [ ] `[PTY]` Interactive `add` reads the manual fields once from
+- [x] `[PTY]` Interactive `add` reads the manual fields once from
   `/dev/tty` (hidden secret entry, manual-mode defaults), routes them
   through `validate_manual`, and never reprompts on invalid input.
 - [ ] `[PTY]` Interactive `add` with no `/dev/tty` exits with `io_error`

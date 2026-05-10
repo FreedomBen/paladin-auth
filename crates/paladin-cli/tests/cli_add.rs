@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 //! End-to-end tests for `paladin add`. Covers the no-prompt input
-//! modes only — `--uri`, manual flags, mode-combination rejection,
-//! `--json` interactive rejection, and duplicate detection. Interactive
-//! happy-path coverage requires a scripted `/dev/tty` and lands with
-//! the dedicated PTY harness called out in
-//! `IMPLEMENTATION_PLAN_02_CLI.md`. `--qr` happy-path coverage needs
-//! synthetic QR fixtures and lands alongside that change.
+//! modes (`--uri`, manual flags, mode-combination rejection,
+//! `--json` interactive rejection, and duplicate detection) plus the
+//! `[PTY]` interactive happy / invalid-input flows that drive the
+//! shared `tests/common/mod.rs` PTY harness so writes to `/dev/tty`
+//! and `rpassword` reads round-trip end to end. `--qr` happy-path
+//! coverage still needs synthetic QR fixtures and lands alongside
+//! that change.
+
+mod common;
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -15,6 +18,8 @@ use assert_cmd::Command;
 use paladin_core::{Store, VaultInit};
 use serde_json::Value;
 use tempfile::TempDir;
+
+use common::Pty;
 
 fn paladin() -> Command {
     let mut cmd = Command::cargo_bin("paladin").expect("cargo bin");
@@ -583,4 +588,94 @@ fn json_missing_vault_rejects_with_vault_missing() {
     let value: Value = serde_json::from_str(stderr.trim()).unwrap();
     assert_eq!(value["error_kind"], serde_json::json!("vault_missing"));
     assert!(assert.get_output().stdout.is_empty());
+}
+
+// --- Interactive add via the scripted /dev/tty PTY harness ---------------
+
+const PROMPT_LABEL: &str = "Label: ";
+const PROMPT_ISSUER: &str = "Issuer (optional): ";
+const PROMPT_SECRET: &str = "Secret (Base32): ";
+const PROMPT_DIGITS: &str = "Digits [6]: ";
+const PROMPT_KIND: &str = "Kind [totp/hotp, default totp]: ";
+const PROMPT_PERIOD: &str = "Period seconds [30]: ";
+const PROMPT_ICON_HINT: &str = "Icon hint (slug, blank for default, 'none' to clear): ";
+
+#[test]
+fn pty_interactive_add_reads_manual_fields_once_with_defaults() {
+    // §5: interactive `add` collects the manual-mode form once from
+    // `/dev/tty`, hides the secret entry via `rpassword`, and routes
+    // the result through `paladin_core::validate_manual` with the
+    // §4.1 manual defaults (TOTP, SHA1, 6 digits, 30 s period,
+    // issuer-derived icon).
+    let (_dir, path) = fresh_vault_path();
+    create_empty_plaintext_vault(&path);
+
+    let mut pty = Pty::spawn(["--vault", path.to_str().unwrap(), "add"], &[]);
+    pty.expect(PROMPT_LABEL);
+    pty.send_line("alice");
+    pty.expect(PROMPT_ISSUER);
+    pty.send_line("Acme");
+    pty.expect(PROMPT_SECRET);
+    pty.send_line(LONG_BASE32_SECRET);
+    pty.expect(PROMPT_DIGITS);
+    pty.send_line("");
+    pty.expect(PROMPT_KIND);
+    pty.send_line("");
+    pty.expect(PROMPT_PERIOD);
+    pty.send_line("");
+    pty.expect(PROMPT_ICON_HINT);
+    pty.send_line("");
+    let exit = pty.wait_for_exit();
+    exit.assert_exit(0);
+
+    // Hidden secret entry: `rpassword` disables echo on the slave
+    // PTY, so the Base32 secret never reaches the parent transcript
+    // even though every visible prompt does.
+    exit.assert_transcript_lacks(LONG_BASE32_SECRET);
+
+    // Manual-mode defaults survive the round-trip through
+    // `validate_manual`.
+    let listed = list_accounts_json(&path);
+    let arr = listed["accounts"].as_array().expect("accounts array");
+    assert_eq!(arr.len(), 1);
+    let a = &arr[0];
+    assert_eq!(a["label"], serde_json::json!("alice"));
+    assert_eq!(a["issuer"], serde_json::json!("Acme"));
+    assert_eq!(a["kind"], serde_json::json!("totp"));
+    assert_eq!(a["digits"], serde_json::json!(6));
+    assert_eq!(a["period"], serde_json::json!(30));
+    assert_eq!(a["counter"], Value::Null);
+}
+
+#[test]
+fn pty_interactive_add_invalid_secret_rejects_without_reprompt() {
+    // §5: invalid input surfaces as a `validation_error` after the
+    // single-pass form is collected; the CLI never re-asks for the
+    // bad field. A bad-Base32 secret therefore exits non-zero, the
+    // vault is unchanged, and the harness reaches `wait_for_exit`
+    // immediately after the icon-hint reply (a reprompt would hang
+    // the child past the per-call PTY timeout).
+    let (_dir, path) = fresh_vault_path();
+    create_empty_plaintext_vault(&path);
+
+    let mut pty = Pty::spawn(["--vault", path.to_str().unwrap(), "add"], &[]);
+    pty.expect(PROMPT_LABEL);
+    pty.send_line("alice");
+    pty.expect(PROMPT_ISSUER);
+    pty.send_line("");
+    pty.expect(PROMPT_SECRET);
+    pty.send_line("not-base32!");
+    pty.expect(PROMPT_DIGITS);
+    pty.send_line("");
+    pty.expect(PROMPT_KIND);
+    pty.send_line("");
+    pty.expect(PROMPT_PERIOD);
+    pty.send_line("");
+    pty.expect(PROMPT_ICON_HINT);
+    pty.send_line("");
+    let exit = pty.wait_for_exit();
+    exit.assert_exit(1);
+
+    let listed = list_accounts_json(&path);
+    assert!(listed["accounts"].as_array().unwrap().is_empty());
 }
