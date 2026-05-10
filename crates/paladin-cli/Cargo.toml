@@ -35,7 +35,7 @@ name = "paladin"
 path = "src/main.rs"
 
 [dependencies]
-paladin-core = { path = "../paladin-core", features = ["error-serde"] }
+paladin-core = { path = "../paladin-core", version = "0.0.1", features = ["error-serde"] }
 clap = { version = "4.5", features = ["derive", "wrap_help"] }
 rpassword = "7.3"
 arboard = { version = "3.4", default-features = false }
@@ -62,4 +62,4 @@ tempfile = "3"
 # test boundary.
 qrcode = { version = "0.14", default-features = false, features = ["image"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
-paladin-core = { path = "../paladin-core", features = ["error-serde", "test-fault-injection"] }
+paladin-core = { path = "../paladin-core", version = "0.0.1", features = ["error-serde", "test-fault-injection"] }

@@ -560,7 +560,7 @@ with `counter_used: null`.
 - [x] Add the CLI integration tests and JSON golden snapshots below.
   Tracked at the bullet level in the Tests checklist; this top-level
   item only ticks once every Tests sub-bullet is checked.
-- [ ] Run the definition-of-done checks (ticks only when every
+- [x] Run the definition-of-done checks (ticks only when every
   Tests sub-bullet is also ticked).
 
 ## Tests (`assert_cmd` + temp dirs + insta golden where useful)
