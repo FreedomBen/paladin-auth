@@ -340,6 +340,63 @@ fn pty_set_confirmation_mismatch_rejects_with_invalid_passphrase_before_mutation
     assert_eq!(after, before, "vault file must not be mutated on mismatch");
 }
 
+#[test]
+fn pty_set_without_dev_tty_surfaces_io_error_passphrase_prompt() {
+    // §5: when `/dev/tty` cannot be opened (no controlling terminal),
+    // any passphrase-prompt path must surface `io_error`
+    // `operation: "passphrase_prompt"`. `passphrase set` on a
+    // plaintext vault is the simplest fixture: no unlock prompt or
+    // destructive confirmation precedes the new-passphrase prompt,
+    // so the failure unambiguously originates from the passphrase
+    // prompt itself. Drive the path by exec-ing the binary through
+    // `setsid(1)` so the child is a fresh session leader and any
+    // `open("/dev/tty")` returns `ENXIO`.
+    use std::process::Stdio;
+
+    use common::paladin_command_without_tty;
+
+    let (_dir, path) = fresh_vault_path();
+    create_empty_plaintext_vault(&path);
+
+    let before = std::fs::read(&path).expect("read pre-set vault");
+    assert_eq!(before[9], 0, "fixture should be plaintext");
+
+    let output = paladin_command_without_tty()
+        .args(["--vault", path.to_str().unwrap(), "passphrase", "set"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("spawn paladin via setsid(1)");
+
+    assert!(
+        !output.status.success(),
+        "expected non-zero exit without /dev/tty; status = {:?}, \
+         stdout = {:?}, stderr = {}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.starts_with("paladin: ") || stderr.contains("\npaladin: "),
+        "expected `paladin:` text-mode prefix on the error line, got {stderr:?}",
+    );
+    // The `passphrase_prompt` operation tag is asserted verbatim so
+    // a future refactor that mis-tags the prompt I/O failure (e.g.
+    // as `confirmation_prompt`) trips this test loudly.
+    assert!(
+        stderr.contains("I/O error during passphrase_prompt"),
+        "expected `passphrase_prompt` operation tag, got {stderr:?}",
+    );
+    // Vault on disk must be untouched (still plaintext, byte-identical).
+    let after = std::fs::read(&path).expect("read vault");
+    assert_eq!(
+        after, before,
+        "vault must remain unchanged when the prompt itself fails"
+    );
+}
+
 // =========================================================================
 // passphrase change
 // =========================================================================

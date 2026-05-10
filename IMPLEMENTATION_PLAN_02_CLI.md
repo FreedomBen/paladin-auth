@@ -731,7 +731,7 @@ can be ticked.
 - [x] `[PTY]` Confirmation mismatch on the new passphrase surfaces
   `invalid_passphrase` with `reason: "confirmation_mismatch"` before
   mutation.
-- [ ] `[PTY]` No-`/dev/tty` passphrase prompt failure surfaces
+- [x] `[PTY]` No-`/dev/tty` passphrase prompt failure surfaces
   `io_error` `operation: "passphrase_prompt"`.
 - [x] Wrong starting state — `passphrase set` on encrypted vault —
   surfaces `invalid_state` before any unlock or new-passphrase prompt.
