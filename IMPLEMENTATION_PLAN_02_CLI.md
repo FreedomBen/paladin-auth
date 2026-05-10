@@ -891,7 +891,7 @@ can be ticked.
 - [x] `[PTY]` Stream cleanliness for `passphrase set` under `--json`:
   with `/dev/tty` rerouted to the test harness, stdout / stderr stay
   byte-clean (the prompt is consumed via `/dev/tty` only).
-- [ ] No `init` / `init --force` / `passphrase remove --yes` /
+- [x] No `init` / `init --force` / `passphrase remove --yes` /
   plaintext-export advisory text appears under `--json` (centralized
   cross-command sweep).
 
