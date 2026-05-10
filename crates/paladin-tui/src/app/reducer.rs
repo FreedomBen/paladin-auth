@@ -44,13 +44,39 @@ use crate::app::state::{compute_idle_deadline, render_error_message, AppState};
 /// Tick and clipboard-clear events are passthrough in terminal
 /// screens; their behavior fills in alongside the corresponding
 /// state slices (HOTP reveal expiry, auto-lock, clipboard auto-clear).
+///
+/// `AppEvent::Input` additionally rebases the auto-lock idle deadline
+/// on the event's `at` timestamp when the post-dispatch state is
+/// `Unlocked`, per `IMPLEMENTATION_PLAN_03_TUI.md` "Auto-lock (per §6)":
+/// *"Idle is reset by any `AppEvent::Input`."* The rebase delegates to
+/// [`compute_idle_deadline`] so the plaintext / disabled `None` cases
+/// fall out of [`paladin_core::IdlePolicy::should_arm`] rather than a
+/// local copy of the rule.
 #[must_use]
 pub fn reduce(state: AppState, event: AppEvent) -> (AppState, Vec<Effect>) {
     match event {
-        AppEvent::Input(input) => reduce_input(state, &input),
+        AppEvent::Input { event: input, at } => {
+            let (state, effects) = reduce_input(state, &input);
+            (refresh_idle_deadline_on_input(state, at), effects)
+        }
         AppEvent::EffectResult(result) => reduce_effect_result(state, result),
         AppEvent::Tick { .. } | AppEvent::ClipboardClear { .. } => (state, Vec::new()),
     }
+}
+
+/// Rebase [`AppState::Unlocked::idle_deadline`] on `at` when the
+/// post-Input state is `Unlocked`. No-op for every other variant —
+/// non-`Unlocked` screens carry no idle deadline.
+fn refresh_idle_deadline_on_input(mut state: AppState, at: Instant) -> AppState {
+    if let AppState::Unlocked {
+        ref mut idle_deadline,
+        ref vault,
+        ..
+    } = state
+    {
+        *idle_deadline = compute_idle_deadline(at, vault);
+    }
+    state
 }
 
 /// Apply an `EffectResult` delivered by the `run` boundary.

@@ -24,7 +24,19 @@ use paladin_core::{ClipboardClearToken, PaladinError, Store, Vault};
 pub enum AppEvent {
     /// Terminal input (keystroke, resize, focus change, …) translated
     /// from a `crossterm` event.
-    Input(crossterm::event::Event),
+    ///
+    /// `at` is the monotonic instant the boundary sampled when the
+    /// event was read from `crossterm`. The reducer feeds it into
+    /// [`paladin_core::IdlePolicy::next_deadline`] to refresh the
+    /// auto-lock idle deadline so the timer rebases on each keypress
+    /// — per `IMPLEMENTATION_PLAN_03_TUI.md` "Auto-lock (per §6)":
+    /// *"Idle is reset by any `AppEvent::Input`."*
+    Input {
+        /// The raw terminal event from `crossterm`.
+        event: crossterm::event::Event,
+        /// Monotonic clock sampled at input read time.
+        at: Instant,
+    },
 
     /// Wall-clock + monotonic tick.
     ///

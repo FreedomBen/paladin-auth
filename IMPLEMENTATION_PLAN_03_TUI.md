@@ -690,7 +690,7 @@ end-to-end.
   `paladin_core::policy::auto_lock::IdlePolicy::next_deadline(now,
   vault.is_encrypted(), settings)` on `Unlocked` + `enabled` +
   encrypted (i.e. `IdlePolicy::should_arm` is `true`).
-- [ ] `idle_deadline` resets on any `AppEvent::Input`.
+- [x] `idle_deadline` resets on any `AppEvent::Input`.
 - [ ] Transition to `Locked` fires when a
   `paladin_core::TICK_INTERVAL_MS` `Tick` observes
   `IdlePolicy::is_expired`.

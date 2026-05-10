@@ -32,11 +32,17 @@ use paladin_tui::prompt::PassphraseBuffer;
 // ---------------------------------------------------------------------------
 
 fn key(code: KeyCode) -> AppEvent {
-    AppEvent::Input(Event::Key(KeyEvent::new(code, KeyModifiers::NONE)))
+    AppEvent::Input {
+        event: Event::Key(KeyEvent::new(code, KeyModifiers::NONE)),
+        at: Instant::now(),
+    }
 }
 
 fn ctrl(code: KeyCode) -> AppEvent {
-    AppEvent::Input(Event::Key(KeyEvent::new(code, KeyModifiers::CONTROL)))
+    AppEvent::Input {
+        event: Event::Key(KeyEvent::new(code, KeyModifiers::CONTROL)),
+        at: Instant::now(),
+    }
 }
 
 fn missing(path: &str) -> AppState {
@@ -473,7 +479,10 @@ fn ctrl_c_only_fires_with_control_modifier() {
 fn non_key_input_event_yields_no_effect() {
     // Resize / focus / paste / mouse events on a terminal screen do
     // not quit; they pass through with no effects.
-    let evt = AppEvent::Input(Event::Resize(80, 24));
+    let evt = AppEvent::Input {
+        event: Event::Resize(80, 24),
+        at: Instant::now(),
+    };
     let (_, effects) = reduce(missing("/tmp/v.bin"), evt);
     assert!(effects.is_empty());
 }
@@ -544,10 +553,10 @@ fn typing_multiple_chars_on_unlock_accumulates_in_typed_order() {
 fn typing_uppercase_char_with_shift_modifier_appends_uppercase() {
     // crossterm reports the resolved character (e.g. 'A' for Shift+a),
     // so a Shift modifier on Char('A') must not block the append.
-    let evt = AppEvent::Input(Event::Key(KeyEvent::new(
-        KeyCode::Char('A'),
-        KeyModifiers::SHIFT,
-    )));
+    let evt = AppEvent::Input {
+        event: Event::Key(KeyEvent::new(KeyCode::Char('A'), KeyModifiers::SHIFT)),
+        at: Instant::now(),
+    };
     let (state, effects) = reduce(unlock("/tmp/v.bin"), evt);
     assert!(effects.is_empty());
     match state {
