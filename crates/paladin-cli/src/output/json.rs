@@ -151,6 +151,41 @@ pub fn write_copy_success(
     Ok(())
 }
 
+/// `paladin remove` success envelope per the §5 JSON shape table:
+/// `{ "removed": AccountSummary }`. The summary captures the state of
+/// the account at the moment of removal, so callers can correlate the
+/// removed entry with the prior `list` output by `id`.
+#[derive(Debug, Serialize)]
+struct RemoveSuccess<'a> {
+    removed: &'a AccountSummary,
+}
+
+/// Render the `paladin remove` success envelope.
+pub fn write_remove_success(account: &AccountSummary, mut out: impl Write) -> std::io::Result<()> {
+    let env = RemoveSuccess { removed: account };
+    serde_json::to_writer(&mut out, &env).map_err(std::io::Error::other)?;
+    writeln!(out)?;
+    Ok(())
+}
+
+/// `paladin rename` success envelope per the §5 JSON shape table:
+/// `{ "account": AccountSummary }`. The summary reflects the
+/// post-rename state — including the bumped `updated_at` — so JSON
+/// consumers can confirm the new label landed and observe the new
+/// timestamp without a follow-up `list`.
+#[derive(Debug, Serialize)]
+struct RenameSuccess<'a> {
+    account: &'a AccountSummary,
+}
+
+/// Render the `paladin rename` success envelope.
+pub fn write_rename_success(account: &AccountSummary, mut out: impl Write) -> std::io::Result<()> {
+    let env = RenameSuccess { account };
+    serde_json::to_writer(&mut out, &env).map_err(std::io::Error::other)?;
+    writeln!(out)?;
+    Ok(())
+}
+
 /// Render the `paladin add --qr` / `paladin import` success envelope.
 pub fn write_qr_import_success(
     report: &ImportReport,
@@ -403,6 +438,49 @@ mod tests {
         assert_eq!(v["copied"], serde_json::json!(true));
         assert_eq!(v["counter_used"], serde_json::Value::Null);
         assert_eq!(v["account"]["kind"], serde_json::json!("totp"));
+    }
+
+    #[test]
+    fn remove_success_envelope_carries_account_under_removed_key() {
+        use paladin_core::parse_otpauth;
+        use std::time::{Duration, SystemTime};
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let acct = parse_otpauth(
+            "otpauth://totp/Acme:alice?secret=JBSWY3DPEHPK3PXP&digits=6&period=30",
+            now,
+        )
+        .unwrap()
+        .account;
+        let summary = acct.summary();
+        let mut buf: Vec<u8> = Vec::new();
+        write_remove_success(&summary, &mut buf).expect("render");
+        let s = String::from_utf8(buf).expect("utf-8");
+        assert!(s.ends_with('\n'), "expected single trailing newline");
+        let v: serde_json::Value = serde_json::from_str(s.trim()).expect("valid json");
+        assert_eq!(v["removed"]["label"], serde_json::json!("alice"));
+        assert_eq!(v["removed"]["issuer"], serde_json::json!("Acme"));
+        assert_eq!(v["removed"]["kind"], serde_json::json!("totp"));
+    }
+
+    #[test]
+    fn rename_success_envelope_carries_account_under_account_key() {
+        use paladin_core::parse_otpauth;
+        use std::time::{Duration, SystemTime};
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let acct = parse_otpauth(
+            "otpauth://totp/Acme:newname?secret=JBSWY3DPEHPK3PXP&digits=6&period=30",
+            now,
+        )
+        .unwrap()
+        .account;
+        let summary = acct.summary();
+        let mut buf: Vec<u8> = Vec::new();
+        write_rename_success(&summary, &mut buf).expect("render");
+        let s = String::from_utf8(buf).expect("utf-8");
+        assert!(s.ends_with('\n'), "expected single trailing newline");
+        let v: serde_json::Value = serde_json::from_str(s.trim()).expect("valid json");
+        assert_eq!(v["account"]["label"], serde_json::json!("newname"));
+        assert_eq!(v["account"]["issuer"], serde_json::json!("Acme"));
     }
 
     #[test]

@@ -145,6 +145,24 @@ pub fn write_copy_success(account: &AccountSummary, mut out: impl Write) -> std:
     writeln!(out, "Copied {} code to clipboard.", display_label(account))
 }
 
+/// Print the success line for `paladin remove` to stdout, e.g.
+/// "Removed Acme:alice." Mirrors the §5 JSON envelope's `removed` key
+/// in human-readable form. The CLI prompts for destructive
+/// confirmation (or rejects under `--json` without `--yes`) before
+/// the mutation runs, so this success line only fires after a
+/// committed save.
+pub fn write_remove_success(account: &AccountSummary, mut out: impl Write) -> std::io::Result<()> {
+    writeln!(out, "Removed {}.", display_label(account))
+}
+
+/// Print the success line for `paladin rename` to stdout, e.g.
+/// "Renamed to Acme:newname." `account` reflects the post-rename
+/// state (new label + bumped `updated_at`) so the rendered line
+/// matches what a follow-up `list` would show.
+pub fn write_rename_success(account: &AccountSummary, mut out: impl Write) -> std::io::Result<()> {
+    writeln!(out, "Renamed to {}.", display_label(account))
+}
+
 /// Print the success summary for `paladin add --qr` (multi-entry) to
 /// stdout. Mirrors the §5 JSON envelope counts so text and JSON paths
 /// stay in sync. `--on-conflict=skip` is fixed for `add --qr`, so
@@ -294,6 +312,46 @@ mod tests {
         write_copy_success(&summary, &mut buf).expect("render");
         let s = String::from_utf8(buf).expect("utf-8");
         assert_eq!(s, "Copied bob code to clipboard.\n");
+    }
+
+    #[test]
+    fn remove_success_includes_label_and_trailing_newline() {
+        let acct = make_totp("alice", Some("Acme"));
+        let summary = acct.summary();
+        let mut buf: Vec<u8> = Vec::new();
+        write_remove_success(&summary, &mut buf).expect("render");
+        let s = String::from_utf8(buf).expect("utf-8");
+        assert_eq!(s, "Removed Acme:alice.\n");
+    }
+
+    #[test]
+    fn remove_success_falls_back_to_bare_label_when_issuer_empty() {
+        let acct = make_hotp("bob", None, 0);
+        let summary = acct.summary();
+        let mut buf: Vec<u8> = Vec::new();
+        write_remove_success(&summary, &mut buf).expect("render");
+        let s = String::from_utf8(buf).expect("utf-8");
+        assert_eq!(s, "Removed bob.\n");
+    }
+
+    #[test]
+    fn rename_success_renders_post_rename_label_with_trailing_newline() {
+        let acct = make_totp("newname", Some("Acme"));
+        let summary = acct.summary();
+        let mut buf: Vec<u8> = Vec::new();
+        write_rename_success(&summary, &mut buf).expect("render");
+        let s = String::from_utf8(buf).expect("utf-8");
+        assert_eq!(s, "Renamed to Acme:newname.\n");
+    }
+
+    #[test]
+    fn rename_success_falls_back_to_bare_label_when_issuer_empty() {
+        let acct = make_totp("newname", None);
+        let summary = acct.summary();
+        let mut buf: Vec<u8> = Vec::new();
+        write_rename_success(&summary, &mut buf).expect("render");
+        let s = String::from_utf8(buf).expect("utf-8");
+        assert_eq!(s, "Renamed to newname.\n");
     }
 
     #[test]
