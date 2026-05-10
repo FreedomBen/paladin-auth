@@ -622,7 +622,7 @@ can be ticked.
 - [x] `[PTY]` Interactive `add` reads the manual fields once from
   `/dev/tty` (hidden secret entry, manual-mode defaults), routes them
   through `validate_manual`, and never reprompts on invalid input.
-- [ ] `[PTY]` Interactive `add` with no `/dev/tty` exits with `io_error`
+- [x] `[PTY]` Interactive `add` with no `/dev/tty` exits with `io_error`
   `operation: "account_prompt"`.
 - [x] Mode combinations reject at parse time: `--uri` + `--qr`,
   `--qr` + `--allow-duplicate`, `--icon-hint` + `--no-icon-hint`,

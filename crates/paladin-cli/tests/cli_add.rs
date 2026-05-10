@@ -648,6 +648,55 @@ fn pty_interactive_add_reads_manual_fields_once_with_defaults() {
 }
 
 #[test]
+fn pty_interactive_add_without_dev_tty_surfaces_io_error_account_prompt() {
+    // §5: interactive `add` must read account fields from `/dev/tty`,
+    // never from stdin. When the child has no controlling terminal,
+    // `prompt::write_prompt`'s `OpenOptions::open("/dev/tty")` fails
+    // with `ENXIO` and the CLI exits with `io_error`,
+    // `operation: "account_prompt"`. Drive that path by exec-ing
+    // through `setsid(1)` so the child is a fresh session leader.
+    use std::process::Stdio;
+
+    let (_dir, path) = fresh_vault_path();
+    create_empty_plaintext_vault(&path);
+
+    let output = common::paladin_command_without_tty()
+        .args(["--vault", path.to_str().unwrap(), "add"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("spawn paladin via setsid(1)");
+
+    assert!(
+        !output.status.success(),
+        "expected non-zero exit without /dev/tty; status = {:?}, \
+         stdout = {:?}, stderr = {}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    // Text-mode `paladin: <message>` prefix from `output::error::render`.
+    assert!(
+        stderr.starts_with("paladin: "),
+        "expected `paladin:` text-mode prefix, got {stderr:?}",
+    );
+    // `PaladinError::IoError` Display is
+    // `"I/O error during {operation}: {source}"` per
+    // `paladin_core::error::PaladinError`. Asserting the operation tag
+    // verbatim guards against the renderer ever dropping it.
+    assert!(
+        stderr.contains("I/O error during account_prompt"),
+        "expected the §5 `account_prompt` operation tag in the \
+         rendered text, got {stderr:?}",
+    );
+    // The prompt failed before the vault could be mutated.
+    let listed = list_accounts_json(&path);
+    assert!(listed["accounts"].as_array().unwrap().is_empty());
+}
+
+#[test]
 fn pty_interactive_add_invalid_secret_rejects_without_reprompt() {
     // §5: invalid input surfaces as a `validation_error` after the
     // single-pass form is collected; the CLI never re-asks for the

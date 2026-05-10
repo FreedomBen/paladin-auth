@@ -14,6 +14,10 @@
 //! * `Pty` — a thin wrapper around `rexpect::PtySession` tailored to
 //!   the §5 prompt strings. Every `[PTY]`-tagged bullet in
 //!   `IMPLEMENTATION_PLAN_02_CLI.md` runs through this harness.
+//! * `paladin_command_without_tty()` — the no-controlling-tty
+//!   companion to `paladin_command()`. Used by the `[PTY]` bullets
+//!   that assert the `io_error` `operation: "..._prompt"` envelope
+//!   when `/dev/tty` cannot be opened.
 
 #![allow(dead_code)]
 
@@ -47,6 +51,31 @@ pub fn paladin() -> assert_cmd::Command {
 /// `Command` to hand off to `rexpect::session::spawn_command`.
 pub fn paladin_command() -> StdCommand {
     let mut cmd = StdCommand::cargo_bin("paladin").expect("cargo bin");
+    cmd.env_remove("NO_COLOR");
+    cmd
+}
+
+/// `std::process::Command` for `paladin` that runs without a
+/// controlling terminal. Wraps the binary in `setsid(1)` from
+/// util-linux so the child is exec'd into a fresh session, after
+/// which any in-process `open("/dev/tty")` returns `ENXIO`. The
+/// `--wait` flag propagates the wrapped program's exit code in the
+/// uncommon path where `setsid(1)` forks (caller already a session
+/// leader); on the common no-fork path it is a no-op because
+/// `setsid(1)` execs into `paladin` directly.
+///
+/// Used by `[PTY]` bullets that need to drive the
+/// `prompt::write_prompt` ENXIO branch end-to-end without scripting
+/// a real PTY (none exists, by definition). The workspace forbids
+/// `unsafe_code`, so we cannot call `setsid(2)` via `pre_exec`;
+/// `setsid(1)` is part of every Linux base install (util-linux) and
+/// gives the same effect.
+pub fn paladin_command_without_tty() -> StdCommand {
+    let paladin = StdCommand::cargo_bin("paladin").expect("cargo bin");
+    let bin = paladin.get_program().to_os_string();
+    let mut cmd = StdCommand::new("setsid");
+    cmd.arg("--wait");
+    cmd.arg(bin);
     cmd.env_remove("NO_COLOR");
     cmd
 }
