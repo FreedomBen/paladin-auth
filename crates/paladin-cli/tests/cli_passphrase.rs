@@ -1,15 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 //! End-to-end tests for `paladin passphrase {set,change,remove}`.
-//! These exercise the no-prompt error paths only — KDF flag
-//! validation, KDF precedence over `vault_missing` and
-//! `invalid_state`, the wrong-state gate (`set` on encrypted,
-//! `change` / `remove` on plaintext), `vault_missing` on a missing
-//! file, and the parse-time rejection of `passphrase remove --json`
-//! without `--yes`. Happy-path coverage (the new-passphrase prompt,
-//! unlock prompt, and destructive confirmation) requires a scripted
-//! `/dev/tty` and lands with the dedicated PTY harness called out in
-//! `IMPLEMENTATION_PLAN_02_CLI.md`.
+//! Covers the no-prompt error paths — KDF flag validation, KDF
+//! precedence over `vault_missing` and `invalid_state`, the
+//! wrong-state gate (`set` on encrypted, `change` / `remove` on
+//! plaintext), `vault_missing` on a missing file, and the
+//! parse-time rejection of `passphrase remove --json` without
+//! `--yes`. PTY-driven happy paths and prompt-I/O failures use the
+//! shared `tests/common/mod.rs` harness to script `/dev/tty`.
 //!
 //! The set-on-encrypted `invalid_state` test creates a real encrypted
 //! vault with the §4.4 minimum Argon2 parameters (`m_kib = 8192`,
@@ -17,6 +15,8 @@
 //! without hand-rolling header bytes; the wrong-state gate fires
 //! before any unlock attempt so the test never needs the passphrase
 //! again.
+
+mod common;
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -26,6 +26,19 @@ use paladin_core::{Argon2Params, EncryptionOptions, Store, VaultInit};
 use secrecy::SecretString;
 use serde_json::Value;
 use tempfile::TempDir;
+
+use common::Pty;
+
+/// `PALADIN\0` magic prefix on every vault file (DESIGN.md §4.6).
+const PALADIN_MAGIC: &[u8; 8] = b"PALADIN\0";
+
+/// Stable §5 prompt label for the first new-passphrase entry. Used by
+/// `init`, `passphrase set`, `passphrase change`, and
+/// `export --encrypted`.
+const PROMPT_NEW_PASSPHRASE: &str = "New passphrase: ";
+
+/// Stable §5 prompt label for the new-passphrase confirmation entry.
+const PROMPT_CONFIRM: &str = "Confirm passphrase: ";
 
 fn paladin() -> Command {
     let mut cmd = Command::cargo_bin("paladin").expect("cargo bin");
@@ -206,6 +219,65 @@ fn json_set_kdf_validation_wins_over_invalid_state_already_encrypted() {
         serde_json::json!("kdf_params_out_of_bounds")
     );
     assert_eq!(value["p"], serde_json::json!(999));
+}
+
+#[test]
+fn pty_set_on_open_plaintext_vault_succeeds_and_writes_encrypted_with_requested_kdf_params() {
+    // §5: `passphrase set` on a plaintext vault prompts for the new
+    // passphrase + a matching confirmation via `/dev/tty` (no unlock
+    // prompt: the source vault is plaintext), encrypts the vault
+    // under the requested Argon2id parameters, and prints the
+    // text-mode `Encrypted vault.` success line. Drive the prompts
+    // through the shared PTY harness with the §4.4 minimum KDF params
+    // so Argon2id stays fast in CI.
+    let (_dir, path) = fresh_vault_path();
+    create_empty_plaintext_vault(&path);
+
+    let mut pty = Pty::spawn(
+        [
+            "--vault",
+            path.to_str().unwrap(),
+            "passphrase",
+            "set",
+            "--kdf-memory-mib",
+            "8",
+            "--kdf-time",
+            "1",
+            "--kdf-parallelism",
+            "1",
+        ],
+        &[],
+    );
+    pty.expect(PROMPT_NEW_PASSPHRASE);
+    pty.send_line("hunter2-newpass");
+    pty.expect(PROMPT_CONFIRM);
+    pty.send_line("hunter2-newpass");
+    let exit = pty.wait_for_exit();
+    exit.assert_exit(0);
+    exit.assert_transcript_contains("Encrypted vault.");
+
+    // Post-state on disk: the vault is now encrypted under the
+    // requested KDF parameters. Header layout per DESIGN.md §4.6 —
+    // magic (8) + format_ver (1) + mode (1) + kdf_id (1) +
+    // m_kib LE u32 (4) + t LE u32 (4) + p LE u32 (4) + salt (16) +
+    // aead_id (1) + nonce (24).
+    let header = std::fs::read(&path).expect("read encrypted vault");
+    assert!(header.len() >= 64, "encrypted header should be ≥ 64 bytes");
+    assert_eq!(&header[..8], PALADIN_MAGIC);
+    assert_eq!(header[8], 1, "format_ver");
+    assert_eq!(header[9], 1, "mode == encrypted");
+    assert_eq!(header[10], 1, "kdf_id == Argon2id");
+    let m_kib = u32::from_le_bytes(header[11..15].try_into().unwrap());
+    let t = u32::from_le_bytes(header[15..19].try_into().unwrap());
+    let p = u32::from_le_bytes(header[19..23].try_into().unwrap());
+    assert_eq!(m_kib, 8 * 1024);
+    assert_eq!(t, 1);
+    assert_eq!(p, 1);
+    assert_eq!(header[39], 1, "aead_id == XChaCha20-Poly1305");
+
+    // File mode preserved at `0o600` across the rotation.
+    let perms = std::fs::metadata(&path).expect("metadata").permissions();
+    assert_eq!(perms.mode() & 0o7777, 0o600);
 }
 
 // =========================================================================

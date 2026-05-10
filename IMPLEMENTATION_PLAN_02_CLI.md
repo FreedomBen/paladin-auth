@@ -717,7 +717,7 @@ can be ticked.
 
 ### `passphrase set` / `change` / `remove` (`tests/cli_passphrase.rs`)
 
-- [ ] `[PTY]` `passphrase set` succeeds end-to-end against an open
+- [x] `[PTY]` `passphrase set` succeeds end-to-end against an open
   plaintext vault.
 - [ ] `[PTY]` `passphrase change` succeeds end-to-end against an open
   encrypted vault.
