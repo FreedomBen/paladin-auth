@@ -636,7 +636,7 @@ can be ticked.
 - [x] `add --json` with no input mode (no `--uri`, no `--qr`, no
   complete manual flag set) rejects at parse time with a JSON
   `validation_error` envelope.
-- [ ] `add --qr` against a synthetic multi-entry QR image uses fixed
+- [x] `add --qr` against a synthetic multi-entry QR image uses fixed
   `--on-conflict=skip` and emits the §5 `import`-shaped success envelope.
 - [x] Duplicate `(secret, issuer, label)` rejects with
   `duplicate_account` plus the existing `account` summary.

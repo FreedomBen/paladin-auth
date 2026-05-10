@@ -55,4 +55,11 @@ insta = { version = "1.40", features = ["json"] }
 # pinning convention for `clap` / `rpassword` / `arboard`.
 rexpect = "0.6.4"
 tempfile = "3"
+# Synthetic QR PNG fixture for `add --qr` integration tests. Mirrors
+# the dev-only QR encoder used in `paladin-core/tests/import_qr.rs`;
+# the thinness guard in `tests/thinness.rs` only scans `[dependencies]`
+# and `crates/paladin-cli/src/`, so the encoder lives entirely in the
+# test boundary.
+qrcode = { version = "0.14", default-features = false, features = ["image"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
 paladin-core = { path = "../paladin-core", features = ["error-serde", "test-fault-injection"] }

@@ -11,11 +11,14 @@
 
 mod common;
 
+use std::io::Cursor;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use assert_cmd::Command;
+use image::{ImageBuffer, ImageFormat, Luma};
 use paladin_core::{Store, VaultInit};
+use qrcode::QrCode;
 use serde_json::Value;
 use tempfile::TempDir;
 
@@ -53,6 +56,52 @@ fn list_accounts_json(path: &Path) -> Value {
         .success();
     let stdout = std::str::from_utf8(&assert.get_output().stdout).unwrap();
     serde_json::from_str(stdout.trim()).unwrap()
+}
+
+/// Render two QR codes side-by-side into one PNG so a single
+/// `paladin add --qr` invocation has to walk every grid that
+/// `rqrr::PreparedImage::detect_grids` returns. Mirrors the
+/// `make_side_by_side_rgba` shape used by
+/// `paladin-core/tests/import_qr.rs`, but writes a real PNG on disk
+/// so we exercise the CLI's `read_import_file` -> facade path.
+fn write_two_qr_png(dir: &Path, name: &str, left: &str, right: &str) -> PathBuf {
+    let left_qr = QrCode::new(left.as_bytes())
+        .expect("encode left QR")
+        .render::<Luma<u8>>()
+        .min_dimensions(160, 160)
+        .quiet_zone(true)
+        .build();
+    let right_qr = QrCode::new(right.as_bytes())
+        .expect("encode right QR")
+        .render::<Luma<u8>>()
+        .min_dimensions(160, 160)
+        .quiet_zone(true)
+        .build();
+    let (lw, lh) = left_qr.dimensions();
+    let (rw, rh) = right_qr.dimensions();
+    let h = lh.max(rh);
+    // 32-pixel white gutter so rqrr resolves the two grids cleanly.
+    let gutter: u32 = 32;
+    let w = lw + gutter + rw;
+    let mut combined = ImageBuffer::<Luma<u8>, Vec<u8>>::from_pixel(w, h, Luma([0xFF]));
+    for y in 0..lh {
+        for x in 0..lw {
+            combined.put_pixel(x, y, *left_qr.get_pixel(x, y));
+        }
+    }
+    for y in 0..rh {
+        for x in 0..rw {
+            let dx = lw + gutter + x;
+            combined.put_pixel(dx, y, *right_qr.get_pixel(x, y));
+        }
+    }
+    let path = dir.join(format!("{name}.png"));
+    let mut buf = Cursor::new(Vec::<u8>::new());
+    combined
+        .write_to(&mut buf, ImageFormat::Png)
+        .expect("encode PNG");
+    std::fs::write(&path, buf.into_inner()).expect("write PNG");
+    path
 }
 
 // --- --uri input mode -----------------------------------------------------
@@ -727,4 +776,102 @@ fn pty_interactive_add_invalid_secret_rejects_without_reprompt() {
 
     let listed = list_accounts_json(&path);
     assert!(listed["accounts"].as_array().unwrap().is_empty());
+}
+
+// --- --qr multi-entry image happy-path / fixed-skip-policy ---------------
+
+#[test]
+fn json_add_qr_multi_entry_image_emits_import_envelope_with_two_accounts() {
+    // §5: `add --qr` is multi-entry, so it shares the `import` /
+    // `add --qr` success envelope shape: imported / skipped /
+    // replaced / appended counts plus an `accounts` array of
+    // `AccountSummary` objects and a `warnings` array. A single PNG
+    // carrying two distinct otpauth URIs must therefore land both
+    // accounts on the first run with imported = 2 and every other
+    // count zero.
+    let (dir, vault_path) = fresh_vault_path();
+    create_empty_plaintext_vault(&vault_path);
+
+    let qr_path = write_two_qr_png(dir.path(), "pair", SAMPLE_TOTP_URI, SAMPLE_HOTP_URI);
+
+    let assert = paladin()
+        .args([
+            "--json",
+            "--vault",
+            vault_path.to_str().unwrap(),
+            "add",
+            "--qr",
+            qr_path.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    let stdout = std::str::from_utf8(&assert.get_output().stdout).unwrap();
+    let v: Value = serde_json::from_str(stdout.trim()).unwrap();
+
+    assert_eq!(v["imported"], serde_json::json!(2));
+    assert_eq!(v["skipped"], serde_json::json!(0));
+    assert_eq!(v["replaced"], serde_json::json!(0));
+    assert_eq!(v["appended"], serde_json::json!(0));
+    let accounts = v["accounts"].as_array().expect("accounts array");
+    assert_eq!(accounts.len(), 2);
+    assert!(v["warnings"].is_array());
+    assert!(assert.get_output().stderr.is_empty());
+
+    // Both URIs landed in the vault, and the post-merge IDs in the
+    // success envelope resolved to the same accounts that `list`
+    // reports.
+    let listed = list_accounts_json(&vault_path);
+    assert_eq!(listed["accounts"].as_array().unwrap().len(), 2);
+}
+
+#[test]
+fn json_add_qr_uses_fixed_skip_policy_on_collision() {
+    // §5: `add --qr` always uses `ImportConflict::Skip` (not
+    // configurable from the CLI), so re-importing the same image
+    // counts every entry as skipped and leaves the vault unchanged.
+    // Asserting the fixed policy here guards against a future drift
+    // toward `replace` / `append` for `add --qr`, which would make
+    // the command silently destructive.
+    let (dir, vault_path) = fresh_vault_path();
+    create_empty_plaintext_vault(&vault_path);
+
+    let qr_path = write_two_qr_png(dir.path(), "pair", SAMPLE_TOTP_URI, SAMPLE_HOTP_URI);
+
+    // First run inserts both.
+    paladin()
+        .args([
+            "--json",
+            "--vault",
+            vault_path.to_str().unwrap(),
+            "add",
+            "--qr",
+            qr_path.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    // Second run on the same image: every entry collides and the
+    // fixed skip policy short-circuits each.
+    let assert = paladin()
+        .args([
+            "--json",
+            "--vault",
+            vault_path.to_str().unwrap(),
+            "add",
+            "--qr",
+            qr_path.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    let stdout = std::str::from_utf8(&assert.get_output().stdout).unwrap();
+    let v: Value = serde_json::from_str(stdout.trim()).unwrap();
+
+    assert_eq!(v["imported"], serde_json::json!(0));
+    assert_eq!(v["skipped"], serde_json::json!(2));
+    assert_eq!(v["replaced"], serde_json::json!(0));
+    assert_eq!(v["appended"], serde_json::json!(0));
+
+    // Vault is still exactly two accounts — skip is non-destructive.
+    let listed = list_accounts_json(&vault_path);
+    assert_eq!(listed["accounts"].as_array().unwrap().len(), 2);
 }
