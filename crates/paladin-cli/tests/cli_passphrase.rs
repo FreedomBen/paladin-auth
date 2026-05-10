@@ -648,6 +648,83 @@ fn pty_change_with_default_kdf_writes_section_4_4_defaults_on_disk() {
     assert_eq!(perms.mode() & 0o7777, 0o600);
 }
 
+#[test]
+fn pty_set_under_json_keeps_streams_clean_after_prompts_consume_dev_tty() {
+    // §5 strict-mode rule: under `--json`, `paladin passphrase set`
+    // writes **only** the success JSON envelope to stdout and nothing
+    // to stderr. Prompt strings are written to `/dev/tty` via the
+    // CLI's `prompt::write_tty_line` helper (see `prompt.rs`), so
+    // even when `/dev/tty` is rerouted to a controlling-terminal PTY
+    // for testing, the prompt bytes never leak into stdout / stderr.
+    //
+    // The shared `Pty` harness muxes the PTY slave to all three child
+    // descriptors, so this test verifies the stream-cleanliness
+    // contract by slicing the merged transcript at the last prompt
+    // boundary: between the prompts and the JSON envelope only
+    // whitespace (the `rpassword` post-input newline) may appear, and
+    // text-mode artifacts like `Encrypted vault.` or the
+    // plaintext-storage advisory must be absent.
+    let (_dir, path) = fresh_vault_path();
+    create_empty_plaintext_vault(&path);
+
+    let mut pty = Pty::spawn(
+        [
+            "--json",
+            "--vault",
+            path.to_str().unwrap(),
+            "passphrase",
+            "set",
+            "--kdf-memory-mib",
+            "8",
+            "--kdf-time",
+            "1",
+            "--kdf-parallelism",
+            "1",
+        ],
+        &[],
+    );
+    pty.expect(PROMPT_NEW_PASSPHRASE);
+    pty.send_line("hunter2-newpass");
+    pty.expect(PROMPT_CONFIRM);
+    pty.send_line("hunter2-newpass");
+    let exit = pty.wait_for_exit();
+    exit.assert_exit(0);
+
+    // Slice the transcript at the last prompt boundary; the suffix is
+    // whatever the child wrote after `rpassword` finished consuming
+    // the confirmation entry. Under `--json`, that suffix must be
+    // (whitespace) + JSON envelope + (whitespace).
+    let transcript = &exit.transcript;
+    let cut = transcript
+        .rfind(PROMPT_CONFIRM)
+        .expect("PROMPT_CONFIRM must appear in transcript")
+        + PROMPT_CONFIRM.len();
+    let suffix = &transcript[cut..];
+
+    let trimmed = suffix.trim();
+    let envelope: Value = serde_json::from_str(trimmed).unwrap_or_else(|err| {
+        panic!(
+            "post-prompt suffix must parse as the JSON success envelope; \
+             got {trimmed:?}: {err}"
+        )
+    });
+    // §5 success envelope shape for `passphrase set` is
+    // `{ "ok": true, "status": ... }`.
+    assert_eq!(envelope["ok"], serde_json::json!(true));
+    assert!(
+        envelope.get("status").is_some(),
+        "passphrase-set envelope must carry `status`, got {envelope}"
+    );
+
+    // No text-mode artifacts may appear anywhere in the stream — the
+    // text-mode success line, the plaintext-storage advisory, and any
+    // `warning:` prefix would all leak under `--json` if the
+    // suppression rule regressed.
+    exit.assert_transcript_lacks("Encrypted vault.");
+    exit.assert_transcript_lacks("Plaintext");
+    exit.assert_transcript_lacks("warning:");
+}
+
 // =========================================================================
 // passphrase remove
 // =========================================================================

@@ -888,7 +888,7 @@ can be ticked.
   single trailing newline on `--json` error paths.
 - [x] `add --uri` of a short-secret URI routes the warning into the
   JSON `warnings` array (no stderr warning under `--json`).
-- [ ] `[PTY]` Stream cleanliness for `passphrase set` under `--json`:
+- [x] `[PTY]` Stream cleanliness for `passphrase set` under `--json`:
   with `/dev/tty` rerouted to the test harness, stdout / stderr stay
   byte-clean (the prompt is consumed via `/dev/tty` only).
 - [ ] No `init` / `init --force` / `passphrase remove --yes` /
