@@ -163,6 +163,16 @@ pub fn write_rename_success(account: &AccountSummary, mut out: impl Write) -> st
     writeln!(out, "Renamed to {}.", display_label(account))
 }
 
+/// Print the success line for `paladin passphrase
+/// {set,change,remove}` to stdout. Mirrors the JSON envelope's
+/// `{ "ok": true, "status": ... }` in human-readable form. Callers
+/// pick the line so the renderer stays oblivious to which subcommand
+/// fired and the wording cannot drift between subcommands without a
+/// callsite change.
+pub fn write_passphrase_success(line: &str, mut out: impl Write) -> std::io::Result<()> {
+    writeln!(out, "{line}")
+}
+
 /// Print the success summary for `paladin add --qr` (multi-entry) to
 /// stdout. Mirrors the §5 JSON envelope counts so text and JSON paths
 /// stay in sync. `--on-conflict=skip` is fixed for `add --qr`, so
@@ -352,6 +362,25 @@ mod tests {
         write_rename_success(&summary, &mut buf).expect("render");
         let s = String::from_utf8(buf).expect("utf-8");
         assert_eq!(s, "Renamed to newname.\n");
+    }
+
+    fn render_passphrase(line: &str) -> String {
+        let mut buf: Vec<u8> = Vec::new();
+        write_passphrase_success(line, &mut buf).expect("render");
+        String::from_utf8(buf).expect("utf-8")
+    }
+
+    #[test]
+    fn passphrase_success_writes_caller_line_with_trailing_newline() {
+        assert_eq!(render_passphrase("Encrypted vault."), "Encrypted vault.\n");
+        assert_eq!(
+            render_passphrase("Re-encrypted vault."),
+            "Re-encrypted vault.\n"
+        );
+        assert_eq!(
+            render_passphrase("Decrypted vault to plaintext."),
+            "Decrypted vault to plaintext.\n"
+        );
     }
 
     #[test]
