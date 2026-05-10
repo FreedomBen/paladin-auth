@@ -522,6 +522,65 @@ fn json_vault_missing_returns_vault_missing_before_reading_source() {
     assert_eq!(v["error_kind"], serde_json::json!("vault_missing"));
 }
 
+#[test]
+fn json_invalid_entry_rejects_whole_batch_atomically() {
+    // §4.7: "Each import parses and validates the full input before
+    // mutating the vault. Any invalid entry rejects the whole batch
+    // with the core error kind and `source_index` when available."
+    //
+    // Drive a JSON array containing one valid and one invalid otpauth
+    // URI; assert the failure envelope carries `validation_error`
+    // tagged with the offending row's `source_index`, and that the
+    // pre-existing vault contents are unchanged (no partial commit).
+    let (dir, vault_path) = fresh_vault_path();
+    create_empty_plaintext_vault(&vault_path);
+    seed_with_alice(&vault_path);
+
+    // [valid bob, invalid scheme] — second element is row 1.
+    let src = dir.path().join("creds.json");
+    let body = format!(
+        "[{}, {}]",
+        serde_json::Value::String(TOTP_URI_BOB.into()),
+        serde_json::Value::String("https://not-otpauth.example/".into()),
+    );
+    write_file(&src, body.as_bytes());
+
+    let assert = paladin()
+        .args([
+            "--json",
+            "--vault",
+            vault_path.to_str().unwrap(),
+            "import",
+            src.to_str().unwrap(),
+        ])
+        .assert()
+        .failure();
+    let stderr = std::str::from_utf8(&assert.get_output().stderr).unwrap();
+    let v: Value = serde_json::from_str(stderr.trim()).unwrap();
+    assert_eq!(v["error_kind"], serde_json::json!("validation_error"));
+    assert_eq!(v["field"], serde_json::json!("uri"));
+    assert_eq!(v["reason"], serde_json::json!("invalid_scheme"));
+    assert_eq!(
+        v["source_index"],
+        serde_json::json!(1),
+        "the offending row index must be carried in the failure envelope",
+    );
+    // §5 stream cleanliness: failure envelope only on stderr.
+    assert!(assert.get_output().stdout.is_empty());
+
+    // Atomicity: the destination vault must still have just the
+    // pre-existing seed (`alice`); the valid `bob` from row 0 must
+    // **not** have been partially committed.
+    let listed = list_accounts_json(&vault_path);
+    let accounts = listed["accounts"].as_array().expect("accounts array");
+    assert_eq!(
+        accounts.len(),
+        1,
+        "vault must be unchanged after a rejected batch",
+    );
+    assert_eq!(accounts[0]["label"], serde_json::json!("alice"));
+}
+
 // ==========================================================================
 // Text-mode coverage (success + skip warning)
 // ==========================================================================

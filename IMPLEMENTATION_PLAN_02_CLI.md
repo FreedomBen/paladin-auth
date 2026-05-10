@@ -785,7 +785,7 @@ can be ticked.
   to disk (`imported_account_is_persisted_to_disk`).
 - [x] `import` with `vault_missing` rejects before reading the source
   file.
-- [ ] `import` rejects the whole batch atomically when any single entry
+- [x] `import` rejects the whole batch atomically when any single entry
   fails validation.
 
 ### `export` (`tests/cli_export.rs`)
