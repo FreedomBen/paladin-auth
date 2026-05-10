@@ -289,6 +289,57 @@ fn pty_set_on_open_plaintext_vault_succeeds_and_writes_encrypted_with_requested_
     assert_eq!(perms.mode() & 0o7777, 0o600);
 }
 
+#[test]
+fn pty_set_confirmation_mismatch_rejects_with_invalid_passphrase_before_mutation() {
+    // §5: A new-passphrase confirmation mismatch must surface
+    // `invalid_passphrase` `reason: "confirmation_mismatch"` before
+    // any mutation. `passphrase set` on a plaintext vault is the
+    // simplest path because it has no unlock prompt — only the new
+    // entry + confirmation are prompted for. The on-disk vault must
+    // remain plaintext (mode byte still 0) and the file must not be
+    // re-encrypted.
+    let (_dir, path) = fresh_vault_path();
+    create_empty_plaintext_vault(&path);
+
+    let before = std::fs::read(&path).expect("read pre-set vault");
+    assert_eq!(&before[..8], PALADIN_MAGIC);
+    assert_eq!(before[9], 0, "fixture should be plaintext");
+
+    let mut pty = Pty::spawn(
+        [
+            "--vault",
+            path.to_str().unwrap(),
+            "passphrase",
+            "set",
+            "--kdf-memory-mib",
+            "8",
+            "--kdf-time",
+            "1",
+            "--kdf-parallelism",
+            "1",
+        ],
+        &[],
+    );
+    pty.expect(PROMPT_NEW_PASSPHRASE);
+    pty.send_line("password-a");
+    pty.expect(PROMPT_CONFIRM);
+    pty.send_line("password-b");
+    let exit = pty.wait_for_exit();
+    // Runtime errors exit `1` per §5.
+    exit.assert_exit(1);
+    // Text-mode renderer prefixes `paladin: ` to the
+    // `Display::fmt` body of `PaladinError::InvalidPassphrase`,
+    // which is `invalid passphrase: <reason>`.
+    exit.assert_transcript_contains("paladin: invalid passphrase: confirmation_mismatch");
+    // Mutation must not have occurred — no encrypted re-save and no
+    // success line.
+    exit.assert_transcript_lacks("Encrypted vault.");
+
+    // Post-state on disk: still plaintext, header byte-identical.
+    let after = std::fs::read(&path).expect("read post-set vault");
+    assert_eq!(after, before, "vault file must not be mutated on mismatch");
+}
+
 // =========================================================================
 // passphrase change
 // =========================================================================

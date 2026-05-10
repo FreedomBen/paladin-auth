@@ -728,7 +728,7 @@ can be ticked.
 - [x] `passphrase remove --json` without `--yes` rejects at parse time.
 - [x] `[PTY]` `passphrase remove --yes` skips only the confirmation, not
   the unlock prompt.
-- [ ] `[PTY]` Confirmation mismatch on the new passphrase surfaces
+- [x] `[PTY]` Confirmation mismatch on the new passphrase surfaces
   `invalid_passphrase` with `reason: "confirmation_mismatch"` before
   mutation.
 - [ ] `[PTY]` No-`/dev/tty` passphrase prompt failure surfaces
