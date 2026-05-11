@@ -22,7 +22,7 @@ use paladin_tui::app::event::{AppEvent, Effect, EffectResult};
 use paladin_tui::app::reducer::reduce;
 use paladin_tui::app::state::{
     compute_idle_deadline, decide_state_from_inspect, decide_state_from_open, render_error_message,
-    AppState,
+    AppState, Modal,
 };
 use paladin_tui::cli::{should_disable_color, GlobalArgs};
 use paladin_tui::prompt::PassphraseBuffer;
@@ -1114,6 +1114,112 @@ fn decide_state_from_open_plaintext_seeds_no_idle_deadline() {
                 idle_deadline, None,
                 "plaintext direct-open must never seed an idle deadline"
             );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Modals — open transitions
+// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Reducer — bullet 4)
+//
+// Slice covered: pressing `a` on `AppState::Unlocked` while no modal is
+// open sets `modal = Some(Modal::Add)` and emits no effects. When a modal
+// is already open, the bare `a` key does not replace the open modal —
+// the modal-local input path consumes it (modals' typed-field payloads
+// land in later slices, so the slot stays unchanged here). `Ctrl-A` is
+// unbound and is a no-op. Routing the other six modal openers
+// (`i` / `e` / `r` / `R` / `p` / `s`) lands with the remaining modal
+// slices alongside their post-open payloads.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn pressing_a_on_unlocked_with_no_modal_open_opens_add_modal() {
+    let tmp = secure_tempdir();
+    let (path, (vault, store)) = open_plaintext_pair(&tmp);
+    let unlocked = AppState::Unlocked {
+        path: path.clone(),
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+    };
+    let (state, effects) = reduce(unlocked, key(KeyCode::Char('a')));
+    assert!(effects.is_empty(), "opening a modal must not emit effects");
+    match state {
+        AppState::Unlocked {
+            modal: Some(Modal::Add),
+            ..
+        } => {}
+        AppState::Unlocked { modal, .. } => {
+            panic!("expected modal=Some(Modal::Add), got modal={modal:?}")
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_a_on_unlocked_with_modal_already_open_does_not_replace_the_modal() {
+    // When a modal is open, the `a` key is consumed by the modal's
+    // input path (text-field typing once payloads land). At this
+    // slice the modal payloads do not exist yet, so the observable
+    // contract is: the open modal variant is preserved unchanged.
+    let tmp = secure_tempdir();
+    let (path, (vault, store)) = open_plaintext_pair(&tmp);
+    let unlocked = AppState::Unlocked {
+        path: path.clone(),
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Settings),
+    };
+    let (state, effects) = reduce(unlocked, key(KeyCode::Char('a')));
+    assert!(
+        effects.is_empty(),
+        "bare `a` inside an open modal must not emit effects"
+    );
+    match state {
+        AppState::Unlocked {
+            modal: Some(Modal::Settings),
+            ..
+        } => {}
+        AppState::Unlocked { modal, .. } => {
+            panic!("expected modal=Some(Modal::Settings) preserved, got modal={modal:?}")
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_ctrl_a_on_unlocked_does_not_open_add_modal() {
+    // `Ctrl-A` is not bound in `Keybindings (initial v0.1)`. The bare
+    // `a` opens the Add modal, but the same code with the Control
+    // modifier must not — otherwise common readline-style `Ctrl-A`
+    // (beginning-of-line) presses would silently open dialogs.
+    let tmp = secure_tempdir();
+    let (path, (vault, store)) = open_plaintext_pair(&tmp);
+    let unlocked = AppState::Unlocked {
+        path: path.clone(),
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+    };
+    let (state, effects) = reduce(unlocked, ctrl(KeyCode::Char('a')));
+    assert!(effects.is_empty(), "Ctrl-A is unbound; no effects");
+    match state {
+        AppState::Unlocked { modal: None, .. } => {}
+        AppState::Unlocked { modal, .. } => {
+            panic!("expected modal=None preserved, got modal={modal:?}")
         }
         other => panic!("expected Unlocked, got {other:?}"),
     }

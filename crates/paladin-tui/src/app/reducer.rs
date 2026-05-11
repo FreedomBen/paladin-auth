@@ -16,7 +16,7 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use paladin_core::{ClipboardClearToken, IdlePolicy, PaladinError, Store, Vault};
 
 use crate::app::event::{AppEvent, Effect, EffectResult};
-use crate::app::state::{compute_idle_deadline, render_error_message, AppState};
+use crate::app::state::{compute_idle_deadline, render_error_message, AppState, Modal};
 
 /// Apply one event to the current state and return the new state plus
 /// any side effects.
@@ -274,8 +274,51 @@ fn reduce_input(state: AppState, event: &Event) -> (AppState, Vec<Effect>) {
         return reduce_unlock_input(state, key);
     }
 
+    if matches!(state, AppState::Unlocked { .. }) {
+        return reduce_unlocked_input(state, key);
+    }
+
     match key.code {
         KeyCode::Char('q') if quits_on_q(&state) => (state, vec![Effect::Quit]),
+        _ => (state, Vec::new()),
+    }
+}
+
+/// Handle a key event on the Unlocked (main list) screen.
+///
+/// This slice covers the modal-open transition for `a` → [`Modal::Add`]
+/// — per `IMPLEMENTATION_PLAN_03_TUI.md` "Keybindings (initial v0.1)":
+/// *"`a` — Open Add modal."* The other six modal openers (`i` / `e` /
+/// `r` / `R` / `p` / `s`) wire alongside their per-modal payload
+/// slices.
+///
+/// `a` is a bare-letter key, so it fires only when no Ctrl / Alt
+/// modifier is held (`Ctrl-A` is unbound; Shift on `a` produces an
+/// upper-case `A` from the terminal and is not bound either). The
+/// modal opens only when no modal is currently open; once a modal
+/// payload exists, the bare `a` inside an open modal is consumed by
+/// the modal-local input path. Routing into modal-local input lands
+/// alongside each modal's payload slice; at this slice the open-modal
+/// case is a no-op so the slot stays unchanged.
+fn reduce_unlocked_input(mut state: AppState, key: &KeyEvent) -> (AppState, Vec<Effect>) {
+    let AppState::Unlocked { ref mut modal, .. } = state else {
+        // Caller ensures we're in Unlocked; defensive fall-through
+        // keeps the reducer total.
+        return (state, Vec::new());
+    };
+
+    if key
+        .modifiers
+        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+    {
+        return (state, Vec::new());
+    }
+
+    match key.code {
+        KeyCode::Char('a') if modal.is_none() => {
+            *modal = Some(Modal::Add);
+            (state, Vec::new())
+        }
         _ => (state, Vec::new()),
     }
 }
