@@ -79,13 +79,16 @@ pub fn reduce(state: AppState, event: AppEvent) -> (AppState, Vec<Effect>) {
 /// [`paladin_core::IdlePolicy::is_expired`] so the TUI shares
 /// monotonic-clock comparison semantics with the GUI.
 ///
-/// On lock the `Vault`, `Store`, search query, and idle deadline drop
-/// in place through the variant change; any pending clipboard
-/// auto-clear is carried onto the resulting [`AppState::Locked`] so
-/// the timer thread's wake event still finds pending state to act on.
-/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Auto-lock (per §6)":
-/// *"A clipboard auto-clear timer scheduled before lock survives lock
-/// and still fires only-if-unchanged."*
+/// On lock the `Vault`, `Store`, search query, open HOTP reveal
+/// window, and idle deadline drop in place through the variant
+/// change; any pending clipboard auto-clear is carried onto the
+/// resulting [`AppState::Locked`] so the timer thread's wake event
+/// still finds pending state to act on. Per
+/// `IMPLEMENTATION_PLAN_03_TUI.md` "Auto-lock (per §6)":
+/// *"Locking discards the Vault / Store, open HOTP reveal windows,
+/// the search query, and any modal while retaining the resolved
+/// vault path…"* and *"A clipboard auto-clear timer scheduled before
+/// lock survives lock and still fires only-if-unchanged."*
 fn maybe_auto_lock(state: AppState, now: Instant) -> AppState {
     let AppState::Unlocked {
         idle_deadline: Some(deadline),
@@ -164,6 +167,7 @@ fn reduce_unlock_result(
                         search_query: String::new(),
                         idle_deadline,
                         pending_clipboard_clear: None,
+                        hotp_reveal: None,
                     },
                     Vec::new(),
                 )

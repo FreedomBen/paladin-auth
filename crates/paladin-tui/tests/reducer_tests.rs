@@ -403,6 +403,7 @@ fn ctrl_c_on_unlocked_quits() {
         search_query: String::new(),
         idle_deadline: None,
         pending_clipboard_clear: None,
+        hotp_reveal: None,
     };
     let (_, effects) = reduce(unlocked, ctrl(KeyCode::Char('c')));
     assert!(matches!(effects.as_slice(), [Effect::Quit]));

@@ -13,11 +13,12 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use secrecy::SecretString;
 
 use paladin_core::{
-    Argon2Params, ClipboardClearPolicy, EncryptionOptions, Store, Vault, VaultInit, VaultLock,
+    hotp_reveal_deadline, AccountId, Argon2Params, ClipboardClearPolicy, EncryptionOptions, Store,
+    Vault, VaultInit, VaultLock,
 };
 use paladin_tui::app::event::AppEvent;
 use paladin_tui::app::reducer::reduce;
-use paladin_tui::app::state::{AppState, PendingClipboardClear};
+use paladin_tui::app::state::{AppState, HotpReveal, PendingClipboardClear};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -100,6 +101,7 @@ fn input_in_encrypted_unlocked_with_auto_lock_rebases_idle_deadline_on_event_at(
         search_query: String::new(),
         idle_deadline: Some(t0 + Duration::from_secs(600)),
         pending_clipboard_clear: None,
+        hotp_reveal: None,
     };
 
     let t1 = t0 + Duration::from_secs(123);
@@ -141,6 +143,7 @@ fn input_in_plaintext_unlocked_keeps_idle_deadline_none_even_if_auto_lock_enable
         search_query: String::new(),
         idle_deadline: None,
         pending_clipboard_clear: None,
+        hotp_reveal: None,
     };
 
     let (next, effects) = reduce(state, key_input_at(KeyCode::Char('x'), Instant::now()));
@@ -168,6 +171,7 @@ fn input_in_encrypted_unlocked_with_auto_lock_disabled_keeps_idle_deadline_none(
         search_query: String::new(),
         idle_deadline: None,
         pending_clipboard_clear: None,
+        hotp_reveal: None,
     };
 
     let (next, effects) = reduce(state, key_input_at(KeyCode::Char('x'), Instant::now()));
@@ -196,6 +200,7 @@ fn non_key_input_in_encrypted_unlocked_also_rebases_idle_deadline() {
         search_query: String::new(),
         idle_deadline: Some(t0 + Duration::from_secs(600)),
         pending_clipboard_clear: None,
+        hotp_reveal: None,
     };
 
     let t1 = t0 + Duration::from_secs(45);
@@ -226,10 +231,12 @@ fn non_key_input_in_encrypted_unlocked_also_rebases_idle_deadline() {
 // fires the lock because `IdlePolicy::is_expired` uses `now >= deadline`.
 //
 // The search-query discard slice is covered by
-// `tick_after_deadline_lock_discards_unlocked_search_query` below;
-// the "discard HOTP reveal / modal" coverage still rides on later
-// slices once those state slots exist. The remaining tests here only
-// assert the state-variant transition and the `path` carry-over.
+// `tick_after_deadline_lock_discards_unlocked_search_query` and the
+// HOTP-reveal slice by
+// `tick_after_deadline_lock_discards_unlocked_hotp_reveal` below; the
+// "discard any modal" half of bullet 6 still rides on a later slice
+// once that state slot exists. The remaining tests here only assert
+// the state-variant transition and the `path` carry-over.
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -248,6 +255,7 @@ fn tick_after_deadline_locks_unlocked_state() {
         search_query: String::new(),
         idle_deadline: Some(deadline),
         pending_clipboard_clear: None,
+        hotp_reveal: None,
     };
 
     let now = deadline + Duration::from_millis(1);
@@ -283,6 +291,7 @@ fn tick_after_deadline_lock_discards_unlocked_search_query() {
         search_query: "github".to_string(),
         idle_deadline: Some(deadline),
         pending_clipboard_clear: None,
+        hotp_reveal: None,
     };
 
     let now = deadline + Duration::from_millis(1);
@@ -293,6 +302,60 @@ fn tick_after_deadline_lock_discards_unlocked_search_query() {
             assert_eq!(p, path, "Locked must carry the original vault path");
         }
         other => panic!("expected Locked (search query and vault must be gone), got {other:?}"),
+    }
+}
+
+#[test]
+fn tick_after_deadline_lock_discards_unlocked_hotp_reveal() {
+    // IMPLEMENTATION_PLAN_03_TUI.md > Tests > Auto-lock — bullet 6:
+    // "Locking discards the Vault / Store, open HOTP reveal windows,
+    // the search query, and any modal while retaining the resolved
+    // vault path for the next unlock attempt." This test covers the
+    // HOTP-reveal slice: an open reveal window (the account being
+    // revealed, the `counter_used` that produced the visible code,
+    // the displayed code bytes, and the monotonic reveal deadline)
+    // present at the moment of lock must be gone from the resulting
+    // `Locked` state, which by construction carries only `path` (plus
+    // any pending clipboard clear). The Vault and Store are likewise
+    // gone because the variant change drops them.
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (mut vault, store) = create_encrypted_pair(&path, "pp");
+    enable_auto_lock(&mut vault, &store, 600);
+
+    let t0 = Instant::now();
+    let idle_deadline = t0 + Duration::from_secs(600);
+    let reveal = HotpReveal {
+        account_id: AccountId::new(),
+        counter_used: 7,
+        code: SecretString::from("123456".to_string()),
+        deadline: hotp_reveal_deadline(t0),
+    };
+    let state = AppState::Unlocked {
+        path: path.clone(),
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: Some(idle_deadline),
+        pending_clipboard_clear: None,
+        hotp_reveal: Some(reveal),
+    };
+
+    let now = idle_deadline + Duration::from_millis(1);
+    let (next, effects) = reduce(state, tick_at(now));
+    assert!(effects.is_empty(), "lock transition emits no effects");
+    match next {
+        AppState::Locked {
+            path: p,
+            pending_clipboard_clear,
+        } => {
+            assert_eq!(p, path, "Locked must carry the original vault path");
+            assert!(
+                pending_clipboard_clear.is_none(),
+                "pending clipboard clear was None on entry; lock must not fabricate one"
+            );
+        }
+        other => panic!("expected Locked (HOTP reveal and vault must be gone), got {other:?}"),
     }
 }
 
@@ -340,6 +403,7 @@ fn tick_after_deadline_lock_carries_pending_clipboard_clear() {
         search_query: String::new(),
         idle_deadline: Some(idle_deadline),
         pending_clipboard_clear: Some(pending),
+        hotp_reveal: None,
     };
 
     let now = idle_deadline + Duration::from_millis(1);
@@ -388,6 +452,7 @@ fn tick_after_deadline_lock_with_no_pending_clipboard_clear_yields_none() {
         search_query: String::new(),
         idle_deadline: Some(deadline),
         pending_clipboard_clear: None,
+        hotp_reveal: None,
     };
 
     let now = deadline + Duration::from_millis(1);
@@ -425,6 +490,7 @@ fn tick_exactly_at_deadline_locks_unlocked_state() {
         search_query: String::new(),
         idle_deadline: Some(deadline),
         pending_clipboard_clear: None,
+        hotp_reveal: None,
     };
 
     let (next, effects) = reduce(state, tick_at(deadline));
@@ -451,6 +517,7 @@ fn tick_before_deadline_keeps_unlocked_state() {
         search_query: String::new(),
         idle_deadline: Some(deadline),
         pending_clipboard_clear: None,
+        hotp_reveal: None,
     };
 
     let now = deadline
@@ -490,6 +557,7 @@ fn tick_with_no_deadline_keeps_unlocked_state() {
         search_query: String::new(),
         idle_deadline: None,
         pending_clipboard_clear: None,
+        hotp_reveal: None,
     };
 
     let (next, effects) = reduce(state, tick_at(Instant::now()));
