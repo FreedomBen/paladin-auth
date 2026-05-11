@@ -676,7 +676,7 @@ end-to-end.
   query resolution in DESIGN §5; empty issuer allowed and the colon is
   still present in the match key); no Unicode normalization.
 - [x] Insertion order is preserved among matches.
-- [ ] Filter changes route through `paladin_core::select_after_filter`:
+- [x] Filter changes route through `paladin_core::select_after_filter`:
   preserve the selected `AccountId` when still visible, otherwise the
   first match, `None` when empty.
 - [ ] Empty result sets have no selection; action keys that require a

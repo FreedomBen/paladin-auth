@@ -10,7 +10,7 @@
 //! preserved because [`Vault::iter`] already walks accounts in
 //! insertion order.
 
-use paladin_core::{account_matches_search, AccountId, Vault};
+use paladin_core::{account_matches_search, select_after_filter, AccountId, Vault};
 
 /// Return the [`AccountId`]s of every account in `vault` whose
 /// `"{issuer}:{label}"` match key contains `query` case-insensitively,
@@ -29,4 +29,27 @@ pub fn filtered_account_ids(vault: &Vault, query: &str) -> Vec<AccountId> {
         .filter(|account| account_matches_search(account, query))
         .map(paladin_core::Account::id)
         .collect()
+}
+
+/// Pick the surviving list selection after a search-query change.
+///
+/// Composes [`filtered_account_ids`] with
+/// [`paladin_core::select_after_filter`] so the TUI's list-view
+/// selection follows the DESIGN.md §6 / §7 search-selection
+/// preservation rule:
+///
+/// * if `prev` is `Some` and still appears in the new filtered set,
+///   it is preserved verbatim (the user's cursor stays put across an
+///   incremental search refinement);
+/// * otherwise the first match of the new filtered set is selected
+///   (vault insertion order);
+/// * `None` is returned only when the new filtered set is empty.
+#[must_use]
+pub fn select_after_search(
+    vault: &Vault,
+    query: &str,
+    prev: Option<AccountId>,
+) -> Option<AccountId> {
+    let filtered = filtered_account_ids(vault, query);
+    select_after_filter(prev, &filtered)
 }

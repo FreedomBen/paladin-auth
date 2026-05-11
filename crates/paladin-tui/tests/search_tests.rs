@@ -14,7 +14,7 @@ use paladin_core::{
     validate_manual, AccountId, AccountInput, AccountKindInput, Algorithm, IconHintInput, Store,
     Vault, VaultInit, VaultLock,
 };
-use paladin_tui::search::filtered_account_ids;
+use paladin_tui::search::{filtered_account_ids, select_after_search};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -177,5 +177,134 @@ fn matches_returned_in_vault_insertion_order() {
         ids,
         vec![a, c, e],
         "filtered matches must keep vault insertion order"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Filter changes route through `paladin_core::select_after_filter`
+// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Search — bullet 3)
+//
+// `select_after_search` composes `filtered_account_ids` with
+// `paladin_core::select_after_filter`: the previous selection is
+// preserved when still visible after the filter rebuild; otherwise the
+// first match is selected; the result is `None` only when the filtered
+// set is empty.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn select_after_search_preserves_prev_when_still_visible() {
+    // bullet 3 (preserve): when the new filter still includes the
+    // previously selected account, the helper must return that same
+    // `AccountId` so the user's cursor stays put across an
+    // incremental search refinement.
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("plain.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+    let _a = add_account(&mut vault, &store, Some("Google"), "alice");
+    let b = add_account(&mut vault, &store, Some("Gmail"), "bob");
+    let _c = add_account(&mut vault, &store, Some("Acme"), "carol");
+
+    let next = select_after_search(&vault, "gm", Some(b));
+    assert_eq!(
+        next,
+        Some(b),
+        "previously selected id that still matches the new query must be preserved"
+    );
+}
+
+#[test]
+fn select_after_search_falls_back_to_first_match_when_prev_filtered_out() {
+    // bullet 3 (fall-back): when the previously selected account no
+    // longer matches the new query, the helper must select the first
+    // account of the new filtered set (vault insertion order).
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("plain.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+    let a = add_account(&mut vault, &store, Some("Google"), "alice");
+    let _b = add_account(&mut vault, &store, Some("Gmail"), "bob");
+    let c = add_account(&mut vault, &store, Some("Acme"), "carol");
+
+    // Previous selection is `a` (Google/alice). New query "ac"
+    // matches only `c` (Acme/carol), so the helper falls back to the
+    // first match in the new filtered set.
+    let next = select_after_search(&vault, "ac", Some(a));
+    assert_eq!(
+        next,
+        Some(c),
+        "prev filtered out → helper must return the first match in the new filtered set"
+    );
+}
+
+#[test]
+fn select_after_search_returns_none_when_filtered_set_is_empty() {
+    // bullet 3 (empty): when no account matches the new query, the
+    // helper must return `None` regardless of the previous
+    // selection. The list view's empty-state row has no selection.
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("plain.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+    let a = add_account(&mut vault, &store, Some("Google"), "alice");
+    let _b = add_account(&mut vault, &store, Some("Gmail"), "bob");
+
+    let next = select_after_search(&vault, "zzz-no-match", Some(a));
+    assert_eq!(
+        next, None,
+        "empty filtered set must drop any prior selection"
+    );
+}
+
+#[test]
+fn select_after_search_with_none_prev_returns_first_match() {
+    // bullet 3 (no prev): when there is no previous selection (e.g.
+    // the list was previously empty and accounts now match the
+    // query), the helper selects the first match.
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("plain.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+    let _a = add_account(&mut vault, &store, Some("Google"), "alice");
+    let b = add_account(&mut vault, &store, Some("Gmail"), "bob");
+    let _c = add_account(&mut vault, &store, Some("Acme"), "carol");
+
+    let next = select_after_search(&vault, "gm", None);
+    assert_eq!(
+        next,
+        Some(b),
+        "with no previous selection the helper must return the first match"
+    );
+}
+
+#[test]
+fn select_after_search_empty_query_preserves_prev() {
+    // bullet 3 (empty query / preserve): the empty query matches
+    // every account, so the previous selection is always still
+    // visible and must be preserved verbatim.
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("plain.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+    let _a = add_account(&mut vault, &store, Some("Google"), "alice");
+    let b = add_account(&mut vault, &store, Some("Gmail"), "bob");
+    let _c = add_account(&mut vault, &store, Some("Acme"), "carol");
+
+    let next = select_after_search(&vault, "", Some(b));
+    assert_eq!(
+        next,
+        Some(b),
+        "empty query (matches all) must preserve the prior selection"
+    );
+}
+
+#[test]
+fn select_after_search_empty_query_empty_vault_returns_none() {
+    // bullet 3 (empty vault): on an empty vault no account exists to
+    // select, so the helper must return `None` even on the empty
+    // query (which would otherwise match every account).
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("plain.bin");
+    let (vault, _store) = open_plaintext_pair(&path);
+
+    let next = select_after_search(&vault, "", None);
+    assert_eq!(
+        next, None,
+        "empty vault must return None regardless of query or prior selection"
     );
 }
