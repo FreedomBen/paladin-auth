@@ -4700,3 +4700,160 @@ fn tick_between_z_presses_preserves_pending_chord_leader() {
         other => panic!("expected Unlocked, got {other:?}"),
     }
 }
+
+// ---------------------------------------------------------------------------
+// `/` — focus the search bar.
+//
+// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Focus model": `/` from list focus
+// transitions `focus` from `Focus::List` to `Focus::Search`. Selection,
+// search_query, viewport, and modal state are untouched. A modal traps
+// focus, so `/` with a modal open is a no-op. `/` also clears any
+// pending vim chord leader (it is a non-`g` / non-`z` press).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn pressing_slash_on_unlocked_focuses_search_bar() {
+    let tmp = secure_tempdir();
+    let (state, [a, _b, _c]) = unlocked_with_three_accounts(&tmp);
+    let (state, effects) = reduce(state, key(KeyCode::Char('/')));
+    assert!(
+        effects.is_empty(),
+        "`/` must not emit effects — it only swaps focus"
+    );
+    match state {
+        AppState::Unlocked {
+            focus,
+            selected,
+            search_query,
+            modal,
+            pending_chord_leader,
+            ..
+        } => {
+            assert_eq!(
+                focus,
+                Focus::Search,
+                "`/` from Focus::List must transition focus to Focus::Search"
+            );
+            assert_eq!(selected, Some(a), "`/` must not move list selection");
+            assert_eq!(search_query, "", "`/` must not modify the search query");
+            assert!(modal.is_none(), "`/` must not open a modal");
+            assert_eq!(
+                pending_chord_leader, None,
+                "`/` must clear any pending chord leader"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_slash_on_unlocked_preserves_existing_search_query() {
+    let tmp = secure_tempdir();
+    let (mut state, _ids) = unlocked_with_three_accounts(&tmp);
+    if let AppState::Unlocked {
+        ref mut search_query,
+        ..
+    } = state
+    {
+        *search_query = "github".to_string();
+    }
+    let (state, effects) = reduce(state, key(KeyCode::Char('/')));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked {
+            focus,
+            search_query,
+            ..
+        } => {
+            assert_eq!(focus, Focus::Search);
+            assert_eq!(
+                search_query, "github",
+                "`/` must preserve the active search query when refocusing"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_slash_when_already_focused_on_search_is_idempotent() {
+    let tmp = secure_tempdir();
+    let (mut state, _ids) = unlocked_with_three_accounts(&tmp);
+    if let AppState::Unlocked { ref mut focus, .. } = state {
+        *focus = Focus::Search;
+    }
+    let (state, effects) = reduce(state, key(KeyCode::Char('/')));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked { focus, .. } => assert_eq!(
+            focus,
+            Focus::Search,
+            "`/` while already in Focus::Search must remain in Focus::Search \
+             (text-routing into the search field lands in a later slice)"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_slash_with_modal_open_does_not_change_focus() {
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let a = add_totp_account(&mut vault, &store, "a");
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Settings),
+        selected: Some(a),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+    };
+    let (state, effects) = reduce(unlocked, key(KeyCode::Char('/')));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked {
+            focus,
+            modal: Some(Modal::Settings),
+            ..
+        } => assert_eq!(
+            focus,
+            Focus::List,
+            "`/` must not change focus while a modal traps input"
+        ),
+        other => panic!("expected Unlocked with Modal::Settings open, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_slash_after_g_clears_chord_and_focuses_search() {
+    let tmp = secure_tempdir();
+    let (state, _ids) = unlocked_with_three_accounts(&tmp);
+    let (state, _) = reduce(state, key(KeyCode::Char('g')));
+    let (state, effects) = reduce(state, key(KeyCode::Char('/')));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked {
+            focus,
+            pending_chord_leader,
+            ..
+        } => {
+            assert_eq!(
+                focus,
+                Focus::Search,
+                "`/` after `g` must still focus the search bar"
+            );
+            assert_eq!(
+                pending_chord_leader, None,
+                "`/` must clear pending chord state alongside the focus swap"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}

@@ -471,6 +471,21 @@ fn reduce_unlocked_input(mut state: AppState, key: &KeyEvent) -> (AppState, Vec<
         if c == 'q' {
             return (state, vec![Effect::Quit]);
         }
+        // `/` focuses the search bar from the list per the §6
+        // "Focus model" rule. The modal guard above already short-
+        // circuits when a modal traps focus, and the chord leader
+        // was cleared just above this Char block, so the only
+        // remaining work is the `Focus::List -> Focus::Search`
+        // transition. Pressing `/` while already in `Focus::Search`
+        // is a silent no-op at this slice — character routing into
+        // the search field (which would type `/` literally) lands
+        // alongside the search-focus typing pass-through.
+        if c == '/' {
+            if let AppState::Unlocked { focus, .. } = &mut state {
+                *focus = Focus::Search;
+            }
+            return (state, Vec::new());
+        }
         if let Some(opened) = modal_opener_for_char(c) {
             if let AppState::Unlocked { modal, .. } = &mut state {
                 *modal = Some(opened);
