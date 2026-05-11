@@ -5,8 +5,8 @@
 //! Tracks the "Tests > Auto-lock (`tests/auto_lock_tests.rs`)" checklist
 //! in `IMPLEMENTATION_PLAN_03_TUI.md`.
 
-use std::path::Path;
-use std::time::{Duration, Instant};
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant, SystemTime};
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 
@@ -60,6 +60,13 @@ fn key_input_at(code: KeyCode, at: Instant) -> AppEvent {
     AppEvent::Input {
         event: Event::Key(KeyEvent::new(code, KeyModifiers::NONE)),
         at,
+    }
+}
+
+fn tick_at(monotonic: Instant) -> AppEvent {
+    AppEvent::Tick {
+        wall_clock: SystemTime::now(),
+        monotonic,
     }
 }
 
@@ -193,5 +200,175 @@ fn non_key_input_in_encrypted_unlocked_also_rebases_idle_deadline() {
             assert_eq!(idle_deadline, Some(t1 + Duration::from_secs(600)));
         }
         other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tick-driven `Unlocked → Locked` transition
+// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Auto-lock — bullet 3)
+//
+// Slice covered: on each `paladin_core::TICK_INTERVAL_MS` `Tick` the
+// reducer asks `IdlePolicy::is_expired(deadline, monotonic)` and, if
+// true, transitions `Unlocked → Locked { path }` so the in-memory
+// `Vault` / `Store` drop in place. Pre-deadline Ticks, `None`-deadline
+// Unlocked states (plaintext / disabled), and Ticks on non-`Unlocked`
+// screens are passthrough. Boundary case: `monotonic == deadline`
+// fires the lock because `IdlePolicy::is_expired` uses `now >= deadline`.
+//
+// The "discard HOTP reveal / search / modal" coverage rides on a
+// later slice once those state slots exist. Here we only assert the
+// state-variant transition and the `path` carry-over.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn tick_after_deadline_locks_unlocked_state() {
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (mut vault, store) = create_encrypted_pair(&path, "pp");
+    enable_auto_lock(&mut vault, &store, 600);
+
+    let t0 = Instant::now();
+    let deadline = t0 + Duration::from_secs(600);
+    let state = AppState::Unlocked {
+        path: path.clone(),
+        vault,
+        store,
+        idle_deadline: Some(deadline),
+    };
+
+    let now = deadline + Duration::from_millis(1);
+    let (next, effects) = reduce(state, tick_at(now));
+    assert!(effects.is_empty(), "lock transition emits no effects");
+    match next {
+        AppState::Locked { path: p } => assert_eq!(p, path),
+        other => panic!("expected Locked, got {other:?}"),
+    }
+}
+
+#[test]
+fn tick_exactly_at_deadline_locks_unlocked_state() {
+    // `IdlePolicy::is_expired` uses `now >= deadline`, so a Tick that
+    // lands exactly on the deadline must fire the lock — this protects
+    // the TUI from re-deriving its own (looser) comparison.
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (mut vault, store) = create_encrypted_pair(&path, "pp");
+    enable_auto_lock(&mut vault, &store, 600);
+
+    let t0 = Instant::now();
+    let deadline = t0 + Duration::from_secs(600);
+    let state = AppState::Unlocked {
+        path: path.clone(),
+        vault,
+        store,
+        idle_deadline: Some(deadline),
+    };
+
+    let (next, effects) = reduce(state, tick_at(deadline));
+    assert!(effects.is_empty());
+    match next {
+        AppState::Locked { path: p } => assert_eq!(p, path),
+        other => panic!("expected Locked, got {other:?}"),
+    }
+}
+
+#[test]
+fn tick_before_deadline_keeps_unlocked_state() {
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (mut vault, store) = create_encrypted_pair(&path, "pp");
+    enable_auto_lock(&mut vault, &store, 600);
+
+    let t0 = Instant::now();
+    let deadline = t0 + Duration::from_secs(600);
+    let state = AppState::Unlocked {
+        path: path.clone(),
+        vault,
+        store,
+        idle_deadline: Some(deadline),
+    };
+
+    let now = deadline
+        .checked_sub(Duration::from_millis(1))
+        .expect("pre-deadline instant in monotonic range");
+    let (next, effects) = reduce(state, tick_at(now));
+    assert!(effects.is_empty());
+    match next {
+        AppState::Unlocked {
+            idle_deadline,
+            path: p,
+            ..
+        } => {
+            assert_eq!(p, path);
+            assert_eq!(
+                idle_deadline,
+                Some(deadline),
+                "pre-deadline Tick must not rebase the deadline"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn tick_with_no_deadline_keeps_unlocked_state() {
+    // Plaintext / auto-lock-disabled vaults have `idle_deadline = None`.
+    // A Tick must never fabricate a `Locked` transition from `None`.
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("plain.bin");
+    let (vault, store) = Store::create(&path, VaultInit::Plaintext).expect("create plaintext");
+
+    let state = AppState::Unlocked {
+        path: path.clone(),
+        vault,
+        store,
+        idle_deadline: None,
+    };
+
+    let (next, effects) = reduce(state, tick_at(Instant::now()));
+    assert!(effects.is_empty());
+    match next {
+        AppState::Unlocked {
+            idle_deadline,
+            path: p,
+            ..
+        } => {
+            assert_eq!(p, path);
+            assert_eq!(idle_deadline, None);
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn tick_on_locked_state_is_passthrough() {
+    // A Tick that arrives while the state is already `Locked` is a
+    // no-op (no re-lock churn, no path drift).
+    let path = PathBuf::from("/tmp/v.bin");
+    let state = AppState::Locked { path: path.clone() };
+
+    let (next, effects) = reduce(state, tick_at(Instant::now()));
+    assert!(effects.is_empty());
+    match next {
+        AppState::Locked { path: p } => assert_eq!(p, path),
+        other => panic!("expected Locked, got {other:?}"),
+    }
+}
+
+#[test]
+fn tick_on_unlock_screen_is_passthrough() {
+    use paladin_tui::prompt::PassphraseBuffer;
+    let path = PathBuf::from("/tmp/v.bin");
+    let state = AppState::Unlock {
+        path: path.clone(),
+        error: None,
+        passphrase: PassphraseBuffer::new(),
+    };
+
+    let (next, effects) = reduce(state, tick_at(Instant::now()));
+    assert!(effects.is_empty());
+    match next {
+        AppState::Unlock { path: p, .. } => assert_eq!(p, path),
+        other => panic!("expected Unlock, got {other:?}"),
     }
 }

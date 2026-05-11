@@ -691,7 +691,7 @@ end-to-end.
   vault.is_encrypted(), settings)` on `Unlocked` + `enabled` +
   encrypted (i.e. `IdlePolicy::should_arm` is `true`).
 - [x] `idle_deadline` resets on any `AppEvent::Input`.
-- [ ] Transition to `Locked` fires when a
+- [x] Transition to `Locked` fires when a
   `paladin_core::TICK_INTERVAL_MS` `Tick` observes
   `IdlePolicy::is_expired`.
 - [ ] No-op for plaintext vaults (deadline stays `None`).

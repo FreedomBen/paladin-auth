@@ -13,7 +13,7 @@ use std::time::Instant;
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 
-use paladin_core::{PaladinError, Store, Vault};
+use paladin_core::{IdlePolicy, PaladinError, Store, Vault};
 
 use crate::app::event::{AppEvent, Effect, EffectResult};
 use crate::app::state::{compute_idle_deadline, render_error_message, AppState};
@@ -41,9 +41,17 @@ use crate::app::state::{compute_idle_deadline, render_error_message, AppState};
 ///   submit and result) are discarded and the carried `(Vault, Store)`
 ///   drops.
 ///
-/// Tick and clipboard-clear events are passthrough in terminal
-/// screens; their behavior fills in alongside the corresponding
-/// state slices (HOTP reveal expiry, auto-lock, clipboard auto-clear).
+/// `AppEvent::Tick` additionally drives the auto-lock `Unlocked →
+/// Locked` transition when the current `Unlocked` state carries an
+/// `idle_deadline` and [`paladin_core::IdlePolicy::is_expired`]
+/// returns `true` for the tick's `monotonic` instant — per
+/// `IMPLEMENTATION_PLAN_03_TUI.md` "Auto-lock (per §6)". The carried
+/// `Vault` / `Store` drop in place on the transition. Ticks with no
+/// deadline, before the deadline, or on non-`Unlocked` screens are
+/// passthrough.
+///
+/// Clipboard-clear events are passthrough in this slice; their
+/// behavior fills in alongside the clipboard auto-clear slice.
 ///
 /// `AppEvent::Input` additionally rebases the auto-lock idle deadline
 /// on the event's `at` timestamp when the post-dispatch state is
@@ -60,8 +68,28 @@ pub fn reduce(state: AppState, event: AppEvent) -> (AppState, Vec<Effect>) {
             (refresh_idle_deadline_on_input(state, at), effects)
         }
         AppEvent::EffectResult(result) => reduce_effect_result(state, result),
-        AppEvent::Tick { .. } | AppEvent::ClipboardClear { .. } => (state, Vec::new()),
+        AppEvent::Tick { monotonic, .. } => (maybe_auto_lock(state, monotonic), Vec::new()),
+        AppEvent::ClipboardClear { .. } => (state, Vec::new()),
     }
+}
+
+/// Transition `Unlocked → Locked` when the auto-lock idle deadline has
+/// expired at `now`. Other states and `Unlocked` with no / unexpired
+/// deadline pass through unchanged. The expiry decision delegates to
+/// [`paladin_core::IdlePolicy::is_expired`] so the TUI shares
+/// monotonic-clock comparison semantics with the GUI.
+fn maybe_auto_lock(state: AppState, now: Instant) -> AppState {
+    if let AppState::Unlocked {
+        idle_deadline: Some(deadline),
+        ref path,
+        ..
+    } = state
+    {
+        if IdlePolicy::is_expired(deadline, now) {
+            return AppState::Locked { path: path.clone() };
+        }
+    }
+    state
 }
 
 /// Rebase [`AppState::Unlocked::idle_deadline`] on `at` when the
