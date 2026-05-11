@@ -671,11 +671,11 @@ end-to-end.
 
 ### Search (`tests/search_tests.rs`)
 
-- [ ] Case-insensitive substring match through
+- [x] Case-insensitive substring match through
   `paladin_core::account_matches_search` (same base match key as CLI
   query resolution in DESIGN §5; empty issuer allowed and the colon is
   still present in the match key); no Unicode normalization.
-- [ ] Insertion order is preserved among matches.
+- [x] Insertion order is preserved among matches.
 - [ ] Filter changes route through `paladin_core::select_after_filter`:
   preserve the selected `AccountId` when still visible, otherwise the
   first match, `None` when empty.
