@@ -6582,3 +6582,229 @@ fn pressing_page_down_clamps_within_filtered_list() {
         other => panic!("expected Unlocked, got {other:?}"),
     }
 }
+
+// ---------------------------------------------------------------------------
+// Empty filtered set: every list-navigation key including the chords
+// is a silent no-op. Per `IMPLEMENTATION_PLAN_03_TUI.md` > Tests >
+// Vim-style navigation > "Empty filtered set: every list-navigation
+// key including the chords is a silent no-op."
+//
+// Setup: a 3-account vault filtered by a query that matches none of
+// the labels. `select_after_filter` leaves `selected = None`. Each
+// nav key must leave `selected = None`, `search_query` unchanged,
+// `viewport_offset` unchanged, and emit no effects.
+// ---------------------------------------------------------------------------
+
+/// Build an `Unlocked` state where the vault has three named accounts
+/// but the search query filters out every one of them.
+///
+/// `viewport_height` is pre-set to `8` and `viewport_offset` to `3` so
+/// chord / page tests can observe that no viewport bookkeeping
+/// changes during the no-op. `pending_chord_leader` starts `None`.
+fn unlocked_with_empty_filtered_set(tmp: &tempfile::TempDir) -> AppState {
+    let (path, (mut vault, store)) = open_plaintext_pair(tmp);
+    add_totp_account(&mut vault, &store, "github");
+    add_totp_account(&mut vault, &store, "google");
+    add_totp_account(&mut vault, &store, "gitlab");
+    AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: "xyz".to_string(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 8,
+        viewport_offset: 3,
+        focus: Focus::List,
+    }
+}
+
+/// Press `event` on a state with an empty filtered set and assert
+/// every observable selection / viewport / effect output is unchanged.
+fn assert_silent_no_op_on_empty_filtered_set(event: AppEvent, msg: &str) {
+    let tmp = secure_tempdir();
+    let before = unlocked_with_empty_filtered_set(&tmp);
+    let (state, effects) = reduce(before, event);
+    assert!(
+        effects.is_empty(),
+        "{msg}: navigation on empty filtered set must not emit effects, got {effects:?}"
+    );
+    match state {
+        AppState::Unlocked {
+            selected,
+            search_query,
+            viewport_offset,
+            modal,
+            ..
+        } => {
+            assert_eq!(
+                selected, None,
+                "{msg}: selection on empty filtered set must stay None"
+            );
+            assert_eq!(
+                search_query, "xyz",
+                "{msg}: nav key must not mutate the search query"
+            );
+            assert_eq!(
+                viewport_offset, 3,
+                "{msg}: nav key on empty filtered set must not shift viewport offset"
+            );
+            assert!(
+                modal.is_none(),
+                "{msg}: nav key must not open a modal on empty filtered set"
+            );
+        }
+        other => panic!("{msg}: expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_down_arrow_on_empty_filtered_set_is_silent_no_op() {
+    assert_silent_no_op_on_empty_filtered_set(key(KeyCode::Down), "Down");
+}
+
+#[test]
+fn pressing_up_arrow_on_empty_filtered_set_is_silent_no_op() {
+    assert_silent_no_op_on_empty_filtered_set(key(KeyCode::Up), "Up");
+}
+
+#[test]
+fn pressing_j_on_empty_filtered_set_is_silent_no_op() {
+    assert_silent_no_op_on_empty_filtered_set(key(KeyCode::Char('j')), "vim j");
+}
+
+#[test]
+fn pressing_k_on_empty_filtered_set_is_silent_no_op() {
+    assert_silent_no_op_on_empty_filtered_set(key(KeyCode::Char('k')), "vim k");
+}
+
+#[test]
+fn pressing_page_down_on_empty_filtered_set_is_silent_no_op() {
+    assert_silent_no_op_on_empty_filtered_set(key(KeyCode::PageDown), "PageDown");
+}
+
+#[test]
+fn pressing_page_up_on_empty_filtered_set_is_silent_no_op() {
+    assert_silent_no_op_on_empty_filtered_set(key(KeyCode::PageUp), "PageUp");
+}
+
+#[test]
+fn pressing_ctrl_f_on_empty_filtered_set_is_silent_no_op() {
+    assert_silent_no_op_on_empty_filtered_set(ctrl(KeyCode::Char('f')), "Ctrl-F");
+}
+
+#[test]
+fn pressing_ctrl_b_on_empty_filtered_set_is_silent_no_op() {
+    assert_silent_no_op_on_empty_filtered_set(ctrl(KeyCode::Char('b')), "Ctrl-B");
+}
+
+#[test]
+fn pressing_ctrl_d_on_empty_filtered_set_is_silent_no_op() {
+    assert_silent_no_op_on_empty_filtered_set(ctrl(KeyCode::Char('d')), "Ctrl-D");
+}
+
+#[test]
+fn pressing_ctrl_u_on_empty_filtered_set_is_silent_no_op() {
+    assert_silent_no_op_on_empty_filtered_set(ctrl(KeyCode::Char('u')), "Ctrl-U");
+}
+
+#[test]
+fn pressing_home_on_empty_filtered_set_is_silent_no_op() {
+    assert_silent_no_op_on_empty_filtered_set(key(KeyCode::Home), "Home");
+}
+
+#[test]
+fn pressing_end_on_empty_filtered_set_is_silent_no_op() {
+    assert_silent_no_op_on_empty_filtered_set(key(KeyCode::End), "End");
+}
+
+#[test]
+fn pressing_shift_g_on_empty_filtered_set_is_silent_no_op() {
+    // vim `G` (End mirror) — Crossterm reports the resolved upper-
+    // case character, with or without a Shift modifier.
+    assert_silent_no_op_on_empty_filtered_set(key(KeyCode::Char('G')), "vim G");
+}
+
+#[test]
+fn pressing_gg_chord_on_empty_filtered_set_is_silent_no_op() {
+    // Two-press `gg` chord: first `g` arms `ChordLeader::G`; second
+    // `g` commits the jump-to-first. With an empty filtered set,
+    // the commit must be a no-op — selection stays None, viewport
+    // offset stays put, no effects emitted, and the chord leader
+    // is cleared after the commit.
+    let tmp = secure_tempdir();
+    let state = unlocked_with_empty_filtered_set(&tmp);
+    let (state, effects) = reduce(state, key(KeyCode::Char('g')));
+    assert!(effects.is_empty(), "first `g` must not emit effects");
+    let (state, effects) = reduce(state, key(KeyCode::Char('g')));
+    assert!(
+        effects.is_empty(),
+        "`gg` commit on empty filtered set must not emit effects"
+    );
+    match state {
+        AppState::Unlocked {
+            selected,
+            search_query,
+            viewport_offset,
+            pending_chord_leader,
+            ..
+        } => {
+            assert_eq!(
+                selected, None,
+                "`gg` commit on empty filtered set must leave selection None"
+            );
+            assert_eq!(search_query, "xyz", "`gg` must not mutate the search query");
+            assert_eq!(
+                viewport_offset, 3,
+                "`gg` on empty filtered set must not shift viewport offset"
+            );
+            assert_eq!(
+                pending_chord_leader, None,
+                "`gg` commit must clear the pending chord leader"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_zz_chord_on_empty_filtered_set_is_silent_no_op() {
+    // Two-press `zz` recenter chord. With `selected = None` (empty
+    // filtered set) the recenter has no row to center on; the
+    // viewport must not move and the chord leader must clear.
+    let tmp = secure_tempdir();
+    let state = unlocked_with_empty_filtered_set(&tmp);
+    let (state, effects) = reduce(state, key(KeyCode::Char('z')));
+    assert!(effects.is_empty(), "first `z` must not emit effects");
+    let (state, effects) = reduce(state, key(KeyCode::Char('z')));
+    assert!(
+        effects.is_empty(),
+        "`zz` commit on empty filtered set must not emit effects"
+    );
+    match state {
+        AppState::Unlocked {
+            selected,
+            viewport_offset,
+            pending_chord_leader,
+            ..
+        } => {
+            assert_eq!(
+                selected, None,
+                "`zz` commit on empty filtered set must leave selection None"
+            );
+            assert_eq!(
+                viewport_offset, 3,
+                "`zz` with no selected row must not shift viewport offset"
+            );
+            assert_eq!(
+                pending_chord_leader, None,
+                "`zz` commit must clear the pending chord leader"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}

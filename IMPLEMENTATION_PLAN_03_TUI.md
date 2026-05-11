@@ -663,7 +663,7 @@ end-to-end.
 - [x] Bare-letter vim keys (`j`, `k`, `g`, `G`, `z`) are consumed by the
   search field as text input and never trigger chord state from the
   search field.
-- [ ] Empty filtered set: every list-navigation key including the
+- [x] Empty filtered set: every list-navigation key including the
   chords is a silent no-op.
 - [ ] `Ctrl-N` / `Ctrl-P` inside modals advance / retreat focus the
   same as `Tab` / `Shift-Tab`, have no effect on a post-success counts
