@@ -18,7 +18,7 @@ use paladin_core::{
 };
 use paladin_tui::app::event::{AppEvent, Effect};
 use paladin_tui::app::reducer::reduce;
-use paladin_tui::app::state::{AppState, HotpReveal, Modal, PendingClipboardClear};
+use paladin_tui::app::state::{AppState, ChordLeader, HotpReveal, Modal, PendingClipboardClear};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -445,6 +445,62 @@ fn tick_after_deadline_lock_discards_unlocked_modal() {
             );
         }
         other => panic!("expected Locked (modal and vault must be gone), got {other:?}"),
+    }
+}
+
+#[test]
+fn tick_after_deadline_lock_discards_unlocked_pending_chord_leader() {
+    // IMPLEMENTATION_PLAN_03_TUI.md > Tests > Vim-style navigation
+    // bullet: "Pending-leader chord state is held by the reducer,
+    // committed on the matching second press, and cleared by any
+    // non-matching key, focus change, modal open, `Esc`, or
+    // auto-lock." This test covers the auto-lock half of that
+    // clear-pending contract: an in-flight chord leader present at
+    // the moment of the idle-expiry tick must be dropped alongside
+    // the `Vault` / `Store` rather than carried into `Locked` (the
+    // `Locked` variant has no chord-leader field, so the contract is
+    // structural — this test locks it in against a future refactor
+    // that might introduce one). `ChordLeader::G` is the
+    // representative case; `Z` rides on the same destructure.
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (mut vault, store) = create_encrypted_pair(&path, "pp");
+    enable_auto_lock(&mut vault, &store, 600);
+
+    let t0 = Instant::now();
+    let deadline = t0 + Duration::from_secs(600);
+    let state = AppState::Unlocked {
+        path: path.clone(),
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: Some(deadline),
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: None,
+        pending_chord_leader: Some(ChordLeader::G),
+        viewport_height: 0,
+        viewport_offset: 0,
+    };
+
+    let now = deadline + Duration::from_millis(1);
+    let (next, effects) = reduce(state, tick_at(now));
+    assert!(effects.is_empty(), "lock transition emits no effects");
+    match next {
+        AppState::Locked {
+            path: p,
+            pending_clipboard_clear,
+        } => {
+            assert_eq!(p, path, "Locked must carry the original vault path");
+            assert!(
+                pending_clipboard_clear.is_none(),
+                "pending clipboard clear was None on entry; lock must not fabricate one"
+            );
+        }
+        other => {
+            panic!("expected Locked (pending chord leader and vault must be gone), got {other:?}")
+        }
     }
 }
 
