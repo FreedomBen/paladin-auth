@@ -12,7 +12,7 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 
 use secrecy::SecretString;
 
-use paladin_core::{Argon2Params, EncryptionOptions, Store, Vault, VaultInit};
+use paladin_core::{Argon2Params, EncryptionOptions, Store, Vault, VaultInit, VaultLock};
 use paladin_tui::app::event::AppEvent;
 use paladin_tui::app::reducer::reduce;
 use paladin_tui::app::state::AppState;
@@ -371,4 +371,77 @@ fn tick_on_unlock_screen_is_passthrough() {
         AppState::Unlock { path: p, .. } => assert_eq!(p, path),
         other => panic!("expected Unlock, got {other:?}"),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Setting persists across saves
+// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Auto-lock — bullet 5)
+//
+// Slice covered: `auto_lock_enabled` and `auto_lock_timeout_secs`
+// survive a `Vault::save` + `Store::open` round-trip on both vault
+// modes. For plaintext vaults the values are inert at runtime (the
+// `IdlePolicy::should_arm` plaintext-no-op rule), but the setting
+// itself is still persisted so it takes effect if the vault is later
+// encrypted via `passphrase set`. Foundational guarantee for the
+// Settings modal slice (still ahead): once that modal lands and
+// commits settings via `Vault::mutate_and_save`, the persisted state
+// must come back identically after reopen.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn auto_lock_setting_persists_across_save_reopen_encrypted() {
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (mut vault, store) = create_encrypted_pair(&path, "pp");
+    vault.set_auto_lock_enabled(true);
+    vault
+        .set_auto_lock_timeout_secs(900)
+        .expect("timeout within bounds");
+    vault.save(&store).expect("commit settings");
+    drop(vault);
+    drop(store);
+
+    let (reopened, _store) = Store::open(
+        &path,
+        VaultLock::Encrypted(SecretString::from("pp".to_string())),
+    )
+    .expect("reopen encrypted vault");
+    assert!(
+        reopened.settings().auto_lock_enabled(),
+        "auto_lock_enabled must survive encrypted save + reopen"
+    );
+    assert_eq!(
+        reopened.settings().auto_lock_timeout_secs(),
+        900,
+        "auto_lock_timeout_secs must survive encrypted save + reopen"
+    );
+}
+
+#[test]
+fn auto_lock_setting_persists_across_save_reopen_plaintext() {
+    // Plaintext-no-op rule (§6 / §7): the setting is inert at
+    // runtime but must still be persisted so it activates if the
+    // vault is later encrypted via `passphrase set`.
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("plain.bin");
+    let (mut vault, store) = Store::create(&path, VaultInit::Plaintext).expect("create plaintext");
+    vault.set_auto_lock_enabled(true);
+    vault
+        .set_auto_lock_timeout_secs(900)
+        .expect("timeout within bounds");
+    vault.save(&store).expect("commit settings");
+    drop(vault);
+    drop(store);
+
+    let (reopened, _store) =
+        Store::open(&path, VaultLock::Plaintext).expect("reopen plaintext vault");
+    assert!(
+        reopened.settings().auto_lock_enabled(),
+        "auto_lock_enabled must survive plaintext save + reopen even though inert"
+    );
+    assert_eq!(
+        reopened.settings().auto_lock_timeout_secs(),
+        900,
+        "auto_lock_timeout_secs must survive plaintext save + reopen"
+    );
 }
