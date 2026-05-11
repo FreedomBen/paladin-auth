@@ -686,7 +686,7 @@ end-to-end.
 
 ### Auto-lock (`tests/auto_lock_tests.rs`)
 
-- [ ] `idle_deadline` is set via
+- [x] `idle_deadline` is set via
   `paladin_core::policy::auto_lock::IdlePolicy::next_deadline(now,
   vault.is_encrypted(), settings)` on `Unlocked` + `enabled` +
   encrypted (i.e. `IdlePolicy::should_arm` is `true`).
@@ -694,7 +694,7 @@ end-to-end.
 - [x] Transition to `Locked` fires when a
   `paladin_core::TICK_INTERVAL_MS` `Tick` observes
   `IdlePolicy::is_expired`.
-- [ ] No-op for plaintext vaults (deadline stays `None`).
+- [x] No-op for plaintext vaults (deadline stays `None`).
 - [ ] Setting persists across saves.
 - [ ] Locking discards the `Vault` / `Store`, open HOTP reveal windows,
   the search query, and any modal while retaining the resolved vault

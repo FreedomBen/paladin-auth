@@ -1075,3 +1075,40 @@ fn effect_result_unlock_ok_plaintext_seeds_no_idle_deadline() {
         other => panic!("expected Unlocked, got {other:?}"),
     }
 }
+
+#[test]
+fn decide_state_from_open_plaintext_seeds_no_idle_deadline() {
+    // The other Unlocked-entry site: `build_initial_state` calls
+    // `decide_state_from_open` on the plaintext direct-open path
+    // (no `Unlock` screen, no `EffectResult::Unlock`). The
+    // plaintext-no-op rule (§6 / §7) must hold here too: even if the
+    // user previously toggled `auto_lock_enabled = true` on the
+    // plaintext vault, the resulting `Unlocked` state carries no
+    // idle deadline. The setting persists in the vault file but is
+    // inert for plaintext because `IdlePolicy::should_arm` gates on
+    // `is_encrypted` first.
+    let tmp = secure_tempdir();
+    let (vault_path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    vault.set_auto_lock_enabled(true);
+    vault
+        .set_auto_lock_timeout_secs(900)
+        .expect("timeout within bounds");
+    vault.save(&store).expect("commit settings");
+
+    let now = Instant::now();
+    let state = decide_state_from_open(now, vault_path.clone(), Ok((vault, store)));
+    match state {
+        AppState::Unlocked {
+            idle_deadline,
+            path: p,
+            ..
+        } => {
+            assert_eq!(p, vault_path);
+            assert_eq!(
+                idle_deadline, None,
+                "plaintext direct-open must never seed an idle deadline"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
