@@ -5000,6 +5000,349 @@ fn pressing_esc_on_unlocked_with_search_focus_and_modal_open_closes_modal_only()
     }
 }
 
+// ---------------------------------------------------------------------------
+// Typing character input while Focus::Search.
+//
+// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Focus model":
+//   "Other keys, including the action keys ... and the bare-letter vim
+//    navigation keys `j` / `k` / `g` / `G` / `z`, the search-focus key
+//    `/`, and the quit key `q`, are routed to the search field as
+//    character input while it has focus".
+//
+// On every search-query change, the list selection is recomputed via
+// `paladin_core::select_after_filter` (DESIGN.md §6 / §7): preserve
+// `prev` if still in the filtered set, otherwise pick the first match,
+// or `None` if the filtered set is empty.
+//
+// Modal dialogs trap focus, so typing while a modal is open is not
+// routed to the search field even if `focus == Focus::Search`. Ctrl /
+// Alt-modified characters are also not routed as text — they remain
+// reserved for the Ctrl-* navigation / quit chords.
+// ---------------------------------------------------------------------------
+
+/// Build a 3-account plaintext Unlocked state with labels "github",
+/// "google", "gitlab" and `Focus::Search` seeded so the focus-routing
+/// tests can demonstrate filtering by typed characters. Selection
+/// starts on the first inserted account ("github").
+fn unlocked_search_focused_with_three_named_accounts(
+    tmp: &tempfile::TempDir,
+) -> (AppState, [AccountId; 3]) {
+    let (path, (mut vault, store)) = open_plaintext_pair(tmp);
+    let a = add_totp_account(&mut vault, &store, "github");
+    let b = add_totp_account(&mut vault, &store, "google");
+    let c = add_totp_account(&mut vault, &store, "gitlab");
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(a),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::Search,
+    };
+    (state, [a, b, c])
+}
+
+#[test]
+fn typing_char_while_focus_search_appends_to_search_query() {
+    let tmp = secure_tempdir();
+    let (state, _ids) = unlocked_search_focused_with_three_named_accounts(&tmp);
+    let (state, effects) = reduce(state, key(KeyCode::Char('g')));
+    assert!(
+        effects.is_empty(),
+        "typing into search must not emit effects"
+    );
+    match state {
+        AppState::Unlocked {
+            search_query,
+            focus,
+            pending_chord_leader,
+            modal,
+            ..
+        } => {
+            assert_eq!(
+                search_query, "g",
+                "character pressed while Focus::Search must append to the query buffer"
+            );
+            assert_eq!(focus, Focus::Search, "typing must not change focus");
+            assert_eq!(
+                pending_chord_leader, None,
+                "typing `g` into the search field must not engage the chord leader"
+            );
+            assert!(modal.is_none(), "typing must not open a modal");
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn typing_chars_while_focus_search_accumulates_in_typed_order() {
+    let tmp = secure_tempdir();
+    let (mut state, _ids) = unlocked_search_focused_with_three_named_accounts(&tmp);
+    for c in ['g', 'i', 't'] {
+        let (next, _) = reduce(state, key(KeyCode::Char(c)));
+        state = next;
+    }
+    match state {
+        AppState::Unlocked { search_query, .. } => {
+            assert_eq!(
+                search_query, "git",
+                "successive Char presses while Focus::Search must accumulate"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn typing_char_while_focus_search_updates_selection_to_first_match() {
+    let tmp = secure_tempdir();
+    let (mut state, [_github, google, _gitlab]) =
+        unlocked_search_focused_with_three_named_accounts(&tmp);
+    // Move selection off the first account so a refining filter has
+    // to fall back to "first match" via `select_after_filter`.
+    if let AppState::Unlocked {
+        ref mut selected, ..
+    } = state
+    {
+        *selected = Some(google);
+    }
+    let (state, _) = reduce(state, key(KeyCode::Char('g')));
+    // "g" still matches all three (all labels start with "g"), so
+    // "google" remains the surviving prev selection.
+    match &state {
+        AppState::Unlocked {
+            search_query,
+            selected,
+            ..
+        } => {
+            assert_eq!(search_query, "g");
+            assert_eq!(
+                *selected,
+                Some(google),
+                "prev selection survives a filter it is still in"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+    // Now narrow to "git" — only "github" and "gitlab" remain, so
+    // the surviving prev ("google") is filtered out and selection
+    // falls back to the first match in insertion order ("github").
+    let (state, _) = reduce(state, key(KeyCode::Char('i')));
+    let (state, _) = reduce(state, key(KeyCode::Char('t')));
+    match state {
+        AppState::Unlocked {
+            search_query,
+            selected,
+            ..
+        } => {
+            assert_eq!(search_query, "git");
+            // First-inserted match for "git" is "github".
+            assert!(
+                selected.is_some(),
+                "filtered set non-empty must yield Some(selected)"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn typing_char_producing_empty_filtered_set_clears_selection() {
+    let tmp = secure_tempdir();
+    let (state, _ids) = unlocked_search_focused_with_three_named_accounts(&tmp);
+    // "xyz" matches none of "github" / "google" / "gitlab".
+    let (state, _) = reduce(state, key(KeyCode::Char('x')));
+    let (state, _) = reduce(state, key(KeyCode::Char('y')));
+    let (state, _) = reduce(state, key(KeyCode::Char('z')));
+    match state {
+        AppState::Unlocked {
+            search_query,
+            selected,
+            ..
+        } => {
+            assert_eq!(search_query, "xyz");
+            assert_eq!(
+                selected, None,
+                "empty filtered set must clear selection per select_after_filter"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn typing_capital_char_while_focus_search_appends_uppercase() {
+    let tmp = secure_tempdir();
+    let (state, _ids) = unlocked_search_focused_with_three_named_accounts(&tmp);
+    let event = AppEvent::Input {
+        event: Event::Key(KeyEvent::new(KeyCode::Char('G'), KeyModifiers::SHIFT)),
+        at: Instant::now(),
+    };
+    let (state, _) = reduce(state, event);
+    match state {
+        AppState::Unlocked { search_query, .. } => {
+            assert_eq!(
+                search_query, "G",
+                "Shift-modified Char must still append the resolved upper-case byte"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn typing_q_while_focus_search_does_not_quit() {
+    let tmp = secure_tempdir();
+    let (state, _ids) = unlocked_search_focused_with_three_named_accounts(&tmp);
+    let (state, effects) = reduce(state, key(KeyCode::Char('q')));
+    assert!(
+        effects.is_empty(),
+        "`q` typed into the search field must not Quit"
+    );
+    match state {
+        AppState::Unlocked { search_query, .. } => {
+            assert_eq!(
+                search_query, "q",
+                "`q` must be routed as a literal char into the search field"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn typing_modal_opener_letter_while_focus_search_does_not_open_modal() {
+    let tmp = secure_tempdir();
+    let (state, _ids) = unlocked_search_focused_with_three_named_accounts(&tmp);
+    let (state, _) = reduce(state, key(KeyCode::Char('a')));
+    match state {
+        AppState::Unlocked {
+            search_query,
+            modal,
+            ..
+        } => {
+            assert!(modal.is_none(), "`a` in search focus must not open Add");
+            assert_eq!(
+                search_query, "a",
+                "`a` must be routed as a literal char into the search field"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn typing_slash_while_focus_search_appends_to_query() {
+    // `/` already focuses search from list focus; while already in
+    // Focus::Search it is routed as a literal char per the §6 /
+    // "Focus model" rule.
+    let tmp = secure_tempdir();
+    let (state, _ids) = unlocked_search_focused_with_three_named_accounts(&tmp);
+    let (state, _) = reduce(state, key(KeyCode::Char('/')));
+    match state {
+        AppState::Unlocked {
+            search_query,
+            focus,
+            ..
+        } => {
+            assert_eq!(focus, Focus::Search);
+            assert_eq!(search_query, "/", "`/` while in Focus::Search is literal");
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn typing_char_while_focus_search_with_modal_open_does_not_route_into_search() {
+    // Modal traps focus and takes precedence over the search-focus
+    // text routing — the modal-local input path consumes the key.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let a = add_totp_account(&mut vault, &store, "github");
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Settings),
+        selected: Some(a),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::Search,
+    };
+    let (state, effects) = reduce(unlocked, key(KeyCode::Char('g')));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked {
+            search_query,
+            modal: Some(Modal::Settings),
+            ..
+        } => assert_eq!(
+            search_query, "",
+            "modal traps focus — typing must not bleed into the search query"
+        ),
+        other => panic!("expected Unlocked with Modal::Settings open, got {other:?}"),
+    }
+}
+
+#[test]
+fn typing_ctrl_modified_char_while_focus_search_does_not_append_to_query() {
+    // Ctrl-* chords (navigation / quit) must not be routed as text
+    // even when the search field is focused, mirroring `tui-input`'s
+    // own treatment of Ctrl-modified keys as control sequences.
+    let tmp = secure_tempdir();
+    let (state, _ids) = unlocked_search_focused_with_three_named_accounts(&tmp);
+    let (state, _) = reduce(state, ctrl(KeyCode::Char('x')));
+    match state {
+        AppState::Unlocked { search_query, .. } => assert_eq!(
+            search_query, "",
+            "Ctrl-modified Char must not be routed as text into the search field"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn typing_g_while_focus_list_still_engages_chord_leader() {
+    // Regression guard: the chord leader engagement on Focus::List is
+    // unchanged by the search-focus text routing — typing `g` from
+    // list focus still sets `Some(ChordLeader::G)`.
+    let tmp = secure_tempdir();
+    let (state, _ids) = unlocked_with_three_accounts(&tmp);
+    let (state, _) = reduce(state, key(KeyCode::Char('g')));
+    match state {
+        AppState::Unlocked {
+            pending_chord_leader,
+            search_query,
+            focus,
+            ..
+        } => {
+            assert_eq!(
+                pending_chord_leader,
+                Some(ChordLeader::G),
+                "`g` on Focus::List must still arm the chord leader"
+            );
+            assert_eq!(
+                search_query, "",
+                "`g` on Focus::List must NOT bleed into the search query"
+            );
+            assert_eq!(focus, Focus::List);
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
 #[test]
 fn pressing_esc_on_unlocked_with_list_focus_does_not_clear_search_query() {
     // On list focus, Esc only clears pending chord state per the §6

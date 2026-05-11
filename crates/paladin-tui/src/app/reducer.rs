@@ -20,6 +20,7 @@ use crate::app::state::{
     compute_idle_deadline, initial_selection, render_error_message, AppState, ChordLeader, Focus,
     Modal,
 };
+use crate::search::select_after_search;
 
 /// Apply one event to the current state and return the new state plus
 /// any side effects.
@@ -354,6 +355,8 @@ fn reduce_unlocked_input(mut state: AppState, key: &KeyEvent) -> (AppState, Vec<
         ref mut pending_chord_leader,
         ref mut focus,
         ref mut search_query,
+        ref vault,
+        ref mut selected,
         ..
     } = state
     else {
@@ -424,6 +427,13 @@ fn reduce_unlocked_input(mut state: AppState, key: &KeyEvent) -> (AppState, Vec<
     }
 
     // Modal is None below here.
+
+    if *focus == Focus::Search {
+        *pending_chord_leader = None;
+        if route_search_focus_char(search_query, selected, vault, key) {
+            return (state, Vec::new());
+        }
+    }
 
     // `gg` chord: first press sets pending leader, matching second
     // press commits jump-to-first. Handled before list-step / modal
@@ -738,6 +748,44 @@ fn step_n_rows(vault: &Vault, current: AccountId, step: ListStep, n: usize) -> O
     } else {
         Some(ids[target])
     }
+}
+
+/// Append a typed character to the search-query buffer and recompute
+/// the surviving list selection.
+///
+/// Returns `true` when the key was consumed (printable Char while
+/// `Focus::Search`); `false` when the caller should fall through to
+/// list-step dispatch — non-Char keys (`↑` / `↓` / `Home` / `End` /
+/// `PgUp` / `PgDn`) pass through to the list per the §6 / "Focus
+/// model" rule that *"the selection is always navigable so the user
+/// does not need to unfocus the search to act on a result"*.
+///
+/// Ctrl / Alt-modified Chars are returned-early by the Ctrl/Alt
+/// guard in [`reduce_unlocked_input`], so this helper only sees bare
+/// or Shift-modified Chars (e.g. `KeyCode::Char('G')` with
+/// `KeyModifiers::SHIFT`). The chord leader is **not** cleared here —
+/// the caller clears it before invoking this routing, mirroring
+/// the unconditional-clear pattern used by the Ctrl/Alt guard.
+///
+/// Selection is recomputed via [`select_after_search`] (composing
+/// [`paladin_core::select_after_filter`] with the case-insensitive
+/// issuer/label substring filter from
+/// [`paladin_core::account_matches_search`]). The prev selection
+/// survives if still in the filtered set; otherwise the first match
+/// in [`Vault::iter`] insertion order; otherwise `None` when the
+/// filtered set is empty.
+fn route_search_focus_char(
+    search_query: &mut String,
+    selected: &mut Option<AccountId>,
+    vault: &Vault,
+    key: &KeyEvent,
+) -> bool {
+    if let KeyCode::Char(c) = key.code {
+        search_query.push(c);
+        *selected = select_after_search(vault, search_query, *selected);
+        return true;
+    }
+    false
 }
 
 /// Map a bare-letter Unlocked-screen keybinding to the modal it opens,
