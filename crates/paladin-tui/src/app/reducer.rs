@@ -17,7 +17,7 @@ use paladin_core::{AccountId, ClipboardClearToken, IdlePolicy, PaladinError, Sto
 
 use crate::app::event::{AppEvent, Effect, EffectResult};
 use crate::app::state::{
-    compute_idle_deadline, initial_selection, render_error_message, AppState, Modal,
+    compute_idle_deadline, initial_selection, render_error_message, AppState, ChordLeader, Modal,
 };
 
 /// Apply one event to the current state and return the new state plus
@@ -233,6 +233,7 @@ fn reduce_unlock_result(
                         hotp_reveal: None,
                         modal: None,
                         selected,
+                        pending_chord_leader: None,
                     },
                     Vec::new(),
                 )
@@ -290,7 +291,7 @@ fn reduce_input(state: AppState, event: &Event) -> (AppState, Vec<Effect>) {
 
 /// Handle a key event on the Unlocked (main list) screen.
 ///
-/// Two transitions land in this slice, both from
+/// Three transitions land in this slice, all from
 /// `IMPLEMENTATION_PLAN_03_TUI.md` "Keybindings (initial v0.1)":
 ///
 /// * **Modal openers** (seven bare-letter keys):
@@ -316,27 +317,44 @@ fn reduce_input(state: AppState, event: &Event) -> (AppState, Vec<Effect>) {
 ///   at this slice the open-modal case is a no-op so the slot stays
 ///   unchanged.
 ///
-/// * **`Esc` close-modal**: with a modal open, `Esc` clears the slot
-///   to `None`. With no modal open, `Esc` on `Unlocked` is a silent
-///   no-op — `Unlocked` is intentionally not in `quits_on_esc`'s
-///   "no dismissable affordance" set, so the user is never one
-///   stray `Esc` away from losing the unlocked session. `Esc` is
-///   accepted regardless of modifier so terminals that report
-///   Ctrl-Esc or kitty-style augmented Esc still dismiss the modal.
-///   Search-clear and vim-chord clear are listed under the same
-///   `Esc` key in the keybindings table and wire alongside their
-///   own slices.
+/// * **`Esc` close-modal / clear-chord**: with a modal open, `Esc`
+///   clears the modal slot to `None`. With no modal open, `Esc` on
+///   `Unlocked` is otherwise a silent no-op — `Unlocked` is
+///   intentionally not in `quits_on_esc`'s "no dismissable
+///   affordance" set, so the user is never one stray `Esc` away
+///   from losing the unlocked session. In both cases, any pending
+///   vim chord leader is cleared. `Esc` is accepted regardless of
+///   modifier so terminals that report Ctrl-Esc or kitty-style
+///   augmented Esc still dismiss the modal. Search-clear lands
+///   alongside the search-focus slice.
+///
+/// * **`gg` two-press chord** (vim mirror of `Home`): with no modal
+///   open, lower-case `g` either sets
+///   `pending_chord_leader = Some(ChordLeader::G)` on the first press
+///   or commits a jump-to-first on the matching second press
+///   (clearing the pending state). Any other key on `Unlocked`,
+///   any Ctrl/Alt-modifier press, `Esc`, or a modal open also
+///   clears the pending state. There is no time-based clear —
+///   vim's `nottimeout` semantics. The chord never engages while
+///   a modal is open. The `zz` recenter chord lands alongside the
+///   viewport-tracking slice.
 fn reduce_unlocked_input(mut state: AppState, key: &KeyEvent) -> (AppState, Vec<Effect>) {
-    let AppState::Unlocked { ref mut modal, .. } = state else {
+    let AppState::Unlocked {
+        ref mut modal,
+        ref mut pending_chord_leader,
+        ..
+    } = state
+    else {
         // Caller ensures we're in Unlocked; defensive fall-through
         // keeps the reducer total.
         return (state, Vec::new());
     };
 
     if matches!(key.code, KeyCode::Esc) {
-        // Modifier-agnostic: any Esc dismisses an open modal.
-        // Search-clear / vim-chord clear are no-ops at this slice;
-        // they layer on without disturbing the close-modal contract.
+        // Modifier-agnostic: any Esc dismisses an open modal and
+        // clears any pending vim chord leader. Search-clear lands
+        // alongside the search-focus slice.
+        *pending_chord_leader = None;
         if modal.is_some() {
             *modal = None;
         }
@@ -347,29 +365,63 @@ fn reduce_unlocked_input(mut state: AppState, key: &KeyEvent) -> (AppState, Vec<
         .modifiers
         .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
     {
+        // Ctrl/Alt-modifier presses are unbound on the list at this
+        // slice but still clear any pending chord state — chord
+        // commitment requires a bare second press.
+        *pending_chord_leader = None;
         return (state, Vec::new());
     }
 
-    if modal.is_none() {
-        if let Some(step) = list_step_for_key(key.code) {
-            return move_selection(state, step);
+    if modal.is_some() {
+        // A modal is open: bare-letter keys belong to the
+        // modal-local input path (handled in later slices) and
+        // any pending chord state is cleared.
+        *pending_chord_leader = None;
+        return (state, Vec::new());
+    }
+
+    // Modal is None below here.
+
+    // `gg` chord: first press sets pending leader, matching second
+    // press commits jump-to-first. Handled before list-step / modal
+    // openers so the bare `g` is consumed by the chord path.
+    if matches!(key.code, KeyCode::Char('g')) {
+        let was_pending = matches!(*pending_chord_leader, Some(ChordLeader::G));
+        *pending_chord_leader = None;
+        if was_pending {
+            return move_selection(state, ListStep::First);
         }
+        if let AppState::Unlocked {
+            pending_chord_leader,
+            ..
+        } = &mut state
+        {
+            *pending_chord_leader = Some(ChordLeader::G);
+        }
+        return (state, Vec::new());
+    }
+
+    // Any other key on the list (matching or not) clears the
+    // pending chord state before its own action runs.
+    *pending_chord_leader = None;
+
+    if let Some(step) = list_step_for_key(key.code) {
+        return move_selection(state, step);
     }
 
     if let KeyCode::Char(c) = key.code {
-        if modal.is_none() {
-            // `q` quits Unlocked when no modal is open. (With a
-            // modal open, `q` belongs to the modal-local input
-            // path. Once the search bar can take focus, `q` is
-            // text input on the search surface too; that gating
-            // lands with the focus-state slice.)
-            if c == 'q' {
-                return (state, vec![Effect::Quit]);
-            }
-            if let Some(opened) = modal_opener_for_char(c) {
+        // `q` quits Unlocked when no modal is open. (Once the
+        // search bar can take focus, `q` is text input on the
+        // search surface too; that gating lands with the
+        // focus-state slice.)
+        if c == 'q' {
+            return (state, vec![Effect::Quit]);
+        }
+        if let Some(opened) = modal_opener_for_char(c) {
+            if let AppState::Unlocked { modal, .. } = &mut state {
                 *modal = Some(opened);
-                return (state, Vec::new());
             }
+            return (state, Vec::new());
         }
     }
 

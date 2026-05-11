@@ -23,7 +23,7 @@ use paladin_tui::app::event::{AppEvent, Effect, EffectResult};
 use paladin_tui::app::reducer::reduce;
 use paladin_tui::app::state::{
     compute_idle_deadline, decide_state_from_inspect, decide_state_from_open, render_error_message,
-    AppState, Modal,
+    AppState, ChordLeader, Modal,
 };
 use paladin_tui::cli::{should_disable_color, GlobalArgs};
 use paladin_tui::prompt::PassphraseBuffer;
@@ -407,6 +407,7 @@ fn ctrl_c_on_unlocked_quits() {
         hotp_reveal: None,
         modal: None,
         selected: None,
+        pending_chord_leader: None,
     };
     let (_, effects) = reduce(unlocked, ctrl(KeyCode::Char('c')));
     assert!(matches!(effects.as_slice(), [Effect::Quit]));
@@ -1272,6 +1273,7 @@ fn pressing_a_on_unlocked_with_no_modal_open_opens_add_modal() {
         hotp_reveal: None,
         modal: None,
         selected: None,
+        pending_chord_leader: None,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Char('a')));
     assert!(effects.is_empty(), "opening a modal must not emit effects");
@@ -1305,6 +1307,7 @@ fn pressing_a_on_unlocked_with_modal_already_open_does_not_replace_the_modal() {
         hotp_reveal: None,
         modal: Some(Modal::Settings),
         selected: None,
+        pending_chord_leader: None,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Char('a')));
     assert!(
@@ -1341,6 +1344,7 @@ fn pressing_ctrl_a_on_unlocked_does_not_open_add_modal() {
         hotp_reveal: None,
         modal: None,
         selected: None,
+        pending_chord_leader: None,
     };
     let (state, effects) = reduce(unlocked, ctrl(KeyCode::Char('a')));
     assert!(effects.is_empty(), "Ctrl-A is unbound; no effects");
@@ -1367,6 +1371,7 @@ fn fresh_plaintext_unlocked(tmp: &tempfile::TempDir) -> AppState {
         hotp_reveal: None,
         modal: None,
         selected: None,
+        pending_chord_leader: None,
     }
 }
 
@@ -1472,6 +1477,7 @@ fn assert_esc_closes_modal(opened: Modal) {
         hotp_reveal: None,
         modal: Some(opened),
         selected: None,
+        pending_chord_leader: None,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Esc));
     assert!(
@@ -1585,6 +1591,7 @@ fn pressing_q_on_unlocked_with_modal_open_does_not_quit() {
         hotp_reveal: None,
         modal: Some(Modal::Add),
         selected: None,
+        pending_chord_leader: None,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Char('q')));
     assert!(
@@ -1649,6 +1656,7 @@ fn unlocked_with_three_accounts(tmp: &tempfile::TempDir) -> (AppState, [AccountI
         hotp_reveal: None,
         modal: None,
         selected: Some(a),
+        pending_chord_leader: None,
     };
     (state, [a, b, c])
 }
@@ -1706,6 +1714,7 @@ fn pressing_down_arrow_at_end_of_list_clamps() {
         hotp_reveal: None,
         modal: None,
         selected: Some(b),
+        pending_chord_leader: None,
     };
     let (state, _) = reduce(unlocked, key(KeyCode::Down));
     match state {
@@ -1734,6 +1743,7 @@ fn pressing_up_arrow_on_unlocked_moves_selection_to_previous_account() {
         hotp_reveal: None,
         modal: None,
         selected: Some(b),
+        pending_chord_leader: None,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Up));
     assert!(effects.is_empty());
@@ -1811,6 +1821,7 @@ fn pressing_down_arrow_with_modal_open_does_not_move_selection() {
         hotp_reveal: None,
         modal: Some(Modal::Settings),
         selected: Some(a),
+        pending_chord_leader: None,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Down));
     assert!(effects.is_empty());
@@ -1860,6 +1871,7 @@ fn pressing_k_mirrors_up_arrow() {
         hotp_reveal: None,
         modal: None,
         selected: Some(b),
+        pending_chord_leader: None,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Char('k')));
     assert!(effects.is_empty());
@@ -1909,6 +1921,7 @@ fn pressing_j_with_modal_open_does_not_move_selection() {
         hotp_reveal: None,
         modal: Some(Modal::Add),
         selected: Some(a),
+        pending_chord_leader: None,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Char('j')));
     assert!(effects.is_empty());
@@ -1960,6 +1973,7 @@ fn pressing_home_on_unlocked_jumps_to_first_account() {
         hotp_reveal: None,
         modal: None,
         selected: Some(c),
+        pending_chord_leader: None,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Home));
     assert!(effects.is_empty(), "navigation must not emit effects");
@@ -2021,6 +2035,7 @@ fn pressing_end_at_last_account_is_a_no_op() {
         hotp_reveal: None,
         modal: None,
         selected: Some(b),
+        pending_chord_leader: None,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::End));
     assert!(effects.is_empty());
@@ -2081,6 +2096,7 @@ fn pressing_home_with_modal_open_does_not_move_selection() {
         hotp_reveal: None,
         modal: Some(Modal::Settings),
         selected: Some(c),
+        pending_chord_leader: None,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Home));
     assert!(effects.is_empty());
@@ -2115,6 +2131,7 @@ fn pressing_end_with_modal_open_does_not_move_selection() {
         hotp_reveal: None,
         modal: Some(Modal::Add),
         selected: Some(a),
+        pending_chord_leader: None,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::End));
     assert!(effects.is_empty());
@@ -2160,6 +2177,7 @@ fn pressing_ctrl_home_does_not_move_selection() {
             hotp_reveal,
             modal,
             selected: Some(c),
+            pending_chord_leader: None,
         },
         other => panic!("expected Unlocked, got {other:?}"),
     };
@@ -2261,6 +2279,7 @@ fn pressing_shift_g_at_last_account_is_a_no_op() {
         hotp_reveal: None,
         modal: None,
         selected: Some(b),
+        pending_chord_leader: None,
     };
     let (state, _) = reduce(unlocked, key(KeyCode::Char('G')));
     match state {
@@ -2305,6 +2324,7 @@ fn pressing_shift_g_with_modal_open_does_not_move_selection() {
         hotp_reveal: None,
         modal: Some(Modal::Add),
         selected: Some(a),
+        pending_chord_leader: None,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Char('G')));
     assert!(effects.is_empty());
@@ -2351,9 +2371,10 @@ fn pressing_ctrl_shift_g_does_not_move_selection() {
 
 #[test]
 fn pressing_lowercase_g_on_unlocked_does_not_move_selection() {
-    // Bare lower-case `g` is the future `gg` chord leader. Until the
-    // chord-state slice lands, a single `g` never moves the
-    // selection on its own — this test locks that contract.
+    // Bare lower-case `g` is the `gg` chord leader: the first press
+    // sets pending state but never moves the selection on its own.
+    // The matching second `g` commits the jump-to-first; that
+    // commit-on-second-press behaviour is covered separately.
     let tmp = secure_tempdir();
     let (state, [_a, _b, c]) = unlocked_with_three_accounts(&tmp);
     let unlocked = match state {
@@ -2377,6 +2398,7 @@ fn pressing_lowercase_g_on_unlocked_does_not_move_selection() {
             hotp_reveal,
             modal,
             selected: Some(c),
+            pending_chord_leader: None,
         },
         other => panic!("expected Unlocked, got {other:?}"),
     };
@@ -2386,8 +2408,378 @@ fn pressing_lowercase_g_on_unlocked_does_not_move_selection() {
         AppState::Unlocked { selected, .. } => assert_eq!(
             selected,
             Some(c),
-            "bare lower-case `g` must not move selection (chord leader handled later)"
+            "first `g` is the chord leader and must not move selection"
         ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// `gg` two-press chord — vim mirror of `Home` (jump-to-first).
+//
+// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Vim-style navigation:
+//   "`gg` two-press chord jumps to the first row of the filtered set."
+//  + "Pending-leader chord state is held by the reducer, committed on
+//    the matching second press, and cleared by any non-matching key,
+//    focus change, modal open, `Esc`, or auto-lock.")
+//
+// Slice covered: lower-case `g` on `Unlocked` with no modal open sets
+// `pending_chord_leader = Some(ChordLeader::G)` on first press and
+// commits a jump-to-first on the matching second press (clearing the
+// pending state). A non-matching key, an `Esc`, a modal open, and any
+// Ctrl/Alt-modifier press all clear the pending state. The chord
+// never engages while a modal is open. Empty filtered set is a silent
+// no-op. `Tick` events between the two presses preserve the pending
+// state (vim's `nottimeout` semantics — there is no timeout). The
+// `zz` chord, `gg` from the focused search field, and the auto-lock
+// chord-drop assertion land in later slices.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn pressing_lowercase_g_on_unlocked_sets_pending_chord_leader() {
+    let tmp = secure_tempdir();
+    let (state, [_a, _b, c]) = unlocked_with_three_accounts(&tmp);
+    let unlocked = match state {
+        AppState::Unlocked {
+            path,
+            vault,
+            store,
+            search_query,
+            idle_deadline,
+            pending_clipboard_clear,
+            hotp_reveal,
+            modal,
+            ..
+        } => AppState::Unlocked {
+            path,
+            vault,
+            store,
+            search_query,
+            idle_deadline,
+            pending_clipboard_clear,
+            hotp_reveal,
+            modal,
+            selected: Some(c),
+            pending_chord_leader: None,
+        },
+        other => panic!("expected Unlocked, got {other:?}"),
+    };
+    let (state, effects) = reduce(unlocked, key(KeyCode::Char('g')));
+    assert!(effects.is_empty(), "chord leader must not emit effects");
+    match state {
+        AppState::Unlocked {
+            pending_chord_leader,
+            ..
+        } => assert_eq!(
+            pending_chord_leader,
+            Some(ChordLeader::G),
+            "first `g` must set pending chord leader to G"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_gg_on_unlocked_jumps_to_first_account() {
+    let tmp = secure_tempdir();
+    let (state, [a, _b, c]) = unlocked_with_three_accounts(&tmp);
+    // Start with selection on the last account so the jump is observable.
+    let unlocked = match state {
+        AppState::Unlocked {
+            path,
+            vault,
+            store,
+            search_query,
+            idle_deadline,
+            pending_clipboard_clear,
+            hotp_reveal,
+            modal,
+            ..
+        } => AppState::Unlocked {
+            path,
+            vault,
+            store,
+            search_query,
+            idle_deadline,
+            pending_clipboard_clear,
+            hotp_reveal,
+            modal,
+            selected: Some(c),
+            pending_chord_leader: None,
+        },
+        other => panic!("expected Unlocked, got {other:?}"),
+    };
+    let (state, effects) = reduce(unlocked, key(KeyCode::Char('g')));
+    assert!(effects.is_empty());
+    let (state, effects) = reduce(state, key(KeyCode::Char('g')));
+    assert!(effects.is_empty(), "chord commit must not emit effects");
+    match state {
+        AppState::Unlocked {
+            selected,
+            pending_chord_leader,
+            ..
+        } => {
+            assert_eq!(
+                selected,
+                Some(a),
+                "`gg` must jump selection to the first inserted account"
+            );
+            assert_eq!(
+                pending_chord_leader, None,
+                "`gg` commit must clear pending chord state"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_g_then_j_clears_chord_and_moves_down() {
+    // A non-matching key after the chord leader must clear the
+    // pending state AND still execute its own action — pressing
+    // `gj` from the first row should land on the second row, not
+    // jump-to-first.
+    let tmp = secure_tempdir();
+    let (state, [_a, b, _c]) = unlocked_with_three_accounts(&tmp);
+    let (state, _) = reduce(state, key(KeyCode::Char('g')));
+    let (state, effects) = reduce(state, key(KeyCode::Char('j')));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked {
+            selected,
+            pending_chord_leader,
+            ..
+        } => {
+            assert_eq!(
+                selected,
+                Some(b),
+                "`j` after `g` must execute Down even though it cleared the chord"
+            );
+            assert_eq!(
+                pending_chord_leader, None,
+                "non-matching key must clear pending chord state"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_esc_after_g_clears_pending_chord_leader() {
+    // `Esc` on the list with no modal open is otherwise a no-op, but
+    // it always clears any pending vim chord state.
+    let tmp = secure_tempdir();
+    let (state, [a, _b, _c]) = unlocked_with_three_accounts(&tmp);
+    let (state, _) = reduce(state, key(KeyCode::Char('g')));
+    let (state, effects) = reduce(state, key(KeyCode::Esc));
+    assert!(
+        effects.is_empty(),
+        "Esc on Unlocked with no modal open must be effect-free"
+    );
+    match state {
+        AppState::Unlocked {
+            selected,
+            pending_chord_leader,
+            modal,
+            ..
+        } => {
+            assert_eq!(
+                pending_chord_leader, None,
+                "Esc must clear pending chord state"
+            );
+            assert!(modal.is_none(), "Esc must not open a modal");
+            assert_eq!(selected, Some(a), "Esc must not move list selection");
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_modal_opener_after_g_clears_chord_and_opens_modal() {
+    let tmp = secure_tempdir();
+    let (state, [a, _b, _c]) = unlocked_with_three_accounts(&tmp);
+    let (state, _) = reduce(state, key(KeyCode::Char('g')));
+    let (state, effects) = reduce(state, key(KeyCode::Char('a')));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked {
+            selected,
+            pending_chord_leader,
+            modal,
+            ..
+        } => {
+            assert!(
+                matches!(modal, Some(Modal::Add)),
+                "`a` after `g` must still open the Add modal"
+            );
+            assert_eq!(
+                pending_chord_leader, None,
+                "opening a modal must clear pending chord state"
+            );
+            assert_eq!(
+                selected,
+                Some(a),
+                "opening a modal must not move list selection"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_g_with_modal_open_does_not_set_chord_leader() {
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let a = add_totp_account(&mut vault, &store, "a");
+    let _b = add_totp_account(&mut vault, &store, "b");
+    let _c = add_totp_account(&mut vault, &store, "c");
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Settings),
+        selected: Some(a),
+        pending_chord_leader: None,
+    };
+    let (state, effects) = reduce(unlocked, key(KeyCode::Char('g')));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked {
+            pending_chord_leader,
+            modal: Some(Modal::Settings),
+            ..
+        } => assert_eq!(
+            pending_chord_leader, None,
+            "chord leader must not engage while a modal is open"
+        ),
+        other => panic!("expected Unlocked with Modal::Settings open, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_gg_on_empty_vault_is_silent_noop() {
+    let tmp = secure_tempdir();
+    let (vault_path, (vault, store)) = open_plaintext_pair(&tmp);
+    let unlocked = AppState::Unlocked {
+        path: vault_path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: None,
+        pending_chord_leader: None,
+    };
+    let (state, _) = reduce(unlocked, key(KeyCode::Char('g')));
+    let (state, effects) = reduce(state, key(KeyCode::Char('g')));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked {
+            selected,
+            pending_chord_leader,
+            ..
+        } => {
+            assert_eq!(selected, None, "`gg` on empty vault must stay at None");
+            assert_eq!(
+                pending_chord_leader, None,
+                "`gg` commit must still clear pending chord state on empty vault"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_ctrl_g_clears_pending_chord_leader() {
+    // `Ctrl-G` is not bound; it falls through the Ctrl/Alt modifier
+    // guard, which also clears any pending chord state.
+    let tmp = secure_tempdir();
+    let (state, [a, _b, _c]) = unlocked_with_three_accounts(&tmp);
+    let (state, _) = reduce(state, key(KeyCode::Char('g')));
+    let (state, effects) = reduce(state, ctrl(KeyCode::Char('g')));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked {
+            selected,
+            pending_chord_leader,
+            ..
+        } => {
+            assert_eq!(
+                pending_chord_leader, None,
+                "Ctrl-G must clear pending chord state"
+            );
+            assert_eq!(selected, Some(a), "Ctrl-G must not move selection");
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn tick_between_g_presses_preserves_pending_chord_leader() {
+    // vim's `nottimeout` semantics — there is no timeout on the chord.
+    // A `Tick` event delivered between the two `g` presses must not
+    // clear the pending chord leader; the second `g` still commits the
+    // jump-to-first.
+    let tmp = secure_tempdir();
+    let (state, [a, _b, c]) = unlocked_with_three_accounts(&tmp);
+    let unlocked = match state {
+        AppState::Unlocked {
+            path,
+            vault,
+            store,
+            search_query,
+            idle_deadline,
+            pending_clipboard_clear,
+            hotp_reveal,
+            modal,
+            ..
+        } => AppState::Unlocked {
+            path,
+            vault,
+            store,
+            search_query,
+            idle_deadline,
+            pending_clipboard_clear,
+            hotp_reveal,
+            modal,
+            selected: Some(c),
+            pending_chord_leader: None,
+        },
+        other => panic!("expected Unlocked, got {other:?}"),
+    };
+    let (state, _) = reduce(unlocked, key(KeyCode::Char('g')));
+    // Slip a tick through; with no idle deadline armed this is a
+    // total passthrough but must not clear chord state.
+    let (state, _) = reduce(
+        state,
+        AppEvent::Tick {
+            wall_clock: SystemTime::now(),
+            monotonic: Instant::now(),
+        },
+    );
+    let (state, _) = reduce(state, key(KeyCode::Char('g')));
+    match state {
+        AppState::Unlocked {
+            selected,
+            pending_chord_leader,
+            ..
+        } => {
+            assert_eq!(
+                selected,
+                Some(a),
+                "Tick between `g`s must not break the chord — `gg` still commits jump-to-first"
+            );
+            assert_eq!(
+                pending_chord_leader, None,
+                "after commit pending chord state must be cleared"
+            );
+        }
         other => panic!("expected Unlocked, got {other:?}"),
     }
 }

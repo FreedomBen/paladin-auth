@@ -86,6 +86,26 @@ pub struct HotpReveal {
     pub deadline: Instant,
 }
 
+/// A pending vim chord leader on the list view.
+///
+/// Set by the first press of a chord leader key and cleared by the
+/// matching second press (which also commits the chord's action), by
+/// any non-matching key, by a focus change, by a modal open, by `Esc`,
+/// or by the `Unlocked → Locked` auto-lock transition (which drops
+/// the field alongside the `Vault` / `Store`). Per
+/// `IMPLEMENTATION_PLAN_03_TUI.md` "Layout (per §6)" the chord uses
+/// vim's `nottimeout` semantics: there is no time-based clear; only
+/// the next keypress can commit or break it.
+///
+/// `G` is the leader for the `gg` jump-to-first chord — the vim
+/// mirror of `Home`. The `Z` variant (leader for the `zz` recenter
+/// chord) lands alongside the viewport-tracking slice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChordLeader {
+    /// Lower-case `g` — leader for `gg` (jump-to-first).
+    G,
+}
+
 /// An open modal dialog over the main list view.
 ///
 /// Discarded on the `Unlocked → Locked` auto-lock transition
@@ -255,6 +275,19 @@ pub enum AppState {
         /// reducer; the `Unlocked → Locked` transition drops it
         /// alongside the `Vault` / `Store`.
         selected: Option<AccountId>,
+        /// Pending two-press vim chord leader, if the most recent
+        /// list-focus keystroke was a chord leader (e.g. lower-case
+        /// `g` for the `gg` jump-to-first chord). `None` when no
+        /// chord is in flight.
+        ///
+        /// Set by the chord leader keystroke, cleared by the
+        /// matching second press (which also commits the chord's
+        /// action), by any non-matching key, by a focus change to
+        /// the search bar, by a modal open, by `Esc`, or by the
+        /// `Unlocked → Locked` auto-lock transition (which drops the
+        /// field alongside the `Vault` / `Store`). No time-based
+        /// clear — vim's `nottimeout` semantics.
+        pending_chord_leader: Option<ChordLeader>,
     },
 
     /// Non-mutating startup-error screen. Used when vault-path
@@ -329,6 +362,7 @@ pub fn decide_state_from_open(
                 hotp_reveal: None,
                 modal: None,
                 selected,
+                pending_chord_leader: None,
             }
         }
         Err(err) => AppState::StartupError {
