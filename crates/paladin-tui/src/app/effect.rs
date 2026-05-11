@@ -67,5 +67,22 @@ pub fn execute(effect: Effect, sender: &Sender<AppEvent>) -> EffectOutcome {
             }));
             EffectOutcome::Continue
         }
+        Effect::ClearClipboard { value: _ } => {
+            // Placeholder: the live-clipboard read and
+            // `ClipboardClearPolicy::should_clear` decision land with
+            // the clipboard adapter slice (see
+            // `IMPLEMENTATION_PLAN_03_TUI.md` "Implementation
+            // checklist": *"Implement clipboard wrapper (arboard
+            // reads/writes) … only-if-unchanged auto-clear via
+            // `ClipboardClearPolicy::should_clear`."*). For now the
+            // captured bytes are dropped here — the reducer has
+            // already cleared `pending_clipboard_clear` before this
+            // executor arm runs.
+            //
+            // No `AppEvent` is sent back: clipboard wipe is fire-and-
+            // forget at this layer.
+            let _ = sender;
+            EffectOutcome::Continue
+        }
     }
 }

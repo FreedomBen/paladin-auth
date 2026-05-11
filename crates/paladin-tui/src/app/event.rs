@@ -125,4 +125,28 @@ pub enum Effect {
         /// buffer.
         passphrase: SecretString,
     },
+    /// Wipe the OS clipboard if it still holds the bytes the front
+    /// end captured at copy time.
+    ///
+    /// Emitted by the reducer when an `AppEvent::ClipboardClear` wake
+    /// arrives whose token matches the current
+    /// `PendingClipboardClear` token (the stale-token / no-pending
+    /// cases short-circuit in the reducer, never reaching the
+    /// executor). The executor reads the live clipboard, asks
+    /// [`paladin_core::ClipboardClearPolicy::should_clear`], and
+    /// writes empty only when the comparison returns `true` — per
+    /// `IMPLEMENTATION_PLAN_03_TUI.md` "Clipboard auto-clear (per
+    /// §6)": *"on wake, it … reads the current clipboard, asks
+    /// `ClipboardClearPolicy::should_clear`, and writes empty when
+    /// the policy returns `true`."*
+    ///
+    /// The actual `arboard` read/write lands with the clipboard
+    /// adapter slice; until then the executor consumes the bytes and
+    /// returns `Continue`.
+    ClearClipboard {
+        /// The bytes the copy effect wrote to the clipboard; compared
+        /// for byte-equality with the live clipboard contents inside
+        /// the executor.
+        value: Vec<u8>,
+    },
 }

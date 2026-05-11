@@ -13,10 +13,10 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use secrecy::SecretString;
 
 use paladin_core::{
-    hotp_reveal_deadline, AccountId, Argon2Params, ClipboardClearPolicy, EncryptionOptions, Store,
-    Vault, VaultInit, VaultLock,
+    hotp_reveal_deadline, AccountId, Argon2Params, ClipboardClearPolicy, ClipboardClearToken,
+    EncryptionOptions, Store, Vault, VaultInit, VaultLock,
 };
-use paladin_tui::app::event::AppEvent;
+use paladin_tui::app::event::{AppEvent, Effect};
 use paladin_tui::app::reducer::reduce;
 use paladin_tui::app::state::{AppState, HotpReveal, Modal, PendingClipboardClear};
 
@@ -420,16 +420,21 @@ fn tick_after_deadline_lock_discards_unlocked_modal() {
 // Clipboard auto-clear survives lock
 // (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Auto-lock — bullet 7)
 //
-// Slice covered: a `PendingClipboardClear` present on `Unlocked` at
-// the moment of the idle-expiry tick is carried unchanged through to
-// the resulting `Locked` state — token, captured bytes, and the
-// scheduled wake-deadline all survive the variant change.
+// State-carry-across-lock slice: a `PendingClipboardClear` present on
+// `Unlocked` at the moment of the idle-expiry tick is carried
+// unchanged through to the resulting `Locked` state — token,
+// captured bytes, and the scheduled wake-deadline all survive the
+// variant change.
 //
-// The "still fires only-if-unchanged" half of bullet 7 lands with the
-// `AppEvent::ClipboardClear` handler slice (which needs the Clipboard
-// effect / event wiring). The state-carry-across-lock slice has to go
-// first so the timer thread's wake event can find the pending state
-// to act on once the user has been auto-locked.
+// Wake-on-`Locked` slice (the "still fires only-if-unchanged" half):
+// covered by `clipboard_clear_event_on_locked_*` further down. A
+// matching-token `AppEvent::ClipboardClear` arriving on `Locked`
+// emits `Effect::ClearClipboard { value }` and clears
+// `pending_clipboard_clear`; a stale token or absent pending state
+// is a no-op. The executor-side "read the live clipboard, apply
+// `ClipboardClearPolicy::should_clear`, write empty if `true`"
+// decision is covered separately by `tests/clipboard_tests.rs` once
+// the clipboard adapter lands.
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -525,6 +530,190 @@ fn tick_after_deadline_lock_with_no_pending_clipboard_clear_yields_none() {
                 pending_clipboard_clear.is_none(),
                 "no pending clear must remain `None` after lock"
             );
+        }
+        other => panic!("expected Locked, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// `AppEvent::ClipboardClear` wake handler on `Locked`
+// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Auto-lock — bullet 7, second half)
+//
+// Slice covered: when the clipboard auto-clear timer that survived the
+// `Unlocked → Locked` lock fires its delayed
+// `AppEvent::ClipboardClear { token, value }`, the reducer:
+//
+// * with a matching token on `pending_clipboard_clear`, emits a single
+//   [`Effect::ClearClipboard { value }`] carrying the captured bytes
+//   from state and clears `pending_clipboard_clear` to `None`. The
+//   actual live-clipboard read / `should_clear` / wipe lives in the
+//   effect executor (covered by `tests/clipboard_tests.rs` once the
+//   adapter lands);
+// * with a stale token (a fresher copy has issued a new token and
+//   replaced the pending state), drops the wake event with no state
+//   change and no effect;
+// * with no pending clear (the wake arrived after a clear had already
+//   fired or been superseded out), is a no-op.
+//
+// The pre-lock (`Unlocked`) wake path is covered by
+// `tests/clipboard_tests.rs`; the `Locked` path is here because it is
+// the path that directly enforces bullet 7's lock-survival contract.
+// ---------------------------------------------------------------------------
+
+fn clipboard_clear_event(token: ClipboardClearToken, value: Vec<u8>) -> AppEvent {
+    AppEvent::ClipboardClear { token, value }
+}
+
+#[test]
+fn clipboard_clear_event_on_locked_with_matching_token_fires_wipe_and_clears_pending() {
+    let path = PathBuf::from("/tmp/v.bin");
+    let captured = vec![0x31, 0x32, 0x33, 0x34, 0x35, 0x36];
+    // A schedule done from a real `VaultSettings` issues a real
+    // `ClipboardClearToken`; the test mirrors that to avoid hand-rolling
+    // tokens (which the policy module doesn't expose as a public ctor).
+    let tmp = secure_tempdir();
+    let (mut vault, store) = create_encrypted_pair(&tmp.path().join("issuer.bin"), "pp");
+    vault.set_clipboard_clear_enabled(true);
+    vault
+        .set_clipboard_clear_secs(30)
+        .expect("clear secs within bounds");
+    let t0 = Instant::now();
+    let (token, deadline) =
+        ClipboardClearPolicy::schedule(t0, vault.settings()).expect("clipboard clear scheduled");
+    drop(vault);
+    drop(store);
+
+    let state = AppState::Locked {
+        path: path.clone(),
+        pending_clipboard_clear: Some(PendingClipboardClear {
+            token,
+            value: captured.clone(),
+            deadline,
+        }),
+    };
+
+    let (next, effects) = reduce(state, clipboard_clear_event(token, captured.clone()));
+
+    match &effects[..] {
+        [Effect::ClearClipboard { value }] => {
+            assert_eq!(
+                value, &captured,
+                "wipe effect must carry the captured bytes from pending state"
+            );
+        }
+        other => panic!("expected exactly one Effect::ClearClipboard, got {other:?}"),
+    }
+    match next {
+        AppState::Locked {
+            path: p,
+            pending_clipboard_clear,
+        } => {
+            assert_eq!(p, path, "Locked path must carry over");
+            assert!(
+                pending_clipboard_clear.is_none(),
+                "matching-token wake hands the wipe to the executor; pending state clears"
+            );
+        }
+        other => panic!("expected Locked, got {other:?}"),
+    }
+}
+
+#[test]
+fn clipboard_clear_event_on_locked_with_stale_token_is_noop() {
+    // A second copy after the first issues a fresh, strictly-greater
+    // token via `ClipboardClearPolicy::schedule`. The first timer's
+    // delayed `AppEvent::ClipboardClear` then arrives with the *old*
+    // token; the reducer must drop it without state change and
+    // without emitting a wipe effect — the newer pending state owns
+    // the only valid clear.
+    let path = PathBuf::from("/tmp/v.bin");
+    let tmp = secure_tempdir();
+    let (mut vault, store) = create_encrypted_pair(&tmp.path().join("issuer.bin"), "pp");
+    vault.set_clipboard_clear_enabled(true);
+    vault
+        .set_clipboard_clear_secs(30)
+        .expect("clear secs within bounds");
+    let t0 = Instant::now();
+    let (stale_token, _stale_deadline) =
+        ClipboardClearPolicy::schedule(t0, vault.settings()).expect("first schedule");
+    let (fresh_token, fresh_deadline) =
+        ClipboardClearPolicy::schedule(t0, vault.settings()).expect("second schedule");
+    assert_ne!(
+        stale_token, fresh_token,
+        "successive schedule calls must issue distinct tokens"
+    );
+    drop(vault);
+    drop(store);
+
+    let fresh_value = vec![0x39, 0x39, 0x39, 0x39, 0x39, 0x39];
+    let state = AppState::Locked {
+        path: path.clone(),
+        pending_clipboard_clear: Some(PendingClipboardClear {
+            token: fresh_token,
+            value: fresh_value.clone(),
+            deadline: fresh_deadline,
+        }),
+    };
+
+    let (next, effects) = reduce(
+        state,
+        clipboard_clear_event(stale_token, vec![0x31, 0x32, 0x33, 0x34, 0x35, 0x36]),
+    );
+
+    assert!(
+        effects.is_empty(),
+        "stale-token wake must not emit a wipe effect"
+    );
+    match next {
+        AppState::Locked {
+            path: p,
+            pending_clipboard_clear,
+        } => {
+            assert_eq!(p, path);
+            let p_clear =
+                pending_clipboard_clear.expect("fresher pending state must survive a stale wake");
+            assert_eq!(p_clear.token, fresh_token);
+            assert_eq!(p_clear.value.as_slice(), fresh_value.as_slice());
+            assert_eq!(p_clear.deadline, fresh_deadline);
+        }
+        other => panic!("expected Locked, got {other:?}"),
+    }
+}
+
+#[test]
+fn clipboard_clear_event_on_locked_with_no_pending_is_noop() {
+    // If the wake arrives after the pending clear has already fired
+    // (or been dropped some other way), the reducer must not
+    // fabricate a wipe — there is nothing to wipe a token against.
+    let path = PathBuf::from("/tmp/v.bin");
+    let tmp = secure_tempdir();
+    let (mut vault, store) = create_encrypted_pair(&tmp.path().join("issuer.bin"), "pp");
+    vault.set_clipboard_clear_enabled(true);
+    vault
+        .set_clipboard_clear_secs(30)
+        .expect("clear secs within bounds");
+    let (token, _deadline) = ClipboardClearPolicy::schedule(Instant::now(), vault.settings())
+        .expect("schedule for token");
+    drop(vault);
+    drop(store);
+
+    let state = AppState::Locked {
+        path: path.clone(),
+        pending_clipboard_clear: None,
+    };
+
+    let (next, effects) = reduce(state, clipboard_clear_event(token, Vec::new()));
+    assert!(
+        effects.is_empty(),
+        "wake with no pending state must not emit a wipe effect"
+    );
+    match next {
+        AppState::Locked {
+            path: p,
+            pending_clipboard_clear,
+        } => {
+            assert_eq!(p, path);
+            assert!(pending_clipboard_clear.is_none());
         }
         other => panic!("expected Locked, got {other:?}"),
     }

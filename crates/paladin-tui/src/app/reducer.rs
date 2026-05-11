@@ -13,7 +13,7 @@ use std::time::Instant;
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 
-use paladin_core::{IdlePolicy, PaladinError, Store, Vault};
+use paladin_core::{ClipboardClearToken, IdlePolicy, PaladinError, Store, Vault};
 
 use crate::app::event::{AppEvent, Effect, EffectResult};
 use crate::app::state::{compute_idle_deadline, render_error_message, AppState};
@@ -50,8 +50,15 @@ use crate::app::state::{compute_idle_deadline, render_error_message, AppState};
 /// deadline, before the deadline, or on non-`Unlocked` screens are
 /// passthrough.
 ///
-/// Clipboard-clear events are passthrough in this slice; their
-/// behavior fills in alongside the clipboard auto-clear slice.
+/// [`AppEvent::ClipboardClear`] on [`AppState::Locked`] with a
+/// matching-token `pending_clipboard_clear` hands the wipe off as an
+/// [`Effect::ClearClipboard`] and clears the pending slot — per
+/// `IMPLEMENTATION_PLAN_03_TUI.md` "Auto-lock (per §6)":
+/// *"A clipboard auto-clear timer scheduled before lock survives
+/// lock and still fires only-if-unchanged."* Stale-token wakes,
+/// `None`-pending wakes, and wakes on non-`Locked` states are
+/// passthrough at this slice; the `Unlocked` branch lands alongside
+/// the clipboard adapter / copy slice.
 ///
 /// `AppEvent::Input` additionally rebases the auto-lock idle deadline
 /// on the event's `at` timestamp when the post-dispatch state is
@@ -69,7 +76,7 @@ pub fn reduce(state: AppState, event: AppEvent) -> (AppState, Vec<Effect>) {
         }
         AppEvent::EffectResult(result) => reduce_effect_result(state, result),
         AppEvent::Tick { monotonic, .. } => (maybe_auto_lock(state, monotonic), Vec::new()),
-        AppEvent::ClipboardClear { .. } => (state, Vec::new()),
+        AppEvent::ClipboardClear { token, .. } => reduce_clipboard_clear_wake(state, token),
     }
 }
 
@@ -112,6 +119,59 @@ fn maybe_auto_lock(state: AppState, now: Instant) -> AppState {
         path,
         pending_clipboard_clear,
     }
+}
+
+/// Handle a delayed [`AppEvent::ClipboardClear`] wake from a one-shot
+/// timer thread.
+///
+/// On [`AppState::Locked`] with a matching-token
+/// `pending_clipboard_clear`, hands the wipe off to the executor as
+/// [`Effect::ClearClipboard`] carrying the captured bytes from state
+/// and clears `pending_clipboard_clear` so a duplicate wake is a
+/// no-op. The live-clipboard read and
+/// [`paladin_core::ClipboardClearPolicy::should_clear`] decision live
+/// in the executor — per `IMPLEMENTATION_PLAN_03_TUI.md`
+/// "Clipboard auto-clear (per §6)": *"on wake, it ignores stale
+/// tokens, reads the current clipboard, asks
+/// `ClipboardClearPolicy::should_clear`, and writes empty when the
+/// policy returns `true`."*
+///
+/// Stale tokens (a fresher copy has issued a new token and replaced
+/// the pending state) and a `None` pending state are both no-ops:
+/// state unchanged, no effect.
+///
+/// The pre-lock (`Unlocked`) branch lands alongside the clipboard
+/// adapter / copy slice; this slice only covers the `Locked` path so
+/// the lock-survival contract of bullet 7 holds end-to-end.
+fn reduce_clipboard_clear_wake(
+    state: AppState,
+    event_token: ClipboardClearToken,
+) -> (AppState, Vec<Effect>) {
+    let AppState::Locked {
+        path,
+        pending_clipboard_clear: Some(pending),
+    } = state
+    else {
+        return (state, Vec::new());
+    };
+    if pending.token != event_token {
+        return (
+            AppState::Locked {
+                path,
+                pending_clipboard_clear: Some(pending),
+            },
+            Vec::new(),
+        );
+    }
+    (
+        AppState::Locked {
+            path,
+            pending_clipboard_clear: None,
+        },
+        vec![Effect::ClearClipboard {
+            value: pending.value,
+        }],
+    )
 }
 
 /// Rebase [`AppState::Unlocked::idle_deadline`] on `at` when the
