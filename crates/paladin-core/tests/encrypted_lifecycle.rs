@@ -8,6 +8,10 @@
 // p=1`) so the suite stays under a few seconds. The §4.4 acceptance
 // floor enforces `m_kib >= 8192`.
 
+mod common;
+
+use common::test_tempdir;
+
 use std::fs;
 use std::io::Write;
 use std::os::unix::fs as unix_fs;
@@ -32,7 +36,7 @@ fn make_account(label: &str, issuer: Option<&str>) -> Account {
 }
 
 fn vault_test_dir() -> TempDir {
-    let dir = TempDir::new().expect("create tempdir");
+    let dir = test_tempdir();
     fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).expect("chmod tempdir 0700");
     dir
 }

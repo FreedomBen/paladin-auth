@@ -24,6 +24,10 @@
 
 #![cfg(feature = "test-fault-injection")]
 
+mod common;
+
+use common::test_tempdir;
+
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -142,7 +146,7 @@ fn no_tmp_residue(path: &Path) {
 #[test]
 fn regular_save_pre_commit_surfaces_save_not_committed() {
     run_serial(|| {
-        let dir = TempDir::new().unwrap();
+        let dir = test_tempdir();
         let path = vault_path_in(&dir);
         let (vault, store) = Store::create(&path, VaultInit::Plaintext).unwrap();
         vault.save(&store).unwrap();
@@ -176,7 +180,7 @@ fn regular_save_pre_commit_surfaces_save_not_committed() {
 #[test]
 fn regular_save_post_commit_surfaces_save_durability_unconfirmed() {
     run_serial(|| {
-        let dir = TempDir::new().unwrap();
+        let dir = test_tempdir();
         let path = vault_path_in(&dir);
         let (vault, store) = Store::create(&path, VaultInit::Plaintext).unwrap();
         vault.save(&store).unwrap();
@@ -207,7 +211,7 @@ fn regular_save_post_commit_surfaces_save_durability_unconfirmed() {
 #[test]
 fn create_force_pre_commit_surfaces_save_not_committed() {
     run_serial(|| {
-        let dir = TempDir::new().unwrap();
+        let dir = test_tempdir();
         let path = vault_path_in(&dir);
         let (vault, store) = Store::create(&path, VaultInit::Plaintext).unwrap();
         vault.save(&store).unwrap();
@@ -226,7 +230,7 @@ fn create_force_pre_commit_surfaces_save_not_committed() {
 #[test]
 fn create_force_post_commit_surfaces_save_durability_unconfirmed() {
     run_serial(|| {
-        let dir = TempDir::new().unwrap();
+        let dir = test_tempdir();
         let path = vault_path_in(&dir);
         let (vault, store) = Store::create(&path, VaultInit::Plaintext).unwrap();
         vault.save(&store).unwrap();
@@ -269,7 +273,7 @@ fn f17_encrypted_options() -> EncryptionOptions {
 #[test]
 fn encrypted_create_pre_commit_surfaces_save_not_committed() {
     run_serial(|| {
-        let dir = TempDir::new().unwrap();
+        let dir = test_tempdir();
         let path = vault_path_in(&dir);
 
         let err = with_fault(PRE, || {
@@ -294,7 +298,7 @@ fn encrypted_create_pre_commit_surfaces_save_not_committed() {
 #[test]
 fn encrypted_create_post_commit_surfaces_save_durability_unconfirmed() {
     run_serial(|| {
-        let dir = TempDir::new().unwrap();
+        let dir = test_tempdir();
         let path = vault_path_in(&dir);
 
         let err = with_fault(POST, || {
@@ -322,7 +326,7 @@ fn encrypted_create_post_commit_surfaces_save_durability_unconfirmed() {
 #[test]
 fn encrypted_create_force_pre_commit_surfaces_save_not_committed() {
     run_serial(|| {
-        let dir = TempDir::new().unwrap();
+        let dir = test_tempdir();
         let path = vault_path_in(&dir);
         let _ = Store::create(&path, VaultInit::Encrypted(f17_encrypted_options()))
             .expect("setup: create encrypted primary");
@@ -357,7 +361,7 @@ fn encrypted_create_force_pre_commit_surfaces_save_not_committed() {
 #[test]
 fn encrypted_create_force_post_commit_surfaces_save_durability_unconfirmed() {
     run_serial(|| {
-        let dir = TempDir::new().unwrap();
+        let dir = test_tempdir();
         let path = vault_path_in(&dir);
         let _ = Store::create(&path, VaultInit::Encrypted(f17_encrypted_options()))
             .expect("setup: create encrypted primary");
@@ -390,7 +394,7 @@ fn encrypted_create_force_post_commit_surfaces_save_durability_unconfirmed() {
 #[test]
 fn write_secret_file_atomic_pre_commit_surfaces_save_not_committed() {
     run_serial(|| {
-        let dir = TempDir::new().unwrap();
+        let dir = test_tempdir();
         let path = dir.path().join("export.bin");
 
         let err = with_fault(PRE, || write_secret_file_atomic(&path, b"export-payload"))
@@ -411,7 +415,7 @@ fn write_secret_file_atomic_pre_commit_surfaces_save_not_committed() {
 #[test]
 fn write_secret_file_atomic_post_commit_surfaces_save_durability_unconfirmed() {
     run_serial(|| {
-        let dir = TempDir::new().unwrap();
+        let dir = test_tempdir();
         let path = dir.path().join("export.bin");
 
         let err = with_fault(POST, || write_secret_file_atomic(&path, b"export-payload"))
@@ -447,7 +451,7 @@ enum Phase {
 }
 
 fn drive(site: SaveSite, phase: Phase) -> PaladinError {
-    let dir = TempDir::new().unwrap();
+    let dir = test_tempdir();
     let path = vault_path_in(&dir);
     let phase_str = match phase {
         Phase::PreCommit => PRE,
@@ -552,7 +556,7 @@ fn fault_hook_reaches_every_save_site() {
 #[test]
 fn repeated_pre_commit_does_not_leak_state() {
     run_serial(|| {
-        let dir = TempDir::new().unwrap();
+        let dir = test_tempdir();
         let path = vault_path_in(&dir);
         let (vault, store) = Store::create(&path, VaultInit::Plaintext).unwrap();
         vault.save(&store).unwrap();
@@ -589,7 +593,7 @@ fn repeated_pre_commit_does_not_leak_state() {
 #[test]
 fn no_env_var_leaves_save_pipeline_intact() {
     run_serial(|| {
-        let dir = TempDir::new().unwrap();
+        let dir = test_tempdir();
         let path = vault_path_in(&dir);
         let (vault, store) = Store::create(&path, VaultInit::Plaintext).unwrap();
         vault
@@ -608,7 +612,7 @@ fn no_env_var_leaves_save_pipeline_intact() {
 #[test]
 fn store_for_test_constructor_drives_fault_hook() {
     run_serial(|| {
-        let dir = TempDir::new().unwrap();
+        let dir = test_tempdir();
         let path = vault_path_in(&dir);
         // Establish a saved primary so a follow-up save on a synthetic
         // Store goes through the rotation path.
@@ -680,7 +684,7 @@ fn assert_csprng_io_error(err: &PaladinError) {
 #[test]
 fn encrypted_create_csprng_failure_surfaces_io_error() {
     run_serial(|| {
-        let dir = TempDir::new().unwrap();
+        let dir = test_tempdir();
         let path = vault_path_in(&dir);
         let opts = cheap_encrypted_options();
 
@@ -706,7 +710,7 @@ fn encrypted_create_csprng_failure_surfaces_io_error() {
 #[test]
 fn encrypted_create_force_csprng_failure_preserves_primary() {
     run_serial(|| {
-        let dir = TempDir::new().unwrap();
+        let dir = test_tempdir();
         let path = vault_path_in(&dir);
         // Establish a committed encrypted primary so the fault path
         // exercises the staged-clobber branch (vs. the empty-dir branch
@@ -751,7 +755,7 @@ fn encrypted_create_force_csprng_failure_preserves_primary() {
 #[test]
 fn encrypted_regular_save_csprng_failure_preserves_primary() {
     run_serial(|| {
-        let dir = TempDir::new().unwrap();
+        let dir = test_tempdir();
         let path = vault_path_in(&dir);
         // Establish a committed encrypted primary, drop, reopen so the
         // follow-up `vault.save` exercises the regular-save path with a
@@ -797,7 +801,7 @@ fn csprng_fault_reaches_every_encrypted_write_site() {
         // Coverage row: each currently-implemented encrypted-write site
         // must surface the same `io_error { operation: "csprng_read" }`
         // when the hook fires. Phase H / Phase I will extend this list.
-        let dir = TempDir::new().unwrap();
+        let dir = test_tempdir();
 
         // Site 1: encrypted create on a fresh path.
         let path1 = vault_path_in(&dir);
@@ -809,7 +813,7 @@ fn csprng_fault_reaches_every_encrypted_write_site() {
         assert_csprng_io_error(&err1);
 
         // Site 2: encrypted create_force over an existing primary.
-        let dir2 = TempDir::new().unwrap();
+        let dir2 = test_tempdir();
         let path2 = vault_path_in(&dir2);
         let _ = Store::create(&path2, VaultInit::Encrypted(cheap_encrypted_options())).unwrap();
         let err2 = with_fault(CSPRNG, || {
@@ -820,7 +824,7 @@ fn csprng_fault_reaches_every_encrypted_write_site() {
         assert_csprng_io_error(&err2);
 
         // Site 3: regular encrypted save on a reopened vault.
-        let dir3 = TempDir::new().unwrap();
+        let dir3 = test_tempdir();
         let path3 = vault_path_in(&dir3);
         let _ = Store::create(&path3, VaultInit::Encrypted(cheap_encrypted_options())).unwrap();
         let (vault, store) = Store::open(
@@ -838,7 +842,7 @@ fn csprng_fault_value_does_not_trip_pre_or_post_commit_paths() {
     run_serial(|| {
         // Plaintext save has no CSPRNG draw — the `csprng_read` fault
         // value must not accidentally fire a pre/post-commit hook there.
-        let dir = TempDir::new().unwrap();
+        let dir = test_tempdir();
         let path = vault_path_in(&dir);
         let (vault, store) = Store::create(&path, VaultInit::Plaintext).unwrap();
         vault.save(&store).unwrap();
@@ -898,7 +902,7 @@ fn assert_kdf_allocation_io_error(err: &PaladinError) {
 #[test]
 fn encrypted_create_kdf_allocation_failure_surfaces_io_error() {
     run_serial(|| {
-        let dir = TempDir::new().unwrap();
+        let dir = test_tempdir();
         let path = vault_path_in(&dir);
         let opts = kdf_encrypted_options();
 
@@ -924,7 +928,7 @@ fn encrypted_create_kdf_allocation_failure_surfaces_io_error() {
 #[test]
 fn encrypted_create_force_kdf_allocation_failure_preserves_primary() {
     run_serial(|| {
-        let dir = TempDir::new().unwrap();
+        let dir = test_tempdir();
         let path = vault_path_in(&dir);
         // Establish a committed encrypted primary so the fault path
         // exercises the staged-clobber branch (vs. the empty-dir branch
@@ -968,7 +972,7 @@ fn encrypted_create_force_kdf_allocation_failure_preserves_primary() {
 #[test]
 fn encrypted_regular_save_kdf_allocation_failure_preserves_primary() {
     run_serial(|| {
-        let dir = TempDir::new().unwrap();
+        let dir = test_tempdir();
         let path = vault_path_in(&dir);
         // Establish a committed encrypted primary, drop, reopen so the
         // follow-up `vault.save` exercises the regular-save path.
@@ -1016,7 +1020,7 @@ fn encrypted_regular_save_kdf_allocation_failure_preserves_primary() {
 #[test]
 fn encrypted_open_kdf_allocation_failure_surfaces_io_error() {
     run_serial(|| {
-        let dir = TempDir::new().unwrap();
+        let dir = test_tempdir();
         let path = vault_path_in(&dir);
         // Establish a committed encrypted primary so the fault fires
         // during the unlock KDF derivation, not during create.
@@ -1064,7 +1068,7 @@ fn kdf_allocation_fault_reaches_every_encrypted_kdf_site() {
         // will extend this list with `set_passphrase`,
         // `change_passphrase`, `remove_passphrase`, and
         // `export::encrypted` rows.
-        let dir = TempDir::new().unwrap();
+        let dir = test_tempdir();
 
         // Site 1: encrypted create on a fresh path.
         let path1 = vault_path_in(&dir);
@@ -1076,7 +1080,7 @@ fn kdf_allocation_fault_reaches_every_encrypted_kdf_site() {
         assert_kdf_allocation_io_error(&err1);
 
         // Site 2: encrypted create_force over an existing primary.
-        let dir2 = TempDir::new().unwrap();
+        let dir2 = test_tempdir();
         let path2 = vault_path_in(&dir2);
         let _ = Store::create(&path2, VaultInit::Encrypted(kdf_encrypted_options())).unwrap();
         let err2 = with_fault(KDF, || {
@@ -1087,7 +1091,7 @@ fn kdf_allocation_fault_reaches_every_encrypted_kdf_site() {
         assert_kdf_allocation_io_error(&err2);
 
         // Site 3: encrypted open on a committed primary.
-        let dir3 = TempDir::new().unwrap();
+        let dir3 = test_tempdir();
         let path3 = vault_path_in(&dir3);
         let _ = Store::create(&path3, VaultInit::Encrypted(kdf_encrypted_options())).unwrap();
         let err3 = with_fault(KDF, || {
@@ -1107,7 +1111,7 @@ fn kdf_allocation_fault_value_does_not_trip_pre_or_post_commit_paths() {
     run_serial(|| {
         // Plaintext save has no KDF — the `kdf_allocation` fault value
         // must not accidentally fire a pre/post-commit hook there.
-        let dir = TempDir::new().unwrap();
+        let dir = test_tempdir();
         let path = vault_path_in(&dir);
         let (vault, store) = Store::create(&path, VaultInit::Plaintext).unwrap();
         vault.save(&store).unwrap();
@@ -1147,7 +1151,7 @@ fn make_hotp_account(label: &str, counter: u64) -> Account {
 #[test]
 fn hotp_advance_pre_commit_rolls_counter_and_updated_at_back() {
     run_serial(|| {
-        let dir = TempDir::new().unwrap();
+        let dir = test_tempdir();
         let path = vault_path_in(&dir);
         let (mut vault, store) = Store::create(&path, VaultInit::Plaintext).unwrap();
         let id = vault.add(make_hotp_account("alice", 5));
@@ -1174,7 +1178,7 @@ fn hotp_advance_pre_commit_rolls_counter_and_updated_at_back() {
 #[test]
 fn hotp_advance_post_commit_keeps_mutation_and_surfaces_durability_unconfirmed() {
     run_serial(|| {
-        let dir = TempDir::new().unwrap();
+        let dir = test_tempdir();
         let path = vault_path_in(&dir);
         let (mut vault, store) = Store::create(&path, VaultInit::Plaintext).unwrap();
         let id = vault.add(make_hotp_account("alice", 5));
@@ -1231,7 +1235,7 @@ fn make_totp_account_for_mutate(label: &str) -> Account {
 #[test]
 fn mutate_and_save_save_not_committed_restores_snapshot() {
     run_serial(|| {
-        let dir = TempDir::new().unwrap();
+        let dir = test_tempdir();
         let path = vault_path_in(&dir);
         let (mut vault, store) = Store::create(&path, VaultInit::Plaintext).unwrap();
         let alice_id = vault.add(make_totp_account_for_mutate("alice"));
@@ -1264,7 +1268,7 @@ fn mutate_and_save_save_not_committed_restores_snapshot() {
 #[test]
 fn mutate_and_save_save_durability_unconfirmed_keeps_mutated_state() {
     run_serial(|| {
-        let dir = TempDir::new().unwrap();
+        let dir = test_tempdir();
         let path = vault_path_in(&dir);
         let (mut vault, store) = Store::create(&path, VaultInit::Plaintext).unwrap();
         vault.add(make_totp_account_for_mutate("alice"));
@@ -1297,7 +1301,7 @@ fn mutate_and_save_save_durability_unconfirmed_keeps_mutated_state() {
 #[test]
 fn mutate_and_save_cross_field_save_not_committed_restores_both_fields() {
     run_serial(|| {
-        let dir = TempDir::new().unwrap();
+        let dir = test_tempdir();
         let path = vault_path_in(&dir);
         let (mut vault, store) = Store::create(&path, VaultInit::Plaintext).unwrap();
         let alice_id = vault.add(make_totp_account_for_mutate("alice"));
@@ -1330,7 +1334,7 @@ fn mutate_and_save_cross_field_save_not_committed_restores_both_fields() {
 #[test]
 fn mutate_and_save_cross_field_save_durability_unconfirmed_keeps_both_fields() {
     run_serial(|| {
-        let dir = TempDir::new().unwrap();
+        let dir = test_tempdir();
         let path = vault_path_in(&dir);
         let (mut vault, store) = Store::create(&path, VaultInit::Plaintext).unwrap();
         vault.add(make_totp_account_for_mutate("alice"));

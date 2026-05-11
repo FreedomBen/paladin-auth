@@ -133,12 +133,24 @@ mod tests {
     use super::*;
 
     use std::os::unix::fs::PermissionsExt;
+    use std::path::PathBuf;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     use paladin_core::{parse_otpauth, ErrorKind, PaladinError, Store, Vault, VaultInit};
 
     fn fixture_now() -> SystemTime {
         UNIX_EPOCH + Duration::from_secs(1_700_000_000)
+    }
+
+    /// Tempdir that ignores `$TMPDIR` so scratch never leaks into the
+    /// workspace when a developer has `TMPDIR=$(pwd)` exported.
+    fn test_tempdir() -> tempfile::TempDir {
+        let root = std::env::var_os("CARGO_TARGET_TMPDIR")
+            .map_or_else(|| PathBuf::from("/tmp"), PathBuf::from);
+        tempfile::Builder::new()
+            .prefix(".tmp")
+            .tempdir_in(root)
+            .expect("create test tempdir")
     }
 
     /// Build an `Account` from a synthesized otpauth URI. `kind` is
@@ -157,7 +169,7 @@ mod tests {
     /// `Store::create` parent-permissions invariant holds). The `TempDir`
     /// is leaked so the test file outlives the borrow.
     fn empty_plaintext_vault() -> Vault {
-        let dir = tempfile::TempDir::new().expect("tempdir");
+        let dir = test_tempdir();
         std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700))
             .expect("chmod tempdir 0700");
         let path = dir.path().join("vault.bin");

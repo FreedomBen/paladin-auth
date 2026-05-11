@@ -21,6 +21,10 @@
 //! are exercised in their respective `cli_*.rs` files where the
 //! setup naturally lives.
 
+mod common;
+
+use common::test_tempdir;
+
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
@@ -35,7 +39,7 @@ fn paladin() -> Command {
 }
 
 fn fresh_vault_dir() -> (TempDir, PathBuf) {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = test_tempdir();
     std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700))
         .expect("chmod tempdir 0700");
     let path = dir.path().join("vault.bin");

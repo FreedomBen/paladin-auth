@@ -10,6 +10,10 @@
 // method through the public import facade; the coverage here is the
 // Phase G smoke tests of the merge / report / warnings contract.
 
+mod common;
+
+use common::test_tempdir;
+
 use std::os::unix::fs::PermissionsExt;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -40,7 +44,7 @@ fn import_now() -> SystemTime {
 }
 
 fn empty_plaintext_vault() -> Vault {
-    let dir = tempfile::TempDir::new().expect("tempdir");
+    let dir = test_tempdir();
     std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700))
         .expect("chmod tempdir 0700");
     let path = dir.path().join("vault.bin");

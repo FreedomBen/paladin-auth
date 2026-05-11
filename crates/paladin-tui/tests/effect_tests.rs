@@ -11,6 +11,10 @@
 //! returns the right [`EffectOutcome`]; `Effect::Quit` short-circuits
 //! the run loop without emitting an `AppEvent`.
 
+mod common;
+
+use common::test_tempdir;
+
 use std::path::Path;
 use std::sync::mpsc;
 use std::time::Instant;
@@ -36,7 +40,7 @@ fn light_params() -> Argon2Params {
 /// checks (`unsafe_permissions`) pass even when the system `TMPDIR`
 /// inherits looser bits.
 fn secure_tempdir() -> TempDir {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = test_tempdir();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

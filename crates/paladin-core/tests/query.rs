@@ -34,6 +34,10 @@
 //     deterministic `AccountId::from_bytes` ids that integration tests
 //     cannot construct (`Account.id` is `pub(crate)`).
 
+mod common;
+
+use common::test_tempdir;
+
 use std::os::unix::fs::PermissionsExt;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -53,7 +57,7 @@ fn make_account(label: &str, issuer: Option<&str>) -> Account {
 }
 
 fn empty_plaintext_vault() -> Vault {
-    let dir = tempfile::TempDir::new().expect("tempdir");
+    let dir = test_tempdir();
     std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700))
         .expect("chmod tempdir 0700");
     let path = dir.path().join("vault.bin");

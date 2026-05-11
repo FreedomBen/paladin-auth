@@ -17,6 +17,10 @@
 
 #![cfg(unix)]
 
+mod common;
+
+use common::test_tempdir;
+
 use std::os::unix::fs::PermissionsExt;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -48,7 +52,7 @@ fn schedule_lock() -> std::sync::MutexGuard<'static, ()> {
 // ---------------------------------------------------------------------------
 
 fn empty_plaintext_vault() -> Vault {
-    let dir = tempfile::TempDir::new().expect("tempdir");
+    let dir = test_tempdir();
     std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700))
         .expect("chmod tempdir 0700");
     let path = dir.path().join("vault.bin");
@@ -67,7 +71,7 @@ fn empty_encrypted_vault() -> Vault {
     };
     let opts = EncryptionOptions::with_params(SecretString::from("hunter2".to_string()), cheap)
         .expect("cheap params are in §4.4 bounds and the passphrase is non-empty");
-    let dir = tempfile::TempDir::new().expect("tempdir");
+    let dir = test_tempdir();
     std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700))
         .expect("chmod tempdir 0700");
     let path = dir.path().join("vault.bin");

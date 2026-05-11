@@ -19,6 +19,10 @@
 // process-wide `PALADIN_FAULT_INJECT` env var serializes on the
 // shared mutex defined there.
 
+mod common;
+
+use common::test_tempdir;
+
 use std::os::unix::fs::PermissionsExt;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -41,7 +45,7 @@ fn make_totp_account(label: &str) -> Account {
 }
 
 fn vault_with_path() -> (Vault, Store, TempDir) {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = test_tempdir();
     std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700))
         .expect("chmod tempdir 0700");
     let path = dir.path().join("vault.bin");

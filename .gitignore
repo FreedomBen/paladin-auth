@@ -6,3 +6,8 @@ TODO.md
 /target
 **/*.rs.bk
 Cargo.lock.bak
+
+# tempfile::TempDir scratch dirs that leak into the project root when
+# the shell's TMPDIR points here. Tests should never deposit scratch in
+# the workspace — see crates/*/tests/common/mod.rs `test_tempdir()`.
+.tmp*/

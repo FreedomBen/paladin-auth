@@ -4,6 +4,10 @@
 
 #![cfg(unix)]
 
+mod common;
+
+use common::test_tempdir;
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
@@ -37,7 +41,7 @@ fn cheap_options(passphrase: &str) -> EncryptionOptions {
 }
 
 fn vault_test_dir() -> TempDir {
-    let dir = TempDir::new().unwrap();
+    let dir = test_tempdir();
     fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
     dir
 }
@@ -69,7 +73,7 @@ fn write_plaintext_paladin(dir: &TempDir, name: &str) -> PathBuf {
 fn forced_otpauth_returns_no_prompt_without_probing() {
     // Even on a path that doesn't exist — forced non-paladin formats
     // never read the file, so missing paths are fine.
-    let dir = TempDir::new().unwrap();
+    let dir = test_tempdir();
     let path = dir.path().join("does-not-exist");
     let result = classify_paladin_import_precheck(&path, Some(ImportFormat::Otpauth));
     assert!(matches!(result, PaladinImportPrecheck::NoPrompt));
@@ -77,7 +81,7 @@ fn forced_otpauth_returns_no_prompt_without_probing() {
 
 #[test]
 fn forced_aegis_returns_no_prompt() {
-    let dir = TempDir::new().unwrap();
+    let dir = test_tempdir();
     let path = dir.path().join("does-not-exist");
     let result = classify_paladin_import_precheck(&path, Some(ImportFormat::Aegis));
     assert!(matches!(result, PaladinImportPrecheck::NoPrompt));
@@ -85,7 +89,7 @@ fn forced_aegis_returns_no_prompt() {
 
 #[test]
 fn forced_qr_returns_no_prompt() {
-    let dir = TempDir::new().unwrap();
+    let dir = test_tempdir();
     let path = dir.path().join("does-not-exist");
     let result = classify_paladin_import_precheck(&path, Some(ImportFormat::QrImage));
     assert!(matches!(result, PaladinImportPrecheck::NoPrompt));
@@ -135,7 +139,7 @@ fn forced_paladin_plaintext_returns_reject_unsupported_plaintext_vault() {
 
 #[test]
 fn paladin_magic_with_unsupported_format_version_returns_reject() {
-    let dir = TempDir::new().unwrap();
+    let dir = test_tempdir();
     let path = dir.path().join("malformed.bin");
     let mut bytes = b"PALADIN\0".to_vec();
     bytes.push(99); // bogus format_ver
@@ -154,7 +158,7 @@ fn paladin_magic_with_unsupported_format_version_returns_reject() {
 
 #[test]
 fn paladin_magic_with_unknown_mode_returns_reject_invalid_header() {
-    let dir = TempDir::new().unwrap();
+    let dir = test_tempdir();
     let path = dir.path().join("malformed.bin");
     let mut bytes = b"PALADIN\0".to_vec();
     bytes.push(1); // valid format_ver
@@ -170,7 +174,7 @@ fn paladin_magic_with_unknown_mode_returns_reject_invalid_header() {
 
 #[test]
 fn paladin_magic_truncated_below_header_length_returns_reject_invalid_header() {
-    let dir = TempDir::new().unwrap();
+    let dir = test_tempdir();
     let path = dir.path().join("trunc.bin");
     fs::write(&path, b"PALADIN\0").unwrap(); // exactly 8 bytes — magic only
     let result = classify_paladin_import_precheck(&path, None);
@@ -184,7 +188,7 @@ fn paladin_magic_truncated_below_header_length_returns_reject_invalid_header() {
 
 #[test]
 fn missing_file_returns_no_prompt() {
-    let dir = TempDir::new().unwrap();
+    let dir = test_tempdir();
     let path = dir.path().join("nope.bin");
     let result = classify_paladin_import_precheck(&path, None);
     assert!(matches!(result, PaladinImportPrecheck::NoPrompt));
@@ -192,7 +196,7 @@ fn missing_file_returns_no_prompt() {
 
 #[test]
 fn non_paladin_magic_returns_no_prompt() {
-    let dir = TempDir::new().unwrap();
+    let dir = test_tempdir();
     let path = dir.path().join("not_paladin.bin");
     fs::write(&path, b"otpauth://totp/A:a?secret=JBSWY3DPEHPK3PXP").unwrap();
     let result = classify_paladin_import_precheck(&path, None);
@@ -201,7 +205,7 @@ fn non_paladin_magic_returns_no_prompt() {
 
 #[test]
 fn empty_file_returns_no_prompt() {
-    let dir = TempDir::new().unwrap();
+    let dir = test_tempdir();
     let path = dir.path().join("empty.bin");
     fs::write(&path, b"").unwrap();
     let result = classify_paladin_import_precheck(&path, None);
@@ -210,7 +214,7 @@ fn empty_file_returns_no_prompt() {
 
 #[test]
 fn unreadable_file_returns_no_prompt() {
-    let dir = TempDir::new().unwrap();
+    let dir = test_tempdir();
     let path = dir.path().join("unreadable.bin");
     fs::write(&path, b"PALADIN\0\x01\x01").unwrap();
     fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();

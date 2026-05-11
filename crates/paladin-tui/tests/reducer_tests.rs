@@ -3,6 +3,10 @@
 //! Reducer / state-machine + global-arg tests for `paladin-tui`.
 //! Tracks the "Tests" checklist in `IMPLEMENTATION_PLAN_03_TUI.md`.
 
+mod common;
+
+use common::test_tempdir;
+
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -213,7 +217,7 @@ fn inspect_error_yields_startup_error_with_rendered_message_and_no_file_mutation
     // file with garbage bytes — verifies bullet "Non-`decrypt_failed`
     // errors from `inspect` / `open` ... open the non-mutating
     // startup-error screen and do not create or mutate files."
-    let tmp = tempfile::TempDir::new().unwrap();
+    let tmp = test_tempdir();
     let path = tmp.path().join("garbage.bin");
     fs::write(&path, b"not a paladin vault").unwrap();
     let before = fs::read(&path).unwrap();
@@ -242,7 +246,7 @@ fn inspect_error_yields_startup_error_with_rendered_message_and_no_file_mutation
 #[test]
 fn plaintext_open_yields_unlocked_state() {
     // Bullet: "Plaintext vault opens directly to the list (no unlock screen)."
-    let tmp = tempfile::TempDir::new().unwrap();
+    let tmp = test_tempdir();
     // `Store::create` enforces the parent directory be mode 0700 (§4.3).
     // `tempfile::TempDir` is typically 0700 but some sandboxed CI / cache
     // roots set a more permissive umask, so normalize defensively.
@@ -294,7 +298,7 @@ fn open_error_yields_startup_error_with_path_retained() {
     // open the non-mutating startup-error screen ..."
     // Drive an open failure by pointing at a tempfile with garbage bytes
     // (Store::open returns an error for invalid header etc.).
-    let tmp = tempfile::TempDir::new().unwrap();
+    let tmp = test_tempdir();
     let path = tmp.path().join("garbage.bin");
     fs::write(&path, b"not a paladin vault").unwrap();
 
@@ -332,7 +336,7 @@ fn render_error_message_uses_format_unsafe_permissions_verbatim() {
 
 #[test]
 fn render_error_message_falls_back_to_display_for_non_unsafe_permissions_error() {
-    let tmp = tempfile::TempDir::new().unwrap();
+    let tmp = test_tempdir();
     let path = tmp.path().join("garbage.bin");
     fs::write(&path, b"not a paladin vault").unwrap();
     let err = paladin_core::inspect(&path).unwrap_err();
@@ -386,7 +390,7 @@ fn ctrl_c_on_locked_quits() {
 fn ctrl_c_on_unlocked_quits() {
     // Build a real Unlocked state so we can verify Ctrl-C quits even
     // from the main list view ("Ctrl-C quits on any screen").
-    let tmp = tempfile::TempDir::new().unwrap();
+    let tmp = test_tempdir();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -758,7 +762,7 @@ fn effect_result_unlock_ok_transitions_unlock_to_unlocked_with_same_path() {
     // We use a plaintext-opened pair because the (Vault, Store) type
     // signature is identical between modes and Argon2id KDF would
     // dominate test runtime.
-    let tmp = tempfile::TempDir::new().unwrap();
+    let tmp = test_tempdir();
     let (vault_path, pair) = open_plaintext_pair(&tmp);
 
     // The Unlock state carries an inline `error` from a prior failed
@@ -819,7 +823,7 @@ fn effect_result_unlock_non_decrypt_error_transitions_to_startup_error() {
     // Bullet: "The unlock screen handles only `decrypt_failed` inline;
     // every other `open` error replaces the unlock screen with the
     // startup-error screen."
-    let tmp = tempfile::TempDir::new().unwrap();
+    let tmp = test_tempdir();
     let garbage = tmp.path().join("garbage.bin");
     fs::write(&garbage, b"not a paladin vault").unwrap();
     let err = paladin_core::inspect(&garbage).unwrap_err();
@@ -857,7 +861,7 @@ fn effect_result_unlock_ok_off_unlock_screen_is_discarded() {
     // the result arriving, the late (Vault, Store) drops on the floor
     // and the current screen is unchanged. Tested against `Locked`
     // because auto-lock is the realistic race condition.
-    let tmp = tempfile::TempDir::new().unwrap();
+    let tmp = test_tempdir();
     let (_vault_path, pair) = open_plaintext_pair(&tmp);
 
     let locked_path = PathBuf::from("/tmp/locked.bin");
@@ -915,7 +919,7 @@ fn light_params() -> Argon2Params {
 }
 
 fn secure_tempdir() -> tempfile::TempDir {
-    let dir = tempfile::TempDir::new().expect("tempdir");
+    let dir = test_tempdir();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

@@ -7,6 +7,10 @@
 // `vault_lifecycle.rs`; rename / find_duplicate / settings setters
 // land in subsequent Phase G commits.
 
+mod common;
+
+use common::test_tempdir;
+
 use std::os::unix::fs::PermissionsExt;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -27,7 +31,7 @@ fn empty_plaintext_vault() -> Vault {
     // vault by going through the public storage entry point with a
     // throwaway `Store`. The G.1 surface is pure in-memory mutation,
     // so the storage layer is incidental scaffolding here.
-    let dir = tempfile::TempDir::new().expect("tempdir");
+    let dir = test_tempdir();
     std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700))
         .expect("chmod tempdir 0700");
     let path = dir.path().join("vault.bin");

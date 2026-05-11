@@ -26,6 +26,8 @@ use serde_json::Value;
 use tempfile::TempDir;
 
 mod common;
+
+use common::test_tempdir;
 use common::Pty;
 
 const PALADIN_MAGIC: &[u8; 8] = b"PALADIN\0";
@@ -37,7 +39,7 @@ fn paladin() -> Command {
 }
 
 fn fresh_vault_path() -> (TempDir, PathBuf) {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = test_tempdir();
     std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700))
         .expect("chmod tempdir 0700");
     let path = dir.path().join("vault.bin");
@@ -363,7 +365,7 @@ fn json_export_with_both_plaintext_and_encrypted_rejects_at_parse_time() {
 
 #[test]
 fn json_export_returns_vault_missing_when_source_vault_does_not_exist() {
-    let dir = TempDir::new().unwrap();
+    let dir = test_tempdir();
     std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
     let vault_path = dir.path().join("vault.bin");
     let out = dir.path().join("creds.json");
@@ -482,7 +484,7 @@ fn json_encrypted_export_kdf_validation_wins_over_vault_missing_precedence() {
     // `inspect`, so the user sees `validation_error` rather than
     // `vault_missing`. Locked by the §5 ordering rule for encrypted-
     // write commands.
-    let dir = TempDir::new().unwrap();
+    let dir = test_tempdir();
     std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
     let vault_path = dir.path().join("vault.bin");
     let out = dir.path().join("bundle.bin");

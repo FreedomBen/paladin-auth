@@ -11,6 +11,8 @@
 
 mod common;
 
+use common::test_tempdir;
+
 use std::io::Cursor;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -31,7 +33,7 @@ fn paladin() -> Command {
 }
 
 fn fresh_vault_path() -> (TempDir, PathBuf) {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = test_tempdir();
     std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700))
         .expect("chmod tempdir 0700");
     let path = dir.path().join("vault.bin");

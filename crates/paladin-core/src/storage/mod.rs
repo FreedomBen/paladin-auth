@@ -1704,7 +1704,21 @@ mod tests {
     use crate::error::ErrorKind;
     use std::fs;
     use std::io::Write;
+    use std::path::PathBuf;
     use tempfile::TempDir;
+
+    /// Tempdir that ignores `$TMPDIR` so scratch never leaks into the
+    /// workspace when a developer has `TMPDIR=$(pwd)` exported. Prefers
+    /// Cargo's `CARGO_TARGET_TMPDIR` (set for integration tests; unset
+    /// here in unit tests), falls back to `/tmp`.
+    fn test_tempdir() -> TempDir {
+        let root = std::env::var_os("CARGO_TARGET_TMPDIR")
+            .map_or_else(|| PathBuf::from("/tmp"), PathBuf::from);
+        tempfile::Builder::new()
+            .prefix(".tmp")
+            .tempdir_in(root)
+            .expect("create test tempdir")
+    }
 
     /// `stage_temp_file` must surface its caller-supplied write op
     /// string verbatim so `save_plaintext` / `create_force_plaintext`
@@ -1713,7 +1727,7 @@ mod tests {
     /// directory so `OpenOptions::open` fails with `ENOENT`.
     #[test]
     fn stage_temp_file_surfaces_caller_supplied_write_op_string() {
-        let dir = TempDir::new().unwrap();
+        let dir = test_tempdir();
         let unreachable = dir.path().join("missing_subdir").join("file.tmp");
 
         let err = stage_temp_file(&unreachable, b"x", "write_vault_tmp").unwrap_err();
@@ -1761,28 +1775,28 @@ mod tests {
 
     #[test]
     fn inspect_returns_missing_for_absent_file() {
-        let dir = TempDir::new().unwrap();
+        let dir = test_tempdir();
         let path = dir.path().join("vault.bin");
         assert_eq!(inspect(&path).unwrap(), VaultStatus::Missing);
     }
 
     #[test]
     fn inspect_returns_plaintext_for_plaintext_header() {
-        let dir = TempDir::new().unwrap();
+        let dir = test_tempdir();
         let path = write_bytes(&dir, "vault.bin", &plaintext_header());
         assert_eq!(inspect(&path).unwrap(), VaultStatus::Plaintext);
     }
 
     #[test]
     fn inspect_returns_encrypted_for_encrypted_header() {
-        let dir = TempDir::new().unwrap();
+        let dir = test_tempdir();
         let path = write_bytes(&dir, "vault.bin", &encrypted_header());
         assert_eq!(inspect(&path).unwrap(), VaultStatus::Encrypted);
     }
 
     #[test]
     fn inspect_ignores_payload_bytes_after_header() {
-        let dir = TempDir::new().unwrap();
+        let dir = test_tempdir();
         let mut bytes = plaintext_header();
         bytes.extend_from_slice(&[0xAA; 1024]);
         let path = write_bytes(&dir, "vault.bin", &bytes);
@@ -1791,7 +1805,7 @@ mod tests {
 
     #[test]
     fn inspect_rejects_unrecognized_magic() {
-        let dir = TempDir::new().unwrap();
+        let dir = test_tempdir();
         let mut bad = plaintext_header();
         bad[0] = b'X';
         let path = write_bytes(&dir, "vault.bin", &bad);
@@ -1800,7 +1814,7 @@ mod tests {
 
     #[test]
     fn inspect_rejects_unsupported_format_version() {
-        let dir = TempDir::new().unwrap();
+        let dir = test_tempdir();
         let mut bad = plaintext_header();
         bad[8] = 99;
         let path = write_bytes(&dir, "vault.bin", &bad);
@@ -1812,7 +1826,7 @@ mod tests {
 
     #[test]
     fn inspect_rejects_unknown_mode() {
-        let dir = TempDir::new().unwrap();
+        let dir = test_tempdir();
         let mut bad = plaintext_header();
         bad[9] = 0x42;
         let path = write_bytes(&dir, "vault.bin", &bad);
@@ -1821,7 +1835,7 @@ mod tests {
 
     #[test]
     fn inspect_rejects_unknown_kdf_id() {
-        let dir = TempDir::new().unwrap();
+        let dir = test_tempdir();
         let mut bad = encrypted_header();
         bad[10] = 99;
         let path = write_bytes(&dir, "vault.bin", &bad);
@@ -1830,7 +1844,7 @@ mod tests {
 
     #[test]
     fn inspect_rejects_unknown_aead_id() {
-        let dir = TempDir::new().unwrap();
+        let dir = test_tempdir();
         let mut bad = encrypted_header();
         bad[39] = 99;
         let path = write_bytes(&dir, "vault.bin", &bad);
@@ -1841,7 +1855,7 @@ mod tests {
     fn inspect_rejects_truncated_file() {
         // Anything shorter than the 10-byte plaintext header is
         // invalid_header (not Missing).
-        let dir = TempDir::new().unwrap();
+        let dir = test_tempdir();
         let path = write_bytes(&dir, "vault.bin", b"PALAD");
         assert_eq!(inspect(&path).unwrap_err().kind(), ErrorKind::InvalidHeader);
     }
@@ -1852,7 +1866,7 @@ mod tests {
         // Write the vault file with a wide-open mode and confirm we
         // get a clean classification rather than `unsafe_permissions`.
         use std::os::unix::fs::PermissionsExt;
-        let dir = TempDir::new().unwrap();
+        let dir = test_tempdir();
         let path = write_bytes(&dir, "vault.bin", &plaintext_header());
         fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
         // Parent dir mode also wide open (would fail an open() perms
@@ -1921,7 +1935,7 @@ mod tests {
     fn encrypted_save_writes_body_equal_to_payload_plus_aead_tag() {
         use crate::crypto::AEAD_TAG_LEN;
         use std::os::unix::fs::PermissionsExt;
-        let dir = TempDir::new().unwrap();
+        let dir = test_tempdir();
         fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
         let path = dir.path().join("vault.bin");
 
@@ -1961,7 +1975,7 @@ mod tests {
         use crate::otpauth::parse_otpauth;
         use std::os::unix::fs::PermissionsExt;
         use std::time::{Duration, UNIX_EPOCH};
-        let dir = TempDir::new().unwrap();
+        let dir = test_tempdir();
         fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
         let path = dir.path().join("vault.bin");
 

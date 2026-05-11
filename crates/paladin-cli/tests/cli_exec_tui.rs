@@ -7,6 +7,10 @@
 //! wrapper's flag forwarding can be asserted from the parent test
 //! process.
 
+mod common;
+
+use common::test_tempdir;
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -29,7 +33,7 @@ fn paladin() -> Command {
 /// argument per line) to `argv.log` in the same directory and exits
 /// `0` after printing the marker `EXEC_OK` to stdout.
 fn stub_dir_with_argv_recorder() -> TempDir {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = test_tempdir();
     let script = dir.path().join("paladin-tui");
     let log = dir.path().join("argv.log");
     let body = format!(
@@ -232,7 +236,7 @@ fn paladin_tui_text_mode_with_missing_paladin_tui_returns_io_error_exec_paladin_
     // Empty PATH guarantees `paladin-tui` cannot be resolved; the
     // wrapper surfaces `io_error` with `operation: "exec_paladin_tui"`
     // per the implementation plan.
-    let empty = TempDir::new().expect("tempdir");
+    let empty = test_tempdir();
     let assert = paladin()
         .env("PATH", empty.path())
         .args(["tui"])

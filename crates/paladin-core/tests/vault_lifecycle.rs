@@ -6,6 +6,10 @@
 // Subsequent Phase E commits will extend this file with `Store::open`,
 // `Store::create`, `create_force`, and `mutate_and_save` coverage.
 
+mod common;
+
+use common::test_tempdir;
+
 use std::fs;
 use std::io::Write;
 use std::os::unix::fs as unix_fs;
@@ -41,7 +45,7 @@ fn make_account(label: &str, issuer: Option<&str>) -> Account {
 /// §4.3 perms check passes regardless of the host's `mkdtemp`
 /// default (sandbox/test runners sometimes hand back `0770`).
 fn vault_test_dir() -> TempDir {
-    let dir = TempDir::new().expect("create tempdir");
+    let dir = test_tempdir();
     fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).expect("chmod tempdir 0700");
     dir
 }

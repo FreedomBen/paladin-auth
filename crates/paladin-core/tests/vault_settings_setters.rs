@@ -6,6 +6,10 @@
 // `apply_setting_patch` + `SettingPatch` parsing land in a later
 // Phase G bullet alongside the dotted-key grammar.
 
+mod common;
+
+use common::test_tempdir;
+
 use std::os::unix::fs::PermissionsExt;
 
 use paladin_core::{
@@ -14,7 +18,7 @@ use paladin_core::{
 };
 
 fn empty_plaintext_vault() -> Vault {
-    let dir = tempfile::TempDir::new().expect("tempdir");
+    let dir = test_tempdir();
     std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700))
         .expect("chmod tempdir 0700");
     let path = dir.path().join("vault.bin");

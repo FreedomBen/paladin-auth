@@ -16,6 +16,10 @@
 // constructs the variant directly so the operation string and field
 // shape are still pinned.
 
+mod common;
+
+use common::test_tempdir;
+
 use std::fs;
 use std::io;
 use std::os::unix::fs::PermissionsExt;
@@ -52,7 +56,7 @@ fn make_hotp_account(label: &str, counter: u64) -> Account {
 }
 
 fn vault_test_dir() -> TempDir {
-    let dir = TempDir::new().expect("create tempdir");
+    let dir = test_tempdir();
     fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).expect("chmod tempdir 0700");
     dir
 }
@@ -388,7 +392,7 @@ fn vault_exists_kind_when_creating_existing_path() {
 
 #[test]
 fn unsafe_permissions_carries_path_subject_and_modes() {
-    let dir = TempDir::new().expect("tempdir");
+    let dir = test_tempdir();
     fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o755))
         .expect("loosen tempdir to 0755");
     let path = dir.path().join("vault.bin");
@@ -873,7 +877,7 @@ fn io_error_every_stable_operation_is_constructible_and_round_trips() {
 fn io_error_read_import_file_via_missing_path() {
     // Real production trigger: import facade reads a path that
     // doesn't exist. Pins one io_error row through the public API.
-    let dir = TempDir::new().expect("tempdir");
+    let dir = test_tempdir();
     let path = dir.path().join("does-not-exist.json");
     let err = import::from_file(&path, ImportOptions::default(), fixture_now()).unwrap_err();
     assert_eq!(err.kind(), ErrorKind::IoError);

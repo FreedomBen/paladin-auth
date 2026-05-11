@@ -2,6 +2,10 @@
 //
 // Phase I.5 — QR import helpers (DESIGN.md §4.6 / §4.7).
 
+mod common;
+
+use common::test_tempdir;
+
 use std::io::Cursor;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -156,7 +160,7 @@ fn read_qr_image_bytes_returns_empty_when_no_qr() {
 
 #[test]
 fn read_qr_image_decodes_png_on_disk() {
-    let dir = TempDir::new().unwrap();
+    let dir = test_tempdir();
     let path = write_qr_png(&dir, "totp_a", URI_TOTP_A);
     let payloads = import::read_qr_image(&path).unwrap();
     assert_eq!(payloads.len(), 1);
@@ -165,7 +169,7 @@ fn read_qr_image_decodes_png_on_disk() {
 
 #[test]
 fn read_qr_image_missing_file_returns_io_error() {
-    let dir = TempDir::new().unwrap();
+    let dir = test_tempdir();
     let path = dir.path().join("nope.png");
     let err = import::read_qr_image(&path).unwrap_err();
     let PaladinError::IoError { operation, .. } = err else {
@@ -176,7 +180,7 @@ fn read_qr_image_missing_file_returns_io_error() {
 
 #[test]
 fn read_qr_image_truncated_png_returns_io_error_decode_image_bytes() {
-    let dir = TempDir::new().unwrap();
+    let dir = test_tempdir();
     let path = dir.path().join("trunc.png");
     // Only the 8-byte PNG magic — image decode must fail without
     // panic, surfaced as io_error operation = "decode_image_bytes".
@@ -318,7 +322,7 @@ fn image_with_two_qrs_one_non_otpauth_rejects_batch_with_source_index_for_offend
 
 #[test]
 fn qr_image_path_returns_validated_account() {
-    let dir = TempDir::new().unwrap();
+    let dir = test_tempdir();
     let path = write_qr_png(&dir, "hotp_b", URI_HOTP_B);
     let imported = import::qr_image(&path, import_time()).unwrap();
     assert_eq!(imported.len(), 1);

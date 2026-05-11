@@ -5,6 +5,10 @@
 //! Tracks the "Tests > Auto-lock (`tests/auto_lock_tests.rs`)" checklist
 //! in `IMPLEMENTATION_PLAN_03_TUI.md`.
 
+mod common;
+
+use common::test_tempdir;
+
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -35,7 +39,7 @@ fn light_params() -> Argon2Params {
 }
 
 fn secure_tempdir() -> tempfile::TempDir {
-    let dir = tempfile::TempDir::new().expect("tempdir");
+    let dir = test_tempdir();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

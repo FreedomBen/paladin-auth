@@ -5,6 +5,10 @@
 //! Tracks the "Tests > Search (`tests/search_tests.rs`)" checklist in
 //! `IMPLEMENTATION_PLAN_03_TUI.md`.
 
+mod common;
+
+use common::test_tempdir;
+
 use std::path::Path;
 use std::time::SystemTime;
 
@@ -21,7 +25,7 @@ use paladin_tui::search::{filtered_account_ids, select_after_search};
 // ---------------------------------------------------------------------------
 
 fn secure_tempdir() -> tempfile::TempDir {
-    let dir = tempfile::TempDir::new().expect("tempdir");
+    let dir = test_tempdir();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
