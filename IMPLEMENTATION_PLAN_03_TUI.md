@@ -717,17 +717,17 @@ end-to-end.
 
 ### Terminal lifecycle (`tests/terminal_tests.rs`)
 
-- [ ] Terminal setup uses a guard that restores raw mode and
+- [x] Terminal setup uses a guard that restores raw mode and
   alternate-screen state on normal exit, startup failure after setup,
   `Ctrl-C`, and panic unwind.
 
 ### Global args (`tests/reducer_tests.rs`)
 
-- [ ] `--vault` selects the inspected / opened vault path.
-- [ ] `--no-color` disables ratatui styling.
-- [ ] `NO_COLOR` (when `--no-color` is absent) disables ratatui
+- [x] `--vault` selects the inspected / opened vault path.
+- [x] `--no-color` disables ratatui styling.
+- [x] `NO_COLOR` (when `--no-color` is absent) disables ratatui
   styling.
-- [ ] `--json` is rejected at parse time with clap's text diagnostic
+- [x] `--json` is rejected at parse time with clap's text diagnostic
   and no JSON envelope.
 
 ### Add modal (`tests/reducer_tests.rs`)
