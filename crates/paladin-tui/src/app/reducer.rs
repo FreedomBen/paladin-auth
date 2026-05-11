@@ -348,6 +348,14 @@ fn reduce_unlocked_input(mut state: AppState, key: &KeyEvent) -> (AppState, Vec<
 
     if let KeyCode::Char(c) = key.code {
         if modal.is_none() {
+            // `q` quits Unlocked when no modal is open. (With a
+            // modal open, `q` belongs to the modal-local input
+            // path. Once the search bar can take focus, `q` is
+            // text input on the search surface too; that gating
+            // lands with the focus-state slice.)
+            if c == 'q' {
+                return (state, vec![Effect::Quit]);
+            }
             if let Some(opened) = modal_opener_for_char(c) {
                 *modal = Some(opened);
                 return (state, Vec::new());
@@ -442,13 +450,11 @@ fn quits_on_esc(state: &AppState) -> bool {
     )
 }
 
-/// `q` quits on `MissingVault`, `StartupError`, and (once focus
-/// state is wired) `Unlocked` with the list focused. On `Unlock` it
-/// is text input; on `Unlocked` with the search bar or a modal
-/// focused it is text input.
-///
-/// This slice covers the two terminal screens; the list-focus path
-/// lands with the list / focus slice.
+/// `q` quits on `MissingVault` and `StartupError`. On `Unlock` it is
+/// text input. On `Unlocked` the quit fires from
+/// [`reduce_unlocked_input`] under its modal / focus guards; this
+/// fallback predicate is only consulted for the remaining "no
+/// dedicated handler" states.
 fn quits_on_q(state: &AppState) -> bool {
     matches!(
         state,

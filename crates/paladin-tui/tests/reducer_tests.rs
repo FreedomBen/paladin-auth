@@ -1412,3 +1412,75 @@ fn pressing_esc_on_unlocked_with_no_modal_open_is_passthrough_no_op() {
         other => panic!("expected Unlocked, got {other:?}"),
     }
 }
+
+// ---------------------------------------------------------------------------
+// `q` quits Unlocked when no modal is open
+// (IMPLEMENTATION_PLAN_03_TUI.md > Keybindings: "q — Quit from list,
+//  missing-vault, and startup-error screens; text input in text fields")
+//
+// Slice covered: pressing `q` on `AppState::Unlocked` with no open modal
+// emits `Effect::Quit`. With a modal open, `q` is passthrough so the
+// modal-local input path can consume it as text (modal payloads land
+// per-modal). The search-focused "text input" branch arrives with the
+// focus-state slice; at this slice every `Unlocked` is treated as
+// list-focused because no other focus exists yet.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn pressing_q_on_unlocked_with_no_modal_open_quits() {
+    let tmp = secure_tempdir();
+    let unlocked = fresh_plaintext_unlocked(&tmp);
+    let (_, effects) = reduce(unlocked, key(KeyCode::Char('q')));
+    assert!(
+        matches!(effects.as_slice(), [Effect::Quit]),
+        "expected [Effect::Quit], got {effects:?}"
+    );
+}
+
+#[test]
+fn pressing_q_on_unlocked_with_modal_open_does_not_quit() {
+    // With a modal open, `q` belongs to the modal-local input path
+    // (it'll be consumed as a text-field character once payloads
+    // land). The reducer must not emit `Effect::Quit` and must not
+    // mutate the open modal slot.
+    let tmp = secure_tempdir();
+    let (path, (vault, store)) = open_plaintext_pair(&tmp);
+    let unlocked = AppState::Unlocked {
+        path: path.clone(),
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Add),
+    };
+    let (state, effects) = reduce(unlocked, key(KeyCode::Char('q')));
+    assert!(
+        effects.is_empty(),
+        "q with a modal open must not emit Effect::Quit, got {effects:?}"
+    );
+    match state {
+        AppState::Unlocked {
+            modal: Some(Modal::Add),
+            ..
+        } => {}
+        AppState::Unlocked { modal, .. } => {
+            panic!("expected modal=Some(Modal::Add) preserved, got modal={modal:?}")
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_ctrl_q_on_unlocked_does_not_quit() {
+    // `Ctrl-Q` is not bound and must not silently quit. The bare
+    // `q` quit lives at the modifier-free surface.
+    let tmp = secure_tempdir();
+    let unlocked = fresh_plaintext_unlocked(&tmp);
+    let (_, effects) = reduce(unlocked, ctrl(KeyCode::Char('q')));
+    assert!(
+        effects.is_empty(),
+        "Ctrl-Q is unbound; expected no effects, got {effects:?}"
+    );
+}
