@@ -286,34 +286,58 @@ fn reduce_input(state: AppState, event: &Event) -> (AppState, Vec<Effect>) {
 
 /// Handle a key event on the Unlocked (main list) screen.
 ///
-/// This slice covers the modal-open transitions for the seven bare-letter
-/// keys in `IMPLEMENTATION_PLAN_03_TUI.md` "Keybindings (initial v0.1)":
+/// Two transitions land in this slice, both from
+/// `IMPLEMENTATION_PLAN_03_TUI.md` "Keybindings (initial v0.1)":
 ///
-/// | Key | Modal              |
-/// | --- | ------------------ |
-/// | `a` | [`Modal::Add`]     |
-/// | `i` | [`Modal::Import`]  |
-/// | `e` | [`Modal::Export`]  |
-/// | `r` | [`Modal::Remove`]  |
-/// | `R` | [`Modal::Rename`]  |
-/// | `p` | [`Modal::Passphrase`] |
-/// | `s` | [`Modal::Settings`] |
+/// * **Modal openers** (seven bare-letter keys):
 ///
-/// All seven fire only when no Ctrl / Alt modifier is held — the
-/// corresponding Ctrl- chords are unbound and must not silently open
-/// dialogs. Shift is allowed through because the `r` / `R` split
-/// relies on the resolved upper-case character. The modal opens only
-/// when no modal is currently open; once a modal payload exists, the
-/// bare letter inside an open modal is consumed by the modal-local
-/// input path. Routing into modal-local input lands alongside each
-/// modal's payload slice; at this slice the open-modal case is a
-/// no-op so the slot stays unchanged.
+///   | Key | Modal              |
+///   | --- | ------------------ |
+///   | `a` | [`Modal::Add`]     |
+///   | `i` | [`Modal::Import`]  |
+///   | `e` | [`Modal::Export`]  |
+///   | `r` | [`Modal::Remove`]  |
+///   | `R` | [`Modal::Rename`]  |
+///   | `p` | [`Modal::Passphrase`] |
+///   | `s` | [`Modal::Settings`] |
+///
+///   All seven fire only when no Ctrl / Alt modifier is held — the
+///   corresponding Ctrl- chords are unbound and must not silently
+///   open dialogs. Shift is allowed through because the `r` / `R`
+///   split relies on the resolved upper-case character. The modal
+///   opens only when no modal is currently open; once a modal
+///   payload exists, the bare letter inside an open modal is
+///   consumed by the modal-local input path. Routing into
+///   modal-local input lands alongside each modal's payload slice;
+///   at this slice the open-modal case is a no-op so the slot stays
+///   unchanged.
+///
+/// * **`Esc` close-modal**: with a modal open, `Esc` clears the slot
+///   to `None`. With no modal open, `Esc` on `Unlocked` is a silent
+///   no-op — `Unlocked` is intentionally not in `quits_on_esc`'s
+///   "no dismissable affordance" set, so the user is never one
+///   stray `Esc` away from losing the unlocked session. `Esc` is
+///   accepted regardless of modifier so terminals that report
+///   Ctrl-Esc or kitty-style augmented Esc still dismiss the modal.
+///   Search-clear and vim-chord clear are listed under the same
+///   `Esc` key in the keybindings table and wire alongside their
+///   own slices.
 fn reduce_unlocked_input(mut state: AppState, key: &KeyEvent) -> (AppState, Vec<Effect>) {
     let AppState::Unlocked { ref mut modal, .. } = state else {
         // Caller ensures we're in Unlocked; defensive fall-through
         // keeps the reducer total.
         return (state, Vec::new());
     };
+
+    if matches!(key.code, KeyCode::Esc) {
+        // Modifier-agnostic: any Esc dismisses an open modal.
+        // Search-clear / vim-chord clear are no-ops at this slice;
+        // they layer on without disturbing the close-modal contract.
+        if modal.is_some() {
+            *modal = None;
+        }
+        return (state, Vec::new());
+    }
 
     if key
         .modifiers

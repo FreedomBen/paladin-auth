@@ -1311,3 +1311,104 @@ fn pressing_p_on_unlocked_with_no_modal_open_opens_passphrase_modal() {
 fn pressing_s_on_unlocked_with_no_modal_open_opens_settings_modal() {
     assert_key_opens_modal(key(KeyCode::Char('s')), &Modal::Settings);
 }
+
+// ---------------------------------------------------------------------------
+// Modals — close transitions
+// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Reducer — bullet 4,
+//  Keybindings table: "Esc — Close modal / clear search …")
+//
+// Slice covered: pressing `Esc` on `AppState::Unlocked` with an open
+// modal clears the slot to `None` and emits no effects. With no open
+// modal, `Esc` is a passthrough no-op on `Unlocked` (it does **not**
+// emit `Effect::Quit`; only the unlock / missing-vault / startup-error
+// "no dismissable affordance" screens quit on `Esc`). Search-clear and
+// vim-chord clear land in their own slices.
+// ---------------------------------------------------------------------------
+//
+// Per-variant coverage: this slice asserts the close transition for
+// every `Modal` variant so the reducer's "reset to None" rule is
+// observed regardless of which modal was open.
+// ---------------------------------------------------------------------------
+
+fn assert_esc_closes_modal(opened: Modal) {
+    let tmp = secure_tempdir();
+    let (path, (vault, store)) = open_plaintext_pair(&tmp);
+    let unlocked = AppState::Unlocked {
+        path: path.clone(),
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(opened),
+    };
+    let (state, effects) = reduce(unlocked, key(KeyCode::Esc));
+    assert!(
+        effects.is_empty(),
+        "Esc closing a modal must not emit effects (and must not Quit)"
+    );
+    match state {
+        AppState::Unlocked { modal: None, .. } => {}
+        AppState::Unlocked { modal, .. } => {
+            panic!("expected modal=None after Esc, got modal={modal:?}")
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_esc_on_unlocked_with_open_add_modal_closes_the_modal() {
+    assert_esc_closes_modal(Modal::Add);
+}
+
+#[test]
+fn pressing_esc_on_unlocked_with_open_import_modal_closes_the_modal() {
+    assert_esc_closes_modal(Modal::Import);
+}
+
+#[test]
+fn pressing_esc_on_unlocked_with_open_export_modal_closes_the_modal() {
+    assert_esc_closes_modal(Modal::Export);
+}
+
+#[test]
+fn pressing_esc_on_unlocked_with_open_remove_modal_closes_the_modal() {
+    assert_esc_closes_modal(Modal::Remove);
+}
+
+#[test]
+fn pressing_esc_on_unlocked_with_open_rename_modal_closes_the_modal() {
+    assert_esc_closes_modal(Modal::Rename);
+}
+
+#[test]
+fn pressing_esc_on_unlocked_with_open_passphrase_modal_closes_the_modal() {
+    assert_esc_closes_modal(Modal::Passphrase);
+}
+
+#[test]
+fn pressing_esc_on_unlocked_with_open_settings_modal_closes_the_modal() {
+    assert_esc_closes_modal(Modal::Settings);
+}
+
+#[test]
+fn pressing_esc_on_unlocked_with_no_modal_open_is_passthrough_no_op() {
+    // Unlocked is not in `quits_on_esc`'s "no dismissable
+    // affordance" set, so Esc with no modal open is a silent
+    // no-op — state unchanged, no `Effect::Quit`.
+    let tmp = secure_tempdir();
+    let unlocked = fresh_plaintext_unlocked(&tmp);
+    let (state, effects) = reduce(unlocked, key(KeyCode::Esc));
+    assert!(
+        effects.is_empty(),
+        "Esc on Unlocked with no modal must not emit Effect::Quit, got {effects:?}"
+    );
+    match state {
+        AppState::Unlocked { modal: None, .. } => {}
+        AppState::Unlocked { modal, .. } => {
+            panic!("expected modal=None preserved, got modal={modal:?}")
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
