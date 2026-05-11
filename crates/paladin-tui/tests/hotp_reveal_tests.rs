@@ -27,9 +27,9 @@ use secrecy::{ExposeSecret, SecretString};
 
 use paladin_core::{
     hotp_reveal_deadline, validate_manual, AccountId, AccountInput, AccountKindInput, Algorithm,
-    Argon2Params, EncryptionOptions, IconHintInput, Store, Vault, VaultInit,
+    Argon2Params, Code, EncryptionOptions, IconHintInput, PaladinError, Store, Vault, VaultInit,
 };
-use paladin_tui::app::event::{AppEvent, Effect};
+use paladin_tui::app::event::{AppEvent, Effect, EffectResult};
 use paladin_tui::app::reducer::reduce;
 use paladin_tui::app::state::{AppState, Focus, HotpReveal};
 
@@ -426,5 +426,201 @@ fn pressing_n_with_open_reveal_still_emits_hotp_advance_effect() {
             ..
         } => assert_eq!(r.counter_used, 7),
         other => panic!("expected Unlocked with reveal still set, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// EffectResult::HotpAdvance opens / replaces the reveal window
+// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Reducer)
+//
+// "AppEvent::EffectResult(...) is the only path by which effect outcomes
+// change non-core UI state (status text, reveal windows, modal
+// close / counts panels, inline errors)."
+//
+// The reducer must:
+//   * On `Ok(code)` while Unlocked: open a fresh `HotpReveal` slot keyed
+//     by `account_id`, with `counter_used` and `code` from the carried
+//     `Code` and `deadline = hotp_reveal_deadline(completed_at)`. Any
+//     previous reveal slot is dropped (its `SecretString` zeroizes).
+//   * On any non-`Unlocked` state: drop the result (and the carried
+//     `Code`'s OTP digits) without changing the state.
+// ---------------------------------------------------------------------------
+
+fn hotp_code(digits: &str, counter: u64) -> Code {
+    Code {
+        code: digits.to_string(),
+        valid_from: None,
+        valid_until: None,
+        seconds_remaining: None,
+        counter_used: Some(counter),
+    }
+}
+
+#[test]
+fn effect_result_hotp_advance_ok_opens_reveal_window_on_unlocked() {
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (mut vault, store) = create_encrypted_pair(&path, "pp");
+    let hotp_id = add_hotp_account(&mut vault, &store, "hotp");
+
+    let state = unlocked_with_reveal(path, vault, store, Some(hotp_id), None);
+    let completed_at = Instant::now();
+    let event = AppEvent::EffectResult(EffectResult::HotpAdvance {
+        account_id: hotp_id,
+        result: Ok(hotp_code("123456", 7)),
+        completed_at,
+    });
+
+    let (next, effects) = reduce(state, event);
+    assert!(
+        effects.is_empty(),
+        "EffectResult::HotpAdvance emits no follow-up effects"
+    );
+    match next {
+        AppState::Unlocked {
+            hotp_reveal: Some(r),
+            ..
+        } => {
+            assert_eq!(r.account_id, hotp_id);
+            assert_eq!(r.counter_used, 7);
+            assert_eq!(r.code.expose_secret(), "123456");
+            assert_eq!(
+                r.deadline,
+                hotp_reveal_deadline(completed_at),
+                "reveal deadline must be computed from `completed_at`"
+            );
+        }
+        other => panic!("expected Unlocked with reveal open, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_hotp_advance_ok_replaces_existing_reveal() {
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (mut vault, store) = create_encrypted_pair(&path, "pp");
+    let hotp_id = add_hotp_account(&mut vault, &store, "hotp");
+
+    let t0 = Instant::now();
+    let prior = open_reveal(hotp_id, 7, "111111", t0);
+    let state = unlocked_with_reveal(path, vault, store, Some(hotp_id), Some(prior));
+
+    let completed_at = t0 + Duration::from_millis(500);
+    let event = AppEvent::EffectResult(EffectResult::HotpAdvance {
+        account_id: hotp_id,
+        result: Ok(hotp_code("222222", 8)),
+        completed_at,
+    });
+
+    let (next, effects) = reduce(state, event);
+    assert!(effects.is_empty());
+    match next {
+        AppState::Unlocked {
+            hotp_reveal: Some(r),
+            ..
+        } => {
+            assert_eq!(
+                r.counter_used, 8,
+                "fresh reveal must replace the prior one (counter 7 → 8)"
+            );
+            assert_eq!(r.code.expose_secret(), "222222");
+            assert_eq!(r.deadline, hotp_reveal_deadline(completed_at));
+        }
+        other => panic!("expected Unlocked with replaced reveal, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_hotp_advance_drops_when_locked() {
+    // The user auto-locked between `Effect::HotpAdvance` emission and
+    // the executor's result delivery. The late result is dropped and
+    // the carried `Code` zeroizes on drop without mutating Locked
+    // state.
+    let path = PathBuf::from("/tmp/v.bin");
+    let state = AppState::Locked {
+        path: path.clone(),
+        pending_clipboard_clear: None,
+    };
+    let event = AppEvent::EffectResult(EffectResult::HotpAdvance {
+        account_id: AccountId::new(),
+        result: Ok(hotp_code("999999", 1)),
+        completed_at: Instant::now(),
+    });
+
+    let (next, effects) = reduce(state, event);
+    assert!(effects.is_empty(), "discarding a late result emits nothing");
+    match next {
+        AppState::Locked {
+            path: p,
+            pending_clipboard_clear: None,
+        } => assert_eq!(p, path),
+        other => panic!("expected Locked unchanged, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_hotp_advance_err_save_not_committed_leaves_reveal_unchanged() {
+    // Pre-commit save failure: the core has already reverted the
+    // in-memory counter, so the reducer must not open a reveal. Any
+    // previous reveal stays in place (the failure does not retroact-
+    // ively invalidate an unrelated earlier successful advance).
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (mut vault, store) = create_encrypted_pair(&path, "pp");
+    let hotp_id = add_hotp_account(&mut vault, &store, "hotp");
+
+    let t0 = Instant::now();
+    let prior = open_reveal(hotp_id, 7, "111111", t0);
+    let state = unlocked_with_reveal(path, vault, store, Some(hotp_id), Some(prior));
+
+    let event = AppEvent::EffectResult(EffectResult::HotpAdvance {
+        account_id: hotp_id,
+        result: Err(PaladinError::SaveNotCommitted {
+            committed: false,
+            backup_path: None,
+        }),
+        completed_at: t0,
+    });
+
+    let (next, effects) = reduce(state, event);
+    assert!(effects.is_empty());
+    match next {
+        AppState::Unlocked {
+            hotp_reveal: Some(r),
+            ..
+        } => {
+            assert_eq!(
+                r.counter_used, 7,
+                "pre-commit failure must not replace the prior reveal"
+            );
+            assert_eq!(r.code.expose_secret(), "111111");
+        }
+        other => panic!("expected Unlocked with prior reveal preserved, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_hotp_advance_drops_when_on_unlock_screen() {
+    // Defensive case: a result arriving while the app is back on the
+    // Unlock screen (e.g. the user locked then attempted to unlock
+    // again) is discarded without mutating the unlock screen.
+    use paladin_tui::prompt::PassphraseBuffer;
+    let path = PathBuf::from("/tmp/v.bin");
+    let state = AppState::Unlock {
+        path: path.clone(),
+        error: None,
+        passphrase: PassphraseBuffer::new(),
+    };
+    let event = AppEvent::EffectResult(EffectResult::HotpAdvance {
+        account_id: AccountId::new(),
+        result: Ok(hotp_code("999999", 1)),
+        completed_at: Instant::now(),
+    });
+
+    let (next, effects) = reduce(state, event);
+    assert!(effects.is_empty());
+    match next {
+        AppState::Unlock { path: p, .. } => assert_eq!(p, path),
+        other => panic!("expected Unlock unchanged, got {other:?}"),
     }
 }

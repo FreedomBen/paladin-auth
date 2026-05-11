@@ -13,12 +13,16 @@ use std::time::Instant;
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 
-use paladin_core::{AccountId, ClipboardClearToken, IdlePolicy, PaladinError, Store, Vault};
+use paladin_core::{
+    hotp_reveal_deadline, AccountId, ClipboardClearToken, Code, IdlePolicy, PaladinError, Store,
+    Vault,
+};
+use secrecy::SecretString;
 
 use crate::app::event::{AppEvent, Effect, EffectResult};
 use crate::app::state::{
     compute_idle_deadline, initial_selection, render_error_message, AppState, ChordLeader, Focus,
-    Modal, StatusLine, NO_ACCOUNT_SELECTED,
+    HotpReveal, Modal, StatusLine, NO_ACCOUNT_SELECTED,
 };
 use crate::search::{filtered_account_ids, select_after_search};
 
@@ -237,7 +241,51 @@ fn reduce_effect_result(state: AppState, result: EffectResult) -> (AppState, Vec
         EffectResult::Unlock { result, opened_at } => {
             reduce_unlock_result(state, result, opened_at)
         }
+        EffectResult::HotpAdvance {
+            account_id,
+            result,
+            completed_at,
+        } => reduce_hotp_advance_result(state, account_id, result, completed_at),
     }
+}
+
+/// Handle the outcome of an [`Effect::HotpAdvance`].
+///
+/// On `Ok(code)` while [`AppState::Unlocked`], open (or replace) the
+/// `hotp_reveal` slot keyed by `account_id`. The reveal deadline is
+/// computed from `completed_at` via
+/// [`paladin_core::hotp_reveal_deadline`]. Any prior reveal slot is
+/// dropped in place — its `SecretString` zeroizes on drop per the
+/// "Sensitive UI buffers" guarantee.
+///
+/// On `Err(...)` no reveal opens; the prior reveal slot (if any) is
+/// preserved. Pre-commit failures (`save_not_committed`) have already
+/// been rolled back inside `Vault::hotp_advance`, so the in-memory
+/// vault remains consistent with disk. Status-line surfacing for the
+/// error kinds lands alongside the broader "Effect errors" slice.
+///
+/// On any non-`Unlocked` state the result is discarded so the carried
+/// OTP digits drop without mutating the current state.
+fn reduce_hotp_advance_result(
+    mut state: AppState,
+    account_id: AccountId,
+    result: Result<Code, PaladinError>,
+    completed_at: Instant,
+) -> (AppState, Vec<Effect>) {
+    if let AppState::Unlocked {
+        hotp_reveal: slot, ..
+    } = &mut state
+    {
+        if let Ok(code) = result {
+            *slot = Some(HotpReveal {
+                account_id,
+                counter_used: code.counter_used.unwrap_or(0),
+                code: SecretString::from(code.code),
+                deadline: hotp_reveal_deadline(completed_at),
+            });
+        }
+    }
+    (state, Vec::new())
 }
 
 /// Handle the outcome of an [`Effect::Unlock`].

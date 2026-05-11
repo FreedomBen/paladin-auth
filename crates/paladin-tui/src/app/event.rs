@@ -10,7 +10,7 @@ use std::time::{Instant, SystemTime};
 
 use secrecy::SecretString;
 
-use paladin_core::{AccountId, ClipboardClearToken, PaladinError, Store, Vault};
+use paladin_core::{AccountId, ClipboardClearToken, Code, PaladinError, Store, Vault};
 
 /// Events delivered to the reducer over the `mpsc<AppEvent>` channel.
 ///
@@ -95,6 +95,38 @@ pub enum EffectResult {
         result: Result<(Vault, Store), PaladinError>,
         /// Monotonic clock sampled immediately after `Store::open`.
         opened_at: Instant,
+    },
+
+    /// Outcome of an [`Effect::HotpAdvance`] attempt.
+    ///
+    /// On `Ok(code)` the reducer opens (or replaces) the
+    /// [`crate::app::state::AppState::Unlocked::hotp_reveal`] slot keyed
+    /// by `account_id`. On `Err(...)` no reveal opens and the prior
+    /// reveal slot (if any) is preserved — pre-commit failures
+    /// (`save_not_committed`) have already been rolled back inside
+    /// `Vault::hotp_advance` per `DESIGN.md` §4.3, and other error
+    /// kinds are surfaced through the status-line slice that lands
+    /// alongside the broader "Effect errors" coverage.
+    ///
+    /// Results delivered while not on `Unlocked` (auto-lock, quit-in-
+    /// flight, …) are discarded so the carried OTP digits drop without
+    /// mutating non-`Unlocked` state.
+    ///
+    /// `completed_at` is the monotonic instant the executor sampled
+    /// immediately after `Vault::hotp_advance` returned; the reducer
+    /// feeds it into [`paladin_core::hotp_reveal_deadline`] to compute
+    /// the reveal window's expiry instant.
+    HotpAdvance {
+        /// The account whose counter was advanced. Carried back on
+        /// the result so the reveal slot stays keyed by the account
+        /// the advance ran against, even if the user has since
+        /// changed selection.
+        account_id: AccountId,
+        /// The `Vault::hotp_advance` outcome.
+        result: Result<Code, PaladinError>,
+        /// Monotonic clock sampled immediately after the advance
+        /// returned; used to derive the reveal-window deadline.
+        completed_at: Instant,
     },
 }
 
