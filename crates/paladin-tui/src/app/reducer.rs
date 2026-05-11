@@ -13,7 +13,7 @@ use std::time::Instant;
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 
-use paladin_core::{ClipboardClearToken, IdlePolicy, PaladinError, Store, Vault};
+use paladin_core::{AccountId, ClipboardClearToken, IdlePolicy, PaladinError, Store, Vault};
 
 use crate::app::event::{AppEvent, Effect, EffectResult};
 use crate::app::state::{
@@ -350,6 +350,12 @@ fn reduce_unlocked_input(mut state: AppState, key: &KeyEvent) -> (AppState, Vec<
         return (state, Vec::new());
     }
 
+    if modal.is_none() {
+        if let Some(step) = list_step_for_key(key.code) {
+            return move_selection(state, step);
+        }
+    }
+
     if let KeyCode::Char(c) = key.code {
         if modal.is_none() {
             // `q` quits Unlocked when no modal is open. (With a
@@ -368,6 +374,78 @@ fn reduce_unlocked_input(mut state: AppState, key: &KeyEvent) -> (AppState, Vec<
     }
 
     (state, Vec::new())
+}
+
+/// One-row step direction for list selection navigation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ListStep {
+    Up,
+    Down,
+}
+
+/// Map a single-row list-navigation key to its step direction.
+///
+/// `↑` / `↓` and the vim mirrors `k` / `j` step the selection by one
+/// row. Returns `None` for keys that are not single-row navigation;
+/// page / chord / half-page bindings land in later slices.
+fn list_step_for_key(code: KeyCode) -> Option<ListStep> {
+    match code {
+        KeyCode::Down | KeyCode::Char('j') => Some(ListStep::Down),
+        KeyCode::Up | KeyCode::Char('k') => Some(ListStep::Up),
+        _ => None,
+    }
+}
+
+/// Move the Unlocked list selection by one row in `step`'s direction,
+/// clamping at both ends.
+///
+/// Walks `Vault::iter()` (insertion order) to find the row adjacent to
+/// the currently selected `AccountId`. Empty filtered set (`selected =
+/// None`) is a silent no-op; clamping at top/bottom leaves the
+/// selection unchanged. The reducer never emits effects for
+/// navigation — these are pure state updates.
+fn move_selection(mut state: AppState, step: ListStep) -> (AppState, Vec<Effect>) {
+    let AppState::Unlocked {
+        ref vault,
+        ref mut selected,
+        ..
+    } = state
+    else {
+        return (state, Vec::new());
+    };
+    if let Some(current) = *selected {
+        if let Some(next) = adjacent_account(vault, current, step) {
+            *selected = Some(next);
+        }
+    }
+    (state, Vec::new())
+}
+
+/// Return the account adjacent to `current` in `vault`'s
+/// insertion-order iteration, or `None` when `current` is at the end
+/// of the iteration in the requested direction (clamp signal).
+fn adjacent_account(vault: &Vault, current: AccountId, step: ListStep) -> Option<AccountId> {
+    match step {
+        ListStep::Down => {
+            let mut ids = vault.iter().map(paladin_core::Account::id);
+            for id in ids.by_ref() {
+                if id == current {
+                    return ids.next();
+                }
+            }
+            None
+        }
+        ListStep::Up => {
+            let mut prev: Option<AccountId> = None;
+            for a in vault.iter() {
+                if a.id() == current {
+                    return prev;
+                }
+                prev = Some(a.id());
+            }
+            None
+        }
+    }
 }
 
 /// Map a bare-letter Unlocked-screen keybinding to the modal it opens,

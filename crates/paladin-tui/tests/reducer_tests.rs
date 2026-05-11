@@ -1615,3 +1615,313 @@ fn pressing_ctrl_q_on_unlocked_does_not_quit() {
         "Ctrl-Q is unbound; expected no effects, got {effects:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// List selection navigation — `↑` / `↓` and the vim `j` / `k` mirrors
+// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Reducer:
+//   "Selection navigation moves correctly under `↑` / `↓` / `j` / `k`,
+//    `PgUp` / `PgDn` / `Ctrl-B` / `Ctrl-F`, `Ctrl-U` / `Ctrl-D`, and
+//    `Home` / `End`."
+//  + Vim-style navigation: "`j` / `k` mirror `↓` / `↑`.")
+//
+// Slice covered: bare `↑` / `↓` / `j` / `k` step the selection by one
+// row through `Vault::iter()` (insertion order) and clamp at both ends.
+// `j` / `k` mirror the arrow keys; Ctrl/Alt modifier or a modal open
+// suppress the move. Empty filtered set is a silent no-op (the
+// `select_after_filter` `None` invariant). Page / chord / half-page
+// keys land in later slices.
+// ---------------------------------------------------------------------------
+
+/// Build a 3-account plaintext Unlocked state with the first account
+/// selected; returns the three inserted ids in insertion order.
+fn unlocked_with_three_accounts(tmp: &tempfile::TempDir) -> (AppState, [AccountId; 3]) {
+    let (path, (mut vault, store)) = open_plaintext_pair(tmp);
+    let a = add_totp_account(&mut vault, &store, "a");
+    let b = add_totp_account(&mut vault, &store, "b");
+    let c = add_totp_account(&mut vault, &store, "c");
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(a),
+    };
+    (state, [a, b, c])
+}
+
+#[test]
+fn pressing_down_arrow_on_unlocked_moves_selection_to_next_account() {
+    let tmp = secure_tempdir();
+    let (state, [_a, b, _c]) = unlocked_with_three_accounts(&tmp);
+    let (state, effects) = reduce(state, key(KeyCode::Down));
+    assert!(effects.is_empty(), "navigation must not emit effects");
+    match state {
+        AppState::Unlocked { selected, .. } => assert_eq!(
+            selected,
+            Some(b),
+            "Down on first row must advance selection to the second row"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_down_arrow_walks_through_multiple_rows() {
+    let tmp = secure_tempdir();
+    let (mut state, [_a, b, c]) = unlocked_with_three_accounts(&tmp);
+    let (next, _) = reduce(state, key(KeyCode::Down));
+    state = next;
+    match &state {
+        AppState::Unlocked { selected, .. } => assert_eq!(*selected, Some(b)),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+    let (next, _) = reduce(state, key(KeyCode::Down));
+    match next {
+        AppState::Unlocked { selected, .. } => assert_eq!(
+            selected,
+            Some(c),
+            "two Down presses on a 3-row list must reach the last row"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_down_arrow_at_end_of_list_clamps() {
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let _a = add_totp_account(&mut vault, &store, "a");
+    let b = add_totp_account(&mut vault, &store, "b");
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(b),
+    };
+    let (state, _) = reduce(unlocked, key(KeyCode::Down));
+    match state {
+        AppState::Unlocked { selected, .. } => assert_eq!(
+            selected,
+            Some(b),
+            "Down at end of list must clamp on the last row"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_up_arrow_on_unlocked_moves_selection_to_previous_account() {
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let a = add_totp_account(&mut vault, &store, "a");
+    let b = add_totp_account(&mut vault, &store, "b");
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(b),
+    };
+    let (state, effects) = reduce(unlocked, key(KeyCode::Up));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked { selected, .. } => assert_eq!(
+            selected,
+            Some(a),
+            "Up on second row must retreat selection to the first row"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_up_arrow_at_start_of_list_clamps() {
+    let tmp = secure_tempdir();
+    let (state, [a, _b, _c]) = unlocked_with_three_accounts(&tmp);
+    let (state, _) = reduce(state, key(KeyCode::Up));
+    match state {
+        AppState::Unlocked { selected, .. } => assert_eq!(
+            selected,
+            Some(a),
+            "Up at start of list must clamp on the first row"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_down_arrow_with_empty_vault_is_silent_no_op() {
+    let tmp = secure_tempdir();
+    let unlocked = fresh_plaintext_unlocked(&tmp);
+    let (state, effects) = reduce(unlocked, key(KeyCode::Down));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked { selected: None, .. } => {}
+        AppState::Unlocked { selected, .. } => {
+            panic!("expected selected=None on empty vault, got {selected:?}")
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_up_arrow_with_empty_vault_is_silent_no_op() {
+    let tmp = secure_tempdir();
+    let unlocked = fresh_plaintext_unlocked(&tmp);
+    let (state, effects) = reduce(unlocked, key(KeyCode::Up));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked { selected: None, .. } => {}
+        AppState::Unlocked { selected, .. } => {
+            panic!("expected selected=None on empty vault, got {selected:?}")
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_down_arrow_with_modal_open_does_not_move_selection() {
+    // Modal-open routes list-navigation keys to the modal's input
+    // path. At this slice the modal payloads do not exist yet, so the
+    // observable contract is: the selection is preserved unchanged.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let a = add_totp_account(&mut vault, &store, "a");
+    let _b = add_totp_account(&mut vault, &store, "b");
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Settings),
+        selected: Some(a),
+    };
+    let (state, effects) = reduce(unlocked, key(KeyCode::Down));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked {
+            selected,
+            modal: Some(Modal::Settings),
+            ..
+        } => assert_eq!(
+            selected,
+            Some(a),
+            "Down inside an open modal must not move list selection"
+        ),
+        other => panic!("expected Unlocked with Modal::Settings open, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_j_mirrors_down_arrow() {
+    let tmp = secure_tempdir();
+    let (state, [_a, b, _c]) = unlocked_with_three_accounts(&tmp);
+    let (state, effects) = reduce(state, key(KeyCode::Char('j')));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked { selected, .. } => assert_eq!(
+            selected,
+            Some(b),
+            "vim `j` must mirror Down arrow on the list"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_k_mirrors_up_arrow() {
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let a = add_totp_account(&mut vault, &store, "a");
+    let b = add_totp_account(&mut vault, &store, "b");
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(b),
+    };
+    let (state, effects) = reduce(unlocked, key(KeyCode::Char('k')));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked { selected, .. } => assert_eq!(
+            selected,
+            Some(a),
+            "vim `k` must mirror Up arrow on the list"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_ctrl_down_does_not_move_selection() {
+    // `Ctrl-Down` is not bound in `Keybindings (initial v0.1)`. The
+    // bare `Down` moves selection, but the same key with the Control
+    // modifier must not — readline-style Ctrl bindings should not
+    // silently navigate.
+    let tmp = secure_tempdir();
+    let (state, [a, _b, _c]) = unlocked_with_three_accounts(&tmp);
+    let (state, effects) = reduce(state, ctrl(KeyCode::Down));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked { selected, .. } => {
+            assert_eq!(selected, Some(a), "Ctrl-Down must not move list selection");
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_j_with_modal_open_does_not_move_selection() {
+    // With a modal open, `j` belongs to the modal-local input path
+    // (it'll be consumed as a text-field character once payloads land).
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let a = add_totp_account(&mut vault, &store, "a");
+    let _b = add_totp_account(&mut vault, &store, "b");
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Add),
+        selected: Some(a),
+    };
+    let (state, effects) = reduce(unlocked, key(KeyCode::Char('j')));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked {
+            selected,
+            modal: Some(Modal::Add),
+            ..
+        } => assert_eq!(
+            selected,
+            Some(a),
+            "vim `j` inside an open modal must not move list selection"
+        ),
+        other => panic!("expected Unlocked with Modal::Add open, got {other:?}"),
+    }
+}
