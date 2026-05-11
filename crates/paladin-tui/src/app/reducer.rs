@@ -286,20 +286,28 @@ fn reduce_input(state: AppState, event: &Event) -> (AppState, Vec<Effect>) {
 
 /// Handle a key event on the Unlocked (main list) screen.
 ///
-/// This slice covers the modal-open transition for `a` → [`Modal::Add`]
-/// — per `IMPLEMENTATION_PLAN_03_TUI.md` "Keybindings (initial v0.1)":
-/// *"`a` — Open Add modal."* The other six modal openers (`i` / `e` /
-/// `r` / `R` / `p` / `s`) wire alongside their per-modal payload
-/// slices.
+/// This slice covers the modal-open transitions for the seven bare-letter
+/// keys in `IMPLEMENTATION_PLAN_03_TUI.md` "Keybindings (initial v0.1)":
 ///
-/// `a` is a bare-letter key, so it fires only when no Ctrl / Alt
-/// modifier is held (`Ctrl-A` is unbound; Shift on `a` produces an
-/// upper-case `A` from the terminal and is not bound either). The
-/// modal opens only when no modal is currently open; once a modal
-/// payload exists, the bare `a` inside an open modal is consumed by
-/// the modal-local input path. Routing into modal-local input lands
-/// alongside each modal's payload slice; at this slice the open-modal
-/// case is a no-op so the slot stays unchanged.
+/// | Key | Modal              |
+/// | --- | ------------------ |
+/// | `a` | [`Modal::Add`]     |
+/// | `i` | [`Modal::Import`]  |
+/// | `e` | [`Modal::Export`]  |
+/// | `r` | [`Modal::Remove`]  |
+/// | `R` | [`Modal::Rename`]  |
+/// | `p` | [`Modal::Passphrase`] |
+/// | `s` | [`Modal::Settings`] |
+///
+/// All seven fire only when no Ctrl / Alt modifier is held — the
+/// corresponding Ctrl- chords are unbound and must not silently open
+/// dialogs. Shift is allowed through because the `r` / `R` split
+/// relies on the resolved upper-case character. The modal opens only
+/// when no modal is currently open; once a modal payload exists, the
+/// bare letter inside an open modal is consumed by the modal-local
+/// input path. Routing into modal-local input lands alongside each
+/// modal's payload slice; at this slice the open-modal case is a
+/// no-op so the slot stays unchanged.
 fn reduce_unlocked_input(mut state: AppState, key: &KeyEvent) -> (AppState, Vec<Effect>) {
     let AppState::Unlocked { ref mut modal, .. } = state else {
         // Caller ensures we're in Unlocked; defensive fall-through
@@ -314,13 +322,38 @@ fn reduce_unlocked_input(mut state: AppState, key: &KeyEvent) -> (AppState, Vec<
         return (state, Vec::new());
     }
 
-    match key.code {
-        KeyCode::Char('a') if modal.is_none() => {
-            *modal = Some(Modal::Add);
-            (state, Vec::new())
+    if let KeyCode::Char(c) = key.code {
+        if modal.is_none() {
+            if let Some(opened) = modal_opener_for_char(c) {
+                *modal = Some(opened);
+                return (state, Vec::new());
+            }
         }
-        _ => (state, Vec::new()),
     }
+
+    (state, Vec::new())
+}
+
+/// Map a bare-letter Unlocked-screen keybinding to the modal it opens,
+/// or `None` if the character is not a modal-open binding.
+///
+/// Mirrors `IMPLEMENTATION_PLAN_03_TUI.md` "Keybindings (initial v0.1)"
+/// — `r` (lower-case) opens Remove confirmation while `R`
+/// (upper-case, via Shift+R) opens Rename. Crossterm reports the
+/// resolved character for shifted keys, so the upper-case match arm
+/// works for both terminals that forward the Shift modifier and
+/// those that swallow it into the case conversion.
+fn modal_opener_for_char(c: char) -> Option<Modal> {
+    Some(match c {
+        'a' => Modal::Add,
+        'i' => Modal::Import,
+        'e' => Modal::Export,
+        'r' => Modal::Remove,
+        'R' => Modal::Rename,
+        'p' => Modal::Passphrase,
+        's' => Modal::Settings,
+        _ => return None,
+    })
 }
 
 /// Handle a key event on the Unlock screen.

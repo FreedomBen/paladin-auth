@@ -1224,3 +1224,90 @@ fn pressing_ctrl_a_on_unlocked_does_not_open_add_modal() {
         other => panic!("expected Unlocked, got {other:?}"),
     }
 }
+
+/// Build a fresh plaintext `AppState::Unlocked` with `modal = None` for
+/// per-binding modal-open tests.
+fn fresh_plaintext_unlocked(tmp: &tempfile::TempDir) -> AppState {
+    let (path, (vault, store)) = open_plaintext_pair(tmp);
+    AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+    }
+}
+
+/// Press `event` on a fresh plaintext `Unlocked` state and assert the
+/// resulting `modal` slot matches `expected` with no emitted effects.
+fn assert_key_opens_modal(event: AppEvent, expected: &Modal) {
+    let tmp = secure_tempdir();
+    let unlocked = fresh_plaintext_unlocked(&tmp);
+    let (state, effects) = reduce(unlocked, event);
+    assert!(effects.is_empty(), "opening a modal must not emit effects");
+    match state {
+        AppState::Unlocked { modal: Some(m), .. } => {
+            assert_eq!(
+                std::mem::discriminant(&m),
+                std::mem::discriminant(expected),
+                "expected modal variant {expected:?}, got {m:?}"
+            );
+        }
+        AppState::Unlocked { modal: None, .. } => panic!("expected modal=Some(_), got None"),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_i_on_unlocked_with_no_modal_open_opens_import_modal() {
+    assert_key_opens_modal(key(KeyCode::Char('i')), &Modal::Import);
+}
+
+#[test]
+fn pressing_e_on_unlocked_with_no_modal_open_opens_export_modal() {
+    assert_key_opens_modal(key(KeyCode::Char('e')), &Modal::Export);
+}
+
+#[test]
+fn pressing_lowercase_r_on_unlocked_with_no_modal_open_opens_remove_modal() {
+    // Per Keybindings (initial v0.1): `r` opens Remove confirmation;
+    // `R` (Shift+R) opens Rename. The lowercase / uppercase split is
+    // the only thing distinguishing the two bindings.
+    assert_key_opens_modal(key(KeyCode::Char('r')), &Modal::Remove);
+}
+
+#[test]
+fn pressing_shift_r_on_unlocked_with_no_modal_open_opens_rename_modal() {
+    // crossterm reports the resolved upper-case character with the
+    // SHIFT modifier preserved. Match on `Char('R')` (the resolved
+    // letter) so the binding works whether or not the terminal
+    // forwards the SHIFT modifier alongside the upper-case key.
+    let evt = AppEvent::Input {
+        event: Event::Key(KeyEvent::new(KeyCode::Char('R'), KeyModifiers::SHIFT)),
+        at: Instant::now(),
+    };
+    assert_key_opens_modal(evt, &Modal::Rename);
+}
+
+#[test]
+fn pressing_shift_r_without_modifier_byte_still_opens_rename_modal() {
+    // Belt-and-suspenders for terminals that report `Char('R')`
+    // without the SHIFT modifier byte (the historic crossterm
+    // default outside kitty-protocol mode). The reducer dispatches
+    // on the resolved character, not the modifier, so both shapes
+    // must hit Rename.
+    assert_key_opens_modal(key(KeyCode::Char('R')), &Modal::Rename);
+}
+
+#[test]
+fn pressing_p_on_unlocked_with_no_modal_open_opens_passphrase_modal() {
+    assert_key_opens_modal(key(KeyCode::Char('p')), &Modal::Passphrase);
+}
+
+#[test]
+fn pressing_s_on_unlocked_with_no_modal_open_opens_settings_modal() {
+    assert_key_opens_modal(key(KeyCode::Char('s')), &Modal::Settings);
+}
