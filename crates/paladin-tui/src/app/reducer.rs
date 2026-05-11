@@ -321,16 +321,22 @@ fn reduce_input(state: AppState, event: &Event) -> (AppState, Vec<Effect>) {
 ///   at this slice the open-modal case is a no-op so the slot stays
 ///   unchanged.
 ///
-/// * **`Esc` close-modal / clear-chord**: with a modal open, `Esc`
-///   clears the modal slot to `None`. With no modal open, `Esc` on
-///   `Unlocked` is otherwise a silent no-op — `Unlocked` is
-///   intentionally not in `quits_on_esc`'s "no dismissable
-///   affordance" set, so the user is never one stray `Esc` away
-///   from losing the unlocked session. In both cases, any pending
-///   vim chord leader is cleared. `Esc` is accepted regardless of
-///   modifier so terminals that report Ctrl-Esc or kitty-style
-///   augmented Esc still dismiss the modal. Search-clear lands
-///   alongside the search-focus slice.
+/// * **`Esc` close-modal / clear-search / clear-chord**: precedence
+///   order is `modal-close > search-clear > chord-clear`. With a
+///   modal open, `Esc` clears the modal slot to `None` and leaves
+///   `focus` / `search_query` untouched — the modal traps focus, so
+///   the user returns to the same focus surface that was active
+///   before the modal opened. With no modal open and
+///   `focus == Focus::Search`, `Esc` clears the search query buffer
+///   and returns `focus` to `Focus::List`. With no modal open and
+///   `focus == Focus::List`, `Esc` is otherwise a silent no-op —
+///   `Unlocked` is intentionally not in `quits_on_esc`'s "no
+///   dismissable affordance" set, so the user is never one stray
+///   `Esc` away from losing the unlocked session. In every case,
+///   any pending vim chord leader is cleared. `Esc` is accepted
+///   regardless of modifier so terminals that report Ctrl-Esc or
+///   kitty-style augmented Esc still dismiss the modal /
+///   search-focus.
 ///
 /// * **`gg` two-press chord** (vim mirror of `Home`): with no modal
 ///   open, lower-case `g` either sets
@@ -346,6 +352,8 @@ fn reduce_unlocked_input(mut state: AppState, key: &KeyEvent) -> (AppState, Vec<
     let AppState::Unlocked {
         ref mut modal,
         ref mut pending_chord_leader,
+        ref mut focus,
+        ref mut search_query,
         ..
     } = state
     else {
@@ -355,12 +363,21 @@ fn reduce_unlocked_input(mut state: AppState, key: &KeyEvent) -> (AppState, Vec<
     };
 
     if matches!(key.code, KeyCode::Esc) {
-        // Modifier-agnostic: any Esc dismisses an open modal and
-        // clears any pending vim chord leader. Search-clear lands
-        // alongside the search-focus slice.
+        // Modifier-agnostic: any Esc clears pending chord state and
+        // then dispatches to the highest-precedence dismissable
+        // affordance — modal close, then search clear. The modal
+        // traps focus, so closing it leaves `focus` / `search_query`
+        // intact and the user returns to the same focus surface.
+        // With no modal open and `Focus::Search`, Esc clears the
+        // query buffer and swings focus back to the list. On
+        // `Focus::List` with no modal, Esc is otherwise a silent
+        // no-op (chord clear above is the only state change).
         *pending_chord_leader = None;
         if modal.is_some() {
             *modal = None;
+        } else if *focus == Focus::Search {
+            *focus = Focus::List;
+            search_query.clear();
         }
         return (state, Vec::new());
     }

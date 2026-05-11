@@ -4857,3 +4857,181 @@ fn pressing_slash_after_g_clears_chord_and_focuses_search() {
         other => panic!("expected Unlocked, got {other:?}"),
     }
 }
+
+// ---------------------------------------------------------------------------
+// `Esc` from search focus — clear query and return focus to the list.
+//
+// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Focus model":
+//   "`Esc` clears the search query and returns focus to the list; on the
+//    list, `Esc` only clears pending vim chord state and is otherwise a
+//    no-op."
+//
+// Modal-close still wins: "Modal dialogs trap focus while open and
+// intercept `Esc` to close themselves." When a modal is open, Esc
+// closes the modal and leaves focus / search_query untouched, so the
+// user lands back on whatever focus surface was active before the
+// modal opened.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn pressing_esc_on_unlocked_with_search_focus_clears_query_and_returns_to_list() {
+    let tmp = secure_tempdir();
+    let (mut state, [a, _b, _c]) = unlocked_with_three_accounts(&tmp);
+    if let AppState::Unlocked {
+        ref mut focus,
+        ref mut search_query,
+        ..
+    } = state
+    {
+        *focus = Focus::Search;
+        *search_query = "github".to_string();
+    }
+    let (state, effects) = reduce(state, key(KeyCode::Esc));
+    assert!(
+        effects.is_empty(),
+        "Esc on search focus must not emit effects"
+    );
+    match state {
+        AppState::Unlocked {
+            focus,
+            search_query,
+            selected,
+            modal,
+            pending_chord_leader,
+            ..
+        } => {
+            assert_eq!(
+                focus,
+                Focus::List,
+                "Esc on search focus must return focus to the list"
+            );
+            assert_eq!(
+                search_query, "",
+                "Esc on search focus must clear the search query"
+            );
+            assert_eq!(
+                selected,
+                Some(a),
+                "Esc must not move list selection while clearing search"
+            );
+            assert!(
+                modal.is_none(),
+                "Esc on search focus with no modal open must not open one"
+            );
+            assert_eq!(
+                pending_chord_leader, None,
+                "Esc must keep pending chord leader cleared"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_esc_on_unlocked_with_search_focus_and_empty_query_returns_to_list() {
+    // Even with no query typed, Esc must still swap focus back to the
+    // list — focus management is independent of whether the query
+    // buffer happens to be empty.
+    let tmp = secure_tempdir();
+    let (mut state, _ids) = unlocked_with_three_accounts(&tmp);
+    if let AppState::Unlocked { ref mut focus, .. } = state {
+        *focus = Focus::Search;
+    }
+    let (state, effects) = reduce(state, key(KeyCode::Esc));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked {
+            focus,
+            search_query,
+            ..
+        } => {
+            assert_eq!(focus, Focus::List);
+            assert_eq!(search_query, "");
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_esc_on_unlocked_with_search_focus_and_modal_open_closes_modal_only() {
+    // Modal-close takes precedence — the modal traps focus and
+    // intercepts Esc. The focus slot and search query are untouched
+    // so the user returns to the same search-bar surface after the
+    // modal dismisses.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let a = add_totp_account(&mut vault, &store, "a");
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: "github".to_string(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Settings),
+        selected: Some(a),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::Search,
+    };
+    let (state, effects) = reduce(unlocked, key(KeyCode::Esc));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked {
+            focus,
+            search_query,
+            modal,
+            ..
+        } => {
+            assert!(modal.is_none(), "Esc must close the open modal");
+            assert_eq!(
+                focus,
+                Focus::Search,
+                "modal-close Esc must not change focus — search bar stays focused"
+            );
+            assert_eq!(
+                search_query, "github",
+                "modal-close Esc must not clear the search query"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_esc_on_unlocked_with_list_focus_does_not_clear_search_query() {
+    // On list focus, Esc only clears pending chord state per the §6
+    // / "Focus model" rule. The search query must persist so an
+    // active filter survives stray Esc presses on the list.
+    let tmp = secure_tempdir();
+    let (mut state, _ids) = unlocked_with_three_accounts(&tmp);
+    if let AppState::Unlocked {
+        ref mut search_query,
+        ..
+    } = state
+    {
+        *search_query = "github".to_string();
+    }
+    let (state, effects) = reduce(state, key(KeyCode::Esc));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked {
+            focus,
+            search_query,
+            ..
+        } => {
+            assert_eq!(
+                focus,
+                Focus::List,
+                "Esc on list focus must keep focus on the list"
+            );
+            assert_eq!(
+                search_query, "github",
+                "Esc on list focus must preserve the active search query"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
