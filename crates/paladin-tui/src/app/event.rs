@@ -10,7 +10,7 @@ use std::time::{Instant, SystemTime};
 
 use secrecy::SecretString;
 
-use paladin_core::{ClipboardClearToken, PaladinError, Store, Vault};
+use paladin_core::{AccountId, ClipboardClearToken, PaladinError, Store, Vault};
 
 /// Events delivered to the reducer over the `mpsc<AppEvent>` channel.
 ///
@@ -148,5 +148,27 @@ pub enum Effect {
         /// for byte-equality with the live clipboard contents inside
         /// the executor.
         value: Vec<u8>,
+    },
+    /// Advance the HOTP counter on the selected account, persist the
+    /// new counter to disk, and surface the generated code through an
+    /// `AppEvent::EffectResult(EffectResult::HotpAdvance(...))` so the
+    /// reducer can open a reveal window.
+    ///
+    /// Per `IMPLEMENTATION_PLAN_03_TUI.md` §6 and the reducer-tests
+    /// "HOTP `n` triggers a `HotpAdvance` effect" rule: the reducer
+    /// emits this effect when `Char('n')` is pressed on Unlocked with
+    /// a HOTP-kind account selected and no modal open. The reducer
+    /// itself never mutates `hotp_reveal` — only the matching
+    /// `EffectResult::HotpAdvance` can. The executor delegates to
+    /// `Vault::hotp_advance(store, account_id, SystemTime::now())`
+    /// which advances the counter, persists via `Vault::save`, and
+    /// returns the freshly generated `Code`.
+    HotpAdvance {
+        /// The current vault path; the executor uses it for error
+        /// reporting and to verify the path the effect was emitted
+        /// against in case the user has navigated away.
+        path: PathBuf,
+        /// The HOTP account whose counter should advance.
+        account_id: AccountId,
     },
 }

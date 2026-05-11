@@ -351,6 +351,7 @@ fn reduce_input(state: AppState, event: &Event) -> (AppState, Vec<Effect>) {
 ///   viewport-tracking slice.
 fn reduce_unlocked_input(mut state: AppState, key: &KeyEvent) -> (AppState, Vec<Effect>) {
     let AppState::Unlocked {
+        ref path,
         ref mut modal,
         ref mut pending_chord_leader,
         ref mut focus,
@@ -491,37 +492,91 @@ fn reduce_unlocked_input(mut state: AppState, key: &KeyEvent) -> (AppState, Vec<
     }
 
     if let KeyCode::Char(c) = key.code {
-        // `q` quits Unlocked when no modal is open. (Once the
-        // search bar can take focus, `q` is text input on the
-        // search surface too; that gating lands with the
-        // focus-state slice.)
-        if c == 'q' {
-            return (state, vec![Effect::Quit]);
-        }
-        // `/` focuses the search bar from the list per the §6
-        // "Focus model" rule. The modal guard above already short-
-        // circuits when a modal traps focus, and the chord leader
-        // was cleared just above this Char block, so the only
-        // remaining work is the `Focus::List -> Focus::Search`
-        // transition. Pressing `/` while already in `Focus::Search`
-        // is a silent no-op at this slice — character routing into
-        // the search field (which would type `/` literally) lands
-        // alongside the search-focus typing pass-through.
-        if c == '/' {
-            if let AppState::Unlocked { focus, .. } = &mut state {
-                *focus = Focus::Search;
-            }
-            return (state, Vec::new());
-        }
-        if let Some(opened) = modal_opener_for_char(c) {
-            if let AppState::Unlocked { modal, .. } = &mut state {
-                *modal = Some(opened);
-            }
-            return (state, Vec::new());
-        }
+        let n_effects = if c == 'n' {
+            hotp_advance_effect(path, vault, *selected)
+                .into_iter()
+                .collect()
+        } else {
+            Vec::new()
+        };
+        return dispatch_unlocked_char(state, c, n_effects);
     }
 
     (state, Vec::new())
+}
+
+/// Dispatch the post-chord-clear bare-letter Char handling on
+/// Unlocked / `Focus::List` (modal-already-open is filtered out
+/// upstream).
+///
+/// Owns the small terminal-letter table: `q` → quit, `/` → focus the
+/// search bar, `n` → emit the precomputed HOTP-advance effects, and
+/// the `modal_opener_for_char` table (`a`/`i`/`e`/`r`/`R`/`p`/`s`).
+/// `n_effects` carries the [`Effect::HotpAdvance`] list precomputed by
+/// the caller (empty when the binding is a silent no-op — TOTP
+/// selection, no selection, or selection missing from the vault) so
+/// this helper never needs to touch the still-borrowed vault.
+fn dispatch_unlocked_char(
+    mut state: AppState,
+    c: char,
+    n_effects: Vec<Effect>,
+) -> (AppState, Vec<Effect>) {
+    // `q` quits Unlocked when no modal is open. (Once the search bar
+    // can take focus, `q` is text input on the search surface too;
+    // that gating lands with the focus-state slice.)
+    if c == 'q' {
+        return (state, vec![Effect::Quit]);
+    }
+    // `/` focuses the search bar from the list per the §6 "Focus
+    // model" rule. The modal guard above already short-circuits when
+    // a modal traps focus, and the chord leader was cleared just
+    // above this Char block, so the only remaining work is the
+    // `Focus::List -> Focus::Search` transition. Pressing `/` while
+    // already in `Focus::Search` is a silent no-op at this slice —
+    // character routing into the search field (which would type `/`
+    // literally) lands alongside the search-focus typing pass-through.
+    if c == '/' {
+        if let AppState::Unlocked { focus, .. } = &mut state {
+            *focus = Focus::Search;
+        }
+        return (state, Vec::new());
+    }
+    if c == 'n' {
+        return (state, n_effects);
+    }
+    if let Some(opened) = modal_opener_for_char(c) {
+        if let AppState::Unlocked { modal, .. } = &mut state {
+            *modal = Some(opened);
+        }
+        return (state, Vec::new());
+    }
+    (state, Vec::new())
+}
+
+/// Build the [`Effect::HotpAdvance`] for the selected account, or
+/// `None` when the binding is a silent no-op.
+///
+/// Returns `Some(Effect::HotpAdvance { path, account_id })` only when
+/// (a) `selected` resolves to a vault account and (b) the account's
+/// kind is [`AccountKindSummary::Hotp`]. TOTP accounts, an empty
+/// selection, and a selected id missing from the vault all yield
+/// `None` so the reducer surfaces no effect — the status-line "not an
+/// HOTP account" hint and "no account selected" hint land with the
+/// status-line slice, never with the reducer.
+fn hotp_advance_effect(
+    path: &std::path::Path,
+    vault: &Vault,
+    selected: Option<AccountId>,
+) -> Option<Effect> {
+    let id = selected?;
+    let account = vault.iter().find(|a| a.id() == id)?;
+    if account.kind() != paladin_core::AccountKindSummary::Hotp {
+        return None;
+    }
+    Some(Effect::HotpAdvance {
+        path: path.to_path_buf(),
+        account_id: id,
+    })
 }
 
 /// Step direction for list selection navigation.

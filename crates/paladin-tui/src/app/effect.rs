@@ -84,5 +84,21 @@ pub fn execute(effect: Effect, sender: &Sender<AppEvent>) -> EffectOutcome {
             let _ = sender;
             EffectOutcome::Continue
         }
+        Effect::HotpAdvance {
+            path: _,
+            account_id: _,
+        } => {
+            // Placeholder: the `Vault::hotp_advance` call and matching
+            // `EffectResult::HotpAdvance` dispatch land with the HOTP
+            // reveal slice — the executor needs access to the live
+            // `(Vault, Store)` carried in `AppState::Unlocked` to
+            // mutate the counter. Until that wiring lands the reducer
+            // emit is exercised by reducer-level tests
+            // (`pressing_n_with_hotp_account_selected_emits_hotp_advance_effect`,
+            // etc.) and the executor consumes the variant without
+            // emitting an `AppEvent`.
+            let _ = sender;
+            EffectOutcome::Continue
+        }
     }
 }

@@ -635,7 +635,7 @@ end-to-end.
   `PgUp` / `PgDn` / `Ctrl-B` / `Ctrl-F`, `Ctrl-U` / `Ctrl-D`, and
   `Home` / `End`.
 - [x] Modal open / close transitions for every modal.
-- [ ] HOTP `n` triggers a `HotpAdvance` effect.
+- [x] HOTP `n` triggers a `HotpAdvance` effect.
 - [ ] `AppEvent::EffectResult(...)` is the only path by which effect
   outcomes change non-core UI state (status text, reveal windows, modal
   close / counts panels, inline errors).

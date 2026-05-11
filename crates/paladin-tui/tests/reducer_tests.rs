@@ -962,6 +962,25 @@ fn add_totp_account(vault: &mut Vault, store: &Store, label: &str) -> AccountId 
     id
 }
 
+/// Add an HOTP account with the given `label` and counter `0`.
+fn add_hotp_account(vault: &mut Vault, store: &Store, label: &str) -> AccountId {
+    let input = AccountInput {
+        label: label.to_string(),
+        issuer: None,
+        secret: SecretString::from("JBSWY3DPEHPK3PXP".to_string()),
+        algorithm: Algorithm::Sha1,
+        digits: 6,
+        kind: AccountKindInput::Hotp,
+        period_secs: None,
+        counter: Some(0),
+        icon_hint: IconHintInput::Default,
+    };
+    let validated = validate_manual(input, SystemTime::now()).expect("valid HOTP manual input");
+    let id = vault.add(validated.account);
+    vault.save(store).expect("commit added HOTP account");
+    id
+}
+
 #[test]
 fn compute_idle_deadline_plaintext_vault_is_none() {
     // The plaintext-no-op rule (§6 / §7) must hold even if the
@@ -5582,6 +5601,184 @@ fn pressing_end_with_filter_excluding_first_vault_row_still_lands_in_filtered_se
             Some(carol),
             "End must land on the sole filtered match"
         ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// HOTP `n` triggers a `HotpAdvance` effect (per
+// `IMPLEMENTATION_PLAN_03_TUI.md` Tests > Reducer > "HOTP `n` triggers a
+// `HotpAdvance` effect"). Pressing `n` on Unlocked with an HOTP account
+// selected emits `Effect::HotpAdvance { path, account_id }`. The reducer
+// does not mutate `hotp_reveal` — only `EffectResult::HotpAdvance` may do
+// that, per the §6 effect-result ownership rule.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn pressing_n_with_hotp_account_selected_emits_hotp_advance_effect() {
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let hotp_id = add_hotp_account(&mut vault, &store, "github");
+    let state = AppState::Unlocked {
+        path: path.clone(),
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(hotp_id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+    };
+    let (state, effects) = reduce(state, key(KeyCode::Char('n')));
+    match effects.as_slice() {
+        [Effect::HotpAdvance {
+            path: emitted_path,
+            account_id,
+        }] => {
+            assert_eq!(emitted_path, &path, "HotpAdvance must carry the vault path");
+            assert_eq!(
+                *account_id, hotp_id,
+                "HotpAdvance must carry the selected account id"
+            );
+        }
+        other => panic!("expected single HotpAdvance effect, got {other:?}"),
+    }
+    match state {
+        AppState::Unlocked { hotp_reveal, .. } => {
+            assert!(
+                hotp_reveal.is_none(),
+                "reducer must not seed hotp_reveal — only EffectResult::HotpAdvance can"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_n_with_totp_account_selected_emits_no_effect() {
+    // `n` is meaningful only on HOTP accounts; for TOTP the binding
+    // is a silent no-op at the reducer layer (the status-line "not an
+    // HOTP account" hint lands with the status-line slice).
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let totp_id = add_totp_account(&mut vault, &store, "github");
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(totp_id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+    };
+    let (_state, effects) = reduce(state, key(KeyCode::Char('n')));
+    assert!(
+        effects.is_empty(),
+        "pressing `n` with a TOTP account selected must not emit HotpAdvance, got {effects:?}"
+    );
+}
+
+#[test]
+fn pressing_n_with_no_selection_emits_no_effect() {
+    // Empty vault / empty filtered set: `n` is a silent no-op.
+    let tmp = secure_tempdir();
+    let (path, (vault, store)) = open_plaintext_pair(&tmp);
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+    };
+    let (_state, effects) = reduce(state, key(KeyCode::Char('n')));
+    assert!(
+        effects.is_empty(),
+        "pressing `n` with no selected account must not emit HotpAdvance, got {effects:?}"
+    );
+}
+
+#[test]
+fn pressing_n_with_modal_open_emits_no_effect() {
+    // Modal traps focus — `n` is modal-local input and must not
+    // leak through to the HOTP advance binding.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let hotp_id = add_hotp_account(&mut vault, &store, "github");
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Add),
+        selected: Some(hotp_id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+    };
+    let (_state, effects) = reduce(state, key(KeyCode::Char('n')));
+    assert!(
+        effects.is_empty(),
+        "pressing `n` with a modal open must not emit HotpAdvance, got {effects:?}"
+    );
+}
+
+#[test]
+fn pressing_n_while_focus_search_appends_to_query_not_advance() {
+    // While Focus::Search, `n` is text input — it must accumulate
+    // in `search_query`, never trigger HotpAdvance.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let hotp_id = add_hotp_account(&mut vault, &store, "github");
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(hotp_id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::Search,
+    };
+    let (state, effects) = reduce(state, key(KeyCode::Char('n')));
+    assert!(
+        effects.is_empty(),
+        "pressing `n` while Focus::Search must not emit HotpAdvance, got {effects:?}"
+    );
+    match state {
+        AppState::Unlocked { search_query, .. } => {
+            assert_eq!(
+                search_query, "n",
+                "`n` while Focus::Search must append to the search query"
+            );
+        }
         other => panic!("expected Unlocked, got {other:?}"),
     }
 }
