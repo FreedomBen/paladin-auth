@@ -278,6 +278,7 @@ fn reduce_unlock_result(
                         viewport_offset: 0,
                         focus: Focus::List,
                         status_line: None,
+                        help_open: false,
                     },
                     Vec::new(),
                 )
@@ -398,6 +399,7 @@ fn reduce_unlocked_input(mut state: AppState, key: &KeyEvent) -> (AppState, Vec<
         ref vault,
         ref mut selected,
         ref mut status_line,
+        ref mut help_open,
         ..
     } = state
     else {
@@ -407,22 +409,23 @@ fn reduce_unlocked_input(mut state: AppState, key: &KeyEvent) -> (AppState, Vec<
     };
 
     if matches!(key.code, KeyCode::Esc) {
-        // Modifier-agnostic: any Esc clears pending chord state and
-        // then dispatches to the highest-precedence dismissable
-        // affordance — modal close, then search clear. The modal
-        // traps focus, so closing it leaves `focus` / `search_query`
-        // intact and the user returns to the same focus surface.
-        // With no modal open and `Focus::Search`, Esc clears the
-        // query buffer and swings focus back to the list. On
-        // `Focus::List` with no modal, Esc is otherwise a silent
-        // no-op (chord clear above is the only state change).
-        *pending_chord_leader = None;
-        if modal.is_some() {
-            *modal = None;
-        } else if *focus == Focus::Search {
-            *focus = Focus::List;
-            search_query.clear();
-        }
+        apply_esc_dismiss(pending_chord_leader, help_open, modal, focus, search_query);
+        return (state, Vec::new());
+    }
+
+    if *help_open {
+        // The Help overlay is read-only: every key besides `Esc`
+        // (handled above) and `Ctrl-C` (caught upstream in
+        // [`reduce_input`]) is a silent no-op while it is visible
+        // per `IMPLEMENTATION_PLAN_03_TUI.md` "Help overlay": *"The
+        // overlay has no inputs and never mutates vault state."*
+        // Modal openers, navigation, `q`, `/`, `n`, and even
+        // bare-letter Char presses are suppressed so they cannot
+        // bleed actions into the underlying list view. Pending
+        // chord-leader state stays as-is because the overlay
+        // cannot have been opened with a chord in flight (the
+        // `?` opener runs through `dispatch_unlocked_char` which
+        // clears it on entry).
         return (state, Vec::new());
     }
 
@@ -635,6 +638,22 @@ fn dispatch_unlocked_char(
     }
     if c == 'n' {
         return (state, n_effects);
+    }
+    if c == '?' {
+        // `?` opens the read-only Help overlay from list focus per
+        // `IMPLEMENTATION_PLAN_03_TUI.md` "Help overlay". This arm
+        // is only reached when no modal is open (filtered upstream),
+        // focus is `Focus::List` (Focus::Search consumes Char as
+        // text input), no Ctrl/Alt modifier is held (filtered
+        // upstream), and Help is not already open (the early
+        // `*help_open` guard in `reduce_unlocked_input` would have
+        // short-circuited). Re-pressing `?` while the overlay is
+        // already visible is therefore not observable here — it
+        // never reaches this dispatch.
+        if let AppState::Unlocked { help_open, .. } = &mut state {
+            *help_open = true;
+        }
+        return (state, Vec::new());
     }
     if let Some(opened) = modal_opener_for_char(c) {
         if let AppState::Unlocked { modal, .. } = &mut state {
@@ -1033,6 +1052,38 @@ fn reduce_unlock_input(mut state: AppState, key: &KeyEvent) -> (AppState, Vec<Ef
             (state, vec![effect])
         }
         _ => (state, Vec::new()),
+    }
+}
+
+/// Apply the Unlocked-screen `Esc` precedence chain: clear any
+/// pending vim chord leader, then dismiss the highest-precedence
+/// dismissable affordance (Help close > modal close > search clear).
+///
+/// The chord clear is always performed regardless of which (if any)
+/// affordance fires, mirroring vim's `nottimeout` semantics. The
+/// Help overlay opens only when `modal == None` and `focus ==
+/// List`, so the sibling slots are no-ops by construction while
+/// Help is open; the modal traps focus, so closing it leaves
+/// `focus` / `search_query` intact; with no modal and
+/// `Focus::Search`, Esc clears the query and returns focus to the
+/// list. On `Focus::List` with no modal and no Help, Esc is
+/// otherwise a silent no-op (chord clear above is the only state
+/// change).
+fn apply_esc_dismiss(
+    pending_chord_leader: &mut Option<ChordLeader>,
+    help_open: &mut bool,
+    modal: &mut Option<Modal>,
+    focus: &mut Focus,
+    search_query: &mut String,
+) {
+    *pending_chord_leader = None;
+    if *help_open {
+        *help_open = false;
+    } else if modal.is_some() {
+        *modal = None;
+    } else if *focus == Focus::Search {
+        *focus = Focus::List;
+        search_query.clear();
     }
 }
 

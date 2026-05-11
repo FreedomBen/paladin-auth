@@ -130,6 +130,7 @@ fn unlocked_with_reveal(
         viewport_offset: 0,
         focus: Focus::List,
         status_line: None,
+        help_open: false,
     }
 }
 
@@ -359,6 +360,7 @@ fn auto_lock_takes_precedence_over_reveal_expiry_when_both_fire() {
         viewport_offset: 0,
         focus: Focus::List,
         status_line: None,
+        help_open: false,
     };
 
     // Tick is past both deadlines.

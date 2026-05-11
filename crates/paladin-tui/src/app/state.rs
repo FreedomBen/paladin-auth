@@ -405,6 +405,24 @@ pub enum AppState {
         /// Dropped on the `Unlocked → Locked` auto-lock transition
         /// alongside the `Vault` / `Store` (by variant change).
         status_line: Option<StatusLine>,
+        /// Whether the read-only Help overlay is currently visible.
+        ///
+        /// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Help overlay":
+        /// *"`?` from list focus opens a read-only Help overlay
+        /// listing every keybinding from the table below; `Esc`
+        /// closes the overlay and restores list focus. The overlay
+        /// has no inputs and never mutates vault state."*
+        ///
+        /// `?` opens the overlay only when `modal` is `None`,
+        /// `focus` is [`Focus::List`], and this flag is `false`.
+        /// While the flag is `true`, the only key that has any
+        /// effect is `Esc` (close); every other key is a silent
+        /// no-op so the overlay is genuinely read-only. The flag
+        /// is dropped on the `Unlocked → Locked` auto-lock
+        /// transition alongside the `Vault` / `Store` (by variant
+        /// change) and re-seeded to `false` whenever Unlocked is
+        /// re-entered.
+        help_open: bool,
     },
 
     /// Non-mutating startup-error screen. Used when vault-path
@@ -484,6 +502,7 @@ pub fn decide_state_from_open(
                 viewport_offset: 0,
                 focus: Focus::List,
                 status_line: None,
+                help_open: false,
             }
         }
         Err(err) => AppState::StartupError {

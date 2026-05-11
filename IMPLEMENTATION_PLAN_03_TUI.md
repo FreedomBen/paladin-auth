@@ -1157,6 +1157,12 @@ is never expected to be scripted.
   `Esc` to close); render its content from the same keybindings table
   used to generate the man page so the two stay in sync; suppress
   `?` on the unlock, missing-vault, and startup-error screens.
+  *(Reducer slice done — `help_open: bool` on `AppState::Unlocked`,
+  `?` opener from list focus with `modal == None`, `Esc`-close
+  precedence above modal-close / search-clear, all other keys are
+  silent no-ops while open, `Ctrl-C` still quits, auto-lock
+  discards the slot. View-level rendering of the keybindings table
+  rides with the view slice.)*
 - [ ] Use `paladin_core::account_matches_search` for `search.rs` substring
   filtering so the TUI shares issuer/label matching semantics with the CLI
   and GUI.
