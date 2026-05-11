@@ -7296,8 +7296,11 @@ fn pressing_shift_tab_on_unlocked_search_focus_moves_focus_to_list_preserving_qu
 fn pressing_tab_with_modal_open_does_not_change_focus() {
     // Modals trap focus while open — `Tab` is a silent no-op at the
     // top level so the modal's own focus traversal (Ctrl-N / Ctrl-P
-    // aliasing Tab / Shift-Tab) is not pre-empted. Modal-local
-    // navigation lands in a later slice.
+    // aliasing Tab / Shift-Tab, covered by the modal-local alias
+    // tests further down) is not pre-empted. Until modal payloads
+    // grow focusable fields, both Tab/Shift-Tab and Ctrl-N/Ctrl-P
+    // are silent no-ops inside a modal — symmetry that the alias
+    // tests lock in.
     let tmp = secure_tempdir();
     let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
     let a = add_totp_account(&mut vault, &store, "a");
@@ -7467,5 +7470,534 @@ fn pressing_tab_on_unlock_screen_is_silent_no_op() {
             );
         }
         other => panic!("expected Unlock, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Ctrl-N / Ctrl-P modal-local Tab / Shift-Tab aliases
+//
+// `IMPLEMENTATION_PLAN_03_TUI.md` "Vim-style navigation": *"`Ctrl-N` /
+// `Ctrl-P` inside modals advance / retreat focus the same as `Tab` /
+// `Shift-Tab`, have no effect on a post-success counts panel, and do
+// not override `↑` / `↓` spinner adjustments."*
+//
+// The seven modal variants are still tag-only (no payloads, no
+// focusable fields), so the in-modal observable behavior for both
+// `Tab` / `Shift-Tab` and `Ctrl-N` / `Ctrl-P` is "preserve all visible
+// state". The contract these tests lock in is symmetry: whichever
+// alias is pressed, the modal stays open, top-level focus does not
+// flip, the selection does not move, the status line does not
+// surface, and the pending chord leader ends `None` (the chord-clear
+// is shared by every modal-trapped key). When modal payloads grow
+// internal focus-cycling, the same handler must dispatch off both
+// pairs of keys.
+//
+// Modal-local scope is asserted by the top-level companion tests:
+// outside a modal, `Ctrl-N` / `Ctrl-P` are unbound (silent no-ops)
+// and must NOT flip top-level focus between list and search the way
+// `Tab` / `Shift-Tab` do.
+
+fn assert_ctrl_modal_alias_is_silent_no_op(modal_to_open: Modal, event: AppEvent, label: &str) {
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let a = add_totp_account(&mut vault, &store, "a");
+    let initial_focus = Focus::List;
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(modal_to_open),
+        selected: Some(a),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: initial_focus,
+        status_line: None,
+    };
+    let (state, effects) = reduce(unlocked, event);
+    assert!(
+        effects.is_empty(),
+        "{label} inside a modal must not emit effects"
+    );
+    match state {
+        AppState::Unlocked {
+            focus,
+            modal,
+            selected,
+            status_line,
+            pending_chord_leader,
+            search_query,
+            hotp_reveal,
+            pending_clipboard_clear,
+            ..
+        } => {
+            assert!(modal.is_some(), "{label} must not close the trapped modal");
+            assert_eq!(
+                focus, initial_focus,
+                "{label} must not flip top-level focus while a modal traps input"
+            );
+            assert_eq!(
+                selected,
+                Some(a),
+                "{label} inside a modal must not advance the underlying list selection"
+            );
+            assert!(
+                status_line.is_none(),
+                "{label} inside a modal must not surface a status-line error"
+            );
+            assert!(
+                pending_chord_leader.is_none(),
+                "{label} inside a modal must leave pending chord state cleared"
+            );
+            assert!(
+                search_query.is_empty(),
+                "{label} inside a modal must not mutate the search query"
+            );
+            assert!(
+                hotp_reveal.is_none(),
+                "{label} inside a modal must not open a HOTP reveal"
+            );
+            assert!(
+                pending_clipboard_clear.is_none(),
+                "{label} inside a modal must not arm clipboard auto-clear"
+            );
+        }
+        other => panic!("expected Unlocked with modal preserved, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_ctrl_n_with_add_modal_open_aliases_tab() {
+    assert_ctrl_modal_alias_is_silent_no_op(Modal::Add, ctrl(KeyCode::Char('n')), "`Ctrl-N`");
+}
+
+#[test]
+fn pressing_ctrl_p_with_add_modal_open_aliases_shift_tab() {
+    assert_ctrl_modal_alias_is_silent_no_op(Modal::Add, ctrl(KeyCode::Char('p')), "`Ctrl-P`");
+}
+
+#[test]
+fn pressing_ctrl_n_with_import_modal_open_aliases_tab() {
+    assert_ctrl_modal_alias_is_silent_no_op(Modal::Import, ctrl(KeyCode::Char('n')), "`Ctrl-N`");
+}
+
+#[test]
+fn pressing_ctrl_p_with_import_modal_open_aliases_shift_tab() {
+    assert_ctrl_modal_alias_is_silent_no_op(Modal::Import, ctrl(KeyCode::Char('p')), "`Ctrl-P`");
+}
+
+#[test]
+fn pressing_ctrl_n_with_export_modal_open_aliases_tab() {
+    assert_ctrl_modal_alias_is_silent_no_op(Modal::Export, ctrl(KeyCode::Char('n')), "`Ctrl-N`");
+}
+
+#[test]
+fn pressing_ctrl_p_with_export_modal_open_aliases_shift_tab() {
+    assert_ctrl_modal_alias_is_silent_no_op(Modal::Export, ctrl(KeyCode::Char('p')), "`Ctrl-P`");
+}
+
+#[test]
+fn pressing_ctrl_n_with_remove_modal_open_aliases_tab() {
+    assert_ctrl_modal_alias_is_silent_no_op(Modal::Remove, ctrl(KeyCode::Char('n')), "`Ctrl-N`");
+}
+
+#[test]
+fn pressing_ctrl_p_with_remove_modal_open_aliases_shift_tab() {
+    assert_ctrl_modal_alias_is_silent_no_op(Modal::Remove, ctrl(KeyCode::Char('p')), "`Ctrl-P`");
+}
+
+#[test]
+fn pressing_ctrl_n_with_rename_modal_open_aliases_tab() {
+    assert_ctrl_modal_alias_is_silent_no_op(Modal::Rename, ctrl(KeyCode::Char('n')), "`Ctrl-N`");
+}
+
+#[test]
+fn pressing_ctrl_p_with_rename_modal_open_aliases_shift_tab() {
+    assert_ctrl_modal_alias_is_silent_no_op(Modal::Rename, ctrl(KeyCode::Char('p')), "`Ctrl-P`");
+}
+
+#[test]
+fn pressing_ctrl_n_with_passphrase_modal_open_aliases_tab() {
+    assert_ctrl_modal_alias_is_silent_no_op(
+        Modal::Passphrase,
+        ctrl(KeyCode::Char('n')),
+        "`Ctrl-N`",
+    );
+}
+
+#[test]
+fn pressing_ctrl_p_with_passphrase_modal_open_aliases_shift_tab() {
+    assert_ctrl_modal_alias_is_silent_no_op(
+        Modal::Passphrase,
+        ctrl(KeyCode::Char('p')),
+        "`Ctrl-P`",
+    );
+}
+
+#[test]
+fn pressing_ctrl_n_with_settings_modal_open_aliases_tab() {
+    assert_ctrl_modal_alias_is_silent_no_op(Modal::Settings, ctrl(KeyCode::Char('n')), "`Ctrl-N`");
+}
+
+#[test]
+fn pressing_ctrl_p_with_settings_modal_open_aliases_shift_tab() {
+    assert_ctrl_modal_alias_is_silent_no_op(Modal::Settings, ctrl(KeyCode::Char('p')), "`Ctrl-P`");
+}
+
+#[test]
+fn pressing_ctrl_n_with_modal_open_on_search_focus_does_not_flip_focus() {
+    // Mirror of the `Tab` / `Shift-Tab` modal-trap behavior with the
+    // initial focus seeded to `Focus::Search`: the alias still must
+    // not flip the underlying focus surface while the modal traps
+    // input. Without this guard a future regression where `Ctrl-N`
+    // routes through `toggle_unlocked_focus` would silently flip
+    // List ↔ Search underneath an open modal.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let a = add_totp_account(&mut vault, &store, "a");
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Settings),
+        selected: Some(a),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::Search,
+        status_line: None,
+    };
+    let (state, effects) = reduce(unlocked, ctrl(KeyCode::Char('n')));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked {
+            focus,
+            modal: Some(Modal::Settings),
+            ..
+        } => assert_eq!(
+            focus,
+            Focus::Search,
+            "`Ctrl-N` must not flip top-level focus while a modal is open"
+        ),
+        other => panic!("expected Unlocked with Modal::Settings open, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_ctrl_p_with_modal_open_on_search_focus_does_not_flip_focus() {
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let a = add_totp_account(&mut vault, &store, "a");
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Settings),
+        selected: Some(a),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::Search,
+        status_line: None,
+    };
+    let (state, effects) = reduce(unlocked, ctrl(KeyCode::Char('p')));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked {
+            focus,
+            modal: Some(Modal::Settings),
+            ..
+        } => assert_eq!(
+            focus,
+            Focus::Search,
+            "`Ctrl-P` must not flip top-level focus while a modal is open"
+        ),
+        other => panic!("expected Unlocked with Modal::Settings open, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_ctrl_n_with_modal_open_clears_pending_chord_leader() {
+    // Every modal-trapped key clears the pending vim chord leader
+    // (per the modal-trap rule in `reduce_unlocked_input`). `Ctrl-N`
+    // is no exception — Tab / Shift-Tab clear it via the modal trap;
+    // Ctrl-N clears it via the Ctrl-branch prologue. Symmetry
+    // preserved.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let a = add_totp_account(&mut vault, &store, "a");
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Add),
+        selected: Some(a),
+        pending_chord_leader: Some(ChordLeader::G),
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+    };
+    let (state, effects) = reduce(unlocked, ctrl(KeyCode::Char('n')));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked {
+            pending_chord_leader,
+            modal: Some(Modal::Add),
+            ..
+        } => assert!(
+            pending_chord_leader.is_none(),
+            "`Ctrl-N` inside a modal must clear pending chord state"
+        ),
+        other => panic!("expected Unlocked with Modal::Add open, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_ctrl_p_with_modal_open_clears_pending_chord_leader() {
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let a = add_totp_account(&mut vault, &store, "a");
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Add),
+        selected: Some(a),
+        pending_chord_leader: Some(ChordLeader::Z),
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+    };
+    let (state, effects) = reduce(unlocked, ctrl(KeyCode::Char('p')));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked {
+            pending_chord_leader,
+            modal: Some(Modal::Add),
+            ..
+        } => assert!(
+            pending_chord_leader.is_none(),
+            "`Ctrl-P` inside a modal must clear pending chord state"
+        ),
+        other => panic!("expected Unlocked with Modal::Add open, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_ctrl_n_at_top_level_list_focus_does_not_flip_focus() {
+    // `Ctrl-N` / `Ctrl-P` are MODAL-LOCAL aliases for `Tab` /
+    // `Shift-Tab`. With no modal open, they are unbound — they must
+    // not toggle the List ↔ Search focus the way bare `Tab` does.
+    // This guard would trip a regression that lifted the alias to
+    // top level.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let a = add_totp_account(&mut vault, &store, "a");
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(a),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+    };
+    let (state, effects) = reduce(unlocked, ctrl(KeyCode::Char('n')));
+    assert!(
+        effects.is_empty(),
+        "top-level `Ctrl-N` must not emit effects"
+    );
+    match state {
+        AppState::Unlocked {
+            focus,
+            modal,
+            selected,
+            ..
+        } => {
+            assert_eq!(
+                focus,
+                Focus::List,
+                "top-level `Ctrl-N` must not flip List ↔ Search focus"
+            );
+            assert!(modal.is_none(), "top-level `Ctrl-N` must not open a modal");
+            assert_eq!(
+                selected,
+                Some(a),
+                "top-level `Ctrl-N` must not move the list selection"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_ctrl_p_at_top_level_list_focus_does_not_flip_focus() {
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let a = add_totp_account(&mut vault, &store, "a");
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(a),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+    };
+    let (state, effects) = reduce(unlocked, ctrl(KeyCode::Char('p')));
+    assert!(
+        effects.is_empty(),
+        "top-level `Ctrl-P` must not emit effects"
+    );
+    match state {
+        AppState::Unlocked {
+            focus,
+            modal,
+            selected,
+            ..
+        } => {
+            assert_eq!(
+                focus,
+                Focus::List,
+                "top-level `Ctrl-P` must not flip List ↔ Search focus"
+            );
+            assert!(modal.is_none(), "top-level `Ctrl-P` must not open a modal");
+            assert_eq!(
+                selected,
+                Some(a),
+                "top-level `Ctrl-P` must not move the list selection"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_ctrl_n_at_top_level_search_focus_does_not_flip_focus() {
+    // `Ctrl-N` on the search bar must not pre-empt `tui-input` and
+    // flip focus back to the list — that would invert the contract
+    // that Ctrl-N is a modal-LOCAL Tab alias. The search-focus
+    // pass-through list explicitly omits `Ctrl-N` / `Ctrl-P`.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let a = add_totp_account(&mut vault, &store, "a");
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::from("a"),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(a),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::Search,
+        status_line: None,
+    };
+    let (state, effects) = reduce(unlocked, ctrl(KeyCode::Char('n')));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked {
+            focus,
+            search_query,
+            modal,
+            ..
+        } => {
+            assert_eq!(
+                focus,
+                Focus::Search,
+                "top-level `Ctrl-N` must not flip search focus to list"
+            );
+            assert_eq!(
+                search_query, "a",
+                "top-level `Ctrl-N` must not mutate the search query"
+            );
+            assert!(modal.is_none());
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_ctrl_p_at_top_level_search_focus_does_not_flip_focus() {
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let a = add_totp_account(&mut vault, &store, "a");
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::from("a"),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(a),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::Search,
+        status_line: None,
+    };
+    let (state, effects) = reduce(unlocked, ctrl(KeyCode::Char('p')));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked {
+            focus,
+            search_query,
+            modal,
+            ..
+        } => {
+            assert_eq!(
+                focus,
+                Focus::Search,
+                "top-level `Ctrl-P` must not flip search focus to list"
+            );
+            assert_eq!(
+                search_query, "a",
+                "top-level `Ctrl-P` must not mutate the search query"
+            );
+            assert!(modal.is_none());
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
     }
 }

@@ -665,9 +665,17 @@ end-to-end.
   search field.
 - [x] Empty filtered set: every list-navigation key including the
   chords is a silent no-op.
-- [ ] `Ctrl-N` / `Ctrl-P` inside modals advance / retreat focus the
-  same as `Tab` / `Shift-Tab`, have no effect on a post-success counts
-  panel, and do not override `↑` / `↓` spinner adjustments.
+- [x] `Ctrl-N` / `Ctrl-P` inside modals advance / retreat focus the
+  same as `Tab` / `Shift-Tab` — for every modal variant, symmetry
+  with `Tab` / `Shift-Tab` is locked in, and at the top level the
+  pair is unbound so they cannot leak into List ↔ Search focus
+  cycling.
+- [ ] `Ctrl-N` / `Ctrl-P` inside modals have no effect on a
+  post-success counts panel — lands alongside the counts panel
+  payload (Add / Import / Export).
+- [ ] `Ctrl-N` / `Ctrl-P` inside modals do not override `↑` / `↓`
+  spinner adjustments — lands alongside the spinner payload
+  (Settings).
 
 ### Search (`tests/search_tests.rs`)
 

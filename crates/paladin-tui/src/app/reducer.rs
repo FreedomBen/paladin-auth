@@ -405,9 +405,18 @@ fn reduce_unlocked_input(mut state: AppState, key: &KeyEvent) -> (AppState, Vec<
         // out (mirroring the existing `Ctrl-Shift-G is unbound`
         // convention) — only the bare Ctrl chord engages. With a
         // modal open, these keys mirror the modal-routing no-op of
-        // `PgDn` / `PgUp`. All other Ctrl/Alt-modifier presses are
-        // unbound at this slice but still clear any pending chord
-        // state — chord commitment requires a bare second press.
+        // `PgDn` / `PgUp`. `Ctrl-N` / `Ctrl-P` are the modal-LOCAL
+        // aliases of `Tab` / `Shift-Tab` per
+        // `IMPLEMENTATION_PLAN_03_TUI.md` "Vim-style navigation":
+        // they are unbound at the top level (silent no-ops in this
+        // branch so they cannot flip List ↔ Search focus) and, with
+        // a modal open, they produce the same observable no-op as
+        // `Tab` / `Shift-Tab` produce against the modal trap — when
+        // modal payloads grow focusable fields, both pairs must
+        // dispatch through the same modal-local focus-cycling
+        // handler. All other Ctrl/Alt-modifier presses are unbound
+        // at this slice but still clear any pending chord state —
+        // chord commitment requires a bare second press.
         *pending_chord_leader = None;
         if modal.is_none() && key.modifiers == KeyModifiers::CONTROL {
             match key.code {
@@ -800,8 +809,12 @@ fn recenter_viewport(mut state: AppState) -> (AppState, Vec<Effect>) {
 /// the same direction. `search_query` is untouched so an active
 /// query survives the swap. Modal-open is filtered out by the
 /// modal-trap guard in [`reduce_unlocked_input`] before this helper
-/// is reached — the modal-local `Ctrl-N` / `Ctrl-P` aliasing of
-/// `Tab` / `Shift-Tab` lands with the modal-navigation slice.
+/// is reached — and `Ctrl-N` / `Ctrl-P` are the modal-LOCAL aliases
+/// of `Tab` / `Shift-Tab`, so they never reach this helper either
+/// (they fall through the Ctrl branch as silent no-ops at the top
+/// level and through the modal trap when a modal is open). Once
+/// modal payloads grow focusable fields, both pairs must dispatch
+/// through the same modal-local focus-cycling handler.
 fn toggle_unlocked_focus(mut state: AppState) -> (AppState, Vec<Effect>) {
     if let AppState::Unlocked { focus, .. } = &mut state {
         *focus = match *focus {
