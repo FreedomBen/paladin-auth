@@ -886,20 +886,23 @@ end-to-end.
 
 ### Vault modes and startup (`tests/reducer_tests.rs`)
 
-- [ ] Plaintext vault opens directly to the list (no unlock screen).
-- [ ] Encrypted vault opens to the unlock screen.
-- [ ] Encrypted vault wrong passphrase shows inline `decrypt_failed`
+- [x] Plaintext vault opens directly to the list (no unlock screen).
+- [x] Encrypted vault opens to the unlock screen.
+- [x] Encrypted vault wrong passphrase shows inline `decrypt_failed`
   and stays on the unlock screen.
-- [ ] Encrypted vault correct passphrase advances to the list.
-- [ ] Missing vault opens the missing-vault screen and does not create
+- [x] Encrypted vault correct passphrase advances to the list.
+- [x] Missing vault opens the missing-vault screen and does not create
   or mutate files.
 - [ ] Vault-path resolution failures from `default_vault_path` open
   the non-mutating startup-error screen and do not create or mutate
-  files.
-- [ ] Non-`decrypt_failed` errors from `inspect` / `open` (including
+  files. (Deferred: `build_initial_state` calls `default_vault_path`
+  directly with no injectable resolver, and the resolver only fails
+  when `ProjectDirs::from` returns `None` — not portably forceable
+  from a test. Lands alongside a refactor that takes a resolver.)
+- [x] Non-`decrypt_failed` errors from `inspect` / `open` (including
   `unsafe_permissions`) open the non-mutating startup-error screen
   and do not create or mutate files.
-- [ ] `unsafe_permissions` rendering uses the `Some(text)` from
+- [x] `unsafe_permissions` rendering uses the `Some(text)` from
   `format_unsafe_permissions` verbatim.
 
 ### Insta snapshots (`tests/snapshots/`)

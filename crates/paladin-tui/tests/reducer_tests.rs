@@ -212,6 +212,54 @@ fn plaintext_vault_inspect_returns_none_signaling_caller_to_open() {
 }
 
 #[test]
+fn missing_vault_inspect_does_not_create_or_mutate_files() {
+    // Bullet: "Missing vault opens the missing-vault screen and does
+    // not create or mutate files." `missing_vault_inspect_yields_…`
+    // above drives the state transition with a synthetic
+    // `VaultStatus::Missing`; this test exercises the real
+    // `paladin_core::inspect` path on a non-existent file inside a
+    // sandboxed tempdir and asserts that neither `inspect` nor the
+    // subsequent `decide_state_from_inspect` step creates the vault
+    // file.
+    let tmp = test_tempdir();
+    let path = tmp.path().join("paladin-test-nonexistent.bin");
+    assert!(
+        !path.exists(),
+        "test fixture must start with no vault file at {path:?}"
+    );
+
+    let inspect = paladin_core::inspect(&path);
+    assert!(
+        matches!(inspect, Ok(VaultStatus::Missing)),
+        "missing path must inspect as VaultStatus::Missing, got {inspect:?}"
+    );
+
+    let state = decide_state_from_inspect(&path, inspect);
+    match state {
+        Some(AppState::MissingVault { path: p }) => assert_eq!(p, path),
+        other => panic!("expected MissingVault, got {other:?}"),
+    }
+
+    assert!(
+        !path.exists(),
+        "missing-vault entry point must not create the vault file at {path:?}"
+    );
+
+    // The parent directory was created by the tempdir; the
+    // missing-vault path must not leak any sibling artifacts
+    // (`.bak`, `.tmp`, partial writes) either.
+    let leaked: Vec<_> = fs::read_dir(tmp.path())
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|e| e.file_name())
+        .collect();
+    assert!(
+        leaked.is_empty(),
+        "missing-vault entry point must not create sibling files, found {leaked:?}"
+    );
+}
+
+#[test]
 fn inspect_error_yields_startup_error_with_rendered_message_and_no_file_mutation() {
     // Drive a real `invalid_header` (or comparable) error by inspecting a
     // file with garbage bytes — verifies bullet "Non-`decrypt_failed`
