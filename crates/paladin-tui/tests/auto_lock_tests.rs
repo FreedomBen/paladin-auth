@@ -106,6 +106,7 @@ fn input_in_encrypted_unlocked_with_auto_lock_rebases_idle_deadline_on_event_at(
         selected: None,
         pending_chord_leader: None,
         viewport_height: 0,
+        viewport_offset: 0,
     };
 
     let t1 = t0 + Duration::from_secs(123);
@@ -152,6 +153,7 @@ fn input_in_plaintext_unlocked_keeps_idle_deadline_none_even_if_auto_lock_enable
         selected: None,
         pending_chord_leader: None,
         viewport_height: 0,
+        viewport_offset: 0,
     };
 
     let (next, effects) = reduce(state, key_input_at(KeyCode::Char('x'), Instant::now()));
@@ -184,6 +186,7 @@ fn input_in_encrypted_unlocked_with_auto_lock_disabled_keeps_idle_deadline_none(
         selected: None,
         pending_chord_leader: None,
         viewport_height: 0,
+        viewport_offset: 0,
     };
 
     let (next, effects) = reduce(state, key_input_at(KeyCode::Char('x'), Instant::now()));
@@ -217,6 +220,7 @@ fn non_key_input_in_encrypted_unlocked_also_rebases_idle_deadline() {
         selected: None,
         pending_chord_leader: None,
         viewport_height: 0,
+        viewport_offset: 0,
     };
 
     let t1 = t0 + Duration::from_secs(45);
@@ -277,6 +281,7 @@ fn tick_after_deadline_locks_unlocked_state() {
         selected: None,
         pending_chord_leader: None,
         viewport_height: 0,
+        viewport_offset: 0,
     };
 
     let now = deadline + Duration::from_millis(1);
@@ -317,6 +322,7 @@ fn tick_after_deadline_lock_discards_unlocked_search_query() {
         selected: None,
         pending_chord_leader: None,
         viewport_height: 0,
+        viewport_offset: 0,
     };
 
     let now = deadline + Duration::from_millis(1);
@@ -368,6 +374,7 @@ fn tick_after_deadline_lock_discards_unlocked_hotp_reveal() {
         selected: None,
         pending_chord_leader: None,
         viewport_height: 0,
+        viewport_offset: 0,
     };
 
     let now = idle_deadline + Duration::from_millis(1);
@@ -420,6 +427,7 @@ fn tick_after_deadline_lock_discards_unlocked_modal() {
         selected: None,
         pending_chord_leader: None,
         viewport_height: 0,
+        viewport_offset: 0,
     };
 
     let now = deadline + Duration::from_millis(1);
@@ -494,6 +502,7 @@ fn tick_after_deadline_lock_carries_pending_clipboard_clear() {
         selected: None,
         pending_chord_leader: None,
         viewport_height: 0,
+        viewport_offset: 0,
     };
 
     let now = idle_deadline + Duration::from_millis(1);
@@ -547,6 +556,7 @@ fn tick_after_deadline_lock_with_no_pending_clipboard_clear_yields_none() {
         selected: None,
         pending_chord_leader: None,
         viewport_height: 0,
+        viewport_offset: 0,
     };
 
     let now = deadline + Duration::from_millis(1);
@@ -773,6 +783,7 @@ fn tick_exactly_at_deadline_locks_unlocked_state() {
         selected: None,
         pending_chord_leader: None,
         viewport_height: 0,
+        viewport_offset: 0,
     };
 
     let (next, effects) = reduce(state, tick_at(deadline));
@@ -804,6 +815,7 @@ fn tick_before_deadline_keeps_unlocked_state() {
         selected: None,
         pending_chord_leader: None,
         viewport_height: 0,
+        viewport_offset: 0,
     };
 
     let now = deadline
@@ -848,6 +860,7 @@ fn tick_with_no_deadline_keeps_unlocked_state() {
         selected: None,
         pending_chord_leader: None,
         viewport_height: 0,
+        viewport_offset: 0,
     };
 
     let (next, effects) = reduce(state, tick_at(Instant::now()));

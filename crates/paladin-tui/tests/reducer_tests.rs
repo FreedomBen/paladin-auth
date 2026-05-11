@@ -409,6 +409,7 @@ fn ctrl_c_on_unlocked_quits() {
         selected: None,
         pending_chord_leader: None,
         viewport_height: 0,
+        viewport_offset: 0,
     };
     let (_, effects) = reduce(unlocked, ctrl(KeyCode::Char('c')));
     assert!(matches!(effects.as_slice(), [Effect::Quit]));
@@ -1276,6 +1277,7 @@ fn pressing_a_on_unlocked_with_no_modal_open_opens_add_modal() {
         selected: None,
         pending_chord_leader: None,
         viewport_height: 0,
+        viewport_offset: 0,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Char('a')));
     assert!(effects.is_empty(), "opening a modal must not emit effects");
@@ -1311,6 +1313,7 @@ fn pressing_a_on_unlocked_with_modal_already_open_does_not_replace_the_modal() {
         selected: None,
         pending_chord_leader: None,
         viewport_height: 0,
+        viewport_offset: 0,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Char('a')));
     assert!(
@@ -1349,6 +1352,7 @@ fn pressing_ctrl_a_on_unlocked_does_not_open_add_modal() {
         selected: None,
         pending_chord_leader: None,
         viewport_height: 0,
+        viewport_offset: 0,
     };
     let (state, effects) = reduce(unlocked, ctrl(KeyCode::Char('a')));
     assert!(effects.is_empty(), "Ctrl-A is unbound; no effects");
@@ -1377,6 +1381,7 @@ fn fresh_plaintext_unlocked(tmp: &tempfile::TempDir) -> AppState {
         selected: None,
         pending_chord_leader: None,
         viewport_height: 0,
+        viewport_offset: 0,
     }
 }
 
@@ -1484,6 +1489,7 @@ fn assert_esc_closes_modal(opened: Modal) {
         selected: None,
         pending_chord_leader: None,
         viewport_height: 0,
+        viewport_offset: 0,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Esc));
     assert!(
@@ -1599,6 +1605,7 @@ fn pressing_q_on_unlocked_with_modal_open_does_not_quit() {
         selected: None,
         pending_chord_leader: None,
         viewport_height: 0,
+        viewport_offset: 0,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Char('q')));
     assert!(
@@ -1665,6 +1672,7 @@ fn unlocked_with_three_accounts(tmp: &tempfile::TempDir) -> (AppState, [AccountI
         selected: Some(a),
         pending_chord_leader: None,
         viewport_height: 0,
+        viewport_offset: 0,
     };
     (state, [a, b, c])
 }
@@ -1724,6 +1732,7 @@ fn pressing_down_arrow_at_end_of_list_clamps() {
         selected: Some(b),
         pending_chord_leader: None,
         viewport_height: 0,
+        viewport_offset: 0,
     };
     let (state, _) = reduce(unlocked, key(KeyCode::Down));
     match state {
@@ -1754,6 +1763,7 @@ fn pressing_up_arrow_on_unlocked_moves_selection_to_previous_account() {
         selected: Some(b),
         pending_chord_leader: None,
         viewport_height: 0,
+        viewport_offset: 0,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Up));
     assert!(effects.is_empty());
@@ -1833,6 +1843,7 @@ fn pressing_down_arrow_with_modal_open_does_not_move_selection() {
         selected: Some(a),
         pending_chord_leader: None,
         viewport_height: 0,
+        viewport_offset: 0,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Down));
     assert!(effects.is_empty());
@@ -1884,6 +1895,7 @@ fn pressing_k_mirrors_up_arrow() {
         selected: Some(b),
         pending_chord_leader: None,
         viewport_height: 0,
+        viewport_offset: 0,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Char('k')));
     assert!(effects.is_empty());
@@ -1935,6 +1947,7 @@ fn pressing_j_with_modal_open_does_not_move_selection() {
         selected: Some(a),
         pending_chord_leader: None,
         viewport_height: 0,
+        viewport_offset: 0,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Char('j')));
     assert!(effects.is_empty());
@@ -1988,6 +2001,7 @@ fn pressing_home_on_unlocked_jumps_to_first_account() {
         selected: Some(c),
         pending_chord_leader: None,
         viewport_height: 0,
+        viewport_offset: 0,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Home));
     assert!(effects.is_empty(), "navigation must not emit effects");
@@ -2051,6 +2065,7 @@ fn pressing_end_at_last_account_is_a_no_op() {
         selected: Some(b),
         pending_chord_leader: None,
         viewport_height: 0,
+        viewport_offset: 0,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::End));
     assert!(effects.is_empty());
@@ -2113,6 +2128,7 @@ fn pressing_home_with_modal_open_does_not_move_selection() {
         selected: Some(c),
         pending_chord_leader: None,
         viewport_height: 0,
+        viewport_offset: 0,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Home));
     assert!(effects.is_empty());
@@ -2149,6 +2165,7 @@ fn pressing_end_with_modal_open_does_not_move_selection() {
         selected: Some(a),
         pending_chord_leader: None,
         viewport_height: 0,
+        viewport_offset: 0,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::End));
     assert!(effects.is_empty());
@@ -2196,6 +2213,7 @@ fn pressing_ctrl_home_does_not_move_selection() {
             selected: Some(c),
             pending_chord_leader: None,
             viewport_height: 0,
+            viewport_offset: 0,
         },
         other => panic!("expected Unlocked, got {other:?}"),
     };
@@ -2299,6 +2317,7 @@ fn pressing_shift_g_at_last_account_is_a_no_op() {
         selected: Some(b),
         pending_chord_leader: None,
         viewport_height: 0,
+        viewport_offset: 0,
     };
     let (state, _) = reduce(unlocked, key(KeyCode::Char('G')));
     match state {
@@ -2345,6 +2364,7 @@ fn pressing_shift_g_with_modal_open_does_not_move_selection() {
         selected: Some(a),
         pending_chord_leader: None,
         viewport_height: 0,
+        viewport_offset: 0,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Char('G')));
     assert!(effects.is_empty());
@@ -2420,6 +2440,7 @@ fn pressing_lowercase_g_on_unlocked_does_not_move_selection() {
             selected: Some(c),
             pending_chord_leader: None,
             viewport_height: 0,
+            viewport_offset: 0,
         },
         other => panic!("expected Unlocked, got {other:?}"),
     };
@@ -2483,6 +2504,7 @@ fn pressing_lowercase_g_on_unlocked_sets_pending_chord_leader() {
             selected: Some(c),
             pending_chord_leader: None,
             viewport_height: 0,
+            viewport_offset: 0,
         },
         other => panic!("expected Unlocked, got {other:?}"),
     };
@@ -2529,6 +2551,7 @@ fn pressing_gg_on_unlocked_jumps_to_first_account() {
             selected: Some(c),
             pending_chord_leader: None,
             viewport_height: 0,
+            viewport_offset: 0,
         },
         other => panic!("expected Unlocked, got {other:?}"),
     };
@@ -2668,6 +2691,7 @@ fn pressing_g_with_modal_open_does_not_set_chord_leader() {
         selected: Some(a),
         pending_chord_leader: None,
         viewport_height: 0,
+        viewport_offset: 0,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Char('g')));
     assert!(effects.is_empty());
@@ -2700,6 +2724,7 @@ fn pressing_gg_on_empty_vault_is_silent_noop() {
         selected: None,
         pending_chord_leader: None,
         viewport_height: 0,
+        viewport_offset: 0,
     };
     let (state, _) = reduce(unlocked, key(KeyCode::Char('g')));
     let (state, effects) = reduce(state, key(KeyCode::Char('g')));
@@ -2776,6 +2801,7 @@ fn tick_between_g_presses_preserves_pending_chord_leader() {
             selected: Some(c),
             pending_chord_leader: None,
             viewport_height: 0,
+            viewport_offset: 0,
         },
         other => panic!("expected Unlocked, got {other:?}"),
     };
@@ -2857,6 +2883,7 @@ fn unlocked_with_n_accounts(
         selected,
         pending_chord_leader: None,
         viewport_height,
+        viewport_offset: 0,
     };
     (state, ids)
 }
@@ -2948,6 +2975,7 @@ fn pressing_page_up_on_unlocked_moves_selection_by_viewport_height() {
         selected: Some(d),
         pending_chord_leader: None,
         viewport_height: 2,
+        viewport_offset: 0,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::PageUp));
     assert!(effects.is_empty());
@@ -2983,6 +3011,7 @@ fn pressing_page_down_clamps_to_last_when_fewer_rows_remain() {
         selected: Some(c),
         pending_chord_leader: None,
         viewport_height: 3,
+        viewport_offset: 0,
     };
     let (state, _) = reduce(unlocked, key(KeyCode::PageDown));
     match state {
@@ -3017,6 +3046,7 @@ fn pressing_page_up_clamps_to_first_when_fewer_rows_remain() {
         selected: Some(b),
         pending_chord_leader: None,
         viewport_height: 3,
+        viewport_offset: 0,
     };
     let (state, _) = reduce(unlocked, key(KeyCode::PageUp));
     match state {
@@ -3067,6 +3097,7 @@ fn pressing_page_up_with_viewport_height_zero_is_a_no_op() {
         selected: Some(b),
         pending_chord_leader: None,
         viewport_height: 0,
+        viewport_offset: 0,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::PageUp));
     assert!(effects.is_empty());
@@ -3132,6 +3163,7 @@ fn pressing_page_down_with_modal_open_does_not_move_selection() {
         selected: Some(a),
         pending_chord_leader: None,
         viewport_height: 2,
+        viewport_offset: 0,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::PageDown));
     assert!(effects.is_empty());
@@ -3240,6 +3272,7 @@ fn pressing_ctrl_b_on_unlocked_moves_selection_by_viewport_height() {
         selected: Some(d),
         pending_chord_leader: None,
         viewport_height: 2,
+        viewport_offset: 0,
     };
     let (state, effects) = reduce(unlocked, ctrl(KeyCode::Char('b')));
     assert!(effects.is_empty());
@@ -3275,6 +3308,7 @@ fn pressing_ctrl_f_clamps_to_last_when_fewer_rows_remain() {
         selected: Some(c),
         pending_chord_leader: None,
         viewport_height: 3,
+        viewport_offset: 0,
     };
     let (state, _) = reduce(unlocked, ctrl(KeyCode::Char('f')));
     match state {
@@ -3309,6 +3343,7 @@ fn pressing_ctrl_b_clamps_to_first_when_fewer_rows_remain() {
         selected: Some(b),
         pending_chord_leader: None,
         viewport_height: 3,
+        viewport_offset: 0,
     };
     let (state, _) = reduce(unlocked, ctrl(KeyCode::Char('b')));
     match state {
@@ -3359,6 +3394,7 @@ fn pressing_ctrl_b_with_viewport_height_zero_is_a_no_op() {
         selected: Some(b),
         pending_chord_leader: None,
         viewport_height: 0,
+        viewport_offset: 0,
     };
     let (state, effects) = reduce(unlocked, ctrl(KeyCode::Char('b')));
     assert!(effects.is_empty());
@@ -3424,6 +3460,7 @@ fn pressing_ctrl_f_with_modal_open_does_not_move_selection() {
         selected: Some(a),
         pending_chord_leader: None,
         viewport_height: 2,
+        viewport_offset: 0,
     };
     let (state, effects) = reduce(unlocked, ctrl(KeyCode::Char('f')));
     assert!(effects.is_empty());
@@ -3460,6 +3497,7 @@ fn pressing_ctrl_b_with_modal_open_does_not_move_selection() {
         selected: Some(c),
         pending_chord_leader: None,
         viewport_height: 2,
+        viewport_offset: 0,
     };
     let (state, effects) = reduce(unlocked, ctrl(KeyCode::Char('b')));
     assert!(effects.is_empty());
@@ -3525,6 +3563,7 @@ fn pressing_ctrl_b_clears_pending_chord_leader() {
         selected: Some(d),
         pending_chord_leader: None,
         viewport_height: 2,
+        viewport_offset: 0,
     };
     let (state, _) = reduce(unlocked, key(KeyCode::Char('g')));
     let (state, _) = reduce(state, ctrl(KeyCode::Char('b')));
@@ -3577,6 +3616,7 @@ fn pressing_ctrl_d_on_unlocked_moves_selection_by_half_viewport_height() {
         selected: Some(a),
         pending_chord_leader: None,
         viewport_height: 4,
+        viewport_offset: 0,
     };
     let (state, effects) = reduce(unlocked, ctrl(KeyCode::Char('d')));
     assert!(effects.is_empty(), "navigation must not emit effects");
@@ -3613,6 +3653,7 @@ fn pressing_ctrl_u_on_unlocked_moves_selection_by_half_viewport_height() {
         selected: Some(e),
         pending_chord_leader: None,
         viewport_height: 4,
+        viewport_offset: 0,
     };
     let (state, effects) = reduce(unlocked, ctrl(KeyCode::Char('u')));
     assert!(effects.is_empty());
@@ -3648,6 +3689,7 @@ fn ctrl_d_half_page_uses_integer_division_on_odd_viewport_height() {
         selected: Some(a),
         pending_chord_leader: None,
         viewport_height: 5,
+        viewport_offset: 0,
     };
     let (state, _) = reduce(unlocked, ctrl(KeyCode::Char('d')));
     match state {
@@ -3683,6 +3725,7 @@ fn pressing_ctrl_d_clamps_to_last_when_fewer_rows_remain() {
         selected: Some(d),
         pending_chord_leader: None,
         viewport_height: 4,
+        viewport_offset: 0,
     };
     let (state, _) = reduce(unlocked, ctrl(KeyCode::Char('d')));
     match state {
@@ -3718,6 +3761,7 @@ fn pressing_ctrl_u_clamps_to_first_when_fewer_rows_remain() {
         selected: Some(b),
         pending_chord_leader: None,
         viewport_height: 4,
+        viewport_offset: 0,
     };
     let (state, _) = reduce(unlocked, ctrl(KeyCode::Char('u')));
     match state {
@@ -3766,6 +3810,7 @@ fn pressing_ctrl_u_with_viewport_height_zero_is_a_no_op() {
         selected: Some(b),
         pending_chord_leader: None,
         viewport_height: 0,
+        viewport_offset: 0,
     };
     let (state, effects) = reduce(unlocked, ctrl(KeyCode::Char('u')));
     assert!(effects.is_empty());
@@ -3816,6 +3861,7 @@ fn pressing_ctrl_u_with_viewport_height_one_is_a_no_op() {
         selected: Some(b),
         pending_chord_leader: None,
         viewport_height: 1,
+        viewport_offset: 0,
     };
     let (state, effects) = reduce(unlocked, ctrl(KeyCode::Char('u')));
     assert!(effects.is_empty());
@@ -3878,6 +3924,7 @@ fn pressing_ctrl_d_with_modal_open_does_not_move_selection() {
         selected: Some(a),
         pending_chord_leader: None,
         viewport_height: 4,
+        viewport_offset: 0,
     };
     let (state, effects) = reduce(unlocked, ctrl(KeyCode::Char('d')));
     assert!(effects.is_empty());
@@ -3914,6 +3961,7 @@ fn pressing_ctrl_u_with_modal_open_does_not_move_selection() {
         selected: Some(c),
         pending_chord_leader: None,
         viewport_height: 4,
+        viewport_offset: 0,
     };
     let (state, effects) = reduce(unlocked, ctrl(KeyCode::Char('u')));
     assert!(effects.is_empty());
@@ -3952,6 +4000,7 @@ fn pressing_ctrl_d_clears_pending_chord_leader() {
         selected: Some(a),
         pending_chord_leader: None,
         viewport_height: 4,
+        viewport_offset: 0,
     };
     let (state, _) = reduce(unlocked, key(KeyCode::Char('g')));
     let (state, _) = reduce(state, ctrl(KeyCode::Char('d')));
@@ -3996,6 +4045,7 @@ fn pressing_ctrl_u_clears_pending_chord_leader() {
         selected: Some(e),
         pending_chord_leader: None,
         viewport_height: 4,
+        viewport_offset: 0,
     };
     let (state, _) = reduce(unlocked, key(KeyCode::Char('g')));
     let (state, _) = reduce(state, ctrl(KeyCode::Char('u')));
@@ -4015,6 +4065,522 @@ fn pressing_ctrl_u_clears_pending_chord_leader() {
                 "Ctrl-U must still retreat after clearing the chord"
             );
         }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// `zz` two-press chord — vim recenter (place selected row in the
+// middle of the viewport).
+//
+// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Vim-style navigation:
+//   "`zz` two-press chord recenters the viewport on the selected row."
+//  + "Pending-leader chord state is held by the reducer, committed on
+//    the matching second press, and cleared by any non-matching key,
+//    focus change, modal open, `Esc`, or auto-lock.")
+//
+// Slice covered: lower-case `z` on `Unlocked` with no modal open sets
+// `pending_chord_leader = Some(ChordLeader::Z)` on first press and
+// commits a recenter on the matching second press (clearing the
+// pending state). The recenter sets
+// `viewport_offset = sel_pos.saturating_sub(viewport_height / 2)`
+// (integer division), where `sel_pos` is the position of the
+// selected account in `Vault::iter()`. A non-matching key, an `Esc`,
+// a modal open, any Ctrl/Alt-modifier press, and auto-lock all clear
+// the pending state. `g` after `z` and `z` after `g` cross-clear the
+// other leader and set their own (mixed chords do not commit).
+// Empty filtered set, `viewport_height = 0`, and an open modal are
+// all silent no-ops. `Tick` between the two presses preserves the
+// pending state (vim's `nottimeout` semantics).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn pressing_lowercase_z_on_unlocked_sets_pending_chord_leader_z() {
+    // First `z` is the chord leader: it must set
+    // `pending_chord_leader = Some(ChordLeader::Z)` and leave the
+    // viewport unchanged.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let _a = add_totp_account(&mut vault, &store, "a");
+    let _b = add_totp_account(&mut vault, &store, "b");
+    let c = add_totp_account(&mut vault, &store, "c");
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(c),
+        pending_chord_leader: None,
+        viewport_height: 4,
+        viewport_offset: 0,
+    };
+    let (state, effects) = reduce(unlocked, key(KeyCode::Char('z')));
+    assert!(effects.is_empty(), "chord leader must not emit effects");
+    match state {
+        AppState::Unlocked {
+            pending_chord_leader,
+            viewport_offset,
+            ..
+        } => {
+            assert_eq!(
+                pending_chord_leader,
+                Some(ChordLeader::Z),
+                "first `z` must set pending chord leader to Z"
+            );
+            assert_eq!(
+                viewport_offset, 0,
+                "first `z` is the chord leader and must not move the viewport"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_zz_recenters_viewport_on_selected_row() {
+    // Five-row vault, viewport_height = 4 (half = 2), selection at
+    // row 3 → target offset = 3 - 2 = 1 (selected sits in viewport
+    // middle).
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let _a = add_totp_account(&mut vault, &store, "a");
+    let _b = add_totp_account(&mut vault, &store, "b");
+    let _c = add_totp_account(&mut vault, &store, "c");
+    let d = add_totp_account(&mut vault, &store, "d");
+    let _e = add_totp_account(&mut vault, &store, "e");
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(d),
+        pending_chord_leader: None,
+        viewport_height: 4,
+        viewport_offset: 0,
+    };
+    let (state, _) = reduce(unlocked, key(KeyCode::Char('z')));
+    let (state, effects) = reduce(state, key(KeyCode::Char('z')));
+    assert!(effects.is_empty(), "chord commit must not emit effects");
+    match state {
+        AppState::Unlocked {
+            viewport_offset,
+            pending_chord_leader,
+            ..
+        } => {
+            assert_eq!(
+                viewport_offset, 1,
+                "`zz` must set viewport_offset = sel_pos.saturating_sub(viewport_height / 2)"
+            );
+            assert_eq!(
+                pending_chord_leader, None,
+                "`zz` commit must clear pending chord state"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_zz_uses_integer_division_on_odd_viewport_height() {
+    // viewport_height = 5 (half = 2 by integer division). Selection
+    // at row 4 → target offset = 4 - 2 = 2.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let _a = add_totp_account(&mut vault, &store, "a");
+    let _b = add_totp_account(&mut vault, &store, "b");
+    let _c = add_totp_account(&mut vault, &store, "c");
+    let _d = add_totp_account(&mut vault, &store, "d");
+    let e = add_totp_account(&mut vault, &store, "e");
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(e),
+        pending_chord_leader: None,
+        viewport_height: 5,
+        viewport_offset: 0,
+    };
+    let (state, _) = reduce(unlocked, key(KeyCode::Char('z')));
+    let (state, _) = reduce(state, key(KeyCode::Char('z')));
+    match state {
+        AppState::Unlocked {
+            viewport_offset, ..
+        } => assert_eq!(
+            viewport_offset, 2,
+            "`zz` with viewport_height = 5 must use integer-division half"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_zz_near_top_clamps_offset_to_zero() {
+    // Selection at row 1, viewport_height = 4 (half = 2): target
+    // would be 1 - 2 = -1 → saturating_sub clamps to 0.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let _a = add_totp_account(&mut vault, &store, "a");
+    let b = add_totp_account(&mut vault, &store, "b");
+    let _c = add_totp_account(&mut vault, &store, "c");
+    let _d = add_totp_account(&mut vault, &store, "d");
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(b),
+        pending_chord_leader: None,
+        viewport_height: 4,
+        viewport_offset: 3,
+    };
+    let (state, _) = reduce(unlocked, key(KeyCode::Char('z')));
+    let (state, _) = reduce(state, key(KeyCode::Char('z')));
+    match state {
+        AppState::Unlocked {
+            viewport_offset, ..
+        } => assert_eq!(
+            viewport_offset, 0,
+            "`zz` near the top must clamp viewport_offset to 0"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_zz_with_viewport_height_zero_is_a_no_op() {
+    // viewport_height = 0 (pre-resize seed): half is 0, but
+    // recenter on a zero-height viewport is undefined. Preserve
+    // viewport_offset unchanged.
+    let tmp = secure_tempdir();
+    let (state, _ids) = unlocked_with_n_accounts(&tmp, 3, 0);
+    let (state, _) = reduce(state, key(KeyCode::Char('z')));
+    let (state, _) = reduce(state, key(KeyCode::Char('z')));
+    match state {
+        AppState::Unlocked {
+            viewport_offset,
+            pending_chord_leader,
+            ..
+        } => {
+            assert_eq!(
+                viewport_offset, 0,
+                "`zz` with viewport_height = 0 must not move the viewport"
+            );
+            assert_eq!(
+                pending_chord_leader, None,
+                "`zz` commit must still clear the pending chord"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_zz_with_empty_vault_is_silent_no_op() {
+    // Empty filtered set: every list-navigation key including the
+    // chords is a silent no-op. viewport_offset preserved.
+    let tmp = secure_tempdir();
+    let unlocked = fresh_plaintext_unlocked(&tmp);
+    let (state, _) = reduce(unlocked, key(KeyCode::Char('z')));
+    let (state, _) = reduce(state, key(KeyCode::Char('z')));
+    match state {
+        AppState::Unlocked {
+            viewport_offset,
+            pending_chord_leader,
+            selected: None,
+            ..
+        } => {
+            assert_eq!(
+                viewport_offset, 0,
+                "`zz` on empty vault must not move the viewport"
+            );
+            assert_eq!(
+                pending_chord_leader, None,
+                "`zz` commit must still clear the pending chord"
+            );
+        }
+        AppState::Unlocked { selected, .. } => {
+            panic!("expected selected=None on empty vault, got {selected:?}")
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_z_with_modal_open_does_not_set_chord_leader() {
+    // While a modal is open the chord never engages — bare-letter
+    // input belongs to the modal.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let a = add_totp_account(&mut vault, &store, "a");
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Settings),
+        selected: Some(a),
+        pending_chord_leader: None,
+        viewport_height: 4,
+        viewport_offset: 0,
+    };
+    let (state, effects) = reduce(unlocked, key(KeyCode::Char('z')));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked {
+            pending_chord_leader,
+            viewport_offset,
+            modal: Some(Modal::Settings),
+            ..
+        } => {
+            assert_eq!(
+                pending_chord_leader, None,
+                "`z` inside a modal must not arm the chord leader"
+            );
+            assert_eq!(
+                viewport_offset, 0,
+                "`z` inside a modal must not move the viewport"
+            );
+        }
+        other => panic!("expected Unlocked with Modal::Settings open, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_z_then_j_clears_chord_and_moves_down() {
+    // Mirrors the `gj` cross-key test: a non-matching key after the
+    // chord leader must clear the pending state AND still execute its
+    // own action.
+    let tmp = secure_tempdir();
+    let (state, [_a, b, _c]) = unlocked_with_three_accounts(&tmp);
+    let (state, _) = reduce(state, key(KeyCode::Char('z')));
+    let (state, effects) = reduce(state, key(KeyCode::Char('j')));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked {
+            selected,
+            pending_chord_leader,
+            ..
+        } => {
+            assert_eq!(
+                pending_chord_leader, None,
+                "non-matching key after `z` must clear the pending chord"
+            );
+            assert_eq!(
+                selected,
+                Some(b),
+                "`zj` from the first row must land on the second row"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_z_after_g_clears_g_and_sets_z_pending() {
+    // Cross-chord: a pending `g` is cleared when `z` is pressed,
+    // and `z` arms its own pending state instead.
+    let tmp = secure_tempdir();
+    let (state, _ids) = unlocked_with_three_accounts(&tmp);
+    let (state, _) = reduce(state, key(KeyCode::Char('g')));
+    let (state, _) = reduce(state, key(KeyCode::Char('z')));
+    match state {
+        AppState::Unlocked {
+            pending_chord_leader,
+            ..
+        } => assert_eq!(
+            pending_chord_leader,
+            Some(ChordLeader::Z),
+            "`z` after pending `g` must clear G and set Z"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_g_after_z_clears_z_and_sets_g_pending() {
+    // Symmetry: a pending `z` is cleared when `g` is pressed, and
+    // `g` arms its own pending state instead.
+    let tmp = secure_tempdir();
+    let (state, _ids) = unlocked_with_three_accounts(&tmp);
+    let (state, _) = reduce(state, key(KeyCode::Char('z')));
+    let (state, _) = reduce(state, key(KeyCode::Char('g')));
+    match state {
+        AppState::Unlocked {
+            pending_chord_leader,
+            ..
+        } => assert_eq!(
+            pending_chord_leader,
+            Some(ChordLeader::G),
+            "`g` after pending `z` must clear Z and set G"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_g_then_z_does_not_commit_gg_or_zz() {
+    // Selection must not jump-to-first (no `gg` commit) and
+    // viewport must not recenter (no `zz` commit) when the two
+    // leaders are interleaved. viewport_offset stays unchanged.
+    let tmp = secure_tempdir();
+    let (state, [_a, _b, c]) = unlocked_with_three_accounts(&tmp);
+    let unlocked = match state {
+        AppState::Unlocked {
+            path,
+            vault,
+            store,
+            search_query,
+            idle_deadline,
+            pending_clipboard_clear,
+            hotp_reveal,
+            modal,
+            ..
+        } => AppState::Unlocked {
+            path,
+            vault,
+            store,
+            search_query,
+            idle_deadline,
+            pending_clipboard_clear,
+            hotp_reveal,
+            modal,
+            selected: Some(c),
+            pending_chord_leader: None,
+            viewport_height: 4,
+            viewport_offset: 0,
+        },
+        other => panic!("expected Unlocked, got {other:?}"),
+    };
+    let (state, _) = reduce(unlocked, key(KeyCode::Char('g')));
+    let (state, _) = reduce(state, key(KeyCode::Char('z')));
+    match state {
+        AppState::Unlocked {
+            selected,
+            viewport_offset,
+            ..
+        } => {
+            assert_eq!(
+                selected,
+                Some(c),
+                "interleaved `gz` must not commit jump-to-first"
+            );
+            assert_eq!(
+                viewport_offset, 0,
+                "interleaved `gz` must not commit recenter"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_esc_after_z_clears_pending_chord_leader() {
+    // Esc clears any pending chord leader (regardless of which
+    // leader it is).
+    let tmp = secure_tempdir();
+    let (state, _ids) = unlocked_with_three_accounts(&tmp);
+    let (state, _) = reduce(state, key(KeyCode::Char('z')));
+    let (state, _) = reduce(state, key(KeyCode::Esc));
+    match state {
+        AppState::Unlocked {
+            pending_chord_leader,
+            ..
+        } => assert_eq!(pending_chord_leader, None, "Esc must clear pending Z chord"),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_ctrl_z_does_not_set_chord_leader() {
+    // Ctrl-Z is unbound at this slice and must not arm the chord
+    // leader. (The Ctrl/Alt guard clears any pending chord state.)
+    let tmp = secure_tempdir();
+    let (state, _ids) = unlocked_with_three_accounts(&tmp);
+    let (state, effects) = reduce(state, ctrl(KeyCode::Char('z')));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked {
+            pending_chord_leader,
+            ..
+        } => assert_eq!(
+            pending_chord_leader, None,
+            "Ctrl-Z must not arm the chord leader"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_modal_opener_after_z_clears_chord_and_opens_modal() {
+    // A modal-opener letter after `z` must clear the pending Z
+    // chord and open the modal — chord state never persists across
+    // modal transitions.
+    let tmp = secure_tempdir();
+    let (state, _ids) = unlocked_with_three_accounts(&tmp);
+    let (state, _) = reduce(state, key(KeyCode::Char('z')));
+    let (state, effects) = reduce(state, key(KeyCode::Char('a')));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked {
+            modal: Some(Modal::Add),
+            pending_chord_leader,
+            ..
+        } => assert_eq!(
+            pending_chord_leader, None,
+            "opening a modal must clear pending Z chord"
+        ),
+        AppState::Unlocked { modal, .. } => {
+            panic!("expected Modal::Add, got {modal:?}")
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn tick_between_z_presses_preserves_pending_chord_leader() {
+    // vim's `nottimeout` semantics: the chord has no time-based
+    // clear; a Tick between presses must leave pending state intact.
+    let tmp = secure_tempdir();
+    let (state, _ids) = unlocked_with_three_accounts(&tmp);
+    let (state, _) = reduce(state, key(KeyCode::Char('z')));
+    let monotonic = Instant::now() + Duration::from_secs(5);
+    let wall_clock = SystemTime::now() + Duration::from_secs(5);
+    let (state, _) = reduce(
+        state,
+        AppEvent::Tick {
+            monotonic,
+            wall_clock,
+        },
+    );
+    match state {
+        AppState::Unlocked {
+            pending_chord_leader,
+            ..
+        } => assert_eq!(
+            pending_chord_leader,
+            Some(ChordLeader::Z),
+            "Tick between `z` presses must preserve pending Z state"
+        ),
         other => panic!("expected Unlocked, got {other:?}"),
     }
 }

@@ -235,6 +235,7 @@ fn reduce_unlock_result(
                         selected,
                         pending_chord_leader: None,
                         viewport_height: 0,
+                        viewport_offset: 0,
                     },
                     Vec::new(),
                 )
@@ -407,7 +408,9 @@ fn reduce_unlocked_input(mut state: AppState, key: &KeyEvent) -> (AppState, Vec<
 
     // `gg` chord: first press sets pending leader, matching second
     // press commits jump-to-first. Handled before list-step / modal
-    // openers so the bare `g` is consumed by the chord path.
+    // openers so the bare `g` is consumed by the chord path. `z` on a
+    // pending `g` cross-clears `g` and arms `z` — handled below by
+    // the symmetric `z` branch.
     if matches!(key.code, KeyCode::Char('g')) {
         let was_pending = matches!(*pending_chord_leader, Some(ChordLeader::G));
         *pending_chord_leader = None;
@@ -420,6 +423,32 @@ fn reduce_unlocked_input(mut state: AppState, key: &KeyEvent) -> (AppState, Vec<
         } = &mut state
         {
             *pending_chord_leader = Some(ChordLeader::G);
+        }
+        return (state, Vec::new());
+    }
+
+    // `zz` chord (vim recenter): first press sets pending leader,
+    // matching second press commits a viewport recenter on the
+    // selected row. A pending `z` followed by any non-`z` key
+    // (including `g`) cross-clears the leader; `g` then re-arms its
+    // own leader through the `g` branch above. The recenter
+    // resolves `sel_pos = vault.iter().position(selected)` and sets
+    // `viewport_offset = (sel_pos - viewport_height / 2)` with
+    // `saturating_sub` so near-the-top selections clamp to `0`.
+    // Empty filtered set, `selected = None`, and `viewport_height
+    // = 0` are silent no-ops; the chord leader is still cleared.
+    if matches!(key.code, KeyCode::Char('z')) {
+        let was_pending = matches!(*pending_chord_leader, Some(ChordLeader::Z));
+        *pending_chord_leader = None;
+        if was_pending {
+            return recenter_viewport(state);
+        }
+        if let AppState::Unlocked {
+            pending_chord_leader,
+            ..
+        } = &mut state
+        {
+            *pending_chord_leader = Some(ChordLeader::Z);
         }
         return (state, Vec::new());
     }
@@ -524,6 +553,7 @@ fn move_selection(mut state: AppState, step: ListStep) -> (AppState, Vec<Effect>
         ref vault,
         ref mut selected,
         viewport_height,
+        viewport_offset: 0,
         ..
     } = state
     else {
@@ -563,6 +593,46 @@ fn move_selection(mut state: AppState, step: ListStep) -> (AppState, Vec<Effect>
             }
         }
     }
+    (state, Vec::new())
+}
+
+/// Commit a `zz` recenter: set [`AppState::Unlocked::viewport_offset`]
+/// so the selected row sits in the middle of the viewport.
+///
+/// Computes `sel_pos = vault.iter().position(selected)` and assigns
+/// `viewport_offset = sel_pos.saturating_sub(viewport_height / 2)`.
+/// The lower-bound saturation keeps near-the-top selections at offset
+/// `0`; the renderer is responsible for any upper-bound clamping when
+/// the resize-driven viewport slice lands. Silent no-op when
+/// `selected = None`, the selected id is not present in the vault, or
+/// `viewport_height = 0` — `viewport_offset` is unchanged in every
+/// no-op case.
+fn recenter_viewport(mut state: AppState) -> (AppState, Vec<Effect>) {
+    let AppState::Unlocked {
+        ref vault,
+        selected,
+        viewport_height,
+        ref mut viewport_offset,
+        ..
+    } = state
+    else {
+        return (state, Vec::new());
+    };
+    if viewport_height == 0 {
+        return (state, Vec::new());
+    }
+    let Some(current) = selected else {
+        return (state, Vec::new());
+    };
+    let Some(pos) = vault
+        .iter()
+        .position(|a| paladin_core::Account::id(a) == current)
+    else {
+        return (state, Vec::new());
+    };
+    let half = viewport_height / 2;
+    let sel_pos: u16 = u16::try_from(pos).unwrap_or(u16::MAX);
+    *viewport_offset = sel_pos.saturating_sub(half);
     (state, Vec::new())
 }
 

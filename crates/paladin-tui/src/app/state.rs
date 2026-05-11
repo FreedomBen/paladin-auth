@@ -98,12 +98,18 @@ pub struct HotpReveal {
 /// the next keypress can commit or break it.
 ///
 /// `G` is the leader for the `gg` jump-to-first chord — the vim
-/// mirror of `Home`. The `Z` variant (leader for the `zz` recenter
-/// chord) lands alongside the viewport-tracking slice.
+/// mirror of `Home`. `Z` is the leader for the `zz` recenter
+/// chord — the vim viewport-center command. A first press of either
+/// key sets its pending leader and clears any other pending leader,
+/// so `g` after `z` and `z` after `g` restart cleanly rather than
+/// committing a mixed chord.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChordLeader {
     /// Lower-case `g` — leader for `gg` (jump-to-first).
     G,
+    /// Lower-case `z` — leader for `zz` (recenter viewport on the
+    /// selected row).
+    Z,
 }
 
 /// An open modal dialog over the main list view.
@@ -291,16 +297,31 @@ pub enum AppState {
         /// Number of visible list rows in the current terminal
         /// viewport. Used by page / half-page navigation
         /// (`PgUp` / `PgDn` / `Ctrl-B` / `Ctrl-F` / `Ctrl-U` /
-        /// `Ctrl-D`) to compute step sizes, and by the upcoming
-        /// `zz` recenter chord to keep the selected row in the
-        /// middle of the viewport. Seeded to `0` on every
-        /// `Unlocked` entry; the production run loop replaces it
-        /// with the real terminal height through the resize-driven
-        /// viewport slice (not yet implemented) before the first
-        /// draw. A `0` height makes page / half-page navigation a
-        /// silent no-op, which keeps reducer-only unit tests
-        /// deterministic until the resize handler lands.
+        /// `Ctrl-D`) to compute step sizes, and by the `zz`
+        /// recenter chord to keep the selected row in the middle of
+        /// the viewport. Seeded to `0` on every `Unlocked` entry;
+        /// the production run loop replaces it with the real
+        /// terminal height through the resize-driven viewport
+        /// slice (not yet implemented) before the first draw. A
+        /// `0` height makes page / half-page navigation a silent
+        /// no-op, which keeps reducer-only unit tests deterministic
+        /// until the resize handler lands.
         viewport_height: u16,
+        /// Index of the first row of the filtered list rendered at
+        /// the top of the viewport (insertion-order position
+        /// inside `Vault::iter()` until the search-focus slice
+        /// lands, then the filtered set). Mutated by the `zz`
+        /// recenter chord to
+        /// `sel_pos.saturating_sub(viewport_height / 2)`, so the
+        /// selected row sits in the middle of the viewport. Seeded
+        /// to `0` on every `Unlocked` entry; the resize-driven
+        /// viewport slice and an auto-scroll "keep selection
+        /// visible" pass land later, so page / half-page / arrow
+        /// navigation does not touch this field at this slice —
+        /// only `zz` commits to it. With `viewport_height = 0`,
+        /// `selected = None`, or an empty vault, `zz` is a silent
+        /// no-op and the field stays unchanged.
+        viewport_offset: u16,
     },
 
     /// Non-mutating startup-error screen. Used when vault-path
@@ -377,6 +398,7 @@ pub fn decide_state_from_open(
                 selected,
                 pending_chord_leader: None,
                 viewport_height: 0,
+                viewport_offset: 0,
             }
         }
         Err(err) => AppState::StartupError {
