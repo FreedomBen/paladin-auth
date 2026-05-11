@@ -308,3 +308,81 @@ fn select_after_search_empty_query_empty_vault_returns_none() {
         "empty vault must return None regardless of query or prior selection"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The `id:` prefix form is CLI-only and is NOT honored by the TUI search
+// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Search — bullet 5)
+//
+// `paladin_core::parse_account_query` recognizes `id:<hex>` as an
+// `AccountQuery::IdPrefix` selector for CLI single-account resolution
+// (DESIGN.md §5). The TUI search bar deliberately does NOT call that
+// parser — it delegates to `account_matches_search`, which treats the
+// query as a plain case-insensitive substring needle. So `id:<hex>`
+// typed into the search bar must look for the literal four-byte
+// substring `"id:<hex>"` in `"{issuer}:{label}"`, never resolve as an
+// account-id lookup.
+// ---------------------------------------------------------------------------
+
+/// Compute the lowercase 8-char hex prefix of an `AccountId`'s raw
+/// bytes — the same projection the CLI's `id:` selector validates
+/// against.
+fn account_id_hex8(id: AccountId) -> String {
+    use std::fmt::Write;
+    let mut hex = String::with_capacity(32);
+    for byte in id.as_bytes() {
+        let _ = write!(hex, "{byte:02x}");
+    }
+    hex.truncate(8);
+    hex
+}
+
+#[test]
+fn id_colon_hex_prefix_query_does_not_resolve_account_in_tui_search() {
+    // bullet 5: CLI behavior — `id:<hex>` resolves to a single account
+    // by `AccountId` prefix. TUI behavior — the same string is just a
+    // substring needle, so an account whose `"{issuer}:{label}"` does
+    // not contain the literal text `"id:<hex>"` must not match.
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("plain.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+    let alice = add_account(&mut vault, &store, Some("Google"), "alice");
+    let _bob = add_account(&mut vault, &store, Some("GitHub"), "bob");
+
+    // The CLI would resolve `id:<hex>` to alice. The TUI must not.
+    let query = format!("id:{}", account_id_hex8(alice));
+    let ids = filtered_account_ids(&vault, &query);
+    assert!(
+        ids.is_empty(),
+        "TUI search must not resolve `id:<hex>` to an account by id; got {ids:?}"
+    );
+
+    // `select_after_search` composes the same predicate, so it too
+    // must drop the prior selection (no account survives the filter).
+    let next = select_after_search(&vault, &query, Some(alice));
+    assert_eq!(
+        next, None,
+        "select_after_search must not honor `id:<hex>` either (no substring match → no selection)"
+    );
+}
+
+#[test]
+fn literal_id_colon_substring_in_issuer_still_matches_via_substring() {
+    // bullet 5 (positive control): the TUI does not treat `id:` as a
+    // selector, but it does see it as part of the substring needle.
+    // An account whose issuer literally contains `"id:foo"` must be
+    // found by a query of `"id:foo"`, exactly like any other
+    // case-insensitive substring search.
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("plain.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+    let _a = add_account(&mut vault, &store, Some("Google"), "alice");
+    let weird = add_account(&mut vault, &store, Some("id:foo"), "carol");
+    let _b = add_account(&mut vault, &store, Some("GitHub"), "bob");
+
+    let ids = filtered_account_ids(&vault, "id:foo");
+    assert_eq!(
+        ids,
+        vec![weird],
+        "literal `id:foo` substring in issuer must still match — `id:` is not a selector here"
+    );
+}

@@ -681,7 +681,7 @@ end-to-end.
   first match, `None` when empty.
 - [ ] Empty result sets have no selection; action keys that require a
   selected row surface the "no account selected" status-line error.
-- [ ] The `id:` prefix form is CLI-only and is **not** honored by the
+- [x] The `id:` prefix form is CLI-only and is **not** honored by the
   TUI search.
 
 ### Auto-lock (`tests/auto_lock_tests.rs`)
