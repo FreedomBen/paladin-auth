@@ -2187,3 +2187,207 @@ fn pressing_ctrl_end_does_not_move_selection() {
         other => panic!("expected Unlocked, got {other:?}"),
     }
 }
+
+// ---------------------------------------------------------------------------
+// Vim `G` — mirror of `End` (jump-to-last list selection on Unlocked).
+//
+// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Vim-style navigation:
+//   "`G` mirrors `End`.")
+//
+// Slice covered: bare upper-case `G` (Shift+g — crossterm reports the
+// resolved `KeyCode::Char('G')`, with or without `KeyModifiers::SHIFT`
+// depending on the terminal) jumps the selection to the last row of
+// `Vault::iter()`. Suppression rules mirror `End`: Ctrl/Alt blocks the
+// jump, a modal-open is passthrough so modal-local input wins, and an
+// empty filtered set is a silent no-op. Bare lower-case `g` stays a
+// no-op at this slice — the `gg` chord leader lands with the pending-
+// chord state slice; the contract here is just that a single `g`
+// never moves selection on its own.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn pressing_shift_g_on_unlocked_jumps_to_last_account() {
+    let tmp = secure_tempdir();
+    let (state, [_a, _b, c]) = unlocked_with_three_accounts(&tmp);
+    let (state, effects) = reduce(
+        state,
+        AppEvent::Input {
+            event: Event::Key(KeyEvent::new(KeyCode::Char('G'), KeyModifiers::SHIFT)),
+            at: Instant::now(),
+        },
+    );
+    assert!(effects.is_empty(), "navigation must not emit effects");
+    match state {
+        AppState::Unlocked { selected, .. } => assert_eq!(
+            selected,
+            Some(c),
+            "vim `G` must jump selection to the last inserted account (End mirror)"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_shift_g_without_modifier_byte_still_jumps_to_last() {
+    // Some terminals fold Shift into the resolved character and drop
+    // `KeyModifiers::SHIFT`; the upper-case match arm must still
+    // resolve `G` to a jump.
+    let tmp = secure_tempdir();
+    let (state, [_a, _b, c]) = unlocked_with_three_accounts(&tmp);
+    let (state, _) = reduce(state, key(KeyCode::Char('G')));
+    match state {
+        AppState::Unlocked { selected, .. } => assert_eq!(
+            selected,
+            Some(c),
+            "`G` with no Shift modifier byte must still resolve to jump-to-last"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_shift_g_at_last_account_is_a_no_op() {
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let _a = add_totp_account(&mut vault, &store, "a");
+    let b = add_totp_account(&mut vault, &store, "b");
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(b),
+    };
+    let (state, _) = reduce(unlocked, key(KeyCode::Char('G')));
+    match state {
+        AppState::Unlocked { selected, .. } => assert_eq!(
+            selected,
+            Some(b),
+            "vim `G` on the last row must leave the selection unchanged"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_shift_g_with_empty_vault_is_silent_no_op() {
+    let tmp = secure_tempdir();
+    let unlocked = fresh_plaintext_unlocked(&tmp);
+    let (state, effects) = reduce(unlocked, key(KeyCode::Char('G')));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked { selected: None, .. } => {}
+        AppState::Unlocked { selected, .. } => {
+            panic!("expected selected=None on empty vault, got {selected:?}")
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_shift_g_with_modal_open_does_not_move_selection() {
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let a = add_totp_account(&mut vault, &store, "a");
+    let _b = add_totp_account(&mut vault, &store, "b");
+    let _c = add_totp_account(&mut vault, &store, "c");
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Add),
+        selected: Some(a),
+    };
+    let (state, effects) = reduce(unlocked, key(KeyCode::Char('G')));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked {
+            selected,
+            modal: Some(Modal::Add),
+            ..
+        } => assert_eq!(
+            selected,
+            Some(a),
+            "vim `G` inside an open modal must not move list selection"
+        ),
+        other => panic!("expected Unlocked with Modal::Add open, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_ctrl_shift_g_does_not_move_selection() {
+    // `Ctrl-G` (or `Ctrl-Shift-G`) is not bound; only the bare /
+    // shift-only `G` jumps to last.
+    let tmp = secure_tempdir();
+    let (state, [a, _b, _c]) = unlocked_with_three_accounts(&tmp);
+    let (state, effects) = reduce(
+        state,
+        AppEvent::Input {
+            event: Event::Key(KeyEvent::new(
+                KeyCode::Char('G'),
+                KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            )),
+            at: Instant::now(),
+        },
+    );
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked { selected, .. } => assert_eq!(
+            selected,
+            Some(a),
+            "Ctrl-Shift-G must not move list selection"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_lowercase_g_on_unlocked_does_not_move_selection() {
+    // Bare lower-case `g` is the future `gg` chord leader. Until the
+    // chord-state slice lands, a single `g` never moves the
+    // selection on its own — this test locks that contract.
+    let tmp = secure_tempdir();
+    let (state, [_a, _b, c]) = unlocked_with_three_accounts(&tmp);
+    let unlocked = match state {
+        AppState::Unlocked {
+            path,
+            vault,
+            store,
+            search_query,
+            idle_deadline,
+            pending_clipboard_clear,
+            hotp_reveal,
+            modal,
+            ..
+        } => AppState::Unlocked {
+            path,
+            vault,
+            store,
+            search_query,
+            idle_deadline,
+            pending_clipboard_clear,
+            hotp_reveal,
+            modal,
+            selected: Some(c),
+        },
+        other => panic!("expected Unlocked, got {other:?}"),
+    };
+    let (state, effects) = reduce(unlocked, key(KeyCode::Char('g')));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked { selected, .. } => assert_eq!(
+            selected,
+            Some(c),
+            "bare lower-case `g` must not move selection (chord leader handled later)"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}

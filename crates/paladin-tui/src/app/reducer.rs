@@ -393,14 +393,18 @@ enum ListStep {
 ///
 /// `↑` / `↓` and the vim mirrors `k` / `j` step the selection by one
 /// row. `Home` / `End` jump to the first / last row of `Vault::iter()`
-/// (insertion order). Returns `None` for keys that are not list
-/// navigation; page / chord / half-page bindings land in later slices.
+/// (insertion order); upper-case `G` (Shift+g — crossterm reports the
+/// resolved `KeyCode::Char('G')`, with or without `KeyModifiers::SHIFT`
+/// depending on the terminal) is the vim mirror of `End`. Returns
+/// `None` for keys that are not list navigation; the `gg` chord
+/// leader (lower-case `g`), page / half-page bindings, and `zz`
+/// recenter land in later slices.
 fn list_step_for_key(code: KeyCode) -> Option<ListStep> {
     match code {
         KeyCode::Down | KeyCode::Char('j') => Some(ListStep::Down),
         KeyCode::Up | KeyCode::Char('k') => Some(ListStep::Up),
         KeyCode::Home => Some(ListStep::First),
-        KeyCode::End => Some(ListStep::Last),
+        KeyCode::End | KeyCode::Char('G') => Some(ListStep::Last),
         _ => None,
     }
 }
