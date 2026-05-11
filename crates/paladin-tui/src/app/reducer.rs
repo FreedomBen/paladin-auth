@@ -79,7 +79,13 @@ pub fn reduce(state: AppState, event: AppEvent) -> (AppState, Vec<Effect>) {
             (refresh_idle_deadline_on_input(state, at), effects)
         }
         AppEvent::EffectResult(result) => reduce_effect_result(state, result),
-        AppEvent::Tick { monotonic, .. } => (maybe_auto_lock(state, monotonic), Vec::new()),
+        AppEvent::Tick { monotonic, .. } => {
+            let state = maybe_auto_lock(state, monotonic);
+            (
+                maybe_close_expired_hotp_reveal(state, monotonic),
+                Vec::new(),
+            )
+        }
         AppEvent::ClipboardClear { token, .. } => reduce_clipboard_clear_wake(state, token),
     }
 }
@@ -123,6 +129,38 @@ fn maybe_auto_lock(state: AppState, now: Instant) -> AppState {
         path,
         pending_clipboard_clear,
     }
+}
+
+/// Close the HOTP reveal window on [`AppState::Unlocked`] when the
+/// monotonic `now` has reached the reveal's deadline. Other states
+/// and `Unlocked` with no reveal or an unexpired deadline pass
+/// through unchanged.
+///
+/// Chained after [`maybe_auto_lock`] in the [`AppEvent::Tick`] arm of
+/// [`reduce`], so a tick that fires both the auto-lock idle deadline
+/// and the reveal deadline transitions to [`AppState::Locked`] (which
+/// has no reveal slot) without this helper running — the variant
+/// change is the source of truth for "lock discards open HOTP reveal
+/// windows" (`IMPLEMENTATION_PLAN_03_TUI.md` "Auto-lock (per §6)").
+///
+/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Tests > HOTP reveal window":
+/// *"Reveal closes after the deadline returned by
+/// `paladin_core::policy::hotp_reveal::deadline(now)`
+/// (`paladin_core::HOTP_REVEAL_SECS` measured on a monotonic
+/// clock)."* The boundary is `now >= deadline`, mirroring
+/// [`paladin_core::IdlePolicy::is_expired`].
+fn maybe_close_expired_hotp_reveal(mut state: AppState, now: Instant) -> AppState {
+    if let AppState::Unlocked {
+        hotp_reveal: slot @ Some(_),
+        ..
+    } = &mut state
+    {
+        let deadline = slot.as_ref().expect("matched Some above").deadline;
+        if now >= deadline {
+            *slot = None;
+        }
+    }
+    state
 }
 
 /// Handle a delayed [`AppEvent::ClipboardClear`] wake from a one-shot

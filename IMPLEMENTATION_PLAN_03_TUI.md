@@ -854,13 +854,15 @@ end-to-end.
 
 ### HOTP reveal window (`tests/hotp_reveal_tests.rs`)
 
-- [ ] Reveal closes after the deadline returned by
+- [x] Reveal closes after the deadline returned by
   `paladin_core::policy::hotp_reveal::deadline(now)`
   (`paladin_core::HOTP_REVEAL_SECS` measured on a monotonic clock).
-- [ ] `n` during an open reveal advances again (does not no-op).
-- [ ] Hidden rows show the stored next counter.
+- [x] `n` during an open reveal advances again (does not no-op).
+- [ ] Hidden rows show the stored next counter. (View-level; lands
+  with the list-view rendering slice.)
 - [ ] Revealed rows show the `Code.counter_used` that produced the
-  visible code until expiry.
+  visible code until expiry. (View-level; lands with the list-view
+  rendering slice.)
 
 ### Sensitive UI buffers (`tests/reducer_tests.rs`)
 
