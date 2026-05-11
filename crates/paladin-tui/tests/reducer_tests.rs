@@ -408,6 +408,7 @@ fn ctrl_c_on_unlocked_quits() {
         modal: None,
         selected: None,
         pending_chord_leader: None,
+        viewport_height: 0,
     };
     let (_, effects) = reduce(unlocked, ctrl(KeyCode::Char('c')));
     assert!(matches!(effects.as_slice(), [Effect::Quit]));
@@ -1274,6 +1275,7 @@ fn pressing_a_on_unlocked_with_no_modal_open_opens_add_modal() {
         modal: None,
         selected: None,
         pending_chord_leader: None,
+        viewport_height: 0,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Char('a')));
     assert!(effects.is_empty(), "opening a modal must not emit effects");
@@ -1308,6 +1310,7 @@ fn pressing_a_on_unlocked_with_modal_already_open_does_not_replace_the_modal() {
         modal: Some(Modal::Settings),
         selected: None,
         pending_chord_leader: None,
+        viewport_height: 0,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Char('a')));
     assert!(
@@ -1345,6 +1348,7 @@ fn pressing_ctrl_a_on_unlocked_does_not_open_add_modal() {
         modal: None,
         selected: None,
         pending_chord_leader: None,
+        viewport_height: 0,
     };
     let (state, effects) = reduce(unlocked, ctrl(KeyCode::Char('a')));
     assert!(effects.is_empty(), "Ctrl-A is unbound; no effects");
@@ -1372,6 +1376,7 @@ fn fresh_plaintext_unlocked(tmp: &tempfile::TempDir) -> AppState {
         modal: None,
         selected: None,
         pending_chord_leader: None,
+        viewport_height: 0,
     }
 }
 
@@ -1478,6 +1483,7 @@ fn assert_esc_closes_modal(opened: Modal) {
         modal: Some(opened),
         selected: None,
         pending_chord_leader: None,
+        viewport_height: 0,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Esc));
     assert!(
@@ -1592,6 +1598,7 @@ fn pressing_q_on_unlocked_with_modal_open_does_not_quit() {
         modal: Some(Modal::Add),
         selected: None,
         pending_chord_leader: None,
+        viewport_height: 0,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Char('q')));
     assert!(
@@ -1657,6 +1664,7 @@ fn unlocked_with_three_accounts(tmp: &tempfile::TempDir) -> (AppState, [AccountI
         modal: None,
         selected: Some(a),
         pending_chord_leader: None,
+        viewport_height: 0,
     };
     (state, [a, b, c])
 }
@@ -1715,6 +1723,7 @@ fn pressing_down_arrow_at_end_of_list_clamps() {
         modal: None,
         selected: Some(b),
         pending_chord_leader: None,
+        viewport_height: 0,
     };
     let (state, _) = reduce(unlocked, key(KeyCode::Down));
     match state {
@@ -1744,6 +1753,7 @@ fn pressing_up_arrow_on_unlocked_moves_selection_to_previous_account() {
         modal: None,
         selected: Some(b),
         pending_chord_leader: None,
+        viewport_height: 0,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Up));
     assert!(effects.is_empty());
@@ -1822,6 +1832,7 @@ fn pressing_down_arrow_with_modal_open_does_not_move_selection() {
         modal: Some(Modal::Settings),
         selected: Some(a),
         pending_chord_leader: None,
+        viewport_height: 0,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Down));
     assert!(effects.is_empty());
@@ -1872,6 +1883,7 @@ fn pressing_k_mirrors_up_arrow() {
         modal: None,
         selected: Some(b),
         pending_chord_leader: None,
+        viewport_height: 0,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Char('k')));
     assert!(effects.is_empty());
@@ -1922,6 +1934,7 @@ fn pressing_j_with_modal_open_does_not_move_selection() {
         modal: Some(Modal::Add),
         selected: Some(a),
         pending_chord_leader: None,
+        viewport_height: 0,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Char('j')));
     assert!(effects.is_empty());
@@ -1974,6 +1987,7 @@ fn pressing_home_on_unlocked_jumps_to_first_account() {
         modal: None,
         selected: Some(c),
         pending_chord_leader: None,
+        viewport_height: 0,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Home));
     assert!(effects.is_empty(), "navigation must not emit effects");
@@ -2036,6 +2050,7 @@ fn pressing_end_at_last_account_is_a_no_op() {
         modal: None,
         selected: Some(b),
         pending_chord_leader: None,
+        viewport_height: 0,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::End));
     assert!(effects.is_empty());
@@ -2097,6 +2112,7 @@ fn pressing_home_with_modal_open_does_not_move_selection() {
         modal: Some(Modal::Settings),
         selected: Some(c),
         pending_chord_leader: None,
+        viewport_height: 0,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Home));
     assert!(effects.is_empty());
@@ -2132,6 +2148,7 @@ fn pressing_end_with_modal_open_does_not_move_selection() {
         modal: Some(Modal::Add),
         selected: Some(a),
         pending_chord_leader: None,
+        viewport_height: 0,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::End));
     assert!(effects.is_empty());
@@ -2178,6 +2195,7 @@ fn pressing_ctrl_home_does_not_move_selection() {
             modal,
             selected: Some(c),
             pending_chord_leader: None,
+            viewport_height: 0,
         },
         other => panic!("expected Unlocked, got {other:?}"),
     };
@@ -2280,6 +2298,7 @@ fn pressing_shift_g_at_last_account_is_a_no_op() {
         modal: None,
         selected: Some(b),
         pending_chord_leader: None,
+        viewport_height: 0,
     };
     let (state, _) = reduce(unlocked, key(KeyCode::Char('G')));
     match state {
@@ -2325,6 +2344,7 @@ fn pressing_shift_g_with_modal_open_does_not_move_selection() {
         modal: Some(Modal::Add),
         selected: Some(a),
         pending_chord_leader: None,
+        viewport_height: 0,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Char('G')));
     assert!(effects.is_empty());
@@ -2399,6 +2419,7 @@ fn pressing_lowercase_g_on_unlocked_does_not_move_selection() {
             modal,
             selected: Some(c),
             pending_chord_leader: None,
+            viewport_height: 0,
         },
         other => panic!("expected Unlocked, got {other:?}"),
     };
@@ -2461,6 +2482,7 @@ fn pressing_lowercase_g_on_unlocked_sets_pending_chord_leader() {
             modal,
             selected: Some(c),
             pending_chord_leader: None,
+            viewport_height: 0,
         },
         other => panic!("expected Unlocked, got {other:?}"),
     };
@@ -2506,6 +2528,7 @@ fn pressing_gg_on_unlocked_jumps_to_first_account() {
             modal,
             selected: Some(c),
             pending_chord_leader: None,
+            viewport_height: 0,
         },
         other => panic!("expected Unlocked, got {other:?}"),
     };
@@ -2644,6 +2667,7 @@ fn pressing_g_with_modal_open_does_not_set_chord_leader() {
         modal: Some(Modal::Settings),
         selected: Some(a),
         pending_chord_leader: None,
+        viewport_height: 0,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Char('g')));
     assert!(effects.is_empty());
@@ -2675,6 +2699,7 @@ fn pressing_gg_on_empty_vault_is_silent_noop() {
         modal: None,
         selected: None,
         pending_chord_leader: None,
+        viewport_height: 0,
     };
     let (state, _) = reduce(unlocked, key(KeyCode::Char('g')));
     let (state, effects) = reduce(state, key(KeyCode::Char('g')));
@@ -2750,6 +2775,7 @@ fn tick_between_g_presses_preserves_pending_chord_leader() {
             modal,
             selected: Some(c),
             pending_chord_leader: None,
+            viewport_height: 0,
         },
         other => panic!("expected Unlocked, got {other:?}"),
     };
@@ -2778,6 +2804,391 @@ fn tick_between_g_presses_preserves_pending_chord_leader() {
             assert_eq!(
                 pending_chord_leader, None,
                 "after commit pending chord state must be cleared"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// `PgUp` / `PgDn` — page-up / page-down list selection by `viewport_height`.
+//
+// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Reducer:
+//   "Selection navigation moves correctly under `↑` / `↓` / `j` / `k`,
+//    `PgUp` / `PgDn` / `Ctrl-B` / `Ctrl-F`, `Ctrl-U` / `Ctrl-D`, and
+//    `Home` / `End`."
+//  + DESIGN §6: "PgUp/PgDn and Ctrl-B/Ctrl-F move by viewport height".)
+//
+// Slice covered: bare `PgDn` / `PgUp` walk `Vault::iter()` (insertion order)
+// by `viewport_height` rows from the current selection, clamping at the
+// last / first row when fewer rows remain. `viewport_height = 0` makes the
+// step a silent no-op (the production run loop seeds the real height
+// through the resize-driven viewport slice). Empty filtered set is a
+// silent no-op. Modal open or Ctrl/Alt modifier suppresses the move. The
+// `Ctrl-F` / `Ctrl-B` vim mirrors, `Ctrl-U` / `Ctrl-D` half-page
+// variants, and the search-focus pass-through land in later slices.
+// ---------------------------------------------------------------------------
+
+/// Build a plaintext `AppState::Unlocked` with `n` TOTP accounts named
+/// `acct-0` … `acct-{n-1}` and the given `viewport_height`, selecting
+/// the first account. Returns the state plus the account IDs in
+/// insertion order so tests can assert against specific rows.
+fn unlocked_with_n_accounts(
+    tmp: &tempfile::TempDir,
+    n: usize,
+    viewport_height: u16,
+) -> (AppState, Vec<AccountId>) {
+    let (path, (mut vault, store)) = open_plaintext_pair(tmp);
+    let mut ids = Vec::with_capacity(n);
+    for i in 0..n {
+        let label = format!("acct-{i}");
+        ids.push(add_totp_account(&mut vault, &store, &label));
+    }
+    let selected = ids.first().copied();
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected,
+        pending_chord_leader: None,
+        viewport_height,
+    };
+    (state, ids)
+}
+
+#[test]
+fn decide_state_from_open_seeds_viewport_height_to_zero() {
+    // Unlocked entry must seed `viewport_height = 0`; the production
+    // run loop replaces it with the real terminal height through the
+    // resize-driven viewport slice before the first draw.
+    let tmp = secure_tempdir();
+    let (vault_path, (vault, store)) = open_plaintext_pair(&tmp);
+    let now = Instant::now();
+    let state = decide_state_from_open(now, vault_path, Ok((vault, store)));
+    match state {
+        AppState::Unlocked {
+            viewport_height, ..
+        } => assert_eq!(
+            viewport_height, 0,
+            "decide_state_from_open must seed viewport_height to 0"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_unlock_ok_seeds_viewport_height_to_zero() {
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (vault, store) = create_encrypted_pair(&path, "pw");
+    drop(vault);
+    drop(store);
+    let pp = SecretString::from("pw".to_string());
+    let pair = Store::open(&path, VaultLock::Encrypted(pp)).expect("unlock");
+
+    let prior = AppState::Unlock {
+        path: path.clone(),
+        error: None,
+        passphrase: PassphraseBuffer::new(),
+    };
+    let (state, _) = reduce(prior, unlock_result(Ok(pair)));
+    match state {
+        AppState::Unlocked {
+            viewport_height, ..
+        } => assert_eq!(
+            viewport_height, 0,
+            "EffectResult::Unlock Ok must seed viewport_height to 0"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_page_down_on_unlocked_moves_selection_by_viewport_height() {
+    // viewport_height = 2 over a four-row vault: selection at row 0
+    // advances to row 2.
+    let tmp = secure_tempdir();
+    let (state, ids) = unlocked_with_n_accounts(&tmp, 4, 2);
+    let (state, effects) = reduce(state, key(KeyCode::PageDown));
+    assert!(effects.is_empty(), "navigation must not emit effects");
+    match state {
+        AppState::Unlocked { selected, .. } => assert_eq!(
+            selected,
+            Some(ids[2]),
+            "PgDn must advance selection by viewport_height rows"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_page_up_on_unlocked_moves_selection_by_viewport_height() {
+    // viewport_height = 2 over a four-row vault: selection at row 3
+    // retreats to row 1.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let _a = add_totp_account(&mut vault, &store, "a");
+    let b = add_totp_account(&mut vault, &store, "b");
+    let _c = add_totp_account(&mut vault, &store, "c");
+    let d = add_totp_account(&mut vault, &store, "d");
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(d),
+        pending_chord_leader: None,
+        viewport_height: 2,
+    };
+    let (state, effects) = reduce(unlocked, key(KeyCode::PageUp));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked { selected, .. } => assert_eq!(
+            selected,
+            Some(b),
+            "PgUp must retreat selection by viewport_height rows"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_page_down_clamps_to_last_when_fewer_rows_remain() {
+    // viewport_height = 3 over a four-row vault: selection at row 2
+    // would land beyond the end; clamp at the last row.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let _a = add_totp_account(&mut vault, &store, "a");
+    let _b = add_totp_account(&mut vault, &store, "b");
+    let c = add_totp_account(&mut vault, &store, "c");
+    let d = add_totp_account(&mut vault, &store, "d");
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(c),
+        pending_chord_leader: None,
+        viewport_height: 3,
+    };
+    let (state, _) = reduce(unlocked, key(KeyCode::PageDown));
+    match state {
+        AppState::Unlocked { selected, .. } => assert_eq!(
+            selected,
+            Some(d),
+            "PgDn past the end must clamp on the last row"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_page_up_clamps_to_first_when_fewer_rows_remain() {
+    // viewport_height = 3 over a four-row vault: selection at row 1
+    // would land before the start; clamp at the first row.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let a = add_totp_account(&mut vault, &store, "a");
+    let b = add_totp_account(&mut vault, &store, "b");
+    let _c = add_totp_account(&mut vault, &store, "c");
+    let _d = add_totp_account(&mut vault, &store, "d");
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(b),
+        pending_chord_leader: None,
+        viewport_height: 3,
+    };
+    let (state, _) = reduce(unlocked, key(KeyCode::PageUp));
+    match state {
+        AppState::Unlocked { selected, .. } => assert_eq!(
+            selected,
+            Some(a),
+            "PgUp past the start must clamp on the first row"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_page_down_with_viewport_height_zero_is_a_no_op() {
+    // viewport_height = 0 (pre-resize seed) makes page navigation a
+    // silent no-op so the reducer stays deterministic before the
+    // production run loop has sampled the terminal size.
+    let tmp = secure_tempdir();
+    let (state, ids) = unlocked_with_n_accounts(&tmp, 3, 0);
+    let (state, effects) = reduce(state, key(KeyCode::PageDown));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked { selected, .. } => assert_eq!(
+            selected,
+            Some(ids[0]),
+            "PgDn with viewport_height = 0 must not move selection"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_page_up_with_viewport_height_zero_is_a_no_op() {
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let _a = add_totp_account(&mut vault, &store, "a");
+    let b = add_totp_account(&mut vault, &store, "b");
+    let _c = add_totp_account(&mut vault, &store, "c");
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(b),
+        pending_chord_leader: None,
+        viewport_height: 0,
+    };
+    let (state, effects) = reduce(unlocked, key(KeyCode::PageUp));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked { selected, .. } => assert_eq!(
+            selected,
+            Some(b),
+            "PgUp with viewport_height = 0 must not move selection"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_page_down_with_empty_vault_is_silent_no_op() {
+    let tmp = secure_tempdir();
+    let unlocked = fresh_plaintext_unlocked(&tmp);
+    let (state, effects) = reduce(unlocked, key(KeyCode::PageDown));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked { selected: None, .. } => {}
+        AppState::Unlocked { selected, .. } => {
+            panic!("expected selected=None on empty vault, got {selected:?}")
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_page_up_with_empty_vault_is_silent_no_op() {
+    let tmp = secure_tempdir();
+    let unlocked = fresh_plaintext_unlocked(&tmp);
+    let (state, effects) = reduce(unlocked, key(KeyCode::PageUp));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked { selected: None, .. } => {}
+        AppState::Unlocked { selected, .. } => {
+            panic!("expected selected=None on empty vault, got {selected:?}")
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_page_down_with_modal_open_does_not_move_selection() {
+    // With a modal open, list-navigation keys route to the modal-local
+    // input path. Observable contract at this slice: selection is
+    // preserved unchanged.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let a = add_totp_account(&mut vault, &store, "a");
+    let _b = add_totp_account(&mut vault, &store, "b");
+    let _c = add_totp_account(&mut vault, &store, "c");
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Settings),
+        selected: Some(a),
+        pending_chord_leader: None,
+        viewport_height: 2,
+    };
+    let (state, effects) = reduce(unlocked, key(KeyCode::PageDown));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked {
+            selected,
+            modal: Some(Modal::Settings),
+            ..
+        } => assert_eq!(
+            selected,
+            Some(a),
+            "PgDn inside an open modal must not move list selection"
+        ),
+        other => panic!("expected Unlocked with Modal::Settings open, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_ctrl_page_down_does_not_move_selection() {
+    // `Ctrl-PgDn` is not bound; the Ctrl/Alt modifier guard also
+    // clears any pending chord state.
+    let tmp = secure_tempdir();
+    let (state, ids) = unlocked_with_n_accounts(&tmp, 4, 2);
+    let (state, effects) = reduce(state, ctrl(KeyCode::PageDown));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked { selected, .. } => assert_eq!(
+            selected,
+            Some(ids[0]),
+            "Ctrl-PgDn must not move list selection"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_page_down_clears_pending_chord_leader() {
+    // Any non-matching list-navigation key clears the pending chord
+    // state before its own action runs.
+    let tmp = secure_tempdir();
+    let (state, ids) = unlocked_with_n_accounts(&tmp, 4, 2);
+    let (state, _) = reduce(state, key(KeyCode::Char('g')));
+    let (state, _) = reduce(state, key(KeyCode::PageDown));
+    match state {
+        AppState::Unlocked {
+            selected,
+            pending_chord_leader,
+            ..
+        } => {
+            assert_eq!(
+                pending_chord_leader, None,
+                "PgDn must clear pending chord leader"
+            );
+            assert_eq!(
+                selected,
+                Some(ids[2]),
+                "PgDn must still advance after clearing the chord"
             );
         }
         other => panic!("expected Unlocked, got {other:?}"),

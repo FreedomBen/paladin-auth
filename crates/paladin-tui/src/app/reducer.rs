@@ -234,6 +234,7 @@ fn reduce_unlock_result(
                         modal: None,
                         selected,
                         pending_chord_leader: None,
+                        viewport_height: 0,
                     },
                     Vec::new(),
                 )
@@ -432,13 +433,18 @@ fn reduce_unlocked_input(mut state: AppState, key: &KeyEvent) -> (AppState, Vec<
 ///
 /// `Up` / `Down` are single-row adjacency steps. `First` / `Last` are
 /// absolute jumps to the head / tail of `Vault::iter()` (insertion
-/// order), used by `Home` and `End`.
+/// order), used by `Home` and `End`. `PageUp` / `PageDown` walk by
+/// `AppState::Unlocked::viewport_height` rows (insertion order),
+/// clamping at the head / tail when fewer rows remain — used by `PgUp`
+/// / `PgDn` (and the upcoming `Ctrl-B` / `Ctrl-F` vim mirrors).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ListStep {
     Up,
     Down,
     First,
     Last,
+    PageUp,
+    PageDown,
 }
 
 /// Map a list-navigation key to its step direction.
@@ -447,16 +453,21 @@ enum ListStep {
 /// row. `Home` / `End` jump to the first / last row of `Vault::iter()`
 /// (insertion order); upper-case `G` (Shift+g — crossterm reports the
 /// resolved `KeyCode::Char('G')`, with or without `KeyModifiers::SHIFT`
-/// depending on the terminal) is the vim mirror of `End`. Returns
-/// `None` for keys that are not list navigation; the `gg` chord
-/// leader (lower-case `g`), page / half-page bindings, and `zz`
-/// recenter land in later slices.
+/// depending on the terminal) is the vim mirror of `End`. `PgUp` /
+/// `PgDn` walk by [`AppState::Unlocked::viewport_height`] rows,
+/// clamping at the first / last row of the iteration. Returns `None`
+/// for keys that are not list navigation; the `gg` chord leader
+/// (lower-case `g`), `Ctrl-B` / `Ctrl-F` vim mirrors, `Ctrl-U` /
+/// `Ctrl-D` half-page bindings, and `zz` recenter land in later
+/// slices.
 fn list_step_for_key(code: KeyCode) -> Option<ListStep> {
     match code {
         KeyCode::Down | KeyCode::Char('j') => Some(ListStep::Down),
         KeyCode::Up | KeyCode::Char('k') => Some(ListStep::Up),
         KeyCode::Home => Some(ListStep::First),
         KeyCode::End | KeyCode::Char('G') => Some(ListStep::Last),
+        KeyCode::PageDown => Some(ListStep::PageDown),
+        KeyCode::PageUp => Some(ListStep::PageUp),
         _ => None,
     }
 }
@@ -466,14 +477,19 @@ fn list_step_for_key(code: KeyCode) -> Option<ListStep> {
 /// For `Up` / `Down`, walks `Vault::iter()` (insertion order) to find
 /// the row adjacent to the currently selected `AccountId`; clamping at
 /// top / bottom leaves the selection unchanged. For `First` / `Last`,
-/// assigns the head / tail of the iteration directly. Empty filtered
-/// set (`selected = None` and `vault.iter()` empty) is a silent no-op
-/// in every direction. The reducer never emits effects for navigation
-/// — these are pure state updates.
+/// assigns the head / tail of the iteration directly. For `PageUp` /
+/// `PageDown`, walks the iteration by `viewport_height` rows from the
+/// currently selected `AccountId`, clamping at the head / tail when
+/// fewer rows remain. A `viewport_height` of `0` (pre-resize seed) is
+/// a silent no-op. Empty filtered set (`selected = None` and
+/// `vault.iter()` empty) is a silent no-op in every direction. The
+/// reducer never emits effects for navigation — these are pure state
+/// updates.
 fn move_selection(mut state: AppState, step: ListStep) -> (AppState, Vec<Effect>) {
     let AppState::Unlocked {
         ref vault,
         ref mut selected,
+        viewport_height,
         ..
     } = state
     else {
@@ -493,6 +509,13 @@ fn move_selection(mut state: AppState, step: ListStep) -> (AppState, Vec<Effect>
         ListStep::Last => {
             *selected = vault.iter().last().map(paladin_core::Account::id);
         }
+        ListStep::PageDown | ListStep::PageUp => {
+            if let Some(current) = *selected {
+                if let Some(next) = step_n_rows(vault, current, step, viewport_height as usize) {
+                    *selected = Some(next);
+                }
+            }
+        }
     }
     (state, Vec::new())
 }
@@ -502,7 +525,8 @@ fn move_selection(mut state: AppState, step: ListStep) -> (AppState, Vec<Effect>
 /// of the iteration in the requested direction (clamp signal).
 ///
 /// Only `ListStep::Up` and `ListStep::Down` are valid here; the
-/// absolute-jump variants are handled directly in [`move_selection`].
+/// absolute-jump and page-step variants are handled directly in
+/// [`move_selection`].
 fn adjacent_account(vault: &Vault, current: AccountId, step: ListStep) -> Option<AccountId> {
     match step {
         ListStep::Down => {
@@ -524,9 +548,39 @@ fn adjacent_account(vault: &Vault, current: AccountId, step: ListStep) -> Option
             }
             None
         }
-        ListStep::First | ListStep::Last => {
-            unreachable!("First/Last are absolute jumps handled in move_selection")
+        ListStep::First | ListStep::Last | ListStep::PageDown | ListStep::PageUp => {
+            unreachable!(
+                "First/Last/PageUp/PageDown are absolute / page jumps handled in move_selection"
+            )
         }
+    }
+}
+
+/// Walk `vault`'s insertion-order iteration `n` rows up or down from
+/// `current`, clamping at the head / tail when fewer rows remain.
+///
+/// Returns the new `AccountId` when the selection moves, or `None` when
+/// the walk would be a no-op (n == 0, `current` already at the
+/// boundary in the requested direction, or `current` not found in the
+/// iteration). Used by `ListStep::PageUp` / `ListStep::PageDown` with
+/// `n = viewport_height`.
+fn step_n_rows(vault: &Vault, current: AccountId, step: ListStep, n: usize) -> Option<AccountId> {
+    if n == 0 {
+        return None;
+    }
+    let ids: Vec<AccountId> = vault.iter().map(paladin_core::Account::id).collect();
+    let pos = ids.iter().position(|id| *id == current)?;
+    let target = match step {
+        ListStep::PageDown => (pos + n).min(ids.len().saturating_sub(1)),
+        ListStep::PageUp => pos.saturating_sub(n),
+        ListStep::Up | ListStep::Down | ListStep::First | ListStep::Last => {
+            unreachable!("step_n_rows only handles page steps")
+        }
+    };
+    if target == pos {
+        None
+    } else {
+        Some(ids[target])
     }
 }
 

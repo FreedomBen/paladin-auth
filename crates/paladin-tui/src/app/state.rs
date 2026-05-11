@@ -288,6 +288,19 @@ pub enum AppState {
         /// field alongside the `Vault` / `Store`). No time-based
         /// clear — vim's `nottimeout` semantics.
         pending_chord_leader: Option<ChordLeader>,
+        /// Number of visible list rows in the current terminal
+        /// viewport. Used by page / half-page navigation
+        /// (`PgUp` / `PgDn` / `Ctrl-B` / `Ctrl-F` / `Ctrl-U` /
+        /// `Ctrl-D`) to compute step sizes, and by the upcoming
+        /// `zz` recenter chord to keep the selected row in the
+        /// middle of the viewport. Seeded to `0` on every
+        /// `Unlocked` entry; the production run loop replaces it
+        /// with the real terminal height through the resize-driven
+        /// viewport slice (not yet implemented) before the first
+        /// draw. A `0` height makes page / half-page navigation a
+        /// silent no-op, which keeps reducer-only unit tests
+        /// deterministic until the resize handler lands.
+        viewport_height: u16,
     },
 
     /// Non-mutating startup-error screen. Used when vault-path
@@ -363,6 +376,7 @@ pub fn decide_state_from_open(
                 modal: None,
                 selected,
                 pending_chord_leader: None,
+                viewport_height: 0,
             }
         }
         Err(err) => AppState::StartupError {
