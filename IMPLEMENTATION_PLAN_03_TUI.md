@@ -679,7 +679,7 @@ end-to-end.
 - [x] Filter changes route through `paladin_core::select_after_filter`:
   preserve the selected `AccountId` when still visible, otherwise the
   first match, `None` when empty.
-- [ ] Empty result sets have no selection; action keys that require a
+- [x] Empty result sets have no selection; action keys that require a
   selected row surface the "no account selected" status-line error.
 - [x] The `id:` prefix form is CLI-only and is **not** honored by the
   TUI search.

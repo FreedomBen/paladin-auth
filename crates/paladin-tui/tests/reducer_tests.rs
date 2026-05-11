@@ -27,7 +27,7 @@ use paladin_tui::app::event::{AppEvent, Effect, EffectResult};
 use paladin_tui::app::reducer::reduce;
 use paladin_tui::app::state::{
     compute_idle_deadline, decide_state_from_inspect, decide_state_from_open, render_error_message,
-    AppState, ChordLeader, Focus, Modal,
+    AppState, ChordLeader, Focus, Modal, StatusLine, NO_ACCOUNT_SELECTED,
 };
 use paladin_tui::cli::{should_disable_color, GlobalArgs};
 use paladin_tui::prompt::PassphraseBuffer;
@@ -415,6 +415,7 @@ fn ctrl_c_on_unlocked_quits() {
         viewport_height: 0,
         viewport_offset: 0,
         focus: Focus::List,
+        status_line: None,
     };
     let (_, effects) = reduce(unlocked, ctrl(KeyCode::Char('c')));
     assert!(matches!(effects.as_slice(), [Effect::Quit]));
@@ -1363,6 +1364,7 @@ fn pressing_a_on_unlocked_with_no_modal_open_opens_add_modal() {
         viewport_height: 0,
         viewport_offset: 0,
         focus: Focus::List,
+        status_line: None,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Char('a')));
     assert!(effects.is_empty(), "opening a modal must not emit effects");
@@ -1400,6 +1402,7 @@ fn pressing_a_on_unlocked_with_modal_already_open_does_not_replace_the_modal() {
         viewport_height: 0,
         viewport_offset: 0,
         focus: Focus::List,
+        status_line: None,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Char('a')));
     assert!(
@@ -1440,6 +1443,7 @@ fn pressing_ctrl_a_on_unlocked_does_not_open_add_modal() {
         viewport_height: 0,
         viewport_offset: 0,
         focus: Focus::List,
+        status_line: None,
     };
     let (state, effects) = reduce(unlocked, ctrl(KeyCode::Char('a')));
     assert!(effects.is_empty(), "Ctrl-A is unbound; no effects");
@@ -1470,6 +1474,7 @@ fn fresh_plaintext_unlocked(tmp: &tempfile::TempDir) -> AppState {
         viewport_height: 0,
         viewport_offset: 0,
         focus: Focus::List,
+        status_line: None,
     }
 }
 
@@ -1493,6 +1498,55 @@ fn assert_key_opens_modal(event: AppEvent, expected: &Modal) {
     }
 }
 
+/// Like [`assert_key_opens_modal`] but seeds an account into the vault
+/// first so the resulting `selected` is `Some(_)`. Used by the
+/// selection-gated openers (`r` / `R`) per the
+/// `IMPLEMENTATION_PLAN_03_TUI.md` "Focus model" rule: with no
+/// selection those keys surface the "no account selected"
+/// status-line error instead of opening the modal.
+fn assert_selection_gated_key_opens_modal(event: AppEvent, expected: &Modal) {
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let id = add_totp_account(&mut vault, &store, "github");
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+    };
+    let (state, effects) = reduce(unlocked, event);
+    assert!(effects.is_empty(), "opening a modal must not emit effects");
+    match state {
+        AppState::Unlocked {
+            modal: Some(m),
+            status_line,
+            ..
+        } => {
+            assert_eq!(
+                std::mem::discriminant(&m),
+                std::mem::discriminant(expected),
+                "expected modal variant {expected:?}, got {m:?}"
+            );
+            assert!(
+                status_line.is_none(),
+                "selection-gated opener with selected=Some must not set a status-line, got {status_line:?}"
+            );
+        }
+        AppState::Unlocked { modal: None, .. } => panic!("expected modal=Some(_), got None"),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
 #[test]
 fn pressing_i_on_unlocked_with_no_modal_open_opens_import_modal() {
     assert_key_opens_modal(key(KeyCode::Char('i')), &Modal::Import);
@@ -1507,8 +1561,9 @@ fn pressing_e_on_unlocked_with_no_modal_open_opens_export_modal() {
 fn pressing_lowercase_r_on_unlocked_with_no_modal_open_opens_remove_modal() {
     // Per Keybindings (initial v0.1): `r` opens Remove confirmation;
     // `R` (Shift+R) opens Rename. The lowercase / uppercase split is
-    // the only thing distinguishing the two bindings.
-    assert_key_opens_modal(key(KeyCode::Char('r')), &Modal::Remove);
+    // the only thing distinguishing the two bindings. `r` is a
+    // selection-gated opener, so the helper seeds an account first.
+    assert_selection_gated_key_opens_modal(key(KeyCode::Char('r')), &Modal::Remove);
 }
 
 #[test]
@@ -1521,7 +1576,7 @@ fn pressing_shift_r_on_unlocked_with_no_modal_open_opens_rename_modal() {
         event: Event::Key(KeyEvent::new(KeyCode::Char('R'), KeyModifiers::SHIFT)),
         at: Instant::now(),
     };
-    assert_key_opens_modal(evt, &Modal::Rename);
+    assert_selection_gated_key_opens_modal(evt, &Modal::Rename);
 }
 
 #[test]
@@ -1531,7 +1586,7 @@ fn pressing_shift_r_without_modifier_byte_still_opens_rename_modal() {
     // default outside kitty-protocol mode). The reducer dispatches
     // on the resolved character, not the modifier, so both shapes
     // must hit Rename.
-    assert_key_opens_modal(key(KeyCode::Char('R')), &Modal::Rename);
+    assert_selection_gated_key_opens_modal(key(KeyCode::Char('R')), &Modal::Rename);
 }
 
 #[test]
@@ -1579,6 +1634,7 @@ fn assert_esc_closes_modal(opened: Modal) {
         viewport_height: 0,
         viewport_offset: 0,
         focus: Focus::List,
+        status_line: None,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Esc));
     assert!(
@@ -1696,6 +1752,7 @@ fn pressing_q_on_unlocked_with_modal_open_does_not_quit() {
         viewport_height: 0,
         viewport_offset: 0,
         focus: Focus::List,
+        status_line: None,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Char('q')));
     assert!(
@@ -1764,6 +1821,7 @@ fn unlocked_with_three_accounts(tmp: &tempfile::TempDir) -> (AppState, [AccountI
         viewport_height: 0,
         viewport_offset: 0,
         focus: Focus::List,
+        status_line: None,
     };
     (state, [a, b, c])
 }
@@ -1825,6 +1883,7 @@ fn pressing_down_arrow_at_end_of_list_clamps() {
         viewport_height: 0,
         viewport_offset: 0,
         focus: Focus::List,
+        status_line: None,
     };
     let (state, _) = reduce(unlocked, key(KeyCode::Down));
     match state {
@@ -1857,6 +1916,7 @@ fn pressing_up_arrow_on_unlocked_moves_selection_to_previous_account() {
         viewport_height: 0,
         viewport_offset: 0,
         focus: Focus::List,
+        status_line: None,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Up));
     assert!(effects.is_empty());
@@ -1938,6 +1998,7 @@ fn pressing_down_arrow_with_modal_open_does_not_move_selection() {
         viewport_height: 0,
         viewport_offset: 0,
         focus: Focus::List,
+        status_line: None,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Down));
     assert!(effects.is_empty());
@@ -1991,6 +2052,7 @@ fn pressing_k_mirrors_up_arrow() {
         viewport_height: 0,
         viewport_offset: 0,
         focus: Focus::List,
+        status_line: None,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Char('k')));
     assert!(effects.is_empty());
@@ -2044,6 +2106,7 @@ fn pressing_j_with_modal_open_does_not_move_selection() {
         viewport_height: 0,
         viewport_offset: 0,
         focus: Focus::List,
+        status_line: None,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Char('j')));
     assert!(effects.is_empty());
@@ -2085,6 +2148,7 @@ fn pressing_k_with_modal_open_does_not_move_selection() {
         viewport_height: 0,
         viewport_offset: 0,
         focus: Focus::List,
+        status_line: None,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Char('k')));
     assert!(effects.is_empty());
@@ -2124,6 +2188,7 @@ fn pressing_j_at_end_of_list_clamps() {
         viewport_height: 0,
         viewport_offset: 0,
         focus: Focus::List,
+        status_line: None,
     };
     let (state, _) = reduce(unlocked, key(KeyCode::Char('j')));
     match state {
@@ -2227,6 +2292,7 @@ fn pressing_home_on_unlocked_jumps_to_first_account() {
         viewport_height: 0,
         viewport_offset: 0,
         focus: Focus::List,
+        status_line: None,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Home));
     assert!(effects.is_empty(), "navigation must not emit effects");
@@ -2292,6 +2358,7 @@ fn pressing_end_at_last_account_is_a_no_op() {
         viewport_height: 0,
         viewport_offset: 0,
         focus: Focus::List,
+        status_line: None,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::End));
     assert!(effects.is_empty());
@@ -2356,6 +2423,7 @@ fn pressing_home_with_modal_open_does_not_move_selection() {
         viewport_height: 0,
         viewport_offset: 0,
         focus: Focus::List,
+        status_line: None,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Home));
     assert!(effects.is_empty());
@@ -2394,6 +2462,7 @@ fn pressing_end_with_modal_open_does_not_move_selection() {
         viewport_height: 0,
         viewport_offset: 0,
         focus: Focus::List,
+        status_line: None,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::End));
     assert!(effects.is_empty());
@@ -2443,6 +2512,7 @@ fn pressing_ctrl_home_does_not_move_selection() {
             viewport_height: 0,
             viewport_offset: 0,
             focus: Focus::List,
+            status_line: None,
         },
         other => panic!("expected Unlocked, got {other:?}"),
     };
@@ -2548,6 +2618,7 @@ fn pressing_shift_g_at_last_account_is_a_no_op() {
         viewport_height: 0,
         viewport_offset: 0,
         focus: Focus::List,
+        status_line: None,
     };
     let (state, _) = reduce(unlocked, key(KeyCode::Char('G')));
     match state {
@@ -2596,6 +2667,7 @@ fn pressing_shift_g_with_modal_open_does_not_move_selection() {
         viewport_height: 0,
         viewport_offset: 0,
         focus: Focus::List,
+        status_line: None,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Char('G')));
     assert!(effects.is_empty());
@@ -2673,6 +2745,7 @@ fn pressing_lowercase_g_on_unlocked_does_not_move_selection() {
             viewport_height: 0,
             viewport_offset: 0,
             focus: Focus::List,
+            status_line: None,
         },
         other => panic!("expected Unlocked, got {other:?}"),
     };
@@ -2738,6 +2811,7 @@ fn pressing_lowercase_g_on_unlocked_sets_pending_chord_leader() {
             viewport_height: 0,
             viewport_offset: 0,
             focus: Focus::List,
+            status_line: None,
         },
         other => panic!("expected Unlocked, got {other:?}"),
     };
@@ -2786,6 +2860,7 @@ fn pressing_gg_on_unlocked_jumps_to_first_account() {
             viewport_height: 0,
             viewport_offset: 0,
             focus: Focus::List,
+            status_line: None,
         },
         other => panic!("expected Unlocked, got {other:?}"),
     };
@@ -2927,6 +3002,7 @@ fn pressing_g_with_modal_open_does_not_set_chord_leader() {
         viewport_height: 0,
         viewport_offset: 0,
         focus: Focus::List,
+        status_line: None,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Char('g')));
     assert!(effects.is_empty());
@@ -2961,6 +3037,7 @@ fn pressing_gg_on_empty_vault_is_silent_noop() {
         viewport_height: 0,
         viewport_offset: 0,
         focus: Focus::List,
+        status_line: None,
     };
     let (state, _) = reduce(unlocked, key(KeyCode::Char('g')));
     let (state, effects) = reduce(state, key(KeyCode::Char('g')));
@@ -3039,6 +3116,7 @@ fn tick_between_g_presses_preserves_pending_chord_leader() {
             viewport_height: 0,
             viewport_offset: 0,
             focus: Focus::List,
+            status_line: None,
         },
         other => panic!("expected Unlocked, got {other:?}"),
     };
@@ -3122,6 +3200,7 @@ fn unlocked_with_n_accounts(
         viewport_height,
         viewport_offset: 0,
         focus: Focus::List,
+        status_line: None,
     };
     (state, ids)
 }
@@ -3215,6 +3294,7 @@ fn pressing_page_up_on_unlocked_moves_selection_by_viewport_height() {
         viewport_height: 2,
         viewport_offset: 0,
         focus: Focus::List,
+        status_line: None,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::PageUp));
     assert!(effects.is_empty());
@@ -3252,6 +3332,7 @@ fn pressing_page_down_clamps_to_last_when_fewer_rows_remain() {
         viewport_height: 3,
         viewport_offset: 0,
         focus: Focus::List,
+        status_line: None,
     };
     let (state, _) = reduce(unlocked, key(KeyCode::PageDown));
     match state {
@@ -3288,6 +3369,7 @@ fn pressing_page_up_clamps_to_first_when_fewer_rows_remain() {
         viewport_height: 3,
         viewport_offset: 0,
         focus: Focus::List,
+        status_line: None,
     };
     let (state, _) = reduce(unlocked, key(KeyCode::PageUp));
     match state {
@@ -3340,6 +3422,7 @@ fn pressing_page_up_with_viewport_height_zero_is_a_no_op() {
         viewport_height: 0,
         viewport_offset: 0,
         focus: Focus::List,
+        status_line: None,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::PageUp));
     assert!(effects.is_empty());
@@ -3407,6 +3490,7 @@ fn pressing_page_down_with_modal_open_does_not_move_selection() {
         viewport_height: 2,
         viewport_offset: 0,
         focus: Focus::List,
+        status_line: None,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::PageDown));
     assert!(effects.is_empty());
@@ -3517,6 +3601,7 @@ fn pressing_ctrl_b_on_unlocked_moves_selection_by_viewport_height() {
         viewport_height: 2,
         viewport_offset: 0,
         focus: Focus::List,
+        status_line: None,
     };
     let (state, effects) = reduce(unlocked, ctrl(KeyCode::Char('b')));
     assert!(effects.is_empty());
@@ -3554,6 +3639,7 @@ fn pressing_ctrl_f_clamps_to_last_when_fewer_rows_remain() {
         viewport_height: 3,
         viewport_offset: 0,
         focus: Focus::List,
+        status_line: None,
     };
     let (state, _) = reduce(unlocked, ctrl(KeyCode::Char('f')));
     match state {
@@ -3590,6 +3676,7 @@ fn pressing_ctrl_b_clamps_to_first_when_fewer_rows_remain() {
         viewport_height: 3,
         viewport_offset: 0,
         focus: Focus::List,
+        status_line: None,
     };
     let (state, _) = reduce(unlocked, ctrl(KeyCode::Char('b')));
     match state {
@@ -3642,6 +3729,7 @@ fn pressing_ctrl_b_with_viewport_height_zero_is_a_no_op() {
         viewport_height: 0,
         viewport_offset: 0,
         focus: Focus::List,
+        status_line: None,
     };
     let (state, effects) = reduce(unlocked, ctrl(KeyCode::Char('b')));
     assert!(effects.is_empty());
@@ -3709,6 +3797,7 @@ fn pressing_ctrl_f_with_modal_open_does_not_move_selection() {
         viewport_height: 2,
         viewport_offset: 0,
         focus: Focus::List,
+        status_line: None,
     };
     let (state, effects) = reduce(unlocked, ctrl(KeyCode::Char('f')));
     assert!(effects.is_empty());
@@ -3747,6 +3836,7 @@ fn pressing_ctrl_b_with_modal_open_does_not_move_selection() {
         viewport_height: 2,
         viewport_offset: 0,
         focus: Focus::List,
+        status_line: None,
     };
     let (state, effects) = reduce(unlocked, ctrl(KeyCode::Char('b')));
     assert!(effects.is_empty());
@@ -3814,6 +3904,7 @@ fn pressing_ctrl_b_clears_pending_chord_leader() {
         viewport_height: 2,
         viewport_offset: 0,
         focus: Focus::List,
+        status_line: None,
     };
     let (state, _) = reduce(unlocked, key(KeyCode::Char('g')));
     let (state, _) = reduce(state, ctrl(KeyCode::Char('b')));
@@ -3868,6 +3959,7 @@ fn pressing_ctrl_d_on_unlocked_moves_selection_by_half_viewport_height() {
         viewport_height: 4,
         viewport_offset: 0,
         focus: Focus::List,
+        status_line: None,
     };
     let (state, effects) = reduce(unlocked, ctrl(KeyCode::Char('d')));
     assert!(effects.is_empty(), "navigation must not emit effects");
@@ -3906,6 +3998,7 @@ fn pressing_ctrl_u_on_unlocked_moves_selection_by_half_viewport_height() {
         viewport_height: 4,
         viewport_offset: 0,
         focus: Focus::List,
+        status_line: None,
     };
     let (state, effects) = reduce(unlocked, ctrl(KeyCode::Char('u')));
     assert!(effects.is_empty());
@@ -3943,6 +4036,7 @@ fn ctrl_d_half_page_uses_integer_division_on_odd_viewport_height() {
         viewport_height: 5,
         viewport_offset: 0,
         focus: Focus::List,
+        status_line: None,
     };
     let (state, _) = reduce(unlocked, ctrl(KeyCode::Char('d')));
     match state {
@@ -3980,6 +4074,7 @@ fn pressing_ctrl_d_clamps_to_last_when_fewer_rows_remain() {
         viewport_height: 4,
         viewport_offset: 0,
         focus: Focus::List,
+        status_line: None,
     };
     let (state, _) = reduce(unlocked, ctrl(KeyCode::Char('d')));
     match state {
@@ -4017,6 +4112,7 @@ fn pressing_ctrl_u_clamps_to_first_when_fewer_rows_remain() {
         viewport_height: 4,
         viewport_offset: 0,
         focus: Focus::List,
+        status_line: None,
     };
     let (state, _) = reduce(unlocked, ctrl(KeyCode::Char('u')));
     match state {
@@ -4067,6 +4163,7 @@ fn pressing_ctrl_u_with_viewport_height_zero_is_a_no_op() {
         viewport_height: 0,
         viewport_offset: 0,
         focus: Focus::List,
+        status_line: None,
     };
     let (state, effects) = reduce(unlocked, ctrl(KeyCode::Char('u')));
     assert!(effects.is_empty());
@@ -4119,6 +4216,7 @@ fn pressing_ctrl_u_with_viewport_height_one_is_a_no_op() {
         viewport_height: 1,
         viewport_offset: 0,
         focus: Focus::List,
+        status_line: None,
     };
     let (state, effects) = reduce(unlocked, ctrl(KeyCode::Char('u')));
     assert!(effects.is_empty());
@@ -4183,6 +4281,7 @@ fn pressing_ctrl_d_with_modal_open_does_not_move_selection() {
         viewport_height: 4,
         viewport_offset: 0,
         focus: Focus::List,
+        status_line: None,
     };
     let (state, effects) = reduce(unlocked, ctrl(KeyCode::Char('d')));
     assert!(effects.is_empty());
@@ -4221,6 +4320,7 @@ fn pressing_ctrl_u_with_modal_open_does_not_move_selection() {
         viewport_height: 4,
         viewport_offset: 0,
         focus: Focus::List,
+        status_line: None,
     };
     let (state, effects) = reduce(unlocked, ctrl(KeyCode::Char('u')));
     assert!(effects.is_empty());
@@ -4261,6 +4361,7 @@ fn pressing_ctrl_d_clears_pending_chord_leader() {
         viewport_height: 4,
         viewport_offset: 0,
         focus: Focus::List,
+        status_line: None,
     };
     let (state, _) = reduce(unlocked, key(KeyCode::Char('g')));
     let (state, _) = reduce(state, ctrl(KeyCode::Char('d')));
@@ -4307,6 +4408,7 @@ fn pressing_ctrl_u_clears_pending_chord_leader() {
         viewport_height: 4,
         viewport_offset: 0,
         focus: Focus::List,
+        status_line: None,
     };
     let (state, _) = reduce(unlocked, key(KeyCode::Char('g')));
     let (state, _) = reduce(state, ctrl(KeyCode::Char('u')));
@@ -4379,6 +4481,7 @@ fn pressing_lowercase_z_on_unlocked_sets_pending_chord_leader_z() {
         viewport_height: 4,
         viewport_offset: 0,
         focus: Focus::List,
+        status_line: None,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Char('z')));
     assert!(effects.is_empty(), "chord leader must not emit effects");
@@ -4428,6 +4531,7 @@ fn pressing_zz_recenters_viewport_on_selected_row() {
         viewport_height: 4,
         viewport_offset: 0,
         focus: Focus::List,
+        status_line: None,
     };
     let (state, _) = reduce(unlocked, key(KeyCode::Char('z')));
     let (state, effects) = reduce(state, key(KeyCode::Char('z')));
@@ -4476,6 +4580,7 @@ fn pressing_zz_uses_integer_division_on_odd_viewport_height() {
         viewport_height: 5,
         viewport_offset: 0,
         focus: Focus::List,
+        status_line: None,
     };
     let (state, _) = reduce(unlocked, key(KeyCode::Char('z')));
     let (state, _) = reduce(state, key(KeyCode::Char('z')));
@@ -4514,6 +4619,7 @@ fn pressing_zz_near_top_clamps_offset_to_zero() {
         viewport_height: 4,
         viewport_offset: 3,
         focus: Focus::List,
+        status_line: None,
     };
     let (state, _) = reduce(unlocked, key(KeyCode::Char('z')));
     let (state, _) = reduce(state, key(KeyCode::Char('z')));
@@ -4608,6 +4714,7 @@ fn pressing_z_with_modal_open_does_not_set_chord_leader() {
         viewport_height: 4,
         viewport_offset: 0,
         focus: Focus::List,
+        status_line: None,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Char('z')));
     assert!(effects.is_empty());
@@ -4735,6 +4842,7 @@ fn pressing_g_then_z_does_not_commit_gg_or_zz() {
             viewport_height: 4,
             viewport_offset: 0,
             focus: Focus::List,
+            status_line: None,
         },
         other => panic!("expected Unlocked, got {other:?}"),
     };
@@ -4965,6 +5073,7 @@ fn pressing_slash_with_modal_open_does_not_change_focus() {
         viewport_height: 0,
         viewport_offset: 0,
         focus: Focus::List,
+        status_line: None,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Char('/')));
     assert!(effects.is_empty());
@@ -5158,6 +5267,7 @@ fn pressing_esc_on_unlocked_with_search_focus_and_modal_open_closes_modal_only()
         viewport_height: 0,
         viewport_offset: 0,
         focus: Focus::Search,
+        status_line: None,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Esc));
     assert!(effects.is_empty());
@@ -5228,6 +5338,7 @@ fn unlocked_search_focused_with_three_named_accounts(
         viewport_height: 0,
         viewport_offset: 0,
         focus: Focus::Search,
+        status_line: None,
     };
     (state, [a, b, c])
 }
@@ -5652,6 +5763,7 @@ fn typing_char_while_focus_search_with_modal_open_does_not_route_into_search() {
         viewport_height: 0,
         viewport_offset: 0,
         focus: Focus::Search,
+        status_line: None,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Char('g')));
     assert!(effects.is_empty());
@@ -6080,6 +6192,7 @@ fn unlocked_with_four_labeled_accounts(
         viewport_height: 0,
         viewport_offset: 0,
         focus: Focus::List,
+        status_line: None,
     };
     (state, [a, b, c, d])
 }
@@ -6407,6 +6520,7 @@ fn pressing_n_with_hotp_account_selected_emits_hotp_advance_effect() {
         viewport_height: 0,
         viewport_offset: 0,
         focus: Focus::List,
+        status_line: None,
     };
     let (state, effects) = reduce(state, key(KeyCode::Char('n')));
     match effects.as_slice() {
@@ -6455,6 +6569,7 @@ fn pressing_n_with_totp_account_selected_emits_no_effect() {
         viewport_height: 0,
         viewport_offset: 0,
         focus: Focus::List,
+        status_line: None,
     };
     let (_state, effects) = reduce(state, key(KeyCode::Char('n')));
     assert!(
@@ -6465,7 +6580,11 @@ fn pressing_n_with_totp_account_selected_emits_no_effect() {
 
 #[test]
 fn pressing_n_with_no_selection_emits_no_effect() {
-    // Empty vault / empty filtered set: `n` is a silent no-op.
+    // Empty vault / empty filtered set: `n` emits no effect and (per
+    // `IMPLEMENTATION_PLAN_03_TUI.md` "Focus model") surfaces the
+    // "no account selected" status-line error. The status-line side
+    // of the contract is asserted separately in
+    // `pressing_n_with_no_selection_sets_no_account_selected_status_line`.
     let tmp = secure_tempdir();
     let (path, (vault, store)) = open_plaintext_pair(&tmp);
     let state = AppState::Unlocked {
@@ -6482,6 +6601,7 @@ fn pressing_n_with_no_selection_emits_no_effect() {
         viewport_height: 0,
         viewport_offset: 0,
         focus: Focus::List,
+        status_line: None,
     };
     let (_state, effects) = reduce(state, key(KeyCode::Char('n')));
     assert!(
@@ -6511,12 +6631,219 @@ fn pressing_n_with_modal_open_emits_no_effect() {
         viewport_height: 0,
         viewport_offset: 0,
         focus: Focus::List,
+        status_line: None,
     };
     let (_state, effects) = reduce(state, key(KeyCode::Char('n')));
     assert!(
         effects.is_empty(),
         "pressing `n` with a modal open must not emit HotpAdvance, got {effects:?}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Selection-gated action keys with `selected = None`
+// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Search — bullet
+//  *"Empty result sets have no selection; action keys that require a
+//  selected row surface the 'no account selected' status-line
+//  error."*; cross-references the "Focus model" rule
+//  *"With no selection, `Enter`, `n`, `r`, and `R` produce a
+//  status-line 'no account selected' error and no effect."*)
+//
+// Slice covered: `n`, `r`, and `R` on `Unlocked` / `Focus::List` /
+// no-modal with `selected = None` set `status_line` to
+// `StatusLine::Error("no account selected")` and suppress their
+// normal effect (no `HotpAdvance` for `n`; no modal open for `r` / `R`).
+// `Enter` is not yet bound on Unlocked at this slice — its gating
+// lands alongside the show / copy effect.
+// ---------------------------------------------------------------------------
+
+fn unlocked_with_empty_selection(tmp: &tempfile::TempDir) -> AppState {
+    // Empty vault — `select_after_filter(None, &[])` is `None`, so
+    // every `selected = None` flow we care about reuses this fixture.
+    let (path, (vault, store)) = open_plaintext_pair(tmp);
+    AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+    }
+}
+
+fn assert_no_account_selected_status_after(event: AppEvent, label: &str) {
+    let tmp = secure_tempdir();
+    let before = unlocked_with_empty_selection(&tmp);
+    let (after, effects) = reduce(before, event);
+    assert!(
+        effects.is_empty(),
+        "{label} with no selection must emit no effects, got {effects:?}"
+    );
+    match after {
+        AppState::Unlocked {
+            modal,
+            status_line,
+            selected,
+            ..
+        } => {
+            assert!(
+                selected.is_none(),
+                "{label} with no selection must leave selected = None, got {selected:?}"
+            );
+            assert!(
+                modal.is_none(),
+                "{label} with no selection must not open a modal, got {modal:?}"
+            );
+            assert_eq!(
+                status_line,
+                Some(StatusLine::Error(NO_ACCOUNT_SELECTED.to_string())),
+                "{label} with no selection must set the 'no account selected' status-line error, got {status_line:?}"
+            );
+        }
+        other => panic!("{label}: expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_n_with_no_selection_sets_no_account_selected_status_line() {
+    assert_no_account_selected_status_after(key(KeyCode::Char('n')), "n");
+}
+
+#[test]
+fn pressing_lowercase_r_with_no_selection_sets_no_account_selected_status_line() {
+    assert_no_account_selected_status_after(key(KeyCode::Char('r')), "r");
+}
+
+#[test]
+fn pressing_shift_r_with_no_selection_sets_no_account_selected_status_line() {
+    // Both the bare `Char('R')` (terminals that swallow SHIFT into
+    // the case conversion) and the `Char('R') + SHIFT` shape must
+    // surface the status-line error — matches the resolved-character
+    // dispatch on the modal-open side.
+    assert_no_account_selected_status_after(key(KeyCode::Char('R')), "R");
+    let evt = AppEvent::Input {
+        event: Event::Key(KeyEvent::new(KeyCode::Char('R'), KeyModifiers::SHIFT)),
+        at: Instant::now(),
+    };
+    assert_no_account_selected_status_after(evt, "Shift-R");
+}
+
+#[test]
+fn pressing_non_selection_gated_opener_with_no_selection_does_not_set_status_line() {
+    // `a` / `i` / `e` / `p` / `s` are not selection-gated — they
+    // open their respective modals regardless of `selected`. The
+    // status-line stays `None` so the user does not see a spurious
+    // "no account selected" error while opening Add / Import /
+    // Export / Passphrase / Settings on an empty vault.
+    for (letter, expected) in [
+        ('a', Modal::Add),
+        ('i', Modal::Import),
+        ('e', Modal::Export),
+        ('p', Modal::Passphrase),
+        ('s', Modal::Settings),
+    ] {
+        let tmp = secure_tempdir();
+        let before = unlocked_with_empty_selection(&tmp);
+        let (after, effects) = reduce(before, key(KeyCode::Char(letter)));
+        assert!(
+            effects.is_empty(),
+            "{letter} with no selection must emit no effects, got {effects:?}"
+        );
+        match after {
+            AppState::Unlocked {
+                modal, status_line, ..
+            } => {
+                assert!(
+                    matches!(&modal, Some(m) if std::mem::discriminant(m) == std::mem::discriminant(&expected)),
+                    "{letter} must open {expected:?}, got {modal:?}"
+                );
+                assert!(
+                    status_line.is_none(),
+                    "{letter} must not set the status-line on an empty selection, got {status_line:?}"
+                );
+            }
+            other => panic!("{letter}: expected Unlocked, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn pressing_n_after_search_clears_filtered_set_sets_status_line() {
+    // End-to-end path the L682 bullet describes verbatim: a vault
+    // with accounts, a typed search query that filters everything
+    // out, then `n` on the resulting empty selection. Asserts that
+    // the empty filtered set is reached through the search path
+    // (not directly fabricated) and that the status-line error
+    // surfaces.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    add_totp_account(&mut vault, &store, "github");
+    add_hotp_account(&mut vault, &store, "azure");
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::Search,
+        status_line: None,
+    };
+    // Type "zzz" — no account matches.
+    let (state, _) = reduce(unlocked, key(KeyCode::Char('z')));
+    let (state, _) = reduce(state, key(KeyCode::Char('z')));
+    let (state, _) = reduce(state, key(KeyCode::Char('z')));
+    match &state {
+        AppState::Unlocked { selected, .. } => assert!(
+            selected.is_none(),
+            "search query filtered everything out, so selection must be None"
+        ),
+        other => panic!("expected Unlocked after typing search query, got {other:?}"),
+    }
+    // Return focus to the list so `n` is interpreted as the
+    // HOTP-advance binding, not as text input. `Esc` from
+    // `Focus::Search` also clears the query, so re-establish the
+    // empty filtered set with a `Tab` cycle instead, which preserves
+    // the query.
+    let (state, _) = reduce(state, key(KeyCode::Tab));
+    // `n` on the empty filtered set surfaces the status-line error.
+    let (state, effects) = reduce(state, key(KeyCode::Char('n')));
+    assert!(
+        effects.is_empty(),
+        "`n` on a search-emptied set must emit no effect, got {effects:?}"
+    );
+    match state {
+        AppState::Unlocked {
+            selected,
+            status_line,
+            ..
+        } => {
+            assert!(
+                selected.is_none(),
+                "search-empty selection must remain None across `n`, got {selected:?}"
+            );
+            assert_eq!(
+                status_line,
+                Some(StatusLine::Error(NO_ACCOUNT_SELECTED.to_string())),
+                "`n` on a search-emptied set must set 'no account selected', got {status_line:?}"
+            );
+        }
+        other => panic!("expected Unlocked after `n`, got {other:?}"),
+    }
 }
 
 #[test]
@@ -6540,6 +6867,7 @@ fn pressing_n_while_focus_search_appends_to_query_not_advance() {
         viewport_height: 0,
         viewport_offset: 0,
         focus: Focus::Search,
+        status_line: None,
     };
     let (state, effects) = reduce(state, key(KeyCode::Char('n')));
     assert!(
@@ -6624,6 +6952,7 @@ fn unlocked_with_empty_filtered_set(tmp: &tempfile::TempDir) -> AppState {
         viewport_height: 8,
         viewport_offset: 3,
         focus: Focus::List,
+        status_line: None,
     }
 }
 
@@ -6986,6 +7315,7 @@ fn pressing_tab_with_modal_open_does_not_change_focus() {
         viewport_height: 0,
         viewport_offset: 0,
         focus: Focus::List,
+        status_line: None,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Tab));
     assert!(
@@ -7025,6 +7355,7 @@ fn pressing_shift_tab_with_modal_open_does_not_change_focus() {
         viewport_height: 0,
         viewport_offset: 0,
         focus: Focus::Search,
+        status_line: None,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::BackTab));
     assert!(effects.is_empty());

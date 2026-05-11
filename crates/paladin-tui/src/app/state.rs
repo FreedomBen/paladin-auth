@@ -86,6 +86,36 @@ pub struct HotpReveal {
     pub deadline: Instant,
 }
 
+/// A bottom-bar status message shown on the list view.
+///
+/// Set by actions that need to surface a short, non-modal message —
+/// e.g. pressing `n` / `r` / `R` (and later `Enter`) with no account
+/// selected per `IMPLEMENTATION_PLAN_03_TUI.md` "Focus model" — and
+/// cleared on the `Unlocked → Locked` auto-lock transition alongside
+/// the `Vault` / `Store` (by variant change). Replacement is
+/// last-write-wins: a fresh status-line update overwrites any
+/// existing one without preserving history.
+///
+/// Only the `Error` variant lands at this slice; the `Confirmation`
+/// variant used by successful modal outcomes per the plan's
+/// "Status-line states" list arrives alongside the corresponding
+/// modal-effect slices.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StatusLine {
+    /// An action was rejected without changing visible state — e.g.
+    /// `n` / `r` / `R` with no account selected. The string is
+    /// non-secret prose suitable for verbatim rendering on the bottom
+    /// status bar.
+    Error(String),
+}
+
+/// Status-line error string surfaced when `n`, `r`, `R`, or (when
+/// bound) `Enter` is pressed on Unlocked with `selected = None`. Per
+/// `IMPLEMENTATION_PLAN_03_TUI.md` "Focus model": *"With no
+/// selection, `Enter`, `n`, `r`, and `R` produce a status-line 'no
+/// account selected' error and no effect."*
+pub const NO_ACCOUNT_SELECTED: &str = "no account selected";
+
 /// A pending vim chord leader on the list view.
 ///
 /// Set by the first press of a chord leader key and cleared by the
@@ -366,6 +396,15 @@ pub enum AppState {
         /// the `Vault` / `Store` (by variant change) and re-seeded
         /// to `Focus::List` whenever Unlocked is re-entered.
         focus: Focus,
+        /// Bottom-bar status message, if any. `None` on Unlocked
+        /// entry; set by selection-gated action keys (`n` / `r` /
+        /// `R`) when `selected` is `None` per the
+        /// `IMPLEMENTATION_PLAN_03_TUI.md` "Focus model" rule, and
+        /// (in later slices) by modal-success confirmations and
+        /// other rejected actions. Replacement is last-write-wins.
+        /// Dropped on the `Unlocked → Locked` auto-lock transition
+        /// alongside the `Vault` / `Store` (by variant change).
+        status_line: Option<StatusLine>,
     },
 
     /// Non-mutating startup-error screen. Used when vault-path
@@ -444,6 +483,7 @@ pub fn decide_state_from_open(
                 viewport_height: 0,
                 viewport_offset: 0,
                 focus: Focus::List,
+                status_line: None,
             }
         }
         Err(err) => AppState::StartupError {

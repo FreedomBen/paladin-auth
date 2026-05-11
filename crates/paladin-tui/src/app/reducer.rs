@@ -18,7 +18,7 @@ use paladin_core::{AccountId, ClipboardClearToken, IdlePolicy, PaladinError, Sto
 use crate::app::event::{AppEvent, Effect, EffectResult};
 use crate::app::state::{
     compute_idle_deadline, initial_selection, render_error_message, AppState, ChordLeader, Focus,
-    Modal,
+    Modal, StatusLine, NO_ACCOUNT_SELECTED,
 };
 use crate::search::{filtered_account_ids, select_after_search};
 
@@ -239,6 +239,7 @@ fn reduce_unlock_result(
                         viewport_height: 0,
                         viewport_offset: 0,
                         focus: Focus::List,
+                        status_line: None,
                     },
                     Vec::new(),
                 )
@@ -358,6 +359,7 @@ fn reduce_unlocked_input(mut state: AppState, key: &KeyEvent) -> (AppState, Vec<
         ref mut search_query,
         ref vault,
         ref mut selected,
+        ref mut status_line,
         ..
     } = state
     else {
@@ -496,17 +498,56 @@ fn reduce_unlocked_input(mut state: AppState, key: &KeyEvent) -> (AppState, Vec<
     }
 
     if let KeyCode::Char(c) = key.code {
-        let n_effects = if c == 'n' {
-            hotp_advance_effect(path, vault, *selected)
-                .into_iter()
-                .collect()
-        } else {
-            Vec::new()
-        };
+        if let Some(err) = selection_gated_status_error(c, *selected) {
+            *status_line = Some(err);
+            return (state, Vec::new());
+        }
+        let n_effects = n_effects_for_char(c, path, vault, *selected);
         return dispatch_unlocked_char(state, c, n_effects);
     }
 
     (state, Vec::new())
+}
+
+/// Build the effect list `dispatch_unlocked_char` should carry for
+/// the bare-letter Char `c`. Currently only `n` produces a non-empty
+/// list (the HOTP-advance effect when a HOTP account is selected);
+/// every other letter is dispatched with an empty effect list. The
+/// helper keeps the borrow of `path` / `vault` confined to a tight
+/// pre-dispatch window so the parent reducer stays within its line
+/// budget.
+fn n_effects_for_char(
+    c: char,
+    path: &std::path::Path,
+    vault: &Vault,
+    selected: Option<AccountId>,
+) -> Vec<Effect> {
+    if c == 'n' {
+        hotp_advance_effect(path, vault, selected)
+            .into_iter()
+            .collect()
+    } else {
+        Vec::new()
+    }
+}
+
+/// Map the (key character, current selection) pair to a status-line
+/// error when a selection-gated action key fires without a selected
+/// row. Returns `Some(StatusLine::Error(...))` for `n` / `r` / `R`
+/// with `selected = None` and `None` for every other shape per
+/// `IMPLEMENTATION_PLAN_03_TUI.md` "Focus model": *"With no
+/// selection, `Enter`, `n`, `r`, and `R` produce a status-line 'no
+/// account selected' error and no effect; Add / Import / Export /
+/// Passphrase / Settings remain available from list focus."*
+///
+/// `Enter` is not bound on Unlocked at this slice — once it gains a
+/// show / copy action it joins this gate.
+fn selection_gated_status_error(c: char, selected: Option<AccountId>) -> Option<StatusLine> {
+    if matches!(c, 'n' | 'r' | 'R') && selected.is_none() {
+        Some(StatusLine::Error(NO_ACCOUNT_SELECTED.to_string()))
+    } else {
+        None
+    }
 }
 
 /// Dispatch the post-chord-clear bare-letter Char handling on
@@ -562,11 +603,14 @@ fn dispatch_unlocked_char(
 ///
 /// Returns `Some(Effect::HotpAdvance { path, account_id })` only when
 /// (a) `selected` resolves to a vault account and (b) the account's
-/// kind is [`AccountKindSummary::Hotp`]. TOTP accounts, an empty
-/// selection, and a selected id missing from the vault all yield
-/// `None` so the reducer surfaces no effect — the status-line "not an
-/// HOTP account" hint and "no account selected" hint land with the
-/// status-line slice, never with the reducer.
+/// kind is [`AccountKindSummary::Hotp`]. TOTP accounts and a selected
+/// id missing from the vault yield `None` so the reducer surfaces no
+/// effect — the status-line "not an HOTP account" hint lands with a
+/// later slice. The `selected = None` case is intercepted earlier by
+/// [`selection_gated_status_error`] (which sets the
+/// "no account selected" status-line error), so this helper sees
+/// `None` for selection only when called from paths that have not
+/// run the gate.
 fn hotp_advance_effect(
     path: &std::path::Path,
     vault: &Vault,

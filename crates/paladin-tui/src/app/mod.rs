@@ -19,5 +19,5 @@ pub use event::{AppEvent, Effect, EffectResult};
 pub use reducer::reduce;
 pub use state::{
     build_initial_state, decide_state_from_inspect, decide_state_from_open, render_error_message,
-    AppState,
+    AppState, StatusLine, NO_ACCOUNT_SELECTED,
 };
