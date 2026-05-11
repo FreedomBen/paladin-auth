@@ -696,7 +696,7 @@ end-to-end.
   `IdlePolicy::is_expired`.
 - [x] No-op for plaintext vaults (deadline stays `None`).
 - [x] Setting persists across saves.
-- [ ] Locking discards the `Vault` / `Store`, open HOTP reveal windows,
+- [x] Locking discards the `Vault` / `Store`, open HOTP reveal windows,
   the search query, and any modal while retaining the resolved vault
   path for the next unlock attempt.
 - [ ] A clipboard auto-clear timer scheduled before lock survives lock
