@@ -660,7 +660,7 @@ end-to-end.
 - [x] Search-focus pass-through routes `PgUp` / `PgDn` / `Home` / `End`
   / `Ctrl-B` / `Ctrl-F` / `Ctrl-D` / `Ctrl-U` to the list before
   `tui-input` sees them.
-- [ ] Bare-letter vim keys (`j`, `k`, `g`, `G`, `z`) are consumed by the
+- [x] Bare-letter vim keys (`j`, `k`, `g`, `G`, `z`) are consumed by the
   search field as text input and never trigger chord state from the
   search field.
 - [ ] Empty filtered set: every list-navigation key including the

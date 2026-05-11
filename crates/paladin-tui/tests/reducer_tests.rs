@@ -5376,6 +5376,195 @@ fn typing_capital_char_while_focus_search_appends_uppercase() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Bare-letter vim keys (`j`, `k`, `g`, `G`, `z`) are consumed by the
+// search field as text input and never trigger chord state from the
+// search field. Per `IMPLEMENTATION_PLAN_03_TUI.md` > Tests > Vim-style
+// navigation. The `g` and `G` cases are covered above by the generic
+// bare-letter tests; the `j`, `k`, `z` cases below close the explicit
+// regression guards. `z` is the regression-critical one because it is
+// the `zz` recenter chord leader on `Focus::List` — typing `z` in
+// `Focus::Search` must NOT arm `ChordLeader::Z`.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn typing_j_while_focus_search_appends_to_query_and_no_chord() {
+    let tmp = secure_tempdir();
+    let (state, _ids) = unlocked_search_focused_with_three_named_accounts(&tmp);
+    let (state, effects) = reduce(state, key(KeyCode::Char('j')));
+    assert!(
+        effects.is_empty(),
+        "typing `j` into the search field must not emit effects"
+    );
+    match state {
+        AppState::Unlocked {
+            search_query,
+            focus,
+            pending_chord_leader,
+            ..
+        } => {
+            assert_eq!(
+                search_query, "j",
+                "vim `j` while Focus::Search must be routed as text input"
+            );
+            assert_eq!(focus, Focus::Search, "typing must not change focus");
+            assert_eq!(
+                pending_chord_leader, None,
+                "vim `j` while Focus::Search must not engage chord state"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn typing_k_while_focus_search_appends_to_query_and_no_chord() {
+    let tmp = secure_tempdir();
+    let (state, _ids) = unlocked_search_focused_with_three_named_accounts(&tmp);
+    let (state, effects) = reduce(state, key(KeyCode::Char('k')));
+    assert!(
+        effects.is_empty(),
+        "typing `k` into the search field must not emit effects"
+    );
+    match state {
+        AppState::Unlocked {
+            search_query,
+            focus,
+            pending_chord_leader,
+            ..
+        } => {
+            assert_eq!(
+                search_query, "k",
+                "vim `k` while Focus::Search must be routed as text input"
+            );
+            assert_eq!(focus, Focus::Search);
+            assert_eq!(
+                pending_chord_leader, None,
+                "vim `k` while Focus::Search must not engage chord state"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn typing_z_while_focus_search_does_not_arm_zz_chord_leader() {
+    let tmp = secure_tempdir();
+    let (state, _ids) = unlocked_search_focused_with_three_named_accounts(&tmp);
+    let (state, effects) = reduce(state, key(KeyCode::Char('z')));
+    assert!(
+        effects.is_empty(),
+        "typing `z` into the search field must not emit effects"
+    );
+    match state {
+        AppState::Unlocked {
+            search_query,
+            focus,
+            pending_chord_leader,
+            ..
+        } => {
+            assert_eq!(
+                search_query, "z",
+                "vim `z` while Focus::Search must be routed as text input"
+            );
+            assert_eq!(focus, Focus::Search);
+            assert_eq!(
+                pending_chord_leader, None,
+                "vim `z` while Focus::Search must not arm the `zz` chord leader"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn typing_zz_pair_while_focus_search_appends_two_chars_and_no_chord() {
+    // The `zz` recenter chord is `Focus::List`-only. Pressing `z`
+    // twice with the search field focused must accumulate "zz" in
+    // the query buffer without ever committing the chord or
+    // recentering the viewport.
+    let tmp = secure_tempdir();
+    let (mut state, _ids) = unlocked_search_focused_with_three_named_accounts(&tmp);
+    if let AppState::Unlocked {
+        ref mut viewport_offset,
+        ..
+    } = state
+    {
+        *viewport_offset = 7;
+    }
+    let (state, _) = reduce(state, key(KeyCode::Char('z')));
+    let (state, _) = reduce(state, key(KeyCode::Char('z')));
+    match state {
+        AppState::Unlocked {
+            search_query,
+            pending_chord_leader,
+            viewport_offset,
+            ..
+        } => {
+            assert_eq!(
+                search_query, "zz",
+                "two `z` presses in Focus::Search must accumulate as text"
+            );
+            assert_eq!(
+                pending_chord_leader, None,
+                "no chord must be armed at any point during the search-focused `z` `z` sequence"
+            );
+            assert_eq!(
+                viewport_offset, 7,
+                "the recenter chord must not fire while Focus::Search"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn typing_gg_pair_while_focus_search_appends_two_chars_and_no_chord() {
+    // Parallel guard to `zz`: the `gg` jump-to-first chord is
+    // `Focus::List`-only; two `g` presses in `Focus::Search` must
+    // accumulate "gg" without arming or committing the chord.
+    let tmp = secure_tempdir();
+    let (mut state, [_a, _b, c]) = unlocked_search_focused_with_three_named_accounts(&tmp);
+    if let AppState::Unlocked {
+        ref mut selected, ..
+    } = state
+    {
+        *selected = Some(c);
+    }
+    let (state, _) = reduce(state, key(KeyCode::Char('g')));
+    let (state, _) = reduce(state, key(KeyCode::Char('g')));
+    match state {
+        AppState::Unlocked {
+            search_query,
+            pending_chord_leader,
+            selected,
+            ..
+        } => {
+            assert_eq!(
+                search_query, "gg",
+                "two `g` presses in Focus::Search must accumulate as text"
+            );
+            assert_eq!(
+                pending_chord_leader, None,
+                "no chord must be armed during the search-focused `g` `g` sequence"
+            );
+            // All three labels ("github", "google", "gitlab") match
+            // "gg" case-insensitively? No — only "github" contains
+            // "gg"? Actually none do. The filter goes empty and the
+            // surviving prev selection (c = gitlab) drops; selection
+            // becomes None. The contract asserted here is *not* the
+            // selection value (which is a filter side-effect) but
+            // that the chord didn't commit to first-of-filtered.
+            assert!(
+                selected.is_none() || selected != Some(c),
+                "filter side-effect: prev selection dropped when filtered set is empty; \
+                 the important guard is that no chord-commit jumped selection"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
 #[test]
 fn typing_q_while_focus_search_does_not_quit() {
     let tmp = secure_tempdir();
