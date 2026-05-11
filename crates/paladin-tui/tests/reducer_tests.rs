@@ -5378,3 +5378,240 @@ fn pressing_esc_on_unlocked_with_list_focus_does_not_clear_search_query() {
         other => panic!("expected Unlocked, got {other:?}"),
     }
 }
+
+// ---------------------------------------------------------------------------
+// Search filter narrows the visible list in place (per
+// `IMPLEMENTATION_PLAN_03_TUI.md` Tests > Reducer > "Search filter narrows
+// the visible list in place"). With a non-empty `search_query`, list
+// navigation must walk the filtered insertion-order set, not `Vault::iter()`.
+// ---------------------------------------------------------------------------
+
+/// Build a 4-account plaintext Unlocked state with custom labels so the
+/// search predicate has both matches and non-matches to traverse.
+/// Returns the four inserted ids in insertion order.
+fn unlocked_with_four_labeled_accounts(
+    tmp: &tempfile::TempDir,
+    labels: [&str; 4],
+) -> (AppState, [AccountId; 4]) {
+    let (path, (mut vault, store)) = open_plaintext_pair(tmp);
+    let a = add_totp_account(&mut vault, &store, labels[0]);
+    let b = add_totp_account(&mut vault, &store, labels[1]);
+    let c = add_totp_account(&mut vault, &store, labels[2]);
+    let d = add_totp_account(&mut vault, &store, labels[3]);
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(a),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+    };
+    (state, [a, b, c, d])
+}
+
+#[test]
+fn pressing_down_arrow_walks_filtered_list_when_search_query_active() {
+    // alpha / alex match "al"; beta / carol do not. Down from alpha
+    // must skip past beta (filtered out) and land on alex.
+    let tmp = secure_tempdir();
+    let (mut state, [alpha, _beta, alex, _carol]) =
+        unlocked_with_four_labeled_accounts(&tmp, ["alpha", "beta", "alex", "carol"]);
+    if let AppState::Unlocked {
+        ref mut search_query,
+        ref mut selected,
+        ..
+    } = state
+    {
+        *search_query = "al".to_string();
+        *selected = Some(alpha);
+    }
+    let (state, effects) = reduce(state, key(KeyCode::Down));
+    assert!(effects.is_empty(), "navigation must not emit effects");
+    match state {
+        AppState::Unlocked { selected, .. } => assert_eq!(
+            selected,
+            Some(alex),
+            "Down must walk the filtered list and skip over non-matching rows"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_down_arrow_clamps_at_last_of_filtered_list() {
+    // From alex (last filtered match for "al"), Down must clamp at
+    // alex — not jump to carol (filtered out) or beyond.
+    let tmp = secure_tempdir();
+    let (mut state, [_alpha, _beta, alex, _carol]) =
+        unlocked_with_four_labeled_accounts(&tmp, ["alpha", "beta", "alex", "carol"]);
+    if let AppState::Unlocked {
+        ref mut search_query,
+        ref mut selected,
+        ..
+    } = state
+    {
+        *search_query = "al".to_string();
+        *selected = Some(alex);
+    }
+    let (state, _effects) = reduce(state, key(KeyCode::Down));
+    match state {
+        AppState::Unlocked { selected, .. } => assert_eq!(
+            selected,
+            Some(alex),
+            "Down at last filtered row must clamp, not advance to a filtered-out row"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_up_arrow_walks_filtered_list_when_search_query_active() {
+    // From alex, Up with filter "al" must skip beta and land on alpha.
+    let tmp = secure_tempdir();
+    let (mut state, [alpha, _beta, alex, _carol]) =
+        unlocked_with_four_labeled_accounts(&tmp, ["alpha", "beta", "alex", "carol"]);
+    if let AppState::Unlocked {
+        ref mut search_query,
+        ref mut selected,
+        ..
+    } = state
+    {
+        *search_query = "al".to_string();
+        *selected = Some(alex);
+    }
+    let (state, _effects) = reduce(state, key(KeyCode::Up));
+    match state {
+        AppState::Unlocked { selected, .. } => assert_eq!(
+            selected,
+            Some(alpha),
+            "Up must walk the filtered list and skip over non-matching rows"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_end_jumps_to_last_of_filtered_list() {
+    // End with filter "al" must land on alex (last filtered match),
+    // not carol (last vault row, filtered out).
+    let tmp = secure_tempdir();
+    let (mut state, [alpha, _beta, alex, _carol]) =
+        unlocked_with_four_labeled_accounts(&tmp, ["alpha", "beta", "alex", "carol"]);
+    if let AppState::Unlocked {
+        ref mut search_query,
+        ref mut selected,
+        ..
+    } = state
+    {
+        *search_query = "al".to_string();
+        *selected = Some(alpha);
+    }
+    let (state, _effects) = reduce(state, key(KeyCode::End));
+    match state {
+        AppState::Unlocked { selected, .. } => assert_eq!(
+            selected,
+            Some(alex),
+            "End must jump to the last row of the filtered list"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_home_jumps_to_first_of_filtered_list() {
+    // Home with filter "al" must land on alpha (first filtered match)
+    // from alex, not on alpha's vault-position-0 unless alpha is the
+    // first filtered row.
+    let tmp = secure_tempdir();
+    let (mut state, [alpha, _beta, alex, _carol]) =
+        unlocked_with_four_labeled_accounts(&tmp, ["alpha", "beta", "alex", "carol"]);
+    if let AppState::Unlocked {
+        ref mut search_query,
+        ref mut selected,
+        ..
+    } = state
+    {
+        *search_query = "al".to_string();
+        *selected = Some(alex);
+    }
+    let (state, _effects) = reduce(state, key(KeyCode::Home));
+    match state {
+        AppState::Unlocked { selected, .. } => assert_eq!(
+            selected,
+            Some(alpha),
+            "Home must jump to the first row of the filtered list"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_end_with_filter_excluding_first_vault_row_still_lands_in_filtered_set() {
+    // Filter "ro" matches only "carol". End must land on carol even
+    // though "carol" is the last vault row in this layout — but the
+    // important assertion is that End is grounded in the filtered set
+    // (not vault.iter()), which is exercised by the other End test
+    // above. This case asserts End behaves the same when the filtered
+    // set is a single account.
+    let tmp = secure_tempdir();
+    let (mut state, [alpha, _beta, _alex, carol]) =
+        unlocked_with_four_labeled_accounts(&tmp, ["alpha", "beta", "alex", "carol"]);
+    if let AppState::Unlocked {
+        ref mut search_query,
+        ref mut selected,
+        ..
+    } = state
+    {
+        *search_query = "ro".to_string();
+        // A typical search-recompute would have already placed
+        // selection on carol; seed it explicitly here from alpha to
+        // verify End repositions to the only filtered row.
+        *selected = Some(alpha);
+    }
+    let (state, _effects) = reduce(state, key(KeyCode::End));
+    match state {
+        AppState::Unlocked { selected, .. } => assert_eq!(
+            selected,
+            Some(carol),
+            "End must land on the sole filtered match"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_page_down_clamps_within_filtered_list() {
+    // With a viewport tall enough to overshoot the filtered set,
+    // PageDown must clamp at the last filtered row (alex), not run
+    // off the end of vault.iter() into filtered-out rows.
+    let tmp = secure_tempdir();
+    let (mut state, [alpha, _beta, alex, _carol]) =
+        unlocked_with_four_labeled_accounts(&tmp, ["alpha", "beta", "alex", "carol"]);
+    if let AppState::Unlocked {
+        ref mut search_query,
+        ref mut selected,
+        ref mut viewport_height,
+        ..
+    } = state
+    {
+        *search_query = "al".to_string();
+        *selected = Some(alpha);
+        *viewport_height = 10;
+    }
+    let (state, _effects) = reduce(state, key(KeyCode::PageDown));
+    match state {
+        AppState::Unlocked { selected, .. } => assert_eq!(
+            selected,
+            Some(alex),
+            "PageDown with oversized viewport must clamp at the last filtered row"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}

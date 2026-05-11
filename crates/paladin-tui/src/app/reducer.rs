@@ -20,7 +20,7 @@ use crate::app::state::{
     compute_idle_deadline, initial_selection, render_error_message, AppState, ChordLeader, Focus,
     Modal,
 };
-use crate::search::select_after_search;
+use crate::search::{filtered_account_ids, select_after_search};
 
 /// Apply one event to the current state and return the new state plus
 /// any side effects.
@@ -581,20 +581,24 @@ fn list_step_for_key(code: KeyCode) -> Option<ListStep> {
 
 /// Move the Unlocked list selection per `step`.
 ///
-/// For `Up` / `Down`, walks `Vault::iter()` (insertion order) to find
-/// the row adjacent to the currently selected `AccountId`; clamping at
-/// top / bottom leaves the selection unchanged. For `First` / `Last`,
-/// assigns the head / tail of the iteration directly. For `PageUp` /
-/// `PageDown`, walks the iteration by `viewport_height` rows from the
-/// currently selected `AccountId`, clamping at the head / tail when
-/// fewer rows remain. A `viewport_height` of `0` (pre-resize seed) is
-/// a silent no-op. Empty filtered set (`selected = None` and
-/// `vault.iter()` empty) is a silent no-op in every direction. The
-/// reducer never emits effects for navigation — these are pure state
-/// updates.
+/// All step variants walk the **filtered** insertion-order set derived
+/// from `search_query` via [`filtered_account_ids`], not the unfiltered
+/// `Vault::iter()`, so navigation honors the active search filter per
+/// the §6 "Search filter narrows the visible list in place" rule. For
+/// `Up` / `Down`, picks the row adjacent to the currently selected
+/// `AccountId` within the filtered set; clamping at top / bottom leaves
+/// the selection unchanged. For `First` / `Last`, assigns the head /
+/// tail of the filtered set directly. For `PageUp` / `PageDown`, walks
+/// the filtered set by `viewport_height` rows, clamping at head / tail
+/// when fewer filtered rows remain. A `viewport_height` of `0`
+/// (pre-resize seed) is a silent no-op. An empty filtered set
+/// (`selected = None`, no rows match) is a silent no-op in every
+/// direction. The reducer never emits effects for navigation — these
+/// are pure state updates.
 fn move_selection(mut state: AppState, step: ListStep) -> (AppState, Vec<Effect>) {
     let AppState::Unlocked {
         ref vault,
+        ref search_query,
         ref mut selected,
         viewport_height,
         viewport_offset: 0,
@@ -603,23 +607,24 @@ fn move_selection(mut state: AppState, step: ListStep) -> (AppState, Vec<Effect>
     else {
         return (state, Vec::new());
     };
+    let ids = filtered_account_ids(vault, search_query);
     match step {
         ListStep::Up | ListStep::Down => {
             if let Some(current) = *selected {
-                if let Some(next) = adjacent_account(vault, current, step) {
+                if let Some(next) = adjacent_in_filtered(&ids, current, step) {
                     *selected = Some(next);
                 }
             }
         }
         ListStep::First => {
-            *selected = vault.iter().next().map(paladin_core::Account::id);
+            *selected = ids.first().copied();
         }
         ListStep::Last => {
-            *selected = vault.iter().last().map(paladin_core::Account::id);
+            *selected = ids.last().copied();
         }
         ListStep::PageDown | ListStep::PageUp => {
             if let Some(current) = *selected {
-                if let Some(next) = step_n_rows(vault, current, step, viewport_height as usize) {
+                if let Some(next) = step_n_rows(&ids, current, step, viewport_height as usize) {
                     *selected = Some(next);
                 }
             }
@@ -631,7 +636,7 @@ fn move_selection(mut state: AppState, step: ListStep) -> (AppState, Vec<Effect>
                 // behavior — half-page is undefined on a one-row
                 // viewport.
                 let n = (viewport_height as usize) / 2;
-                if let Some(next) = step_n_rows(vault, current, step, n) {
+                if let Some(next) = step_n_rows(&ids, current, step, n) {
                     *selected = Some(next);
                 }
             }
@@ -643,17 +648,20 @@ fn move_selection(mut state: AppState, step: ListStep) -> (AppState, Vec<Effect>
 /// Commit a `zz` recenter: set [`AppState::Unlocked::viewport_offset`]
 /// so the selected row sits in the middle of the viewport.
 ///
-/// Computes `sel_pos = vault.iter().position(selected)` and assigns
-/// `viewport_offset = sel_pos.saturating_sub(viewport_height / 2)`.
+/// Computes `sel_pos` as the position of the selection within the
+/// **filtered** insertion-order set (`filtered_account_ids`) so the
+/// offset matches the rendered list when a search query is active, then
+/// assigns `viewport_offset = sel_pos.saturating_sub(viewport_height / 2)`.
 /// The lower-bound saturation keeps near-the-top selections at offset
 /// `0`; the renderer is responsible for any upper-bound clamping when
 /// the resize-driven viewport slice lands. Silent no-op when
-/// `selected = None`, the selected id is not present in the vault, or
-/// `viewport_height = 0` — `viewport_offset` is unchanged in every
-/// no-op case.
+/// `selected = None`, the selected id is not present in the filtered
+/// set, or `viewport_height = 0` — `viewport_offset` is unchanged in
+/// every no-op case.
 fn recenter_viewport(mut state: AppState) -> (AppState, Vec<Effect>) {
     let AppState::Unlocked {
         ref vault,
+        ref search_query,
         selected,
         viewport_height,
         ref mut viewport_offset,
@@ -668,10 +676,8 @@ fn recenter_viewport(mut state: AppState) -> (AppState, Vec<Effect>) {
     let Some(current) = selected else {
         return (state, Vec::new());
     };
-    let Some(pos) = vault
-        .iter()
-        .position(|a| paladin_core::Account::id(a) == current)
-    else {
+    let ids = filtered_account_ids(vault, search_query);
+    let Some(pos) = ids.iter().position(|id| *id == current) else {
         return (state, Vec::new());
     };
     let half = viewport_height / 2;
@@ -680,33 +686,28 @@ fn recenter_viewport(mut state: AppState) -> (AppState, Vec<Effect>) {
     (state, Vec::new())
 }
 
-/// Return the account adjacent to `current` in `vault`'s
-/// insertion-order iteration, or `None` when `current` is at the end
-/// of the iteration in the requested direction (clamp signal).
+/// Return the account adjacent to `current` in the filtered
+/// insertion-order set `ids`, or `None` when `current` is at the end
+/// of the set in the requested direction (clamp signal) or is absent
+/// from the filtered set entirely.
 ///
 /// Only `ListStep::Up` and `ListStep::Down` are valid here; the
 /// absolute-jump and page-step variants are handled directly in
 /// [`move_selection`].
-fn adjacent_account(vault: &Vault, current: AccountId, step: ListStep) -> Option<AccountId> {
+fn adjacent_in_filtered(
+    ids: &[AccountId],
+    current: AccountId,
+    step: ListStep,
+) -> Option<AccountId> {
+    let pos = ids.iter().position(|id| *id == current)?;
     match step {
-        ListStep::Down => {
-            let mut ids = vault.iter().map(paladin_core::Account::id);
-            for id in ids.by_ref() {
-                if id == current {
-                    return ids.next();
-                }
-            }
-            None
-        }
+        ListStep::Down => ids.get(pos + 1).copied(),
         ListStep::Up => {
-            let mut prev: Option<AccountId> = None;
-            for a in vault.iter() {
-                if a.id() == current {
-                    return prev;
-                }
-                prev = Some(a.id());
+            if pos == 0 {
+                None
+            } else {
+                Some(ids[pos - 1])
             }
-            None
         }
         ListStep::First
         | ListStep::Last
@@ -721,20 +722,24 @@ fn adjacent_account(vault: &Vault, current: AccountId, step: ListStep) -> Option
     }
 }
 
-/// Walk `vault`'s insertion-order iteration `n` rows up or down from
-/// `current`, clamping at the head / tail when fewer rows remain.
+/// Walk the filtered insertion-order set `ids` by `n` rows up or down
+/// from `current`, clamping at the head / tail when fewer rows remain.
 ///
 /// Returns the new `AccountId` when the selection moves, or `None` when
 /// the walk would be a no-op (n == 0, `current` already at the
 /// boundary in the requested direction, or `current` not found in the
-/// iteration). Used by `ListStep::PageUp` / `ListStep::PageDown` with
-/// `n = viewport_height` and by `ListStep::HalfPageUp` /
+/// filtered set). Used by `ListStep::PageUp` / `ListStep::PageDown`
+/// with `n = viewport_height` and by `ListStep::HalfPageUp` /
 /// `ListStep::HalfPageDown` with `n = viewport_height / 2`.
-fn step_n_rows(vault: &Vault, current: AccountId, step: ListStep, n: usize) -> Option<AccountId> {
+fn step_n_rows(
+    ids: &[AccountId],
+    current: AccountId,
+    step: ListStep,
+    n: usize,
+) -> Option<AccountId> {
     if n == 0 {
         return None;
     }
-    let ids: Vec<AccountId> = vault.iter().map(paladin_core::Account::id).collect();
     let pos = ids.iter().position(|id| *id == current)?;
     let target = match step {
         ListStep::PageDown | ListStep::HalfPageDown => (pos + n).min(ids.len().saturating_sub(1)),
