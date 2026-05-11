@@ -1058,3 +1058,147 @@ fn auto_lock_setting_persists_across_save_reopen_plaintext() {
         "auto_lock_timeout_secs must survive plaintext save + reopen"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Clipboard auto-clear timer scheduled before lock survives lock and still
+// fires only-if-unchanged
+// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Auto-lock — last bullet)
+//
+// End-to-end shape: schedule a clipboard clear on `Unlocked` via
+// `ClipboardClearPolicy::schedule`, then let a `Tick` past the idle
+// deadline transition the state to `Locked` (the lock window comes
+// before the clear-deadline). The `pending_clipboard_clear` must
+// survive the variant change verbatim. When the deferred
+// `AppEvent::ClipboardClear { token, value }` fires after the lock,
+// the reducer on `Locked` must emit exactly one
+// `Effect::ClearClipboard { value }` carrying the captured bytes —
+// which is the input the executor needs to apply
+// `ClipboardClearPolicy::should_clear` against the live clipboard
+// ("only-if-unchanged"; executor side is covered by
+// `tests/clipboard_tests.rs` once the `arboard` adapter lands).
+//
+// The individual carry-across and wake-handler slices are pinned by
+// `tick_after_deadline_lock_carries_pending_clipboard_clear` and
+// `clipboard_clear_event_on_locked_with_matching_token_fires_wipe_and_clears_pending`
+// above; this test threads them into a single lifecycle so the
+// bullet's "survives lock AND still fires" intent is observable as one
+// scenario.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn clipboard_clear_timer_scheduled_before_lock_survives_and_fires_after_lock() {
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (mut vault, store) = create_encrypted_pair(&path, "pp");
+    // Auto-lock fires well before the clipboard clear timer, so the
+    // wake event arrives on `Locked`, not `Unlocked`. The minimum
+    // `auto_lock_timeout_secs` is 30 and the maximum
+    // `clipboard_clear_secs` is 600 (per `ui_contract`), so the lock
+    // is guaranteed to land before the clipboard clear deadline.
+    enable_auto_lock(&mut vault, &store, 30);
+    vault.set_clipboard_clear_enabled(true);
+    vault
+        .set_clipboard_clear_secs(600)
+        .expect("clear secs within bounds");
+
+    let t0 = Instant::now();
+    let (token, clear_deadline) =
+        ClipboardClearPolicy::schedule(t0, vault.settings()).expect("clipboard clear scheduled");
+    let captured: Vec<u8> = vec![0x31, 0x32, 0x33, 0x34, 0x35, 0x36];
+
+    // Idle deadline comes from the 30s auto-lock timeout; the clear
+    // deadline is 600s out — guaranteed to be after the lock.
+    let idle_deadline = t0 + Duration::from_secs(30);
+    assert!(
+        clear_deadline > idle_deadline,
+        "test invariant: clear must be scheduled after the lock window"
+    );
+
+    let unlocked = AppState::Unlocked {
+        path: path.clone(),
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: Some(idle_deadline),
+        pending_clipboard_clear: Some(PendingClipboardClear {
+            token,
+            value: captured.clone(),
+            deadline: clear_deadline,
+        }),
+        hotp_reveal: None,
+        modal: None,
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+    };
+
+    // Step 1: a tick past the idle deadline locks the vault; the
+    // pending clear must ride the variant change verbatim.
+    let lock_at = idle_deadline + Duration::from_millis(1);
+    let (locked, lock_effects) = reduce(unlocked, tick_at(lock_at));
+    assert!(
+        lock_effects.is_empty(),
+        "lock transition emits no effects; got {lock_effects:?}"
+    );
+    match &locked {
+        AppState::Locked {
+            path: p,
+            pending_clipboard_clear,
+        } => {
+            assert_eq!(p, &path, "Locked path matches the original Unlocked path");
+            let p_clear = pending_clipboard_clear
+                .as_ref()
+                .expect("pending clear must survive lock");
+            assert_eq!(
+                p_clear.token, token,
+                "token survives the Unlocked → Locked transition unchanged"
+            );
+            assert_eq!(
+                p_clear.value.as_slice(),
+                captured.as_slice(),
+                "captured bytes survive the lock unchanged"
+            );
+            assert_eq!(
+                p_clear.deadline, clear_deadline,
+                "wake-deadline survives the lock unchanged"
+            );
+        }
+        other => panic!("expected Locked after tick past idle deadline, got {other:?}"),
+    }
+
+    // Step 2: the delayed wake fires on the locked state. The reducer
+    // emits exactly one `Effect::ClearClipboard` carrying the captured
+    // bytes (the input to executor-side `should_clear`) and the
+    // pending state drops to `None`.
+    let (final_state, wake_effects) = reduce(
+        locked,
+        AppEvent::ClipboardClear {
+            token,
+            value: captured.clone(),
+        },
+    );
+    match &wake_effects[..] {
+        [Effect::ClearClipboard { value }] => {
+            assert_eq!(
+                value, &captured,
+                "Effect::ClearClipboard must carry the captured bytes verbatim — the executor checks only-if-unchanged against this value"
+            );
+        }
+        other => panic!("expected exactly one Effect::ClearClipboard, got {other:?}"),
+    }
+    match final_state {
+        AppState::Locked {
+            path: p,
+            pending_clipboard_clear,
+        } => {
+            assert_eq!(p, path, "still Locked after firing");
+            assert!(
+                pending_clipboard_clear.is_none(),
+                "pending clear is consumed once handed to the executor"
+            );
+        }
+        other => panic!("expected Locked after wake, got {other:?}"),
+    }
+}

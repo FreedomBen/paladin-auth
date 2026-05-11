@@ -699,7 +699,7 @@ end-to-end.
 - [x] Locking discards the `Vault` / `Store`, open HOTP reveal windows,
   the search query, and any modal while retaining the resolved vault
   path for the next unlock attempt.
-- [ ] A clipboard auto-clear timer scheduled before lock survives lock
+- [x] A clipboard auto-clear timer scheduled before lock survives lock
   and still fires only-if-unchanged.
 
 ### Clipboard auto-clear (`tests/clipboard_tests.rs`)
