@@ -6812,3 +6812,329 @@ fn pressing_zz_chord_on_empty_filtered_set_is_silent_no_op() {
         other => panic!("expected Unlocked, got {other:?}"),
     }
 }
+
+// ---------------------------------------------------------------------------
+// `Tab` / `Shift-Tab` — cycle focus between the search bar and the
+// account list (Unlocked).
+//
+// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Keybindings (initial v0.1)":
+//   "`Tab` `Shift-Tab` — Cycle focus between search bar and list
+//    (preserves active query when leaving search)".
+//
+// Top-level Unlocked has two focus surfaces (`Focus::List`,
+// `Focus::Search`), so `Tab` and `Shift-Tab` both swap. Outside
+// Unlocked the keys are silent (the other screens have no focus
+// model in v0.1). Modal dialogs trap focus while open, so `Tab`
+// with a modal open is a silent no-op — `Ctrl-N` / `Ctrl-P` inside
+// modals will land in a later slice for the modal-local navigation
+// rule. Focus changes clear any pending vim chord leader, mirroring
+// the `/`-after-`g` / `/`-after-`z` chord-clear rule from the slash
+// section above.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn pressing_tab_on_unlocked_list_focus_moves_focus_to_search() {
+    let tmp = secure_tempdir();
+    let (state, [a, _b, _c]) = unlocked_with_three_accounts(&tmp);
+    let (state, effects) = reduce(state, key(KeyCode::Tab));
+    assert!(
+        effects.is_empty(),
+        "`Tab` must not emit effects — it only swaps focus"
+    );
+    match state {
+        AppState::Unlocked {
+            focus,
+            selected,
+            search_query,
+            modal,
+            pending_chord_leader,
+            ..
+        } => {
+            assert_eq!(
+                focus,
+                Focus::Search,
+                "`Tab` from Focus::List must transition focus to Focus::Search"
+            );
+            assert_eq!(selected, Some(a), "`Tab` must not move list selection");
+            assert_eq!(search_query, "", "`Tab` must not modify the search query");
+            assert!(modal.is_none(), "`Tab` must not open a modal");
+            assert_eq!(
+                pending_chord_leader, None,
+                "`Tab` must keep pending chord leader cleared"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_tab_on_unlocked_search_focus_moves_focus_to_list_preserving_query() {
+    // Active query must survive the focus swap per the keybindings
+    // table: "preserves active query when leaving search".
+    let tmp = secure_tempdir();
+    let (mut state, [a, _b, _c]) = unlocked_with_three_accounts(&tmp);
+    if let AppState::Unlocked {
+        ref mut focus,
+        ref mut search_query,
+        ..
+    } = state
+    {
+        *focus = Focus::Search;
+        *search_query = "github".to_string();
+    }
+    let (state, effects) = reduce(state, key(KeyCode::Tab));
+    assert!(effects.is_empty(), "`Tab` must not emit effects");
+    match state {
+        AppState::Unlocked {
+            focus,
+            search_query,
+            selected,
+            modal,
+            pending_chord_leader,
+            ..
+        } => {
+            assert_eq!(
+                focus,
+                Focus::List,
+                "`Tab` from Focus::Search must return focus to the list"
+            );
+            assert_eq!(
+                search_query, "github",
+                "`Tab` must preserve the active search query when leaving search"
+            );
+            assert_eq!(selected, Some(a), "`Tab` must not move list selection");
+            assert!(modal.is_none(), "`Tab` must not open a modal");
+            assert_eq!(pending_chord_leader, None);
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_shift_tab_on_unlocked_list_focus_moves_focus_to_search() {
+    // Top-level Unlocked has only two focus surfaces, so Shift-Tab
+    // swaps the same way as Tab.
+    let tmp = secure_tempdir();
+    let (state, _ids) = unlocked_with_three_accounts(&tmp);
+    let (state, effects) = reduce(state, key(KeyCode::BackTab));
+    assert!(effects.is_empty(), "`Shift-Tab` must not emit effects");
+    match state {
+        AppState::Unlocked { focus, .. } => assert_eq!(
+            focus,
+            Focus::Search,
+            "`Shift-Tab` from Focus::List must transition focus to Focus::Search"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_shift_tab_on_unlocked_search_focus_moves_focus_to_list_preserving_query() {
+    let tmp = secure_tempdir();
+    let (mut state, _ids) = unlocked_with_three_accounts(&tmp);
+    if let AppState::Unlocked {
+        ref mut focus,
+        ref mut search_query,
+        ..
+    } = state
+    {
+        *focus = Focus::Search;
+        *search_query = "gitlab".to_string();
+    }
+    let (state, effects) = reduce(state, key(KeyCode::BackTab));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked {
+            focus,
+            search_query,
+            ..
+        } => {
+            assert_eq!(
+                focus,
+                Focus::List,
+                "`Shift-Tab` from Focus::Search must return focus to the list"
+            );
+            assert_eq!(
+                search_query, "gitlab",
+                "`Shift-Tab` must preserve the active search query"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_tab_with_modal_open_does_not_change_focus() {
+    // Modals trap focus while open — `Tab` is a silent no-op at the
+    // top level so the modal's own focus traversal (Ctrl-N / Ctrl-P
+    // aliasing Tab / Shift-Tab) is not pre-empted. Modal-local
+    // navigation lands in a later slice.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let a = add_totp_account(&mut vault, &store, "a");
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Settings),
+        selected: Some(a),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+    };
+    let (state, effects) = reduce(unlocked, key(KeyCode::Tab));
+    assert!(
+        effects.is_empty(),
+        "`Tab` with modal open must not emit effects"
+    );
+    match state {
+        AppState::Unlocked {
+            focus,
+            modal: Some(Modal::Settings),
+            ..
+        } => assert_eq!(
+            focus,
+            Focus::List,
+            "`Tab` must not change top-level focus while a modal traps input"
+        ),
+        other => panic!("expected Unlocked with Modal::Settings open, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_shift_tab_with_modal_open_does_not_change_focus() {
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let a = add_totp_account(&mut vault, &store, "a");
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Settings),
+        selected: Some(a),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::Search,
+    };
+    let (state, effects) = reduce(unlocked, key(KeyCode::BackTab));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked {
+            focus,
+            modal: Some(Modal::Settings),
+            ..
+        } => assert_eq!(
+            focus,
+            Focus::Search,
+            "`Shift-Tab` must not change top-level focus while a modal is open"
+        ),
+        other => panic!("expected Unlocked with Modal::Settings open, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_tab_after_g_clears_chord_and_moves_focus_to_search() {
+    // Mirrors `pressing_slash_after_g_clears_chord_and_focuses_search`:
+    // any focus change to the search bar must drop a pending vim
+    // chord leader. The `Tab` key swaps focus, so it cross-clears
+    // the `g` leader without firing the `gg` jump-to-first action.
+    let tmp = secure_tempdir();
+    let (state, _ids) = unlocked_with_three_accounts(&tmp);
+    let (state, effects) = reduce(state, key(KeyCode::Char('g')));
+    assert!(effects.is_empty(), "first `g` must not emit effects");
+    let (state, effects) = reduce(state, key(KeyCode::Tab));
+    assert!(effects.is_empty(), "`Tab` must not emit effects");
+    match state {
+        AppState::Unlocked {
+            focus,
+            pending_chord_leader,
+            ..
+        } => {
+            assert_eq!(
+                focus,
+                Focus::Search,
+                "`Tab` after `g` must still focus the search bar"
+            );
+            assert_eq!(
+                pending_chord_leader, None,
+                "`Tab` must clear a pending `g` chord leader"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_tab_after_z_clears_chord_and_moves_focus_to_search() {
+    // Mirrors `pressing_slash_after_z_clears_chord_and_focuses_search`
+    // for the `z` leader.
+    let tmp = secure_tempdir();
+    let (state, _ids) = unlocked_with_three_accounts(&tmp);
+    let (state, effects) = reduce(state, key(KeyCode::Char('z')));
+    assert!(effects.is_empty(), "first `z` must not emit effects");
+    let (state, effects) = reduce(state, key(KeyCode::Tab));
+    assert!(effects.is_empty(), "`Tab` must not emit effects");
+    match state {
+        AppState::Unlocked {
+            focus,
+            pending_chord_leader,
+            ..
+        } => {
+            assert_eq!(
+                focus,
+                Focus::Search,
+                "`Tab` after `z` must still focus the search bar"
+            );
+            assert_eq!(
+                pending_chord_leader, None,
+                "`Tab` must clear a pending `z` chord leader"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_tab_on_missing_vault_is_silent_no_op() {
+    // Non-Unlocked screens have no focus model in v0.1 — `Tab` is a
+    // silent no-op (no effects, state unchanged).
+    let state = missing("/nonexistent/vault");
+    let (state, effects) = reduce(state, key(KeyCode::Tab));
+    assert!(
+        effects.is_empty(),
+        "`Tab` outside Unlocked must not emit effects"
+    );
+    match state {
+        AppState::MissingVault { path } => assert_eq!(path, PathBuf::from("/nonexistent/vault")),
+        other => panic!("expected MissingVault, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_tab_on_unlock_screen_is_silent_no_op() {
+    // The unlock screen has only the passphrase buffer — `Tab` must
+    // not be captured as text input nor change anything.
+    let state = unlock_with("/some/vault", "secret");
+    let (state, effects) = reduce(state, key(KeyCode::Tab));
+    assert!(effects.is_empty(), "`Tab` on Unlock must not emit effects");
+    match state {
+        AppState::Unlock { passphrase, .. } => {
+            assert_eq!(
+                passphrase.as_str(),
+                "secret",
+                "`Tab` on Unlock must not mutate the passphrase buffer"
+            );
+        }
+        other => panic!("expected Unlock, got {other:?}"),
+    }
+}

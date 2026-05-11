@@ -487,6 +487,10 @@ fn reduce_unlocked_input(mut state: AppState, key: &KeyEvent) -> (AppState, Vec<
     // pending chord state before its own action runs.
     *pending_chord_leader = None;
 
+    if matches!(key.code, KeyCode::Tab | KeyCode::BackTab) {
+        return toggle_unlocked_focus(state);
+    }
+
     if let Some(step) = list_step_for_key(key.code) {
         return move_selection(state, step);
     }
@@ -738,6 +742,29 @@ fn recenter_viewport(mut state: AppState) -> (AppState, Vec<Effect>) {
     let half = viewport_height / 2;
     let sel_pos: u16 = u16::try_from(pos).unwrap_or(u16::MAX);
     *viewport_offset = sel_pos.saturating_sub(half);
+    (state, Vec::new())
+}
+
+/// Swap [`AppState::Unlocked::focus`] between the two top-level
+/// surfaces (`Focus::List` ↔ `Focus::Search`) for the `Tab` /
+/// `Shift-Tab` keybinding.
+///
+/// `IMPLEMENTATION_PLAN_03_TUI.md` "Keybindings" rule: *"Cycle focus
+/// between search bar and list (preserves active query when leaving
+/// search)"*. Top-level Unlocked has only two surfaces, so `Tab` and
+/// `Shift-Tab` (which crossterm reports as `KeyCode::BackTab`) swap
+/// the same direction. `search_query` is untouched so an active
+/// query survives the swap. Modal-open is filtered out by the
+/// modal-trap guard in [`reduce_unlocked_input`] before this helper
+/// is reached — the modal-local `Ctrl-N` / `Ctrl-P` aliasing of
+/// `Tab` / `Shift-Tab` lands with the modal-navigation slice.
+fn toggle_unlocked_focus(mut state: AppState) -> (AppState, Vec<Effect>) {
+    if let AppState::Unlocked { focus, .. } = &mut state {
+        *focus = match *focus {
+            Focus::List => Focus::Search,
+            Focus::Search => Focus::List,
+        };
+    }
     (state, Vec::new())
 }
 
