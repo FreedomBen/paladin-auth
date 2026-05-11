@@ -11,10 +11,46 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use paladin_core::{
-    format_unsafe_permissions, IdlePolicy, PaladinError, Store, Vault, VaultLock, VaultStatus,
+    format_unsafe_permissions, ClipboardClearToken, IdlePolicy, PaladinError, Store, Vault,
+    VaultLock, VaultStatus,
 };
 
 use crate::prompt::PassphraseBuffer;
+
+/// A clipboard auto-clear scheduled by an earlier copy effect and
+/// awaiting either its wake-deadline (at which point the bytes are
+/// wiped if they still match the system clipboard) or a stale-token
+/// supersession.
+///
+/// Held on [`AppState::Unlocked`] while the user is active and on
+/// [`AppState::Locked`] when an idle-expiry transition arrives before
+/// the wake fires — per `IMPLEMENTATION_PLAN_03_TUI.md`
+/// "Auto-lock (per §6)": *"A clipboard auto-clear timer scheduled
+/// before lock survives lock and still fires only-if-unchanged."*
+///
+/// `value` is the bytes that were written to the clipboard; the
+/// reducer compares them to the current clipboard contents via
+/// [`paladin_core::ClipboardClearPolicy::should_clear`] when the wake
+/// event arrives so a later external copy is preserved. The bytes are
+/// non-secret-token-bearing on their own but reflect a code that was
+/// just exposed to the user, so the same zeroization discipline as
+/// other typed buffers applies; the field is exposed as `Vec<u8>` for
+/// now and tightens to a zeroizing wrapper alongside the
+/// "Sensitive UI buffers" coverage slice.
+#[derive(Debug)]
+pub struct PendingClipboardClear {
+    /// Monotonic token returned by
+    /// [`paladin_core::ClipboardClearPolicy::schedule`]. A later
+    /// schedule on the same vault settings supersedes this one.
+    pub token: ClipboardClearToken,
+    /// The bytes the copy effect wrote to the clipboard. Compared
+    /// byte-equal against the current clipboard contents when the
+    /// wake fires; only-if-unchanged.
+    pub value: Vec<u8>,
+    /// Monotonic wake-deadline; the timer thread sleeps until this
+    /// instant and then sends an `AppEvent::ClipboardClear`.
+    pub deadline: Instant,
+}
 
 /// Top-level UI state.
 ///
@@ -58,6 +94,15 @@ pub enum AppState {
     Locked {
         /// The vault path; same as the previously unlocked state's.
         path: PathBuf,
+        /// Clipboard auto-clear that was scheduled while the vault
+        /// was still unlocked. Carried across the
+        /// `Unlocked → Locked` transition so the timer thread's
+        /// `AppEvent::ClipboardClear` wake still finds a target
+        /// pending state. Per `IMPLEMENTATION_PLAN_03_TUI.md`
+        /// "Auto-lock (per §6)": *"A clipboard auto-clear timer
+        /// scheduled before lock survives lock and still fires
+        /// only-if-unchanged."*
+        pending_clipboard_clear: Option<PendingClipboardClear>,
     },
 
     /// Unlocked: the main list view is active. Owns the `Vault` and
@@ -92,6 +137,13 @@ pub enum AppState {
         /// monotonic `Tick` instants for the `Locked` transition.
         /// See `IMPLEMENTATION_PLAN_03_TUI.md` "Auto-lock (per §6)".
         idle_deadline: Option<Instant>,
+        /// Clipboard auto-clear that was scheduled by an earlier
+        /// copy effect and is still waiting for its wake-deadline.
+        /// On the `Unlocked → Locked` transition this field moves
+        /// onto [`AppState::Locked`] verbatim so the timer thread's
+        /// wake event can still find pending state to act on. See
+        /// `IMPLEMENTATION_PLAN_03_TUI.md` "Auto-lock (per §6)".
+        pending_clipboard_clear: Option<PendingClipboardClear>,
     },
 
     /// Non-mutating startup-error screen. Used when vault-path
@@ -161,6 +213,7 @@ pub fn decide_state_from_open(
                 store,
                 search_query: String::new(),
                 idle_deadline,
+                pending_clipboard_clear: None,
             }
         }
         Err(err) => AppState::StartupError {

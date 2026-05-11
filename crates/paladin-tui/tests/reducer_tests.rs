@@ -81,6 +81,7 @@ fn unlock_with(path: &str, typed: &str) -> AppState {
 fn locked(path: &str) -> AppState {
     AppState::Locked {
         path: PathBuf::from(path),
+        pending_clipboard_clear: None,
     }
 }
 
@@ -401,6 +402,7 @@ fn ctrl_c_on_unlocked_quits() {
         store,
         search_query: String::new(),
         idle_deadline: None,
+        pending_clipboard_clear: None,
     };
     let (_, effects) = reduce(unlocked, ctrl(KeyCode::Char('c')));
     assert!(matches!(effects.as_slice(), [Effect::Quit]));
@@ -854,12 +856,13 @@ fn effect_result_unlock_ok_off_unlock_screen_is_discarded() {
     let (state, effects) = reduce(
         AppState::Locked {
             path: locked_path.clone(),
+            pending_clipboard_clear: None,
         },
         unlock_result(Ok(pair)),
     );
     assert!(effects.is_empty());
     match state {
-        AppState::Locked { path } => assert_eq!(path, locked_path),
+        AppState::Locked { path, .. } => assert_eq!(path, locked_path),
         other => panic!("expected Locked unchanged, got {other:?}"),
     }
 }

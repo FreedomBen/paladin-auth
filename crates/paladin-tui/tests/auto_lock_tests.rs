@@ -12,10 +12,12 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 
 use secrecy::SecretString;
 
-use paladin_core::{Argon2Params, EncryptionOptions, Store, Vault, VaultInit, VaultLock};
+use paladin_core::{
+    Argon2Params, ClipboardClearPolicy, EncryptionOptions, Store, Vault, VaultInit, VaultLock,
+};
 use paladin_tui::app::event::AppEvent;
 use paladin_tui::app::reducer::reduce;
-use paladin_tui::app::state::AppState;
+use paladin_tui::app::state::{AppState, PendingClipboardClear};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -97,6 +99,7 @@ fn input_in_encrypted_unlocked_with_auto_lock_rebases_idle_deadline_on_event_at(
         store,
         search_query: String::new(),
         idle_deadline: Some(t0 + Duration::from_secs(600)),
+        pending_clipboard_clear: None,
     };
 
     let t1 = t0 + Duration::from_secs(123);
@@ -137,6 +140,7 @@ fn input_in_plaintext_unlocked_keeps_idle_deadline_none_even_if_auto_lock_enable
         store,
         search_query: String::new(),
         idle_deadline: None,
+        pending_clipboard_clear: None,
     };
 
     let (next, effects) = reduce(state, key_input_at(KeyCode::Char('x'), Instant::now()));
@@ -163,6 +167,7 @@ fn input_in_encrypted_unlocked_with_auto_lock_disabled_keeps_idle_deadline_none(
         store,
         search_query: String::new(),
         idle_deadline: None,
+        pending_clipboard_clear: None,
     };
 
     let (next, effects) = reduce(state, key_input_at(KeyCode::Char('x'), Instant::now()));
@@ -190,6 +195,7 @@ fn non_key_input_in_encrypted_unlocked_also_rebases_idle_deadline() {
         store,
         search_query: String::new(),
         idle_deadline: Some(t0 + Duration::from_secs(600)),
+        pending_clipboard_clear: None,
     };
 
     let t1 = t0 + Duration::from_secs(45);
@@ -241,13 +247,14 @@ fn tick_after_deadline_locks_unlocked_state() {
         store,
         search_query: String::new(),
         idle_deadline: Some(deadline),
+        pending_clipboard_clear: None,
     };
 
     let now = deadline + Duration::from_millis(1);
     let (next, effects) = reduce(state, tick_at(now));
     assert!(effects.is_empty(), "lock transition emits no effects");
     match next {
-        AppState::Locked { path: p } => assert_eq!(p, path),
+        AppState::Locked { path: p, .. } => assert_eq!(p, path),
         other => panic!("expected Locked, got {other:?}"),
     }
 }
@@ -275,16 +282,127 @@ fn tick_after_deadline_lock_discards_unlocked_search_query() {
         store,
         search_query: "github".to_string(),
         idle_deadline: Some(deadline),
+        pending_clipboard_clear: None,
     };
 
     let now = deadline + Duration::from_millis(1);
     let (next, effects) = reduce(state, tick_at(now));
     assert!(effects.is_empty(), "lock transition emits no effects");
     match next {
-        AppState::Locked { path: p } => {
+        AppState::Locked { path: p, .. } => {
             assert_eq!(p, path, "Locked must carry the original vault path");
         }
         other => panic!("expected Locked (search query and vault must be gone), got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Clipboard auto-clear survives lock
+// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Auto-lock — bullet 7)
+//
+// Slice covered: a `PendingClipboardClear` present on `Unlocked` at
+// the moment of the idle-expiry tick is carried unchanged through to
+// the resulting `Locked` state — token, captured bytes, and the
+// scheduled wake-deadline all survive the variant change.
+//
+// The "still fires only-if-unchanged" half of bullet 7 lands with the
+// `AppEvent::ClipboardClear` handler slice (which needs the Clipboard
+// effect / event wiring). The state-carry-across-lock slice has to go
+// first so the timer thread's wake event can find the pending state
+// to act on once the user has been auto-locked.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn tick_after_deadline_lock_carries_pending_clipboard_clear() {
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (mut vault, store) = create_encrypted_pair(&path, "pp");
+    enable_auto_lock(&mut vault, &store, 600);
+    vault.set_clipboard_clear_enabled(true);
+    vault
+        .set_clipboard_clear_secs(30)
+        .expect("clear secs within bounds");
+
+    let t0 = Instant::now();
+    let (token, clear_deadline) =
+        ClipboardClearPolicy::schedule(t0, vault.settings()).expect("clipboard clear scheduled");
+    let pending = PendingClipboardClear {
+        token,
+        value: vec![0x31, 0x32, 0x33, 0x34, 0x35, 0x36],
+        deadline: clear_deadline,
+    };
+
+    let idle_deadline = t0 + Duration::from_secs(600);
+    let state = AppState::Unlocked {
+        path: path.clone(),
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: Some(idle_deadline),
+        pending_clipboard_clear: Some(pending),
+    };
+
+    let now = idle_deadline + Duration::from_millis(1);
+    let (next, effects) = reduce(state, tick_at(now));
+    assert!(effects.is_empty(), "lock transition emits no effects");
+    match next {
+        AppState::Locked {
+            path: p,
+            pending_clipboard_clear,
+        } => {
+            assert_eq!(p, path);
+            let p_clear =
+                pending_clipboard_clear.expect("pending clear survives the lock transition");
+            assert_eq!(p_clear.token, token, "token survives unchanged");
+            assert_eq!(
+                p_clear.value.as_slice(),
+                &[0x31, 0x32, 0x33, 0x34, 0x35, 0x36],
+                "captured bytes survive unchanged"
+            );
+            assert_eq!(
+                p_clear.deadline, clear_deadline,
+                "wake-deadline survives unchanged"
+            );
+        }
+        other => panic!("expected Locked, got {other:?}"),
+    }
+}
+
+#[test]
+fn tick_after_deadline_lock_with_no_pending_clipboard_clear_yields_none() {
+    // The default Unlocked has no pending clear; the post-lock state
+    // must reflect that — i.e. `pending_clipboard_clear == None` on
+    // `Locked` — so a stale `Some(...)` cannot be fabricated by the
+    // transition path.
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (mut vault, store) = create_encrypted_pair(&path, "pp");
+    enable_auto_lock(&mut vault, &store, 600);
+
+    let t0 = Instant::now();
+    let deadline = t0 + Duration::from_secs(600);
+    let state = AppState::Unlocked {
+        path: path.clone(),
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: Some(deadline),
+        pending_clipboard_clear: None,
+    };
+
+    let now = deadline + Duration::from_millis(1);
+    let (next, _effects) = reduce(state, tick_at(now));
+    match next {
+        AppState::Locked {
+            pending_clipboard_clear,
+            ..
+        } => {
+            assert!(
+                pending_clipboard_clear.is_none(),
+                "no pending clear must remain `None` after lock"
+            );
+        }
+        other => panic!("expected Locked, got {other:?}"),
     }
 }
 
@@ -306,12 +424,13 @@ fn tick_exactly_at_deadline_locks_unlocked_state() {
         store,
         search_query: String::new(),
         idle_deadline: Some(deadline),
+        pending_clipboard_clear: None,
     };
 
     let (next, effects) = reduce(state, tick_at(deadline));
     assert!(effects.is_empty());
     match next {
-        AppState::Locked { path: p } => assert_eq!(p, path),
+        AppState::Locked { path: p, .. } => assert_eq!(p, path),
         other => panic!("expected Locked, got {other:?}"),
     }
 }
@@ -331,6 +450,7 @@ fn tick_before_deadline_keeps_unlocked_state() {
         store,
         search_query: String::new(),
         idle_deadline: Some(deadline),
+        pending_clipboard_clear: None,
     };
 
     let now = deadline
@@ -369,6 +489,7 @@ fn tick_with_no_deadline_keeps_unlocked_state() {
         store,
         search_query: String::new(),
         idle_deadline: None,
+        pending_clipboard_clear: None,
     };
 
     let (next, effects) = reduce(state, tick_at(Instant::now()));
@@ -391,12 +512,15 @@ fn tick_on_locked_state_is_passthrough() {
     // A Tick that arrives while the state is already `Locked` is a
     // no-op (no re-lock churn, no path drift).
     let path = PathBuf::from("/tmp/v.bin");
-    let state = AppState::Locked { path: path.clone() };
+    let state = AppState::Locked {
+        path: path.clone(),
+        pending_clipboard_clear: None,
+    };
 
     let (next, effects) = reduce(state, tick_at(Instant::now()));
     assert!(effects.is_empty());
     match next {
-        AppState::Locked { path: p } => assert_eq!(p, path),
+        AppState::Locked { path: p, .. } => assert_eq!(p, path),
         other => panic!("expected Locked, got {other:?}"),
     }
 }
