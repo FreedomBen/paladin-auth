@@ -650,7 +650,7 @@ end-to-end.
 ### Vim-style navigation (`tests/reducer_tests.rs`)
 
 - [ ] `j` / `k` mirror `↓` / `↑`.
-- [ ] `Ctrl-F` / `Ctrl-B` mirror `PgDn` / `PgUp`.
+- [x] `Ctrl-F` / `Ctrl-B` mirror `PgDn` / `PgUp`.
 - [ ] `G` mirrors `End`.
 - [ ] `gg` two-press chord jumps to the first row of the filtered set.
 - [ ] `zz` two-press chord recenters the viewport on the selected row.

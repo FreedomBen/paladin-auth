@@ -366,10 +366,26 @@ fn reduce_unlocked_input(mut state: AppState, key: &KeyEvent) -> (AppState, Vec<
         .modifiers
         .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
     {
-        // Ctrl/Alt-modifier presses are unbound on the list at this
+        // Ctrl-F / Ctrl-B are the vim mirrors of `PgDn` / `PgUp` when
+        // no modal is open. They route through the same
+        // [`move_selection`] path, so viewport_height = 0 and the
+        // empty filtered set stay silent no-ops, and the chord
+        // leader is cleared before the page step runs. Strict
+        // equality on `KeyModifiers::CONTROL` keeps Ctrl-Shift-F /
+        // Ctrl-Alt-F (and the Ctrl-Shift-G mirror) out — only the
+        // bare Ctrl chord engages. With a modal open, Ctrl-F /
+        // Ctrl-B mirror the modal-routing no-op of `PgDn` / `PgUp`.
+        // All other Ctrl/Alt-modifier presses are unbound at this
         // slice but still clear any pending chord state — chord
         // commitment requires a bare second press.
         *pending_chord_leader = None;
+        if modal.is_none() && key.modifiers == KeyModifiers::CONTROL {
+            match key.code {
+                KeyCode::Char('f') => return move_selection(state, ListStep::PageDown),
+                KeyCode::Char('b') => return move_selection(state, ListStep::PageUp),
+                _ => {}
+            }
+        }
         return (state, Vec::new());
     }
 
@@ -436,7 +452,7 @@ fn reduce_unlocked_input(mut state: AppState, key: &KeyEvent) -> (AppState, Vec<
 /// order), used by `Home` and `End`. `PageUp` / `PageDown` walk by
 /// `AppState::Unlocked::viewport_height` rows (insertion order),
 /// clamping at the head / tail when fewer rows remain — used by `PgUp`
-/// / `PgDn` (and the upcoming `Ctrl-B` / `Ctrl-F` vim mirrors).
+/// / `PgDn` and their `Ctrl-B` / `Ctrl-F` vim mirrors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ListStep {
     Up,
@@ -457,9 +473,12 @@ enum ListStep {
 /// `PgDn` walk by [`AppState::Unlocked::viewport_height`] rows,
 /// clamping at the first / last row of the iteration. Returns `None`
 /// for keys that are not list navigation; the `gg` chord leader
-/// (lower-case `g`), `Ctrl-B` / `Ctrl-F` vim mirrors, `Ctrl-U` /
-/// `Ctrl-D` half-page bindings, and `zz` recenter land in later
-/// slices.
+/// (lower-case `g`) is consumed before this dispatch and the
+/// `Ctrl-B` / `Ctrl-F` vim mirrors are routed through the Ctrl/Alt
+/// guard in [`reduce_unlocked_input`] (so they reuse the
+/// [`ListStep::PageDown`] / [`ListStep::PageUp`] step from here).
+/// `Ctrl-U` / `Ctrl-D` half-page bindings and `zz` recenter land in
+/// later slices.
 fn list_step_for_key(code: KeyCode) -> Option<ListStep> {
     match code {
         KeyCode::Down | KeyCode::Char('j') => Some(ListStep::Down),

@@ -3194,3 +3194,356 @@ fn pressing_page_down_clears_pending_chord_leader() {
         other => panic!("expected Unlocked, got {other:?}"),
     }
 }
+
+// ---------------------------------------------------------------------------
+// Vim-style navigation: Ctrl-F / Ctrl-B mirror PgDn / PgUp
+// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Vim-style navigation)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn pressing_ctrl_f_on_unlocked_moves_selection_by_viewport_height() {
+    // Ctrl-F is the vim mirror of PgDn: viewport_height = 2 over a
+    // four-row vault advances selection at row 0 to row 2.
+    let tmp = secure_tempdir();
+    let (state, ids) = unlocked_with_n_accounts(&tmp, 4, 2);
+    let (state, effects) = reduce(state, ctrl(KeyCode::Char('f')));
+    assert!(effects.is_empty(), "navigation must not emit effects");
+    match state {
+        AppState::Unlocked { selected, .. } => assert_eq!(
+            selected,
+            Some(ids[2]),
+            "Ctrl-F must advance selection by viewport_height rows (PgDn mirror)"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_ctrl_b_on_unlocked_moves_selection_by_viewport_height() {
+    // Ctrl-B is the vim mirror of PgUp: viewport_height = 2 over a
+    // four-row vault retreats selection at row 3 to row 1.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let _a = add_totp_account(&mut vault, &store, "a");
+    let b = add_totp_account(&mut vault, &store, "b");
+    let _c = add_totp_account(&mut vault, &store, "c");
+    let d = add_totp_account(&mut vault, &store, "d");
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(d),
+        pending_chord_leader: None,
+        viewport_height: 2,
+    };
+    let (state, effects) = reduce(unlocked, ctrl(KeyCode::Char('b')));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked { selected, .. } => assert_eq!(
+            selected,
+            Some(b),
+            "Ctrl-B must retreat selection by viewport_height rows (PgUp mirror)"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_ctrl_f_clamps_to_last_when_fewer_rows_remain() {
+    // Mirrors PgDn clamp: viewport_height = 3 with selection at row 2
+    // (one row from end) clamps at the last row.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let _a = add_totp_account(&mut vault, &store, "a");
+    let _b = add_totp_account(&mut vault, &store, "b");
+    let c = add_totp_account(&mut vault, &store, "c");
+    let d = add_totp_account(&mut vault, &store, "d");
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(c),
+        pending_chord_leader: None,
+        viewport_height: 3,
+    };
+    let (state, _) = reduce(unlocked, ctrl(KeyCode::Char('f')));
+    match state {
+        AppState::Unlocked { selected, .. } => assert_eq!(
+            selected,
+            Some(d),
+            "Ctrl-F past the end must clamp on the last row"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_ctrl_b_clamps_to_first_when_fewer_rows_remain() {
+    // Mirrors PgUp clamp: viewport_height = 3 with selection at row 1
+    // (one row from start) clamps at the first row.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let a = add_totp_account(&mut vault, &store, "a");
+    let b = add_totp_account(&mut vault, &store, "b");
+    let _c = add_totp_account(&mut vault, &store, "c");
+    let _d = add_totp_account(&mut vault, &store, "d");
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(b),
+        pending_chord_leader: None,
+        viewport_height: 3,
+    };
+    let (state, _) = reduce(unlocked, ctrl(KeyCode::Char('b')));
+    match state {
+        AppState::Unlocked { selected, .. } => assert_eq!(
+            selected,
+            Some(a),
+            "Ctrl-B past the start must clamp on the first row"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_ctrl_f_with_viewport_height_zero_is_a_no_op() {
+    // Matches PgDn: viewport_height = 0 (pre-resize seed) is a silent
+    // no-op so the reducer stays deterministic before the production
+    // run loop has sampled the terminal size.
+    let tmp = secure_tempdir();
+    let (state, ids) = unlocked_with_n_accounts(&tmp, 3, 0);
+    let (state, effects) = reduce(state, ctrl(KeyCode::Char('f')));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked { selected, .. } => assert_eq!(
+            selected,
+            Some(ids[0]),
+            "Ctrl-F with viewport_height = 0 must not move selection"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_ctrl_b_with_viewport_height_zero_is_a_no_op() {
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let _a = add_totp_account(&mut vault, &store, "a");
+    let b = add_totp_account(&mut vault, &store, "b");
+    let _c = add_totp_account(&mut vault, &store, "c");
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(b),
+        pending_chord_leader: None,
+        viewport_height: 0,
+    };
+    let (state, effects) = reduce(unlocked, ctrl(KeyCode::Char('b')));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked { selected, .. } => assert_eq!(
+            selected,
+            Some(b),
+            "Ctrl-B with viewport_height = 0 must not move selection"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_ctrl_f_with_empty_vault_is_silent_no_op() {
+    let tmp = secure_tempdir();
+    let unlocked = fresh_plaintext_unlocked(&tmp);
+    let (state, effects) = reduce(unlocked, ctrl(KeyCode::Char('f')));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked { selected: None, .. } => {}
+        AppState::Unlocked { selected, .. } => {
+            panic!("expected selected=None on empty vault, got {selected:?}")
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_ctrl_b_with_empty_vault_is_silent_no_op() {
+    let tmp = secure_tempdir();
+    let unlocked = fresh_plaintext_unlocked(&tmp);
+    let (state, effects) = reduce(unlocked, ctrl(KeyCode::Char('b')));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked { selected: None, .. } => {}
+        AppState::Unlocked { selected, .. } => {
+            panic!("expected selected=None on empty vault, got {selected:?}")
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_ctrl_f_with_modal_open_does_not_move_selection() {
+    // Mirrors PgDn: with a modal open, list-navigation keys route to
+    // the modal-local input path. Observable contract at this slice:
+    // selection is preserved unchanged.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let a = add_totp_account(&mut vault, &store, "a");
+    let _b = add_totp_account(&mut vault, &store, "b");
+    let _c = add_totp_account(&mut vault, &store, "c");
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Settings),
+        selected: Some(a),
+        pending_chord_leader: None,
+        viewport_height: 2,
+    };
+    let (state, effects) = reduce(unlocked, ctrl(KeyCode::Char('f')));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked {
+            selected,
+            modal: Some(Modal::Settings),
+            ..
+        } => assert_eq!(
+            selected,
+            Some(a),
+            "Ctrl-F inside an open modal must not move list selection"
+        ),
+        other => panic!("expected Unlocked with Modal::Settings open, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_ctrl_b_with_modal_open_does_not_move_selection() {
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let _a = add_totp_account(&mut vault, &store, "a");
+    let _b = add_totp_account(&mut vault, &store, "b");
+    let c = add_totp_account(&mut vault, &store, "c");
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Settings),
+        selected: Some(c),
+        pending_chord_leader: None,
+        viewport_height: 2,
+    };
+    let (state, effects) = reduce(unlocked, ctrl(KeyCode::Char('b')));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked {
+            selected,
+            modal: Some(Modal::Settings),
+            ..
+        } => assert_eq!(
+            selected,
+            Some(c),
+            "Ctrl-B inside an open modal must not move list selection"
+        ),
+        other => panic!("expected Unlocked with Modal::Settings open, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_ctrl_f_clears_pending_chord_leader() {
+    // Mirrors PgDn: a non-matching key clears the pending chord state
+    // before its own action runs.
+    let tmp = secure_tempdir();
+    let (state, ids) = unlocked_with_n_accounts(&tmp, 4, 2);
+    let (state, _) = reduce(state, key(KeyCode::Char('g')));
+    let (state, _) = reduce(state, ctrl(KeyCode::Char('f')));
+    match state {
+        AppState::Unlocked {
+            selected,
+            pending_chord_leader,
+            ..
+        } => {
+            assert_eq!(
+                pending_chord_leader, None,
+                "Ctrl-F must clear pending chord leader"
+            );
+            assert_eq!(
+                selected,
+                Some(ids[2]),
+                "Ctrl-F must still advance after clearing the chord"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_ctrl_b_clears_pending_chord_leader() {
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let _a = add_totp_account(&mut vault, &store, "a");
+    let b = add_totp_account(&mut vault, &store, "b");
+    let _c = add_totp_account(&mut vault, &store, "c");
+    let d = add_totp_account(&mut vault, &store, "d");
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(d),
+        pending_chord_leader: None,
+        viewport_height: 2,
+    };
+    let (state, _) = reduce(unlocked, key(KeyCode::Char('g')));
+    let (state, _) = reduce(state, ctrl(KeyCode::Char('b')));
+    match state {
+        AppState::Unlocked {
+            selected,
+            pending_chord_leader,
+            ..
+        } => {
+            assert_eq!(
+                pending_chord_leader, None,
+                "Ctrl-B must clear pending chord leader"
+            );
+            assert_eq!(
+                selected,
+                Some(b),
+                "Ctrl-B must still retreat after clearing the chord"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
