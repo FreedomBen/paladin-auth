@@ -71,6 +71,14 @@ pub enum AppState {
         vault: Vault,
         /// Persistence handle for the vault file.
         store: Store,
+        /// Active search-bar text used to filter the visible
+        /// account list. Empty when no filter is set. Discarded on
+        /// auto-lock alongside the `Vault` / `Store` per
+        /// `IMPLEMENTATION_PLAN_03_TUI.md` "Auto-lock (per §6)":
+        /// "the search query is cleared". Held in plain `String`
+        /// because issuer / label text is non-secret (DESIGN §5);
+        /// only secrets live in zeroizing storage.
+        search_query: String,
         /// Auto-lock idle deadline (monotonic clock).
         ///
         /// `Some(now + timeout)` when
@@ -151,6 +159,7 @@ pub fn decide_state_from_open(
                 path,
                 vault,
                 store,
+                search_query: String::new(),
                 idle_deadline,
             }
         }

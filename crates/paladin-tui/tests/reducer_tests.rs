@@ -399,6 +399,7 @@ fn ctrl_c_on_unlocked_quits() {
         path: path.clone(),
         vault,
         store,
+        search_query: String::new(),
         idle_deadline: None,
     };
     let (_, effects) = reduce(unlocked, ctrl(KeyCode::Char('c')));

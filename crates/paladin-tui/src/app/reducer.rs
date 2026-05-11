@@ -142,6 +142,7 @@ fn reduce_unlock_result(
                         path,
                         vault,
                         store,
+                        search_query: String::new(),
                         idle_deadline,
                     },
                     Vec::new(),
