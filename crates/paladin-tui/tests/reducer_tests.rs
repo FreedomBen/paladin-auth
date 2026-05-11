@@ -15,7 +15,8 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use secrecy::{ExposeSecret, SecretString};
 
 use paladin_core::{
-    Argon2Params, EncryptionOptions, IdlePolicy, PaladinError, PermissionSubject, Store, Vault,
+    validate_manual, AccountId, AccountInput, AccountKindInput, Algorithm, Argon2Params,
+    EncryptionOptions, IconHintInput, IdlePolicy, PaladinError, PermissionSubject, Store, Vault,
     VaultInit, VaultLock, VaultStatus,
 };
 use paladin_tui::app::event::{AppEvent, Effect, EffectResult};
@@ -405,6 +406,7 @@ fn ctrl_c_on_unlocked_quits() {
         pending_clipboard_clear: None,
         hotp_reveal: None,
         modal: None,
+        selected: None,
     };
     let (_, effects) = reduce(unlocked, ctrl(KeyCode::Char('c')));
     assert!(matches!(effects.as_slice(), [Effect::Quit]));
@@ -935,6 +937,27 @@ fn enable_auto_lock(vault: &mut Vault, store: &Store, timeout_secs: u32) {
     vault.save(store).expect("commit settings");
 }
 
+/// Insert a TOTP account into the vault (persisted) and return its
+/// `AccountId`. Insertion order is preserved by `Vault::iter()`, so
+/// repeated calls produce the same ordering the TUI list will show.
+fn add_totp_account(vault: &mut Vault, store: &Store, label: &str) -> AccountId {
+    let input = AccountInput {
+        label: label.to_string(),
+        issuer: None,
+        secret: SecretString::from("JBSWY3DPEHPK3PXP".to_string()),
+        algorithm: Algorithm::Sha1,
+        digits: 6,
+        kind: AccountKindInput::Totp,
+        period_secs: None,
+        counter: None,
+        icon_hint: IconHintInput::Default,
+    };
+    let validated = validate_manual(input, SystemTime::now()).expect("valid manual input");
+    let id = vault.add(validated.account);
+    vault.save(store).expect("commit added account");
+    id
+}
+
 #[test]
 fn compute_idle_deadline_plaintext_vault_is_none() {
     // The plaintext-no-op rule (§6 / §7) must hold even if the
@@ -1120,6 +1143,108 @@ fn decide_state_from_open_plaintext_seeds_no_idle_deadline() {
 }
 
 // ---------------------------------------------------------------------------
+// Initial selection seeding
+// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Search — `select_after_filter`
+//  preserves selection by `AccountId`; on Unlocked entry the previous
+//  selection is `None`, so the seed equals the first match in the
+//  filtered set. With no search query the filtered set is `Vault::iter()`
+//  in insertion order, so the seed is the first inserted account or
+//  `None` when the vault is empty.)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn decide_state_from_open_empty_vault_seeds_no_selection() {
+    let tmp = secure_tempdir();
+    let (vault_path, (vault, store)) = open_plaintext_pair(&tmp);
+    let now = Instant::now();
+    let state = decide_state_from_open(now, vault_path, Ok((vault, store)));
+    match state {
+        AppState::Unlocked { selected, .. } => assert_eq!(
+            selected, None,
+            "empty vault must seed `selected` to None on Unlocked entry"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn decide_state_from_open_non_empty_vault_seeds_first_inserted_account() {
+    let tmp = secure_tempdir();
+    let (vault_path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let first = add_totp_account(&mut vault, &store, "first");
+    let _second = add_totp_account(&mut vault, &store, "second");
+    let now = Instant::now();
+    let state = decide_state_from_open(now, vault_path, Ok((vault, store)));
+    match state {
+        AppState::Unlocked { selected, .. } => assert_eq!(
+            selected,
+            Some(first),
+            "non-empty vault must seed `selected` to the first inserted account"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_unlock_ok_seeds_selection_from_first_inserted_account() {
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (mut vault, store) = create_encrypted_pair(&path, "pw");
+    let first = add_totp_account(&mut vault, &store, "first");
+    let _second = add_totp_account(&mut vault, &store, "second");
+    // Drop and re-open to mimic the unlock-effect flow.
+    drop(vault);
+    drop(store);
+    let pp = SecretString::from("pw".to_string());
+    let pair = Store::open(&path, VaultLock::Encrypted(pp)).expect("unlock");
+
+    let prior = AppState::Unlock {
+        path: path.clone(),
+        error: None,
+        passphrase: PassphraseBuffer::new(),
+    };
+    let (state, effects) = reduce(prior, unlock_result(Ok(pair)));
+    assert!(
+        effects.is_empty(),
+        "successful unlock yields no follow-up effects"
+    );
+    match state {
+        AppState::Unlocked { selected, .. } => assert_eq!(
+            selected,
+            Some(first),
+            "successful unlock must seed `selected` to the first inserted account"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_unlock_ok_empty_vault_seeds_no_selection() {
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (vault, store) = create_encrypted_pair(&path, "pw");
+    drop(vault);
+    drop(store);
+    let pp = SecretString::from("pw".to_string());
+    let pair = Store::open(&path, VaultLock::Encrypted(pp)).expect("unlock");
+
+    let prior = AppState::Unlock {
+        path: path.clone(),
+        error: None,
+        passphrase: PassphraseBuffer::new(),
+    };
+    let (state, effects) = reduce(prior, unlock_result(Ok(pair)));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked { selected, .. } => assert_eq!(
+            selected, None,
+            "empty vault unlock must seed `selected` to None"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Modals — open transitions
 // (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Reducer — bullet 4)
 //
@@ -1146,6 +1271,7 @@ fn pressing_a_on_unlocked_with_no_modal_open_opens_add_modal() {
         pending_clipboard_clear: None,
         hotp_reveal: None,
         modal: None,
+        selected: None,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Char('a')));
     assert!(effects.is_empty(), "opening a modal must not emit effects");
@@ -1178,6 +1304,7 @@ fn pressing_a_on_unlocked_with_modal_already_open_does_not_replace_the_modal() {
         pending_clipboard_clear: None,
         hotp_reveal: None,
         modal: Some(Modal::Settings),
+        selected: None,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Char('a')));
     assert!(
@@ -1213,6 +1340,7 @@ fn pressing_ctrl_a_on_unlocked_does_not_open_add_modal() {
         pending_clipboard_clear: None,
         hotp_reveal: None,
         modal: None,
+        selected: None,
     };
     let (state, effects) = reduce(unlocked, ctrl(KeyCode::Char('a')));
     assert!(effects.is_empty(), "Ctrl-A is unbound; no effects");
@@ -1238,6 +1366,7 @@ fn fresh_plaintext_unlocked(tmp: &tempfile::TempDir) -> AppState {
         pending_clipboard_clear: None,
         hotp_reveal: None,
         modal: None,
+        selected: None,
     }
 }
 
@@ -1342,6 +1471,7 @@ fn assert_esc_closes_modal(opened: Modal) {
         pending_clipboard_clear: None,
         hotp_reveal: None,
         modal: Some(opened),
+        selected: None,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Esc));
     assert!(
@@ -1454,6 +1584,7 @@ fn pressing_q_on_unlocked_with_modal_open_does_not_quit() {
         pending_clipboard_clear: None,
         hotp_reveal: None,
         modal: Some(Modal::Add),
+        selected: None,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Char('q')));
     assert!(

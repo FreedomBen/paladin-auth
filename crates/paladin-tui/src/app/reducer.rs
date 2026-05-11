@@ -16,7 +16,9 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use paladin_core::{ClipboardClearToken, IdlePolicy, PaladinError, Store, Vault};
 
 use crate::app::event::{AppEvent, Effect, EffectResult};
-use crate::app::state::{compute_idle_deadline, render_error_message, AppState, Modal};
+use crate::app::state::{
+    compute_idle_deadline, initial_selection, render_error_message, AppState, Modal,
+};
 
 /// Apply one event to the current state and return the new state plus
 /// any side effects.
@@ -219,6 +221,7 @@ fn reduce_unlock_result(
         } => match open {
             Ok((vault, store)) => {
                 let idle_deadline = compute_idle_deadline(opened_at, &vault);
+                let selected = initial_selection(&vault);
                 (
                     AppState::Unlocked {
                         path,
@@ -229,6 +232,7 @@ fn reduce_unlock_result(
                         pending_clipboard_clear: None,
                         hotp_reveal: None,
                         modal: None,
+                        selected,
                     },
                     Vec::new(),
                 )

@@ -242,6 +242,19 @@ pub enum AppState {
         /// (e.g. the Passphrase modal's typed bytes) zeroize on drop
         /// as their payloads land in later slices.
         modal: Option<Modal>,
+        /// Currently selected account in the list view, or `None`
+        /// when the filtered set is empty.
+        ///
+        /// On Unlocked entry the previous selection is `None`, so the
+        /// initial seed follows [`paladin_core::select_after_filter`]
+        /// for `prev = None` and the empty-search filtered set
+        /// (`Vault::iter()` in insertion order): the first account
+        /// when one exists, `None` when the vault is empty. List
+        /// navigation, search filter changes, add / remove / rename,
+        /// and import outcomes update this field through the
+        /// reducer; the `Unlocked → Locked` transition drops it
+        /// alongside the `Vault` / `Store`.
+        selected: Option<AccountId>,
     },
 
     /// Non-mutating startup-error screen. Used when vault-path
@@ -305,6 +318,7 @@ pub fn decide_state_from_open(
     match open {
         Ok((vault, store)) => {
             let idle_deadline = compute_idle_deadline(now, &vault);
+            let selected = initial_selection(&vault);
             AppState::Unlocked {
                 path,
                 vault,
@@ -314,6 +328,7 @@ pub fn decide_state_from_open(
                 pending_clipboard_clear: None,
                 hotp_reveal: None,
                 modal: None,
+                selected,
             }
         }
         Err(err) => AppState::StartupError {
@@ -321,6 +336,18 @@ pub fn decide_state_from_open(
             message: render_error_message(&err),
         },
     }
+}
+
+/// Compute the initial `AppState::Unlocked::selected` for `vault`.
+///
+/// Mirrors [`paladin_core::select_after_filter`] for `prev = None` and
+/// the empty-search filtered set (`Vault::iter()` in insertion
+/// order): the first account when one exists, `None` when the vault
+/// is empty. Used on every Unlocked-entry site so the user lands on
+/// a navigable selection without an extra arrow-key press.
+#[must_use]
+pub fn initial_selection(vault: &Vault) -> Option<AccountId> {
+    vault.iter().next().map(paladin_core::Account::id)
 }
 
 /// Compute the auto-lock idle deadline for the given vault at `now`.
