@@ -649,7 +649,7 @@ end-to-end.
 
 ### Vim-style navigation (`tests/reducer_tests.rs`)
 
-- [ ] `j` / `k` mirror `↓` / `↑`.
+- [x] `j` / `k` mirror `↓` / `↑`.
 - [x] `Ctrl-F` / `Ctrl-B` mirror `PgDn` / `PgUp`.
 - [x] `G` mirrors `End`.
 - [x] `gg` two-press chord jumps to the first row of the filtered set.

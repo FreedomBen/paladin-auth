@@ -2057,6 +2057,134 @@ fn pressing_j_with_modal_open_does_not_move_selection() {
     }
 }
 
+#[test]
+fn pressing_k_with_modal_open_does_not_move_selection() {
+    // Parity with `pressing_down_arrow_with_modal_open_does_not_move_selection`
+    // and `pressing_j_with_modal_open_does_not_move_selection`: with a
+    // modal open, `k` belongs to the modal-local input path and must
+    // not move list selection.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let _a = add_totp_account(&mut vault, &store, "a");
+    let b = add_totp_account(&mut vault, &store, "b");
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Settings),
+        selected: Some(b),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+    };
+    let (state, effects) = reduce(unlocked, key(KeyCode::Char('k')));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked {
+            selected,
+            modal: Some(Modal::Settings),
+            ..
+        } => assert_eq!(
+            selected,
+            Some(b),
+            "vim `k` inside an open modal must not move list selection"
+        ),
+        other => panic!("expected Unlocked with Modal::Settings open, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_j_at_end_of_list_clamps() {
+    // Mirrors `pressing_down_arrow_at_end_of_list_clamps`: vim `j` on
+    // the last row must clamp and not advance past the tail.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let _a = add_totp_account(&mut vault, &store, "a");
+    let b = add_totp_account(&mut vault, &store, "b");
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(b),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+    };
+    let (state, _) = reduce(unlocked, key(KeyCode::Char('j')));
+    match state {
+        AppState::Unlocked { selected, .. } => assert_eq!(
+            selected,
+            Some(b),
+            "vim `j` at end of list must clamp on the last row, mirroring Down"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_k_at_start_of_list_clamps() {
+    // Mirrors `pressing_up_arrow_at_start_of_list_clamps`: vim `k` on
+    // the first row must clamp and not retreat past the head.
+    let tmp = secure_tempdir();
+    let (state, [a, _b, _c]) = unlocked_with_three_accounts(&tmp);
+    let (state, _) = reduce(state, key(KeyCode::Char('k')));
+    match state {
+        AppState::Unlocked { selected, .. } => assert_eq!(
+            selected,
+            Some(a),
+            "vim `k` at start of list must clamp on the first row, mirroring Up"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_j_with_empty_vault_is_silent_no_op() {
+    // Mirrors `pressing_down_arrow_with_empty_vault_is_silent_no_op`:
+    // vim `j` on an empty vault must keep `selected = None` and emit
+    // no effects.
+    let tmp = secure_tempdir();
+    let unlocked = fresh_plaintext_unlocked(&tmp);
+    let (state, effects) = reduce(unlocked, key(KeyCode::Char('j')));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked { selected: None, .. } => {}
+        AppState::Unlocked { selected, .. } => {
+            panic!("expected selected=None on empty vault, got {selected:?}")
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_k_with_empty_vault_is_silent_no_op() {
+    // Mirrors `pressing_up_arrow_with_empty_vault_is_silent_no_op`:
+    // vim `k` on an empty vault must keep `selected = None` and emit
+    // no effects.
+    let tmp = secure_tempdir();
+    let unlocked = fresh_plaintext_unlocked(&tmp);
+    let (state, effects) = reduce(unlocked, key(KeyCode::Char('k')));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked { selected: None, .. } => {}
+        AppState::Unlocked { selected, .. } => {
+            panic!("expected selected=None on empty vault, got {selected:?}")
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // `Home` / `End` — jump-to-first / jump-to-last list selection (Unlocked).
 //
@@ -5600,6 +5728,62 @@ fn pressing_end_with_filter_excluding_first_vault_row_still_lands_in_filtered_se
             selected,
             Some(carol),
             "End must land on the sole filtered match"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_j_walks_filtered_list_when_search_query_active() {
+    // Mirrors `pressing_down_arrow_walks_filtered_list_when_search_query_active`:
+    // with filter "al", `j` from alpha must skip beta (filtered out)
+    // and land on alex.
+    let tmp = secure_tempdir();
+    let (mut state, [alpha, _beta, alex, _carol]) =
+        unlocked_with_four_labeled_accounts(&tmp, ["alpha", "beta", "alex", "carol"]);
+    if let AppState::Unlocked {
+        ref mut search_query,
+        ref mut selected,
+        ..
+    } = state
+    {
+        *search_query = "al".to_string();
+        *selected = Some(alpha);
+    }
+    let (state, _effects) = reduce(state, key(KeyCode::Char('j')));
+    match state {
+        AppState::Unlocked { selected, .. } => assert_eq!(
+            selected,
+            Some(alex),
+            "vim `j` must walk the filtered list, mirroring Down"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_k_walks_filtered_list_when_search_query_active() {
+    // Mirrors `pressing_up_arrow_walks_filtered_list_when_search_query_active`:
+    // with filter "al", `k` from alex must skip beta (filtered out)
+    // and land on alpha.
+    let tmp = secure_tempdir();
+    let (mut state, [alpha, _beta, alex, _carol]) =
+        unlocked_with_four_labeled_accounts(&tmp, ["alpha", "beta", "alex", "carol"]);
+    if let AppState::Unlocked {
+        ref mut search_query,
+        ref mut selected,
+        ..
+    } = state
+    {
+        *search_query = "al".to_string();
+        *selected = Some(alex);
+    }
+    let (state, _effects) = reduce(state, key(KeyCode::Char('k')));
+    match state {
+        AppState::Unlocked { selected, .. } => assert_eq!(
+            selected,
+            Some(alpha),
+            "vim `k` must walk the filtered list, mirroring Up"
         ),
         other => panic!("expected Unlocked, got {other:?}"),
     }
