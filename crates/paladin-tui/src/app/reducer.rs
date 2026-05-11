@@ -376,34 +376,44 @@ fn reduce_unlocked_input(mut state: AppState, key: &KeyEvent) -> (AppState, Vec<
     (state, Vec::new())
 }
 
-/// One-row step direction for list selection navigation.
+/// Step direction for list selection navigation.
+///
+/// `Up` / `Down` are single-row adjacency steps. `First` / `Last` are
+/// absolute jumps to the head / tail of `Vault::iter()` (insertion
+/// order), used by `Home` and `End`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ListStep {
     Up,
     Down,
+    First,
+    Last,
 }
 
-/// Map a single-row list-navigation key to its step direction.
+/// Map a list-navigation key to its step direction.
 ///
 /// `↑` / `↓` and the vim mirrors `k` / `j` step the selection by one
-/// row. Returns `None` for keys that are not single-row navigation;
-/// page / chord / half-page bindings land in later slices.
+/// row. `Home` / `End` jump to the first / last row of `Vault::iter()`
+/// (insertion order). Returns `None` for keys that are not list
+/// navigation; page / chord / half-page bindings land in later slices.
 fn list_step_for_key(code: KeyCode) -> Option<ListStep> {
     match code {
         KeyCode::Down | KeyCode::Char('j') => Some(ListStep::Down),
         KeyCode::Up | KeyCode::Char('k') => Some(ListStep::Up),
+        KeyCode::Home => Some(ListStep::First),
+        KeyCode::End => Some(ListStep::Last),
         _ => None,
     }
 }
 
-/// Move the Unlocked list selection by one row in `step`'s direction,
-/// clamping at both ends.
+/// Move the Unlocked list selection per `step`.
 ///
-/// Walks `Vault::iter()` (insertion order) to find the row adjacent to
-/// the currently selected `AccountId`. Empty filtered set (`selected =
-/// None`) is a silent no-op; clamping at top/bottom leaves the
-/// selection unchanged. The reducer never emits effects for
-/// navigation — these are pure state updates.
+/// For `Up` / `Down`, walks `Vault::iter()` (insertion order) to find
+/// the row adjacent to the currently selected `AccountId`; clamping at
+/// top / bottom leaves the selection unchanged. For `First` / `Last`,
+/// assigns the head / tail of the iteration directly. Empty filtered
+/// set (`selected = None` and `vault.iter()` empty) is a silent no-op
+/// in every direction. The reducer never emits effects for navigation
+/// — these are pure state updates.
 fn move_selection(mut state: AppState, step: ListStep) -> (AppState, Vec<Effect>) {
     let AppState::Unlocked {
         ref vault,
@@ -413,9 +423,19 @@ fn move_selection(mut state: AppState, step: ListStep) -> (AppState, Vec<Effect>
     else {
         return (state, Vec::new());
     };
-    if let Some(current) = *selected {
-        if let Some(next) = adjacent_account(vault, current, step) {
-            *selected = Some(next);
+    match step {
+        ListStep::Up | ListStep::Down => {
+            if let Some(current) = *selected {
+                if let Some(next) = adjacent_account(vault, current, step) {
+                    *selected = Some(next);
+                }
+            }
+        }
+        ListStep::First => {
+            *selected = vault.iter().next().map(paladin_core::Account::id);
+        }
+        ListStep::Last => {
+            *selected = vault.iter().last().map(paladin_core::Account::id);
         }
     }
     (state, Vec::new())
@@ -424,6 +444,9 @@ fn move_selection(mut state: AppState, step: ListStep) -> (AppState, Vec<Effect>
 /// Return the account adjacent to `current` in `vault`'s
 /// insertion-order iteration, or `None` when `current` is at the end
 /// of the iteration in the requested direction (clamp signal).
+///
+/// Only `ListStep::Up` and `ListStep::Down` are valid here; the
+/// absolute-jump variants are handled directly in [`move_selection`].
 fn adjacent_account(vault: &Vault, current: AccountId, step: ListStep) -> Option<AccountId> {
     match step {
         ListStep::Down => {
@@ -444,6 +467,9 @@ fn adjacent_account(vault: &Vault, current: AccountId, step: ListStep) -> Option
                 prev = Some(a.id());
             }
             None
+        }
+        ListStep::First | ListStep::Last => {
+            unreachable!("First/Last are absolute jumps handled in move_selection")
         }
     }
 }

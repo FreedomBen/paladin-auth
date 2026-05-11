@@ -1925,3 +1925,265 @@ fn pressing_j_with_modal_open_does_not_move_selection() {
         other => panic!("expected Unlocked with Modal::Add open, got {other:?}"),
     }
 }
+
+// ---------------------------------------------------------------------------
+// `Home` / `End` — jump-to-first / jump-to-last list selection (Unlocked).
+//
+// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Reducer:
+//   "Selection navigation moves correctly under `↑` / `↓` / `j` / `k`,
+//    `PgUp` / `PgDn` / `Ctrl-B` / `Ctrl-F`, `Ctrl-U` / `Ctrl-D`, and
+//    `Home` / `End`.")
+//
+// Slice covered: bare `Home` jumps the selection to the first row of
+// `Vault::iter()` (insertion order); bare `End` jumps to the last row.
+// Ctrl/Alt modifier or a modal open suppress the move. Empty filtered
+// set is a silent no-op. Already-at-first / already-at-last are
+// observable no-ops (the resolved selection is identical to the prior
+// selection). The `G` vim mirror of `End` and the `gg` chord mirror of
+// `Home` land in later slices.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn pressing_home_on_unlocked_jumps_to_first_account() {
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let a = add_totp_account(&mut vault, &store, "a");
+    let _b = add_totp_account(&mut vault, &store, "b");
+    let c = add_totp_account(&mut vault, &store, "c");
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(c),
+    };
+    let (state, effects) = reduce(unlocked, key(KeyCode::Home));
+    assert!(effects.is_empty(), "navigation must not emit effects");
+    match state {
+        AppState::Unlocked { selected, .. } => assert_eq!(
+            selected,
+            Some(a),
+            "Home must jump selection to the first inserted account"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_end_on_unlocked_jumps_to_last_account() {
+    let tmp = secure_tempdir();
+    let (state, [_a, _b, c]) = unlocked_with_three_accounts(&tmp);
+    let (state, effects) = reduce(state, key(KeyCode::End));
+    assert!(effects.is_empty(), "navigation must not emit effects");
+    match state {
+        AppState::Unlocked { selected, .. } => assert_eq!(
+            selected,
+            Some(c),
+            "End must jump selection to the last inserted account"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_home_at_first_account_is_a_no_op() {
+    let tmp = secure_tempdir();
+    let (state, [a, _b, _c]) = unlocked_with_three_accounts(&tmp);
+    let (state, effects) = reduce(state, key(KeyCode::Home));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked { selected, .. } => assert_eq!(
+            selected,
+            Some(a),
+            "Home on the first row must leave the selection unchanged"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_end_at_last_account_is_a_no_op() {
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let _a = add_totp_account(&mut vault, &store, "a");
+    let b = add_totp_account(&mut vault, &store, "b");
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(b),
+    };
+    let (state, effects) = reduce(unlocked, key(KeyCode::End));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked { selected, .. } => assert_eq!(
+            selected,
+            Some(b),
+            "End on the last row must leave the selection unchanged"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_home_with_empty_vault_is_silent_no_op() {
+    let tmp = secure_tempdir();
+    let unlocked = fresh_plaintext_unlocked(&tmp);
+    let (state, effects) = reduce(unlocked, key(KeyCode::Home));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked { selected: None, .. } => {}
+        AppState::Unlocked { selected, .. } => {
+            panic!("expected selected=None on empty vault, got {selected:?}")
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_end_with_empty_vault_is_silent_no_op() {
+    let tmp = secure_tempdir();
+    let unlocked = fresh_plaintext_unlocked(&tmp);
+    let (state, effects) = reduce(unlocked, key(KeyCode::End));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked { selected: None, .. } => {}
+        AppState::Unlocked { selected, .. } => {
+            panic!("expected selected=None on empty vault, got {selected:?}")
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_home_with_modal_open_does_not_move_selection() {
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let _a = add_totp_account(&mut vault, &store, "a");
+    let _b = add_totp_account(&mut vault, &store, "b");
+    let c = add_totp_account(&mut vault, &store, "c");
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Settings),
+        selected: Some(c),
+    };
+    let (state, effects) = reduce(unlocked, key(KeyCode::Home));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked {
+            selected,
+            modal: Some(Modal::Settings),
+            ..
+        } => assert_eq!(
+            selected,
+            Some(c),
+            "Home inside an open modal must not move list selection"
+        ),
+        other => panic!("expected Unlocked with Modal::Settings open, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_end_with_modal_open_does_not_move_selection() {
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let a = add_totp_account(&mut vault, &store, "a");
+    let _b = add_totp_account(&mut vault, &store, "b");
+    let _c = add_totp_account(&mut vault, &store, "c");
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Add),
+        selected: Some(a),
+    };
+    let (state, effects) = reduce(unlocked, key(KeyCode::End));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked {
+            selected,
+            modal: Some(Modal::Add),
+            ..
+        } => assert_eq!(
+            selected,
+            Some(a),
+            "End inside an open modal must not move list selection"
+        ),
+        other => panic!("expected Unlocked with Modal::Add open, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_ctrl_home_does_not_move_selection() {
+    // `Ctrl-Home` is not bound in `Keybindings (initial v0.1)`. The
+    // bare `Home` jumps to the first row, but the same key with the
+    // Control modifier must not silently navigate.
+    let tmp = secure_tempdir();
+    let (state, [_a, _b, c]) = unlocked_with_three_accounts(&tmp);
+    let unlocked = match state {
+        AppState::Unlocked {
+            path,
+            vault,
+            store,
+            search_query,
+            idle_deadline,
+            pending_clipboard_clear,
+            hotp_reveal,
+            modal,
+            ..
+        } => AppState::Unlocked {
+            path,
+            vault,
+            store,
+            search_query,
+            idle_deadline,
+            pending_clipboard_clear,
+            hotp_reveal,
+            modal,
+            selected: Some(c),
+        },
+        other => panic!("expected Unlocked, got {other:?}"),
+    };
+    let (state, effects) = reduce(unlocked, ctrl(KeyCode::Home));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked { selected, .. } => {
+            assert_eq!(selected, Some(c), "Ctrl-Home must not move list selection");
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_ctrl_end_does_not_move_selection() {
+    // Same rationale as `Ctrl-Home`: only the bare `End` is bound.
+    let tmp = secure_tempdir();
+    let (state, [a, _b, _c]) = unlocked_with_three_accounts(&tmp);
+    let (state, effects) = reduce(state, ctrl(KeyCode::End));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked { selected, .. } => {
+            assert_eq!(selected, Some(a), "Ctrl-End must not move list selection");
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
