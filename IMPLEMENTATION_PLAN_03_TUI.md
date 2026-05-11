@@ -651,8 +651,8 @@ end-to-end.
 
 - [ ] `j` / `k` mirror `↓` / `↑`.
 - [x] `Ctrl-F` / `Ctrl-B` mirror `PgDn` / `PgUp`.
-- [ ] `G` mirrors `End`.
-- [ ] `gg` two-press chord jumps to the first row of the filtered set.
+- [x] `G` mirrors `End`.
+- [x] `gg` two-press chord jumps to the first row of the filtered set.
 - [x] `zz` two-press chord recenters the viewport on the selected row.
 - [ ] Pending-leader chord state is held by the reducer, committed on
   the matching second press, and cleared by any non-matching key,

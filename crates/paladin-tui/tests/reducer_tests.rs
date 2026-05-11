@@ -5605,6 +5605,75 @@ fn pressing_end_with_filter_excluding_first_vault_row_still_lands_in_filtered_se
     }
 }
 
+#[test]
+fn pressing_shift_g_jumps_to_last_of_filtered_list() {
+    // vim `G` mirrors `End`; with filter "al" matching alpha / alex,
+    // `G` must land on alex (last filtered match), skipping carol
+    // (last vault row, filtered out).
+    let tmp = secure_tempdir();
+    let (mut state, [alpha, _beta, alex, _carol]) =
+        unlocked_with_four_labeled_accounts(&tmp, ["alpha", "beta", "alex", "carol"]);
+    if let AppState::Unlocked {
+        ref mut search_query,
+        ref mut selected,
+        ..
+    } = state
+    {
+        *search_query = "al".to_string();
+        *selected = Some(alpha);
+    }
+    let (state, _effects) = reduce(state, key(KeyCode::Char('G')));
+    match state {
+        AppState::Unlocked { selected, .. } => assert_eq!(
+            selected,
+            Some(alex),
+            "vim `G` must jump to the last row of the filtered list, mirroring End"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_gg_jumps_to_first_of_filtered_list() {
+    // vim `gg` chord mirrors `Home`; with filter "al" matching alpha /
+    // alex, starting at alex the two-press chord must land on alpha
+    // (first filtered match), not on the unfiltered vault head.
+    let tmp = secure_tempdir();
+    let (mut state, [alpha, _beta, alex, _carol]) =
+        unlocked_with_four_labeled_accounts(&tmp, ["alpha", "beta", "alex", "carol"]);
+    if let AppState::Unlocked {
+        ref mut search_query,
+        ref mut selected,
+        ..
+    } = state
+    {
+        *search_query = "al".to_string();
+        *selected = Some(alex);
+    }
+    let (state, effects) = reduce(state, key(KeyCode::Char('g')));
+    assert!(effects.is_empty(), "first `g` arms the chord; no effects");
+    let (state, effects) = reduce(state, key(KeyCode::Char('g')));
+    assert!(effects.is_empty(), "chord commit must not emit effects");
+    match state {
+        AppState::Unlocked {
+            selected,
+            pending_chord_leader,
+            ..
+        } => {
+            assert_eq!(
+                selected,
+                Some(alpha),
+                "vim `gg` must jump to the first row of the filtered list"
+            );
+            assert_eq!(
+                pending_chord_leader, None,
+                "`gg` commit must clear pending chord state"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // HOTP `n` triggers a `HotpAdvance` effect (per
 // `IMPLEMENTATION_PLAN_03_TUI.md` Tests > Reducer > "HOTP `n` triggers a
