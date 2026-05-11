@@ -703,6 +703,74 @@ fn enter_with_non_empty_passphrase_emits_unlock_effect_and_clears_buffer() {
     }
 }
 
+#[test]
+fn esc_on_unlock_with_typed_passphrase_zeroizes_buffer_before_quit() {
+    // Bullet (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Sensitive UI
+    // buffers): "Unlock passphrase buffer zeroizes on submit, cancel,
+    // and auto-lock." `Esc` on the Unlock screen is a cancel path —
+    // per Keybindings it emits `Effect::Quit`, and the typed bytes
+    // must be wiped before the process tears down so the passphrase
+    // does not linger between `Quit` emission and actual process
+    // exit (or survive a crash / coredump in that window).
+    let (state, effects) = reduce(unlock_with("/tmp/v.bin", "hunter2"), key(KeyCode::Esc));
+
+    assert!(matches!(effects.as_slice(), [Effect::Quit]));
+    match state {
+        AppState::Unlock { passphrase, .. } => assert!(
+            passphrase.is_empty(),
+            "passphrase buffer must zeroize on Esc-cancel before Quit"
+        ),
+        other => panic!("expected Unlock state, got {other:?}"),
+    }
+}
+
+#[test]
+fn ctrl_c_on_unlock_with_typed_passphrase_zeroizes_buffer_before_quit() {
+    // Same bullet: `Ctrl-C` is the other cancel path from the Unlock
+    // screen (Keybindings: "Ctrl-C quits any screen") and must
+    // zeroize the buffer for the same reason as `Esc`-cancel.
+    let (state, effects) = reduce(
+        unlock_with("/tmp/v.bin", "hunter2"),
+        ctrl(KeyCode::Char('c')),
+    );
+
+    assert!(matches!(effects.as_slice(), [Effect::Quit]));
+    match state {
+        AppState::Unlock { passphrase, .. } => assert!(
+            passphrase.is_empty(),
+            "passphrase buffer must zeroize on Ctrl-C cancel before Quit"
+        ),
+        other => panic!("expected Unlock state, got {other:?}"),
+    }
+}
+
+#[test]
+fn tick_on_unlock_with_typed_passphrase_preserves_buffer() {
+    // Auto-lock fires only from `Unlocked` (per
+    // `IMPLEMENTATION_PLAN_03_TUI.md` "Auto-lock (per §6)"); the
+    // Unlock screen has no idle deadline. A `Tick` on `Unlock`
+    // therefore passes through unchanged — the buffer is *not*
+    // zeroized by Tick, only by submit / cancel. This nails down
+    // that the auto-lock axis of the Sensitive-UI-buffers bullet is
+    // structurally satisfied by Unlock having no auto-lock path,
+    // rather than by a hidden buffer-wipe on every Tick.
+    let tick = AppEvent::Tick {
+        wall_clock: SystemTime::now(),
+        monotonic: Instant::now(),
+    };
+    let (state, effects) = reduce(unlock_with("/tmp/v.bin", "hunter2"), tick);
+
+    assert!(effects.is_empty(), "Tick on Unlock yields no effects");
+    match state {
+        AppState::Unlock { passphrase, .. } => assert_eq!(
+            passphrase.as_str(),
+            "hunter2",
+            "Tick on Unlock must not mutate the passphrase buffer"
+        ),
+        other => panic!("expected Unlock state, got {other:?}"),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Sensitive UI buffers — PassphraseBuffer
 // (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Sensitive UI buffers)

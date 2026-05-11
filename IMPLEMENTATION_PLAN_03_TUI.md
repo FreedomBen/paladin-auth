@@ -866,7 +866,7 @@ end-to-end.
 
 ### Sensitive UI buffers (`tests/reducer_tests.rs`)
 
-- [ ] Unlock passphrase buffer zeroizes on submit, cancel, and
+- [x] Unlock passphrase buffer zeroizes on submit, cancel, and
   auto-lock.
 - [ ] Encrypted Paladin import passphrase buffer zeroizes on submit,
   cancel, modal close, and auto-lock.

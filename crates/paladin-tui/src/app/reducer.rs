@@ -313,11 +313,11 @@ fn reduce_input(state: AppState, event: &Event) -> (AppState, Vec<Effect>) {
     };
 
     if is_ctrl_c(key) {
-        return (state, vec![Effect::Quit]);
+        return (zeroize_unlock_passphrase(state), vec![Effect::Quit]);
     }
 
     if matches!(key.code, KeyCode::Esc) && quits_on_esc(&state) {
-        return (state, vec![Effect::Quit]);
+        return (zeroize_unlock_passphrase(state), vec![Effect::Quit]);
     }
 
     if matches!(state, AppState::Unlock { .. }) {
@@ -1115,4 +1115,26 @@ fn quits_on_q(state: &AppState) -> bool {
         state,
         AppState::MissingVault { .. } | AppState::StartupError { .. }
     )
+}
+
+/// Wipe the Unlock-screen passphrase buffer in place on a cancel-quit.
+///
+/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Tests > Sensitive UI buffers":
+/// *"Unlock passphrase buffer zeroizes on submit, cancel, and
+/// auto-lock."* The submit path is covered by
+/// [`crate::prompt::PassphraseBuffer::take`]; this helper covers the
+/// cancel paths (`Esc` and `Ctrl-C` from the Unlock screen) so the
+/// typed bytes do not linger between [`Effect::Quit`] emission and
+/// process tear-down. Auto-lock does not apply on the Unlock screen
+/// — auto-lock fires from `Unlocked`, not `Unlock` — so no buffer
+/// exists to wipe at that boundary. States other than `Unlock` pass
+/// through unchanged.
+fn zeroize_unlock_passphrase(mut state: AppState) -> AppState {
+    if let AppState::Unlock {
+        ref mut passphrase, ..
+    } = state
+    {
+        passphrase.clear();
+    }
+    state
 }
