@@ -654,7 +654,7 @@ end-to-end.
 - [x] `G` mirrors `End`.
 - [x] `gg` two-press chord jumps to the first row of the filtered set.
 - [x] `zz` two-press chord recenters the viewport on the selected row.
-- [ ] Pending-leader chord state is held by the reducer, committed on
+- [x] Pending-leader chord state is held by the reducer, committed on
   the matching second press, and cleared by any non-matching key,
   focus change, modal open, `Esc`, or auto-lock.
 - [ ] Search-focus pass-through routes `PgUp` / `PgDn` / `Home` / `End`

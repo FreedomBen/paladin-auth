@@ -5005,6 +5005,38 @@ fn pressing_slash_after_g_clears_chord_and_focuses_search() {
     }
 }
 
+#[test]
+fn pressing_slash_after_z_clears_chord_and_focuses_search() {
+    // Mirrors `pressing_slash_after_g_clears_chord_and_focuses_search`
+    // for the `z` leader: focus change to the search bar must clear a
+    // pending `z` chord state alongside the focus swap, completing the
+    // "cleared by focus change" axis of the pending-leader contract
+    // for both leaders.
+    let tmp = secure_tempdir();
+    let (state, _ids) = unlocked_with_three_accounts(&tmp);
+    let (state, _) = reduce(state, key(KeyCode::Char('z')));
+    let (state, effects) = reduce(state, key(KeyCode::Char('/')));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked {
+            focus,
+            pending_chord_leader,
+            ..
+        } => {
+            assert_eq!(
+                focus,
+                Focus::Search,
+                "`/` after `z` must still focus the search bar"
+            );
+            assert_eq!(
+                pending_chord_leader, None,
+                "`/` must clear pending `z` chord state alongside the focus swap"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // `Esc` from search focus — clear query and return focus to the list.
 //
