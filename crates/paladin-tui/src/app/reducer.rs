@@ -366,23 +366,29 @@ fn reduce_unlocked_input(mut state: AppState, key: &KeyEvent) -> (AppState, Vec<
         .modifiers
         .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
     {
-        // Ctrl-F / Ctrl-B are the vim mirrors of `PgDn` / `PgUp` when
-        // no modal is open. They route through the same
-        // [`move_selection`] path, so viewport_height = 0 and the
+        // `Ctrl-F` / `Ctrl-B` are the vim mirrors of `PgDn` / `PgUp`
+        // and `Ctrl-D` / `Ctrl-U` are the vim half-page bindings
+        // (move by `viewport_height / 2` rows, integer division)
+        // when no modal is open. All four route through the same
+        // [`move_selection`] path, so `viewport_height = 0` and the
         // empty filtered set stay silent no-ops, and the chord
-        // leader is cleared before the page step runs. Strict
-        // equality on `KeyModifiers::CONTROL` keeps Ctrl-Shift-F /
-        // Ctrl-Alt-F (and the Ctrl-Shift-G mirror) out — only the
-        // bare Ctrl chord engages. With a modal open, Ctrl-F /
-        // Ctrl-B mirror the modal-routing no-op of `PgDn` / `PgUp`.
-        // All other Ctrl/Alt-modifier presses are unbound at this
-        // slice but still clear any pending chord state — chord
-        // commitment requires a bare second press.
+        // leader is cleared before the page step runs. The
+        // half-page variants additionally no-op on
+        // `viewport_height = 1` (half = 0). Strict equality on
+        // `KeyModifiers::CONTROL` keeps Ctrl-Shift-* / Ctrl-Alt-*
+        // out (mirroring the existing `Ctrl-Shift-G is unbound`
+        // convention) — only the bare Ctrl chord engages. With a
+        // modal open, these keys mirror the modal-routing no-op of
+        // `PgDn` / `PgUp`. All other Ctrl/Alt-modifier presses are
+        // unbound at this slice but still clear any pending chord
+        // state — chord commitment requires a bare second press.
         *pending_chord_leader = None;
         if modal.is_none() && key.modifiers == KeyModifiers::CONTROL {
             match key.code {
                 KeyCode::Char('f') => return move_selection(state, ListStep::PageDown),
                 KeyCode::Char('b') => return move_selection(state, ListStep::PageUp),
+                KeyCode::Char('d') => return move_selection(state, ListStep::HalfPageDown),
+                KeyCode::Char('u') => return move_selection(state, ListStep::HalfPageUp),
                 _ => {}
             }
         }
@@ -453,6 +459,12 @@ fn reduce_unlocked_input(mut state: AppState, key: &KeyEvent) -> (AppState, Vec<
 /// `AppState::Unlocked::viewport_height` rows (insertion order),
 /// clamping at the head / tail when fewer rows remain — used by `PgUp`
 /// / `PgDn` and their `Ctrl-B` / `Ctrl-F` vim mirrors.
+/// `HalfPageUp` / `HalfPageDown` walk by
+/// `AppState::Unlocked::viewport_height / 2` rows (integer division),
+/// with the same clamp behavior — used by the vim-style `Ctrl-U` /
+/// `Ctrl-D` half-page bindings. A `viewport_height` of `0` or `1`
+/// (half = 0 by integer division) is a silent no-op for the half-page
+/// variants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ListStep {
     Up,
@@ -461,6 +473,8 @@ enum ListStep {
     Last,
     PageUp,
     PageDown,
+    HalfPageUp,
+    HalfPageDown,
 }
 
 /// Map a list-navigation key to its step direction.
@@ -474,11 +488,12 @@ enum ListStep {
 /// clamping at the first / last row of the iteration. Returns `None`
 /// for keys that are not list navigation; the `gg` chord leader
 /// (lower-case `g`) is consumed before this dispatch and the
-/// `Ctrl-B` / `Ctrl-F` vim mirrors are routed through the Ctrl/Alt
-/// guard in [`reduce_unlocked_input`] (so they reuse the
-/// [`ListStep::PageDown`] / [`ListStep::PageUp`] step from here).
-/// `Ctrl-U` / `Ctrl-D` half-page bindings and `zz` recenter land in
-/// later slices.
+/// `Ctrl-B` / `Ctrl-F` page mirrors plus `Ctrl-U` / `Ctrl-D`
+/// half-page bindings are routed through the Ctrl/Alt guard in
+/// [`reduce_unlocked_input`] (so they reuse the
+/// [`ListStep::PageDown`] / [`ListStep::PageUp`] /
+/// [`ListStep::HalfPageDown`] / [`ListStep::HalfPageUp`] steps from
+/// here). The `zz` recenter chord lands in a later slice.
 fn list_step_for_key(code: KeyCode) -> Option<ListStep> {
     match code {
         KeyCode::Down | KeyCode::Char('j') => Some(ListStep::Down),
@@ -535,6 +550,18 @@ fn move_selection(mut state: AppState, step: ListStep) -> (AppState, Vec<Effect>
                 }
             }
         }
+        ListStep::HalfPageDown | ListStep::HalfPageUp => {
+            if let Some(current) = *selected {
+                // Half-page uses integer division: viewport_height = 1
+                // yields n = 0 (no-op) which matches vim's
+                // behavior — half-page is undefined on a one-row
+                // viewport.
+                let n = (viewport_height as usize) / 2;
+                if let Some(next) = step_n_rows(vault, current, step, n) {
+                    *selected = Some(next);
+                }
+            }
+        }
     }
     (state, Vec::new())
 }
@@ -567,9 +594,14 @@ fn adjacent_account(vault: &Vault, current: AccountId, step: ListStep) -> Option
             }
             None
         }
-        ListStep::First | ListStep::Last | ListStep::PageDown | ListStep::PageUp => {
+        ListStep::First
+        | ListStep::Last
+        | ListStep::PageDown
+        | ListStep::PageUp
+        | ListStep::HalfPageDown
+        | ListStep::HalfPageUp => {
             unreachable!(
-                "First/Last/PageUp/PageDown are absolute / page jumps handled in move_selection"
+                "First/Last/PageUp/PageDown/HalfPageUp/HalfPageDown are absolute / page jumps handled in move_selection"
             )
         }
     }
@@ -582,7 +614,8 @@ fn adjacent_account(vault: &Vault, current: AccountId, step: ListStep) -> Option
 /// the walk would be a no-op (n == 0, `current` already at the
 /// boundary in the requested direction, or `current` not found in the
 /// iteration). Used by `ListStep::PageUp` / `ListStep::PageDown` with
-/// `n = viewport_height`.
+/// `n = viewport_height` and by `ListStep::HalfPageUp` /
+/// `ListStep::HalfPageDown` with `n = viewport_height / 2`.
 fn step_n_rows(vault: &Vault, current: AccountId, step: ListStep, n: usize) -> Option<AccountId> {
     if n == 0 {
         return None;
@@ -590,8 +623,8 @@ fn step_n_rows(vault: &Vault, current: AccountId, step: ListStep, n: usize) -> O
     let ids: Vec<AccountId> = vault.iter().map(paladin_core::Account::id).collect();
     let pos = ids.iter().position(|id| *id == current)?;
     let target = match step {
-        ListStep::PageDown => (pos + n).min(ids.len().saturating_sub(1)),
-        ListStep::PageUp => pos.saturating_sub(n),
+        ListStep::PageDown | ListStep::HalfPageDown => (pos + n).min(ids.len().saturating_sub(1)),
+        ListStep::PageUp | ListStep::HalfPageUp => pos.saturating_sub(n),
         ListStep::Up | ListStep::Down | ListStep::First | ListStep::Last => {
             unreachable!("step_n_rows only handles page steps")
         }

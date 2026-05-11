@@ -631,7 +631,7 @@ end-to-end.
 
 - [ ] Every keybinding maps to the expected state transition.
 - [ ] Search filter narrows the visible list in place.
-- [ ] Selection navigation moves correctly under `↑` / `↓` / `j` / `k`,
+- [x] Selection navigation moves correctly under `↑` / `↓` / `j` / `k`,
   `PgUp` / `PgDn` / `Ctrl-B` / `Ctrl-F`, `Ctrl-U` / `Ctrl-D`, and
   `Home` / `End`.
 - [ ] Modal open / close transitions for every modal.
