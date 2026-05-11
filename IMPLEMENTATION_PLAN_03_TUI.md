@@ -657,7 +657,7 @@ end-to-end.
 - [x] Pending-leader chord state is held by the reducer, committed on
   the matching second press, and cleared by any non-matching key,
   focus change, modal open, `Esc`, or auto-lock.
-- [ ] Search-focus pass-through routes `PgUp` / `PgDn` / `Home` / `End`
+- [x] Search-focus pass-through routes `PgUp` / `PgDn` / `Home` / `End`
   / `Ctrl-B` / `Ctrl-F` / `Ctrl-D` / `Ctrl-U` to the list before
   `tui-input` sees them.
 - [ ] Bare-letter vim keys (`j`, `k`, `g`, `G`, `z`) are consumed by the

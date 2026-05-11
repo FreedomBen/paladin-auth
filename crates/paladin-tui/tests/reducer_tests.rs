@@ -5492,6 +5492,302 @@ fn typing_ctrl_modified_char_while_focus_search_does_not_append_to_query() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Search-focus pass-through routes navigation keys to the list (per
+// `IMPLEMENTATION_PLAN_03_TUI.md` > Tests > Vim-style navigation:
+// "Search-focus pass-through routes `PgUp` / `PgDn` / `Home` / `End`
+//  / `Ctrl-B` / `Ctrl-F` / `Ctrl-D` / `Ctrl-U` to the list before
+//  `tui-input` sees them.")
+//
+// The selection must move while the search field is focused so the
+// user can navigate filter results without unfocusing the search bar.
+// For each of the eight keys we assert (a) the selection moved, (b)
+// the search query was NOT appended to (so the key wasn't routed as
+// text input), and (c) `focus` stays on `Focus::Search` so subsequent
+// typed characters still flow into the query.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn pressing_page_down_while_focus_search_advances_selection() {
+    let tmp = secure_tempdir();
+    let (mut state, [a, _b, c]) = unlocked_search_focused_with_three_named_accounts(&tmp);
+    if let AppState::Unlocked {
+        ref mut viewport_height,
+        ref mut selected,
+        ..
+    } = state
+    {
+        *viewport_height = 2;
+        *selected = Some(a);
+    }
+    let (state, effects) = reduce(state, key(KeyCode::PageDown));
+    assert!(effects.is_empty(), "navigation must not emit effects");
+    match state {
+        AppState::Unlocked {
+            selected,
+            search_query,
+            focus,
+            ..
+        } => {
+            assert_eq!(
+                selected,
+                Some(c),
+                "PgDn while Focus::Search must advance list selection"
+            );
+            assert_eq!(
+                search_query, "",
+                "PgDn must not be routed as text into the search field"
+            );
+            assert_eq!(
+                focus,
+                Focus::Search,
+                "PgDn must leave focus on the search bar"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_page_up_while_focus_search_retreats_selection() {
+    let tmp = secure_tempdir();
+    let (mut state, [a, _b, c]) = unlocked_search_focused_with_three_named_accounts(&tmp);
+    if let AppState::Unlocked {
+        ref mut viewport_height,
+        ref mut selected,
+        ..
+    } = state
+    {
+        *viewport_height = 2;
+        *selected = Some(c);
+    }
+    let (state, _) = reduce(state, key(KeyCode::PageUp));
+    match state {
+        AppState::Unlocked {
+            selected,
+            search_query,
+            focus,
+            ..
+        } => {
+            assert_eq!(
+                selected,
+                Some(a),
+                "PgUp while Focus::Search must retreat list selection"
+            );
+            assert_eq!(
+                search_query, "",
+                "PgUp must not be routed as text into the search field"
+            );
+            assert_eq!(focus, Focus::Search);
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_home_while_focus_search_jumps_to_first() {
+    let tmp = secure_tempdir();
+    let (mut state, [a, _b, c]) = unlocked_search_focused_with_three_named_accounts(&tmp);
+    if let AppState::Unlocked {
+        ref mut selected, ..
+    } = state
+    {
+        *selected = Some(c);
+    }
+    let (state, _) = reduce(state, key(KeyCode::Home));
+    match state {
+        AppState::Unlocked {
+            selected,
+            search_query,
+            focus,
+            ..
+        } => {
+            assert_eq!(
+                selected,
+                Some(a),
+                "Home while Focus::Search must jump to the first row"
+            );
+            assert_eq!(
+                search_query, "",
+                "Home must not be routed as text into the search field"
+            );
+            assert_eq!(focus, Focus::Search);
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_end_while_focus_search_jumps_to_last() {
+    let tmp = secure_tempdir();
+    let (state, [_a, _b, c]) = unlocked_search_focused_with_three_named_accounts(&tmp);
+    let (state, _) = reduce(state, key(KeyCode::End));
+    match state {
+        AppState::Unlocked {
+            selected,
+            search_query,
+            focus,
+            ..
+        } => {
+            assert_eq!(
+                selected,
+                Some(c),
+                "End while Focus::Search must jump to the last row"
+            );
+            assert_eq!(
+                search_query, "",
+                "End must not be routed as text into the search field"
+            );
+            assert_eq!(focus, Focus::Search);
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_ctrl_f_while_focus_search_advances_selection() {
+    let tmp = secure_tempdir();
+    let (mut state, [a, _b, c]) = unlocked_search_focused_with_three_named_accounts(&tmp);
+    if let AppState::Unlocked {
+        ref mut viewport_height,
+        ref mut selected,
+        ..
+    } = state
+    {
+        *viewport_height = 2;
+        *selected = Some(a);
+    }
+    let (state, _) = reduce(state, ctrl(KeyCode::Char('f')));
+    match state {
+        AppState::Unlocked {
+            selected,
+            search_query,
+            focus,
+            ..
+        } => {
+            assert_eq!(
+                selected,
+                Some(c),
+                "Ctrl-F while Focus::Search must advance list selection (PgDn mirror)"
+            );
+            assert_eq!(
+                search_query, "",
+                "Ctrl-F must not append to the search field"
+            );
+            assert_eq!(focus, Focus::Search);
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_ctrl_b_while_focus_search_retreats_selection() {
+    let tmp = secure_tempdir();
+    let (mut state, [a, _b, c]) = unlocked_search_focused_with_three_named_accounts(&tmp);
+    if let AppState::Unlocked {
+        ref mut viewport_height,
+        ref mut selected,
+        ..
+    } = state
+    {
+        *viewport_height = 2;
+        *selected = Some(c);
+    }
+    let (state, _) = reduce(state, ctrl(KeyCode::Char('b')));
+    match state {
+        AppState::Unlocked {
+            selected,
+            search_query,
+            focus,
+            ..
+        } => {
+            assert_eq!(
+                selected,
+                Some(a),
+                "Ctrl-B while Focus::Search must retreat list selection (PgUp mirror)"
+            );
+            assert_eq!(
+                search_query, "",
+                "Ctrl-B must not append to the search field"
+            );
+            assert_eq!(focus, Focus::Search);
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_ctrl_d_while_focus_search_half_page_advances() {
+    let tmp = secure_tempdir();
+    let (mut state, [a, b, _c]) = unlocked_search_focused_with_three_named_accounts(&tmp);
+    if let AppState::Unlocked {
+        ref mut viewport_height,
+        ref mut selected,
+        ..
+    } = state
+    {
+        *viewport_height = 2;
+        *selected = Some(a);
+    }
+    let (state, _) = reduce(state, ctrl(KeyCode::Char('d')));
+    match state {
+        AppState::Unlocked {
+            selected,
+            search_query,
+            focus,
+            ..
+        } => {
+            assert_eq!(
+                selected,
+                Some(b),
+                "Ctrl-D while Focus::Search must half-page advance the list selection"
+            );
+            assert_eq!(
+                search_query, "",
+                "Ctrl-D must not append to the search field"
+            );
+            assert_eq!(focus, Focus::Search);
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_ctrl_u_while_focus_search_half_page_retreats() {
+    let tmp = secure_tempdir();
+    let (mut state, [_a, b, c]) = unlocked_search_focused_with_three_named_accounts(&tmp);
+    if let AppState::Unlocked {
+        ref mut viewport_height,
+        ref mut selected,
+        ..
+    } = state
+    {
+        *viewport_height = 2;
+        *selected = Some(c);
+    }
+    let (state, _) = reduce(state, ctrl(KeyCode::Char('u')));
+    match state {
+        AppState::Unlocked {
+            selected,
+            search_query,
+            focus,
+            ..
+        } => {
+            assert_eq!(
+                selected,
+                Some(b),
+                "Ctrl-U while Focus::Search must half-page retreat the list selection"
+            );
+            assert_eq!(
+                search_query, "",
+                "Ctrl-U must not append to the search field"
+            );
+            assert_eq!(focus, Focus::Search);
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
 #[test]
 fn typing_g_while_focus_list_still_engages_chord_leader() {
     // Regression guard: the chord leader engagement on Focus::List is
