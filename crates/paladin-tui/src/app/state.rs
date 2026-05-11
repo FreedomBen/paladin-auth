@@ -86,6 +86,43 @@ pub struct HotpReveal {
     pub deadline: Instant,
 }
 
+/// An open modal dialog over the main list view.
+///
+/// Discarded on the `Unlocked → Locked` auto-lock transition
+/// alongside the `Vault` / `Store`, search query, and HOTP reveal
+/// window per `IMPLEMENTATION_PLAN_03_TUI.md` "Auto-lock (per §6)":
+/// *"Locking discards the Vault / Store, open HOTP reveal windows,
+/// the search query, and any modal while retaining the resolved
+/// vault path for the next unlock attempt."*
+///
+/// Variant payloads (form fields, segmented selectors, zeroizing
+/// passphrase buffers for the `Passphrase` / `Import` / `Export`
+/// flows, post-success counts panels) land alongside each modal's
+/// effect-wiring slice. The variant tag is sufficient on its own to
+/// model the discard-on-lock contract, so this slice introduces only
+/// the kinds — payloads are added per modal when their reducer paths
+/// land. The seven variants mirror the modals enumerated in
+/// `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)".
+#[derive(Debug)]
+pub enum Modal {
+    /// Add an account — manual / `otpauth://` URI / clipboard-QR.
+    Add,
+    /// Confirm removal of the selected account.
+    Remove,
+    /// Rename the selected account.
+    Rename,
+    /// Import an existing vault export (Paladin, Aegis, Google
+    /// Authenticator).
+    Import,
+    /// Export the current vault (plaintext or twice-confirmed
+    /// encrypted bundle).
+    Export,
+    /// Passphrase set / change / remove sub-flow.
+    Passphrase,
+    /// Settings: auto-lock and clipboard-clear toggles + timeouts.
+    Settings,
+}
+
 /// Top-level UI state.
 ///
 /// Variants other than [`AppState::Unlocked`] are deliberately
@@ -95,10 +132,10 @@ pub struct HotpReveal {
 ///
 /// The `Unlocked` variant intentionally owns the live `Vault`, `Store`,
 /// and per-screen UI slots (search, idle deadline, pending clipboard
-/// clear, open HOTP reveal) so save-bearing effects can call
-/// `Vault::mutate_and_save` / `Vault::hotp_advance` directly without
-/// indirection. `AppState` is a singleton on the run loop's stack, not
-/// stored in a `Vec`, so the variant-size disparity has no
+/// clear, open HOTP reveal, open modal) so save-bearing effects can
+/// call `Vault::mutate_and_save` / `Vault::hotp_advance` directly
+/// without indirection. `AppState` is a singleton on the run loop's
+/// stack, not stored in a `Vec`, so the variant-size disparity has no
 /// allocator/cache impact in practice; the resulting
 /// `clippy::large_enum_variant` warning is therefore allowed at the
 /// enum level rather than each large field being boxed.
@@ -198,6 +235,13 @@ pub enum AppState {
         /// "Locking discards the Vault / Store, open HOTP reveal
         /// windows, the search query, and any modal …".
         hotp_reveal: Option<HotpReveal>,
+        /// Open modal dialog, if any. Discarded on the
+        /// `Unlocked → Locked` transition alongside the
+        /// `Vault` / `Store` per `IMPLEMENTATION_PLAN_03_TUI.md`
+        /// "Auto-lock (per §6)" — modal-local zeroizing buffers
+        /// (e.g. the Passphrase modal's typed bytes) zeroize on drop
+        /// as their payloads land in later slices.
+        modal: Option<Modal>,
     },
 
     /// Non-mutating startup-error screen. Used when vault-path
@@ -269,6 +313,7 @@ pub fn decide_state_from_open(
                 idle_deadline,
                 pending_clipboard_clear: None,
                 hotp_reveal: None,
+                modal: None,
             }
         }
         Err(err) => AppState::StartupError {

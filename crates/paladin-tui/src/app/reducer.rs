@@ -80,10 +80,10 @@ pub fn reduce(state: AppState, event: AppEvent) -> (AppState, Vec<Effect>) {
 /// monotonic-clock comparison semantics with the GUI.
 ///
 /// On lock the `Vault`, `Store`, search query, open HOTP reveal
-/// window, and idle deadline drop in place through the variant
-/// change; any pending clipboard auto-clear is carried onto the
-/// resulting [`AppState::Locked`] so the timer thread's wake event
-/// still finds pending state to act on. Per
+/// window, open modal, and idle deadline drop in place through the
+/// variant change; any pending clipboard auto-clear is carried onto
+/// the resulting [`AppState::Locked`] so the timer thread's wake
+/// event still finds pending state to act on. Per
 /// `IMPLEMENTATION_PLAN_03_TUI.md` "Auto-lock (per §6)":
 /// *"Locking discards the Vault / Store, open HOTP reveal windows,
 /// the search query, and any modal while retaining the resolved
@@ -168,6 +168,7 @@ fn reduce_unlock_result(
                         idle_deadline,
                         pending_clipboard_clear: None,
                         hotp_reveal: None,
+                        modal: None,
                     },
                     Vec::new(),
                 )
