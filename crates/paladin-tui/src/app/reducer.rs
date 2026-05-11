@@ -400,6 +400,7 @@ fn reduce_unlocked_input(mut state: AppState, key: &KeyEvent) -> (AppState, Vec<
         ref mut selected,
         ref mut status_line,
         ref mut help_open,
+        ref hotp_reveal,
         ..
     } = state
     else {
@@ -547,6 +548,12 @@ fn reduce_unlocked_input(mut state: AppState, key: &KeyEvent) -> (AppState, Vec<
         return move_selection(state, step);
     }
 
+    // `Enter` on Unlocked: copy the selected code (see [`enter_on_unlocked`]).
+    if matches!(key.code, KeyCode::Enter) && *focus == Focus::List {
+        let effects = enter_on_unlocked(path, vault, hotp_reveal.as_ref(), *selected);
+        return (state, effects);
+    }
+
     if let KeyCode::Char(c) = key.code {
         if let Some(err) = selection_gated_status_error(c, *selected) {
             *status_line = Some(err);
@@ -688,6 +695,62 @@ fn hotp_advance_effect(
         return None;
     }
     Some(Effect::HotpAdvance {
+        path: path.to_path_buf(),
+        account_id: id,
+    })
+}
+
+/// Handle `Enter` on Unlocked: return the effects for a `CopyCode`
+/// emission when [`copy_code_effect`] resolves one, otherwise an empty
+/// vec. Per the Keybindings table: *"`Enter` — Copy selected code
+/// (TOTP: current; HOTP: visible only)."* Modal / help / `Ctrl-Enter`
+/// short-circuit before reaching this helper; `Focus::List` is gated
+/// by the caller.
+fn enter_on_unlocked(
+    path: &std::path::Path,
+    vault: &Vault,
+    hotp_reveal: Option<&crate::app::state::HotpReveal>,
+    selected: Option<AccountId>,
+) -> Vec<Effect> {
+    copy_code_effect(path, vault, hotp_reveal, selected)
+        .map(|e| vec![e])
+        .unwrap_or_default()
+}
+
+/// Resolve whether `Enter` on Unlocked should emit a
+/// [`Effect::CopyCode`] for the currently selected account.
+///
+/// Per `IMPLEMENTATION_PLAN_03_TUI.md` Keybindings: *"`Enter` — Copy
+/// selected code (TOTP: current; HOTP: visible only)."* The rules:
+///
+/// * No selection → `None`.
+/// * Selection points at an account no longer in the vault
+///   (defensive — the search/selection slice keeps these in sync) →
+///   `None`.
+/// * TOTP → `Some(CopyCode)` — the executor generates a fresh code
+///   from the live wall clock.
+/// * HOTP with a `hotp_reveal` whose `account_id` matches the
+///   selection → `Some(CopyCode)` — the executor reads the visible
+///   code.
+/// * HOTP without a matching reveal (no reveal at all, or one for a
+///   different account) → `None`. The "visible only" rule is enforced
+///   here so the executor never sees a `CopyCode` for a hidden code.
+fn copy_code_effect(
+    path: &std::path::Path,
+    vault: &Vault,
+    hotp_reveal: Option<&crate::app::state::HotpReveal>,
+    selected: Option<AccountId>,
+) -> Option<Effect> {
+    let id = selected?;
+    let account = vault.iter().find(|a| a.id() == id)?;
+    let visible = match account.kind() {
+        paladin_core::AccountKindSummary::Totp => true,
+        paladin_core::AccountKindSummary::Hotp => hotp_reveal.is_some_and(|r| r.account_id == id),
+    };
+    if !visible {
+        return None;
+    }
+    Some(Effect::CopyCode {
         path: path.to_path_buf(),
         account_id: id,
     })

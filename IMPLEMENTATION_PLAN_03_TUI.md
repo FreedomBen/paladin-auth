@@ -629,7 +629,7 @@ end-to-end.
 
 ### Reducer (`tests/reducer_tests.rs`)
 
-- [ ] Every keybinding maps to the expected state transition.
+- [x] Every keybinding maps to the expected state transition.
 - [x] Search filter narrows the visible list in place.
 - [x] Selection navigation moves correctly under `↑` / `↓` / `j` / `k`,
   `PgUp` / `PgDn` / `Ctrl-B` / `Ctrl-F`, `Ctrl-U` / `Ctrl-D`, and

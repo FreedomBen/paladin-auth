@@ -171,4 +171,33 @@ pub enum Effect {
         /// The HOTP account whose counter should advance.
         account_id: AccountId,
     },
+    /// Copy the currently selected account's code to the OS clipboard.
+    ///
+    /// Per the Keybindings table in `IMPLEMENTATION_PLAN_03_TUI.md`:
+    /// *"`Enter` — Copy selected code (TOTP: current; HOTP: visible
+    /// only)."* The reducer emits this effect when `KeyCode::Enter` is
+    /// pressed on `Unlocked` with `Focus::List`, no modal open, no
+    /// help overlay, and either a TOTP account selected or an HOTP
+    /// account selected whose code is currently visible in
+    /// `hotp_reveal`. The HOTP-visible-only gating is enforced at the
+    /// reducer level so the executor only ever sees emissions for
+    /// codes the user can actually see.
+    ///
+    /// The actual clipboard write, auto-clear scheduling, and
+    /// `ClipboardClearPolicy::should_clear` wiring land with the
+    /// clipboard adapter slice (see `IMPLEMENTATION_PLAN_03_TUI.md`
+    /// "Clipboard auto-clear"); until then the executor consumes the
+    /// variant and returns `Continue` without touching the
+    /// clipboard.
+    CopyCode {
+        /// The current vault path; the executor uses it for error
+        /// reporting and to verify the path the effect was emitted
+        /// against in case the user has navigated away.
+        path: PathBuf,
+        /// The account whose code should be copied. For TOTP the
+        /// executor generates a fresh code from the live wall clock;
+        /// for HOTP the executor reads the most recently revealed
+        /// code (guaranteed to exist by reducer-level gating).
+        account_id: AccountId,
+    },
 }

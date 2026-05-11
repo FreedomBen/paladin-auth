@@ -100,5 +100,25 @@ pub fn execute(effect: Effect, sender: &Sender<AppEvent>) -> EffectOutcome {
             let _ = sender;
             EffectOutcome::Continue
         }
+        Effect::CopyCode {
+            path: _,
+            account_id: _,
+        } => {
+            // Placeholder: the `arboard` clipboard write and
+            // `ClipboardClearPolicy::schedule` wiring land with the
+            // clipboard adapter slice (see
+            // `IMPLEMENTATION_PLAN_03_TUI.md` "Clipboard auto-clear":
+            // *"Copy schedules a clear via
+            // `ClipboardClearPolicy::schedule`."*). The executor
+            // needs access to the live `(Vault, Store)` carried in
+            // `AppState::Unlocked` to compute the TOTP code or read
+            // the HOTP reveal value. Until that wiring lands the
+            // reducer emit is exercised by reducer-level tests
+            // (`pressing_enter_*_emits_copy_code_effect`, etc.) and
+            // the executor consumes the variant without emitting an
+            // `AppEvent`.
+            let _ = sender;
+            EffectOutcome::Continue
+        }
     }
 }

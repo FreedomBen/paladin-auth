@@ -19,15 +19,15 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use secrecy::{ExposeSecret, SecretString};
 
 use paladin_core::{
-    validate_manual, AccountId, AccountInput, AccountKindInput, Algorithm, Argon2Params,
-    EncryptionOptions, IconHintInput, IdlePolicy, PaladinError, PermissionSubject, Store, Vault,
-    VaultInit, VaultLock, VaultStatus,
+    hotp_reveal_deadline, validate_manual, AccountId, AccountInput, AccountKindInput, Algorithm,
+    Argon2Params, EncryptionOptions, IconHintInput, IdlePolicy, PaladinError, PermissionSubject,
+    Store, Vault, VaultInit, VaultLock, VaultStatus,
 };
 use paladin_tui::app::event::{AppEvent, Effect, EffectResult};
 use paladin_tui::app::reducer::reduce;
 use paladin_tui::app::state::{
     compute_idle_deadline, decide_state_from_inspect, decide_state_from_open, render_error_message,
-    AppState, ChordLeader, Focus, Modal, StatusLine, NO_ACCOUNT_SELECTED,
+    AppState, ChordLeader, Focus, HotpReveal, Modal, StatusLine, NO_ACCOUNT_SELECTED,
 };
 use paladin_tui::cli::{should_disable_color, GlobalArgs};
 use paladin_tui::prompt::PassphraseBuffer;
@@ -8196,6 +8196,383 @@ fn pressing_ctrl_p_at_top_level_search_focus_does_not_flip_focus() {
                 "top-level `Ctrl-P` must not mutate the search query"
             );
             assert!(modal.is_none());
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Enter on Unlocked copies the selected code
+//
+// `IMPLEMENTATION_PLAN_03_TUI.md` Keybindings table: *"`Enter` — Copy
+// selected code (TOTP: current; HOTP: visible only)."* The reducer
+// emits `Effect::CopyCode { path, account_id }` when:
+//
+//   * `Focus::List` (Enter is not a search-field action),
+//   * no modal is open and the help overlay is closed,
+//   * an account is selected,
+//   * and the account is TOTP, or it is HOTP with a `hotp_reveal`
+//     whose `account_id` matches `selected`.
+//
+// The reducer never reads or writes the OS clipboard itself — only
+// the executor (and only behind the placeholder until the clipboard
+// adapter slice lands). HOTP-visible-only gating is enforced here so
+// the executor never sees a CopyCode for a HOTP code the user cannot
+// see on screen.
+// ---------------------------------------------------------------------------
+
+fn assert_copy_code_for(effects: &[Effect], expected_path: &Path, expected_account: AccountId) {
+    match effects {
+        [Effect::CopyCode { path, account_id }] => {
+            assert_eq!(path, expected_path, "CopyCode must carry the vault path");
+            assert_eq!(
+                *account_id, expected_account,
+                "CopyCode must carry the selected account id"
+            );
+        }
+        other => panic!("expected single CopyCode effect, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_enter_on_unlocked_with_totp_selected_emits_copy_code_effect() {
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let totp_id = add_totp_account(&mut vault, &store, "github");
+    let state = AppState::Unlocked {
+        path: path.clone(),
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(totp_id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let (state, effects) = reduce(state, key(KeyCode::Enter));
+    assert_copy_code_for(&effects, &path, totp_id);
+    match state {
+        AppState::Unlocked {
+            hotp_reveal,
+            status_line,
+            ..
+        } => {
+            assert!(
+                hotp_reveal.is_none(),
+                "Enter on TOTP must not seed an HOTP reveal"
+            );
+            assert!(
+                status_line.is_none(),
+                "Enter on TOTP must not set a status line"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_enter_on_unlocked_with_hotp_selected_and_visible_reveal_emits_copy_code_effect() {
+    // HOTP rule: copy only when a reveal window for the SAME account
+    // is currently visible. The reveal is a precondition the reducer
+    // can observe locally — no need to round-trip the executor.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let hotp_id = add_hotp_account(&mut vault, &store, "github");
+    let reveal = HotpReveal {
+        account_id: hotp_id,
+        counter_used: 7,
+        code: SecretString::from("123456".to_string()),
+        deadline: hotp_reveal_deadline(Instant::now()),
+    };
+    let state = AppState::Unlocked {
+        path: path.clone(),
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: Some(reveal),
+        modal: None,
+        selected: Some(hotp_id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let (state, effects) = reduce(state, key(KeyCode::Enter));
+    assert_copy_code_for(&effects, &path, hotp_id);
+    match state {
+        AppState::Unlocked { hotp_reveal, .. } => {
+            assert!(
+                hotp_reveal.is_some(),
+                "Enter on a visible HOTP reveal must not close the reveal window — \
+                 only Tick past the deadline or a fresh EffectResult may"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_enter_on_unlocked_with_hotp_selected_and_no_reveal_emits_no_effect() {
+    // "HOTP: visible only" — with no reveal window the code is
+    // hidden, so Enter has nothing to copy. The reducer must not
+    // leak a CopyCode emission the executor would have to drop.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let hotp_id = add_hotp_account(&mut vault, &store, "github");
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(hotp_id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let (state, effects) = reduce(state, key(KeyCode::Enter));
+    assert!(
+        effects.is_empty(),
+        "Enter on a hidden HOTP must not emit CopyCode, got {effects:?}"
+    );
+    match state {
+        AppState::Unlocked { hotp_reveal, .. } => {
+            assert!(
+                hotp_reveal.is_none(),
+                "Enter on a hidden HOTP must not seed a reveal"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_enter_on_unlocked_with_hotp_selected_and_reveal_for_other_account_emits_no_effect() {
+    // A stale reveal — pointing at a DIFFERENT account — does not
+    // satisfy "visible only" for the currently selected HOTP. The
+    // reducer must compare `hotp_reveal.account_id` against
+    // `selected`, not merely check `hotp_reveal.is_some()`.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let hotp_a = add_hotp_account(&mut vault, &store, "alpha");
+    let hotp_b = add_hotp_account(&mut vault, &store, "beta");
+    let reveal = HotpReveal {
+        account_id: hotp_a,
+        counter_used: 3,
+        code: SecretString::from("000000".to_string()),
+        deadline: hotp_reveal_deadline(Instant::now()),
+    };
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: Some(reveal),
+        modal: None,
+        selected: Some(hotp_b),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let (state, effects) = reduce(state, key(KeyCode::Enter));
+    assert!(
+        effects.is_empty(),
+        "Enter on HOTP-B with reveal for HOTP-A must not emit CopyCode, got {effects:?}"
+    );
+    match state {
+        AppState::Unlocked { hotp_reveal, .. } => {
+            assert!(
+                hotp_reveal.is_some(),
+                "the stale reveal for the other account must not be cleared by Enter"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_enter_on_unlocked_with_no_selection_emits_no_effect() {
+    // Without a selection there is no "selected code" to copy. The
+    // reducer must not emit CopyCode and must not surface the
+    // "no account selected" status used by the modal-opener keys
+    // (`n` / `r` / `R`) — Enter is not selection-gated in the same
+    // sense; an empty vault simply yields no action.
+    let tmp = secure_tempdir();
+    let (path, (vault, store)) = open_plaintext_pair(&tmp);
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let (state, effects) = reduce(state, key(KeyCode::Enter));
+    assert!(
+        effects.is_empty(),
+        "Enter with no selection must not emit CopyCode, got {effects:?}"
+    );
+    match state {
+        AppState::Unlocked { status_line, .. } => {
+            assert!(
+                status_line.is_none(),
+                "Enter with no selection is a silent no-op (no status surface)"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_enter_on_unlocked_with_modal_open_emits_no_effect() {
+    // Modal traps focus — Enter is modal-local input (Add modal
+    // commits, Remove modal confirms, …) and must not leak through
+    // to the underlying list's copy binding.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let totp_id = add_totp_account(&mut vault, &store, "github");
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Add),
+        selected: Some(totp_id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let (state, effects) = reduce(state, key(KeyCode::Enter));
+    assert!(
+        effects.is_empty(),
+        "Enter with a modal open must not emit CopyCode, got {effects:?}"
+    );
+    match state {
+        AppState::Unlocked {
+            modal: Some(Modal::Add),
+            ..
+        } => {}
+        AppState::Unlocked { modal, .. } => {
+            panic!("expected modal=Some(Modal::Add) preserved, got modal={modal:?}")
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_enter_on_unlocked_with_help_open_emits_no_effect() {
+    // The Help overlay is read-only — every key besides `Esc` and
+    // `Ctrl-C` is a silent no-op while it is visible, so Enter
+    // cannot leak through to the copy binding.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let totp_id = add_totp_account(&mut vault, &store, "github");
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(totp_id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: true,
+    };
+    let (state, effects) = reduce(state, key(KeyCode::Enter));
+    assert!(
+        effects.is_empty(),
+        "Enter with help open must not emit CopyCode, got {effects:?}"
+    );
+    match state {
+        AppState::Unlocked { help_open, .. } => {
+            assert!(help_open, "Enter with help open must not close the overlay");
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_enter_on_unlocked_with_focus_search_emits_no_effect() {
+    // Enter is a list action — on `Focus::Search` it must not copy.
+    // The search field has no "submit" concept (the filter is live
+    // on every keystroke), so the cleanest behavior is a silent
+    // no-op. `Tab` is the documented way to leave the search field.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let totp_id = add_totp_account(&mut vault, &store, "github");
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: "gh".to_string(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(totp_id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::Search,
+        status_line: None,
+        help_open: false,
+    };
+    let (state, effects) = reduce(state, key(KeyCode::Enter));
+    assert!(
+        effects.is_empty(),
+        "Enter while Focus::Search must not emit CopyCode, got {effects:?}"
+    );
+    match state {
+        AppState::Unlocked {
+            focus,
+            search_query,
+            ..
+        } => {
+            assert_eq!(focus, Focus::Search, "Enter must not change focus");
+            assert_eq!(search_query, "gh", "Enter must not mutate the search query");
         }
         other => panic!("expected Unlocked, got {other:?}"),
     }
