@@ -23,7 +23,7 @@ use paladin_tui::app::event::{AppEvent, Effect, EffectResult};
 use paladin_tui::app::reducer::reduce;
 use paladin_tui::app::state::{
     compute_idle_deadline, decide_state_from_inspect, decide_state_from_open, render_error_message,
-    AppState, ChordLeader, Modal,
+    AppState, ChordLeader, Focus, Modal,
 };
 use paladin_tui::cli::{should_disable_color, GlobalArgs};
 use paladin_tui::prompt::PassphraseBuffer;
@@ -410,6 +410,7 @@ fn ctrl_c_on_unlocked_quits() {
         pending_chord_leader: None,
         viewport_height: 0,
         viewport_offset: 0,
+        focus: Focus::List,
     };
     let (_, effects) = reduce(unlocked, ctrl(KeyCode::Char('c')));
     assert!(matches!(effects.as_slice(), [Effect::Quit]));
@@ -1248,6 +1249,66 @@ fn effect_result_unlock_ok_empty_vault_seeds_no_selection() {
 }
 
 // ---------------------------------------------------------------------------
+// Initial focus seeding
+// (IMPLEMENTATION_PLAN_03_TUI.md > Focus model: "On list-view entry,
+//  focus starts on the account list".)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn decide_state_from_open_seeds_focus_on_the_list() {
+    // Every Unlocked-entry path lands the user on the account list so
+    // navigation keys engage without a focus-toggle press. The
+    // `decide_state_from_open` path is the plaintext / direct-open
+    // entry; the encrypted-unlock path is covered by its own test.
+    let tmp = secure_tempdir();
+    let (vault_path, (vault, store)) = open_plaintext_pair(&tmp);
+    let now = Instant::now();
+    let state = decide_state_from_open(now, vault_path, Ok((vault, store)));
+    match state {
+        AppState::Unlocked { focus, .. } => assert_eq!(
+            focus,
+            Focus::List,
+            "Unlocked entry must seed `focus` to Focus::List"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_unlock_ok_seeds_focus_on_the_list() {
+    // The successful-unlock branch in `reduce_unlock_result` is the
+    // second Unlocked-entry site. It must seed focus the same way so
+    // the user is on the list regardless of whether they came in via
+    // plaintext direct-open or encrypted unlock.
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (vault, store) = create_encrypted_pair(&path, "pw");
+    drop(vault);
+    drop(store);
+    let pp = SecretString::from("pw".to_string());
+    let pair = Store::open(&path, VaultLock::Encrypted(pp)).expect("unlock");
+
+    let prior = AppState::Unlock {
+        path: path.clone(),
+        error: None,
+        passphrase: PassphraseBuffer::new(),
+    };
+    let (state, effects) = reduce(prior, unlock_result(Ok(pair)));
+    assert!(
+        effects.is_empty(),
+        "successful unlock yields no follow-up effects"
+    );
+    match state {
+        AppState::Unlocked { focus, .. } => assert_eq!(
+            focus,
+            Focus::List,
+            "successful unlock must seed `focus` to Focus::List"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Modals — open transitions
 // (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Reducer — bullet 4)
 //
@@ -1278,6 +1339,7 @@ fn pressing_a_on_unlocked_with_no_modal_open_opens_add_modal() {
         pending_chord_leader: None,
         viewport_height: 0,
         viewport_offset: 0,
+        focus: Focus::List,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Char('a')));
     assert!(effects.is_empty(), "opening a modal must not emit effects");
@@ -1314,6 +1376,7 @@ fn pressing_a_on_unlocked_with_modal_already_open_does_not_replace_the_modal() {
         pending_chord_leader: None,
         viewport_height: 0,
         viewport_offset: 0,
+        focus: Focus::List,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Char('a')));
     assert!(
@@ -1353,6 +1416,7 @@ fn pressing_ctrl_a_on_unlocked_does_not_open_add_modal() {
         pending_chord_leader: None,
         viewport_height: 0,
         viewport_offset: 0,
+        focus: Focus::List,
     };
     let (state, effects) = reduce(unlocked, ctrl(KeyCode::Char('a')));
     assert!(effects.is_empty(), "Ctrl-A is unbound; no effects");
@@ -1382,6 +1446,7 @@ fn fresh_plaintext_unlocked(tmp: &tempfile::TempDir) -> AppState {
         pending_chord_leader: None,
         viewport_height: 0,
         viewport_offset: 0,
+        focus: Focus::List,
     }
 }
 
@@ -1490,6 +1555,7 @@ fn assert_esc_closes_modal(opened: Modal) {
         pending_chord_leader: None,
         viewport_height: 0,
         viewport_offset: 0,
+        focus: Focus::List,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Esc));
     assert!(
@@ -1606,6 +1672,7 @@ fn pressing_q_on_unlocked_with_modal_open_does_not_quit() {
         pending_chord_leader: None,
         viewport_height: 0,
         viewport_offset: 0,
+        focus: Focus::List,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Char('q')));
     assert!(
@@ -1673,6 +1740,7 @@ fn unlocked_with_three_accounts(tmp: &tempfile::TempDir) -> (AppState, [AccountI
         pending_chord_leader: None,
         viewport_height: 0,
         viewport_offset: 0,
+        focus: Focus::List,
     };
     (state, [a, b, c])
 }
@@ -1733,6 +1801,7 @@ fn pressing_down_arrow_at_end_of_list_clamps() {
         pending_chord_leader: None,
         viewport_height: 0,
         viewport_offset: 0,
+        focus: Focus::List,
     };
     let (state, _) = reduce(unlocked, key(KeyCode::Down));
     match state {
@@ -1764,6 +1833,7 @@ fn pressing_up_arrow_on_unlocked_moves_selection_to_previous_account() {
         pending_chord_leader: None,
         viewport_height: 0,
         viewport_offset: 0,
+        focus: Focus::List,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Up));
     assert!(effects.is_empty());
@@ -1844,6 +1914,7 @@ fn pressing_down_arrow_with_modal_open_does_not_move_selection() {
         pending_chord_leader: None,
         viewport_height: 0,
         viewport_offset: 0,
+        focus: Focus::List,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Down));
     assert!(effects.is_empty());
@@ -1896,6 +1967,7 @@ fn pressing_k_mirrors_up_arrow() {
         pending_chord_leader: None,
         viewport_height: 0,
         viewport_offset: 0,
+        focus: Focus::List,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Char('k')));
     assert!(effects.is_empty());
@@ -1948,6 +2020,7 @@ fn pressing_j_with_modal_open_does_not_move_selection() {
         pending_chord_leader: None,
         viewport_height: 0,
         viewport_offset: 0,
+        focus: Focus::List,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Char('j')));
     assert!(effects.is_empty());
@@ -2002,6 +2075,7 @@ fn pressing_home_on_unlocked_jumps_to_first_account() {
         pending_chord_leader: None,
         viewport_height: 0,
         viewport_offset: 0,
+        focus: Focus::List,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Home));
     assert!(effects.is_empty(), "navigation must not emit effects");
@@ -2066,6 +2140,7 @@ fn pressing_end_at_last_account_is_a_no_op() {
         pending_chord_leader: None,
         viewport_height: 0,
         viewport_offset: 0,
+        focus: Focus::List,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::End));
     assert!(effects.is_empty());
@@ -2129,6 +2204,7 @@ fn pressing_home_with_modal_open_does_not_move_selection() {
         pending_chord_leader: None,
         viewport_height: 0,
         viewport_offset: 0,
+        focus: Focus::List,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Home));
     assert!(effects.is_empty());
@@ -2166,6 +2242,7 @@ fn pressing_end_with_modal_open_does_not_move_selection() {
         pending_chord_leader: None,
         viewport_height: 0,
         viewport_offset: 0,
+        focus: Focus::List,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::End));
     assert!(effects.is_empty());
@@ -2214,6 +2291,7 @@ fn pressing_ctrl_home_does_not_move_selection() {
             pending_chord_leader: None,
             viewport_height: 0,
             viewport_offset: 0,
+            focus: Focus::List,
         },
         other => panic!("expected Unlocked, got {other:?}"),
     };
@@ -2318,6 +2396,7 @@ fn pressing_shift_g_at_last_account_is_a_no_op() {
         pending_chord_leader: None,
         viewport_height: 0,
         viewport_offset: 0,
+        focus: Focus::List,
     };
     let (state, _) = reduce(unlocked, key(KeyCode::Char('G')));
     match state {
@@ -2365,6 +2444,7 @@ fn pressing_shift_g_with_modal_open_does_not_move_selection() {
         pending_chord_leader: None,
         viewport_height: 0,
         viewport_offset: 0,
+        focus: Focus::List,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Char('G')));
     assert!(effects.is_empty());
@@ -2441,6 +2521,7 @@ fn pressing_lowercase_g_on_unlocked_does_not_move_selection() {
             pending_chord_leader: None,
             viewport_height: 0,
             viewport_offset: 0,
+            focus: Focus::List,
         },
         other => panic!("expected Unlocked, got {other:?}"),
     };
@@ -2505,6 +2586,7 @@ fn pressing_lowercase_g_on_unlocked_sets_pending_chord_leader() {
             pending_chord_leader: None,
             viewport_height: 0,
             viewport_offset: 0,
+            focus: Focus::List,
         },
         other => panic!("expected Unlocked, got {other:?}"),
     };
@@ -2552,6 +2634,7 @@ fn pressing_gg_on_unlocked_jumps_to_first_account() {
             pending_chord_leader: None,
             viewport_height: 0,
             viewport_offset: 0,
+            focus: Focus::List,
         },
         other => panic!("expected Unlocked, got {other:?}"),
     };
@@ -2692,6 +2775,7 @@ fn pressing_g_with_modal_open_does_not_set_chord_leader() {
         pending_chord_leader: None,
         viewport_height: 0,
         viewport_offset: 0,
+        focus: Focus::List,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Char('g')));
     assert!(effects.is_empty());
@@ -2725,6 +2809,7 @@ fn pressing_gg_on_empty_vault_is_silent_noop() {
         pending_chord_leader: None,
         viewport_height: 0,
         viewport_offset: 0,
+        focus: Focus::List,
     };
     let (state, _) = reduce(unlocked, key(KeyCode::Char('g')));
     let (state, effects) = reduce(state, key(KeyCode::Char('g')));
@@ -2802,6 +2887,7 @@ fn tick_between_g_presses_preserves_pending_chord_leader() {
             pending_chord_leader: None,
             viewport_height: 0,
             viewport_offset: 0,
+            focus: Focus::List,
         },
         other => panic!("expected Unlocked, got {other:?}"),
     };
@@ -2884,6 +2970,7 @@ fn unlocked_with_n_accounts(
         pending_chord_leader: None,
         viewport_height,
         viewport_offset: 0,
+        focus: Focus::List,
     };
     (state, ids)
 }
@@ -2976,6 +3063,7 @@ fn pressing_page_up_on_unlocked_moves_selection_by_viewport_height() {
         pending_chord_leader: None,
         viewport_height: 2,
         viewport_offset: 0,
+        focus: Focus::List,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::PageUp));
     assert!(effects.is_empty());
@@ -3012,6 +3100,7 @@ fn pressing_page_down_clamps_to_last_when_fewer_rows_remain() {
         pending_chord_leader: None,
         viewport_height: 3,
         viewport_offset: 0,
+        focus: Focus::List,
     };
     let (state, _) = reduce(unlocked, key(KeyCode::PageDown));
     match state {
@@ -3047,6 +3136,7 @@ fn pressing_page_up_clamps_to_first_when_fewer_rows_remain() {
         pending_chord_leader: None,
         viewport_height: 3,
         viewport_offset: 0,
+        focus: Focus::List,
     };
     let (state, _) = reduce(unlocked, key(KeyCode::PageUp));
     match state {
@@ -3098,6 +3188,7 @@ fn pressing_page_up_with_viewport_height_zero_is_a_no_op() {
         pending_chord_leader: None,
         viewport_height: 0,
         viewport_offset: 0,
+        focus: Focus::List,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::PageUp));
     assert!(effects.is_empty());
@@ -3164,6 +3255,7 @@ fn pressing_page_down_with_modal_open_does_not_move_selection() {
         pending_chord_leader: None,
         viewport_height: 2,
         viewport_offset: 0,
+        focus: Focus::List,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::PageDown));
     assert!(effects.is_empty());
@@ -3273,6 +3365,7 @@ fn pressing_ctrl_b_on_unlocked_moves_selection_by_viewport_height() {
         pending_chord_leader: None,
         viewport_height: 2,
         viewport_offset: 0,
+        focus: Focus::List,
     };
     let (state, effects) = reduce(unlocked, ctrl(KeyCode::Char('b')));
     assert!(effects.is_empty());
@@ -3309,6 +3402,7 @@ fn pressing_ctrl_f_clamps_to_last_when_fewer_rows_remain() {
         pending_chord_leader: None,
         viewport_height: 3,
         viewport_offset: 0,
+        focus: Focus::List,
     };
     let (state, _) = reduce(unlocked, ctrl(KeyCode::Char('f')));
     match state {
@@ -3344,6 +3438,7 @@ fn pressing_ctrl_b_clamps_to_first_when_fewer_rows_remain() {
         pending_chord_leader: None,
         viewport_height: 3,
         viewport_offset: 0,
+        focus: Focus::List,
     };
     let (state, _) = reduce(unlocked, ctrl(KeyCode::Char('b')));
     match state {
@@ -3395,6 +3490,7 @@ fn pressing_ctrl_b_with_viewport_height_zero_is_a_no_op() {
         pending_chord_leader: None,
         viewport_height: 0,
         viewport_offset: 0,
+        focus: Focus::List,
     };
     let (state, effects) = reduce(unlocked, ctrl(KeyCode::Char('b')));
     assert!(effects.is_empty());
@@ -3461,6 +3557,7 @@ fn pressing_ctrl_f_with_modal_open_does_not_move_selection() {
         pending_chord_leader: None,
         viewport_height: 2,
         viewport_offset: 0,
+        focus: Focus::List,
     };
     let (state, effects) = reduce(unlocked, ctrl(KeyCode::Char('f')));
     assert!(effects.is_empty());
@@ -3498,6 +3595,7 @@ fn pressing_ctrl_b_with_modal_open_does_not_move_selection() {
         pending_chord_leader: None,
         viewport_height: 2,
         viewport_offset: 0,
+        focus: Focus::List,
     };
     let (state, effects) = reduce(unlocked, ctrl(KeyCode::Char('b')));
     assert!(effects.is_empty());
@@ -3564,6 +3662,7 @@ fn pressing_ctrl_b_clears_pending_chord_leader() {
         pending_chord_leader: None,
         viewport_height: 2,
         viewport_offset: 0,
+        focus: Focus::List,
     };
     let (state, _) = reduce(unlocked, key(KeyCode::Char('g')));
     let (state, _) = reduce(state, ctrl(KeyCode::Char('b')));
@@ -3617,6 +3716,7 @@ fn pressing_ctrl_d_on_unlocked_moves_selection_by_half_viewport_height() {
         pending_chord_leader: None,
         viewport_height: 4,
         viewport_offset: 0,
+        focus: Focus::List,
     };
     let (state, effects) = reduce(unlocked, ctrl(KeyCode::Char('d')));
     assert!(effects.is_empty(), "navigation must not emit effects");
@@ -3654,6 +3754,7 @@ fn pressing_ctrl_u_on_unlocked_moves_selection_by_half_viewport_height() {
         pending_chord_leader: None,
         viewport_height: 4,
         viewport_offset: 0,
+        focus: Focus::List,
     };
     let (state, effects) = reduce(unlocked, ctrl(KeyCode::Char('u')));
     assert!(effects.is_empty());
@@ -3690,6 +3791,7 @@ fn ctrl_d_half_page_uses_integer_division_on_odd_viewport_height() {
         pending_chord_leader: None,
         viewport_height: 5,
         viewport_offset: 0,
+        focus: Focus::List,
     };
     let (state, _) = reduce(unlocked, ctrl(KeyCode::Char('d')));
     match state {
@@ -3726,6 +3828,7 @@ fn pressing_ctrl_d_clamps_to_last_when_fewer_rows_remain() {
         pending_chord_leader: None,
         viewport_height: 4,
         viewport_offset: 0,
+        focus: Focus::List,
     };
     let (state, _) = reduce(unlocked, ctrl(KeyCode::Char('d')));
     match state {
@@ -3762,6 +3865,7 @@ fn pressing_ctrl_u_clamps_to_first_when_fewer_rows_remain() {
         pending_chord_leader: None,
         viewport_height: 4,
         viewport_offset: 0,
+        focus: Focus::List,
     };
     let (state, _) = reduce(unlocked, ctrl(KeyCode::Char('u')));
     match state {
@@ -3811,6 +3915,7 @@ fn pressing_ctrl_u_with_viewport_height_zero_is_a_no_op() {
         pending_chord_leader: None,
         viewport_height: 0,
         viewport_offset: 0,
+        focus: Focus::List,
     };
     let (state, effects) = reduce(unlocked, ctrl(KeyCode::Char('u')));
     assert!(effects.is_empty());
@@ -3862,6 +3967,7 @@ fn pressing_ctrl_u_with_viewport_height_one_is_a_no_op() {
         pending_chord_leader: None,
         viewport_height: 1,
         viewport_offset: 0,
+        focus: Focus::List,
     };
     let (state, effects) = reduce(unlocked, ctrl(KeyCode::Char('u')));
     assert!(effects.is_empty());
@@ -3925,6 +4031,7 @@ fn pressing_ctrl_d_with_modal_open_does_not_move_selection() {
         pending_chord_leader: None,
         viewport_height: 4,
         viewport_offset: 0,
+        focus: Focus::List,
     };
     let (state, effects) = reduce(unlocked, ctrl(KeyCode::Char('d')));
     assert!(effects.is_empty());
@@ -3962,6 +4069,7 @@ fn pressing_ctrl_u_with_modal_open_does_not_move_selection() {
         pending_chord_leader: None,
         viewport_height: 4,
         viewport_offset: 0,
+        focus: Focus::List,
     };
     let (state, effects) = reduce(unlocked, ctrl(KeyCode::Char('u')));
     assert!(effects.is_empty());
@@ -4001,6 +4109,7 @@ fn pressing_ctrl_d_clears_pending_chord_leader() {
         pending_chord_leader: None,
         viewport_height: 4,
         viewport_offset: 0,
+        focus: Focus::List,
     };
     let (state, _) = reduce(unlocked, key(KeyCode::Char('g')));
     let (state, _) = reduce(state, ctrl(KeyCode::Char('d')));
@@ -4046,6 +4155,7 @@ fn pressing_ctrl_u_clears_pending_chord_leader() {
         pending_chord_leader: None,
         viewport_height: 4,
         viewport_offset: 0,
+        focus: Focus::List,
     };
     let (state, _) = reduce(unlocked, key(KeyCode::Char('g')));
     let (state, _) = reduce(state, ctrl(KeyCode::Char('u')));
@@ -4117,6 +4227,7 @@ fn pressing_lowercase_z_on_unlocked_sets_pending_chord_leader_z() {
         pending_chord_leader: None,
         viewport_height: 4,
         viewport_offset: 0,
+        focus: Focus::List,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Char('z')));
     assert!(effects.is_empty(), "chord leader must not emit effects");
@@ -4165,6 +4276,7 @@ fn pressing_zz_recenters_viewport_on_selected_row() {
         pending_chord_leader: None,
         viewport_height: 4,
         viewport_offset: 0,
+        focus: Focus::List,
     };
     let (state, _) = reduce(unlocked, key(KeyCode::Char('z')));
     let (state, effects) = reduce(state, key(KeyCode::Char('z')));
@@ -4212,6 +4324,7 @@ fn pressing_zz_uses_integer_division_on_odd_viewport_height() {
         pending_chord_leader: None,
         viewport_height: 5,
         viewport_offset: 0,
+        focus: Focus::List,
     };
     let (state, _) = reduce(unlocked, key(KeyCode::Char('z')));
     let (state, _) = reduce(state, key(KeyCode::Char('z')));
@@ -4249,6 +4362,7 @@ fn pressing_zz_near_top_clamps_offset_to_zero() {
         pending_chord_leader: None,
         viewport_height: 4,
         viewport_offset: 3,
+        focus: Focus::List,
     };
     let (state, _) = reduce(unlocked, key(KeyCode::Char('z')));
     let (state, _) = reduce(state, key(KeyCode::Char('z')));
@@ -4342,6 +4456,7 @@ fn pressing_z_with_modal_open_does_not_set_chord_leader() {
         pending_chord_leader: None,
         viewport_height: 4,
         viewport_offset: 0,
+        focus: Focus::List,
     };
     let (state, effects) = reduce(unlocked, key(KeyCode::Char('z')));
     assert!(effects.is_empty());
@@ -4468,6 +4583,7 @@ fn pressing_g_then_z_does_not_commit_gg_or_zz() {
             pending_chord_leader: None,
             viewport_height: 4,
             viewport_offset: 0,
+            focus: Focus::List,
         },
         other => panic!("expected Unlocked, got {other:?}"),
     };

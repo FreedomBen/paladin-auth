@@ -112,6 +112,37 @@ pub enum ChordLeader {
     Z,
 }
 
+/// Which area of the main list view currently captures input.
+///
+/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Focus model": focus
+/// alternates between the search bar and the account list. On
+/// list-view entry the focus starts on the account list so
+/// navigation keys engage without a focus-toggle press; `/` focuses
+/// the search bar, `Esc` returns focus to the list (also clearing
+/// the search query), and `Tab` / `Shift-Tab` cycle between them
+/// once the search-focus payload (text editing, focus-aware key
+/// routing) lands. This slice introduces only the enum and the
+/// `focus` slot so subsequent slices can wire the keybindings; on
+/// the `Unlocked → Locked` auto-lock transition the focus slot is
+/// discarded alongside the `Vault` / `Store` (by the variant
+/// change), and re-entering Unlocked re-seeds `Focus::List` per the
+/// "On list-view entry, focus starts on the account list" rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Focus {
+    /// The account list captures input (selection movement, action
+    /// keys like `a` / `r` / `n` / `Enter`, vim navigation chords).
+    /// Default on every Unlocked-entry path.
+    List,
+    /// The search bar captures input (incremental query editing).
+    /// List navigation keys (`↑` / `↓` / `PgUp` / `PgDn` / `Home` /
+    /// `End` / `Ctrl-U` / `Ctrl-D` / `Ctrl-F` / `Ctrl-B`) still pass
+    /// through to the list per the §6 / "Focus model" pass-through
+    /// rule once that slice lands; bare-letter vim keys (`j` / `k`
+    /// / `g` / `G` / `z`) and the action letters are consumed by
+    /// the search field as text input.
+    Search,
+}
+
 /// An open modal dialog over the main list view.
 ///
 /// Discarded on the `Unlocked → Locked` auto-lock transition
@@ -322,6 +353,19 @@ pub enum AppState {
         /// `selected = None`, or an empty vault, `zz` is a silent
         /// no-op and the field stays unchanged.
         viewport_offset: u16,
+        /// Which area of the main list view captures keystrokes.
+        ///
+        /// Seeded to [`Focus::List`] on every Unlocked-entry path
+        /// per the `IMPLEMENTATION_PLAN_03_TUI.md` "Focus model"
+        /// rule *"On list-view entry, focus starts on the account
+        /// list"*. The keybindings that move focus to the search
+        /// bar (`/`), cycle focus (`Tab` / `Shift-Tab`), and return
+        /// focus to the list while clearing the query (`Esc`) land
+        /// in subsequent slices. On the `Unlocked → Locked`
+        /// auto-lock transition the field is discarded alongside
+        /// the `Vault` / `Store` (by variant change) and re-seeded
+        /// to `Focus::List` whenever Unlocked is re-entered.
+        focus: Focus,
     },
 
     /// Non-mutating startup-error screen. Used when vault-path
@@ -399,6 +443,7 @@ pub fn decide_state_from_open(
                 pending_chord_leader: None,
                 viewport_height: 0,
                 viewport_offset: 0,
+                focus: Focus::List,
             }
         }
         Err(err) => AppState::StartupError {

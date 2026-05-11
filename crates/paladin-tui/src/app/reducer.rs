@@ -17,7 +17,8 @@ use paladin_core::{AccountId, ClipboardClearToken, IdlePolicy, PaladinError, Sto
 
 use crate::app::event::{AppEvent, Effect, EffectResult};
 use crate::app::state::{
-    compute_idle_deadline, initial_selection, render_error_message, AppState, ChordLeader, Modal,
+    compute_idle_deadline, initial_selection, render_error_message, AppState, ChordLeader, Focus,
+    Modal,
 };
 
 /// Apply one event to the current state and return the new state plus
@@ -236,6 +237,7 @@ fn reduce_unlock_result(
                         pending_chord_leader: None,
                         viewport_height: 0,
                         viewport_offset: 0,
+                        focus: Focus::List,
                     },
                     Vec::new(),
                 )
