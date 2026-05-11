@@ -634,7 +634,7 @@ end-to-end.
 - [x] Selection navigation moves correctly under `↑` / `↓` / `j` / `k`,
   `PgUp` / `PgDn` / `Ctrl-B` / `Ctrl-F`, `Ctrl-U` / `Ctrl-D`, and
   `Home` / `End`.
-- [ ] Modal open / close transitions for every modal.
+- [x] Modal open / close transitions for every modal.
 - [ ] HOTP `n` triggers a `HotpAdvance` effect.
 - [ ] `AppEvent::EffectResult(...)` is the only path by which effect
   outcomes change non-core UI state (status text, reveal windows, modal
