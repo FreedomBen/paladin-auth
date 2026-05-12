@@ -145,7 +145,14 @@ pub fn validate_manual(
 }
 
 /// Trim Unicode whitespace and reject empty / overlong labels.
-pub(crate) fn validate_label(raw: &str) -> Result<String, PaladinError> {
+///
+/// Returns the trimmed label on success or
+/// `PaladinError::ValidationError { field: "label", reason: … }` for
+/// `empty` / `too_long` rejections (§4.1 length rules / §5 stable
+/// error codes). Public so the TUI / GUI front-ends can pre-validate
+/// Rename modal input before emitting a save effect — the
+/// post-emission core path (`Vault::rename`) re-validates idempotently.
+pub fn validate_label(raw: &str) -> Result<String, PaladinError> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Err(PaladinError::validation("label", "empty"));

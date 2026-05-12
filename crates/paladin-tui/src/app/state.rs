@@ -210,10 +210,19 @@ pub struct RenameModal {
     /// open time.
     pub account_id: AccountId,
     /// Working label buffer. Initialized to the selected account's
-    /// current label at open time and updated by text-field editing
-    /// in later slices. Cleared on submit / cancel / modal close /
-    /// auto-lock alongside the rest of the modal-local state.
+    /// current label at open time and updated by text-field editing.
+    /// Cleared on submit / cancel / modal close / auto-lock alongside
+    /// the rest of the modal-local state.
     pub draft: String,
+    /// Inline validation / save error from the most recent submit
+    /// attempt, if any. Rendered through
+    /// [`render_error_message`](crate::app::state::render_error_message)
+    /// so the surfaced wording matches the rest of the TUI's error
+    /// surface. Subsequent edits clear this slot so the user sees
+    /// they are re-trying, and a successful submit transitions
+    /// through `EffectResult::Rename` (the success / save-error
+    /// rollback wiring lands alongside that slice).
+    pub error: Option<String>,
 }
 
 /// An open modal dialog over the main list view.

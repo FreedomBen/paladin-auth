@@ -319,4 +319,35 @@ pub enum Effect {
         /// code (guaranteed to exist by reducer-level gating).
         account_id: AccountId,
     },
+    /// Rename the selected account's label and persist the change.
+    ///
+    /// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" >
+    /// Rename: *"Confirm wraps `Vault::rename(id, new_label, now)`
+    /// in `Vault::mutate_and_save` with the trimmed input regardless
+    /// of whether it equals the current label."* The reducer emits
+    /// this effect when `Enter` is pressed on `Modal::Rename` with a
+    /// draft that passes [`paladin_core::validate_label`] — empty /
+    /// out-of-range drafts surface inline inside the modal without
+    /// reaching the executor.
+    ///
+    /// The executor wires the call to `Vault::rename` inside
+    /// `Vault::mutate_and_save` and posts the outcome back through
+    /// an `AppEvent::EffectResult(EffectResult::Rename { … })`
+    /// in a subsequent slice; until then the executor consumes the
+    /// variant and returns `Continue`.
+    Rename {
+        /// The current vault path; the executor uses it for error
+        /// reporting and to verify the path the effect was emitted
+        /// against in case the user has navigated away.
+        path: PathBuf,
+        /// The account whose label should be replaced. Snapshotted by
+        /// the reducer at modal-open time so a later selection change
+        /// does not redirect the rename mid-flight.
+        account_id: AccountId,
+        /// The trimmed, pre-validated new label. The executor re-runs
+        /// `validate_label` through `Vault::rename` for defense in
+        /// depth; the trim is idempotent so this string is the value
+        /// that ends up persisted on success.
+        new_label: String,
+    },
 }

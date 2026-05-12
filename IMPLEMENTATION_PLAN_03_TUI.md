@@ -872,12 +872,32 @@ end-to-end.
 - [ ] Non-empty trimmed input routes through `Vault::rename` inside
   `Vault::mutate_and_save`, including when the trimmed input equals
   the current label so `updated_at` still matches CLI behavior.
+  *(Reducer-level emission covered by
+  `rename_modal_enter_with_valid_draft_emits_rename_effect` and
+  `rename_modal_enter_with_same_label_still_emits_rename_effect` in
+  `tests/reducer_tests.rs`: Enter on `Modal::Rename` validates via
+  `paladin_core::validate_label` and emits `Effect::Rename { path,
+  account_id, new_label: trimmed }`. The executor side wiring inside
+  `Vault::mutate_and_save` lands alongside the `EffectResult::Rename`
+  slice.)*
 - [ ] Pre-commit `save_not_committed` restores the prior label and
   keeps the modal open with the inline error.
 - [ ] `save_durability_unconfirmed` leaves the new label in memory and
   surfaces the warning.
-- [ ] Empty / out-of-range labels surface inline validation errors and
+- [x] Empty / out-of-range labels surface inline validation errors and
   never invoke the setter.
+  *(`rename_modal_enter_with_empty_draft_sets_inline_error_no_effect`,
+  `rename_modal_enter_with_whitespace_only_draft_sets_inline_error_no_effect`,
+  and `rename_modal_enter_with_overlong_draft_sets_inline_error_no_effect`
+  cover the §4.1 `label` / `empty` and `label` / `too_long` rejection
+  paths. The reducer routes through `paladin_core::validate_label`
+  and stores the rendered error on `RenameModal.error` without
+  emitting `Effect::Rename`. Companion tests
+  (`rename_modal_typing_char_appends_to_draft`,
+  `rename_modal_backspace_pops_last_char_from_draft`,
+  `rename_modal_backspace_on_empty_draft_is_a_silent_noop`,
+  `rename_modal_typing_clears_inline_error`) lock the text-editing
+  contract a draft must satisfy before submit.)*
 
 ### Pre-commit save rollback (`tests/reducer_tests.rs`)
 

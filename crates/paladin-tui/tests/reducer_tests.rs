@@ -1773,6 +1773,249 @@ fn pressing_shift_r_opens_rename_modal_prepopulated_with_selected_label() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Rename modal — text editing, Enter submit, validation
+// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Rename modal)
+//
+// Slice covered: while `Modal::Rename` is open, bare-letter Char keys
+// append to `draft`; Backspace pops; Enter validates via
+// `validate_label` and either emits `Effect::Rename` for valid input
+// or surfaces an inline error (no effect). Subsequent typing clears
+// any prior inline error. Same-label renames still emit the effect
+// (per design: bump `updated_at` to match the CLI). The effect /
+// `EffectResult` wiring (executor side, save-error rollback paths)
+// lands in a follow-up slice.
+// ---------------------------------------------------------------------------
+
+fn fresh_unlocked_with_rename_modal_open(
+    label: &str,
+    draft: &str,
+) -> (tempfile::TempDir, AccountId, PathBuf, AppState) {
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let id = add_totp_account(&mut vault, &store, label);
+    let state = AppState::Unlocked {
+        path: path.clone(),
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Rename(RenameModal {
+            account_id: id,
+            draft: draft.to_string(),
+            error: None,
+        })),
+        selected: Some(id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    (tmp, id, path, state)
+}
+
+fn expect_rename_modal(state: &AppState) -> &RenameModal {
+    match state {
+        AppState::Unlocked {
+            modal: Some(Modal::Rename(rename)),
+            ..
+        } => rename,
+        AppState::Unlocked { modal, .. } => panic!("expected Modal::Rename, got {modal:?}"),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn rename_modal_typing_char_appends_to_draft() {
+    let (_tmp, _id, _path, unlocked) = fresh_unlocked_with_rename_modal_open("github", "github");
+    let (state, effects) = reduce(unlocked, key(KeyCode::Char('!')));
+    assert!(
+        effects.is_empty(),
+        "typing inside Rename must not emit effects"
+    );
+    let rename = expect_rename_modal(&state);
+    assert_eq!(rename.draft, "github!");
+}
+
+#[test]
+fn rename_modal_backspace_pops_last_char_from_draft() {
+    let (_tmp, _id, _path, unlocked) = fresh_unlocked_with_rename_modal_open("github", "github");
+    let (state, effects) = reduce(unlocked, key(KeyCode::Backspace));
+    assert!(
+        effects.is_empty(),
+        "backspace inside Rename must not emit effects"
+    );
+    let rename = expect_rename_modal(&state);
+    assert_eq!(rename.draft, "githu");
+}
+
+#[test]
+fn rename_modal_backspace_on_empty_draft_is_a_silent_noop() {
+    // Pop on an empty buffer is a defined no-op so the user can hold
+    // backspace through the whole label without surfacing an error.
+    let (_tmp, _id, _path, unlocked) = fresh_unlocked_with_rename_modal_open("github", "");
+    let (state, effects) = reduce(unlocked, key(KeyCode::Backspace));
+    assert!(effects.is_empty());
+    let rename = expect_rename_modal(&state);
+    assert_eq!(rename.draft, "");
+    assert!(rename.error.is_none());
+}
+
+#[test]
+fn rename_modal_typing_clears_inline_error() {
+    // Seed a Rename modal with a stale inline error so the test
+    // observes that an edit clears the slot. Building the state
+    // directly (rather than driving through a prior Enter) keeps
+    // this slice's failure mode independent of the validation
+    // slice's own assertions.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let id = add_totp_account(&mut vault, &store, "github");
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Rename(RenameModal {
+            account_id: id,
+            draft: String::new(),
+            error: Some("stale".into()),
+        })),
+        selected: Some(id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let (state, _) = reduce(unlocked, key(KeyCode::Char('x')));
+    let rename = expect_rename_modal(&state);
+    assert_eq!(rename.draft, "x");
+    assert!(
+        rename.error.is_none(),
+        "editing must clear any prior inline error"
+    );
+}
+
+#[test]
+fn rename_modal_enter_with_valid_draft_emits_rename_effect() {
+    let (_tmp, id, path, unlocked) =
+        fresh_unlocked_with_rename_modal_open("github", "  github-personal  ");
+    let (state, effects) = reduce(unlocked, key(KeyCode::Enter));
+    assert_eq!(effects.len(), 1, "expected single Effect::Rename");
+    match &effects[0] {
+        Effect::Rename {
+            path: p,
+            account_id,
+            new_label,
+        } => {
+            assert_eq!(p, &path);
+            assert_eq!(*account_id, id);
+            assert_eq!(
+                new_label, "github-personal",
+                "Effect::Rename must carry the trimmed label"
+            );
+        }
+        other => panic!("expected Effect::Rename, got {other:?}"),
+    }
+    // Modal stays open until the EffectResult arrives (success path
+    // closes it; save-error rollback re-opens with inline error).
+    let rename = expect_rename_modal(&state);
+    assert!(
+        rename.error.is_none(),
+        "submitting a valid draft must not surface an inline error"
+    );
+}
+
+#[test]
+fn rename_modal_enter_with_same_label_still_emits_rename_effect() {
+    // Per IMPLEMENTATION_PLAN_03_TUI.md "Modals (per §6)" > Rename:
+    // "Same-label renames still call `Vault::rename`, save, and bump
+    // `updated_at`, matching the CLI." The reducer must not short-
+    // circuit when the trimmed draft equals the current label —
+    // the executor / core layer is responsible for that semantics.
+    let (_tmp, id, path, unlocked) = fresh_unlocked_with_rename_modal_open("github", "github");
+    let (_state, effects) = reduce(unlocked, key(KeyCode::Enter));
+    assert_eq!(effects.len(), 1);
+    match &effects[0] {
+        Effect::Rename {
+            path: p,
+            account_id,
+            new_label,
+        } => {
+            assert_eq!(p, &path);
+            assert_eq!(*account_id, id);
+            assert_eq!(new_label, "github");
+        }
+        other => panic!("expected Effect::Rename, got {other:?}"),
+    }
+}
+
+#[test]
+fn rename_modal_enter_with_empty_draft_sets_inline_error_no_effect() {
+    let (_tmp, _id, _path, unlocked) = fresh_unlocked_with_rename_modal_open("github", "");
+    let (state, effects) = reduce(unlocked, key(KeyCode::Enter));
+    assert!(
+        effects.is_empty(),
+        "empty draft must not emit Effect::Rename"
+    );
+    let rename = expect_rename_modal(&state);
+    assert_eq!(
+        rename.draft, "",
+        "empty draft stays empty after the rejected submit"
+    );
+    let err = rename
+        .error
+        .as_deref()
+        .expect("empty draft must set an inline error");
+    // `validate_label`'s `empty` reason is rendered through
+    // `render_error_message` (which falls back to `Display`), so the
+    // surfaced string carries the §5 `label` / `empty` pair verbatim.
+    assert!(
+        err.contains("label") && err.contains("empty"),
+        "inline error must surface the `label` / `empty` validation pair, got {err:?}"
+    );
+}
+
+#[test]
+fn rename_modal_enter_with_whitespace_only_draft_sets_inline_error_no_effect() {
+    // `validate_label` trims; a whitespace-only draft trims to empty
+    // and the empty-label rejection fires.
+    let (_tmp, _id, _path, unlocked) = fresh_unlocked_with_rename_modal_open("github", "   \t  ");
+    let (state, effects) = reduce(unlocked, key(KeyCode::Enter));
+    assert!(effects.is_empty());
+    let rename = expect_rename_modal(&state);
+    let err = rename.error.as_deref().expect("whitespace draft is empty");
+    assert!(
+        err.contains("label") && err.contains("empty"),
+        "inline error must surface the `label` / `empty` validation pair, got {err:?}"
+    );
+}
+
+#[test]
+fn rename_modal_enter_with_overlong_draft_sets_inline_error_no_effect() {
+    // §4.1 caps labels at 128 bytes. A 129-char ASCII draft exceeds
+    // the cap and `validate_label` returns `too_long`.
+    let oversized = "a".repeat(129);
+    let (_tmp, _id, _path, unlocked) = fresh_unlocked_with_rename_modal_open("github", &oversized);
+    let (state, effects) = reduce(unlocked, key(KeyCode::Enter));
+    assert!(effects.is_empty(), "too-long draft must not emit effect");
+    let rename = expect_rename_modal(&state);
+    let err = rename.error.as_deref().expect("overlong draft errors");
+    assert!(
+        err.contains("label") && err.contains("too_long"),
+        "inline error must surface the `label` / `too_long` validation pair, got {err:?}"
+    );
+}
+
 #[test]
 fn pressing_p_on_unlocked_with_no_modal_open_opens_passphrase_modal() {
     assert_key_opens_modal(key(KeyCode::Char('p')), &Modal::Passphrase);

@@ -124,5 +124,23 @@ pub fn execute(effect: Effect, sender: &Sender<AppEvent>) -> EffectOutcome {
             let _ = sender;
             EffectOutcome::Continue
         }
+        Effect::Rename {
+            path: _,
+            account_id: _,
+            new_label: _,
+        } => {
+            // Placeholder: the `Vault::rename` call inside
+            // `Vault::mutate_and_save` lands with the run-loop slice
+            // that gives the executor access to the live `(Vault,
+            // Store)` carried in `AppState::Unlocked`, alongside
+            // `EffectResult::Rename` and the modal-close / save-error
+            // rollback paths. Until that wiring lands the reducer
+            // emit is exercised by reducer-level tests
+            // (`rename_modal_enter_*_emits_rename_effect`) and the
+            // executor consumes the variant without emitting an
+            // `AppEvent`.
+            let _ = sender;
+            EffectOutcome::Continue
+        }
     }
 }

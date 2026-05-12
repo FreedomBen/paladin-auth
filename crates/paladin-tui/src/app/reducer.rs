@@ -14,8 +14,8 @@ use std::time::Instant;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 
 use paladin_core::{
-    hotp_reveal_deadline, AccountId, ClipboardClearPolicy, ClipboardClearToken, Code, IdlePolicy,
-    PaladinError, Store, Vault,
+    hotp_reveal_deadline, validate_label, AccountId, ClipboardClearPolicy, ClipboardClearToken,
+    Code, IdlePolicy, PaladinError, Store, Vault,
 };
 use secrecy::SecretString;
 use zeroize::Zeroizing;
@@ -620,24 +620,16 @@ fn reduce_unlocked_input(mut state: AppState, key: &KeyEvent) -> (AppState, Vec<
         // at this slice but still clear any pending chord state —
         // chord commitment requires a bare second press.
         *pending_chord_leader = None;
-        if modal.is_none() && key.modifiers == KeyModifiers::CONTROL {
-            match key.code {
-                KeyCode::Char('f') => return move_selection(state, ListStep::PageDown),
-                KeyCode::Char('b') => return move_selection(state, ListStep::PageUp),
-                KeyCode::Char('d') => return move_selection(state, ListStep::HalfPageDown),
-                KeyCode::Char('u') => return move_selection(state, ListStep::HalfPageUp),
-                _ => {}
-            }
+        if let Some(step) = ctrl_chord_list_step(modal.is_some(), key) {
+            return move_selection(state, step);
         }
         return (state, Vec::new());
     }
 
     if modal.is_some() {
-        // A modal is open: bare-letter keys belong to the
-        // modal-local input path (handled in later slices) and
-        // any pending chord state is cleared.
         *pending_chord_leader = None;
-        return (state, Vec::new());
+        let effects = route_modal_input(path, modal, key);
+        return (state, effects);
     }
 
     // Modal is None below here.
@@ -734,6 +726,32 @@ fn reduce_unlocked_input(mut state: AppState, key: &KeyEvent) -> (AppState, Vec<
 /// helper keeps the borrow of `path` / `vault` confined to a tight
 /// pre-dispatch window so the parent reducer stays within its line
 /// budget.
+/// Resolve a bare-Ctrl chord into its list-navigation step, or `None`
+/// when the chord is unbound at the current modal state.
+///
+/// `Ctrl-F` / `Ctrl-B` mirror `PgDn` / `PgUp` and `Ctrl-D` / `Ctrl-U`
+/// are the vim half-page bindings per
+/// `IMPLEMENTATION_PLAN_03_TUI.md` "Vim-style navigation". They only
+/// fire when no modal is open (modals trap focus) and the modifier
+/// set equals `KeyModifiers::CONTROL` exactly — Ctrl-Shift-* /
+/// Ctrl-Alt-* stay unbound, matching the `Ctrl-Shift-G is unbound`
+/// convention. `Ctrl-N` / `Ctrl-P` (modal-local Tab / Shift-Tab
+/// aliases) are deliberately excluded so they cannot leak into the
+/// list view; with a modal open they observe through the modal-trap
+/// path.
+fn ctrl_chord_list_step(modal_open: bool, key: &KeyEvent) -> Option<ListStep> {
+    if modal_open || key.modifiers != KeyModifiers::CONTROL {
+        return None;
+    }
+    match key.code {
+        KeyCode::Char('f') => Some(ListStep::PageDown),
+        KeyCode::Char('b') => Some(ListStep::PageUp),
+        KeyCode::Char('d') => Some(ListStep::HalfPageDown),
+        KeyCode::Char('u') => Some(ListStep::HalfPageUp),
+        _ => None,
+    }
+}
+
 fn n_effects_for_char(
     c: char,
     path: &std::path::Path,
@@ -774,7 +792,71 @@ fn pending_rename_for_char(
     Some(RenameModal {
         account_id: id,
         draft: account.label().to_owned(),
+        error: None,
     })
+}
+
+/// Dispatch a key event to the open modal's modal-local input path.
+///
+/// At this slice only [`Modal::Rename`] consumes input; the other
+/// variants do not yet carry an editable payload, so they fall
+/// through to a silent no-op (the modal stays open and no effect is
+/// emitted, preserving the modal-trap contract that bare-letter
+/// keys do not leak into the list view). Each modal's input path
+/// lands alongside its respective slice.
+fn route_modal_input(
+    path: &std::path::Path,
+    modal: &mut Option<Modal>,
+    key: &KeyEvent,
+) -> Vec<Effect> {
+    if let Some(Modal::Rename(rename)) = modal.as_mut() {
+        return route_rename_modal_input(path, rename, key);
+    }
+    Vec::new()
+}
+
+/// Rename modal's input path.
+///
+/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Rename:
+/// printable Chars append to `draft`, Backspace pops, Enter validates
+/// through [`paladin_core::validate_label`] and either emits
+/// [`Effect::Rename`] (with the trimmed draft) or surfaces an inline
+/// `error` (`empty` / `too_long`). Any edit clears the inline error
+/// so the user sees their retry; the upstream Ctrl/Alt guard filters
+/// modifier-bearing Chars before this routing runs. Tab / Shift-Tab
+/// / arrows / other unbound keys are silent no-ops at this slice —
+/// Rename has only one field, so modal-local focus traversal is
+/// observable only as no-ops until additional fields land. Esc /
+/// Help / Ctrl-C are filtered upstream of the modal trap.
+fn route_rename_modal_input(
+    path: &std::path::Path,
+    rename: &mut RenameModal,
+    key: &KeyEvent,
+) -> Vec<Effect> {
+    match key.code {
+        KeyCode::Char(c) => {
+            rename.draft.push(c);
+            rename.error = None;
+            Vec::new()
+        }
+        KeyCode::Backspace => {
+            rename.draft.pop();
+            rename.error = None;
+            Vec::new()
+        }
+        KeyCode::Enter => match validate_label(&rename.draft) {
+            Ok(trimmed) => vec![Effect::Rename {
+                path: path.to_path_buf(),
+                account_id: rename.account_id,
+                new_label: trimmed,
+            }],
+            Err(err) => {
+                rename.error = Some(render_error_message(&err));
+                Vec::new()
+            }
+        },
+        _ => Vec::new(),
+    }
 }
 
 /// Map the (key character, current selection) pair to a status-line
