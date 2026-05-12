@@ -8577,3 +8577,318 @@ fn pressing_enter_on_unlocked_with_focus_search_emits_no_effect() {
         other => panic!("expected Unlocked, got {other:?}"),
     }
 }
+
+// ---------------------------------------------------------------------------
+// EffectResult is the only path for non-core UI state mutation.
+//
+// Per `IMPLEMENTATION_PLAN_03_TUI.md` Tests > Reducer:
+//   "AppEvent::EffectResult(...) is the only path by which effect
+//    outcomes change non-core UI state (status text, reveal windows,
+//    modal close / counts panels, inline errors)."
+//
+// The contract is: when the reducer EMITS an effect (Unlock, HotpAdvance,
+// CopyCode, ClearClipboard, Quit), it must NOT mutate any of these
+// non-core UI fields based on the effect's pending outcome — only the
+// matching `EffectResult` arm may do so. Modal-close / counts-panel
+// payloads land with the modal slices; this section locks in the rule
+// for the slots already in `AppState::Unlocked` plus the inline
+// `error` on `AppState::Unlock`.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn emit_unlock_effect_preserves_prior_inline_error_on_unlock_screen() {
+    // Pressing Enter with a typed passphrase emits Effect::Unlock; the
+    // prior `decrypt_failed` text must remain visible until the
+    // matching EffectResult::Unlock replaces it (success → Unlocked,
+    // wrong → re-renders the same `decrypt_failed`, other → StartupError).
+    // The reducer must not pre-clear the error in anticipation.
+    let prior = render_error_message(&PaladinError::DecryptFailed);
+    let mut buf = PassphraseBuffer::new();
+    for c in "hunter2".chars() {
+        buf.push(c);
+    }
+    let state = AppState::Unlock {
+        path: PathBuf::from("/tmp/v.bin"),
+        error: Some(prior.clone()),
+        passphrase: buf,
+    };
+    let (state, effects) = reduce(state, key(KeyCode::Enter));
+
+    match effects.as_slice() {
+        [Effect::Unlock { .. }] => {}
+        other => panic!("expected single Effect::Unlock, got {other:?}"),
+    }
+    match state {
+        AppState::Unlock { error, .. } => assert_eq!(
+            error.as_deref(),
+            Some(prior.as_str()),
+            "Effect::Unlock emission must not clear the prior inline error — \
+             only EffectResult::Unlock may"
+        ),
+        other => panic!("expected Unlock, got {other:?}"),
+    }
+}
+
+#[test]
+fn emit_hotp_advance_effect_preserves_prior_open_reveal_window() {
+    // Pressing `n` on Unlocked with an HOTP account selected emits
+    // Effect::HotpAdvance. A prior reveal window (e.g. from an earlier
+    // press whose code is still on screen) must be preserved verbatim
+    // — only EffectResult::HotpAdvance Ok may replace it.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let hotp_id = add_hotp_account(&mut vault, &store, "github");
+    let prior_deadline = hotp_reveal_deadline(Instant::now());
+    let prior = HotpReveal {
+        account_id: hotp_id,
+        counter_used: 11,
+        code: SecretString::from("424242".to_string()),
+        deadline: prior_deadline,
+    };
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: Some(prior),
+        modal: None,
+        selected: Some(hotp_id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let (state, effects) = reduce(state, key(KeyCode::Char('n')));
+    match effects.as_slice() {
+        [Effect::HotpAdvance { .. }] => {}
+        other => panic!("expected single Effect::HotpAdvance, got {other:?}"),
+    }
+    match state {
+        AppState::Unlocked { hotp_reveal, .. } => match hotp_reveal {
+            Some(reveal) => {
+                assert_eq!(
+                    reveal.account_id, hotp_id,
+                    "prior reveal must be preserved across emission"
+                );
+                assert_eq!(
+                    reveal.counter_used, 11,
+                    "prior counter_used must be preserved — only \
+                     EffectResult::HotpAdvance Ok may replace the slot"
+                );
+                assert_eq!(reveal.deadline, prior_deadline);
+                assert_eq!(reveal.code.expose_secret(), "424242");
+            }
+            None => panic!("prior reveal must not be cleared by Effect::HotpAdvance emission"),
+        },
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn emit_hotp_advance_effect_preserves_prior_status_line() {
+    // A prior status_line set by an earlier rejected action (e.g. a
+    // bare `n` on a no-selection list) must remain visible across a
+    // later emission. The Effect emission step itself is not a
+    // status-line surface — only the matching EffectResult arms (or
+    // unrelated reducer paths) may set / clear it.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let hotp_id = add_hotp_account(&mut vault, &store, "github");
+    let prior = StatusLine::Error("prior status".to_string());
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(hotp_id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: Some(prior.clone()),
+        help_open: false,
+    };
+    let (state, effects) = reduce(state, key(KeyCode::Char('n')));
+    match effects.as_slice() {
+        [Effect::HotpAdvance { .. }] => {}
+        other => panic!("expected single Effect::HotpAdvance, got {other:?}"),
+    }
+    match state {
+        AppState::Unlocked { status_line, .. } => assert_eq!(
+            status_line,
+            Some(prior),
+            "Effect::HotpAdvance emission must not mutate status_line — \
+             only matching EffectResult arms (or distinct reducer paths) may"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn emit_copy_code_effect_for_totp_preserves_prior_status_line() {
+    // Pressing Enter on Unlocked with a TOTP account selected emits
+    // Effect::CopyCode. A prior status_line (e.g. a stale "no account
+    // selected" from before the user clicked into the list) must be
+    // left in place by the emission step — only the matching
+    // EffectResult arm or a distinct reducer path may clear it.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let totp_id = add_totp_account(&mut vault, &store, "github");
+    let prior = StatusLine::Error("prior status".to_string());
+    let state = AppState::Unlocked {
+        path: path.clone(),
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(totp_id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: Some(prior.clone()),
+        help_open: false,
+    };
+    let (state, effects) = reduce(state, key(KeyCode::Enter));
+    assert_copy_code_for(&effects, &path, totp_id);
+    match state {
+        AppState::Unlocked { status_line, .. } => assert_eq!(
+            status_line,
+            Some(prior),
+            "Effect::CopyCode emission must not mutate status_line"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn emit_copy_code_effect_for_totp_preserves_prior_unrelated_hotp_reveal() {
+    // A reveal window for an HOTP account that is NOT the currently
+    // selected (TOTP) account must survive the CopyCode emission for
+    // the TOTP. Only its own deadline-Tick or a fresh
+    // EffectResult::HotpAdvance can replace / drop it.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let hotp_id = add_hotp_account(&mut vault, &store, "alpha");
+    let totp_id = add_totp_account(&mut vault, &store, "github");
+    let prior_deadline = hotp_reveal_deadline(Instant::now());
+    let prior = HotpReveal {
+        account_id: hotp_id,
+        counter_used: 5,
+        code: SecretString::from("121212".to_string()),
+        deadline: prior_deadline,
+    };
+    let state = AppState::Unlocked {
+        path: path.clone(),
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: Some(prior),
+        modal: None,
+        selected: Some(totp_id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let (state, effects) = reduce(state, key(KeyCode::Enter));
+    assert_copy_code_for(&effects, &path, totp_id);
+    match state {
+        AppState::Unlocked { hotp_reveal, .. } => match hotp_reveal {
+            Some(reveal) => {
+                assert_eq!(
+                    reveal.account_id, hotp_id,
+                    "unrelated HOTP reveal must survive a TOTP CopyCode emission"
+                );
+                assert_eq!(reveal.counter_used, 5);
+                assert_eq!(reveal.deadline, prior_deadline);
+                assert_eq!(reveal.code.expose_secret(), "121212");
+            }
+            None => panic!(
+                "unrelated HOTP reveal must not be cleared by Effect::CopyCode emission for TOTP"
+            ),
+        },
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn emit_copy_code_effect_for_hotp_preserves_status_line_and_reveal() {
+    // Pressing Enter on a visible HOTP reveal emits Effect::CopyCode;
+    // both the status_line AND the reveal window must be preserved.
+    // The reveal stays visible because only its own deadline-Tick (or
+    // a fresh EffectResult::HotpAdvance) may drop it; status_line is
+    // not on the path either.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let hotp_id = add_hotp_account(&mut vault, &store, "github");
+    let prior_deadline = hotp_reveal_deadline(Instant::now());
+    let prior_reveal = HotpReveal {
+        account_id: hotp_id,
+        counter_used: 3,
+        code: SecretString::from("987654".to_string()),
+        deadline: prior_deadline,
+    };
+    let prior_status = StatusLine::Error("prior status".to_string());
+    let state = AppState::Unlocked {
+        path: path.clone(),
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: Some(prior_reveal),
+        modal: None,
+        selected: Some(hotp_id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: Some(prior_status.clone()),
+        help_open: false,
+    };
+    let (state, effects) = reduce(state, key(KeyCode::Enter));
+    assert_copy_code_for(&effects, &path, hotp_id);
+    match state {
+        AppState::Unlocked {
+            hotp_reveal,
+            status_line,
+            ..
+        } => {
+            match hotp_reveal {
+                Some(reveal) => {
+                    assert_eq!(reveal.account_id, hotp_id);
+                    assert_eq!(
+                        reveal.counter_used, 3,
+                        "Effect::CopyCode emission must not replace reveal — \
+                         only EffectResult::HotpAdvance Ok may"
+                    );
+                    assert_eq!(reveal.deadline, prior_deadline);
+                    assert_eq!(reveal.code.expose_secret(), "987654");
+                }
+                None => panic!("HOTP reveal must survive CopyCode emission"),
+            }
+            assert_eq!(
+                status_line,
+                Some(prior_status),
+                "status_line must survive CopyCode emission"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}

@@ -636,9 +636,12 @@ end-to-end.
   `Home` / `End`.
 - [x] Modal open / close transitions for every modal.
 - [x] HOTP `n` triggers a `HotpAdvance` effect.
-- [ ] `AppEvent::EffectResult(...)` is the only path by which effect
+- [x] `AppEvent::EffectResult(...)` is the only path by which effect
   outcomes change non-core UI state (status text, reveal windows, modal
-  close / counts panels, inline errors).
+  close / counts panels, inline errors). *(Reducer-level emission paths
+  covered by the `emit_*_preserves_*` tests for `Effect::Unlock` /
+  `Effect::HotpAdvance` / `Effect::CopyCode`; modal-close /
+  counts-panel payloads land alongside the modal slices.)*
 - [ ] Pre-commit effect failures leave visible state unchanged and
   surface inline / status-line errors.
 - [ ] Durability-unconfirmed failures follow the committed-state
