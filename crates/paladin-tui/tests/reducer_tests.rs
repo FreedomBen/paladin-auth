@@ -2187,6 +2187,318 @@ fn remove_modal_backspace_is_silent_noop() {
 }
 
 // ---------------------------------------------------------------------------
+// Remove modal — EffectResult::Remove handling
+// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Remove modal — save-error
+//  rollback and durability-unconfirmed bullets; "Effect errors" >
+//  "Add / remove / rename / settings saves" rule.)
+//
+// Slice covered: the reducer's response to `EffectResult::Remove`
+// deliveries. `Ok(label)` closes the modal and publishes a status-line
+// confirmation built from the carried display label (the executor
+// captures it before `Vault::remove` drops the Account). The
+// save-error variants (`save_not_committed`,
+// `save_durability_unconfirmed`, any other) leave the modal open with
+// the rendered error in `RemoveModal.error`; pre-commit rollback
+// semantics are owned by `Vault::mutate_and_save` in `paladin-core`.
+// Deliveries that arrive after the modal closed, with a stale
+// account_id, or onto a non-Unlocked state are discarded.
+// ---------------------------------------------------------------------------
+
+fn remove_result(account_id: AccountId, result: Result<String, PaladinError>) -> AppEvent {
+    AppEvent::EffectResult(EffectResult::Remove { account_id, result })
+}
+
+#[test]
+fn effect_result_remove_ok_closes_modal_and_sets_status_confirmation() {
+    // Simulate the executor's post-`Vault::mutate_and_save` state by
+    // dropping the account from the vault before delivering the
+    // `Ok(label)` outcome — that mirrors the real run-loop where the
+    // executor has already removed the account by the time the
+    // reducer sees the result.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let id = add_totp_account(&mut vault, &store, "github");
+    vault.remove(id).expect("simulate executor-side remove");
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Remove(RemoveModal {
+            account_id: id,
+            error: None,
+        })),
+        selected: Some(id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let (state, effects) = reduce(unlocked, remove_result(id, Ok("github".to_string())));
+    assert!(
+        effects.is_empty(),
+        "successful remove result must not emit effects"
+    );
+    match state {
+        AppState::Unlocked {
+            modal, status_line, ..
+        } => {
+            assert!(
+                modal.is_none(),
+                "Ok(()) remove outcome must close the modal, got {modal:?}"
+            );
+            let line = status_line.expect("Ok remove outcome must surface confirmation");
+            match line {
+                StatusLine::Confirmation(msg) => assert!(
+                    msg.contains("github") && msg.contains("Removed"),
+                    "confirmation must include the removed label, got {msg:?}"
+                ),
+                StatusLine::Error(e) => panic!("expected Confirmation, got Error({e:?})"),
+            }
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_remove_ok_message_uses_carried_display_label() {
+    // Per the EffectResult::Remove contract: the executor formats the
+    // display label (`issuer:label` or just `label`) and the reducer
+    // surfaces it verbatim — it does not re-look-up in the vault
+    // because the account is already gone post-remove.
+    let (_tmp, id, _path, unlocked) = fresh_unlocked_with_remove_modal_open();
+    let (state, _) = reduce(unlocked, remove_result(id, Ok("Acme:alice".to_string())));
+    match state {
+        AppState::Unlocked {
+            status_line: Some(StatusLine::Confirmation(msg)),
+            ..
+        } => {
+            assert!(
+                msg.contains("Acme:alice"),
+                "confirmation must echo the carried display label, got {msg:?}"
+            );
+        }
+        other => panic!("expected Unlocked with Confirmation, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_remove_save_not_committed_keeps_modal_open_with_inline_error() {
+    // Core rolls back the remove inside `Vault::mutate_and_save` so
+    // the vault still holds the original account at its previous
+    // iteration position; the reducer surfaces the typed error
+    // inline and leaves the modal open so the user can retry. The
+    // fixture's vault carries the original "github" account (no
+    // executor-side mutation simulated) — that mirrors the
+    // rolled-back state core leaves behind on `save_not_committed`.
+    let (_tmp, id, _path, unlocked) = fresh_unlocked_with_remove_modal_open();
+    let err = PaladinError::SaveNotCommitted {
+        committed: false,
+        backup_path: None,
+    };
+    let (state, effects) = reduce(unlocked, remove_result(id, Err(err)));
+    assert!(
+        effects.is_empty(),
+        "save error result must not emit effects"
+    );
+    let remove = expect_remove_modal(&state);
+    assert_eq!(
+        remove.account_id, id,
+        "account_id is preserved across the save-error rollback"
+    );
+    let surfaced = remove
+        .error
+        .as_deref()
+        .expect("save_not_committed must set inline error");
+    assert!(
+        surfaced.contains("save not committed") || surfaced.contains("save_not_committed"),
+        "inline error must surface save_not_committed wording, got {surfaced:?}"
+    );
+    let labels: Vec<&str> = match &state {
+        AppState::Unlocked { vault, .. } => {
+            vault.iter().map(paladin_core::Account::label).collect()
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    };
+    assert_eq!(
+        labels,
+        vec!["github"],
+        "Vault::iter() must reflect the rolled-back pre-attempt state on save_not_committed"
+    );
+}
+
+#[test]
+fn effect_result_remove_save_durability_unconfirmed_keeps_modal_open_with_inline_error() {
+    // Durability-unconfirmed: core left the account removed in
+    // memory and on disk, but parent fsync was uncertain. The TUI
+    // mirrors Rename's surfacing convention — modal stays open and
+    // the warning is inline so the user can retry or `Esc` out
+    // deliberately.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let id = add_totp_account(&mut vault, &store, "github");
+    vault
+        .remove(id)
+        .expect("simulate executor-side remove for durability-unconfirmed");
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Remove(RemoveModal {
+            account_id: id,
+            error: None,
+        })),
+        selected: Some(id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let err = PaladinError::SaveDurabilityUnconfirmed;
+    let (state, _) = reduce(unlocked, remove_result(id, Err(err)));
+    let remove = expect_remove_modal(&state);
+    let surfaced = remove
+        .error
+        .as_deref()
+        .expect("save_durability_unconfirmed must surface inline");
+    assert!(
+        surfaced.to_lowercase().contains("durability")
+            || surfaced.contains("save_durability_unconfirmed"),
+        "inline error must surface durability wording, got {surfaced:?}"
+    );
+    match &state {
+        AppState::Unlocked { vault, .. } => {
+            assert_eq!(
+                vault.iter().count(),
+                0,
+                "durability-unconfirmed leaves the account removed in memory"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_remove_io_error_keeps_modal_open_with_inline_error() {
+    let (_tmp, id, _path, unlocked) = fresh_unlocked_with_remove_modal_open();
+    let err = PaladinError::IoError {
+        operation: "remove_save",
+        source: std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied"),
+    };
+    let (state, _effects) = reduce(unlocked, remove_result(id, Err(err)));
+    let remove = expect_remove_modal(&state);
+    let surfaced = remove
+        .error
+        .as_deref()
+        .expect("io_error must surface inline");
+    assert!(
+        surfaced.to_lowercase().contains("i/o") || surfaced.contains("remove_save"),
+        "inline error must surface io wording, got {surfaced:?}"
+    );
+}
+
+#[test]
+fn effect_result_remove_on_locked_state_is_discarded() {
+    // Auto-lock fired between the remove emit and the result
+    // delivery. The result is dropped without mutating the Locked
+    // screen.
+    let locked = AppState::Locked {
+        path: PathBuf::from("/tmp/v.bin"),
+        pending_clipboard_clear: None,
+    };
+    let (state, effects) = reduce(
+        locked,
+        remove_result(AccountId::new(), Ok("ignored".to_string())),
+    );
+    assert!(effects.is_empty());
+    match state {
+        AppState::Locked { path, .. } => assert_eq!(path, PathBuf::from("/tmp/v.bin")),
+        other => panic!("expected Locked preserved, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_remove_on_non_remove_modal_is_discarded() {
+    // Defensive: a stale remove outcome arrives after the user has
+    // dismissed Remove and opened (say) the Add modal. The reducer
+    // must leave the unrelated modal untouched.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let id = add_totp_account(&mut vault, &store, "github");
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Add),
+        selected: Some(id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let (state, effects) = reduce(unlocked, remove_result(id, Ok("github".to_string())));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked {
+            modal: Some(Modal::Add),
+            status_line: None,
+            ..
+        } => {}
+        AppState::Unlocked {
+            modal,
+            status_line,
+            ..
+        } => panic!(
+            "stale remove outcome must not touch unrelated modal / status, got modal={modal:?} status_line={status_line:?}"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_remove_with_mismatched_account_id_is_discarded() {
+    // The modal targets account A but the result carries B's id
+    // (defensive — should never happen in practice, but the reducer
+    // is total so the no-op is observable). Modal stays open, no
+    // inline error is set, and `status_line` is untouched.
+    let (_tmp, modal_id, _path, unlocked) = fresh_unlocked_with_remove_modal_open();
+    let other_id = AccountId::new();
+    let (state, _) = reduce(unlocked, remove_result(other_id, Ok("github".to_string())));
+    let remove = expect_remove_modal(&state);
+    assert_eq!(
+        remove.account_id, modal_id,
+        "modal account_id must be preserved across a mismatched result"
+    );
+    assert!(
+        remove.error.is_none(),
+        "mismatched result must not set an inline error"
+    );
+    match &state {
+        AppState::Unlocked {
+            status_line: None, ..
+        } => {}
+        other => panic!("status_line must stay untouched, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Rename modal — EffectResult::Rename handling
 // (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Rename modal — save-error
 //  rollback and durability-unconfirmed bullets; "Effect errors" >

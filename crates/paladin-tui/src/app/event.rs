@@ -248,6 +248,48 @@ pub enum EffectResult {
         /// (the executor mutated the vault before posting back).
         result: Result<(), PaladinError>,
     },
+
+    /// Outcome of an [`Effect::Remove`] attempt.
+    ///
+    /// On `Ok(display_label)` while [`crate::app::state::AppState::Unlocked`]
+    /// with `Modal::Remove` open against `account_id`, the reducer
+    /// closes the modal and publishes a
+    /// [`crate::app::state::StatusLine::Confirmation`] derived from
+    /// the carried display label — mirroring the CLI's "Removed
+    /// {label}." idiom. The label is carried back because the
+    /// executor has already removed the account from
+    /// `Vault::iter()` by the time the reducer sees the result, so
+    /// the reducer cannot look it up post-hoc.
+    ///
+    /// On any `Err(...)` the modal stays open and the rendered error
+    /// is stashed in
+    /// [`crate::app::state::RemoveModal::error`] — per
+    /// `IMPLEMENTATION_PLAN_03_TUI.md` "Effect errors" >
+    /// "Add / remove / rename / settings saves": pre-commit failures
+    /// (`save_not_committed`) are rolled back inside
+    /// `Vault::mutate_and_save` so memory matches disk (the removed
+    /// account is restored at its previous iteration position);
+    /// durability-unconfirmed leaves the account removed in memory
+    /// and surfaces the warning inline.
+    ///
+    /// Results delivered while not on `Unlocked`, while a different
+    /// modal is open, or for an `account_id` that does not match the
+    /// open remove modal are discarded so the carried error drops
+    /// without mutating state.
+    Remove {
+        /// The account the remove targeted. Carried back so the
+        /// reducer can correlate the result with the modal — the
+        /// remove modal's `account_id` is the source of truth and
+        /// the result is discarded on mismatch.
+        account_id: AccountId,
+        /// The `Vault::remove` + `Vault::save` outcome. `Ok(label)`
+        /// indicates the account is gone from `Vault::iter()` and
+        /// carries its pre-remove display label (`issuer:label` if
+        /// the issuer was set, else just `label`) for the status-line
+        /// confirmation; the executor captures it from the Account
+        /// returned by `Vault::remove` before the value drops.
+        result: Result<String, PaladinError>,
+    },
 }
 
 /// Side effects produced by the reducer.

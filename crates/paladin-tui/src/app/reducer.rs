@@ -257,6 +257,9 @@ fn reduce_effect_result(state: AppState, result: EffectResult) -> (AppState, Vec
         EffectResult::Rename { account_id, result } => {
             reduce_rename_result(state, account_id, result)
         }
+        EffectResult::Remove { account_id, result } => {
+            reduce_remove_result(state, account_id, result)
+        }
     }
 }
 
@@ -470,6 +473,69 @@ fn reduce_rename_result(
         }
         Err(err) => {
             rename.error = Some(render_error_message(&err));
+        }
+    }
+    (state, Vec::new())
+}
+
+/// Handle the outcome of an [`Effect::Remove`].
+///
+/// On `Ok(display_label)` while [`AppState::Unlocked`] with
+/// `Modal::Remove` open against the result's `account_id`, close the
+/// modal and publish a [`StatusLine::Confirmation`] built from the
+/// carried display label — mirroring the CLI's "Removed {label}."
+/// idiom. The executor has already removed the account from
+/// `Vault::iter()` through `Vault::mutate_and_save` by the time the
+/// reducer sees the result, so the label must come back through the
+/// `EffectResult` rather than from a post-hoc vault lookup. Per
+/// `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)": *"manual Add,
+/// URI Add, Remove, Rename, Export, Passphrase, and Settings close
+/// the modal and publish a status-line confirmation."*
+///
+/// On `Err(...)` the modal stays open and the rendered error is
+/// stashed in `RemoveModal.error` — per the same plan's "Effect
+/// errors" section: *"Pre-commit save failures (`save_not_committed`)
+/// are rolled back by `Vault::mutate_and_save` so memory matches
+/// disk (Remove restores the removed account at its previous
+/// position) ... and the modal stays open with the inline error so
+/// the user can retry. Durability-unconfirmed save errors leave the
+/// new state in memory ... and are shown as committed-but-uncertain."*
+/// `save_not_committed`, `save_durability_unconfirmed`, and any
+/// other error variant share this surfacing path; the specific
+/// rollback semantics belong to `Vault::mutate_and_save`.
+///
+/// Deliveries that arrive after the user navigated away (auto-lock,
+/// non-`Unlocked` state), after the modal closed or was replaced, or
+/// whose `account_id` does not match the open remove modal are
+/// discarded so the carried error drops without mutating state.
+fn reduce_remove_result(
+    mut state: AppState,
+    account_id: AccountId,
+    result: Result<String, PaladinError>,
+) -> (AppState, Vec<Effect>) {
+    let AppState::Unlocked {
+        ref mut modal,
+        ref mut status_line,
+        ..
+    } = state
+    else {
+        return (state, Vec::new());
+    };
+
+    let Some(Modal::Remove(remove)) = modal.as_mut() else {
+        return (state, Vec::new());
+    };
+    if remove.account_id != account_id {
+        return (state, Vec::new());
+    }
+
+    match result {
+        Ok(label) => {
+            *modal = None;
+            *status_line = Some(StatusLine::Confirmation(format!("Removed {label}.")));
+        }
+        Err(err) => {
+            remove.error = Some(render_error_message(&err));
         }
     }
     (state, Vec::new())
