@@ -440,11 +440,11 @@ impl AddMode {
 /// modal hosts three input modes (manual / URI / QR), each with its
 /// own field set. This slice carries the segmented
 /// [`mode`](AddModal::mode) selector, the Manual-mode non-secret
-/// fields, and the Manual-mode secret-bearing buffer
-/// ([`manual_secret`](AddModal::manual_secret)); the URI-mode entry,
-/// focus cycling, duplicate-gate pending state, and the post-QR
-/// counts panel land in subsequent slices alongside their
-/// effect-wiring.
+/// fields, the Manual-mode secret-bearing buffer
+/// ([`manual_secret`](AddModal::manual_secret)), and the URI-mode
+/// entry buffer ([`uri_text`](AddModal::uri_text)); focus cycling,
+/// the duplicate-gate pending state, and the post-QR counts panel
+/// land in subsequent slices alongside their effect-wiring.
 ///
 /// [`Default`] yields a clean Manual-mode modal with no inline error
 /// and the CLI manual-add defaults per `DESIGN.md` §5 (TOTP, SHA1,
@@ -456,11 +456,11 @@ impl AddMode {
 /// Rename / Remove / Settings).
 ///
 /// `Clone` / `PartialEq` / `Eq` are intentionally **not** derived:
-/// [`manual_secret`](AddModal::manual_secret) is a
-/// [`PassphraseBuffer`] which holds typed secret bytes and
-/// deliberately omits those traits so the secret can't be cloned or
-/// pattern-compared into adjacent allocations that escape the
-/// zeroize-on-drop contract.
+/// [`manual_secret`](AddModal::manual_secret) and
+/// [`uri_text`](AddModal::uri_text) are [`PassphraseBuffer`]s which
+/// hold typed secret bytes and deliberately omit those traits so the
+/// secret can't be cloned or pattern-compared into adjacent
+/// allocations that escape the zeroize-on-drop contract.
 #[derive(Debug)]
 pub struct AddModal {
     /// Which input mode is currently active. Cycled by the segmented
@@ -517,6 +517,19 @@ pub struct AddModal {
     /// Per-key editing, mode-switch / cancel / submit zeroization,
     /// and the submit path land in subsequent reducer slices.
     pub manual_secret: PassphraseBuffer,
+    /// Uri-mode `otpauth://` text buffer.
+    ///
+    /// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
+    /// *"URI mode is a single text field; on submit the entered
+    /// string is passed to [`paladin_core::parse_otpauth`] … The URI
+    /// text field is treated as a secret-bearing buffer and
+    /// zeroized on submit, cancel, modal close, and auto-lock because
+    /// the URI embeds the Base32 secret."* The buffer's `Debug` impl
+    /// is redacted via [`PassphraseBuffer`] so panic messages and
+    /// reducer-state dumps never leak the typed bytes. Per-key
+    /// editing, mode-switch / cancel / submit zeroization, and the
+    /// submit path land in subsequent reducer slices.
+    pub uri_text: PassphraseBuffer,
     /// Inline validation / save error from the most recent submit
     /// attempt, if any. Rendered through
     /// [`render_error_message`](crate::app::state::render_error_message)
@@ -536,10 +549,10 @@ impl AddModal {
     /// the modes being left: the manual Base32 secret, the URI text,
     /// and any pending duplicate/add-anyway state."* The contract is
     /// targeted — only the *leaving* mode's secrets are wiped, so
-    /// switching between modes that don't currently hold the buffer
-    /// (e.g. Uri → Qr) does not touch the manual-secret slot. The
-    /// URI-text and pending-duplicate-add slots will hook into this
-    /// helper as they land.
+    /// switching between modes that don't currently hold a relevant
+    /// buffer (e.g. Manual → Qr leaves the URI buffer alone) does
+    /// not touch unrelated slots. The pending-duplicate-add slot will
+    /// hook into this helper as it lands.
     ///
     /// A no-op same-mode call (`switch_mode(mode)` where
     /// `mode == self.mode`) leaves every buffer untouched so
@@ -548,8 +561,12 @@ impl AddModal {
         if self.mode == target {
             return;
         }
-        if self.mode == AddMode::Manual {
-            self.manual_secret.clear();
+        match self.mode {
+            AddMode::Manual => self.manual_secret.clear(),
+            AddMode::Uri => self.uri_text.clear(),
+            // Pending duplicate/add-anyway state lands in a
+            // subsequent slice; clearing on leave will hook in here.
+            AddMode::Qr => {}
         }
         self.mode = target;
     }
@@ -568,6 +585,7 @@ impl Default for AddModal {
             counter: 0,
             icon_hint_text: String::new(),
             manual_secret: PassphraseBuffer::new(),
+            uri_text: PassphraseBuffer::new(),
             error: None,
         }
     }

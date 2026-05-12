@@ -1649,6 +1649,42 @@ fn add_modal_manual_secret_debug_redacts_typed_bytes() {
 }
 
 #[test]
+fn add_modal_default_uri_text_is_empty() {
+    // Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
+    // *"The URI text field is treated as a secret-bearing buffer …
+    // because the URI embeds the Base32 secret."* A freshly opened
+    // modal starts with an empty buffer just like the manual-secret
+    // slot above.
+    let add = AddModal::default();
+    assert!(
+        add.uri_text.is_empty(),
+        "freshly opened Add modal must start with empty URI text"
+    );
+}
+
+#[test]
+fn add_modal_uri_text_debug_redacts_typed_bytes() {
+    // Per `CLAUDE.md` "No `Debug` impls that leak bytes" — the
+    // URI-mode entry embeds the Base32 secret (`otpauth://…?secret=…`)
+    // so its `Debug` output must redact the contents the same way
+    // the manual-secret buffer does. Push an obviously sentinel
+    // substring and assert it does not surface in the formatted
+    // output.
+    let mut add = AddModal::default();
+    add.uri_text.push('o');
+    add.uri_text.push('t');
+    add.uri_text.push('p');
+    add.uri_text.push('Z');
+    add.uri_text.push('Z');
+    add.uri_text.push('Z');
+    let dbg = format!("{add:?}");
+    assert!(
+        !dbg.contains("otpZZZ"),
+        "Debug output must not leak URI-text bytes, got: {dbg}"
+    );
+}
+
+#[test]
 fn opening_add_modal_with_a_seeds_manual_defaults() {
     // The `a` opener constructs `AddModal::default()`, so the modal
     // observed in the unlocked state must carry the same manual
@@ -1662,6 +1698,7 @@ fn opening_add_modal_with_a_seeds_manual_defaults() {
     assert!(add.issuer.is_empty());
     assert!(add.icon_hint_text.is_empty());
     assert!(add.manual_secret.is_empty());
+    assert!(add.uri_text.is_empty());
     assert_eq!(add.algorithm, Algorithm::Sha1);
     assert_eq!(add.digits, paladin_core::DIGITS_DEFAULT);
     assert_eq!(add.kind, AccountKindInput::Totp);
@@ -1830,9 +1867,9 @@ fn arrows_in_add_modal_do_not_mutate_other_state() {
 // pending duplicate/add-anyway state."* This block locks in the
 // targeted contract — only the *leaving* mode's secrets are wiped —
 // so stale Base32 input does not survive behind the active mode.
-// The URI / pending-add slots land alongside their slices; for now
-// the manual-secret buffer is the only secret-bearing field, so the
-// coverage is gated on that single field.
+// Coverage tracks the secret-bearing fields as they land: the
+// manual-secret buffer (Manual mode) and the URI-text buffer (Uri
+// mode) today, with the pending duplicate/add-anyway slot to follow.
 // ---------------------------------------------------------------------------
 
 /// Helper: open the Add modal and push four Base32 chars into the
@@ -1849,6 +1886,27 @@ fn add_modal_with_typed_manual_secret(tmp: &tempfile::TempDir) -> AppState {
             add.manual_secret.push('B');
             add.manual_secret.push('S');
             add.manual_secret.push('W');
+        }
+        _ => panic!("expected Unlocked with Modal::Add open"),
+    }
+    state
+}
+
+/// Helper: open the Add modal, advance to Uri mode via `→`, and push
+/// a sentinel `otpauth://` prefix into the URI buffer so the
+/// assertions can distinguish "wiped" from "already empty".
+fn add_modal_in_uri_mode_with_typed_text(tmp: &tempfile::TempDir) -> AppState {
+    // One `→` cycles Manual → Uri.
+    let (mut state, _) = reduce(fresh_unlocked_with_add_modal(tmp), key(KeyCode::Right));
+    match &mut state {
+        AppState::Unlocked {
+            modal: Some(Modal::Add(add)),
+            ..
+        } => {
+            assert_eq!(add.mode, AddMode::Uri, "expected one → to land on Uri");
+            for c in "otpauth://".chars() {
+                add.uri_text.push(c);
+            }
         }
         _ => panic!("expected Unlocked with Modal::Add open"),
     }
@@ -1938,6 +1996,83 @@ fn cycling_between_uri_and_qr_preserves_manual_secret() {
         add.manual_secret.as_str(),
         "X",
         "Qr → Uri must not touch manual_secret",
+    );
+}
+
+#[test]
+fn right_from_uri_mode_wipes_uri_text() {
+    // Leaving Uri via `→` (Uri → Qr) must zeroize the typed URI
+    // buffer so the embedded Base32 secret is not retained behind
+    // the active mode.
+    let tmp = secure_tempdir();
+    let state = add_modal_in_uri_mode_with_typed_text(&tmp);
+    let (after, effects) = reduce(state, key(KeyCode::Right));
+    assert!(
+        effects.is_empty(),
+        "→ inside Add modal must not emit effects"
+    );
+    let add = add_modal_ref(&after);
+    assert_eq!(add.mode, AddMode::Qr);
+    assert!(add.uri_text.is_empty(), "→ from Uri must wipe uri_text");
+}
+
+#[test]
+fn left_from_uri_mode_wipes_uri_text() {
+    // Leaving Uri via `←` (Uri → Manual) must zeroize the typed URI
+    // buffer the same way `→` does — both arrows are mode-switches
+    // that abandon the Uri-mode field set.
+    let tmp = secure_tempdir();
+    let state = add_modal_in_uri_mode_with_typed_text(&tmp);
+    let (after, effects) = reduce(state, key(KeyCode::Left));
+    assert!(
+        effects.is_empty(),
+        "← inside Add modal must not emit effects"
+    );
+    let add = add_modal_ref(&after);
+    assert_eq!(add.mode, AddMode::Manual);
+    assert!(add.uri_text.is_empty(), "← from Uri must wipe uri_text");
+}
+
+#[test]
+fn cycling_away_from_manual_or_qr_preserves_uri_text() {
+    // Per the plan, only the *leaving* mode's secrets are wiped. Push
+    // a sentinel byte into uri_text while in Manual and cycle to Qr
+    // (via `←`, two-step path Manual → Qr); the URI buffer must
+    // survive because neither leg leaves Uri mode. Then cycle Qr →
+    // Manual (via `→`) and assert the byte still survives.
+    let tmp = secure_tempdir();
+    let mut state = fresh_unlocked_with_add_modal(&tmp);
+    match &mut state {
+        AppState::Unlocked {
+            modal: Some(Modal::Add(add)),
+            ..
+        } => {
+            assert_eq!(add.mode, AddMode::Manual);
+            // Direct mutation: production code wouldn't fill
+            // uri_text while in Manual mode, but the test reaches in
+            // so we can prove the *next* mode-switch does not touch
+            // this slot.
+            add.uri_text.push('S');
+        }
+        _ => panic!("expected Modal::Add open in Manual mode"),
+    }
+    // Manual → Qr via `←`.
+    let (after_manual_to_qr, _) = reduce(state, key(KeyCode::Left));
+    let add = add_modal_ref(&after_manual_to_qr);
+    assert_eq!(add.mode, AddMode::Qr);
+    assert_eq!(
+        add.uri_text.as_str(),
+        "S",
+        "Manual → Qr must not touch uri_text",
+    );
+    // Qr → Manual via `→`.
+    let (after_qr_to_manual, _) = reduce(after_manual_to_qr, key(KeyCode::Right));
+    let add = add_modal_ref(&after_qr_to_manual);
+    assert_eq!(add.mode, AddMode::Manual);
+    assert_eq!(
+        add.uri_text.as_str(),
+        "S",
+        "Qr → Manual must not touch uri_text",
     );
 }
 
