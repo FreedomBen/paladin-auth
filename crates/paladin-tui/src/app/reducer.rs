@@ -252,17 +252,28 @@ fn reduce_effect_result(state: AppState, result: EffectResult) -> (AppState, Vec
 /// Handle the outcome of an [`Effect::HotpAdvance`].
 ///
 /// On `Ok(code)` while [`AppState::Unlocked`], open (or replace) the
-/// `hotp_reveal` slot keyed by `account_id`. The reveal deadline is
-/// computed from `completed_at` via
+/// `hotp_reveal` slot keyed by `account_id` and clear any prior
+/// status-line note (last-write-wins per the [`StatusLine`] contract:
+/// a successful advance dismisses the previous failure note). The
+/// reveal deadline is computed from `completed_at` via
 /// [`paladin_core::hotp_reveal_deadline`]. Any prior reveal slot is
 /// dropped in place — its `SecretString` zeroizes on drop per the
 /// "Sensitive UI buffers" guarantee.
 ///
 /// On `Err(...)` no reveal opens; the prior reveal slot (if any) is
-/// preserved. Pre-commit failures (`save_not_committed`) have already
-/// been rolled back inside `Vault::hotp_advance`, so the in-memory
-/// vault remains consistent with disk. Status-line surfacing for the
-/// error kinds lands alongside the broader "Effect errors" slice.
+/// preserved and a status-line error is surfaced via
+/// [`render_error_message`] — per
+/// `IMPLEMENTATION_PLAN_03_TUI.md` "Effect errors":
+/// *"Pre-commit save failures (`save_not_committed`) leave the
+/// in-memory counter and reveal state unchanged ... and surface a
+/// status-line error. ... All other failures show a status-line
+/// error and leave the previous reveal state unchanged."* Pre-commit
+/// failures have already been rolled back inside `Vault::hotp_advance`,
+/// so the in-memory vault remains consistent with disk. The
+/// reveal-on-`save_durability_unconfirmed` half of the design rule
+/// needs the staged-code mechanism (the current `EffectResult` shape
+/// carries no `Code` on `Err`); the status-line surface is shared and
+/// lands here.
 ///
 /// On any non-`Unlocked` state the result is discarded so the carried
 /// OTP digits drop without mutating the current state.
@@ -273,16 +284,24 @@ fn reduce_hotp_advance_result(
     completed_at: Instant,
 ) -> (AppState, Vec<Effect>) {
     if let AppState::Unlocked {
-        hotp_reveal: slot, ..
+        hotp_reveal: slot,
+        status_line,
+        ..
     } = &mut state
     {
-        if let Ok(code) = result {
-            *slot = Some(HotpReveal {
-                account_id,
-                counter_used: code.counter_used.unwrap_or(0),
-                code: SecretString::from(code.code),
-                deadline: hotp_reveal_deadline(completed_at),
-            });
+        match result {
+            Ok(code) => {
+                *slot = Some(HotpReveal {
+                    account_id,
+                    counter_used: code.counter_used.unwrap_or(0),
+                    code: SecretString::from(code.code),
+                    deadline: hotp_reveal_deadline(completed_at),
+                });
+                *status_line = None;
+            }
+            Err(err) => {
+                *status_line = Some(StatusLine::Error(render_error_message(&err)));
+            }
         }
     }
     (state, Vec::new())

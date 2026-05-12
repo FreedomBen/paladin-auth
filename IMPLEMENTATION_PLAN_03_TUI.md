@@ -642,8 +642,13 @@ end-to-end.
   covered by the `emit_*_preserves_*` tests for `Effect::Unlock` /
   `Effect::HotpAdvance` / `Effect::CopyCode`; modal-close /
   counts-panel payloads land alongside the modal slices.)*
-- [ ] Pre-commit effect failures leave visible state unchanged and
-  surface inline / status-line errors.
+- [x] Pre-commit effect failures leave visible state unchanged and
+  surface inline / status-line errors. *(Reducer-level
+  `EffectResult::HotpAdvance` Err handling sets a status-line error
+  via `render_error_message` while preserving any prior reveal slot,
+  and a successful follow-up advance clears the prior status-line
+  note. Modal-side save-error rollback rides with each modal slice in
+  "Pre-commit save rollback".)*
 - [ ] Durability-unconfirmed failures follow the committed-state
   behavior in "Effect errors".
 - [ ] Modal-local navigation covers `Tab` / `Shift-Tab`, the

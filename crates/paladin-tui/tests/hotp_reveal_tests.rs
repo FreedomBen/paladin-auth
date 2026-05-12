@@ -31,7 +31,7 @@ use paladin_core::{
 };
 use paladin_tui::app::event::{AppEvent, Effect, EffectResult};
 use paladin_tui::app::reducer::reduce;
-use paladin_tui::app::state::{AppState, Focus, HotpReveal};
+use paladin_tui::app::state::{render_error_message, AppState, Focus, HotpReveal, StatusLine};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -709,4 +709,163 @@ fn hotp_reveal_debug_redacts_displayed_code_bytes() {
         !rendered.contains("424242"),
         "HotpReveal Debug must not leak the OTP digits, got: {rendered}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// EffectResult::HotpAdvance Err — status-line surfacing.
+//
+// Per `IMPLEMENTATION_PLAN_03_TUI.md` Tests > Reducer:
+//   "Pre-commit effect failures leave visible state unchanged and surface
+//    inline / status-line errors."
+//
+// And the Effect errors body:
+//   "Pre-commit save failures (`save_not_committed`) leave the in-memory
+//    counter and reveal state unchanged ... and surface a status-line error.
+//    All other failures show a status-line error and leave the previous
+//    reveal state unchanged."
+//
+// The companion `_leaves_reveal_unchanged` tests above already lock in
+// the visible-state-unchanged half. The tests below lock in the
+// status-line surfacing half for the error kinds the executor surfaces
+// today (`save_not_committed` from `Vault::hotp_advance`'s pre-rename
+// failure, `invalid_state` defensively, `save_durability_unconfirmed`).
+// The `save_durability_unconfirmed` row reveals-on-failure behavior
+// from `DESIGN.md` §6 needs a staged-code mechanism in `EffectResult`
+// (the current shape carries no `Code` on `Err`); that lands with the
+// staged-code slice. The status-line surface is shared.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn effect_result_hotp_advance_err_save_not_committed_sets_status_line() {
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (mut vault, store) = create_encrypted_pair(&path, "pp");
+    let hotp_id = add_hotp_account(&mut vault, &store, "hotp");
+
+    let state = unlocked_with_reveal(path, vault, store, Some(hotp_id), None);
+
+    let err = PaladinError::SaveNotCommitted {
+        committed: false,
+        backup_path: None,
+    };
+    let expected = render_error_message(&err);
+    let event = AppEvent::EffectResult(EffectResult::HotpAdvance {
+        account_id: hotp_id,
+        result: Err(err),
+        completed_at: Instant::now(),
+    });
+
+    let (next, effects) = reduce(state, event);
+    assert!(effects.is_empty());
+    match next {
+        AppState::Unlocked { status_line, .. } => assert_eq!(
+            status_line,
+            Some(StatusLine::Error(expected)),
+            "save_not_committed must surface a status-line error"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_hotp_advance_err_invalid_state_sets_status_line() {
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (mut vault, store) = create_encrypted_pair(&path, "pp");
+    let hotp_id = add_hotp_account(&mut vault, &store, "hotp");
+
+    let state = unlocked_with_reveal(path, vault, store, Some(hotp_id), None);
+
+    let err = PaladinError::InvalidState {
+        operation: "hotp_advance",
+        state: "account_not_found",
+    };
+    let expected = render_error_message(&err);
+    let event = AppEvent::EffectResult(EffectResult::HotpAdvance {
+        account_id: hotp_id,
+        result: Err(err),
+        completed_at: Instant::now(),
+    });
+
+    let (next, effects) = reduce(state, event);
+    assert!(effects.is_empty());
+    match next {
+        AppState::Unlocked { status_line, .. } => assert_eq!(
+            status_line,
+            Some(StatusLine::Error(expected)),
+            "non-save errors must surface a status-line error"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_hotp_advance_err_save_durability_unconfirmed_sets_status_line() {
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (mut vault, store) = create_encrypted_pair(&path, "pp");
+    let hotp_id = add_hotp_account(&mut vault, &store, "hotp");
+
+    let state = unlocked_with_reveal(path, vault, store, Some(hotp_id), None);
+
+    let err = PaladinError::SaveDurabilityUnconfirmed;
+    let expected = render_error_message(&err);
+    let event = AppEvent::EffectResult(EffectResult::HotpAdvance {
+        account_id: hotp_id,
+        result: Err(err),
+        completed_at: Instant::now(),
+    });
+
+    let (next, effects) = reduce(state, event);
+    assert!(effects.is_empty());
+    match next {
+        AppState::Unlocked { status_line, .. } => assert_eq!(
+            status_line,
+            Some(StatusLine::Error(expected)),
+            "save_durability_unconfirmed must surface a status-line note \
+             until the staged-code slice lands and the reveal opens too"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_hotp_advance_ok_clears_prior_status_line() {
+    // Symmetric: a successful advance closes the loop and the status
+    // line should be cleared so the prior failure note does not stick.
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (mut vault, store) = create_encrypted_pair(&path, "pp");
+    let hotp_id = add_hotp_account(&mut vault, &store, "hotp");
+
+    let mut state = unlocked_with_reveal(path, vault, store, Some(hotp_id), None);
+    if let AppState::Unlocked {
+        ref mut status_line,
+        ..
+    } = state
+    {
+        *status_line = Some(StatusLine::Error("prior failure".to_string()));
+    }
+
+    let event = AppEvent::EffectResult(EffectResult::HotpAdvance {
+        account_id: hotp_id,
+        result: Ok(hotp_code("999999", 1)),
+        completed_at: Instant::now(),
+    });
+    let (next, effects) = reduce(state, event);
+    assert!(effects.is_empty());
+    match next {
+        AppState::Unlocked {
+            status_line,
+            hotp_reveal,
+            ..
+        } => {
+            assert_eq!(
+                status_line, None,
+                "successful advance must clear the prior status-line error"
+            );
+            assert!(hotp_reveal.is_some(), "Ok must open the reveal window");
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
 }
