@@ -23,7 +23,7 @@ use zeroize::Zeroizing;
 use crate::app::event::{AppEvent, Effect, EffectResult};
 use crate::app::state::{
     compute_idle_deadline, initial_selection, render_error_message, AppState, ChordLeader, Focus,
-    HotpReveal, Modal, PendingClipboardClear, StatusLine, CLIPBOARD_WRITE_FAILED,
+    HotpReveal, Modal, PendingClipboardClear, RenameModal, StatusLine, CLIPBOARD_WRITE_FAILED,
     NO_ACCOUNT_SELECTED,
 };
 use crate::search::{filtered_account_ids, select_after_search};
@@ -720,7 +720,8 @@ fn reduce_unlocked_input(mut state: AppState, key: &KeyEvent) -> (AppState, Vec<
             return (state, Vec::new());
         }
         let n_effects = n_effects_for_char(c, path, vault, *selected);
-        return dispatch_unlocked_char(state, c, n_effects);
+        let rename_modal = pending_rename_for_char(c, vault, *selected);
+        return dispatch_unlocked_char(state, c, n_effects, rename_modal);
     }
 
     (state, Vec::new())
@@ -748,6 +749,34 @@ fn n_effects_for_char(
     }
 }
 
+/// Construct the [`RenameModal`] payload for `R` from the still-borrowed
+/// vault + selection, or `None` when the binding is not `R` or when the
+/// selection cannot be resolved to a vault account.
+///
+/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Rename:
+/// *"single text field pre-populated with the selected account's
+/// current label."* Selection is gated upstream by
+/// [`selection_gated_status_error`], so a `selected = None` here means
+/// the caller bypassed the gate (defensive — yields `None` so no modal
+/// opens). The lookup tolerates a stale selection (id no longer in
+/// `Vault::iter`) by returning `None`; the dispatch arm leaves the
+/// modal slot untouched in that case.
+fn pending_rename_for_char(
+    c: char,
+    vault: &Vault,
+    selected: Option<AccountId>,
+) -> Option<RenameModal> {
+    if c != 'R' {
+        return None;
+    }
+    let id = selected?;
+    let account = vault.iter().find(|a| a.id() == id)?;
+    Some(RenameModal {
+        account_id: id,
+        draft: account.label().to_owned(),
+    })
+}
+
 /// Map the (key character, current selection) pair to a status-line
 /// error when a selection-gated action key fires without a selected
 /// row. Returns `Some(StatusLine::Error(...))` for `n` / `r` / `R`
@@ -772,16 +801,23 @@ fn selection_gated_status_error(c: char, selected: Option<AccountId>) -> Option<
 /// upstream).
 ///
 /// Owns the small terminal-letter table: `q` → quit, `/` → focus the
-/// search bar, `n` → emit the precomputed HOTP-advance effects, and
-/// the `modal_opener_for_char` table (`a`/`i`/`e`/`r`/`R`/`p`/`s`).
-/// `n_effects` carries the [`Effect::HotpAdvance`] list precomputed by
-/// the caller (empty when the binding is a silent no-op — TOTP
-/// selection, no selection, or selection missing from the vault) so
-/// this helper never needs to touch the still-borrowed vault.
+/// search bar, `n` → emit the precomputed HOTP-advance effects, `R`
+/// → open the precomputed [`Modal::Rename`] payload, and the
+/// `modal_opener_for_char` table (`a`/`i`/`e`/`r`/`p`/`s`) for the
+/// payload-free modals.
+///
+/// `n_effects` carries the [`Effect::HotpAdvance`] list precomputed
+/// by the caller (empty when the binding is a silent no-op — TOTP
+/// selection, no selection, or selection missing from the vault).
+/// `rename_modal` carries the [`RenameModal`] payload built from the
+/// still-borrowed vault for `R` (or `None` for every other char). Both
+/// are precomputed by the caller so this helper does not borrow the
+/// vault.
 fn dispatch_unlocked_char(
     mut state: AppState,
     c: char,
     n_effects: Vec<Effect>,
+    rename_modal: Option<RenameModal>,
 ) -> (AppState, Vec<Effect>) {
     // `q` quits Unlocked when no modal is open. (Once the search bar
     // can take focus, `q` is text input on the search surface too;
@@ -819,6 +855,19 @@ fn dispatch_unlocked_char(
         // never reaches this dispatch.
         if let AppState::Unlocked { help_open, .. } = &mut state {
             *help_open = true;
+        }
+        return (state, Vec::new());
+    }
+    if c == 'R' {
+        // Rename is selection-gated (filtered upstream) and carries a
+        // pre-populated payload built by [`pending_rename_for_char`].
+        // A `None` here means the gate was passed but the selection
+        // could not be resolved to a vault account — leave the modal
+        // slot untouched so the binding observes as a silent no-op.
+        if let Some(rename) = rename_modal {
+            if let AppState::Unlocked { modal, .. } = &mut state {
+                *modal = Some(Modal::Rename(rename));
+            }
         }
         return (state, Vec::new());
     }
@@ -1212,22 +1261,21 @@ fn route_search_focus_char(
     false
 }
 
-/// Map a bare-letter Unlocked-screen keybinding to the modal it opens,
-/// or `None` if the character is not a modal-open binding.
+/// Map a bare-letter Unlocked-screen keybinding to the payload-free
+/// modal it opens, or `None` if the character is not such a binding.
 ///
 /// Mirrors `IMPLEMENTATION_PLAN_03_TUI.md` "Keybindings (initial v0.1)"
-/// — `r` (lower-case) opens Remove confirmation while `R`
-/// (upper-case, via Shift+R) opens Rename. Crossterm reports the
-/// resolved character for shifted keys, so the upper-case match arm
-/// works for both terminals that forward the Shift modifier and
-/// those that swallow it into the case conversion.
+/// for the modals whose initial state does not depend on vault data:
+/// Add / Import / Export / Remove / Passphrase / Settings. The `R`
+/// (Rename) binding is handled separately by [`dispatch_unlocked_char`]
+/// because its payload pre-populates the draft from the selected
+/// account's label.
 fn modal_opener_for_char(c: char) -> Option<Modal> {
     Some(match c {
         'a' => Modal::Add,
         'i' => Modal::Import,
         'e' => Modal::Export,
         'r' => Modal::Remove,
-        'R' => Modal::Rename,
         'p' => Modal::Passphrase,
         's' => Modal::Settings,
         _ => return None,

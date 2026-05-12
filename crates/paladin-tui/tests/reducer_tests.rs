@@ -27,7 +27,7 @@ use paladin_tui::app::event::{AppEvent, Effect, EffectResult};
 use paladin_tui::app::reducer::reduce;
 use paladin_tui::app::state::{
     compute_idle_deadline, decide_state_from_inspect, decide_state_from_open, render_error_message,
-    AppState, ChordLeader, Focus, HotpReveal, Modal, StatusLine, NO_ACCOUNT_SELECTED,
+    AppState, ChordLeader, Focus, HotpReveal, Modal, RenameModal, StatusLine, NO_ACCOUNT_SELECTED,
 };
 use paladin_tui::cli::{should_disable_color, GlobalArgs};
 use paladin_tui::prompt::PassphraseBuffer;
@@ -1698,7 +1698,7 @@ fn pressing_shift_r_on_unlocked_with_no_modal_open_opens_rename_modal() {
         event: Event::Key(KeyEvent::new(KeyCode::Char('R'), KeyModifiers::SHIFT)),
         at: Instant::now(),
     };
-    assert_selection_gated_key_opens_modal(evt, &Modal::Rename);
+    assert_selection_gated_key_opens_modal(evt, &Modal::Rename(RenameModal::default()));
 }
 
 #[test]
@@ -1708,7 +1708,69 @@ fn pressing_shift_r_without_modifier_byte_still_opens_rename_modal() {
     // default outside kitty-protocol mode). The reducer dispatches
     // on the resolved character, not the modifier, so both shapes
     // must hit Rename.
-    assert_selection_gated_key_opens_modal(key(KeyCode::Char('R')), &Modal::Rename);
+    assert_selection_gated_key_opens_modal(
+        key(KeyCode::Char('R')),
+        &Modal::Rename(RenameModal::default()),
+    );
+}
+
+#[test]
+fn pressing_shift_r_opens_rename_modal_prepopulated_with_selected_label() {
+    // Per IMPLEMENTATION_PLAN_03_TUI.md "Modals (per §6)" > Rename:
+    // "single text field pre-populated with the selected account's
+    // current label." The reducer snapshots the selected account's
+    // id and label at modal-open time so a subsequent selection /
+    // search change does not redirect the rename mid-edit.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let id = add_totp_account(&mut vault, &store, "github");
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let (state, effects) = reduce(
+        unlocked,
+        AppEvent::Input {
+            event: Event::Key(KeyEvent::new(KeyCode::Char('R'), KeyModifiers::SHIFT)),
+            at: Instant::now(),
+        },
+    );
+    assert!(effects.is_empty(), "opening Rename must not emit effects");
+    match state {
+        AppState::Unlocked {
+            modal: Some(Modal::Rename(rename)),
+            status_line,
+            ..
+        } => {
+            assert_eq!(
+                rename.account_id, id,
+                "Rename modal must snapshot the selected account id"
+            );
+            assert_eq!(
+                rename.draft, "github",
+                "Rename modal draft must pre-populate with the account's current label"
+            );
+            assert!(
+                status_line.is_none(),
+                "Rename open with selection must not surface a status-line error"
+            );
+        }
+        AppState::Unlocked { modal, .. } => panic!("expected Modal::Rename, got {modal:?}"),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
 }
 
 #[test]
@@ -1795,7 +1857,7 @@ fn pressing_esc_on_unlocked_with_open_remove_modal_closes_the_modal() {
 
 #[test]
 fn pressing_esc_on_unlocked_with_open_rename_modal_closes_the_modal() {
-    assert_esc_closes_modal(Modal::Rename);
+    assert_esc_closes_modal(Modal::Rename(RenameModal::default()));
 }
 
 #[test]
@@ -7803,12 +7865,20 @@ fn pressing_ctrl_p_with_remove_modal_open_aliases_shift_tab() {
 
 #[test]
 fn pressing_ctrl_n_with_rename_modal_open_aliases_tab() {
-    assert_ctrl_modal_alias_is_silent_no_op(Modal::Rename, ctrl(KeyCode::Char('n')), "`Ctrl-N`");
+    assert_ctrl_modal_alias_is_silent_no_op(
+        Modal::Rename(RenameModal::default()),
+        ctrl(KeyCode::Char('n')),
+        "`Ctrl-N`",
+    );
 }
 
 #[test]
 fn pressing_ctrl_p_with_rename_modal_open_aliases_shift_tab() {
-    assert_ctrl_modal_alias_is_silent_no_op(Modal::Rename, ctrl(KeyCode::Char('p')), "`Ctrl-P`");
+    assert_ctrl_modal_alias_is_silent_no_op(
+        Modal::Rename(RenameModal::default()),
+        ctrl(KeyCode::Char('p')),
+        "`Ctrl-P`",
+    );
 }
 
 #[test]

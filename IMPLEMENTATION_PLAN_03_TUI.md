@@ -863,7 +863,12 @@ end-to-end.
 
 ### Rename modal (`tests/reducer_tests.rs`)
 
-- [ ] Opens with the selected account's current label pre-populated.
+- [x] Opens with the selected account's current label pre-populated.
+  *(`pressing_shift_r_opens_rename_modal_prepopulated_with_selected_label`
+  in `tests/reducer_tests.rs` asserts the reducer snapshots
+  `account_id` and seeds `draft` from `Account::label()` at modal
+  open. Text editing, submit, validation, and save-effect wiring
+  land in subsequent slices.)*
 - [ ] Non-empty trimmed input routes through `Vault::rename` inside
   `Vault::mutate_and_save`, including when the trimmed input equals
   the current label so `updated_at` still matches CLI behavior.

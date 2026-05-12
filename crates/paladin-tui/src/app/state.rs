@@ -188,6 +188,34 @@ pub enum Focus {
     Search,
 }
 
+/// State for the Rename modal.
+///
+/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Rename:
+/// *"single text field pre-populated with the selected account's
+/// current label."* The `account_id` is snapshotted when the modal
+/// opens so a subsequent selection / search-filter change does not
+/// redirect the rename mid-edit; the submit path passes
+/// `account_id` straight through to `Vault::rename` inside
+/// `Vault::mutate_and_save`.
+///
+/// [`Default`] yields an empty draft and a freshly generated
+/// [`AccountId`] sentinel so existing reducer tests that match on
+/// the variant discriminant can construct a placeholder without
+/// reaching into the vault. Production code never relies on
+/// [`Default`] — the reducer's modal-open path always populates the
+/// fields from the selected account.
+#[derive(Debug, Default)]
+pub struct RenameModal {
+    /// Account whose label is being edited. Snapshotted at modal
+    /// open time.
+    pub account_id: AccountId,
+    /// Working label buffer. Initialized to the selected account's
+    /// current label at open time and updated by text-field editing
+    /// in later slices. Cleared on submit / cancel / modal close /
+    /// auto-lock alongside the rest of the modal-local state.
+    pub draft: String,
+}
+
 /// An open modal dialog over the main list view.
 ///
 /// Discarded on the `Unlocked → Locked` auto-lock transition
@@ -200,11 +228,8 @@ pub enum Focus {
 /// Variant payloads (form fields, segmented selectors, zeroizing
 /// passphrase buffers for the `Passphrase` / `Import` / `Export`
 /// flows, post-success counts panels) land alongside each modal's
-/// effect-wiring slice. The variant tag is sufficient on its own to
-/// model the discard-on-lock contract, so this slice introduces only
-/// the kinds — payloads are added per modal when their reducer paths
-/// land. The seven variants mirror the modals enumerated in
-/// `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)".
+/// effect-wiring slice. The seven variants mirror the modals
+/// enumerated in `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)".
 #[derive(Debug)]
 pub enum Modal {
     /// Add an account — manual / `otpauth://` URI / clipboard-QR.
@@ -212,7 +237,7 @@ pub enum Modal {
     /// Confirm removal of the selected account.
     Remove,
     /// Rename the selected account.
-    Rename,
+    Rename(RenameModal),
     /// Import an existing vault export (Paladin, Aegis, Google
     /// Authenticator).
     Import,
