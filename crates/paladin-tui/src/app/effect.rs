@@ -20,7 +20,7 @@
 use std::sync::mpsc::Sender;
 use std::time::{Instant, SystemTime};
 
-use paladin_core::{Store, VaultLock};
+use paladin_core::{PaladinError, Store, VaultLock};
 
 use crate::app::event::{AppEvent, Effect, EffectResult};
 use crate::app::state::AppState;
@@ -131,18 +131,64 @@ pub fn execute(effect: Effect, state: &mut AppState, sender: &Sender<AppEvent>) 
             let _ = sender;
             EffectOutcome::Continue
         }
-        Effect::Remove {
-            path: _,
-            account_id: _,
-        } => {
-            // Placeholder: the `Vault::remove` call inside
-            // `Vault::mutate_and_save` lands with the executor slice
-            // that mirrors `Effect::Rename`. Until then the reducer
-            // emit is exercised by reducer-level tests
-            // (`remove_modal_enter_emits_remove_effect`) and the
-            // executor consumes the variant without emitting an
-            // `AppEvent`.
-            let _ = sender;
+        Effect::Remove { path, account_id } => {
+            // Run `Vault::remove` inside `Vault::mutate_and_save` so a
+            // pre-commit failure (`save_not_committed`) snaps the
+            // removed account back to its prior iteration position
+            // while post-commit `save_durability_unconfirmed` leaves
+            // the account removed in memory matching the on-disk
+            // primary, per `IMPLEMENTATION_PLAN_03_TUI.md`
+            // "Effect errors" >
+            // "Add / remove / rename / settings saves".
+            //
+            // The closure captures the removed Account's display
+            // label (`issuer:label` if issuer is set, else `label`)
+            // and returns it through the result; the reducer surfaces
+            // this string verbatim in `StatusLine::Confirmation`,
+            // mirroring the CLI's "Removed {label}." idiom. `Account`
+            // is dropped at the end of the closure — the label is
+            // already a `String` owned by the result, so secrets do
+            // not leak across the boundary.
+            //
+            // The path check protects against a stale effect emitted
+            // before an auto-lock or vault switch: if the live state
+            // is no longer `Unlocked` against the same path, drop the
+            // effect silently — the reducer would discard the
+            // corresponding `EffectResult::Remove` anyway, and
+            // posting back would just synthesize an artificial
+            // mutation attempt against unrelated state.
+            //
+            // A missing `account_id` (defensive — never happens in
+            // practice because the reducer snapshots it at modal-open
+            // time) becomes
+            // `invalid_state { operation: "remove",
+            //                 state: "account_not_found" }`, matching
+            // the `Vault::rename` not-found shape.
+            if let AppState::Unlocked {
+                path: state_path,
+                vault,
+                store,
+                ..
+            } = state
+            {
+                if *state_path == path {
+                    let result = vault.mutate_and_save(store, |v| {
+                        let account = v.remove(account_id).ok_or(PaladinError::InvalidState {
+                            operation: "remove",
+                            state: "account_not_found",
+                        })?;
+                        let label = match account.issuer().filter(|i| !i.is_empty()) {
+                            Some(issuer) => format!("{issuer}:{}", account.label()),
+                            None => account.label().to_string(),
+                        };
+                        Ok(label)
+                    });
+                    let _ = sender.send(AppEvent::EffectResult(EffectResult::Remove {
+                        account_id,
+                        result,
+                    }));
+                }
+            }
             EffectOutcome::Continue
         }
         Effect::Rename {

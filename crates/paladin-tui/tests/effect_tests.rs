@@ -558,3 +558,270 @@ fn execute_rename_with_dropped_receiver_does_not_panic() {
         other => panic!("expected Unlocked, got {other:?}"),
     }
 }
+
+// ---------------------------------------------------------------------------
+// Effect::Remove
+// ---------------------------------------------------------------------------
+
+/// `Effect::Remove` against an `AppState::Unlocked` whose live `Vault`
+/// owns the target account routes through `Vault::mutate_and_save` →
+/// `Vault::remove`. The account is gone from the live vault, the
+/// on-disk primary no longer carries it after commit, and the
+/// executor posts back `EffectResult::Remove` with `Ok(display_label)`
+/// so the reducer can close the modal and publish the status
+/// confirmation.
+#[test]
+fn execute_remove_with_existing_account_removes_and_sends_ok_with_label() {
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (mut state, id) = unlocked_with_one_totp(&path, "github");
+
+    let (tx, rx) = mpsc::channel::<AppEvent>();
+    let effect = Effect::Remove {
+        path: path.clone(),
+        account_id: id,
+    };
+
+    let outcome = execute(effect, &mut state, &tx);
+    assert_eq!(outcome, EffectOutcome::Continue);
+
+    let evt = rx.try_recv().expect("an AppEvent should be sent");
+    match evt {
+        AppEvent::EffectResult(EffectResult::Remove {
+            account_id,
+            result: Ok(label),
+        }) => {
+            assert_eq!(account_id, id, "result must carry the source account_id");
+            assert_eq!(
+                label, "github",
+                "Ok carries the removed account's display label"
+            );
+        }
+        other => panic!("expected EffectResult::Remove {{ Ok }}, got {other:?}"),
+    }
+    assert!(
+        rx.try_recv().is_err(),
+        "executor must emit exactly one AppEvent per Effect::Remove"
+    );
+
+    // The live vault no longer carries the account.
+    match &state {
+        AppState::Unlocked { vault, .. } => {
+            assert!(
+                vault.iter().find(|a| a.id() == id).is_none(),
+                "Vault::remove must drop the account from the live vault"
+            );
+            assert_eq!(
+                vault.iter().count(),
+                0,
+                "the one-account fixture is empty after remove"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+
+    // Re-open the on-disk primary and assert the commit landed.
+    let (reopened, _store) =
+        Store::open(&path, VaultLock::Plaintext).expect("reopen plaintext vault");
+    assert_eq!(
+        reopened.iter().count(),
+        0,
+        "Vault::mutate_and_save must commit the remove to the on-disk primary"
+    );
+}
+
+/// `Effect::Remove` carrying an `account_id` that does not exist in
+/// the live vault surfaces an `account_not_found` `Err` for the
+/// reducer to discard. The live vault is unchanged.
+#[test]
+fn execute_remove_with_unknown_account_id_sends_account_not_found_err() {
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (mut state, _id) = unlocked_with_one_totp(&path, "github");
+
+    let (tx, rx) = mpsc::channel::<AppEvent>();
+    let bogus = AccountId::new();
+    let effect = Effect::Remove {
+        path: path.clone(),
+        account_id: bogus,
+    };
+
+    let outcome = execute(effect, &mut state, &tx);
+    assert_eq!(outcome, EffectOutcome::Continue);
+
+    let evt = rx.try_recv().expect("an AppEvent should be sent");
+    match evt {
+        AppEvent::EffectResult(EffectResult::Remove {
+            account_id,
+            result:
+                Err(PaladinError::InvalidState {
+                    operation: "remove",
+                    state: "account_not_found",
+                }),
+        }) => {
+            assert_eq!(account_id, bogus);
+        }
+        other => panic!(
+            "expected EffectResult::Remove {{ Err(InvalidState account_not_found) }}, got {other:?}"
+        ),
+    }
+
+    // The unrelated account in the live vault is untouched.
+    match &state {
+        AppState::Unlocked { vault, .. } => {
+            assert_eq!(vault.iter().count(), 1);
+            assert_eq!(vault.iter().next().unwrap().label(), "github");
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+/// A stale `Effect::Remove` (emitted under an `Unlocked` state that
+/// has since transitioned to `Locked` / `MissingVault` / etc.) is
+/// dropped silently so the executor cannot synthesize a remove
+/// attempt against an unrelated vault.
+#[test]
+fn execute_remove_on_non_unlocked_state_is_silently_dropped() {
+    let mut state = AppState::MissingVault {
+        path: PathBuf::from("/tmp/dummy-vault.bin"),
+    };
+    let (tx, rx) = mpsc::channel::<AppEvent>();
+    let effect = Effect::Remove {
+        path: PathBuf::from("/tmp/dummy-vault.bin"),
+        account_id: AccountId::new(),
+    };
+
+    let outcome = execute(effect, &mut state, &tx);
+    assert_eq!(outcome, EffectOutcome::Continue);
+    assert!(
+        rx.try_recv().is_err(),
+        "off-Unlocked Effect::Remove must not emit an AppEvent"
+    );
+}
+
+/// Path mismatch (e.g. the user `--vault`-switched between the
+/// reducer-side emit and the run loop draining the effect queue) is
+/// treated like a stale effect: dropped silently with no mutation.
+#[test]
+fn execute_remove_with_mismatched_path_is_silently_dropped() {
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("real-vault.bin");
+    let (mut state, id) = unlocked_with_one_totp(&path, "github");
+
+    let (tx, rx) = mpsc::channel::<AppEvent>();
+    let effect = Effect::Remove {
+        path: PathBuf::from("/tmp/some-other-vault.bin"),
+        account_id: id,
+    };
+
+    let outcome = execute(effect, &mut state, &tx);
+    assert_eq!(outcome, EffectOutcome::Continue);
+    assert!(
+        rx.try_recv().is_err(),
+        "path-mismatched Effect::Remove must not emit an AppEvent"
+    );
+
+    // The live vault is untouched.
+    match &state {
+        AppState::Unlocked { vault, .. } => {
+            assert_eq!(vault.iter().next().unwrap().label(), "github");
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+/// A dropped receiver during a Remove does not panic the executor,
+/// mirroring the Unlock channel-resilience contract.
+#[test]
+fn execute_remove_with_dropped_receiver_does_not_panic() {
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (mut state, id) = unlocked_with_one_totp(&path, "github");
+
+    let (tx, rx) = mpsc::channel::<AppEvent>();
+    drop(rx);
+
+    let effect = Effect::Remove {
+        path: path.clone(),
+        account_id: id,
+    };
+
+    let outcome = execute(effect, &mut state, &tx);
+    assert_eq!(outcome, EffectOutcome::Continue);
+
+    // The remove still took effect in memory (the executor does not
+    // pre-check the channel before mutating) and on disk.
+    match &state {
+        AppState::Unlocked { vault, .. } => {
+            assert_eq!(vault.iter().count(), 0);
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+/// When the removed account has an issuer, the carried display label
+/// formats as `issuer:label` to match the CLI's "Removed Acme:alice."
+/// text-output idiom (see paladin-cli's `display_label`).
+#[test]
+fn execute_remove_carries_issuer_joined_display_label() {
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+
+    let (mut vault, store) = Store::create(&path, VaultInit::Plaintext).expect("create vault");
+    let input = AccountInput {
+        label: "alice".to_string(),
+        issuer: Some("Acme".to_string()),
+        secret: SecretString::from("JBSWY3DPEHPK3PXP".to_string()),
+        algorithm: Algorithm::Sha1,
+        digits: 6,
+        kind: AccountKindInput::Totp,
+        period_secs: None,
+        counter: None,
+        icon_hint: IconHintInput::Default,
+    };
+    let validated = validate_manual(input, SystemTime::now()).expect("valid manual input");
+    let id = vault.add(validated.account);
+    vault.save(&store).expect("save vault");
+
+    let mut state = AppState::Unlocked {
+        path: path.clone(),
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+
+    let (tx, rx) = mpsc::channel::<AppEvent>();
+    let effect = Effect::Remove {
+        path: path.clone(),
+        account_id: id,
+    };
+
+    let outcome = execute(effect, &mut state, &tx);
+    assert_eq!(outcome, EffectOutcome::Continue);
+
+    let evt = rx.try_recv().expect("an AppEvent should be sent");
+    match evt {
+        AppEvent::EffectResult(EffectResult::Remove {
+            account_id,
+            result: Ok(label),
+        }) => {
+            assert_eq!(account_id, id);
+            assert_eq!(
+                label, "Acme:alice",
+                "issuer-prefixed display label must be carried back verbatim"
+            );
+        }
+        other => panic!("expected EffectResult::Remove {{ Ok }}, got {other:?}"),
+    }
+}
