@@ -2075,6 +2075,118 @@ fn rename_modal_enter_with_overlong_draft_sets_inline_error_no_effect() {
 }
 
 // ---------------------------------------------------------------------------
+// Remove modal — Enter submit
+// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Remove modal; Modals (per
+//  §6) > Remove: *"confirmation modal. On confirm, wraps
+//  `Vault::remove` in `Vault::mutate_and_save`."*)
+//
+// Slice covered: while `Modal::Remove` is open, `Enter` emits a single
+// `Effect::Remove` carrying the snapshotted `account_id` and the
+// current vault path. Unlike Rename, Remove has no editable draft —
+// every other key (printable Chars, Backspace, arrows, Tab) is a
+// silent no-op so the modal-trap contract holds (bare-letter keys do
+// not leak into the list view). The modal stays open until the
+// `EffectResult::Remove` arrives; the success / save-error rollback
+// wiring lands in a subsequent slice. Esc is filtered upstream and
+// covered by `pressing_esc_on_unlocked_with_open_remove_modal_*`.
+// ---------------------------------------------------------------------------
+
+fn fresh_unlocked_with_remove_modal_open() -> (tempfile::TempDir, AccountId, PathBuf, AppState) {
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let id = add_totp_account(&mut vault, &store, "github");
+    let state = AppState::Unlocked {
+        path: path.clone(),
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Remove(RemoveModal {
+            account_id: id,
+            error: None,
+        })),
+        selected: Some(id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    (tmp, id, path, state)
+}
+
+fn expect_remove_modal(state: &AppState) -> &RemoveModal {
+    match state {
+        AppState::Unlocked {
+            modal: Some(Modal::Remove(remove)),
+            ..
+        } => remove,
+        AppState::Unlocked { modal, .. } => panic!("expected Modal::Remove, got {modal:?}"),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn remove_modal_enter_emits_remove_effect() {
+    let (_tmp, id, path, unlocked) = fresh_unlocked_with_remove_modal_open();
+    let (state, effects) = reduce(unlocked, key(KeyCode::Enter));
+    assert_eq!(effects.len(), 1, "expected single Effect::Remove");
+    match &effects[0] {
+        Effect::Remove {
+            path: p,
+            account_id,
+        } => {
+            assert_eq!(p, &path);
+            assert_eq!(*account_id, id);
+        }
+        other => panic!("expected Effect::Remove, got {other:?}"),
+    }
+    // Modal stays open until the EffectResult arrives (success path
+    // closes it; save-error rollback re-opens with inline error).
+    let remove = expect_remove_modal(&state);
+    assert_eq!(
+        remove.account_id, id,
+        "Enter on Remove must preserve the snapshotted account_id"
+    );
+    assert!(
+        remove.error.is_none(),
+        "submitting Remove must not surface an inline error"
+    );
+}
+
+#[test]
+fn remove_modal_printable_chars_are_silent_noop() {
+    // Remove is a confirmation modal with no editable draft; bare
+    // letters must not leak into the list (modal-trap contract) and
+    // must not emit any effect or mutate modal state.
+    let (_tmp, id, _path, unlocked) = fresh_unlocked_with_remove_modal_open();
+    let (state, effects) = reduce(unlocked, key(KeyCode::Char('x')));
+    assert!(
+        effects.is_empty(),
+        "printable chars inside Remove must not emit effects"
+    );
+    let remove = expect_remove_modal(&state);
+    assert_eq!(remove.account_id, id);
+    assert!(remove.error.is_none());
+}
+
+#[test]
+fn remove_modal_backspace_is_silent_noop() {
+    let (_tmp, id, _path, unlocked) = fresh_unlocked_with_remove_modal_open();
+    let (state, effects) = reduce(unlocked, key(KeyCode::Backspace));
+    assert!(
+        effects.is_empty(),
+        "backspace inside Remove must not emit effects"
+    );
+    let remove = expect_remove_modal(&state);
+    assert_eq!(remove.account_id, id);
+    assert!(remove.error.is_none());
+}
+
+// ---------------------------------------------------------------------------
 // Rename modal — EffectResult::Rename handling
 // (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Rename modal — save-error
 //  rollback and durability-unconfirmed bullets; "Effect errors" >

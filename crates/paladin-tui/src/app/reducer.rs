@@ -897,21 +897,46 @@ fn pending_remove_for_char(c: char, selected: Option<AccountId>) -> Option<Remov
 
 /// Dispatch a key event to the open modal's modal-local input path.
 ///
-/// At this slice only [`Modal::Rename`] consumes input; the other
-/// variants do not yet carry an editable payload, so they fall
-/// through to a silent no-op (the modal stays open and no effect is
-/// emitted, preserving the modal-trap contract that bare-letter
-/// keys do not leak into the list view). Each modal's input path
-/// lands alongside its respective slice.
+/// At this slice [`Modal::Rename`] and [`Modal::Remove`] consume
+/// input; the other variants do not yet carry an editable payload,
+/// so they fall through to a silent no-op (the modal stays open and
+/// no effect is emitted, preserving the modal-trap contract that
+/// bare-letter keys do not leak into the list view). Each modal's
+/// input path lands alongside its respective slice.
 fn route_modal_input(
     path: &std::path::Path,
     modal: &mut Option<Modal>,
     key: &KeyEvent,
 ) -> Vec<Effect> {
-    if let Some(Modal::Rename(rename)) = modal.as_mut() {
-        return route_rename_modal_input(path, rename, key);
+    match modal.as_mut() {
+        Some(Modal::Rename(rename)) => route_rename_modal_input(path, rename, key),
+        Some(Modal::Remove(remove)) => route_remove_modal_input(path, remove, key),
+        _ => Vec::new(),
     }
-    Vec::new()
+}
+
+/// Remove modal's input path.
+///
+/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Remove:
+/// confirmation modal whose only affordance is `Enter` to confirm
+/// removal. `Enter` emits [`Effect::Remove`] carrying the
+/// snapshotted `account_id`. Every other key (printable Chars,
+/// Backspace, arrows, Tab) is a silent no-op — Remove has no
+/// editable draft, so the modal-trap contract holds (bare-letter
+/// keys do not leak to the list view). Esc / Help / Ctrl-C are
+/// filtered upstream of the modal trap.
+fn route_remove_modal_input(
+    path: &std::path::Path,
+    remove: &mut RemoveModal,
+    key: &KeyEvent,
+) -> Vec<Effect> {
+    match key.code {
+        KeyCode::Enter => vec![Effect::Remove {
+            path: path.to_path_buf(),
+            account_id: remove.account_id,
+        }],
+        _ => Vec::new(),
+    }
 }
 
 /// Rename modal's input path.

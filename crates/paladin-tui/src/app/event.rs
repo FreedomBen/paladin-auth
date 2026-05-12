@@ -385,4 +385,28 @@ pub enum Effect {
         /// that ends up persisted on success.
         new_label: String,
     },
+    /// Remove the selected account and persist the change.
+    ///
+    /// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" >
+    /// Remove: *"confirmation modal. On confirm, wraps `Vault::remove`
+    /// in `Vault::mutate_and_save`."* The reducer emits this effect
+    /// when `Enter` is pressed on `Modal::Remove`; the modal carries
+    /// the snapshotted `account_id` so a subsequent selection /
+    /// search-filter change does not redirect the remove mid-confirm.
+    ///
+    /// The executor wires the call to `Vault::remove` inside
+    /// `Vault::mutate_and_save` and posts the outcome back through an
+    /// `AppEvent::EffectResult(EffectResult::Remove { … })` in a
+    /// subsequent slice; until then the executor consumes the variant
+    /// and returns `Continue`.
+    Remove {
+        /// The current vault path; the executor uses it for error
+        /// reporting and to verify the path the effect was emitted
+        /// against in case the user has navigated away.
+        path: PathBuf,
+        /// The account to remove. Snapshotted by the reducer at
+        /// modal-open time so a later selection change does not
+        /// redirect the remove mid-flight.
+        account_id: AccountId,
+    },
 }

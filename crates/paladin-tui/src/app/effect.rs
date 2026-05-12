@@ -131,6 +131,20 @@ pub fn execute(effect: Effect, state: &mut AppState, sender: &Sender<AppEvent>) 
             let _ = sender;
             EffectOutcome::Continue
         }
+        Effect::Remove {
+            path: _,
+            account_id: _,
+        } => {
+            // Placeholder: the `Vault::remove` call inside
+            // `Vault::mutate_and_save` lands with the executor slice
+            // that mirrors `Effect::Rename`. Until then the reducer
+            // emit is exercised by reducer-level tests
+            // (`remove_modal_enter_emits_remove_effect`) and the
+            // executor consumes the variant without emitting an
+            // `AppEvent`.
+            let _ = sender;
+            EffectOutcome::Continue
+        }
         Effect::Rename {
             path,
             account_id,
