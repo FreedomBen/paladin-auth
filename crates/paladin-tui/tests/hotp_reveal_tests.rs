@@ -624,3 +624,89 @@ fn effect_result_hotp_advance_drops_when_on_unlock_screen() {
         other => panic!("expected Unlock unchanged, got {other:?}"),
     }
 }
+
+#[test]
+fn effect_result_hotp_advance_err_invalid_state_leaves_reveal_unchanged() {
+    // Defensive coverage: any non-`Ok` result (here `InvalidState`,
+    // matching the `account_not_found` / `not_hotp` paths inside
+    // `Vault::hotp_advance`) must not open a reveal. Any prior reveal
+    // is preserved verbatim until a successful `Ok(code)` replaces it.
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (mut vault, store) = create_encrypted_pair(&path, "pp");
+    let hotp_id = add_hotp_account(&mut vault, &store, "hotp");
+
+    let t0 = Instant::now();
+    let prior = open_reveal(hotp_id, 7, "111111", t0);
+    let state = unlocked_with_reveal(path, vault, store, Some(hotp_id), Some(prior));
+
+    let event = AppEvent::EffectResult(EffectResult::HotpAdvance {
+        account_id: hotp_id,
+        result: Err(PaladinError::InvalidState {
+            operation: "hotp_advance",
+            state: "account_not_found",
+        }),
+        completed_at: t0,
+    });
+
+    let (next, effects) = reduce(state, event);
+    assert!(effects.is_empty());
+    match next {
+        AppState::Unlocked {
+            hotp_reveal: Some(r),
+            ..
+        } => {
+            assert_eq!(r.counter_used, 7);
+            assert_eq!(r.code.expose_secret(), "111111");
+        }
+        other => panic!("expected Unlocked with prior reveal preserved, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_hotp_advance_err_with_no_prior_reveal_does_not_open_one() {
+    // No prior reveal + error result must leave `hotp_reveal` as
+    // `None`. Symmetric with the prior-reveal-preserved case.
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (mut vault, store) = create_encrypted_pair(&path, "pp");
+    let hotp_id = add_hotp_account(&mut vault, &store, "hotp");
+
+    let state = unlocked_with_reveal(path, vault, store, Some(hotp_id), None);
+
+    let event = AppEvent::EffectResult(EffectResult::HotpAdvance {
+        account_id: hotp_id,
+        result: Err(PaladinError::SaveDurabilityUnconfirmed),
+        completed_at: Instant::now(),
+    });
+
+    let (next, effects) = reduce(state, event);
+    assert!(effects.is_empty());
+    match next {
+        AppState::Unlocked { hotp_reveal, .. } => assert!(
+            hotp_reveal.is_none(),
+            "error result with no prior reveal must not fabricate one"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn hotp_reveal_debug_redacts_displayed_code_bytes() {
+    // The displayed code is held in `SecretString` and must not leak
+    // through the derived `Debug` impl. Same rule as
+    // `passphrase_buffer_debug_redacts_typed_bytes` for the unlock
+    // buffer — anyone reading a panic trace or `dbg!(&state)` output
+    // must not see the active OTP digits.
+    let reveal = HotpReveal {
+        account_id: AccountId::new(),
+        counter_used: 7,
+        code: SecretString::from("424242".to_string()),
+        deadline: Instant::now(),
+    };
+    let rendered = format!("{reveal:?}");
+    assert!(
+        !rendered.contains("424242"),
+        "HotpReveal Debug must not leak the OTP digits, got: {rendered}"
+    );
+}
