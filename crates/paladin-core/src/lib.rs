@@ -35,7 +35,10 @@ pub use crypto::argon2_derivation_count;
 
 #[cfg(feature = "test-zeroize-witness")]
 pub use crypto::zeroize_witness;
-pub use domain::validation::AccountInput;
+pub use domain::validation::{
+    AccountInput, DIGITS_DEFAULT, DIGITS_MAX, DIGITS_MIN, TOTP_PERIOD_DEFAULT, TOTP_PERIOD_MAX,
+    TOTP_PERIOD_MIN,
+};
 pub use domain::{
     account_match_key, account_matches_search, parse_account_query, parse_icon_hint_token,
     parse_setting_key, parse_setting_patch, select_after_filter, validate_label, validate_manual,

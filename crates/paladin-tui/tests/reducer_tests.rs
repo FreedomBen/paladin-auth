@@ -1531,6 +1531,108 @@ fn add_modal_default_has_no_inline_error() {
 }
 
 // ---------------------------------------------------------------------------
+// Add modal — Manual-mode non-secret field defaults.
+//
+// Per DESIGN §5 manual-add defaults / `IMPLEMENTATION_PLAN_03_TUI.md`
+// "Modals (per §6)" > Add: *"defaults follow the CLI manual-add
+// defaults in DESIGN §5 (TOTP, SHA1, 6 digits, 30 s period, HOTP
+// counter 0, icon-hint defaulted from the issuer per §4.1)"*. The
+// secret-bearing buffer (manual-secret field) lands in a subsequent
+// slice alongside its zeroize requirements.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn add_modal_default_manual_label_is_empty() {
+    let add = AddModal::default();
+    assert!(
+        add.label.is_empty(),
+        "freshly opened Add modal must start with empty label, got {:?}",
+        add.label
+    );
+}
+
+#[test]
+fn add_modal_default_manual_issuer_is_empty() {
+    let add = AddModal::default();
+    assert!(
+        add.issuer.is_empty(),
+        "freshly opened Add modal must start with empty issuer, got {:?}",
+        add.issuer
+    );
+}
+
+#[test]
+fn add_modal_default_manual_icon_hint_text_is_empty() {
+    // Per DESIGN §6 the icon-hint default is "default from issuer";
+    // the modal's text buffer is empty so that an unedited submit
+    // resolves to `IconHintInput::Default` via `parse_icon_hint_token`
+    // (an empty / whitespace-only token).
+    let add = AddModal::default();
+    assert!(
+        add.icon_hint_text.is_empty(),
+        "freshly opened Add modal must start with empty icon-hint text, got {:?}",
+        add.icon_hint_text
+    );
+}
+
+#[test]
+fn add_modal_default_manual_algorithm_is_sha1() {
+    // RFC 6238 default per DESIGN §5.
+    let add = AddModal::default();
+    assert_eq!(add.algorithm, Algorithm::Sha1);
+}
+
+#[test]
+fn add_modal_default_manual_digits_is_six() {
+    // CLI manual-add default per DESIGN §5 (`DIGITS_DEFAULT`).
+    let add = AddModal::default();
+    assert_eq!(add.digits, paladin_core::DIGITS_DEFAULT);
+    assert_eq!(add.digits, 6);
+}
+
+#[test]
+fn add_modal_default_manual_kind_is_totp() {
+    // CLI manual-add default per DESIGN §5: TOTP unless `--hotp`.
+    let add = AddModal::default();
+    assert_eq!(add.kind, AccountKindInput::Totp);
+}
+
+#[test]
+fn add_modal_default_manual_period_secs_is_thirty() {
+    // CLI manual-add default per DESIGN §5 (`TOTP_PERIOD_DEFAULT`).
+    let add = AddModal::default();
+    assert_eq!(add.period_secs, paladin_core::TOTP_PERIOD_DEFAULT);
+    assert_eq!(add.period_secs, 30);
+}
+
+#[test]
+fn add_modal_default_manual_counter_is_zero() {
+    // CLI manual-add default per DESIGN §5 — HOTP counter starts at 0.
+    let add = AddModal::default();
+    assert_eq!(add.counter, 0);
+}
+
+#[test]
+fn opening_add_modal_with_a_seeds_manual_defaults() {
+    // The `a` opener constructs `AddModal::default()`, so the modal
+    // observed in the unlocked state must carry the same manual
+    // defaults the unit tests above lock in. This anchors the
+    // observable contract from the keybinding through to the payload
+    // shape.
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_add_modal(&tmp);
+    let add = add_modal_ref(&state);
+    assert!(add.label.is_empty());
+    assert!(add.issuer.is_empty());
+    assert!(add.icon_hint_text.is_empty());
+    assert_eq!(add.algorithm, Algorithm::Sha1);
+    assert_eq!(add.digits, paladin_core::DIGITS_DEFAULT);
+    assert_eq!(add.kind, AccountKindInput::Totp);
+    assert_eq!(add.period_secs, paladin_core::TOTP_PERIOD_DEFAULT);
+    assert_eq!(add.counter, 0);
+}
+
+// ---------------------------------------------------------------------------
 // Add modal — segmented mode selector (`←` / `→`).
 //
 // Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)": *"`←` / `→`

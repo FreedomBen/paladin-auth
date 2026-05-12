@@ -11,8 +11,9 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use paladin_core::{
-    format_unsafe_permissions, AccountId, ClipboardClearToken, IdlePolicy, PaladinError, Store,
-    Vault, VaultLock, VaultStatus,
+    format_unsafe_permissions, AccountId, AccountKindInput, Algorithm, ClipboardClearToken,
+    IdlePolicy, PaladinError, Store, Vault, VaultLock, VaultStatus, DIGITS_DEFAULT,
+    TOTP_PERIOD_DEFAULT,
 };
 use secrecy::SecretString;
 use zeroize::Zeroizing;
@@ -437,25 +438,59 @@ impl AddMode {
 ///
 /// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add: the
 /// modal hosts three input modes (manual / URI / QR), each with its
-/// own field set. This slice introduces the payload struct and the
-/// segmented [`mode`](AddModal::mode) selector; per-mode fields,
-/// focus cycling, duplicate-gate pending state, and the post-QR
-/// counts panel land in subsequent slices alongside their
-/// effect-wiring.
+/// own field set. This slice carries the segmented
+/// [`mode`](AddModal::mode) selector plus the Manual-mode non-secret
+/// fields; the manual-secret zeroizing buffer, URI-mode entry, focus
+/// cycling, duplicate-gate pending state, and the post-QR counts
+/// panel land in subsequent slices alongside their effect-wiring.
 ///
-/// [`Default`] yields a clean Manual-mode modal with no inline
-/// error so existing reducer tests that match on the modal
-/// discriminant can construct a placeholder, and so the reducer's
-/// `'a'` opener can build one without reaching into the vault (Add
-/// starts from a blank form rather than pre-populating from
-/// vault data, unlike Rename / Remove / Settings).
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+/// [`Default`] yields a clean Manual-mode modal with no inline error
+/// and the CLI manual-add defaults per `DESIGN.md` §5 (TOTP, SHA1,
+/// 6 digits, 30 s period, HOTP counter 0, icon-hint defaulted from
+/// the issuer) so reducer tests that match on the modal discriminant
+/// can construct a placeholder, and so the reducer's `'a'` opener
+/// can build one without reaching into the vault (Add starts from a
+/// blank form rather than pre-populating from vault data, unlike
+/// Rename / Remove / Settings).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AddModal {
     /// Which input mode is currently active. Cycled by the segmented
     /// selector (the `←` / `→` arrows per the plan's "Modals (per
     /// §6)" cross-modal navigation rules); seeded to
     /// [`AddMode::Manual`] at modal open time.
     pub mode: AddMode,
+    /// Manual-mode label buffer. Edited modal-locally; trimmed and
+    /// passed to [`paladin_core::validate_manual`] on submit.
+    pub label: String,
+    /// Manual-mode issuer buffer. Edited modal-locally; trimmed and
+    /// passed to [`paladin_core::validate_manual`] on submit (empty
+    /// is allowed — `validate_manual` accepts `None`).
+    pub issuer: String,
+    /// Manual-mode HMAC algorithm. Seeded to
+    /// [`Algorithm::Sha1`] per `DESIGN.md` §5 (RFC 6238 default);
+    /// cycled by `↑` / `↓` when the algorithm field has focus in a
+    /// subsequent slice.
+    pub algorithm: Algorithm,
+    /// Manual-mode OTP digit count. Seeded to
+    /// [`paladin_core::DIGITS_DEFAULT`] (6); valid values are
+    /// `6..=8` per the core bounds.
+    pub digits: u8,
+    /// Manual-mode account kind (TOTP / HOTP). Seeded to
+    /// [`AccountKindInput::Totp`] per `DESIGN.md` §5.
+    pub kind: AccountKindInput,
+    /// Manual-mode TOTP period in seconds. Seeded to
+    /// [`paladin_core::TOTP_PERIOD_DEFAULT`] (30); only consulted
+    /// when [`kind`](AddModal::kind) is [`AccountKindInput::Totp`].
+    pub period_secs: u32,
+    /// Manual-mode HOTP starting counter. Seeded to `0` per
+    /// `DESIGN.md` §5; only consulted when [`kind`](AddModal::kind)
+    /// is [`AccountKindInput::Hotp`].
+    pub counter: u64,
+    /// Manual-mode icon-hint free-form text token. Parsed by
+    /// [`paladin_core::parse_icon_hint_token`] on submit; an empty
+    /// buffer resolves to [`paladin_core::IconHintInput::Default`]
+    /// (derive a slug from the issuer per §4.1).
+    pub icon_hint_text: String,
     /// Inline validation / save error from the most recent submit
     /// attempt, if any. Rendered through
     /// [`render_error_message`](crate::app::state::render_error_message)
@@ -464,6 +499,23 @@ pub struct AddModal {
     /// they are re-trying; a successful submit transitions through
     /// the Add effect slice (which lands later).
     pub error: Option<String>,
+}
+
+impl Default for AddModal {
+    fn default() -> Self {
+        Self {
+            mode: AddMode::default(),
+            label: String::new(),
+            issuer: String::new(),
+            algorithm: Algorithm::default(),
+            digits: DIGITS_DEFAULT,
+            kind: AccountKindInput::default(),
+            period_secs: TOTP_PERIOD_DEFAULT,
+            counter: 0,
+            icon_hint_text: String::new(),
+            error: None,
+        }
+    }
 }
 
 /// An open modal dialog over the main list view.

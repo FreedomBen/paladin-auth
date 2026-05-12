@@ -21,11 +21,19 @@ pub const ISSUER_MAX_BYTES: usize = 128;
 pub const SECRET_MIN_BYTES: usize = 10;
 pub const SECRET_MAX_BYTES: usize = 1024;
 pub const SHORT_SECRET_THRESHOLD_BYTES: usize = 16;
+/// Minimum OTP digit count accepted by `validate_digits` (inclusive).
 pub const DIGITS_MIN: u8 = 6;
+/// Maximum OTP digit count accepted by `validate_digits` (inclusive).
 pub const DIGITS_MAX: u8 = 8;
+/// CLI manual-add and importer fallback digit count per `DESIGN.md` §5.
 pub const DIGITS_DEFAULT: u8 = 6;
+/// Minimum TOTP period in seconds accepted by `validate_totp_period`
+/// (inclusive).
 pub const TOTP_PERIOD_MIN: u32 = 1;
+/// Maximum TOTP period in seconds accepted by `validate_totp_period`
+/// (inclusive).
 pub const TOTP_PERIOD_MAX: u32 = 300;
+/// CLI manual-add and importer fallback TOTP period per `DESIGN.md` §5.
 pub const TOTP_PERIOD_DEFAULT: u32 = 30;
 /// Inclusive upper bound on Unix-seconds timestamps stored in the
 /// vault: `9999-12-31T23:59:59Z`.

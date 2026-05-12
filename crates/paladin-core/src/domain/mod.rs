@@ -91,9 +91,14 @@ pub enum AccountKindSummary {
 }
 
 /// Manual-input kind selector.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// [`Default`] is [`AccountKindInput::Totp`] to match the CLI
+/// manual-add default per `DESIGN.md` §5 (TOTP unless `--hotp`);
+/// front-end modals snapshot this default at modal-open time.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum AccountKindInput {
     /// Caller is adding a TOTP account.
+    #[default]
     Totp,
     /// Caller is adding an HOTP account.
     Hotp,
