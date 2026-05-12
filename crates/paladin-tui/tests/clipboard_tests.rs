@@ -553,3 +553,115 @@ fn effect_result_copy_code_ok_schedules_on_encrypted_vault_when_enabled() {
         other => panic!("expected Unlocked with pending clear, got {other:?}"),
     }
 }
+
+// ---------------------------------------------------------------------------
+// Stale tokens are ignored on wake
+// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Clipboard auto-clear — bullet 2)
+//
+// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Clipboard auto-clear (per §6)":
+// *"on wake, it ignores stale tokens, …"*. The reducer-side guard
+// short-circuits the wake on `AppState::Locked` when the event token
+// does not match the pending token (a fresher copy has issued a new
+// token and replaced the pending state) and when the pending slot is
+// `None` (the matching-token branch already fired or auto-lock
+// arrived with no pending clear in flight). Both no-op branches must
+// leave state untouched and emit no effects.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn clipboard_clear_wake_with_stale_token_on_locked_is_noop() {
+    // Stale token: a fresher copy has replaced `pending_clipboard_clear`
+    // with a strictly greater token; the older timer thread's wake
+    // arrives carrying its now-superseded token. The reducer must
+    // preserve the fresher pending slot byte-for-byte and emit no
+    // `Effect::ClearClipboard`.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    enable_clipboard_clear(&mut vault, &store, 60);
+
+    let (stale_token, _stale_deadline) =
+        ClipboardClearPolicy::schedule(Instant::now(), vault.settings())
+            .expect("first schedule yields Some when clipboard_clear_enabled");
+    let (fresh_token, fresh_deadline) =
+        ClipboardClearPolicy::schedule(Instant::now(), vault.settings())
+            .expect("second schedule yields Some when clipboard_clear_enabled");
+    assert!(
+        fresh_token > stale_token,
+        "schedule must issue strictly monotonic tokens ({stale_token:?} vs {fresh_token:?})"
+    );
+
+    let fresh_value: Vec<u8> = b"654321".to_vec();
+    let state = AppState::Locked {
+        path: path.clone(),
+        pending_clipboard_clear: Some(PendingClipboardClear {
+            token: fresh_token,
+            value: fresh_value.clone(),
+            deadline: fresh_deadline,
+        }),
+    };
+    let event = AppEvent::ClipboardClear {
+        token: stale_token,
+        value: b"123456".to_vec(),
+    };
+    let (next, effects) = reduce(state, event);
+    assert!(
+        effects.is_empty(),
+        "stale-token wake must not dispatch any effect, got {effects:?}"
+    );
+    match next {
+        AppState::Locked {
+            path: p,
+            pending_clipboard_clear: Some(pending),
+        } => {
+            assert_eq!(p, path);
+            assert_eq!(
+                pending.token, fresh_token,
+                "fresher pending token must be preserved verbatim"
+            );
+            assert_eq!(
+                pending.value.as_slice(),
+                fresh_value.as_slice(),
+                "fresher pending bytes must be preserved verbatim"
+            );
+            assert_eq!(
+                pending.deadline, fresh_deadline,
+                "fresher pending deadline must be preserved verbatim"
+            );
+        }
+        other => panic!("expected Locked with the fresher pending clear intact, got {other:?}"),
+    }
+}
+
+#[test]
+fn clipboard_clear_wake_with_no_pending_on_locked_is_noop() {
+    // The matching-token branch already cleared `pending_clipboard_clear`
+    // (so a duplicate wake is a no-op), or auto-lock landed without a
+    // copy in flight. Either way the reducer must drop the wake
+    // silently — no effect, state unchanged.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    enable_clipboard_clear(&mut vault, &store, 60);
+
+    let (token, _deadline) = ClipboardClearPolicy::schedule(Instant::now(), vault.settings())
+        .expect("schedule yields Some when clipboard_clear_enabled");
+    let state = AppState::Locked {
+        path: path.clone(),
+        pending_clipboard_clear: None,
+    };
+    let event = AppEvent::ClipboardClear {
+        token,
+        value: b"123456".to_vec(),
+    };
+    let (next, effects) = reduce(state, event);
+    assert!(
+        effects.is_empty(),
+        "wake with no pending clear must not dispatch any effect, got {effects:?}"
+    );
+    match next {
+        AppState::Locked {
+            path: p,
+            pending_clipboard_clear: None,
+        } => assert_eq!(p, path),
+        other => panic!("expected Locked with no pending clear preserved, got {other:?}"),
+    }
+}

@@ -740,7 +740,15 @@ end-to-end.
   `clipboard_write_failed` status-line error per "Effect errors"
   without scheduling. The executor-side `arboard` write that
   produces the `Ok(value)` lands with the clipboard-adapter slice.)*
-- [ ] Stale tokens are ignored on wake.
+- [x] Stale tokens are ignored on wake.
+  *(Reducer-level: `AppEvent::ClipboardClear { token, .. }` on
+  `AppState::Locked` with a `Some(pending)` slot whose `token !=
+  event_token` short-circuits to a state-preserving no-op with no
+  `Effect::ClearClipboard` dispatched. A `None` pending slot on
+  `Locked` is also a no-op so a duplicate wake after the matching-
+  token branch already cleared the slot drops cleanly. The
+  Unlocked-wake branch lands alongside the clipboard adapter / copy
+  slice.)*
 - [ ] "Only-if-unchanged" honored when an external copy mutates the
   clipboard between copy and wake.
 - [ ] Pending copied values are zeroized after the clear attempt or
