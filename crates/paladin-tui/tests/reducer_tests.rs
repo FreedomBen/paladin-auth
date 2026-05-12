@@ -3108,6 +3108,205 @@ fn ctrl_n_in_settings_modal_does_not_flip_top_level_focus() {
 }
 
 // ---------------------------------------------------------------------------
+// Settings modal — Space toggles the focused boolean field
+// (IMPLEMENTATION_PLAN_03_TUI.md > Modals (per §6): *"`Space` toggles
+//  the focused checkbox / toggle."* The two boolean fields are
+//  `auto_lock.enabled` and `clipboard.clear_enabled`; on the two
+//  spinner fields, Space is a silent no-op so the modal-trap contract
+//  holds. Toggles stay modal-local; only Confirm runs the setters
+//  inside `Vault::mutate_and_save`.)
+// ---------------------------------------------------------------------------
+
+/// Reduce a Space press against a freshly opened Settings modal with
+/// `focus` pre-positioned on `target` and `auto_lock_enabled` /
+/// `clipboard_clear_enabled` pre-set to `(al, cc)`, returning the
+/// resulting `SettingsModal` along with any emitted effects.
+fn reduce_space_on_settings_with(
+    tmp: &tempfile::TempDir,
+    target: SettingsFocus,
+    al: bool,
+    cc: bool,
+) -> (SettingsModal, Vec<Effect>) {
+    let state = fresh_unlocked_with_settings_modal(tmp);
+    let state = match state {
+        AppState::Unlocked {
+            path,
+            vault,
+            store,
+            search_query,
+            idle_deadline,
+            pending_clipboard_clear,
+            hotp_reveal,
+            modal: Some(Modal::Settings(mut s)),
+            selected,
+            pending_chord_leader,
+            viewport_height,
+            viewport_offset,
+            focus,
+            status_line,
+            help_open,
+        } => {
+            s.focus = target;
+            s.auto_lock_enabled = al;
+            s.clipboard_clear_enabled = cc;
+            AppState::Unlocked {
+                path,
+                vault,
+                store,
+                search_query,
+                idle_deadline,
+                pending_clipboard_clear,
+                hotp_reveal,
+                modal: Some(Modal::Settings(s)),
+                selected,
+                pending_chord_leader,
+                viewport_height,
+                viewport_offset,
+                focus,
+                status_line,
+                help_open,
+            }
+        }
+        other => panic!("expected Settings modal open, got {other:?}"),
+    };
+    let (after, effects) = reduce(state, key(KeyCode::Char(' ')));
+    let modal = match after {
+        AppState::Unlocked {
+            modal: Some(Modal::Settings(s)),
+            ..
+        } => s,
+        AppState::Unlocked { modal, .. } => {
+            panic!("expected Settings modal still open, got modal={modal:?}")
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    };
+    (modal, effects)
+}
+
+#[test]
+fn space_on_settings_with_focus_on_auto_lock_enabled_flips_auto_lock_only() {
+    let tmp = secure_tempdir();
+    let (modal, effects) =
+        reduce_space_on_settings_with(&tmp, SettingsFocus::AutoLockEnabled, false, false);
+    assert!(
+        effects.is_empty(),
+        "Space inside Settings must not emit effects"
+    );
+    assert!(
+        modal.auto_lock_enabled,
+        "Space on AutoLockEnabled must flip the boolean"
+    );
+    assert!(
+        !modal.clipboard_clear_enabled,
+        "Space must not touch the other toggle"
+    );
+    assert_eq!(
+        modal.focus,
+        SettingsFocus::AutoLockEnabled,
+        "Space must not advance focus"
+    );
+}
+
+#[test]
+fn space_on_settings_with_focus_on_auto_lock_enabled_toggles_off_when_already_on() {
+    let tmp = secure_tempdir();
+    let (modal, _) =
+        reduce_space_on_settings_with(&tmp, SettingsFocus::AutoLockEnabled, true, true);
+    assert!(!modal.auto_lock_enabled, "Space must flip true → false too");
+    assert!(modal.clipboard_clear_enabled, "the other toggle stays put");
+}
+
+#[test]
+fn space_on_settings_with_focus_on_clipboard_clear_enabled_flips_clipboard_only() {
+    let tmp = secure_tempdir();
+    let (modal, effects) =
+        reduce_space_on_settings_with(&tmp, SettingsFocus::ClipboardClearEnabled, false, false);
+    assert!(effects.is_empty());
+    assert!(
+        modal.clipboard_clear_enabled,
+        "Space must flip the clipboard toggle"
+    );
+    assert!(!modal.auto_lock_enabled, "auto-lock toggle stays put");
+    assert_eq!(modal.focus, SettingsFocus::ClipboardClearEnabled);
+}
+
+#[test]
+fn space_on_settings_with_focus_on_auto_lock_timeout_spinner_is_silent_no_op() {
+    // Spinner fields are spinner-only; Space against them is a
+    // silent no-op so the modal-trap contract holds.
+    let tmp = secure_tempdir();
+    let (modal, effects) =
+        reduce_space_on_settings_with(&tmp, SettingsFocus::AutoLockTimeoutSecs, true, true);
+    assert!(effects.is_empty());
+    assert!(
+        modal.auto_lock_enabled && modal.clipboard_clear_enabled,
+        "Space on a spinner field must not flip any toggle"
+    );
+    assert_eq!(modal.focus, SettingsFocus::AutoLockTimeoutSecs);
+}
+
+#[test]
+fn space_on_settings_with_focus_on_clipboard_clear_secs_spinner_is_silent_no_op() {
+    let tmp = secure_tempdir();
+    let (modal, effects) =
+        reduce_space_on_settings_with(&tmp, SettingsFocus::ClipboardClearSecs, false, false);
+    assert!(effects.is_empty());
+    assert!(
+        !modal.auto_lock_enabled && !modal.clipboard_clear_enabled,
+        "Space on a spinner field must not flip any toggle"
+    );
+    assert_eq!(modal.focus, SettingsFocus::ClipboardClearSecs);
+}
+
+#[test]
+fn space_on_settings_modal_does_not_mutate_vault_settings() {
+    // Toggle edits stay modal-local; the live `VaultSettings` only
+    // changes through the Confirm path's `Vault::mutate_and_save`.
+    let tmp = secure_tempdir();
+    let unlocked = fresh_plaintext_unlocked(&tmp);
+    let before = match &unlocked {
+        AppState::Unlocked { vault, .. } => {
+            let s = vault.settings();
+            (s.auto_lock_enabled(), s.clipboard_clear_enabled())
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    };
+    let (with_modal, _) = reduce(unlocked, key(KeyCode::Char('s')));
+    let (after, _) = reduce(with_modal, key(KeyCode::Char(' ')));
+    match &after {
+        AppState::Unlocked { vault, .. } => {
+            let s = vault.settings();
+            assert_eq!(
+                (s.auto_lock_enabled(), s.clipboard_clear_enabled()),
+                before,
+                "Space inside Settings must not mutate live VaultSettings"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn space_on_settings_round_trips_boolean_on_repeated_presses() {
+    // Two consecutive Space presses on the AutoLockEnabled toggle
+    // must flip false → true → false. Drives the press through the
+    // live reducer twice so the toggle direction (XOR rather than
+    // "set to a fixed value") is exercised.
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_settings_modal(&tmp);
+    let (after_one, _) = reduce(state, key(KeyCode::Char(' ')));
+    assert!(
+        settings_modal_ref(&after_one).auto_lock_enabled,
+        "first Space press must flip false → true"
+    );
+    let (after_two, _) = reduce(after_one, key(KeyCode::Char(' ')));
+    assert!(
+        !settings_modal_ref(&after_two).auto_lock_enabled,
+        "second Space press must flip true → false"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Modals — close transitions
 // (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Reducer — bullet 4,
 //  Keybindings table: "Esc — Close modal / clear search …")

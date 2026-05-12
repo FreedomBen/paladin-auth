@@ -1051,13 +1051,15 @@ fn route_modal_input(
 ///
 /// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)": *"`Tab` and
 /// `Ctrl-N` move to the next control, `Shift-Tab` and `Ctrl-P` move
-/// to the previous control."* At this slice the Settings modal
-/// consumes those four keys to cycle [`SettingsFocus`] through its
-/// four pending fields, wrapping at either end. Space toggle, spinner
-/// adjustments, Enter confirm, and Esc discard land in subsequent
-/// slices; every other key is a silent no-op so the modal-trap
-/// contract holds. Esc / Help / Ctrl-C are filtered upstream of the
-/// modal trap.
+/// to the previous control … `Space` toggles the focused checkbox /
+/// toggle."* At this slice the Settings modal cycles
+/// [`SettingsFocus`] through its four pending fields (wrapping at
+/// either end) and flips the focused boolean. Space against a
+/// spinner-focused field is a silent no-op — spinners take `↑` /
+/// `↓` in a later slice. Enter confirm and Esc discard land in
+/// subsequent slices; every other key is a silent no-op so the
+/// modal-trap contract holds. Esc / Help / Ctrl-C are filtered
+/// upstream of the modal trap.
 fn route_settings_modal_input(settings: &mut SettingsModal, key: &KeyEvent) -> Vec<Effect> {
     if is_modal_focus_next(key) {
         settings.focus = settings.focus.next();
@@ -1065,6 +1067,22 @@ fn route_settings_modal_input(settings: &mut SettingsModal, key: &KeyEvent) -> V
     }
     if is_modal_focus_prev(key) {
         settings.focus = settings.focus.prev();
+        return Vec::new();
+    }
+    if matches!(key.code, KeyCode::Char(' ')) {
+        match settings.focus {
+            SettingsFocus::AutoLockEnabled => {
+                settings.auto_lock_enabled = !settings.auto_lock_enabled;
+            }
+            SettingsFocus::ClipboardClearEnabled => {
+                settings.clipboard_clear_enabled = !settings.clipboard_clear_enabled;
+            }
+            SettingsFocus::AutoLockTimeoutSecs | SettingsFocus::ClipboardClearSecs => {
+                // Spinner-only fields: Space is a silent no-op so the
+                // modal-trap contract holds. `↑` / `↓` adjust the
+                // spinner in a later slice.
+            }
+        }
         return Vec::new();
     }
     Vec::new()
