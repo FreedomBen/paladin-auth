@@ -439,10 +439,12 @@ impl AddMode {
 /// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add: the
 /// modal hosts three input modes (manual / URI / QR), each with its
 /// own field set. This slice carries the segmented
-/// [`mode`](AddModal::mode) selector plus the Manual-mode non-secret
-/// fields; the manual-secret zeroizing buffer, URI-mode entry, focus
-/// cycling, duplicate-gate pending state, and the post-QR counts
-/// panel land in subsequent slices alongside their effect-wiring.
+/// [`mode`](AddModal::mode) selector, the Manual-mode non-secret
+/// fields, and the Manual-mode secret-bearing buffer
+/// ([`manual_secret`](AddModal::manual_secret)); the URI-mode entry,
+/// focus cycling, duplicate-gate pending state, and the post-QR
+/// counts panel land in subsequent slices alongside their
+/// effect-wiring.
 ///
 /// [`Default`] yields a clean Manual-mode modal with no inline error
 /// and the CLI manual-add defaults per `DESIGN.md` §5 (TOTP, SHA1,
@@ -452,7 +454,14 @@ impl AddMode {
 /// can build one without reaching into the vault (Add starts from a
 /// blank form rather than pre-populating from vault data, unlike
 /// Rename / Remove / Settings).
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `Clone` / `PartialEq` / `Eq` are intentionally **not** derived:
+/// [`manual_secret`](AddModal::manual_secret) is a
+/// [`PassphraseBuffer`] which holds typed secret bytes and
+/// deliberately omits those traits so the secret can't be cloned or
+/// pattern-compared into adjacent allocations that escape the
+/// zeroize-on-drop contract.
+#[derive(Debug)]
 pub struct AddModal {
     /// Which input mode is currently active. Cycled by the segmented
     /// selector (the `←` / `→` arrows per the plan's "Modals (per
@@ -491,6 +500,23 @@ pub struct AddModal {
     /// buffer resolves to [`paladin_core::IconHintInput::Default`]
     /// (derive a slug from the issuer per §4.1).
     pub icon_hint_text: String,
+    /// Manual-mode Base32 secret buffer.
+    ///
+    /// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)":
+    /// *"All passphrase-entry fields ... and the Add modal's
+    /// secret-bearing fields (manual-secret field and the URI-mode
+    /// entry) keep typed bytes in zeroizing buffers, convert to
+    /// `secrecy::SecretString` only for core calls, and zeroize on
+    /// submit, cancel, modal close, and auto-lock."* This buffer
+    /// holds the typed Base32 characters (RFC 4648, case-insensitive,
+    /// optional `=` padding per DESIGN §6); on submit
+    /// [`PassphraseBuffer::take`] yields a `SecretString` for
+    /// [`paladin_core::validate_manual`], wiping the local buffer in
+    /// the same step. The buffer's `Debug` impl is redacted so panic
+    /// messages and reducer-state dumps never leak the typed bytes.
+    /// Per-key editing, mode-switch / cancel / submit zeroization,
+    /// and the submit path land in subsequent reducer slices.
+    pub manual_secret: PassphraseBuffer,
     /// Inline validation / save error from the most recent submit
     /// attempt, if any. Rendered through
     /// [`render_error_message`](crate::app::state::render_error_message)
@@ -513,6 +539,7 @@ impl Default for AddModal {
             period_secs: TOTP_PERIOD_DEFAULT,
             counter: 0,
             icon_hint_text: String::new(),
+            manual_secret: PassphraseBuffer::new(),
             error: None,
         }
     }

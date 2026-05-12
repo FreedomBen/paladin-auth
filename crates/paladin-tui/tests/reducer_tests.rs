@@ -1531,14 +1531,17 @@ fn add_modal_default_has_no_inline_error() {
 }
 
 // ---------------------------------------------------------------------------
-// Add modal — Manual-mode non-secret field defaults.
+// Add modal — Manual-mode field defaults (non-secret + secret).
 //
 // Per DESIGN §5 manual-add defaults / `IMPLEMENTATION_PLAN_03_TUI.md`
 // "Modals (per §6)" > Add: *"defaults follow the CLI manual-add
 // defaults in DESIGN §5 (TOTP, SHA1, 6 digits, 30 s period, HOTP
 // counter 0, icon-hint defaulted from the issuer per §4.1)"*. The
-// secret-bearing buffer (manual-secret field) lands in a subsequent
-// slice alongside its zeroize requirements.
+// secret-bearing manual-secret buffer (Base32 secret material) lives
+// in a zeroizing buffer per the same section's *"keep typed bytes in
+// zeroizing buffers, convert to `secrecy::SecretString` only for
+// core calls"* rule; submit / cancel / mode-switch zeroization lands
+// alongside the reducer wiring for those transitions.
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -1613,6 +1616,39 @@ fn add_modal_default_manual_counter_is_zero() {
 }
 
 #[test]
+fn add_modal_default_manual_secret_is_empty() {
+    // Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
+    // the manual-secret field carries Base32 secret material in a
+    // zeroizing buffer. A freshly opened modal starts with an empty
+    // buffer so the user begins with a clean slate — mirroring the
+    // empty label / issuer / icon-hint slots above.
+    let add = AddModal::default();
+    assert!(
+        add.manual_secret.is_empty(),
+        "freshly opened Add modal must start with empty manual secret"
+    );
+}
+
+#[test]
+fn add_modal_manual_secret_debug_redacts_typed_bytes() {
+    // Per `CLAUDE.md` "No `Debug` impls that leak bytes" — the
+    // manual-secret buffer is secret-bearing (Base32 secret material)
+    // so its `Debug` output must redact the contents the same way
+    // `PassphraseBuffer` does for typed passphrases. This guards
+    // against accidentally surfacing the secret through panic
+    // messages, reducer-state dumps, or test failure output.
+    let mut add = AddModal::default();
+    add.manual_secret.push('A');
+    add.manual_secret.push('B');
+    add.manual_secret.push('C');
+    let dbg = format!("{add:?}");
+    assert!(
+        !dbg.contains("ABC"),
+        "Debug output must not leak manual-secret bytes, got: {dbg}"
+    );
+}
+
+#[test]
 fn opening_add_modal_with_a_seeds_manual_defaults() {
     // The `a` opener constructs `AddModal::default()`, so the modal
     // observed in the unlocked state must carry the same manual
@@ -1625,6 +1661,7 @@ fn opening_add_modal_with_a_seeds_manual_defaults() {
     assert!(add.label.is_empty());
     assert!(add.issuer.is_empty());
     assert!(add.icon_hint_text.is_empty());
+    assert!(add.manual_secret.is_empty());
     assert_eq!(add.algorithm, Algorithm::Sha1);
     assert_eq!(add.digits, paladin_core::DIGITS_DEFAULT);
     assert_eq!(add.kind, AccountKindInput::Totp);
