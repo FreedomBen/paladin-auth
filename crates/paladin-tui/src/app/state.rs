@@ -262,6 +262,63 @@ pub struct RenameModal {
     pub error: Option<String>,
 }
 
+/// State for the Settings modal.
+///
+/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Settings:
+/// *"toggles for `auto_lock.enabled` and `clipboard.clear_enabled`,
+/// spinners for `auto_lock.timeout_secs` and `clipboard.clear_secs`.
+/// … The modal accumulates pending edits in modal-local state and
+/// only commits on Confirm: pending values are applied through the
+/// same setters (`set_auto_lock_*`, `set_clipboard_clear_*`) inside
+/// a single `Vault::mutate_and_save` transaction."*
+///
+/// The four fields are snapshotted from the live
+/// [`paladin_core::VaultSettings`] when the modal opens; subsequent
+/// edits stay modal-local until Confirm so `Esc` can discard them
+/// without invoking any setter or save. Pre-commit save failures
+/// restore the prior snapshot per the plan's "Effect errors" >
+/// "Add / remove / rename / settings saves" section; the
+/// success / save-error rollback wiring lands alongside the
+/// Settings effect slice.
+///
+/// [`Default`] yields the same shape that `SettingsModal::default()`
+/// would produce against a brand-new vault: both toggles off and the
+/// minimum allowed spinner values per the shared core bounds. It
+/// exists so existing reducer tests that match on the modal
+/// discriminant can construct a placeholder without reaching into
+/// the vault — production code never relies on it, because the
+/// reducer's modal-open path always populates the fields from the
+/// live vault settings.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct SettingsModal {
+    /// Pending `auto_lock.enabled` value. Snapshotted from
+    /// [`paladin_core::VaultSettings::auto_lock_enabled`] at modal
+    /// open time and edited modal-locally until Confirm.
+    pub auto_lock_enabled: bool,
+    /// Pending `auto_lock.timeout_secs` value. Clamped on edit to
+    /// [`paladin_core::AUTO_LOCK_SECS_MIN`]..=[`paladin_core::AUTO_LOCK_SECS_MAX`]
+    /// per the plan's "Modals (per §6)" > Settings spinner-bounds
+    /// rule; the controls clamp before submit so the core setter
+    /// rejection path stays a defensive backstop.
+    pub auto_lock_timeout_secs: u32,
+    /// Pending `clipboard.clear_enabled` value. Snapshotted from
+    /// [`paladin_core::VaultSettings::clipboard_clear_enabled`] at
+    /// modal open time and edited modal-locally until Confirm.
+    pub clipboard_clear_enabled: bool,
+    /// Pending `clipboard.clear_secs` value. Clamped on edit to
+    /// [`paladin_core::CLIPBOARD_CLEAR_SECS_MIN`]..=[`paladin_core::CLIPBOARD_CLEAR_SECS_MAX`].
+    pub clipboard_clear_secs: u32,
+    /// Inline validation / save error from the most recent submit
+    /// attempt, if any. Rendered through
+    /// [`render_error_message`](crate::app::state::render_error_message)
+    /// so the surfaced wording matches the rest of the TUI's error
+    /// surface. Subsequent edits clear this slot so the user sees
+    /// they are re-trying, and a successful submit transitions
+    /// through `EffectResult::Settings` (the success / save-error
+    /// rollback wiring lands alongside that slice).
+    pub error: Option<String>,
+}
+
 /// An open modal dialog over the main list view.
 ///
 /// Discarded on the `Unlocked → Locked` auto-lock transition
@@ -293,7 +350,7 @@ pub enum Modal {
     /// Passphrase set / change / remove sub-flow.
     Passphrase,
     /// Settings: auto-lock and clipboard-clear toggles + timeouts.
-    Settings,
+    Settings(SettingsModal),
 }
 
 /// Top-level UI state.

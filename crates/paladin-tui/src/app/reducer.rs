@@ -23,7 +23,7 @@ use zeroize::Zeroizing;
 use crate::app::event::{AppEvent, Effect, EffectResult};
 use crate::app::state::{
     compute_idle_deadline, initial_selection, render_error_message, AppState, ChordLeader, Focus,
-    HotpReveal, Modal, PendingClipboardClear, RemoveModal, RenameModal, StatusLine,
+    HotpReveal, Modal, PendingClipboardClear, RemoveModal, RenameModal, SettingsModal, StatusLine,
     CLIPBOARD_WRITE_FAILED, NO_ACCOUNT_SELECTED,
 };
 use crate::search::{filtered_account_ids, select_after_search};
@@ -699,7 +699,6 @@ fn reduce_unlocked_input(mut state: AppState, key: &KeyEvent) -> (AppState, Vec<
         ref mut search_query,
         ref vault,
         ref mut selected,
-        ref mut status_line,
         ref mut help_open,
         ref hotp_reveal,
         ..
@@ -848,17 +847,51 @@ fn reduce_unlocked_input(mut state: AppState, key: &KeyEvent) -> (AppState, Vec<
     }
 
     if let KeyCode::Char(c) = key.code {
-        if let Some(err) = selection_gated_status_error(c, *selected) {
-            *status_line = Some(err);
-            return (state, Vec::new());
-        }
-        let n_effects = n_effects_for_char(c, path, vault, *selected);
-        let rename_modal = pending_rename_for_char(c, vault, *selected);
-        let remove_modal = pending_remove_for_char(c, *selected);
-        return dispatch_unlocked_char(state, c, n_effects, rename_modal, remove_modal);
+        return route_unlocked_char_kbd(state, c);
     }
 
     (state, Vec::new())
+}
+
+/// Route the bare-letter Char `c` on `AppState::Unlocked` with no
+/// modal open and no chord leader pending.
+///
+/// Pre-bundles the per-char modal-payload and effect-list inputs
+/// (snapshotting the live `(Vault, &Path)` borrow before handing
+/// `state` to [`dispatch_unlocked_char`]) and applies the
+/// selection-gated status-line error from
+/// [`selection_gated_status_error`] for `n` / `r` / `R` with no
+/// selection. Extracted from [`reduce_unlocked_input`] so the parent
+/// reducer stays within the 100-line clippy budget; the inputs are
+/// what the previous inline implementation passed to
+/// `dispatch_unlocked_char` plus the selection-gated error gate.
+fn route_unlocked_char_kbd(mut state: AppState, c: char) -> (AppState, Vec<Effect>) {
+    let AppState::Unlocked {
+        ref path,
+        ref vault,
+        ref selected,
+        ref mut status_line,
+        ..
+    } = state
+    else {
+        return (state, Vec::new());
+    };
+    if let Some(err) = selection_gated_status_error(c, *selected) {
+        *status_line = Some(err);
+        return (state, Vec::new());
+    }
+    let n_effects = n_effects_for_char(c, path, vault, *selected);
+    let rename_modal = pending_rename_for_char(c, vault, *selected);
+    let remove_modal = pending_remove_for_char(c, *selected);
+    let settings_modal = pending_settings_for_char(c, vault);
+    dispatch_unlocked_char(
+        state,
+        c,
+        n_effects,
+        rename_modal,
+        remove_modal,
+        settings_modal,
+    )
 }
 
 /// Build the effect list `dispatch_unlocked_char` should carry for
@@ -957,6 +990,32 @@ fn pending_remove_for_char(c: char, selected: Option<AccountId>) -> Option<Remov
     let id = selected?;
     Some(RemoveModal {
         account_id: id,
+        error: None,
+    })
+}
+
+/// Construct the [`SettingsModal`] payload for `s` from the live vault
+/// settings, or `None` when the binding is not `s`.
+///
+/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Settings:
+/// *"The modal accumulates pending edits in modal-local state and
+/// only commits on Confirm."* The reducer snapshots the live
+/// [`paladin_core::VaultSettings`] into the modal's pending fields at
+/// open time so subsequent edits stay modal-local until Confirm and
+/// `Esc` can discard them without invoking any setter or save.
+/// Settings is not selection-gated (per the "Focus model" rule) and
+/// the four field types are all `Copy`, so no vault-account lookup
+/// or fallible read is required.
+fn pending_settings_for_char(c: char, vault: &Vault) -> Option<SettingsModal> {
+    if c != 's' {
+        return None;
+    }
+    let settings = vault.settings();
+    Some(SettingsModal {
+        auto_lock_enabled: settings.auto_lock_enabled(),
+        auto_lock_timeout_secs: settings.auto_lock_timeout_secs(),
+        clipboard_clear_enabled: settings.clipboard_clear_enabled(),
+        clipboard_clear_secs: settings.clipboard_clear_secs(),
         error: None,
     })
 }
@@ -1075,8 +1134,9 @@ fn selection_gated_status_error(c: char, selected: Option<AccountId>) -> Option<
 /// Owns the small terminal-letter table: `q` → quit, `/` → focus the
 /// search bar, `n` → emit the precomputed HOTP-advance effects, `r`
 /// → open the precomputed [`Modal::Remove`] payload, `R` → open the
-/// precomputed [`Modal::Rename`] payload, and the
-/// `modal_opener_for_char` table (`a`/`i`/`e`/`p`/`s`) for the
+/// precomputed [`Modal::Rename`] payload, `s` → open the
+/// precomputed [`Modal::Settings`] payload, and the
+/// `modal_opener_for_char` table (`a`/`i`/`e`/`p`) for the
 /// payload-free modals.
 ///
 /// `n_effects` carries the [`Effect::HotpAdvance`] list precomputed
@@ -1085,14 +1145,17 @@ fn selection_gated_status_error(c: char, selected: Option<AccountId>) -> Option<
 /// `rename_modal` carries the [`RenameModal`] payload built from the
 /// still-borrowed vault for `R` (or `None` for every other char).
 /// `remove_modal` carries the [`RemoveModal`] payload for `r` (or
-/// `None` otherwise). All are precomputed by the caller so this
-/// helper does not borrow the vault.
+/// `None` otherwise). `settings_modal` carries the
+/// [`SettingsModal`] payload snapshotted from the live vault
+/// settings for `s` (or `None` otherwise). All are precomputed by
+/// the caller so this helper does not borrow the vault.
 fn dispatch_unlocked_char(
     mut state: AppState,
     c: char,
     n_effects: Vec<Effect>,
     rename_modal: Option<RenameModal>,
     remove_modal: Option<RemoveModal>,
+    settings_modal: Option<SettingsModal>,
 ) -> (AppState, Vec<Effect>) {
     // `q` quits Unlocked when no modal is open. (Once the search bar
     // can take focus, `q` is text input on the search surface too;
@@ -1155,6 +1218,21 @@ fn dispatch_unlocked_char(
         if let Some(rename) = rename_modal {
             if let AppState::Unlocked { modal, .. } = &mut state {
                 *modal = Some(Modal::Rename(rename));
+            }
+        }
+        return (state, Vec::new());
+    }
+    if c == 's' {
+        // Settings is not selection-gated and carries a pre-populated
+        // payload built by [`pending_settings_for_char`] from the
+        // live `VaultSettings`. The helper always returns `Some(_)`
+        // for `c == 's'` (the four fields are all `Copy` and the
+        // settings borrow is infallible), so the inner `if let Some`
+        // is purely defensive — a `None` here would leave the modal
+        // slot untouched and observe as a silent no-op.
+        if let Some(settings) = settings_modal {
+            if let AppState::Unlocked { modal, .. } = &mut state {
+                *modal = Some(Modal::Settings(settings));
             }
         }
         return (state, Vec::new());
@@ -1554,18 +1632,18 @@ fn route_search_focus_char(
 ///
 /// Mirrors `IMPLEMENTATION_PLAN_03_TUI.md` "Keybindings (initial v0.1)"
 /// for the modals whose initial state does not depend on vault data:
-/// Add / Import / Export / Passphrase / Settings. The `r` (Remove)
-/// and `R` (Rename) bindings are handled separately by
+/// Add / Import / Export / Passphrase. The `r` (Remove), `R`
+/// (Rename), and `s` (Settings) bindings are handled separately by
 /// [`dispatch_unlocked_char`] because their payloads pre-populate
-/// `account_id` (and, for Rename, the draft) from the selected
-/// account.
+/// from vault state — `account_id` (and, for Rename, the draft)
+/// from the selected account, and the Settings pending values from
+/// the live [`paladin_core::VaultSettings`].
 fn modal_opener_for_char(c: char) -> Option<Modal> {
     Some(match c {
         'a' => Modal::Add,
         'i' => Modal::Import,
         'e' => Modal::Export,
         'p' => Modal::Passphrase,
-        's' => Modal::Settings,
         _ => return None,
     })
 }

@@ -33,7 +33,7 @@ use paladin_core::{
 };
 use paladin_tui::app::event::AppEvent;
 use paladin_tui::app::reducer::reduce;
-use paladin_tui::app::state::{AppState, Focus, Modal};
+use paladin_tui::app::state::{AppState, Focus, Modal, SettingsModal};
 use paladin_tui::prompt::PassphraseBuffer;
 
 // ---------------------------------------------------------------------------
@@ -294,7 +294,7 @@ fn question_mark_with_modal_open_does_not_open_help() {
     let (vault, store) = open_plaintext_pair(&path);
     let mut state = unlocked_default(path, vault, store);
     if let AppState::Unlocked { modal, .. } = &mut state {
-        *modal = Some(Modal::Settings);
+        *modal = Some(Modal::Settings(SettingsModal::default()));
     }
 
     let (next, effects) = reduce(state, key(KeyCode::Char('?')));
@@ -305,7 +305,7 @@ fn question_mark_with_modal_open_does_not_open_help() {
         } => {
             assert!(!help_open, "`?` with a modal open must not open Help");
             assert!(
-                matches!(modal, Some(Modal::Settings)),
+                matches!(modal, Some(Modal::Settings(_))),
                 "modal must be preserved unchanged, got {modal:?}"
             );
         }
@@ -391,7 +391,7 @@ fn esc_with_help_closed_falls_back_to_existing_esc_handling() {
     let (vault, store) = open_plaintext_pair(&path);
     let mut state = unlocked_default(path, vault, store);
     if let AppState::Unlocked { modal, .. } = &mut state {
-        *modal = Some(Modal::Settings);
+        *modal = Some(Modal::Settings(SettingsModal::default()));
     }
 
     let (next, effects) = reduce(state, key(KeyCode::Esc));

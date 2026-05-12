@@ -27,8 +27,8 @@ use paladin_tui::app::event::{AppEvent, Effect, EffectResult};
 use paladin_tui::app::reducer::reduce;
 use paladin_tui::app::state::{
     compute_idle_deadline, decide_state_from_inspect, decide_state_from_open, render_error_message,
-    AppState, ChordLeader, Focus, HotpReveal, Modal, RemoveModal, RenameModal, StatusLine,
-    NO_ACCOUNT_SELECTED,
+    AppState, ChordLeader, Focus, HotpReveal, Modal, RemoveModal, RenameModal, SettingsModal,
+    StatusLine, NO_ACCOUNT_SELECTED,
 };
 use paladin_tui::cli::{should_disable_color, GlobalArgs};
 use paladin_tui::prompt::PassphraseBuffer;
@@ -1515,7 +1515,7 @@ fn pressing_a_on_unlocked_with_modal_already_open_does_not_replace_the_modal() {
         idle_deadline: None,
         pending_clipboard_clear: None,
         hotp_reveal: None,
-        modal: Some(Modal::Settings),
+        modal: Some(Modal::Settings(SettingsModal::default())),
         selected: None,
         pending_chord_leader: None,
         viewport_height: 0,
@@ -1531,11 +1531,11 @@ fn pressing_a_on_unlocked_with_modal_already_open_does_not_replace_the_modal() {
     );
     match state {
         AppState::Unlocked {
-            modal: Some(Modal::Settings),
+            modal: Some(Modal::Settings(_)),
             ..
         } => {}
         AppState::Unlocked { modal, .. } => {
-            panic!("expected modal=Some(Modal::Settings) preserved, got modal={modal:?}")
+            panic!("expected modal=Some(Modal::Settings(SettingsModal::default())) preserved, got modal={modal:?}")
         }
         other => panic!("expected Unlocked, got {other:?}"),
     }
@@ -2810,7 +2810,86 @@ fn pressing_p_on_unlocked_with_no_modal_open_opens_passphrase_modal() {
 
 #[test]
 fn pressing_s_on_unlocked_with_no_modal_open_opens_settings_modal() {
-    assert_key_opens_modal(key(KeyCode::Char('s')), &Modal::Settings);
+    assert_key_opens_modal(
+        key(KeyCode::Char('s')),
+        &Modal::Settings(SettingsModal::default()),
+    );
+}
+
+#[test]
+fn pressing_s_opens_settings_modal_prepopulated_with_vault_config() {
+    // Per IMPLEMENTATION_PLAN_03_TUI.md "Modals (per §6)" > Settings:
+    // *"toggles for `auto_lock.enabled` and `clipboard.clear_enabled`,
+    // spinners for `auto_lock.timeout_secs` and `clipboard.clear_secs`.
+    // ... The modal accumulates pending edits in modal-local state and
+    // only commits on Confirm."* The reducer snapshots the live
+    // `VaultSettings` into the modal's pending fields at open time so
+    // edits stay modal-local until Confirm. Selection is not gated for
+    // Settings (per the Focus model), so the binding works regardless
+    // of `selected`.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    // Mutate the live vault settings away from defaults so the
+    // pre-populated values are observable instead of coinciding with
+    // the `SettingsModal::default()`.
+    vault.set_auto_lock_enabled(true);
+    vault
+        .set_auto_lock_timeout_secs(123)
+        .expect("123s is within AUTO_LOCK_SECS_MIN..=AUTO_LOCK_SECS_MAX");
+    vault.set_clipboard_clear_enabled(true);
+    vault
+        .set_clipboard_clear_secs(45)
+        .expect("45s is within CLIPBOARD_CLEAR_SECS_MIN..=CLIPBOARD_CLEAR_SECS_MAX");
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let (state, effects) = reduce(unlocked, key(KeyCode::Char('s')));
+    assert!(effects.is_empty(), "opening Settings must not emit effects");
+    match state {
+        AppState::Unlocked {
+            modal: Some(Modal::Settings(settings)),
+            ..
+        } => {
+            assert!(
+                settings.auto_lock_enabled,
+                "auto_lock_enabled must mirror the live vault setting"
+            );
+            assert_eq!(
+                settings.auto_lock_timeout_secs, 123,
+                "auto_lock_timeout_secs must mirror the live vault setting"
+            );
+            assert!(
+                settings.clipboard_clear_enabled,
+                "clipboard_clear_enabled must mirror the live vault setting"
+            );
+            assert_eq!(
+                settings.clipboard_clear_secs, 45,
+                "clipboard_clear_secs must mirror the live vault setting"
+            );
+            assert!(
+                settings.error.is_none(),
+                "freshly opened Settings modal has no inline error"
+            );
+        }
+        AppState::Unlocked { modal, .. } => {
+            panic!("expected Modal::Settings, got {modal:?}")
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2897,7 +2976,7 @@ fn pressing_esc_on_unlocked_with_open_passphrase_modal_closes_the_modal() {
 
 #[test]
 fn pressing_esc_on_unlocked_with_open_settings_modal_closes_the_modal() {
-    assert_esc_closes_modal(Modal::Settings);
+    assert_esc_closes_modal(Modal::Settings(SettingsModal::default()));
 }
 
 #[test]
@@ -3211,7 +3290,7 @@ fn pressing_down_arrow_with_modal_open_does_not_move_selection() {
         idle_deadline: None,
         pending_clipboard_clear: None,
         hotp_reveal: None,
-        modal: Some(Modal::Settings),
+        modal: Some(Modal::Settings(SettingsModal::default())),
         selected: Some(a),
         pending_chord_leader: None,
         viewport_height: 0,
@@ -3225,7 +3304,7 @@ fn pressing_down_arrow_with_modal_open_does_not_move_selection() {
     match state {
         AppState::Unlocked {
             selected,
-            modal: Some(Modal::Settings),
+            modal: Some(Modal::Settings(_)),
             ..
         } => assert_eq!(
             selected,
@@ -3364,7 +3443,7 @@ fn pressing_k_with_modal_open_does_not_move_selection() {
         idle_deadline: None,
         pending_clipboard_clear: None,
         hotp_reveal: None,
-        modal: Some(Modal::Settings),
+        modal: Some(Modal::Settings(SettingsModal::default())),
         selected: Some(b),
         pending_chord_leader: None,
         viewport_height: 0,
@@ -3378,7 +3457,7 @@ fn pressing_k_with_modal_open_does_not_move_selection() {
     match state {
         AppState::Unlocked {
             selected,
-            modal: Some(Modal::Settings),
+            modal: Some(Modal::Settings(_)),
             ..
         } => assert_eq!(
             selected,
@@ -3643,7 +3722,7 @@ fn pressing_home_with_modal_open_does_not_move_selection() {
         idle_deadline: None,
         pending_clipboard_clear: None,
         hotp_reveal: None,
-        modal: Some(Modal::Settings),
+        modal: Some(Modal::Settings(SettingsModal::default())),
         selected: Some(c),
         pending_chord_leader: None,
         viewport_height: 0,
@@ -3657,7 +3736,7 @@ fn pressing_home_with_modal_open_does_not_move_selection() {
     match state {
         AppState::Unlocked {
             selected,
-            modal: Some(Modal::Settings),
+            modal: Some(Modal::Settings(_)),
             ..
         } => assert_eq!(
             selected,
@@ -4230,7 +4309,7 @@ fn pressing_g_with_modal_open_does_not_set_chord_leader() {
         idle_deadline: None,
         pending_clipboard_clear: None,
         hotp_reveal: None,
-        modal: Some(Modal::Settings),
+        modal: Some(Modal::Settings(SettingsModal::default())),
         selected: Some(a),
         pending_chord_leader: None,
         viewport_height: 0,
@@ -4244,7 +4323,7 @@ fn pressing_g_with_modal_open_does_not_set_chord_leader() {
     match state {
         AppState::Unlocked {
             pending_chord_leader,
-            modal: Some(Modal::Settings),
+            modal: Some(Modal::Settings(_)),
             ..
         } => assert_eq!(
             pending_chord_leader, None,
@@ -4726,7 +4805,7 @@ fn pressing_page_down_with_modal_open_does_not_move_selection() {
         idle_deadline: None,
         pending_clipboard_clear: None,
         hotp_reveal: None,
-        modal: Some(Modal::Settings),
+        modal: Some(Modal::Settings(SettingsModal::default())),
         selected: Some(a),
         pending_chord_leader: None,
         viewport_height: 2,
@@ -4740,7 +4819,7 @@ fn pressing_page_down_with_modal_open_does_not_move_selection() {
     match state {
         AppState::Unlocked {
             selected,
-            modal: Some(Modal::Settings),
+            modal: Some(Modal::Settings(_)),
             ..
         } => assert_eq!(
             selected,
@@ -5038,7 +5117,7 @@ fn pressing_ctrl_f_with_modal_open_does_not_move_selection() {
         idle_deadline: None,
         pending_clipboard_clear: None,
         hotp_reveal: None,
-        modal: Some(Modal::Settings),
+        modal: Some(Modal::Settings(SettingsModal::default())),
         selected: Some(a),
         pending_chord_leader: None,
         viewport_height: 2,
@@ -5052,7 +5131,7 @@ fn pressing_ctrl_f_with_modal_open_does_not_move_selection() {
     match state {
         AppState::Unlocked {
             selected,
-            modal: Some(Modal::Settings),
+            modal: Some(Modal::Settings(_)),
             ..
         } => assert_eq!(
             selected,
@@ -5078,7 +5157,7 @@ fn pressing_ctrl_b_with_modal_open_does_not_move_selection() {
         idle_deadline: None,
         pending_clipboard_clear: None,
         hotp_reveal: None,
-        modal: Some(Modal::Settings),
+        modal: Some(Modal::Settings(SettingsModal::default())),
         selected: Some(c),
         pending_chord_leader: None,
         viewport_height: 2,
@@ -5092,7 +5171,7 @@ fn pressing_ctrl_b_with_modal_open_does_not_move_selection() {
     match state {
         AppState::Unlocked {
             selected,
-            modal: Some(Modal::Settings),
+            modal: Some(Modal::Settings(_)),
             ..
         } => assert_eq!(
             selected,
@@ -5532,7 +5611,7 @@ fn pressing_ctrl_d_with_modal_open_does_not_move_selection() {
         idle_deadline: None,
         pending_clipboard_clear: None,
         hotp_reveal: None,
-        modal: Some(Modal::Settings),
+        modal: Some(Modal::Settings(SettingsModal::default())),
         selected: Some(a),
         pending_chord_leader: None,
         viewport_height: 4,
@@ -5546,7 +5625,7 @@ fn pressing_ctrl_d_with_modal_open_does_not_move_selection() {
     match state {
         AppState::Unlocked {
             selected,
-            modal: Some(Modal::Settings),
+            modal: Some(Modal::Settings(_)),
             ..
         } => assert_eq!(
             selected,
@@ -5572,7 +5651,7 @@ fn pressing_ctrl_u_with_modal_open_does_not_move_selection() {
         idle_deadline: None,
         pending_clipboard_clear: None,
         hotp_reveal: None,
-        modal: Some(Modal::Settings),
+        modal: Some(Modal::Settings(SettingsModal::default())),
         selected: Some(c),
         pending_chord_leader: None,
         viewport_height: 4,
@@ -5586,7 +5665,7 @@ fn pressing_ctrl_u_with_modal_open_does_not_move_selection() {
     match state {
         AppState::Unlocked {
             selected,
-            modal: Some(Modal::Settings),
+            modal: Some(Modal::Settings(_)),
             ..
         } => assert_eq!(
             selected,
@@ -5973,7 +6052,7 @@ fn pressing_z_with_modal_open_does_not_set_chord_leader() {
         idle_deadline: None,
         pending_clipboard_clear: None,
         hotp_reveal: None,
-        modal: Some(Modal::Settings),
+        modal: Some(Modal::Settings(SettingsModal::default())),
         selected: Some(a),
         pending_chord_leader: None,
         viewport_height: 4,
@@ -5988,7 +6067,7 @@ fn pressing_z_with_modal_open_does_not_set_chord_leader() {
         AppState::Unlocked {
             pending_chord_leader,
             viewport_offset,
-            modal: Some(Modal::Settings),
+            modal: Some(Modal::Settings(_)),
             ..
         } => {
             assert_eq!(
@@ -6334,7 +6413,7 @@ fn pressing_slash_with_modal_open_does_not_change_focus() {
         idle_deadline: None,
         pending_clipboard_clear: None,
         hotp_reveal: None,
-        modal: Some(Modal::Settings),
+        modal: Some(Modal::Settings(SettingsModal::default())),
         selected: Some(a),
         pending_chord_leader: None,
         viewport_height: 0,
@@ -6348,7 +6427,7 @@ fn pressing_slash_with_modal_open_does_not_change_focus() {
     match state {
         AppState::Unlocked {
             focus,
-            modal: Some(Modal::Settings),
+            modal: Some(Modal::Settings(_)),
             ..
         } => assert_eq!(
             focus,
@@ -6529,7 +6608,7 @@ fn pressing_esc_on_unlocked_with_search_focus_and_modal_open_closes_modal_only()
         idle_deadline: None,
         pending_clipboard_clear: None,
         hotp_reveal: None,
-        modal: Some(Modal::Settings),
+        modal: Some(Modal::Settings(SettingsModal::default())),
         selected: Some(a),
         pending_chord_leader: None,
         viewport_height: 0,
@@ -7027,7 +7106,7 @@ fn typing_char_while_focus_search_with_modal_open_does_not_route_into_search() {
         idle_deadline: None,
         pending_clipboard_clear: None,
         hotp_reveal: None,
-        modal: Some(Modal::Settings),
+        modal: Some(Modal::Settings(SettingsModal::default())),
         selected: Some(a),
         pending_chord_leader: None,
         viewport_height: 0,
@@ -7041,7 +7120,7 @@ fn typing_char_while_focus_search_with_modal_open_does_not_route_into_search() {
     match state {
         AppState::Unlocked {
             search_query,
-            modal: Some(Modal::Settings),
+            modal: Some(Modal::Settings(_)),
             ..
         } => assert_eq!(
             search_query, "",
@@ -8025,7 +8104,7 @@ fn pressing_non_selection_gated_opener_with_no_selection_does_not_set_status_lin
         ('i', Modal::Import),
         ('e', Modal::Export),
         ('p', Modal::Passphrase),
-        ('s', Modal::Settings),
+        ('s', Modal::Settings(SettingsModal::default())),
     ] {
         let tmp = secure_tempdir();
         let before = unlocked_with_empty_selection(&tmp);
@@ -8592,7 +8671,7 @@ fn pressing_tab_with_modal_open_does_not_change_focus() {
         idle_deadline: None,
         pending_clipboard_clear: None,
         hotp_reveal: None,
-        modal: Some(Modal::Settings),
+        modal: Some(Modal::Settings(SettingsModal::default())),
         selected: Some(a),
         pending_chord_leader: None,
         viewport_height: 0,
@@ -8609,7 +8688,7 @@ fn pressing_tab_with_modal_open_does_not_change_focus() {
     match state {
         AppState::Unlocked {
             focus,
-            modal: Some(Modal::Settings),
+            modal: Some(Modal::Settings(_)),
             ..
         } => assert_eq!(
             focus,
@@ -8633,7 +8712,7 @@ fn pressing_shift_tab_with_modal_open_does_not_change_focus() {
         idle_deadline: None,
         pending_clipboard_clear: None,
         hotp_reveal: None,
-        modal: Some(Modal::Settings),
+        modal: Some(Modal::Settings(SettingsModal::default())),
         selected: Some(a),
         pending_chord_leader: None,
         viewport_height: 0,
@@ -8647,7 +8726,7 @@ fn pressing_shift_tab_with_modal_open_does_not_change_focus() {
     match state {
         AppState::Unlocked {
             focus,
-            modal: Some(Modal::Settings),
+            modal: Some(Modal::Settings(_)),
             ..
         } => assert_eq!(
             focus,
@@ -8939,12 +9018,20 @@ fn pressing_ctrl_p_with_passphrase_modal_open_aliases_shift_tab() {
 
 #[test]
 fn pressing_ctrl_n_with_settings_modal_open_aliases_tab() {
-    assert_ctrl_modal_alias_is_silent_no_op(Modal::Settings, ctrl(KeyCode::Char('n')), "`Ctrl-N`");
+    assert_ctrl_modal_alias_is_silent_no_op(
+        Modal::Settings(SettingsModal::default()),
+        ctrl(KeyCode::Char('n')),
+        "`Ctrl-N`",
+    );
 }
 
 #[test]
 fn pressing_ctrl_p_with_settings_modal_open_aliases_shift_tab() {
-    assert_ctrl_modal_alias_is_silent_no_op(Modal::Settings, ctrl(KeyCode::Char('p')), "`Ctrl-P`");
+    assert_ctrl_modal_alias_is_silent_no_op(
+        Modal::Settings(SettingsModal::default()),
+        ctrl(KeyCode::Char('p')),
+        "`Ctrl-P`",
+    );
 }
 
 #[test]
@@ -8966,7 +9053,7 @@ fn pressing_ctrl_n_with_modal_open_on_search_focus_does_not_flip_focus() {
         idle_deadline: None,
         pending_clipboard_clear: None,
         hotp_reveal: None,
-        modal: Some(Modal::Settings),
+        modal: Some(Modal::Settings(SettingsModal::default())),
         selected: Some(a),
         pending_chord_leader: None,
         viewport_height: 0,
@@ -8980,7 +9067,7 @@ fn pressing_ctrl_n_with_modal_open_on_search_focus_does_not_flip_focus() {
     match state {
         AppState::Unlocked {
             focus,
-            modal: Some(Modal::Settings),
+            modal: Some(Modal::Settings(_)),
             ..
         } => assert_eq!(
             focus,
@@ -9004,7 +9091,7 @@ fn pressing_ctrl_p_with_modal_open_on_search_focus_does_not_flip_focus() {
         idle_deadline: None,
         pending_clipboard_clear: None,
         hotp_reveal: None,
-        modal: Some(Modal::Settings),
+        modal: Some(Modal::Settings(SettingsModal::default())),
         selected: Some(a),
         pending_chord_leader: None,
         viewport_height: 0,
@@ -9018,7 +9105,7 @@ fn pressing_ctrl_p_with_modal_open_on_search_focus_does_not_flip_focus() {
     match state {
         AppState::Unlocked {
             focus,
-            modal: Some(Modal::Settings),
+            modal: Some(Modal::Settings(_)),
             ..
         } => assert_eq!(
             focus,
