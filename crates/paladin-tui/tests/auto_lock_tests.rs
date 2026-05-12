@@ -15,6 +15,7 @@ use std::time::{Duration, Instant, SystemTime};
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 
 use secrecy::SecretString;
+use zeroize::Zeroizing;
 
 use paladin_core::{
     hotp_reveal_deadline, AccountId, Argon2Params, ClipboardClearPolicy, ClipboardClearToken,
@@ -574,7 +575,7 @@ fn tick_after_deadline_lock_carries_pending_clipboard_clear() {
         ClipboardClearPolicy::schedule(t0, vault.settings()).expect("clipboard clear scheduled");
     let pending = PendingClipboardClear {
         token,
-        value: vec![0x31, 0x32, 0x33, 0x34, 0x35, 0x36],
+        value: Zeroizing::new(vec![0x31, 0x32, 0x33, 0x34, 0x35, 0x36]),
         deadline: clear_deadline,
     };
 
@@ -696,7 +697,10 @@ fn tick_after_deadline_lock_with_no_pending_clipboard_clear_yields_none() {
 // ---------------------------------------------------------------------------
 
 fn clipboard_clear_event(token: ClipboardClearToken, value: Vec<u8>) -> AppEvent {
-    AppEvent::ClipboardClear { token, value }
+    AppEvent::ClipboardClear {
+        token,
+        value: Zeroizing::new(value),
+    }
 }
 
 #[test]
@@ -722,7 +726,7 @@ fn clipboard_clear_event_on_locked_with_matching_token_fires_wipe_and_clears_pen
         path: path.clone(),
         pending_clipboard_clear: Some(PendingClipboardClear {
             token,
-            value: captured.clone(),
+            value: Zeroizing::new(captured.clone()),
             deadline,
         }),
     };
@@ -732,7 +736,8 @@ fn clipboard_clear_event_on_locked_with_matching_token_fires_wipe_and_clears_pen
     match &effects[..] {
         [Effect::ClearClipboard { value }] => {
             assert_eq!(
-                value, &captured,
+                value.as_slice(),
+                captured.as_slice(),
                 "wipe effect must carry the captured bytes from pending state"
             );
         }
@@ -785,7 +790,7 @@ fn clipboard_clear_event_on_locked_with_stale_token_is_noop() {
         path: path.clone(),
         pending_clipboard_clear: Some(PendingClipboardClear {
             token: fresh_token,
-            value: fresh_value.clone(),
+            value: Zeroizing::new(fresh_value.clone()),
             deadline: fresh_deadline,
         }),
     };
@@ -1154,7 +1159,7 @@ fn clipboard_clear_timer_scheduled_before_lock_survives_and_fires_after_lock() {
         idle_deadline: Some(idle_deadline),
         pending_clipboard_clear: Some(PendingClipboardClear {
             token,
-            value: captured.clone(),
+            value: Zeroizing::new(captured.clone()),
             deadline: clear_deadline,
         }),
         hotp_reveal: None,
@@ -1210,13 +1215,14 @@ fn clipboard_clear_timer_scheduled_before_lock_survives_and_fires_after_lock() {
         locked,
         AppEvent::ClipboardClear {
             token,
-            value: captured.clone(),
+            value: Zeroizing::new(captured.clone()),
         },
     );
     match &wake_effects[..] {
         [Effect::ClearClipboard { value }] => {
             assert_eq!(
-                value, &captured,
+                value.as_slice(),
+                captured.as_slice(),
                 "Effect::ClearClipboard must carry the captured bytes verbatim — the executor checks only-if-unchanged against this value"
             );
         }

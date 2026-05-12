@@ -18,6 +18,7 @@ use paladin_core::{
     PaladinError, Store, Vault,
 };
 use secrecy::SecretString;
+use zeroize::Zeroizing;
 
 use crate::app::event::{AppEvent, Effect, EffectResult};
 use crate::app::state::{
@@ -289,7 +290,7 @@ fn reduce_effect_result(state: AppState, result: EffectResult) -> (AppState, Vec
 fn reduce_copy_code_result(
     mut state: AppState,
     _account_id: AccountId,
-    result: Result<Vec<u8>, ()>,
+    result: Result<Zeroizing<Vec<u8>>, ()>,
     completed_at: Instant,
 ) -> (AppState, Vec<Effect>) {
     if let AppState::Unlocked {

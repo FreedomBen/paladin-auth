@@ -30,12 +30,13 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
 use secrecy::SecretString;
+use zeroize::Zeroizing;
 
 use paladin_core::{
     validate_manual, AccountId, AccountInput, AccountKindInput, Algorithm, Argon2Params,
     ClipboardClearPolicy, EncryptionOptions, IconHintInput, Store, Vault, VaultInit, VaultLock,
 };
-use paladin_tui::app::event::{AppEvent, EffectResult};
+use paladin_tui::app::event::{AppEvent, Effect, EffectResult};
 use paladin_tui::app::reducer::reduce;
 use paladin_tui::app::state::{
     AppState, Focus, PendingClipboardClear, StatusLine, CLIPBOARD_WRITE_FAILED,
@@ -169,7 +170,7 @@ fn effect_result_copy_code_ok_with_clipboard_clear_enabled_schedules_pending_cle
     let completed_at = Instant::now();
     let event = AppEvent::EffectResult(EffectResult::CopyCode {
         account_id: totp_id,
-        result: Ok(copy_bytes()),
+        result: Ok(Zeroizing::new(copy_bytes())),
         completed_at,
     });
 
@@ -218,7 +219,7 @@ fn effect_result_copy_code_ok_uses_monotonic_schedule_token() {
     let state = build_unlocked(path, vault, store, Some(totp_id));
     let event = AppEvent::EffectResult(EffectResult::CopyCode {
         account_id: totp_id,
-        result: Ok(copy_bytes()),
+        result: Ok(Zeroizing::new(copy_bytes())),
         completed_at: Instant::now(),
     });
     let (next, _) = reduce(state, event);
@@ -256,7 +257,7 @@ fn effect_result_copy_code_ok_with_clipboard_clear_disabled_does_not_arm_pending
 
     let event = AppEvent::EffectResult(EffectResult::CopyCode {
         account_id: totp_id,
-        result: Ok(copy_bytes()),
+        result: Ok(Zeroizing::new(copy_bytes())),
         completed_at: Instant::now(),
     });
     let (next, effects) = reduce(state, event);
@@ -294,7 +295,7 @@ fn effect_result_copy_code_ok_replaces_prior_pending_clear_when_enabled() {
         ClipboardClearPolicy::schedule(Instant::now(), vault.settings()).expect("first schedule");
     let prior = PendingClipboardClear {
         token: earlier.0,
-        value: b"prev".to_vec(),
+        value: Zeroizing::new(b"prev".to_vec()),
         deadline: earlier.1,
     };
     let mut state = build_unlocked(path, vault, store, Some(totp_id));
@@ -309,7 +310,7 @@ fn effect_result_copy_code_ok_replaces_prior_pending_clear_when_enabled() {
     let completed_at = Instant::now();
     let event = AppEvent::EffectResult(EffectResult::CopyCode {
         account_id: totp_id,
-        result: Ok(copy_bytes()),
+        result: Ok(Zeroizing::new(copy_bytes())),
         completed_at,
     });
     let (next, _) = reduce(state, event);
@@ -352,7 +353,7 @@ fn effect_result_copy_code_ok_clears_prior_status_line() {
 
     let event = AppEvent::EffectResult(EffectResult::CopyCode {
         account_id: totp_id,
-        result: Ok(copy_bytes()),
+        result: Ok(Zeroizing::new(copy_bytes())),
         completed_at: Instant::now(),
     });
     let (next, _) = reduce(state, event);
@@ -421,7 +422,7 @@ fn effect_result_copy_code_err_leaves_prior_pending_clear_unchanged() {
         ClipboardClearPolicy::schedule(Instant::now(), vault.settings()).expect("schedule");
     let prior = PendingClipboardClear {
         token: earlier.0,
-        value: b"prev".to_vec(),
+        value: Zeroizing::new(b"prev".to_vec()),
         deadline: earlier.1,
     };
     let mut state = build_unlocked(path, vault, store, Some(totp_id));
@@ -450,7 +451,8 @@ fn effect_result_copy_code_err_leaves_prior_pending_clear_unchanged() {
                 "prior pending clear must survive a failed follow-up copy"
             );
             assert_eq!(
-                pending.value, b"prev",
+                pending.value.as_slice(),
+                b"prev",
                 "prior captured bytes must survive a failed follow-up copy"
             );
             assert_eq!(
@@ -480,7 +482,7 @@ fn effect_result_copy_code_drops_when_locked() {
     };
     let event = AppEvent::EffectResult(EffectResult::CopyCode {
         account_id: AccountId::new(),
-        result: Ok(copy_bytes()),
+        result: Ok(Zeroizing::new(copy_bytes())),
         completed_at: Instant::now(),
     });
     let (next, effects) = reduce(state, event);
@@ -538,7 +540,7 @@ fn effect_result_copy_code_ok_schedules_on_encrypted_vault_when_enabled() {
     let completed_at = Instant::now();
     let event = AppEvent::EffectResult(EffectResult::CopyCode {
         account_id: totp_id,
-        result: Ok(copy_bytes()),
+        result: Ok(Zeroizing::new(copy_bytes())),
         completed_at,
     });
     let (next, _) = reduce(state, event);
@@ -595,13 +597,13 @@ fn clipboard_clear_wake_with_stale_token_on_locked_is_noop() {
         path: path.clone(),
         pending_clipboard_clear: Some(PendingClipboardClear {
             token: fresh_token,
-            value: fresh_value.clone(),
+            value: Zeroizing::new(fresh_value.clone()),
             deadline: fresh_deadline,
         }),
     };
     let event = AppEvent::ClipboardClear {
         token: stale_token,
-        value: b"123456".to_vec(),
+        value: Zeroizing::new(b"123456".to_vec()),
     };
     let (next, effects) = reduce(state, event);
     assert!(
@@ -650,7 +652,7 @@ fn clipboard_clear_wake_with_no_pending_on_locked_is_noop() {
     };
     let event = AppEvent::ClipboardClear {
         token,
-        value: b"123456".to_vec(),
+        value: Zeroizing::new(b"123456".to_vec()),
     };
     let (next, effects) = reduce(state, event);
     assert!(
@@ -664,4 +666,169 @@ fn clipboard_clear_wake_with_no_pending_on_locked_is_noop() {
         } => assert_eq!(p, path),
         other => panic!("expected Locked with no pending clear preserved, got {other:?}"),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Pending copied values are zeroized
+// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Clipboard auto-clear — bullet 4)
+//
+// Captured clipboard bytes flow through four lifetime points:
+//   * the reducer's `pending_clipboard_clear.value` slot,
+//   * the `AppEvent::ClipboardClear.value` carried by the wake event
+//     (which the reducer drops verbatim on a stale-token wake),
+//   * the `Effect::ClearClipboard.value` payload handed to the
+//     executor on a matching-token wake, and
+//   * the `EffectResult::CopyCode.result` `Ok` payload carried back
+//     from the executor.
+//
+// Each is wrapped in `Zeroizing<Vec<u8>>` so `Drop` zeroizes the bytes
+// before the underlying allocation is freed — covering both the
+// "after the clear attempt" path (executor drops the effect after
+// running the wipe) and the "stale-token drop" path (reducer drops
+// the rejected event without dispatching an effect).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn pending_clipboard_clear_value_field_is_zeroizing_vec() {
+    // Compile-time gate: building a `PendingClipboardClear` whose
+    // `value` is `Zeroizing<Vec<u8>>` only typechecks when the field
+    // accepts that exact type. A plain `Vec<u8>` field would fail
+    // to compile here.
+    let tmp = secure_tempdir();
+    let (_path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    enable_clipboard_clear(&mut vault, &store, 30);
+    let (token, deadline) = ClipboardClearPolicy::schedule(Instant::now(), vault.settings())
+        .expect("schedule yields Some when clipboard_clear_enabled");
+
+    let pending = PendingClipboardClear {
+        token,
+        value: Zeroizing::new(copy_bytes()),
+        deadline,
+    };
+
+    // The `value` deref'd as a slice must still expose the bytes for
+    // the only-if-unchanged comparison.
+    assert_eq!(pending.value.as_slice(), copy_bytes().as_slice());
+    // Explicit type binding locks the wrapper in.
+    let _: &Zeroizing<Vec<u8>> = &pending.value;
+}
+
+#[test]
+fn app_event_clipboard_clear_value_field_is_zeroizing_vec() {
+    let tmp = secure_tempdir();
+    let (_path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    enable_clipboard_clear(&mut vault, &store, 30);
+    let (token, _deadline) = ClipboardClearPolicy::schedule(Instant::now(), vault.settings())
+        .expect("schedule yields Some when clipboard_clear_enabled");
+
+    let event = AppEvent::ClipboardClear {
+        token,
+        value: Zeroizing::new(copy_bytes()),
+    };
+
+    match event {
+        AppEvent::ClipboardClear { value, .. } => {
+            assert_eq!(value.as_slice(), copy_bytes().as_slice());
+            let _: &Zeroizing<Vec<u8>> = &value;
+        }
+        other => panic!("expected ClipboardClear, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_clear_clipboard_value_field_is_zeroizing_vec() {
+    let effect = Effect::ClearClipboard {
+        value: Zeroizing::new(copy_bytes()),
+    };
+    match effect {
+        Effect::ClearClipboard { value } => {
+            assert_eq!(value.as_slice(), copy_bytes().as_slice());
+            let _: &Zeroizing<Vec<u8>> = &value;
+        }
+        other => panic!("expected ClearClipboard, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_copy_code_ok_value_is_zeroizing_vec() {
+    let result = EffectResult::CopyCode {
+        account_id: AccountId::new(),
+        result: Ok(Zeroizing::new(copy_bytes())),
+        completed_at: Instant::now(),
+    };
+    match result {
+        EffectResult::CopyCode {
+            result: Ok(value), ..
+        } => {
+            assert_eq!(value.as_slice(), copy_bytes().as_slice());
+            let _: &Zeroizing<Vec<u8>> = &value;
+        }
+        other => panic!("expected CopyCode Ok, got {other:?}"),
+    }
+}
+
+#[test]
+fn matching_token_wake_hands_clear_clipboard_effect_zeroizing_bytes() {
+    // End-to-end check: after the matching-token wake on `Locked`,
+    // the dispatched `Effect::ClearClipboard.value` is a
+    // `Zeroizing<Vec<u8>>` carrying the previously captured bytes.
+    // The executor drops this payload after the wipe; the zeroizing
+    // wrapper's Drop guarantees the bytes are wiped before the
+    // backing allocation is freed.
+    let tmp = secure_tempdir();
+    let (_path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    enable_clipboard_clear(&mut vault, &store, 30);
+    let (token, deadline) = ClipboardClearPolicy::schedule(Instant::now(), vault.settings())
+        .expect("schedule yields Some when clipboard_clear_enabled");
+
+    let path = PathBuf::from("/tmp/v.bin");
+    let captured = copy_bytes();
+    let state = AppState::Locked {
+        path: path.clone(),
+        pending_clipboard_clear: Some(PendingClipboardClear {
+            token,
+            value: Zeroizing::new(captured.clone()),
+            deadline,
+        }),
+    };
+
+    let (_next, effects) = reduce(
+        state,
+        AppEvent::ClipboardClear {
+            token,
+            value: Zeroizing::new(captured.clone()),
+        },
+    );
+
+    match &effects[..] {
+        [Effect::ClearClipboard { value }] => {
+            assert_eq!(
+                value.as_slice(),
+                captured.as_slice(),
+                "wipe effect must carry the captured bytes from pending state"
+            );
+            let _: &Zeroizing<Vec<u8>> = value;
+        }
+        other => panic!("expected exactly one Effect::ClearClipboard, got {other:?}"),
+    }
+}
+
+#[test]
+fn zeroizing_vec_zeroize_empties_buffer() {
+    // The `Zeroize::zeroize` contract for `Vec<u8>` — both the
+    // explicit call exercised here and the implicit one in
+    // `Zeroizing::<Vec<u8>>::drop` — zeros every byte of the
+    // backing buffer and resets the `Vec`'s length to 0. The
+    // `is_empty()` check is the safe-Rust observable side of that
+    // contract; the wrapper is the contract bearer for the
+    // `Pending` / `Effect` / `EffectResult` payloads above.
+    let mut value: Zeroizing<Vec<u8>> = Zeroizing::new(copy_bytes());
+    assert!(!value.is_empty(), "precondition: buffer is non-empty");
+
+    zeroize::Zeroize::zeroize(&mut *value);
+
+    assert!(
+        value.is_empty(),
+        "Zeroize::zeroize must reset the buffer to empty"
+    );
 }

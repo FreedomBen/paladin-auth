@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use std::time::{Instant, SystemTime};
 
 use secrecy::SecretString;
+use zeroize::Zeroizing;
 
 use paladin_core::{AccountId, ClipboardClearToken, Code, PaladinError, Store, Vault};
 
@@ -64,8 +65,10 @@ pub enum AppEvent {
         /// Token identifying which copy this clear is for.
         token: ClipboardClearToken,
         /// The previously copied bytes; checked against the current
-        /// clipboard contents for the only-if-unchanged rule.
-        value: Vec<u8>,
+        /// clipboard contents for the only-if-unchanged rule. Wrapped
+        /// in [`Zeroizing`] so a stale-token reducer drop wipes the
+        /// bytes before the backing allocation is freed.
+        value: Zeroizing<Vec<u8>>,
     },
 }
 
@@ -199,9 +202,12 @@ pub enum EffectResult {
         /// the source account even if selection has since moved.
         account_id: AccountId,
         /// The clipboard-write outcome. `Ok(value)` carries the bytes
-        /// the executor wrote to the OS clipboard; `Err(())` indicates
-        /// the `arboard` backend rejected the write.
-        result: Result<Vec<u8>, ()>,
+        /// the executor wrote to the OS clipboard, wrapped in
+        /// [`Zeroizing`] so the bytes are wiped on drop (covers the
+        /// non-`Unlocked` discard path where the carried result drops
+        /// without seeding `pending_clipboard_clear`); `Err(())`
+        /// indicates the `arboard` backend rejected the write.
+        result: Result<Zeroizing<Vec<u8>>, ()>,
         /// Monotonic clock sampled immediately after the clipboard
         /// write returned; used to derive the auto-clear deadline via
         /// [`paladin_core::ClipboardClearPolicy::schedule`].
@@ -257,8 +263,10 @@ pub enum Effect {
     ClearClipboard {
         /// The bytes the copy effect wrote to the clipboard; compared
         /// for byte-equality with the live clipboard contents inside
-        /// the executor.
-        value: Vec<u8>,
+        /// the executor. Wrapped in [`Zeroizing`] so the bytes are
+        /// wiped on drop once the executor finishes the
+        /// only-if-unchanged comparison.
+        value: Zeroizing<Vec<u8>>,
     },
     /// Advance the HOTP counter on the selected account, persist the
     /// new counter to disk, and surface the generated code through an

@@ -15,6 +15,7 @@ use paladin_core::{
     Vault, VaultLock, VaultStatus,
 };
 use secrecy::SecretString;
+use zeroize::Zeroizing;
 
 use crate::prompt::PassphraseBuffer;
 
@@ -35,9 +36,12 @@ use crate::prompt::PassphraseBuffer;
 /// event arrives so a later external copy is preserved. The bytes are
 /// non-secret-token-bearing on their own but reflect a code that was
 /// just exposed to the user, so the same zeroization discipline as
-/// other typed buffers applies; the field is exposed as `Vec<u8>` for
-/// now and tightens to a zeroizing wrapper alongside the
-/// "Sensitive UI buffers" coverage slice.
+/// other typed buffers applies — the field is wrapped in
+/// [`Zeroizing<Vec<u8>>`] so `Drop` wipes the bytes in place before
+/// the backing allocation is freed (covers the "after the clear
+/// attempt" path when the executor consumes
+/// [`Effect::ClearClipboard`] and the "supersession drop" path when
+/// a fresher copy replaces the pending slot).
 #[derive(Debug)]
 pub struct PendingClipboardClear {
     /// Monotonic token returned by
@@ -46,8 +50,9 @@ pub struct PendingClipboardClear {
     pub token: ClipboardClearToken,
     /// The bytes the copy effect wrote to the clipboard. Compared
     /// byte-equal against the current clipboard contents when the
-    /// wake fires; only-if-unchanged.
-    pub value: Vec<u8>,
+    /// wake fires; only-if-unchanged. Wrapped in [`Zeroizing`] so the
+    /// bytes are wiped on drop.
+    pub value: Zeroizing<Vec<u8>>,
     /// Monotonic wake-deadline; the timer thread sleeps until this
     /// instant and then sends an `AppEvent::ClipboardClear`.
     pub deadline: Instant,
