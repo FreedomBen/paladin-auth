@@ -197,6 +197,34 @@ pub enum Focus {
     Search,
 }
 
+/// State for the Remove modal.
+///
+/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Remove: a
+/// confirmation gate for removing the selected account. The
+/// `account_id` is snapshotted when the modal opens so a subsequent
+/// selection / search-filter change does not redirect the remove
+/// mid-confirm; the submit path passes `account_id` straight through
+/// to `Vault::remove` inside `Vault::mutate_and_save`.
+///
+/// [`Default`] yields a freshly generated [`AccountId`] sentinel so
+/// existing reducer tests that match on the variant discriminant can
+/// construct a placeholder without reaching into the vault.
+/// Production code never relies on [`Default`] — the reducer's
+/// modal-open path always populates `account_id` from the selected
+/// account.
+#[derive(Debug, Default)]
+pub struct RemoveModal {
+    /// Account being removed. Snapshotted at modal open time.
+    pub account_id: AccountId,
+    /// Inline save error from the most recent submit attempt, if any.
+    /// Rendered through
+    /// [`render_error_message`](crate::app::state::render_error_message)
+    /// so the surfaced wording matches the rest of the TUI's error
+    /// surface. The success / save-error rollback wiring lands
+    /// alongside the `EffectResult::Remove` slice.
+    pub error: Option<String>,
+}
+
 /// State for the Rename modal.
 ///
 /// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Rename:
@@ -253,7 +281,7 @@ pub enum Modal {
     /// Add an account — manual / `otpauth://` URI / clipboard-QR.
     Add,
     /// Confirm removal of the selected account.
-    Remove,
+    Remove(RemoveModal),
     /// Rename the selected account.
     Rename(RenameModal),
     /// Import an existing vault export (Paladin, Aegis, Google

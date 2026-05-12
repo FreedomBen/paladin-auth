@@ -27,7 +27,8 @@ use paladin_tui::app::event::{AppEvent, Effect, EffectResult};
 use paladin_tui::app::reducer::reduce;
 use paladin_tui::app::state::{
     compute_idle_deadline, decide_state_from_inspect, decide_state_from_open, render_error_message,
-    AppState, ChordLeader, Focus, HotpReveal, Modal, RenameModal, StatusLine, NO_ACCOUNT_SELECTED,
+    AppState, ChordLeader, Focus, HotpReveal, Modal, RemoveModal, RenameModal, StatusLine,
+    NO_ACCOUNT_SELECTED,
 };
 use paladin_tui::cli::{should_disable_color, GlobalArgs};
 use paladin_tui::prompt::PassphraseBuffer;
@@ -1685,7 +1686,64 @@ fn pressing_lowercase_r_on_unlocked_with_no_modal_open_opens_remove_modal() {
     // `R` (Shift+R) opens Rename. The lowercase / uppercase split is
     // the only thing distinguishing the two bindings. `r` is a
     // selection-gated opener, so the helper seeds an account first.
-    assert_selection_gated_key_opens_modal(key(KeyCode::Char('r')), &Modal::Remove);
+    assert_selection_gated_key_opens_modal(
+        key(KeyCode::Char('r')),
+        &Modal::Remove(RemoveModal::default()),
+    );
+}
+
+#[test]
+fn pressing_r_opens_remove_modal_prepopulated_with_selected_account_id() {
+    // Per IMPLEMENTATION_PLAN_03_TUI.md "Modals (per §6)" > Remove:
+    // a confirmation gate for removing the selected account. The
+    // reducer snapshots the selected account id at modal-open time so
+    // a subsequent selection / search change does not redirect the
+    // remove mid-confirm. Mirrors `RenameModal.account_id`; Remove
+    // just has no editable draft.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let id = add_totp_account(&mut vault, &store, "github");
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let (state, effects) = reduce(unlocked, key(KeyCode::Char('r')));
+    assert!(effects.is_empty(), "opening Remove must not emit effects");
+    match state {
+        AppState::Unlocked {
+            modal: Some(Modal::Remove(remove)),
+            status_line,
+            ..
+        } => {
+            assert_eq!(
+                remove.account_id, id,
+                "Remove modal must snapshot the selected account id"
+            );
+            assert!(
+                remove.error.is_none(),
+                "freshly opened Remove modal has no inline error"
+            );
+            assert!(
+                status_line.is_none(),
+                "Remove open with selection must not surface a status-line error"
+            );
+        }
+        AppState::Unlocked { modal, .. } => panic!("expected Modal::Remove, got {modal:?}"),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
 }
 
 #[test]
@@ -2400,7 +2458,7 @@ fn pressing_esc_on_unlocked_with_open_export_modal_closes_the_modal() {
 
 #[test]
 fn pressing_esc_on_unlocked_with_open_remove_modal_closes_the_modal() {
-    assert_esc_closes_modal(Modal::Remove);
+    assert_esc_closes_modal(Modal::Remove(RemoveModal::default()));
 }
 
 #[test]
@@ -8403,12 +8461,20 @@ fn pressing_ctrl_p_with_export_modal_open_aliases_shift_tab() {
 
 #[test]
 fn pressing_ctrl_n_with_remove_modal_open_aliases_tab() {
-    assert_ctrl_modal_alias_is_silent_no_op(Modal::Remove, ctrl(KeyCode::Char('n')), "`Ctrl-N`");
+    assert_ctrl_modal_alias_is_silent_no_op(
+        Modal::Remove(RemoveModal::default()),
+        ctrl(KeyCode::Char('n')),
+        "`Ctrl-N`",
+    );
 }
 
 #[test]
 fn pressing_ctrl_p_with_remove_modal_open_aliases_shift_tab() {
-    assert_ctrl_modal_alias_is_silent_no_op(Modal::Remove, ctrl(KeyCode::Char('p')), "`Ctrl-P`");
+    assert_ctrl_modal_alias_is_silent_no_op(
+        Modal::Remove(RemoveModal::default()),
+        ctrl(KeyCode::Char('p')),
+        "`Ctrl-P`",
+    );
 }
 
 #[test]
