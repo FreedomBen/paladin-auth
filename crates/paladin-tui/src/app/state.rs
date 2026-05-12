@@ -116,6 +116,16 @@ pub enum StatusLine {
 /// account selected' error and no effect."*
 pub const NO_ACCOUNT_SELECTED: &str = "no account selected";
 
+/// Status-line error string surfaced when an
+/// [`crate::app::event::Effect::CopyCode`] effect fails its clipboard
+/// write. Per `IMPLEMENTATION_PLAN_03_TUI.md` "Effect errors":
+/// *"Copy: show a status-line error if clipboard write fails; do not
+/// schedule auto-clear."* The wording mirrors the §5
+/// `clipboard_write_failed` envelope key the CLI uses on its failure
+/// path so all three front ends surface a recognizable phrase for
+/// the same condition.
+pub const CLIPBOARD_WRITE_FAILED: &str = "clipboard write failed";
+
 /// A pending vim chord leader on the list view.
 ///
 /// Set by the first press of a chord leader key and cleared by the

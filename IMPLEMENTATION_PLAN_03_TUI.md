@@ -729,8 +729,17 @@ end-to-end.
 
 ### Clipboard auto-clear (`tests/clipboard_tests.rs`)
 
-- [ ] Copy schedules a clear via
+- [x] Copy schedules a clear via
   `paladin_core::policy::clipboard_clear::ClipboardClearPolicy::schedule`.
+  *(Reducer-level: `EffectResult::CopyCode { result: Ok(value), … }`
+  on `Unlocked` routes through
+  `ClipboardClearPolicy::schedule(completed_at, vault.settings())`
+  and seeds `pending_clipboard_clear`; the schedule returns `None`
+  when `clipboard_clear_enabled = false` and the reducer leaves
+  `pending_clipboard_clear` untouched. `Err(())` surfaces the
+  `clipboard_write_failed` status-line error per "Effect errors"
+  without scheduling. The executor-side `arboard` write that
+  produces the `Ok(value)` lands with the clipboard-adapter slice.)*
 - [ ] Stale tokens are ignored on wake.
 - [ ] "Only-if-unchanged" honored when an external copy mutates the
   clipboard between copy and wake.

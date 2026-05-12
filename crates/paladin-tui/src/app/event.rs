@@ -157,6 +157,56 @@ pub enum EffectResult {
         /// returned; used to derive the reveal-window deadline.
         completed_at: Instant,
     },
+
+    /// Outcome of an [`Effect::CopyCode`] attempt.
+    ///
+    /// On `Ok(value)` (the executor's `arboard` write succeeded),
+    /// while [`crate::app::state::AppState::Unlocked`] the reducer
+    /// routes through
+    /// [`paladin_core::ClipboardClearPolicy::schedule`] to seed
+    /// `pending_clipboard_clear` with the issued token, the captured
+    /// `value`, and the policy-returned deadline — per
+    /// `IMPLEMENTATION_PLAN_03_TUI.md` "Clipboard auto-clear (per
+    /// §6)": *"at copy time it stores the latest
+    /// `ClipboardClearToken` plus the captured bytes in UI state."*
+    /// When the vault's `clipboard_clear_enabled` is `false` the
+    /// policy returns `None` and the reducer leaves
+    /// `pending_clipboard_clear` untouched. A successful copy also
+    /// clears any prior `status_line` (last-write-wins per the
+    /// [`crate::app::state::StatusLine`] contract).
+    ///
+    /// On `Err(())` (the `arboard` backend failed) the reducer
+    /// surfaces a [`crate::app::state::StatusLine::Error`] carrying
+    /// [`crate::app::state::CLIPBOARD_WRITE_FAILED`] and leaves
+    /// `pending_clipboard_clear` unchanged — per
+    /// `IMPLEMENTATION_PLAN_03_TUI.md` "Effect errors": *"Copy: show
+    /// a status-line error if clipboard write fails; do not schedule
+    /// auto-clear."* The `arboard` error is collapsed to `()` because
+    /// the user-facing wording is fixed; the executor's failure
+    /// envelope does not need to round-trip a typed error.
+    ///
+    /// Results delivered while not on `Unlocked` (auto-lock or quit
+    /// in-flight) are discarded so the carried bytes drop without
+    /// mutating non-`Unlocked` state.
+    ///
+    /// `completed_at` is the monotonic instant the executor sampled
+    /// immediately after the clipboard write returned; the reducer
+    /// feeds it into [`paladin_core::ClipboardClearPolicy::schedule`]
+    /// so the auto-clear deadline rebases on the actual copy time.
+    CopyCode {
+        /// The account whose code was (or was meant to be) copied.
+        /// Carried back so the reducer can correlate the result with
+        /// the source account even if selection has since moved.
+        account_id: AccountId,
+        /// The clipboard-write outcome. `Ok(value)` carries the bytes
+        /// the executor wrote to the OS clipboard; `Err(())` indicates
+        /// the `arboard` backend rejected the write.
+        result: Result<Vec<u8>, ()>,
+        /// Monotonic clock sampled immediately after the clipboard
+        /// write returned; used to derive the auto-clear deadline via
+        /// [`paladin_core::ClipboardClearPolicy::schedule`].
+        completed_at: Instant,
+    },
 }
 
 /// Side effects produced by the reducer.

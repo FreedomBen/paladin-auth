@@ -14,15 +14,16 @@ use std::time::Instant;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 
 use paladin_core::{
-    hotp_reveal_deadline, AccountId, ClipboardClearToken, Code, IdlePolicy, PaladinError, Store,
-    Vault,
+    hotp_reveal_deadline, AccountId, ClipboardClearPolicy, ClipboardClearToken, Code, IdlePolicy,
+    PaladinError, Store, Vault,
 };
 use secrecy::SecretString;
 
 use crate::app::event::{AppEvent, Effect, EffectResult};
 use crate::app::state::{
     compute_idle_deadline, initial_selection, render_error_message, AppState, ChordLeader, Focus,
-    HotpReveal, Modal, StatusLine, NO_ACCOUNT_SELECTED,
+    HotpReveal, Modal, PendingClipboardClear, StatusLine, CLIPBOARD_WRITE_FAILED,
+    NO_ACCOUNT_SELECTED,
 };
 use crate::search::{filtered_account_ids, select_after_search};
 
@@ -247,7 +248,76 @@ fn reduce_effect_result(state: AppState, result: EffectResult) -> (AppState, Vec
             staged_code,
             completed_at,
         } => reduce_hotp_advance_result(state, account_id, result, staged_code, completed_at),
+        EffectResult::CopyCode {
+            account_id,
+            result,
+            completed_at,
+        } => reduce_copy_code_result(state, account_id, result, completed_at),
     }
+}
+
+/// Handle the outcome of an [`Effect::CopyCode`].
+///
+/// On `Ok(value)` while [`AppState::Unlocked`], route through
+/// [`paladin_core::ClipboardClearPolicy::schedule`] to obtain a
+/// monotonic token and the policy-derived deadline; when
+/// `clipboard.clear_enabled = true` the policy returns
+/// `Some((token, deadline))` and the reducer seeds
+/// `pending_clipboard_clear` with the captured bytes. When the
+/// setting is disabled the policy returns `None` and
+/// `pending_clipboard_clear` is left untouched — per
+/// `IMPLEMENTATION_PLAN_03_TUI.md` "Clipboard auto-clear (per §6)":
+/// *"at copy time it stores the latest `ClipboardClearToken` plus the
+/// captured bytes in UI state."* The successful arm also clears any
+/// prior `status_line` (last-write-wins, matching
+/// [`reduce_hotp_advance_result`]'s Ok contract).
+///
+/// On `Err(())` set a status-line error using
+/// [`CLIPBOARD_WRITE_FAILED`] and leave `pending_clipboard_clear`
+/// unchanged — per the same plan's "Effect errors" rule: *"Copy:
+/// show a status-line error if clipboard write fails; do not
+/// schedule auto-clear."*
+///
+/// On any non-`Unlocked` state (auto-lock fired between the copy
+/// effect and the result, quit-in-flight, …) the result is dropped
+/// so the carried bytes drop without mutating state.
+///
+/// `account_id` is carried back on the result for symmetry with
+/// [`EffectResult::HotpAdvance`] and to keep future hooks
+/// (per-account confirmations, focus moves) self-contained; the
+/// scheduling decision itself does not depend on it.
+fn reduce_copy_code_result(
+    mut state: AppState,
+    _account_id: AccountId,
+    result: Result<Vec<u8>, ()>,
+    completed_at: Instant,
+) -> (AppState, Vec<Effect>) {
+    if let AppState::Unlocked {
+        ref vault,
+        ref mut pending_clipboard_clear,
+        ref mut status_line,
+        ..
+    } = state
+    {
+        match result {
+            Ok(value) => {
+                if let Some((token, deadline)) =
+                    ClipboardClearPolicy::schedule(completed_at, vault.settings())
+                {
+                    *pending_clipboard_clear = Some(PendingClipboardClear {
+                        token,
+                        value,
+                        deadline,
+                    });
+                }
+                *status_line = None;
+            }
+            Err(()) => {
+                *status_line = Some(StatusLine::Error(CLIPBOARD_WRITE_FAILED.to_string()));
+            }
+        }
+    }
+    (state, Vec::new())
 }
 
 /// Handle the outcome of an [`Effect::HotpAdvance`].
