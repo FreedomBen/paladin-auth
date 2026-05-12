@@ -374,6 +374,67 @@ pub struct SettingsModal {
     pub error: Option<String>,
 }
 
+/// Which input mode the Add modal is currently presenting.
+///
+/// Per `DESIGN.md` §6 / `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per
+/// §6)" > Add: *"Add supports manual entry, paste of an `otpauth://`
+/// URI …, and QR scan from clipboard image bytes."* The three modes
+/// share the modal frame but feed different fields and submit paths;
+/// switching modes zeroizes the inactive mode's secret-bearing
+/// buffers per the plan's "Modals (per §6)" zeroize rule, which
+/// lands alongside the per-mode field slices.
+///
+/// [`Default`] yields [`AddMode::Manual`] so the modal opens on the
+/// manual-entry tab — the most common case and the one CLI users
+/// already know from `paladin add` with no flags (DESIGN §13).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum AddMode {
+    /// Manual entry: typed label, secret, issuer, algorithm, digits,
+    /// period / counter, kind. Default mode on modal open.
+    #[default]
+    Manual,
+    /// Paste of an `otpauth://` URI; decoded via
+    /// [`paladin_core::parse_otpauth`] on submit.
+    Uri,
+    /// Scan a QR code from clipboard image bytes; imported via the
+    /// shared QR-decode path with `ImportConflict::Skip` per DESIGN
+    /// §6.
+    Qr,
+}
+
+/// State for the Add modal.
+///
+/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add: the
+/// modal hosts three input modes (manual / URI / QR), each with its
+/// own field set. This slice introduces the payload struct and the
+/// segmented [`mode`](AddModal::mode) selector; per-mode fields,
+/// focus cycling, duplicate-gate pending state, and the post-QR
+/// counts panel land in subsequent slices alongside their
+/// effect-wiring.
+///
+/// [`Default`] yields a clean Manual-mode modal with no inline
+/// error so existing reducer tests that match on the modal
+/// discriminant can construct a placeholder, and so the reducer's
+/// `'a'` opener can build one without reaching into the vault (Add
+/// starts from a blank form rather than pre-populating from
+/// vault data, unlike Rename / Remove / Settings).
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct AddModal {
+    /// Which input mode is currently active. Cycled by the segmented
+    /// selector (the `←` / `→` arrows per the plan's "Modals (per
+    /// §6)" cross-modal navigation rules); seeded to
+    /// [`AddMode::Manual`] at modal open time.
+    pub mode: AddMode,
+    /// Inline validation / save error from the most recent submit
+    /// attempt, if any. Rendered through
+    /// [`render_error_message`](crate::app::state::render_error_message)
+    /// so the surfaced wording matches the rest of the TUI's error
+    /// surface. Subsequent edits clear this slot so the user sees
+    /// they are re-trying; a successful submit transitions through
+    /// the Add effect slice (which lands later).
+    pub error: Option<String>,
+}
+
 /// An open modal dialog over the main list view.
 ///
 /// Discarded on the `Unlocked → Locked` auto-lock transition
@@ -391,7 +452,7 @@ pub struct SettingsModal {
 #[derive(Debug)]
 pub enum Modal {
     /// Add an account — manual / `otpauth://` URI / clipboard-QR.
-    Add,
+    Add(AddModal),
     /// Confirm removal of the selected account.
     Remove(RemoveModal),
     /// Rename the selected account.

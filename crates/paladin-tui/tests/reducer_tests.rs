@@ -27,8 +27,8 @@ use paladin_tui::app::event::{AppEvent, Effect, EffectResult};
 use paladin_tui::app::reducer::reduce;
 use paladin_tui::app::state::{
     compute_idle_deadline, decide_state_from_inspect, decide_state_from_open, render_error_message,
-    AppState, ChordLeader, Focus, HotpReveal, Modal, RemoveModal, RenameModal, SettingsFocus,
-    SettingsModal, StatusLine, NO_ACCOUNT_SELECTED,
+    AddModal, AddMode, AppState, ChordLeader, Focus, HotpReveal, Modal, RemoveModal, RenameModal,
+    SettingsFocus, SettingsModal, StatusLine, NO_ACCOUNT_SELECTED,
 };
 use paladin_tui::cli::{should_disable_color, GlobalArgs};
 use paladin_tui::prompt::PassphraseBuffer;
@@ -1489,14 +1489,45 @@ fn pressing_a_on_unlocked_with_no_modal_open_opens_add_modal() {
     assert!(effects.is_empty(), "opening a modal must not emit effects");
     match state {
         AppState::Unlocked {
-            modal: Some(Modal::Add),
+            modal: Some(Modal::Add(add)),
             ..
-        } => {}
+        } => {
+            assert_eq!(
+                add.mode,
+                AddMode::Manual,
+                "Add modal opens on the Manual input-mode tab per DESIGN §6"
+            );
+            assert!(
+                add.error.is_none(),
+                "freshly opened Add modal must have no inline error, got {:?}",
+                add.error
+            );
+        }
         AppState::Unlocked { modal, .. } => {
-            panic!("expected modal=Some(Modal::Add), got modal={modal:?}")
+            panic!("expected modal=Some(Modal::Add(_)), got modal={modal:?}")
         }
         other => panic!("expected Unlocked, got {other:?}"),
     }
+}
+
+#[test]
+fn add_modal_default_mode_is_manual() {
+    // The Add modal opens on the Manual tab per DESIGN §6: *"Add
+    // supports manual entry, paste of an `otpauth://` URI ..., and QR
+    // scan from clipboard image bytes"*. `AddModal::default()` must
+    // mirror this so the placeholder shape used by reducer tests and
+    // the `'a'` opener agree on the initial input mode.
+    let add = AddModal::default();
+    assert_eq!(add.mode, AddMode::Manual);
+}
+
+#[test]
+fn add_modal_default_has_no_inline_error() {
+    // No save / validation attempt has happened on a fresh modal, so
+    // the inline error slot starts empty per the Settings/Rename/Remove
+    // pattern.
+    let add = AddModal::default();
+    assert!(add.error.is_none(), "got {:?}", add.error);
 }
 
 #[test]
@@ -2444,7 +2475,7 @@ fn effect_result_remove_on_non_remove_modal_is_discarded() {
         idle_deadline: None,
         pending_clipboard_clear: None,
         hotp_reveal: None,
-        modal: Some(Modal::Add),
+        modal: Some(Modal::Add(AddModal::default())),
         selected: Some(id),
         pending_chord_leader: None,
         viewport_height: 0,
@@ -2457,7 +2488,7 @@ fn effect_result_remove_on_non_remove_modal_is_discarded() {
     assert!(effects.is_empty());
     match state {
         AppState::Unlocked {
-            modal: Some(Modal::Add),
+            modal: Some(Modal::Add(_)),
             status_line: None,
             ..
         } => {}
@@ -2748,7 +2779,7 @@ fn effect_result_rename_on_non_rename_modal_is_discarded() {
         idle_deadline: None,
         pending_clipboard_clear: None,
         hotp_reveal: None,
-        modal: Some(Modal::Add),
+        modal: Some(Modal::Add(AddModal::default())),
         selected: Some(id),
         pending_chord_leader: None,
         viewport_height: 0,
@@ -2761,7 +2792,7 @@ fn effect_result_rename_on_non_rename_modal_is_discarded() {
     assert!(effects.is_empty());
     match state {
         AppState::Unlocked {
-            modal: Some(Modal::Add),
+            modal: Some(Modal::Add(_)),
             status_line: None,
             ..
         } => {}
@@ -4195,7 +4226,7 @@ fn effect_result_settings_on_non_settings_modal_is_discarded() {
         idle_deadline: None,
         pending_clipboard_clear: None,
         hotp_reveal: None,
-        modal: Some(Modal::Add),
+        modal: Some(Modal::Add(AddModal::default())),
         selected: None,
         pending_chord_leader: None,
         viewport_height: 0,
@@ -4208,7 +4239,7 @@ fn effect_result_settings_on_non_settings_modal_is_discarded() {
     assert!(effects.is_empty());
     match state {
         AppState::Unlocked {
-            modal: Some(Modal::Add),
+            modal: Some(Modal::Add(_)),
             status_line: None,
             ..
         } => {}
@@ -4277,7 +4308,7 @@ fn assert_esc_closes_modal(opened: Modal) {
 
 #[test]
 fn pressing_esc_on_unlocked_with_open_add_modal_closes_the_modal() {
-    assert_esc_closes_modal(Modal::Add);
+    assert_esc_closes_modal(Modal::Add(AddModal::default()));
 }
 
 #[test]
@@ -4371,7 +4402,7 @@ fn pressing_q_on_unlocked_with_modal_open_does_not_quit() {
         idle_deadline: None,
         pending_clipboard_clear: None,
         hotp_reveal: None,
-        modal: Some(Modal::Add),
+        modal: Some(Modal::Add(AddModal::default())),
         selected: None,
         pending_chord_leader: None,
         viewport_height: 0,
@@ -4387,7 +4418,7 @@ fn pressing_q_on_unlocked_with_modal_open_does_not_quit() {
     );
     match state {
         AppState::Unlocked {
-            modal: Some(Modal::Add),
+            modal: Some(Modal::Add(_)),
             ..
         } => {}
         AppState::Unlocked { modal, .. } => {
@@ -4731,7 +4762,7 @@ fn pressing_j_with_modal_open_does_not_move_selection() {
         idle_deadline: None,
         pending_clipboard_clear: None,
         hotp_reveal: None,
-        modal: Some(Modal::Add),
+        modal: Some(Modal::Add(AddModal::default())),
         selected: Some(a),
         pending_chord_leader: None,
         viewport_height: 0,
@@ -4745,7 +4776,7 @@ fn pressing_j_with_modal_open_does_not_move_selection() {
     match state {
         AppState::Unlocked {
             selected,
-            modal: Some(Modal::Add),
+            modal: Some(Modal::Add(_)),
             ..
         } => assert_eq!(
             selected,
@@ -5093,7 +5124,7 @@ fn pressing_end_with_modal_open_does_not_move_selection() {
         idle_deadline: None,
         pending_clipboard_clear: None,
         hotp_reveal: None,
-        modal: Some(Modal::Add),
+        modal: Some(Modal::Add(AddModal::default())),
         selected: Some(a),
         pending_chord_leader: None,
         viewport_height: 0,
@@ -5107,7 +5138,7 @@ fn pressing_end_with_modal_open_does_not_move_selection() {
     match state {
         AppState::Unlocked {
             selected,
-            modal: Some(Modal::Add),
+            modal: Some(Modal::Add(_)),
             ..
         } => assert_eq!(
             selected,
@@ -5301,7 +5332,7 @@ fn pressing_shift_g_with_modal_open_does_not_move_selection() {
         idle_deadline: None,
         pending_clipboard_clear: None,
         hotp_reveal: None,
-        modal: Some(Modal::Add),
+        modal: Some(Modal::Add(AddModal::default())),
         selected: Some(a),
         pending_chord_leader: None,
         viewport_height: 0,
@@ -5315,7 +5346,7 @@ fn pressing_shift_g_with_modal_open_does_not_move_selection() {
     match state {
         AppState::Unlocked {
             selected,
-            modal: Some(Modal::Add),
+            modal: Some(Modal::Add(_)),
             ..
         } => assert_eq!(
             selected,
@@ -5608,7 +5639,7 @@ fn pressing_modal_opener_after_g_clears_chord_and_opens_modal() {
             ..
         } => {
             assert!(
-                matches!(modal, Some(Modal::Add)),
+                matches!(modal, Some(Modal::Add(_))),
                 "`a` after `g` must still open the Add modal"
             );
             assert_eq!(
@@ -7594,7 +7625,7 @@ fn pressing_modal_opener_after_z_clears_chord_and_opens_modal() {
     assert!(effects.is_empty());
     match state {
         AppState::Unlocked {
-            modal: Some(Modal::Add),
+            modal: Some(Modal::Add(_)),
             pending_chord_leader,
             ..
         } => assert_eq!(
@@ -9310,7 +9341,7 @@ fn pressing_n_with_modal_open_emits_no_effect() {
         idle_deadline: None,
         pending_clipboard_clear: None,
         hotp_reveal: None,
-        modal: Some(Modal::Add),
+        modal: Some(Modal::Add(AddModal::default())),
         selected: Some(hotp_id),
         pending_chord_leader: None,
         viewport_height: 0,
@@ -9431,7 +9462,7 @@ fn pressing_non_selection_gated_opener_with_no_selection_does_not_set_status_lin
     // "no account selected" error while opening Add / Import /
     // Export / Passphrase / Settings on an empty vault.
     for (letter, expected) in [
-        ('a', Modal::Add),
+        ('a', Modal::Add(AddModal::default())),
         ('i', Modal::Import),
         ('e', Modal::Export),
         ('p', Modal::Passphrase),
@@ -10265,12 +10296,20 @@ fn assert_ctrl_modal_alias_is_silent_no_op(modal_to_open: Modal, event: AppEvent
 
 #[test]
 fn pressing_ctrl_n_with_add_modal_open_aliases_tab() {
-    assert_ctrl_modal_alias_is_silent_no_op(Modal::Add, ctrl(KeyCode::Char('n')), "`Ctrl-N`");
+    assert_ctrl_modal_alias_is_silent_no_op(
+        Modal::Add(AddModal::default()),
+        ctrl(KeyCode::Char('n')),
+        "`Ctrl-N`",
+    );
 }
 
 #[test]
 fn pressing_ctrl_p_with_add_modal_open_aliases_shift_tab() {
-    assert_ctrl_modal_alias_is_silent_no_op(Modal::Add, ctrl(KeyCode::Char('p')), "`Ctrl-P`");
+    assert_ctrl_modal_alias_is_silent_no_op(
+        Modal::Add(AddModal::default()),
+        ctrl(KeyCode::Char('p')),
+        "`Ctrl-P`",
+    );
 }
 
 #[test]
@@ -10458,7 +10497,7 @@ fn pressing_ctrl_n_with_modal_open_clears_pending_chord_leader() {
         idle_deadline: None,
         pending_clipboard_clear: None,
         hotp_reveal: None,
-        modal: Some(Modal::Add),
+        modal: Some(Modal::Add(AddModal::default())),
         selected: Some(a),
         pending_chord_leader: Some(ChordLeader::G),
         viewport_height: 0,
@@ -10472,7 +10511,7 @@ fn pressing_ctrl_n_with_modal_open_clears_pending_chord_leader() {
     match state {
         AppState::Unlocked {
             pending_chord_leader,
-            modal: Some(Modal::Add),
+            modal: Some(Modal::Add(_)),
             ..
         } => assert!(
             pending_chord_leader.is_none(),
@@ -10495,7 +10534,7 @@ fn pressing_ctrl_p_with_modal_open_clears_pending_chord_leader() {
         idle_deadline: None,
         pending_clipboard_clear: None,
         hotp_reveal: None,
-        modal: Some(Modal::Add),
+        modal: Some(Modal::Add(AddModal::default())),
         selected: Some(a),
         pending_chord_leader: Some(ChordLeader::Z),
         viewport_height: 0,
@@ -10509,7 +10548,7 @@ fn pressing_ctrl_p_with_modal_open_clears_pending_chord_leader() {
     match state {
         AppState::Unlocked {
             pending_chord_leader,
-            modal: Some(Modal::Add),
+            modal: Some(Modal::Add(_)),
             ..
         } => assert!(
             pending_chord_leader.is_none(),
@@ -10989,7 +11028,7 @@ fn pressing_enter_on_unlocked_with_modal_open_emits_no_effect() {
         idle_deadline: None,
         pending_clipboard_clear: None,
         hotp_reveal: None,
-        modal: Some(Modal::Add),
+        modal: Some(Modal::Add(AddModal::default())),
         selected: Some(totp_id),
         pending_chord_leader: None,
         viewport_height: 0,
@@ -11005,7 +11044,7 @@ fn pressing_enter_on_unlocked_with_modal_open_emits_no_effect() {
     );
     match state {
         AppState::Unlocked {
-            modal: Some(Modal::Add),
+            modal: Some(Modal::Add(_)),
             ..
         } => {}
         AppState::Unlocked { modal, .. } => {

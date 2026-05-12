@@ -22,9 +22,9 @@ use zeroize::Zeroizing;
 
 use crate::app::event::{AppEvent, Effect, EffectResult};
 use crate::app::state::{
-    compute_idle_deadline, initial_selection, render_error_message, AppState, ChordLeader, Focus,
-    HotpReveal, Modal, PendingClipboardClear, RemoveModal, RenameModal, SettingsFocus,
-    SettingsModal, StatusLine, CLIPBOARD_WRITE_FAILED, NO_ACCOUNT_SELECTED,
+    compute_idle_deadline, initial_selection, render_error_message, AddModal, AppState,
+    ChordLeader, Focus, HotpReveal, Modal, PendingClipboardClear, RemoveModal, RenameModal,
+    SettingsFocus, SettingsModal, StatusLine, CLIPBOARD_WRITE_FAILED, NO_ACCOUNT_SELECTED,
 };
 use crate::search::{filtered_account_ids, select_after_search};
 
@@ -1866,7 +1866,7 @@ fn route_search_focus_char(
 /// the live [`paladin_core::VaultSettings`].
 fn modal_opener_for_char(c: char) -> Option<Modal> {
     Some(match c {
-        'a' => Modal::Add,
+        'a' => Modal::Add(AddModal::default()),
         'i' => Modal::Import,
         'e' => Modal::Export,
         'p' => Modal::Passphrase,
