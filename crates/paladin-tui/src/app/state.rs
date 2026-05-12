@@ -262,6 +262,57 @@ pub struct RenameModal {
     pub error: Option<String>,
 }
 
+/// Which Settings field currently holds modal-local focus.
+///
+/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)": *"`Tab` and
+/// `Ctrl-N` move to the next control, `Shift-Tab` and `Ctrl-P` move
+/// to the previous control."* The Settings modal cycles through its
+/// four pending fields in reading order: the `auto_lock.enabled`
+/// toggle, the `auto_lock.timeout_secs` spinner, the
+/// `clipboard.clear_enabled` toggle, and the `clipboard.clear_secs`
+/// spinner. `Space` toggles the focused boolean field; `↑` / `↓`
+/// adjust the focused spinner; both pairs are no-ops on the opposite
+/// field kind. [`Default`] places focus on the first field so a
+/// freshly opened modal mirrors the visual top-down read order.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsFocus {
+    /// `auto_lock.enabled` toggle (default focus on modal open).
+    #[default]
+    AutoLockEnabled,
+    /// `auto_lock.timeout_secs` spinner.
+    AutoLockTimeoutSecs,
+    /// `clipboard.clear_enabled` toggle.
+    ClipboardClearEnabled,
+    /// `clipboard.clear_secs` spinner.
+    ClipboardClearSecs,
+}
+
+impl SettingsFocus {
+    /// Advance focus to the next field, wrapping after the last
+    /// field so `Tab` / `Ctrl-N` cycle indefinitely.
+    #[must_use]
+    pub fn next(self) -> Self {
+        match self {
+            Self::AutoLockEnabled => Self::AutoLockTimeoutSecs,
+            Self::AutoLockTimeoutSecs => Self::ClipboardClearEnabled,
+            Self::ClipboardClearEnabled => Self::ClipboardClearSecs,
+            Self::ClipboardClearSecs => Self::AutoLockEnabled,
+        }
+    }
+
+    /// Retreat focus to the previous field, wrapping before the
+    /// first field so `Shift-Tab` / `Ctrl-P` cycle indefinitely.
+    #[must_use]
+    pub fn prev(self) -> Self {
+        match self {
+            Self::AutoLockEnabled => Self::ClipboardClearSecs,
+            Self::AutoLockTimeoutSecs => Self::AutoLockEnabled,
+            Self::ClipboardClearEnabled => Self::AutoLockTimeoutSecs,
+            Self::ClipboardClearSecs => Self::ClipboardClearEnabled,
+        }
+    }
+}
+
 /// State for the Settings modal.
 ///
 /// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Settings:
@@ -282,13 +333,13 @@ pub struct RenameModal {
 /// Settings effect slice.
 ///
 /// [`Default`] yields the same shape that `SettingsModal::default()`
-/// would produce against a brand-new vault: both toggles off and the
-/// minimum allowed spinner values per the shared core bounds. It
-/// exists so existing reducer tests that match on the modal
-/// discriminant can construct a placeholder without reaching into
-/// the vault — production code never relies on it, because the
-/// reducer's modal-open path always populates the fields from the
-/// live vault settings.
+/// would produce against a brand-new vault: both toggles off, the
+/// minimum allowed spinner values per the shared core bounds, and
+/// focus on the first field. It exists so existing reducer tests that
+/// match on the modal discriminant can construct a placeholder
+/// without reaching into the vault — production code never relies on
+/// it, because the reducer's modal-open path always populates the
+/// fields from the live vault settings.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct SettingsModal {
     /// Pending `auto_lock.enabled` value. Snapshotted from
@@ -308,6 +359,10 @@ pub struct SettingsModal {
     /// Pending `clipboard.clear_secs` value. Clamped on edit to
     /// [`paladin_core::CLIPBOARD_CLEAR_SECS_MIN`]..=[`paladin_core::CLIPBOARD_CLEAR_SECS_MAX`].
     pub clipboard_clear_secs: u32,
+    /// Which field currently holds modal-local focus. Seeded to
+    /// [`SettingsFocus::AutoLockEnabled`] at modal open time and
+    /// cycled by `Tab` / `Shift-Tab` / `Ctrl-N` / `Ctrl-P`.
+    pub focus: SettingsFocus,
     /// Inline validation / save error from the most recent submit
     /// attempt, if any. Rendered through
     /// [`render_error_message`](crate::app::state::render_error_message)

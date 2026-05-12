@@ -27,8 +27,8 @@ use paladin_tui::app::event::{AppEvent, Effect, EffectResult};
 use paladin_tui::app::reducer::reduce;
 use paladin_tui::app::state::{
     compute_idle_deadline, decide_state_from_inspect, decide_state_from_open, render_error_message,
-    AppState, ChordLeader, Focus, HotpReveal, Modal, RemoveModal, RenameModal, SettingsModal,
-    StatusLine, NO_ACCOUNT_SELECTED,
+    AppState, ChordLeader, Focus, HotpReveal, Modal, RemoveModal, RenameModal, SettingsFocus,
+    SettingsModal, StatusLine, NO_ACCOUNT_SELECTED,
 };
 use paladin_tui::cli::{should_disable_color, GlobalArgs};
 use paladin_tui::prompt::PassphraseBuffer;
@@ -2888,6 +2888,221 @@ fn pressing_s_opens_settings_modal_prepopulated_with_vault_config() {
         AppState::Unlocked { modal, .. } => {
             panic!("expected Modal::Settings, got {modal:?}")
         }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Settings modal — field focus + Tab/Shift-Tab/Ctrl-N/Ctrl-P cycling
+// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Reducer — "Modal-local
+//  navigation covers Tab / Shift-Tab, the Ctrl-N / Ctrl-P aliases …")
+//
+// The Settings modal traps Tab / Shift-Tab and their modal-LOCAL
+// aliases `Ctrl-N` / `Ctrl-P` to cycle [`SettingsFocus`] through the
+// four pending fields in reading order: auto-lock toggle → auto-lock
+// spinner → clipboard-clear toggle → clipboard-clear spinner →
+// wrap. Focus is modal-local; the live `VaultSettings` is untouched
+// until a future Confirm slice runs the setters inside one
+// `Vault::mutate_and_save` transaction.
+// ---------------------------------------------------------------------------
+
+/// Open the Settings modal on a fresh plaintext vault with default
+/// settings, returning the populated `AppState` ready for focus-key
+/// tests.
+fn fresh_unlocked_with_settings_modal(tmp: &tempfile::TempDir) -> AppState {
+    let unlocked = fresh_plaintext_unlocked(tmp);
+    let (state, effects) = reduce(unlocked, key(KeyCode::Char('s')));
+    assert!(effects.is_empty(), "opening Settings must not emit effects");
+    state
+}
+
+/// Pull the open `SettingsModal` out of an `Unlocked` state by ref,
+/// panicking with a clear message if Settings is not the open modal.
+fn settings_modal_ref(state: &AppState) -> &SettingsModal {
+    match state {
+        AppState::Unlocked {
+            modal: Some(Modal::Settings(s)),
+            ..
+        } => s,
+        AppState::Unlocked { modal, .. } => {
+            panic!("expected Modal::Settings open, got modal={modal:?}")
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn settings_modal_opens_with_default_focus_on_auto_lock_enabled() {
+    // Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)": focus
+    // starts on the first field so the visual top-down reading order
+    // matches the keyboard entry point. `SettingsFocus::default()`
+    // is `AutoLockEnabled`.
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_settings_modal(&tmp);
+    assert_eq!(
+        settings_modal_ref(&state).focus,
+        SettingsFocus::AutoLockEnabled
+    );
+}
+
+#[test]
+fn tab_in_settings_modal_advances_focus_through_all_fields_with_wrap() {
+    let tmp = secure_tempdir();
+    let mut state = fresh_unlocked_with_settings_modal(&tmp);
+    let order = [
+        SettingsFocus::AutoLockTimeoutSecs,
+        SettingsFocus::ClipboardClearEnabled,
+        SettingsFocus::ClipboardClearSecs,
+        SettingsFocus::AutoLockEnabled,
+    ];
+    for (i, expected) in order.iter().enumerate() {
+        let (next, effects) = reduce(state, key(KeyCode::Tab));
+        assert!(
+            effects.is_empty(),
+            "Tab inside Settings (step {i}) must not emit effects"
+        );
+        assert_eq!(
+            settings_modal_ref(&next).focus,
+            *expected,
+            "Tab step {i} should land on {expected:?}"
+        );
+        state = next;
+    }
+}
+
+#[test]
+fn shift_tab_in_settings_modal_retreats_focus_through_all_fields_with_wrap() {
+    let tmp = secure_tempdir();
+    let mut state = fresh_unlocked_with_settings_modal(&tmp);
+    let order = [
+        SettingsFocus::ClipboardClearSecs,
+        SettingsFocus::ClipboardClearEnabled,
+        SettingsFocus::AutoLockTimeoutSecs,
+        SettingsFocus::AutoLockEnabled,
+    ];
+    for (i, expected) in order.iter().enumerate() {
+        let (next, effects) = reduce(state, key(KeyCode::BackTab));
+        assert!(
+            effects.is_empty(),
+            "Shift-Tab inside Settings (step {i}) must not emit effects"
+        );
+        assert_eq!(
+            settings_modal_ref(&next).focus,
+            *expected,
+            "Shift-Tab step {i} should land on {expected:?}"
+        );
+        state = next;
+    }
+}
+
+#[test]
+fn ctrl_n_in_settings_modal_advances_focus_like_tab() {
+    // `Ctrl-N` is the modal-LOCAL alias for `Tab` per the keybindings
+    // table; the observable behavior must match `Tab` exactly inside
+    // a focusable-field modal.
+    let tmp = secure_tempdir();
+    let mut state = fresh_unlocked_with_settings_modal(&tmp);
+    let order = [
+        SettingsFocus::AutoLockTimeoutSecs,
+        SettingsFocus::ClipboardClearEnabled,
+        SettingsFocus::ClipboardClearSecs,
+        SettingsFocus::AutoLockEnabled,
+    ];
+    for (i, expected) in order.iter().enumerate() {
+        let (next, effects) = reduce(state, ctrl(KeyCode::Char('n')));
+        assert!(
+            effects.is_empty(),
+            "Ctrl-N inside Settings (step {i}) must not emit effects"
+        );
+        assert_eq!(
+            settings_modal_ref(&next).focus,
+            *expected,
+            "Ctrl-N step {i} should land on {expected:?}"
+        );
+        state = next;
+    }
+}
+
+#[test]
+fn ctrl_p_in_settings_modal_retreats_focus_like_shift_tab() {
+    let tmp = secure_tempdir();
+    let mut state = fresh_unlocked_with_settings_modal(&tmp);
+    let order = [
+        SettingsFocus::ClipboardClearSecs,
+        SettingsFocus::ClipboardClearEnabled,
+        SettingsFocus::AutoLockTimeoutSecs,
+        SettingsFocus::AutoLockEnabled,
+    ];
+    for (i, expected) in order.iter().enumerate() {
+        let (next, effects) = reduce(state, ctrl(KeyCode::Char('p')));
+        assert!(
+            effects.is_empty(),
+            "Ctrl-P inside Settings (step {i}) must not emit effects"
+        );
+        assert_eq!(
+            settings_modal_ref(&next).focus,
+            *expected,
+            "Ctrl-P step {i} should land on {expected:?}"
+        );
+        state = next;
+    }
+}
+
+#[test]
+fn tab_in_settings_modal_does_not_mutate_vault_settings() {
+    // Modal-local focus changes must never reach the live
+    // `VaultSettings`; only the Confirm path through
+    // `Vault::mutate_and_save` is allowed to do that. Snapshot the
+    // four fields before / after Tab and assert byte equality.
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_settings_modal(&tmp);
+    let before = match &state {
+        AppState::Unlocked { vault, .. } => {
+            let s = vault.settings();
+            (
+                s.auto_lock_enabled(),
+                s.auto_lock_timeout_secs(),
+                s.clipboard_clear_enabled(),
+                s.clipboard_clear_secs(),
+            )
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    };
+    let (after, _) = reduce(state, key(KeyCode::Tab));
+    match &after {
+        AppState::Unlocked { vault, .. } => {
+            let s = vault.settings();
+            assert_eq!(
+                (
+                    s.auto_lock_enabled(),
+                    s.auto_lock_timeout_secs(),
+                    s.clipboard_clear_enabled(),
+                    s.clipboard_clear_secs(),
+                ),
+                before,
+                "Tab inside Settings must not mutate live VaultSettings"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn ctrl_n_in_settings_modal_does_not_flip_top_level_focus() {
+    // Mirror of the existing `Ctrl-N with modal open on Search focus`
+    // top-level-focus guard, but with focusable Settings fields:
+    // advancing the modal-local focus must not flip the underlying
+    // `Focus::List` / `Focus::Search` surface.
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_settings_modal(&tmp);
+    let (after, effects) = reduce(state, ctrl(KeyCode::Char('n')));
+    assert!(effects.is_empty());
+    match &after {
+        AppState::Unlocked { focus, .. } => assert_eq!(
+            *focus,
+            Focus::List,
+            "Ctrl-N inside Settings must not flip top-level focus"
+        ),
         other => panic!("expected Unlocked, got {other:?}"),
     }
 }
@@ -9016,23 +9231,16 @@ fn pressing_ctrl_p_with_passphrase_modal_open_aliases_shift_tab() {
     );
 }
 
-#[test]
-fn pressing_ctrl_n_with_settings_modal_open_aliases_tab() {
-    assert_ctrl_modal_alias_is_silent_no_op(
-        Modal::Settings(SettingsModal::default()),
-        ctrl(KeyCode::Char('n')),
-        "`Ctrl-N`",
-    );
-}
-
-#[test]
-fn pressing_ctrl_p_with_settings_modal_open_aliases_shift_tab() {
-    assert_ctrl_modal_alias_is_silent_no_op(
-        Modal::Settings(SettingsModal::default()),
-        ctrl(KeyCode::Char('p')),
-        "`Ctrl-P`",
-    );
-}
+// `Ctrl-N` / `Ctrl-P` inside an open Settings modal advance / retreat
+// `SettingsFocus` through the four pending fields; coverage lives in
+// the "Settings modal — field focus" slice above
+// (`ctrl_n_in_settings_modal_advances_focus_like_tab` and
+// `ctrl_p_in_settings_modal_retreats_focus_like_shift_tab`). The
+// generic `assert_ctrl_modal_alias_is_silent_no_op` helper is reserved
+// for modals whose payload has no focusable fields yet (Add / Import
+// / Export / Remove / Passphrase / Rename); the Settings entry is
+// intentionally not in that table because Settings consumes the
+// aliases through `route_settings_modal_input` instead.
 
 #[test]
 fn pressing_ctrl_n_with_modal_open_on_search_focus_does_not_flip_focus() {

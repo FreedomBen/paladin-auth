@@ -23,8 +23,8 @@ use zeroize::Zeroizing;
 use crate::app::event::{AppEvent, Effect, EffectResult};
 use crate::app::state::{
     compute_idle_deadline, initial_selection, render_error_message, AppState, ChordLeader, Focus,
-    HotpReveal, Modal, PendingClipboardClear, RemoveModal, RenameModal, SettingsModal, StatusLine,
-    CLIPBOARD_WRITE_FAILED, NO_ACCOUNT_SELECTED,
+    HotpReveal, Modal, PendingClipboardClear, RemoveModal, RenameModal, SettingsFocus,
+    SettingsModal, StatusLine, CLIPBOARD_WRITE_FAILED, NO_ACCOUNT_SELECTED,
 };
 use crate::search::{filtered_account_ids, select_after_search};
 
@@ -763,6 +763,10 @@ fn reduce_unlocked_input(mut state: AppState, key: &KeyEvent) -> (AppState, Vec<
         if let Some(step) = ctrl_chord_list_step(modal.is_some(), key) {
             return move_selection(state, step);
         }
+        if modal.is_some() && (is_modal_focus_next(key) || is_modal_focus_prev(key)) {
+            let effects = route_modal_input(path, modal, key);
+            return (state, effects);
+        }
         return (state, Vec::new());
     }
 
@@ -1016,18 +1020,20 @@ fn pending_settings_for_char(c: char, vault: &Vault) -> Option<SettingsModal> {
         auto_lock_timeout_secs: settings.auto_lock_timeout_secs(),
         clipboard_clear_enabled: settings.clipboard_clear_enabled(),
         clipboard_clear_secs: settings.clipboard_clear_secs(),
+        focus: SettingsFocus::default(),
         error: None,
     })
 }
 
 /// Dispatch a key event to the open modal's modal-local input path.
 ///
-/// At this slice [`Modal::Rename`] and [`Modal::Remove`] consume
-/// input; the other variants do not yet carry an editable payload,
-/// so they fall through to a silent no-op (the modal stays open and
-/// no effect is emitted, preserving the modal-trap contract that
-/// bare-letter keys do not leak into the list view). Each modal's
-/// input path lands alongside its respective slice.
+/// At this slice [`Modal::Rename`], [`Modal::Remove`], and
+/// [`Modal::Settings`] consume input; the other variants do not yet
+/// carry an editable payload, so they fall through to a silent
+/// no-op (the modal stays open and no effect is emitted, preserving
+/// the modal-trap contract that bare-letter keys do not leak into
+/// the list view). Each modal's input path lands alongside its
+/// respective slice.
 fn route_modal_input(
     path: &std::path::Path,
     modal: &mut Option<Modal>,
@@ -1036,8 +1042,49 @@ fn route_modal_input(
     match modal.as_mut() {
         Some(Modal::Rename(rename)) => route_rename_modal_input(path, rename, key),
         Some(Modal::Remove(remove)) => route_remove_modal_input(path, remove, key),
+        Some(Modal::Settings(settings)) => route_settings_modal_input(settings, key),
         _ => Vec::new(),
     }
+}
+
+/// Settings modal's input path.
+///
+/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)": *"`Tab` and
+/// `Ctrl-N` move to the next control, `Shift-Tab` and `Ctrl-P` move
+/// to the previous control."* At this slice the Settings modal
+/// consumes those four keys to cycle [`SettingsFocus`] through its
+/// four pending fields, wrapping at either end. Space toggle, spinner
+/// adjustments, Enter confirm, and Esc discard land in subsequent
+/// slices; every other key is a silent no-op so the modal-trap
+/// contract holds. Esc / Help / Ctrl-C are filtered upstream of the
+/// modal trap.
+fn route_settings_modal_input(settings: &mut SettingsModal, key: &KeyEvent) -> Vec<Effect> {
+    if is_modal_focus_next(key) {
+        settings.focus = settings.focus.next();
+        return Vec::new();
+    }
+    if is_modal_focus_prev(key) {
+        settings.focus = settings.focus.prev();
+        return Vec::new();
+    }
+    Vec::new()
+}
+
+/// `true` when `key` is the modal-local "advance focus" trigger:
+/// bare `Tab` or `Ctrl-N`. `Ctrl-N` requires exactly
+/// `KeyModifiers::CONTROL` so `Ctrl-Shift-N` / `Ctrl-Alt-N` stay
+/// unbound, matching the existing strict-modifier convention used by
+/// [`ctrl_chord_list_step`].
+fn is_modal_focus_next(key: &KeyEvent) -> bool {
+    matches!(key.code, KeyCode::Tab)
+        || (key.modifiers == KeyModifiers::CONTROL && matches!(key.code, KeyCode::Char('n')))
+}
+
+/// `true` when `key` is the modal-local "retreat focus" trigger:
+/// `BackTab` (crossterm's report for `Shift-Tab`) or `Ctrl-P`.
+fn is_modal_focus_prev(key: &KeyEvent) -> bool {
+    matches!(key.code, KeyCode::BackTab)
+        || (key.modifiers == KeyModifiers::CONTROL && matches!(key.code, KeyCode::Char('p')))
 }
 
 /// Remove modal's input path.
