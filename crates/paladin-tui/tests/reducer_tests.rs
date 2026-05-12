@@ -3307,6 +3307,319 @@ fn space_on_settings_round_trips_boolean_on_repeated_presses() {
 }
 
 // ---------------------------------------------------------------------------
+// Settings modal — ↑/↓ adjusts the focused spinner
+// (IMPLEMENTATION_PLAN_03_TUI.md > Modals (per §6): *"`↑` / `↓`
+//  adjust spinners … The spinners clamp to the shared core bounds."*
+//  Step size matches the field's MIN granule:
+//  `auto_lock.timeout_secs` steps by `AUTO_LOCK_SECS_MIN = 30`;
+//  `clipboard.clear_secs` steps by `CLIPBOARD_CLEAR_SECS_MIN = 5`.
+//  Saturation at MIN/MAX is enforced at the UI layer so the core
+//  setter rejection path stays a defensive backstop.)
+// ---------------------------------------------------------------------------
+
+/// Reduce an arrow press against a freshly opened Settings modal with
+/// `focus` pre-positioned on `target` and the two spinner fields
+/// pre-set to `(al_secs, cc_secs)`. Returns the post-press
+/// `SettingsModal` plus emitted effects.
+fn reduce_arrow_on_settings_with(
+    tmp: &tempfile::TempDir,
+    target: SettingsFocus,
+    arrow: KeyCode,
+    al_secs: u32,
+    cc_secs: u32,
+) -> (SettingsModal, Vec<Effect>) {
+    let state = fresh_unlocked_with_settings_modal(tmp);
+    let state = match state {
+        AppState::Unlocked {
+            path,
+            vault,
+            store,
+            search_query,
+            idle_deadline,
+            pending_clipboard_clear,
+            hotp_reveal,
+            modal: Some(Modal::Settings(mut s)),
+            selected,
+            pending_chord_leader,
+            viewport_height,
+            viewport_offset,
+            focus,
+            status_line,
+            help_open,
+        } => {
+            s.focus = target;
+            s.auto_lock_timeout_secs = al_secs;
+            s.clipboard_clear_secs = cc_secs;
+            AppState::Unlocked {
+                path,
+                vault,
+                store,
+                search_query,
+                idle_deadline,
+                pending_clipboard_clear,
+                hotp_reveal,
+                modal: Some(Modal::Settings(s)),
+                selected,
+                pending_chord_leader,
+                viewport_height,
+                viewport_offset,
+                focus,
+                status_line,
+                help_open,
+            }
+        }
+        other => panic!("expected Settings modal open, got {other:?}"),
+    };
+    let (after, effects) = reduce(state, key(arrow));
+    let modal = match after {
+        AppState::Unlocked {
+            modal: Some(Modal::Settings(s)),
+            ..
+        } => s,
+        AppState::Unlocked { modal, .. } => {
+            panic!("expected Settings modal still open, got modal={modal:?}")
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    };
+    (modal, effects)
+}
+
+#[test]
+fn up_on_auto_lock_timeout_spinner_increments_by_min_step() {
+    let tmp = secure_tempdir();
+    let (modal, effects) = reduce_arrow_on_settings_with(
+        &tmp,
+        SettingsFocus::AutoLockTimeoutSecs,
+        KeyCode::Up,
+        60,
+        30,
+    );
+    assert!(
+        effects.is_empty(),
+        "↑ inside Settings must not emit effects"
+    );
+    assert_eq!(
+        modal.auto_lock_timeout_secs,
+        60 + paladin_core::AUTO_LOCK_SECS_MIN,
+        "↑ must increment by AUTO_LOCK_SECS_MIN (= 30)"
+    );
+    assert_eq!(
+        modal.clipboard_clear_secs, 30,
+        "the other spinner stays put"
+    );
+    assert_eq!(modal.focus, SettingsFocus::AutoLockTimeoutSecs);
+}
+
+#[test]
+fn down_on_auto_lock_timeout_spinner_decrements_by_min_step() {
+    let tmp = secure_tempdir();
+    let (modal, effects) = reduce_arrow_on_settings_with(
+        &tmp,
+        SettingsFocus::AutoLockTimeoutSecs,
+        KeyCode::Down,
+        120,
+        30,
+    );
+    assert!(effects.is_empty());
+    assert_eq!(
+        modal.auto_lock_timeout_secs,
+        120 - paladin_core::AUTO_LOCK_SECS_MIN
+    );
+}
+
+#[test]
+fn up_on_clipboard_clear_spinner_increments_by_min_step() {
+    let tmp = secure_tempdir();
+    let (modal, effects) =
+        reduce_arrow_on_settings_with(&tmp, SettingsFocus::ClipboardClearSecs, KeyCode::Up, 60, 30);
+    assert!(effects.is_empty());
+    assert_eq!(
+        modal.clipboard_clear_secs,
+        30 + paladin_core::CLIPBOARD_CLEAR_SECS_MIN,
+        "↑ must increment by CLIPBOARD_CLEAR_SECS_MIN (= 5)"
+    );
+    assert_eq!(
+        modal.auto_lock_timeout_secs, 60,
+        "the other spinner stays put"
+    );
+}
+
+#[test]
+fn down_on_clipboard_clear_spinner_decrements_by_min_step() {
+    let tmp = secure_tempdir();
+    let (modal, _) = reduce_arrow_on_settings_with(
+        &tmp,
+        SettingsFocus::ClipboardClearSecs,
+        KeyCode::Down,
+        60,
+        60,
+    );
+    assert_eq!(
+        modal.clipboard_clear_secs,
+        60 - paladin_core::CLIPBOARD_CLEAR_SECS_MIN
+    );
+}
+
+#[test]
+fn up_at_auto_lock_max_clamps_to_max() {
+    let tmp = secure_tempdir();
+    let (modal, _) = reduce_arrow_on_settings_with(
+        &tmp,
+        SettingsFocus::AutoLockTimeoutSecs,
+        KeyCode::Up,
+        paladin_core::AUTO_LOCK_SECS_MAX,
+        30,
+    );
+    assert_eq!(
+        modal.auto_lock_timeout_secs,
+        paladin_core::AUTO_LOCK_SECS_MAX,
+        "↑ at MAX must clamp instead of wrapping or overshooting"
+    );
+}
+
+#[test]
+fn up_near_auto_lock_max_clamps_to_max_when_step_would_overshoot() {
+    // MAX = 86400, step = 30. Start at MAX - 10 (86390); ↑ would
+    // overshoot to 86420 — the clamp must trim it to MAX.
+    let tmp = secure_tempdir();
+    let start = paladin_core::AUTO_LOCK_SECS_MAX - 10;
+    let (modal, _) = reduce_arrow_on_settings_with(
+        &tmp,
+        SettingsFocus::AutoLockTimeoutSecs,
+        KeyCode::Up,
+        start,
+        30,
+    );
+    assert_eq!(
+        modal.auto_lock_timeout_secs,
+        paladin_core::AUTO_LOCK_SECS_MAX
+    );
+}
+
+#[test]
+fn down_at_auto_lock_min_clamps_to_min() {
+    let tmp = secure_tempdir();
+    let (modal, _) = reduce_arrow_on_settings_with(
+        &tmp,
+        SettingsFocus::AutoLockTimeoutSecs,
+        KeyCode::Down,
+        paladin_core::AUTO_LOCK_SECS_MIN,
+        30,
+    );
+    assert_eq!(
+        modal.auto_lock_timeout_secs,
+        paladin_core::AUTO_LOCK_SECS_MIN
+    );
+}
+
+#[test]
+fn down_near_auto_lock_min_clamps_to_min_when_step_would_undershoot() {
+    let tmp = secure_tempdir();
+    let start = paladin_core::AUTO_LOCK_SECS_MIN + 10;
+    let (modal, _) = reduce_arrow_on_settings_with(
+        &tmp,
+        SettingsFocus::AutoLockTimeoutSecs,
+        KeyCode::Down,
+        start,
+        30,
+    );
+    assert_eq!(
+        modal.auto_lock_timeout_secs,
+        paladin_core::AUTO_LOCK_SECS_MIN
+    );
+}
+
+#[test]
+fn up_at_clipboard_max_clamps_to_max() {
+    let tmp = secure_tempdir();
+    let (modal, _) = reduce_arrow_on_settings_with(
+        &tmp,
+        SettingsFocus::ClipboardClearSecs,
+        KeyCode::Up,
+        60,
+        paladin_core::CLIPBOARD_CLEAR_SECS_MAX,
+    );
+    assert_eq!(
+        modal.clipboard_clear_secs,
+        paladin_core::CLIPBOARD_CLEAR_SECS_MAX
+    );
+}
+
+#[test]
+fn down_at_clipboard_min_clamps_to_min() {
+    let tmp = secure_tempdir();
+    let (modal, _) = reduce_arrow_on_settings_with(
+        &tmp,
+        SettingsFocus::ClipboardClearSecs,
+        KeyCode::Down,
+        60,
+        paladin_core::CLIPBOARD_CLEAR_SECS_MIN,
+    );
+    assert_eq!(
+        modal.clipboard_clear_secs,
+        paladin_core::CLIPBOARD_CLEAR_SECS_MIN
+    );
+}
+
+#[test]
+fn up_on_settings_with_focus_on_auto_lock_toggle_is_silent_no_op() {
+    // Toggle fields take Space; ↑/↓ are silent no-ops so the
+    // modal-trap contract holds and the focused boolean is not
+    // accidentally mutated by spinner-adjacent presses.
+    let tmp = secure_tempdir();
+    let (modal, effects) =
+        reduce_arrow_on_settings_with(&tmp, SettingsFocus::AutoLockEnabled, KeyCode::Up, 60, 30);
+    assert!(effects.is_empty());
+    assert_eq!(modal.auto_lock_timeout_secs, 60);
+    assert_eq!(modal.clipboard_clear_secs, 30);
+}
+
+#[test]
+fn down_on_settings_with_focus_on_clipboard_toggle_is_silent_no_op() {
+    let tmp = secure_tempdir();
+    let (modal, effects) = reduce_arrow_on_settings_with(
+        &tmp,
+        SettingsFocus::ClipboardClearEnabled,
+        KeyCode::Down,
+        60,
+        30,
+    );
+    assert!(effects.is_empty());
+    assert_eq!(modal.auto_lock_timeout_secs, 60);
+    assert_eq!(modal.clipboard_clear_secs, 30);
+}
+
+#[test]
+fn arrow_on_settings_modal_does_not_mutate_vault_settings() {
+    // Spinner edits stay modal-local; the live `VaultSettings` only
+    // changes through the Confirm path's `Vault::mutate_and_save`.
+    let tmp = secure_tempdir();
+    let unlocked = fresh_plaintext_unlocked(&tmp);
+    let before = match &unlocked {
+        AppState::Unlocked { vault, .. } => {
+            let s = vault.settings();
+            (s.auto_lock_timeout_secs(), s.clipboard_clear_secs())
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    };
+    let (with_modal, _) = reduce(unlocked, key(KeyCode::Char('s')));
+    // Cycle to the auto_lock spinner and press ↑.
+    let (after_tab, _) = reduce(with_modal, key(KeyCode::Tab));
+    let (after_up, _) = reduce(after_tab, key(KeyCode::Up));
+    match &after_up {
+        AppState::Unlocked { vault, .. } => {
+            let s = vault.settings();
+            assert_eq!(
+                (s.auto_lock_timeout_secs(), s.clipboard_clear_secs()),
+                before,
+                "↑ inside Settings must not mutate live VaultSettings"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Modals — close transitions
 // (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Reducer — bullet 4,
 //  Keybindings table: "Esc — Close modal / clear search …")

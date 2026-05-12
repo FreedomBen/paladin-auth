@@ -1052,14 +1052,19 @@ fn route_modal_input(
 /// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)": *"`Tab` and
 /// `Ctrl-N` move to the next control, `Shift-Tab` and `Ctrl-P` move
 /// to the previous control … `Space` toggles the focused checkbox /
-/// toggle."* At this slice the Settings modal cycles
-/// [`SettingsFocus`] through its four pending fields (wrapping at
-/// either end) and flips the focused boolean. Space against a
-/// spinner-focused field is a silent no-op — spinners take `↑` /
-/// `↓` in a later slice. Enter confirm and Esc discard land in
-/// subsequent slices; every other key is a silent no-op so the
-/// modal-trap contract holds. Esc / Help / Ctrl-C are filtered
-/// upstream of the modal trap.
+/// toggle … `↑` / `↓` adjust spinners … The spinners clamp to the
+/// shared core bounds."* At this slice the Settings modal cycles
+/// [`SettingsFocus`], flips the focused boolean, and adjusts the
+/// focused spinner by the field's MIN granule
+/// (`AUTO_LOCK_SECS_MIN = 30` for `auto_lock.timeout_secs`;
+/// `CLIPBOARD_CLEAR_SECS_MIN = 5` for `clipboard.clear_secs`),
+/// clamping at both ends. `↑` / `↓` on a toggle-focused field and
+/// Space on a spinner-focused field are silent no-ops so the
+/// modal-trap contract holds and the focused field is not
+/// accidentally mutated by the wrong control. Enter confirm and Esc
+/// discard land in subsequent slices; every other key is a silent
+/// no-op. Esc / Help / Ctrl-C are filtered upstream of the modal
+/// trap.
 fn route_settings_modal_input(settings: &mut SettingsModal, key: &KeyEvent) -> Vec<Effect> {
     if is_modal_focus_next(key) {
         settings.focus = settings.focus.next();
@@ -1079,13 +1084,54 @@ fn route_settings_modal_input(settings: &mut SettingsModal, key: &KeyEvent) -> V
             }
             SettingsFocus::AutoLockTimeoutSecs | SettingsFocus::ClipboardClearSecs => {
                 // Spinner-only fields: Space is a silent no-op so the
-                // modal-trap contract holds. `↑` / `↓` adjust the
-                // spinner in a later slice.
+                // modal-trap contract holds.
+            }
+        }
+        return Vec::new();
+    }
+    if matches!(key.code, KeyCode::Up | KeyCode::Down) {
+        let delta_up = matches!(key.code, KeyCode::Up);
+        match settings.focus {
+            SettingsFocus::AutoLockTimeoutSecs => {
+                settings.auto_lock_timeout_secs = step_spinner(
+                    settings.auto_lock_timeout_secs,
+                    delta_up,
+                    paladin_core::AUTO_LOCK_SECS_MIN,
+                    paladin_core::AUTO_LOCK_SECS_MAX,
+                );
+            }
+            SettingsFocus::ClipboardClearSecs => {
+                settings.clipboard_clear_secs = step_spinner(
+                    settings.clipboard_clear_secs,
+                    delta_up,
+                    paladin_core::CLIPBOARD_CLEAR_SECS_MIN,
+                    paladin_core::CLIPBOARD_CLEAR_SECS_MAX,
+                );
+            }
+            SettingsFocus::AutoLockEnabled | SettingsFocus::ClipboardClearEnabled => {
+                // Toggle-only fields: ↑/↓ is a silent no-op so the
+                // modal-trap contract holds.
             }
         }
         return Vec::new();
     }
     Vec::new()
+}
+
+/// Apply one ↑/↓ press to a spinner field. The step granule is the
+/// field's MIN bound (the natural unit for that range — 30 s for
+/// auto-lock, 5 s for clipboard); the result is clamped to the
+/// inclusive `min..=max` range so saturation at either end is a
+/// silent no-op rather than wrapping or overshooting. Implements the
+/// "spinners clamp to the shared core bounds" rule from
+/// `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)".
+fn step_spinner(current: u32, up: bool, min: u32, max: u32) -> u32 {
+    let step = min;
+    if up {
+        current.saturating_add(step).min(max)
+    } else {
+        current.saturating_sub(step).max(min)
+    }
 }
 
 /// `true` when `key` is the modal-local "advance focus" trigger:
