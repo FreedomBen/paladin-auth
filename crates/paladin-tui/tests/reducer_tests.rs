@@ -1530,6 +1530,234 @@ fn add_modal_default_has_no_inline_error() {
     assert!(add.error.is_none(), "got {:?}", add.error);
 }
 
+// ---------------------------------------------------------------------------
+// Add modal — segmented mode selector (`←` / `→`).
+//
+// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)": *"`←` / `→`
+// change segmented selectors"*. The Add modal's three input modes
+// (Manual / URI / QR per DESIGN §6) form one segmented selector;
+// `→` advances Manual → Uri → Qr → Manual and `←` retreats
+// Manual → Qr → Uri → Manual. Cycling is modal-local: outside an
+// open Add modal both keys are silent no-ops at the top level.
+// ---------------------------------------------------------------------------
+
+/// Open the Add modal on a fresh plaintext vault, returning the
+/// populated `AppState` ready for mode-selector tests.
+fn fresh_unlocked_with_add_modal(tmp: &tempfile::TempDir) -> AppState {
+    let unlocked = fresh_plaintext_unlocked(tmp);
+    let (state, effects) = reduce(unlocked, key(KeyCode::Char('a')));
+    assert!(effects.is_empty(), "opening Add must not emit effects");
+    state
+}
+
+/// Pull the open `AddModal` out of an `Unlocked` state by ref,
+/// panicking with a clear message if Add is not the open modal.
+fn add_modal_ref(state: &AppState) -> &AddModal {
+    match state {
+        AppState::Unlocked {
+            modal: Some(Modal::Add(a)),
+            ..
+        } => a,
+        AppState::Unlocked { modal, .. } => {
+            panic!("expected Modal::Add open, got modal={modal:?}")
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn right_in_add_modal_cycles_mode_manual_uri_qr_manual() {
+    // Per DESIGN §6 the Add modal's input modes are Manual / URI / QR;
+    // the segmented selector advances forward on `→`, wrapping after
+    // the final mode so the user can cycle indefinitely without a
+    // separate "reset" action.
+    let tmp = secure_tempdir();
+    let mut state = fresh_unlocked_with_add_modal(&tmp);
+    assert_eq!(add_modal_ref(&state).mode, AddMode::Manual);
+    let order = [AddMode::Uri, AddMode::Qr, AddMode::Manual];
+    for (i, expected) in order.iter().enumerate() {
+        let (next, effects) = reduce(state, key(KeyCode::Right));
+        assert!(
+            effects.is_empty(),
+            "→ inside Add modal (step {i}) must not emit effects"
+        );
+        assert_eq!(
+            add_modal_ref(&next).mode,
+            *expected,
+            "→ step {i} should land on {expected:?}"
+        );
+        state = next;
+    }
+}
+
+#[test]
+fn left_in_add_modal_cycles_mode_manual_qr_uri_manual() {
+    // `←` retreats through the segmented selector, the mirror of `→`.
+    let tmp = secure_tempdir();
+    let mut state = fresh_unlocked_with_add_modal(&tmp);
+    assert_eq!(add_modal_ref(&state).mode, AddMode::Manual);
+    let order = [AddMode::Qr, AddMode::Uri, AddMode::Manual];
+    for (i, expected) in order.iter().enumerate() {
+        let (next, effects) = reduce(state, key(KeyCode::Left));
+        assert!(
+            effects.is_empty(),
+            "← inside Add modal (step {i}) must not emit effects"
+        );
+        assert_eq!(
+            add_modal_ref(&next).mode,
+            *expected,
+            "← step {i} should land on {expected:?}"
+        );
+        state = next;
+    }
+}
+
+#[test]
+fn right_then_left_in_add_modal_round_trips_from_every_mode() {
+    // Defensive round-trip: from any starting mode, `→` then `←`
+    // must return to the starting mode. Locks in the symmetry between
+    // `AddMode::next()` and `AddMode::prev()`. Walks the modal
+    // forward across each mode in one open session, asserting the
+    // round-trip at each stop.
+    let tmp = secure_tempdir();
+    let mut state = fresh_unlocked_with_add_modal(&tmp);
+    let order = [AddMode::Manual, AddMode::Uri, AddMode::Qr];
+    for start in order {
+        assert_eq!(
+            add_modal_ref(&state).mode,
+            start,
+            "walk should be at {start:?}"
+        );
+        let (after_right, _) = reduce(state, key(KeyCode::Right));
+        let (after_left, _) = reduce(after_right, key(KeyCode::Left));
+        assert_eq!(
+            add_modal_ref(&after_left).mode,
+            start,
+            "→ then ← from {start:?} should round-trip back to {start:?}"
+        );
+        // Advance to the next start by one `→` for the next iteration.
+        let (next, _) = reduce(after_left, key(KeyCode::Right));
+        state = next;
+    }
+}
+
+#[test]
+fn arrows_in_add_modal_do_not_mutate_other_state() {
+    // Per the modal-trap contract, ←/→ are modal-local: pressing them
+    // while the Add modal is open must not change the path, search
+    // query, focus, or status line.
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_add_modal(&tmp);
+    let (path_before, query_before, focus_before, status_before) = match &state {
+        AppState::Unlocked {
+            path,
+            search_query,
+            focus,
+            status_line,
+            ..
+        } => (
+            path.clone(),
+            search_query.clone(),
+            *focus,
+            status_line.clone(),
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    };
+    let (after_right, _) = reduce(state, key(KeyCode::Right));
+    match &after_right {
+        AppState::Unlocked {
+            path,
+            search_query,
+            focus,
+            status_line,
+            modal: Some(Modal::Add(_)),
+            ..
+        } => {
+            assert_eq!(path, &path_before);
+            assert_eq!(search_query, &query_before);
+            assert_eq!(*focus, focus_before);
+            assert_eq!(status_line, &status_before);
+        }
+        other => panic!("expected Unlocked with Modal::Add open, got {other:?}"),
+    }
+}
+
+#[test]
+fn right_with_no_modal_open_is_a_silent_no_op() {
+    // `→` is not a top-level binding. With no modal open it must be a
+    // silent no-op (no effects, modal stays `None`).
+    let tmp = secure_tempdir();
+    let state = fresh_plaintext_unlocked(&tmp);
+    let (after, effects) = reduce(state, key(KeyCode::Right));
+    assert!(effects.is_empty(), "→ at top level must not emit effects");
+    match after {
+        AppState::Unlocked { modal: None, .. } => {}
+        AppState::Unlocked { modal, .. } => {
+            panic!("expected modal=None preserved, got modal={modal:?}")
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn left_with_no_modal_open_is_a_silent_no_op() {
+    let tmp = secure_tempdir();
+    let state = fresh_plaintext_unlocked(&tmp);
+    let (after, effects) = reduce(state, key(KeyCode::Left));
+    assert!(effects.is_empty(), "← at top level must not emit effects");
+    match after {
+        AppState::Unlocked { modal: None, .. } => {}
+        AppState::Unlocked { modal, .. } => {
+            panic!("expected modal=None preserved, got modal={modal:?}")
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn right_in_non_add_modal_does_not_mutate_state() {
+    // `→` is the Add modal's segmented-selector key only; other
+    // focusable-field modals (Settings here) must not be mutated by
+    // it. The observable contract: the open variant is preserved with
+    // no effects emitted.
+    let tmp = secure_tempdir();
+    let unlocked = fresh_plaintext_unlocked(&tmp);
+    let (state, _) = reduce(unlocked, key(KeyCode::Char('s')));
+    let (after, effects) = reduce(state, key(KeyCode::Right));
+    assert!(
+        effects.is_empty(),
+        "→ inside Settings modal must not emit effects"
+    );
+    match after {
+        AppState::Unlocked {
+            modal: Some(Modal::Settings(_)),
+            ..
+        } => {}
+        AppState::Unlocked { modal, .. } => {
+            panic!("expected Modal::Settings preserved, got modal={modal:?}")
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn add_mode_next_cycles_manual_to_uri_to_qr_to_manual() {
+    // Unit test for `AddMode::next()`: explicit per-variant transition
+    // table so the cycle is locked at the type level independent of
+    // the reducer wiring.
+    assert_eq!(AddMode::Manual.next(), AddMode::Uri);
+    assert_eq!(AddMode::Uri.next(), AddMode::Qr);
+    assert_eq!(AddMode::Qr.next(), AddMode::Manual);
+}
+
+#[test]
+fn add_mode_prev_cycles_manual_to_qr_to_uri_to_manual() {
+    // Unit test for `AddMode::prev()`: the mirror of `next()`.
+    assert_eq!(AddMode::Manual.prev(), AddMode::Qr);
+    assert_eq!(AddMode::Qr.prev(), AddMode::Uri);
+    assert_eq!(AddMode::Uri.prev(), AddMode::Manual);
+}
+
 #[test]
 fn pressing_a_on_unlocked_with_modal_already_open_does_not_replace_the_modal() {
     // When a modal is open, the `a` key is consumed by the modal's

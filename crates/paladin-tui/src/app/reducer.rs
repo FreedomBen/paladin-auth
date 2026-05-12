@@ -1075,9 +1075,9 @@ fn pending_settings_for_char(c: char, vault: &Vault) -> Option<SettingsModal> {
 
 /// Dispatch a key event to the open modal's modal-local input path.
 ///
-/// At this slice [`Modal::Rename`], [`Modal::Remove`], and
-/// [`Modal::Settings`] consume input; the other variants do not yet
-/// carry an editable payload, so they fall through to a silent
+/// At this slice [`Modal::Add`], [`Modal::Rename`], [`Modal::Remove`],
+/// and [`Modal::Settings`] consume input; the other variants do not
+/// yet carry an editable payload, so they fall through to a silent
 /// no-op (the modal stays open and no effect is emitted, preserving
 /// the modal-trap contract that bare-letter keys do not leak into
 /// the list view). Each modal's input path lands alongside its
@@ -1089,6 +1089,7 @@ fn route_modal_input(
     key: &KeyEvent,
 ) -> Vec<Effect> {
     match modal.as_mut() {
+        Some(Modal::Add(add)) => route_add_modal_input(add, key),
         Some(Modal::Rename(rename)) => route_rename_modal_input(path, rename, key),
         Some(Modal::Remove(remove)) => route_remove_modal_input(path, remove, key),
         Some(Modal::Settings(settings)) => {
@@ -1100,6 +1101,30 @@ fn route_modal_input(
         }
         _ => Vec::new(),
     }
+}
+
+/// Add modal's input path.
+///
+/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)":
+/// *"`←` / `→` change segmented selectors"*. The Add modal's three
+/// input modes (Manual / URI / QR per DESIGN §6) form one segmented
+/// selector; `→` advances through [`AddMode::next`] and `←` retreats
+/// through [`AddMode::prev`], both wrapping so the user can cycle
+/// indefinitely. Per-mode field editing, focus cycling, the
+/// duplicate-gate pending state, and the post-QR counts panel land
+/// in subsequent slices; every other key here is a silent no-op so
+/// the modal-trap contract holds.
+fn route_add_modal_input(add: &mut AddModal, key: &KeyEvent) -> Vec<Effect> {
+    match key.code {
+        KeyCode::Right => {
+            add.mode = add.mode.next();
+        }
+        KeyCode::Left => {
+            add.mode = add.mode.prev();
+        }
+        _ => {}
+    }
+    Vec::new()
 }
 
 /// Settings modal's input path.

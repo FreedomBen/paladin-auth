@@ -402,6 +402,37 @@ pub enum AddMode {
     Qr,
 }
 
+impl AddMode {
+    /// Advance the segmented selector to the next mode, wrapping
+    /// after the final mode so `→` cycles indefinitely.
+    ///
+    /// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)":
+    /// *"`←` / `→` change segmented selectors"*. The Add modal's
+    /// three modes (Manual / URI / QR per DESIGN §6) form one
+    /// segmented selector; `next` produces the forward cycle
+    /// Manual → Uri → Qr → Manual.
+    #[must_use]
+    pub fn next(self) -> Self {
+        match self {
+            Self::Manual => Self::Uri,
+            Self::Uri => Self::Qr,
+            Self::Qr => Self::Manual,
+        }
+    }
+
+    /// Retreat the segmented selector to the previous mode, wrapping
+    /// before the first mode so `←` cycles indefinitely. The mirror
+    /// of [`AddMode::next`]: Manual → Qr → Uri → Manual.
+    #[must_use]
+    pub fn prev(self) -> Self {
+        match self {
+            Self::Manual => Self::Qr,
+            Self::Uri => Self::Manual,
+            Self::Qr => Self::Uri,
+        }
+    }
+}
+
 /// State for the Add modal.
 ///
 /// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add: the
