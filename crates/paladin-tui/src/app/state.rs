@@ -112,6 +112,15 @@ pub enum StatusLine {
     /// non-secret prose suitable for verbatim rendering on the bottom
     /// status bar.
     Error(String),
+    /// A modal action succeeded and the reducer closed the modal.
+    /// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" >
+    /// "Successful modal outcomes": *"manual Add, URI Add, Remove,
+    /// Rename, Export, Passphrase, and Settings close the modal and
+    /// publish a status-line confirmation."* The string is
+    /// non-secret prose (no OTP digits, no passphrase bytes) built
+    /// from the post-save vault state so it matches what a follow-up
+    /// `list` would show.
+    Confirmation(String),
 }
 
 /// Status-line error string surfaced when `n`, `r`, `R`, or (when

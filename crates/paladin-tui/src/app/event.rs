@@ -213,6 +213,41 @@ pub enum EffectResult {
         /// [`paladin_core::ClipboardClearPolicy::schedule`].
         completed_at: Instant,
     },
+
+    /// Outcome of an [`Effect::Rename`] attempt.
+    ///
+    /// On `Ok(())` while [`crate::app::state::AppState::Unlocked`]
+    /// with `Modal::Rename` open against `account_id`, the reducer
+    /// closes the modal and publishes a
+    /// [`crate::app::state::StatusLine::Confirmation`] derived from
+    /// the post-rename label (looked up in the vault, which the
+    /// executor has already mutated through
+    /// `Vault::mutate_and_save`). On any `Err(...)` the modal stays
+    /// open and the rendered error is stashed in
+    /// [`crate::app::state::RenameModal::error`] — per
+    /// `IMPLEMENTATION_PLAN_03_TUI.md` "Effect errors" >
+    /// "Add / remove / rename / settings saves": pre-commit failures
+    /// (`save_not_committed`) are rolled back inside
+    /// `Vault::mutate_and_save` so memory matches disk;
+    /// durability-unconfirmed leaves the new label committed and
+    /// surfaces the warning inline.
+    ///
+    /// Results delivered while not on `Unlocked`, while a different
+    /// modal is open, or for an `account_id` that does not match the
+    /// open rename modal are discarded so the carried error drops
+    /// without mutating state.
+    Rename {
+        /// The account the rename targeted. Carried back so the
+        /// reducer can correlate the result with the modal — the
+        /// rename modal's `account_id` is the source of truth and
+        /// the result is discarded on mismatch.
+        account_id: AccountId,
+        /// The `Vault::rename` + `Vault::save` outcome. `Ok(())`
+        /// indicates the new label is persisted; the post-rename
+        /// label lives on the `Vault::iter()` entry for `account_id`
+        /// (the executor mutated the vault before posting back).
+        result: Result<(), PaladinError>,
+    },
 }
 
 /// Side effects produced by the reducer.

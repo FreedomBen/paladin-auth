@@ -2016,6 +2016,311 @@ fn rename_modal_enter_with_overlong_draft_sets_inline_error_no_effect() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Rename modal — EffectResult::Rename handling
+// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Rename modal — save-error
+//  rollback and durability-unconfirmed bullets; "Effect errors" >
+//  "Add / remove / rename / settings saves" rule.)
+//
+// Slice covered: the reducer's response to `EffectResult::Rename`
+// deliveries. `Ok(())` closes the modal and publishes a status-line
+// confirmation built from the post-rename label. The save-error
+// variants (`save_not_committed`, `save_durability_unconfirmed`, any
+// other) leave the modal open with the rendered error in
+// `RenameModal.error`; pre-commit rollback semantics are owned by
+// `Vault::mutate_and_save` in `paladin-core` so the reducer side
+// only asserts the surface that's visible from the TUI. Deliveries
+// that arrive after the modal closed, with a stale account_id, or
+// onto a non-Unlocked state are discarded.
+// ---------------------------------------------------------------------------
+
+fn rename_result(account_id: AccountId, result: Result<(), PaladinError>) -> AppEvent {
+    AppEvent::EffectResult(EffectResult::Rename { account_id, result })
+}
+
+#[test]
+fn effect_result_rename_ok_closes_modal_and_sets_status_confirmation() {
+    // Simulate the executor's post-`Vault::mutate_and_save` state by
+    // applying the rename in the vault before delivering the
+    // `Ok(())` outcome — that mirrors the real run-loop where the
+    // executor has already mutated the vault by the time the
+    // reducer sees the result.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let id = add_totp_account(&mut vault, &store, "github");
+    vault
+        .rename(id, "github-personal", SystemTime::now())
+        .expect("simulate executor-side rename");
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Rename(RenameModal {
+            account_id: id,
+            draft: "github-personal".to_string(),
+            error: None,
+        })),
+        selected: Some(id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let (state, effects) = reduce(unlocked, rename_result(id, Ok(())));
+    assert!(
+        effects.is_empty(),
+        "successful rename result must not emit effects"
+    );
+    match state {
+        AppState::Unlocked {
+            modal,
+            status_line,
+            selected,
+            ..
+        } => {
+            assert!(
+                modal.is_none(),
+                "Ok(()) rename outcome must close the modal, got {modal:?}"
+            );
+            assert_eq!(
+                selected,
+                Some(id),
+                "Selection must survive a successful rename"
+            );
+            let line = status_line.expect("Ok rename outcome must surface confirmation");
+            match line {
+                StatusLine::Confirmation(msg) => assert!(
+                    msg.contains("github-personal"),
+                    "confirmation must include the new label, got {msg:?}"
+                ),
+                StatusLine::Error(e) => panic!("expected Confirmation, got Error({e:?})"),
+            }
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_rename_save_not_committed_keeps_modal_open_with_inline_error() {
+    // Core rolls back the label inside `Vault::mutate_and_save` so the
+    // vault still holds the pre-attempt label; the reducer surfaces
+    // the typed error inline and leaves the modal open so the user
+    // can adjust and retry. The fixture's vault carries the original
+    // "github" label (no executor-side mutation simulated) — that
+    // mirrors the rolled-back state core leaves behind on
+    // `save_not_committed`.
+    let (_tmp, id, _path, unlocked) =
+        fresh_unlocked_with_rename_modal_open("github", "github-personal");
+    let err = PaladinError::SaveNotCommitted {
+        committed: false,
+        backup_path: None,
+    };
+    let (state, effects) = reduce(unlocked, rename_result(id, Err(err)));
+    assert!(
+        effects.is_empty(),
+        "save error result must not emit effects"
+    );
+    let rename = expect_rename_modal(&state);
+    assert_eq!(
+        rename.draft, "github-personal",
+        "draft is preserved so the user can retry"
+    );
+    let surfaced = rename
+        .error
+        .as_deref()
+        .expect("save_not_committed must set inline error");
+    assert!(
+        surfaced.contains("save not committed") || surfaced.contains("save_not_committed"),
+        "inline error must surface save_not_committed wording, got {surfaced:?}"
+    );
+    let labels: Vec<&str> = match &state {
+        AppState::Unlocked { vault, .. } => {
+            vault.iter().map(paladin_core::Account::label).collect()
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    };
+    assert_eq!(
+        labels,
+        vec!["github"],
+        "Vault::iter() must reflect the rolled-back pre-attempt state on save_not_committed"
+    );
+}
+
+#[test]
+fn effect_result_rename_save_durability_unconfirmed_keeps_modal_open_with_inline_error() {
+    // Durability-unconfirmed: core left the new label committed in
+    // memory and on disk, but parent fsync was uncertain. The TUI
+    // mirrors HotpAdvance's surfacing convention — modal stays open
+    // and the warning is inline so the user can retry or `Esc` out
+    // deliberately.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let id = add_totp_account(&mut vault, &store, "github");
+    vault
+        .rename(id, "github-personal", SystemTime::now())
+        .expect("simulate executor-side rename");
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Rename(RenameModal {
+            account_id: id,
+            draft: "github-personal".to_string(),
+            error: None,
+        })),
+        selected: Some(id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let (state, effects) = reduce(
+        unlocked,
+        rename_result(id, Err(PaladinError::SaveDurabilityUnconfirmed)),
+    );
+    assert!(effects.is_empty());
+    let rename = expect_rename_modal(&state);
+    let surfaced = rename
+        .error
+        .as_deref()
+        .expect("durability-unconfirmed must surface inline");
+    assert!(
+        surfaced.contains("durability") || surfaced.contains("save durability"),
+        "inline error must surface durability wording, got {surfaced:?}"
+    );
+    let labels: Vec<&str> = match &state {
+        AppState::Unlocked { vault, .. } => {
+            vault.iter().map(paladin_core::Account::label).collect()
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    };
+    assert_eq!(
+        labels,
+        vec!["github-personal"],
+        "Vault::iter() must reflect the committed new label on save_durability_unconfirmed"
+    );
+}
+
+#[test]
+fn effect_result_rename_io_error_keeps_modal_open_with_inline_error() {
+    let (_tmp, id, _path, unlocked) =
+        fresh_unlocked_with_rename_modal_open("github", "github-personal");
+    let err = PaladinError::IoError {
+        operation: "rename_save",
+        source: std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied"),
+    };
+    let (state, _effects) = reduce(unlocked, rename_result(id, Err(err)));
+    let rename = expect_rename_modal(&state);
+    let surfaced = rename
+        .error
+        .as_deref()
+        .expect("io_error must surface inline");
+    assert!(
+        surfaced.to_lowercase().contains("i/o") || surfaced.contains("rename_save"),
+        "inline error must surface io wording, got {surfaced:?}"
+    );
+}
+
+#[test]
+fn effect_result_rename_on_locked_state_is_discarded() {
+    // Auto-lock fired between the rename emit and the result
+    // delivery. The result is dropped without mutating the Locked
+    // screen.
+    let locked = AppState::Locked {
+        path: PathBuf::from("/tmp/v.bin"),
+        pending_clipboard_clear: None,
+    };
+    let (state, effects) = reduce(locked, rename_result(AccountId::new(), Ok(())));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Locked { path, .. } => assert_eq!(path, PathBuf::from("/tmp/v.bin")),
+        other => panic!("expected Locked preserved, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_rename_on_non_rename_modal_is_discarded() {
+    // Defensive: a stale rename outcome arrives after the user has
+    // dismissed Rename and opened (say) the Add modal. The reducer
+    // must leave the unrelated modal untouched.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let id = add_totp_account(&mut vault, &store, "github");
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Add),
+        selected: Some(id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let (state, effects) = reduce(unlocked, rename_result(id, Ok(())));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked {
+            modal: Some(Modal::Add),
+            status_line: None,
+            ..
+        } => {}
+        AppState::Unlocked {
+            modal,
+            status_line,
+            ..
+        } => panic!(
+            "stale rename outcome must not touch unrelated modal / status, got modal={modal:?} status_line={status_line:?}"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_rename_with_mismatched_account_id_is_discarded() {
+    // The modal targets account A but the result carries B's id
+    // (defensive — should never happen in practice, but the reducer
+    // is total so the no-op is observable). Modal stays open, no
+    // inline error is set, and `status_line` is untouched.
+    let (_tmp, modal_id, _path, unlocked) =
+        fresh_unlocked_with_rename_modal_open("github", "github-personal");
+    let other_id = AccountId::new();
+    let (state, _) = reduce(unlocked, rename_result(other_id, Ok(())));
+    let rename = expect_rename_modal(&state);
+    assert_eq!(
+        rename.account_id, modal_id,
+        "modal account_id must be preserved across a mismatched result"
+    );
+    assert!(
+        rename.error.is_none(),
+        "mismatched result must not set an inline error"
+    );
+    match &state {
+        AppState::Unlocked {
+            status_line: None, ..
+        } => {}
+        other => panic!("status_line must stay untouched, got {other:?}"),
+    }
+}
+
 #[test]
 fn pressing_p_on_unlocked_with_no_modal_open_opens_passphrase_modal() {
     assert_key_opens_modal(key(KeyCode::Char('p')), &Modal::Passphrase);

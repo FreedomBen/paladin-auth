@@ -873,17 +873,37 @@ end-to-end.
   `Vault::mutate_and_save`, including when the trimmed input equals
   the current label so `updated_at` still matches CLI behavior.
   *(Reducer-level emission covered by
-  `rename_modal_enter_with_valid_draft_emits_rename_effect` and
-  `rename_modal_enter_with_same_label_still_emits_rename_effect` in
-  `tests/reducer_tests.rs`: Enter on `Modal::Rename` validates via
+  `rename_modal_enter_with_valid_draft_emits_rename_effect`,
+  `rename_modal_enter_with_same_label_still_emits_rename_effect`,
+  and `effect_result_rename_ok_closes_modal_and_sets_status_confirmation`
+  in `tests/reducer_tests.rs`: Enter on `Modal::Rename` validates via
   `paladin_core::validate_label` and emits `Effect::Rename { path,
-  account_id, new_label: trimmed }`. The executor side wiring inside
-  `Vault::mutate_and_save` lands alongside the `EffectResult::Rename`
-  slice.)*
-- [ ] Pre-commit `save_not_committed` restores the prior label and
+  account_id, new_label: trimmed }`; the `Ok(())` outcome closes the
+  modal and publishes `StatusLine::Confirmation("Renamed to {label}")`.
+  The executor side that actually calls `Vault::rename` inside
+  `Vault::mutate_and_save` lands with the run-loop slice that gives
+  the executor access to the live `(Vault, Store)` — alongside the
+  HotpAdvance / CopyCode placeholders.)*
+- [x] Pre-commit `save_not_committed` restores the prior label and
   keeps the modal open with the inline error.
-- [ ] `save_durability_unconfirmed` leaves the new label in memory and
+  *(`effect_result_rename_save_not_committed_keeps_modal_open_with_inline_error`
+  asserts the modal stays open with the rendered
+  `save_not_committed` error stashed in `RenameModal.error`, the
+  draft is preserved for retry, and `Vault::iter()` reflects the
+  rolled-back pre-attempt label. The on-disk rollback semantics
+  belong to `Vault::mutate_and_save` in `paladin-core`.)*
+- [x] `save_durability_unconfirmed` leaves the new label in memory and
   surfaces the warning.
+  *(`effect_result_rename_save_durability_unconfirmed_keeps_modal_open_with_inline_error`
+  asserts the modal stays open with the rendered durability warning,
+  and `Vault::iter()` reflects the committed new label. Other
+  save-error paths share the surfacing via
+  `effect_result_rename_io_error_keeps_modal_open_with_inline_error`;
+  off-`Unlocked`, stale-modal, and mismatched-`account_id`
+  deliveries are discarded by
+  `effect_result_rename_on_locked_state_is_discarded`,
+  `effect_result_rename_on_non_rename_modal_is_discarded`, and
+  `effect_result_rename_with_mismatched_account_id_is_discarded`.)*
 - [x] Empty / out-of-range labels surface inline validation errors and
   never invoke the setter.
   *(`rename_modal_enter_with_empty_draft_sets_inline_error_no_effect`,

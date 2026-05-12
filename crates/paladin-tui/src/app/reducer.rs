@@ -254,6 +254,9 @@ fn reduce_effect_result(state: AppState, result: EffectResult) -> (AppState, Vec
             result,
             completed_at,
         } => reduce_copy_code_result(state, account_id, result, completed_at),
+        EffectResult::Rename { account_id, result } => {
+            reduce_rename_result(state, account_id, result)
+        }
     }
 }
 
@@ -395,6 +398,78 @@ fn reduce_hotp_advance_result(
             Err(err) => {
                 *status_line = Some(StatusLine::Error(render_error_message(&err)));
             }
+        }
+    }
+    (state, Vec::new())
+}
+
+/// Handle the outcome of an [`Effect::Rename`].
+///
+/// On `Ok(())` while [`AppState::Unlocked`] with `Modal::Rename` open
+/// against the result's `account_id`, close the modal and publish a
+/// [`StatusLine::Confirmation`] derived from the post-rename label —
+/// the executor has already mutated the vault via
+/// `Vault::mutate_and_save`, so `vault.iter()` carries the new
+/// label. Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)":
+/// *"manual Add, URI Add, Remove, Rename, Export, Passphrase, and
+/// Settings close the modal and publish a status-line confirmation."*
+///
+/// On `Err(...)` the modal stays open and the rendered error is
+/// stashed in `RenameModal.error` — per the same plan's "Effect
+/// errors" section: *"Pre-commit save failures (`save_not_committed`)
+/// are rolled back by `Vault::mutate_and_save` so memory matches
+/// disk ... and the modal stays open with the inline error so the
+/// user can retry. Durability-unconfirmed save errors leave the new
+/// state in memory ... and are shown as committed-but-uncertain."*
+/// `save_not_committed`, `save_durability_unconfirmed`, and any
+/// other error variant share this surfacing path; the specific
+/// rollback semantics belong to `Vault::mutate_and_save`.
+///
+/// Deliveries that arrive after the user navigated away (auto-lock,
+/// non-`Unlocked` state), after the modal closed or was replaced, or
+/// whose `account_id` does not match the open rename modal are
+/// discarded so the carried error drops without mutating state.
+fn reduce_rename_result(
+    mut state: AppState,
+    account_id: AccountId,
+    result: Result<(), PaladinError>,
+) -> (AppState, Vec<Effect>) {
+    let AppState::Unlocked {
+        ref vault,
+        ref mut modal,
+        ref mut status_line,
+        ..
+    } = state
+    else {
+        return (state, Vec::new());
+    };
+
+    let Some(Modal::Rename(rename)) = modal.as_mut() else {
+        return (state, Vec::new());
+    };
+    if rename.account_id != account_id {
+        return (state, Vec::new());
+    }
+
+    match result {
+        Ok(()) => {
+            let label = vault
+                .iter()
+                .find(|a| a.id() == account_id)
+                .map(|a| a.label().to_owned());
+            // Defensive: if the account is no longer in the vault
+            // (race with a remove, or a core invariant break), keep
+            // the modal open without overwriting state so the user
+            // can dismiss deliberately rather than silently losing
+            // the buffer.
+            let Some(label) = label else {
+                return (state, Vec::new());
+            };
+            *modal = None;
+            *status_line = Some(StatusLine::Confirmation(format!("Renamed to {label}")));
+        }
+        Err(err) => {
+            rename.error = Some(render_error_message(&err));
         }
     }
     (state, Vec::new())
