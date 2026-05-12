@@ -434,6 +434,92 @@ impl AddMode {
     }
 }
 
+/// Which Manual-mode field currently holds modal-local focus inside
+/// the Add modal.
+///
+/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)": *"`Tab` and
+/// `Ctrl-N` move to the next control, `Shift-Tab` and `Ctrl-P` move
+/// to the previous control."* The Add modal's Manual mode collects
+/// eight controls in DESIGN §6 reading order — label, issuer, secret
+/// (Base32), algorithm, digits, kind, period-or-counter, and an
+/// optional icon-hint token — and this enum names that focus slot.
+/// [`next`](AddManualFocus::next) and [`prev`](AddManualFocus::prev)
+/// implement the wrap-both-ways cycle the keybindings expect.
+///
+/// The variant order mirrors the visual top-down reading order so
+/// `Tab` traversal matches the layout. [`Default`] yields the first
+/// field ([`AddManualFocus::Label`]) so a freshly opened Add modal
+/// lands on the same control the user would naturally read first.
+///
+/// Period-and-counter share a single focus slot
+/// ([`AddManualFocus::PeriodOrCounter`]) because only one of them is
+/// ever rendered: the field consults [`AddModal::kind`] to pick
+/// `period_secs` (TOTP) or `counter` (HOTP). Collapsing them keeps
+/// the cycle balanced regardless of which kind is selected.
+///
+/// `manual_focus` is intentionally **sticky** across mode switches:
+/// pressing `Tab` in Uri / Qr mode is a silent no-op so the user's
+/// last Manual-mode focus survives a round trip and is restored when
+/// the modal returns to Manual mode.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum AddManualFocus {
+    /// `label` text field (default focus on modal open).
+    #[default]
+    Label,
+    /// `issuer` text field.
+    Issuer,
+    /// Base32 `manual_secret` field — the only secret-bearing entry
+    /// in Manual mode.
+    Secret,
+    /// `algorithm` selector (cycled by `↑` / `↓` in a later slice).
+    Algorithm,
+    /// `digits` spinner (clamped to `6..=8` per the core bounds in a
+    /// later slice).
+    Digits,
+    /// `kind` selector (TOTP / HOTP).
+    Kind,
+    /// `period_secs` (TOTP) or `counter` (HOTP) — only one is
+    /// rendered, chosen by [`AddModal::kind`].
+    PeriodOrCounter,
+    /// `icon_hint_text` free-form token field.
+    IconHintText,
+}
+
+impl AddManualFocus {
+    /// Advance focus to the next Manual-mode field, wrapping after
+    /// the final field so `Tab` / `Ctrl-N` cycle indefinitely.
+    #[must_use]
+    pub fn next(self) -> Self {
+        match self {
+            Self::Label => Self::Issuer,
+            Self::Issuer => Self::Secret,
+            Self::Secret => Self::Algorithm,
+            Self::Algorithm => Self::Digits,
+            Self::Digits => Self::Kind,
+            Self::Kind => Self::PeriodOrCounter,
+            Self::PeriodOrCounter => Self::IconHintText,
+            Self::IconHintText => Self::Label,
+        }
+    }
+
+    /// Retreat focus to the previous Manual-mode field, wrapping
+    /// before the first field so `Shift-Tab` / `Ctrl-P` cycle
+    /// indefinitely.
+    #[must_use]
+    pub fn prev(self) -> Self {
+        match self {
+            Self::Label => Self::IconHintText,
+            Self::Issuer => Self::Label,
+            Self::Secret => Self::Issuer,
+            Self::Algorithm => Self::Secret,
+            Self::Digits => Self::Algorithm,
+            Self::Kind => Self::Digits,
+            Self::PeriodOrCounter => Self::Kind,
+            Self::IconHintText => Self::PeriodOrCounter,
+        }
+    }
+}
+
 /// State for the Add modal.
 ///
 /// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add: the
@@ -441,10 +527,11 @@ impl AddMode {
 /// own field set. This slice carries the segmented
 /// [`mode`](AddModal::mode) selector, the Manual-mode non-secret
 /// fields, the Manual-mode secret-bearing buffer
-/// ([`manual_secret`](AddModal::manual_secret)), and the URI-mode
-/// entry buffer ([`uri_text`](AddModal::uri_text)); focus cycling,
-/// the duplicate-gate pending state, and the post-QR counts panel
-/// land in subsequent slices alongside their effect-wiring.
+/// ([`manual_secret`](AddModal::manual_secret)), the URI-mode entry
+/// buffer ([`uri_text`](AddModal::uri_text)), and the Manual-mode
+/// field focus slot ([`manual_focus`](AddModal::manual_focus)); the
+/// duplicate-gate pending state and the post-QR counts panel land in
+/// subsequent slices alongside their effect-wiring.
 ///
 /// [`Default`] yields a clean Manual-mode modal with no inline error
 /// and the CLI manual-add defaults per `DESIGN.md` §5 (TOTP, SHA1,
@@ -530,6 +617,24 @@ pub struct AddModal {
     /// editing, mode-switch / cancel / submit zeroization, and the
     /// submit path land in subsequent reducer slices.
     pub uri_text: PassphraseBuffer,
+    /// Which Manual-mode field currently holds modal-local focus.
+    ///
+    /// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
+    /// *"`Tab` and `Ctrl-N` move to the next control, `Shift-Tab` and
+    /// `Ctrl-P` move to the previous control."* The Add modal's
+    /// Manual mode has eight focusable controls in DESIGN §6 reading
+    /// order; this slot names the one currently receiving keystrokes.
+    /// Seeded to [`AddManualFocus::Label`] at modal open time and
+    /// cycled by [`AddManualFocus::next`] / [`AddManualFocus::prev`]
+    /// inside [`route_add_modal_input`](crate::app::reducer).
+    ///
+    /// Focus is **sticky** across mode switches: `Tab` in Uri / Qr
+    /// mode is a silent no-op so the user's last Manual-mode focus
+    /// is restored when the modal returns to Manual mode. The single
+    /// `PeriodOrCounter` slot renders `period_secs` (TOTP) or
+    /// `counter` (HOTP) based on [`kind`](AddModal::kind), so the
+    /// focus cycle stays balanced regardless of the selected kind.
+    pub manual_focus: AddManualFocus,
     /// Inline validation / save error from the most recent submit
     /// attempt, if any. Rendered through
     /// [`render_error_message`](crate::app::state::render_error_message)
@@ -586,6 +691,7 @@ impl Default for AddModal {
             icon_hint_text: String::new(),
             manual_secret: PassphraseBuffer::new(),
             uri_text: PassphraseBuffer::new(),
+            manual_focus: AddManualFocus::default(),
             error: None,
         }
     }

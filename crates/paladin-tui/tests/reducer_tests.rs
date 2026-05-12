@@ -27,8 +27,8 @@ use paladin_tui::app::event::{AppEvent, Effect, EffectResult};
 use paladin_tui::app::reducer::reduce;
 use paladin_tui::app::state::{
     compute_idle_deadline, decide_state_from_inspect, decide_state_from_open, render_error_message,
-    AddModal, AddMode, AppState, ChordLeader, Focus, HotpReveal, Modal, RemoveModal, RenameModal,
-    SettingsFocus, SettingsModal, StatusLine, NO_ACCOUNT_SELECTED,
+    AddManualFocus, AddModal, AddMode, AppState, ChordLeader, Focus, HotpReveal, Modal,
+    RemoveModal, RenameModal, SettingsFocus, SettingsModal, StatusLine, NO_ACCOUNT_SELECTED,
 };
 use paladin_tui::cli::{should_disable_color, GlobalArgs};
 use paladin_tui::prompt::PassphraseBuffer;
@@ -2150,6 +2150,331 @@ fn add_mode_prev_cycles_manual_to_qr_to_uri_to_manual() {
     assert_eq!(AddMode::Manual.prev(), AddMode::Qr);
     assert_eq!(AddMode::Qr.prev(), AddMode::Uri);
     assert_eq!(AddMode::Uri.prev(), AddMode::Manual);
+}
+
+// ---------------------------------------------------------------------------
+// Add modal — Manual-mode field focus + Tab/Shift-Tab/Ctrl-N/Ctrl-P cycling
+// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Reducer — "Modal-local
+//  navigation covers Tab / Shift-Tab, the Ctrl-N / Ctrl-P aliases …"
+//  and "Modals (per §6)": *"`Tab` and `Ctrl-N` move to the next
+//  control, `Shift-Tab` and `Ctrl-P` move to the previous control."*)
+//
+// The Add modal's Manual mode collects eight field controls in DESIGN
+// §6 reading order: label → issuer → secret → algorithm → digits →
+// kind → period/counter → icon-hint. Tab and its modal-LOCAL alias
+// `Ctrl-N` cycle [`AddManualFocus`] forward, `BackTab` / `Ctrl-P`
+// cycle backward, both wrapping at either end. Focus is modal-local;
+// no effects fire and no other slice of state is touched. In Uri / Qr
+// modes there are no multi-field controls to cycle, so the same keys
+// are silent no-ops — the stored `manual_focus` survives a round trip
+// through a different mode so it remains "sticky" when the user
+// returns to Manual.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn add_manual_focus_default_is_label() {
+    // Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)": focus
+    // starts on the first field so the visual top-down reading order
+    // matches the keyboard entry point. `AddManualFocus::default()`
+    // is `Label` — the first field in DESIGN §6's order.
+    assert_eq!(AddManualFocus::default(), AddManualFocus::Label);
+}
+
+#[test]
+fn add_manual_focus_next_cycles_through_all_fields_with_wrap() {
+    // Unit test for `AddManualFocus::next()`: explicit per-variant
+    // transition table so the cycle is locked at the type level
+    // independent of the reducer wiring. Forward order mirrors DESIGN
+    // §6: label → issuer → secret → algorithm → digits → kind →
+    // period/counter → icon-hint → wrap to label.
+    assert_eq!(AddManualFocus::Label.next(), AddManualFocus::Issuer);
+    assert_eq!(AddManualFocus::Issuer.next(), AddManualFocus::Secret);
+    assert_eq!(AddManualFocus::Secret.next(), AddManualFocus::Algorithm);
+    assert_eq!(AddManualFocus::Algorithm.next(), AddManualFocus::Digits);
+    assert_eq!(AddManualFocus::Digits.next(), AddManualFocus::Kind);
+    assert_eq!(AddManualFocus::Kind.next(), AddManualFocus::PeriodOrCounter);
+    assert_eq!(
+        AddManualFocus::PeriodOrCounter.next(),
+        AddManualFocus::IconHintText
+    );
+    assert_eq!(AddManualFocus::IconHintText.next(), AddManualFocus::Label);
+}
+
+#[test]
+fn add_manual_focus_prev_cycles_through_all_fields_with_wrap() {
+    // Unit test for `AddManualFocus::prev()`: the mirror of `next()`,
+    // wrapping at the first field so `Shift-Tab` / `Ctrl-P` cycle
+    // indefinitely without falling off the front.
+    assert_eq!(AddManualFocus::Label.prev(), AddManualFocus::IconHintText);
+    assert_eq!(
+        AddManualFocus::IconHintText.prev(),
+        AddManualFocus::PeriodOrCounter
+    );
+    assert_eq!(AddManualFocus::PeriodOrCounter.prev(), AddManualFocus::Kind);
+    assert_eq!(AddManualFocus::Kind.prev(), AddManualFocus::Digits);
+    assert_eq!(AddManualFocus::Digits.prev(), AddManualFocus::Algorithm);
+    assert_eq!(AddManualFocus::Algorithm.prev(), AddManualFocus::Secret);
+    assert_eq!(AddManualFocus::Secret.prev(), AddManualFocus::Issuer);
+    assert_eq!(AddManualFocus::Issuer.prev(), AddManualFocus::Label);
+}
+
+#[test]
+fn add_modal_default_manual_focus_is_label() {
+    // `AddModal::default()` seeds focus on `Label` so a freshly
+    // opened modal lands on the first field per DESIGN §6 reading
+    // order.
+    let add = AddModal::default();
+    assert_eq!(add.manual_focus, AddManualFocus::Label);
+}
+
+#[test]
+fn opening_add_modal_with_a_seeds_manual_focus_on_label() {
+    // The `a` opener constructs `AddModal::default()`, so the modal
+    // opens with focus on Label end-to-end.
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_add_modal(&tmp);
+    assert_eq!(add_modal_ref(&state).manual_focus, AddManualFocus::Label);
+}
+
+#[test]
+fn tab_in_add_modal_manual_mode_advances_focus_through_all_fields_with_wrap() {
+    let tmp = secure_tempdir();
+    let mut state = fresh_unlocked_with_add_modal(&tmp);
+    let order = [
+        AddManualFocus::Issuer,
+        AddManualFocus::Secret,
+        AddManualFocus::Algorithm,
+        AddManualFocus::Digits,
+        AddManualFocus::Kind,
+        AddManualFocus::PeriodOrCounter,
+        AddManualFocus::IconHintText,
+        AddManualFocus::Label,
+    ];
+    for (i, expected) in order.iter().enumerate() {
+        let (next, effects) = reduce(state, key(KeyCode::Tab));
+        assert!(
+            effects.is_empty(),
+            "Tab inside Add (step {i}) must not emit effects"
+        );
+        assert_eq!(
+            add_modal_ref(&next).manual_focus,
+            *expected,
+            "Tab step {i} should land on {expected:?}"
+        );
+        state = next;
+    }
+}
+
+#[test]
+fn shift_tab_in_add_modal_manual_mode_retreats_focus_through_all_fields_with_wrap() {
+    let tmp = secure_tempdir();
+    let mut state = fresh_unlocked_with_add_modal(&tmp);
+    let order = [
+        AddManualFocus::IconHintText,
+        AddManualFocus::PeriodOrCounter,
+        AddManualFocus::Kind,
+        AddManualFocus::Digits,
+        AddManualFocus::Algorithm,
+        AddManualFocus::Secret,
+        AddManualFocus::Issuer,
+        AddManualFocus::Label,
+    ];
+    for (i, expected) in order.iter().enumerate() {
+        let (next, effects) = reduce(state, key(KeyCode::BackTab));
+        assert!(
+            effects.is_empty(),
+            "Shift-Tab inside Add (step {i}) must not emit effects"
+        );
+        assert_eq!(
+            add_modal_ref(&next).manual_focus,
+            *expected,
+            "Shift-Tab step {i} should land on {expected:?}"
+        );
+        state = next;
+    }
+}
+
+#[test]
+fn ctrl_n_in_add_modal_manual_mode_advances_focus_like_tab() {
+    // `Ctrl-N` is the modal-LOCAL alias for `Tab` per the keybindings
+    // table; the observable behavior must match `Tab` exactly inside
+    // a focusable-field modal.
+    let tmp = secure_tempdir();
+    let mut state = fresh_unlocked_with_add_modal(&tmp);
+    let order = [
+        AddManualFocus::Issuer,
+        AddManualFocus::Secret,
+        AddManualFocus::Algorithm,
+        AddManualFocus::Digits,
+        AddManualFocus::Kind,
+        AddManualFocus::PeriodOrCounter,
+        AddManualFocus::IconHintText,
+        AddManualFocus::Label,
+    ];
+    for (i, expected) in order.iter().enumerate() {
+        let (next, effects) = reduce(state, ctrl(KeyCode::Char('n')));
+        assert!(
+            effects.is_empty(),
+            "Ctrl-N inside Add (step {i}) must not emit effects"
+        );
+        assert_eq!(
+            add_modal_ref(&next).manual_focus,
+            *expected,
+            "Ctrl-N step {i} should land on {expected:?}"
+        );
+        state = next;
+    }
+}
+
+#[test]
+fn ctrl_p_in_add_modal_manual_mode_retreats_focus_like_shift_tab() {
+    // `Ctrl-P` is the modal-LOCAL alias for `Shift-Tab`.
+    let tmp = secure_tempdir();
+    let mut state = fresh_unlocked_with_add_modal(&tmp);
+    let order = [
+        AddManualFocus::IconHintText,
+        AddManualFocus::PeriodOrCounter,
+        AddManualFocus::Kind,
+        AddManualFocus::Digits,
+        AddManualFocus::Algorithm,
+        AddManualFocus::Secret,
+        AddManualFocus::Issuer,
+        AddManualFocus::Label,
+    ];
+    for (i, expected) in order.iter().enumerate() {
+        let (next, effects) = reduce(state, ctrl(KeyCode::Char('p')));
+        assert!(
+            effects.is_empty(),
+            "Ctrl-P inside Add (step {i}) must not emit effects"
+        );
+        assert_eq!(
+            add_modal_ref(&next).manual_focus,
+            *expected,
+            "Ctrl-P step {i} should land on {expected:?}"
+        );
+        state = next;
+    }
+}
+
+#[test]
+fn tab_in_add_modal_does_not_mutate_other_state() {
+    // Per the modal-trap contract, modal-local focus cycling is
+    // strictly modal-local: pressing Tab while the Add modal is open
+    // must not change the path, search query, top-level focus, or
+    // status line, and must not emit any effects.
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_add_modal(&tmp);
+    let (path_before, query_before, focus_before, status_before) = match &state {
+        AppState::Unlocked {
+            path,
+            search_query,
+            focus,
+            status_line,
+            ..
+        } => (
+            path.clone(),
+            search_query.clone(),
+            *focus,
+            status_line.clone(),
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    };
+    let (after, effects) = reduce(state, key(KeyCode::Tab));
+    assert!(effects.is_empty(), "Tab inside Add must not emit effects");
+    match &after {
+        AppState::Unlocked {
+            path,
+            search_query,
+            focus,
+            status_line,
+            modal: Some(Modal::Add(add)),
+            ..
+        } => {
+            assert_eq!(path, &path_before);
+            assert_eq!(search_query, &query_before);
+            assert_eq!(*focus, focus_before);
+            assert_eq!(status_line, &status_before);
+            assert_eq!(add.manual_focus, AddManualFocus::Issuer);
+        }
+        other => panic!("expected Unlocked with Modal::Add open, got {other:?}"),
+    }
+}
+
+#[test]
+fn tab_in_add_modal_uri_mode_does_not_change_manual_focus() {
+    // Uri mode is a single text field — there are no multi-field
+    // controls to cycle, so `Tab` is a silent no-op. The stored
+    // `manual_focus` survives a Uri-mode round trip so it remains
+    // "sticky" when the user returns to Manual mode.
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_add_modal(&tmp);
+    // Manual → Uri via `→`.
+    let (state, _) = reduce(state, key(KeyCode::Right));
+    assert_eq!(add_modal_ref(&state).mode, AddMode::Uri);
+    let focus_before = add_modal_ref(&state).manual_focus;
+    let (after, effects) = reduce(state, key(KeyCode::Tab));
+    assert!(
+        effects.is_empty(),
+        "Tab inside Add (Uri mode) must not emit effects"
+    );
+    let add = add_modal_ref(&after);
+    assert_eq!(add.mode, AddMode::Uri);
+    assert_eq!(
+        add.manual_focus, focus_before,
+        "Tab in Uri mode must not change manual_focus"
+    );
+}
+
+#[test]
+fn tab_in_add_modal_qr_mode_does_not_change_manual_focus() {
+    // Qr mode's only control is a "scan from clipboard" action with
+    // no multi-field cycling target, so `Tab` is a silent no-op.
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_add_modal(&tmp);
+    // Manual → Qr via `←`.
+    let (state, _) = reduce(state, key(KeyCode::Left));
+    assert_eq!(add_modal_ref(&state).mode, AddMode::Qr);
+    let focus_before = add_modal_ref(&state).manual_focus;
+    let (after, effects) = reduce(state, key(KeyCode::Tab));
+    assert!(
+        effects.is_empty(),
+        "Tab inside Add (Qr mode) must not emit effects"
+    );
+    let add = add_modal_ref(&after);
+    assert_eq!(add.mode, AddMode::Qr);
+    assert_eq!(
+        add.manual_focus, focus_before,
+        "Tab in Qr mode must not change manual_focus"
+    );
+}
+
+#[test]
+fn manual_focus_survives_round_trip_through_uri_mode() {
+    // Push focus past Label so a default-equal compare can't mask a
+    // reset bug, then cycle Manual → Uri → Manual via `→ →`. The
+    // stored focus must come back identical: mode-switching does not
+    // touch the focus slot.
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_add_modal(&tmp);
+    let (state, _) = reduce(state, key(KeyCode::Tab));
+    assert_eq!(add_modal_ref(&state).manual_focus, AddManualFocus::Issuer);
+    // Manual → Uri.
+    let (state, _) = reduce(state, key(KeyCode::Right));
+    assert_eq!(add_modal_ref(&state).mode, AddMode::Uri);
+    assert_eq!(
+        add_modal_ref(&state).manual_focus,
+        AddManualFocus::Issuer,
+        "→ Manual→Uri must not change manual_focus"
+    );
+    // Uri → Qr → Manual.
+    let (state, _) = reduce(state, key(KeyCode::Right));
+    let (state, _) = reduce(state, key(KeyCode::Right));
+    assert_eq!(add_modal_ref(&state).mode, AddMode::Manual);
+    assert_eq!(
+        add_modal_ref(&state).manual_focus,
+        AddManualFocus::Issuer,
+        "round-trip back to Manual must preserve manual_focus"
+    );
 }
 
 #[test]

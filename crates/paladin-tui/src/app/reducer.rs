@@ -22,7 +22,7 @@ use zeroize::Zeroizing;
 
 use crate::app::event::{AppEvent, Effect, EffectResult};
 use crate::app::state::{
-    compute_idle_deadline, initial_selection, render_error_message, AddModal, AppState,
+    compute_idle_deadline, initial_selection, render_error_message, AddModal, AddMode, AppState,
     ChordLeader, Focus, HotpReveal, Modal, PendingClipboardClear, RemoveModal, RenameModal,
     SettingsFocus, SettingsModal, StatusLine, CLIPBOARD_WRITE_FAILED, NO_ACCOUNT_SELECTED,
 };
@@ -1106,28 +1106,54 @@ fn route_modal_input(
 /// Add modal's input path.
 ///
 /// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)":
-/// *"`←` / `→` change segmented selectors"*. The Add modal's three
-/// input modes (Manual / URI / QR per DESIGN §6) form one segmented
-/// selector; `→` advances through [`AddMode::next`] and `←` retreats
-/// through [`AddMode::prev`], both wrapping so the user can cycle
-/// indefinitely. The mode-switch routes through
-/// [`AddModal::switch_mode`] which zeroizes the secret-bearing
-/// buffers belonging to the mode being left — per the plan's
-/// *"switching modes clears the hidden secret-bearing fields for the
-/// modes being left: the manual Base32 secret, the URI text, and any
-/// pending duplicate/add-anyway state"*. Per-mode field editing,
-/// focus cycling, the duplicate-gate pending state, and the post-QR
-/// counts panel land in subsequent slices; every other key here is a
-/// silent no-op so the modal-trap contract holds.
+/// *"`←` / `→` change segmented selectors"* and *"`Tab` and `Ctrl-N`
+/// move to the next control, `Shift-Tab` and `Ctrl-P` move to the
+/// previous control."*
+///
+/// The Add modal's three input modes (Manual / URI / QR per DESIGN
+/// §6) form one segmented selector; `→` advances through
+/// [`AddMode::next`] and `←` retreats through [`AddMode::prev`], both
+/// wrapping so the user can cycle indefinitely. The mode-switch
+/// routes through [`AddModal::switch_mode`] which zeroizes the
+/// secret-bearing buffers belonging to the mode being left — per the
+/// plan's *"switching modes clears the hidden secret-bearing fields
+/// for the modes being left: the manual Base32 secret, the URI text,
+/// and any pending duplicate/add-anyway state"*.
+///
+/// Inside Manual mode `Tab` / `Ctrl-N` advance
+/// [`AddModal::manual_focus`] forward through DESIGN §6's eight
+/// controls (label → issuer → secret → algorithm → digits → kind →
+/// period/counter → icon-hint) and `Shift-Tab` / `Ctrl-P` retreat,
+/// both wrapping at either end. In Uri / Qr mode there is no
+/// multi-field control to cycle, so the same keys are silent no-ops;
+/// `manual_focus` is intentionally sticky across mode switches so the
+/// user's last Manual-mode focus is restored on return to Manual.
+///
+/// Per-mode field editing, the duplicate-gate pending state, and the
+/// post-QR counts panel land in subsequent slices; every other key
+/// here is a silent no-op so the modal-trap contract holds. `Esc` /
+/// Help / `Ctrl-C` are filtered upstream of the modal trap.
 fn route_add_modal_input(add: &mut AddModal, key: &KeyEvent) -> Vec<Effect> {
     match key.code {
         KeyCode::Right => {
             add.switch_mode(add.mode.next());
+            return Vec::new();
         }
         KeyCode::Left => {
             add.switch_mode(add.mode.prev());
+            return Vec::new();
         }
         _ => {}
+    }
+    if add.mode == AddMode::Manual {
+        if is_modal_focus_next(key) {
+            add.manual_focus = add.manual_focus.next();
+            return Vec::new();
+        }
+        if is_modal_focus_prev(key) {
+            add.manual_focus = add.manual_focus.prev();
+            return Vec::new();
+        }
     }
     Vec::new()
 }

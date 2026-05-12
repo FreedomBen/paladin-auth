@@ -686,7 +686,11 @@ end-to-end.
   same as `Tab` / `Shift-Tab` — for every modal variant, symmetry
   with `Tab` / `Shift-Tab` is locked in, and at the top level the
   pair is unbound so they cannot leak into List ↔ Search focus
-  cycling.
+  cycling. *(Add modal Manual-mode focus cycle covered by
+  `tab_in_add_modal_manual_mode_advances_focus_through_all_fields_with_wrap`
+  and its `BackTab` / `Ctrl-N` / `Ctrl-P` siblings; Uri / Qr modes
+  treat the same keys as silent no-ops so `manual_focus` stays
+  sticky.)*
 - [ ] `Ctrl-N` / `Ctrl-P` inside modals have no effect on a
   post-success counts panel — lands alongside the counts panel
   payload (Add / Import / Export).
