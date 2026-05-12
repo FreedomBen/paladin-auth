@@ -24,7 +24,8 @@ use tempfile::TempDir;
 
 use paladin_core::{
     validate_manual, AccountId, AccountInput, AccountKindInput, Algorithm, Argon2Params,
-    EncryptionOptions, IconHintInput, PaladinError, Store, Vault, VaultInit, VaultLock,
+    EncryptionOptions, IconHintInput, PaladinError, SettingPatch, Store, Vault, VaultInit,
+    VaultLock,
 };
 
 use paladin_tui::app::effect::{execute, EffectOutcome};
@@ -823,5 +824,227 @@ fn execute_remove_carries_issuer_joined_display_label() {
             );
         }
         other => panic!("expected EffectResult::Remove {{ Ok }}, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Effect::ApplySettings
+// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Settings modal: "Confirm
+//  runs every changed setter inside one Vault::mutate_and_save
+//  transaction.")
+// ---------------------------------------------------------------------------
+
+#[test]
+fn execute_apply_settings_with_single_patch_applies_and_sends_ok() {
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (mut state, _id) = unlocked_with_one_totp(&path, "github");
+
+    let (tx, rx) = mpsc::channel::<AppEvent>();
+    let effect = Effect::ApplySettings {
+        path: path.clone(),
+        patches: vec![SettingPatch::AutoLockEnabled(true)],
+    };
+
+    let outcome = execute(effect, &mut state, &tx);
+    assert_eq!(outcome, EffectOutcome::Continue);
+
+    let evt = rx.try_recv().expect("an AppEvent should be sent");
+    match evt {
+        AppEvent::EffectResult(EffectResult::Settings { result: Ok(()) }) => {}
+        other => panic!("expected EffectResult::Settings {{ Ok }}, got {other:?}"),
+    }
+    assert!(
+        rx.try_recv().is_err(),
+        "executor must emit exactly one AppEvent per Effect::ApplySettings"
+    );
+
+    // The live vault carries the new value.
+    match &state {
+        AppState::Unlocked { vault, .. } => {
+            assert!(
+                vault.settings().auto_lock_enabled(),
+                "single patch must update the live vault"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+
+    // Re-open the on-disk primary and assert the commit landed.
+    let (reopened, _store) =
+        Store::open(&path, VaultLock::Plaintext).expect("reopen plaintext vault");
+    assert!(
+        reopened.settings().auto_lock_enabled(),
+        "Vault::mutate_and_save must commit the new setting to the on-disk primary"
+    );
+}
+
+#[test]
+fn execute_apply_settings_with_multiple_patches_applies_atomically_and_sends_ok() {
+    // Per IMPLEMENTATION_PLAN_03_TUI.md > Settings modal: "Confirm
+    // runs every changed setter inside one `Vault::mutate_and_save`
+    // transaction." A four-patch list lands as one commit and every
+    // field reflects the new value in the live vault and on disk.
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (mut state, _id) = unlocked_with_one_totp(&path, "github");
+
+    let (tx, rx) = mpsc::channel::<AppEvent>();
+    let effect = Effect::ApplySettings {
+        path: path.clone(),
+        patches: vec![
+            SettingPatch::AutoLockEnabled(true),
+            SettingPatch::AutoLockTimeoutSecs(120),
+            SettingPatch::ClipboardClearEnabled(true),
+            SettingPatch::ClipboardClearSecs(45),
+        ],
+    };
+
+    let outcome = execute(effect, &mut state, &tx);
+    assert_eq!(outcome, EffectOutcome::Continue);
+
+    let evt = rx.try_recv().expect("an AppEvent should be sent");
+    assert!(matches!(
+        evt,
+        AppEvent::EffectResult(EffectResult::Settings { result: Ok(()) })
+    ));
+
+    match &state {
+        AppState::Unlocked { vault, .. } => {
+            let s = vault.settings();
+            assert!(s.auto_lock_enabled());
+            assert_eq!(s.auto_lock_timeout_secs(), 120);
+            assert!(s.clipboard_clear_enabled());
+            assert_eq!(s.clipboard_clear_secs(), 45);
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+
+    let (reopened, _store) =
+        Store::open(&path, VaultLock::Plaintext).expect("reopen plaintext vault");
+    let s = reopened.settings();
+    assert!(s.auto_lock_enabled());
+    assert_eq!(s.auto_lock_timeout_secs(), 120);
+    assert!(s.clipboard_clear_enabled());
+    assert_eq!(s.clipboard_clear_secs(), 45);
+}
+
+#[test]
+fn execute_apply_settings_with_out_of_range_patch_returns_validation_error() {
+    // Defensive: the reducer clamps spinner values before submit, so
+    // this path is observable only when a future code path bypasses
+    // the modal clamp. `apply_setting_patch` enforces the §4.7
+    // bounds (`auto_lock.timeout_secs` ∈ 30..=86_400), so an
+    // out-of-range patch rejects with `validation_error` and
+    // `Vault::mutate_and_save` rolls back. The live vault stays at
+    // its pre-attempt values.
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (mut state, _id) = unlocked_with_one_totp(&path, "github");
+
+    let pre = match &state {
+        AppState::Unlocked { vault, .. } => vault.settings().auto_lock_timeout_secs(),
+        other => panic!("expected Unlocked, got {other:?}"),
+    };
+
+    let (tx, rx) = mpsc::channel::<AppEvent>();
+    let effect = Effect::ApplySettings {
+        path: path.clone(),
+        patches: vec![SettingPatch::AutoLockTimeoutSecs(0)],
+    };
+
+    let outcome = execute(effect, &mut state, &tx);
+    assert_eq!(outcome, EffectOutcome::Continue);
+
+    let evt = rx.try_recv().expect("an AppEvent should be sent");
+    match evt {
+        AppEvent::EffectResult(EffectResult::Settings { result: Err(err) }) => {
+            assert!(
+                matches!(err, PaladinError::ValidationError { field, .. } if field == "auto_lock.timeout_secs"),
+                "expected validation_error for auto_lock.timeout_secs, got {err:?}"
+            );
+        }
+        other => panic!("expected EffectResult::Settings {{ Err }}, got {other:?}"),
+    }
+
+    // mutate_and_save rolls back: the live vault still has the
+    // pre-attempt value.
+    match &state {
+        AppState::Unlocked { vault, .. } => {
+            assert_eq!(vault.settings().auto_lock_timeout_secs(), pre);
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn execute_apply_settings_on_non_unlocked_state_is_silently_dropped() {
+    let mut state = AppState::MissingVault {
+        path: PathBuf::from("/tmp/dummy-vault.bin"),
+    };
+    let (tx, rx) = mpsc::channel::<AppEvent>();
+    let effect = Effect::ApplySettings {
+        path: PathBuf::from("/tmp/dummy-vault.bin"),
+        patches: vec![SettingPatch::AutoLockEnabled(true)],
+    };
+
+    let outcome = execute(effect, &mut state, &tx);
+    assert_eq!(outcome, EffectOutcome::Continue);
+    assert!(
+        rx.try_recv().is_err(),
+        "off-Unlocked Effect::ApplySettings must not emit an AppEvent"
+    );
+}
+
+#[test]
+fn execute_apply_settings_with_mismatched_path_is_silently_dropped() {
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("real-vault.bin");
+    let (mut state, _id) = unlocked_with_one_totp(&path, "github");
+
+    let (tx, rx) = mpsc::channel::<AppEvent>();
+    let effect = Effect::ApplySettings {
+        path: PathBuf::from("/tmp/some-other-vault.bin"),
+        patches: vec![SettingPatch::AutoLockEnabled(true)],
+    };
+
+    let outcome = execute(effect, &mut state, &tx);
+    assert_eq!(outcome, EffectOutcome::Continue);
+    assert!(
+        rx.try_recv().is_err(),
+        "path-mismatched Effect::ApplySettings must not emit an AppEvent"
+    );
+
+    // The live vault settings are untouched.
+    match &state {
+        AppState::Unlocked { vault, .. } => {
+            assert!(!vault.settings().auto_lock_enabled());
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn execute_apply_settings_with_dropped_receiver_does_not_panic() {
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (mut state, _id) = unlocked_with_one_totp(&path, "github");
+
+    let (tx, rx) = mpsc::channel::<AppEvent>();
+    drop(rx);
+    let effect = Effect::ApplySettings {
+        path,
+        patches: vec![SettingPatch::AutoLockEnabled(true)],
+    };
+
+    // The mutate-and-save still ran (vault carries the new value);
+    // the send into a dropped channel is swallowed without panic.
+    let outcome = execute(effect, &mut state, &tx);
+    assert_eq!(outcome, EffectOutcome::Continue);
+    match &state {
+        AppState::Unlocked { vault, .. } => {
+            assert!(vault.settings().auto_lock_enabled());
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
     }
 }

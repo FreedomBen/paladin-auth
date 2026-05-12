@@ -15,7 +15,7 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 
 use paladin_core::{
     hotp_reveal_deadline, validate_label, AccountId, ClipboardClearPolicy, ClipboardClearToken,
-    Code, IdlePolicy, PaladinError, Store, Vault,
+    Code, IdlePolicy, PaladinError, SettingPatch, Store, Vault,
 };
 use secrecy::SecretString;
 use zeroize::Zeroizing;
@@ -260,6 +260,7 @@ fn reduce_effect_result(state: AppState, result: EffectResult) -> (AppState, Vec
         EffectResult::Remove { account_id, result } => {
             reduce_remove_result(state, account_id, result)
         }
+        EffectResult::Settings { result } => reduce_settings_result(state, result),
     }
 }
 
@@ -541,6 +542,53 @@ fn reduce_remove_result(
     (state, Vec::new())
 }
 
+/// Handle the outcome of an [`Effect::ApplySettings`].
+///
+/// On `Ok(())` while [`AppState::Unlocked`] with `Modal::Settings`
+/// open, close the modal and publish a [`StatusLine::Confirmation`]
+/// — per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)": *"manual
+/// Add, URI Add, Remove, Rename, Export, Passphrase, and Settings
+/// close the modal and publish a status-line confirmation."*
+///
+/// On any `Err(...)` the modal stays open and the rendered error is
+/// stashed in `SettingsModal.error` — per the same plan's "Effect
+/// errors" > "Add / remove / rename / settings saves" section.
+/// `save_not_committed`, `save_durability_unconfirmed`, and any
+/// validation / I/O error variant share this surfacing path; the
+/// specific rollback semantics belong to `Vault::mutate_and_save`.
+///
+/// Deliveries that arrive after the user navigated away (auto-lock,
+/// non-`Unlocked` state) or after the Settings modal closed are
+/// discarded so the carried error drops without mutating state.
+fn reduce_settings_result(
+    mut state: AppState,
+    result: Result<(), PaladinError>,
+) -> (AppState, Vec<Effect>) {
+    let AppState::Unlocked {
+        ref mut modal,
+        ref mut status_line,
+        ..
+    } = state
+    else {
+        return (state, Vec::new());
+    };
+
+    let Some(Modal::Settings(settings)) = modal.as_mut() else {
+        return (state, Vec::new());
+    };
+
+    match result {
+        Ok(()) => {
+            *modal = None;
+            *status_line = Some(StatusLine::Confirmation("Settings updated.".to_string()));
+        }
+        Err(err) => {
+            settings.error = Some(render_error_message(&err));
+        }
+    }
+    (state, Vec::new())
+}
+
 /// Handle the outcome of an [`Effect::Unlock`].
 ///
 /// Only `AppState::Unlock` accepts the result; any other state means
@@ -764,7 +812,7 @@ fn reduce_unlocked_input(mut state: AppState, key: &KeyEvent) -> (AppState, Vec<
             return move_selection(state, step);
         }
         if modal.is_some() && (is_modal_focus_next(key) || is_modal_focus_prev(key)) {
-            let effects = route_modal_input(path, modal, key);
+            let effects = route_modal_input(path, modal, vault, key);
             return (state, effects);
         }
         return (state, Vec::new());
@@ -772,7 +820,7 @@ fn reduce_unlocked_input(mut state: AppState, key: &KeyEvent) -> (AppState, Vec<
 
     if modal.is_some() {
         *pending_chord_leader = None;
-        let effects = route_modal_input(path, modal, key);
+        let effects = route_modal_input(path, modal, vault, key);
         return (state, effects);
     }
 
@@ -1037,12 +1085,19 @@ fn pending_settings_for_char(c: char, vault: &Vault) -> Option<SettingsModal> {
 fn route_modal_input(
     path: &std::path::Path,
     modal: &mut Option<Modal>,
+    vault: &Vault,
     key: &KeyEvent,
 ) -> Vec<Effect> {
     match modal.as_mut() {
         Some(Modal::Rename(rename)) => route_rename_modal_input(path, rename, key),
         Some(Modal::Remove(remove)) => route_remove_modal_input(path, remove, key),
-        Some(Modal::Settings(settings)) => route_settings_modal_input(settings, key),
+        Some(Modal::Settings(settings)) => {
+            let (effects, close) = route_settings_modal_input(path, settings, vault, key);
+            if close {
+                *modal = None;
+            }
+            effects
+        }
         _ => Vec::new(),
     }
 }
@@ -1053,26 +1108,39 @@ fn route_modal_input(
 /// `Ctrl-N` move to the next control, `Shift-Tab` and `Ctrl-P` move
 /// to the previous control … `Space` toggles the focused checkbox /
 /// toggle … `↑` / `↓` adjust spinners … The spinners clamp to the
-/// shared core bounds."* At this slice the Settings modal cycles
+/// shared core bounds."* The Settings modal cycles
 /// [`SettingsFocus`], flips the focused boolean, and adjusts the
 /// focused spinner by the field's MIN granule
 /// (`AUTO_LOCK_SECS_MIN = 30` for `auto_lock.timeout_secs`;
 /// `CLIPBOARD_CLEAR_SECS_MIN = 5` for `clipboard.clear_secs`),
 /// clamping at both ends. `↑` / `↓` on a toggle-focused field and
 /// Space on a spinner-focused field are silent no-ops so the
-/// modal-trap contract holds and the focused field is not
-/// accidentally mutated by the wrong control. Enter confirm and Esc
-/// discard land in subsequent slices; every other key is a silent
-/// no-op. Esc / Help / Ctrl-C are filtered upstream of the modal
-/// trap.
-fn route_settings_modal_input(settings: &mut SettingsModal, key: &KeyEvent) -> Vec<Effect> {
+/// modal-trap contract holds.
+///
+/// `Enter` diffs the modal's pending fields against the live
+/// [`paladin_core::VaultSettings`] and emits a single
+/// [`Effect::ApplySettings`] carrying exactly the changed
+/// [`SettingPatch`]es (declaration order of [`SettingsFocus`]). An
+/// empty diff closes the modal in place without emitting any effect
+/// — per `IMPLEMENTATION_PLAN_03_TUI.md` > Settings modal: *"Confirm
+/// with no changes closes the modal without invoking save."*
+/// Every other key is a silent no-op; Esc / Help / Ctrl-C are
+/// filtered upstream of the modal trap. The bool in the tuple return
+/// signals the caller to clear the modal slot on the no-change Enter
+/// path.
+fn route_settings_modal_input(
+    path: &std::path::Path,
+    settings: &mut SettingsModal,
+    vault: &Vault,
+    key: &KeyEvent,
+) -> (Vec<Effect>, bool) {
     if is_modal_focus_next(key) {
         settings.focus = settings.focus.next();
-        return Vec::new();
+        return (Vec::new(), false);
     }
     if is_modal_focus_prev(key) {
         settings.focus = settings.focus.prev();
-        return Vec::new();
+        return (Vec::new(), false);
     }
     if matches!(key.code, KeyCode::Char(' ')) {
         match settings.focus {
@@ -1087,7 +1155,7 @@ fn route_settings_modal_input(settings: &mut SettingsModal, key: &KeyEvent) -> V
                 // modal-trap contract holds.
             }
         }
-        return Vec::new();
+        return (Vec::new(), false);
     }
     if matches!(key.code, KeyCode::Up | KeyCode::Down) {
         let delta_up = matches!(key.code, KeyCode::Up);
@@ -1113,9 +1181,56 @@ fn route_settings_modal_input(settings: &mut SettingsModal, key: &KeyEvent) -> V
                 // modal-trap contract holds.
             }
         }
-        return Vec::new();
+        return (Vec::new(), false);
     }
-    Vec::new()
+    if matches!(key.code, KeyCode::Enter) {
+        let patches = pending_settings_diff(settings, vault);
+        if patches.is_empty() {
+            return (Vec::new(), true);
+        }
+        return (
+            vec![Effect::ApplySettings {
+                path: path.to_path_buf(),
+                patches,
+            }],
+            false,
+        );
+    }
+    (Vec::new(), false)
+}
+
+/// Diff the [`SettingsModal`] modal-local pending fields against the
+/// live [`paladin_core::VaultSettings`] and return one
+/// [`SettingPatch`] per changed field. The patch list is emitted in
+/// [`SettingsFocus`] declaration order (auto-lock toggle → auto-lock
+/// spinner → clipboard toggle → clipboard spinner) so the
+/// `EffectResult::Settings` round trip is deterministic and the
+/// executor's per-patch error reporting picks the same field the user
+/// last edited when bounds are violated.
+///
+/// An empty list means the user pressed Confirm without altering any
+/// pending field; the reducer skips emitting an effect and closes
+/// the modal in place.
+fn pending_settings_diff(modal: &SettingsModal, vault: &Vault) -> Vec<SettingPatch> {
+    let current = vault.settings();
+    let mut patches = Vec::new();
+    if modal.auto_lock_enabled != current.auto_lock_enabled() {
+        patches.push(SettingPatch::AutoLockEnabled(modal.auto_lock_enabled));
+    }
+    if modal.auto_lock_timeout_secs != current.auto_lock_timeout_secs() {
+        patches.push(SettingPatch::AutoLockTimeoutSecs(
+            modal.auto_lock_timeout_secs,
+        ));
+    }
+    if modal.clipboard_clear_enabled != current.clipboard_clear_enabled() {
+        patches.push(SettingPatch::ClipboardClearEnabled(
+            modal.clipboard_clear_enabled,
+        ));
+    }
+    if modal.clipboard_clear_secs != current.clipboard_clear_secs() {
+        patches.push(SettingPatch::ClipboardClearSecs(modal.clipboard_clear_secs));
+    }
+    patches
 }
 
 /// Apply one ↑/↓ press to a spinner field. The step granule is the

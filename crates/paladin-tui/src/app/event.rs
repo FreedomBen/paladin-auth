@@ -11,7 +11,9 @@ use std::time::{Instant, SystemTime};
 use secrecy::SecretString;
 use zeroize::Zeroizing;
 
-use paladin_core::{AccountId, ClipboardClearToken, Code, PaladinError, Store, Vault};
+use paladin_core::{
+    AccountId, ClipboardClearToken, Code, PaladinError, SettingPatch, Store, Vault,
+};
 
 /// Events delivered to the reducer over the `mpsc<AppEvent>` channel.
 ///
@@ -290,6 +292,40 @@ pub enum EffectResult {
         /// returned by `Vault::remove` before the value drops.
         result: Result<String, PaladinError>,
     },
+
+    /// Outcome of an [`Effect::ApplySettings`] attempt.
+    ///
+    /// On `Ok(())` while [`crate::app::state::AppState::Unlocked`]
+    /// with `Modal::Settings` open, the reducer closes the modal and
+    /// publishes a [`crate::app::state::StatusLine::Confirmation`] —
+    /// per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)":
+    /// *"manual Add, URI Add, Remove, Rename, Export, Passphrase, and
+    /// Settings close the modal and publish a status-line
+    /// confirmation."*
+    ///
+    /// On any `Err(...)` the modal stays open and the rendered error
+    /// is stashed in
+    /// [`crate::app::state::SettingsModal::error`] — per the same
+    /// plan's "Effect errors" > "Add / remove / rename / settings
+    /// saves": pre-commit failures (`save_not_committed`) are rolled
+    /// back inside `Vault::mutate_and_save` so memory matches disk;
+    /// durability-unconfirmed leaves the new values committed and
+    /// surfaces the warning inline; defensive setter validation
+    /// failures (e.g. an out-of-range patch) also surface inline so
+    /// the user can adjust and retry.
+    ///
+    /// Results delivered while not on `Unlocked`, while a different
+    /// modal is open, or after the Settings modal closed are
+    /// discarded so the carried error drops without mutating state.
+    Settings {
+        /// The `Vault::apply_setting_patch` + `Vault::save` outcome.
+        /// `Ok(())` indicates every staged patch is persisted; on
+        /// `Err(...)` core's `Vault::mutate_and_save` has already
+        /// rolled back the in-memory snapshot on `save_not_committed`
+        /// or left the new values committed on
+        /// `save_durability_unconfirmed`.
+        result: Result<(), PaladinError>,
+    },
 }
 
 /// Side effects produced by the reducer.
@@ -450,5 +486,41 @@ pub enum Effect {
         /// modal-open time so a later selection change does not
         /// redirect the remove mid-flight.
         account_id: AccountId,
+    },
+    /// Apply Settings modal's pending changes to the live vault and
+    /// persist them.
+    ///
+    /// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" >
+    /// Settings: *"The modal accumulates pending edits in modal-local
+    /// state and only commits on Confirm: pending values are applied
+    /// through the same setters (`set_auto_lock_*`,
+    /// `set_clipboard_clear_*`) inside a single
+    /// `Vault::mutate_and_save` transaction."* The reducer diffs the
+    /// modal's pending fields against the live
+    /// [`paladin_core::VaultSettings`] at Confirm time and emits this
+    /// effect carrying exactly the changed [`SettingPatch`]es (empty
+    /// pending == no diff == no effect; the reducer closes the modal
+    /// without invoking save in that case).
+    ///
+    /// The executor wires each patch through
+    /// `Vault::apply_setting_patch` inside a single
+    /// `Vault::mutate_and_save` so all changes commit atomically: a
+    /// pre-commit failure (`save_not_committed`) snaps every staged
+    /// value back to its pre-attempt state and a
+    /// `save_durability_unconfirmed` leaves them committed in memory.
+    /// The outcome is posted back through an
+    /// `AppEvent::EffectResult(EffectResult::Settings { … })`.
+    ApplySettings {
+        /// The current vault path; the executor uses it to verify the
+        /// path the effect was emitted against in case the user has
+        /// navigated away.
+        path: PathBuf,
+        /// The diffed list of patches to apply, in declaration order
+        /// of `SettingsFocus` (auto-lock toggle → auto-lock spinner →
+        /// clipboard toggle → clipboard spinner). The reducer only
+        /// emits this effect when `patches` is non-empty; the
+        /// executor still tolerates an empty list as a defensive
+        /// no-op that posts back `Ok(())`.
+        patches: Vec<SettingPatch>,
     },
 }

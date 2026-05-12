@@ -21,7 +21,7 @@ use secrecy::{ExposeSecret, SecretString};
 use paladin_core::{
     hotp_reveal_deadline, validate_manual, AccountId, AccountInput, AccountKindInput, Algorithm,
     Argon2Params, EncryptionOptions, IconHintInput, IdlePolicy, PaladinError, PermissionSubject,
-    Store, Vault, VaultInit, VaultLock, VaultStatus,
+    SettingPatch, Store, Vault, VaultInit, VaultLock, VaultStatus,
 };
 use paladin_tui::app::event::{AppEvent, Effect, EffectResult};
 use paladin_tui::app::reducer::reduce;
@@ -3615,6 +3615,610 @@ fn arrow_on_settings_modal_does_not_mutate_vault_settings() {
                 "↑ inside Settings must not mutate live VaultSettings"
             );
         }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Settings modal — Confirm / Esc / pending-edit buffering + save outcomes
+// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Reducer — "Settings modal":
+//  pending edits buffered, Esc discards, Confirm runs every changed
+//  setter inside one Vault::mutate_and_save, save-error rollback,
+//  durability-unconfirmed surfacing, no-change Confirm closes without
+//  saving.)
+// ---------------------------------------------------------------------------
+
+/// Open the Settings modal and return the contained `AppState` plus
+/// the vault path for Effect assertions. The fresh plaintext vault
+/// uses `VaultSettings::default()` so callers can mutate pending
+/// fields to create observable diffs.
+fn fresh_unlocked_with_settings_modal_and_path(
+    tmp: &tempfile::TempDir,
+) -> (PathBuf, AccountId, AppState) {
+    let (path, (mut vault, store)) = open_plaintext_pair(tmp);
+    // Seed one account so `Vault::iter()` is non-empty and the
+    // post-save assertions can observe vault-wide invariants (the
+    // Settings modal does not depend on selection but the executor
+    // does run inside `Vault::mutate_and_save`).
+    let id = add_totp_account(&mut vault, &store, "github");
+    let unlocked = AppState::Unlocked {
+        path: path.clone(),
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let (state, effects) = reduce(unlocked, key(KeyCode::Char('s')));
+    assert!(effects.is_empty(), "opening Settings must not emit effects");
+    (path, id, state)
+}
+
+/// Mutate the open Settings modal's pending fields, returning the
+/// modified `AppState`. Caller supplies a closure so multiple field
+/// edits stay observable; the helper preserves every other slot.
+fn with_settings_modal_mut(state: AppState, f: impl FnOnce(&mut SettingsModal)) -> AppState {
+    match state {
+        AppState::Unlocked {
+            path,
+            vault,
+            store,
+            search_query,
+            idle_deadline,
+            pending_clipboard_clear,
+            hotp_reveal,
+            mut modal,
+            selected,
+            pending_chord_leader,
+            viewport_height,
+            viewport_offset,
+            focus,
+            status_line,
+            help_open,
+        } => {
+            match modal.as_mut() {
+                Some(Modal::Settings(s)) => f(s),
+                other => panic!("expected Modal::Settings open, got {other:?}"),
+            }
+            AppState::Unlocked {
+                path,
+                vault,
+                store,
+                search_query,
+                idle_deadline,
+                pending_clipboard_clear,
+                hotp_reveal,
+                modal,
+                selected,
+                pending_chord_leader,
+                viewport_height,
+                viewport_offset,
+                focus,
+                status_line,
+                help_open,
+            }
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+fn settings_result(result: Result<(), PaladinError>) -> AppEvent {
+    AppEvent::EffectResult(EffectResult::Settings { result })
+}
+
+/// Pull a snapshot of the live `VaultSettings` from an `Unlocked`
+/// state as a `(auto_lock_enabled, auto_lock_timeout_secs,
+/// clipboard_clear_enabled, clipboard_clear_secs)` tuple.
+fn settings_snapshot(state: &AppState) -> (bool, u32, bool, u32) {
+    match state {
+        AppState::Unlocked { vault, .. } => {
+            let s = vault.settings();
+            (
+                s.auto_lock_enabled(),
+                s.auto_lock_timeout_secs(),
+                s.clipboard_clear_enabled(),
+                s.clipboard_clear_secs(),
+            )
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn settings_modal_space_and_arrow_edits_buffer_pending_until_confirm() {
+    // Per IMPLEMENTATION_PLAN_03_TUI.md > Settings modal:
+    // "Pending edits are buffered until Confirm." Multiple
+    // interleaved Tab / Space / ↑ presses must update the modal's
+    // pending fields but never call any `Vault::set_*` setter — the
+    // live `VaultSettings` only changes through the Confirm path's
+    // `Vault::mutate_and_save`. This sister-tests `space_*` and
+    // `arrow_*` for the buffered-multi-edit guarantee.
+    let tmp = secure_tempdir();
+    let (_path, _id, state) = fresh_unlocked_with_settings_modal_and_path(&tmp);
+    let before = settings_snapshot(&state);
+    // Flip auto-lock toggle (focus starts on AutoLockEnabled).
+    let (state, _) = reduce(state, key(KeyCode::Char(' ')));
+    // Tab → auto_lock_timeout_secs spinner.
+    let (state, _) = reduce(state, key(KeyCode::Tab));
+    let (state, _) = reduce(state, key(KeyCode::Up));
+    // Tab → clipboard_clear_enabled.
+    let (state, _) = reduce(state, key(KeyCode::Tab));
+    let (state, _) = reduce(state, key(KeyCode::Char(' ')));
+    // Tab → clipboard_clear_secs spinner.
+    let (state, _) = reduce(state, key(KeyCode::Tab));
+    let (state, _) = reduce(state, key(KeyCode::Up));
+    let after = settings_snapshot(&state);
+    assert_eq!(
+        before, after,
+        "pending Settings edits must not mutate live VaultSettings until Confirm"
+    );
+    // The modal carries the pending values now.
+    match &state {
+        AppState::Unlocked {
+            modal: Some(Modal::Settings(s)),
+            ..
+        } => {
+            assert!(s.auto_lock_enabled, "auto_lock_enabled toggled pending");
+            assert!(
+                s.auto_lock_timeout_secs > before.1,
+                "auto_lock_timeout_secs stepped pending (before={}, after={})",
+                before.1,
+                s.auto_lock_timeout_secs
+            );
+            assert!(s.clipboard_clear_enabled);
+            assert!(s.clipboard_clear_secs > before.3);
+        }
+        other => panic!("expected open Settings modal, got {other:?}"),
+    }
+}
+
+#[test]
+fn settings_modal_esc_discards_pending_edits_without_invoking_save() {
+    // Per IMPLEMENTATION_PLAN_03_TUI.md > Settings modal:
+    // "`Esc` discards pending edits without invoking setters or save."
+    // The reducer's Esc handler clears the modal slot; pending values
+    // drop with the discarded `SettingsModal` and no effect is
+    // emitted. The live vault stays at its pre-edit settings.
+    let tmp = secure_tempdir();
+    let (_path, _id, state) = fresh_unlocked_with_settings_modal_and_path(&tmp);
+    let before = settings_snapshot(&state);
+    // Apply a flurry of pending edits.
+    let (state, _) = reduce(state, key(KeyCode::Char(' ')));
+    let (state, _) = reduce(state, key(KeyCode::Tab));
+    let (state, _) = reduce(state, key(KeyCode::Up));
+    // Now press Esc.
+    let (state, effects) = reduce(state, key(KeyCode::Esc));
+    assert!(
+        effects.is_empty(),
+        "Esc on Settings must not emit effects, got {effects:?}"
+    );
+    match &state {
+        AppState::Unlocked { modal: None, .. } => {}
+        AppState::Unlocked { modal, .. } => {
+            panic!("expected modal=None after Esc, got {modal:?}")
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+    assert_eq!(
+        settings_snapshot(&state),
+        before,
+        "Esc on Settings must not mutate live VaultSettings"
+    );
+}
+
+#[test]
+fn settings_modal_enter_with_no_changes_closes_modal_without_emitting_effect() {
+    // Per IMPLEMENTATION_PLAN_03_TUI.md > Settings modal:
+    // "Confirm with no changes closes the modal without invoking
+    // save." The reducer diffs pending vs live and skips the effect
+    // when the diff is empty.
+    let tmp = secure_tempdir();
+    let (_path, _id, state) = fresh_unlocked_with_settings_modal_and_path(&tmp);
+    let before = settings_snapshot(&state);
+    let (state, effects) = reduce(state, key(KeyCode::Enter));
+    assert!(
+        effects.is_empty(),
+        "no-change Confirm must not emit Effect::ApplySettings, got {effects:?}"
+    );
+    match &state {
+        AppState::Unlocked { modal: None, .. } => {}
+        AppState::Unlocked { modal, .. } => {
+            panic!("expected modal=None after no-change Confirm, got {modal:?}")
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+    assert_eq!(
+        settings_snapshot(&state),
+        before,
+        "no-change Confirm must not mutate live VaultSettings"
+    );
+}
+
+#[test]
+fn settings_modal_enter_with_changes_emits_apply_settings_effect_with_diff_patches() {
+    // Per IMPLEMENTATION_PLAN_03_TUI.md > Settings modal: "Confirm
+    // runs every changed setter inside one `Vault::mutate_and_save`
+    // transaction." The reducer diffs the modal's pending fields
+    // against the live `VaultSettings` at Confirm time and emits
+    // exactly the changed `SettingPatch`es; the modal stays open
+    // until the `EffectResult::Settings` arrives.
+    let tmp = secure_tempdir();
+    let (path, _id, state) = fresh_unlocked_with_settings_modal_and_path(&tmp);
+    let before = settings_snapshot(&state);
+    // Stage three pending changes (every field except
+    // `auto_lock_timeout_secs`).
+    let state = with_settings_modal_mut(state, |s| {
+        s.auto_lock_enabled = !before.0;
+        s.clipboard_clear_enabled = !before.2;
+        s.clipboard_clear_secs = before
+            .3
+            .saturating_add(paladin_core::CLIPBOARD_CLEAR_SECS_MIN);
+    });
+    let (state, effects) = reduce(state, key(KeyCode::Enter));
+    assert_eq!(effects.len(), 1, "expected single Effect::ApplySettings");
+    match &effects[0] {
+        Effect::ApplySettings { path: p, patches } => {
+            assert_eq!(p, &path);
+            assert_eq!(
+                patches.len(),
+                3,
+                "patches must include exactly the three diffed fields, got {patches:?}"
+            );
+            assert!(matches!(
+                patches[0],
+                SettingPatch::AutoLockEnabled(v) if v != before.0
+            ));
+            assert!(matches!(
+                patches[1],
+                SettingPatch::ClipboardClearEnabled(v) if v != before.2
+            ));
+            assert!(matches!(
+                patches[2],
+                SettingPatch::ClipboardClearSecs(v)
+                    if v == before.3.saturating_add(paladin_core::CLIPBOARD_CLEAR_SECS_MIN)
+            ));
+        }
+        other => panic!("expected Effect::ApplySettings, got {other:?}"),
+    }
+    // The modal stays open while the executor runs `mutate_and_save`.
+    match &state {
+        AppState::Unlocked {
+            modal: Some(Modal::Settings(s)),
+            ..
+        } => {
+            assert!(
+                s.error.is_none(),
+                "submitting changes must not set an inline error"
+            );
+        }
+        AppState::Unlocked { modal, .. } => {
+            panic!("expected open Settings modal pending result, got {modal:?}")
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+    // Live vault is still untouched — the executor hasn't run yet.
+    assert_eq!(settings_snapshot(&state), before);
+}
+
+#[test]
+fn settings_modal_enter_with_single_field_change_emits_one_patch() {
+    // Only the single diffed field appears in `patches`.
+    let tmp = secure_tempdir();
+    let (path, _id, state) = fresh_unlocked_with_settings_modal_and_path(&tmp);
+    let before = settings_snapshot(&state);
+    let state = with_settings_modal_mut(state, |s| {
+        s.auto_lock_timeout_secs = before.1.saturating_add(paladin_core::AUTO_LOCK_SECS_MIN);
+    });
+    let (_state, effects) = reduce(state, key(KeyCode::Enter));
+    match effects.as_slice() {
+        [Effect::ApplySettings { path: p, patches }] => {
+            assert_eq!(p, &path);
+            assert_eq!(patches.len(), 1);
+            assert!(matches!(
+                patches[0],
+                SettingPatch::AutoLockTimeoutSecs(v)
+                    if v == before.1.saturating_add(paladin_core::AUTO_LOCK_SECS_MIN)
+            ));
+        }
+        other => panic!("expected single Effect::ApplySettings, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_settings_ok_closes_modal_and_sets_status_confirmation() {
+    // Simulate the post-`Vault::mutate_and_save` view (the executor
+    // has already mutated the live vault) by applying the patch
+    // before delivering the `Ok(())` outcome.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let id = add_totp_account(&mut vault, &store, "github");
+    vault
+        .apply_setting_patch(SettingPatch::AutoLockEnabled(true))
+        .expect("simulate executor-side patch");
+    vault.save(&store).expect("commit setting");
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Settings(SettingsModal {
+            auto_lock_enabled: true,
+            auto_lock_timeout_secs: 300,
+            clipboard_clear_enabled: false,
+            clipboard_clear_secs: 20,
+            focus: SettingsFocus::default(),
+            error: None,
+        })),
+        selected: Some(id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let (state, effects) = reduce(unlocked, settings_result(Ok(())));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked {
+            modal, status_line, ..
+        } => {
+            assert!(
+                modal.is_none(),
+                "Ok settings outcome must close the modal, got {modal:?}"
+            );
+            let line = status_line.expect("Ok settings outcome must surface confirmation");
+            match line {
+                StatusLine::Confirmation(_) => {}
+                StatusLine::Error(e) => panic!("expected Confirmation, got Error({e:?})"),
+            }
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_settings_save_not_committed_keeps_modal_open_with_inline_error() {
+    // Core's `mutate_and_save` rolls back inside on `save_not_committed`
+    // so the vault stays at its pre-attempt values. The reducer
+    // surfaces the typed error inline and the modal stays open so the
+    // user can retry.
+    let tmp = secure_tempdir();
+    let (_path, _id, state) = fresh_unlocked_with_settings_modal_and_path(&tmp);
+    let before = settings_snapshot(&state);
+    let state = with_settings_modal_mut(state, |s| {
+        s.auto_lock_enabled = !before.0;
+    });
+    let err = PaladinError::SaveNotCommitted {
+        committed: false,
+        backup_path: None,
+    };
+    let (state, effects) = reduce(state, settings_result(Err(err)));
+    assert!(effects.is_empty());
+    match &state {
+        AppState::Unlocked {
+            modal: Some(Modal::Settings(s)),
+            ..
+        } => {
+            let surfaced = s
+                .error
+                .as_deref()
+                .expect("save_not_committed must set inline error");
+            assert!(
+                surfaced.contains("save not committed") || surfaced.contains("save_not_committed"),
+                "inline error must surface save_not_committed wording, got {surfaced:?}"
+            );
+        }
+        other => panic!("expected open Settings modal, got {other:?}"),
+    }
+    // Live vault still reflects the rolled-back state.
+    assert_eq!(
+        settings_snapshot(&state),
+        before,
+        "Vault::settings() must reflect the rolled-back pre-attempt state on save_not_committed"
+    );
+}
+
+#[test]
+fn effect_result_settings_save_durability_unconfirmed_keeps_modal_open_with_inline_error() {
+    // Durability-unconfirmed: core left the new values committed in
+    // memory + on disk, but parent fsync was uncertain. Modal stays
+    // open and the warning is inline so the user can retry or `Esc`
+    // out deliberately.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let id = add_totp_account(&mut vault, &store, "github");
+    vault
+        .apply_setting_patch(SettingPatch::AutoLockEnabled(true))
+        .expect("simulate executor-side patch");
+    vault.save(&store).expect("commit setting");
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Settings(SettingsModal {
+            auto_lock_enabled: true,
+            auto_lock_timeout_secs: 300,
+            clipboard_clear_enabled: false,
+            clipboard_clear_secs: 20,
+            focus: SettingsFocus::default(),
+            error: None,
+        })),
+        selected: Some(id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let (state, effects) = reduce(
+        unlocked,
+        settings_result(Err(PaladinError::SaveDurabilityUnconfirmed)),
+    );
+    assert!(effects.is_empty());
+    match &state {
+        AppState::Unlocked {
+            modal: Some(Modal::Settings(s)),
+            ..
+        } => {
+            let surfaced = s
+                .error
+                .as_deref()
+                .expect("durability-unconfirmed must surface inline");
+            assert!(
+                surfaced.contains("durability") || surfaced.contains("save durability"),
+                "inline error must surface durability wording, got {surfaced:?}"
+            );
+        }
+        other => panic!("expected open Settings modal, got {other:?}"),
+    }
+    // Live vault reflects the committed new value.
+    match &state {
+        AppState::Unlocked { vault, .. } => {
+            assert!(
+                vault.settings().auto_lock_enabled(),
+                "durability-unconfirmed leaves the new values committed"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_settings_io_error_keeps_modal_open_with_inline_error() {
+    // Generic I/O error path: any non-`SaveNotCommitted` /
+    // non-`SaveDurabilityUnconfirmed` error also surfaces inline so
+    // the user can adjust and retry.
+    let tmp = secure_tempdir();
+    let (_path, _id, state) = fresh_unlocked_with_settings_modal_and_path(&tmp);
+    let err = PaladinError::IoError {
+        operation: "settings_save",
+        source: std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied"),
+    };
+    let (state, _) = reduce(state, settings_result(Err(err)));
+    match &state {
+        AppState::Unlocked {
+            modal: Some(Modal::Settings(s)),
+            ..
+        } => {
+            let surfaced = s.error.as_deref().expect("io_error must surface inline");
+            assert!(
+                surfaced.to_lowercase().contains("i/o") || surfaced.contains("settings_save"),
+                "inline error must surface io wording, got {surfaced:?}"
+            );
+        }
+        other => panic!("expected open Settings modal, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_settings_validation_error_keeps_modal_open_with_inline_error() {
+    // Defensive setter validation failure: even though the spinner
+    // controls clamp to the shared core bounds, a malformed pending
+    // value reaching the executor would surface back through
+    // `EffectResult::Settings(Err(ValidationError { … }))`. The
+    // reducer surfaces it inline and keeps the modal open.
+    let tmp = secure_tempdir();
+    let (_path, _id, state) = fresh_unlocked_with_settings_modal_and_path(&tmp);
+    let err = PaladinError::ValidationError {
+        field: "auto_lock.timeout_secs",
+        reason: "out_of_range".to_string(),
+        source_index: None,
+        decoded_len: None,
+        recommended_min: None,
+        entry_type: None,
+    };
+    let (state, _) = reduce(state, settings_result(Err(err)));
+    match &state {
+        AppState::Unlocked {
+            modal: Some(Modal::Settings(s)),
+            ..
+        } => {
+            let surfaced = s
+                .error
+                .as_deref()
+                .expect("validation_error must surface inline");
+            assert!(
+                surfaced.contains("auto_lock.timeout_secs"),
+                "inline error must mention the rejected field, got {surfaced:?}"
+            );
+        }
+        other => panic!("expected open Settings modal, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_settings_on_locked_state_is_discarded() {
+    // Auto-lock fired between the apply emit and the result delivery.
+    // The result is dropped without mutating the Locked screen.
+    let locked = AppState::Locked {
+        path: PathBuf::from("/tmp/v.bin"),
+        pending_clipboard_clear: None,
+    };
+    let (state, effects) = reduce(locked, settings_result(Ok(())));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Locked { path, .. } => assert_eq!(path, PathBuf::from("/tmp/v.bin")),
+        other => panic!("expected Locked preserved, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_settings_on_non_settings_modal_is_discarded() {
+    // A stale settings outcome arrives after the user dismissed
+    // Settings and opened (say) the Add modal. The reducer must
+    // leave the unrelated modal untouched.
+    let tmp = secure_tempdir();
+    let (path, (vault, store)) = open_plaintext_pair(&tmp);
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Add),
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let (state, effects) = reduce(unlocked, settings_result(Ok(())));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked {
+            modal: Some(Modal::Add),
+            status_line: None,
+            ..
+        } => {}
+        AppState::Unlocked {
+            modal,
+            status_line,
+            ..
+        } => panic!(
+            "stale settings outcome must not touch unrelated modal / status, got modal={modal:?} status_line={status_line:?}"
+        ),
         other => panic!("expected Unlocked, got {other:?}"),
     }
 }

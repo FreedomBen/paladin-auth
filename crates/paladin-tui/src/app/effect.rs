@@ -17,10 +17,11 @@
 //! each [`Effect`] the reducer returned. Variants land here in lockstep
 //! with the corresponding [`Effect`] variants.
 
+use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 use std::time::{Instant, SystemTime};
 
-use paladin_core::{PaladinError, Store, VaultLock};
+use paladin_core::{PaladinError, SettingPatch, Store, VaultLock};
 
 use crate::app::event::{AppEvent, Effect, EffectResult};
 use crate::app::state::AppState;
@@ -191,6 +192,9 @@ pub fn execute(effect: Effect, state: &mut AppState, sender: &Sender<AppEvent>) 
             }
             EffectOutcome::Continue
         }
+        Effect::ApplySettings { path, patches } => {
+            execute_apply_settings(&path, &patches, state, sender)
+        }
         Effect::Rename {
             path,
             account_id,
@@ -231,4 +235,50 @@ pub fn execute(effect: Effect, state: &mut AppState, sender: &Sender<AppEvent>) 
             EffectOutcome::Continue
         }
     }
+}
+
+/// Apply every staged [`SettingPatch`] inside one
+/// [`Vault::mutate_and_save`](paladin_core::Vault::mutate_and_save) so
+/// the rollback semantics from `paladin-core` cover the batch: a
+/// pre-commit failure snaps every pending value back to its
+/// pre-attempt state, while `save_durability_unconfirmed` leaves them
+/// all committed in memory matching the on-disk primary — per
+/// `IMPLEMENTATION_PLAN_03_TUI.md` "Effect errors" > "Add / remove /
+/// rename / settings saves".
+///
+/// The path check protects against a stale effect emitted before an
+/// auto-lock or vault switch: if the live state is no longer
+/// `Unlocked` against the same path, drop the effect silently — the
+/// reducer would discard the corresponding `EffectResult::Settings`
+/// anyway, and posting back would just synthesize an artificial
+/// mutation attempt against unrelated state.
+///
+/// The defensive empty-`patches` case is treated as a no-op `Ok(())`
+/// so the reducer still observes a result. The reducer-side emit only
+/// produces this effect with a non-empty list, but the executor stays
+/// total against future callers.
+fn execute_apply_settings(
+    path: &PathBuf,
+    patches: &[SettingPatch],
+    state: &mut AppState,
+    sender: &Sender<AppEvent>,
+) -> EffectOutcome {
+    if let AppState::Unlocked {
+        path: state_path,
+        vault,
+        store,
+        ..
+    } = state
+    {
+        if state_path == path {
+            let result = vault.mutate_and_save(store, |v| {
+                for patch in patches {
+                    v.apply_setting_patch(*patch)?;
+                }
+                Ok(())
+            });
+            let _ = sender.send(AppEvent::EffectResult(EffectResult::Settings { result }));
+        }
+    }
+    EffectOutcome::Continue
 }

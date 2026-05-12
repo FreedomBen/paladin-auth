@@ -848,18 +848,78 @@ end-to-end.
 
 ### Settings modal (`tests/reducer_tests.rs`)
 
-- [ ] Pending edits are buffered until Confirm.
-- [ ] `Esc` discards pending edits without invoking setters or save.
-- [ ] Confirm runs every changed setter inside one
+- [x] Pending edits are buffered until Confirm.
+  *(`settings_modal_space_and_arrow_edits_buffer_pending_until_confirm`
+  in `tests/reducer_tests.rs` interleaves Tab / Space / ↑ presses
+  across all four pending fields and asserts that `vault.settings()`
+  is byte-identical before and after the edit flurry; only the
+  modal's pending slots change. Sister-tests `space_*` and `arrow_*`
+  cover per-key buffering.)*
+- [x] `Esc` discards pending edits without invoking setters or save.
+  *(`settings_modal_esc_discards_pending_edits_without_invoking_save`
+  applies pending edits, presses Esc, and asserts the modal closes,
+  no effects are emitted, and `vault.settings()` reflects the
+  pre-edit values.)*
+- [x] Confirm runs every changed setter inside one
   `Vault::mutate_and_save` transaction.
-- [ ] A defensive setter validation failure restores the pre-attempt
+  *(Reducer side:
+  `settings_modal_enter_with_changes_emits_apply_settings_effect_with_diff_patches`
+  and `settings_modal_enter_with_single_field_change_emits_one_patch`
+  in `tests/reducer_tests.rs` assert that Enter diffs the modal's
+  pending fields against the live `VaultSettings` and emits a single
+  `Effect::ApplySettings { path, patches }` carrying exactly the
+  changed `SettingPatch`es in `SettingsFocus` declaration order;
+  the modal stays open until the `EffectResult::Settings` arrives.
+  Executor side:
+  `execute_apply_settings_with_single_patch_applies_and_sends_ok`
+  and
+  `execute_apply_settings_with_multiple_patches_applies_atomically_and_sends_ok`
+  in `tests/effect_tests.rs` assert the four patches commit through
+  `Vault::mutate_and_save` → `Vault::apply_setting_patch` inside
+  one transaction, the live `(Vault, Store)` reflects every change
+  in memory, and re-opening the on-disk primary surfaces the
+  committed values; companion tests
+  (`execute_apply_settings_on_non_unlocked_state_is_silently_dropped`,
+  `execute_apply_settings_with_mismatched_path_is_silently_dropped`,
+  `execute_apply_settings_with_dropped_receiver_does_not_panic`)
+  cover the off-`Unlocked` / path-mismatch drop paths and
+  channel-resilience.)*
+- [x] A defensive setter validation failure restores the pre-attempt
   settings, surfaces inline, blocks the save, and keeps the modal
   open.
-- [ ] A pre-commit save failure restores the prior settings values in
+  *(Reducer side:
+  `effect_result_settings_validation_error_keeps_modal_open_with_inline_error`
+  asserts a `PaladinError::ValidationError` outcome stashes the
+  rendered error on `SettingsModal.error` and the modal stays open.
+  Executor side:
+  `execute_apply_settings_with_out_of_range_patch_returns_validation_error`
+  asserts an out-of-range `SettingPatch` rejects through
+  `apply_setting_patch`'s §4.7 bound check, `Vault::mutate_and_save`
+  rolls back to the pre-attempt `auto_lock_timeout_secs`, and the
+  reducer receives `EffectResult::Settings { Err(ValidationError) }`.)*
+- [x] A pre-commit save failure restores the prior settings values in
   memory and keeps the modal open with the inline error.
-- [ ] A durability-unconfirmed save leaves the new values in memory
+  *(`effect_result_settings_save_not_committed_keeps_modal_open_with_inline_error`
+  asserts the modal stays open with the rendered
+  `save_not_committed` error stashed in `SettingsModal.error`, and
+  `vault.settings()` reflects the rolled-back pre-attempt values.
+  The on-disk rollback semantics belong to
+  `Vault::mutate_and_save` in `paladin-core`.)*
+- [x] A durability-unconfirmed save leaves the new values in memory
   and surfaces the warning inline.
-- [ ] Confirm with no changes closes the modal without invoking save.
+  *(`effect_result_settings_save_durability_unconfirmed_keeps_modal_open_with_inline_error`
+  asserts the modal stays open with the rendered durability warning
+  and `vault.settings()` reflects the committed new values. Other
+  save-error paths share the surfacing via
+  `effect_result_settings_io_error_keeps_modal_open_with_inline_error`;
+  off-`Unlocked` and stale-modal deliveries are discarded by
+  `effect_result_settings_on_locked_state_is_discarded` and
+  `effect_result_settings_on_non_settings_modal_is_discarded`.)*
+- [x] Confirm with no changes closes the modal without invoking save.
+  *(`settings_modal_enter_with_no_changes_closes_modal_without_emitting_effect`
+  opens the Settings modal on a fresh vault, presses Enter without
+  edits, and asserts no effect is emitted, the modal closes, and
+  `vault.settings()` is unchanged.)*
 
 ### Rename modal (`tests/reducer_tests.rs`)
 
@@ -940,8 +1000,14 @@ end-to-end.
 - [ ] Remove modal: same coverage as Add, asserted on `Vault::iter()`.
 - [ ] Rename modal: same coverage as Add, asserted on `Vault::iter()`.
 - [ ] Import modal: same coverage as Add, asserted on `Vault::iter()`.
-- [ ] Settings modal: same coverage as Add, asserted on
+- [x] Settings modal: same coverage as Add, asserted on
   `Vault::settings()`.
+  *(`effect_result_settings_save_not_committed_keeps_modal_open_with_inline_error`
+  and
+  `effect_result_settings_save_durability_unconfirmed_keeps_modal_open_with_inline_error`
+  in `tests/reducer_tests.rs` assert the rollback semantics via
+  `vault.settings()` for both save-error variants. Validation /
+  I/O / mismatched-modal coverage lives in companion tests.)*
 - [ ] Passphrase modal: the inline error surfaces and the TUI's
   visible vault-mode flag (sourced from `Vault::is_encrypted()`)
   tracks the transition outcome without inspecting private key /
