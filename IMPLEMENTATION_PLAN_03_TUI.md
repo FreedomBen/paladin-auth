@@ -869,7 +869,7 @@ end-to-end.
   `account_id` and seeds `draft` from `Account::label()` at modal
   open. Text editing, submit, validation, and save-effect wiring
   land in subsequent slices.)*
-- [ ] Non-empty trimmed input routes through `Vault::rename` inside
+- [x] Non-empty trimmed input routes through `Vault::rename` inside
   `Vault::mutate_and_save`, including when the trimmed input equals
   the current label so `updated_at` still matches CLI behavior.
   *(Reducer-level emission covered by
@@ -880,10 +880,22 @@ end-to-end.
   `paladin_core::validate_label` and emits `Effect::Rename { path,
   account_id, new_label: trimmed }`; the `Ok(())` outcome closes the
   modal and publishes `StatusLine::Confirmation("Renamed to {label}")`.
-  The executor side that actually calls `Vault::rename` inside
-  `Vault::mutate_and_save` lands with the run-loop slice that gives
-  the executor access to the live `(Vault, Store)` — alongside the
-  HotpAdvance / CopyCode placeholders.)*
+  Executor-side coverage lives in `tests/effect_tests.rs`:
+  `execute_rename_with_valid_label_renames_account_and_sends_ok`
+  asserts `Vault::mutate_and_save` → `Vault::rename` flows through
+  the live `(Vault, Store)` carried in `AppState::Unlocked`, mutates
+  the in-memory label, commits the new label to the on-disk primary,
+  and posts back `EffectResult::Rename { Ok }`;
+  `execute_rename_with_same_label_still_bumps_updated_at` asserts the
+  same-label path still advances `Account::updated_at` to match CLI
+  behavior. Companion tests
+  (`execute_rename_with_unknown_account_id_sends_account_not_found_err`,
+  `execute_rename_on_non_unlocked_state_is_silently_dropped`,
+  `execute_rename_with_mismatched_path_is_silently_dropped`,
+  `execute_rename_with_dropped_receiver_does_not_panic`) cover the
+  unknown-account error surface, the off-`Unlocked` / path-mismatch
+  drop paths, and channel-resilience. `HotpAdvance` / `CopyCode`
+  remain on the placeholder side of the run-loop boundary.)*
 - [x] Pre-commit `save_not_committed` restores the prior label and
   keeps the modal open with the inline error.
   *(`effect_result_rename_save_not_committed_keeps_modal_open_with_inline_error`

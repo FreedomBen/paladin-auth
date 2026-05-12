@@ -15,17 +15,21 @@ mod common;
 
 use common::test_tempdir;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc;
-use std::time::Instant;
+use std::time::{Instant, SystemTime};
 
 use secrecy::SecretString;
 use tempfile::TempDir;
 
-use paladin_core::{Argon2Params, EncryptionOptions, PaladinError, Store, VaultInit};
+use paladin_core::{
+    validate_manual, AccountId, AccountInput, AccountKindInput, Algorithm, Argon2Params,
+    EncryptionOptions, IconHintInput, PaladinError, Store, Vault, VaultInit, VaultLock,
+};
 
 use paladin_tui::app::effect::{execute, EffectOutcome};
 use paladin_tui::app::event::{AppEvent, Effect, EffectResult};
+use paladin_tui::app::state::{AppState, Focus};
 
 /// Light Argon2 params for fast tests; mirrors the CLI test fixtures.
 fn light_params() -> Argon2Params {
@@ -62,6 +66,60 @@ fn create_plaintext_vault(path: &Path) {
     vault.save(&store).expect("commit initial vault");
 }
 
+/// A throwaway state for effects that do not read it (`Quit`,
+/// `Unlock`, `ClearClipboard`). `MissingVault` is the cheapest
+/// variant to construct.
+fn dummy_state() -> AppState {
+    AppState::MissingVault {
+        path: PathBuf::from("/dev/null/dummy-vault.bin"),
+    }
+}
+
+/// Build an [`AppState::Unlocked`] backed by a real plaintext vault at
+/// `path` containing a single TOTP account labeled `label`. Returns the
+/// state and the account's `AccountId` so callers can target it.
+fn unlocked_with_one_totp(path: &Path, label: &str) -> (AppState, AccountId) {
+    let (mut vault, store) = Store::create(path, VaultInit::Plaintext).expect("create vault");
+    vault.save(&store).expect("commit empty vault");
+    let id = add_totp_account(&mut vault, &store, label);
+    let state = AppState::Unlocked {
+        path: path.to_path_buf(),
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    (state, id)
+}
+
+fn add_totp_account(vault: &mut Vault, store: &Store, label: &str) -> AccountId {
+    let input = AccountInput {
+        label: label.to_string(),
+        issuer: None,
+        secret: SecretString::from("JBSWY3DPEHPK3PXP".to_string()),
+        algorithm: Algorithm::Sha1,
+        digits: 6,
+        kind: AccountKindInput::Totp,
+        period_secs: None,
+        counter: None,
+        icon_hint: IconHintInput::Default,
+    };
+    let validated = validate_manual(input, SystemTime::now()).expect("valid manual input");
+    let id = vault.add(validated.account);
+    vault.save(store).expect("commit added account");
+    id
+}
+
 // ---------------------------------------------------------------------------
 // Effect::Quit
 // ---------------------------------------------------------------------------
@@ -69,7 +127,8 @@ fn create_plaintext_vault(path: &Path) {
 #[test]
 fn execute_quit_returns_quit_and_sends_no_event() {
     let (tx, rx) = mpsc::channel::<AppEvent>();
-    let outcome = execute(Effect::Quit, &tx);
+    let mut state = dummy_state();
+    let outcome = execute(Effect::Quit, &mut state, &tx);
     assert_eq!(outcome, EffectOutcome::Quit);
     assert!(
         rx.try_recv().is_err(),
@@ -98,7 +157,8 @@ fn execute_unlock_with_correct_passphrase_sends_unlock_ok() {
     // control so we can assert the executor used a real monotonic
     // sample rather than some default-constructed instant.
     let before = Instant::now();
-    let outcome = execute(effect, &tx);
+    let mut state = dummy_state();
+    let outcome = execute(effect, &mut state, &tx);
     let after = Instant::now();
     assert_eq!(outcome, EffectOutcome::Continue);
 
@@ -138,7 +198,8 @@ fn execute_unlock_with_wrong_passphrase_sends_decrypt_failed() {
         passphrase: SecretString::from("wrong".to_string()),
     };
 
-    let outcome = execute(effect, &tx);
+    let mut state = dummy_state();
+    let outcome = execute(effect, &mut state, &tx);
     assert_eq!(outcome, EffectOutcome::Continue);
 
     let evt = rx.try_recv().expect("event should be sent");
@@ -169,7 +230,8 @@ fn execute_unlock_against_missing_vault_sends_vault_missing() {
         passphrase: SecretString::from("any".to_string()),
     };
 
-    let outcome = execute(effect, &tx);
+    let mut state = dummy_state();
+    let outcome = execute(effect, &mut state, &tx);
     assert_eq!(outcome, EffectOutcome::Continue);
 
     let evt = rx.try_recv().expect("event should be sent");
@@ -194,7 +256,8 @@ fn execute_unlock_against_plaintext_vault_sends_wrong_vault_lock() {
         passphrase: SecretString::from("any".to_string()),
     };
 
-    let outcome = execute(effect, &tx);
+    let mut state = dummy_state();
+    let outcome = execute(effect, &mut state, &tx);
     assert_eq!(outcome, EffectOutcome::Continue);
 
     let evt = rx.try_recv().expect("event should be sent");
@@ -229,10 +292,269 @@ fn execute_unlock_with_dropped_receiver_does_not_panic() {
         passphrase: SecretString::from("pass".to_string()),
     };
 
-    let outcome = execute(effect, &tx);
+    let mut state = dummy_state();
+    let outcome = execute(effect, &mut state, &tx);
     assert_eq!(
         outcome,
         EffectOutcome::Continue,
         "executor must continue even when the receiver is gone"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Effect::Rename
+// ---------------------------------------------------------------------------
+
+/// `Effect::Rename` against an `AppState::Unlocked` whose live `Vault`
+/// owns the target account routes through `Vault::mutate_and_save` →
+/// `Vault::rename`. The post-rename label lives on the live vault, the
+/// on-disk primary carries the same payload after commit, and the
+/// executor posts back `EffectResult::Rename` with `Ok(())` so the
+/// reducer can close the modal and publish the status confirmation.
+#[test]
+fn execute_rename_with_valid_label_renames_account_and_sends_ok() {
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (mut state, id) = unlocked_with_one_totp(&path, "github");
+
+    let (tx, rx) = mpsc::channel::<AppEvent>();
+    let effect = Effect::Rename {
+        path: path.clone(),
+        account_id: id,
+        new_label: "github-personal".to_string(),
+    };
+
+    let outcome = execute(effect, &mut state, &tx);
+    assert_eq!(outcome, EffectOutcome::Continue);
+
+    let evt = rx.try_recv().expect("an AppEvent should be sent");
+    match evt {
+        AppEvent::EffectResult(EffectResult::Rename {
+            account_id,
+            result: Ok(()),
+        }) => {
+            assert_eq!(account_id, id, "result must carry the source account_id");
+        }
+        other => panic!("expected EffectResult::Rename {{ Ok }}, got {other:?}"),
+    }
+    assert!(
+        rx.try_recv().is_err(),
+        "executor must emit exactly one AppEvent per Effect::Rename"
+    );
+
+    // The live vault now carries the new label.
+    let live_label = match &state {
+        AppState::Unlocked { vault, .. } => vault
+            .iter()
+            .find(|a| a.id() == id)
+            .expect("account should exist")
+            .label()
+            .to_string(),
+        other => panic!("expected Unlocked, got {other:?}"),
+    };
+    assert_eq!(live_label, "github-personal");
+
+    // Re-open the on-disk primary and assert the commit landed.
+    let (reopened, _store) =
+        Store::open(&path, VaultLock::Plaintext).expect("reopen plaintext vault");
+    let on_disk_label = reopened
+        .iter()
+        .find(|a| a.id() == id)
+        .expect("account on disk")
+        .label()
+        .to_string();
+    assert_eq!(
+        on_disk_label, "github-personal",
+        "Vault::mutate_and_save must commit the new label to the on-disk primary"
+    );
+}
+
+/// Per `DESIGN.md` §6 (Rename) the trimmed draft is passed through to
+/// `Vault::rename` even when it equals the current label so
+/// `updated_at` advances and matches CLI behavior.
+#[test]
+fn execute_rename_with_same_label_still_bumps_updated_at() {
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (mut state, id) = unlocked_with_one_totp(&path, "github");
+
+    let prior_updated_at = match &state {
+        AppState::Unlocked { vault, .. } => vault
+            .iter()
+            .find(|a| a.id() == id)
+            .expect("account exists")
+            .updated_at(),
+        other => panic!("expected Unlocked, got {other:?}"),
+    };
+
+    // Wall-clock must advance by at least one second between the
+    // initial save (`add_totp_account`) and the rename so the
+    // post-rename `updated_at` (stored in whole seconds) is strictly
+    // greater. The reducer / executor never sleeps in production —
+    // this is a test-only synchronization to make the bump observable.
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+
+    let (tx, rx) = mpsc::channel::<AppEvent>();
+    let effect = Effect::Rename {
+        path: path.clone(),
+        account_id: id,
+        new_label: "github".to_string(),
+    };
+
+    let outcome = execute(effect, &mut state, &tx);
+    assert_eq!(outcome, EffectOutcome::Continue);
+
+    let evt = rx.try_recv().expect("an AppEvent should be sent");
+    assert!(matches!(
+        evt,
+        AppEvent::EffectResult(EffectResult::Rename { result: Ok(()), .. })
+    ));
+
+    let new_updated_at = match &state {
+        AppState::Unlocked { vault, .. } => vault
+            .iter()
+            .find(|a| a.id() == id)
+            .expect("account exists")
+            .updated_at(),
+        other => panic!("expected Unlocked, got {other:?}"),
+    };
+    assert!(
+        new_updated_at > prior_updated_at,
+        "same-label rename must still bump updated_at ({prior_updated_at} -> {new_updated_at})"
+    );
+}
+
+/// `Effect::Rename` carrying an `account_id` that does not exist in
+/// the live vault surfaces an `account_not_found` `Err` for the
+/// reducer to discard (mismatched-account_id results are dropped
+/// alongside the carried error per the reducer's `EffectResult::Rename`
+/// arm). The live vault is unchanged.
+#[test]
+fn execute_rename_with_unknown_account_id_sends_account_not_found_err() {
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (mut state, _id) = unlocked_with_one_totp(&path, "github");
+
+    let (tx, rx) = mpsc::channel::<AppEvent>();
+    let bogus = AccountId::new();
+    let effect = Effect::Rename {
+        path: path.clone(),
+        account_id: bogus,
+        new_label: "whatever".to_string(),
+    };
+
+    let outcome = execute(effect, &mut state, &tx);
+    assert_eq!(outcome, EffectOutcome::Continue);
+
+    let evt = rx.try_recv().expect("an AppEvent should be sent");
+    match evt {
+        AppEvent::EffectResult(EffectResult::Rename {
+            account_id,
+            result:
+                Err(PaladinError::InvalidState {
+                    operation: "rename",
+                    state: "account_not_found",
+                }),
+        }) => {
+            assert_eq!(account_id, bogus);
+        }
+        other => panic!(
+            "expected EffectResult::Rename {{ Err(InvalidState account_not_found) }}, got {other:?}"
+        ),
+    }
+
+    // The unrelated account in the live vault is untouched.
+    match &state {
+        AppState::Unlocked { vault, .. } => {
+            assert_eq!(vault.iter().count(), 1);
+            assert_eq!(vault.iter().next().unwrap().label(), "github");
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+/// A stale `Effect::Rename` (emitted under an `Unlocked` state that
+/// has since transitioned to `Locked` / `MissingVault` / etc.) is
+/// dropped silently so the executor cannot synthesize a rename
+/// attempt against an unrelated vault.
+#[test]
+fn execute_rename_on_non_unlocked_state_is_silently_dropped() {
+    let mut state = AppState::MissingVault {
+        path: PathBuf::from("/tmp/dummy-vault.bin"),
+    };
+    let (tx, rx) = mpsc::channel::<AppEvent>();
+    let effect = Effect::Rename {
+        path: PathBuf::from("/tmp/dummy-vault.bin"),
+        account_id: AccountId::new(),
+        new_label: "anything".to_string(),
+    };
+
+    let outcome = execute(effect, &mut state, &tx);
+    assert_eq!(outcome, EffectOutcome::Continue);
+    assert!(
+        rx.try_recv().is_err(),
+        "off-Unlocked Effect::Rename must not emit an AppEvent"
+    );
+}
+
+/// Path mismatch (e.g. the user `--vault`-switched between the
+/// reducer-side emit and the run loop draining the effect queue) is
+/// treated like a stale effect: dropped silently with no mutation.
+#[test]
+fn execute_rename_with_mismatched_path_is_silently_dropped() {
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("real-vault.bin");
+    let (mut state, id) = unlocked_with_one_totp(&path, "github");
+
+    let (tx, rx) = mpsc::channel::<AppEvent>();
+    let effect = Effect::Rename {
+        path: PathBuf::from("/tmp/some-other-vault.bin"),
+        account_id: id,
+        new_label: "renamed".to_string(),
+    };
+
+    let outcome = execute(effect, &mut state, &tx);
+    assert_eq!(outcome, EffectOutcome::Continue);
+    assert!(
+        rx.try_recv().is_err(),
+        "path-mismatched Effect::Rename must not emit an AppEvent"
+    );
+
+    // The live vault is untouched.
+    match &state {
+        AppState::Unlocked { vault, .. } => {
+            assert_eq!(vault.iter().next().unwrap().label(), "github");
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+/// A dropped receiver during a Rename does not panic the executor,
+/// mirroring the Unlock channel-resilience contract.
+#[test]
+fn execute_rename_with_dropped_receiver_does_not_panic() {
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (mut state, id) = unlocked_with_one_totp(&path, "github");
+
+    let (tx, rx) = mpsc::channel::<AppEvent>();
+    drop(rx);
+
+    let effect = Effect::Rename {
+        path: path.clone(),
+        account_id: id,
+        new_label: "renamed".to_string(),
+    };
+
+    let outcome = execute(effect, &mut state, &tx);
+    assert_eq!(outcome, EffectOutcome::Continue);
+
+    // The rename still took effect in memory (the executor does not
+    // pre-check the channel before mutating) and on disk.
+    match &state {
+        AppState::Unlocked { vault, .. } => {
+            assert_eq!(vault.iter().next().unwrap().label(), "renamed");
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
 }

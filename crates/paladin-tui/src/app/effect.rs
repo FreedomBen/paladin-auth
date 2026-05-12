@@ -18,11 +18,12 @@
 //! with the corresponding [`Effect`] variants.
 
 use std::sync::mpsc::Sender;
-use std::time::Instant;
+use std::time::{Instant, SystemTime};
 
 use paladin_core::{Store, VaultLock};
 
 use crate::app::event::{AppEvent, Effect, EffectResult};
+use crate::app::state::AppState;
 
 /// Outcome of executing a single [`Effect`].
 ///
@@ -45,11 +46,17 @@ pub enum EffectOutcome {
 /// reducer through `sender`; [`Effect::Quit`] returns
 /// [`EffectOutcome::Quit`] without emitting an `AppEvent`.
 ///
+/// `state` is the run loop's live [`AppState`]. Effects whose target
+/// requires the live `(Vault, Store)` — `Rename`, and later
+/// `HotpAdvance` / `CopyCode` — read it from
+/// [`AppState::Unlocked`]; effects whose target is independent of UI
+/// state (`Quit`, `Unlock`, `ClearClipboard`) ignore it.
+///
 /// If the receiver has already been dropped (the run loop is tearing
 /// down), the send is silently ignored. The carried result — including
 /// any `(Vault, Store)` pair — drops cleanly, which zeroizes the
 /// derived AEAD key inside the `Store` and frees the in-memory vault.
-pub fn execute(effect: Effect, sender: &Sender<AppEvent>) -> EffectOutcome {
+pub fn execute(effect: Effect, state: &mut AppState, sender: &Sender<AppEvent>) -> EffectOutcome {
     match effect {
         Effect::Quit => EffectOutcome::Quit,
         Effect::Unlock { path, passphrase } => {
@@ -125,21 +132,42 @@ pub fn execute(effect: Effect, sender: &Sender<AppEvent>) -> EffectOutcome {
             EffectOutcome::Continue
         }
         Effect::Rename {
-            path: _,
-            account_id: _,
-            new_label: _,
+            path,
+            account_id,
+            new_label,
         } => {
-            // Placeholder: the `Vault::rename` call inside
-            // `Vault::mutate_and_save` lands with the run-loop slice
-            // that gives the executor access to the live `(Vault,
-            // Store)` carried in `AppState::Unlocked`, alongside
-            // `EffectResult::Rename` and the modal-close / save-error
-            // rollback paths. Until that wiring lands the reducer
-            // emit is exercised by reducer-level tests
-            // (`rename_modal_enter_*_emits_rename_effect`) and the
-            // executor consumes the variant without emitting an
-            // `AppEvent`.
-            let _ = sender;
+            // Run `Vault::rename` inside `Vault::mutate_and_save` so a
+            // pre-commit failure (`save_not_committed`) snaps the
+            // in-memory label back to its pre-rename value while
+            // post-commit `save_durability_unconfirmed` leaves the
+            // new label in memory matching the on-disk primary, per
+            // `IMPLEMENTATION_PLAN_03_TUI.md` "Effect errors" >
+            // "Add / remove / rename / settings saves".
+            //
+            // The path check protects against a stale effect emitted
+            // before an auto-lock or vault switch: if the live state
+            // is no longer `Unlocked` against the same path, drop the
+            // effect silently — the reducer would discard the
+            // corresponding `EffectResult::Rename` anyway, and posting
+            // back would just synthesize an artificial mutation
+            // attempt against unrelated state.
+            if let AppState::Unlocked {
+                path: state_path,
+                vault,
+                store,
+                ..
+            } = state
+            {
+                if *state_path == path {
+                    let result = vault.mutate_and_save(store, |v| {
+                        v.rename(account_id, &new_label, SystemTime::now())
+                    });
+                    let _ = sender.send(AppEvent::EffectResult(EffectResult::Rename {
+                        account_id,
+                        result,
+                    }));
+                }
+            }
             EffectOutcome::Continue
         }
     }
