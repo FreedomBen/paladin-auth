@@ -11,29 +11,33 @@
 
 ## Project Structure & Module Organization
 
-Paladin is currently pre-implementation: the approved design lives in
-`DESIGN.md`, with staged plans in `IMPLEMENTATION_PLAN_01_CORE.md`,
-`IMPLEMENTATION_PLAN_02_CLI.md`, `IMPLEMENTATION_PLAN_03_TUI.md`, and
-`IMPLEMENTATION_PLAN_04_GTK.md`. Follow `DESIGN.md` as the source of truth.
-When scaffolding begins, use the planned Cargo workspace exactly:
+The approved design lives in `DESIGN.md`, with staged plans in
+`IMPLEMENTATION_PLAN_01_CORE.md`, `IMPLEMENTATION_PLAN_02_CLI.md`,
+`IMPLEMENTATION_PLAN_03_TUI.md`, and `IMPLEMENTATION_PLAN_04_GTK.md`.
+Follow `DESIGN.md` as the source of truth. The Cargo workspace currently
+contains three members; `paladin-gtk` is deferred to v0.2:
 
 ```text
 crates/paladin-core/  # shared domain, OTP, storage, crypto, import/export
 crates/paladin-cli/   # `paladin` command
 crates/paladin-tui/   # terminal UI
-crates/paladin-gtk/   # planned GTK4 GUI
-xtask/                # optional build/release helpers
+crates/paladin-gtk/   # planned GTK4 GUI (v0.2; not yet scaffolded)
+xtask/                # dev-tool version pins (dev-tools.toml)
 ```
 
 ## Build, Test, and Development Commands
 
-No build system exists yet. Once the Rust workspace lands, expected gates are:
+The Rust toolchain is pinned in `rust-toolchain.toml`; `rustup` installs
+the matching version on first invocation. The CI gates in
+`.github/workflows/ci.yml` are:
 
-- `cargo fmt --check` - verify Rust formatting.
-- `cargo clippy -- -D warnings` - fail on lints.
-- `cargo test --all` - run all workspace tests.
+- `cargo fmt --all -- --check` - verify Rust formatting.
+- `cargo clippy --workspace --all-targets -- -D warnings` - fail on lints.
+- `cargo test --workspace --all-targets` - run all workspace tests.
 - `cargo deny check` - enforce dependency policy, including no network stack.
 - `cargo audit` - check Rust dependency advisories.
+- `cargo public-api -p paladin-core --simplified` - diff against the
+  committed `crates/paladin-core/public-api.txt` snapshot.
 
 ## Coding Style & Naming Conventions
 

@@ -13,7 +13,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-**Pre-implementation.** The design was approved 2026-05-04. There is no source tree, `Cargo.toml`, or tests yet — only `DESIGN.md` and `LICENSE`. Until code exists, `DESIGN.md` is the source of truth; do not invent file paths, types, or APIs that aren't grounded in it. When scaffolding work begins, follow the workspace layout in `DESIGN.md` §3 verbatim.
+**Implementation in progress.** The design was approved 2026-05-04. The workspace is live with three members (`crates/paladin-core`, `crates/paladin-cli`, `crates/paladin-tui`); `paladin-gtk` remains deferred to v0.2 per `DESIGN.md` §13. `IMPLEMENTATION_PLAN_01_CORE.md` and `IMPLEMENTATION_PLAN_02_CLI.md` are complete; `IMPLEMENTATION_PLAN_03_TUI.md` is the active workstream. `DESIGN.md` remains the source of truth for behavior and APIs; do not invent file paths, types, or APIs that aren't grounded in it.
 
 ## What this is
 
@@ -34,9 +34,9 @@ A Rust OTP authenticator (TOTP + HOTP) with three front-ends — CLI (`paladin`)
 
 AGPL-3.0-or-later. New source files carry `// SPDX-License-Identifier: AGPL-3.0-or-later`. All workspace crates set `license = "AGPL-3.0-or-later"`. Vet vendored code and test fixtures (Aegis, Gnome Authenticator samples) for license compatibility before adding.
 
-## Commands (will apply once code lands)
+## Commands
 
-CI gates per `DESIGN.md` §10: `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo test --all`, `cargo deny check`, `cargo audit`. Tests must cover RFC 6238 / RFC 4226 vectors, both-mode vault round-trip, AAD tamper detection (flip any header byte → fail), file-permission enforcement, passphrase transition rollback, and zeroize-on-drop. Use `assert_cmd` for CLI integration and `insta` golden snapshots for TUI.
+CI gates per `DESIGN.md` §10 and `.github/workflows/ci.yml`: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace --all-targets`, `cargo deny check`, `cargo audit`. CI also runs a `cargo public-api` snapshot diff against `crates/paladin-core/public-api.txt`. Tests must cover RFC 6238 / RFC 4226 vectors, both-mode vault round-trip, AAD tamper detection (flip any header byte → fail), file-permission enforcement, passphrase transition rollback, and zeroize-on-drop. Use `assert_cmd` for CLI integration and `insta` golden snapshots for TUI.
 
 ## When in doubt
 
