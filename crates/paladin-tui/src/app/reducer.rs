@@ -244,8 +244,9 @@ fn reduce_effect_result(state: AppState, result: EffectResult) -> (AppState, Vec
         EffectResult::HotpAdvance {
             account_id,
             result,
+            staged_code,
             completed_at,
-        } => reduce_hotp_advance_result(state, account_id, result, completed_at),
+        } => reduce_hotp_advance_result(state, account_id, result, staged_code, completed_at),
     }
 }
 
@@ -260,20 +261,26 @@ fn reduce_effect_result(state: AppState, result: EffectResult) -> (AppState, Vec
 /// dropped in place — its `SecretString` zeroizes on drop per the
 /// "Sensitive UI buffers" guarantee.
 ///
-/// On `Err(...)` no reveal opens; the prior reveal slot (if any) is
-/// preserved and a status-line error is surfaced via
-/// [`render_error_message`] — per
-/// `IMPLEMENTATION_PLAN_03_TUI.md` "Effect errors":
+/// On `Err(PaladinError::SaveDurabilityUnconfirmed)` with a
+/// `staged_code: Some(_)`, open (or replace) the reveal slot using the
+/// staged code AND surface a status-line note built from
+/// [`render_error_message`] — per `IMPLEMENTATION_PLAN_03_TUI.md`
+/// "Effect errors":
+/// *"Durability-unconfirmed failures (`save_durability_unconfirmed`)
+/// reveal the new code and `Code.counter_used` label and report the
+/// committed-but-uncertain status in the status line — the user has the
+/// new code in hand even though durability is in question."*
+///
+/// On any other `Err(...)` (or `Err(SaveDurabilityUnconfirmed)` with
+/// `staged_code: None`) no reveal opens; the prior reveal slot (if any)
+/// is preserved and a status-line error is surfaced via
+/// [`render_error_message`] — per the same "Effect errors" section:
 /// *"Pre-commit save failures (`save_not_committed`) leave the
 /// in-memory counter and reveal state unchanged ... and surface a
-/// status-line error. ... All other failures show a status-line
-/// error and leave the previous reveal state unchanged."* Pre-commit
+/// status-line error. ... All other failures show a status-line error
+/// and leave the previous reveal state unchanged."* Pre-commit
 /// failures have already been rolled back inside `Vault::hotp_advance`,
-/// so the in-memory vault remains consistent with disk. The
-/// reveal-on-`save_durability_unconfirmed` half of the design rule
-/// needs the staged-code mechanism (the current `EffectResult` shape
-/// carries no `Code` on `Err`); the status-line surface is shared and
-/// lands here.
+/// so the in-memory vault remains consistent with disk.
 ///
 /// On any non-`Unlocked` state the result is discarded so the carried
 /// OTP digits drop without mutating the current state.
@@ -281,6 +288,7 @@ fn reduce_hotp_advance_result(
     mut state: AppState,
     account_id: AccountId,
     result: Result<Code, PaladinError>,
+    staged_code: Option<Box<Code>>,
     completed_at: Instant,
 ) -> (AppState, Vec<Effect>) {
     if let AppState::Unlocked {
@@ -298,6 +306,20 @@ fn reduce_hotp_advance_result(
                     deadline: hotp_reveal_deadline(completed_at),
                 });
                 *status_line = None;
+            }
+            Err(PaladinError::SaveDurabilityUnconfirmed) => {
+                if let Some(code) = staged_code {
+                    let code = *code;
+                    *slot = Some(HotpReveal {
+                        account_id,
+                        counter_used: code.counter_used.unwrap_or(0),
+                        code: SecretString::from(code.code),
+                        deadline: hotp_reveal_deadline(completed_at),
+                    });
+                }
+                *status_line = Some(StatusLine::Error(render_error_message(
+                    &PaladinError::SaveDurabilityUnconfirmed,
+                )));
             }
             Err(err) => {
                 *status_line = Some(StatusLine::Error(render_error_message(&err)));

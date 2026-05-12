@@ -468,6 +468,7 @@ fn effect_result_hotp_advance_ok_opens_reveal_window_on_unlocked() {
     let event = AppEvent::EffectResult(EffectResult::HotpAdvance {
         account_id: hotp_id,
         result: Ok(hotp_code("123456", 7)),
+        staged_code: None,
         completed_at,
     });
 
@@ -509,6 +510,7 @@ fn effect_result_hotp_advance_ok_replaces_existing_reveal() {
     let event = AppEvent::EffectResult(EffectResult::HotpAdvance {
         account_id: hotp_id,
         result: Ok(hotp_code("222222", 8)),
+        staged_code: None,
         completed_at,
     });
 
@@ -544,6 +546,7 @@ fn effect_result_hotp_advance_drops_when_locked() {
     let event = AppEvent::EffectResult(EffectResult::HotpAdvance {
         account_id: AccountId::new(),
         result: Ok(hotp_code("999999", 1)),
+        staged_code: None,
         completed_at: Instant::now(),
     });
 
@@ -579,6 +582,7 @@ fn effect_result_hotp_advance_err_save_not_committed_leaves_reveal_unchanged() {
             committed: false,
             backup_path: None,
         }),
+        staged_code: None,
         completed_at: t0,
     });
 
@@ -614,6 +618,7 @@ fn effect_result_hotp_advance_drops_when_on_unlock_screen() {
     let event = AppEvent::EffectResult(EffectResult::HotpAdvance {
         account_id: AccountId::new(),
         result: Ok(hotp_code("999999", 1)),
+        staged_code: None,
         completed_at: Instant::now(),
     });
 
@@ -646,6 +651,7 @@ fn effect_result_hotp_advance_err_invalid_state_leaves_reveal_unchanged() {
             operation: "hotp_advance",
             state: "account_not_found",
         }),
+        staged_code: None,
         completed_at: t0,
     });
 
@@ -665,8 +671,13 @@ fn effect_result_hotp_advance_err_invalid_state_leaves_reveal_unchanged() {
 
 #[test]
 fn effect_result_hotp_advance_err_with_no_prior_reveal_does_not_open_one() {
-    // No prior reveal + error result must leave `hotp_reveal` as
-    // `None`. Symmetric with the prior-reveal-preserved case.
+    // No prior reveal + error result + `staged_code: None` must leave
+    // `hotp_reveal` as `None`. Symmetric with the prior-reveal-
+    // preserved case, and the fail-safe for the
+    // `Err(SaveDurabilityUnconfirmed)` path when the executor did not
+    // (or could not) stage a `Code` via `Vault::hotp_peek` —
+    // `staged_code: Some(_)` opens a reveal per the dedicated
+    // staged-code tests below.
     let tmp = secure_tempdir();
     let path = tmp.path().join("vault.bin");
     let (mut vault, store) = create_encrypted_pair(&path, "pp");
@@ -677,6 +688,7 @@ fn effect_result_hotp_advance_err_with_no_prior_reveal_does_not_open_one() {
     let event = AppEvent::EffectResult(EffectResult::HotpAdvance {
         account_id: hotp_id,
         result: Err(PaladinError::SaveDurabilityUnconfirmed),
+        staged_code: None,
         completed_at: Instant::now(),
     });
 
@@ -685,7 +697,7 @@ fn effect_result_hotp_advance_err_with_no_prior_reveal_does_not_open_one() {
     match next {
         AppState::Unlocked { hotp_reveal, .. } => assert!(
             hotp_reveal.is_none(),
-            "error result with no prior reveal must not fabricate one"
+            "error result without a staged code must not fabricate a reveal"
         ),
         other => panic!("expected Unlocked, got {other:?}"),
     }
@@ -721,18 +733,22 @@ fn hotp_reveal_debug_redacts_displayed_code_bytes() {
 // And the Effect errors body:
 //   "Pre-commit save failures (`save_not_committed`) leave the in-memory
 //    counter and reveal state unchanged ... and surface a status-line error.
-//    All other failures show a status-line error and leave the previous
-//    reveal state unchanged."
+//    Durability-unconfirmed failures (`save_durability_unconfirmed`) reveal
+//    the new code and `Code.counter_used` label and report the
+//    committed-but-uncertain status in the status line — the user has the
+//    new code in hand even though durability is in question. All other
+//    failures show a status-line error and leave the previous reveal state
+//    unchanged."
 //
-// The companion `_leaves_reveal_unchanged` tests above already lock in
-// the visible-state-unchanged half. The tests below lock in the
-// status-line surfacing half for the error kinds the executor surfaces
-// today (`save_not_committed` from `Vault::hotp_advance`'s pre-rename
-// failure, `invalid_state` defensively, `save_durability_unconfirmed`).
-// The `save_durability_unconfirmed` row reveals-on-failure behavior
-// from `DESIGN.md` §6 needs a staged-code mechanism in `EffectResult`
-// (the current shape carries no `Code` on `Err`); that lands with the
-// staged-code slice. The status-line surface is shared.
+// The companion `_leaves_reveal_unchanged` tests above lock in the
+// visible-state-unchanged half for pre-commit and other errors. The
+// `save_durability_unconfirmed` row's reveals-on-failure behavior uses
+// the staged-code mechanism on `EffectResult::HotpAdvance` and is
+// covered by the dedicated `_with_staged_code_*` tests below. The
+// status-line tests below lock in the shared status-line surface for
+// every error kind the executor surfaces today (`save_not_committed`
+// from `Vault::hotp_advance`'s pre-rename failure, `invalid_state`
+// defensively, `save_durability_unconfirmed`).
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -752,6 +768,7 @@ fn effect_result_hotp_advance_err_save_not_committed_sets_status_line() {
     let event = AppEvent::EffectResult(EffectResult::HotpAdvance {
         account_id: hotp_id,
         result: Err(err),
+        staged_code: None,
         completed_at: Instant::now(),
     });
 
@@ -784,6 +801,7 @@ fn effect_result_hotp_advance_err_invalid_state_sets_status_line() {
     let event = AppEvent::EffectResult(EffectResult::HotpAdvance {
         account_id: hotp_id,
         result: Err(err),
+        staged_code: None,
         completed_at: Instant::now(),
     });
 
@@ -813,6 +831,7 @@ fn effect_result_hotp_advance_err_save_durability_unconfirmed_sets_status_line()
     let event = AppEvent::EffectResult(EffectResult::HotpAdvance {
         account_id: hotp_id,
         result: Err(err),
+        staged_code: None,
         completed_at: Instant::now(),
     });
 
@@ -823,7 +842,8 @@ fn effect_result_hotp_advance_err_save_durability_unconfirmed_sets_status_line()
             status_line,
             Some(StatusLine::Error(expected)),
             "save_durability_unconfirmed must surface a status-line note \
-             until the staged-code slice lands and the reveal opens too"
+             reporting the committed-but-uncertain status; the companion \
+             reveal-opening behavior lives in the staged-code tests below"
         ),
         other => panic!("expected Unlocked, got {other:?}"),
     }
@@ -850,6 +870,7 @@ fn effect_result_hotp_advance_ok_clears_prior_status_line() {
     let event = AppEvent::EffectResult(EffectResult::HotpAdvance {
         account_id: hotp_id,
         result: Ok(hotp_code("999999", 1)),
+        staged_code: None,
         completed_at: Instant::now(),
     });
     let (next, effects) = reduce(state, event);
@@ -867,5 +888,214 @@ fn effect_result_hotp_advance_ok_clears_prior_status_line() {
             assert!(hotp_reveal.is_some(), "Ok must open the reveal window");
         }
         other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// EffectResult::HotpAdvance Err(SaveDurabilityUnconfirmed) with a staged
+// code — the durability-unconfirmed reveal-on-failure path.
+//
+// Per `IMPLEMENTATION_PLAN_03_TUI.md` Tests > Reducer:
+//   "Durability-unconfirmed failures follow the committed-state behavior
+//    in 'Effect errors'."
+//
+// And the Effect errors body for HOTP `n`:
+//   "Durability-unconfirmed failures (`save_durability_unconfirmed`)
+//    reveal the new code and `Code.counter_used` label and report the
+//    committed-but-uncertain status in the status line — the user has
+//    the new code in hand even though durability is in question."
+//
+// The executor stages the would-be visible `Code` via `Vault::hotp_peek`
+// before calling `Vault::hotp_advance`, and publishes the staged code on
+// `EffectResult::HotpAdvance.staged_code` only when the advance succeeded
+// or returned `save_durability_unconfirmed`. On every other `Err(...)`
+// path the executor zeroizes the staged code and sets `staged_code` to
+// `None`, which the reducer treats as "status-line only" (covered by
+// the `_sets_status_line` and `_with_no_prior_reveal_does_not_open_one`
+// tests above).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn effect_result_hotp_advance_err_save_durability_unconfirmed_with_staged_code_opens_reveal() {
+    // No prior reveal + Err(SaveDurabilityUnconfirmed) + staged_code:
+    // Some(_) must open the reveal slot using the staged code AND set
+    // the status-line to the rendered durability-unconfirmed note.
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (mut vault, store) = create_encrypted_pair(&path, "pp");
+    let hotp_id = add_hotp_account(&mut vault, &store, "hotp");
+
+    let state = unlocked_with_reveal(path, vault, store, Some(hotp_id), None);
+
+    let completed_at = Instant::now();
+    let expected_status = render_error_message(&PaladinError::SaveDurabilityUnconfirmed);
+    let event = AppEvent::EffectResult(EffectResult::HotpAdvance {
+        account_id: hotp_id,
+        result: Err(PaladinError::SaveDurabilityUnconfirmed),
+        staged_code: Some(Box::new(hotp_code("424242", 9))),
+        completed_at,
+    });
+
+    let (next, effects) = reduce(state, event);
+    assert!(effects.is_empty());
+    match next {
+        AppState::Unlocked {
+            hotp_reveal: Some(r),
+            status_line,
+            ..
+        } => {
+            assert_eq!(
+                r.account_id, hotp_id,
+                "reveal must be keyed by the advanced account"
+            );
+            assert_eq!(
+                r.counter_used, 9,
+                "reveal must carry the staged code's pre-advance counter"
+            );
+            assert_eq!(
+                r.code.expose_secret(),
+                "424242",
+                "reveal must show the staged code"
+            );
+            assert_eq!(
+                r.deadline,
+                hotp_reveal_deadline(completed_at),
+                "reveal deadline must be computed from `completed_at`"
+            );
+            assert_eq!(
+                status_line,
+                Some(StatusLine::Error(expected_status)),
+                "save_durability_unconfirmed must also surface a status-line note"
+            );
+        }
+        other => panic!("expected Unlocked with reveal opened from staged code, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_hotp_advance_err_save_durability_unconfirmed_with_staged_code_replaces_prior_reveal(
+) {
+    // Prior reveal at counter=7 + Err(SaveDurabilityUnconfirmed) +
+    // staged_code: Some(counter=8) must REPLACE the prior reveal with
+    // the new staged code — the user just advanced and the on-disk
+    // counter is at the new value even though durability is uncertain.
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (mut vault, store) = create_encrypted_pair(&path, "pp");
+    let hotp_id = add_hotp_account(&mut vault, &store, "hotp");
+
+    let t0 = Instant::now();
+    let prior = open_reveal(hotp_id, 7, "111111", t0);
+    let state = unlocked_with_reveal(path, vault, store, Some(hotp_id), Some(prior));
+
+    let completed_at = t0 + Duration::from_millis(500);
+    let event = AppEvent::EffectResult(EffectResult::HotpAdvance {
+        account_id: hotp_id,
+        result: Err(PaladinError::SaveDurabilityUnconfirmed),
+        staged_code: Some(Box::new(hotp_code("222222", 8))),
+        completed_at,
+    });
+
+    let (next, effects) = reduce(state, event);
+    assert!(effects.is_empty());
+    match next {
+        AppState::Unlocked {
+            hotp_reveal: Some(r),
+            ..
+        } => {
+            assert_eq!(
+                r.counter_used, 8,
+                "staged code must replace the prior reveal"
+            );
+            assert_eq!(
+                r.code.expose_secret(),
+                "222222",
+                "reveal must show the staged code, not the prior code"
+            );
+            assert_eq!(
+                r.deadline,
+                hotp_reveal_deadline(completed_at),
+                "reveal deadline must rebase off the latest `completed_at`"
+            );
+        }
+        other => panic!("expected Unlocked with replaced reveal, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_hotp_advance_err_save_not_committed_with_staged_code_does_not_open_reveal() {
+    // Defensive guard: only `Err(SaveDurabilityUnconfirmed)` may publish
+    // the staged code to the reveal slot. A pre-commit failure
+    // (`SaveNotCommitted`) with a staged code attached (which the
+    // executor should not produce, but the reducer must not trust)
+    // leaves the reveal unchanged — the in-memory counter has been
+    // rolled back inside `Vault::hotp_advance` and the user must not
+    // see a code that is no longer the on-disk state.
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (mut vault, store) = create_encrypted_pair(&path, "pp");
+    let hotp_id = add_hotp_account(&mut vault, &store, "hotp");
+
+    let t0 = Instant::now();
+    let prior = open_reveal(hotp_id, 7, "111111", t0);
+    let state = unlocked_with_reveal(path, vault, store, Some(hotp_id), Some(prior));
+
+    let event = AppEvent::EffectResult(EffectResult::HotpAdvance {
+        account_id: hotp_id,
+        result: Err(PaladinError::SaveNotCommitted {
+            committed: false,
+            backup_path: None,
+        }),
+        staged_code: Some(Box::new(hotp_code("999999", 8))),
+        completed_at: t0,
+    });
+
+    let (next, effects) = reduce(state, event);
+    assert!(effects.is_empty());
+    match next {
+        AppState::Unlocked {
+            hotp_reveal: Some(r),
+            ..
+        } => {
+            assert_eq!(
+                r.counter_used, 7,
+                "pre-commit failure must not replace the prior reveal even if a staged code is attached"
+            );
+            assert_eq!(
+                r.code.expose_secret(),
+                "111111",
+                "prior reveal's code must remain visible"
+            );
+        }
+        other => panic!("expected Unlocked with prior reveal preserved, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_hotp_advance_err_save_durability_unconfirmed_with_staged_code_on_non_unlocked_drops(
+) {
+    // Defensive case: a result arriving while the app is no longer
+    // `Unlocked` must drop the staged code (and its OTP digits) without
+    // mutating the current state. Matches the existing drop-on-Unlock
+    // test for `Ok(code)`.
+    use paladin_tui::prompt::PassphraseBuffer;
+    let path = PathBuf::from("/tmp/v.bin");
+    let state = AppState::Unlock {
+        path: path.clone(),
+        error: None,
+        passphrase: PassphraseBuffer::new(),
+    };
+    let event = AppEvent::EffectResult(EffectResult::HotpAdvance {
+        account_id: AccountId::new(),
+        result: Err(PaladinError::SaveDurabilityUnconfirmed),
+        staged_code: Some(Box::new(hotp_code("424242", 9))),
+        completed_at: Instant::now(),
+    });
+
+    let (next, effects) = reduce(state, event);
+    assert!(effects.is_empty());
+    match next {
+        AppState::Unlock { path: p, .. } => assert_eq!(p, path),
+        other => panic!("expected Unlock unchanged, got {other:?}"),
     }
 }

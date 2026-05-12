@@ -649,8 +649,17 @@ end-to-end.
   and a successful follow-up advance clears the prior status-line
   note. Modal-side save-error rollback rides with each modal slice in
   "Pre-commit save rollback".)*
-- [ ] Durability-unconfirmed failures follow the committed-state
-  behavior in "Effect errors".
+- [x] Durability-unconfirmed failures follow the committed-state
+  behavior in "Effect errors". *(Reducer-level
+  `EffectResult::HotpAdvance` `Err(SaveDurabilityUnconfirmed)` carries
+  a `staged_code: Option<Box<Code>>` produced by the executor's
+  pre-advance `Vault::hotp_peek`; the reducer opens / replaces the
+  reveal slot from that staged code AND surfaces the
+  committed-but-uncertain status in the status line, while a
+  `staged_code: None` defensive fallback and the
+  `SaveNotCommitted`-with-staged-code defensive guard keep the prior
+  reveal unchanged. Modal-side durability-unconfirmed coverage lands
+  alongside each modal slice.)*
 - [ ] Modal-local navigation covers `Tab` / `Shift-Tab`, the
   `Ctrl-N` / `Ctrl-P` aliases, `Enter`, `Space`, arrows, text-field
   editing, and `Esc` cancel / close behavior for every modal.

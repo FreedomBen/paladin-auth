@@ -101,12 +101,24 @@ pub enum EffectResult {
     ///
     /// On `Ok(code)` the reducer opens (or replaces) the
     /// [`crate::app::state::AppState::Unlocked::hotp_reveal`] slot keyed
-    /// by `account_id`. On `Err(...)` no reveal opens and the prior
-    /// reveal slot (if any) is preserved — pre-commit failures
+    /// by `account_id`.
+    ///
+    /// On `Err(PaladinError::SaveDurabilityUnconfirmed)`, if the
+    /// executor staged a code via `Vault::hotp_peek` before the advance
+    /// (carried back as `staged_code: Some(_)`), the reducer opens (or
+    /// replaces) the reveal slot with that staged code AND surfaces the
+    /// committed-but-uncertain status in the status line — per
+    /// `IMPLEMENTATION_PLAN_03_TUI.md` "Effect errors":
+    /// *"Durability-unconfirmed failures (`save_durability_unconfirmed`)
+    /// reveal the new code and `Code.counter_used` label and report the
+    /// committed-but-uncertain status in the status line — the user has
+    /// the new code in hand even though durability is in question."*
+    ///
+    /// On any other `Err(...)` no reveal opens and the prior reveal
+    /// slot (if any) is preserved — pre-commit failures
     /// (`save_not_committed`) have already been rolled back inside
     /// `Vault::hotp_advance` per `DESIGN.md` §4.3, and other error
-    /// kinds are surfaced through the status-line slice that lands
-    /// alongside the broader "Effect errors" coverage.
+    /// kinds are surfaced only through the status line.
     ///
     /// Results delivered while not on `Unlocked` (auto-lock, quit-in-
     /// flight, …) are discarded so the carried OTP digits drop without
@@ -124,6 +136,23 @@ pub enum EffectResult {
         account_id: AccountId,
         /// The `Vault::hotp_advance` outcome.
         result: Result<Code, PaladinError>,
+        /// Pre-advance code computed by `Vault::hotp_peek` and held by
+        /// the executor in zeroizing pending state. The executor
+        /// publishes it back only on the two paths where the reveal
+        /// should open: `result == Ok(_)` (redundant with the code
+        /// inside `Ok`) and `result == Err(SaveDurabilityUnconfirmed)`
+        /// (the staged-code mechanism that avoids requiring the error
+        /// type to carry a `Code`). On every other `Err(...)` path the
+        /// executor zeroizes the staged code and sets this to `None`.
+        ///
+        /// The reducer reads `staged_code` only on
+        /// `Err(SaveDurabilityUnconfirmed)`; the `Ok` arm uses the
+        /// code from `result` directly.
+        ///
+        /// Boxed so the rare durability-unconfirmed-with-staged-code
+        /// path does not bloat every `EffectResult::HotpAdvance` —
+        /// the common path (`None`) stays one pointer wide.
+        staged_code: Option<Box<Code>>,
         /// Monotonic clock sampled immediately after the advance
         /// returned; used to derive the reveal-window deadline.
         completed_at: Instant,
