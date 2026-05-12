@@ -1110,17 +1110,22 @@ fn route_modal_input(
 /// input modes (Manual / URI / QR per DESIGN §6) form one segmented
 /// selector; `→` advances through [`AddMode::next`] and `←` retreats
 /// through [`AddMode::prev`], both wrapping so the user can cycle
-/// indefinitely. Per-mode field editing, focus cycling, the
-/// duplicate-gate pending state, and the post-QR counts panel land
-/// in subsequent slices; every other key here is a silent no-op so
-/// the modal-trap contract holds.
+/// indefinitely. The mode-switch routes through
+/// [`AddModal::switch_mode`] which zeroizes the secret-bearing
+/// buffers belonging to the mode being left — per the plan's
+/// *"switching modes clears the hidden secret-bearing fields for the
+/// modes being left: the manual Base32 secret, the URI text, and any
+/// pending duplicate/add-anyway state"*. Per-mode field editing,
+/// focus cycling, the duplicate-gate pending state, and the post-QR
+/// counts panel land in subsequent slices; every other key here is a
+/// silent no-op so the modal-trap contract holds.
 fn route_add_modal_input(add: &mut AddModal, key: &KeyEvent) -> Vec<Effect> {
     match key.code {
         KeyCode::Right => {
-            add.mode = add.mode.next();
+            add.switch_mode(add.mode.next());
         }
         KeyCode::Left => {
-            add.mode = add.mode.prev();
+            add.switch_mode(add.mode.prev());
         }
         _ => {}
     }

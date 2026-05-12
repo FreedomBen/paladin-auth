@@ -1821,6 +1821,126 @@ fn arrows_in_add_modal_do_not_mutate_other_state() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Add modal — mode-switch zeroization of secret-bearing buffers.
+//
+// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
+// *"Switching modes clears the hidden secret-bearing fields for the
+// modes being left: the manual Base32 secret, the URI text, and any
+// pending duplicate/add-anyway state."* This block locks in the
+// targeted contract — only the *leaving* mode's secrets are wiped —
+// so stale Base32 input does not survive behind the active mode.
+// The URI / pending-add slots land alongside their slices; for now
+// the manual-secret buffer is the only secret-bearing field, so the
+// coverage is gated on that single field.
+// ---------------------------------------------------------------------------
+
+/// Helper: open the Add modal and push four Base32 chars into the
+/// manual-secret buffer so the assertions can distinguish "wiped" from
+/// "already empty".
+fn add_modal_with_typed_manual_secret(tmp: &tempfile::TempDir) -> AppState {
+    let mut state = fresh_unlocked_with_add_modal(tmp);
+    match &mut state {
+        AppState::Unlocked {
+            modal: Some(Modal::Add(add)),
+            ..
+        } => {
+            add.manual_secret.push('J');
+            add.manual_secret.push('B');
+            add.manual_secret.push('S');
+            add.manual_secret.push('W');
+        }
+        _ => panic!("expected Unlocked with Modal::Add open"),
+    }
+    state
+}
+
+#[test]
+fn right_from_manual_mode_wipes_manual_secret() {
+    // Leaving Manual via `→` (Manual → Uri) must zeroize the typed
+    // Base32 buffer so the bytes are not retained behind the active
+    // mode.
+    let tmp = secure_tempdir();
+    let state = add_modal_with_typed_manual_secret(&tmp);
+    let (after, effects) = reduce(state, key(KeyCode::Right));
+    assert!(
+        effects.is_empty(),
+        "→ inside Add modal must not emit effects"
+    );
+    let add = add_modal_ref(&after);
+    assert_eq!(add.mode, AddMode::Uri);
+    assert!(
+        add.manual_secret.is_empty(),
+        "→ from Manual must wipe manual_secret"
+    );
+}
+
+#[test]
+fn left_from_manual_mode_wipes_manual_secret() {
+    // Leaving Manual via `←` (Manual → Qr) must zeroize the typed
+    // Base32 buffer the same way `→` does — both arrows are
+    // mode-switches that abandon the Manual-mode field set.
+    let tmp = secure_tempdir();
+    let state = add_modal_with_typed_manual_secret(&tmp);
+    let (after, effects) = reduce(state, key(KeyCode::Left));
+    assert!(
+        effects.is_empty(),
+        "← inside Add modal must not emit effects"
+    );
+    let add = add_modal_ref(&after);
+    assert_eq!(add.mode, AddMode::Qr);
+    assert!(
+        add.manual_secret.is_empty(),
+        "← from Manual must wipe manual_secret"
+    );
+}
+
+#[test]
+fn cycling_between_uri_and_qr_preserves_manual_secret() {
+    // Per the plan, only the *leaving* mode's secrets are wiped on a
+    // mode switch. Cycling Uri ↔ Qr (with Manual untouched) must
+    // leave the manual-secret buffer alone — we observe this by
+    // poking a sentinel byte directly into the buffer while not in
+    // Manual mode, then cycling and asserting the byte survives.
+    let tmp = secure_tempdir();
+    // Move to Uri so leaving Manual already happened and manual_secret
+    // is empty (per the test above).
+    let (state, _) = reduce(fresh_unlocked_with_add_modal(&tmp), key(KeyCode::Right));
+    let mut state = state;
+    match &mut state {
+        AppState::Unlocked {
+            modal: Some(Modal::Add(add)),
+            ..
+        } => {
+            assert_eq!(add.mode, AddMode::Uri);
+            // Direct mutation: production code wouldn't fill
+            // manual_secret while in Uri mode, but the test reaches
+            // in so we can prove the *next* mode switch does not
+            // touch this slot.
+            add.manual_secret.push('X');
+        }
+        _ => panic!("expected Modal::Add open in Uri mode"),
+    }
+    // Uri → Qr.
+    let (after_uri_to_qr, _) = reduce(state, key(KeyCode::Right));
+    let add = add_modal_ref(&after_uri_to_qr);
+    assert_eq!(add.mode, AddMode::Qr);
+    assert_eq!(
+        add.manual_secret.as_str(),
+        "X",
+        "Uri → Qr must not touch manual_secret",
+    );
+    // Qr → Uri (back) via `←` — still not leaving Manual.
+    let (after_qr_to_uri, _) = reduce(after_uri_to_qr, key(KeyCode::Left));
+    let add = add_modal_ref(&after_qr_to_uri);
+    assert_eq!(add.mode, AddMode::Uri);
+    assert_eq!(
+        add.manual_secret.as_str(),
+        "X",
+        "Qr → Uri must not touch manual_secret",
+    );
+}
+
 #[test]
 fn right_with_no_modal_open_is_a_silent_no_op() {
     // `→` is not a top-level binding. With no modal open it must be a

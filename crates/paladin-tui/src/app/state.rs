@@ -527,6 +527,34 @@ pub struct AddModal {
     pub error: Option<String>,
 }
 
+impl AddModal {
+    /// Switch the segmented input mode, wiping the secret-bearing
+    /// buffers belonging to the mode being left.
+    ///
+    /// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
+    /// *"Switching modes clears the hidden secret-bearing fields for
+    /// the modes being left: the manual Base32 secret, the URI text,
+    /// and any pending duplicate/add-anyway state."* The contract is
+    /// targeted — only the *leaving* mode's secrets are wiped, so
+    /// switching between modes that don't currently hold the buffer
+    /// (e.g. Uri → Qr) does not touch the manual-secret slot. The
+    /// URI-text and pending-duplicate-add slots will hook into this
+    /// helper as they land.
+    ///
+    /// A no-op same-mode call (`switch_mode(mode)` where
+    /// `mode == self.mode`) leaves every buffer untouched so
+    /// idempotent re-entries don't accidentally erase typed input.
+    pub fn switch_mode(&mut self, target: AddMode) {
+        if self.mode == target {
+            return;
+        }
+        if self.mode == AddMode::Manual {
+            self.manual_secret.clear();
+        }
+        self.mode = target;
+    }
+}
+
 impl Default for AddModal {
     fn default() -> Self {
         Self {
