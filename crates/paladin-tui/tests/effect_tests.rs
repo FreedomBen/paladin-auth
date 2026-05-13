@@ -29,7 +29,7 @@ use paladin_core::{
 };
 
 use paladin_tui::app::effect::{execute, EffectOutcome};
-use paladin_tui::app::event::{AddFailure, AppEvent, Effect, EffectResult};
+use paladin_tui::app::event::{AddFailure, AddSuccess, AppEvent, Effect, EffectResult};
 use paladin_tui::app::state::{AppState, Focus};
 
 /// Light Argon2 params for fast tests; mirrors the CLI test fixtures.
@@ -1470,4 +1470,185 @@ fn execute_add_anyway_with_mismatched_path_is_silently_dropped() {
         }
         other => panic!("expected Unlocked, got {other:?}"),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Effect::Add — non-duplicate happy-path insertion
+// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Add modal" — covers the
+//  `Vault::add` inside `Vault::mutate_and_save` insertion referenced by
+//  `effect_result_add_ok_closes_modal`'s "later slice" comment.)
+// ---------------------------------------------------------------------------
+
+/// `Effect::Add` whose validated `(secret, issuer, label)` triple does
+/// **not** match any existing account must:
+///
+/// 1. Run `validate_manual` over the carried form fields.
+/// 2. Call `Vault::find_duplicate(&validated)` and see no match.
+/// 3. Wrap `Vault::add` in `Vault::mutate_and_save` so the insertion
+///    commits atomically to the on-disk primary alongside the live
+///    in-memory vault.
+/// 4. Emit `EffectResult::Add { Ok(AddSuccess { summary, warnings }) }`
+///    carrying the newly assigned account's `AccountSummary` and the
+///    validation warnings.
+///
+/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add: *"Manual
+/// entries route through `paladin_core::validate_manual(input,
+/// submit_time)` ... Successful additions are wrapped in
+/// `Vault::mutate_and_save`, which runs the `Vault::add` ... mutation
+/// and save under core-owned rollback."*
+#[test]
+fn execute_add_with_no_duplicate_inserts_validated_account_and_persists() {
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (mut state, existing_id) = unlocked_with_one_totp(&path, "github");
+    let initial_count = match &state {
+        AppState::Unlocked { vault, .. } => vault.iter().count(),
+        other => panic!("expected Unlocked, got {other:?}"),
+    };
+
+    // Distinct label keeps the `(secret, issuer, label)` triple unique
+    // even though the secret is shared with the seeded account —
+    // `Vault::find_duplicate` matches on the full triple, so a label
+    // difference alone is enough to bypass the duplicate gate.
+    let (tx, rx) = mpsc::channel::<AppEvent>();
+    let effect = Effect::Add {
+        path: path.clone(),
+        label: "aws".to_string(),
+        issuer: String::new(),
+        secret: SecretString::from("JBSWY3DPEHPK3PXP".to_string()),
+        algorithm: Algorithm::Sha1,
+        digits: 6,
+        kind: AccountKindInput::Totp,
+        period_secs: 30,
+        counter: 0,
+        icon_hint_text: String::new(),
+    };
+
+    let outcome = execute(effect, &mut state, &tx);
+    assert_eq!(outcome, EffectOutcome::Continue);
+
+    let evt = rx.try_recv().expect("an AppEvent should be sent");
+    let new_id = match evt {
+        AppEvent::EffectResult(EffectResult::Add {
+            result: Ok(AddSuccess { summary, .. }),
+        }) => {
+            assert_ne!(
+                summary.id, existing_id,
+                "fresh insertion must assign a distinct AccountId"
+            );
+            assert_eq!(summary.label, "aws");
+            assert_eq!(summary.issuer, None);
+            summary.id
+        }
+        other => panic!("expected EffectResult::Add Ok, got {other:?}"),
+    };
+    assert!(
+        rx.try_recv().is_err(),
+        "executor must emit exactly one AppEvent per Effect::Add"
+    );
+
+    match &state {
+        AppState::Unlocked { vault, .. } => {
+            assert_eq!(
+                vault.iter().count(),
+                initial_count + 1,
+                "non-duplicate Add must insert into the live vault"
+            );
+            assert!(
+                vault.iter().any(|a| a.id() == new_id),
+                "vault must carry the freshly inserted account"
+            );
+            assert!(
+                vault.iter().any(|a| a.id() == existing_id),
+                "existing account must survive the Add"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+
+    let (reopened, _store) =
+        Store::open(&path, VaultLock::Plaintext).expect("reopen plaintext vault");
+    assert_eq!(
+        reopened.iter().count(),
+        initial_count + 1,
+        "non-duplicate Add must commit to the on-disk primary"
+    );
+    assert!(
+        reopened.iter().any(|a| a.id() == new_id),
+        "on-disk vault must carry the freshly inserted account"
+    );
+}
+
+/// `Effect::AddFromUri` whose parsed `(secret, issuer, label)` triple
+/// does **not** match any existing account shares the Manual-mode
+/// success path: `parse_otpauth` → `Vault::find_duplicate` → wrap
+/// `Vault::add` in `Vault::mutate_and_save` → emit
+/// `EffectResult::Add { Ok(AddSuccess { summary, warnings }) }`. The
+/// reducer's Manual-mode `Ok` handling covers URI-mode too.
+#[test]
+fn execute_add_from_uri_with_no_duplicate_inserts_validated_account_and_persists() {
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (mut state, existing_id) = unlocked_with_one_totp(&path, "github");
+    let initial_count = match &state {
+        AppState::Unlocked { vault, .. } => vault.iter().count(),
+        other => panic!("expected Unlocked, got {other:?}"),
+    };
+
+    // Distinct label ("aws" vs seeded "github") keeps the
+    // `(secret, issuer, label)` triple unique even though the URI
+    // encodes the same secret as the seeded account.
+    let uri = SecretString::from(
+        "otpauth://totp/aws?secret=JBSWY3DPEHPK3PXP&algorithm=SHA1&digits=6&period=30".to_string(),
+    );
+    let (tx, rx) = mpsc::channel::<AppEvent>();
+    let effect = Effect::AddFromUri {
+        path: path.clone(),
+        uri,
+    };
+
+    let outcome = execute(effect, &mut state, &tx);
+    assert_eq!(outcome, EffectOutcome::Continue);
+
+    let evt = rx.try_recv().expect("an AppEvent should be sent");
+    let new_id = match evt {
+        AppEvent::EffectResult(EffectResult::Add {
+            result: Ok(AddSuccess { summary, .. }),
+        }) => {
+            assert_ne!(
+                summary.id, existing_id,
+                "fresh insertion must assign a distinct AccountId"
+            );
+            assert_eq!(summary.label, "aws");
+            summary.id
+        }
+        other => panic!("expected EffectResult::Add Ok, got {other:?}"),
+    };
+    assert!(
+        rx.try_recv().is_err(),
+        "executor must emit exactly one AppEvent per Effect::AddFromUri"
+    );
+
+    match &state {
+        AppState::Unlocked { vault, .. } => {
+            assert_eq!(
+                vault.iter().count(),
+                initial_count + 1,
+                "non-duplicate URI Add must insert into the live vault"
+            );
+            assert!(
+                vault.iter().any(|a| a.id() == new_id),
+                "vault must carry the freshly inserted account"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+
+    let (reopened, _store) =
+        Store::open(&path, VaultLock::Plaintext).expect("reopen plaintext vault");
+    assert_eq!(
+        reopened.iter().count(),
+        initial_count + 1,
+        "non-duplicate URI Add must commit to the on-disk primary"
+    );
 }

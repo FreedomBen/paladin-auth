@@ -319,6 +319,7 @@ fn execute_add(
     let AppState::Unlocked {
         path: state_path,
         vault,
+        store,
         ..
     } = state
     else {
@@ -381,11 +382,9 @@ fn execute_add(
         return EffectOutcome::Continue;
     }
 
-    // Success path (`Vault::add` inside `Vault::mutate_and_save`)
-    // lands with the next slice; for now drop the validated account
-    // without posting back so the secret zeroizes on this stack
-    // frame.
-    drop(validated);
+    let _ = sender.send(AppEvent::EffectResult(EffectResult::Add {
+        result: commit_validated_add(vault, store, validated),
+    }));
     EffectOutcome::Continue
 }
 
@@ -426,6 +425,7 @@ fn execute_add_from_uri(
     let AppState::Unlocked {
         path: state_path,
         vault,
+        store,
         ..
     } = state
     else {
@@ -457,11 +457,9 @@ fn execute_add_from_uri(
         return EffectOutcome::Continue;
     }
 
-    // Success path (`Vault::add` inside `Vault::mutate_and_save`)
-    // lands with the next slice; for now drop the validated account
-    // without posting back so the secret zeroizes on this stack
-    // frame.
-    drop(validated);
+    let _ = sender.send(AppEvent::EffectResult(EffectResult::Add {
+        result: commit_validated_add(vault, store, validated),
+    }));
     EffectOutcome::Continue
 }
 
@@ -562,6 +560,35 @@ fn execute_add_anyway(
         return EffectOutcome::Continue;
     }
 
+    let _ = sender.send(AppEvent::EffectResult(EffectResult::Add {
+        result: commit_validated_add(vault, store, validated),
+    }));
+    EffectOutcome::Continue
+}
+
+/// Wrap `Vault::add` in `Vault::mutate_and_save` so the freshly
+/// inserted account commits atomically to the on-disk primary alongside
+/// the live in-memory vault, then build the matching
+/// [`Result<AddSuccess, AddFailure>`] for delivery on the
+/// [`EffectResult::Add`] channel.
+///
+/// Shared by `Effect::Add` (Manual mode), `Effect::AddFromUri` (URI
+/// mode), and `Effect::AddAnyway` (duplicate-allowed follow-up) — all
+/// three paths reach this helper once their input has been validated
+/// and any duplicate gate has been resolved. The validation warnings
+/// ride through unchanged so the reducer can render them in the
+/// status-line confirmation.
+///
+/// Pre-commit save failures (`save_not_committed`) and
+/// durability-unconfirmed saves both deliver as
+/// [`AddFailure::Save`]; the reducer surfaces either inline per
+/// `IMPLEMENTATION_PLAN_03_TUI.md` "Effect errors" >
+/// "Add / remove / rename / settings saves".
+fn commit_validated_add(
+    vault: &mut paladin_core::Vault,
+    store: &Store,
+    validated: ValidatedAccount,
+) -> Result<AddSuccess, AddFailure> {
     let ValidatedAccount { account, warnings } = validated;
     let result = vault.mutate_and_save(store, move |v| {
         let id = v.add(account);
@@ -572,10 +599,8 @@ fn execute_add_anyway(
             .expect("freshly inserted account must be present in the vault");
         Ok(summary)
     });
-    let result = match result {
+    match result {
         Ok(summary) => Ok(AddSuccess { summary, warnings }),
         Err(err) => Err(AddFailure::Save(err)),
-    };
-    let _ = sender.send(AppEvent::EffectResult(EffectResult::Add { result }));
-    EffectOutcome::Continue
+    }
 }
