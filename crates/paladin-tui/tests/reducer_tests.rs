@@ -2981,6 +2981,175 @@ fn char_in_add_modal_manual_mode_with_non_text_focus_is_silent_noop() {
     );
 }
 
+/// Reach Algorithm focus from the default Add-modal open (Label) by
+/// pressing Tab three times. Returned state has `manual_focus ==
+/// Algorithm` and an unchanged `algorithm == Sha1` default.
+fn add_modal_focused_on_algorithm(tmp: &tempfile::TempDir) -> AppState {
+    let state = fresh_unlocked_with_add_modal(tmp);
+    let (state, _) = reduce(state, key(KeyCode::Tab));
+    let (state, _) = reduce(state, key(KeyCode::Tab));
+    let (state, _) = reduce(state, key(KeyCode::Tab));
+    assert_eq!(
+        add_modal_ref(&state).manual_focus,
+        AddManualFocus::Algorithm
+    );
+    assert_eq!(add_modal_ref(&state).algorithm, Algorithm::Sha1);
+    state
+}
+
+#[test]
+fn right_in_add_modal_manual_mode_algorithm_focus_cycles_forward_with_wrap() {
+    // Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)":
+    // *"selectors and spinners cycled by `←` / `→` / `↑` / `↓`"*.
+    // Algorithm is a three-valued segmented selector (Sha1 / Sha256 /
+    // Sha512); `→` advances forward and wraps after Sha512 so the
+    // user can cycle indefinitely. The mode stays Manual — `→` does
+    // NOT switch the AddMode header when focused on a non-text field.
+    let tmp = secure_tempdir();
+    let mut state = add_modal_focused_on_algorithm(&tmp);
+    let order = [Algorithm::Sha256, Algorithm::Sha512, Algorithm::Sha1];
+    for (i, expected) in order.iter().enumerate() {
+        let (next, effects) = reduce(state, key(KeyCode::Right));
+        assert!(
+            effects.is_empty(),
+            "→ on Algorithm focus (step {i}) must not emit effects"
+        );
+        let add = add_modal_ref(&next);
+        assert_eq!(
+            add.algorithm, *expected,
+            "→ step {i} should land on {expected:?}"
+        );
+        assert_eq!(
+            add.mode,
+            AddMode::Manual,
+            "→ on Algorithm focus must not switch AddMode (step {i})"
+        );
+        assert_eq!(
+            add.manual_focus,
+            AddManualFocus::Algorithm,
+            "→ on Algorithm focus must not change focus (step {i})"
+        );
+        state = next;
+    }
+}
+
+#[test]
+fn left_in_add_modal_manual_mode_algorithm_focus_cycles_backward_with_wrap() {
+    // `←` retreats through the three-valued Algorithm selector and
+    // wraps from Sha1 back to Sha512. The mode stays Manual.
+    let tmp = secure_tempdir();
+    let mut state = add_modal_focused_on_algorithm(&tmp);
+    let order = [Algorithm::Sha512, Algorithm::Sha256, Algorithm::Sha1];
+    for (i, expected) in order.iter().enumerate() {
+        let (next, effects) = reduce(state, key(KeyCode::Left));
+        assert!(
+            effects.is_empty(),
+            "← on Algorithm focus (step {i}) must not emit effects"
+        );
+        let add = add_modal_ref(&next);
+        assert_eq!(
+            add.algorithm, *expected,
+            "← step {i} should land on {expected:?}"
+        );
+        assert_eq!(
+            add.mode,
+            AddMode::Manual,
+            "← on Algorithm focus must not switch AddMode (step {i})"
+        );
+        assert_eq!(
+            add.manual_focus,
+            AddManualFocus::Algorithm,
+            "← on Algorithm focus must not change focus (step {i})"
+        );
+        state = next;
+    }
+}
+
+#[test]
+fn down_in_add_modal_manual_mode_algorithm_focus_cycles_forward_like_right() {
+    // `↓` is an alias for `→` on segmented selectors: forward
+    // through Sha1 → Sha256 → Sha512 → Sha1, with the same
+    // mode-preserving contract.
+    let tmp = secure_tempdir();
+    let mut state = add_modal_focused_on_algorithm(&tmp);
+    let order = [Algorithm::Sha256, Algorithm::Sha512, Algorithm::Sha1];
+    for (i, expected) in order.iter().enumerate() {
+        let (next, effects) = reduce(state, key(KeyCode::Down));
+        assert!(
+            effects.is_empty(),
+            "↓ on Algorithm focus (step {i}) must not emit effects"
+        );
+        let add = add_modal_ref(&next);
+        assert_eq!(add.algorithm, *expected, "↓ step {i}");
+        assert_eq!(add.mode, AddMode::Manual);
+        assert_eq!(add.manual_focus, AddManualFocus::Algorithm);
+        state = next;
+    }
+}
+
+#[test]
+fn up_in_add_modal_manual_mode_algorithm_focus_cycles_backward_like_left() {
+    // `↑` is an alias for `←` on segmented selectors: backward
+    // through Sha1 → Sha512 → Sha256 → Sha1, with the same
+    // mode-preserving contract.
+    let tmp = secure_tempdir();
+    let mut state = add_modal_focused_on_algorithm(&tmp);
+    let order = [Algorithm::Sha512, Algorithm::Sha256, Algorithm::Sha1];
+    for (i, expected) in order.iter().enumerate() {
+        let (next, effects) = reduce(state, key(KeyCode::Up));
+        assert!(
+            effects.is_empty(),
+            "↑ on Algorithm focus (step {i}) must not emit effects"
+        );
+        let add = add_modal_ref(&next);
+        assert_eq!(add.algorithm, *expected, "↑ step {i}");
+        assert_eq!(add.mode, AddMode::Manual);
+        assert_eq!(add.manual_focus, AddManualFocus::Algorithm);
+        state = next;
+    }
+}
+
+#[test]
+fn arrows_on_algorithm_focus_do_not_leak_into_text_fields_or_secret() {
+    // Cycling the Algorithm selector with arrow keys must leave every
+    // other modal-local field untouched: text buffers stay empty, the
+    // secret-bearing manual_secret / uri_text buffers stay empty,
+    // and the digits / kind / period / counter values keep their
+    // open-time defaults.
+    let tmp = secure_tempdir();
+    let state = add_modal_focused_on_algorithm(&tmp);
+    let (state, _) = reduce(state, key(KeyCode::Right));
+    let (state, _) = reduce(state, key(KeyCode::Down));
+    let (state, _) = reduce(state, key(KeyCode::Left));
+    let (state, _) = reduce(state, key(KeyCode::Up));
+    let add = add_modal_ref(&state);
+    assert!(add.label.is_empty());
+    assert!(add.issuer.is_empty());
+    assert!(add.icon_hint_text.is_empty());
+    assert!(add.manual_secret.is_empty());
+    assert!(add.uri_text.is_empty());
+    assert_eq!(add.digits, paladin_core::DIGITS_DEFAULT);
+    assert_eq!(add.kind, AccountKindInput::Totp);
+    assert_eq!(add.period_secs, paladin_core::TOTP_PERIOD_DEFAULT);
+    assert_eq!(add.counter, 0);
+    assert!(add.error.is_none());
+}
+
+#[test]
+fn right_in_add_modal_manual_mode_label_focus_still_cycles_addmode() {
+    // Regression: → on a text-bearing focus (Label) keeps the
+    // existing AddMode segmented-selector behavior — Manual → Uri.
+    // The non-text-focus override (Algorithm / Digits / Kind /
+    // PeriodOrCounter) must not steal `→` when a text field is
+    // focused.
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_add_modal(&tmp);
+    assert_eq!(add_modal_ref(&state).manual_focus, AddManualFocus::Label);
+    let (after, effects) = reduce(state, key(KeyCode::Right));
+    assert!(effects.is_empty());
+    assert_eq!(add_modal_ref(&after).mode, AddMode::Uri);
+}
+
 #[test]
 fn pressing_a_on_unlocked_with_modal_already_open_does_not_replace_the_modal() {
     // When a modal is open, the `a` key is consumed by the modal's

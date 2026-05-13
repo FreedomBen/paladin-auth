@@ -14,8 +14,8 @@ use std::time::Instant;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 
 use paladin_core::{
-    hotp_reveal_deadline, validate_label, AccountId, ClipboardClearPolicy, ClipboardClearToken,
-    Code, IdlePolicy, PaladinError, SettingPatch, Store, Vault,
+    hotp_reveal_deadline, validate_label, AccountId, Algorithm, ClipboardClearPolicy,
+    ClipboardClearToken, Code, IdlePolicy, PaladinError, SettingPatch, Store, Vault,
 };
 use secrecy::SecretString;
 use zeroize::Zeroizing;
@@ -1146,14 +1146,46 @@ fn route_modal_input(
 /// non-text-bearing focuses ([`AddManualFocus::Algorithm`],
 /// [`AddManualFocus::Digits`], [`AddManualFocus::Kind`], and
 /// [`AddManualFocus::PeriodOrCounter`] — selectors and spinners
-/// cycled by `←` / `→` / `↑` / `↓` in subsequent slices) and on the
-/// URI mode are silently consumed for now (modal-trap contract);
-/// URI-mode typing, the duplicate-gate pending state, and the
-/// post-QR counts panel land in subsequent slices.
+/// cycled by `←` / `→` / `↑` / `↓`) are silently consumed.
+///
+/// In Manual mode with [`AddManualFocus::Algorithm`] focused,
+/// `→` / `↓` advance the three-valued segmented selector forward
+/// (Sha1 → Sha256 → Sha512 → Sha1) and `←` / `↑` retreat it backward
+/// (Sha1 → Sha512 → Sha256 → Sha1); both wrap at either end. These
+/// arrow keys are intercepted before the mode-switch `←` / `→`
+/// branch so they do not switch the [`AddMode`] header when a
+/// non-text field has focus; the URI / QR modes and the four
+/// text-bearing Manual focuses keep the existing
+/// [`AddMode`]-cycling behavior.
+/// The remaining non-text focuses ([`AddManualFocus::Digits`],
+/// [`AddManualFocus::Kind`], [`AddManualFocus::PeriodOrCounter`])
+/// land in subsequent slices, alongside URI-mode typing, the
+/// duplicate-gate pending state, and the post-QR counts panel.
 /// Every other key here is a silent no-op so the modal-trap contract
 /// holds. `Esc` / Help / `Ctrl-C` are filtered upstream of the modal
 /// trap.
 fn route_add_modal_input(add: &mut AddModal, key: &KeyEvent) -> Vec<Effect> {
+    if add.mode == AddMode::Manual && add.manual_focus == AddManualFocus::Algorithm {
+        match key.code {
+            KeyCode::Right | KeyCode::Down => {
+                add.algorithm = match add.algorithm {
+                    Algorithm::Sha1 => Algorithm::Sha256,
+                    Algorithm::Sha256 => Algorithm::Sha512,
+                    Algorithm::Sha512 => Algorithm::Sha1,
+                };
+                return Vec::new();
+            }
+            KeyCode::Left | KeyCode::Up => {
+                add.algorithm = match add.algorithm {
+                    Algorithm::Sha1 => Algorithm::Sha512,
+                    Algorithm::Sha256 => Algorithm::Sha1,
+                    Algorithm::Sha512 => Algorithm::Sha256,
+                };
+                return Vec::new();
+            }
+            _ => {}
+        }
+    }
     match key.code {
         KeyCode::Right => {
             add.switch_mode(add.mode.next());
