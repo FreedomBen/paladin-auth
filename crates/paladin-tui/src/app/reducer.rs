@@ -14,8 +14,9 @@ use std::time::Instant;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 
 use paladin_core::{
-    hotp_reveal_deadline, validate_label, AccountId, Algorithm, ClipboardClearPolicy,
-    ClipboardClearToken, Code, IdlePolicy, PaladinError, SettingPatch, Store, Vault,
+    hotp_reveal_deadline, validate_label, AccountId, AccountKindInput, Algorithm,
+    ClipboardClearPolicy, ClipboardClearToken, Code, IdlePolicy, PaladinError, SettingPatch, Store,
+    Vault,
 };
 use secrecy::SecretString;
 use zeroize::Zeroizing;
@@ -1156,55 +1157,78 @@ fn route_modal_input(
 /// digit count through the three valid values per
 /// [`paladin_core::DIGITS_MIN`]..=[`paladin_core::DIGITS_MAX`]
 /// (6 → 7 → 8 → 6 forward; 6 → 8 → 7 → 6 backward), also wrapping.
+/// With [`AddManualFocus::Kind`] focused, any of the four arrow
+/// keys toggles the two-valued
+/// [`paladin_core::AccountKindInput`] selector between `Totp` and
+/// `Hotp`; the modal's independent `period_secs` and `counter`
+/// scratch values are preserved across the toggle so the
+/// `PeriodOrCounter` focus can bind to whichever applies to the
+/// current Kind.
 /// These arrow keys are intercepted before the mode-switch `←` /
 /// `→` branch so they do not switch the [`AddMode`] header when a
 /// non-text field has focus; the URI / QR modes and the four
 /// text-bearing Manual focuses keep the existing
 /// [`AddMode`]-cycling behavior.
-/// The remaining non-text focuses ([`AddManualFocus::Kind`],
-/// [`AddManualFocus::PeriodOrCounter`]) land in subsequent slices,
-/// alongside URI-mode typing, the duplicate-gate pending state, and
-/// the post-QR counts panel.
+/// The remaining non-text focus
+/// ([`AddManualFocus::PeriodOrCounter`]) lands in a subsequent
+/// slice, alongside URI-mode typing, the duplicate-gate pending
+/// state, and the post-QR counts panel.
 /// Every other key here is a silent no-op so the modal-trap contract
 /// holds. `Esc` / Help / `Ctrl-C` are filtered upstream of the modal
 /// trap.
-fn route_add_modal_input(add: &mut AddModal, key: &KeyEvent) -> Vec<Effect> {
-    if add.mode == AddMode::Manual {
-        match (add.manual_focus, key.code) {
-            (AddManualFocus::Algorithm, KeyCode::Right | KeyCode::Down) => {
-                add.algorithm = match add.algorithm {
-                    Algorithm::Sha1 => Algorithm::Sha256,
-                    Algorithm::Sha256 => Algorithm::Sha512,
-                    Algorithm::Sha512 => Algorithm::Sha1,
-                };
-                return Vec::new();
-            }
-            (AddManualFocus::Algorithm, KeyCode::Left | KeyCode::Up) => {
-                add.algorithm = match add.algorithm {
-                    Algorithm::Sha1 => Algorithm::Sha512,
-                    Algorithm::Sha256 => Algorithm::Sha1,
-                    Algorithm::Sha512 => Algorithm::Sha256,
-                };
-                return Vec::new();
-            }
-            (AddManualFocus::Digits, KeyCode::Right | KeyCode::Down) => {
-                add.digits = match add.digits {
-                    6 => 7,
-                    7 => 8,
-                    _ => 6,
-                };
-                return Vec::new();
-            }
-            (AddManualFocus::Digits, KeyCode::Left | KeyCode::Up) => {
-                add.digits = match add.digits {
-                    6 => 8,
-                    7 => 6,
-                    _ => 7,
-                };
-                return Vec::new();
-            }
-            _ => {}
+/// Try to handle a `←` / `→` / `↑` / `↓` keystroke as a value cycle
+/// on the Add modal's non-text Manual focuses (Algorithm / Digits /
+/// Kind). Returns `true` if the key was consumed so the caller skips
+/// the mode-switch `←` / `→` branch and the Tab / Char / Backspace
+/// handlers. Caller guarantees [`AddMode::Manual`].
+fn try_cycle_manual_selector(add: &mut AddModal, key: &KeyEvent) -> bool {
+    match (add.manual_focus, key.code) {
+        (AddManualFocus::Algorithm, KeyCode::Right | KeyCode::Down) => {
+            add.algorithm = match add.algorithm {
+                Algorithm::Sha1 => Algorithm::Sha256,
+                Algorithm::Sha256 => Algorithm::Sha512,
+                Algorithm::Sha512 => Algorithm::Sha1,
+            };
+            true
         }
+        (AddManualFocus::Algorithm, KeyCode::Left | KeyCode::Up) => {
+            add.algorithm = match add.algorithm {
+                Algorithm::Sha1 => Algorithm::Sha512,
+                Algorithm::Sha256 => Algorithm::Sha1,
+                Algorithm::Sha512 => Algorithm::Sha256,
+            };
+            true
+        }
+        (AddManualFocus::Digits, KeyCode::Right | KeyCode::Down) => {
+            add.digits = match add.digits {
+                6 => 7,
+                7 => 8,
+                _ => 6,
+            };
+            true
+        }
+        (AddManualFocus::Digits, KeyCode::Left | KeyCode::Up) => {
+            add.digits = match add.digits {
+                6 => 8,
+                7 => 6,
+                _ => 7,
+            };
+            true
+        }
+        (AddManualFocus::Kind, KeyCode::Right | KeyCode::Down | KeyCode::Left | KeyCode::Up) => {
+            add.kind = match add.kind {
+                AccountKindInput::Totp => AccountKindInput::Hotp,
+                AccountKindInput::Hotp => AccountKindInput::Totp,
+            };
+            true
+        }
+        _ => false,
+    }
+}
+
+fn route_add_modal_input(add: &mut AddModal, key: &KeyEvent) -> Vec<Effect> {
+    if add.mode == AddMode::Manual && try_cycle_manual_selector(add, key) {
+        return Vec::new();
     }
     match key.code {
         KeyCode::Right => {

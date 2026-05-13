@@ -3277,6 +3277,145 @@ fn up_in_add_modal_manual_mode_digits_focus_cycles_backward_like_left() {
     }
 }
 
+/// Reach Kind focus from the default Add-modal open (Label) by
+/// pressing Tab five times. Returned state has `manual_focus ==
+/// Kind` and an unchanged `kind == AccountKindInput::Totp` default.
+fn add_modal_focused_on_kind(tmp: &tempfile::TempDir) -> AppState {
+    let mut state = fresh_unlocked_with_add_modal(tmp);
+    for _ in 0..5 {
+        let (next, _) = reduce(state, key(KeyCode::Tab));
+        state = next;
+    }
+    assert_eq!(add_modal_ref(&state).manual_focus, AddManualFocus::Kind);
+    assert_eq!(add_modal_ref(&state).kind, AccountKindInput::Totp);
+    state
+}
+
+#[test]
+fn right_in_add_modal_manual_mode_kind_focus_toggles_totp_hotp_totp_with_wrap() {
+    // Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)":
+    // *"selectors and spinners cycled by `←` / `→` / `↑` / `↓`"*.
+    // Kind is a two-valued segmented selector (Totp / Hotp); `→`
+    // toggles between them, wrapping after each press. The mode
+    // stays Manual — `→` does NOT switch the AddMode header when
+    // focused on a non-text field.
+    let tmp = secure_tempdir();
+    let mut state = add_modal_focused_on_kind(&tmp);
+    let order = [AccountKindInput::Hotp, AccountKindInput::Totp];
+    for (i, expected) in order.iter().enumerate() {
+        let (next, effects) = reduce(state, key(KeyCode::Right));
+        assert!(
+            effects.is_empty(),
+            "→ on Kind focus (step {i}) must not emit effects"
+        );
+        let add = add_modal_ref(&next);
+        assert_eq!(
+            add.kind, *expected,
+            "→ step {i} should land on {expected:?}"
+        );
+        assert_eq!(
+            add.mode,
+            AddMode::Manual,
+            "→ on Kind focus must not switch AddMode (step {i})"
+        );
+        assert_eq!(
+            add.manual_focus,
+            AddManualFocus::Kind,
+            "→ on Kind focus must not change focus (step {i})"
+        );
+        state = next;
+    }
+}
+
+#[test]
+fn left_in_add_modal_manual_mode_kind_focus_toggles_totp_hotp_totp_with_wrap() {
+    // `←` on the two-valued Kind selector toggles every press,
+    // wrapping symmetrically. The mode stays Manual.
+    let tmp = secure_tempdir();
+    let mut state = add_modal_focused_on_kind(&tmp);
+    let order = [AccountKindInput::Hotp, AccountKindInput::Totp];
+    for (i, expected) in order.iter().enumerate() {
+        let (next, effects) = reduce(state, key(KeyCode::Left));
+        assert!(
+            effects.is_empty(),
+            "← on Kind focus (step {i}) must not emit effects"
+        );
+        let add = add_modal_ref(&next);
+        assert_eq!(
+            add.kind, *expected,
+            "← step {i} should land on {expected:?}"
+        );
+        assert_eq!(add.mode, AddMode::Manual);
+        assert_eq!(add.manual_focus, AddManualFocus::Kind);
+        state = next;
+    }
+}
+
+#[test]
+fn down_in_add_modal_manual_mode_kind_focus_toggles_like_right() {
+    // `↓` mirrors `→` on the two-valued Kind selector.
+    let tmp = secure_tempdir();
+    let mut state = add_modal_focused_on_kind(&tmp);
+    let order = [AccountKindInput::Hotp, AccountKindInput::Totp];
+    for (i, expected) in order.iter().enumerate() {
+        let (next, effects) = reduce(state, key(KeyCode::Down));
+        assert!(effects.is_empty(), "↓ on Kind focus (step {i})");
+        let add = add_modal_ref(&next);
+        assert_eq!(add.kind, *expected, "↓ step {i}");
+        assert_eq!(add.mode, AddMode::Manual);
+        assert_eq!(add.manual_focus, AddManualFocus::Kind);
+        state = next;
+    }
+}
+
+#[test]
+fn up_in_add_modal_manual_mode_kind_focus_toggles_like_left() {
+    // `↑` mirrors `←` on the two-valued Kind selector.
+    let tmp = secure_tempdir();
+    let mut state = add_modal_focused_on_kind(&tmp);
+    let order = [AccountKindInput::Hotp, AccountKindInput::Totp];
+    for (i, expected) in order.iter().enumerate() {
+        let (next, effects) = reduce(state, key(KeyCode::Up));
+        assert!(effects.is_empty(), "↑ on Kind focus (step {i})");
+        let add = add_modal_ref(&next);
+        assert_eq!(add.kind, *expected, "↑ step {i}");
+        assert_eq!(add.mode, AddMode::Manual);
+        assert_eq!(add.manual_focus, AddManualFocus::Kind);
+        state = next;
+    }
+}
+
+#[test]
+fn arrows_on_kind_focus_preserve_period_secs_and_counter() {
+    // Switching Kind must NOT reset the modal-local `period_secs` or
+    // `counter` — the two values live independently on `AddModal`,
+    // and the PeriodOrCounter focus simply binds to whichever
+    // applies given the current Kind. Cycling arrow keys around the
+    // Kind selector therefore leaves both numeric defaults intact
+    // (30s / 0) alongside every other modal-local field.
+    let tmp = secure_tempdir();
+    let state = add_modal_focused_on_kind(&tmp);
+    let (state, _) = reduce(state, key(KeyCode::Right));
+    let (state, _) = reduce(state, key(KeyCode::Down));
+    let (state, _) = reduce(state, key(KeyCode::Left));
+    let (state, _) = reduce(state, key(KeyCode::Up));
+    let add = add_modal_ref(&state);
+    assert!(add.label.is_empty());
+    assert!(add.issuer.is_empty());
+    assert!(add.icon_hint_text.is_empty());
+    assert!(add.manual_secret.is_empty());
+    assert!(add.uri_text.is_empty());
+    assert_eq!(add.algorithm, Algorithm::Sha1);
+    assert_eq!(add.digits, paladin_core::DIGITS_DEFAULT);
+    assert_eq!(
+        add.period_secs,
+        paladin_core::TOTP_PERIOD_DEFAULT,
+        "cycling Kind must not touch period_secs"
+    );
+    assert_eq!(add.counter, 0, "cycling Kind must not touch counter");
+    assert!(add.error.is_none());
+}
+
 #[test]
 fn arrows_on_digits_focus_do_not_leak_into_other_fields() {
     // Cycling the Digits selector with arrow keys must leave every
