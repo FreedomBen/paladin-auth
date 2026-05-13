@@ -19,6 +19,8 @@
 
 use std::process::ExitCode;
 
+pub mod search;
+
 /// Run the `paladin-gtk` binary.
 ///
 /// Milestone 7 scaffold per `IMPLEMENTATION_PLAN_04_GTK.md`: returns

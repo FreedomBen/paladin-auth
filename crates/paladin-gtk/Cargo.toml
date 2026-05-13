@@ -43,3 +43,9 @@ clap = { version = "4.5", features = ["derive", "wrap_help"] }
 
 [dev-dependencies]
 tempfile = "3"
+# Test fixtures construct `AccountInput { secret: SecretString, ... }`
+# values directly. `secrecy` is a dev-dep only for now — when the v0.2
+# add / import / passphrase dialogs land (which need it at runtime),
+# move it under `[dependencies]` and update the plan's §"Dependencies"
+# section accordingly.
+secrecy = "0.10"
