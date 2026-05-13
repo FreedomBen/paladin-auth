@@ -1155,3 +1155,152 @@ fn execute_add_with_duplicate_emits_duplicate_failure_and_does_not_mutate_vault(
         "duplicate detection must not commit to the on-disk primary"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Effect::AddFromUri — duplicate detection (parse_otpauth + find_duplicate)
+// ---------------------------------------------------------------------------
+
+/// `Effect::AddFromUri` whose carried `otpauth://` URI parses to a
+/// `ValidatedAccount` that exactly matches an existing
+/// `(secret, issuer, label)` triple in the vault must:
+///
+/// 1. Call [`paladin_core::parse_otpauth`] over the carried URI bytes.
+/// 2. Call `Vault::find_duplicate(&validated)`.
+/// 3. Emit `EffectResult::Add { Err(AddFailure::Duplicate { existing, pending }) }`
+///    carrying the existing account's `AccountSummary` and the
+///    parsed pending account so the reducer can stash it for the
+///    follow-up "add anyway" confirmation. The result is delivered
+///    on the shared [`EffectResult::Add`] channel so the reducer's
+///    Manual-mode duplicate handling covers URI-mode too.
+/// 4. Leave the on-disk vault unchanged (the duplicate gate runs
+///    before `Vault::mutate_and_save`).
+///
+/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
+/// *"URI mode is a single text field; on submit the entered string is
+/// passed to `paladin_core::parse_otpauth(uri, submit_time)`, and on
+/// success the resulting `ValidatedAccount` shares the manual path's
+/// duplicate-detection, 'add anyway' override, and
+/// `Vault::mutate_and_save` insertion."*
+#[test]
+fn execute_add_from_uri_with_duplicate_emits_duplicate_failure_and_does_not_mutate_vault() {
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (mut state, existing_id) = unlocked_with_one_totp(&path, "github");
+
+    let (initial_count, existing_summary) = match &state {
+        AppState::Unlocked { vault, .. } => (
+            vault.iter().count(),
+            vault
+                .iter()
+                .find(|a| a.id() == existing_id)
+                .expect("existing account in vault")
+                .summary(),
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    };
+
+    // `unlocked_with_one_totp` seeds: secret `JBSWY3DPEHPK3PXP`,
+    // no issuer, label "github", SHA1, 6 digits, TOTP, period 30.
+    // The URI below parses to the same triple so `find_duplicate`
+    // matches verbatim.
+    let uri = SecretString::from(
+        "otpauth://totp/github?secret=JBSWY3DPEHPK3PXP&algorithm=SHA1&digits=6&period=30"
+            .to_string(),
+    );
+    let (tx, rx) = mpsc::channel::<AppEvent>();
+    let effect = Effect::AddFromUri {
+        path: path.clone(),
+        uri,
+    };
+
+    let outcome = execute(effect, &mut state, &tx);
+    assert_eq!(outcome, EffectOutcome::Continue);
+
+    let evt = rx.try_recv().expect("an AppEvent should be sent");
+    match evt {
+        AppEvent::EffectResult(EffectResult::Add {
+            result:
+                Err(AddFailure::Duplicate {
+                    existing,
+                    pending: _,
+                }),
+        }) => {
+            assert_eq!(
+                existing, existing_summary,
+                "executor must carry the existing account's AccountSummary"
+            );
+        }
+        other => panic!("expected EffectResult::Add Duplicate, got {other:?}"),
+    }
+    assert!(
+        rx.try_recv().is_err(),
+        "executor must emit exactly one AppEvent per Effect::AddFromUri"
+    );
+
+    match &state {
+        AppState::Unlocked { vault, .. } => {
+            assert_eq!(
+                vault.iter().count(),
+                initial_count,
+                "duplicate detection must run before any mutation"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+
+    let (reopened, _store) =
+        Store::open(&path, VaultLock::Plaintext).expect("reopen plaintext vault");
+    assert_eq!(
+        reopened.iter().count(),
+        initial_count,
+        "duplicate detection must not commit to the on-disk primary"
+    );
+}
+
+/// An `Effect::AddFromUri` whose carried bytes do not parse as a
+/// valid `otpauth://` URI must emit
+/// `EffectResult::Add { Err(AddFailure::Validation(...)) }` carrying
+/// the `parse_otpauth` error verbatim — per `IMPLEMENTATION_PLAN_03_TUI.md`
+/// "Modals (per §6)" > Add: *"Parser errors
+/// (`unsupported_import_format`, `validation_error`) stay in the
+/// modal as inline errors and never mutate the vault."*
+#[test]
+fn execute_add_from_uri_with_invalid_uri_emits_validation_failure() {
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (mut state, _) = unlocked_with_one_totp(&path, "github");
+    let initial_count = match &state {
+        AppState::Unlocked { vault, .. } => vault.iter().count(),
+        other => panic!("expected Unlocked, got {other:?}"),
+    };
+
+    let uri = SecretString::from("not-a-real-otpauth-uri".to_string());
+    let (tx, rx) = mpsc::channel::<AppEvent>();
+    let effect = Effect::AddFromUri {
+        path: path.clone(),
+        uri,
+    };
+
+    let outcome = execute(effect, &mut state, &tx);
+    assert_eq!(outcome, EffectOutcome::Continue);
+
+    let evt = rx.try_recv().expect("an AppEvent should be sent");
+    match evt {
+        AppEvent::EffectResult(EffectResult::Add {
+            result: Err(AddFailure::Validation(_)),
+        }) => {}
+        other => panic!("expected EffectResult::Add Validation, got {other:?}"),
+    }
+    assert!(rx.try_recv().is_err());
+
+    match &state {
+        AppState::Unlocked { vault, .. } => {
+            assert_eq!(
+                vault.iter().count(),
+                initial_count,
+                "parse failure must not mutate the vault"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}

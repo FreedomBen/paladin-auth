@@ -796,9 +796,23 @@ end-to-end.
   in `tests/effect_tests.rs` and
   `effect_result_add_duplicate_stashes_pending_and_sets_inline_error`
   + discard-path siblings in `tests/reducer_tests.rs`.)*
-- [ ] URI duplicate collision is detected through
+- [x] URI duplicate collision is detected through
   `Vault::find_duplicate(&validated)` and rejects with the existing
   account.
+  *(Reducer's URI-mode Enter handler emits a new `Effect::AddFromUri
+  { path, uri }` carrying the typed bytes taken (and zeroized) from
+  `AddModal::uri_text`; the executor calls `paladin_core::parse_otpauth`
+  + `Vault::find_duplicate` and emits the same `EffectResult::Add
+  { Err(AddFailure::Duplicate { existing, pending }) }` channel
+  the Manual-mode path already uses, so the reducer's pending-stash
+  + inline `duplicate_account` rendering covers Manual and URI alike.
+  Asserted by
+  `execute_add_from_uri_with_duplicate_emits_duplicate_failure_and_does_not_mutate_vault`
+  and `execute_add_from_uri_with_invalid_uri_emits_validation_failure`
+  in `tests/effect_tests.rs`;
+  `enter_in_uri_mode_emits_add_from_uri_effect_with_typed_bytes`
+  + `enter_in_uri_mode_with_empty_buffer_still_emits_effect_to_surface_parse_error`
+  in `tests/reducer_tests.rs`.)*
 - [ ] The follow-up "add anyway" confirmation inserts the pending
   validated account on the duplicate-allowed path with a fresh ID.
 - [ ] Clipboard QR import uses `ImportConflict::Skip` and reports

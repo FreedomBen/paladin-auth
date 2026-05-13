@@ -1409,6 +1409,12 @@ fn route_add_modal_input(
             return Vec::new();
         }
     }
+    if add.mode == AddMode::Uri && matches!(key.code, KeyCode::Enter) {
+        return vec![Effect::AddFromUri {
+            path: path.to_path_buf(),
+            uri: add.uri_text.take(),
+        }];
+    }
     Vec::new()
 }
 

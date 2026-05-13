@@ -685,4 +685,43 @@ pub enum Effect {
         /// the `AccountInput`.
         icon_hint_text: String,
     },
+    /// Insert a URI-mode account into the vault and persist it.
+    ///
+    /// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
+    /// *"URI mode is a single text field; on submit the entered
+    /// string is passed to `paladin_core::parse_otpauth(uri,
+    /// submit_time)`, and on success the resulting `ValidatedAccount`
+    /// shares the manual path's duplicate-detection, 'add anyway'
+    /// override, and `Vault::mutate_and_save` insertion."* The
+    /// reducer emits this effect when `Enter` is pressed on
+    /// `Modal::Add` with [`crate::app::state::AddMode::Uri`] active;
+    /// the executor calls
+    /// [`paladin_core::parse_otpauth`] over the carried URI bytes,
+    /// samples one `SystemTime::now()` as `submit_time`, performs
+    /// duplicate detection, and wraps the `Vault::add` call in
+    /// `Vault::mutate_and_save`. The result is delivered on the
+    /// shared [`EffectResult::Add`] channel so the reducer's
+    /// duplicate / validation / save handling covers Manual and URI
+    /// alike — only the parsing front end differs.
+    ///
+    /// `uri` is the typed text buffer taken from
+    /// [`crate::app::state::AddModal::uri_text`] via
+    /// [`crate::prompt::PassphraseBuffer::take`]; the buffer zeroizes
+    /// in the same step. `uri` then zeroizes on drop because
+    /// `SecretString` owns its bytes through `secrecy` — the URI
+    /// text is secret-bearing because the URI embeds the Base32
+    /// secret.
+    AddFromUri {
+        /// The current vault path; the executor uses it for error
+        /// reporting and to verify the path the effect was emitted
+        /// against in case the user has navigated away.
+        path: PathBuf,
+        /// URI text buffer taken from the modal's
+        /// [`crate::prompt::PassphraseBuffer`] at submit time;
+        /// zeroizes on drop because `SecretString` owns its bytes
+        /// through `secrecy`. Passed verbatim to
+        /// [`paladin_core::parse_otpauth`] which trims and enforces
+        /// the §4.4 URI grammar.
+        uri: SecretString,
+    },
 }

@@ -3868,28 +3868,6 @@ fn enter_in_add_modal_manual_mode_carries_hotp_counter_after_kind_change() {
 }
 
 #[test]
-fn enter_in_add_modal_uri_mode_is_silent_noop_for_now() {
-    // URI-mode submit lands with a subsequent slice
-    // (`paladin_core::parse_otpauth(uri, submit_time)`). At this
-    // slice URI Enter must not emit `Effect::Add` and must leave the
-    // typed `uri_text` buffer intact so the upcoming slice can pick
-    // up where this one left off.
-    let tmp = secure_tempdir();
-    let state = add_modal_in_uri_mode_with_typed_text(&tmp);
-    let (state, effects) = reduce(state, key(KeyCode::Enter));
-    assert!(
-        effects.is_empty(),
-        "Enter in URI mode must not emit Effect::Add at this slice"
-    );
-    let add = add_modal_ref(&state);
-    assert_eq!(add.mode, AddMode::Uri, "modal stays in URI mode");
-    assert!(
-        !add.uri_text.is_empty(),
-        "uri_text buffer must survive a silent-noop Enter"
-    );
-}
-
-#[test]
 fn enter_in_add_modal_qr_mode_is_silent_noop_for_now() {
     // QR-mode submit lands with a subsequent slice (`arboard`
     // clipboard read + `paladin_core::import::qr_image_bytes`). At
@@ -14108,5 +14086,117 @@ fn effect_result_add_duplicate_on_non_add_modal_is_discarded() {
             other => panic!("expected Rename modal to survive, got {other:?}"),
         },
         other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Add modal — URI-mode Enter emits Effect::AddFromUri
+// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Add modal" > URI
+//  duplicate collision is detected through
+//  `Vault::find_duplicate(&validated)` and rejects with the existing
+//  account.)
+//
+// Slice covered: the reducer's URI-mode Enter handler. Per the plan's
+// Add-modal section: *"URI mode is a single text field; on submit the
+// entered string is passed to `paladin_core::parse_otpauth(uri,
+// submit_time)`, and on success the resulting `ValidatedAccount`
+// shares the manual path's duplicate-detection, 'add anyway' override,
+// and `Vault::mutate_and_save` insertion."* The reducer emits an
+// `Effect::AddFromUri` carrying the typed bytes (taken from the
+// zeroizing URI buffer); the executor owns the parse + duplicate
+// gate (covered in `tests/effect_tests.rs`). The shared
+// `EffectResult::Add` channel covers the modal-side stash on
+// `Err(AddFailure::Duplicate { .. })` — see
+// `effect_result_add_duplicate_stashes_pending_and_sets_inline_error`.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enter_in_uri_mode_emits_add_from_uri_effect_with_typed_bytes() {
+    let tmp = secure_tempdir();
+    let unlocked = fresh_plaintext_unlocked(&tmp);
+    let path_before = match &unlocked {
+        AppState::Unlocked { path, .. } => path.clone(),
+        other => panic!("expected Unlocked, got {other:?}"),
+    };
+    // Open Add modal (defaults to Manual), advance to Uri via `→`.
+    let (state, _) = reduce(unlocked, key(KeyCode::Char('a')));
+    let (mut state, _) = reduce(state, key(KeyCode::Right));
+    let typed = "otpauth://totp/github?secret=JBSWY3DPEHPK3PXP&algorithm=SHA1&digits=6&period=30";
+    match &mut state {
+        AppState::Unlocked {
+            modal: Some(Modal::Add(add)),
+            ..
+        } => {
+            assert_eq!(add.mode, AddMode::Uri, "one → from Manual must land on Uri");
+            for c in typed.chars() {
+                add.uri_text.push(c);
+            }
+        }
+        _ => panic!("expected Add modal open in Uri mode"),
+    }
+    let (state, effects) = reduce(state, key(KeyCode::Enter));
+    assert_eq!(
+        effects.len(),
+        1,
+        "Enter in Uri mode must emit exactly one effect; got {effects:?}"
+    );
+    match &effects[0] {
+        Effect::AddFromUri { path, uri } => {
+            assert_eq!(path, &path_before, "effect must target the live vault path");
+            assert_eq!(
+                uri.expose_secret(),
+                typed,
+                "Effect::AddFromUri must carry the typed bytes verbatim"
+            );
+        }
+        other => panic!("expected Effect::AddFromUri, got {other:?}"),
+    }
+    // The URI buffer must be taken/zeroized on submit (parity with
+    // the manual_secret buffer's submit-time zeroization) so the
+    // typed bytes do not survive past the effect emission.
+    match &state {
+        AppState::Unlocked {
+            modal: Some(Modal::Add(add)),
+            ..
+        } => {
+            assert!(
+                add.uri_text.is_empty(),
+                "uri_text must be taken/zeroized after Enter"
+            );
+            assert_eq!(
+                add.mode,
+                AddMode::Uri,
+                "modal stays open in Uri mode pending the effect outcome"
+            );
+        }
+        other => panic!("expected Add modal still open in Uri mode, got {other:?}"),
+    }
+}
+
+#[test]
+fn enter_in_uri_mode_with_empty_buffer_still_emits_effect_to_surface_parse_error() {
+    // Empty URI input goes to the executor which surfaces a
+    // `validation_error` via parse_otpauth — the reducer does not
+    // pre-validate the URI text (parse_otpauth owns the error
+    // surface). This locks in the "always emit, never silently
+    // swallow" contract.
+    let tmp = secure_tempdir();
+    let unlocked = fresh_plaintext_unlocked(&tmp);
+    let (state, _) = reduce(unlocked, key(KeyCode::Char('a')));
+    let (state, _) = reduce(state, key(KeyCode::Right));
+    let (_state, effects) = reduce(state, key(KeyCode::Enter));
+    assert_eq!(
+        effects.len(),
+        1,
+        "Enter in Uri mode must emit even on empty buffer; got {effects:?}"
+    );
+    match &effects[0] {
+        Effect::AddFromUri { uri, .. } => {
+            assert!(
+                uri.expose_secret().is_empty(),
+                "empty URI buffer must produce an empty SecretString"
+            );
+        }
+        other => panic!("expected Effect::AddFromUri, got {other:?}"),
     }
 }

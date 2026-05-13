@@ -22,8 +22,8 @@ use std::sync::mpsc::Sender;
 use std::time::{Instant, SystemTime};
 
 use paladin_core::{
-    parse_icon_hint_token, validate_manual, AccountInput, PaladinError, SettingPatch, Store,
-    VaultLock,
+    parse_icon_hint_token, parse_otpauth, validate_manual, AccountInput, PaladinError,
+    SettingPatch, Store, VaultLock,
 };
 
 use crate::app::event::{AddFailure, AppEvent, Effect, EffectResult};
@@ -268,6 +268,7 @@ pub fn execute(effect: Effect, state: &mut AppState, sender: &Sender<AppEvent>) 
             state,
             sender,
         ),
+        Effect::AddFromUri { path, uri } => execute_add_from_uri(&path, &uri, state, sender),
     }
 }
 
@@ -365,6 +366,82 @@ fn execute_add(
             return EffectOutcome::Continue;
         }
     };
+
+    if let Some(existing) = vault.find_duplicate(&validated) {
+        let existing_summary = existing.summary();
+        let _ = sender.send(AppEvent::EffectResult(EffectResult::Add {
+            result: Err(AddFailure::Duplicate {
+                existing: existing_summary,
+                pending: Box::new(validated),
+            }),
+        }));
+        return EffectOutcome::Continue;
+    }
+
+    // Success path (`Vault::add` inside `Vault::mutate_and_save`)
+    // lands with the next slice; for now drop the validated account
+    // without posting back so the secret zeroizes on this stack
+    // frame.
+    drop(validated);
+    EffectOutcome::Continue
+}
+
+/// Execute an [`Effect::AddFromUri`] for a URI-mode submit.
+///
+/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
+/// *"URI mode is a single text field; on submit the entered string is
+/// passed to `paladin_core::parse_otpauth(uri, submit_time)`, and on
+/// success the resulting `ValidatedAccount` shares the manual path's
+/// duplicate-detection, 'add anyway' override, and
+/// `Vault::mutate_and_save` insertion."*
+///
+/// 1. Call [`paladin_core::parse_otpauth`] over the carried URI bytes
+///    with one `SystemTime::now()` sample (the submit time used for
+///    the account's `created_at` / `updated_at`).
+/// 2. Call [`paladin_core::Vault::find_duplicate`] over the parsed
+///    candidate. A collision returns an existing account's
+///    [`paladin_core::AccountSummary`] alongside the parsed pending
+///    account so the reducer can render the `duplicate_account`
+///    rejection and stash pending state on the shared
+///    [`crate::app::state::AddModal::pending_duplicate_add`] slot.
+/// 3. (Subsequent slice) wrap [`paladin_core::Vault::add`] in
+///    [`paladin_core::Vault::mutate_and_save`] on the non-duplicate
+///    path.
+///
+/// The path check protects against a stale effect emitted before an
+/// auto-lock or vault switch: if the live state is no longer
+/// `Unlocked` against the same path, drop the effect silently — the
+/// reducer would discard the corresponding `EffectResult::Add`
+/// anyway, and posting back would just synthesize an artificial
+/// mutation attempt against unrelated state.
+fn execute_add_from_uri(
+    path: &std::path::Path,
+    uri: &secrecy::SecretString,
+    state: &mut AppState,
+    sender: &Sender<AppEvent>,
+) -> EffectOutcome {
+    let AppState::Unlocked {
+        path: state_path,
+        vault,
+        ..
+    } = state
+    else {
+        return EffectOutcome::Continue;
+    };
+    if state_path != path {
+        return EffectOutcome::Continue;
+    }
+
+    let validated =
+        match parse_otpauth(secrecy::ExposeSecret::expose_secret(uri), SystemTime::now()) {
+            Ok(v) => v,
+            Err(err) => {
+                let _ = sender.send(AppEvent::EffectResult(EffectResult::Add {
+                    result: Err(AddFailure::Validation(err)),
+                }));
+                return EffectOutcome::Continue;
+            }
+        };
 
     if let Some(existing) = vault.find_duplicate(&validated) {
         let existing_summary = existing.summary();
