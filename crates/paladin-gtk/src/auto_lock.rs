@@ -22,6 +22,8 @@ use std::time::Instant;
 use paladin_core::policy::auto_lock::IdlePolicy;
 use paladin_core::{Store, Vault};
 
+use crate::clipboard_clear::PendingClipboardClear;
+
 /// Compute the next auto-lock deadline relative to `now` for the
 /// currently-unlocked `vault`.
 ///
@@ -83,28 +85,42 @@ pub struct UnlockedDiscards<Reveal, Modal> {
 /// The `AppModel::Locked` snapshot produced by an auto-lock expiry
 /// transition.
 ///
-/// Only the vault path survives the lock; the open `Vault`, `Store`,
-/// search query, HOTP reveal window, and any open dialog are
-/// dropped by [`lock_on_expiry`] via move semantics.
+/// The vault path survives the lock; the open `Vault`, `Store`,
+/// search query, HOTP reveal window, and any open dialog are dropped
+/// by [`lock_on_expiry`] via move semantics. A pending clipboard
+/// auto-clear scheduled before the lock survives so its timer still
+/// fires only-if-unchanged on the post-lock clipboard — per
+/// `IMPLEMENTATION_PLAN_04_GTK.md` §"Tests > `tests/clipboard_clear_logic.rs`"
+/// *"A clipboard auto-clear timer scheduled before lock survives lock
+/// and still fires only-if-unchanged."*
 pub struct LockedTransition {
     /// The resolved vault path. `UnlockComponent` re-presents against
     /// this path after lock.
     pub path: PathBuf,
+    /// Pending clipboard wipe-after-copy entry, carried forward
+    /// across the auto-lock transition so the deferred wake still
+    /// finds state to act on. `None` when no clipboard auto-clear
+    /// was scheduled at lock time, or when the user has not opted in.
+    pub pending_clipboard_clear: Option<PendingClipboardClear>,
 }
 
 /// Build a [`LockedTransition`] from an expired `AppModel::Unlocked`
 /// state.
 ///
 /// Takes `vault`, `store`, and `discards` **by value** so the caller
-/// cannot smuggle them past the lock. The returned `LockedTransition`
-/// holds only the vault path; everything else is dropped in this
-/// function's stack frame.
+/// cannot smuggle them past the lock. `pending_clipboard_clear` is
+/// carried forward verbatim so a clipboard timer scheduled before
+/// lock still fires only-if-unchanged after lock.
 #[must_use]
 pub fn lock_on_expiry<Reveal, Modal>(
     path: PathBuf,
     _vault: Vault,
     _store: Store,
     _discards: UnlockedDiscards<Reveal, Modal>,
+    pending_clipboard_clear: Option<PendingClipboardClear>,
 ) -> LockedTransition {
-    LockedTransition { path }
+    LockedTransition {
+        path,
+        pending_clipboard_clear,
+    }
 }

@@ -300,11 +300,13 @@ fn lock_on_expiry_carries_only_the_path_forward() {
         modal: Some(modal_tag),
     };
 
-    let locked = lock_on_expiry(path.clone(), vault, store, discards);
+    let locked = lock_on_expiry(path.clone(), vault, store, discards, None);
 
     assert_eq!(locked.path, path);
-    // The transition takes the values by move and drops them; nothing
-    // else survives. The only carried-forward state is the path.
+    // The transition takes the values by move and drops them; the
+    // only carried-forward fields are the path and any pending
+    // clipboard auto-clear (None here — covered in clipboard_clear_logic).
+    assert!(locked.pending_clipboard_clear.is_none());
     assert_eq!(
         reveal_drops.load(Ordering::SeqCst),
         1,
@@ -331,8 +333,9 @@ fn lock_on_expiry_discards_open_reveal_and_modal_when_none() {
         modal: None,
     };
 
-    let locked = lock_on_expiry(path.clone(), vault, store, discards);
+    let locked = lock_on_expiry(path.clone(), vault, store, discards, None);
     assert_eq!(locked.path, path);
+    assert!(locked.pending_clipboard_clear.is_none());
 }
 
 #[test]
@@ -353,8 +356,9 @@ fn lock_on_expiry_drops_vault_so_secrets_do_not_outlive_lock() {
         modal: None,
     };
 
-    let locked = lock_on_expiry(path.clone(), vault, store, discards);
+    let locked = lock_on_expiry(path.clone(), vault, store, discards, None);
     assert_eq!(locked.path, path);
+    assert!(locked.pending_clipboard_clear.is_none());
 
     // Re-opening the on-disk vault still works (the in-memory copy is
     // gone, but the file is unchanged).

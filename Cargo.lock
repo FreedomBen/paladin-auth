@@ -1330,6 +1330,7 @@ dependencies = [
  "paladin-core",
  "secrecy",
  "tempfile",
+ "zeroize",
 ]
 
 [[package]]

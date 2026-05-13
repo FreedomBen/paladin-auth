@@ -1108,7 +1108,11 @@ the libadwaita 1.6 floor below is satisfiable), `libadwaita` (via the
 `libadwaita` crate from gtk-rs, baseline 1.6 to match the §11.3
 Debian dep declaration and to make `AdwAlertDialog` and
 `AdwAboutDialog` available without a compatibility shim), `glib`,
-`gio`, `gdk4`, `clap`, plus `paladin-core`. GDK
+`gio`, `gdk4`, `clap`, `zeroize` (pinned to the same `1.8` version
+used by `paladin-core` and `paladin-tui`, for the
+`clipboard_clear::PendingClipboardClear { value: Zeroizing<Vec<u8>> }`
+captured-bytes wrapper so the post-copy clipboard payload zeroes on
+drop), plus `paladin-core`. GDK
 clipboard is the canonical Wayland/X11 path; `arboard` is **not** a
 hard dependency for v0.2 and is only added if GDK clipboard proves
 insufficient during implementation. Build-time tooling includes

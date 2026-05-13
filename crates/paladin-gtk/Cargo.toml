@@ -40,6 +40,12 @@ path = "src/main.rs"
 [dependencies]
 paladin-core = { path = "../paladin-core", version = "0.0.1" }
 clap = { version = "4.5", features = ["derive", "wrap_help"] }
+# The pure-logic `clipboard_clear` module holds copied clipboard
+# bytes in a `Zeroizing<Vec<u8>>` so the captured value zeroes on
+# drop (DESIGN §6 / §7 "Pending copied value is zeroized after a
+# clear attempt or stale-token drop"). Pinned at the same workspace
+# version `paladin-core` and `paladin-tui` use.
+zeroize = { version = "1.8", features = ["zeroize_derive"] }
 
 [dev-dependencies]
 tempfile = "3"
