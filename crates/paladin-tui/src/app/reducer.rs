@@ -21,12 +21,12 @@ use paladin_core::{
 use secrecy::SecretString;
 use zeroize::Zeroizing;
 
-use crate::app::event::{AppEvent, Effect, EffectResult};
+use crate::app::event::{AddFailure, AppEvent, Effect, EffectResult};
 use crate::app::state::{
-    compute_idle_deadline, initial_selection, render_error_message, AddManualFocus, AddModal,
-    AddMode, AppState, ChordLeader, Focus, HotpReveal, Modal, PendingClipboardClear, RemoveModal,
-    RenameModal, SettingsFocus, SettingsModal, StatusLine, CLIPBOARD_WRITE_FAILED,
-    NO_ACCOUNT_SELECTED,
+    compute_idle_deadline, format_duplicate_account_message, initial_selection,
+    render_error_message, AddManualFocus, AddModal, AddMode, AppState, ChordLeader, Focus,
+    HotpReveal, Modal, PendingClipboardClear, PendingDuplicateAdd, RemoveModal, RenameModal,
+    SettingsFocus, SettingsModal, StatusLine, CLIPBOARD_WRITE_FAILED, NO_ACCOUNT_SELECTED,
 };
 use crate::search::{filtered_account_ids, select_after_search};
 
@@ -263,6 +263,7 @@ fn reduce_effect_result(state: AppState, result: EffectResult) -> (AppState, Vec
             reduce_remove_result(state, account_id, result)
         }
         EffectResult::Settings { result } => reduce_settings_result(state, result),
+        EffectResult::Add { result } => reduce_add_result(state, result),
     }
 }
 
@@ -586,6 +587,66 @@ fn reduce_settings_result(
         }
         Err(err) => {
             settings.error = Some(render_error_message(&err));
+        }
+    }
+    (state, Vec::new())
+}
+
+/// Handle the outcome of an [`Effect::Add`].
+///
+/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
+/// *"manual and URI duplicate collisions call
+/// `Vault::find_duplicate(&validated)` before mutation. A collision
+/// initially rejects with the existing account in the modal and
+/// offers an 'add anyway' confirmation that inserts the pending
+/// validated account on the duplicate-allowed path."* The
+/// duplicate-rejection path stashes the pending validated account in
+/// [`AddModal::pending_duplicate_add`] so the follow-up confirmation
+/// can insert it without re-running validation; the inline error
+/// names the existing account via [`format_duplicate_account_message`].
+///
+/// Validation and save failures (the other two [`AddFailure`]
+/// variants) surface inline through [`render_error_message`] and
+/// leave the modal open per the plan's "Effect errors" >
+/// "Add / remove / rename / settings saves" rule.
+///
+/// The success path closes the modal and publishes a
+/// [`StatusLine::Confirmation`]; that wiring lands alongside the
+/// success-side slice. For now the `Ok` arm is left as a TODO so
+/// subsequent slices can extend it without rewriting the match —
+/// the executor does not yet produce `Ok` results.
+///
+/// Deliveries that arrive after the user navigated away
+/// (non-`Unlocked` state) or after the Add modal closed are
+/// discarded so the carried [`paladin_core::ValidatedAccount`] (with
+/// its `SecretString`) drops without mutating state.
+fn reduce_add_result(
+    mut state: AppState,
+    result: Result<crate::app::event::AddSuccess, AddFailure>,
+) -> (AppState, Vec<Effect>) {
+    let AppState::Unlocked { ref mut modal, .. } = state else {
+        return (state, Vec::new());
+    };
+
+    let Some(Modal::Add(add)) = modal.as_mut() else {
+        return (state, Vec::new());
+    };
+
+    match result {
+        Ok(_success) => {
+            // Success path (status-line confirmation + modal close)
+            // lands with the next slice; for now consume the result
+            // without mutating state so the carried summary drops.
+        }
+        Err(AddFailure::Duplicate { existing, pending }) => {
+            add.error = Some(format_duplicate_account_message(&existing));
+            add.pending_duplicate_add = Some(Box::new(PendingDuplicateAdd {
+                existing,
+                validated: pending,
+            }));
+        }
+        Err(AddFailure::Validation(err) | AddFailure::Save(err)) => {
+            add.error = Some(render_error_message(&err));
         }
     }
     (state, Vec::new())

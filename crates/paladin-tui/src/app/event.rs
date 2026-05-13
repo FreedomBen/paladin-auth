@@ -12,8 +12,8 @@ use secrecy::SecretString;
 use zeroize::Zeroizing;
 
 use paladin_core::{
-    AccountId, AccountKindInput, Algorithm, ClipboardClearToken, Code, PaladinError, SettingPatch,
-    Store, Vault,
+    AccountId, AccountKindInput, AccountSummary, Algorithm, ClipboardClearToken, Code,
+    PaladinError, SettingPatch, Store, ValidatedAccount, ValidationWarning, Vault,
 };
 
 /// Events delivered to the reducer over the `mpsc<AppEvent>` channel.
@@ -327,6 +327,102 @@ pub enum EffectResult {
         /// `save_durability_unconfirmed`.
         result: Result<(), PaladinError>,
     },
+
+    /// Outcome of an [`Effect::Add`] attempt.
+    ///
+    /// The executor first runs
+    /// [`paladin_core::validate_manual`] over the carried Manual-mode
+    /// form fields; on validation failure the reducer surfaces the
+    /// error inline in [`crate::app::state::AddModal::error`] and
+    /// leaves the modal open. On a passing validation the executor
+    /// calls [`paladin_core::Vault::find_duplicate`]; a collision
+    /// returns the existing account's [`AccountSummary`] alongside
+    /// the validated pending account so the reducer can render the
+    /// `duplicate_account` rejection and stash the pending state for
+    /// a follow-up "add anyway" confirmation — per
+    /// `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
+    /// *"manual and URI duplicate collisions call
+    /// `Vault::find_duplicate(&validated)` before mutation. A
+    /// collision initially rejects with the existing account in the
+    /// modal and offers an 'add anyway' confirmation."* When no
+    /// duplicate is found the executor commits the new account
+    /// through `Vault::mutate_and_save`; save errors map to
+    /// [`AddFailure::Save`] and the modal stays open with the inline
+    /// error per the plan's "Effect errors" >
+    /// "Add / remove / rename / settings saves" rule.
+    ///
+    /// Results delivered while not on `Unlocked`, while a different
+    /// modal is open, or after the Add modal closed are discarded so
+    /// the carried [`ValidatedAccount`] / [`SecretString`] drop
+    /// without mutating state.
+    Add {
+        /// The validation / duplicate-check / save outcome. `Ok` carries
+        /// the inserted account's projection plus any non-fatal
+        /// `ValidationWarning`s for the status-line confirmation; `Err`
+        /// covers validation failure, duplicate collision, and save
+        /// failure.
+        result: Result<AddSuccess, AddFailure>,
+    },
+}
+
+/// Successful outcome of an [`Effect::Add`] attempt.
+///
+/// Carries the freshly inserted account's public projection plus any
+/// non-fatal `ValidationWarning`s collected by
+/// [`paladin_core::validate_manual`]. The reducer renders the
+/// status-line confirmation from `summary` and includes any
+/// `warnings` text per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per
+/// §6)" > Add: *"Validation warnings are rendered with
+/// `paladin_core::format_validation_warning()` and do not block
+/// creation: manual / URI additions include them in the status-line
+/// confirmation."*
+#[derive(Debug)]
+pub struct AddSuccess {
+    /// Non-secret projection of the inserted account.
+    pub summary: AccountSummary,
+    /// Non-fatal warnings captured at validation time (e.g.
+    /// [`ValidationWarning::ShortSecret`]).
+    pub warnings: Vec<ValidationWarning>,
+}
+
+/// Failure outcome of an [`Effect::Add`] attempt.
+///
+/// Distinguishes the three rejection paths the reducer must surface
+/// differently:
+///
+/// - [`AddFailure::Validation`] — `validate_manual` returned an error
+///   (label / issuer length, Base32 decode, digits / period bounds,
+///   icon-hint slug). The reducer surfaces the rendered error inline
+///   and leaves the modal open so the user can correct the field.
+/// - [`AddFailure::Duplicate`] — validation passed but
+///   `Vault::find_duplicate` matched an existing
+///   `(secret, issuer, label)` triple. The reducer stashes the
+///   `pending` validated account in
+///   [`crate::app::state::AddModal::pending_duplicate_add`] and
+///   surfaces a `duplicate_account` rejection naming the existing
+///   account so a follow-up "add anyway" confirmation can insert the
+///   pending account on the duplicate-allowed path.
+/// - [`AddFailure::Save`] — `Vault::mutate_and_save` returned an
+///   error (`save_not_committed` rolled back inside core,
+///   `save_durability_unconfirmed` left committed in memory, or any
+///   other `io_error`). Same inline-error surface as validation.
+#[derive(Debug)]
+pub enum AddFailure {
+    /// `validate_manual` rejected the carried form fields.
+    Validation(PaladinError),
+    /// `Vault::find_duplicate` matched an existing account.
+    Duplicate {
+        /// Public projection of the colliding account already in the
+        /// vault, used for the rejection message.
+        existing: AccountSummary,
+        /// Validated pending account stashed so a follow-up
+        /// "add anyway" confirmation can insert it on the
+        /// duplicate-allowed path. Carries the secret bytes which
+        /// zeroize on drop if the user cancels.
+        pending: Box<ValidatedAccount>,
+    },
+    /// `Vault::mutate_and_save` returned an error.
+    Save(PaladinError),
 }
 
 /// Side effects produced by the reducer.

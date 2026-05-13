@@ -29,7 +29,7 @@ use paladin_core::{
 };
 
 use paladin_tui::app::effect::{execute, EffectOutcome};
-use paladin_tui::app::event::{AppEvent, Effect, EffectResult};
+use paladin_tui::app::event::{AddFailure, AppEvent, Effect, EffectResult};
 use paladin_tui::app::state::{AppState, Focus};
 
 /// Light Argon2 params for fast tests; mirrors the CLI test fixtures.
@@ -1047,4 +1047,111 @@ fn execute_apply_settings_with_dropped_receiver_does_not_panic() {
         }
         other => panic!("expected Unlocked, got {other:?}"),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Effect::Add — duplicate detection (validate_manual + find_duplicate)
+// ---------------------------------------------------------------------------
+
+/// `Effect::Add` whose carried Manual-mode fields produce a
+/// `ValidatedAccount` that exactly matches an existing
+/// `(secret, issuer, label)` triple in the vault must:
+///
+/// 1. Build the `AccountInput` and call `paladin_core::validate_manual`.
+/// 2. Call `Vault::find_duplicate(&validated)`.
+/// 3. Emit `EffectResult::Add { Err(AddFailure::Duplicate { existing, pending }) }`
+///    carrying the existing account's `AccountSummary` and the
+///    validated pending account so the reducer can stash it for the
+///    follow-up "add anyway" confirmation.
+/// 4. Leave the on-disk vault unchanged (the duplicate gate runs
+///    before `Vault::mutate_and_save`).
+///
+/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
+/// *"manual and URI duplicate collisions call
+/// `Vault::find_duplicate(&validated)` before mutation. A collision
+/// initially rejects with the existing account in the modal and
+/// offers an 'add anyway' confirmation."*
+#[test]
+fn execute_add_with_duplicate_emits_duplicate_failure_and_does_not_mutate_vault() {
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (mut state, existing_id) = unlocked_with_one_totp(&path, "github");
+
+    // Capture the pre-attempt account count and the existing account's
+    // summary so the assertions can verify the executor neither
+    // mutated the vault nor invented a fresh summary.
+    let (initial_count, existing_summary) = match &state {
+        AppState::Unlocked { vault, .. } => (
+            vault.iter().count(),
+            vault
+                .iter()
+                .find(|a| a.id() == existing_id)
+                .expect("existing account in vault")
+                .summary(),
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    };
+
+    // Mirror `unlocked_with_one_totp`'s seed: same secret, same label,
+    // no issuer, TOTP/SHA1/6 digits. `validate_manual` will produce
+    // an account whose (secret, issuer, label) triple matches the
+    // stored one verbatim.
+    let (tx, rx) = mpsc::channel::<AppEvent>();
+    let effect = Effect::Add {
+        path: path.clone(),
+        label: "github".to_string(),
+        issuer: String::new(),
+        secret: SecretString::from("JBSWY3DPEHPK3PXP".to_string()),
+        algorithm: Algorithm::Sha1,
+        digits: 6,
+        kind: AccountKindInput::Totp,
+        period_secs: 30,
+        counter: 0,
+        icon_hint_text: String::new(),
+    };
+
+    let outcome = execute(effect, &mut state, &tx);
+    assert_eq!(outcome, EffectOutcome::Continue);
+
+    let evt = rx.try_recv().expect("an AppEvent should be sent");
+    match evt {
+        AppEvent::EffectResult(EffectResult::Add {
+            result:
+                Err(AddFailure::Duplicate {
+                    existing,
+                    pending: _,
+                }),
+        }) => {
+            assert_eq!(
+                existing, existing_summary,
+                "executor must carry the existing account's AccountSummary"
+            );
+        }
+        other => panic!("expected EffectResult::Add Duplicate, got {other:?}"),
+    }
+    assert!(
+        rx.try_recv().is_err(),
+        "executor must emit exactly one AppEvent per Effect::Add"
+    );
+
+    // The live vault still carries exactly the pre-attempt accounts.
+    match &state {
+        AppState::Unlocked { vault, .. } => {
+            assert_eq!(
+                vault.iter().count(),
+                initial_count,
+                "duplicate detection must run before any mutation"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+
+    // Re-open the on-disk primary and assert no commit happened.
+    let (reopened, _store) =
+        Store::open(&path, VaultLock::Plaintext).expect("reopen plaintext vault");
+    assert_eq!(
+        reopened.iter().count(),
+        initial_count,
+        "duplicate detection must not commit to the on-disk primary"
+    );
 }

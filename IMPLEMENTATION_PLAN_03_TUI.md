@@ -783,9 +783,19 @@ end-to-end.
 
 ### Add modal (`tests/reducer_tests.rs`)
 
-- [ ] Manual duplicate collision is detected through
+- [x] Manual duplicate collision is detected through
   `Vault::find_duplicate(&validated)` and rejects with the existing
   account.
+  *(Executor wires `validate_manual` + `Vault::find_duplicate` and
+  emits `EffectResult::Add { Err(AddFailure::Duplicate { existing,
+  pending }) }`; reducer stashes the pending `ValidatedAccount` in
+  `AddModal::pending_duplicate_add` and surfaces the inline
+  `duplicate_account` message via `format_duplicate_account_message`.
+  Asserted by
+  `execute_add_with_duplicate_emits_duplicate_failure_and_does_not_mutate_vault`
+  in `tests/effect_tests.rs` and
+  `effect_result_add_duplicate_stashes_pending_and_sets_inline_error`
+  + discard-path siblings in `tests/reducer_tests.rs`.)*
 - [ ] URI duplicate collision is detected through
   `Vault::find_duplicate(&validated)` and rejects with the existing
   account.

@@ -11,9 +11,9 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use paladin_core::{
-    format_unsafe_permissions, AccountId, AccountKindInput, Algorithm, ClipboardClearToken,
-    IdlePolicy, PaladinError, Store, Vault, VaultLock, VaultStatus, DIGITS_DEFAULT,
-    TOTP_PERIOD_DEFAULT,
+    format_unsafe_permissions, AccountId, AccountKindInput, AccountSummary, Algorithm,
+    ClipboardClearToken, IdlePolicy, PaladinError, Store, ValidatedAccount, Vault, VaultLock,
+    VaultStatus, DIGITS_DEFAULT, TOTP_PERIOD_DEFAULT,
 };
 use secrecy::SecretString;
 use zeroize::Zeroizing;
@@ -643,6 +643,51 @@ pub struct AddModal {
     /// they are re-trying; a successful submit transitions through
     /// the Add effect slice (which lands later).
     pub error: Option<String>,
+    /// Pending duplicate-add state held between the initial
+    /// `duplicate_account` rejection and the user's follow-up "add
+    /// anyway" confirmation.
+    ///
+    /// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
+    /// *"manual and URI duplicate collisions call
+    /// `Vault::find_duplicate(&validated)` before mutation. A
+    /// collision initially rejects with the existing account in the
+    /// modal and offers an 'add anyway' confirmation that inserts
+    /// the pending validated account on the duplicate-allowed
+    /// path."* The modal keeps the already-validated account in
+    /// secret-bearing pending state so the follow-up confirmation
+    /// can insert it without re-running validation; per the same
+    /// plan's secret-handling rule the pending state is zeroized on
+    /// add-anyway, cancel, modal close, and auto-lock.
+    ///
+    /// Boxed so the common no-pending-state case keeps `Modal::Add`
+    /// small (the `AccountSummary` + `ValidatedAccount` payload runs
+    /// past `clippy::large_enum_variant`'s threshold when held
+    /// inline).
+    pub pending_duplicate_add: Option<Box<PendingDuplicateAdd>>,
+}
+
+/// Pending duplicate-add state stashed on [`AddModal`] between the
+/// initial `duplicate_account` rejection and the user's follow-up
+/// "add anyway" confirmation.
+///
+/// Carries the existing account's [`AccountSummary`] for the
+/// rejection rendering plus the validated pending account that will
+/// be inserted on the duplicate-allowed path. The pending account
+/// holds the validated `Account` (with its `SecretString`) so the
+/// follow-up confirmation can insert without re-running validation;
+/// dropping this struct zeroizes the secret in place per the
+/// `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)"
+/// secret-handling rule.
+#[derive(Debug)]
+pub struct PendingDuplicateAdd {
+    /// Existing account that collides with the validated candidate
+    /// on the `(secret, issuer, label)` triple. Surfaced verbatim in
+    /// the rejection message.
+    pub existing: AccountSummary,
+    /// Pending validated account; inserted via `Vault::add` on the
+    /// follow-up "add anyway" confirmation. Boxed so the common
+    /// no-pending-state case stays a single null pointer.
+    pub validated: Box<ValidatedAccount>,
 }
 
 impl AddModal {
@@ -669,10 +714,9 @@ impl AddModal {
         match self.mode {
             AddMode::Manual => self.manual_secret.clear(),
             AddMode::Uri => self.uri_text.clear(),
-            // Pending duplicate/add-anyway state lands in a
-            // subsequent slice; clearing on leave will hook in here.
             AddMode::Qr => {}
         }
+        self.pending_duplicate_add = None;
         self.mode = target;
     }
 }
@@ -693,6 +737,7 @@ impl Default for AddModal {
             uri_text: PassphraseBuffer::new(),
             manual_focus: AddManualFocus::default(),
             error: None,
+            pending_duplicate_add: None,
         }
     }
 }
@@ -1067,6 +1112,38 @@ pub fn compute_idle_deadline(now: Instant, vault: &Vault) -> Option<Instant> {
 #[must_use]
 pub fn render_error_message(error: &PaladinError) -> String {
     format_unsafe_permissions(error).unwrap_or_else(|| error.to_string())
+}
+
+/// Render the `"issuer:label"` (or bare `"label"`) display string
+/// for an [`AccountSummary`]. Mirrors the CLI's `display_label` so
+/// duplicate-account messages and other surfaces use identical
+/// wording across front ends.
+#[must_use]
+pub fn format_account_display_label(summary: &AccountSummary) -> String {
+    match &summary.issuer {
+        Some(issuer) => format!("{}:{}", issuer, summary.label),
+        None => summary.label.clone(),
+    }
+}
+
+/// Render the inline `duplicate_account` rejection message shown in
+/// [`AddModal::error`] when [`paladin_core::Vault::find_duplicate`]
+/// matches an existing account on the
+/// `(secret, issuer, label)` triple.
+///
+/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add: *"A
+/// collision initially rejects with the existing account in the
+/// modal and offers an 'add anyway' confirmation."* The wording
+/// mirrors the CLI's `duplicate_account` rendering and names the
+/// existing account so the user can confirm it really is the
+/// duplicate they expect; the "add anyway" hint matches the TUI's
+/// modal-local confirm gesture rather than the CLI's flag.
+#[must_use]
+pub fn format_duplicate_account_message(existing: &AccountSummary) -> String {
+    format!(
+        "account already exists with the same (secret, issuer, label): {} (press Enter to add anyway)",
+        format_account_display_label(existing),
+    )
 }
 
 /// Build the TUI's initial state from the optional `--vault`

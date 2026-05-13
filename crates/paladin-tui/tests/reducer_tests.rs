@@ -23,10 +23,11 @@ use paladin_core::{
     Argon2Params, EncryptionOptions, IconHintInput, IdlePolicy, PaladinError, PermissionSubject,
     SettingPatch, Store, Vault, VaultInit, VaultLock, VaultStatus,
 };
-use paladin_tui::app::event::{AppEvent, Effect, EffectResult};
+use paladin_tui::app::event::{AddFailure, AddSuccess, AppEvent, Effect, EffectResult};
 use paladin_tui::app::reducer::reduce;
 use paladin_tui::app::state::{
-    compute_idle_deadline, decide_state_from_inspect, decide_state_from_open, render_error_message,
+    compute_idle_deadline, decide_state_from_inspect, decide_state_from_open,
+    format_account_display_label, format_duplicate_account_message, render_error_message,
     AddManualFocus, AddModal, AddMode, AppState, ChordLeader, Focus, HotpReveal, Modal,
     RemoveModal, RenameModal, SettingsFocus, SettingsModal, StatusLine, NO_ACCOUNT_SELECTED,
 };
@@ -13856,6 +13857,256 @@ fn emit_copy_code_effect_for_hotp_preserves_status_line_and_reveal() {
                 "status_line must survive CopyCode emission"
             );
         }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Add modal — EffectResult::Add duplicate detection
+// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Add modal" > Manual
+//  duplicate collision is detected through
+//  `Vault::find_duplicate(&validated)` and rejects with the existing
+//  account.)
+//
+// Slice covered: the reducer's response to
+// `EffectResult::Add { Err(AddFailure::Duplicate { .. }) }`. The
+// executor builds the `ValidatedAccount` via `validate_manual` and
+// invokes `Vault::find_duplicate(&validated)`; on a collision the
+// reducer stashes the pending validated account so a follow-up "add
+// anyway" confirmation can insert it, surfaces an inline error
+// naming the existing account, keeps the modal open, and does not
+// mutate the vault. Discard rules mirror Rename / Remove / Settings:
+// non-`Unlocked` state, no Add modal open, or a closed Add modal
+// drop the result without state mutation.
+// ---------------------------------------------------------------------------
+
+fn add_result(result: Result<AddSuccess, AddFailure>) -> AppEvent {
+    AppEvent::EffectResult(EffectResult::Add { result })
+}
+
+/// Build a `ValidatedAccount` whose `(secret, issuer, label)` triple
+/// matches the existing TOTP added by [`add_totp_account`], so the
+/// vault's `find_duplicate` will match.
+fn make_duplicate_validated(label: &str) -> paladin_core::ValidatedAccount {
+    let input = AccountInput {
+        label: label.to_string(),
+        issuer: None,
+        secret: SecretString::from("JBSWY3DPEHPK3PXP".to_string()),
+        algorithm: Algorithm::Sha1,
+        digits: 6,
+        kind: AccountKindInput::Totp,
+        period_secs: None,
+        counter: None,
+        icon_hint: IconHintInput::Default,
+    };
+    validate_manual(input, SystemTime::now()).expect("validation should succeed on golden input")
+}
+
+#[test]
+fn effect_result_add_duplicate_stashes_pending_and_sets_inline_error() {
+    // Vault already holds one TOTP labelled "github" with the
+    // canonical JBSWY... secret and no issuer; the executor has just
+    // run `validate_manual` over the user's typed fields and
+    // `Vault::find_duplicate(&validated)` matched the existing entry.
+    // The result delivers the existing AccountSummary and the
+    // validated pending account so the reducer can render the
+    // duplicate_account rejection and stash pending state for a
+    // follow-up "add anyway" confirmation.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let existing_id = add_totp_account(&mut vault, &store, "github");
+    let existing_summary = vault
+        .iter()
+        .find(|a| a.id() == existing_id)
+        .expect("existing account in vault")
+        .summary();
+    let initial_count = vault.iter().count();
+
+    let unlocked = AppState::Unlocked {
+        path: path.clone(),
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Add(AddModal::default())),
+        selected: Some(existing_id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let pending = make_duplicate_validated("github");
+    let (state, effects) = reduce(
+        unlocked,
+        add_result(Err(AddFailure::Duplicate {
+            existing: existing_summary.clone(),
+            pending: Box::new(pending),
+        })),
+    );
+    assert!(
+        effects.is_empty(),
+        "Duplicate rejection must not emit further effects"
+    );
+    match state {
+        AppState::Unlocked {
+            modal,
+            status_line,
+            vault,
+            ..
+        } => {
+            let Some(Modal::Add(add)) = modal else {
+                panic!("Add modal must remain open after duplicate rejection");
+            };
+            let error = add
+                .error
+                .as_ref()
+                .expect("inline error must be set on duplicate rejection");
+            assert!(
+                error.contains(&format_account_display_label(&existing_summary)),
+                "inline error must name the existing account; got {error:?}"
+            );
+            assert_eq!(
+                error,
+                &format_duplicate_account_message(&existing_summary),
+                "inline error must match the shared duplicate_account renderer"
+            );
+            let pending_state = add
+                .pending_duplicate_add
+                .as_ref()
+                .expect("pending duplicate-add state must be stashed for add-anyway");
+            assert_eq!(
+                pending_state.existing, existing_summary,
+                "pending state must carry the existing AccountSummary"
+            );
+            assert_eq!(
+                pending_state.validated.account.label(),
+                "github",
+                "pending state must carry the validated account label"
+            );
+            assert!(
+                status_line.is_none(),
+                "duplicate rejection must not publish a status-line confirmation"
+            );
+            assert_eq!(
+                vault.iter().count(),
+                initial_count,
+                "duplicate rejection must not mutate the vault"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_add_duplicate_on_locked_state_is_discarded() {
+    // Late `EffectResult::Add` deliveries that arrive after auto-lock
+    // or quit-in-flight drop the carried `ValidatedAccount` (which
+    // holds the secret) and never touch the `AppState::Locked`
+    // payload.
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    {
+        let (vault, store) = Store::create(&path, VaultInit::Plaintext).expect("create vault");
+        vault.save(&store).expect("commit empty vault");
+    }
+    let locked = AppState::Locked {
+        path: path.clone(),
+        pending_clipboard_clear: None,
+    };
+    let existing = make_existing_summary_for_test("github");
+    let pending = make_duplicate_validated("github");
+    let (state, effects) = reduce(
+        locked,
+        add_result(Err(AddFailure::Duplicate {
+            existing,
+            pending: Box::new(pending),
+        })),
+    );
+    assert!(effects.is_empty());
+    match state {
+        AppState::Locked {
+            path: locked_path, ..
+        } => assert_eq!(locked_path, path),
+        other => panic!("expected Locked, got {other:?}"),
+    }
+}
+
+/// Test-only helper: build an `AccountSummary` resembling the one
+/// `add_totp_account("github")` produces, without needing a Vault.
+/// Used by discard-path tests where we never look the summary up.
+fn make_existing_summary_for_test(label: &str) -> paladin_core::AccountSummary {
+    paladin_core::AccountSummary {
+        id: AccountId::new(),
+        issuer: None,
+        label: label.to_string(),
+        kind: paladin_core::AccountKindSummary::Totp,
+        algorithm: Algorithm::Sha1,
+        digits: 6,
+        period: Some(30),
+        counter: None,
+        icon_hint: None,
+        created_at: 0,
+        updated_at: 0,
+    }
+}
+
+#[test]
+fn effect_result_add_duplicate_on_non_add_modal_is_discarded() {
+    // The reducer keys the dispatch on `Modal::Add`; deliveries that
+    // arrive after the user navigated to a different modal drop the
+    // pending state without mutating anything.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let id = add_totp_account(&mut vault, &store, "github");
+    let existing_summary = vault
+        .iter()
+        .find(|a| a.id() == id)
+        .expect("existing account")
+        .summary();
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Rename(RenameModal {
+            account_id: id,
+            draft: "renamed".to_string(),
+            error: None,
+        })),
+        selected: Some(id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let pending = make_duplicate_validated("github");
+    let (state, effects) = reduce(
+        unlocked,
+        add_result(Err(AddFailure::Duplicate {
+            existing: existing_summary,
+            pending: Box::new(pending),
+        })),
+    );
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked { modal, .. } => match modal {
+            Some(Modal::Rename(rename)) => {
+                assert!(
+                    rename.error.is_none(),
+                    "Add result must not leak error into a non-Add modal"
+                );
+            }
+            other => panic!("expected Rename modal to survive, got {other:?}"),
+        },
         other => panic!("expected Unlocked, got {other:?}"),
     }
 }
