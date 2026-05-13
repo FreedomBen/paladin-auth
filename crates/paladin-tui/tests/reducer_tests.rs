@@ -21,8 +21,8 @@ use secrecy::{ExposeSecret, SecretString};
 use paladin_core::{
     format_validation_warning, hotp_reveal_deadline, validate_manual, AccountId, AccountInput,
     AccountKindInput, Algorithm, Argon2Params, EncryptionOptions, IconHintInput, IdlePolicy,
-    ImportReport, ImportWarning, PaladinError, PermissionSubject, SettingPatch, Store,
-    ValidationWarning, Vault, VaultInit, VaultLock, VaultStatus,
+    ImportFormat, ImportReport, ImportWarning, PaladinError, PermissionSubject, SettingPatch,
+    Store, ValidationWarning, Vault, VaultInit, VaultLock, VaultStatus,
 };
 use paladin_tui::app::event::{
     AddFailure, AddSuccess, AppEvent, Effect, EffectResult, QrImportFailure, QrImportSuccess,
@@ -32,8 +32,8 @@ use paladin_tui::app::state::{
     compute_idle_deadline, decide_state_from_inspect, decide_state_from_open,
     format_account_display_label, format_duplicate_account_message, format_qr_import_failure,
     render_error_message, AddManualFocus, AddModal, AddMode, AppState, ChordLeader, Focus,
-    HotpReveal, ImportModal, Modal, PendingDuplicateAdd, RemoveModal, RenameModal, SettingsFocus,
-    SettingsModal, StatusLine, NO_ACCOUNT_SELECTED,
+    HotpReveal, ImportFormatSelector, ImportModal, Modal, PendingDuplicateAdd, RemoveModal,
+    RenameModal, SettingsFocus, SettingsModal, StatusLine, NO_ACCOUNT_SELECTED,
 };
 use paladin_tui::cli::{should_disable_color, GlobalArgs};
 use paladin_tui::prompt::PassphraseBuffer;
@@ -16477,5 +16477,124 @@ fn ctrl_modified_char_in_import_modal_does_not_append_to_path_text() {
             );
         }
         other => panic!("expected Import modal open, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Import modal — explicit format overrides route through
+// `paladin_core::import::from_file` with the matching forced
+// `ImportFormat`.
+//
+// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Import modal" > "Explicit
+//  format overrides (`otpauth` / `aegis` / `paladin` / `qr`) route
+//  through `paladin_core::import::from_file`.")
+//
+// Reducer slice: each `ImportFormatSelector` variant translates to the
+// matching `Option<ImportFormat>` payload on `Effect::Import` via
+// `ImportFormatSelector::forced()`. The executor's forced-format
+// dispatch is covered in `effect_tests.rs` (`execute_import_with_forced_*`).
+// ---------------------------------------------------------------------------
+
+/// Drive the Import modal Enter handler with `selector` pre-set and
+/// return the carried `format` on the emitted `Effect::Import`.
+fn import_format_after_enter_with_selector(selector: ImportFormatSelector) -> Option<ImportFormat> {
+    let tmp = secure_tempdir();
+    let unlocked = fresh_plaintext_unlocked(&tmp);
+    let (mut state, _) = reduce(unlocked, key(KeyCode::Char('i')));
+    if let AppState::Unlocked {
+        modal: Some(Modal::Import(import)),
+        ..
+    } = &mut state
+    {
+        import.format = selector;
+    } else {
+        panic!("expected Import modal open after pressing `i`");
+    }
+    let (state, effects) = reduce(state, key(KeyCode::Enter));
+    assert_eq!(
+        effects.len(),
+        1,
+        "Enter on Modal::Import must emit exactly one Effect::Import; got {effects:?}"
+    );
+    let format = match &effects[0] {
+        Effect::Import { format, .. } => *format,
+        other => panic!("expected Effect::Import, got {other:?}"),
+    };
+    match &state {
+        AppState::Unlocked {
+            modal: Some(Modal::Import(_)),
+            ..
+        } => {}
+        other => panic!("Import modal must stay open pending the effect outcome, got {other:?}"),
+    }
+    format
+}
+
+#[test]
+fn enter_in_import_modal_with_otpauth_selector_emits_import_effect_with_some_otpauth() {
+    assert_eq!(
+        import_format_after_enter_with_selector(ImportFormatSelector::Otpauth),
+        Some(ImportFormat::Otpauth),
+        "ImportFormatSelector::Otpauth must force ImportFormat::Otpauth so the core facade dispatches directly to the otpauth importer"
+    );
+}
+
+#[test]
+fn enter_in_import_modal_with_aegis_selector_emits_import_effect_with_some_aegis() {
+    assert_eq!(
+        import_format_after_enter_with_selector(ImportFormatSelector::Aegis),
+        Some(ImportFormat::Aegis),
+        "ImportFormatSelector::Aegis must force ImportFormat::Aegis so the core facade dispatches directly to the aegis importer"
+    );
+}
+
+#[test]
+fn enter_in_import_modal_with_paladin_selector_emits_import_effect_with_some_paladin() {
+    assert_eq!(
+        import_format_after_enter_with_selector(ImportFormatSelector::Paladin),
+        Some(ImportFormat::Paladin),
+        "ImportFormatSelector::Paladin must force ImportFormat::Paladin so the core facade routes through `dispatch_paladin_bytes` (passphrase prompt lives in a later precheck slice)"
+    );
+}
+
+#[test]
+fn enter_in_import_modal_with_qr_selector_emits_import_effect_with_some_qr_image() {
+    assert_eq!(
+        import_format_after_enter_with_selector(ImportFormatSelector::Qr),
+        Some(ImportFormat::QrImage),
+        "ImportFormatSelector::Qr must force ImportFormat::QrImage so the core facade dispatches to the QR-image decoder over the source path"
+    );
+}
+
+#[test]
+fn enter_in_import_modal_with_paladin_selector_still_carries_none_passphrase_at_submit() {
+    // The pre-prompt precheck slice lands later — until then submit
+    // always carries `paladin_passphrase: None` even on the forced
+    // `ImportFormatSelector::Paladin` path. The core facade surfaces a
+    // `missing_passphrase` `invalid_state` error which the executor
+    // forwards through `EffectResult::Import` for inline rendering.
+    let tmp = secure_tempdir();
+    let unlocked = fresh_plaintext_unlocked(&tmp);
+    let (mut state, _) = reduce(unlocked, key(KeyCode::Char('i')));
+    if let AppState::Unlocked {
+        modal: Some(Modal::Import(import)),
+        ..
+    } = &mut state
+    {
+        import.format = ImportFormatSelector::Paladin;
+    } else {
+        panic!("expected Import modal open after pressing `i`");
+    }
+    let (_state, effects) = reduce(state, key(KeyCode::Enter));
+    match &effects[0] {
+        Effect::Import {
+            paladin_passphrase, ..
+        } => {
+            assert!(
+                paladin_passphrase.is_none(),
+                "explicit Paladin override at this slice still carries `paladin_passphrase: None` — the prompt lives in the precheck slice"
+            );
+        }
+        other => panic!("expected Effect::Import, got {other:?}"),
     }
 }

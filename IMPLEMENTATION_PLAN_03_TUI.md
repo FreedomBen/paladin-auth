@@ -947,8 +947,31 @@ end-to-end.
   `execute_import_with_mismatched_path_is_silently_dropped` and the
   io_error sibling
   `execute_import_with_missing_source_file_emits_io_error_failure_and_leaves_vault_untouched`.)*
-- [ ] Explicit format overrides (`otpauth` / `aegis` / `paladin` /
+- [x] Explicit format overrides (`otpauth` / `aegis` / `paladin` /
   `qr`) route through `paladin_core::import::from_file`.
+  *(Reducer side:
+  `enter_in_import_modal_with_otpauth_selector_emits_import_effect_with_some_otpauth`,
+  `enter_in_import_modal_with_aegis_selector_emits_import_effect_with_some_aegis`,
+  `enter_in_import_modal_with_paladin_selector_emits_import_effect_with_some_paladin`,
+  and
+  `enter_in_import_modal_with_qr_selector_emits_import_effect_with_some_qr_image`
+  in `tests/reducer_tests.rs` assert each `ImportFormatSelector` variant
+  translates to the matching `Some(ImportFormat)` payload on
+  `Effect::Import` via `ImportFormatSelector::forced()`. A companion
+  test
+  `enter_in_import_modal_with_paladin_selector_still_carries_none_passphrase_at_submit`
+  documents that the forced-Paladin override carries
+  `paladin_passphrase: None` at this slice — the precheck / prompt
+  slice lives in the next checklist item. Executor side:
+  `execute_import_with_forced_aegis_format_routes_through_import_from_file_for_aegis_payload_and_persists_via_mutate_and_save`
+  in `tests/effect_tests.rs` proves forced `Some(ImportFormat::Aegis)`
+  over Aegis-shaped JSON dispatches to `aegis_plaintext` inside
+  `paladin_core::import::from_file` and commits via
+  `Vault::mutate_and_save`;
+  `execute_import_with_forced_format_mismatch_returns_unsupported_import_format_without_mutation`
+  proves a forced/detected mismatch surfaces
+  `PaladinError::UnsupportedImportFormat { format: "aegis" }` inline
+  with no live-vault or on-disk mutation.)*
 - [ ] Pre-prompt Paladin decision routes through
   `paladin_core::classify_paladin_import_precheck`, prompting only on
   `PromptForPassphrase`.

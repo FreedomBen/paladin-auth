@@ -24,8 +24,8 @@ use tempfile::TempDir;
 
 use paladin_core::{
     validate_manual, AccountId, AccountInput, AccountKindInput, Algorithm, Argon2Params,
-    EncryptionOptions, IconHintInput, ImportConflict, PaladinError, SettingPatch, Store, Vault,
-    VaultInit, VaultLock,
+    EncryptionOptions, IconHintInput, ImportConflict, ImportFormat, PaladinError, SettingPatch,
+    Store, Vault, VaultInit, VaultLock,
 };
 
 use paladin_tui::app::effect::{execute, EffectOutcome};
@@ -1896,4 +1896,201 @@ fn execute_import_with_mismatched_path_is_silently_dropped() {
         }
         other => panic!("expected Unlocked, got {other:?}"),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Explicit-format-override executor coverage —
+// IMPLEMENTATION_PLAN_03_TUI.md > "Import modal" >
+// "Explicit format overrides (`otpauth` / `aegis` / `paladin` / `qr`)
+//  route through `paladin_core::import::from_file`."
+//
+// The reducer-side translation from `ImportFormatSelector` → forced
+// `Option<ImportFormat>` is locked in by `enter_in_import_modal_with_*`
+// in `reducer_tests.rs`. These executor tests prove the forced
+// `Some(format)` payload dispatches to the right importer inside
+// `paladin_core::import::from_file` and that a forced-format mismatch
+// surfaces `unsupported_import_format` inline without mutating the
+// vault.
+// ---------------------------------------------------------------------------
+
+/// Minimal valid Aegis plaintext export with a single TOTP entry.
+fn aegis_plaintext_single_totp() -> String {
+    r#"{"version":1,"header":{"slots":null,"params":null},"db":{"version":2,"entries":[{"type":"totp","name":"alice","issuer":"Acme","info":{"secret":"JBSWY3DPEHPK3PXP"}}]}}"#
+        .to_string()
+}
+
+#[test]
+fn execute_import_with_forced_aegis_format_routes_through_import_from_file_for_aegis_payload_and_persists_via_mutate_and_save(
+) {
+    // Forced `Some(ImportFormat::Aegis)` over Aegis-shaped JSON must
+    // dispatch through `from_file` → `aegis_plaintext` (not the
+    // otpauth path), parse the entry, and commit via
+    // `Vault::mutate_and_save`.
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+
+    let (vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let initial_count = vault.iter().count();
+    let mut state = AppState::Unlocked {
+        path: path.clone(),
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+
+    let source_path = tmp.path().join("aegis.json");
+    std::fs::write(&source_path, aegis_plaintext_single_totp()).expect("write aegis source file");
+
+    let (tx, rx) = mpsc::channel::<AppEvent>();
+    let effect = Effect::Import {
+        path: path.clone(),
+        source_path: source_path.clone(),
+        format: Some(ImportFormat::Aegis),
+        conflict: ImportConflict::Skip,
+        paladin_passphrase: None,
+    };
+    let outcome = execute(effect, &mut state, &tx);
+    assert_eq!(outcome, EffectOutcome::Continue);
+
+    let evt = rx.try_recv().expect("an AppEvent should be sent");
+    let new_id = match evt {
+        AppEvent::EffectResult(EffectResult::Import {
+            result: Ok(ImportSuccess { report }),
+        }) => {
+            assert_eq!(
+                report.imported, 1,
+                "single-entry Aegis payload must produce exactly one imported account"
+            );
+            assert_eq!(
+                report.accounts.len(),
+                1,
+                "imported IDs list must reflect the new account"
+            );
+            report.accounts[0]
+        }
+        other => panic!("expected EffectResult::Import Ok via forced Aegis, got {other:?}"),
+    };
+
+    let live_vault = match &state {
+        AppState::Unlocked { vault, .. } => vault,
+        other => panic!("expected Unlocked, got {other:?}"),
+    };
+    assert_eq!(
+        live_vault.iter().count(),
+        initial_count + 1,
+        "forced-Aegis success must grow the live vault by one"
+    );
+    assert!(
+        live_vault.iter().any(|a| a.id() == new_id),
+        "live vault must carry the imported Aegis account ID"
+    );
+
+    let (reopened, _store) = Store::open(&path, VaultLock::Plaintext).expect("reopen plaintext");
+    assert_eq!(
+        reopened.iter().count(),
+        initial_count + 1,
+        "forced-Aegis success must commit to the on-disk primary"
+    );
+    assert!(
+        reopened.iter().any(|a| a.id() == new_id),
+        "on-disk vault must carry the imported Aegis account ID"
+    );
+}
+
+#[test]
+fn execute_import_with_forced_format_mismatch_returns_unsupported_import_format_without_mutation() {
+    // Forced `Some(ImportFormat::Aegis)` over an otpauth URI text body
+    // must surface `unsupported_import_format` (the facade's
+    // `resolve_format` rejects forced/detected disagreement when the
+    // detected concrete format is *not* `Unknown`). No mutation reaches
+    // the vault.
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let initial_count = vault.iter().count();
+    let mut state = AppState::Unlocked {
+        path: path.clone(),
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+
+    // Write an otpauth URI: `detect` returns `ImportFormat::Otpauth`,
+    // so a forced `Aegis` triggers the mismatch rejection branch.
+    let source_path = tmp.path().join("import.txt");
+    std::fs::write(
+        &source_path,
+        "otpauth://totp/Example:alice@example.com?secret=JBSWY3DPEHPK3PXP&issuer=Example",
+    )
+    .expect("write otpauth source file");
+
+    let (tx, rx) = mpsc::channel::<AppEvent>();
+    let effect = Effect::Import {
+        path: path.clone(),
+        source_path,
+        format: Some(ImportFormat::Aegis),
+        conflict: ImportConflict::Skip,
+        paladin_passphrase: None,
+    };
+    let outcome = execute(effect, &mut state, &tx);
+    assert_eq!(outcome, EffectOutcome::Continue);
+
+    let evt = rx.try_recv().expect("an AppEvent should be sent");
+    match evt {
+        AppEvent::EffectResult(EffectResult::Import {
+            result: Err(ImportFailure(err)),
+        }) => match err {
+            PaladinError::UnsupportedImportFormat { format } => assert_eq!(
+                format, "aegis",
+                "the facade must echo the forced format token on mismatch"
+            ),
+            other => panic!("expected UnsupportedImportFormat, got {other:?}"),
+        },
+        other => panic!("expected EffectResult::Import Err, got {other:?}"),
+    }
+    assert!(
+        rx.try_recv().is_err(),
+        "executor must emit exactly one AppEvent per Effect::Import"
+    );
+
+    let live_vault = match &state {
+        AppState::Unlocked { vault, .. } => vault,
+        other => panic!("expected Unlocked, got {other:?}"),
+    };
+    assert_eq!(
+        live_vault.iter().count(),
+        initial_count,
+        "forced-format mismatch must not mutate the live vault"
+    );
+
+    let (reopened, _store) = Store::open(&path, VaultLock::Plaintext).expect("reopen plaintext");
+    assert_eq!(
+        reopened.iter().count(),
+        initial_count,
+        "forced-format mismatch must not touch the on-disk primary"
+    );
 }
