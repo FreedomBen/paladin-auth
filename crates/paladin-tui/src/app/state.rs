@@ -664,6 +664,52 @@ pub struct AddModal {
     /// past `clippy::large_enum_variant`'s threshold when held
     /// inline).
     pub pending_duplicate_add: Option<Box<PendingDuplicateAdd>>,
+    /// Post-success counts panel populated on a successful
+    /// [`Effect::AddFromClipboardQr`](crate::app::event::Effect::AddFromClipboardQr)
+    /// outcome.
+    ///
+    /// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
+    /// *"Clipboard QR import uses `ImportConflict::Skip` and reports
+    /// imported / skipped counts."* and *"QR-add validation warnings
+    /// are rendered through `paladin_core::format_validation_warning()`
+    /// in the post-success counts panel."* The reducer's
+    /// [`EffectResult::QrImport`](crate::app::event::EffectResult::QrImport)
+    /// `Ok` arm seeds this slot from the carried
+    /// [`paladin_core::ImportReport`], rendering each
+    /// [`paladin_core::ImportWarning`] through
+    /// [`paladin_core::format_validation_warning`] up front so the
+    /// view layer only needs to display the already-formatted strings.
+    /// `None` means no post-success panel is being displayed.
+    pub counts_panel: Option<CountsPanel>,
+}
+
+/// Post-success counts panel for the Add modal's clipboard-QR import
+/// flow.
+///
+/// Carries the imported / skipped totals returned by
+/// `Vault::import_accounts` plus any [`paladin_core::ImportWarning`]
+/// rendered through [`paladin_core::format_validation_warning`] so the
+/// view layer can show advisory text alongside the counts. Lives on
+/// [`AddModal::counts_panel`] for the lifetime of the modal; cleared
+/// when the modal closes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CountsPanel {
+    /// Number of source rows added as new accounts (no collision)
+    /// — mirrors [`paladin_core::ImportReport::imported`].
+    pub imported: usize,
+    /// Number of source rows skipped under
+    /// [`paladin_core::ImportConflict::Skip`] — mirrors
+    /// [`paladin_core::ImportReport::skipped`]. Replaced / appended
+    /// totals are not surfaced for QR-add because the import always
+    /// runs with `ImportConflict::Skip` per the plan, so the four
+    /// counts collapse to `imported + skipped`.
+    pub skipped: usize,
+    /// Non-fatal validation warnings already rendered through
+    /// [`paladin_core::format_validation_warning`]. Order mirrors
+    /// the original [`paladin_core::ImportReport::warnings`] order
+    /// so the view layer can show source-row context if needed in a
+    /// later slice.
+    pub warnings: Vec<String>,
 }
 
 /// Pending duplicate-add state stashed on [`AddModal`] between the
@@ -738,6 +784,7 @@ impl Default for AddModal {
             manual_focus: AddManualFocus::default(),
             error: None,
             pending_duplicate_add: None,
+            counts_panel: None,
         }
     }
 }

@@ -25,7 +25,7 @@ use crate::app::event::{AddFailure, AppEvent, Effect, EffectResult, QrImportSucc
 use crate::app::state::{
     compute_idle_deadline, format_account_display_label, format_duplicate_account_message,
     format_qr_import_failure, initial_selection, render_error_message, AddManualFocus, AddModal,
-    AddMode, AppState, ChordLeader, Focus, HotpReveal, Modal, PendingClipboardClear,
+    AddMode, AppState, ChordLeader, CountsPanel, Focus, HotpReveal, Modal, PendingClipboardClear,
     PendingDuplicateAdd, RemoveModal, RenameModal, SettingsFocus, SettingsModal, StatusLine,
     CLIPBOARD_WRITE_FAILED, NO_ACCOUNT_SELECTED,
 };
@@ -690,12 +690,22 @@ fn reduce_add_result(
 /// *"No-image, no-QR, and invalid-QR cases reject inline."* On any
 /// `Err(...)` the Add modal stays open and the rendered failure is
 /// stashed in [`AddModal::error`] via [`format_qr_import_failure`] so
-/// the user can retry. The `Ok` arm — populating the post-success
-/// counts panel with imported / skipped totals and any rendered
-/// `ImportWarning` messages — lands alongside the counts-panel state
-/// slice (next bullet in the plan's "Add modal" list); until then the
-/// success result is consumed without mutating modal state so the
-/// reducer surface stays narrow.
+/// the user can retry.
+///
+/// On `Ok(QrImportSuccess { report })` the modal stays open in
+/// [`AddMode::Qr`] and the carried [`paladin_core::ImportReport`]
+/// seeds the post-success counts panel: `imported` / `skipped` totals
+/// flow through verbatim, and each [`paladin_core::ImportWarning`] is
+/// rendered through [`paladin_core::format_validation_warning`] up
+/// front so the view layer only needs to display the already-formatted
+/// strings. Any prior inline error from a failed retry is cleared so
+/// the user does not see a stale rejection alongside the success
+/// panel. The status line is left untouched — counts panel owns
+/// success rendering for QR-add per the plan's "Add modal" >
+/// *"Clipboard QR import uses `ImportConflict::Skip` and reports
+/// imported / skipped counts."* and *"QR-add validation warnings are
+/// rendered through `paladin_core::format_validation_warning()` in the
+/// post-success counts panel."*.
 ///
 /// Results delivered while not on `Unlocked`, while a different modal
 /// is open, or after the Add modal closed are discarded so the
@@ -714,16 +724,18 @@ fn reduce_qr_import_result(
     };
 
     match result {
-        Ok(_success) => {
-            // Counts-panel rendering lands with the next slice (see
-            // `IMPLEMENTATION_PLAN_03_TUI.md` "Add modal" >
-            // *"Clipboard QR import uses `ImportConflict::Skip` and
-            // reports imported / skipped counts."* and *"QR-add
-            // validation warnings are rendered through
-            // `paladin_core::format_validation_warning()` in the
-            // post-success counts panel."*). For now the success is
-            // consumed without mutating modal state so the inline-
-            // error rejection slice stays narrow.
+        Ok(QrImportSuccess { report }) => {
+            let warnings = report
+                .warnings
+                .iter()
+                .map(|w| format_validation_warning(&w.warning))
+                .collect();
+            add.counts_panel = Some(CountsPanel {
+                imported: report.imported,
+                skipped: report.skipped,
+                warnings,
+            });
+            add.error = None;
         }
         Err(failure) => {
             add.error = Some(format_qr_import_failure(&failure));

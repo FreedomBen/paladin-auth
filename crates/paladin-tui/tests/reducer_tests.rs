@@ -15234,14 +15234,7 @@ fn effect_result_qr_import_err_is_dropped_when_a_different_modal_is_open() {
 }
 
 #[test]
-fn effect_result_qr_import_ok_consumes_result_without_mutating_modal_state_for_now() {
-    // The success path lands with the next slice (post-success counts
-    // panel + ImportWarning rendering). Until that slice is in place
-    // the reducer consumes the Ok without mutating modal state, so
-    // the modal stays open in Qr mode with no inline error and no
-    // status-line confirmation. The Ok-arm placeholder is exercised
-    // here so a future regression that writes through the Ok arm
-    // before its slice lands will surface.
+fn effect_result_qr_import_ok_populates_counts_panel_with_imported_and_skipped_counts() {
     let tmp = secure_tempdir();
     let state = fresh_unlocked_with_qr_add_modal(&tmp);
     let report = ImportReport {
@@ -15254,19 +15247,232 @@ fn effect_result_qr_import_ok_consumes_result_without_mutating_modal_state_for_n
     };
     let success = QrImportSuccess { report };
     let (state, effects) = reduce(state, qr_import_result(Ok(success)));
-    assert!(effects.is_empty());
+    assert!(effects.is_empty(), "Ok must not emit follow-up effects");
+    let add = add_modal_ref(&state);
+    let panel = add
+        .counts_panel
+        .as_ref()
+        .expect("Ok must populate AddModal::counts_panel");
+    assert_eq!(panel.imported, 2, "imported total mirrors ImportReport");
+    assert_eq!(panel.skipped, 1, "skipped total mirrors ImportReport");
+}
+
+#[test]
+fn effect_result_qr_import_ok_renders_warnings_through_format_validation_warning() {
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_qr_add_modal(&tmp);
+    let warning_inner = ValidationWarning::ShortSecret {
+        decoded_len: 10,
+        recommended_min: 20,
+    };
+    let expected = format_validation_warning(&warning_inner);
+    let report = ImportReport {
+        imported: 1,
+        skipped: 0,
+        replaced: 0,
+        appended: 0,
+        accounts: Vec::new(),
+        warnings: vec![ImportWarning {
+            source_index: 0,
+            warning: warning_inner,
+        }],
+    };
+    let success = QrImportSuccess { report };
+    let (state, _effects) = reduce(state, qr_import_result(Ok(success)));
+    let add = add_modal_ref(&state);
+    let panel = add.counts_panel.as_ref().expect("panel populated");
+    assert_eq!(
+        panel.warnings,
+        vec![expected],
+        "each warning is rendered through format_validation_warning"
+    );
+}
+
+#[test]
+fn effect_result_qr_import_ok_preserves_warning_order_across_multiple_warnings() {
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_qr_add_modal(&tmp);
+    let w0 = ValidationWarning::ShortSecret {
+        decoded_len: 8,
+        recommended_min: 20,
+    };
+    let w1 = ValidationWarning::ShortSecret {
+        decoded_len: 12,
+        recommended_min: 20,
+    };
+    let expected_0 = format_validation_warning(&w0);
+    let expected_1 = format_validation_warning(&w1);
+    let report = ImportReport {
+        imported: 2,
+        skipped: 0,
+        replaced: 0,
+        appended: 0,
+        accounts: Vec::new(),
+        warnings: vec![
+            ImportWarning {
+                source_index: 0,
+                warning: w0,
+            },
+            ImportWarning {
+                source_index: 1,
+                warning: w1,
+            },
+        ],
+    };
+    let success = QrImportSuccess { report };
+    let (state, _effects) = reduce(state, qr_import_result(Ok(success)));
+    let add = add_modal_ref(&state);
+    let panel = add.counts_panel.as_ref().expect("panel populated");
+    assert_eq!(
+        panel.warnings,
+        vec![expected_0, expected_1],
+        "warning order mirrors the ImportReport::warnings order"
+    );
+}
+
+#[test]
+fn effect_result_qr_import_ok_with_no_warnings_yields_empty_warnings_list() {
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_qr_add_modal(&tmp);
+    let report = ImportReport {
+        imported: 3,
+        skipped: 0,
+        replaced: 0,
+        appended: 0,
+        accounts: Vec::new(),
+        warnings: Vec::new(),
+    };
+    let success = QrImportSuccess { report };
+    let (state, _effects) = reduce(state, qr_import_result(Ok(success)));
+    let add = add_modal_ref(&state);
+    let panel = add.counts_panel.as_ref().expect("panel populated");
+    assert!(
+        panel.warnings.is_empty(),
+        "empty report.warnings yields an empty rendered list; got {:?}",
+        panel.warnings
+    );
+}
+
+#[test]
+fn effect_result_qr_import_ok_with_only_skips_still_populates_counts_panel() {
+    // Every source row collided under ImportConflict::Skip; the panel
+    // must still appear so the user sees the result of the import.
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_qr_add_modal(&tmp);
+    let report = ImportReport {
+        imported: 0,
+        skipped: 4,
+        replaced: 0,
+        appended: 0,
+        accounts: Vec::new(),
+        warnings: Vec::new(),
+    };
+    let success = QrImportSuccess { report };
+    let (state, _effects) = reduce(state, qr_import_result(Ok(success)));
+    let add = add_modal_ref(&state);
+    let panel = add.counts_panel.as_ref().expect("panel populated");
+    assert_eq!(panel.imported, 0);
+    assert_eq!(panel.skipped, 4);
+}
+
+#[test]
+fn effect_result_qr_import_ok_clears_prior_inline_error() {
+    // A prior Err populated AddModal::error; a subsequent Ok must
+    // clear it so the user does not see a stale rejection alongside
+    // the success counts panel.
+    let tmp = secure_tempdir();
+    let mut state = fresh_unlocked_with_qr_add_modal(&tmp);
+    if let AppState::Unlocked {
+        modal: Some(Modal::Add(add)),
+        ..
+    } = &mut state
+    {
+        add.error = Some("stale prior rejection".to_string());
+    } else {
+        panic!("expected open Add modal");
+    }
+    let report = ImportReport {
+        imported: 1,
+        skipped: 0,
+        replaced: 0,
+        appended: 0,
+        accounts: Vec::new(),
+        warnings: Vec::new(),
+    };
+    let success = QrImportSuccess { report };
+    let (state, _effects) = reduce(state, qr_import_result(Ok(success)));
+    let add = add_modal_ref(&state);
+    assert!(
+        add.error.is_none(),
+        "Ok must clear any prior inline error; got {:?}",
+        add.error
+    );
+}
+
+#[test]
+fn effect_result_qr_import_ok_preserves_modal_mode_qr() {
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_qr_add_modal(&tmp);
+    let report = ImportReport {
+        imported: 1,
+        skipped: 0,
+        replaced: 0,
+        appended: 0,
+        accounts: Vec::new(),
+        warnings: Vec::new(),
+    };
+    let success = QrImportSuccess { report };
+    let (state, _effects) = reduce(state, qr_import_result(Ok(success)));
+    let add = add_modal_ref(&state);
+    assert_eq!(
+        add.mode,
+        AddMode::Qr,
+        "modal stays in Qr mode after a successful import"
+    );
+}
+
+#[test]
+fn effect_result_qr_import_ok_does_not_publish_status_line_confirmation() {
+    // Counts panel owns success rendering for QR-add; the status line
+    // is reserved for the Manual / URI Add paths' single-line
+    // confirmations.
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_qr_add_modal(&tmp);
+    let report = ImportReport {
+        imported: 1,
+        skipped: 0,
+        replaced: 0,
+        appended: 0,
+        accounts: Vec::new(),
+        warnings: Vec::new(),
+    };
+    let success = QrImportSuccess { report };
+    let (state, _effects) = reduce(state, qr_import_result(Ok(success)));
     match state {
-        AppState::Unlocked {
-            modal, status_line, ..
-        } => {
-            let Some(Modal::Add(add)) = modal else {
-                panic!("Add modal must remain open while Ok-arm slice is pending");
-            };
-            assert_eq!(add.mode, AddMode::Qr);
-            assert!(add.error.is_none(), "no inline error on Ok");
+        AppState::Unlocked { status_line, .. } => {
             assert!(
                 status_line.is_none(),
-                "no status-line confirmation on Ok (counts panel will own success rendering)"
+                "status line stays empty on QR-add success; got {status_line:?}"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_qr_import_ok_does_not_close_modal() {
+    // The counts panel is shown inside the Add modal; the modal does
+    // not auto-close on success — the user dismisses it explicitly.
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_qr_add_modal(&tmp);
+    let report = ImportReport::default();
+    let success = QrImportSuccess { report };
+    let (state, _effects) = reduce(state, qr_import_result(Ok(success)));
+    match state {
+        AppState::Unlocked { modal, .. } => {
+            assert!(
+                matches!(modal, Some(Modal::Add(_))),
+                "Add modal must stay open while counts panel is displayed; got {modal:?}"
             );
         }
         other => panic!("expected Unlocked, got {other:?}"),
