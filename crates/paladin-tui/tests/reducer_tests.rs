@@ -2481,6 +2481,100 @@ fn manual_focus_survives_round_trip_through_uri_mode() {
 }
 
 #[test]
+fn char_in_add_modal_uri_mode_appends_to_uri_text() {
+    // Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
+    // Uri mode collects an `otpauth://` URI in a single text buffer.
+    // A printable character (no Ctrl/Alt modifier) typed while in
+    // Uri mode appends to the modal-local `uri_text` buffer.
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_add_modal(&tmp);
+    // Manual → Uri via one `→`.
+    let (state, _) = reduce(state, key(KeyCode::Right));
+    assert_eq!(add_modal_ref(&state).mode, AddMode::Uri);
+    assert!(add_modal_ref(&state).uri_text.is_empty());
+    let (after, effects) = reduce(state, key(KeyCode::Char('o')));
+    assert!(
+        effects.is_empty(),
+        "typing into the Uri buffer must not emit effects"
+    );
+    let add = add_modal_ref(&after);
+    assert_eq!(add.uri_text.as_str(), "o");
+    assert_eq!(add.mode, AddMode::Uri, "typing must not change input mode");
+}
+
+#[test]
+fn multiple_chars_in_add_modal_uri_mode_append_in_order() {
+    // Several `KeyCode::Char` presses build up the URI in the typed
+    // order, including a non-ASCII codepoint so the implementation
+    // can't accidentally byte-slice or drop multi-byte input.
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_add_modal(&tmp);
+    let (mut state, _) = reduce(state, key(KeyCode::Right));
+    assert_eq!(add_modal_ref(&state).mode, AddMode::Uri);
+    for c in "otp🦀".chars() {
+        let (next, effects) = reduce(state, key(KeyCode::Char(c)));
+        assert!(effects.is_empty(), "typing must not emit effects");
+        state = next;
+    }
+    assert_eq!(add_modal_ref(&state).uri_text.as_str(), "otp🦀");
+}
+
+#[test]
+fn backspace_in_add_modal_uri_mode_pops_last_char() {
+    // Backspace on a non-empty uri_text removes the trailing
+    // character.
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_add_modal(&tmp);
+    let (mut state, _) = reduce(state, key(KeyCode::Right));
+    assert_eq!(add_modal_ref(&state).mode, AddMode::Uri);
+    for c in "Hi".chars() {
+        let (next, _) = reduce(state, key(KeyCode::Char(c)));
+        state = next;
+    }
+    assert_eq!(add_modal_ref(&state).uri_text.as_str(), "Hi");
+    let (after, effects) = reduce(state, key(KeyCode::Backspace));
+    assert!(effects.is_empty(), "Backspace must not emit effects");
+    assert_eq!(add_modal_ref(&after).uri_text.as_str(), "H");
+}
+
+#[test]
+fn backspace_in_add_modal_uri_mode_on_empty_uri_text_is_silent_noop() {
+    // Backspace on an empty uri_text is a silent no-op: no panic, no
+    // effects, no state change. Mirrors the Manual-mode contract.
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_add_modal(&tmp);
+    let (state, _) = reduce(state, key(KeyCode::Right));
+    assert_eq!(add_modal_ref(&state).mode, AddMode::Uri);
+    assert!(add_modal_ref(&state).uri_text.is_empty());
+    let (after, effects) = reduce(state, key(KeyCode::Backspace));
+    assert!(
+        effects.is_empty(),
+        "Backspace on empty must not emit effects"
+    );
+    let add = add_modal_ref(&after);
+    assert!(add.uri_text.is_empty());
+    assert_eq!(add.mode, AddMode::Uri);
+}
+
+#[test]
+fn ctrl_modified_char_in_add_modal_uri_mode_does_not_append() {
+    // Mirrors the Manual-mode Ctrl/Alt-modifier filter: `Ctrl-*` and
+    // `Alt-*` are reserved for binding extensions and must not leak
+    // into the URI buffer as raw characters. `Ctrl-X` must NOT
+    // append `'x'` to `uri_text`.
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_add_modal(&tmp);
+    let (state, _) = reduce(state, key(KeyCode::Right));
+    assert_eq!(add_modal_ref(&state).mode, AddMode::Uri);
+    let (after, effects) = reduce(state, ctrl(KeyCode::Char('x')));
+    assert!(effects.is_empty(), "Ctrl-X must not emit effects");
+    assert!(
+        add_modal_ref(&after).uri_text.is_empty(),
+        "Ctrl-X must not append 'x' to uri_text"
+    );
+}
+
+#[test]
 fn char_in_add_modal_manual_mode_label_focus_appends_to_label() {
     // Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
     // Manual mode collects a label as the first focused field. A

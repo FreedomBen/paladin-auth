@@ -1457,11 +1457,38 @@ fn route_add_modal_input(
             return Vec::new();
         }
     }
-    if add.mode == AddMode::Uri && matches!(key.code, KeyCode::Enter) {
+    if add.mode == AddMode::Uri {
+        return route_add_uri_mode_input(path, add, key);
+    }
+    Vec::new()
+}
+
+/// Uri-mode key dispatch: Enter submits the typed URI, printable
+/// `KeyCode::Char` (without Ctrl/Alt) appends to `uri_text`, and
+/// `KeyCode::Backspace` pops the trailing character. All other keys
+/// are silent no-ops so the modal-trap contract holds.
+fn route_add_uri_mode_input(
+    path: &std::path::Path,
+    add: &mut AddModal,
+    key: &KeyEvent,
+) -> Vec<Effect> {
+    if matches!(key.code, KeyCode::Enter) {
         return vec![Effect::AddFromUri {
             path: path.to_path_buf(),
             uri: add.uri_text.take(),
         }];
+    }
+    if let KeyCode::Char(c) = key.code {
+        if !key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+        {
+            add.uri_text.push(c);
+        }
+        return Vec::new();
+    }
+    if matches!(key.code, KeyCode::Backspace) {
+        add.uri_text.pop();
     }
     Vec::new()
 }
