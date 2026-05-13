@@ -13,7 +13,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-**Implementation in progress.** The design was approved 2026-05-04. The workspace is live with three members (`crates/paladin-core`, `crates/paladin-cli`, `crates/paladin-tui`); `paladin-gtk` remains deferred to v0.2 per `DESIGN.md` §13. `IMPLEMENTATION_PLAN_01_CORE.md` and `IMPLEMENTATION_PLAN_02_CLI.md` are complete; `IMPLEMENTATION_PLAN_03_TUI.md` is the active workstream. `DESIGN.md` remains the source of truth for behavior and APIs; do not invent file paths, types, or APIs that aren't grounded in it.
+**Implementation in progress.** The design was approved 2026-05-04. The workspace is live with four members (`crates/paladin-core`, `crates/paladin-cli`, `crates/paladin-tui`, `crates/paladin-gtk`). `IMPLEMENTATION_PLAN_01_CORE.md` and `IMPLEMENTATION_PLAN_02_CLI.md` are complete; `IMPLEMENTATION_PLAN_03_TUI.md` (v0.1) and `IMPLEMENTATION_PLAN_04_GTK.md` (v0.2 Milestone 7) are both active workstreams. The GTK release target remains v0.2 per `DESIGN.md` §13, but pure-logic scaffolding for it lands incrementally so the workspace shape and `paladin-core` API contract stay aligned. `DESIGN.md` remains the source of truth for behavior and APIs; do not invent file paths, types, or APIs that aren't grounded in it.
 
 ## What this is
 

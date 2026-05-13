@@ -19,6 +19,7 @@
 
 use std::process::ExitCode;
 
+pub mod icon_resolution;
 pub mod search;
 
 /// Run the `paladin-gtk` binary.
