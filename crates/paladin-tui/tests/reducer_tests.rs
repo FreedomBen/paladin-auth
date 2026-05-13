@@ -2478,6 +2478,126 @@ fn manual_focus_survives_round_trip_through_uri_mode() {
 }
 
 #[test]
+fn char_in_add_modal_manual_mode_label_focus_appends_to_label() {
+    // Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
+    // Manual mode collects a label as the first focused field. A
+    // printable character (no Ctrl/Alt modifier) typed while the
+    // label is focused appends to the modal-local `label` buffer.
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_add_modal(&tmp);
+    assert_eq!(add_modal_ref(&state).manual_focus, AddManualFocus::Label);
+    assert!(add_modal_ref(&state).label.is_empty());
+    let (after, effects) = reduce(state, key(KeyCode::Char('H')));
+    assert!(
+        effects.is_empty(),
+        "typing into a Manual-mode field must not emit effects"
+    );
+    let add = add_modal_ref(&after);
+    assert_eq!(add.label, "H");
+    assert_eq!(
+        add.mode,
+        AddMode::Manual,
+        "typing must not change input mode"
+    );
+    assert_eq!(
+        add.manual_focus,
+        AddManualFocus::Label,
+        "typing must not change manual_focus"
+    );
+}
+
+#[test]
+fn multiple_chars_in_add_modal_manual_mode_label_focus_append_in_order() {
+    // Several `KeyCode::Char` presses build up the label in the typed
+    // order, including a non-ASCII codepoint so the implementation
+    // can't accidentally byte-slice or drop multi-byte input.
+    let tmp = secure_tempdir();
+    let mut state = fresh_unlocked_with_add_modal(&tmp);
+    for c in "Hi 🦀".chars() {
+        let (next, effects) = reduce(state, key(KeyCode::Char(c)));
+        assert!(effects.is_empty(), "typing must not emit effects");
+        state = next;
+    }
+    assert_eq!(add_modal_ref(&state).label, "Hi 🦀");
+}
+
+#[test]
+fn backspace_in_add_modal_manual_mode_label_focus_pops_last_char() {
+    // Backspace on a non-empty label removes the trailing character.
+    let tmp = secure_tempdir();
+    let mut state = fresh_unlocked_with_add_modal(&tmp);
+    for c in "Hi".chars() {
+        let (next, _) = reduce(state, key(KeyCode::Char(c)));
+        state = next;
+    }
+    assert_eq!(add_modal_ref(&state).label, "Hi");
+    let (after, effects) = reduce(state, key(KeyCode::Backspace));
+    assert!(effects.is_empty(), "Backspace must not emit effects");
+    assert_eq!(add_modal_ref(&after).label, "H");
+}
+
+#[test]
+fn backspace_in_add_modal_manual_mode_label_focus_on_empty_label_is_silent_noop() {
+    // Backspace on an empty label is a silent no-op: no panic, no
+    // effects, no state change. Mirrors the Unlock-screen contract.
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_add_modal(&tmp);
+    assert!(add_modal_ref(&state).label.is_empty());
+    let (after, effects) = reduce(state, key(KeyCode::Backspace));
+    assert!(
+        effects.is_empty(),
+        "Backspace on empty must not emit effects"
+    );
+    let add = add_modal_ref(&after);
+    assert!(add.label.is_empty());
+    assert_eq!(add.manual_focus, AddManualFocus::Label);
+    assert_eq!(add.mode, AddMode::Manual);
+}
+
+#[test]
+fn ctrl_modified_char_in_add_modal_manual_mode_label_focus_does_not_append() {
+    // Mirrors the Unlock screen's Ctrl/Alt-modifier filter on text
+    // fields: `Ctrl-*` and `Alt-*` are reserved for binding extensions
+    // and must not leak into the label as raw characters. `Ctrl-X`
+    // must NOT append `'x'` to the label.
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_add_modal(&tmp);
+    let (after, effects) = reduce(state, ctrl(KeyCode::Char('x')));
+    assert!(effects.is_empty(), "Ctrl-X must not emit effects");
+    assert!(
+        add_modal_ref(&after).label.is_empty(),
+        "Ctrl-X must not append 'x' to the label"
+    );
+}
+
+#[test]
+fn char_in_add_modal_manual_mode_with_non_label_focus_is_silent_noop() {
+    // This slice only wires text editing for the Label field. With
+    // focus advanced past Label (to Issuer), a `KeyCode::Char`
+    // keystroke is consumed silently — neither `label` nor any other
+    // Manual-mode buffer mutates. Subsequent slices wire typing for
+    // the other text-bearing fields.
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_add_modal(&tmp);
+    let (state, _) = reduce(state, key(KeyCode::Tab));
+    assert_eq!(add_modal_ref(&state).manual_focus, AddManualFocus::Issuer);
+    let (after, effects) = reduce(state, key(KeyCode::Char('Y')));
+    assert!(
+        effects.is_empty(),
+        "typing on non-Label must not emit effects"
+    );
+    let add = add_modal_ref(&after);
+    assert!(
+        add.label.is_empty(),
+        "non-Label Char keystroke must not leak into the label"
+    );
+    assert!(
+        add.issuer.is_empty(),
+        "issuer typing is unimplemented in this slice"
+    );
+}
+
+#[test]
 fn pressing_a_on_unlocked_with_modal_already_open_does_not_replace_the_modal() {
     // When a modal is open, the `a` key is consumed by the modal's
     // input path (text-field typing once payloads land). At this

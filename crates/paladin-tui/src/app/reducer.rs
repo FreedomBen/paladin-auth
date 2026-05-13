@@ -22,9 +22,10 @@ use zeroize::Zeroizing;
 
 use crate::app::event::{AppEvent, Effect, EffectResult};
 use crate::app::state::{
-    compute_idle_deadline, initial_selection, render_error_message, AddModal, AddMode, AppState,
-    ChordLeader, Focus, HotpReveal, Modal, PendingClipboardClear, RemoveModal, RenameModal,
-    SettingsFocus, SettingsModal, StatusLine, CLIPBOARD_WRITE_FAILED, NO_ACCOUNT_SELECTED,
+    compute_idle_deadline, initial_selection, render_error_message, AddManualFocus, AddModal,
+    AddMode, AppState, ChordLeader, Focus, HotpReveal, Modal, PendingClipboardClear, RemoveModal,
+    RenameModal, SettingsFocus, SettingsModal, StatusLine, CLIPBOARD_WRITE_FAILED,
+    NO_ACCOUNT_SELECTED,
 };
 use crate::search::{filtered_account_ids, select_after_search};
 
@@ -1129,10 +1130,18 @@ fn route_modal_input(
 /// `manual_focus` is intentionally sticky across mode switches so the
 /// user's last Manual-mode focus is restored on return to Manual.
 ///
-/// Per-mode field editing, the duplicate-gate pending state, and the
-/// post-QR counts panel land in subsequent slices; every other key
-/// here is a silent no-op so the modal-trap contract holds. `Esc` /
-/// Help / `Ctrl-C` are filtered upstream of the modal trap.
+/// In Manual mode with [`AddManualFocus::Label`] focused, a printable
+/// `KeyCode::Char` keystroke (no `Ctrl` / `Alt` modifier — mirroring
+/// the Unlock-screen filter) appends to the modal-local `label`
+/// buffer and `KeyCode::Backspace` pops the trailing character;
+/// backspace on an empty label is a silent no-op. `Char` keystrokes
+/// on any other Manual-mode focus are silently consumed for now
+/// (modal-trap contract); typing for the remaining text-bearing
+/// fields and the URI mode lands in subsequent slices, as does the
+/// duplicate-gate pending state and the post-QR counts panel.
+/// Every other key here is a silent no-op so the modal-trap contract
+/// holds. `Esc` / Help / `Ctrl-C` are filtered upstream of the modal
+/// trap.
 fn route_add_modal_input(add: &mut AddModal, key: &KeyEvent) -> Vec<Effect> {
     match key.code {
         KeyCode::Right => {
@@ -1152,6 +1161,39 @@ fn route_add_modal_input(add: &mut AddModal, key: &KeyEvent) -> Vec<Effect> {
         }
         if is_modal_focus_prev(key) {
             add.manual_focus = add.manual_focus.prev();
+            return Vec::new();
+        }
+        if let KeyCode::Char(c) = key.code {
+            if !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+            {
+                match add.manual_focus {
+                    AddManualFocus::Label => add.label.push(c),
+                    AddManualFocus::Issuer
+                    | AddManualFocus::Secret
+                    | AddManualFocus::Algorithm
+                    | AddManualFocus::Digits
+                    | AddManualFocus::Kind
+                    | AddManualFocus::PeriodOrCounter
+                    | AddManualFocus::IconHintText => {}
+                }
+            }
+            return Vec::new();
+        }
+        if matches!(key.code, KeyCode::Backspace) {
+            match add.manual_focus {
+                AddManualFocus::Label => {
+                    add.label.pop();
+                }
+                AddManualFocus::Issuer
+                | AddManualFocus::Secret
+                | AddManualFocus::Algorithm
+                | AddManualFocus::Digits
+                | AddManualFocus::Kind
+                | AddManualFocus::PeriodOrCounter
+                | AddManualFocus::IconHintText => {}
+            }
             return Vec::new();
         }
     }
