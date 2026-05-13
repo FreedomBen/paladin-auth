@@ -10,6 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - After changing code, format and lint it with `cargo fmt` and `cargo clippy`, ensuring no warnings remain.
 - Commit after making changes.  Do not push.
 - For containers, use Containerfile and compose.yaml and always build and run with rootless podman unless explicitly told otherwise.
+- Multiple agents may be working in this repository simultaneously.  Before committing, check if the file commit.lock exists.  If it does, wait for it to be removed before committing.  When you are ready to commit, create the file commit.lock, then delete it after you are finished committing.  This ensures that only one agent is committing at a time and prevents agent stomping on each other.
 
 ## Project status
 
