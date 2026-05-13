@@ -759,4 +759,35 @@ pub enum Effect {
         /// reaches `Vault::add`.
         validated: Box<ValidatedAccount>,
     },
+    /// Read a QR code from the OS clipboard image, decode any encoded
+    /// `otpauth://` URIs, and import the resulting accounts into the
+    /// vault.
+    ///
+    /// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
+    /// *"Clipboard images are read through
+    /// `arboard::Clipboard::get_image()`, whose `ImageData` already
+    /// carries raw RGBA8 bytes plus width/height; the TUI calls
+    /// `paladin_core::import::qr_image_bytes(width, height, rgba_bytes,
+    /// submit_time)` per the §4.7 signature, which takes `import_time`
+    /// directly rather than the `ImportOptions` accepted by
+    /// `import::from_file` / `import::from_bytes`. Per DESIGN §4.6, the
+    /// Add modal checks `width * height * 4` against
+    /// `paladin_core::QR_RGBA_MAX_BYTES` before allocating or copying
+    /// the clipboard buffer and surfaces the same `validation_error`
+    /// (`field: "qr_image"`, `reason: "image_too_large"`) inline that
+    /// the core decoder would return for an oversized buffer."*
+    ///
+    /// The reducer emits this effect when `Enter` is pressed on
+    /// `Modal::Add` with [`crate::app::state::AddMode::Qr`] active.
+    /// QR import has no modal-local form fields — the executor reads
+    /// the live clipboard image through `arboard`, performs the
+    /// oversized-buffer guard, runs `qr_image_bytes`, and calls
+    /// `Vault::import_accounts` with `ImportConflict::Skip` inside
+    /// `Vault::mutate_and_save`.
+    AddFromClipboardQr {
+        /// The current vault path; the executor uses it for error
+        /// reporting and to verify the path the effect was emitted
+        /// against in case the user has navigated away.
+        path: PathBuf,
+    },
 }

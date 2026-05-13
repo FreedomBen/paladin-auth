@@ -272,6 +272,23 @@ pub fn execute(effect: Effect, state: &mut AppState, sender: &Sender<AppEvent>) 
         Effect::AddAnyway { path, validated } => {
             execute_add_anyway(&path, *validated, state, sender)
         }
+        Effect::AddFromClipboardQr { path: _ } => {
+            // Placeholder: the live `arboard::Clipboard::get_image()`
+            // read, the `width * height * 4` vs
+            // `paladin_core::QR_RGBA_MAX_BYTES` guard, the
+            // `paladin_core::import::qr_image_bytes` decode, and the
+            // `Vault::import_accounts(_, ImportConflict::Skip, _)`
+            // wrapped in `Vault::mutate_and_save` land alongside the
+            // QR-add inline-error / counts-panel slices (see
+            // `IMPLEMENTATION_PLAN_03_TUI.md` "Add modal" QR-import
+            // bullets). Until that wiring lands the reducer emit is
+            // exercised by reducer-level tests
+            // (`enter_in_add_modal_qr_mode_emits_add_from_clipboard_qr_effect`)
+            // and the executor consumes the variant without emitting
+            // an `AppEvent`.
+            let _ = sender;
+            EffectOutcome::Continue
+        }
     }
 }
 

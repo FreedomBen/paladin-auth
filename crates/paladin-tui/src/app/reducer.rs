@@ -1460,6 +1460,28 @@ fn route_add_modal_input(
     if add.mode == AddMode::Uri {
         return route_add_uri_mode_input(path, add, key);
     }
+    if add.mode == AddMode::Qr {
+        return route_add_qr_mode_input(path, key);
+    }
+    Vec::new()
+}
+
+/// Qr-mode key dispatch: Enter dispatches an
+/// [`Effect::AddFromClipboardQr`] so the executor can read the live
+/// clipboard image through `arboard`, validate the RGBA buffer size
+/// against [`paladin_core::QR_RGBA_MAX_BYTES`], decode any encoded
+/// `otpauth://` URIs via `paladin_core::import::qr_image_bytes`, and
+/// import them via `Vault::import_accounts` with
+/// [`paladin_core::ImportConflict::Skip`] per
+/// `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add. QR mode
+/// has no modal-local form fields, so every other key is a silent
+/// no-op so the modal-trap contract holds.
+fn route_add_qr_mode_input(path: &std::path::Path, key: &KeyEvent) -> Vec<Effect> {
+    if matches!(key.code, KeyCode::Enter) {
+        return vec![Effect::AddFromClipboardQr {
+            path: path.to_path_buf(),
+        }];
+    }
     Vec::new()
 }
 

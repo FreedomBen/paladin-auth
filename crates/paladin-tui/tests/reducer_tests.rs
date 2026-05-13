@@ -3964,21 +3964,90 @@ fn enter_in_add_modal_manual_mode_carries_hotp_counter_after_kind_change() {
 }
 
 #[test]
-fn enter_in_add_modal_qr_mode_is_silent_noop_for_now() {
-    // QR-mode submit lands with a subsequent slice (`arboard`
-    // clipboard read + `paladin_core::import::qr_image_bytes`). At
-    // this slice QR Enter must not emit `Effect::Add`.
+fn printable_chars_in_add_modal_qr_mode_are_silent_noops() {
+    // QR mode has no modal-local form fields — printable chars must
+    // not perturb any other modal buffer (label / issuer / secret /
+    // uri_text / icon_hint_text) and must not emit an effect, so the
+    // modal-trap contract holds.
     let tmp = secure_tempdir();
-    // Two `→` from Manual lands on Qr.
     let (state, _) = reduce(fresh_unlocked_with_add_modal(&tmp), key(KeyCode::Right));
     let (state, _) = reduce(state, key(KeyCode::Right));
     assert_eq!(add_modal_ref(&state).mode, AddMode::Qr);
-    let (state, effects) = reduce(state, key(KeyCode::Enter));
+    let (state, effects) = reduce(state, key(KeyCode::Char('x')));
     assert!(
         effects.is_empty(),
-        "Enter in QR mode must not emit Effect::Add at this slice"
+        "printable chars in QR mode must not emit effects; got {effects:?}"
+    );
+    let add = add_modal_ref(&state);
+    assert_eq!(add.mode, AddMode::Qr);
+    assert!(add.label.is_empty(), "label must remain untouched in Qr");
+    assert!(add.issuer.is_empty(), "issuer must remain untouched in Qr");
+    assert!(
+        add.icon_hint_text.is_empty(),
+        "icon_hint_text must remain untouched in Qr"
+    );
+    assert!(
+        add.manual_secret.is_empty(),
+        "manual_secret must remain untouched in Qr"
+    );
+    assert!(
+        add.uri_text.is_empty(),
+        "uri_text must remain untouched in Qr"
+    );
+}
+
+#[test]
+fn backspace_in_add_modal_qr_mode_is_silent_noop() {
+    let tmp = secure_tempdir();
+    let (state, _) = reduce(fresh_unlocked_with_add_modal(&tmp), key(KeyCode::Right));
+    let (state, _) = reduce(state, key(KeyCode::Right));
+    assert_eq!(add_modal_ref(&state).mode, AddMode::Qr);
+    let (state, effects) = reduce(state, key(KeyCode::Backspace));
+    assert!(
+        effects.is_empty(),
+        "Backspace in QR mode must not emit effects; got {effects:?}"
     );
     assert_eq!(add_modal_ref(&state).mode, AddMode::Qr);
+}
+
+#[test]
+fn enter_in_add_modal_qr_mode_emits_add_from_clipboard_qr_effect() {
+    // QR-mode Enter dispatches an `Effect::AddFromClipboardQr` so
+    // the executor can read the live clipboard image, validate
+    // `width * height * 4` against `paladin_core::QR_RGBA_MAX_BYTES`,
+    // and call `paladin_core::import::qr_image_bytes` per
+    // `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add. The
+    // path snapshot mirrors `Effect::AddFromUri` so a stale effect
+    // emitted before an auto-lock or vault switch is dropped by the
+    // executor.
+    let tmp = secure_tempdir();
+    let unlocked = fresh_plaintext_unlocked(&tmp);
+    let path_before = match &unlocked {
+        AppState::Unlocked { path, .. } => path.clone(),
+        other => panic!("expected Unlocked, got {other:?}"),
+    };
+    let (state, _) = reduce(unlocked, key(KeyCode::Char('a')));
+    // Two `→` from Manual lands on Qr.
+    let (state, _) = reduce(state, key(KeyCode::Right));
+    let (state, _) = reduce(state, key(KeyCode::Right));
+    assert_eq!(add_modal_ref(&state).mode, AddMode::Qr);
+    let (state, effects) = reduce(state, key(KeyCode::Enter));
+    assert_eq!(
+        effects.len(),
+        1,
+        "Enter in QR mode must emit exactly one effect; got {effects:?}"
+    );
+    match &effects[0] {
+        Effect::AddFromClipboardQr { path } => {
+            assert_eq!(path, &path_before, "effect must target the live vault path");
+        }
+        other => panic!("expected Effect::AddFromClipboardQr, got {other:?}"),
+    }
+    assert_eq!(
+        add_modal_ref(&state).mode,
+        AddMode::Qr,
+        "modal stays open in Qr mode pending the effect outcome"
+    );
 }
 
 #[test]
