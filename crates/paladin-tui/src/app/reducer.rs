@@ -1151,23 +1151,27 @@ fn route_modal_input(
 /// In Manual mode with [`AddManualFocus::Algorithm`] focused,
 /// `→` / `↓` advance the three-valued segmented selector forward
 /// (Sha1 → Sha256 → Sha512 → Sha1) and `←` / `↑` retreat it backward
-/// (Sha1 → Sha512 → Sha256 → Sha1); both wrap at either end. These
-/// arrow keys are intercepted before the mode-switch `←` / `→`
-/// branch so they do not switch the [`AddMode`] header when a
+/// (Sha1 → Sha512 → Sha256 → Sha1); both wrap at either end. The
+/// same four arrow keys with [`AddManualFocus::Digits`] cycle the
+/// digit count through the three valid values per
+/// [`paladin_core::DIGITS_MIN`]..=[`paladin_core::DIGITS_MAX`]
+/// (6 → 7 → 8 → 6 forward; 6 → 8 → 7 → 6 backward), also wrapping.
+/// These arrow keys are intercepted before the mode-switch `←` /
+/// `→` branch so they do not switch the [`AddMode`] header when a
 /// non-text field has focus; the URI / QR modes and the four
 /// text-bearing Manual focuses keep the existing
 /// [`AddMode`]-cycling behavior.
-/// The remaining non-text focuses ([`AddManualFocus::Digits`],
-/// [`AddManualFocus::Kind`], [`AddManualFocus::PeriodOrCounter`])
-/// land in subsequent slices, alongside URI-mode typing, the
-/// duplicate-gate pending state, and the post-QR counts panel.
+/// The remaining non-text focuses ([`AddManualFocus::Kind`],
+/// [`AddManualFocus::PeriodOrCounter`]) land in subsequent slices,
+/// alongside URI-mode typing, the duplicate-gate pending state, and
+/// the post-QR counts panel.
 /// Every other key here is a silent no-op so the modal-trap contract
 /// holds. `Esc` / Help / `Ctrl-C` are filtered upstream of the modal
 /// trap.
 fn route_add_modal_input(add: &mut AddModal, key: &KeyEvent) -> Vec<Effect> {
-    if add.mode == AddMode::Manual && add.manual_focus == AddManualFocus::Algorithm {
-        match key.code {
-            KeyCode::Right | KeyCode::Down => {
+    if add.mode == AddMode::Manual {
+        match (add.manual_focus, key.code) {
+            (AddManualFocus::Algorithm, KeyCode::Right | KeyCode::Down) => {
                 add.algorithm = match add.algorithm {
                     Algorithm::Sha1 => Algorithm::Sha256,
                     Algorithm::Sha256 => Algorithm::Sha512,
@@ -1175,11 +1179,27 @@ fn route_add_modal_input(add: &mut AddModal, key: &KeyEvent) -> Vec<Effect> {
                 };
                 return Vec::new();
             }
-            KeyCode::Left | KeyCode::Up => {
+            (AddManualFocus::Algorithm, KeyCode::Left | KeyCode::Up) => {
                 add.algorithm = match add.algorithm {
                     Algorithm::Sha1 => Algorithm::Sha512,
                     Algorithm::Sha256 => Algorithm::Sha1,
                     Algorithm::Sha512 => Algorithm::Sha256,
+                };
+                return Vec::new();
+            }
+            (AddManualFocus::Digits, KeyCode::Right | KeyCode::Down) => {
+                add.digits = match add.digits {
+                    6 => 7,
+                    7 => 8,
+                    _ => 6,
+                };
+                return Vec::new();
+            }
+            (AddManualFocus::Digits, KeyCode::Left | KeyCode::Up) => {
+                add.digits = match add.digits {
+                    6 => 8,
+                    7 => 6,
+                    _ => 7,
                 };
                 return Vec::new();
             }

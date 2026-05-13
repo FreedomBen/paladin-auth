@@ -3150,6 +3150,159 @@ fn right_in_add_modal_manual_mode_label_focus_still_cycles_addmode() {
     assert_eq!(add_modal_ref(&after).mode, AddMode::Uri);
 }
 
+/// Reach Digits focus from the default Add-modal open (Label) by
+/// pressing Tab four times. Returned state has `manual_focus ==
+/// Digits` and an unchanged `digits == DIGITS_DEFAULT` (6).
+fn add_modal_focused_on_digits(tmp: &tempfile::TempDir) -> AppState {
+    let mut state = fresh_unlocked_with_add_modal(tmp);
+    for _ in 0..4 {
+        let (next, _) = reduce(state, key(KeyCode::Tab));
+        state = next;
+    }
+    assert_eq!(add_modal_ref(&state).manual_focus, AddManualFocus::Digits);
+    assert_eq!(add_modal_ref(&state).digits, paladin_core::DIGITS_DEFAULT);
+    state
+}
+
+#[test]
+fn right_in_add_modal_manual_mode_digits_focus_cycles_forward_with_wrap() {
+    // Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)":
+    // *"selectors and spinners cycled by `←` / `→` / `↑` / `↓`"*.
+    // Digits is a three-valued segmented selector (6 / 7 / 8 per
+    // `DIGITS_MIN`..=`DIGITS_MAX`); `→` advances forward and wraps
+    // after 8 so the user can cycle indefinitely. The mode stays
+    // Manual — `→` does NOT switch the AddMode header when focused
+    // on a non-text field.
+    let tmp = secure_tempdir();
+    let mut state = add_modal_focused_on_digits(&tmp);
+    let order = [7u8, 8u8, 6u8];
+    for (i, expected) in order.iter().enumerate() {
+        let (next, effects) = reduce(state, key(KeyCode::Right));
+        assert!(
+            effects.is_empty(),
+            "→ on Digits focus (step {i}) must not emit effects"
+        );
+        let add = add_modal_ref(&next);
+        assert_eq!(
+            add.digits, *expected,
+            "→ step {i} should land on {expected} digits"
+        );
+        assert_eq!(
+            add.mode,
+            AddMode::Manual,
+            "→ on Digits focus must not switch AddMode (step {i})"
+        );
+        assert_eq!(
+            add.manual_focus,
+            AddManualFocus::Digits,
+            "→ on Digits focus must not change focus (step {i})"
+        );
+        state = next;
+    }
+}
+
+#[test]
+fn left_in_add_modal_manual_mode_digits_focus_cycles_backward_with_wrap() {
+    // `←` retreats through the three-valued Digits selector and
+    // wraps from 6 back to 8. The mode stays Manual.
+    let tmp = secure_tempdir();
+    let mut state = add_modal_focused_on_digits(&tmp);
+    let order = [8u8, 7u8, 6u8];
+    for (i, expected) in order.iter().enumerate() {
+        let (next, effects) = reduce(state, key(KeyCode::Left));
+        assert!(
+            effects.is_empty(),
+            "← on Digits focus (step {i}) must not emit effects"
+        );
+        let add = add_modal_ref(&next);
+        assert_eq!(
+            add.digits, *expected,
+            "← step {i} should land on {expected} digits"
+        );
+        assert_eq!(
+            add.mode,
+            AddMode::Manual,
+            "← on Digits focus must not switch AddMode (step {i})"
+        );
+        assert_eq!(
+            add.manual_focus,
+            AddManualFocus::Digits,
+            "← on Digits focus must not change focus (step {i})"
+        );
+        state = next;
+    }
+}
+
+#[test]
+fn down_in_add_modal_manual_mode_digits_focus_cycles_forward_like_right() {
+    // `↓` is an alias for `→` on segmented selectors: forward
+    // through 6 → 7 → 8 → 6, with the same mode-preserving
+    // contract.
+    let tmp = secure_tempdir();
+    let mut state = add_modal_focused_on_digits(&tmp);
+    let order = [7u8, 8u8, 6u8];
+    for (i, expected) in order.iter().enumerate() {
+        let (next, effects) = reduce(state, key(KeyCode::Down));
+        assert!(
+            effects.is_empty(),
+            "↓ on Digits focus (step {i}) must not emit effects"
+        );
+        let add = add_modal_ref(&next);
+        assert_eq!(add.digits, *expected, "↓ step {i}");
+        assert_eq!(add.mode, AddMode::Manual);
+        assert_eq!(add.manual_focus, AddManualFocus::Digits);
+        state = next;
+    }
+}
+
+#[test]
+fn up_in_add_modal_manual_mode_digits_focus_cycles_backward_like_left() {
+    // `↑` is an alias for `←` on segmented selectors: backward
+    // through 6 → 8 → 7 → 6, with the same mode-preserving
+    // contract.
+    let tmp = secure_tempdir();
+    let mut state = add_modal_focused_on_digits(&tmp);
+    let order = [8u8, 7u8, 6u8];
+    for (i, expected) in order.iter().enumerate() {
+        let (next, effects) = reduce(state, key(KeyCode::Up));
+        assert!(
+            effects.is_empty(),
+            "↑ on Digits focus (step {i}) must not emit effects"
+        );
+        let add = add_modal_ref(&next);
+        assert_eq!(add.digits, *expected, "↑ step {i}");
+        assert_eq!(add.mode, AddMode::Manual);
+        assert_eq!(add.manual_focus, AddManualFocus::Digits);
+        state = next;
+    }
+}
+
+#[test]
+fn arrows_on_digits_focus_do_not_leak_into_other_fields() {
+    // Cycling the Digits selector with arrow keys must leave every
+    // other modal-local field untouched: text buffers stay empty,
+    // the secret-bearing manual_secret / uri_text buffers stay
+    // empty, and the algorithm / kind / period / counter values keep
+    // their open-time defaults.
+    let tmp = secure_tempdir();
+    let state = add_modal_focused_on_digits(&tmp);
+    let (state, _) = reduce(state, key(KeyCode::Right));
+    let (state, _) = reduce(state, key(KeyCode::Down));
+    let (state, _) = reduce(state, key(KeyCode::Left));
+    let (state, _) = reduce(state, key(KeyCode::Up));
+    let add = add_modal_ref(&state);
+    assert!(add.label.is_empty());
+    assert!(add.issuer.is_empty());
+    assert!(add.icon_hint_text.is_empty());
+    assert!(add.manual_secret.is_empty());
+    assert!(add.uri_text.is_empty());
+    assert_eq!(add.algorithm, Algorithm::Sha1);
+    assert_eq!(add.kind, AccountKindInput::Totp);
+    assert_eq!(add.period_secs, paladin_core::TOTP_PERIOD_DEFAULT);
+    assert_eq!(add.counter, 0);
+    assert!(add.error.is_none());
+}
+
 #[test]
 fn pressing_a_on_unlocked_with_modal_already_open_does_not_replace_the_modal() {
     // When a modal is open, the `a` key is consumed by the modal's
