@@ -1,6 +1,7 @@
 TODO.md
 .claude/settings.local.json
 .codex
+commit.lock
 
 # Rust workspace artifacts
 /target

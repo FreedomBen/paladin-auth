@@ -19,6 +19,7 @@
 
 use std::process::ExitCode;
 
+pub mod auto_lock;
 pub mod icon_resolution;
 pub mod search;
 
