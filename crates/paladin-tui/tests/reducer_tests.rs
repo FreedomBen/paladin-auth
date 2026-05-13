@@ -2811,6 +2811,144 @@ fn ctrl_modified_char_in_add_modal_manual_mode_secret_focus_does_not_append() {
 }
 
 #[test]
+fn char_in_add_modal_manual_mode_icon_hint_focus_appends_to_icon_hint_text() {
+    // Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
+    // Manual mode collects an optional icon-hint free-form token as
+    // the eighth (final) focused field. A printable character (no
+    // Ctrl/Alt modifier) typed while the icon-hint is focused appends
+    // to the modal-local `icon_hint_text` buffer. Reach IconHintText
+    // by one BackTab from the default Label focus (the cycle wraps).
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_add_modal(&tmp);
+    let (state, _) = reduce(state, key(KeyCode::BackTab));
+    assert_eq!(
+        add_modal_ref(&state).manual_focus,
+        AddManualFocus::IconHintText
+    );
+    assert!(add_modal_ref(&state).icon_hint_text.is_empty());
+    let (after, effects) = reduce(state, key(KeyCode::Char('I')));
+    assert!(
+        effects.is_empty(),
+        "typing into a Manual-mode field must not emit effects"
+    );
+    let add = add_modal_ref(&after);
+    assert_eq!(add.icon_hint_text, "I");
+    assert!(
+        add.label.is_empty(),
+        "IconHint-focused Char must not leak into the label"
+    );
+    assert!(
+        add.issuer.is_empty(),
+        "IconHint-focused Char must not leak into the issuer"
+    );
+    assert!(
+        add.manual_secret.is_empty(),
+        "IconHint-focused Char must not leak into manual_secret"
+    );
+    assert_eq!(
+        add.mode,
+        AddMode::Manual,
+        "typing must not change input mode"
+    );
+    assert_eq!(
+        add.manual_focus,
+        AddManualFocus::IconHintText,
+        "typing must not change manual_focus"
+    );
+}
+
+#[test]
+fn multiple_chars_in_add_modal_manual_mode_icon_hint_focus_append_in_order() {
+    // Several `KeyCode::Char` presses build up the icon-hint buffer
+    // in typed order, including a non-ASCII codepoint so the
+    // implementation can't accidentally byte-slice or drop multi-byte
+    // input.
+    let tmp = secure_tempdir();
+    let mut state = fresh_unlocked_with_add_modal(&tmp);
+    let (next, _) = reduce(state, key(KeyCode::BackTab));
+    state = next;
+    assert_eq!(
+        add_modal_ref(&state).manual_focus,
+        AddManualFocus::IconHintText
+    );
+    for c in "key 🦀".chars() {
+        let (next, effects) = reduce(state, key(KeyCode::Char(c)));
+        assert!(effects.is_empty(), "typing must not emit effects");
+        state = next;
+    }
+    assert_eq!(add_modal_ref(&state).icon_hint_text, "key 🦀");
+    assert!(add_modal_ref(&state).label.is_empty());
+    assert!(add_modal_ref(&state).issuer.is_empty());
+    assert!(add_modal_ref(&state).manual_secret.is_empty());
+}
+
+#[test]
+fn backspace_in_add_modal_manual_mode_icon_hint_focus_pops_last_char() {
+    // Backspace on a non-empty icon_hint_text removes the trailing
+    // character.
+    let tmp = secure_tempdir();
+    let mut state = fresh_unlocked_with_add_modal(&tmp);
+    let (next, _) = reduce(state, key(KeyCode::BackTab));
+    state = next;
+    for c in "ab".chars() {
+        let (next, _) = reduce(state, key(KeyCode::Char(c)));
+        state = next;
+    }
+    assert_eq!(add_modal_ref(&state).icon_hint_text, "ab");
+    let (after, effects) = reduce(state, key(KeyCode::Backspace));
+    assert!(effects.is_empty(), "Backspace must not emit effects");
+    assert_eq!(add_modal_ref(&after).icon_hint_text, "a");
+}
+
+#[test]
+fn backspace_in_add_modal_manual_mode_icon_hint_focus_on_empty_is_silent_noop() {
+    // Backspace on an empty icon_hint_text is a silent no-op: no
+    // panic, no effects, no state change. Mirrors the Unlock-screen
+    // contract and the Label / Issuer / Secret focus behaviour.
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_add_modal(&tmp);
+    let (state, _) = reduce(state, key(KeyCode::BackTab));
+    assert_eq!(
+        add_modal_ref(&state).manual_focus,
+        AddManualFocus::IconHintText
+    );
+    assert!(add_modal_ref(&state).icon_hint_text.is_empty());
+    let (after, effects) = reduce(state, key(KeyCode::Backspace));
+    assert!(
+        effects.is_empty(),
+        "Backspace on empty must not emit effects"
+    );
+    let add = add_modal_ref(&after);
+    assert!(add.icon_hint_text.is_empty());
+    assert!(add.label.is_empty());
+    assert!(add.issuer.is_empty());
+    assert!(add.manual_secret.is_empty());
+    assert_eq!(add.manual_focus, AddManualFocus::IconHintText);
+    assert_eq!(add.mode, AddMode::Manual);
+}
+
+#[test]
+fn ctrl_modified_char_in_add_modal_manual_mode_icon_hint_focus_does_not_append() {
+    // Mirrors the Unlock-screen / Label / Issuer / Secret
+    // Ctrl/Alt-modifier filter on text fields: `Ctrl-*` and `Alt-*`
+    // are reserved for binding extensions and must not leak into the
+    // icon hint as raw characters.
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_add_modal(&tmp);
+    let (state, _) = reduce(state, key(KeyCode::BackTab));
+    assert_eq!(
+        add_modal_ref(&state).manual_focus,
+        AddManualFocus::IconHintText
+    );
+    let (after, effects) = reduce(state, ctrl(KeyCode::Char('x')));
+    assert!(effects.is_empty(), "Ctrl-X must not emit effects");
+    assert!(
+        add_modal_ref(&after).icon_hint_text.is_empty(),
+        "Ctrl-X must not append 'x' to icon_hint_text"
+    );
+}
+
+#[test]
 fn char_in_add_modal_manual_mode_with_non_text_focus_is_silent_noop() {
     // Text editing for Label and Issuer is wired; the remaining
     // fields beyond Secret (Algorithm / Digits / Kind /

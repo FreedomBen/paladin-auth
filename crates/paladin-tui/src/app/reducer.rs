@@ -1130,21 +1130,26 @@ fn route_modal_input(
 /// `manual_focus` is intentionally sticky across mode switches so the
 /// user's last Manual-mode focus is restored on return to Manual.
 ///
-/// In Manual mode with [`AddManualFocus::Label`],
-/// [`AddManualFocus::Issuer`], or [`AddManualFocus::Secret`] focused,
+/// In Manual mode with one of the four text-bearing fields focused
+/// — [`AddManualFocus::Label`], [`AddManualFocus::Issuer`],
+/// [`AddManualFocus::Secret`], or [`AddManualFocus::IconHintText`] —
 /// a printable `KeyCode::Char` keystroke (no `Ctrl` / `Alt` modifier
 /// — mirroring the Unlock-screen filter) appends to the corresponding
-/// modal-local buffer (`label`, `issuer`, or `manual_secret`) and
-/// `KeyCode::Backspace` pops the trailing character; backspace on an
-/// empty buffer is a silent no-op. The `manual_secret` field is a
+/// modal-local buffer (`label`, `issuer`, `manual_secret`, or
+/// `icon_hint_text`) and `KeyCode::Backspace` pops the trailing
+/// character; backspace on an empty buffer is a silent no-op. The
+/// `manual_secret` field is a
 /// [`PassphraseBuffer`](crate::prompt::PassphraseBuffer) so typed
 /// bytes are zeroized on drop / clear; Base32 + length validation
 /// runs at submit time via `paladin_core::validate_manual`, so typing
-/// accepts any character. `Char` keystrokes on any other Manual-mode
-/// focus are silently consumed for now (modal-trap contract); typing
-/// for the remaining text-bearing field (icon hint) and the URI mode
-/// lands in subsequent slices, as does the duplicate-gate pending
-/// state and the post-QR counts panel.
+/// accepts any character. `Char` keystrokes on the four
+/// non-text-bearing focuses ([`AddManualFocus::Algorithm`],
+/// [`AddManualFocus::Digits`], [`AddManualFocus::Kind`], and
+/// [`AddManualFocus::PeriodOrCounter`] — selectors and spinners
+/// cycled by `←` / `→` / `↑` / `↓` in subsequent slices) and on the
+/// URI mode are silently consumed for now (modal-trap contract);
+/// URI-mode typing, the duplicate-gate pending state, and the
+/// post-QR counts panel land in subsequent slices.
 /// Every other key here is a silent no-op so the modal-trap contract
 /// holds. `Esc` / Help / `Ctrl-C` are filtered upstream of the modal
 /// trap.
@@ -1178,11 +1183,11 @@ fn route_add_modal_input(add: &mut AddModal, key: &KeyEvent) -> Vec<Effect> {
                     AddManualFocus::Label => add.label.push(c),
                     AddManualFocus::Issuer => add.issuer.push(c),
                     AddManualFocus::Secret => add.manual_secret.push(c),
+                    AddManualFocus::IconHintText => add.icon_hint_text.push(c),
                     AddManualFocus::Algorithm
                     | AddManualFocus::Digits
                     | AddManualFocus::Kind
-                    | AddManualFocus::PeriodOrCounter
-                    | AddManualFocus::IconHintText => {}
+                    | AddManualFocus::PeriodOrCounter => {}
                 }
             }
             return Vec::new();
@@ -1198,11 +1203,13 @@ fn route_add_modal_input(add: &mut AddModal, key: &KeyEvent) -> Vec<Effect> {
                 AddManualFocus::Secret => {
                     add.manual_secret.pop();
                 }
+                AddManualFocus::IconHintText => {
+                    add.icon_hint_text.pop();
+                }
                 AddManualFocus::Algorithm
                 | AddManualFocus::Digits
                 | AddManualFocus::Kind
-                | AddManualFocus::PeriodOrCounter
-                | AddManualFocus::IconHintText => {}
+                | AddManualFocus::PeriodOrCounter => {}
             }
             return Vec::new();
         }
