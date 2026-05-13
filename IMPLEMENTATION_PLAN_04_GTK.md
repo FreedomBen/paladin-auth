@@ -771,18 +771,18 @@ These run without a display server. Each lives under
 
 #### `tests/hotp_reveal_logic.rs`
 
-- [ ] Reveal window timing routes through
+- [x] Reveal window timing routes through
   `paladin_core::policy::hotp_reveal::deadline` (uses
   `paladin_core::HOTP_REVEAL_SECS`).
-- [ ] Visible counter label tracks `Code.counter_used` during reveal;
+- [x] Visible counter label tracks `Code.counter_used` during reveal;
   the row reverts to the stored next counter when hidden.
-- [ ] Activating "next" during an open reveal advances the counter
+- [x] Activating "next" during an open reveal advances the counter
   again and restarts the shared reveal window with the newly
   committed code.
-- [ ] Staged code is published on success.
-- [ ] Staged code is published on `save_durability_unconfirmed` and
+- [x] Staged code is published on success.
+- [x] Staged code is published on `save_durability_unconfirmed` and
   surfaces an `AdwToast` warning.
-- [ ] Staged code is zeroized and prior reveal state is retained on
+- [x] Staged code is zeroized and prior reveal state is retained on
   `save_not_committed` and other failures.
 
 #### `tests/secret_fields_logic.rs`
