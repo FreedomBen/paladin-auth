@@ -13,7 +13,8 @@ use zeroize::Zeroizing;
 
 use paladin_core::{
     AccountId, AccountKindInput, AccountSummary, Algorithm, ClipboardClearToken, Code,
-    ImportReport, PaladinError, SettingPatch, Store, ValidatedAccount, ValidationWarning, Vault,
+    ImportConflict, ImportFormat, ImportReport, PaladinError, SettingPatch, Store,
+    ValidatedAccount, ValidationWarning, Vault,
 };
 
 /// Events delivered to the reducer over the `mpsc<AppEvent>` channel.
@@ -393,6 +394,41 @@ pub enum EffectResult {
         /// panel; `Err` carries the inline-error reason.
         result: Result<QrImportSuccess, QrImportFailure>,
     },
+
+    /// Outcome of an [`Effect::Import`] attempt.
+    ///
+    /// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Import:
+    /// *"The modal reports imported/skipped/replaced/appended/warning
+    /// counts plus validation-warning messages rendered through
+    /// `paladin_core::format_validation_warning()` in a post-success
+    /// counts panel."* and *"Importer errors … stay in the modal as
+    /// inline errors and never mutate vault state."*
+    ///
+    /// On `Ok(ImportSuccess)` the reducer renders the counts panel
+    /// (warnings + per-policy totals) inside the still-open Import
+    /// modal — the counts-panel state slice lands alongside the success
+    /// rendering.
+    ///
+    /// On `Err(ImportFailure)` the reducer surfaces the rendered
+    /// failure inline in
+    /// [`crate::app::state::ImportModal::error`] and leaves the modal
+    /// open so the user can retry. Pre-commit save failures
+    /// (`save_not_committed`) are rolled back inside
+    /// `Vault::mutate_and_save`; durability-unconfirmed leaves the
+    /// merge committed in memory and surfaces the warning inline. Both
+    /// classes deliver here as [`ImportFailure`].
+    ///
+    /// Results delivered while not on
+    /// [`crate::app::state::AppState::Unlocked`], while a different
+    /// modal is open, or after the Import modal closed are discarded so
+    /// the carried [`ImportReport`] / [`PaladinError`] drops without
+    /// mutating state.
+    Import {
+        /// The import outcome. `Ok` carries the
+        /// [`ImportReport`](paladin_core::ImportReport) for the counts
+        /// panel; `Err` carries the rendered inline-error reason.
+        result: Result<ImportSuccess, ImportFailure>,
+    },
 }
 
 /// Successful outcome of an [`Effect::Add`] attempt.
@@ -511,6 +547,42 @@ pub enum QrImportFailure {
     /// non-otpauth payload, save-not-committed, etc.).
     Import(PaladinError),
 }
+
+/// Successful outcome of an [`Effect::Import`] attempt.
+///
+/// Carries the [`ImportReport`] returned by
+/// [`paladin_core::Vault::import_accounts`] so the reducer can populate
+/// the post-success counts panel with the `imported` / `skipped` /
+/// `replaced` / `appended` totals plus the rendered validation
+/// warnings — per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" >
+/// Import: *"The modal reports imported/skipped/replaced/appended/
+/// warning counts plus validation-warning messages rendered through
+/// `paladin_core::format_validation_warning()` in a post-success
+/// counts panel."*
+#[derive(Debug)]
+pub struct ImportSuccess {
+    /// Counts and warnings from
+    /// [`paladin_core::Vault::import_accounts`].
+    pub report: ImportReport,
+}
+
+/// Failure outcome of an [`Effect::Import`] attempt.
+///
+/// Wraps the [`PaladinError`] returned by
+/// [`paladin_core::import::from_file`] (importer / facade /
+/// format-specific errors) or by
+/// [`paladin_core::Vault::import_accounts`] /
+/// [`paladin_core::Vault::mutate_and_save`] (merge / save / durability
+/// errors). The reducer renders the failure through
+/// [`crate::app::state::render_error_message`] so the wording matches
+/// the rest of the TUI's error surface and stashes it in
+/// [`crate::app::state::ImportModal::error`] per the plan's "Modals
+/// (per §6)" > Import inline-error rule. Single-variant for now
+/// (mirrors the CLI's `paladin: error: <text>` surface); subsequent
+/// slices may introduce sub-variants if a class needs distinct UI
+/// affordances.
+#[derive(Debug)]
+pub struct ImportFailure(pub PaladinError);
 
 /// Side effects produced by the reducer.
 ///
@@ -876,5 +948,57 @@ pub enum Effect {
         /// reporting and to verify the path the effect was emitted
         /// against in case the user has navigated away.
         path: PathBuf,
+    },
+    /// Import accounts from a source file into the live vault.
+    ///
+    /// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Import:
+    /// *"The selected `paladin_core::import::from_file` call returns
+    /// `Vec<ValidatedAccount>`; on success,
+    /// `Vault::import_accounts(accounts, conflict, import_time)` is
+    /// called inside `Vault::mutate_and_save` with the user's policy
+    /// and the same `import_time` passed to `ImportOptions`."*
+    ///
+    /// The reducer emits this effect when `Enter` is pressed on
+    /// `Modal::Import` after the (optional)
+    /// [`paladin_core::classify_paladin_import_precheck`] gate has
+    /// returned `NoPrompt` (or after the encrypted-Paladin passphrase
+    /// prompt resolved). The executor calls
+    /// [`paladin_core::import::from_file`] over `source_path` with the
+    /// carried [`paladin_core::ImportOptions`] and one
+    /// `SystemTime::now()` sample as `import_time`; on success it
+    /// commits the resulting [`paladin_core::ValidatedAccount`] batch
+    /// through [`paladin_core::Vault::import_accounts`] wrapped in
+    /// [`paladin_core::Vault::mutate_and_save`] so the merge and save
+    /// are atomic. The outcome rides on [`EffectResult::Import`].
+    ///
+    /// `format` mirrors [`paladin_core::ImportOptions::format`]:
+    /// [`None`] auto-detects via [`paladin_core::detect`] inside the
+    /// facade, [`Some`] forces the matching format and lets the facade
+    /// sanity-check the input shape.
+    ///
+    /// `paladin_passphrase` is consumed only when the facade dispatches
+    /// to [`ImportFormat::Paladin`]; it lands in subsequent slices once
+    /// the precheck wiring is in place. The auto-detect first slice
+    /// passes [`None`].
+    Import {
+        /// The current vault path; the executor uses it for error
+        /// reporting and to verify the path the effect was emitted
+        /// against in case the user has navigated away.
+        path: PathBuf,
+        /// Source file path passed to
+        /// [`paladin_core::import::from_file`].
+        source_path: PathBuf,
+        /// Forced format override (per
+        /// [`paladin_core::ImportOptions::format`]). [`None`] means
+        /// auto-detect via [`paladin_core::detect`].
+        format: Option<ImportFormat>,
+        /// Per-batch merge policy passed to
+        /// [`paladin_core::Vault::import_accounts`].
+        conflict: ImportConflict,
+        /// Bundle passphrase for encrypted-Paladin imports; consumed
+        /// only when the facade dispatches to
+        /// [`ImportFormat::Paladin`]. The auto-detect first slice
+        /// passes [`None`].
+        paladin_passphrase: Option<SecretString>,
     },
 }

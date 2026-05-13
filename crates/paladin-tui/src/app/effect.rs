@@ -22,11 +22,14 @@ use std::sync::mpsc::Sender;
 use std::time::{Instant, SystemTime};
 
 use paladin_core::{
-    parse_icon_hint_token, parse_otpauth, validate_manual, Account, AccountInput, PaladinError,
-    SettingPatch, Store, ValidatedAccount, VaultLock,
+    import as core_import, parse_icon_hint_token, parse_otpauth, validate_manual, Account,
+    AccountInput, ImportConflict, ImportFormat, ImportOptions, PaladinError, SettingPatch, Store,
+    ValidatedAccount, VaultLock,
 };
 
-use crate::app::event::{AddFailure, AddSuccess, AppEvent, Effect, EffectResult};
+use crate::app::event::{
+    AddFailure, AddSuccess, AppEvent, Effect, EffectResult, ImportFailure, ImportSuccess,
+};
 use crate::app::state::AppState;
 
 /// Outcome of executing a single [`Effect`].
@@ -289,6 +292,21 @@ pub fn execute(effect: Effect, state: &mut AppState, sender: &Sender<AppEvent>) 
             let _ = sender;
             EffectOutcome::Continue
         }
+        Effect::Import {
+            path,
+            source_path,
+            format,
+            conflict,
+            paladin_passphrase,
+        } => execute_import(
+            &path,
+            &source_path,
+            format,
+            conflict,
+            paladin_passphrase,
+            state,
+            sender,
+        ),
     }
 }
 
@@ -620,4 +638,83 @@ fn commit_validated_add(
         Ok(summary) => Ok(AddSuccess { summary, warnings }),
         Err(err) => Err(AddFailure::Save(err)),
     }
+}
+
+/// Execute an [`Effect::Import`] for an Import-modal submit.
+///
+/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Import:
+///
+/// 1. Build a [`paladin_core::ImportOptions`] from the carried
+///    `format` (`None` runs auto-detect via
+///    [`paladin_core::detect`] inside the facade, [`Some`] forces the
+///    matching format and lets the facade sanity-check the input
+///    shape) and `paladin_passphrase` (consumed only when the facade
+///    dispatches to [`ImportFormat::Paladin`]).
+/// 2. Call [`paladin_core::import::from_file`] over `source_path` with
+///    one `SystemTime::now()` sample as `import_time`; importer /
+///    format-facade errors map to [`ImportFailure`] and surface inline.
+/// 3. On a successful parse commit the resulting
+///    [`paladin_core::ValidatedAccount`] batch through
+///    [`paladin_core::Vault::import_accounts`] wrapped in
+///    [`paladin_core::Vault::mutate_and_save`] with the same
+///    `import_time`. Save errors (`save_not_committed`,
+///    `save_durability_unconfirmed`, `io_error`) ride the same
+///    [`ImportFailure`] channel; the reducer surfaces them inline per
+///    the plan's "Effect errors" > "Add / remove / rename / settings
+///    saves" rule (pre-commit failures are rolled back inside core).
+///
+/// The path check protects against a stale effect emitted before an
+/// auto-lock or vault switch: if the live state is no longer
+/// `Unlocked` against the same path, drop the effect silently — the
+/// reducer would discard the corresponding `EffectResult::Import`
+/// anyway, and posting back would just synthesize an artificial
+/// mutation attempt against unrelated state.
+fn execute_import(
+    path: &std::path::Path,
+    source_path: &std::path::Path,
+    format: Option<ImportFormat>,
+    conflict: ImportConflict,
+    paladin_passphrase: Option<secrecy::SecretString>,
+    state: &mut AppState,
+    sender: &Sender<AppEvent>,
+) -> EffectOutcome {
+    let AppState::Unlocked {
+        path: state_path,
+        vault,
+        store,
+        ..
+    } = state
+    else {
+        return EffectOutcome::Continue;
+    };
+    if state_path != path {
+        return EffectOutcome::Continue;
+    }
+
+    let import_time = SystemTime::now();
+    let options = ImportOptions {
+        format,
+        paladin_passphrase,
+    };
+    let accounts = match core_import::from_file(source_path, options, import_time) {
+        Ok(v) => v,
+        Err(err) => {
+            let _ = sender.send(AppEvent::EffectResult(EffectResult::Import {
+                result: Err(ImportFailure(err)),
+            }));
+            return EffectOutcome::Continue;
+        }
+    };
+
+    let result = vault.mutate_and_save(store, move |v| {
+        v.import_accounts(accounts, conflict, import_time)
+    });
+    let mapped = match result {
+        Ok(report) => Ok(ImportSuccess { report }),
+        Err(err) => Err(ImportFailure(err)),
+    };
+    let _ = sender.send(AppEvent::EffectResult(EffectResult::Import {
+        result: mapped,
+    }));
+    EffectOutcome::Continue
 }

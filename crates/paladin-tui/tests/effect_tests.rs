@@ -24,12 +24,14 @@ use tempfile::TempDir;
 
 use paladin_core::{
     validate_manual, AccountId, AccountInput, AccountKindInput, Algorithm, Argon2Params,
-    EncryptionOptions, IconHintInput, PaladinError, SettingPatch, Store, Vault, VaultInit,
-    VaultLock,
+    EncryptionOptions, IconHintInput, ImportConflict, PaladinError, SettingPatch, Store, Vault,
+    VaultInit, VaultLock,
 };
 
 use paladin_tui::app::effect::{execute, EffectOutcome};
-use paladin_tui::app::event::{AddFailure, AddSuccess, AppEvent, Effect, EffectResult};
+use paladin_tui::app::event::{
+    AddFailure, AddSuccess, AppEvent, Effect, EffectResult, ImportFailure, ImportSuccess,
+};
 use paladin_tui::app::state::{AppState, Focus};
 
 /// Light Argon2 params for fast tests; mirrors the CLI test fixtures.
@@ -1651,4 +1653,247 @@ fn execute_add_from_uri_with_no_duplicate_inserts_validated_account_and_persists
         initial_count + 1,
         "non-duplicate URI Add must commit to the on-disk primary"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Effect::Import — auto-detect path
+// ---------------------------------------------------------------------------
+//
+// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Import modal" >
+// *"Format auto-detect routes through `paladin_core::import::from_file`."*
+// With `format: None` the executor must build
+// `paladin_core::ImportOptions { format: None, .. }`, call
+// `paladin_core::import::from_file`, and commit the resulting
+// `Vec<ValidatedAccount>` through `Vault::import_accounts` wrapped in
+// `Vault::mutate_and_save`. A plain `otpauth://` URI in the source file
+// is detected as `ImportFormat::Otpauth` by the core facade, so the
+// happy-path executor test only needs to verify the imported count and
+// the in-memory / on-disk persistence parity.
+
+#[test]
+fn execute_import_with_auto_format_routes_through_import_from_file_for_otpauth_payload_and_persists_via_mutate_and_save(
+) {
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+
+    let (mut vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let initial_count = vault.iter().count();
+    let state = AppState::Unlocked {
+        path: path.clone(),
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+
+    // Write a single otpauth URI so the facade's `detect` returns
+    // `ImportFormat::Otpauth` and dispatches to the otpauth importer.
+    let source_path = tmp.path().join("import.txt");
+    std::fs::write(
+        &source_path,
+        "otpauth://totp/Example:alice@example.com?secret=JBSWY3DPEHPK3PXP&issuer=Example",
+    )
+    .expect("write otpauth source file");
+
+    let mut state = state;
+    let (tx, rx) = mpsc::channel::<AppEvent>();
+    let effect = Effect::Import {
+        path: path.clone(),
+        source_path: source_path.clone(),
+        format: None,
+        conflict: ImportConflict::Skip,
+        paladin_passphrase: None,
+    };
+    let outcome = execute(effect, &mut state, &tx);
+    assert_eq!(outcome, EffectOutcome::Continue);
+
+    let evt = rx.try_recv().expect("an AppEvent should be sent");
+    let new_id = match evt {
+        AppEvent::EffectResult(EffectResult::Import {
+            result: Ok(ImportSuccess { report }),
+        }) => {
+            assert_eq!(
+                report.imported, 1,
+                "single-URI otpauth payload must produce exactly one imported account"
+            );
+            assert_eq!(report.skipped, 0, "no skip path on an empty starting vault");
+            assert_eq!(report.replaced, 0, "Skip policy never replaces");
+            assert_eq!(report.appended, 0, "Skip policy never appends");
+            assert_eq!(
+                report.accounts.len(),
+                1,
+                "imported IDs list must reflect the new account"
+            );
+            report.accounts[0]
+        }
+        other => panic!("expected EffectResult::Import Ok, got {other:?}"),
+    };
+    assert!(
+        rx.try_recv().is_err(),
+        "executor must emit exactly one AppEvent per Effect::Import"
+    );
+
+    // Live in-memory vault grew by one.
+    vault = match state {
+        AppState::Unlocked { vault, .. } => vault,
+        other => panic!("expected Unlocked, got {other:?}"),
+    };
+    assert_eq!(
+        vault.iter().count(),
+        initial_count + 1,
+        "successful import must grow the live vault"
+    );
+    assert!(
+        vault.iter().any(|a| a.id() == new_id),
+        "live vault must carry the imported account ID"
+    );
+
+    // On-disk primary committed (mutate_and_save persists the merge).
+    let (reopened, _store) = Store::open(&path, VaultLock::Plaintext).expect("reopen plaintext");
+    assert_eq!(
+        reopened.iter().count(),
+        initial_count + 1,
+        "successful import must commit to the on-disk primary"
+    );
+    assert!(
+        reopened.iter().any(|a| a.id() == new_id),
+        "on-disk vault must carry the imported account ID"
+    );
+}
+
+#[test]
+fn execute_import_with_missing_source_file_emits_io_error_failure_and_leaves_vault_untouched() {
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let initial_count = vault.iter().count();
+    let mut state = AppState::Unlocked {
+        path: path.clone(),
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+
+    let missing = tmp.path().join("does-not-exist.txt");
+    let (tx, rx) = mpsc::channel::<AppEvent>();
+    let effect = Effect::Import {
+        path: path.clone(),
+        source_path: missing,
+        format: None,
+        conflict: ImportConflict::Skip,
+        paladin_passphrase: None,
+    };
+    let outcome = execute(effect, &mut state, &tx);
+    assert_eq!(outcome, EffectOutcome::Continue);
+
+    let evt = rx.try_recv().expect("an AppEvent should be sent");
+    match evt {
+        AppEvent::EffectResult(EffectResult::Import {
+            result: Err(ImportFailure(err)),
+        }) => match err {
+            PaladinError::IoError { operation, .. } => assert_eq!(
+                operation, "read_import_file",
+                "missing source file must surface the facade's `read_import_file` io_error"
+            ),
+            other => panic!("expected IoError, got {other:?}"),
+        },
+        other => panic!("expected EffectResult::Import Err, got {other:?}"),
+    }
+
+    // Vault state was not mutated.
+    match &state {
+        AppState::Unlocked { vault, .. } => {
+            assert_eq!(
+                vault.iter().count(),
+                initial_count,
+                "io_error during import must not mutate the live vault"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn execute_import_with_mismatched_path_is_silently_dropped() {
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let other_path = tmp.path().join("other.bin");
+    create_plaintext_vault(&path);
+    let (vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let initial_count = vault.iter().count();
+    let mut state = AppState::Unlocked {
+        path: path.clone(),
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+
+    // Write a valid source file so the facade would otherwise succeed —
+    // the path guard must reject this effect before the read.
+    let source_path = tmp.path().join("import.txt");
+    std::fs::write(
+        &source_path,
+        "otpauth://totp/Example:alice@example.com?secret=JBSWY3DPEHPK3PXP&issuer=Example",
+    )
+    .expect("write otpauth source file");
+
+    let (tx, rx) = mpsc::channel::<AppEvent>();
+    let effect = Effect::Import {
+        path: other_path,
+        source_path,
+        format: None,
+        conflict: ImportConflict::Skip,
+        paladin_passphrase: None,
+    };
+    let outcome = execute(effect, &mut state, &tx);
+    assert_eq!(outcome, EffectOutcome::Continue);
+    assert!(
+        rx.try_recv().is_err(),
+        "mismatched path must drop the effect without emitting an AppEvent"
+    );
+
+    match &state {
+        AppState::Unlocked { vault, .. } => {
+            assert_eq!(
+                vault.iter().count(),
+                initial_count,
+                "mismatched path must not mutate the live vault"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
 }

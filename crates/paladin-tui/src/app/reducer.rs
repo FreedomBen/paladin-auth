@@ -21,13 +21,15 @@ use paladin_core::{
 use secrecy::SecretString;
 use zeroize::Zeroizing;
 
-use crate::app::event::{AddFailure, AppEvent, Effect, EffectResult, QrImportSuccess};
+use crate::app::event::{
+    AddFailure, AppEvent, Effect, EffectResult, ImportFailure, ImportSuccess, QrImportSuccess,
+};
 use crate::app::state::{
     compute_idle_deadline, format_account_display_label, format_duplicate_account_message,
     format_qr_import_failure, initial_selection, render_error_message, AddManualFocus, AddModal,
-    AddMode, AppState, ChordLeader, CountsPanel, Focus, HotpReveal, Modal, PendingClipboardClear,
-    PendingDuplicateAdd, RemoveModal, RenameModal, SettingsFocus, SettingsModal, StatusLine,
-    CLIPBOARD_WRITE_FAILED, NO_ACCOUNT_SELECTED,
+    AddMode, AppState, ChordLeader, CountsPanel, Focus, HotpReveal, ImportModal, Modal,
+    PendingClipboardClear, PendingDuplicateAdd, RemoveModal, RenameModal, SettingsFocus,
+    SettingsModal, StatusLine, CLIPBOARD_WRITE_FAILED, NO_ACCOUNT_SELECTED,
 };
 use crate::search::{filtered_account_ids, select_after_search};
 
@@ -266,6 +268,7 @@ fn reduce_effect_result(state: AppState, result: EffectResult) -> (AppState, Vec
         EffectResult::Settings { result } => reduce_settings_result(state, result),
         EffectResult::Add { result } => reduce_add_result(state, result),
         EffectResult::QrImport { result } => reduce_qr_import_result(state, result),
+        EffectResult::Import { result } => reduce_import_result(state, result),
     }
 }
 
@@ -739,6 +742,50 @@ fn reduce_qr_import_result(
         }
         Err(failure) => {
             add.error = Some(format_qr_import_failure(&failure));
+        }
+    }
+    (state, Vec::new())
+}
+
+/// Handle the outcome of an [`Effect::Import`].
+///
+/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Import:
+/// on success the modal renders a post-success counts panel (the
+/// per-slice counts-panel state lands alongside that bullet); on
+/// failure the rendered importer / save error stashes inline so the
+/// user can adjust and retry. Pre-commit save failures are rolled
+/// back inside [`paladin_core::Vault::mutate_and_save`] — the executor
+/// reports them through the same [`ImportFailure`] channel as
+/// importer-side errors, so this arm does not need a separate rollback
+/// step on the in-memory vault.
+///
+/// Results delivered while not on
+/// [`AppState::Unlocked`], while a different modal is open, or after
+/// the Import modal closed are discarded so the carried
+/// [`paladin_core::ImportReport`] / [`PaladinError`] drops without
+/// mutating state.
+fn reduce_import_result(
+    mut state: AppState,
+    result: Result<ImportSuccess, ImportFailure>,
+) -> (AppState, Vec<Effect>) {
+    let AppState::Unlocked { ref mut modal, .. } = state else {
+        return (state, Vec::new());
+    };
+
+    let Some(Modal::Import(import)) = modal.as_mut() else {
+        return (state, Vec::new());
+    };
+
+    match result {
+        Ok(ImportSuccess { report: _ }) => {
+            // Counts panel rendering lands alongside the dedicated
+            // "Successful imports persist via `Vault::mutate_and_save`"
+            // slice; for now we clear any prior inline error so the
+            // user does not see stale rejection text after a success.
+            import.error = None;
+        }
+        Err(ImportFailure(err)) => {
+            import.error = Some(render_error_message(&err));
         }
     }
     (state, Vec::new())
@@ -1247,6 +1294,7 @@ fn route_modal_input(
         Some(Modal::Add(add)) => route_add_modal_input(path, add, key),
         Some(Modal::Rename(rename)) => route_rename_modal_input(path, rename, key),
         Some(Modal::Remove(remove)) => route_remove_modal_input(path, remove, key),
+        Some(Modal::Import(import)) => route_import_modal_input(path, import, key),
         Some(Modal::Settings(settings)) => {
             let (effects, close) = route_settings_modal_input(path, settings, vault, key);
             if close {
@@ -1820,6 +1868,65 @@ fn route_rename_modal_input(
     }
 }
 
+/// Import modal's input path.
+///
+/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Import:
+/// the modal collects a source path, a format selector (auto-detect or
+/// explicit `otpauth` / `aegis` / `paladin` / `qr`), and an
+/// on-conflict selector. At this slice the input path supports:
+///
+/// - printable `KeyCode::Char` keystrokes (no `Ctrl` / `Alt` modifier
+///   — mirroring the Unlock-screen filter) append to the `path_text`
+///   buffer; `KeyCode::Backspace` pops the trailing character. Any
+///   edit clears the inline `error` so the user sees their retry.
+/// - `KeyCode::Enter` submits: it emits an
+///   [`Effect::Import`] keyed off the current `format` / `conflict`
+///   selectors. With the default
+///   [`ImportFormatSelector::Auto`] the carried
+///   [`paladin_core::ImportOptions::format`] is [`None`], so the core
+///   facade owns format dispatch via [`paladin_core::detect`]. The
+///   encrypted-Paladin passphrase prompt lands in a subsequent slice
+///   gated by [`paladin_core::classify_paladin_import_precheck`]; for
+///   now `paladin_passphrase` is always `None` on submit.
+/// - other keys (`Tab` / `Shift-Tab` / arrows / unbound chords) are
+///   silent no-ops at this slice — the format / conflict selector
+///   navigation lands alongside its slice.
+///
+/// Esc / Help / Ctrl-C are filtered upstream of the modal trap.
+fn route_import_modal_input(
+    path: &std::path::Path,
+    import: &mut ImportModal,
+    key: &KeyEvent,
+) -> Vec<Effect> {
+    match key.code {
+        KeyCode::Char(c)
+            if !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+        {
+            import.path_text.push(c);
+            import.error = None;
+            Vec::new()
+        }
+        KeyCode::Backspace => {
+            import.path_text.pop();
+            import.error = None;
+            Vec::new()
+        }
+        KeyCode::Enter => {
+            let source_path = std::path::PathBuf::from(import.path_text.trim());
+            vec![Effect::Import {
+                path: path.to_path_buf(),
+                source_path,
+                format: import.format.forced(),
+                conflict: import.conflict,
+                paladin_passphrase: None,
+            }]
+        }
+        _ => Vec::new(),
+    }
+}
+
 /// Map the (key character, current selection) pair to a status-line
 /// error when a selection-gated action key fires without a selected
 /// row. Returns `Some(StatusLine::Error(...))` for `n` / `r` / `R`
@@ -2353,7 +2460,7 @@ fn route_search_focus_char(
 fn modal_opener_for_char(c: char) -> Option<Modal> {
     Some(match c {
         'a' => Modal::Add(AddModal::default()),
-        'i' => Modal::Import,
+        'i' => Modal::Import(ImportModal::default()),
         'e' => Modal::Export,
         'p' => Modal::Passphrase,
         _ => return None,

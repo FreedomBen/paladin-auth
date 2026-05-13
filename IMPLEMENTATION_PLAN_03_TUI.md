@@ -930,8 +930,23 @@ end-to-end.
 
 ### Import modal (`tests/reducer_tests.rs`)
 
-- [ ] Format auto-detect routes through
+- [x] Format auto-detect routes through
   `paladin_core::import::from_file`.
+  *(Reducer's Import-modal Enter handler emits
+  `Effect::Import { format: None, conflict: Skip, paladin_passphrase:
+  None, .. }` keyed off the default
+  `ImportFormatSelector::Auto`; the executor builds
+  `paladin_core::ImportOptions { format: None, .. }` and calls
+  `paladin_core::import::from_file`, then commits the resulting
+  `Vec<ValidatedAccount>` through `Vault::import_accounts` wrapped in
+  `Vault::mutate_and_save`. Asserted by
+  `execute_import_with_auto_format_routes_through_import_from_file_for_otpauth_payload_and_persists_via_mutate_and_save`
+  in `tests/effect_tests.rs` and
+  `enter_in_import_modal_with_default_state_emits_import_effect_with_auto_format_and_skip_conflict`
+  in `tests/reducer_tests.rs`, with the path-guard sibling
+  `execute_import_with_mismatched_path_is_silently_dropped` and the
+  io_error sibling
+  `execute_import_with_missing_source_file_emits_io_error_failure_and_leaves_vault_untouched`.)*
 - [ ] Explicit format overrides (`otpauth` / `aegis` / `paladin` /
   `qr`) route through `paladin_core::import::from_file`.
 - [ ] Pre-prompt Paladin decision routes through

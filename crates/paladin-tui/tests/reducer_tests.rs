@@ -32,8 +32,8 @@ use paladin_tui::app::state::{
     compute_idle_deadline, decide_state_from_inspect, decide_state_from_open,
     format_account_display_label, format_duplicate_account_message, format_qr_import_failure,
     render_error_message, AddManualFocus, AddModal, AddMode, AppState, ChordLeader, Focus,
-    HotpReveal, Modal, PendingDuplicateAdd, RemoveModal, RenameModal, SettingsFocus, SettingsModal,
-    StatusLine, NO_ACCOUNT_SELECTED,
+    HotpReveal, ImportModal, Modal, PendingDuplicateAdd, RemoveModal, RenameModal, SettingsFocus,
+    SettingsModal, StatusLine, NO_ACCOUNT_SELECTED,
 };
 use paladin_tui::cli::{should_disable_color, GlobalArgs};
 use paladin_tui::prompt::PassphraseBuffer;
@@ -4255,7 +4255,10 @@ fn assert_selection_gated_key_opens_modal(event: AppEvent, expected: &Modal) {
 
 #[test]
 fn pressing_i_on_unlocked_with_no_modal_open_opens_import_modal() {
-    assert_key_opens_modal(key(KeyCode::Char('i')), &Modal::Import);
+    assert_key_opens_modal(
+        key(KeyCode::Char('i')),
+        &Modal::Import(ImportModal::default()),
+    );
 }
 
 #[test]
@@ -7186,7 +7189,7 @@ fn pressing_esc_on_unlocked_with_open_add_modal_closes_the_modal() {
 
 #[test]
 fn pressing_esc_on_unlocked_with_open_import_modal_closes_the_modal() {
-    assert_esc_closes_modal(Modal::Import);
+    assert_esc_closes_modal(Modal::Import(ImportModal::default()));
 }
 
 #[test]
@@ -12336,7 +12339,7 @@ fn pressing_non_selection_gated_opener_with_no_selection_does_not_set_status_lin
     // Export / Passphrase / Settings on an empty vault.
     for (letter, expected) in [
         ('a', Modal::Add(AddModal::default())),
-        ('i', Modal::Import),
+        ('i', Modal::Import(ImportModal::default())),
         ('e', Modal::Export),
         ('p', Modal::Passphrase),
         ('s', Modal::Settings(SettingsModal::default())),
@@ -13187,12 +13190,20 @@ fn pressing_ctrl_p_with_add_modal_open_aliases_shift_tab() {
 
 #[test]
 fn pressing_ctrl_n_with_import_modal_open_aliases_tab() {
-    assert_ctrl_modal_alias_is_silent_no_op(Modal::Import, ctrl(KeyCode::Char('n')), "`Ctrl-N`");
+    assert_ctrl_modal_alias_is_silent_no_op(
+        Modal::Import(ImportModal::default()),
+        ctrl(KeyCode::Char('n')),
+        "`Ctrl-N`",
+    );
 }
 
 #[test]
 fn pressing_ctrl_p_with_import_modal_open_aliases_shift_tab() {
-    assert_ctrl_modal_alias_is_silent_no_op(Modal::Import, ctrl(KeyCode::Char('p')), "`Ctrl-P`");
+    assert_ctrl_modal_alias_is_silent_no_op(
+        Modal::Import(ImportModal::default()),
+        ctrl(KeyCode::Char('p')),
+        "`Ctrl-P`",
+    );
 }
 
 #[test]
@@ -13259,13 +13270,15 @@ fn pressing_ctrl_p_with_passphrase_modal_open_aliases_shift_tab() {
     );
 }
 
-// Import / Export / Passphrase are unit-variant modal placeholders in
-// v0.1: `route_modal_input` falls through to `_ => Vec::new()` for all
-// three, so every modal-local key (Tab / Shift-Tab / Enter / Space /
-// the four arrows / printable Char / Backspace) is a silent no-op
-// while the modal traps input. The `Ctrl-N` / `Ctrl-P` alias trap
-// tests above cover the Ctrl-modifier pair; Esc-close coverage lives
-// in `pressing_esc_on_unlocked_with_open_{import,export,passphrase}_modal_closes_the_modal`.
+// Export / Passphrase remain unit-variant modal placeholders in v0.1:
+// `route_modal_input` falls through to `_ => Vec::new()` for both, so
+// every modal-local key (Tab / Shift-Tab / Enter / Space / the four
+// arrows / printable Char / Backspace) is a silent no-op while the
+// modal traps input. The `Ctrl-N` / `Ctrl-P` alias trap tests above
+// cover the Ctrl-modifier pair; Esc-close coverage lives in
+// `pressing_esc_on_unlocked_with_open_{export,passphrase}_modal_closes_the_modal`.
+// The Import modal has its own routing — submit / path-text editing /
+// selector navigation slices add their own targeted tests.
 //
 // The loop below uses the same trap helper as the Ctrl alias tests so
 // every navigation key passes through the full "modal preserved,
@@ -13289,13 +13302,6 @@ fn navigation_keys_for_stub_modal_trap() -> Vec<(AppEvent, &'static str)> {
 }
 
 #[test]
-fn import_modal_navigation_keys_are_silent_no_op() {
-    for (event, label) in navigation_keys_for_stub_modal_trap() {
-        assert_ctrl_modal_alias_is_silent_no_op(Modal::Import, event, label);
-    }
-}
-
-#[test]
 fn export_modal_navigation_keys_are_silent_no_op() {
     for (event, label) in navigation_keys_for_stub_modal_trap() {
         assert_ctrl_modal_alias_is_silent_no_op(Modal::Export, event, label);
@@ -13316,7 +13322,9 @@ fn passphrase_modal_navigation_keys_are_silent_no_op() {
 // `ctrl_p_in_settings_modal_retreats_focus_like_shift_tab`). The
 // generic `assert_ctrl_modal_alias_is_silent_no_op` helper is reserved
 // for modals whose payload has no focusable fields yet (Add / Import
-// / Export / Remove / Passphrase / Rename); the Settings entry is
+// / Export / Remove / Passphrase / Rename); Import / Add stay in the
+// helper's table because their Ctrl-N / Ctrl-P contract is silent
+// (selector cycling lands in a later slice). The Settings entry is
 // intentionally not in that table because Settings consumes the
 // aliases through `route_settings_modal_input` instead.
 
@@ -16261,5 +16269,213 @@ fn tick_past_idle_deadline_with_open_add_modal_typed_manual_secret_locks_and_dro
         other => panic!(
             "expected Locked (Add modal and its manual_secret buffer must be gone), got {other:?}",
         ),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Import modal — submit emits Effect::Import via auto-detect routing
+// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Import modal" >
+//  "Format auto-detect routes through `paladin_core::import::from_file`.")
+//
+// Slice covered: the reducer's Enter handler in `route_import_modal_input`
+// emits `Effect::Import { format: None, conflict: Skip, ... }` when the
+// modal's format selector is at the default `ImportFormatSelector::Auto`.
+// The executor's auto-detect routing is asserted by the matching
+// `effect_tests.rs::execute_import_with_auto_format_routes_through_import_from_file_for_otpauth_payload_and_persists_via_mutate_and_save`.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enter_in_import_modal_with_default_state_emits_import_effect_with_auto_format_and_skip_conflict()
+{
+    let tmp = secure_tempdir();
+    let unlocked = fresh_plaintext_unlocked(&tmp);
+    let path_before = match &unlocked {
+        AppState::Unlocked { path, .. } => path.clone(),
+        other => panic!("expected Unlocked, got {other:?}"),
+    };
+    let (state, _) = reduce(unlocked, key(KeyCode::Char('i')));
+    let (state, effects) = reduce(state, key(KeyCode::Enter));
+    assert_eq!(
+        effects.len(),
+        1,
+        "Enter on Modal::Import must emit exactly one effect; got {effects:?}"
+    );
+    match &effects[0] {
+        Effect::Import {
+            path,
+            source_path,
+            format,
+            conflict,
+            paladin_passphrase,
+        } => {
+            assert_eq!(path, &path_before, "effect must target the live vault path");
+            assert_eq!(
+                source_path,
+                &std::path::PathBuf::from(""),
+                "default path_text is empty; the executor will surface read_import_file io_error"
+            );
+            assert!(
+                format.is_none(),
+                "default ImportFormatSelector::Auto must thread through as format=None so the facade auto-detects"
+            );
+            assert_eq!(
+                *conflict,
+                paladin_core::ImportConflict::Skip,
+                "default ImportConflict is Skip per CLI parity"
+            );
+            assert!(
+                paladin_passphrase.is_none(),
+                "auto-detect first slice never carries a Paladin-bundle passphrase"
+            );
+        }
+        other => panic!("expected Effect::Import, got {other:?}"),
+    }
+    match &state {
+        AppState::Unlocked {
+            modal: Some(Modal::Import(_)),
+            ..
+        } => {}
+        other => panic!("Import modal must stay open pending the effect outcome, got {other:?}"),
+    }
+}
+
+#[test]
+fn enter_in_import_modal_with_typed_path_carries_trimmed_path_to_effect() {
+    let tmp = secure_tempdir();
+    let unlocked = fresh_plaintext_unlocked(&tmp);
+    let (state, _) = reduce(unlocked, key(KeyCode::Char('i')));
+
+    let typed = "/tmp/export.json";
+    let mut state = state;
+    for c in typed.chars() {
+        let (next, effects) = reduce(state, key(KeyCode::Char(c)));
+        assert!(
+            effects.is_empty(),
+            "typing into the Import modal must not emit effects"
+        );
+        state = next;
+    }
+
+    let (_state, effects) = reduce(state, key(KeyCode::Enter));
+    assert_eq!(
+        effects.len(),
+        1,
+        "Enter on Modal::Import must emit exactly one effect"
+    );
+    match &effects[0] {
+        Effect::Import { source_path, .. } => {
+            assert_eq!(
+                source_path,
+                &std::path::PathBuf::from(typed),
+                "Effect::Import must carry the typed source path verbatim"
+            );
+        }
+        other => panic!("expected Effect::Import, got {other:?}"),
+    }
+}
+
+#[test]
+fn printable_char_in_import_modal_appends_to_path_text_and_emits_no_effects() {
+    let tmp = secure_tempdir();
+    let unlocked = fresh_plaintext_unlocked(&tmp);
+    let (state, _) = reduce(unlocked, key(KeyCode::Char('i')));
+    let (state, effects) = reduce(state, key(KeyCode::Char('/')));
+    assert!(
+        effects.is_empty(),
+        "printable Char in Import modal must not emit effects"
+    );
+    match &state {
+        AppState::Unlocked {
+            modal: Some(Modal::Import(import)),
+            ..
+        } => {
+            assert_eq!(
+                import.path_text, "/",
+                "printable Char must append to path_text"
+            );
+        }
+        other => panic!("expected Import modal open, got {other:?}"),
+    }
+}
+
+#[test]
+fn backspace_in_import_modal_pops_path_text_and_emits_no_effects() {
+    let tmp = secure_tempdir();
+    let unlocked = fresh_plaintext_unlocked(&tmp);
+    let (mut state, _) = reduce(unlocked, key(KeyCode::Char('i')));
+    if let AppState::Unlocked {
+        modal: Some(Modal::Import(import)),
+        ..
+    } = &mut state
+    {
+        import.path_text.push_str("abc");
+    }
+    let (state, effects) = reduce(state, key(KeyCode::Backspace));
+    assert!(
+        effects.is_empty(),
+        "Backspace in Import modal must not emit effects"
+    );
+    match &state {
+        AppState::Unlocked {
+            modal: Some(Modal::Import(import)),
+            ..
+        } => {
+            assert_eq!(
+                import.path_text, "ab",
+                "Backspace must pop the trailing char"
+            );
+        }
+        other => panic!("expected Import modal open, got {other:?}"),
+    }
+}
+
+#[test]
+fn backspace_on_empty_path_text_in_import_modal_is_silent_no_op() {
+    let tmp = secure_tempdir();
+    let unlocked = fresh_plaintext_unlocked(&tmp);
+    let (state, _) = reduce(unlocked, key(KeyCode::Char('i')));
+    let (state, effects) = reduce(state, key(KeyCode::Backspace));
+    assert!(
+        effects.is_empty(),
+        "Backspace on empty path_text must not emit effects"
+    );
+    match &state {
+        AppState::Unlocked {
+            modal: Some(Modal::Import(import)),
+            ..
+        } => {
+            assert!(
+                import.path_text.is_empty(),
+                "Backspace on empty buffer leaves it empty"
+            );
+        }
+        other => panic!("expected Import modal open, got {other:?}"),
+    }
+}
+
+#[test]
+fn ctrl_modified_char_in_import_modal_does_not_append_to_path_text() {
+    // Per the same Ctrl/Alt filter the Unlock screen + other text-field
+    // modals use: `Ctrl-N` / `Ctrl-P` must not leak into the path
+    // buffer when the Import modal traps input.
+    let tmp = secure_tempdir();
+    let unlocked = fresh_plaintext_unlocked(&tmp);
+    let (state, _) = reduce(unlocked, key(KeyCode::Char('i')));
+    let (state, effects) = reduce(state, ctrl(KeyCode::Char('n')));
+    assert!(
+        effects.is_empty(),
+        "Ctrl-modified Char must not emit effects"
+    );
+    match &state {
+        AppState::Unlocked {
+            modal: Some(Modal::Import(import)),
+            ..
+        } => {
+            assert!(
+                import.path_text.is_empty(),
+                "Ctrl-modified Char must not append to path_text"
+            );
+        }
+        other => panic!("expected Import modal open, got {other:?}"),
     }
 }

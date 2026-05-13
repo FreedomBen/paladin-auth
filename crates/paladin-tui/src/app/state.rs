@@ -12,8 +12,8 @@ use std::time::Instant;
 
 use paladin_core::{
     format_unsafe_permissions, AccountId, AccountKindInput, AccountSummary, Algorithm,
-    ClipboardClearToken, IdlePolicy, PaladinError, Store, ValidatedAccount, Vault, VaultLock,
-    VaultStatus, DIGITS_DEFAULT, TOTP_PERIOD_DEFAULT,
+    ClipboardClearToken, IdlePolicy, ImportConflict, ImportFormat, PaladinError, Store,
+    ValidatedAccount, Vault, VaultLock, VaultStatus, DIGITS_DEFAULT, TOTP_PERIOD_DEFAULT,
 };
 use secrecy::SecretString;
 use zeroize::Zeroizing;
@@ -789,6 +789,110 @@ impl Default for AddModal {
     }
 }
 
+/// Source-format selector for the Import modal.
+///
+/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Import:
+/// *"a format selector (auto-detect or explicit `otpauth` / `aegis` /
+/// `paladin` / `qr`)"*. [`Auto`](Self::Auto) defers to
+/// [`paladin_core::detect`] on the loaded bytes — the resulting
+/// `forced` value is [`None`] so [`paladin_core::ImportOptions::format`]
+/// stays unset and the core facade owns format dispatch. The four
+/// explicit variants force the matching [`paladin_core::ImportFormat`]
+/// so the facade can sanity-check the input shape and dispatch to the
+/// per-format importer.
+///
+/// [`Default`] yields [`Self::Auto`] so the modal opens to the
+/// auto-detect path, matching the CLI's `--format auto` default.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum ImportFormatSelector {
+    /// Run [`paladin_core::detect`] on the loaded bytes; the facade
+    /// owns dispatch. Default selector at modal open time.
+    #[default]
+    Auto,
+    /// Force [`ImportFormat::Otpauth`].
+    Otpauth,
+    /// Force [`ImportFormat::Aegis`].
+    Aegis,
+    /// Force [`ImportFormat::Paladin`].
+    Paladin,
+    /// Force [`ImportFormat::QrImage`].
+    Qr,
+}
+
+impl ImportFormatSelector {
+    /// Translate to the [`paladin_core::ImportOptions::format`]
+    /// payload: [`Self::Auto`] yields [`None`] (the facade runs
+    /// `detect`), explicit variants yield [`Some`] with the matching
+    /// [`ImportFormat`] so the facade can dispatch directly.
+    #[must_use]
+    pub fn forced(self) -> Option<ImportFormat> {
+        match self {
+            Self::Auto => None,
+            Self::Otpauth => Some(ImportFormat::Otpauth),
+            Self::Aegis => Some(ImportFormat::Aegis),
+            Self::Paladin => Some(ImportFormat::Paladin),
+            Self::Qr => Some(ImportFormat::QrImage),
+        }
+    }
+}
+
+/// State for the Import modal.
+///
+/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Import:
+/// *"text field for the source path, a format selector (auto-detect or
+/// explicit `otpauth` / `aegis` / `paladin` / `qr`), and an on-conflict
+/// selector (`skip` / `replace` / `append`)."* The submit path threads
+/// these through [`paladin_core::ImportOptions`] +
+/// [`paladin_core::import::from_file`] and then through
+/// [`paladin_core::Vault::import_accounts`] inside
+/// [`paladin_core::Vault::mutate_and_save`]; the per-slice effect
+/// wiring lands alongside the executor.
+///
+/// [`Default`] yields an empty path buffer with the auto-detect
+/// format selector and `ImportConflict::Skip` so reducer tests that
+/// match on the modal discriminant can construct a placeholder without
+/// reaching into the vault. The `Skip` default matches the CLI's
+/// `import --on-conflict skip` default.
+///
+/// Subsequent slices add an encrypted-Paladin passphrase buffer (gated
+/// by [`paladin_core::classify_paladin_import_precheck`]), a
+/// post-success counts panel mirroring the Add modal's
+/// [`CountsPanel`], and validation-warning rendering through
+/// [`paladin_core::format_validation_warning`].
+#[derive(Debug)]
+pub struct ImportModal {
+    /// Source-path text buffer; trimmed and passed to
+    /// [`paladin_core::import::from_file`] on submit.
+    pub path_text: String,
+    /// Source-format selector. [`ImportFormatSelector::Auto`] dispatches
+    /// through [`paladin_core::detect`]; the explicit variants force
+    /// the matching [`paladin_core::ImportFormat`].
+    pub format: ImportFormatSelector,
+    /// On-conflict merge policy threaded into
+    /// [`paladin_core::Vault::import_accounts`]. Defaults to
+    /// [`ImportConflict::Skip`] for CLI parity.
+    pub conflict: ImportConflict,
+    /// Inline validation / import / save error from the most recent
+    /// submit attempt, if any. Rendered through
+    /// [`render_error_message`](crate::app::state::render_error_message)
+    /// so the surfaced wording matches the rest of the TUI's error
+    /// surface. Subsequent edits clear this slot so the user sees they
+    /// are re-trying; the success / inline-error rollback wiring lands
+    /// alongside the `EffectResult::Import` slice.
+    pub error: Option<String>,
+}
+
+impl Default for ImportModal {
+    fn default() -> Self {
+        Self {
+            path_text: String::new(),
+            format: ImportFormatSelector::default(),
+            conflict: ImportConflict::Skip,
+            error: None,
+        }
+    }
+}
+
 /// An open modal dialog over the main list view.
 ///
 /// Discarded on the `Unlocked → Locked` auto-lock transition
@@ -813,7 +917,7 @@ pub enum Modal {
     Rename(RenameModal),
     /// Import an existing vault export (Paladin, Aegis, Google
     /// Authenticator).
-    Import,
+    Import(ImportModal),
     /// Export the current vault (plaintext or twice-confirmed
     /// encrypted bundle).
     Export,
