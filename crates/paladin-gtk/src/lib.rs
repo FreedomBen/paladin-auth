@@ -21,6 +21,7 @@ use std::process::ExitCode;
 
 pub mod auto_lock;
 pub mod clipboard_clear;
+pub mod hotp_reveal;
 pub mod icon_resolution;
 pub mod search;
 
