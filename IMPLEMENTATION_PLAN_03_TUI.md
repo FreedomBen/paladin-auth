@@ -703,9 +703,18 @@ end-to-end.
   and its `BackTab` / `Ctrl-N` / `Ctrl-P` siblings; Uri / Qr modes
   treat the same keys as silent no-ops so `manual_focus` stays
   sticky.)*
-- [ ] `Ctrl-N` / `Ctrl-P` inside modals have no effect on a
+- [x] `Ctrl-N` / `Ctrl-P` inside modals have no effect on a
   post-success counts panel — lands alongside the counts panel
-  payload (Add / Import / Export).
+  payload (Add / Import / Export). *(Add modal covered now that
+  `AddModal::counts_panel` exists: `route_add_modal_input` short-
+  circuits to a silent no-op when `counts_panel.is_some()` and
+  the key is `is_modal_focus_next` / `is_modal_focus_prev`, so
+  neither the Manual focus ring nor the Uri text buffer nor the
+  Qr-mode dispatch is reachable while the panel is up. Asserted
+  by `ctrl_n_with_counts_panel_set_in_{qr,manual,uri}_mode_…`
+  and the matching `ctrl_p_…` siblings. Import / Export modals
+  will hook into the same early-out as their counts-panel
+  payloads land.)*
 - [x] `Ctrl-N` / `Ctrl-P` inside modals do not override `↑` / `↓`
   spinner adjustments — lands alongside the spinner payload
   (Settings). *(Reducer routes `Ctrl-N` / `Ctrl-P` through

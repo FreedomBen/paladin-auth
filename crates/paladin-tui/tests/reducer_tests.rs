@@ -15714,3 +15714,187 @@ fn format_qr_import_failure_import_variant_delegates_to_render_error_message() {
         },
     };
 }
+
+// ---------------------------------------------------------------------------
+// Add modal — Ctrl-N / Ctrl-P are silent no-ops once the post-success
+// counts panel is showing (IMPLEMENTATION_PLAN_03_TUI.md > Tests >
+// Reducer — "Vim-style navigation": *"`Ctrl-N` / `Ctrl-P` inside
+// modals have no effect on a post-success counts panel — lands
+// alongside the counts panel payload (Add / Import / Export)."*
+//
+// The counts panel reports the result of the QR-add import (imported
+// / skipped counts + validation warnings) and owns the modal's
+// visible region; the underlying mode-specific controls are no
+// longer reachable. Ctrl-N / Ctrl-P must therefore neither cycle
+// `AddManualFocus` (Manual mode), mutate `uri_text` (Uri mode), nor
+// emit any effect (Qr mode). They also must not clear or otherwise
+// mutate the counts panel itself.
+// ---------------------------------------------------------------------------
+
+/// Populate `AddModal::counts_panel` with a representative report so
+/// the post-success-only contract can be exercised. Uses the natural
+/// reducer path: Qr mode → `EffectResult::QrImport { Ok }` → panel
+/// seeded. Leaves the modal in Qr mode.
+fn populate_counts_panel_via_qr_success(state: AppState) -> AppState {
+    let report = ImportReport {
+        imported: 2,
+        skipped: 1,
+        replaced: 0,
+        appended: 0,
+        accounts: Vec::new(),
+        warnings: Vec::new(),
+    };
+    let success = QrImportSuccess { report };
+    let (state, _) = reduce(state, qr_import_result(Ok(success)));
+    assert!(
+        add_modal_ref(&state).counts_panel.is_some(),
+        "harness precondition: counts_panel must be populated"
+    );
+    state
+}
+
+#[test]
+fn ctrl_n_with_counts_panel_set_in_qr_mode_does_not_mutate_modal_state() {
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_qr_add_modal(&tmp);
+    let state = populate_counts_panel_via_qr_success(state);
+    let panel_before = add_modal_ref(&state).counts_panel.clone();
+    let mode_before = add_modal_ref(&state).mode;
+    let (state, effects) = reduce(state, ctrl(KeyCode::Char('n')));
+    assert!(
+        effects.is_empty(),
+        "Ctrl-N must emit no effects while counts panel is showing; got {effects:?}"
+    );
+    let add = add_modal_ref(&state);
+    assert_eq!(add.counts_panel, panel_before, "panel must survive Ctrl-N");
+    assert_eq!(add.mode, mode_before, "mode must not change");
+}
+
+#[test]
+fn ctrl_p_with_counts_panel_set_in_qr_mode_does_not_mutate_modal_state() {
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_qr_add_modal(&tmp);
+    let state = populate_counts_panel_via_qr_success(state);
+    let panel_before = add_modal_ref(&state).counts_panel.clone();
+    let mode_before = add_modal_ref(&state).mode;
+    let (state, effects) = reduce(state, ctrl(KeyCode::Char('p')));
+    assert!(
+        effects.is_empty(),
+        "Ctrl-P must emit no effects while counts panel is showing; got {effects:?}"
+    );
+    let add = add_modal_ref(&state);
+    assert_eq!(add.counts_panel, panel_before, "panel must survive Ctrl-P");
+    assert_eq!(add.mode, mode_before, "mode must not change");
+}
+
+#[test]
+fn ctrl_n_with_counts_panel_set_in_manual_mode_does_not_cycle_focus() {
+    // Reach Manual mode after the counts panel is populated by
+    // pressing `←` from Qr mode (Qr → Uri → Manual). The panel is not
+    // cleared on mode switch (it lives until the modal closes), so
+    // the user can land in Manual mode with the panel still visible.
+    // In that state Ctrl-N must not cycle `AddManualFocus`.
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_qr_add_modal(&tmp);
+    let state = populate_counts_panel_via_qr_success(state);
+    let (state, _) = reduce(state, key(KeyCode::Left));
+    let (state, _) = reduce(state, key(KeyCode::Left));
+    assert_eq!(
+        add_modal_ref(&state).mode,
+        AddMode::Manual,
+        "harness precondition: modal must be in Manual mode"
+    );
+    let focus_before = add_modal_ref(&state).manual_focus;
+    let panel_before = add_modal_ref(&state).counts_panel.clone();
+    let (state, effects) = reduce(state, ctrl(KeyCode::Char('n')));
+    assert!(
+        effects.is_empty(),
+        "Ctrl-N must emit no effects while counts panel is showing; got {effects:?}"
+    );
+    let add = add_modal_ref(&state);
+    assert_eq!(
+        add.manual_focus, focus_before,
+        "Ctrl-N must not advance manual_focus while counts panel is showing"
+    );
+    assert_eq!(add.counts_panel, panel_before, "panel must survive Ctrl-N");
+}
+
+#[test]
+fn ctrl_p_with_counts_panel_set_in_manual_mode_does_not_cycle_focus() {
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_qr_add_modal(&tmp);
+    let state = populate_counts_panel_via_qr_success(state);
+    let (state, _) = reduce(state, key(KeyCode::Left));
+    let (state, _) = reduce(state, key(KeyCode::Left));
+    assert_eq!(
+        add_modal_ref(&state).mode,
+        AddMode::Manual,
+        "harness precondition: modal must be in Manual mode"
+    );
+    let focus_before = add_modal_ref(&state).manual_focus;
+    let panel_before = add_modal_ref(&state).counts_panel.clone();
+    let (state, effects) = reduce(state, ctrl(KeyCode::Char('p')));
+    assert!(
+        effects.is_empty(),
+        "Ctrl-P must emit no effects while counts panel is showing; got {effects:?}"
+    );
+    let add = add_modal_ref(&state);
+    assert_eq!(
+        add.manual_focus, focus_before,
+        "Ctrl-P must not retreat manual_focus while counts panel is showing"
+    );
+    assert_eq!(add.counts_panel, panel_before, "panel must survive Ctrl-P");
+}
+
+#[test]
+fn ctrl_n_with_counts_panel_set_in_uri_mode_does_not_append_to_uri_text() {
+    // Reach Uri mode after the counts panel is populated by pressing
+    // `←` from Qr mode (Qr → Uri). Ctrl-N must not be treated as text
+    // input against `uri_text` and must not emit any effect.
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_qr_add_modal(&tmp);
+    let state = populate_counts_panel_via_qr_success(state);
+    let (state, _) = reduce(state, key(KeyCode::Left));
+    assert_eq!(
+        add_modal_ref(&state).mode,
+        AddMode::Uri,
+        "harness precondition: modal must be in Uri mode"
+    );
+    let panel_before = add_modal_ref(&state).counts_panel.clone();
+    let (state, effects) = reduce(state, ctrl(KeyCode::Char('n')));
+    assert!(
+        effects.is_empty(),
+        "Ctrl-N must emit no effects while counts panel is showing; got {effects:?}"
+    );
+    let add = add_modal_ref(&state);
+    assert!(
+        add.uri_text.is_empty(),
+        "Ctrl-N must not append to uri_text while counts panel is showing"
+    );
+    assert_eq!(add.counts_panel, panel_before, "panel must survive Ctrl-N");
+}
+
+#[test]
+fn ctrl_p_with_counts_panel_set_in_uri_mode_does_not_append_to_uri_text() {
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_qr_add_modal(&tmp);
+    let state = populate_counts_panel_via_qr_success(state);
+    let (state, _) = reduce(state, key(KeyCode::Left));
+    assert_eq!(
+        add_modal_ref(&state).mode,
+        AddMode::Uri,
+        "harness precondition: modal must be in Uri mode"
+    );
+    let panel_before = add_modal_ref(&state).counts_panel.clone();
+    let (state, effects) = reduce(state, ctrl(KeyCode::Char('p')));
+    assert!(
+        effects.is_empty(),
+        "Ctrl-P must emit no effects while counts panel is showing; got {effects:?}"
+    );
+    let add = add_modal_ref(&state);
+    assert!(
+        add.uri_text.is_empty(),
+        "Ctrl-P must not append to uri_text while counts panel is showing"
+    );
+    assert_eq!(add.counts_panel, panel_before, "panel must survive Ctrl-P");
+}

@@ -1424,6 +1424,18 @@ fn route_add_modal_input(
     add: &mut AddModal,
     key: &KeyEvent,
 ) -> Vec<Effect> {
+    // Post-success counts panel owns the modal's visible region: the
+    // underlying mode-specific controls are no longer reachable, so
+    // the modal-local focus aliases `Ctrl-N` / `Ctrl-P` (and their
+    // `Tab` / `Shift-Tab` siblings) must be silent no-ops rather
+    // than cycle the now-hidden field set. Per
+    // `IMPLEMENTATION_PLAN_03_TUI.md` "Vim-style navigation":
+    // *"`Ctrl-N` / `Ctrl-P` inside modals have no effect on a
+    // post-success counts panel — lands alongside the counts panel
+    // payload (Add / Import / Export)."*
+    if add.counts_panel.is_some() && (is_modal_focus_next(key) || is_modal_focus_prev(key)) {
+        return Vec::new();
+    }
     // Pending duplicate-add state shortcircuits Enter on both Manual
     // and URI modes per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per
     // §6)" > Add: *"A collision initially rejects with the existing
