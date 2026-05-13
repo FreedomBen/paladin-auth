@@ -660,9 +660,21 @@ end-to-end.
   `SaveNotCommitted`-with-staged-code defensive guard keep the prior
   reveal unchanged. Modal-side durability-unconfirmed coverage lands
   alongside each modal slice.)*
-- [ ] Modal-local navigation covers `Tab` / `Shift-Tab`, the
+- [x] Modal-local navigation covers `Tab` / `Shift-Tab`, the
   `Ctrl-N` / `Ctrl-P` aliases, `Enter`, `Space`, arrows, text-field
-  editing, and `Esc` cancel / close behavior for every modal.
+  editing, and `Esc` cancel / close behavior for every modal. *(Add /
+  Settings modals route Tab / Shift-Tab / Ctrl-N / Ctrl-P / Enter /
+  Space / arrows / Char / Backspace through dedicated focus-cycling
+  paths covered in the "Add modal" and "Settings modal — field focus"
+  slices; Remove / Rename single-field modals add explicit
+  `*_modal_{tab,shift_tab,space,up,down,left,right}_arrow_is_silent_noop`
+  tests with Rename's Space (`Char(' ')`) appending to the draft;
+  Import / Export / Passphrase unit-variant stubs land
+  `{import,export,passphrase}_modal_navigation_keys_are_silent_no_op`
+  loops that pass Tab / Shift-Tab / Enter / Space / four arrows /
+  printable Char / Backspace through `assert_ctrl_modal_alias_is_silent_no_op`;
+  Esc-close coverage lives in
+  `pressing_esc_on_unlocked_with_open_*_modal_closes_the_modal`.)*
 
 ### Vim-style navigation (`tests/reducer_tests.rs`)
 

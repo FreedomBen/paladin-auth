@@ -4657,6 +4657,79 @@ fn rename_modal_enter_with_overlong_draft_sets_inline_error_no_effect() {
     );
 }
 
+// `route_rename_modal_input` only binds printable `Char`, `Backspace`,
+// and `Enter`; the doc-comment above the function lists Tab /
+// Shift-Tab / arrows as silent no-ops *"because Rename has only one
+// field, so modal-local focus traversal is observable only as no-ops
+// until additional fields land."* Space (`Char(' ')`) is a printable
+// character and must therefore append to the draft like any other
+// typed char. The tests below pin both branches so the modal-local
+// navigation checklist bullet has explicit coverage for every key.
+
+fn assert_rename_modal_key_is_silent_noop(event: AppEvent, label: &str) {
+    let (_tmp, _id, _path, unlocked) = fresh_unlocked_with_rename_modal_open("github", "github");
+    let (state, effects) = reduce(unlocked, event);
+    assert!(
+        effects.is_empty(),
+        "{label} inside Rename must not emit effects"
+    );
+    let rename = expect_rename_modal(&state);
+    assert_eq!(
+        rename.draft, "github",
+        "{label} inside Rename must not mutate the draft"
+    );
+    assert!(
+        rename.error.is_none(),
+        "{label} inside Rename must not surface an inline error"
+    );
+}
+
+#[test]
+fn rename_modal_tab_is_silent_noop() {
+    assert_rename_modal_key_is_silent_noop(key(KeyCode::Tab), "`Tab`");
+}
+
+#[test]
+fn rename_modal_shift_tab_is_silent_noop() {
+    assert_rename_modal_key_is_silent_noop(key(KeyCode::BackTab), "`Shift-Tab`");
+}
+
+#[test]
+fn rename_modal_up_arrow_is_silent_noop() {
+    assert_rename_modal_key_is_silent_noop(key(KeyCode::Up), "`Up`");
+}
+
+#[test]
+fn rename_modal_down_arrow_is_silent_noop() {
+    assert_rename_modal_key_is_silent_noop(key(KeyCode::Down), "`Down`");
+}
+
+#[test]
+fn rename_modal_left_arrow_is_silent_noop() {
+    assert_rename_modal_key_is_silent_noop(key(KeyCode::Left), "`Left`");
+}
+
+#[test]
+fn rename_modal_right_arrow_is_silent_noop() {
+    assert_rename_modal_key_is_silent_noop(key(KeyCode::Right), "`Right`");
+}
+
+#[test]
+fn rename_modal_space_appends_to_draft() {
+    // Space is `KeyCode::Char(' ')` in crossterm; labels permit spaces
+    // (§4.1 only forbids control chars and newlines), so the rename
+    // route appends Space to the draft like any other printable char.
+    let (_tmp, _id, _path, unlocked) = fresh_unlocked_with_rename_modal_open("github", "github");
+    let (state, effects) = reduce(unlocked, key(KeyCode::Char(' ')));
+    assert!(
+        effects.is_empty(),
+        "typing Space inside Rename must not emit effects"
+    );
+    let rename = expect_rename_modal(&state);
+    assert_eq!(rename.draft, "github ");
+    assert!(rename.error.is_none());
+}
+
 // ---------------------------------------------------------------------------
 // Remove modal — Enter submit
 // (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Remove modal; Modals (per
@@ -4767,6 +4840,72 @@ fn remove_modal_backspace_is_silent_noop() {
     let remove = expect_remove_modal(&state);
     assert_eq!(remove.account_id, id);
     assert!(remove.error.is_none());
+}
+
+// `route_remove_modal_input` only binds Enter; every other key is a
+// silent no-op so the modal-trap contract holds. The trap-level
+// `assert_ctrl_modal_alias_is_silent_no_op` tests verify that
+// `Ctrl-N` / `Ctrl-P` do not flip top-level focus while a Remove
+// modal is open; the explicit per-key tests below verify the same
+// no-op contract for `Tab` / `Shift-Tab`, the four arrow keys, and
+// `Space` — confirmation modals have no focusable fields so each of
+// these must leave Remove's snapshotted `account_id` / `error`
+// unchanged and emit no effects.
+fn assert_remove_modal_key_is_silent_noop(event: AppEvent, label: &str) {
+    let (_tmp, id, _path, unlocked) = fresh_unlocked_with_remove_modal_open();
+    let (state, effects) = reduce(unlocked, event);
+    assert!(
+        effects.is_empty(),
+        "{label} inside Remove must not emit effects"
+    );
+    let remove = expect_remove_modal(&state);
+    assert_eq!(
+        remove.account_id, id,
+        "{label} inside Remove must not mutate the snapshotted account_id"
+    );
+    assert!(
+        remove.error.is_none(),
+        "{label} inside Remove must not surface an inline error"
+    );
+}
+
+#[test]
+fn remove_modal_tab_is_silent_noop() {
+    assert_remove_modal_key_is_silent_noop(key(KeyCode::Tab), "`Tab`");
+}
+
+#[test]
+fn remove_modal_shift_tab_is_silent_noop() {
+    assert_remove_modal_key_is_silent_noop(key(KeyCode::BackTab), "`Shift-Tab`");
+}
+
+#[test]
+fn remove_modal_space_is_silent_noop() {
+    // Space is `KeyCode::Char(' ')` in crossterm; Remove's confirmation
+    // form has no editable draft, so it must follow the same no-op
+    // contract as `remove_modal_printable_chars_are_silent_noop` which
+    // only asserts on `'x'`.
+    assert_remove_modal_key_is_silent_noop(key(KeyCode::Char(' ')), "`Space`");
+}
+
+#[test]
+fn remove_modal_up_arrow_is_silent_noop() {
+    assert_remove_modal_key_is_silent_noop(key(KeyCode::Up), "`Up`");
+}
+
+#[test]
+fn remove_modal_down_arrow_is_silent_noop() {
+    assert_remove_modal_key_is_silent_noop(key(KeyCode::Down), "`Down`");
+}
+
+#[test]
+fn remove_modal_left_arrow_is_silent_noop() {
+    assert_remove_modal_key_is_silent_noop(key(KeyCode::Left), "`Left`");
+}
+
+#[test]
+fn remove_modal_right_arrow_is_silent_noop() {
+    assert_remove_modal_key_is_silent_noop(key(KeyCode::Right), "`Right`");
 }
 
 // ---------------------------------------------------------------------------
@@ -13118,6 +13257,56 @@ fn pressing_ctrl_p_with_passphrase_modal_open_aliases_shift_tab() {
         ctrl(KeyCode::Char('p')),
         "`Ctrl-P`",
     );
+}
+
+// Import / Export / Passphrase are unit-variant modal placeholders in
+// v0.1: `route_modal_input` falls through to `_ => Vec::new()` for all
+// three, so every modal-local key (Tab / Shift-Tab / Enter / Space /
+// the four arrows / printable Char / Backspace) is a silent no-op
+// while the modal traps input. The `Ctrl-N` / `Ctrl-P` alias trap
+// tests above cover the Ctrl-modifier pair; Esc-close coverage lives
+// in `pressing_esc_on_unlocked_with_open_{import,export,passphrase}_modal_closes_the_modal`.
+//
+// The loop below uses the same trap helper as the Ctrl alias tests so
+// every navigation key passes through the full "modal preserved,
+// top-level focus unchanged, selection unchanged, no status / chord /
+// reveal / clipboard side effects" assertion bundle. Each event is
+// asserted independently so a regression that breaks a single key
+// fails with a precise label.
+fn navigation_keys_for_stub_modal_trap() -> Vec<(AppEvent, &'static str)> {
+    vec![
+        (key(KeyCode::Tab), "`Tab`"),
+        (key(KeyCode::BackTab), "`Shift-Tab`"),
+        (key(KeyCode::Enter), "`Enter`"),
+        (key(KeyCode::Char(' ')), "`Space`"),
+        (key(KeyCode::Up), "`Up`"),
+        (key(KeyCode::Down), "`Down`"),
+        (key(KeyCode::Left), "`Left`"),
+        (key(KeyCode::Right), "`Right`"),
+        (key(KeyCode::Char('x')), "printable `Char`"),
+        (key(KeyCode::Backspace), "`Backspace`"),
+    ]
+}
+
+#[test]
+fn import_modal_navigation_keys_are_silent_no_op() {
+    for (event, label) in navigation_keys_for_stub_modal_trap() {
+        assert_ctrl_modal_alias_is_silent_no_op(Modal::Import, event, label);
+    }
+}
+
+#[test]
+fn export_modal_navigation_keys_are_silent_no_op() {
+    for (event, label) in navigation_keys_for_stub_modal_trap() {
+        assert_ctrl_modal_alias_is_silent_no_op(Modal::Export, event, label);
+    }
+}
+
+#[test]
+fn passphrase_modal_navigation_keys_are_silent_no_op() {
+    for (event, label) in navigation_keys_for_stub_modal_trap() {
+        assert_ctrl_modal_alias_is_silent_no_op(Modal::Passphrase, event, label);
+    }
 }
 
 // `Ctrl-N` / `Ctrl-P` inside an open Settings modal advance / retreat
