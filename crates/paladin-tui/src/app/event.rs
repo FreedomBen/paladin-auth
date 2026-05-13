@@ -724,4 +724,39 @@ pub enum Effect {
         /// the §4.4 URI grammar.
         uri: SecretString,
     },
+    /// Insert a previously-validated account on the duplicate-allowed
+    /// path and persist it.
+    ///
+    /// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
+    /// *"A collision initially rejects with the existing account in
+    /// the modal and offers an 'add anyway' confirmation that inserts
+    /// the pending validated account on the duplicate-allowed path
+    /// (CLI parity with `--allow-duplicate`, appending a new account
+    /// that shares the `(secret, issuer, label)` triple)."*
+    ///
+    /// The reducer emits this effect when `Enter` is pressed on
+    /// `Modal::Add` while
+    /// [`crate::app::state::AddModal::pending_duplicate_add`] is
+    /// `Some`. The pending state was stashed by the prior
+    /// [`EffectResult::Add`] `Err(AddFailure::Duplicate { .. })` and
+    /// carries the already-validated account; the executor inserts it
+    /// via `Vault::add` inside `Vault::mutate_and_save` without
+    /// re-running `validate_manual` / `parse_otpauth` or
+    /// `Vault::find_duplicate`. `Vault::add` assigns a fresh
+    /// [`paladin_core::AccountId`] so the new account is distinct from
+    /// the colliding existing account. The outcome is delivered on the
+    /// shared [`EffectResult::Add`] channel so the success / save-error
+    /// rendering covers Manual, URI, and "add anyway" alike.
+    AddAnyway {
+        /// The current vault path; the executor uses it for error
+        /// reporting and to verify the path the effect was emitted
+        /// against in case the user has navigated away.
+        path: PathBuf,
+        /// The validated account taken out of
+        /// [`crate::app::state::AddModal::pending_duplicate_add`].
+        /// Carries the secret bytes; zeroizes on drop if the closure
+        /// rolls back or the executor is torn down before the call
+        /// reaches `Vault::add`.
+        validated: Box<ValidatedAccount>,
+    },
 }

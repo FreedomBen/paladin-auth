@@ -22,11 +22,11 @@ use std::sync::mpsc::Sender;
 use std::time::{Instant, SystemTime};
 
 use paladin_core::{
-    parse_icon_hint_token, parse_otpauth, validate_manual, AccountInput, PaladinError,
-    SettingPatch, Store, VaultLock,
+    parse_icon_hint_token, parse_otpauth, validate_manual, Account, AccountInput, PaladinError,
+    SettingPatch, Store, ValidatedAccount, VaultLock,
 };
 
-use crate::app::event::{AddFailure, AppEvent, Effect, EffectResult};
+use crate::app::event::{AddFailure, AddSuccess, AppEvent, Effect, EffectResult};
 use crate::app::state::AppState;
 
 /// Outcome of executing a single [`Effect`].
@@ -269,6 +269,9 @@ pub fn execute(effect: Effect, state: &mut AppState, sender: &Sender<AppEvent>) 
             sender,
         ),
         Effect::AddFromUri { path, uri } => execute_add_from_uri(&path, &uri, state, sender),
+        Effect::AddAnyway { path, validated } => {
+            execute_add_anyway(&path, *validated, state, sender)
+        }
     }
 }
 
@@ -505,5 +508,74 @@ fn execute_apply_settings(
             let _ = sender.send(AppEvent::EffectResult(EffectResult::Settings { result }));
         }
     }
+    EffectOutcome::Continue
+}
+
+/// Execute an [`Effect::AddAnyway`] for the "add anyway" follow-up
+/// confirmation on the duplicate-allowed path.
+///
+/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add: *"A
+/// collision initially rejects with the existing account in the modal
+/// and offers an 'add anyway' confirmation that inserts the pending
+/// validated account on the duplicate-allowed path (CLI parity with
+/// `--allow-duplicate`, appending a new account that shares the
+/// `(secret, issuer, label)` triple)."*
+///
+/// The carried [`ValidatedAccount`] was previously produced by the
+/// duplicate-detection executor arm and stashed on
+/// [`crate::app::state::AddModal::pending_duplicate_add`]; this
+/// executor wraps [`paladin_core::Vault::add`] in
+/// [`paladin_core::Vault::mutate_and_save`] so the new account is
+/// committed atomically. `Vault::add` assigns a fresh
+/// [`paladin_core::AccountId`] so the inserted account is distinct
+/// from the colliding existing entry.
+///
+/// On `save_not_committed` core rolls back the in-memory snapshot so
+/// the freshly-added account vanishes (memory matches the on-disk
+/// primary); on `save_durability_unconfirmed` the new account remains
+/// in memory matching the committed primary and the reducer surfaces
+/// the warning inline. Both failure modes deliver as
+/// `EffectResult::Add { Err(AddFailure::Save(_)) }`.
+///
+/// The path check protects against a stale effect emitted before an
+/// auto-lock or vault switch: if the live state is no longer
+/// `Unlocked` against the same path, drop the effect silently — the
+/// reducer would discard the corresponding `EffectResult::Add`
+/// anyway, and posting back would just synthesize an artificial
+/// mutation attempt against unrelated state.
+fn execute_add_anyway(
+    path: &std::path::Path,
+    validated: ValidatedAccount,
+    state: &mut AppState,
+    sender: &Sender<AppEvent>,
+) -> EffectOutcome {
+    let AppState::Unlocked {
+        path: state_path,
+        vault,
+        store,
+        ..
+    } = state
+    else {
+        return EffectOutcome::Continue;
+    };
+    if state_path != path {
+        return EffectOutcome::Continue;
+    }
+
+    let ValidatedAccount { account, warnings } = validated;
+    let result = vault.mutate_and_save(store, move |v| {
+        let id = v.add(account);
+        let summary = v
+            .iter()
+            .find(|a| a.id() == id)
+            .map(Account::summary)
+            .expect("freshly inserted account must be present in the vault");
+        Ok(summary)
+    });
+    let result = match result {
+        Ok(summary) => Ok(AddSuccess { summary, warnings }),
+        Err(err) => Err(AddFailure::Save(err)),
+    };
+    let _ = sender.send(AppEvent::EffectResult(EffectResult::Add { result }));
     EffectOutcome::Continue
 }

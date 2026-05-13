@@ -1304,3 +1304,170 @@ fn execute_add_from_uri_with_invalid_uri_emits_validation_failure() {
         other => panic!("expected Unlocked, got {other:?}"),
     }
 }
+
+// ---------------------------------------------------------------------------
+// Effect::AddAnyway — duplicate-allowed insertion path
+// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Add modal" > "The follow-up
+//  'add anyway' confirmation inserts the pending validated account on
+//  the duplicate-allowed path with a fresh ID.")
+// ---------------------------------------------------------------------------
+
+/// `Effect::AddAnyway` carries a `ValidatedAccount` previously stashed
+/// in [`AddModal::pending_duplicate_add`] after the duplicate-rejection
+/// slice. On the user's follow-up "add anyway" confirmation, the
+/// executor wraps `Vault::add` in `Vault::mutate_and_save` so the
+/// pending account is inserted with a fresh `AccountId`, persisted to
+/// the on-disk primary, and surfaced through
+/// `EffectResult::Add { Ok(AddSuccess { summary, warnings }) }`.
+///
+/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add: *"A
+/// collision initially rejects with the existing account in the modal
+/// and offers an 'add anyway' confirmation that inserts the pending
+/// validated account on the duplicate-allowed path (CLI parity with
+/// `--allow-duplicate`, appending a new account that shares the
+/// `(secret, issuer, label)` triple)."*
+#[test]
+fn execute_add_anyway_inserts_validated_account_with_fresh_id_and_persists() {
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (mut state, existing_id) = unlocked_with_one_totp(&path, "github");
+    let initial_count = match &state {
+        AppState::Unlocked { vault, .. } => vault.iter().count(),
+        other => panic!("expected Unlocked, got {other:?}"),
+    };
+
+    // Build a validated account whose (secret, issuer, label) triple
+    // matches the existing entry; the executor must insert it without
+    // re-running duplicate detection.
+    let input = AccountInput {
+        label: "github".to_string(),
+        issuer: None,
+        secret: SecretString::from("JBSWY3DPEHPK3PXP".to_string()),
+        algorithm: Algorithm::Sha1,
+        digits: 6,
+        kind: AccountKindInput::Totp,
+        period_secs: None,
+        counter: None,
+        icon_hint: IconHintInput::Default,
+    };
+    let validated = validate_manual(input, SystemTime::now())
+        .expect("validation should succeed on golden duplicate input");
+
+    let (tx, rx) = mpsc::channel::<AppEvent>();
+    let effect = Effect::AddAnyway {
+        path: path.clone(),
+        validated: Box::new(validated),
+    };
+
+    let outcome = execute(effect, &mut state, &tx);
+    assert_eq!(outcome, EffectOutcome::Continue);
+
+    let evt = rx.try_recv().expect("an AppEvent should be sent");
+    let new_id = match evt {
+        AppEvent::EffectResult(EffectResult::Add {
+            result: Ok(success),
+        }) => {
+            assert_ne!(
+                success.summary.id, existing_id,
+                "add-anyway insertion must assign a fresh AccountId distinct from the colliding one"
+            );
+            assert_eq!(success.summary.label, "github");
+            assert_eq!(success.summary.issuer, None);
+            // `success.warnings` rides the validation outcome (e.g.
+            // `ShortSecret` on a 16-character Base32 secret); the
+            // status-line confirmation slice asserts on warning
+            // rendering — this slice only checks the insertion path.
+            success.summary.id
+        }
+        other => panic!("expected EffectResult::Add Ok, got {other:?}"),
+    };
+    assert!(
+        rx.try_recv().is_err(),
+        "executor must emit exactly one AppEvent per Effect::AddAnyway"
+    );
+
+    // Live in-memory vault gained the duplicate alongside the existing entry.
+    match &state {
+        AppState::Unlocked { vault, .. } => {
+            assert_eq!(
+                vault.iter().count(),
+                initial_count + 1,
+                "add-anyway must insert the pending validated account"
+            );
+            assert!(
+                vault.iter().any(|a| a.id() == new_id),
+                "vault must carry the freshly inserted account"
+            );
+            assert!(
+                vault.iter().any(|a| a.id() == existing_id),
+                "existing colliding account must survive add-anyway"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+
+    // On-disk primary committed.
+    let (reopened, _store) =
+        Store::open(&path, VaultLock::Plaintext).expect("reopen plaintext vault");
+    assert_eq!(
+        reopened.iter().count(),
+        initial_count + 1,
+        "add-anyway must commit to the on-disk primary"
+    );
+    assert!(
+        reopened.iter().any(|a| a.id() == new_id),
+        "on-disk vault must carry the freshly inserted account"
+    );
+}
+
+/// Path-mismatch / non-`Unlocked` deliveries drop the effect silently
+/// — the dispatcher only mutates the live vault when the carried path
+/// still matches `Unlocked.path`, mirroring the path-guard the Remove /
+/// Rename / Add / `AddFromUri` arms already enforce.
+#[test]
+fn execute_add_anyway_with_mismatched_path_is_silently_dropped() {
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let other_path = tmp.path().join("other.bin");
+    let (mut state, _) = unlocked_with_one_totp(&path, "github");
+    let initial_count = match &state {
+        AppState::Unlocked { vault, .. } => vault.iter().count(),
+        other => panic!("expected Unlocked, got {other:?}"),
+    };
+
+    let input = AccountInput {
+        label: "github".to_string(),
+        issuer: None,
+        secret: SecretString::from("JBSWY3DPEHPK3PXP".to_string()),
+        algorithm: Algorithm::Sha1,
+        digits: 6,
+        kind: AccountKindInput::Totp,
+        period_secs: None,
+        counter: None,
+        icon_hint: IconHintInput::Default,
+    };
+    let validated = validate_manual(input, SystemTime::now()).expect("validation should succeed");
+
+    let (tx, rx) = mpsc::channel::<AppEvent>();
+    let effect = Effect::AddAnyway {
+        path: other_path,
+        validated: Box::new(validated),
+    };
+
+    let outcome = execute(effect, &mut state, &tx);
+    assert_eq!(outcome, EffectOutcome::Continue);
+    assert!(
+        rx.try_recv().is_err(),
+        "mismatched path must drop the effect without emitting"
+    );
+    match &state {
+        AppState::Unlocked { vault, .. } => {
+            assert_eq!(
+                vault.iter().count(),
+                initial_count,
+                "mismatched-path must not mutate the live vault"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}

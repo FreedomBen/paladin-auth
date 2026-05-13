@@ -592,7 +592,8 @@ fn reduce_settings_result(
     (state, Vec::new())
 }
 
-/// Handle the outcome of an [`Effect::Add`].
+/// Handle the outcome of an [`Effect::Add`] / [`Effect::AddFromUri`] /
+/// [`Effect::AddAnyway`].
 ///
 /// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
 /// *"manual and URI duplicate collisions call
@@ -610,11 +611,11 @@ fn reduce_settings_result(
 /// leave the modal open per the plan's "Effect errors" >
 /// "Add / remove / rename / settings saves" rule.
 ///
-/// The success path closes the modal and publishes a
-/// [`StatusLine::Confirmation`]; that wiring lands alongside the
-/// success-side slice. For now the `Ok` arm is left as a TODO so
-/// subsequent slices can extend it without rewriting the match —
-/// the executor does not yet produce `Ok` results.
+/// The success path closes the modal so the user returns to the list
+/// view; the status-line confirmation wording (with
+/// [`paladin_core::format_validation_warning`] text) lands with the
+/// dedicated "Manual / URI Add status-line confirmations include
+/// validation warning text" slice.
 ///
 /// Deliveries that arrive after the user navigated away
 /// (non-`Unlocked` state) or after the Add modal closed are
@@ -634,9 +635,11 @@ fn reduce_add_result(
 
     match result {
         Ok(_success) => {
-            // Success path (status-line confirmation + modal close)
-            // lands with the next slice; for now consume the result
-            // without mutating state so the carried summary drops.
+            // Close the Add modal so the user returns to the list
+            // view. Status-line confirmation wording (and the
+            // `format_validation_warning` rendering for any
+            // `AddSuccess::warnings`) lands with the dedicated slice.
+            *modal = None;
         }
         Err(AddFailure::Duplicate { existing, pending }) => {
             add.error = Some(format_duplicate_account_message(&existing));
@@ -1332,6 +1335,23 @@ fn route_add_modal_input(
     add: &mut AddModal,
     key: &KeyEvent,
 ) -> Vec<Effect> {
+    // Pending duplicate-add state shortcircuits Enter on both Manual
+    // and URI modes per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per
+    // §6)" > Add: *"A collision initially rejects with the existing
+    // account in the modal and offers an 'add anyway' confirmation
+    // that inserts the pending validated account on the
+    // duplicate-allowed path."* The dispatch must run before the
+    // mode-specific submit so a follow-up Enter in URI mode does not
+    // re-run `parse_otpauth` against an empty buffer.
+    if matches!(key.code, KeyCode::Enter) {
+        if let Some(pending) = add.pending_duplicate_add.take() {
+            add.error = None;
+            return vec![Effect::AddAnyway {
+                path: path.to_path_buf(),
+                validated: pending.validated,
+            }];
+        }
+    }
     if add.mode == AddMode::Manual && try_cycle_manual_selector(add, key) {
         return Vec::new();
     }

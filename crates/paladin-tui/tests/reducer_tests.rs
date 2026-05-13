@@ -29,7 +29,8 @@ use paladin_tui::app::state::{
     compute_idle_deadline, decide_state_from_inspect, decide_state_from_open,
     format_account_display_label, format_duplicate_account_message, render_error_message,
     AddManualFocus, AddModal, AddMode, AppState, ChordLeader, Focus, HotpReveal, Modal,
-    RemoveModal, RenameModal, SettingsFocus, SettingsModal, StatusLine, NO_ACCOUNT_SELECTED,
+    PendingDuplicateAdd, RemoveModal, RenameModal, SettingsFocus, SettingsModal, StatusLine,
+    NO_ACCOUNT_SELECTED,
 };
 use paladin_tui::cli::{should_disable_color, GlobalArgs};
 use paladin_tui::prompt::PassphraseBuffer;
@@ -14198,5 +14199,238 @@ fn enter_in_uri_mode_with_empty_buffer_still_emits_effect_to_surface_parse_error
             );
         }
         other => panic!("expected Effect::AddFromUri, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Add modal — "add anyway" follow-up confirmation
+// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Add modal" > "The follow-up
+//  'add anyway' confirmation inserts the pending validated account on
+//  the duplicate-allowed path with a fresh ID.")
+//
+// Slice covered: the reducer's Enter handler when
+// `AddModal::pending_duplicate_add.is_some()`. The duplicate-rejection
+// slice stashed a validated pending account; the user's follow-up
+// Enter must take that pending state out of the slot, clear the inline
+// `duplicate_account` error, and emit `Effect::AddAnyway` carrying the
+// pending validated account so the executor can insert it on the
+// duplicate-allowed path. The modal stays open until the executor's
+// `EffectResult::Add { Ok(_) }` delivery closes it (covered by the
+// `effect_result_add_ok_closes_modal` test).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enter_with_pending_duplicate_add_in_manual_mode_emits_add_anyway_effect() {
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let existing_id = add_totp_account(&mut vault, &store, "github");
+    let existing_summary = vault
+        .iter()
+        .find(|a| a.id() == existing_id)
+        .expect("existing account in vault")
+        .summary();
+
+    let pending = make_duplicate_validated("github");
+    let pending_label = pending.account.label().to_string();
+    let pending_id = pending.account.id();
+
+    let add_modal = AddModal {
+        error: Some(format_duplicate_account_message(&existing_summary)),
+        pending_duplicate_add: Some(Box::new(PendingDuplicateAdd {
+            existing: existing_summary.clone(),
+            validated: Box::new(pending),
+        })),
+        ..AddModal::default()
+    };
+
+    let unlocked = AppState::Unlocked {
+        path: path.clone(),
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Add(add_modal)),
+        selected: Some(existing_id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+
+    let (state, effects) = reduce(unlocked, key(KeyCode::Enter));
+    assert_eq!(
+        effects.len(),
+        1,
+        "Enter with pending duplicate-add state must emit exactly one effect; got {effects:?}"
+    );
+    match &effects[0] {
+        Effect::AddAnyway {
+            path: effect_path,
+            validated,
+        } => {
+            assert_eq!(effect_path, &path, "effect must target the live vault path");
+            assert_eq!(
+                validated.account.label(),
+                &pending_label,
+                "effect must carry the pending validated account verbatim"
+            );
+            assert_eq!(
+                validated.account.id(),
+                pending_id,
+                "effect must carry the same Account (same UUID) the modal stashed"
+            );
+        }
+        other => panic!("expected Effect::AddAnyway, got {other:?}"),
+    }
+
+    match &state {
+        AppState::Unlocked {
+            modal: Some(Modal::Add(add)),
+            ..
+        } => {
+            assert!(
+                add.pending_duplicate_add.is_none(),
+                "pending state must be taken on add-anyway emit"
+            );
+            assert!(
+                add.error.is_none(),
+                "inline duplicate error must clear on add-anyway emit"
+            );
+        }
+        other => {
+            panic!("Add modal must remain open pending the AddAnyway outcome, got {other:?}")
+        }
+    }
+}
+
+#[test]
+fn enter_with_pending_duplicate_add_in_uri_mode_emits_add_anyway_effect() {
+    // The duplicate-rejection stash is shared between Manual and URI
+    // modes (per the plan: *"on success the resulting `ValidatedAccount`
+    // shares the manual path's duplicate-detection, 'add anyway'
+    // override, and `Vault::mutate_and_save` insertion."*). The Enter
+    // handler must dispatch on `pending_duplicate_add` before the
+    // mode-specific submit paths so a follow-up Enter in URI mode does
+    // not re-run `parse_otpauth` against an empty buffer.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let existing_id = add_totp_account(&mut vault, &store, "github");
+    let existing_summary = vault
+        .iter()
+        .find(|a| a.id() == existing_id)
+        .expect("existing account in vault")
+        .summary();
+
+    let pending = make_duplicate_validated("github");
+    let add_modal = AddModal {
+        mode: AddMode::Uri,
+        error: Some(format_duplicate_account_message(&existing_summary)),
+        pending_duplicate_add: Some(Box::new(PendingDuplicateAdd {
+            existing: existing_summary,
+            validated: Box::new(pending),
+        })),
+        ..AddModal::default()
+    };
+
+    let unlocked = AppState::Unlocked {
+        path: path.clone(),
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Add(add_modal)),
+        selected: Some(existing_id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+
+    let (state, effects) = reduce(unlocked, key(KeyCode::Enter));
+    assert_eq!(
+        effects.len(),
+        1,
+        "Enter with pending state must emit exactly one effect in URI mode"
+    );
+    match &effects[0] {
+        Effect::AddAnyway {
+            path: effect_path, ..
+        } => {
+            assert_eq!(effect_path, &path);
+        }
+        other => panic!("expected Effect::AddAnyway in URI mode, got {other:?}"),
+    }
+
+    match &state {
+        AppState::Unlocked {
+            modal: Some(Modal::Add(add)),
+            ..
+        } => {
+            assert!(add.pending_duplicate_add.is_none());
+            assert!(add.error.is_none());
+        }
+        other => panic!("Add modal must remain open in URI mode, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_add_ok_closes_modal() {
+    // After `Effect::AddAnyway` (and, in a later slice, the
+    // non-duplicate Add path) commits via `Vault::add` inside
+    // `Vault::mutate_and_save`, the executor emits
+    // `EffectResult::Add { Ok(AddSuccess { … }) }`. The reducer must
+    // close the Add modal so the user returns to the list view;
+    // status-line confirmation wording lands with the dedicated
+    // "Manual / URI Add status-line confirmations include validation
+    // warning text" slice.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let existing_id = add_totp_account(&mut vault, &store, "github");
+    let existing_summary = vault
+        .iter()
+        .find(|a| a.id() == existing_id)
+        .expect("existing account in vault")
+        .summary();
+
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Add(AddModal::default())),
+        selected: Some(existing_id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+
+    let success = AddSuccess {
+        summary: existing_summary,
+        warnings: Vec::new(),
+    };
+    let (state, effects) = reduce(unlocked, add_result(Ok(success)));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked { modal, .. } => {
+            assert!(
+                modal.is_none(),
+                "Add modal must close on EffectResult::Add Ok"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
     }
 }

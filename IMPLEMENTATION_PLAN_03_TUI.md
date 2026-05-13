@@ -813,8 +813,29 @@ end-to-end.
   `enter_in_uri_mode_emits_add_from_uri_effect_with_typed_bytes`
   + `enter_in_uri_mode_with_empty_buffer_still_emits_effect_to_surface_parse_error`
   in `tests/reducer_tests.rs`.)*
-- [ ] The follow-up "add anyway" confirmation inserts the pending
+- [x] The follow-up "add anyway" confirmation inserts the pending
   validated account on the duplicate-allowed path with a fresh ID.
+  *(Reducer's `route_add_modal_input` short-circuits Enter to emit a
+  new `Effect::AddAnyway { path, validated }` whenever
+  `AddModal::pending_duplicate_add.is_some()`, taking the pending
+  state and clearing the inline duplicate error before the
+  mode-specific Manual / URI submit paths run. The executor wraps
+  `Vault::add(validated.account)` in `Vault::mutate_and_save`, so
+  `Vault::add` assigns a fresh `AccountId` distinct from the
+  colliding entry and the on-disk primary is committed atomically;
+  the outcome rides the shared `EffectResult::Add` channel as
+  `Ok(AddSuccess { summary, warnings })` with the warnings carried
+  from the pre-validated account. The reducer's `Ok` arm now closes
+  `Modal::Add` so the user returns to the list view — status-line
+  confirmation wording (and validation-warning text) lands with the
+  dedicated "Manual / URI Add status-line confirmations include
+  validation warning text" slice. Asserted by
+  `execute_add_anyway_inserts_validated_account_with_fresh_id_and_persists`
+  and `execute_add_anyway_with_mismatched_path_is_silently_dropped`
+  in `tests/effect_tests.rs`, and by
+  `enter_with_pending_duplicate_add_in_manual_mode_emits_add_anyway_effect`,
+  `enter_with_pending_duplicate_add_in_uri_mode_emits_add_anyway_effect`,
+  and `effect_result_add_ok_closes_modal` in `tests/reducer_tests.rs`.)*
 - [ ] Clipboard QR import uses `ImportConflict::Skip` and reports
   imported / skipped counts.
 - [ ] QR-add validation warnings are rendered through
