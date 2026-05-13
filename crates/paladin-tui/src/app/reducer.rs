@@ -21,13 +21,13 @@ use paladin_core::{
 use secrecy::SecretString;
 use zeroize::Zeroizing;
 
-use crate::app::event::{AddFailure, AppEvent, Effect, EffectResult};
+use crate::app::event::{AddFailure, AppEvent, Effect, EffectResult, QrImportSuccess};
 use crate::app::state::{
     compute_idle_deadline, format_account_display_label, format_duplicate_account_message,
-    initial_selection, render_error_message, AddManualFocus, AddModal, AddMode, AppState,
-    ChordLeader, Focus, HotpReveal, Modal, PendingClipboardClear, PendingDuplicateAdd, RemoveModal,
-    RenameModal, SettingsFocus, SettingsModal, StatusLine, CLIPBOARD_WRITE_FAILED,
-    NO_ACCOUNT_SELECTED,
+    format_qr_import_failure, initial_selection, render_error_message, AddManualFocus, AddModal,
+    AddMode, AppState, ChordLeader, Focus, HotpReveal, Modal, PendingClipboardClear,
+    PendingDuplicateAdd, RemoveModal, RenameModal, SettingsFocus, SettingsModal, StatusLine,
+    CLIPBOARD_WRITE_FAILED, NO_ACCOUNT_SELECTED,
 };
 use crate::search::{filtered_account_ids, select_after_search};
 
@@ -265,6 +265,7 @@ fn reduce_effect_result(state: AppState, result: EffectResult) -> (AppState, Vec
         }
         EffectResult::Settings { result } => reduce_settings_result(state, result),
         EffectResult::Add { result } => reduce_add_result(state, result),
+        EffectResult::QrImport { result } => reduce_qr_import_result(state, result),
     }
 }
 
@@ -678,6 +679,54 @@ fn reduce_add_result(
         }
         Err(AddFailure::Validation(err) | AddFailure::Save(err)) => {
             add.error = Some(render_error_message(&err));
+        }
+    }
+    (state, Vec::new())
+}
+
+/// Handle the outcome of an [`Effect::AddFromClipboardQr`].
+///
+/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Add modal":
+/// *"No-image, no-QR, and invalid-QR cases reject inline."* On any
+/// `Err(...)` the Add modal stays open and the rendered failure is
+/// stashed in [`AddModal::error`] via [`format_qr_import_failure`] so
+/// the user can retry. The `Ok` arm — populating the post-success
+/// counts panel with imported / skipped totals and any rendered
+/// `ImportWarning` messages — lands alongside the counts-panel state
+/// slice (next bullet in the plan's "Add modal" list); until then the
+/// success result is consumed without mutating modal state so the
+/// reducer surface stays narrow.
+///
+/// Results delivered while not on `Unlocked`, while a different modal
+/// is open, or after the Add modal closed are discarded so the
+/// carried [`paladin_core::ImportReport`] / [`PaladinError`] drops
+/// without mutating state.
+fn reduce_qr_import_result(
+    mut state: AppState,
+    result: Result<QrImportSuccess, crate::app::event::QrImportFailure>,
+) -> (AppState, Vec<Effect>) {
+    let AppState::Unlocked { ref mut modal, .. } = state else {
+        return (state, Vec::new());
+    };
+
+    let Some(Modal::Add(add)) = modal.as_mut() else {
+        return (state, Vec::new());
+    };
+
+    match result {
+        Ok(_success) => {
+            // Counts-panel rendering lands with the next slice (see
+            // `IMPLEMENTATION_PLAN_03_TUI.md` "Add modal" >
+            // *"Clipboard QR import uses `ImportConflict::Skip` and
+            // reports imported / skipped counts."* and *"QR-add
+            // validation warnings are rendered through
+            // `paladin_core::format_validation_warning()` in the
+            // post-success counts panel."*). For now the success is
+            // consumed without mutating modal state so the inline-
+            // error rejection slice stays narrow.
+        }
+        Err(failure) => {
+            add.error = Some(format_qr_import_failure(&failure));
         }
     }
     (state, Vec::new())

@@ -21,17 +21,19 @@ use secrecy::{ExposeSecret, SecretString};
 use paladin_core::{
     format_validation_warning, hotp_reveal_deadline, validate_manual, AccountId, AccountInput,
     AccountKindInput, Algorithm, Argon2Params, EncryptionOptions, IconHintInput, IdlePolicy,
-    PaladinError, PermissionSubject, SettingPatch, Store, ValidationWarning, Vault, VaultInit,
-    VaultLock, VaultStatus,
+    ImportReport, ImportWarning, PaladinError, PermissionSubject, SettingPatch, Store,
+    ValidationWarning, Vault, VaultInit, VaultLock, VaultStatus,
 };
-use paladin_tui::app::event::{AddFailure, AddSuccess, AppEvent, Effect, EffectResult};
+use paladin_tui::app::event::{
+    AddFailure, AddSuccess, AppEvent, Effect, EffectResult, QrImportFailure, QrImportSuccess,
+};
 use paladin_tui::app::reducer::reduce;
 use paladin_tui::app::state::{
     compute_idle_deadline, decide_state_from_inspect, decide_state_from_open,
-    format_account_display_label, format_duplicate_account_message, render_error_message,
-    AddManualFocus, AddModal, AddMode, AppState, ChordLeader, Focus, HotpReveal, Modal,
-    PendingDuplicateAdd, RemoveModal, RenameModal, SettingsFocus, SettingsModal, StatusLine,
-    NO_ACCOUNT_SELECTED,
+    format_account_display_label, format_duplicate_account_message, format_qr_import_failure,
+    render_error_message, AddManualFocus, AddModal, AddMode, AppState, ChordLeader, Focus,
+    HotpReveal, Modal, PendingDuplicateAdd, RemoveModal, RenameModal, SettingsFocus, SettingsModal,
+    StatusLine, NO_ACCOUNT_SELECTED,
 };
 use paladin_tui::cli::{should_disable_color, GlobalArgs};
 use paladin_tui::prompt::PassphraseBuffer;
@@ -14980,4 +14982,340 @@ fn effect_result_add_ok_joins_multiple_validation_warnings_with_separator() {
         }
         other => panic!("expected Unlocked, got {other:?}"),
     }
+}
+
+// ---------------------------------------------------------------------------
+// QR-add inline error rejection.
+//
+// Slice covered: the reducer's response to
+// `EffectResult::QrImport { Err(QrImportFailure::*) }`. The executor's
+// `arboard::Clipboard::get_image()` read can fail with
+// `NoClipboardImage` or `ImageDecodeFailure`; the importer
+// (`paladin_core::import::qr_image_bytes` +
+// `Vault::import_accounts`) can fail with any
+// `PaladinError` (oversized RGBA buffer, zero decoded QRs, non-otpauth
+// payload, save errors). On any `Err(...)` the reducer must surface
+// the rendered failure inline in `AddModal::error` and leave the
+// modal open so the user can retry. Discard rules mirror Add /
+// Rename / Remove / Settings.
+// ---------------------------------------------------------------------------
+
+fn qr_import_result(result: Result<QrImportSuccess, QrImportFailure>) -> AppEvent {
+    AppEvent::EffectResult(EffectResult::QrImport { result })
+}
+
+fn fresh_unlocked_with_qr_add_modal(tmp: &tempfile::TempDir) -> AppState {
+    let unlocked = fresh_plaintext_unlocked(tmp);
+    let (state, _) = reduce(unlocked, key(KeyCode::Char('a')));
+    let (state, _) = reduce(state, key(KeyCode::Right));
+    let (state, _) = reduce(state, key(KeyCode::Right));
+    assert_eq!(add_modal_ref(&state).mode, AddMode::Qr);
+    state
+}
+
+#[test]
+fn effect_result_qr_import_no_clipboard_image_sets_inline_error_and_keeps_modal_open() {
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_qr_add_modal(&tmp);
+    let (state, effects) = reduce(
+        state,
+        qr_import_result(Err(QrImportFailure::NoClipboardImage)),
+    );
+    assert!(
+        effects.is_empty(),
+        "Err must not emit further effects; got {effects:?}"
+    );
+    let add = add_modal_ref(&state);
+    assert_eq!(
+        add.mode,
+        AddMode::Qr,
+        "modal stays in Qr mode after a failed import so the user can retry"
+    );
+    let err = add
+        .error
+        .as_ref()
+        .expect("NoClipboardImage must populate AddModal::error");
+    assert_eq!(
+        err,
+        &format_qr_import_failure(&QrImportFailure::NoClipboardImage),
+        "inline error must match format_qr_import_failure verbatim"
+    );
+}
+
+#[test]
+fn effect_result_qr_import_image_decode_failure_sets_inline_error_and_keeps_modal_open() {
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_qr_add_modal(&tmp);
+    let (state, effects) = reduce(
+        state,
+        qr_import_result(Err(QrImportFailure::ImageDecodeFailure)),
+    );
+    assert!(effects.is_empty());
+    let add = add_modal_ref(&state);
+    assert_eq!(add.mode, AddMode::Qr);
+    let err = add.error.as_ref().expect("error populated");
+    assert_eq!(
+        err,
+        &format_qr_import_failure(&QrImportFailure::ImageDecodeFailure),
+    );
+}
+
+#[test]
+fn effect_result_qr_import_oversized_rgba_buffer_sets_inline_error_via_render_error_message() {
+    // `paladin_core::import::qr_image_bytes` rejects oversized RGBA
+    // buffers with `validation_error { field: "qr_image",
+    // reason: "image_too_large" }` per DESIGN §4.6. We trigger that
+    // PaladinError through the public API by passing dimensions whose
+    // `width * height * 4` exceeds `paladin_core::QR_RGBA_MAX_BYTES`,
+    // then assert the reducer surfaces it verbatim through
+    // `render_error_message` so the wording matches the rest of the
+    // TUI's error surface.
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_qr_add_modal(&tmp);
+    let oversized_side: u32 = 5000;
+    let core_err = paladin_core::import::qr_image_bytes(
+        oversized_side,
+        oversized_side,
+        &[],
+        SystemTime::now(),
+    )
+    .expect_err("oversized RGBA dimensions must reject");
+    let expected = render_error_message(&core_err);
+    let (state, _effects) = reduce(
+        state,
+        qr_import_result(Err(QrImportFailure::Import(core_err))),
+    );
+    let add = add_modal_ref(&state);
+    assert_eq!(add.mode, AddMode::Qr);
+    let err = add.error.as_ref().expect("error populated");
+    assert_eq!(err, &expected);
+}
+
+#[test]
+fn effect_result_qr_import_no_qrs_decoded_sets_inline_error_via_render_error_message() {
+    // `qr_image_bytes` returns `PaladinError::NoEntriesToImport` when
+    // the decoded payload list is empty (no QRs found in the image).
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_qr_add_modal(&tmp);
+    let core_err = PaladinError::NoEntriesToImport;
+    let expected = render_error_message(&core_err);
+    let (state, _effects) = reduce(
+        state,
+        qr_import_result(Err(QrImportFailure::Import(core_err))),
+    );
+    let add = add_modal_ref(&state);
+    let err = add.error.as_ref().expect("error populated");
+    assert_eq!(err, &expected);
+}
+
+#[test]
+fn effect_result_qr_import_invalid_qr_payload_sets_inline_error_via_render_error_message() {
+    // Trigger an importer-side validation error through the public
+    // API: the standard `unsupported_import_format` constructor is
+    // close enough in shape (a stable §5 error code) to lock in that
+    // arbitrary `PaladinError` values returned by the importer route
+    // through `render_error_message`. The QR-specific
+    // `non_otpauth_payload` reason carries the same surface — the
+    // reducer does not branch on the inner reason code.
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_qr_add_modal(&tmp);
+    let core_err = PaladinError::UnsupportedImportFormat {
+        format: "unknown".to_string(),
+    };
+    let expected = render_error_message(&core_err);
+    let (state, _effects) = reduce(
+        state,
+        qr_import_result(Err(QrImportFailure::Import(core_err))),
+    );
+    let add = add_modal_ref(&state);
+    let err = add.error.as_ref().expect("error populated");
+    assert_eq!(err, &expected);
+}
+
+#[test]
+fn effect_result_qr_import_err_does_not_close_modal_or_publish_status_line() {
+    // The QR-add modal stays open on every Err path so the user can
+    // copy a different image and retry. No status-line confirmation
+    // is published — the inline error is the only surface.
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_qr_add_modal(&tmp);
+    let (state, _) = reduce(
+        state,
+        qr_import_result(Err(QrImportFailure::NoClipboardImage)),
+    );
+    match state {
+        AppState::Unlocked {
+            modal, status_line, ..
+        } => {
+            assert!(
+                matches!(modal, Some(Modal::Add(_))),
+                "QR-add Err must leave Modal::Add open"
+            );
+            assert!(
+                status_line.is_none(),
+                "QR-add Err must not publish a status-line confirmation"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_qr_import_err_does_not_perturb_other_modal_state() {
+    // Inline error rejection must not touch the modal's other slots:
+    // mode stays Qr, manual buffers stay empty, no pending duplicate
+    // state appears, and the URI buffer remains empty. (The Add
+    // modal's other modes' buffers are zeroized when QR mode is
+    // entered via switch_mode; this assertion locks in that the Err
+    // handler does not synthesize new state on top of that.)
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_qr_add_modal(&tmp);
+    let (state, _) = reduce(
+        state,
+        qr_import_result(Err(QrImportFailure::ImageDecodeFailure)),
+    );
+    let add = add_modal_ref(&state);
+    assert_eq!(add.mode, AddMode::Qr);
+    assert!(add.label.is_empty());
+    assert!(add.issuer.is_empty());
+    assert!(add.icon_hint_text.is_empty());
+    assert!(add.manual_secret.is_empty());
+    assert!(add.uri_text.is_empty());
+    assert!(
+        add.pending_duplicate_add.is_none(),
+        "QR Err path must not synthesize duplicate-add state"
+    );
+}
+
+#[test]
+fn effect_result_qr_import_err_is_dropped_when_not_unlocked() {
+    let state = unlock("/tmp/example.bin");
+    let (next, effects) = reduce(
+        state,
+        qr_import_result(Err(QrImportFailure::NoClipboardImage)),
+    );
+    assert!(effects.is_empty());
+    assert!(matches!(next, AppState::Unlock { .. }));
+}
+
+#[test]
+fn effect_result_qr_import_err_is_dropped_when_no_modal_open() {
+    let tmp = secure_tempdir();
+    let unlocked = fresh_plaintext_unlocked(&tmp);
+    let (next, effects) = reduce(
+        unlocked,
+        qr_import_result(Err(QrImportFailure::NoClipboardImage)),
+    );
+    assert!(effects.is_empty());
+    match next {
+        AppState::Unlocked { modal, .. } => assert!(modal.is_none()),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_qr_import_err_is_dropped_when_a_different_modal_is_open() {
+    let tmp = secure_tempdir();
+    let unlocked = fresh_plaintext_unlocked(&tmp);
+    // Open the Settings modal so a stale QR-add Err result has no Add
+    // modal to write to.
+    let (state, _) = reduce(unlocked, key(KeyCode::Char('s')));
+    let (state, effects) = reduce(
+        state,
+        qr_import_result(Err(QrImportFailure::NoClipboardImage)),
+    );
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked { modal, .. } => {
+            assert!(matches!(modal, Some(Modal::Settings(_))));
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_qr_import_ok_consumes_result_without_mutating_modal_state_for_now() {
+    // The success path lands with the next slice (post-success counts
+    // panel + ImportWarning rendering). Until that slice is in place
+    // the reducer consumes the Ok without mutating modal state, so
+    // the modal stays open in Qr mode with no inline error and no
+    // status-line confirmation. The Ok-arm placeholder is exercised
+    // here so a future regression that writes through the Ok arm
+    // before its slice lands will surface.
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_qr_add_modal(&tmp);
+    let report = ImportReport {
+        imported: 2,
+        skipped: 1,
+        replaced: 0,
+        appended: 0,
+        accounts: Vec::new(),
+        warnings: Vec::new(),
+    };
+    let success = QrImportSuccess { report };
+    let (state, effects) = reduce(state, qr_import_result(Ok(success)));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked {
+            modal, status_line, ..
+        } => {
+            let Some(Modal::Add(add)) = modal else {
+                panic!("Add modal must remain open while Ok-arm slice is pending");
+            };
+            assert_eq!(add.mode, AddMode::Qr);
+            assert!(add.error.is_none(), "no inline error on Ok");
+            assert!(
+                status_line.is_none(),
+                "no status-line confirmation on Ok (counts panel will own success rendering)"
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn format_qr_import_failure_no_clipboard_image_message_is_user_facing() {
+    let msg = format_qr_import_failure(&QrImportFailure::NoClipboardImage);
+    assert!(
+        msg.contains("clipboard"),
+        "no-clipboard-image message must mention 'clipboard'; got {msg:?}"
+    );
+    assert!(
+        msg.contains("image"),
+        "no-clipboard-image message must mention 'image'; got {msg:?}"
+    );
+}
+
+#[test]
+fn format_qr_import_failure_image_decode_failure_message_is_user_facing() {
+    let msg = format_qr_import_failure(&QrImportFailure::ImageDecodeFailure);
+    assert!(
+        msg.contains("decode"),
+        "image-decode message must mention 'decode'; got {msg:?}"
+    );
+}
+
+#[test]
+fn format_qr_import_failure_import_variant_delegates_to_render_error_message() {
+    // Reuses `render_error_message` so any `PaladinError` returned by
+    // the importer or save layer surfaces with the same wording the
+    // rest of the TUI uses (parity with Add validation / save errors).
+    let core_err = PaladinError::NoEntriesToImport;
+    let direct = render_error_message(&core_err);
+    let via_helper = format_qr_import_failure(&QrImportFailure::Import(core_err));
+    assert_eq!(
+        via_helper, direct,
+        "Import variant must reuse render_error_message verbatim"
+    );
+    // `ImportWarning` is referenced by the `EffectResult::QrImport`
+    // success path through `ImportReport::warnings`; touching the
+    // variant here keeps the import set tight without unused-import
+    // warnings while the success-path slice is pending.
+    let _ = ImportWarning {
+        source_index: 0,
+        warning: ValidationWarning::ShortSecret {
+            decoded_len: 8,
+            recommended_min: 16,
+        },
+    };
 }

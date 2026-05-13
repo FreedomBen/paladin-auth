@@ -13,7 +13,7 @@ use zeroize::Zeroizing;
 
 use paladin_core::{
     AccountId, AccountKindInput, AccountSummary, Algorithm, ClipboardClearToken, Code,
-    PaladinError, SettingPatch, Store, ValidatedAccount, ValidationWarning, Vault,
+    ImportReport, PaladinError, SettingPatch, Store, ValidatedAccount, ValidationWarning, Vault,
 };
 
 /// Events delivered to the reducer over the `mpsc<AppEvent>` channel.
@@ -363,6 +363,36 @@ pub enum EffectResult {
         /// failure.
         result: Result<AddSuccess, AddFailure>,
     },
+
+    /// Outcome of an [`Effect::AddFromClipboardQr`] attempt.
+    ///
+    /// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
+    /// *"QR imports call `Vault::import_accounts` with
+    /// `ImportConflict::Skip` and report imported/skipped/warning
+    /// counts plus any warning messages in the post-success counts
+    /// panel."*
+    ///
+    /// On `Ok(QrImportSuccess)` the reducer renders the counts panel
+    /// and any [`ImportWarning`](paladin_core::ImportWarning) messages
+    /// inside the still-open Add modal — the success path lands with
+    /// the counts-panel state slice.
+    ///
+    /// On `Err(QrImportFailure)` the reducer surfaces the rendered
+    /// failure inline in [`crate::app::state::AddModal::error`] and
+    /// leaves the modal open so the user can retry, per the plan's
+    /// "Add modal" QR-import inline-error bullets:
+    /// *"No-image, no-QR, and invalid-QR cases reject inline."*
+    ///
+    /// Results delivered while not on `Unlocked`, while a different
+    /// modal is open, or after the Add modal closed are discarded so
+    /// the carried `ImportReport` / [`PaladinError`] drops without
+    /// mutating state.
+    QrImport {
+        /// The QR-import outcome. `Ok` carries the
+        /// [`ImportReport`](paladin_core::ImportReport) for the counts
+        /// panel; `Err` carries the inline-error reason.
+        result: Result<QrImportSuccess, QrImportFailure>,
+    },
 }
 
 /// Successful outcome of an [`Effect::Add`] attempt.
@@ -423,6 +453,63 @@ pub enum AddFailure {
     },
     /// `Vault::mutate_and_save` returned an error.
     Save(PaladinError),
+}
+
+/// Successful outcome of an [`Effect::AddFromClipboardQr`] attempt.
+///
+/// Carries the [`ImportReport`] returned by `Vault::import_accounts`
+/// so the reducer can populate the post-success counts panel with the
+/// `imported` / `skipped` / `warnings` totals and the rendered
+/// warning messages (per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per
+/// §6)" > Add: *"QR imports call `Vault::import_accounts` with
+/// `ImportConflict::Skip` and report imported/skipped/warning counts
+/// plus any warning messages in the post-success counts panel."*).
+#[derive(Debug)]
+pub struct QrImportSuccess {
+    /// Counts and warnings from `Vault::import_accounts`. The reducer
+    /// reads the `imported` / `skipped` totals plus
+    /// [`ImportReport::warnings`] for the counts-panel rendering;
+    /// other fields (`replaced`, `appended`) are zero by construction
+    /// because clipboard QR imports always use
+    /// `ImportConflict::Skip`.
+    pub report: ImportReport,
+}
+
+/// Failure outcome of an [`Effect::AddFromClipboardQr`] attempt.
+///
+/// Distinguishes the inline-error cases the reducer must render
+/// differently in [`crate::app::state::AddModal::error`], per
+/// `IMPLEMENTATION_PLAN_03_TUI.md` "Add modal":
+/// *"No-image, no-QR, and invalid-QR cases reject inline."*
+///
+/// - [`QrImportFailure::NoClipboardImage`] — `arboard` reported the
+///   clipboard does not currently hold an image. The reducer surfaces
+///   a stable user-facing string asking the user to copy a QR image
+///   first.
+/// - [`QrImportFailure::ImageDecodeFailure`] — `arboard` reported an
+///   image is present but the bytes could not be decoded as a usable
+///   raster. Same surface as `NoClipboardImage`, different wording.
+/// - [`QrImportFailure::Import`] — wraps a [`PaladinError`] returned
+///   by `paladin_core::import::qr_image_bytes` (oversized buffer
+///   guard, zero decoded QRs, non-otpauth payload, validation /
+///   parsing failures) or by `Vault::import_accounts` /
+///   `Vault::mutate_and_save`. Rendered through
+///   [`crate::app::state::render_error_message`] so the wording stays
+///   in sync with the rest of the TUI's error surface.
+#[derive(Debug)]
+pub enum QrImportFailure {
+    /// `arboard::Clipboard::get_image()` reported the clipboard does
+    /// not hold an image (the user has not copied one, or the active
+    /// clipboard target carries text-only data).
+    NoClipboardImage,
+    /// `arboard` returned an image but the bytes could not be decoded
+    /// as a usable raster.
+    ImageDecodeFailure,
+    /// `paladin_core::import::qr_image_bytes` /
+    /// `Vault::import_accounts` / `Vault::mutate_and_save` returned a
+    /// [`PaladinError`] (oversized RGBA buffer, zero decoded QRs,
+    /// non-otpauth payload, save-not-committed, etc.).
+    Import(PaladinError),
 }
 
 /// Side effects produced by the reducer.

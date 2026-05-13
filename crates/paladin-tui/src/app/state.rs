@@ -1146,6 +1146,38 @@ pub fn format_duplicate_account_message(existing: &AccountSummary) -> String {
     )
 }
 
+/// Render the inline error message shown in [`AddModal::error`] when
+/// a clipboard QR-import attempt fails before reaching the importer
+/// (the `arboard` read returned no image, or the image bytes could
+/// not be decoded), or when the importer / save layer rejects the
+/// decoded payload.
+///
+/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Add modal": *"No-image,
+/// no-QR, and invalid-QR cases reject inline."* The TUI-side
+/// `arboard` failures ("no image" / "image decode") have no
+/// equivalent in the core's `PaladinError` vocabulary because they
+/// originate at the front-end clipboard adapter, so the wording
+/// lives here. Importer-side failures (oversized buffer, no QRs
+/// decoded, non-otpauth payloads, save errors, etc.) carry a
+/// [`PaladinError`] in
+/// [`QrImportFailure::Import`](crate::app::event::QrImportFailure::Import)
+/// and reuse [`render_error_message`] for parity with the rest of
+/// the TUI's error surface.
+#[must_use]
+pub fn format_qr_import_failure(failure: &crate::app::event::QrImportFailure) -> String {
+    use crate::app::event::QrImportFailure;
+    match failure {
+        QrImportFailure::NoClipboardImage => {
+            "QR import failed: clipboard does not contain an image (copy a QR image first)."
+                .to_string()
+        }
+        QrImportFailure::ImageDecodeFailure => {
+            "QR import failed: clipboard image could not be decoded.".to_string()
+        }
+        QrImportFailure::Import(err) => render_error_message(err),
+    }
+}
+
 /// Build the TUI's initial state from the optional `--vault`
 /// command-line override.
 ///
