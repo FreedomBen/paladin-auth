@@ -868,11 +868,31 @@ end-to-end.
   `enter_with_pending_duplicate_add_in_manual_mode_emits_add_anyway_effect`,
   `enter_with_pending_duplicate_add_in_uri_mode_emits_add_anyway_effect`,
   and `effect_result_add_ok_closes_modal` in `tests/reducer_tests.rs`.)*
-- [ ] Clipboard QR import uses `ImportConflict::Skip` and reports
+- [x] Clipboard QR import uses `ImportConflict::Skip` and reports
   imported / skipped counts.
-- [ ] QR-add validation warnings are rendered through
+  *(Executor's `Effect::AddFromClipboardQr` arm in
+  `crates/paladin-tui/src/app/effect.rs` calls
+  `Vault::import_accounts(_, ImportConflict::Skip, _)` after the
+  shared QR-decode path, and the reducer mirrors the resulting
+  `ImportReport.imported` / `skipped` totals into
+  `AddModal::counts_panel`. Asserted by
+  `effect_result_qr_import_ok_populates_counts_panel_with_imported_and_skipped_counts`
+  and the skip-only sibling
+  `effect_result_qr_import_ok_with_only_skips_still_populates_counts_panel`
+  in `tests/reducer_tests.rs`.)*
+- [x] QR-add validation warnings are rendered through
   `paladin_core::format_validation_warning()` in the post-success
   counts panel.
+  *(`reduce_qr_import_result`'s `Ok` arm maps each
+  `ImportReport.warnings` entry through
+  `paladin_core::format_validation_warning(&w.warning)` into
+  `AddModal::counts_panel.warnings` while preserving source order.
+  Asserted by
+  `effect_result_qr_import_ok_renders_warnings_through_format_validation_warning`,
+  `effect_result_qr_import_ok_preserves_warning_order_across_multiple_warnings`,
+  and the empty-list sibling
+  `effect_result_qr_import_ok_with_no_warnings_yields_empty_warnings_list`
+  in `tests/reducer_tests.rs`.)*
 - [x] Manual / URI Add status-line confirmations include validation
   warning text.
   *(`reduce_add_result`'s `Ok` arm composes
@@ -886,7 +906,27 @@ end-to-end.
   and
   `effect_result_add_ok_joins_multiple_validation_warnings_with_separator`
   in `tests/reducer_tests.rs`.)*
-- [ ] No-image, no-QR, and invalid-QR cases reject inline.
+- [x] No-image, no-QR, and invalid-QR cases reject inline.
+  *(Every `EffectResult::QrImport { Err(QrImportFailure::*) }`
+  variant lands in `AddModal::error` via
+  `format_qr_import_failure` / `render_error_message` and leaves
+  the modal in `AddMode::Qr` with no status-line confirmation.
+  Asserted by
+  `effect_result_qr_import_no_clipboard_image_sets_inline_error_and_keeps_modal_open`
+  (no-image),
+  `effect_result_qr_import_image_decode_failure_sets_inline_error_and_keeps_modal_open`
+  (decode failure — no readable QR),
+  `effect_result_qr_import_no_qrs_decoded_sets_inline_error_via_render_error_message`
+  (image decoded but no QR payload via
+  `PaladinError::NoEntriesToImport`),
+  `effect_result_qr_import_invalid_qr_payload_sets_inline_error_via_render_error_message`
+  and
+  `effect_result_qr_import_oversized_rgba_buffer_sets_inline_error_via_render_error_message`
+  (invalid-QR variants), with discard / state-isolation siblings
+  `effect_result_qr_import_err_does_not_close_modal_or_publish_status_line`,
+  `effect_result_qr_import_err_does_not_perturb_other_modal_state`,
+  and the `not Unlocked` / `no modal` / `different modal` discard
+  trio, all in `tests/reducer_tests.rs`.)*
 
 ### Import modal (`tests/reducer_tests.rs`)
 
@@ -1097,8 +1137,25 @@ end-to-end.
   `durability` wording. Both run through the shared
   `Validation | Save` arm in `reduce_add_result` and leave the
   status line untouched.)*
-- [ ] Remove modal: same coverage as Add, asserted on `Vault::iter()`.
-- [ ] Rename modal: same coverage as Add, asserted on `Vault::iter()`.
+- [x] Remove modal: same coverage as Add, asserted on `Vault::iter()`.
+  *(`effect_result_remove_save_not_committed_keeps_modal_open_with_inline_error`
+  asserts the rolled-back single-account vault via `Vault::iter()`
+  with the inline `save_not_committed` wording; the durability
+  sibling
+  `effect_result_remove_save_durability_unconfirmed_keeps_modal_open_with_inline_error`
+  asserts the committed empty vault via `Vault::iter().count()`
+  with the inline `durability` wording. Both run through the
+  shared `Validation | Save` arm in `reduce_remove_result` and
+  leave the status line untouched.)*
+- [x] Rename modal: same coverage as Add, asserted on `Vault::iter()`.
+  *(`effect_result_rename_save_not_committed_keeps_modal_open_with_inline_error`
+  asserts the rolled-back original label via `Vault::iter()` with
+  the inline `save_not_committed` wording; the durability sibling
+  `effect_result_rename_save_durability_unconfirmed_keeps_modal_open_with_inline_error`
+  asserts the committed new label via `Vault::iter()` with the
+  inline `durability` wording. Both run through the shared
+  `Validation | Save` arm in `reduce_rename_result` and leave the
+  status line untouched.)*
 - [ ] Import modal: same coverage as Add, asserted on `Vault::iter()`.
 - [x] Settings modal: same coverage as Add, asserted on
   `Vault::settings()`.
@@ -1136,8 +1193,25 @@ end-to-end.
   modal close, and auto-lock.
 - [ ] Passphrase set / change buffers zeroize on submit, cancel, modal
   close, and auto-lock.
-- [ ] Add modal manual-secret field zeroizes on submit, cancel, modal
+- [x] Add modal manual-secret field zeroizes on submit, cancel, modal
   close, mode switch, and auto-lock.
+  *(`AddModal::manual_secret` is a `PassphraseBuffer` wrapping
+  `Zeroizing<String>`, so `clear()` / `take()` wipe in place and
+  `Drop` wipes on modal teardown. Submit is covered by
+  `enter_in_add_modal_manual_mode_consumes_manual_secret_buffer`
+  (Enter takes the buffer into a `SecretString`); mode-switch by
+  `right_from_manual_mode_wipes_manual_secret` and
+  `left_from_manual_mode_wipes_manual_secret`; cancel by
+  `add_modal_esc_with_typed_manual_secret_closes_modal_and_drops_buffer`
+  (`Esc` clears `modal` to `None` so the typed bytes drop with the
+  modal); modal close (success) by
+  `effect_result_add_ok_closes_modal_with_already_taken_manual_secret`
+  (Enter `take()` then `EffectResult::Add Ok` drops the now-empty
+  `AddModal`); auto-lock by
+  `tick_past_idle_deadline_with_open_add_modal_typed_manual_secret_locks_and_drops_buffer`
+  (Tick past `idle_deadline` transitions to `Locked`, dropping the
+  whole `Unlocked` arm including the open `AddModal`). All in
+  `tests/reducer_tests.rs`.)*
 - [ ] Add URI-mode entry zeroizes on submit, cancel, modal close, mode
   switch, and auto-lock.
 - [ ] Pending duplicate-add validated accounts zeroize on add-anyway,

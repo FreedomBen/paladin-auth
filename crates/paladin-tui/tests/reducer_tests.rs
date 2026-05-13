@@ -16054,3 +16054,212 @@ fn ctrl_p_with_counts_panel_set_in_uri_mode_does_not_append_to_uri_text() {
     );
     assert_eq!(add.counts_panel, panel_before, "panel must survive Ctrl-P");
 }
+
+// ---------------------------------------------------------------------------
+// Sensitive UI buffers — `AddModal::manual_secret`
+// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Sensitive UI buffers":
+//  "Add modal manual-secret field zeroizes on submit, cancel, modal
+//  close, mode switch, and auto-lock.")
+//
+// `manual_secret: PassphraseBuffer` wraps `Zeroizing<String>`, so the
+// stored bytes are wiped on every `clear()` / `take()` and on `Drop`.
+// The submit axis is covered by
+// `enter_in_add_modal_manual_mode_consumes_manual_secret_buffer`
+// (Enter takes the buffer into a `SecretString`) and the mode-switch
+// axis by `right_from_manual_mode_wipes_manual_secret` /
+// `left_from_manual_mode_wipes_manual_secret`. This block locks the
+// remaining axes:
+//
+//   * cancel — `Esc` drops `Modal::Add(AddModal)`, dropping
+//     `manual_secret` so its bytes zeroize.
+//   * modal close (Add success) — `EffectResult::Add { Ok(_) }`
+//     drops the modal; combined with the Enter `take()` this closes
+//     the submit → success window without leaking buffered bytes.
+//   * auto-lock — a `Tick` past `idle_deadline` transitions the
+//     `Unlocked` value (which owns the modal) to `Locked`, dropping
+//     `manual_secret` along with the rest of the modal.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn add_modal_esc_with_typed_manual_secret_closes_modal_and_drops_buffer() {
+    // Cancel axis. The user has typed Base32 chars into the
+    // manual-secret field and then dismissed the Add modal with Esc
+    // before submitting. The reducer's Esc precedence chain
+    // (apply_esc_dismiss) clears `modal` to `None`; dropping the
+    // `Modal::Add(AddModal)` runs `PassphraseBuffer`'s `Drop` via
+    // `Zeroizing<String>`, wiping the typed bytes. Externally this
+    // is observable as the modal slot being empty after a single
+    // Esc, with no effects emitted (so no rogue Effect can carry
+    // the buffer elsewhere).
+    let tmp = secure_tempdir();
+    let state = add_modal_with_typed_manual_secret(&tmp);
+    // Precondition: the helper populated the manual-secret buffer
+    // with sentinel bytes so this test distinguishes "wiped" from
+    // "never written" on the cancel path.
+    assert!(
+        !add_modal_ref(&state).manual_secret.is_empty(),
+        "harness precondition: manual_secret must hold typed bytes",
+    );
+
+    let (state, effects) = reduce(state, key(KeyCode::Esc));
+    assert!(
+        effects.is_empty(),
+        "Esc cancelling the Add modal must not emit effects; got {effects:?}",
+    );
+    match state {
+        AppState::Unlocked {
+            modal,
+            status_line,
+            search_query,
+            ..
+        } => {
+            assert!(
+                modal.is_none(),
+                "Esc must drop the Add modal so its manual_secret buffer zeroizes; got {modal:?}",
+            );
+            assert!(
+                status_line.is_none(),
+                "cancel path must not publish a status-line confirmation; got {status_line:?}",
+            );
+            assert!(
+                search_query.is_empty(),
+                "cancel path must not leak buffered bytes into search_query; got {search_query:?}",
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_add_ok_closes_modal_with_already_taken_manual_secret() {
+    // Modal-close-on-success axis. By the time
+    // `EffectResult::Add { Ok(_) }` arrives, the Enter handler has
+    // already called `manual_secret.take()` (see
+    // `enter_in_add_modal_manual_mode_consumes_manual_secret_buffer`),
+    // so the in-memory buffer is empty. The Ok arm closes the
+    // modal, dropping the now-empty `AddModal`. This test locks the
+    // end-to-end contract: a user who submits with typed bytes ends
+    // up with the modal closed *and* the buffer drained — no
+    // post-success residue.
+    let (_tmp, _path, mut state) = fresh_unlocked_with_add_modal_at_path();
+    // Type a label so the success summary has something concrete to
+    // carry; the manual_secret bytes are the focus here.
+    match &mut state {
+        AppState::Unlocked {
+            modal: Some(Modal::Add(add)),
+            ..
+        } => {
+            add.label.push_str("github");
+            for c in "JBSWY3DPEHPK3PXP".chars() {
+                add.manual_secret.push(c);
+            }
+        }
+        _ => panic!("expected Unlocked with Modal::Add open"),
+    }
+    // Submit drains the manual_secret into the emitted Effect::Add.
+    let (state, effects) = reduce(state, key(KeyCode::Enter));
+    assert_eq!(effects.len(), 1, "Enter must emit Effect::Add");
+    let add = add_modal_ref(&state);
+    assert!(
+        add.manual_secret.is_empty(),
+        "submit must consume manual_secret via take(); residue would leak through Ok arm",
+    );
+
+    // Stage an Ok result mimicking the executor's commit. Build a
+    // free-standing summary so the test does not need the executor.
+    let tmp2 = secure_tempdir();
+    let (_path2, (mut vault2, store2)) = open_plaintext_pair(&tmp2);
+    let stage_id = add_totp_account(&mut vault2, &store2, "github");
+    let summary = vault2
+        .iter()
+        .find(|a| a.id() == stage_id)
+        .expect("staging account")
+        .summary();
+    let (state, effects) = reduce(
+        state,
+        add_result(Ok(AddSuccess {
+            summary,
+            warnings: Vec::new(),
+        })),
+    );
+    assert!(effects.is_empty(), "Ok arm emits no follow-up effects");
+    match state {
+        AppState::Unlocked { modal, .. } => {
+            assert!(
+                modal.is_none(),
+                "Ok arm must close the Add modal so the now-empty manual_secret buffer drops",
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn tick_past_idle_deadline_with_open_add_modal_typed_manual_secret_locks_and_drops_buffer() {
+    // Auto-lock axis. `maybe_auto_lock` transitions `Unlocked →
+    // Locked` when `Tick.monotonic` is past `idle_deadline`. The
+    // `Locked` state carries only `path` (and any pending clipboard
+    // clear) — by construction every other slot of the prior
+    // `Unlocked` is dropped, including any open `Modal::Add` and its
+    // `manual_secret` buffer. The buffer's `Zeroizing<String>` drop
+    // wipes the typed bytes in place.
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (mut vault, store) = create_encrypted_pair(&path, "pp");
+    enable_auto_lock(&mut vault, &store, 600);
+
+    let t0 = Instant::now();
+    let deadline = t0 + Duration::from_secs(600);
+    let mut add = AddModal::default();
+    for c in "JBSWY3DPEHPK3PXP".chars() {
+        add.manual_secret.push(c);
+    }
+    assert!(
+        !add.manual_secret.is_empty(),
+        "harness precondition: manual_secret must hold typed bytes",
+    );
+
+    let unlocked = AppState::Unlocked {
+        path: path.clone(),
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: Some(deadline),
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Add(add)),
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+
+    let now = deadline + Duration::from_millis(1);
+    let tick = AppEvent::Tick {
+        wall_clock: SystemTime::now(),
+        monotonic: now,
+    };
+    let (next, effects) = reduce(unlocked, tick);
+    assert!(
+        effects.is_empty(),
+        "auto-lock transition emits no effects; got {effects:?}",
+    );
+    match next {
+        AppState::Locked {
+            path: p,
+            pending_clipboard_clear,
+        } => {
+            assert_eq!(p, path, "Locked must carry the original vault path");
+            assert!(
+                pending_clipboard_clear.is_none(),
+                "no pending clipboard clear was seeded — lock must not synthesize one",
+            );
+        }
+        other => panic!(
+            "expected Locked (Add modal and its manual_secret buffer must be gone), got {other:?}",
+        ),
+    }
+}
