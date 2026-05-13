@@ -1323,6 +1323,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "paladin-gtk"
+version = "0.0.1"
+dependencies = [
+ "clap",
+ "paladin-core",
+ "tempfile",
+]
+
+[[package]]
 name = "paladin-tui"
 version = "0.0.1"
 dependencies = [

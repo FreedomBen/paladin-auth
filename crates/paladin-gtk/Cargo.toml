@@ -1,0 +1,45 @@
+[package]
+name = "paladin-gtk"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description.workspace = true
+keywords = ["otp", "totp", "hotp", "authenticator", "gtk"]
+categories = ["gui", "authentication"]
+
+[lints]
+workspace = true
+
+# Both a library and a binary so integration tests in `tests/` can
+# reach internal modules (search, pure-logic helpers, components) while
+# the binary entry stays in `src/main.rs`. Mirrors the §"Crate layout"
+# requirement in IMPLEMENTATION_PLAN_04_GTK.md.
+[lib]
+name = "paladin_gtk"
+path = "src/lib.rs"
+
+[[bin]]
+name = "paladin-gtk"
+path = "src/main.rs"
+
+# Per §"Dependencies (per §9)" of IMPLEMENTATION_PLAN_04_GTK.md, the
+# v0.2 GUI binds `relm4`, `gtk4` (>=4.16), `libadwaita` (>=1.6),
+# `glib`, `gio`, `gdk4`, plus `paladin-core` and `clap`. These widget-
+# stack deps are added in the commit that introduces the first GTK-
+# touching module so the scaffold stays buildable on systems without
+# GTK dev headers and so each addition has a clear blame trail.
+# `paladin-core` is the only crate-level dep here today.
+#
+# Thinness contract (tests/thinness.rs): this section MUST NOT
+# declare any of `argon2`, `chacha20poly1305`, `bincode`, `hmac`,
+# `sha1`, `sha2`, `rqrr`, `image`, `getrandom`, `directories`, or
+# `url` directly — those belong in `paladin-core`.
+[dependencies]
+paladin-core = { path = "../paladin-core", version = "0.0.1" }
+clap = { version = "4.5", features = ["derive", "wrap_help"] }
+
+[dev-dependencies]
+tempfile = "3"
