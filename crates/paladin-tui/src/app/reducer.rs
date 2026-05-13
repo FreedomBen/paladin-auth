@@ -14,19 +14,20 @@ use std::time::Instant;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 
 use paladin_core::{
-    hotp_reveal_deadline, validate_label, AccountId, AccountKindInput, Algorithm,
-    ClipboardClearPolicy, ClipboardClearToken, Code, IdlePolicy, PaladinError, SettingPatch, Store,
-    Vault,
+    format_validation_warning, hotp_reveal_deadline, validate_label, AccountId, AccountKindInput,
+    Algorithm, ClipboardClearPolicy, ClipboardClearToken, Code, IdlePolicy, PaladinError,
+    SettingPatch, Store, Vault,
 };
 use secrecy::SecretString;
 use zeroize::Zeroizing;
 
 use crate::app::event::{AddFailure, AppEvent, Effect, EffectResult};
 use crate::app::state::{
-    compute_idle_deadline, format_duplicate_account_message, initial_selection,
-    render_error_message, AddManualFocus, AddModal, AddMode, AppState, ChordLeader, Focus,
-    HotpReveal, Modal, PendingClipboardClear, PendingDuplicateAdd, RemoveModal, RenameModal,
-    SettingsFocus, SettingsModal, StatusLine, CLIPBOARD_WRITE_FAILED, NO_ACCOUNT_SELECTED,
+    compute_idle_deadline, format_account_display_label, format_duplicate_account_message,
+    initial_selection, render_error_message, AddManualFocus, AddModal, AddMode, AppState,
+    ChordLeader, Focus, HotpReveal, Modal, PendingClipboardClear, PendingDuplicateAdd, RemoveModal,
+    RenameModal, SettingsFocus, SettingsModal, StatusLine, CLIPBOARD_WRITE_FAILED,
+    NO_ACCOUNT_SELECTED,
 };
 use crate::search::{filtered_account_ids, select_after_search};
 
@@ -625,7 +626,12 @@ fn reduce_add_result(
     mut state: AppState,
     result: Result<crate::app::event::AddSuccess, AddFailure>,
 ) -> (AppState, Vec<Effect>) {
-    let AppState::Unlocked { ref mut modal, .. } = state else {
+    let AppState::Unlocked {
+        ref mut modal,
+        ref mut status_line,
+        ..
+    } = state
+    else {
         return (state, Vec::new());
     };
 
@@ -634,11 +640,33 @@ fn reduce_add_result(
     };
 
     match result {
-        Ok(_success) => {
+        Ok(success) => {
             // Close the Add modal so the user returns to the list
-            // view. Status-line confirmation wording (and the
-            // `format_validation_warning` rendering for any
-            // `AddSuccess::warnings`) lands with the dedicated slice.
+            // view and publish the `Added <display>.` status-line
+            // confirmation, mirroring the CLI's
+            // `Added Acme:alice (id:abcdef01).` idiom (the TUI omits
+            // the disambiguator because no `id:` selector is used in
+            // the keyboard UI). Any
+            // `paladin_core::ValidationWarning`s collected by
+            // `validate_manual` are rendered through
+            // `format_validation_warning` and appended after the
+            // confirmation as `warning: <text>` — multiple warnings
+            // are joined with `; ` so the status line stays single-
+            // line per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per
+            // §6)" > Add.
+            let display = format_account_display_label(&success.summary);
+            let confirmation = if success.warnings.is_empty() {
+                format!("Added {display}.")
+            } else {
+                let rendered = success
+                    .warnings
+                    .iter()
+                    .map(format_validation_warning)
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                format!("Added {display}. warning: {rendered}")
+            };
+            *status_line = Some(StatusLine::Confirmation(confirmation));
             *modal = None;
         }
         Err(AddFailure::Duplicate { existing, pending }) => {

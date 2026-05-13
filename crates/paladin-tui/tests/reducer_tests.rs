@@ -19,9 +19,10 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use secrecy::{ExposeSecret, SecretString};
 
 use paladin_core::{
-    hotp_reveal_deadline, validate_manual, AccountId, AccountInput, AccountKindInput, Algorithm,
-    Argon2Params, EncryptionOptions, IconHintInput, IdlePolicy, PaladinError, PermissionSubject,
-    SettingPatch, Store, Vault, VaultInit, VaultLock, VaultStatus,
+    format_validation_warning, hotp_reveal_deadline, validate_manual, AccountId, AccountInput,
+    AccountKindInput, Algorithm, Argon2Params, EncryptionOptions, IconHintInput, IdlePolicy,
+    PaladinError, PermissionSubject, SettingPatch, Store, ValidationWarning, Vault, VaultInit,
+    VaultLock, VaultStatus,
 };
 use paladin_tui::app::event::{AddFailure, AddSuccess, AppEvent, Effect, EffectResult};
 use paladin_tui::app::reducer::reduce;
@@ -14430,6 +14431,207 @@ fn effect_result_add_ok_closes_modal() {
                 modal.is_none(),
                 "Add modal must close on EffectResult::Add Ok"
             );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_add_ok_sets_status_line_confirmation_with_display_label() {
+    // Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)": *"manual
+    // Add, URI Add, Remove, Rename, Export, Passphrase, and Settings
+    // close the modal and publish a status-line confirmation."* The
+    // wording matches the CLI's `Added Acme:alice.` idiom — built
+    // from `format_account_display_label(&summary)` so the issuer is
+    // included when present and elided when absent. No validation
+    // warnings means just the bare confirmation, no warning trailer.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let existing_id = add_totp_account(&mut vault, &store, "github");
+    let existing_summary = vault
+        .iter()
+        .find(|a| a.id() == existing_id)
+        .expect("existing account in vault")
+        .summary();
+    let expected_label = paladin_tui::app::state::format_account_display_label(&existing_summary);
+
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Add(AddModal::default())),
+        selected: Some(existing_id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+
+    let success = AddSuccess {
+        summary: existing_summary,
+        warnings: Vec::new(),
+    };
+    let (state, effects) = reduce(unlocked, add_result(Ok(success)));
+    assert!(effects.is_empty());
+    match state {
+        AppState::Unlocked {
+            modal, status_line, ..
+        } => {
+            assert!(modal.is_none(), "Add modal must close on Add Ok");
+            let line = status_line.expect("Add Ok must publish status-line confirmation");
+            match line {
+                StatusLine::Confirmation(msg) => {
+                    assert_eq!(
+                        msg,
+                        format!("Added {expected_label}."),
+                        "wording must match the CLI's `Added <display>.` idiom"
+                    );
+                }
+                StatusLine::Error(e) => panic!("expected Confirmation, got Error({e:?})"),
+            }
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_add_ok_includes_validation_warning_text_in_confirmation() {
+    // Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
+    // *"Validation warnings are rendered with
+    // `paladin_core::format_validation_warning()` and do not block
+    // creation: manual / URI additions include them in the status-line
+    // confirmation."* The reducer composes the confirmation as
+    // `Added <display>. warning: <format_validation_warning(w)>` so
+    // wording stays aligned with the CLI's `paladin: warning: <text>`
+    // stderr advisory.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let existing_id = add_totp_account(&mut vault, &store, "github");
+    let existing_summary = vault
+        .iter()
+        .find(|a| a.id() == existing_id)
+        .expect("existing account in vault")
+        .summary();
+    let expected_label = paladin_tui::app::state::format_account_display_label(&existing_summary);
+
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Add(AddModal::default())),
+        selected: Some(existing_id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+
+    let warning = ValidationWarning::ShortSecret {
+        decoded_len: 8,
+        recommended_min: 16,
+    };
+    let expected_warning_text = format_validation_warning(&warning);
+    let success = AddSuccess {
+        summary: existing_summary,
+        warnings: vec![warning],
+    };
+    let (state, _effects) = reduce(unlocked, add_result(Ok(success)));
+    match state {
+        AppState::Unlocked {
+            modal, status_line, ..
+        } => {
+            assert!(modal.is_none(), "Add modal must close on Add Ok");
+            let line = status_line.expect("Add Ok must publish status-line confirmation");
+            match line {
+                StatusLine::Confirmation(msg) => {
+                    assert_eq!(
+                        msg,
+                        format!("Added {expected_label}. warning: {expected_warning_text}"),
+                        "confirmation must include the rendered validation warning text"
+                    );
+                }
+                StatusLine::Error(e) => panic!("expected Confirmation, got Error({e:?})"),
+            }
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_add_ok_joins_multiple_validation_warnings_with_separator() {
+    // Defensive: the success carrier is `Vec<ValidationWarning>`, so
+    // even though `validate_manual` currently emits at most one
+    // warning, the reducer must compose multiple rendered warnings
+    // deterministically. Join with `; ` so the status line stays
+    // single-line and warnings remain individually readable.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let existing_id = add_totp_account(&mut vault, &store, "github");
+    let existing_summary = vault
+        .iter()
+        .find(|a| a.id() == existing_id)
+        .expect("existing account in vault")
+        .summary();
+    let expected_label = paladin_tui::app::state::format_account_display_label(&existing_summary);
+
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Add(AddModal::default())),
+        selected: Some(existing_id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+
+    let w1 = ValidationWarning::ShortSecret {
+        decoded_len: 4,
+        recommended_min: 16,
+    };
+    let w2 = ValidationWarning::ShortSecret {
+        decoded_len: 8,
+        recommended_min: 16,
+    };
+    let rendered_w1 = format_validation_warning(&w1);
+    let rendered_w2 = format_validation_warning(&w2);
+    let success = AddSuccess {
+        summary: existing_summary,
+        warnings: vec![w1, w2],
+    };
+    let (state, _effects) = reduce(unlocked, add_result(Ok(success)));
+    match state {
+        AppState::Unlocked { status_line, .. } => {
+            let line = status_line.expect("Add Ok must publish status-line confirmation");
+            match line {
+                StatusLine::Confirmation(msg) => {
+                    assert_eq!(
+                        msg,
+                        format!("Added {expected_label}. warning: {rendered_w1}; {rendered_w2}"),
+                        "multiple warnings must be joined with `; ` after the `warning: ` prefix"
+                    );
+                }
+                StatusLine::Error(e) => panic!("expected Confirmation, got Error({e:?})"),
+            }
         }
         other => panic!("expected Unlocked, got {other:?}"),
     }

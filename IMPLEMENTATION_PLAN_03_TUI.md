@@ -841,8 +841,19 @@ end-to-end.
 - [ ] QR-add validation warnings are rendered through
   `paladin_core::format_validation_warning()` in the post-success
   counts panel.
-- [ ] Manual / URI Add status-line confirmations include validation
+- [x] Manual / URI Add status-line confirmations include validation
   warning text.
+  *(`reduce_add_result`'s `Ok` arm composes
+  `Added <format_account_display_label>.` plus a
+  `warning: <format_validation_warning(w); …>` trailer for any
+  `AddSuccess::warnings`, joining multiple rendered warnings with
+  `; ` so the status line stays single-line and matches the CLI's
+  `paladin: warning: <text>` advisory wording. Asserted by
+  `effect_result_add_ok_sets_status_line_confirmation_with_display_label`,
+  `effect_result_add_ok_includes_validation_warning_text_in_confirmation`,
+  and
+  `effect_result_add_ok_joins_multiple_validation_warnings_with_separator`
+  in `tests/reducer_tests.rs`.)*
 - [ ] No-image, no-QR, and invalid-QR cases reject inline.
 
 ### Import modal (`tests/reducer_tests.rs`)
