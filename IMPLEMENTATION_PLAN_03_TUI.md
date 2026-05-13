@@ -694,9 +694,20 @@ end-to-end.
 - [ ] `Ctrl-N` / `Ctrl-P` inside modals have no effect on a
   post-success counts panel — lands alongside the counts panel
   payload (Add / Import / Export).
-- [ ] `Ctrl-N` / `Ctrl-P` inside modals do not override `↑` / `↓`
+- [x] `Ctrl-N` / `Ctrl-P` inside modals do not override `↑` / `↓`
   spinner adjustments — lands alongside the spinner payload
-  (Settings).
+  (Settings). *(Reducer routes `Ctrl-N` / `Ctrl-P` through
+  `is_modal_focus_next` / `is_modal_focus_prev` before the
+  spinner-adjust path runs, so pressing either chord while focus
+  rests on `AutoLockTimeoutSecs` or `ClipboardClearSecs` advances /
+  retreats `SettingsFocus` without mutating
+  `auto_lock_timeout_secs` / `clipboard_clear_secs`. Asserted by
+  `ctrl_n_on_auto_lock_timeout_spinner_focus_advances_focus_without_changing_value`,
+  `ctrl_p_on_auto_lock_timeout_spinner_focus_retreats_focus_without_changing_value`,
+  `ctrl_n_on_clipboard_clear_secs_spinner_focus_advances_focus_without_changing_value`,
+  and
+  `ctrl_p_on_clipboard_clear_secs_spinner_focus_retreats_focus_without_changing_value`
+  in `tests/reducer_tests.rs`.)*
 
 ### Search (`tests/search_tests.rs`)
 

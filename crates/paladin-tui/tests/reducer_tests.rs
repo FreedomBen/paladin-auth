@@ -6132,6 +6132,188 @@ fn arrow_on_settings_modal_does_not_mutate_vault_settings() {
 }
 
 // ---------------------------------------------------------------------------
+// Settings modal — Ctrl-N / Ctrl-P from a spinner-focused field
+// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Reducer — "Vim-style
+//  navigation": *"`Ctrl-N` / `Ctrl-P` inside modals do not override
+//  `↑` / `↓` spinner adjustments — lands alongside the spinner
+//  payload (Settings)."*
+//
+// Ctrl-N / Ctrl-P are modal-LOCAL focus aliases for Tab / Shift-Tab;
+// they must NOT double as spinner up/down shortcuts. With focus on a
+// spinner field, Ctrl-N advances focus to the next field and Ctrl-P
+// retreats to the previous one — the spinner value itself is left
+// untouched.
+// ---------------------------------------------------------------------------
+
+/// Reduce an `AppEvent` against a freshly opened Settings modal with
+/// `focus` pre-positioned on `target` and the two spinner fields
+/// pre-set to `(al_secs, cc_secs)`. Returns the post-event
+/// `SettingsModal` plus emitted effects. Parallels
+/// [`reduce_arrow_on_settings_with`] but accepts any `AppEvent` so
+/// callers can dispatch `Ctrl-*` keystrokes against a primed
+/// spinner.
+fn reduce_event_on_settings_with(
+    tmp: &tempfile::TempDir,
+    target: SettingsFocus,
+    event: AppEvent,
+    al_secs: u32,
+    cc_secs: u32,
+) -> (SettingsModal, Vec<Effect>) {
+    let state = fresh_unlocked_with_settings_modal(tmp);
+    let state = match state {
+        AppState::Unlocked {
+            path,
+            vault,
+            store,
+            search_query,
+            idle_deadline,
+            pending_clipboard_clear,
+            hotp_reveal,
+            modal: Some(Modal::Settings(mut s)),
+            selected,
+            pending_chord_leader,
+            viewport_height,
+            viewport_offset,
+            focus,
+            status_line,
+            help_open,
+        } => {
+            s.focus = target;
+            s.auto_lock_timeout_secs = al_secs;
+            s.clipboard_clear_secs = cc_secs;
+            AppState::Unlocked {
+                path,
+                vault,
+                store,
+                search_query,
+                idle_deadline,
+                pending_clipboard_clear,
+                hotp_reveal,
+                modal: Some(Modal::Settings(s)),
+                selected,
+                pending_chord_leader,
+                viewport_height,
+                viewport_offset,
+                focus,
+                status_line,
+                help_open,
+            }
+        }
+        other => panic!("expected Settings modal open, got {other:?}"),
+    };
+    let (after, effects) = reduce(state, event);
+    let modal = match after {
+        AppState::Unlocked {
+            modal: Some(Modal::Settings(s)),
+            ..
+        } => s,
+        AppState::Unlocked { modal, .. } => {
+            panic!("expected Settings modal still open, got modal={modal:?}")
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    };
+    (modal, effects)
+}
+
+#[test]
+fn ctrl_n_on_auto_lock_timeout_spinner_focus_advances_focus_without_changing_value() {
+    let tmp = secure_tempdir();
+    let (modal, effects) = reduce_event_on_settings_with(
+        &tmp,
+        SettingsFocus::AutoLockTimeoutSecs,
+        ctrl(KeyCode::Char('n')),
+        60,
+        30,
+    );
+    assert!(
+        effects.is_empty(),
+        "Ctrl-N inside Settings must not emit effects"
+    );
+    assert_eq!(
+        modal.focus,
+        SettingsFocus::ClipboardClearEnabled,
+        "Ctrl-N on a spinner field must advance focus like Tab"
+    );
+    assert_eq!(
+        modal.auto_lock_timeout_secs, 60,
+        "Ctrl-N must not adjust the focused spinner value"
+    );
+    assert_eq!(
+        modal.clipboard_clear_secs, 30,
+        "Ctrl-N must not touch the other spinner"
+    );
+}
+
+#[test]
+fn ctrl_p_on_auto_lock_timeout_spinner_focus_retreats_focus_without_changing_value() {
+    let tmp = secure_tempdir();
+    let (modal, effects) = reduce_event_on_settings_with(
+        &tmp,
+        SettingsFocus::AutoLockTimeoutSecs,
+        ctrl(KeyCode::Char('p')),
+        60,
+        30,
+    );
+    assert!(effects.is_empty());
+    assert_eq!(
+        modal.focus,
+        SettingsFocus::AutoLockEnabled,
+        "Ctrl-P on a spinner field must retreat focus like Shift-Tab"
+    );
+    assert_eq!(
+        modal.auto_lock_timeout_secs, 60,
+        "Ctrl-P must not adjust the focused spinner value"
+    );
+    assert_eq!(modal.clipboard_clear_secs, 30);
+}
+
+#[test]
+fn ctrl_n_on_clipboard_clear_secs_spinner_focus_advances_focus_without_changing_value() {
+    let tmp = secure_tempdir();
+    let (modal, effects) = reduce_event_on_settings_with(
+        &tmp,
+        SettingsFocus::ClipboardClearSecs,
+        ctrl(KeyCode::Char('n')),
+        60,
+        30,
+    );
+    assert!(effects.is_empty());
+    assert_eq!(
+        modal.focus,
+        SettingsFocus::AutoLockEnabled,
+        "Ctrl-N on the last spinner wraps focus back to the first toggle"
+    );
+    assert_eq!(
+        modal.clipboard_clear_secs, 30,
+        "Ctrl-N must not adjust the focused spinner value"
+    );
+    assert_eq!(modal.auto_lock_timeout_secs, 60);
+}
+
+#[test]
+fn ctrl_p_on_clipboard_clear_secs_spinner_focus_retreats_focus_without_changing_value() {
+    let tmp = secure_tempdir();
+    let (modal, effects) = reduce_event_on_settings_with(
+        &tmp,
+        SettingsFocus::ClipboardClearSecs,
+        ctrl(KeyCode::Char('p')),
+        60,
+        30,
+    );
+    assert!(effects.is_empty());
+    assert_eq!(
+        modal.focus,
+        SettingsFocus::ClipboardClearEnabled,
+        "Ctrl-P on a spinner field must retreat focus like Shift-Tab"
+    );
+    assert_eq!(
+        modal.clipboard_clear_secs, 30,
+        "Ctrl-P must not adjust the focused spinner value"
+    );
+    assert_eq!(modal.auto_lock_timeout_secs, 60);
+}
+
+// ---------------------------------------------------------------------------
 // Settings modal — Confirm / Esc / pending-edit buffering + save outcomes
 // (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Reducer — "Settings modal":
 //  pending edits buffered, Esc discards, Confirm runs every changed
