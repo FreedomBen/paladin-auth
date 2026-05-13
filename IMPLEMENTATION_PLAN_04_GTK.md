@@ -787,13 +787,13 @@ These run without a display server. Each lives under
 
 #### `tests/secret_fields_logic.rs`
 
-- [ ] Secret-field clearing / redaction invariants for passphrase,
+- [x] Secret-field clearing / redaction invariants for passphrase,
   manual-secret, and `otpauth://` URI entry buffers (submit, cancel,
   close, auto-lock).
-- [ ] Add path-switch clears the hidden Base32 manual secret, the
+- [x] Add path-switch clears the hidden Base32 manual secret, the
   URI text, and any pending duplicate-add state before the new path
   becomes active.
-- [ ] Pending `ValidatedAccount` (Add duplicate-collision) and
+- [x] Pending `ValidatedAccount` (Add duplicate-collision) and
   pending `VaultInit` (Init `vault_exists` race) are zeroized on
   cancel, close, replacement, and auto-lock.
 

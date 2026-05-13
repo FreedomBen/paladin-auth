@@ -24,6 +24,7 @@ pub mod clipboard_clear;
 pub mod hotp_reveal;
 pub mod icon_resolution;
 pub mod search;
+pub mod secret_fields;
 
 /// Run the `paladin-gtk` binary.
 ///
