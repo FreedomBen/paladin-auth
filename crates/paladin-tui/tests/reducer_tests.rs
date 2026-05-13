@@ -3416,6 +3416,241 @@ fn arrows_on_kind_focus_preserve_period_secs_and_counter() {
     assert!(add.error.is_none());
 }
 
+/// Reach `PeriodOrCounter` focus from the default Add-modal open
+/// (Label) by pressing Tab six times. Returned state has
+/// `manual_focus == PeriodOrCounter`, kind == Totp (open-time
+/// default), and unchanged spinner defaults (`period_secs == 30`,
+/// `counter == 0`).
+fn add_modal_focused_on_period_or_counter(tmp: &tempfile::TempDir) -> AppState {
+    let mut state = fresh_unlocked_with_add_modal(tmp);
+    for _ in 0..6 {
+        let (next, _) = reduce(state, key(KeyCode::Tab));
+        state = next;
+    }
+    let add = add_modal_ref(&state);
+    assert_eq!(add.manual_focus, AddManualFocus::PeriodOrCounter);
+    assert_eq!(add.kind, AccountKindInput::Totp);
+    assert_eq!(add.period_secs, paladin_core::TOTP_PERIOD_DEFAULT);
+    assert_eq!(add.counter, 0);
+    state
+}
+
+/// Same as `add_modal_focused_on_period_or_counter` but pre-toggles
+/// `kind` to Hotp via one arrow press on the Kind focus before
+/// landing on `PeriodOrCounter`.
+fn add_modal_focused_on_period_or_counter_hotp(tmp: &tempfile::TempDir) -> AppState {
+    let mut state = fresh_unlocked_with_add_modal(tmp);
+    for _ in 0..5 {
+        let (next, _) = reduce(state, key(KeyCode::Tab));
+        state = next;
+    }
+    assert_eq!(add_modal_ref(&state).manual_focus, AddManualFocus::Kind);
+    let (state2, _) = reduce(state, key(KeyCode::Right));
+    let state2 = state2;
+    assert_eq!(add_modal_ref(&state2).kind, AccountKindInput::Hotp);
+    let (state3, _) = reduce(state2, key(KeyCode::Tab));
+    let add = add_modal_ref(&state3);
+    assert_eq!(add.manual_focus, AddManualFocus::PeriodOrCounter);
+    assert_eq!(add.kind, AccountKindInput::Hotp);
+    assert_eq!(add.period_secs, paladin_core::TOTP_PERIOD_DEFAULT);
+    assert_eq!(add.counter, 0);
+    state3
+}
+
+#[test]
+fn up_on_period_focus_with_totp_increments_period_secs_by_one() {
+    // Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)":
+    // *"↑ / ↓ adjust spinners"*. PeriodOrCounter is the Manual-mode
+    // numeric spinner; when kind == Totp it binds to `period_secs`.
+    // `↑` increments by 1 (the validation granule per
+    // `TOTP_PERIOD_MIN`..=`TOTP_PERIOD_MAX`).
+    let tmp = secure_tempdir();
+    let state = add_modal_focused_on_period_or_counter(&tmp);
+    let (after, effects) = reduce(state, key(KeyCode::Up));
+    assert!(effects.is_empty(), "↑ on spinner must not emit effects");
+    let add = add_modal_ref(&after);
+    assert_eq!(add.period_secs, paladin_core::TOTP_PERIOD_DEFAULT + 1);
+    assert_eq!(add.counter, 0, "↑ on Totp spinner must not touch counter");
+    assert_eq!(add.mode, AddMode::Manual);
+    assert_eq!(add.manual_focus, AddManualFocus::PeriodOrCounter);
+}
+
+#[test]
+fn down_on_period_focus_with_totp_decrements_period_secs_by_one() {
+    // `↓` decrements `period_secs` by 1.
+    let tmp = secure_tempdir();
+    let state = add_modal_focused_on_period_or_counter(&tmp);
+    let (after, effects) = reduce(state, key(KeyCode::Down));
+    assert!(effects.is_empty());
+    let add = add_modal_ref(&after);
+    assert_eq!(add.period_secs, paladin_core::TOTP_PERIOD_DEFAULT - 1);
+    assert_eq!(add.counter, 0);
+    assert_eq!(add.mode, AddMode::Manual);
+    assert_eq!(add.manual_focus, AddManualFocus::PeriodOrCounter);
+}
+
+#[test]
+fn right_on_period_focus_with_totp_increments_like_up() {
+    // `→` aliases to `↑` on the spinner: same +1 increment.
+    let tmp = secure_tempdir();
+    let state = add_modal_focused_on_period_or_counter(&tmp);
+    let (after, effects) = reduce(state, key(KeyCode::Right));
+    assert!(effects.is_empty());
+    let add = add_modal_ref(&after);
+    assert_eq!(add.period_secs, paladin_core::TOTP_PERIOD_DEFAULT + 1);
+    assert_eq!(
+        add.mode,
+        AddMode::Manual,
+        "→ on PeriodOrCounter focus must not switch AddMode"
+    );
+}
+
+#[test]
+fn left_on_period_focus_with_totp_decrements_like_down() {
+    // `←` aliases to `↓` on the spinner: same -1 decrement.
+    let tmp = secure_tempdir();
+    let state = add_modal_focused_on_period_or_counter(&tmp);
+    let (after, effects) = reduce(state, key(KeyCode::Left));
+    assert!(effects.is_empty());
+    let add = add_modal_ref(&after);
+    assert_eq!(add.period_secs, paladin_core::TOTP_PERIOD_DEFAULT - 1);
+    assert_eq!(
+        add.mode,
+        AddMode::Manual,
+        "← on PeriodOrCounter focus must not switch AddMode"
+    );
+}
+
+#[test]
+fn up_at_period_max_clamps_to_max() {
+    // The spinner is clamped to
+    // `TOTP_PERIOD_MIN`..=`TOTP_PERIOD_MAX` so `↑` at the upper
+    // bound is a silent no-op (no overflow, no emitted effects).
+    let tmp = secure_tempdir();
+    let mut state = add_modal_focused_on_period_or_counter(&tmp);
+    // Walk up to TOTP_PERIOD_MAX. TOTP_PERIOD_DEFAULT == 30,
+    // TOTP_PERIOD_MAX == 300 → 270 presses. Use a tight loop.
+    for _ in paladin_core::TOTP_PERIOD_DEFAULT..paladin_core::TOTP_PERIOD_MAX {
+        let (next, _) = reduce(state, key(KeyCode::Up));
+        state = next;
+    }
+    assert_eq!(
+        add_modal_ref(&state).period_secs,
+        paladin_core::TOTP_PERIOD_MAX
+    );
+    let (after, effects) = reduce(state, key(KeyCode::Up));
+    assert!(effects.is_empty());
+    assert_eq!(
+        add_modal_ref(&after).period_secs,
+        paladin_core::TOTP_PERIOD_MAX,
+        "↑ at TOTP_PERIOD_MAX must clamp, not overflow"
+    );
+}
+
+#[test]
+fn down_at_period_min_clamps_to_min() {
+    // `↓` at TOTP_PERIOD_MIN clamps; default 30 → walk down to 1.
+    let tmp = secure_tempdir();
+    let mut state = add_modal_focused_on_period_or_counter(&tmp);
+    for _ in paladin_core::TOTP_PERIOD_MIN..paladin_core::TOTP_PERIOD_DEFAULT {
+        let (next, _) = reduce(state, key(KeyCode::Down));
+        state = next;
+    }
+    assert_eq!(
+        add_modal_ref(&state).period_secs,
+        paladin_core::TOTP_PERIOD_MIN
+    );
+    let (after, effects) = reduce(state, key(KeyCode::Down));
+    assert!(effects.is_empty());
+    assert_eq!(
+        add_modal_ref(&after).period_secs,
+        paladin_core::TOTP_PERIOD_MIN,
+        "↓ at TOTP_PERIOD_MIN must clamp"
+    );
+}
+
+#[test]
+fn up_on_period_or_counter_focus_with_hotp_increments_counter_by_one() {
+    // When kind == Hotp the same spinner focus binds to the
+    // independent `counter: u64` instead of `period_secs`.
+    let tmp = secure_tempdir();
+    let state = add_modal_focused_on_period_or_counter_hotp(&tmp);
+    let (after, effects) = reduce(state, key(KeyCode::Up));
+    assert!(effects.is_empty());
+    let add = add_modal_ref(&after);
+    assert_eq!(add.counter, 1);
+    assert_eq!(
+        add.period_secs,
+        paladin_core::TOTP_PERIOD_DEFAULT,
+        "↑ on Hotp spinner must not touch period_secs"
+    );
+    assert_eq!(add.mode, AddMode::Manual);
+    assert_eq!(add.manual_focus, AddManualFocus::PeriodOrCounter);
+}
+
+#[test]
+fn down_at_counter_zero_clamps_to_zero() {
+    // Counter is u64 with saturating-subtract semantics; `↓` at 0
+    // is a silent no-op so the spinner can't wrap to u64::MAX.
+    let tmp = secure_tempdir();
+    let state = add_modal_focused_on_period_or_counter_hotp(&tmp);
+    assert_eq!(add_modal_ref(&state).counter, 0);
+    let (after, effects) = reduce(state, key(KeyCode::Down));
+    assert!(effects.is_empty());
+    assert_eq!(
+        add_modal_ref(&after).counter,
+        0,
+        "↓ at counter==0 must clamp, not wrap to u64::MAX"
+    );
+}
+
+#[test]
+fn right_and_left_on_counter_focus_with_hotp_alias_up_and_down() {
+    // `→` increments counter by 1; `←` decrements (clamping at 0).
+    let tmp = secure_tempdir();
+    let state = add_modal_focused_on_period_or_counter_hotp(&tmp);
+    let (state, _) = reduce(state, key(KeyCode::Right));
+    assert_eq!(add_modal_ref(&state).counter, 1);
+    let (state, _) = reduce(state, key(KeyCode::Right));
+    assert_eq!(add_modal_ref(&state).counter, 2);
+    let (state, _) = reduce(state, key(KeyCode::Left));
+    assert_eq!(add_modal_ref(&state).counter, 1);
+    let (state, _) = reduce(state, key(KeyCode::Left));
+    assert_eq!(add_modal_ref(&state).counter, 0);
+    let add = add_modal_ref(&state);
+    assert_eq!(add.mode, AddMode::Manual);
+    assert_eq!(add.manual_focus, AddManualFocus::PeriodOrCounter);
+}
+
+#[test]
+fn arrows_on_period_or_counter_focus_do_not_leak_into_other_fields() {
+    // The spinner mutates only the field its current Kind binds
+    // to (period_secs for Totp). Every other modal-local field
+    // keeps its open-time default.
+    let tmp = secure_tempdir();
+    let state = add_modal_focused_on_period_or_counter(&tmp);
+    let (state, _) = reduce(state, key(KeyCode::Up));
+    let (state, _) = reduce(state, key(KeyCode::Right));
+    let (state, _) = reduce(state, key(KeyCode::Down));
+    let (state, _) = reduce(state, key(KeyCode::Left));
+    let add = add_modal_ref(&state);
+    assert_eq!(
+        add.period_secs,
+        paladin_core::TOTP_PERIOD_DEFAULT,
+        "+1, +1, -1, -1 must round-trip"
+    );
+    assert_eq!(add.counter, 0);
+    assert!(add.label.is_empty());
+    assert!(add.issuer.is_empty());
+    assert!(add.icon_hint_text.is_empty());
+    assert!(add.manual_secret.is_empty());
+    assert!(add.uri_text.is_empty());
+    assert_eq!(add.algorithm, Algorithm::Sha1);
+    assert_eq!(add.digits, paladin_core::DIGITS_DEFAULT);
+    assert_eq!(add.kind, AccountKindInput::Totp);
+    assert!(add.error.is_none());
+}
+
 #[test]
 fn arrows_on_digits_focus_do_not_leak_into_other_fields() {
     // Cycling the Digits selector with arrow keys must leave every

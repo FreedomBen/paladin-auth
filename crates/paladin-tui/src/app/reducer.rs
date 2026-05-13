@@ -1163,16 +1163,18 @@ fn route_modal_input(
 /// `Hotp`; the modal's independent `period_secs` and `counter`
 /// scratch values are preserved across the toggle so the
 /// `PeriodOrCounter` focus can bind to whichever applies to the
-/// current Kind.
+/// current Kind. With [`AddManualFocus::PeriodOrCounter`] focused,
+/// `↑` / `→` increment and `↓` / `←` decrement the bound numeric
+/// spinner by 1: `period_secs` when Kind is `Totp` (clamped to
+/// [`paladin_core::TOTP_PERIOD_MIN`]..=[`paladin_core::TOTP_PERIOD_MAX`])
+/// or `counter` when Kind is `Hotp` (saturating `u64`).
 /// These arrow keys are intercepted before the mode-switch `←` /
 /// `→` branch so they do not switch the [`AddMode`] header when a
 /// non-text field has focus; the URI / QR modes and the four
 /// text-bearing Manual focuses keep the existing
 /// [`AddMode`]-cycling behavior.
-/// The remaining non-text focus
-/// ([`AddManualFocus::PeriodOrCounter`]) lands in a subsequent
-/// slice, alongside URI-mode typing, the duplicate-gate pending
-/// state, and the post-QR counts panel.
+/// URI-mode typing, the duplicate-gate pending state, and the
+/// post-QR counts panel land in subsequent slices.
 /// Every other key here is a silent no-op so the modal-trap contract
 /// holds. `Esc` / Help / `Ctrl-C` are filtered upstream of the modal
 /// trap.
@@ -1222,7 +1224,45 @@ fn try_cycle_manual_selector(add: &mut AddModal, key: &KeyEvent) -> bool {
             };
             true
         }
+        (AddManualFocus::PeriodOrCounter, KeyCode::Up | KeyCode::Right) => {
+            step_period_or_counter(add, true);
+            true
+        }
+        (AddManualFocus::PeriodOrCounter, KeyCode::Down | KeyCode::Left) => {
+            step_period_or_counter(add, false);
+            true
+        }
         _ => false,
+    }
+}
+
+/// Increment / decrement the Add modal's
+/// [`AddManualFocus::PeriodOrCounter`] spinner.
+///
+/// When the modal-local Kind is `Totp` the step adjusts `period_secs`
+/// by 1 second, clamped to
+/// [`paladin_core::TOTP_PERIOD_MIN`]..=[`paladin_core::TOTP_PERIOD_MAX`].
+/// When Kind is `Hotp` the step adjusts `counter` by 1 with
+/// saturating-add / saturating-sub semantics so the spinner cannot
+/// wrap past `u64::MAX` or below 0.
+fn step_period_or_counter(add: &mut AddModal, up: bool) {
+    match add.kind {
+        AccountKindInput::Totp => {
+            if up {
+                if add.period_secs < paladin_core::TOTP_PERIOD_MAX {
+                    add.period_secs += 1;
+                }
+            } else if add.period_secs > paladin_core::TOTP_PERIOD_MIN {
+                add.period_secs -= 1;
+            }
+        }
+        AccountKindInput::Hotp => {
+            if up {
+                add.counter = add.counter.saturating_add(1);
+            } else {
+                add.counter = add.counter.saturating_sub(1);
+            }
+        }
     }
 }
 
