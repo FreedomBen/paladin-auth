@@ -1130,17 +1130,21 @@ fn route_modal_input(
 /// `manual_focus` is intentionally sticky across mode switches so the
 /// user's last Manual-mode focus is restored on return to Manual.
 ///
-/// In Manual mode with [`AddManualFocus::Label`] or
-/// [`AddManualFocus::Issuer`] focused, a printable `KeyCode::Char`
-/// keystroke (no `Ctrl` / `Alt` modifier — mirroring the
-/// Unlock-screen filter) appends to the corresponding modal-local
-/// buffer (`label` or `issuer`) and `KeyCode::Backspace` pops the
-/// trailing character; backspace on an empty buffer is a silent
-/// no-op. `Char` keystrokes on any other Manual-mode focus are
-/// silently consumed for now (modal-trap contract); typing for the
-/// remaining text-bearing fields and the URI mode lands in
-/// subsequent slices, as does the duplicate-gate pending state and
-/// the post-QR counts panel.
+/// In Manual mode with [`AddManualFocus::Label`],
+/// [`AddManualFocus::Issuer`], or [`AddManualFocus::Secret`] focused,
+/// a printable `KeyCode::Char` keystroke (no `Ctrl` / `Alt` modifier
+/// — mirroring the Unlock-screen filter) appends to the corresponding
+/// modal-local buffer (`label`, `issuer`, or `manual_secret`) and
+/// `KeyCode::Backspace` pops the trailing character; backspace on an
+/// empty buffer is a silent no-op. The `manual_secret` field is a
+/// [`PassphraseBuffer`](crate::prompt::PassphraseBuffer) so typed
+/// bytes are zeroized on drop / clear; Base32 + length validation
+/// runs at submit time via `paladin_core::validate_manual`, so typing
+/// accepts any character. `Char` keystrokes on any other Manual-mode
+/// focus are silently consumed for now (modal-trap contract); typing
+/// for the remaining text-bearing field (icon hint) and the URI mode
+/// lands in subsequent slices, as does the duplicate-gate pending
+/// state and the post-QR counts panel.
 /// Every other key here is a silent no-op so the modal-trap contract
 /// holds. `Esc` / Help / `Ctrl-C` are filtered upstream of the modal
 /// trap.
@@ -1173,8 +1177,8 @@ fn route_add_modal_input(add: &mut AddModal, key: &KeyEvent) -> Vec<Effect> {
                 match add.manual_focus {
                     AddManualFocus::Label => add.label.push(c),
                     AddManualFocus::Issuer => add.issuer.push(c),
-                    AddManualFocus::Secret
-                    | AddManualFocus::Algorithm
+                    AddManualFocus::Secret => add.manual_secret.push(c),
+                    AddManualFocus::Algorithm
                     | AddManualFocus::Digits
                     | AddManualFocus::Kind
                     | AddManualFocus::PeriodOrCounter
@@ -1191,8 +1195,10 @@ fn route_add_modal_input(add: &mut AddModal, key: &KeyEvent) -> Vec<Effect> {
                 AddManualFocus::Issuer => {
                     add.issuer.pop();
                 }
-                AddManualFocus::Secret
-                | AddManualFocus::Algorithm
+                AddManualFocus::Secret => {
+                    add.manual_secret.pop();
+                }
+                AddManualFocus::Algorithm
                 | AddManualFocus::Digits
                 | AddManualFocus::Kind
                 | AddManualFocus::PeriodOrCounter

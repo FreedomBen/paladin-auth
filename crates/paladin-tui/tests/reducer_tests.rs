@@ -2682,6 +2682,135 @@ fn ctrl_modified_char_in_add_modal_manual_mode_issuer_focus_does_not_append() {
 }
 
 #[test]
+fn char_in_add_modal_manual_mode_secret_focus_appends_to_manual_secret() {
+    // Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
+    // Manual mode collects the Base32 secret as the third focused
+    // field. A printable character (no Ctrl/Alt modifier) typed while
+    // the secret is focused appends to the modal-local
+    // `manual_secret` PassphraseBuffer; `label` and `issuer` remain
+    // untouched. Validation (Base32 + length) lands at submit time
+    // via `paladin_core::validate_manual` — typing accepts any char.
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_add_modal(&tmp);
+    let (state, _) = reduce(state, key(KeyCode::Tab));
+    let (state, _) = reduce(state, key(KeyCode::Tab));
+    assert_eq!(add_modal_ref(&state).manual_focus, AddManualFocus::Secret);
+    assert!(add_modal_ref(&state).manual_secret.is_empty());
+    let (after, effects) = reduce(state, key(KeyCode::Char('J')));
+    assert!(
+        effects.is_empty(),
+        "typing into a Manual-mode field must not emit effects"
+    );
+    let add = add_modal_ref(&after);
+    assert_eq!(add.manual_secret.as_str(), "J");
+    assert!(
+        add.label.is_empty(),
+        "Secret-focused Char must not leak into the label"
+    );
+    assert!(
+        add.issuer.is_empty(),
+        "Secret-focused Char must not leak into the issuer"
+    );
+    assert_eq!(
+        add.mode,
+        AddMode::Manual,
+        "typing must not change input mode"
+    );
+    assert_eq!(
+        add.manual_focus,
+        AddManualFocus::Secret,
+        "typing must not change manual_focus"
+    );
+}
+
+#[test]
+fn multiple_chars_in_add_modal_manual_mode_secret_focus_append_in_order() {
+    // Several `KeyCode::Char` presses build up the secret buffer in
+    // typed order, including a non-ASCII codepoint so the
+    // implementation can't accidentally byte-slice or drop multi-byte
+    // input (validation rejects non-Base32 at submit, not at typing
+    // time).
+    let tmp = secure_tempdir();
+    let mut state = fresh_unlocked_with_add_modal(&tmp);
+    let (next, _) = reduce(state, key(KeyCode::Tab));
+    state = next;
+    let (next, _) = reduce(state, key(KeyCode::Tab));
+    state = next;
+    assert_eq!(add_modal_ref(&state).manual_focus, AddManualFocus::Secret);
+    for c in "JBSW 🦀".chars() {
+        let (next, effects) = reduce(state, key(KeyCode::Char(c)));
+        assert!(effects.is_empty(), "typing must not emit effects");
+        state = next;
+    }
+    assert_eq!(add_modal_ref(&state).manual_secret.as_str(), "JBSW 🦀");
+    assert!(add_modal_ref(&state).label.is_empty());
+    assert!(add_modal_ref(&state).issuer.is_empty());
+}
+
+#[test]
+fn backspace_in_add_modal_manual_mode_secret_focus_pops_last_char() {
+    // Backspace on a non-empty manual_secret removes the trailing
+    // character.
+    let tmp = secure_tempdir();
+    let mut state = fresh_unlocked_with_add_modal(&tmp);
+    let (next, _) = reduce(state, key(KeyCode::Tab));
+    state = next;
+    let (next, _) = reduce(state, key(KeyCode::Tab));
+    state = next;
+    for c in "JB".chars() {
+        let (next, _) = reduce(state, key(KeyCode::Char(c)));
+        state = next;
+    }
+    assert_eq!(add_modal_ref(&state).manual_secret.as_str(), "JB");
+    let (after, effects) = reduce(state, key(KeyCode::Backspace));
+    assert!(effects.is_empty(), "Backspace must not emit effects");
+    assert_eq!(add_modal_ref(&after).manual_secret.as_str(), "J");
+}
+
+#[test]
+fn backspace_in_add_modal_manual_mode_secret_focus_on_empty_secret_is_silent_noop() {
+    // Backspace on an empty manual_secret is a silent no-op: no
+    // panic, no effects, no state change. Mirrors the Unlock-screen
+    // contract and the Label / Issuer focus behaviour.
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_add_modal(&tmp);
+    let (state, _) = reduce(state, key(KeyCode::Tab));
+    let (state, _) = reduce(state, key(KeyCode::Tab));
+    assert_eq!(add_modal_ref(&state).manual_focus, AddManualFocus::Secret);
+    assert!(add_modal_ref(&state).manual_secret.is_empty());
+    let (after, effects) = reduce(state, key(KeyCode::Backspace));
+    assert!(
+        effects.is_empty(),
+        "Backspace on empty must not emit effects"
+    );
+    let add = add_modal_ref(&after);
+    assert!(add.manual_secret.is_empty());
+    assert!(add.label.is_empty());
+    assert!(add.issuer.is_empty());
+    assert_eq!(add.manual_focus, AddManualFocus::Secret);
+    assert_eq!(add.mode, AddMode::Manual);
+}
+
+#[test]
+fn ctrl_modified_char_in_add_modal_manual_mode_secret_focus_does_not_append() {
+    // Mirrors the Unlock-screen / Label / Issuer Ctrl/Alt-modifier
+    // filter on text fields: `Ctrl-*` and `Alt-*` are reserved for
+    // binding extensions and must not leak into the secret as raw
+    // characters.
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_add_modal(&tmp);
+    let (state, _) = reduce(state, key(KeyCode::Tab));
+    let (state, _) = reduce(state, key(KeyCode::Tab));
+    assert_eq!(add_modal_ref(&state).manual_focus, AddManualFocus::Secret);
+    let (after, effects) = reduce(state, ctrl(KeyCode::Char('x')));
+    assert!(effects.is_empty(), "Ctrl-X must not emit effects");
+    assert!(
+        add_modal_ref(&after).manual_secret.is_empty(),
+        "Ctrl-X must not append 'x' to manual_secret"
+    );
+}
+
+#[test]
 fn char_in_add_modal_manual_mode_with_non_text_focus_is_silent_noop() {
     // Text editing for Label and Issuer is wired; the remaining
     // fields beyond Secret (Algorithm / Digits / Kind /
