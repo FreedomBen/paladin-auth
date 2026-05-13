@@ -15174,6 +15174,162 @@ fn effect_result_add_ok_joins_multiple_validation_warnings_with_separator() {
 }
 
 // ---------------------------------------------------------------------------
+// Add modal — pre-commit save rollback
+// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Pre-commit save rollback":
+//  *"Add modal `save_not_committed` leaves `Vault::iter()` matching
+//  its pre-attempt snapshot and the modal stays open with the typed
+//  inline error; `save_durability_unconfirmed` leaves the new state
+//  in memory while surfacing the warning."*)
+//
+// Slice covered: the reducer's response to
+// `EffectResult::Add { Err(AddFailure::Save(PaladinError::*)) }` for
+// both the rolled-back `save_not_committed` path and the committed-
+// in-memory `save_durability_unconfirmed` path. The executor builds
+// the candidate `Account` and invokes `Vault::mutate_and_save`; on
+// `save_not_committed`, core has rolled the insert back so the
+// vault iter still matches the pre-attempt snapshot, and on
+// `save_durability_unconfirmed`, core has committed the insert in
+// memory (and on disk modulo the uncertain parent fsync) so the
+// vault iter reflects the new account. Either way the reducer
+// surfaces the typed error inline on `AddModal::error` and leaves
+// the modal open so the user can retry or `Esc` out deliberately —
+// the status line stays untouched.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn effect_result_add_save_not_committed_keeps_modal_open_with_inline_error() {
+    // Core's `Vault::mutate_and_save` rolled the insert back inside
+    // on `save_not_committed`; the fixture's vault still holds just
+    // the pre-attempt "github" account, mirroring the rolled-back
+    // state core leaves behind. The reducer surfaces the typed error
+    // inline on `AddModal::error` and leaves the modal open so the
+    // user can retry.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let _ = add_totp_account(&mut vault, &store, "github");
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Add(AddModal::default())),
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let err = PaladinError::SaveNotCommitted {
+        committed: false,
+        backup_path: None,
+    };
+    let (state, effects) = reduce(unlocked, add_result(Err(AddFailure::Save(err))));
+    assert!(
+        effects.is_empty(),
+        "save error result must not emit follow-up effects"
+    );
+    let add = add_modal_ref(&state);
+    let surfaced = add
+        .error
+        .as_deref()
+        .expect("save_not_committed must set inline error");
+    assert!(
+        surfaced.contains("save not committed") || surfaced.contains("save_not_committed"),
+        "inline error must surface save_not_committed wording, got {surfaced:?}"
+    );
+    let labels: Vec<&str> = match &state {
+        AppState::Unlocked { vault, .. } => {
+            vault.iter().map(paladin_core::Account::label).collect()
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    };
+    assert_eq!(
+        labels,
+        vec!["github"],
+        "Vault::iter() must reflect the rolled-back pre-attempt state on save_not_committed"
+    );
+    match &state {
+        AppState::Unlocked { status_line, .. } => assert!(
+            status_line.is_none(),
+            "save_not_committed must not publish a status-line confirmation; got {status_line:?}"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_add_save_durability_unconfirmed_keeps_modal_open_with_inline_error() {
+    // Durability-unconfirmed: core inserted the new account in
+    // memory (and wrote to disk) but the parent-directory fsync was
+    // uncertain. The fixture mirrors that state by seeding the new
+    // account into the vault before injecting the failure, so the
+    // reducer observes the committed iter while surfacing the
+    // durability warning inline. The TUI's surfacing mirrors Remove
+    // / Rename / Settings: modal stays open with the warning so the
+    // user can retry or `Esc` out deliberately.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let _ = add_totp_account(&mut vault, &store, "github");
+    let _new_id = add_totp_account(&mut vault, &store, "google");
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Add(AddModal::default())),
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let err = PaladinError::SaveDurabilityUnconfirmed;
+    let (state, effects) = reduce(unlocked, add_result(Err(AddFailure::Save(err))));
+    assert!(
+        effects.is_empty(),
+        "save error result must not emit follow-up effects"
+    );
+    let add = add_modal_ref(&state);
+    let surfaced = add
+        .error
+        .as_deref()
+        .expect("save_durability_unconfirmed must surface inline");
+    assert!(
+        surfaced.to_lowercase().contains("durability")
+            || surfaced.contains("save_durability_unconfirmed"),
+        "inline error must surface durability wording, got {surfaced:?}"
+    );
+    let labels: Vec<&str> = match &state {
+        AppState::Unlocked { vault, .. } => {
+            vault.iter().map(paladin_core::Account::label).collect()
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    };
+    assert_eq!(
+        labels,
+        vec!["github", "google"],
+        "Vault::iter() must reflect the committed new account on save_durability_unconfirmed"
+    );
+    match &state {
+        AppState::Unlocked { status_line, .. } => assert!(
+            status_line.is_none(),
+            "save_durability_unconfirmed must not publish a status-line confirmation; got {status_line:?}"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // QR-add inline error rejection.
 //
 // Slice covered: the reducer's response to

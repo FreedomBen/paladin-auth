@@ -1085,10 +1085,18 @@ end-to-end.
 
 ### Pre-commit save rollback (`tests/reducer_tests.rs`)
 
-- [ ] Add modal `save_not_committed` leaves `Vault::iter()` matching
+- [x] Add modal `save_not_committed` leaves `Vault::iter()` matching
   its pre-attempt snapshot and the modal stays open with the typed
   inline error; `save_durability_unconfirmed` leaves the new state in
   memory while surfacing the warning.
+  *(`effect_result_add_save_not_committed_keeps_modal_open_with_inline_error`
+  asserts the rolled-back single-account vault and the inline
+  `save_not_committed` wording; the durability sibling
+  (`effect_result_add_save_durability_unconfirmed_keeps_modal_open_with_inline_error`)
+  asserts the committed two-account vault and the inline
+  `durability` wording. Both run through the shared
+  `Validation | Save` arm in `reduce_add_result` and leave the
+  status line untouched.)*
 - [ ] Remove modal: same coverage as Add, asserted on `Vault::iter()`.
 - [ ] Rename modal: same coverage as Add, asserted on `Vault::iter()`.
 - [ ] Import modal: same coverage as Add, asserted on `Vault::iter()`.
