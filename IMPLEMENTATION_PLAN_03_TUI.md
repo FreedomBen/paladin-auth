@@ -972,15 +972,46 @@ end-to-end.
   proves a forced/detected mismatch surfaces
   `PaladinError::UnsupportedImportFormat { format: "aegis" }` inline
   with no live-vault or on-disk mutation.)*
-- [ ] Pre-prompt Paladin decision routes through
+- [x] Pre-prompt Paladin decision routes through
   `paladin_core::classify_paladin_import_precheck`, prompting only on
   `PromptForPassphrase`.
-- [ ] `Reject(err)` from the precheck surfaces inline without a
+  *(Reducer's Import-modal `Enter` handler now calls
+  `classify_paladin_import_precheck(&source_path, forced_format)` and
+  branches on the result. `PromptForPassphrase` seeds
+  `import.paladin_passphrase = Some(PassphraseBuffer::new())` and
+  emits no effect; the next `Enter` consumes the typed buffer via
+  `PassphraseBuffer::take` and emits `Effect::Import` with
+  `paladin_passphrase: Some(_)`. Asserted by
+  `enter_in_import_modal_with_encrypted_paladin_path_transitions_to_passphrase_phase_without_emitting_effect`
+  and
+  `enter_in_import_modal_passphrase_phase_emits_import_effect_with_typed_passphrase`
+  in `tests/reducer_tests.rs`.)*
+- [x] `Reject(err)` from the precheck surfaces inline without a
   passphrase prompt.
-- [ ] `NoPrompt` from the precheck continues through the import facade.
-- [ ] Coverage spans encrypted Paladin, plaintext Paladin,
+  *(Both `Reject(UnsupportedPlaintextVault)` and the malformed-header
+  arms — `Reject(UnsupportedFormatVersion)`, `Reject(InvalidHeader)`
+  — render through `render_error_message` into `import.error` while
+  the modal stays in path-entry phase. Asserted by
+  `enter_in_import_modal_with_plaintext_paladin_path_surfaces_unsupported_plaintext_vault_inline`,
+  `enter_in_import_modal_with_unsupported_paladin_format_version_surfaces_inline`,
+  and `enter_in_import_modal_with_invalid_paladin_header_surfaces_inline`.)*
+- [x] `NoPrompt` from the precheck continues through the import facade.
+  *(Auto-detect over non-Paladin payloads, missing files, and
+  forced-non-Paladin formats over a Paladin bundle all emit
+  `Effect::Import` with `paladin_passphrase: None`. Asserted by
+  `enter_in_import_modal_with_non_paladin_file_proceeds_to_import_effect_with_none_passphrase`,
+  `enter_in_import_modal_with_missing_source_file_proceeds_to_import_effect_with_none_passphrase`,
+  and the
+  `enter_in_import_modal_with_forced_{otpauth,aegis,qr}_format_over_encrypted_paladin_emits_import_with_none_passphrase`
+  trio.)*
+- [x] Coverage spans encrypted Paladin, plaintext Paladin,
   malformed/unsupported Paladin headers, missing files, non-Paladin
   content, and forced-format mismatches through the shared helper.
+  *(See the tests listed above plus
+  `enter_in_import_modal_with_forced_paladin_format_over_encrypted_paladin_transitions_to_passphrase_phase`
+  and
+  `enter_in_import_modal_with_forced_paladin_format_over_plaintext_paladin_surfaces_unsupported_plaintext_vault`
+  for forced-Paladin coverage on both header shapes.)*
 - [ ] On-conflict policy (`skip` / `replace` / `append`) is forwarded
   to `Vault::import_accounts` and reflected in the report counts.
 - [ ] Validation warnings are rendered through

@@ -854,11 +854,12 @@ impl ImportFormatSelector {
 /// reaching into the vault. The `Skip` default matches the CLI's
 /// `import --on-conflict skip` default.
 ///
-/// Subsequent slices add an encrypted-Paladin passphrase buffer (gated
-/// by [`paladin_core::classify_paladin_import_precheck`]), a
-/// post-success counts panel mirroring the Add modal's
-/// [`CountsPanel`], and validation-warning rendering through
-/// [`paladin_core::format_validation_warning`].
+/// Subsequent slices add a post-success counts panel mirroring the Add
+/// modal's [`CountsPanel`] and validation-warning rendering through
+/// [`paladin_core::format_validation_warning`]. The encrypted-Paladin
+/// passphrase buffer lives in [`Self::paladin_passphrase`] and is
+/// populated by the reducer's
+/// [`paladin_core::classify_paladin_import_precheck`] gate on Enter.
 #[derive(Debug)]
 pub struct ImportModal {
     /// Source-path text buffer; trimmed and passed to
@@ -880,6 +881,26 @@ pub struct ImportModal {
     /// are re-trying; the success / inline-error rollback wiring lands
     /// alongside the `EffectResult::Import` slice.
     pub error: Option<String>,
+    /// Encrypted-Paladin passphrase sub-phase buffer.
+    ///
+    /// `None` is the initial path-entry phase: `Char` / `Backspace`
+    /// edit [`Self::path_text`] and `Enter` runs the
+    /// [`paladin_core::classify_paladin_import_precheck`] gate.
+    /// `Some(buffer)` is the passphrase-entry phase, entered when the
+    /// precheck returns [`paladin_core::PaladinImportPrecheck::PromptForPassphrase`]
+    /// — `Char` / `Backspace` then edit the passphrase buffer and
+    /// `Enter` emits [`crate::app::event::Effect::Import`] with the
+    /// buffer's bytes promoted to a [`secrecy::SecretString`].
+    ///
+    /// Held in a [`PassphraseBuffer`] so typed bytes zeroize on
+    /// drop — covering modal close, auto-lock discard, and the
+    /// [`PassphraseBuffer::take`] call on submit. Per
+    /// `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)": *"All
+    /// passphrase-entry fields … keep typed bytes in zeroizing
+    /// buffers, convert to `secrecy::SecretString` only for core
+    /// calls, and zeroize on submit, cancel, modal close, and
+    /// auto-lock."*
+    pub paladin_passphrase: Option<PassphraseBuffer>,
 }
 
 impl Default for ImportModal {
@@ -889,6 +910,7 @@ impl Default for ImportModal {
             format: ImportFormatSelector::default(),
             conflict: ImportConflict::Skip,
             error: None,
+            paladin_passphrase: None,
         }
     }
 }

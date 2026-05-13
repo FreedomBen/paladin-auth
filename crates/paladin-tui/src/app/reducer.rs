@@ -14,9 +14,10 @@ use std::time::Instant;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 
 use paladin_core::{
-    format_validation_warning, hotp_reveal_deadline, validate_label, AccountId, AccountKindInput,
-    Algorithm, ClipboardClearPolicy, ClipboardClearToken, Code, IdlePolicy, PaladinError,
-    SettingPatch, Store, Vault,
+    classify_paladin_import_precheck, format_validation_warning, hotp_reveal_deadline,
+    validate_label, AccountId, AccountKindInput, Algorithm, ClipboardClearPolicy,
+    ClipboardClearToken, Code, IdlePolicy, PaladinError, PaladinImportPrecheck, SettingPatch,
+    Store, Vault,
 };
 use secrecy::SecretString;
 use zeroize::Zeroizing;
@@ -31,6 +32,7 @@ use crate::app::state::{
     PendingClipboardClear, PendingDuplicateAdd, RemoveModal, RenameModal, SettingsFocus,
     SettingsModal, StatusLine, CLIPBOARD_WRITE_FAILED, NO_ACCOUNT_SELECTED,
 };
+use crate::prompt::PassphraseBuffer;
 use crate::search::{filtered_account_ids, select_after_search};
 
 /// Apply one event to the current state and return the new state plus
@@ -1873,24 +1875,46 @@ fn route_rename_modal_input(
 /// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Import:
 /// the modal collects a source path, a format selector (auto-detect or
 /// explicit `otpauth` / `aegis` / `paladin` / `qr`), and an
-/// on-conflict selector. At this slice the input path supports:
+/// on-conflict selector.
 ///
-/// - printable `KeyCode::Char` keystrokes (no `Ctrl` / `Alt` modifier
-///   — mirroring the Unlock-screen filter) append to the `path_text`
-///   buffer; `KeyCode::Backspace` pops the trailing character. Any
-///   edit clears the inline `error` so the user sees their retry.
-/// - `KeyCode::Enter` submits: it emits an
-///   [`Effect::Import`] keyed off the current `format` / `conflict`
-///   selectors. With the default
-///   [`ImportFormatSelector::Auto`] the carried
-///   [`paladin_core::ImportOptions::format`] is [`None`], so the core
-///   facade owns format dispatch via [`paladin_core::detect`]. The
-///   encrypted-Paladin passphrase prompt lands in a subsequent slice
-///   gated by [`paladin_core::classify_paladin_import_precheck`]; for
-///   now `paladin_passphrase` is always `None` on submit.
-/// - other keys (`Tab` / `Shift-Tab` / arrows / unbound chords) are
-///   silent no-ops at this slice — the format / conflict selector
-///   navigation lands alongside its slice.
+/// The modal runs in one of two phases keyed off
+/// [`ImportModal::paladin_passphrase`]:
+///
+/// - **Path-entry phase** (`paladin_passphrase.is_none()`, the
+///   default). Printable `KeyCode::Char` keystrokes (no `Ctrl` /
+///   `Alt` modifier — mirroring the Unlock-screen filter) append to
+///   the `path_text` buffer; `KeyCode::Backspace` pops the trailing
+///   character. Any edit clears the inline `error` so the user sees
+///   their retry. `KeyCode::Enter` runs
+///   [`paladin_core::classify_paladin_import_precheck`] over the
+///   trimmed `source_path` + forced format selector:
+///   - [`PaladinImportPrecheck::NoPrompt`] emits
+///     [`Effect::Import`] with `paladin_passphrase: None`. This
+///     covers missing files, non-Paladin payloads, and forced
+///     non-Paladin formats — `import::from_file` owns the per-format
+///     failure surfaces from there.
+///   - [`PaladinImportPrecheck::Reject`] surfaces the carried
+///     [`PaladinError`] inline through `import.error` and emits no
+///     effect; the modal stays open in path-entry phase so the user
+///     can retry / cancel.
+///   - [`PaladinImportPrecheck::PromptForPassphrase`] transitions
+///     the modal to the passphrase-entry phase by seeding
+///     `import.paladin_passphrase = Some(PassphraseBuffer::new())`.
+///     No effect is emitted; the next `Enter` submits with the
+///     buffered passphrase.
+/// - **Passphrase-entry phase** (`paladin_passphrase.is_some()`).
+///   Printable `KeyCode::Char` keystrokes append to the
+///   [`PassphraseBuffer`]; `KeyCode::Backspace` pops the trailing
+///   character. Any edit clears the inline `error`.
+///   `KeyCode::Enter` consumes the buffered passphrase through
+///   [`PassphraseBuffer::take`] (zeroizing the buffer in place) and
+///   emits [`Effect::Import`] with `paladin_passphrase: Some(_)`.
+///   The buffer is dropped on modal close / auto-lock so leftover
+///   bytes never outlive the modal.
+///
+/// Other keys (`Tab` / `Shift-Tab` / arrows / unbound chords) are
+/// silent no-ops at this slice — the format / conflict selector
+/// navigation lands alongside its slice.
 ///
 /// Esc / Help / Ctrl-C are filtered upstream of the modal trap.
 fn route_import_modal_input(
@@ -1898,30 +1922,71 @@ fn route_import_modal_input(
     import: &mut ImportModal,
     key: &KeyEvent,
 ) -> Vec<Effect> {
+    let has_passphrase_phase = import.paladin_passphrase.is_some();
     match key.code {
         KeyCode::Char(c)
             if !key
                 .modifiers
                 .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
         {
-            import.path_text.push(c);
+            if let Some(buf) = import.paladin_passphrase.as_mut() {
+                buf.push(c);
+            } else {
+                import.path_text.push(c);
+            }
             import.error = None;
             Vec::new()
         }
         KeyCode::Backspace => {
-            import.path_text.pop();
+            if let Some(buf) = import.paladin_passphrase.as_mut() {
+                buf.pop();
+            } else {
+                import.path_text.pop();
+            }
             import.error = None;
             Vec::new()
         }
-        KeyCode::Enter => {
+        KeyCode::Enter if has_passphrase_phase => {
+            // SAFETY: `has_passphrase_phase` was sampled at the top
+            // of the function; nothing between there and here mutates
+            // `paladin_passphrase` away from `Some`.
+            let buf = import
+                .paladin_passphrase
+                .as_mut()
+                .expect("passphrase phase implies Some(buffer)");
+            let secret = buf.take();
             let source_path = std::path::PathBuf::from(import.path_text.trim());
             vec![Effect::Import {
                 path: path.to_path_buf(),
                 source_path,
                 format: import.format.forced(),
                 conflict: import.conflict,
-                paladin_passphrase: None,
+                paladin_passphrase: Some(secret),
             }]
+        }
+        KeyCode::Enter => {
+            let source_path = std::path::PathBuf::from(import.path_text.trim());
+            let forced_format = import.format.forced();
+            match classify_paladin_import_precheck(&source_path, forced_format) {
+                PaladinImportPrecheck::NoPrompt => {
+                    vec![Effect::Import {
+                        path: path.to_path_buf(),
+                        source_path,
+                        format: forced_format,
+                        conflict: import.conflict,
+                        paladin_passphrase: None,
+                    }]
+                }
+                PaladinImportPrecheck::Reject(err) => {
+                    import.error = Some(render_error_message(&err));
+                    Vec::new()
+                }
+                PaladinImportPrecheck::PromptForPassphrase => {
+                    import.paladin_passphrase = Some(PassphraseBuffer::new());
+                    import.error = None;
+                    Vec::new()
+                }
+            }
         }
         _ => Vec::new(),
     }

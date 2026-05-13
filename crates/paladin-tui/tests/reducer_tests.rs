@@ -16567,12 +16567,15 @@ fn enter_in_import_modal_with_qr_selector_emits_import_effect_with_some_qr_image
 }
 
 #[test]
-fn enter_in_import_modal_with_paladin_selector_still_carries_none_passphrase_at_submit() {
-    // The pre-prompt precheck slice lands later — until then submit
-    // always carries `paladin_passphrase: None` even on the forced
-    // `ImportFormatSelector::Paladin` path. The core facade surfaces a
-    // `missing_passphrase` `invalid_state` error which the executor
-    // forwards through `EffectResult::Import` for inline rendering.
+fn enter_in_import_modal_with_paladin_selector_on_missing_file_emits_import_with_none_passphrase() {
+    // The forced `ImportFormatSelector::Paladin` path now runs the
+    // `classify_paladin_import_precheck` gate on Enter. With the
+    // default empty `path_text` the source path resolves to `""` —
+    // the precheck cannot read the file and returns
+    // `PaladinImportPrecheck::NoPrompt`, so `Effect::Import` is still
+    // emitted with `paladin_passphrase: None`. The core facade then
+    // surfaces the underlying `io_error` through
+    // `EffectResult::Import` for inline rendering.
     let tmp = secure_tempdir();
     let unlocked = fresh_plaintext_unlocked(&tmp);
     let (mut state, _) = reduce(unlocked, key(KeyCode::Char('i')));
@@ -16592,9 +16595,616 @@ fn enter_in_import_modal_with_paladin_selector_still_carries_none_passphrase_at_
         } => {
             assert!(
                 paladin_passphrase.is_none(),
-                "explicit Paladin override at this slice still carries `paladin_passphrase: None` — the prompt lives in the precheck slice"
+                "forced Paladin override over a missing source path must precheck-NoPrompt and submit with `paladin_passphrase: None`"
             );
         }
         other => panic!("expected Effect::Import, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Import modal — `paladin_core::classify_paladin_import_precheck` routing.
+// Covers `IMPLEMENTATION_PLAN_03_TUI.md` "Import modal" bullets:
+//
+//   - "Pre-prompt Paladin decision routes through
+//     `paladin_core::classify_paladin_import_precheck`, prompting only
+//     on `PromptForPassphrase`."
+//   - "`Reject(err)` from the precheck surfaces inline without a
+//     passphrase prompt."
+//   - "`NoPrompt` from the precheck continues through the import
+//     facade."
+//   - "Coverage spans encrypted Paladin, plaintext Paladin,
+//     malformed/unsupported Paladin headers, missing files,
+//     non-Paladin content, and forced-format mismatches through the
+//     shared helper."
+// ---------------------------------------------------------------------------
+
+/// Write an encrypted Paladin bundle to `dir/name`, save it, and drop
+/// the open `(Vault, Store)` so the file's bytes are flushed to disk
+/// and reflect a real encrypted-mode Paladin header.
+fn write_encrypted_paladin_bundle(
+    dir: &std::path::Path,
+    name: &str,
+    passphrase: &str,
+) -> std::path::PathBuf {
+    let path = dir.join(name);
+    let (vault, store) = create_encrypted_pair(&path, passphrase);
+    drop(vault);
+    drop(store);
+    path
+}
+
+/// Write a plaintext Paladin bundle (`PALADIN\0` magic + plaintext
+/// mode byte) to `dir/name`. Used to exercise the precheck's
+/// `unsupported_plaintext_vault` rejection.
+fn write_plaintext_paladin_bundle(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
+    let path = dir.join(name);
+    let (vault, store) =
+        Store::create(&path, VaultInit::Plaintext).expect("create plaintext bundle");
+    vault.save(&store).expect("commit plaintext bundle");
+    drop(vault);
+    drop(store);
+    path
+}
+
+/// Open the Import modal on a fresh plaintext-unlocked state, type
+/// `path_text` into `path_text`, optionally force a format selector,
+/// then return the post-`Enter` `(state, effects)`.
+fn drive_import_modal_enter(
+    tmp: &tempfile::TempDir,
+    path_text: &str,
+    selector: Option<ImportFormatSelector>,
+) -> (AppState, Vec<Effect>) {
+    let unlocked = fresh_plaintext_unlocked(tmp);
+    let (mut state, _) = reduce(unlocked, key(KeyCode::Char('i')));
+    if let AppState::Unlocked {
+        modal: Some(Modal::Import(import)),
+        ..
+    } = &mut state
+    {
+        import.path_text = path_text.to_string();
+        if let Some(s) = selector {
+            import.format = s;
+        }
+    } else {
+        panic!("expected Import modal open after pressing `i`");
+    }
+    reduce(state, key(KeyCode::Enter))
+}
+
+#[test]
+fn enter_in_import_modal_with_encrypted_paladin_path_transitions_to_passphrase_phase_without_emitting_effect(
+) {
+    let tmp = secure_tempdir();
+    let bundle = write_encrypted_paladin_bundle(tmp.path(), "bundle.bin", "hunter2");
+    let (state, effects) = drive_import_modal_enter(&tmp, bundle.to_str().unwrap(), None);
+
+    assert!(
+        effects.is_empty(),
+        "PromptForPassphrase must emit no effect — the next Enter submits with the typed passphrase; got {effects:?}"
+    );
+    match &state {
+        AppState::Unlocked {
+            modal: Some(Modal::Import(import)),
+            ..
+        } => {
+            assert!(
+                import.paladin_passphrase.is_some(),
+                "encrypted-Paladin precheck must seed `paladin_passphrase` with an empty passphrase buffer"
+            );
+            assert!(
+                import.error.is_none(),
+                "PromptForPassphrase must not surface an inline error"
+            );
+        }
+        other => panic!("expected Import modal open in passphrase phase, got {other:?}"),
+    }
+}
+
+#[test]
+fn enter_in_import_modal_with_plaintext_paladin_path_surfaces_unsupported_plaintext_vault_inline() {
+    let tmp = secure_tempdir();
+    let bundle = write_plaintext_paladin_bundle(tmp.path(), "plain-import.bin");
+    let (state, effects) = drive_import_modal_enter(&tmp, bundle.to_str().unwrap(), None);
+
+    assert!(
+        effects.is_empty(),
+        "Reject(unsupported_plaintext_vault) must not emit an effect; got {effects:?}"
+    );
+    match &state {
+        AppState::Unlocked {
+            modal: Some(Modal::Import(import)),
+            ..
+        } => {
+            assert!(
+                import.paladin_passphrase.is_none(),
+                "Reject must not transition to passphrase phase"
+            );
+            let expected = render_error_message(&PaladinError::UnsupportedPlaintextVault);
+            assert_eq!(
+                import.error.as_deref(),
+                Some(expected.as_str()),
+                "Reject(UnsupportedPlaintextVault) must render through render_error_message"
+            );
+        }
+        other => panic!("expected Import modal open in path phase, got {other:?}"),
+    }
+}
+
+#[test]
+fn enter_in_import_modal_with_unsupported_paladin_format_version_surfaces_inline() {
+    let tmp = secure_tempdir();
+    let bundle = tmp.path().join("malformed.bin");
+    let mut bytes = b"PALADIN\0".to_vec();
+    bytes.push(99); // bogus format_ver
+    bytes.push(1); // mode encrypted
+    bytes.extend_from_slice(&[0u8; 100]);
+    std::fs::write(&bundle, &bytes).expect("write malformed bundle");
+
+    let (state, effects) = drive_import_modal_enter(&tmp, bundle.to_str().unwrap(), None);
+
+    assert!(
+        effects.is_empty(),
+        "Reject(unsupported_format_version) must not emit an effect; got {effects:?}"
+    );
+    match &state {
+        AppState::Unlocked {
+            modal: Some(Modal::Import(import)),
+            ..
+        } => {
+            assert!(
+                import.paladin_passphrase.is_none(),
+                "Reject must not transition to passphrase phase"
+            );
+            let expected =
+                render_error_message(&PaladinError::UnsupportedFormatVersion { format_ver: 99 });
+            assert_eq!(
+                import.error.as_deref(),
+                Some(expected.as_str()),
+                "Reject(UnsupportedFormatVersion) must render through render_error_message"
+            );
+        }
+        other => panic!("expected Import modal open in path phase, got {other:?}"),
+    }
+}
+
+#[test]
+fn enter_in_import_modal_with_invalid_paladin_header_surfaces_inline() {
+    let tmp = secure_tempdir();
+    let bundle = tmp.path().join("trunc.bin");
+    // PALADIN magic only — header is truncated.
+    std::fs::write(&bundle, b"PALADIN\0").expect("write truncated bundle");
+
+    let (state, effects) = drive_import_modal_enter(&tmp, bundle.to_str().unwrap(), None);
+
+    assert!(
+        effects.is_empty(),
+        "Reject(invalid_header) must not emit an effect; got {effects:?}"
+    );
+    match &state {
+        AppState::Unlocked {
+            modal: Some(Modal::Import(import)),
+            ..
+        } => {
+            assert!(
+                import.paladin_passphrase.is_none(),
+                "Reject must not transition to passphrase phase"
+            );
+            let expected = render_error_message(&PaladinError::InvalidHeader);
+            assert_eq!(
+                import.error.as_deref(),
+                Some(expected.as_str()),
+                "Reject(InvalidHeader) must render through render_error_message"
+            );
+        }
+        other => panic!("expected Import modal open in path phase, got {other:?}"),
+    }
+}
+
+#[test]
+fn enter_in_import_modal_with_non_paladin_file_proceeds_to_import_effect_with_none_passphrase() {
+    let tmp = secure_tempdir();
+    let bundle = tmp.path().join("otpauth.txt");
+    std::fs::write(
+        &bundle,
+        b"otpauth://totp/Example:alice@example.com?secret=JBSWY3DPEHPK3PXP&issuer=Example",
+    )
+    .expect("write otpauth source");
+
+    let (state, effects) = drive_import_modal_enter(&tmp, bundle.to_str().unwrap(), None);
+
+    assert_eq!(
+        effects.len(),
+        1,
+        "NoPrompt over a non-Paladin source must emit one Effect::Import; got {effects:?}"
+    );
+    match &effects[0] {
+        Effect::Import {
+            paladin_passphrase, ..
+        } => {
+            assert!(
+                paladin_passphrase.is_none(),
+                "NoPrompt path must submit with `paladin_passphrase: None`"
+            );
+        }
+        other => panic!("expected Effect::Import, got {other:?}"),
+    }
+    match &state {
+        AppState::Unlocked {
+            modal: Some(Modal::Import(import)),
+            ..
+        } => {
+            assert!(
+                import.paladin_passphrase.is_none(),
+                "NoPrompt path must keep the modal in path-entry phase"
+            );
+            assert!(
+                import.error.is_none(),
+                "NoPrompt path must not stamp an inline error"
+            );
+        }
+        other => panic!("expected Import modal still open, got {other:?}"),
+    }
+}
+
+#[test]
+fn enter_in_import_modal_with_missing_source_file_proceeds_to_import_effect_with_none_passphrase() {
+    let tmp = secure_tempdir();
+    let missing = tmp.path().join("does-not-exist.bin");
+    let (_state, effects) = drive_import_modal_enter(&tmp, missing.to_str().unwrap(), None);
+
+    assert_eq!(
+        effects.len(),
+        1,
+        "missing-file precheck must return NoPrompt and emit one Effect::Import; got {effects:?}"
+    );
+    match &effects[0] {
+        Effect::Import {
+            paladin_passphrase, ..
+        } => {
+            assert!(
+                paladin_passphrase.is_none(),
+                "missing-file NoPrompt path must submit with `paladin_passphrase: None`"
+            );
+        }
+        other => panic!("expected Effect::Import, got {other:?}"),
+    }
+}
+
+#[test]
+fn enter_in_import_modal_with_forced_otpauth_format_over_encrypted_paladin_emits_import_with_none_passphrase(
+) {
+    // Forced non-Paladin format ⇒ precheck returns NoPrompt without
+    // probing the bytes, even though the file is in fact an
+    // encrypted Paladin bundle. `from_file` will surface the
+    // import-format mismatch through `EffectResult::Import`.
+    let tmp = secure_tempdir();
+    let bundle = write_encrypted_paladin_bundle(tmp.path(), "bundle.bin", "hunter2");
+    let (state, effects) = drive_import_modal_enter(
+        &tmp,
+        bundle.to_str().unwrap(),
+        Some(ImportFormatSelector::Otpauth),
+    );
+
+    assert_eq!(effects.len(), 1, "forced Otpauth must emit Effect::Import");
+    match &effects[0] {
+        Effect::Import {
+            paladin_passphrase,
+            format,
+            ..
+        } => {
+            assert_eq!(*format, Some(ImportFormat::Otpauth));
+            assert!(paladin_passphrase.is_none());
+        }
+        other => panic!("expected Effect::Import, got {other:?}"),
+    }
+    match &state {
+        AppState::Unlocked {
+            modal: Some(Modal::Import(import)),
+            ..
+        } => {
+            assert!(
+                import.paladin_passphrase.is_none(),
+                "forced non-Paladin format must skip the passphrase phase"
+            );
+        }
+        other => panic!("expected Import modal open, got {other:?}"),
+    }
+}
+
+#[test]
+fn enter_in_import_modal_with_forced_aegis_format_over_encrypted_paladin_emits_import_with_none_passphrase(
+) {
+    let tmp = secure_tempdir();
+    let bundle = write_encrypted_paladin_bundle(tmp.path(), "bundle.bin", "hunter2");
+    let (_state, effects) = drive_import_modal_enter(
+        &tmp,
+        bundle.to_str().unwrap(),
+        Some(ImportFormatSelector::Aegis),
+    );
+    match &effects[0] {
+        Effect::Import {
+            paladin_passphrase,
+            format,
+            ..
+        } => {
+            assert_eq!(*format, Some(ImportFormat::Aegis));
+            assert!(paladin_passphrase.is_none());
+        }
+        other => panic!("expected Effect::Import, got {other:?}"),
+    }
+}
+
+#[test]
+fn enter_in_import_modal_with_forced_qr_format_over_encrypted_paladin_emits_import_with_none_passphrase(
+) {
+    let tmp = secure_tempdir();
+    let bundle = write_encrypted_paladin_bundle(tmp.path(), "bundle.bin", "hunter2");
+    let (_state, effects) = drive_import_modal_enter(
+        &tmp,
+        bundle.to_str().unwrap(),
+        Some(ImportFormatSelector::Qr),
+    );
+    match &effects[0] {
+        Effect::Import {
+            paladin_passphrase,
+            format,
+            ..
+        } => {
+            assert_eq!(*format, Some(ImportFormat::QrImage));
+            assert!(paladin_passphrase.is_none());
+        }
+        other => panic!("expected Effect::Import, got {other:?}"),
+    }
+}
+
+#[test]
+fn enter_in_import_modal_with_forced_paladin_format_over_encrypted_paladin_transitions_to_passphrase_phase(
+) {
+    let tmp = secure_tempdir();
+    let bundle = write_encrypted_paladin_bundle(tmp.path(), "bundle.bin", "hunter2");
+    let (state, effects) = drive_import_modal_enter(
+        &tmp,
+        bundle.to_str().unwrap(),
+        Some(ImportFormatSelector::Paladin),
+    );
+
+    assert!(
+        effects.is_empty(),
+        "forced Paladin + encrypted header must precheck-PromptForPassphrase and emit no effect; got {effects:?}"
+    );
+    match &state {
+        AppState::Unlocked {
+            modal: Some(Modal::Import(import)),
+            ..
+        } => {
+            assert!(
+                import.paladin_passphrase.is_some(),
+                "forced Paladin + encrypted header must seed the passphrase buffer"
+            );
+        }
+        other => panic!("expected Import modal open in passphrase phase, got {other:?}"),
+    }
+}
+
+#[test]
+fn enter_in_import_modal_with_forced_paladin_format_over_plaintext_paladin_surfaces_unsupported_plaintext_vault(
+) {
+    let tmp = secure_tempdir();
+    let bundle = write_plaintext_paladin_bundle(tmp.path(), "plain-import.bin");
+    let (state, effects) = drive_import_modal_enter(
+        &tmp,
+        bundle.to_str().unwrap(),
+        Some(ImportFormatSelector::Paladin),
+    );
+
+    assert!(
+        effects.is_empty(),
+        "forced Paladin + plaintext bundle must precheck-Reject and emit no effect; got {effects:?}"
+    );
+    match &state {
+        AppState::Unlocked {
+            modal: Some(Modal::Import(import)),
+            ..
+        } => {
+            assert!(import.paladin_passphrase.is_none());
+            let expected = render_error_message(&PaladinError::UnsupportedPlaintextVault);
+            assert_eq!(import.error.as_deref(), Some(expected.as_str()));
+        }
+        other => panic!("expected Import modal open in path phase, got {other:?}"),
+    }
+}
+
+#[test]
+fn printable_char_in_import_modal_passphrase_phase_appends_to_passphrase_buffer_not_path_text() {
+    let tmp = secure_tempdir();
+    let bundle = write_encrypted_paladin_bundle(tmp.path(), "bundle.bin", "hunter2");
+    let (state, _) = drive_import_modal_enter(&tmp, bundle.to_str().unwrap(), None);
+    let path_text_before = match &state {
+        AppState::Unlocked {
+            modal: Some(Modal::Import(import)),
+            ..
+        } => import.path_text.clone(),
+        other => panic!("expected Import modal in passphrase phase, got {other:?}"),
+    };
+
+    let (state, effects) = reduce(state, key(KeyCode::Char('s')));
+    assert!(
+        effects.is_empty(),
+        "typing into the passphrase buffer must not emit effects"
+    );
+    match &state {
+        AppState::Unlocked {
+            modal: Some(Modal::Import(import)),
+            ..
+        } => {
+            assert_eq!(
+                import.path_text, path_text_before,
+                "passphrase-phase Char must not edit path_text"
+            );
+            let buf = import
+                .paladin_passphrase
+                .as_ref()
+                .expect("still in passphrase phase");
+            assert_eq!(
+                buf.as_str(),
+                "s",
+                "passphrase-phase Char must append to the passphrase buffer"
+            );
+        }
+        other => panic!("expected Import modal still open, got {other:?}"),
+    }
+}
+
+#[test]
+fn backspace_in_import_modal_passphrase_phase_pops_passphrase_buffer_not_path_text() {
+    let tmp = secure_tempdir();
+    let bundle = write_encrypted_paladin_bundle(tmp.path(), "bundle.bin", "hunter2");
+    let (mut state, _) = drive_import_modal_enter(&tmp, bundle.to_str().unwrap(), None);
+    let path_text_before = match &state {
+        AppState::Unlocked {
+            modal: Some(Modal::Import(import)),
+            ..
+        } => import.path_text.clone(),
+        other => panic!("expected Import modal in passphrase phase, got {other:?}"),
+    };
+
+    for c in "abc".chars() {
+        let (next, _) = reduce(state, key(KeyCode::Char(c)));
+        state = next;
+    }
+    let (state, _) = reduce(state, key(KeyCode::Backspace));
+
+    match &state {
+        AppState::Unlocked {
+            modal: Some(Modal::Import(import)),
+            ..
+        } => {
+            assert_eq!(
+                import.path_text, path_text_before,
+                "passphrase-phase Backspace must not edit path_text"
+            );
+            let buf = import
+                .paladin_passphrase
+                .as_ref()
+                .expect("still in passphrase phase");
+            assert_eq!(
+                buf.as_str(),
+                "ab",
+                "passphrase-phase Backspace must pop the passphrase buffer"
+            );
+        }
+        other => panic!("expected Import modal still open, got {other:?}"),
+    }
+}
+
+#[test]
+fn enter_in_import_modal_passphrase_phase_emits_import_effect_with_typed_passphrase() {
+    let tmp = secure_tempdir();
+    let bundle = write_encrypted_paladin_bundle(tmp.path(), "bundle.bin", "hunter2");
+    let (mut state, _) = drive_import_modal_enter(&tmp, bundle.to_str().unwrap(), None);
+
+    for c in "hunter2".chars() {
+        let (next, _) = reduce(state, key(KeyCode::Char(c)));
+        state = next;
+    }
+
+    let (state, effects) = reduce(state, key(KeyCode::Enter));
+    assert_eq!(
+        effects.len(),
+        1,
+        "Enter in passphrase phase must emit one Effect::Import; got {effects:?}"
+    );
+    match &effects[0] {
+        Effect::Import {
+            source_path,
+            format,
+            conflict,
+            paladin_passphrase,
+            ..
+        } => {
+            assert_eq!(source_path, &bundle);
+            assert!(
+                format.is_none(),
+                "auto-format passphrase submit must carry format=None"
+            );
+            assert_eq!(*conflict, paladin_core::ImportConflict::Skip);
+            let secret = paladin_passphrase
+                .as_ref()
+                .expect("passphrase-phase submit must carry Some(SecretString)");
+            assert_eq!(
+                secret.expose_secret(),
+                "hunter2",
+                "the typed passphrase must reach `Effect::Import::paladin_passphrase`"
+            );
+        }
+        other => panic!("expected Effect::Import, got {other:?}"),
+    }
+    match &state {
+        AppState::Unlocked {
+            modal: Some(Modal::Import(import)),
+            ..
+        } => {
+            let buf = import
+                .paladin_passphrase
+                .as_ref()
+                .expect("passphrase phase must remain until EffectResult::Import lands");
+            assert!(
+                buf.is_empty(),
+                "submit must consume the passphrase buffer via `PassphraseBuffer::take`"
+            );
+        }
+        other => panic!("expected Import modal still open after submit, got {other:?}"),
+    }
+}
+
+#[test]
+fn ctrl_modified_char_in_import_modal_passphrase_phase_does_not_append_to_passphrase_buffer() {
+    let tmp = secure_tempdir();
+    let bundle = write_encrypted_paladin_bundle(tmp.path(), "bundle.bin", "hunter2");
+    let (state, _) = drive_import_modal_enter(&tmp, bundle.to_str().unwrap(), None);
+    let (state, _) = reduce(state, ctrl(KeyCode::Char('a')));
+    match &state {
+        AppState::Unlocked {
+            modal: Some(Modal::Import(import)),
+            ..
+        } => {
+            let buf = import
+                .paladin_passphrase
+                .as_ref()
+                .expect("still in passphrase phase");
+            assert!(
+                buf.is_empty(),
+                "Ctrl-modified Char must be a no-op for the passphrase buffer"
+            );
+        }
+        other => panic!("expected Import modal still open, got {other:?}"),
+    }
+}
+
+#[test]
+fn typed_path_edit_after_reject_clears_error_so_user_sees_retry() {
+    let tmp = secure_tempdir();
+    let bundle = write_plaintext_paladin_bundle(tmp.path(), "plain-import.bin");
+    let (state, _) = drive_import_modal_enter(&tmp, bundle.to_str().unwrap(), None);
+    match &state {
+        AppState::Unlocked {
+            modal: Some(Modal::Import(import)),
+            ..
+        } => assert!(import.error.is_some(), "precondition: error stamped"),
+        other => panic!("expected Import modal in path phase, got {other:?}"),
+    }
+    let (state, _) = reduce(state, key(KeyCode::Char('x')));
+    match &state {
+        AppState::Unlocked {
+            modal: Some(Modal::Import(import)),
+            ..
+        } => {
+            assert!(
+                import.error.is_none(),
+                "any path-text edit must clear the inline error so the retry is visible"
+            );
+        }
+        other => panic!("expected Import modal still open, got {other:?}"),
     }
 }
