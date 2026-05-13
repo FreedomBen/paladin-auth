@@ -2571,29 +2571,146 @@ fn ctrl_modified_char_in_add_modal_manual_mode_label_focus_does_not_append() {
 }
 
 #[test]
-fn char_in_add_modal_manual_mode_with_non_label_focus_is_silent_noop() {
-    // This slice only wires text editing for the Label field. With
-    // focus advanced past Label (to Issuer), a `KeyCode::Char`
-    // keystroke is consumed silently — neither `label` nor any other
-    // Manual-mode buffer mutates. Subsequent slices wire typing for
-    // the other text-bearing fields.
+fn char_in_add_modal_manual_mode_issuer_focus_appends_to_issuer() {
+    // Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
+    // Manual mode collects an issuer as the second focused field. A
+    // printable character (no Ctrl/Alt modifier) typed while the
+    // issuer is focused appends to the modal-local `issuer` buffer
+    // and leaves `label` untouched.
     let tmp = secure_tempdir();
     let state = fresh_unlocked_with_add_modal(&tmp);
     let (state, _) = reduce(state, key(KeyCode::Tab));
     assert_eq!(add_modal_ref(&state).manual_focus, AddManualFocus::Issuer);
+    assert!(add_modal_ref(&state).issuer.is_empty());
+    let (after, effects) = reduce(state, key(KeyCode::Char('A')));
+    assert!(
+        effects.is_empty(),
+        "typing into a Manual-mode field must not emit effects"
+    );
+    let add = add_modal_ref(&after);
+    assert_eq!(add.issuer, "A");
+    assert!(
+        add.label.is_empty(),
+        "Issuer-focused Char must not leak into the label"
+    );
+    assert_eq!(
+        add.mode,
+        AddMode::Manual,
+        "typing must not change input mode"
+    );
+    assert_eq!(
+        add.manual_focus,
+        AddManualFocus::Issuer,
+        "typing must not change manual_focus"
+    );
+}
+
+#[test]
+fn multiple_chars_in_add_modal_manual_mode_issuer_focus_append_in_order() {
+    // Several `KeyCode::Char` presses build up the issuer in the
+    // typed order, including a non-ASCII codepoint so the
+    // implementation can't accidentally byte-slice or drop multi-byte
+    // input.
+    let tmp = secure_tempdir();
+    let mut state = fresh_unlocked_with_add_modal(&tmp);
+    let (next, _) = reduce(state, key(KeyCode::Tab));
+    state = next;
+    assert_eq!(add_modal_ref(&state).manual_focus, AddManualFocus::Issuer);
+    for c in "Acme 🦀".chars() {
+        let (next, effects) = reduce(state, key(KeyCode::Char(c)));
+        assert!(effects.is_empty(), "typing must not emit effects");
+        state = next;
+    }
+    assert_eq!(add_modal_ref(&state).issuer, "Acme 🦀");
+    assert!(add_modal_ref(&state).label.is_empty());
+}
+
+#[test]
+fn backspace_in_add_modal_manual_mode_issuer_focus_pops_last_char() {
+    // Backspace on a non-empty issuer removes the trailing character.
+    let tmp = secure_tempdir();
+    let mut state = fresh_unlocked_with_add_modal(&tmp);
+    let (next, _) = reduce(state, key(KeyCode::Tab));
+    state = next;
+    for c in "Hi".chars() {
+        let (next, _) = reduce(state, key(KeyCode::Char(c)));
+        state = next;
+    }
+    assert_eq!(add_modal_ref(&state).issuer, "Hi");
+    let (after, effects) = reduce(state, key(KeyCode::Backspace));
+    assert!(effects.is_empty(), "Backspace must not emit effects");
+    assert_eq!(add_modal_ref(&after).issuer, "H");
+}
+
+#[test]
+fn backspace_in_add_modal_manual_mode_issuer_focus_on_empty_issuer_is_silent_noop() {
+    // Backspace on an empty issuer is a silent no-op: no panic, no
+    // effects, no state change. Mirrors the Unlock-screen contract
+    // and the Label-focus behaviour.
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_add_modal(&tmp);
+    let (state, _) = reduce(state, key(KeyCode::Tab));
+    assert_eq!(add_modal_ref(&state).manual_focus, AddManualFocus::Issuer);
+    assert!(add_modal_ref(&state).issuer.is_empty());
+    let (after, effects) = reduce(state, key(KeyCode::Backspace));
+    assert!(
+        effects.is_empty(),
+        "Backspace on empty must not emit effects"
+    );
+    let add = add_modal_ref(&after);
+    assert!(add.issuer.is_empty());
+    assert!(add.label.is_empty());
+    assert_eq!(add.manual_focus, AddManualFocus::Issuer);
+    assert_eq!(add.mode, AddMode::Manual);
+}
+
+#[test]
+fn ctrl_modified_char_in_add_modal_manual_mode_issuer_focus_does_not_append() {
+    // Mirrors the Unlock-screen / Label Ctrl/Alt-modifier filter on
+    // text fields: `Ctrl-*` and `Alt-*` are reserved for binding
+    // extensions and must not leak into the issuer as raw characters.
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_add_modal(&tmp);
+    let (state, _) = reduce(state, key(KeyCode::Tab));
+    assert_eq!(add_modal_ref(&state).manual_focus, AddManualFocus::Issuer);
+    let (after, effects) = reduce(state, ctrl(KeyCode::Char('x')));
+    assert!(effects.is_empty(), "Ctrl-X must not emit effects");
+    assert!(
+        add_modal_ref(&after).issuer.is_empty(),
+        "Ctrl-X must not append 'x' to the issuer"
+    );
+}
+
+#[test]
+fn char_in_add_modal_manual_mode_with_non_text_focus_is_silent_noop() {
+    // Text editing for Label and Issuer is wired; the remaining
+    // fields beyond Secret (Algorithm / Digits / Kind /
+    // PeriodOrCounter) are not text-bearing — they cycle by `←` /
+    // `→` / `↑` / `↓` in subsequent slices. With focus on Algorithm
+    // (three Tabs past Label), a `KeyCode::Char` keystroke is
+    // consumed silently and no field mutates.
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_add_modal(&tmp);
+    let (state, _) = reduce(state, key(KeyCode::Tab));
+    let (state, _) = reduce(state, key(KeyCode::Tab));
+    let (state, _) = reduce(state, key(KeyCode::Tab));
+    assert_eq!(
+        add_modal_ref(&state).manual_focus,
+        AddManualFocus::Algorithm
+    );
     let (after, effects) = reduce(state, key(KeyCode::Char('Y')));
     assert!(
         effects.is_empty(),
-        "typing on non-Label must not emit effects"
+        "typing on a non-text-bearing field must not emit effects"
     );
     let add = add_modal_ref(&after);
     assert!(
         add.label.is_empty(),
-        "non-Label Char keystroke must not leak into the label"
+        "Algorithm-focused Char keystroke must not leak into the label"
     );
     assert!(
         add.issuer.is_empty(),
-        "issuer typing is unimplemented in this slice"
+        "Algorithm-focused Char keystroke must not leak into the issuer"
     );
 }
 
