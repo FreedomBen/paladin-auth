@@ -3677,6 +3677,265 @@ fn arrows_on_digits_focus_do_not_leak_into_other_fields() {
     assert!(add.error.is_none());
 }
 
+// ---------------------------------------------------------------------------
+// Add modal Manual-mode Enter submit
+// (IMPLEMENTATION_PLAN_03_TUI.md > Modals (per §6) > Add: "Manual
+//  entries route through `paladin_core::validate_manual(input,
+//  submit_time)`." The reducer slice emits `Effect::Add` carrying the
+//  form fields; the executor handles `validate_manual` +
+//  `Vault::find_duplicate` + `Vault::mutate_and_save` in subsequent
+//  slices.)
+// ---------------------------------------------------------------------------
+
+/// Build a fresh plaintext `Unlocked` with the Add modal open and
+/// return `(tmp, path, state)` so tests that assert on `Effect::Add`'s
+/// `path` field have the original vault path on hand.
+fn fresh_unlocked_with_add_modal_at_path() -> (tempfile::TempDir, PathBuf, AppState) {
+    let tmp = secure_tempdir();
+    let (path, (vault, store)) = open_plaintext_pair(&tmp);
+    let unlocked = AppState::Unlocked {
+        path: path.clone(),
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let (state, effects) = reduce(unlocked, key(KeyCode::Char('a')));
+    assert!(effects.is_empty(), "opening Add must not emit effects");
+    (tmp, path, state)
+}
+
+#[test]
+fn enter_in_add_modal_manual_mode_emits_effect_add_with_seeded_defaults() {
+    // A fresh Add modal carries DESIGN §5 manual-add defaults: empty
+    // label / issuer / icon_hint_text, empty secret, Sha1 algorithm,
+    // 6 digits, Totp kind, 30 s period, counter 0. Enter must emit a
+    // single `Effect::Add` carrying those fields verbatim — the
+    // executor (in a subsequent slice) decides which validation
+    // failures surface inline.
+    let (_tmp, path, state) = fresh_unlocked_with_add_modal_at_path();
+    let (_state, effects) = reduce(state, key(KeyCode::Enter));
+    assert_eq!(effects.len(), 1, "expected single Effect::Add");
+    match &effects[0] {
+        Effect::Add {
+            path: p,
+            label,
+            issuer,
+            secret,
+            algorithm,
+            digits,
+            kind,
+            period_secs,
+            counter,
+            icon_hint_text,
+        } => {
+            assert_eq!(p, &path);
+            assert_eq!(label, "");
+            assert_eq!(issuer, "");
+            assert_eq!(secret.expose_secret(), "");
+            assert_eq!(*algorithm, Algorithm::Sha1);
+            assert_eq!(*digits, paladin_core::DIGITS_DEFAULT);
+            assert_eq!(*kind, AccountKindInput::Totp);
+            assert_eq!(*period_secs, paladin_core::TOTP_PERIOD_DEFAULT);
+            assert_eq!(*counter, 0);
+            assert_eq!(icon_hint_text, "");
+        }
+        other => panic!("expected Effect::Add, got {other:?}"),
+    }
+}
+
+#[test]
+fn enter_in_add_modal_manual_mode_emits_effect_add_with_typed_fields() {
+    // Type into every Manual-mode field path (label / issuer /
+    // secret / icon_hint_text) and verify each value flows through
+    // to the corresponding `Effect::Add` field. The non-text fields
+    // (algorithm, digits, kind, period_secs, counter) are exercised
+    // alongside their selector slices; here we only verify the seeded
+    // defaults still flow through alongside the typed values.
+    let (_tmp, _path, mut state) = fresh_unlocked_with_add_modal_at_path();
+    match &mut state {
+        AppState::Unlocked {
+            modal: Some(Modal::Add(add)),
+            ..
+        } => {
+            add.label.push_str("Personal");
+            add.issuer.push_str("GitHub");
+            for c in "JBSWY3DPEHPK3PXP".chars() {
+                add.manual_secret.push(c);
+            }
+            add.icon_hint_text.push_str("github");
+        }
+        _ => panic!("expected Unlocked with Modal::Add open"),
+    }
+    let (_state, effects) = reduce(state, key(KeyCode::Enter));
+    assert_eq!(effects.len(), 1);
+    match &effects[0] {
+        Effect::Add {
+            label,
+            issuer,
+            secret,
+            icon_hint_text,
+            ..
+        } => {
+            assert_eq!(label, "Personal");
+            assert_eq!(issuer, "GitHub");
+            assert_eq!(secret.expose_secret(), "JBSWY3DPEHPK3PXP");
+            assert_eq!(icon_hint_text, "github");
+        }
+        other => panic!("expected Effect::Add, got {other:?}"),
+    }
+}
+
+#[test]
+fn enter_in_add_modal_manual_mode_consumes_manual_secret_buffer() {
+    // Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)":
+    // *"All passphrase-entry fields ... and the Add modal's
+    // secret-bearing fields ... keep typed bytes in zeroizing
+    // buffers, convert to `secrecy::SecretString` only for core
+    // calls, and zeroize on submit, cancel, modal close, and
+    // auto-lock."* Enter is the submit path, so the typed Base32
+    // buffer must be empty after the effect emits — the bytes have
+    // moved into the `SecretString` carried by `Effect::Add`.
+    let (_tmp, _path, mut state) = fresh_unlocked_with_add_modal_at_path();
+    match &mut state {
+        AppState::Unlocked {
+            modal: Some(Modal::Add(add)),
+            ..
+        } => {
+            for c in "JBSWY3DPEHPK3PXP".chars() {
+                add.manual_secret.push(c);
+            }
+            assert!(!add.manual_secret.is_empty(), "test setup precondition");
+        }
+        _ => panic!("expected Unlocked with Modal::Add open"),
+    }
+    let (state, effects) = reduce(state, key(KeyCode::Enter));
+    assert_eq!(effects.len(), 1, "Enter must emit a single Effect::Add");
+    let add = add_modal_ref(&state);
+    assert!(
+        add.manual_secret.is_empty(),
+        "submit must consume the manual_secret buffer (`take()` zeroizes it)"
+    );
+}
+
+#[test]
+fn enter_in_add_modal_manual_mode_carries_hotp_counter_after_kind_change() {
+    // Cycle Kind from Totp to Hotp and bump the spinner by one so the
+    // emitted `Effect::Add` carries the user's HOTP counter selection.
+    // `period_secs` rides along too; the executor selects between the
+    // two based on `kind` per DESIGN §5.
+    let (_tmp, _path, mut state) = fresh_unlocked_with_add_modal_at_path();
+    // Tab to Kind focus (Label → Issuer → Secret → Algorithm → Digits → Kind).
+    for _ in 0..5 {
+        let (next, _) = reduce(state, key(KeyCode::Tab));
+        state = next;
+    }
+    // `→` on Kind focus toggles Totp → Hotp.
+    let (state, _) = reduce(state, key(KeyCode::Right));
+    // Tab to PeriodOrCounter and `↑` once to bump counter from 0 to 1.
+    let (state, _) = reduce(state, key(KeyCode::Tab));
+    let (state, _) = reduce(state, key(KeyCode::Up));
+    let (_state, effects) = reduce(state, key(KeyCode::Enter));
+    assert_eq!(effects.len(), 1);
+    match &effects[0] {
+        Effect::Add {
+            kind,
+            counter,
+            period_secs,
+            ..
+        } => {
+            assert_eq!(*kind, AccountKindInput::Hotp);
+            assert_eq!(*counter, 1);
+            assert_eq!(
+                *period_secs,
+                paladin_core::TOTP_PERIOD_DEFAULT,
+                "period_secs rides along; the executor picks one based on `kind`"
+            );
+        }
+        other => panic!("expected Effect::Add, got {other:?}"),
+    }
+}
+
+#[test]
+fn enter_in_add_modal_uri_mode_is_silent_noop_for_now() {
+    // URI-mode submit lands with a subsequent slice
+    // (`paladin_core::parse_otpauth(uri, submit_time)`). At this
+    // slice URI Enter must not emit `Effect::Add` and must leave the
+    // typed `uri_text` buffer intact so the upcoming slice can pick
+    // up where this one left off.
+    let tmp = secure_tempdir();
+    let state = add_modal_in_uri_mode_with_typed_text(&tmp);
+    let (state, effects) = reduce(state, key(KeyCode::Enter));
+    assert!(
+        effects.is_empty(),
+        "Enter in URI mode must not emit Effect::Add at this slice"
+    );
+    let add = add_modal_ref(&state);
+    assert_eq!(add.mode, AddMode::Uri, "modal stays in URI mode");
+    assert!(
+        !add.uri_text.is_empty(),
+        "uri_text buffer must survive a silent-noop Enter"
+    );
+}
+
+#[test]
+fn enter_in_add_modal_qr_mode_is_silent_noop_for_now() {
+    // QR-mode submit lands with a subsequent slice (`arboard`
+    // clipboard read + `paladin_core::import::qr_image_bytes`). At
+    // this slice QR Enter must not emit `Effect::Add`.
+    let tmp = secure_tempdir();
+    // Two `→` from Manual lands on Qr.
+    let (state, _) = reduce(fresh_unlocked_with_add_modal(&tmp), key(KeyCode::Right));
+    let (state, _) = reduce(state, key(KeyCode::Right));
+    assert_eq!(add_modal_ref(&state).mode, AddMode::Qr);
+    let (state, effects) = reduce(state, key(KeyCode::Enter));
+    assert!(
+        effects.is_empty(),
+        "Enter in QR mode must not emit Effect::Add at this slice"
+    );
+    assert_eq!(add_modal_ref(&state).mode, AddMode::Qr);
+}
+
+#[test]
+fn enter_in_add_modal_manual_mode_leaves_other_text_fields_unchanged() {
+    // Submit must not perturb any non-secret text field; only the
+    // secret-bearing `manual_secret` is consumed. The label / issuer /
+    // icon_hint_text buffers stay populated so the modal can keep
+    // surfacing them while the effect is in flight (the close-on-ok
+    // and inline-error-on-failure flows land alongside
+    // `EffectResult::Add`).
+    let (_tmp, _path, mut state) = fresh_unlocked_with_add_modal_at_path();
+    match &mut state {
+        AppState::Unlocked {
+            modal: Some(Modal::Add(add)),
+            ..
+        } => {
+            add.label.push_str("Personal");
+            add.issuer.push_str("GitHub");
+            add.icon_hint_text.push_str("github");
+            for c in "JBSWY3DPEHPK3PXP".chars() {
+                add.manual_secret.push(c);
+            }
+        }
+        _ => panic!("expected Unlocked with Modal::Add open"),
+    }
+    let (state, _) = reduce(state, key(KeyCode::Enter));
+    let add = add_modal_ref(&state);
+    assert_eq!(add.label, "Personal");
+    assert_eq!(add.issuer, "GitHub");
+    assert_eq!(add.icon_hint_text, "github");
+}
+
 #[test]
 fn pressing_a_on_unlocked_with_modal_already_open_does_not_replace_the_modal() {
     // When a modal is open, the `a` key is consumed by the modal's
@@ -13160,10 +13419,13 @@ fn pressing_enter_on_unlocked_with_no_selection_emits_no_effect() {
 }
 
 #[test]
-fn pressing_enter_on_unlocked_with_modal_open_emits_no_effect() {
+fn pressing_enter_on_unlocked_with_modal_open_does_not_leak_to_copy_binding() {
     // Modal traps focus — Enter is modal-local input (Add modal
-    // commits, Remove modal confirms, …) and must not leak through
-    // to the underlying list's copy binding.
+    // commits via `Effect::Add`, Remove modal confirms, …) and must
+    // not leak through to the underlying list's copy binding. The
+    // modal-local Add commit is the expected effect at this slice;
+    // the assertion guards specifically against `Effect::CopyCode`
+    // leaking out of the modal trap.
     let tmp = secure_tempdir();
     let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
     let totp_id = add_totp_account(&mut vault, &store, "github");
@@ -13186,8 +13448,8 @@ fn pressing_enter_on_unlocked_with_modal_open_emits_no_effect() {
     };
     let (state, effects) = reduce(state, key(KeyCode::Enter));
     assert!(
-        effects.is_empty(),
-        "Enter with a modal open must not emit CopyCode, got {effects:?}"
+        !effects.iter().any(|e| matches!(e, Effect::CopyCode { .. })),
+        "Enter with a modal open must not leak Effect::CopyCode, got {effects:?}"
     );
     match state {
         AppState::Unlocked {

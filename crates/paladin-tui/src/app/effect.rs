@@ -234,6 +234,29 @@ pub fn execute(effect: Effect, state: &mut AppState, sender: &Sender<AppEvent>) 
             }
             EffectOutcome::Continue
         }
+        Effect::Add {
+            path: _,
+            label: _,
+            issuer: _,
+            secret: _,
+            algorithm: _,
+            digits: _,
+            kind: _,
+            period_secs: _,
+            counter: _,
+            icon_hint_text: _,
+        } => {
+            // Placeholder: `paladin_core::parse_icon_hint_token` +
+            // `paladin_core::validate_manual` +
+            // `Vault::find_duplicate` + `Vault::mutate_and_save`
+            // wiring lands with subsequent slices (see
+            // `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" >
+            // Add). Until then the executor consumes the variant
+            // without emitting an `AppEvent`. The carried
+            // `SecretString` zeroizes on drop when this arm exits.
+            let _ = sender;
+            EffectOutcome::Continue
+        }
     }
 }
 

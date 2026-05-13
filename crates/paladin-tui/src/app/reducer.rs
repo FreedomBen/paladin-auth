@@ -1091,7 +1091,7 @@ fn route_modal_input(
     key: &KeyEvent,
 ) -> Vec<Effect> {
     match modal.as_mut() {
-        Some(Modal::Add(add)) => route_add_modal_input(add, key),
+        Some(Modal::Add(add)) => route_add_modal_input(path, add, key),
         Some(Modal::Rename(rename)) => route_rename_modal_input(path, rename, key),
         Some(Modal::Remove(remove)) => route_remove_modal_input(path, remove, key),
         Some(Modal::Settings(settings)) => {
@@ -1266,7 +1266,11 @@ fn step_period_or_counter(add: &mut AddModal, up: bool) {
     }
 }
 
-fn route_add_modal_input(add: &mut AddModal, key: &KeyEvent) -> Vec<Effect> {
+fn route_add_modal_input(
+    path: &std::path::Path,
+    add: &mut AddModal,
+    key: &KeyEvent,
+) -> Vec<Effect> {
     if add.mode == AddMode::Manual && try_cycle_manual_selector(add, key) {
         return Vec::new();
     }
@@ -1289,6 +1293,20 @@ fn route_add_modal_input(add: &mut AddModal, key: &KeyEvent) -> Vec<Effect> {
         if is_modal_focus_prev(key) {
             add.manual_focus = add.manual_focus.prev();
             return Vec::new();
+        }
+        if matches!(key.code, KeyCode::Enter) {
+            return vec![Effect::Add {
+                path: path.to_path_buf(),
+                label: add.label.clone(),
+                issuer: add.issuer.clone(),
+                secret: add.manual_secret.take(),
+                algorithm: add.algorithm,
+                digits: add.digits,
+                kind: add.kind,
+                period_secs: add.period_secs,
+                counter: add.counter,
+                icon_hint_text: add.icon_hint_text.clone(),
+            }];
         }
         if let KeyCode::Char(c) = key.code {
             if !key

@@ -12,7 +12,8 @@ use secrecy::SecretString;
 use zeroize::Zeroizing;
 
 use paladin_core::{
-    AccountId, ClipboardClearToken, Code, PaladinError, SettingPatch, Store, Vault,
+    AccountId, AccountKindInput, Algorithm, ClipboardClearToken, Code, PaladinError, SettingPatch,
+    Store, Vault,
 };
 
 /// Events delivered to the reducer over the `mpsc<AppEvent>` channel.
@@ -522,5 +523,70 @@ pub enum Effect {
         /// executor still tolerates an empty list as a defensive
         /// no-op that posts back `Ok(())`.
         patches: Vec<SettingPatch>,
+    },
+    /// Insert a Manual-mode account into the vault and persist it.
+    ///
+    /// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add:
+    /// *"Manual entries route through
+    /// `paladin_core::validate_manual(input, submit_time)`. … Each
+    /// submit captures one `submit_time` used for account
+    /// validation/import timestamps."* The reducer emits this effect
+    /// when `Enter` is pressed on `Modal::Add` with
+    /// [`crate::app::state::AddMode::Manual`] active; the executor
+    /// builds a `paladin_core::AccountInput` from the carried fields,
+    /// samples one `SystemTime::now()` as `submit_time`, runs
+    /// `validate_manual`, performs duplicate detection, and wraps the
+    /// `Vault::add` call in `Vault::mutate_and_save`. The validation,
+    /// duplicate-detect, and save wiring land with a subsequent slice;
+    /// until then the executor consumes the variant without emitting
+    /// an `AppEvent`.
+    ///
+    /// `secret` is the typed Base32 buffer taken from
+    /// [`crate::app::state::AddModal::manual_secret`] via
+    /// [`crate::prompt::PassphraseBuffer::take`]; the buffer zeroizes
+    /// in the same step. `secret` then zeroizes on drop because
+    /// `SecretString` owns its bytes through `secrecy`. `issuer` is
+    /// carried as `String`; the executor turns an empty string into
+    /// `Option::None` per `validate_manual`'s contract. The
+    /// `period_secs` and `counter` fields ride together; the executor
+    /// picks one based on `kind` per `DESIGN.md` §5
+    /// (rejected-on-cross-kind is enforced inside `validate_manual`).
+    Add {
+        /// The current vault path; the executor uses it for error
+        /// reporting and to verify the path the effect was emitted
+        /// against in case the user has navigated away.
+        path: PathBuf,
+        /// Manual-mode label buffer at submit time. The executor
+        /// passes this verbatim to `validate_manual`, which trims and
+        /// enforces the §4.1 length rules.
+        label: String,
+        /// Manual-mode issuer buffer at submit time. Empty means
+        /// "no issuer" — the executor maps empty to `None` before
+        /// calling `validate_manual`.
+        issuer: String,
+        /// Base32 secret taken from the modal's
+        /// [`crate::prompt::PassphraseBuffer`] at submit time;
+        /// zeroizes on drop.
+        secret: SecretString,
+        /// HMAC algorithm at submit time.
+        algorithm: Algorithm,
+        /// OTP digit count at submit time (6 / 7 / 8 per the §4.1
+        /// bounds).
+        digits: u8,
+        /// Account kind selector at submit time; selects
+        /// `period_secs` (TOTP) or `counter` (HOTP) inside the
+        /// executor.
+        kind: AccountKindInput,
+        /// TOTP period at submit time; consulted only when
+        /// `kind == Totp`.
+        period_secs: u32,
+        /// HOTP starting counter at submit time; consulted only when
+        /// `kind == Hotp`.
+        counter: u64,
+        /// Free-form icon-hint token at submit time; the executor
+        /// runs it through
+        /// [`paladin_core::parse_icon_hint_token`] before building
+        /// the `AccountInput`.
+        icon_hint_text: String,
     },
 }
