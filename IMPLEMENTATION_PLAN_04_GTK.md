@@ -868,17 +868,17 @@ These run without a display server. Each lives under
 
 #### `tests/otpauth_uri_paste_logic.rs`
 
-- [ ] Successful URI parse routes through
+- [x] Successful URI parse routes through
   `paladin_core::parse_otpauth` and shares the manual path's
   duplicate-detection logic.
-- [ ] Parse errors for malformed URIs, unsupported scheme,
+- [x] Parse errors for malformed URIs, unsupported scheme,
   unsupported `type=`, and `validation_error` stay inline without
   mutating vault state.
-- [ ] Inline error messages may name the failing field or reason
+- [x] Inline error messages may name the failing field or reason
   but never echo the URI text.
-- [ ] Duplicate "add anyway" consumes the pending
+- [x] Duplicate "add anyway" consumes the pending
   `ValidatedAccount` on the duplicate-allowed path.
-- [ ] URI entry buffer zeroizes on submit / cancel / dialog close
+- [x] URI entry buffer zeroizes on submit / cancel / dialog close
   and is never carried in `AppMsg` or `AppOutput`.
 
 #### `tests/import_dialog_logic.rs`
