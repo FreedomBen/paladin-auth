@@ -1167,8 +1167,20 @@ end-to-end.
   seeded destination is byte-for-byte unchanged. Mirrors the CLI's
   `refuse_existing_overwrite` gate (DESIGN.md §5) and the GTK
   `overwrite_gate_needs_reset` flow.)*
-- [ ] Encrypted export prompts twice and rejects mismatch with
+- [x] Encrypted export prompts twice and rejects mismatch with
   `confirmation_mismatch`.
+  *(`enter_in_encrypted_export_modal_with_mismatched_passphrases_refuses_with_confirmation_mismatch`
+  in `tests/reducer_tests.rs` opens `Modal::Export` with
+  `format = ExportFormat::Encrypted`, a fresh destination path that
+  the overwrite gate accepts, and two `PassphraseBuffer`s carrying
+  divergent bytes (`"hunter2"` / `"hunter3"`). Pressing Enter asserts
+  no `Effect::Export` is emitted, the modal stays open, the rendered
+  `InvalidPassphrase { reason: "confirmation_mismatch" }` lands inline
+  on `ExportModal::error`, the format selector stays on `Encrypted`,
+  no status-line spill occurs, and the destination remains absent on
+  disk. Mirrors the CLI's `prompt_new_passphrase` (DESIGN.md §5) and
+  the GTK `SubmitRejection::ConfirmationMismatch` wire code so the
+  user-facing reason stays stable across all three front-ends.)*
 - [ ] Encrypted export rejects empty new passphrase with `zero_length`.
 - [ ] Plaintext export requires the unencrypted-secrets confirmation
   before writing.

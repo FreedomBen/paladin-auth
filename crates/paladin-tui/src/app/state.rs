@@ -1005,6 +1005,26 @@ pub struct ExportModal {
     /// [`paladin_core::export::encrypted`] with the user-supplied
     /// twice-confirmed bundle passphrase.
     pub format: ExportFormat,
+    /// First of the two encrypted-export passphrase prompts. Empty
+    /// for plaintext exports. Held in a [`PassphraseBuffer`] so typed
+    /// bytes zeroize on drop — covering modal close, auto-lock
+    /// discard, and the [`PassphraseBuffer::take`] call on submit.
+    /// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)": *"All
+    /// passphrase-entry fields … keep typed bytes in zeroizing
+    /// buffers, convert to `secrecy::SecretString` only for core
+    /// calls, and zeroize on submit, cancel, modal close, and
+    /// auto-lock."*
+    pub new_passphrase: PassphraseBuffer,
+    /// Second of the two encrypted-export passphrase prompts. Held
+    /// in a [`PassphraseBuffer`] with the same zeroize-on-drop
+    /// guarantees as [`Self::new_passphrase`]. Compared byte-for-byte
+    /// against [`Self::new_passphrase`] on submit; any divergence
+    /// surfaces as
+    /// [`PaladinError::InvalidPassphrase`](paladin_core::PaladinError::InvalidPassphrase)
+    /// with `reason: "confirmation_mismatch"` per DESIGN.md §5,
+    /// matching the CLI's twice-confirm prompt and the GTK
+    /// `SubmitRejection::ConfirmationMismatch` wire code.
+    pub confirm_passphrase: PassphraseBuffer,
     /// Inline writer / passphrase / overwrite-gate error from the most
     /// recent submit attempt, if any. Rendered through
     /// [`render_error_message`](crate::app::state::render_error_message)

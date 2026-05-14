@@ -28,9 +28,9 @@ use crate::app::event::{
 use crate::app::state::{
     compute_idle_deadline, format_account_display_label, format_duplicate_account_message,
     format_qr_import_failure, initial_selection, render_error_message, AddManualFocus, AddModal,
-    AddMode, AppState, ChordLeader, CountsPanel, ExportModal, Focus, HotpReveal, ImportModal,
-    Modal, PendingClipboardClear, PendingDuplicateAdd, RemoveModal, RenameModal, SettingsFocus,
-    SettingsModal, StatusLine, CLIPBOARD_WRITE_FAILED, NO_ACCOUNT_SELECTED,
+    AddMode, AppState, ChordLeader, CountsPanel, ExportFormat, ExportModal, Focus, HotpReveal,
+    ImportModal, Modal, PendingClipboardClear, PendingDuplicateAdd, RemoveModal, RenameModal,
+    SettingsFocus, SettingsModal, StatusLine, CLIPBOARD_WRITE_FAILED, NO_ACCOUNT_SELECTED,
 };
 use crate::prompt::PassphraseBuffer;
 use crate::search::{filtered_account_ids, select_after_search};
@@ -2054,12 +2054,25 @@ fn route_import_modal_input(
 /// `refuse_existing_overwrite` (DESIGN.md §5) and the GTK
 /// `overwrite_gate_needs_reset` flow.
 ///
+/// The second submit-time check is the encrypted twice-confirm
+/// passphrase gate. Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals
+/// (per §6)" > Export: *"Encrypted exports prompt twice for the
+/// bundle passphrase ..."*. When `format = ExportFormat::Encrypted`
+/// and the two typed buffers differ byte-for-byte, the reducer
+/// surfaces a rendered
+/// [`PaladinError::InvalidPassphrase`] with
+/// `reason = "confirmation_mismatch"` inline on
+/// [`ExportModal::error`](crate::app::state::ExportModal::error) so
+/// the wording matches the CLI's `prompt_new_passphrase`
+/// (`paladin-cli/src/prompt.rs`, DESIGN.md §5) and the GTK
+/// `SubmitRejection::ConfirmationMismatch` wire code.
+///
 /// Subsequent gate / effect-emission slices (plaintext
-/// unencrypted-secrets confirmation, encrypted twice-confirm
-/// passphrase prompt, the actual [`Effect::Export`] emission) land
-/// alongside their own checklist entries; until then this slice
-/// stops at the refusal and treats all other Enter outcomes as a
-/// silent no-op so the modal-trap contract holds.
+/// unencrypted-secrets confirmation, zero-length passphrase
+/// rejection, the actual [`Effect::Export`] emission) land alongside
+/// their own checklist entries; until then this slice stops at the
+/// gate refusals and treats all other Enter outcomes as a silent
+/// no-op so the modal-trap contract holds.
 fn route_export_modal_input(export: &mut ExportModal, key: &KeyEvent) -> Vec<Effect> {
     if matches!(key.code, KeyCode::Enter) {
         let target = std::path::PathBuf::from(export.path_text.trim());
@@ -2072,6 +2085,15 @@ fn route_export_modal_input(export: &mut ExportModal, key: &KeyEvent) -> Vec<Eff
                 recommended_min: None,
                 entry_type: None,
             }));
+            return Vec::new();
+        }
+        if matches!(export.format, ExportFormat::Encrypted)
+            && export.new_passphrase.as_str() != export.confirm_passphrase.as_str()
+        {
+            export.error = Some(render_error_message(&PaladinError::InvalidPassphrase {
+                reason: "confirmation_mismatch",
+            }));
+            return Vec::new();
         }
         return Vec::new();
     }
