@@ -1367,8 +1367,25 @@ end-to-end.
 
 - [x] Unlock passphrase buffer zeroizes on submit, cancel, and
   auto-lock.
-- [ ] Encrypted Paladin import passphrase buffer zeroizes on submit,
+- [x] Encrypted Paladin import passphrase buffer zeroizes on submit,
   cancel, modal close, and auto-lock.
+  *(`ImportModal::paladin_passphrase` is an `Option<PassphraseBuffer>`
+  wrapping `Zeroizing<String>`, so `take()` wipes in place and
+  `Drop` wipes on modal teardown. Submit is covered by
+  `enter_in_import_modal_passphrase_phase_emits_import_effect_with_typed_passphrase`
+  (Enter takes the buffer into a `SecretString`); cancel by
+  `import_modal_esc_with_typed_paladin_passphrase_closes_modal_and_drops_buffer`
+  (`Esc` clears `modal` to `None` so the typed bytes drop with the
+  modal); modal close (post-success) by
+  `effect_result_import_ok_keeps_modal_open_with_drained_paladin_passphrase_buffer`
+  (Enter `take()` drains the buffer, `EffectResult::Import Ok` keeps
+  the modal open with `paladin_passphrase = Some(empty)` so no
+  resurrected bytes leak, and a follow-up `Esc` drops the
+  now-drained modal cleanly); auto-lock by
+  `tick_past_idle_deadline_with_open_import_modal_typed_paladin_passphrase_locks_and_drops_buffer`
+  (Tick past `idle_deadline` transitions to `Locked`, dropping the
+  whole `Unlocked` arm including the open `ImportModal`). All in
+  `tests/reducer_tests.rs`.)*
 - [ ] Encrypted export passphrase buffer zeroizes on submit, cancel,
   modal close, and auto-lock.
 - [ ] Passphrase set / change buffers zeroize on submit, cancel, modal

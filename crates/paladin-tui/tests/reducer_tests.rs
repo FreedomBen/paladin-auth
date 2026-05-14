@@ -17962,3 +17962,252 @@ fn effect_result_import_ok_is_dropped_when_a_different_modal_is_open() {
         other => panic!("expected Unlocked, got {other:?}"),
     }
 }
+
+// ---------------------------------------------------------------------------
+// Import modal — `paladin_passphrase` zeroize axes (submit, cancel, modal
+// close, auto-lock).
+//
+// Covers `IMPLEMENTATION_PLAN_03_TUI.md` "Sensitive UI buffers":
+//
+//   - "Encrypted Paladin import passphrase buffer zeroizes on submit,
+//     cancel, modal close, and auto-lock."
+//
+// The submit axis is already covered upstream by
+// `enter_in_import_modal_passphrase_phase_emits_import_effect_with_typed_passphrase`
+// — Enter consumes the buffer via `PassphraseBuffer::take` (which
+// zeroizes in place) before forwarding the typed bytes to the
+// emitted `Effect::Import`. The three tests below cover cancel,
+// modal close (post-success dismissal), and auto-lock.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn import_modal_esc_with_typed_paladin_passphrase_closes_modal_and_drops_buffer() {
+    // Cancel axis. The user has typed passphrase chars into the
+    // encrypted-Paladin-import passphrase field and then dismissed
+    // the Import modal with Esc before submitting. The reducer's Esc
+    // precedence chain clears `modal` to `None`; dropping the
+    // `Modal::Import(ImportModal)` runs `PassphraseBuffer`'s `Drop`
+    // via `Zeroizing<String>`, wiping the typed bytes. Externally
+    // this is observable as the modal slot being empty after a
+    // single Esc, with no effects emitted (so no rogue Effect can
+    // carry the buffer elsewhere).
+    let tmp = secure_tempdir();
+    let bundle = write_encrypted_paladin_bundle(tmp.path(), "bundle.bin", "hunter2");
+    let (mut state, _) = drive_import_modal_enter(&tmp, bundle.to_str().unwrap(), None);
+    match &state {
+        AppState::Unlocked {
+            modal: Some(Modal::Import(import)),
+            ..
+        } => assert!(
+            import.paladin_passphrase.is_some(),
+            "harness precondition: must be in passphrase phase"
+        ),
+        other => panic!("expected Import modal in passphrase phase, got {other:?}"),
+    }
+    for c in "secret".chars() {
+        let (next, _) = reduce(state, key(KeyCode::Char(c)));
+        state = next;
+    }
+    match &state {
+        AppState::Unlocked {
+            modal: Some(Modal::Import(import)),
+            ..
+        } => {
+            let buf = import
+                .paladin_passphrase
+                .as_ref()
+                .expect("still in passphrase phase");
+            assert!(
+                !buf.is_empty(),
+                "harness precondition: passphrase buffer must hold typed bytes",
+            );
+        }
+        other => panic!("expected Import modal still open, got {other:?}"),
+    }
+
+    let (state, effects) = reduce(state, key(KeyCode::Esc));
+    assert!(
+        effects.is_empty(),
+        "Esc cancelling the Import modal must not emit effects; got {effects:?}",
+    );
+    match state {
+        AppState::Unlocked {
+            modal,
+            status_line,
+            search_query,
+            ..
+        } => {
+            assert!(
+                modal.is_none(),
+                "Esc must drop the Import modal so its paladin_passphrase buffer zeroizes; got {modal:?}",
+            );
+            assert!(
+                status_line.is_none(),
+                "cancel path must not publish a status-line confirmation; got {status_line:?}",
+            );
+            assert!(
+                search_query.is_empty(),
+                "cancel path must not leak buffered bytes into search_query; got {search_query:?}",
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_import_ok_keeps_modal_open_with_drained_paladin_passphrase_buffer() {
+    // Modal-close axis (post-success). By the time
+    // `EffectResult::Import { Ok(_) }` arrives, the Enter handler has
+    // already called `PassphraseBuffer::take` (see
+    // `enter_in_import_modal_passphrase_phase_emits_import_effect_with_typed_passphrase`),
+    // so the in-memory buffer is empty. The Import modal stays open
+    // after Ok to render its counts panel — but the
+    // `paladin_passphrase` slot must remain `Some(empty)` so no
+    // resurrected bytes leak through the post-success path. A
+    // subsequent Esc dismissal drops the now-drained buffer cleanly.
+    let tmp = secure_tempdir();
+    let bundle = write_encrypted_paladin_bundle(tmp.path(), "bundle.bin", "hunter2");
+    let (mut state, _) = drive_import_modal_enter(&tmp, bundle.to_str().unwrap(), None);
+    for c in "hunter2".chars() {
+        let (next, _) = reduce(state, key(KeyCode::Char(c)));
+        state = next;
+    }
+    let (state, effects) = reduce(state, key(KeyCode::Enter));
+    assert_eq!(
+        effects.len(),
+        1,
+        "Enter in passphrase phase must emit Effect::Import",
+    );
+    match &state {
+        AppState::Unlocked {
+            modal: Some(Modal::Import(import)),
+            ..
+        } => {
+            let buf = import
+                .paladin_passphrase
+                .as_ref()
+                .expect("passphrase phase preserved until EffectResult lands");
+            assert!(
+                buf.is_empty(),
+                "submit's `take()` must have drained the passphrase buffer",
+            );
+        }
+        other => panic!("expected Import modal open after submit, got {other:?}"),
+    }
+    let report = ImportReport {
+        imported: 1,
+        skipped: 0,
+        replaced: 0,
+        appended: 0,
+        accounts: Vec::new(),
+        warnings: Vec::new(),
+    };
+    let (state, effects) = reduce(state, import_result(Ok(ImportSuccess { report })));
+    assert!(effects.is_empty(), "Ok must not emit follow-up effects");
+    match &state {
+        AppState::Unlocked {
+            modal: Some(Modal::Import(import)),
+            ..
+        } => {
+            let buf = import
+                .paladin_passphrase
+                .as_ref()
+                .expect("Ok arm must not clear paladin_passphrase");
+            assert!(
+                buf.is_empty(),
+                "post-Ok paladin_passphrase must remain drained — no resurrected bytes",
+            );
+            assert!(
+                import.counts_panel.is_some(),
+                "Ok arm must populate the counts_panel (precondition for this axis test)",
+            );
+        }
+        other => panic!("expected Import modal still open after Ok, got {other:?}"),
+    }
+    let (state, _) = reduce(state, key(KeyCode::Esc));
+    match state {
+        AppState::Unlocked { modal, .. } => assert!(
+            modal.is_none(),
+            "Esc after Ok must close the modal so the (already drained) paladin_passphrase buffer drops",
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn tick_past_idle_deadline_with_open_import_modal_typed_paladin_passphrase_locks_and_drops_buffer()
+{
+    // Auto-lock axis. `maybe_auto_lock` transitions `Unlocked →
+    // Locked` when `Tick.monotonic` is past `idle_deadline`. The
+    // `Locked` state carries only `path` (and any pending clipboard
+    // clear) — by construction every other slot of the prior
+    // `Unlocked` is dropped, including any open `Modal::Import` and
+    // its `paladin_passphrase` buffer. The buffer's
+    // `Zeroizing<String>` drop wipes the typed bytes in place.
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (mut vault, store) = create_encrypted_pair(&path, "pp");
+    enable_auto_lock(&mut vault, &store, 600);
+
+    let t0 = Instant::now();
+    let deadline = t0 + Duration::from_secs(600);
+    let mut buf = PassphraseBuffer::new();
+    for c in "hunter2".chars() {
+        buf.push(c);
+    }
+    let import = ImportModal {
+        paladin_passphrase: Some(buf),
+        ..ImportModal::default()
+    };
+    match &import.paladin_passphrase {
+        Some(b) => assert!(
+            !b.is_empty(),
+            "harness precondition: paladin_passphrase must hold typed bytes",
+        ),
+        None => panic!("harness precondition: paladin_passphrase must be Some"),
+    }
+
+    let unlocked = AppState::Unlocked {
+        path: path.clone(),
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: Some(deadline),
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Import(import)),
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+
+    let now = deadline + Duration::from_millis(1);
+    let tick = AppEvent::Tick {
+        wall_clock: SystemTime::now(),
+        monotonic: now,
+    };
+    let (next, effects) = reduce(unlocked, tick);
+    assert!(
+        effects.is_empty(),
+        "auto-lock transition emits no effects; got {effects:?}",
+    );
+    match next {
+        AppState::Locked {
+            path: p,
+            pending_clipboard_clear,
+        } => {
+            assert_eq!(p, path, "Locked must carry the original vault path");
+            assert!(
+                pending_clipboard_clear.is_none(),
+                "no pending clipboard clear was seeded — lock must not synthesize one",
+            );
+        }
+        other => panic!(
+            "expected Locked (Import modal and its paladin_passphrase buffer must be gone), got {other:?}",
+        ),
+    }
+}
