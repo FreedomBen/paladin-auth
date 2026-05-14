@@ -799,18 +799,18 @@ These run without a display server. Each lives under
 
 #### `tests/startup_error_logic.rs`
 
-- [ ] `default_vault_path` failure routes to
+- [x] `default_vault_path` failure routes to
   `StartupErrorComponent` without mutating disk.
-- [ ] `inspect` failure routes to `StartupErrorComponent`.
-- [ ] Open failure other than wrong passphrase
+- [x] `inspect` failure routes to `StartupErrorComponent`.
+- [x] Open failure other than wrong passphrase
   (`unsafe_permissions`, `wrong_vault_lock`, `invalid_header`,
   `invalid_payload`, `unsupported_format_version`,
   `kdf_params_out_of_bounds`, `io_error`) routes to
   `StartupErrorComponent`.
-- [ ] `unsafe_permissions` rendering uses the `Some(text)` from
+- [x] `unsafe_permissions` rendering uses the `Some(text)` from
   `paladin_core::format_unsafe_permissions(&err)`, falling back to
   the generic error text only when the formatter returns `None`.
-- [ ] Retry from `StartupErrorComponent` re-runs vault-path
+- [x] Retry from `StartupErrorComponent` re-runs vault-path
   resolution + `inspect`.
 
 #### `tests/qr_clipboard_logic.rs`

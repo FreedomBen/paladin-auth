@@ -25,6 +25,7 @@ pub mod hotp_reveal;
 pub mod icon_resolution;
 pub mod search;
 pub mod secret_fields;
+pub mod startup_error;
 
 /// Run the `paladin-gtk` binary.
 ///
