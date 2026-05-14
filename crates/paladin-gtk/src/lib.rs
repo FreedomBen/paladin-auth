@@ -20,6 +20,7 @@
 use std::process::ExitCode;
 
 pub mod auto_lock;
+pub mod cli;
 pub mod clipboard_clear;
 pub mod effect_ownership;
 pub mod export_dialog;
@@ -38,11 +39,19 @@ pub mod startup_error;
 
 /// Run the `paladin-gtk` binary.
 ///
-/// Milestone 7 scaffold per `IMPLEMENTATION_PLAN_04_GTK.md`: returns
-/// success without launching a GTK application yet. The real entry
-/// (`adw::init`, gresource registration, `RelmApp::new` with the
+/// Milestone 7 scaffold per `IMPLEMENTATION_PLAN_04_GTK.md`: parses
+/// [`cli::GlobalArgs`] and exits. The real entry (`adw::init`,
+/// gresource registration, `RelmApp::new` with the
 /// `org.tamx.Paladin.Gui` app ID) is wired in subsequent commits.
 #[must_use]
 pub fn run() -> ExitCode {
-    ExitCode::SUCCESS
+    use clap::Parser;
+
+    match cli::GlobalArgs::try_parse() {
+        Ok(_args) => ExitCode::SUCCESS,
+        // `Error::exit` writes clap's text diagnostic / help / version
+        // output and exits with the appropriate code (`2` for usage
+        // errors, `0` for `--help` / `--version`). Never returns.
+        Err(err) => err.exit(),
+    }
 }
