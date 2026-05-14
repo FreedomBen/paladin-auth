@@ -283,21 +283,36 @@ fn reduce_effect_result(state: AppState, result: EffectResult) -> (AppState, Vec
 /// overwrite gate stay in the Export modal as inline errors. Export
 /// does not mutate the vault, so save-error rollback does not apply."*
 ///
-/// On `Ok(())` while `Modal::Export` is open the reducer closes the
-/// modal and publishes a status-line confirmation; on `Err(...)` the
-/// modal stays open with the rendered error stashed in
-/// [`crate::app::state::ExportModal::error`]. Results delivered while
-/// not on `Unlocked` or while a different modal is open are discarded.
+/// On `Err(...)` while `Modal::Export` is open the reducer renders the
+/// typed error through [`render_error_message`] and stashes it on
+/// [`crate::app::state::ExportModal::error`]; the modal stays open so
+/// the user can fix the destination, passphrase, or filesystem
+/// condition and retry. The status line is left untouched — every
+/// writer / passphrase error stays inline on the modal. Because the
+/// executor never calls [`paladin_core::Vault::save`] on the Export
+/// path, the live vault and on-disk source bundle are byte-stable
+/// across both Err and Ok arms.
 ///
-/// The success-close / status-line / inline-error wiring lands with the
-/// reducer Enter-handler slice; until then this handler is a
-/// passthrough that drops the carried `PaladinError` without mutating
-/// state — the executor-side routing axis is locked through the live
-/// file write, not the reducer's downstream UI surface.
+/// Results delivered while not on `Unlocked` or while a different
+/// modal is open are discarded.
+///
+/// The Ok-arm success-close + status-line confirmation wiring lands
+/// with a subsequent slice; until then `Ok(())` is a passthrough that
+/// leaves the Export modal open without surfacing a confirmation, so
+/// the user can `Esc`-close deliberately.
 fn reduce_export_result(
-    state: AppState,
-    _result: Result<(), PaladinError>,
+    mut state: AppState,
+    result: Result<(), PaladinError>,
 ) -> (AppState, Vec<Effect>) {
+    if let AppState::Unlocked {
+        modal: Some(Modal::Export(ref mut export)),
+        ..
+    } = state
+    {
+        if let Err(err) = result {
+            export.error = Some(render_error_message(&err));
+        }
+    }
     (state, Vec::new())
 }
 

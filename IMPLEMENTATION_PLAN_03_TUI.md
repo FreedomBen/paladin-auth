@@ -1219,11 +1219,36 @@ end-to-end.
   test stats the written file under `#[cfg(unix)]` and asserts the
   permissions land at `0o600`, which the executor inherits by handing
   bytes to `paladin_core::write_secret_file_atomic`.)*
-- [ ] Writer `io_error`, `save_not_committed`, and
+- [x] Writer `io_error`, `save_not_committed`, and
   `save_durability_unconfirmed` surface inline and the modal stays
   open.
-- [ ] Export performs no `Vault::save` and leaves vault state
+  *(Three sibling reducer tests in `tests/reducer_tests.rs` —
+  `effect_result_export_err_io_error_surfaces_inline_and_keeps_modal_open`,
+  `effect_result_export_err_save_not_committed_surfaces_inline_and_keeps_modal_open`,
+  and
+  `effect_result_export_err_save_durability_unconfirmed_surfaces_inline_and_keeps_modal_open`
+  — each drive `AppEvent::EffectResult(EffectResult::Export { result:
+  Err(...) })` through `reduce` while `Modal::Export` is open and
+  assert (1) the rendered `PaladinError` lands on
+  `ExportModal::error` byte-for-byte through `render_error_message`,
+  (2) the Export modal stays open with no follow-up effects, and (3)
+  the status line stays clear so every writer / save error stays
+  inline on the modal. Wired via `reduce_export_result`'s Err arm in
+  `src/app/reducer.rs`.)*
+- [x] Export performs no `Vault::save` and leaves vault state
   unchanged across success and failure.
+  *(All three Err-arm tests above plus
+  `effect_result_export_ok_leaves_vault_iter_unchanged` seed the
+  fixture vault with two TOTP accounts (`"alpha"`, `"bravo"`),
+  snapshot the `Vault::iter()` labels through
+  `vault_label_snapshot`, drive the reducer with both `Ok(())` and
+  every `Err(...)` variant, and assert the post-reduce label list
+  is byte-identical to the pre-attempt snapshot. The §4.6
+  non-mutation invariant is structurally enforced by
+  `reduce_export_result` never touching `vault` — the Err arm only
+  writes to `ExportModal::error`, and the executor-side
+  `execute_export` in `src/app/effect.rs` never calls
+  `Vault::save`.)*
 
 ### Settings modal (`tests/reducer_tests.rs`)
 

@@ -18698,3 +18698,246 @@ fn enter_in_plaintext_export_modal_without_confirmation_refuses_with_plaintext_w
         "destination must remain absent after a refused plaintext-confirmation gate",
     );
 }
+
+// ---------------------------------------------------------------------------
+// Export reducer EffectResult Err arms — writer / save errors surface inline
+// on `ExportModal::error` and the modal stays open with the vault untouched.
+// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Export modal > "Writer io_error,
+//  save_not_committed, and save_durability_unconfirmed surface inline and the
+//  modal stays open." + "Export performs no Vault::save and leaves vault
+//  state unchanged across success and failure.")
+// ---------------------------------------------------------------------------
+
+/// Build an Unlocked state seeded with two TOTP accounts and an open
+/// Export modal targeted at a fresh destination path inside `tmp`.
+///
+/// Returns `(state, dest_path)`. The seed accounts make the
+/// non-mutation invariant in the Err / Ok arms observable through
+/// `Vault::iter()` label order, not just `.count()`.
+fn unlocked_with_seeded_export_modal(
+    tmp: &tempfile::TempDir,
+    dest_name: &str,
+) -> (AppState, PathBuf) {
+    let (path, (mut vault, store)) = open_plaintext_pair(tmp);
+    let _ = add_totp_account(&mut vault, &store, "alpha");
+    let _ = add_totp_account(&mut vault, &store, "bravo");
+    let dest = tmp.path().join(dest_name);
+    assert!(
+        !dest.exists(),
+        "harness precondition: destination must not exist before the test runs",
+    );
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Export(ExportModal {
+            path_text: dest.to_string_lossy().into_owned(),
+            format: ExportFormat::Plaintext,
+            plaintext_confirmed: true,
+            ..ExportModal::default()
+        })),
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    (state, dest)
+}
+
+/// Snapshot `Vault::iter()` labels for the export non-mutation invariant.
+fn vault_label_snapshot(state: &AppState) -> Vec<String> {
+    match state {
+        AppState::Unlocked { vault, .. } => vault
+            .iter()
+            .map(|a| paladin_core::Account::label(a).to_string())
+            .collect(),
+        other => panic!("expected Unlocked for label snapshot, got {other:?}"),
+    }
+}
+
+fn export_result(result: Result<(), PaladinError>) -> AppEvent {
+    AppEvent::EffectResult(EffectResult::Export { result })
+}
+
+#[test]
+fn effect_result_export_err_io_error_surfaces_inline_and_keeps_modal_open() {
+    // §5 `io_error` from `paladin_core::write_secret_file_atomic`
+    // (anywhere along the staging / rename / parent-dir-fsync chain)
+    // must land inline on `ExportModal::error` through
+    // `render_error_message`. The Export modal stays open so the user
+    // can retry or `Esc` out; the status line stays clear; and since
+    // Export never calls `Vault::save`, `Vault::iter()` order is
+    // unchanged.
+    let tmp = secure_tempdir();
+    let (state_with_modal, dest) = unlocked_with_seeded_export_modal(&tmp, "export-io-error.json");
+    let before_labels = vault_label_snapshot(&state_with_modal);
+
+    let err = PaladinError::IoError {
+        operation: "write_secret_file_atomic",
+        source: std::io::Error::new(std::io::ErrorKind::PermissionDenied, "synthetic-denied"),
+    };
+    let expected = render_error_message(&err);
+    let (state, effects) = reduce(state_with_modal, export_result(Err(err)));
+
+    assert!(
+        effects.is_empty(),
+        "Err io_error must not emit follow-up effects; got {effects:?}",
+    );
+    match &state {
+        AppState::Unlocked {
+            modal: Some(Modal::Export(export)),
+            status_line,
+            ..
+        } => {
+            assert_eq!(
+                export.error.as_deref(),
+                Some(expected.as_str()),
+                "io_error must render inline through render_error_message",
+            );
+            assert!(
+                status_line.is_none(),
+                "writer io_error must stay inline on the modal — no status-line spill",
+            );
+        }
+        other => panic!("expected open Export modal after Err io_error, got {other:?}"),
+    }
+    assert_eq!(
+        vault_label_snapshot(&state),
+        before_labels,
+        "Export Err io_error must not mutate Vault::iter() — Export never calls Vault::save",
+    );
+    assert!(
+        !dest.exists(),
+        "test fixture only constructs the result; the destination must remain absent",
+    );
+}
+
+#[test]
+fn effect_result_export_err_save_not_committed_surfaces_inline_and_keeps_modal_open() {
+    // §5 `save_not_committed` from `write_secret_file_atomic` covers
+    // the staging-file fsync / rename failure mode. The reducer's Err
+    // arm must surface it inline on `ExportModal::error` and keep the
+    // modal open; Export does not mutate the vault, so the
+    // non-mutation invariant must hold here too.
+    let tmp = secure_tempdir();
+    let (state_with_modal, _dest) =
+        unlocked_with_seeded_export_modal(&tmp, "export-save-not-committed.json");
+    let before_labels = vault_label_snapshot(&state_with_modal);
+
+    let err = PaladinError::SaveNotCommitted {
+        committed: false,
+        backup_path: None,
+    };
+    let expected = render_error_message(&err);
+    let (state, effects) = reduce(state_with_modal, export_result(Err(err)));
+
+    assert!(
+        effects.is_empty(),
+        "Err save_not_committed must not emit follow-up effects; got {effects:?}",
+    );
+    match &state {
+        AppState::Unlocked {
+            modal: Some(Modal::Export(export)),
+            status_line,
+            ..
+        } => {
+            assert_eq!(
+                export.error.as_deref(),
+                Some(expected.as_str()),
+                "save_not_committed must render inline through render_error_message",
+            );
+            assert!(
+                status_line.is_none(),
+                "writer save_not_committed must stay inline on the modal — no status-line spill",
+            );
+        }
+        other => panic!("expected open Export modal after Err save_not_committed, got {other:?}"),
+    }
+    assert_eq!(
+        vault_label_snapshot(&state),
+        before_labels,
+        "Export Err save_not_committed must not mutate Vault::iter() — Export never calls Vault::save",
+    );
+}
+
+#[test]
+fn effect_result_export_err_save_durability_unconfirmed_surfaces_inline_and_keeps_modal_open() {
+    // §5 `save_durability_unconfirmed` from `write_secret_file_atomic`
+    // covers the parent-directory fsync failure mode after a primary
+    // rename succeeded. The reducer's Err arm must still surface the
+    // typed warning inline on `ExportModal::error` and keep the modal
+    // open; Export does not mutate the vault, so `Vault::iter()` stays
+    // pinned to the pre-attempt snapshot.
+    let tmp = secure_tempdir();
+    let (state_with_modal, _dest) =
+        unlocked_with_seeded_export_modal(&tmp, "export-save-durability.json");
+    let before_labels = vault_label_snapshot(&state_with_modal);
+
+    let err = PaladinError::SaveDurabilityUnconfirmed;
+    let expected = render_error_message(&err);
+    let (state, effects) = reduce(state_with_modal, export_result(Err(err)));
+
+    assert!(
+        effects.is_empty(),
+        "Err save_durability_unconfirmed must not emit follow-up effects; got {effects:?}",
+    );
+    match &state {
+        AppState::Unlocked {
+            modal: Some(Modal::Export(export)),
+            status_line,
+            ..
+        } => {
+            assert_eq!(
+                export.error.as_deref(),
+                Some(expected.as_str()),
+                "save_durability_unconfirmed must render inline through render_error_message",
+            );
+            assert!(
+                status_line.is_none(),
+                "writer save_durability_unconfirmed must stay inline on the modal — no status-line spill",
+            );
+        }
+        other => {
+            panic!(
+                "expected open Export modal after Err save_durability_unconfirmed, got {other:?}"
+            )
+        }
+    }
+    assert_eq!(
+        vault_label_snapshot(&state),
+        before_labels,
+        "Export Err save_durability_unconfirmed must not mutate Vault::iter() — Export never calls Vault::save",
+    );
+}
+
+#[test]
+fn effect_result_export_ok_leaves_vault_iter_unchanged() {
+    // Export-success path: even when `Effect::Export` returns `Ok(())`
+    // the reducer must leave `Vault::iter()` untouched. Per
+    // IMPLEMENTATION_PLAN_03_TUI.md "Effect errors" > Export:
+    // *"Export does not mutate the vault, so save-error rollback does
+    // not apply."* The non-mutation invariant applies symmetrically on
+    // Ok — the success arm carries no writeback into the live vault.
+    let tmp = secure_tempdir();
+    let (state_with_modal, _dest) = unlocked_with_seeded_export_modal(&tmp, "export-ok.json");
+    let before_labels = vault_label_snapshot(&state_with_modal);
+
+    let (state, effects) = reduce(state_with_modal, export_result(Ok(())));
+
+    assert!(
+        effects.is_empty(),
+        "Ok arm must not emit follow-up effects; got {effects:?}",
+    );
+    assert_eq!(
+        vault_label_snapshot(&state),
+        before_labels,
+        "Export Ok must not mutate Vault::iter() — Export never calls Vault::save",
+    );
+}
