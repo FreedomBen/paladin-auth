@@ -19,6 +19,7 @@ pub mod clipboard;
 pub mod prompt;
 pub mod search;
 pub mod terminal;
+pub mod view;
 
 /// Run the `paladin-tui` binary.
 ///

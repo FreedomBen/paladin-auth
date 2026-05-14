@@ -1729,7 +1729,17 @@ Modals and overlays:
 - [ ] Settings modal.
 - [ ] Help overlay.
 - [ ] Unlock screen.
-- [ ] Missing-vault screen.
+- [x] Missing-vault screen.
+  *(`crates/paladin-tui/src/view/missing_vault.rs` renders the
+  non-mutating guidance screen — a bordered `Paladin` block with
+  the inspected vault path and the "Run `paladin init` to create
+  one" prompt — and `snapshot_missing_vault_screen` in
+  `tests/view_snapshots.rs` drives it through
+  `ratatui::backend::TestBackend` (80×12) into
+  `tests/snapshots/view_snapshots__snapshot_missing_vault_screen.snap`.
+  The `view_snapshots.rs` harness (`render_to_text` /
+  `buffer_to_text`) is shared by every subsequent view-rendering
+  snapshot test.)*
 
 Inline `save_not_committed` / `save_durability_unconfirmed`:
 
