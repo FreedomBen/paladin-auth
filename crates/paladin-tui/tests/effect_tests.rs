@@ -2679,3 +2679,143 @@ fn execute_export_with_plaintext_format_routes_through_otpauth_list_and_writes_v
         "Export must leave the on-disk vault untouched (no Vault::save was issued)"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Effect::Export — encrypted format routes through
+// `paladin_core::export::encrypted` and persists via
+// `paladin_core::write_secret_file_atomic`.
+//
+// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Tests" > "Export modal":
+// *"Encrypted format selector routes to `paladin_core::export::encrypted`."*
+// The executor must render the live vault through `core_export::encrypted`
+// with `EncryptionOptions::new(secret)` (default §4.4 Argon2 params per
+// the plan's "Encrypted-bundle Export" / `EncryptionOptions::new` rule),
+// hand the bundle bytes to `write_secret_file_atomic`, and post back
+// `EffectResult::Export { result: Ok(()) }`. The vault state (in-memory
+// and on disk) must be unchanged — Export does not mutate the vault.
+//
+// Routing axis: byte-equality is not available because each
+// `export::encrypted` call mints a fresh salt + nonce. Instead we pin
+// routing by (a) magic + header bytes that only `export::encrypted`
+// emits (`PALADIN\0`, format_ver=1, mode=1) and (b) a successful
+// round-trip through `import::paladin` with the same passphrase that
+// recovers the original account set. That combination is impossible
+// to satisfy from `otpauth_list` or any other writer.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn execute_export_with_encrypted_format_routes_through_export_encrypted_and_writes_via_write_secret_file_atomic(
+) {
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+
+    let (mut vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let _ = add_totp_account(&mut vault, &store, "github");
+    let _ = add_totp_account(&mut vault, &store, "azure");
+
+    let initial_accounts: Vec<AccountId> = vault.iter().map(paladin_core::Account::id).collect();
+    let initial_labels: Vec<String> = vault.iter().map(|a| a.label().to_string()).collect();
+
+    let mut state = AppState::Unlocked {
+        path: path.clone(),
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+
+    let target_path = tmp.path().join("export.paladin");
+    assert!(!target_path.exists(), "target must not pre-exist");
+
+    let bundle_passphrase = "bundle-hunter2";
+    let (tx, rx) = mpsc::channel::<AppEvent>();
+    let effect = Effect::Export {
+        path: path.clone(),
+        target_path: target_path.clone(),
+        format: ExportFormat::Encrypted,
+        passphrase: Some(SecretString::from(bundle_passphrase.to_string())),
+    };
+    assert_eq!(execute(effect, &mut state, &tx), EffectOutcome::Continue);
+
+    match rx.try_recv().expect("an AppEvent should be sent") {
+        AppEvent::EffectResult(EffectResult::Export { result: Ok(()) }) => {}
+        other => panic!("expected EffectResult::Export Ok, got {other:?}"),
+    }
+    assert!(
+        rx.try_recv().is_err(),
+        "executor must emit exactly one AppEvent per Effect::Export"
+    );
+
+    // Header-routing axis: §4.3 magic + format_ver=1 + mode=1 are emitted
+    // only by `export::encrypted`. `otpauth_list` writes JSON, which
+    // could never satisfy this header check.
+    let written = std::fs::read(&target_path).expect("read written export");
+    assert!(
+        written.starts_with(b"PALADIN\0"),
+        "encrypted export must begin with the §4.3 PALADIN magic; got first 16 = {:?}",
+        &written[..written.len().min(16)]
+    );
+    assert_eq!(written[8], 1, "header byte 8 must be format_ver = 1");
+    assert_eq!(written[9], 1, "header byte 9 must be mode = 1 (encrypted)");
+
+    // Round-trip-routing axis: `import::paladin` with the same passphrase
+    // must recover exactly the source vault's labels in order. Any other
+    // routing would either fail to decrypt or yield a different set.
+    let imported =
+        paladin_core::import::paladin(&written, SecretString::from(bundle_passphrase.to_string()))
+            .expect("encrypted export must round-trip through import::paladin");
+    let imported_labels: Vec<String> = imported
+        .iter()
+        .map(|v| v.account.label().to_string())
+        .collect();
+    assert_eq!(
+        imported_labels, initial_labels,
+        "encrypted bundle must round-trip the source vault's labels in order"
+    );
+
+    // Write-path-routing axis: mode `0600` is enforced only by
+    // `write_secret_file_atomic` (per `DESIGN.md` §4.2 / §4.6); a bare
+    // `fs::write` would inherit the umask instead.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&target_path)
+            .expect("stat export file")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600, "encrypted export file must land at 0600");
+    }
+
+    // Non-mutation invariant: Export issues no `Vault::save`, so both
+    // the in-memory iteration order and the on-disk source vault must
+    // be byte-identical to the pre-export snapshot.
+    let vault = match &state {
+        AppState::Unlocked { vault, .. } => vault,
+        other => panic!("expected Unlocked, got {other:?}"),
+    };
+    let after_accounts: Vec<AccountId> = vault.iter().map(paladin_core::Account::id).collect();
+    assert_eq!(
+        after_accounts, initial_accounts,
+        "in-memory vault unchanged"
+    );
+
+    let (reopened, _store) = Store::open(&path, VaultLock::Plaintext).expect("reopen plaintext");
+    let reopened_accounts: Vec<AccountId> =
+        reopened.iter().map(paladin_core::Account::id).collect();
+    assert_eq!(
+        reopened_accounts, initial_accounts,
+        "on-disk vault unchanged"
+    );
+}

@@ -1139,8 +1139,24 @@ end-to-end.
   `paladin_core::export::otpauth_list(&vault).into_bytes()` exactly,
   and asserts `EffectResult::Export { result: Ok(()) }` rides back on
   the channel.)*
-- [ ] Encrypted format selector routes to
+- [x] Encrypted format selector routes to
   `paladin_core::export::encrypted`.
+  *(Executor-side coverage:
+  `execute_export_with_encrypted_format_routes_through_export_encrypted_and_writes_via_write_secret_file_atomic`
+  in `tests/effect_tests.rs` constructs an `Effect::Export` with
+  `ExportFormat::Encrypted` and `Some(SecretString)`, then pins
+  three routing axes that only `core_export::encrypted` →
+  `write_secret_file_atomic` can satisfy together:
+  (1) the written bytes carry the §4.3 header — `PALADIN\0` magic,
+  `format_ver = 1`, `mode = 1` (encrypted);
+  (2) `paladin_core::import::paladin` decrypts the bundle with the
+  same passphrase and recovers the source vault's labels in order;
+  (3) under `#[cfg(unix)]` the destination file's permission bits
+  land at `0o600`. The test also re-asserts the §4.6 non-mutation
+  invariant for Export — both the in-memory iteration order and
+  the re-opened on-disk source vault match the pre-export account
+  snapshot, since the executor never calls `Vault::save` on the
+  export path.)*
 - [ ] Refused overwrite gate rejects without writing.
 - [ ] Encrypted export prompts twice and rejects mismatch with
   `confirmation_mismatch`.
