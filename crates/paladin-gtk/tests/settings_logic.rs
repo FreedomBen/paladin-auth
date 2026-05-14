@@ -1,0 +1,547 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+//! Pure-logic settings tests for `paladin-gtk`.
+//!
+//! Tracks the §"Tests > Pure-logic unit tests >
+//! `tests/settings_logic.rs`" checklist in
+//! `IMPLEMENTATION_PLAN_04_GTK.md`:
+//!
+//! * Live-apply path runs `Vault::mutate_and_save` once per accepted
+//!   change (modeled here as `ToggleOutcome::Save` /
+//!   `DebounceOutcome::Save` returning exactly one
+//!   [`paladin_core::SettingPatch`] per accepted transition).
+//! * Spinners clamp to
+//!   `paladin_core::AUTO_LOCK_SECS_MIN..=paladin_core::AUTO_LOCK_SECS_MAX`
+//!   and
+//!   `paladin_core::CLIPBOARD_CLEAR_SECS_MIN..=paladin_core::CLIPBOARD_CLEAR_SECS_MAX`.
+//! * 500 ms debounce coalesces repeated spinner changes so only the
+//!   most recent buffered value reaches `mutate_and_save`.
+//! * `save_not_committed` reverts the visible widget value to the
+//!   last committed state.
+//! * `save_durability_unconfirmed` keeps the new value visible and
+//!   attaches the warning to the changed `AdwPreferencesGroup` row
+//!   inside the `AdwPreferencesDialog`.
+//!
+//! The module under test (`paladin_gtk::settings`) is the pure-logic
+//! state machine the GTK `SettingsComponent` shadows. It owns no
+//! widgets and never starts a timer of its own — the widget layer
+//! arms a `glib::timeout_add_local(500ms, ...)` after each
+//! `stage_*` call and calls `resolve_debounce` on tick. The "500 ms
+//! debounce" cited in the plan checklist is enforced by that timer;
+//! the state-machine bullet here is the *coalescing* contract: only
+//! the most recent buffered value reaches `apply_setting_patch`.
+
+use std::path::PathBuf;
+
+use paladin_core::{
+    ErrorKind, PaladinError, SettingPatch, AUTO_LOCK_SECS_MAX, AUTO_LOCK_SECS_MIN,
+    CLIPBOARD_CLEAR_SECS_MAX, CLIPBOARD_CLEAR_SECS_MIN,
+};
+
+use paladin_gtk::settings::{
+    clamp_auto_lock_secs, clamp_clipboard_clear_secs, AcceptedChange, CommittedSettings,
+    DebounceOutcome, SaveOutcome, SettingsField, SettingsState, ToggleOutcome,
+};
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+fn defaults() -> CommittedSettings {
+    // Mirrors `VaultSettings::default()` (DESIGN §4.7): auto-lock
+    // off, 300s; clipboard-clear off, 30s. The numbers are the §4.7
+    // defaults — the state machine carries them across the dialog
+    // round trip but never depends on `VaultSettings::default()`
+    // directly so the tests stay grounded in observable values.
+    CommittedSettings::new(false, 300, false, 30)
+}
+
+fn save_not_committed_no_backup() -> PaladinError {
+    PaladinError::SaveNotCommitted {
+        committed: false,
+        backup_path: None,
+    }
+}
+
+fn save_not_committed_with_backup() -> PaladinError {
+    PaladinError::SaveNotCommitted {
+        committed: true,
+        backup_path: Some(PathBuf::from("/tmp/vault.bin.bak")),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Spinners clamp to AUTO_LOCK / CLIPBOARD_CLEAR bounds
+// ---------------------------------------------------------------------------
+
+#[test]
+fn clamp_auto_lock_secs_below_min_returns_min() {
+    assert_eq!(clamp_auto_lock_secs(0), AUTO_LOCK_SECS_MIN);
+    assert_eq!(
+        clamp_auto_lock_secs(AUTO_LOCK_SECS_MIN - 1),
+        AUTO_LOCK_SECS_MIN
+    );
+}
+
+#[test]
+fn clamp_auto_lock_secs_above_max_returns_max() {
+    assert_eq!(clamp_auto_lock_secs(u32::MAX), AUTO_LOCK_SECS_MAX);
+    assert_eq!(
+        clamp_auto_lock_secs(AUTO_LOCK_SECS_MAX + 1),
+        AUTO_LOCK_SECS_MAX
+    );
+}
+
+#[test]
+fn clamp_auto_lock_secs_in_range_unchanged() {
+    assert_eq!(clamp_auto_lock_secs(AUTO_LOCK_SECS_MIN), AUTO_LOCK_SECS_MIN);
+    assert_eq!(clamp_auto_lock_secs(AUTO_LOCK_SECS_MAX), AUTO_LOCK_SECS_MAX);
+    assert_eq!(clamp_auto_lock_secs(300), 300);
+}
+
+#[test]
+fn clamp_clipboard_clear_secs_below_min_returns_min() {
+    assert_eq!(clamp_clipboard_clear_secs(0), CLIPBOARD_CLEAR_SECS_MIN);
+    assert_eq!(
+        clamp_clipboard_clear_secs(CLIPBOARD_CLEAR_SECS_MIN - 1),
+        CLIPBOARD_CLEAR_SECS_MIN
+    );
+}
+
+#[test]
+fn clamp_clipboard_clear_secs_above_max_returns_max() {
+    assert_eq!(
+        clamp_clipboard_clear_secs(u32::MAX),
+        CLIPBOARD_CLEAR_SECS_MAX
+    );
+    assert_eq!(
+        clamp_clipboard_clear_secs(CLIPBOARD_CLEAR_SECS_MAX + 1),
+        CLIPBOARD_CLEAR_SECS_MAX
+    );
+}
+
+#[test]
+fn clamp_clipboard_clear_secs_in_range_unchanged() {
+    assert_eq!(
+        clamp_clipboard_clear_secs(CLIPBOARD_CLEAR_SECS_MIN),
+        CLIPBOARD_CLEAR_SECS_MIN
+    );
+    assert_eq!(
+        clamp_clipboard_clear_secs(CLIPBOARD_CLEAR_SECS_MAX),
+        CLIPBOARD_CLEAR_SECS_MAX
+    );
+    assert_eq!(clamp_clipboard_clear_secs(30), 30);
+}
+
+#[test]
+fn stage_auto_lock_secs_clamps_to_min() {
+    let mut state = SettingsState::new(defaults());
+    let returned = state.stage_auto_lock_secs(0);
+    assert_eq!(returned, AUTO_LOCK_SECS_MIN);
+    assert_eq!(state.visible_auto_lock_secs(), AUTO_LOCK_SECS_MIN);
+}
+
+#[test]
+fn stage_auto_lock_secs_clamps_to_max() {
+    let mut state = SettingsState::new(defaults());
+    let returned = state.stage_auto_lock_secs(u32::MAX);
+    assert_eq!(returned, AUTO_LOCK_SECS_MAX);
+    assert_eq!(state.visible_auto_lock_secs(), AUTO_LOCK_SECS_MAX);
+}
+
+#[test]
+fn stage_clipboard_clear_secs_clamps_to_min() {
+    let mut state = SettingsState::new(defaults());
+    let returned = state.stage_clipboard_clear_secs(0);
+    assert_eq!(returned, CLIPBOARD_CLEAR_SECS_MIN);
+    assert_eq!(
+        state.visible_clipboard_clear_secs(),
+        CLIPBOARD_CLEAR_SECS_MIN
+    );
+}
+
+#[test]
+fn stage_clipboard_clear_secs_clamps_to_max() {
+    let mut state = SettingsState::new(defaults());
+    let returned = state.stage_clipboard_clear_secs(u32::MAX);
+    assert_eq!(returned, CLIPBOARD_CLEAR_SECS_MAX);
+    assert_eq!(
+        state.visible_clipboard_clear_secs(),
+        CLIPBOARD_CLEAR_SECS_MAX
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Live-apply path runs `Vault::mutate_and_save` once per accepted change
+// (toggles fire immediately; spinners fire on debounce resolution)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn toggle_auto_lock_enabled_returns_save_request_when_value_changes() {
+    let mut state = SettingsState::new(defaults());
+    let outcome = state.toggle_auto_lock_enabled(true);
+
+    let ToggleOutcome::Save { patch, field } = outcome else {
+        panic!("expected Save, got {outcome:?}");
+    };
+    assert!(matches!(patch, SettingPatch::AutoLockEnabled(true)));
+    assert_eq!(field, SettingsField::AutoLockEnabled);
+}
+
+#[test]
+fn toggle_auto_lock_enabled_returns_noop_when_value_unchanged() {
+    let mut state = SettingsState::new(defaults());
+    // `defaults()` has auto-lock disabled.
+    let outcome = state.toggle_auto_lock_enabled(false);
+    assert!(matches!(outcome, ToggleOutcome::Noop));
+}
+
+#[test]
+fn toggle_clipboard_clear_enabled_returns_save_request_when_value_changes() {
+    let mut state = SettingsState::new(defaults());
+    let outcome = state.toggle_clipboard_clear_enabled(true);
+
+    let ToggleOutcome::Save { patch, field } = outcome else {
+        panic!("expected Save, got {outcome:?}");
+    };
+    assert!(matches!(patch, SettingPatch::ClipboardClearEnabled(true)));
+    assert_eq!(field, SettingsField::ClipboardClearEnabled);
+}
+
+#[test]
+fn toggle_clipboard_clear_enabled_returns_noop_when_value_unchanged() {
+    let mut state = SettingsState::new(defaults());
+    let outcome = state.toggle_clipboard_clear_enabled(false);
+    assert!(matches!(outcome, ToggleOutcome::Noop));
+}
+
+#[test]
+fn stage_spinner_does_not_fire_save_immediately() {
+    let mut state = SettingsState::new(defaults());
+    state.stage_auto_lock_secs(60);
+    // The state machine never starts the timer; the only way for a
+    // spinner to reach `mutate_and_save` is through
+    // `resolve_debounce` returning `Save`. So immediately after
+    // staging, the dialog has buffered a value but has not asked
+    // for a save.
+    let outcome = state.resolve_debounce();
+    let DebounceOutcome::Save { patch, field } = outcome else {
+        panic!("expected Save after debounce, got {outcome:?}");
+    };
+    assert!(matches!(patch, SettingPatch::AutoLockTimeoutSecs(60)));
+    assert_eq!(field, SettingsField::AutoLockSecs);
+}
+
+#[test]
+fn resolve_debounce_returns_idle_when_no_pending() {
+    let mut state = SettingsState::new(defaults());
+    assert!(matches!(state.resolve_debounce(), DebounceOutcome::Idle));
+}
+
+#[test]
+fn resolve_debounce_returns_idle_when_pending_matches_committed() {
+    let mut state = SettingsState::new(defaults());
+    // `defaults()` has auto_lock_secs = 300.
+    state.stage_auto_lock_secs(300);
+    assert!(matches!(state.resolve_debounce(), DebounceOutcome::Idle));
+}
+
+#[test]
+fn resolve_debounce_clears_pending_after_firing() {
+    let mut state = SettingsState::new(defaults());
+    state.stage_auto_lock_secs(60);
+    assert!(matches!(
+        state.resolve_debounce(),
+        DebounceOutcome::Save { .. }
+    ));
+    // A second tick with no further changes is idle.
+    assert!(matches!(state.resolve_debounce(), DebounceOutcome::Idle));
+}
+
+// ---------------------------------------------------------------------------
+// 500 ms debounce coalesces repeated spinner changes — only the most recent
+// buffered value reaches `mutate_and_save`
+// ---------------------------------------------------------------------------
+
+#[test]
+fn multiple_auto_lock_spinner_changes_coalesce_to_latest_on_debounce() {
+    let mut state = SettingsState::new(defaults());
+    state.stage_auto_lock_secs(60);
+    state.stage_auto_lock_secs(90);
+    state.stage_auto_lock_secs(120);
+
+    let outcome = state.resolve_debounce();
+    let DebounceOutcome::Save { patch, field } = outcome else {
+        panic!("expected Save, got {outcome:?}");
+    };
+    assert!(matches!(patch, SettingPatch::AutoLockTimeoutSecs(120)));
+    assert_eq!(field, SettingsField::AutoLockSecs);
+}
+
+#[test]
+fn multiple_clipboard_clear_spinner_changes_coalesce_to_latest_on_debounce() {
+    let mut state = SettingsState::new(defaults());
+    state.stage_clipboard_clear_secs(10);
+    state.stage_clipboard_clear_secs(15);
+    state.stage_clipboard_clear_secs(60);
+
+    let outcome = state.resolve_debounce();
+    let DebounceOutcome::Save { patch, field } = outcome else {
+        panic!("expected Save, got {outcome:?}");
+    };
+    assert!(matches!(patch, SettingPatch::ClipboardClearSecs(60)));
+    assert_eq!(field, SettingsField::ClipboardClearSecs);
+}
+
+#[test]
+fn switching_spinner_fields_during_debounce_replaces_pending() {
+    // The dialog only ever debounces a single pending spinner — the
+    // SettingsField changes when the user moves focus to the other
+    // row, and the prior pending is dropped (no orphaned save
+    // request for the previous row).
+    let mut state = SettingsState::new(defaults());
+    state.stage_auto_lock_secs(60);
+    state.stage_clipboard_clear_secs(60);
+
+    let outcome = state.resolve_debounce();
+    let DebounceOutcome::Save { patch, field } = outcome else {
+        panic!("expected Save, got {outcome:?}");
+    };
+    assert!(matches!(patch, SettingPatch::ClipboardClearSecs(60)));
+    assert_eq!(field, SettingsField::ClipboardClearSecs);
+}
+
+#[test]
+fn debounce_during_inflight_save_accumulates_for_next_tick() {
+    // Per the effect_ownership checklist bullet "Settings spinner
+    // debounce coalesces to the latest pre-save value when an
+    // effect is in flight." The state machine itself does not gate
+    // on in-flight effects (that's the AppModel's job); but the
+    // *coalescing* contract — that pending entries survive across
+    // an apply_save_result cycle and fire on the next debounce —
+    // is enforced here.
+    let mut state = SettingsState::new(defaults());
+
+    // First save fires for value 60.
+    state.stage_auto_lock_secs(60);
+    let DebounceOutcome::Save { .. } = state.resolve_debounce() else {
+        panic!("expected first Save");
+    };
+    state.apply_save_result(AcceptedChange::AutoLockSecs(60), Ok(()));
+
+    // User keeps typing during the save — pending accumulates.
+    state.stage_auto_lock_secs(90);
+    state.stage_auto_lock_secs(120);
+
+    // Next debounce fires the latest value once.
+    let outcome = state.resolve_debounce();
+    let DebounceOutcome::Save { patch, field } = outcome else {
+        panic!("expected Save, got {outcome:?}");
+    };
+    assert!(matches!(patch, SettingPatch::AutoLockTimeoutSecs(120)));
+    assert_eq!(field, SettingsField::AutoLockSecs);
+}
+
+// ---------------------------------------------------------------------------
+// `save_not_committed` reverts the visible widget value to the last committed
+// state
+// ---------------------------------------------------------------------------
+
+#[test]
+fn apply_save_not_committed_reverts_auto_lock_secs_to_committed() {
+    let mut state = SettingsState::new(defaults());
+
+    state.stage_auto_lock_secs(60);
+    let _ = state.resolve_debounce();
+
+    let outcome = state.apply_save_result(
+        AcceptedChange::AutoLockSecs(60),
+        Err(save_not_committed_no_backup()),
+    );
+
+    let SaveOutcome::Rollback { error, field } = outcome else {
+        panic!("expected Rollback, got {outcome:?}");
+    };
+    assert_eq!(error.kind, ErrorKind::SaveNotCommitted);
+    assert_eq!(field, SettingsField::AutoLockSecs);
+
+    // The visible value reverts to the last committed state (300s).
+    assert_eq!(state.visible_auto_lock_secs(), 300);
+    assert_eq!(state.committed().auto_lock_secs(), 300);
+}
+
+#[test]
+fn apply_save_not_committed_reverts_auto_lock_enabled_to_committed() {
+    let mut state = SettingsState::new(defaults());
+    let _ = state.toggle_auto_lock_enabled(true);
+
+    let outcome = state.apply_save_result(
+        AcceptedChange::AutoLockEnabled(true),
+        Err(save_not_committed_with_backup()),
+    );
+
+    let SaveOutcome::Rollback { error, field } = outcome else {
+        panic!("expected Rollback, got {outcome:?}");
+    };
+    assert_eq!(error.kind, ErrorKind::SaveNotCommitted);
+    assert_eq!(field, SettingsField::AutoLockEnabled);
+
+    // Committed remains disabled (false) — toggle reverts.
+    assert!(!state.committed().auto_lock_enabled());
+}
+
+#[test]
+fn apply_save_not_committed_reverts_clipboard_clear_secs_to_committed() {
+    let mut state = SettingsState::new(defaults());
+    state.stage_clipboard_clear_secs(60);
+    let _ = state.resolve_debounce();
+
+    let outcome = state.apply_save_result(
+        AcceptedChange::ClipboardClearSecs(60),
+        Err(save_not_committed_no_backup()),
+    );
+
+    let SaveOutcome::Rollback { error, field } = outcome else {
+        panic!("expected Rollback, got {outcome:?}");
+    };
+    assert_eq!(error.kind, ErrorKind::SaveNotCommitted);
+    assert_eq!(field, SettingsField::ClipboardClearSecs);
+
+    assert_eq!(state.committed().clipboard_clear_secs(), 30);
+}
+
+#[test]
+fn apply_save_not_committed_reverts_clipboard_clear_enabled_to_committed() {
+    let mut state = SettingsState::new(defaults());
+    let _ = state.toggle_clipboard_clear_enabled(true);
+
+    let outcome = state.apply_save_result(
+        AcceptedChange::ClipboardClearEnabled(true),
+        Err(save_not_committed_no_backup()),
+    );
+
+    let SaveOutcome::Rollback { error, field } = outcome else {
+        panic!("expected Rollback, got {outcome:?}");
+    };
+    assert_eq!(error.kind, ErrorKind::SaveNotCommitted);
+    assert_eq!(field, SettingsField::ClipboardClearEnabled);
+
+    assert!(!state.committed().clipboard_clear_enabled());
+}
+
+// ---------------------------------------------------------------------------
+// `save_durability_unconfirmed` keeps the new value visible and attaches the
+// warning to the changed row
+// ---------------------------------------------------------------------------
+
+#[test]
+fn apply_save_durability_unconfirmed_keeps_auto_lock_secs_visible_with_warning() {
+    let mut state = SettingsState::new(defaults());
+    state.stage_auto_lock_secs(60);
+    let _ = state.resolve_debounce();
+
+    let outcome = state.apply_save_result(
+        AcceptedChange::AutoLockSecs(60),
+        Err(PaladinError::SaveDurabilityUnconfirmed),
+    );
+
+    let SaveOutcome::DurabilityWarning { warning, field } = outcome else {
+        panic!("expected DurabilityWarning, got {outcome:?}");
+    };
+    assert_eq!(warning.kind, ErrorKind::SaveDurabilityUnconfirmed);
+    // The warning attaches to the row whose value was just saved.
+    assert_eq!(field, SettingsField::AutoLockSecs);
+    // File is on disk — committed reflects the new value.
+    assert_eq!(state.committed().auto_lock_secs(), 60);
+    assert_eq!(state.visible_auto_lock_secs(), 60);
+}
+
+#[test]
+fn apply_save_durability_unconfirmed_keeps_clipboard_clear_secs_visible_with_warning() {
+    let mut state = SettingsState::new(defaults());
+    state.stage_clipboard_clear_secs(60);
+    let _ = state.resolve_debounce();
+
+    let outcome = state.apply_save_result(
+        AcceptedChange::ClipboardClearSecs(60),
+        Err(PaladinError::SaveDurabilityUnconfirmed),
+    );
+
+    let SaveOutcome::DurabilityWarning { warning, field } = outcome else {
+        panic!("expected DurabilityWarning, got {outcome:?}");
+    };
+    assert_eq!(warning.kind, ErrorKind::SaveDurabilityUnconfirmed);
+    assert_eq!(field, SettingsField::ClipboardClearSecs);
+    assert_eq!(state.committed().clipboard_clear_secs(), 60);
+}
+
+#[test]
+fn apply_save_durability_unconfirmed_keeps_auto_lock_enabled_visible_with_warning() {
+    let mut state = SettingsState::new(defaults());
+    let _ = state.toggle_auto_lock_enabled(true);
+
+    let outcome = state.apply_save_result(
+        AcceptedChange::AutoLockEnabled(true),
+        Err(PaladinError::SaveDurabilityUnconfirmed),
+    );
+
+    let SaveOutcome::DurabilityWarning { warning, field } = outcome else {
+        panic!("expected DurabilityWarning, got {outcome:?}");
+    };
+    assert_eq!(warning.kind, ErrorKind::SaveDurabilityUnconfirmed);
+    assert_eq!(field, SettingsField::AutoLockEnabled);
+    assert!(state.committed().auto_lock_enabled());
+}
+
+// ---------------------------------------------------------------------------
+// Apply save success — committed promotes to the attempted value
+// ---------------------------------------------------------------------------
+
+#[test]
+fn apply_save_success_promotes_auto_lock_secs_to_committed() {
+    let mut state = SettingsState::new(defaults());
+    state.stage_auto_lock_secs(60);
+    let _ = state.resolve_debounce();
+
+    let outcome = state.apply_save_result(AcceptedChange::AutoLockSecs(60), Ok(()));
+    assert!(matches!(outcome, SaveOutcome::Success));
+    assert_eq!(state.committed().auto_lock_secs(), 60);
+    assert_eq!(state.visible_auto_lock_secs(), 60);
+}
+
+#[test]
+fn apply_save_success_promotes_clipboard_clear_enabled_to_committed() {
+    let mut state = SettingsState::new(defaults());
+    let _ = state.toggle_clipboard_clear_enabled(true);
+
+    let outcome = state.apply_save_result(AcceptedChange::ClipboardClearEnabled(true), Ok(()));
+    assert!(matches!(outcome, SaveOutcome::Success));
+    assert!(state.committed().clipboard_clear_enabled());
+}
+
+// ---------------------------------------------------------------------------
+// Apply other typed errors — visible value rolls back, inline error attached
+// ---------------------------------------------------------------------------
+
+#[test]
+fn apply_save_io_error_routes_to_inline_and_rolls_back_visible_value() {
+    let mut state = SettingsState::new(defaults());
+    state.stage_auto_lock_secs(60);
+    let _ = state.resolve_debounce();
+
+    let err = PaladinError::IoError {
+        operation: "vault_save",
+        source: std::io::Error::other("disk full"),
+    };
+    let outcome = state.apply_save_result(AcceptedChange::AutoLockSecs(60), Err(err));
+
+    let SaveOutcome::Inline { error, field } = outcome else {
+        panic!("expected Inline, got {outcome:?}");
+    };
+    assert_eq!(error.kind, ErrorKind::IoError);
+    assert_eq!(field, SettingsField::AutoLockSecs);
+
+    // Inline errors are non-mutating from the dialog's perspective —
+    // the on-disk file did not change, so the committed reverts.
+    assert_eq!(state.committed().auto_lock_secs(), 300);
+}

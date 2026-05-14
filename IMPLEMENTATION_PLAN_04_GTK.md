@@ -945,17 +945,17 @@ These run without a display server. Each lives under
 
 #### `tests/settings_logic.rs`
 
-- [ ] Live-apply path runs `Vault::mutate_and_save` once per
+- [x] Live-apply path runs `Vault::mutate_and_save` once per
   accepted change.
-- [ ] Spinners clamp to
+- [x] Spinners clamp to
   `paladin_core::AUTO_LOCK_SECS_MIN..=paladin_core::AUTO_LOCK_SECS_MAX`
   and
   `paladin_core::CLIPBOARD_CLEAR_SECS_MIN..=paladin_core::CLIPBOARD_CLEAR_SECS_MAX`.
-- [ ] 500 ms debounce coalesces repeated spinner changes so only
+- [x] 500 ms debounce coalesces repeated spinner changes so only
   the most recent buffered value reaches `mutate_and_save`.
-- [ ] `save_not_committed` reverts the visible widget value to the
+- [x] `save_not_committed` reverts the visible widget value to the
   last committed state.
-- [ ] `save_durability_unconfirmed` keeps the new value visible and
+- [x] `save_durability_unconfirmed` keeps the new value visible and
   attaches the warning to the changed `AdwPreferencesGroup` row
   inside the `AdwPreferencesDialog`.
 

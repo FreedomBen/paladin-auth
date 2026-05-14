@@ -32,6 +32,7 @@ pub mod qr_clipboard;
 pub mod rename_dialog;
 pub mod search;
 pub mod secret_fields;
+pub mod settings;
 pub mod startup_error;
 
 /// Run the `paladin-gtk` binary.
