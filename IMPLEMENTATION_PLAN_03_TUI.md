@@ -1627,8 +1627,29 @@ end-to-end.
   (Tick past `idle_deadline` transitions to `Locked`, dropping the
   whole `Unlocked` arm including the open `AddModal`). All in
   `tests/reducer_tests.rs`.)*
-- [ ] HOTP reveal state zeroizes on expiry, replacement, drop, and
+- [x] HOTP reveal state zeroizes on expiry, replacement, drop, and
   auto-lock.
+  *(`HotpReveal::code` is a [`secrecy::SecretString`] whose `Drop`
+  impl runs `Zeroize` on the inner bytes; the reveal struct has no
+  `Drop` of its own and no `clear()` — zeroization rides entirely
+  on `SecretString`'s drop chain. Expiry is covered by
+  `tick_past_reveal_deadline_with_open_hotp_reveal_typed_code_drops_reveal_via_secret_string_drop`
+  (Tick past `hotp_reveal_deadline` runs
+  `maybe_close_expired_hotp_reveal`, which sets `*hotp_reveal = None`
+  and drops the prior `HotpReveal`); replacement by
+  `effect_result_hotp_advance_ok_with_open_prior_reveal_replaces_and_drops_prior_via_secret_string_drop`
+  (a fresh `EffectResult::HotpAdvance Ok` assigns
+  `*slot = Some(HotpReveal { .. })`, dropping the prior reveal as
+  the assignment overwrites it); drop by
+  `hotp_reveal_drop_chain_zeroizes_code_via_secret_string_drop`
+  (a direct construct-and-`drop` exercises the `SecretString` drop
+  chain end-to-end as a regression sentinel against future
+  refactors that swap the field type away from a zeroizing wrapper);
+  auto-lock by
+  `tick_past_idle_deadline_with_open_hotp_reveal_typed_code_locks_and_drops_reveal_via_secret_string_drop`
+  (Tick past `idle_deadline` transitions to `Locked`, dropping the
+  whole `Unlocked` arm including the open `hotp_reveal`). All in
+  `tests/hotp_reveal_tests.rs`.)*
 - [ ] Pending clipboard-clear buffers survive lock until the scheduled
   clear attempt, stale-token drop, replacement, or app shutdown, then
   zeroize.

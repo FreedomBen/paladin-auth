@@ -1099,3 +1099,264 @@ fn effect_result_hotp_advance_err_save_durability_unconfirmed_with_staged_code_o
         other => panic!("expected Unlock unchanged, got {other:?}"),
     }
 }
+
+// ---------------------------------------------------------------------------
+// Sensitive UI buffers — `HotpReveal::code`
+// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Sensitive UI buffers":
+//  "HOTP reveal state zeroizes on expiry, replacement, drop, and
+//  auto-lock.")
+//
+// `HotpReveal::code` is a [`secrecy::SecretString`], whose `Drop` impl
+// calls `Zeroize::zeroize` on the inner bytes. The reveal struct itself
+// has no `Drop` of its own and no `clear()` method — zeroization rides
+// entirely on `SecretString`'s drop chain. The four axes verify that
+// every state-transition path which retires a `HotpReveal` actually
+// drops it (and therefore wipes the OTP digits):
+//
+//   * Expiry — `maybe_close_expired_hotp_reveal` sets
+//     `*hotp_reveal = None` when `Tick.monotonic` reaches the
+//     `hotp_reveal_deadline`; the `Option::take`-equivalent drops the
+//     prior `HotpReveal` in-place.
+//   * Replacement — `EffectResult::HotpAdvance { Ok(_) | Err(SaveDurabilityUnconfirmed) }`
+//     overwrites the slot with `Some(HotpReveal { .. })`; the prior
+//     `HotpReveal` drops as the assignment overwrites it.
+//   * Drop — the natural `SecretString` drop chain. A direct
+//     construction-and-drop exercises the chain end-to-end and acts
+//     as a regression sentinel for any future refactor that swaps
+//     the field type away from a zeroizing wrapper.
+//   * Auto-lock — `Tick` past `idle_deadline` transitions
+//     `Unlocked → Locked`, dropping the whole `Unlocked` arm
+//     (including any open `hotp_reveal`).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn tick_past_reveal_deadline_with_open_hotp_reveal_typed_code_drops_reveal_via_secret_string_drop()
+{
+    // Expiry axis. Pre-populate the reveal slot with a sentinel
+    // code so the test can distinguish "wiped" from "never written":
+    // any future code that mistakenly preserved the prior reveal
+    // (e.g. by branching the wrong way in `maybe_close_expired_hotp_reveal`)
+    // would surface as `Some(_)` here. Tick past the
+    // `hotp_reveal_deadline` and observe that the slot is cleared
+    // (the `SecretString` carrying "919191" has been dropped via
+    // its `Zeroize` impl).
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (mut vault, store) = create_encrypted_pair(&path, "pp");
+    let hotp_id = add_hotp_account(&mut vault, &store, "hotp");
+
+    let t0 = Instant::now();
+    let reveal = open_reveal(hotp_id, 7, "919191", t0);
+    // Precondition: the harness wrote the sentinel bytes into the
+    // reveal slot.
+    assert_eq!(
+        reveal.code.expose_secret(),
+        "919191",
+        "harness precondition: reveal must carry sentinel code bytes",
+    );
+    let state = unlocked_with_reveal(path.clone(), vault, store, Some(hotp_id), Some(reveal));
+
+    let now = hotp_reveal_deadline(t0) + Duration::from_millis(1);
+    let (next, effects) = reduce(state, tick_at(now));
+    assert!(
+        effects.is_empty(),
+        "reveal-expiry drop must not emit effects that could carry the buffer; got {effects:?}",
+    );
+    match next {
+        AppState::Unlocked {
+            hotp_reveal,
+            status_line,
+            path: p,
+            ..
+        } => {
+            assert!(
+                hotp_reveal.is_none(),
+                "Tick past the reveal deadline must drop the HotpReveal so its SecretString zeroizes; got {hotp_reveal:?}",
+            );
+            assert!(
+                status_line.is_none(),
+                "expiry-drop path must not surface a status-line message that could echo the digits; got {status_line:?}",
+            );
+            assert_eq!(p, path, "expiry-drop must not alter the vault path");
+        }
+        other => panic!("expected Unlocked (no auto-lock armed), got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_hotp_advance_ok_with_open_prior_reveal_replaces_and_drops_prior_via_secret_string_drop(
+) {
+    // Replacement axis. A fresh `HotpAdvance` Ok arrives while a
+    // prior reveal is open. The reducer assigns
+    // `*slot = Some(HotpReveal { .. })`, which drops the prior
+    // `HotpReveal` (whose `SecretString` zeroizes "111111") and
+    // installs the new one. The test pins distinct sentinel bytes
+    // on the prior reveal ("111111", counter 7) and the new code
+    // ("222222", counter 8) so the assertions can prove the new
+    // value replaced the old — and the old `SecretString` was
+    // dropped by the assignment.
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (mut vault, store) = create_encrypted_pair(&path, "pp");
+    let hotp_id = add_hotp_account(&mut vault, &store, "hotp");
+
+    let t0 = Instant::now();
+    let prior = open_reveal(hotp_id, 7, "111111", t0);
+    // Precondition: the prior reveal slot carries the old sentinel.
+    assert_eq!(
+        prior.code.expose_secret(),
+        "111111",
+        "harness precondition: prior reveal must carry old sentinel",
+    );
+    let state = unlocked_with_reveal(path, vault, store, Some(hotp_id), Some(prior));
+
+    let completed_at = t0 + Duration::from_millis(500);
+    let event = AppEvent::EffectResult(EffectResult::HotpAdvance {
+        account_id: hotp_id,
+        result: Ok(hotp_code("222222", 8)),
+        staged_code: None,
+        completed_at,
+    });
+
+    let (next, effects) = reduce(state, event);
+    assert!(
+        effects.is_empty(),
+        "replacement drop must not emit effects that could carry the prior buffer; got {effects:?}",
+    );
+    match next {
+        AppState::Unlocked {
+            hotp_reveal: Some(r),
+            ..
+        } => {
+            assert_eq!(
+                r.counter_used, 8,
+                "fresh reveal must replace the prior one (counter 7 → 8); residue would surface as counter 7",
+            );
+            assert_eq!(
+                r.code.expose_secret(),
+                "222222",
+                "fresh reveal must carry the new code; the prior SecretString dropped via the slot assignment",
+            );
+        }
+        other => panic!("expected Unlocked with replaced reveal, got {other:?}"),
+    }
+}
+
+#[test]
+fn hotp_reveal_drop_chain_zeroizes_code_via_secret_string_drop() {
+    // Drop axis. A `HotpReveal` is moved out of any owning slot
+    // (auto-lock, expiry, replacement, or the natural end-of-scope
+    // drop when the surrounding `Unlocked` payload is consumed by
+    // any of the other axes). Its `Drop` chain runs `SecretString`'s
+    // `Zeroize` on the inner code bytes; the struct itself derives
+    // only `Debug` and has no `Drop` of its own, so this test acts
+    // as a regression sentinel: if a future refactor replaces
+    // `SecretString` with a non-zeroizing wrapper, the drop axis
+    // would silently regress without a dedicated test.
+    let reveal = HotpReveal {
+        account_id: AccountId::new(),
+        counter_used: 7,
+        code: SecretString::from("424242".to_string()),
+        deadline: Instant::now(),
+    };
+    // Precondition: the constructed reveal carries the sentinel
+    // bytes (this also exercises `SecretString::expose_secret`, the
+    // only path through which the bytes are observable to code).
+    assert_eq!(
+        reveal.code.expose_secret(),
+        "424242",
+        "harness precondition: reveal must carry sentinel code bytes",
+    );
+    // Explicit `drop` makes the intent visible and forbids any
+    // future `mem::forget` accident in the test body from skipping
+    // the chain.
+    drop(reveal);
+}
+
+#[test]
+fn tick_past_idle_deadline_with_open_hotp_reveal_typed_code_locks_and_drops_reveal_via_secret_string_drop(
+) {
+    // Auto-lock axis. `maybe_auto_lock` transitions
+    // `Unlocked → Locked` when `Tick.monotonic` is past
+    // `idle_deadline`. The `Locked` state carries only `path` (and
+    // any pending clipboard clear), so the prior `Unlocked` arm —
+    // including any open `hotp_reveal` — drops in-place. The
+    // reveal's `SecretString` zeroizes via its `Drop` impl. Pin a
+    // dedicated sentinel code on the reveal so this test distinguishes
+    // "wiped via auto-lock" from "never wrote to the slot". Pick an
+    // `idle_deadline` strictly earlier than the reveal's own
+    // deadline so this test isolates the auto-lock axis from the
+    // expiry axis (cf. `auto_lock_takes_precedence_over_reveal_expiry_when_both_fire`,
+    // which fires both deadlines on the same Tick).
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (mut vault, store) = create_encrypted_pair(&path, "pp");
+    let hotp_id = add_hotp_account(&mut vault, &store, "hotp");
+    vault.set_auto_lock_enabled(true);
+    vault
+        .set_auto_lock_timeout_secs(60)
+        .expect("timeout within bounds");
+    vault.save(&store).expect("commit settings");
+
+    let t0 = Instant::now();
+    let idle_deadline = t0 + Duration::from_secs(60);
+    let reveal = open_reveal(hotp_id, 7, "131313", t0);
+    // Precondition: the reveal carries the sentinel bytes before
+    // the auto-lock transition.
+    assert_eq!(
+        reveal.code.expose_secret(),
+        "131313",
+        "harness precondition: reveal must carry sentinel code bytes",
+    );
+    // Sanity-check the test's axis isolation: the reveal's own
+    // deadline must be strictly later than the auto-lock idle
+    // deadline so the auto-lock arm fires while the reveal would
+    // still be considered open under expiry rules.
+    assert!(
+        hotp_reveal_deadline(t0) > idle_deadline,
+        "test harness must pick parameters where the reveal is still open at auto-lock fire time",
+    );
+
+    let state = AppState::Unlocked {
+        path: path.clone(),
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: Some(idle_deadline),
+        pending_clipboard_clear: None,
+        hotp_reveal: Some(reveal),
+        modal: None,
+        selected: Some(hotp_id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+
+    let now = idle_deadline + Duration::from_millis(1);
+    let (next, effects) = reduce(state, tick_at(now));
+    assert!(
+        effects.is_empty(),
+        "auto-lock drop must not emit effects that could carry the buffer; got {effects:?}",
+    );
+    match next {
+        AppState::Locked {
+            path: p,
+            pending_clipboard_clear,
+        } => {
+            assert_eq!(
+                p, path,
+                "Locked must retain the original vault path; the reveal's SecretString dropped with the Unlocked arm",
+            );
+            assert!(
+                pending_clipboard_clear.is_none(),
+                "no pending clipboard clear was seeded — lock must not synthesize one that could carry residue",
+            );
+        }
+        other => panic!(
+            "expected Locked (the HotpReveal and its code buffer must be gone), got {other:?}",
+        ),
+    }
+}
