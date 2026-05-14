@@ -826,29 +826,29 @@ These run without a display server. Each lives under
 
 #### `tests/init_dialog_logic.rs`
 
-- [ ] Plaintext vs encrypted routing: both passphrase fields empty
+- [x] Plaintext vs encrypted routing: both passphrase fields empty
   selects plaintext; non-empty selects encrypted.
-- [ ] Twice-confirm match accepts encrypted submission.
-- [ ] One-empty / mismatched encrypted entries reject inline with
+- [x] Twice-confirm match accepts encrypted submission.
+- [x] One-empty / mismatched encrypted entries reject inline with
   `invalid_passphrase` (`reason: "confirmation_mismatch"`).
-- [ ] Plaintext-warning gate must be ticked before submission is
+- [x] Plaintext-warning gate must be ticked before submission is
   enabled; the rendered text matches
   `paladin_core::format_plaintext_storage_warning()` verbatim.
-- [ ] `paladin_core::classify_init_precheck` routing:
+- [x] `paladin_core::classify_init_precheck` routing:
   `InitPrecheck::Clear` opens the normal create path,
   `InitPrecheck::Existing` opens the destructive-confirmation gate,
   `InitPrecheck::Propagate` shows an inline error.
-- [ ] `vault_exists` returned by `create` after a `Clear` precheck
+- [x] `vault_exists` returned by `create` after a `Clear` precheck
   (race) opens the destructive-confirmation gate worded by
   `paladin_core::format_init_force_warning(existing_path)`.
-- [ ] Confirming the destructive gate routes through
+- [x] Confirming the destructive gate routes through
   `paladin_core::create_force` and consumes the pending
   `VaultInit`.
-- [ ] Cancelling the destructive gate leaves the existing vault
+- [x] Cancelling the destructive gate leaves the existing vault
   intact and zeroizes the pending `VaultInit`.
-- [ ] `unsafe_permissions` from `create` / `create_force` routes
+- [x] `unsafe_permissions` from `create` / `create_force` routes
   back to inline errors (does not transition out of the dialog).
-- [ ] `save_not_committed` and `save_durability_unconfirmed` from
+- [x] `save_not_committed` and `save_durability_unconfirmed` from
   `create` / `create_force` stay inline; `save_not_committed`
   carries the `backup_path` field on the `create_force` path when
   the failure occurs after backup rotation.
