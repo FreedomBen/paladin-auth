@@ -19,6 +19,7 @@
 
 use std::process::ExitCode;
 
+pub mod app;
 pub mod auto_lock;
 pub mod cli;
 pub mod clipboard_clear;
