@@ -18,16 +18,21 @@
 //! `--no-color` × styled-color matrix lands when the list view's
 //! search highlighting needs it.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use ratatui::Terminal;
 
-use paladin_core::{format_unsafe_permissions, PaladinError, PermissionSubject};
-use paladin_tui::app::state::AppState;
+use paladin_core::{
+    format_unsafe_permissions, PaladinError, PermissionSubject, Store, VaultInit, VaultLock,
+};
+use paladin_tui::app::state::{AppState, Focus};
 use paladin_tui::prompt::PassphraseBuffer;
 use paladin_tui::view::render;
+
+mod common;
+use common::secure_test_tempdir;
 
 /// Draw `state` into an `width × height` [`TestBackend`] and return
 /// the resulting text grid (one line per row, cell symbols only).
@@ -96,6 +101,52 @@ fn snapshot_unlock_screen_with_wrong_passphrase_error() {
         path: PathBuf::from("/var/lib/paladin/vault.bin"),
         error: Some(PaladinError::DecryptFailed.to_string()),
         passphrase: PassphraseBuffer::new(),
+    };
+    insta::assert_snapshot!(render_to_text(&state, 80, 12));
+}
+
+/// Create an empty plaintext vault at `path` and commit it to disk so a
+/// subsequent `Store::open(_, VaultLock::Plaintext)` reopens an
+/// `Unlocked`-able vault. Mirrors the helper in
+/// `crates/paladin-tui/tests/effect_tests.rs` — duplicated locally
+/// because integration-test crates do not share helper code.
+fn create_plaintext_vault(path: &Path) {
+    let (vault, store) = Store::create(path, VaultInit::Plaintext).expect("create vault");
+    vault.save(&store).expect("commit initial vault");
+}
+
+#[test]
+fn snapshot_list_view_empty() {
+    // Plan L1711: "Empty vault list view." Construct an `Unlocked`
+    // AppState backed by a freshly-created empty plaintext vault so
+    // the renderer exercises the no-accounts branch (an empty rows
+    // pane) while still drawing the surrounding chrome — title bar,
+    // search line, separators, bottom keybinding hint — per
+    // `DESIGN.md` §6's list-view layout.
+    //
+    // The vault path itself does not appear in the list view (per the
+    // §6 mock), so the tempdir-backed path stays out of the rendered
+    // snapshot grid and keeps the snapshot deterministic across hosts.
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
     };
     insta::assert_snapshot!(render_to_text(&state, 80, 12));
 }

@@ -1708,7 +1708,22 @@ end-to-end.
 
 Layout / list views:
 
-- [ ] Empty vault list view.
+- [x] Empty vault list view.
+  *(`crates/paladin-tui/src/view/list.rs` renders the §6 single-screen
+  list layout — a bordered `Paladin` block holding the `Search:`
+  line, a horizontal divider, the rows pane, a second divider, and
+  the `[↑↓] move  [enter] copy  [n] next-HOTP  [a] add  [/] find`
+  hint flush with the bottom border. When `vault.iter()` is empty the
+  rows pane shows a centered `No accounts. Press `a` to add one.`
+  prompt so a user landing on a fresh vault sees the add keybinding.
+  `snapshot_list_view_empty` in `tests/view_snapshots.rs` constructs
+  the state from a temp-backed plaintext vault (`secure_test_tempdir`
+  + `Store::create(_, VaultInit::Plaintext)`) and locks the rendered
+  grid in
+  `tests/snapshots/view_snapshots__snapshot_list_view_empty.snap`;
+  the vault path itself is not rendered on the list view, so the
+  tempdir-backed path stays out of the snapshot grid and the
+  snapshot stays deterministic across hosts.)*
 - [ ] Single-TOTP list view.
 - [ ] Mixed TOTP / HOTP list view with hidden + revealed rows.
 - [ ] Search-active list view.

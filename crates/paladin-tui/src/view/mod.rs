@@ -16,6 +16,7 @@
 //! HOTP reveal labels, status-line states, and search highlighting),
 //! then modals and overlays.
 
+pub mod list;
 pub mod missing_vault;
 pub mod startup_error;
 pub mod unlock;
@@ -43,13 +44,13 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState) {
         } => {
             unlock::render(frame, path, error.as_deref(), passphrase);
         }
-        AppState::Locked { .. } | AppState::Unlocked { .. } => {
-            // Renderers land in subsequent slices. `Locked` re-uses
-            // the unlock screen with an empty passphrase on the next
-            // unlock attempt; the in-state-machine handoff
-            // (Locked → Unlock on first keystroke) is reducer
-            // territory and lands alongside the auto-lock re-unlock
-            // slice.
+        AppState::Unlocked { .. } => list::render(frame, state),
+        AppState::Locked { .. } => {
+            // Renderer lands alongside the auto-lock re-unlock slice:
+            // `Locked` re-uses the unlock screen with an empty
+            // passphrase on the next unlock attempt, and the
+            // in-state-machine `Locked → Unlock` handoff on the first
+            // keystroke is reducer territory.
         }
     }
 }
