@@ -459,6 +459,53 @@ pub enum EffectResult {
         /// inline rendering.
         result: Result<(), PaladinError>,
     },
+
+    /// Outcome of an `Effect::PassphraseSet` / `PassphraseChange` /
+    /// `PassphraseRemove` attempt.
+    ///
+    /// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Passphrase:
+    /// *"The transition methods (`set_passphrase` / `change_passphrase` /
+    /// `remove_passphrase`) save themselves through `&Store` and handle
+    /// their own pre-commit rollback per DESIGN §4.5 (the in-memory
+    /// mode/key reverts to its previous state on `save_not_committed`
+    /// and is replaced on `save_durability_unconfirmed`); the TUI
+    /// surfaces both failure classes inline, re-reads
+    /// `Vault::is_encrypted()` to refresh its visible vault-mode flag
+    /// (unchanged on `save_not_committed`, changed on
+    /// `save_durability_unconfirmed`), and otherwise leaves the
+    /// in-memory vault as the core left it."*
+    ///
+    /// On `Ok(())` while
+    /// [`crate::app::state::AppState::Unlocked`] with
+    /// [`crate::app::state::Modal::Passphrase`] open, the reducer
+    /// closes the modal and publishes a
+    /// [`crate::app::state::StatusLine::Confirmation`] — per
+    /// `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" >
+    /// "Successful modal outcomes": *"manual Add, URI Add, Remove,
+    /// Rename, Export, Passphrase, and Settings close the modal and
+    /// publish a status-line confirmation."*
+    ///
+    /// On any `Err(...)` the modal stays open and the rendered error
+    /// is stashed in [`crate::app::state::PassphraseModal::error`];
+    /// the reducer does not mutate vault state (core has already
+    /// applied any rollback) and does not inspect private key / cache
+    /// material — the visible vault-mode flag is read back through
+    /// [`paladin_core::Vault::is_encrypted`] alongside other view-only
+    /// projections.
+    ///
+    /// Results delivered while not on
+    /// [`crate::app::state::AppState::Unlocked`], while a different
+    /// modal is open, or after the Passphrase modal closed are
+    /// discarded so the carried error drops without mutating state.
+    Passphrase {
+        /// The `Vault::set_passphrase` / `change_passphrase` /
+        /// `remove_passphrase` outcome. `Ok(())` indicates the
+        /// transition persisted; on `Err(...)` core has already
+        /// rolled back the in-memory snapshot on `save_not_committed`
+        /// or left the new mode/key committed on
+        /// `save_durability_unconfirmed`.
+        result: Result<(), PaladinError>,
+    },
 }
 
 /// Successful outcome of an [`Effect::Add`] attempt.

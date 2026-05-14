@@ -273,6 +273,7 @@ fn reduce_effect_result(state: AppState, result: EffectResult) -> (AppState, Vec
         EffectResult::QrImport { result } => reduce_qr_import_result(state, result),
         EffectResult::Import { result } => reduce_import_result(state, result),
         EffectResult::Export { result } => reduce_export_result(state, result),
+        EffectResult::Passphrase { result } => reduce_passphrase_result(state, result),
     }
 }
 
@@ -655,6 +656,69 @@ fn reduce_settings_result(
         }
         Err(err) => {
             settings.error = Some(render_error_message(&err));
+        }
+    }
+    (state, Vec::new())
+}
+
+/// Handle the outcome of an `Effect::PassphraseSet` /
+/// `PassphraseChange` / `PassphraseRemove`.
+///
+/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Passphrase:
+/// *"The transition methods (`set_passphrase` / `change_passphrase` /
+/// `remove_passphrase`) save themselves through `&Store` and handle
+/// their own pre-commit rollback per DESIGN §4.5 (the in-memory
+/// mode/key reverts to its previous state on `save_not_committed` and
+/// is replaced on `save_durability_unconfirmed`); the TUI surfaces
+/// both failure classes inline, re-reads `Vault::is_encrypted()` to
+/// refresh its visible vault-mode flag (unchanged on
+/// `save_not_committed`, changed on `save_durability_unconfirmed`),
+/// and otherwise leaves the in-memory vault as the core left it."*
+///
+/// On `Ok(())` the reducer closes the modal and publishes a
+/// [`StatusLine::Confirmation`] — per the plan's "Successful modal
+/// outcomes": *"manual Add, URI Add, Remove, Rename, Export,
+/// Passphrase, and Settings close the modal and publish a status-line
+/// confirmation."* Sub-flow-specific confirmation wording lands with
+/// the dedicated Ok-arm slice.
+///
+/// On any `Err(...)` the modal stays open and the rendered error is
+/// stashed in [`crate::app::state::PassphraseModal::error`]; the
+/// reducer does **not** mutate the vault (core owns the rollback
+/// semantics on the `save_not_committed` / `save_durability_unconfirmed`
+/// classes) and does **not** inspect private key / cache material —
+/// the visible vault-mode flag is read back through
+/// [`paladin_core::Vault::is_encrypted`] alongside other view-only
+/// projections. The status line is left untouched so every
+/// transition / writer / save error stays inline on the modal.
+///
+/// Deliveries that arrive after the user navigated away (auto-lock,
+/// non-`Unlocked` state) or after the Passphrase modal closed are
+/// discarded so the carried error drops without mutating state.
+fn reduce_passphrase_result(
+    mut state: AppState,
+    result: Result<(), PaladinError>,
+) -> (AppState, Vec<Effect>) {
+    let AppState::Unlocked {
+        ref mut modal,
+        ref mut status_line,
+        ..
+    } = state
+    else {
+        return (state, Vec::new());
+    };
+
+    let Some(Modal::Passphrase(passphrase)) = modal.as_mut() else {
+        return (state, Vec::new());
+    };
+
+    match result {
+        Ok(()) => {
+            *modal = None;
+            *status_line = Some(StatusLine::Confirmation("Passphrase updated.".to_string()));
+        }
+        Err(err) => {
+            passphrase.error = Some(render_error_message(&err));
         }
     }
     (state, Vec::new())

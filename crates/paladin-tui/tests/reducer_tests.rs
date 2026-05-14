@@ -19410,3 +19410,187 @@ fn tick_past_idle_deadline_with_open_export_modal_typed_passphrases_locks_and_dr
         other => panic!("expected AppState::Locked after Tick past idle_deadline, got {other:?}"),
     }
 }
+
+// ---------------------------------------------------------------------------
+// Passphrase modal pre-commit save rollback (IMPLEMENTATION_PLAN_03_TUI.md
+// L1450).
+//
+// The transition methods (`Vault::set_passphrase` / `change_passphrase` /
+// `remove_passphrase`) own their own pre-commit rollback inside
+// `paladin-core` (DESIGN §4.5): the in-memory mode/key reverts on
+// `save_not_committed` and is replaced on `save_durability_unconfirmed`.
+// The end-to-end rollback semantics live in the `paladin-core` plan; on
+// the TUI side `reduce_passphrase_result` just has to:
+//
+//   (1) Stash the rendered error inline on `PassphraseModal::error`.
+//   (2) Leave the live `Vault` untouched so `Vault::is_encrypted()`
+//       reports whatever core left it as — the visible vault-mode flag
+//       is read back through this single accessor without inspecting
+//       private key / cache material.
+//   (3) Leave the status line clear so the inline error owns the
+//       surface.
+//
+// The pair of tests below cover both failure classes that ride this
+// channel: `save_not_committed` (core rolled back; `is_encrypted()`
+// reports the *previous* mode) and `save_durability_unconfirmed` (core
+// left the new mode/key committed; `is_encrypted()` reports the
+// *post-transition* mode). For the TUI-side test we construct the
+// post-result vault state directly so each branch's `is_encrypted()`
+// observable is exactly what the executor would have left.
+// ---------------------------------------------------------------------------
+
+fn passphrase_result(result: Result<(), PaladinError>) -> AppEvent {
+    AppEvent::EffectResult(EffectResult::Passphrase { result })
+}
+
+/// Construct an `Unlocked` state with an encrypted vault and an open
+/// `Modal::Passphrase` in the supplied sub-flow. The encrypted vault is
+/// created with [`light_params()`] to keep Argon2id cost test-cheap;
+/// the modal carries no typed buffers so the reducer's vault-side
+/// behavior is the only signal under test.
+fn unlocked_with_encrypted_vault_and_open_passphrase_modal(
+    tmp: &tempfile::TempDir,
+    sub_flow: paladin_tui::app::state::PassphraseSubFlow,
+) -> (PathBuf, AppState) {
+    let path = tmp.path().join("vault.bin");
+    let (vault, store) = create_encrypted_pair(&path, "current-pp");
+    assert!(
+        vault.is_encrypted(),
+        "fixture must seed an encrypted vault for the change/remove sub-flows"
+    );
+    let state = AppState::Unlocked {
+        path: path.clone(),
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Passphrase(PassphraseModal {
+            sub_flow,
+            new_passphrase: PassphraseBuffer::new(),
+            confirm_passphrase: PassphraseBuffer::new(),
+            error: None,
+        })),
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    (path, state)
+}
+
+#[test]
+fn effect_result_passphrase_save_not_committed_keeps_modal_open_with_inline_error_and_preserves_is_encrypted(
+) {
+    // Per DESIGN §4.5 / IMPLEMENTATION_PLAN_03_TUI.md "Modals (per §6)"
+    // > Passphrase: on `save_not_committed`, core's transition method
+    // has already rolled back the in-memory mode/key to the
+    // pre-attempt state. The TUI surfaces the typed error inline,
+    // leaves the modal open, and re-reads `Vault::is_encrypted()` —
+    // for the `Change` sub-flow that re-read still returns `true`
+    // (encrypted → encrypted; rollback restores the previous key).
+    let tmp = secure_tempdir();
+    let (_path, state_with_modal) = unlocked_with_encrypted_vault_and_open_passphrase_modal(
+        &tmp,
+        paladin_tui::app::state::PassphraseSubFlow::Change,
+    );
+
+    let err = PaladinError::SaveNotCommitted {
+        committed: false,
+        backup_path: None,
+    };
+    let expected_inline = render_error_message(&err);
+
+    let (state, effects) = reduce(state_with_modal, passphrase_result(Err(err)));
+
+    assert!(
+        effects.is_empty(),
+        "save_not_committed must not emit follow-up effects; got {effects:?}",
+    );
+    match &state {
+        AppState::Unlocked {
+            modal: Some(Modal::Passphrase(pp)),
+            status_line,
+            vault,
+            ..
+        } => {
+            assert_eq!(
+                pp.error.as_deref(),
+                Some(expected_inline.as_str()),
+                "save_not_committed must surface render_error_message verbatim on PassphraseModal::error",
+            );
+            assert!(
+                status_line.is_none(),
+                "save_not_committed must stay inline on the modal; status line must be clear, got {status_line:?}",
+            );
+            // The visible vault-mode flag tracks the transition
+            // outcome through `Vault::is_encrypted()` — the only
+            // public accessor — so the reducer never touches private
+            // key / cache material.
+            assert!(
+                vault.is_encrypted(),
+                "Change sub-flow + save_not_committed: core rolled back so is_encrypted() must still return true",
+            );
+        }
+        other => panic!("expected open Passphrase modal after save_not_committed, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_passphrase_save_durability_unconfirmed_keeps_modal_open_with_inline_error_and_reflects_committed_is_encrypted(
+) {
+    // Per DESIGN §4.5 / IMPLEMENTATION_PLAN_03_TUI.md "Modals (per §6)"
+    // > Passphrase: on `save_durability_unconfirmed`, core left the
+    // new mode/key committed in memory + on disk but parent fsync was
+    // uncertain. The TUI surfaces the warning inline, leaves the modal
+    // open, and re-reads `Vault::is_encrypted()` — for the `Change`
+    // sub-flow that re-read still returns `true` (encrypted →
+    // encrypted with the new key).
+    let tmp = secure_tempdir();
+    let (_path, state_with_modal) = unlocked_with_encrypted_vault_and_open_passphrase_modal(
+        &tmp,
+        paladin_tui::app::state::PassphraseSubFlow::Change,
+    );
+
+    let err = PaladinError::SaveDurabilityUnconfirmed;
+    let expected_inline = render_error_message(&err);
+
+    let (state, effects) = reduce(state_with_modal, passphrase_result(Err(err)));
+
+    assert!(
+        effects.is_empty(),
+        "save_durability_unconfirmed must not emit follow-up effects; got {effects:?}",
+    );
+    match &state {
+        AppState::Unlocked {
+            modal: Some(Modal::Passphrase(pp)),
+            status_line,
+            vault,
+            ..
+        } => {
+            assert_eq!(
+                pp.error.as_deref(),
+                Some(expected_inline.as_str()),
+                "save_durability_unconfirmed must surface render_error_message verbatim on PassphraseModal::error",
+            );
+            assert!(
+                status_line.is_none(),
+                "save_durability_unconfirmed must stay inline on the modal; status line must be clear, got {status_line:?}",
+            );
+            // The committed-in-memory state remains encrypted across
+            // a Change-sub-flow durability warning — observed through
+            // `Vault::is_encrypted()` only.
+            assert!(
+                vault.is_encrypted(),
+                "Change sub-flow + save_durability_unconfirmed: core left the new key committed, so is_encrypted() must remain true",
+            );
+        }
+        other => panic!(
+            "expected open Passphrase modal after save_durability_unconfirmed, got {other:?}",
+        ),
+    }
+}

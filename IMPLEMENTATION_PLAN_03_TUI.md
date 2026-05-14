@@ -1447,11 +1447,30 @@ end-to-end.
   in `tests/reducer_tests.rs` assert the rollback semantics via
   `vault.settings()` for both save-error variants. Validation /
   I/O / mismatched-modal coverage lives in companion tests.)*
-- [ ] Passphrase modal: the inline error surfaces and the TUI's
+- [x] Passphrase modal: the inline error surfaces and the TUI's
   visible vault-mode flag (sourced from `Vault::is_encrypted()`)
   tracks the transition outcome without inspecting private key /
   cache material. (End-to-end passphrase rollback is exercised in the
   `paladin-core` plan.)
+  *(Two sibling reducer tests in `tests/reducer_tests.rs` —
+  `effect_result_passphrase_save_not_committed_keeps_modal_open_with_inline_error_and_preserves_is_encrypted`
+  and
+  `effect_result_passphrase_save_durability_unconfirmed_keeps_modal_open_with_inline_error_and_reflects_committed_is_encrypted`
+  — each seed an encrypted vault, open `Modal::Passphrase` in the
+  `Change` sub-flow, drive
+  `AppEvent::EffectResult(EffectResult::Passphrase { result: Err(...) })`
+  through `reduce` for both failure classes, and assert (1) the
+  rendered error lands on `PassphraseModal::error` byte-for-byte
+  through `render_error_message`, (2) the modal stays open with no
+  follow-up effects, (3) the status line stays clear, and (4) the
+  visible vault-mode flag is observed only through
+  `Vault::is_encrypted()` — the single public accessor — without
+  inspecting private key / cache material. Wired via
+  `reduce_passphrase_result`'s Err arm in `src/app/reducer.rs`, which
+  does not mutate vault state on either failure class (core owns the
+  rollback on `save_not_committed` and the commit-then-warn on
+  `save_durability_unconfirmed` per DESIGN §4.5). End-to-end mode/key
+  transition rollback lives in the `paladin-core` plan.)*
 
 ### HOTP reveal window (`tests/hotp_reveal_tests.rs`)
 
