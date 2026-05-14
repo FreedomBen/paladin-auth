@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - After changing code, format and lint it with `cargo fmt` and `cargo clippy`, ensuring no warnings remain.
 - Commit after making changes.  Do not push.
 - For containers, use Containerfile and compose.yaml and always build and run with rootless podman unless explicitly told otherwise.
-- Multiple agents may be working in this repository simultaneously.  Before committing, check if the file commit.lock exists.  If it does, wait for it to be removed before committing.  When you are ready to commit, create the file commit.lock, then delete it after you are finished committing.  This ensures that only one agent is committing at a time and prevents agent stomping on each other.
+- Multiple agents may be working in this repository simultaneously.  Serialize commits with `flock(1)` against `.git/paladin-commit.lock`, e.g. `flock -w 300 .git/paladin-commit.lock -c 'git add <files> && git commit -m "<msg>"'`.  `flock` acquires the lock atomically, releases it when the wrapped process exits (even on crash, so no stale locks), and the `-w 300` timeout prevents indefinite blocking.  Do not `rm` the lock file — ownership is by file descriptor, not file existence.
 
 ## Project status
 
