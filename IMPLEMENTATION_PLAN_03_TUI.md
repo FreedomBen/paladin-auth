@@ -1581,8 +1581,30 @@ end-to-end.
   (Tick past `idle_deadline` transitions to `Locked`, dropping the
   whole `Unlocked` arm including the open `AddModal`). All in
   `tests/reducer_tests.rs`.)*
-- [ ] Add URI-mode entry zeroizes on submit, cancel, modal close, mode
+- [x] Add URI-mode entry zeroizes on submit, cancel, modal close, mode
   switch, and auto-lock.
+  *(`AddModal::uri_text` is a `PassphraseBuffer` wrapping
+  `Zeroizing<String>`, so `clear()` / `take()` wipe in place and
+  `Drop` wipes on modal teardown. Submit is covered by
+  `enter_in_add_modal_uri_mode_consumes_uri_text_buffer` (Enter
+  `take()`s the buffer into the `SecretString` carried by
+  `Effect::AddFromUri`); mode-switch by
+  `right_from_uri_mode_wipes_uri_text` and
+  `left_from_uri_mode_wipes_uri_text` (both `→` and `←` route
+  through `AddModal::switch_mode` which `clear()`s `uri_text` when
+  leaving Uri); the negative mode-switch case is locked by
+  `cycling_away_from_manual_or_qr_preserves_uri_text` (Manual ↔ Qr
+  cycles never touch `uri_text`); cancel by
+  `add_modal_esc_with_typed_uri_text_closes_modal_and_drops_buffer`
+  (`Esc` clears `modal` to `None` so the typed bytes drop with the
+  modal); modal close (success) by
+  `effect_result_add_ok_closes_modal_with_already_taken_uri_text`
+  (Enter `take()` then `EffectResult::Add Ok` drops the now-empty
+  `AddModal`); auto-lock by
+  `tick_past_idle_deadline_with_open_add_modal_typed_uri_text_locks_and_drops_buffer`
+  (Tick past `idle_deadline` transitions to `Locked`, dropping the
+  whole `Unlocked` arm including the open `AddModal`). All in
+  `tests/reducer_tests.rs`.)*
 - [ ] Pending duplicate-add validated accounts zeroize on add-anyway,
   cancel, modal close, and auto-lock.
 - [ ] HOTP reveal state zeroizes on expiry, replacement, drop, and

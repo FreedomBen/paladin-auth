@@ -16300,6 +16300,268 @@ fn tick_past_idle_deadline_with_open_add_modal_typed_manual_secret_locks_and_dro
 }
 
 // ---------------------------------------------------------------------------
+// Sensitive UI buffers — `AddModal::uri_text`
+// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Sensitive UI buffers":
+//  "Add URI-mode entry zeroizes on submit, cancel, modal close, mode
+//  switch, and auto-lock.")
+//
+// `uri_text: PassphraseBuffer` wraps `Zeroizing<String>`, so the
+// stored bytes are wiped on every `clear()` / `take()` and on `Drop`.
+// The URI text is secret-bearing because the URI embeds the Base32
+// secret. The mode-switch axis is locked by
+// `right_from_uri_mode_wipes_uri_text` /
+// `left_from_uri_mode_wipes_uri_text` /
+// `cycling_away_from_manual_or_qr_preserves_uri_text`. This block
+// locks the remaining axes:
+//
+//   * submit — Enter in Uri mode emits `Effect::AddFromUri { uri }`
+//     where `uri` is the modal-local buffer drained via
+//     `PassphraseBuffer::take()`; the bytes move into the carried
+//     `SecretString` and the modal-local buffer is left empty.
+//   * cancel — `Esc` drops `Modal::Add(AddModal)`, dropping
+//     `uri_text` so its bytes zeroize.
+//   * modal close (Add success) — `EffectResult::Add { Ok(_) }`
+//     drops the modal; combined with the Enter `take()` this closes
+//     the submit → success window without leaking buffered bytes.
+//   * auto-lock — a `Tick` past `idle_deadline` transitions the
+//     `Unlocked` value (which owns the modal) to `Locked`, dropping
+//     `uri_text` along with the rest of the modal.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enter_in_add_modal_uri_mode_consumes_uri_text_buffer() {
+    // Submit axis. Enter in Uri mode emits `Effect::AddFromUri`
+    // carrying the typed URI text as a `SecretString`; the
+    // modal-local `uri_text` buffer is drained via
+    // `PassphraseBuffer::take()` in the same step, which zeroizes
+    // the underlying `Zeroizing<String>` storage. Externally this is
+    // observable as the buffer being empty after the effect emits.
+    let tmp = secure_tempdir();
+    let state = add_modal_in_uri_mode_with_typed_text(&tmp);
+    // Precondition: the helper populated the URI buffer with
+    // sentinel bytes so this test distinguishes "wiped" from "never
+    // written" on the submit path.
+    assert!(
+        !add_modal_ref(&state).uri_text.is_empty(),
+        "harness precondition: uri_text must hold typed bytes",
+    );
+
+    let (state, effects) = reduce(state, key(KeyCode::Enter));
+    assert_eq!(
+        effects.len(),
+        1,
+        "Enter in Uri mode must emit exactly one Effect::AddFromUri; got {effects:?}"
+    );
+    match &effects[0] {
+        Effect::AddFromUri { uri, .. } => {
+            assert_eq!(
+                uri.expose_secret(),
+                "otpauth://",
+                "effect must carry the typed URI buffer verbatim",
+            );
+        }
+        other => panic!("expected Effect::AddFromUri, got {other:?}"),
+    }
+    let add = add_modal_ref(&state);
+    assert!(
+        add.uri_text.is_empty(),
+        "submit must consume the uri_text buffer (`take()` zeroizes it)"
+    );
+    assert_eq!(
+        add.mode,
+        AddMode::Uri,
+        "submit must leave the mode untouched so the modal stays in Uri",
+    );
+}
+
+#[test]
+fn add_modal_esc_with_typed_uri_text_closes_modal_and_drops_buffer() {
+    // Cancel axis. The user has typed URI chars into the Uri-mode
+    // entry and then dismissed the Add modal with Esc before
+    // submitting. The reducer's Esc precedence chain
+    // (apply_esc_dismiss) clears `modal` to `None`; dropping the
+    // `Modal::Add(AddModal)` runs `PassphraseBuffer`'s `Drop` via
+    // `Zeroizing<String>`, wiping the typed bytes. Externally this
+    // is observable as the modal slot being empty after a single
+    // Esc, with no effects emitted (so no rogue Effect can carry
+    // the buffer elsewhere).
+    let tmp = secure_tempdir();
+    let state = add_modal_in_uri_mode_with_typed_text(&tmp);
+    // Precondition: the helper populated the URI buffer with
+    // sentinel bytes so this test distinguishes "wiped" from "never
+    // written" on the cancel path.
+    assert!(
+        !add_modal_ref(&state).uri_text.is_empty(),
+        "harness precondition: uri_text must hold typed bytes",
+    );
+
+    let (state, effects) = reduce(state, key(KeyCode::Esc));
+    assert!(
+        effects.is_empty(),
+        "Esc cancelling the Add modal must not emit effects; got {effects:?}",
+    );
+    match state {
+        AppState::Unlocked {
+            modal,
+            status_line,
+            search_query,
+            ..
+        } => {
+            assert!(
+                modal.is_none(),
+                "Esc must drop the Add modal so its uri_text buffer zeroizes; got {modal:?}",
+            );
+            assert!(
+                status_line.is_none(),
+                "cancel path must not publish a status-line confirmation; got {status_line:?}",
+            );
+            assert!(
+                search_query.is_empty(),
+                "cancel path must not leak buffered bytes into search_query; got {search_query:?}",
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_add_ok_closes_modal_with_already_taken_uri_text() {
+    // Modal-close-on-success axis. By the time
+    // `EffectResult::Add { Ok(_) }` arrives, the Enter handler in
+    // Uri mode has already called `uri_text.take()` (see
+    // `enter_in_add_modal_uri_mode_consumes_uri_text_buffer`), so
+    // the in-memory buffer is empty. The Ok arm closes the modal,
+    // dropping the now-empty `AddModal`. This test locks the
+    // end-to-end contract: a user who submits with a typed URI ends
+    // up with the modal closed *and* the buffer drained — no
+    // post-success residue.
+    let tmp = secure_tempdir();
+    let mut state = add_modal_in_uri_mode_with_typed_text(&tmp);
+    // The helper pushed `"otpauth://"`. Keep the buffer non-empty
+    // at submit time so the test can prove `take()` zeroized it.
+    match &mut state {
+        AppState::Unlocked {
+            modal: Some(Modal::Add(add)),
+            ..
+        } => {
+            for c in "totp/Acme:alice?secret=JBSWY3DPEHPK3PXP&issuer=Acme".chars() {
+                add.uri_text.push(c);
+            }
+        }
+        _ => panic!("expected Unlocked with Modal::Add open"),
+    }
+    // Submit drains uri_text into the emitted Effect::AddFromUri.
+    let (state, effects) = reduce(state, key(KeyCode::Enter));
+    assert_eq!(effects.len(), 1, "Enter must emit Effect::AddFromUri");
+    let add = add_modal_ref(&state);
+    assert!(
+        add.uri_text.is_empty(),
+        "submit must consume uri_text via take(); residue would leak through Ok arm",
+    );
+
+    // Stage an Ok result mimicking the executor's commit. Build a
+    // free-standing summary so the test does not need the executor.
+    let tmp2 = secure_tempdir();
+    let (_path2, (mut vault2, store2)) = open_plaintext_pair(&tmp2);
+    let stage_id = add_totp_account(&mut vault2, &store2, "Acme:alice");
+    let summary = vault2
+        .iter()
+        .find(|a| a.id() == stage_id)
+        .expect("staging account")
+        .summary();
+    let (state, effects) = reduce(
+        state,
+        add_result(Ok(AddSuccess {
+            summary,
+            warnings: Vec::new(),
+        })),
+    );
+    assert!(effects.is_empty(), "Ok arm emits no follow-up effects");
+    match state {
+        AppState::Unlocked { modal, .. } => {
+            assert!(
+                modal.is_none(),
+                "Ok arm must close the Add modal so the now-empty uri_text buffer drops",
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn tick_past_idle_deadline_with_open_add_modal_typed_uri_text_locks_and_drops_buffer() {
+    // Auto-lock axis. `maybe_auto_lock` transitions `Unlocked →
+    // Locked` when `Tick.monotonic` is past `idle_deadline`. The
+    // `Locked` state carries only `path` (and any pending clipboard
+    // clear) — by construction every other slot of the prior
+    // `Unlocked` is dropped, including any open `Modal::Add` and its
+    // `uri_text` buffer. The buffer's `Zeroizing<String>` drop
+    // wipes the typed bytes in place.
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (mut vault, store) = create_encrypted_pair(&path, "pp");
+    enable_auto_lock(&mut vault, &store, 600);
+
+    let t0 = Instant::now();
+    let deadline = t0 + Duration::from_secs(600);
+    let mut add = AddModal {
+        mode: AddMode::Uri,
+        ..AddModal::default()
+    };
+    for c in "otpauth://totp/Acme:alice?secret=JBSWY3DPEHPK3PXP".chars() {
+        add.uri_text.push(c);
+    }
+    assert!(
+        !add.uri_text.is_empty(),
+        "harness precondition: uri_text must hold typed bytes",
+    );
+
+    let unlocked = AppState::Unlocked {
+        path: path.clone(),
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: Some(deadline),
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Add(add)),
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+
+    let now = deadline + Duration::from_millis(1);
+    let tick = AppEvent::Tick {
+        wall_clock: SystemTime::now(),
+        monotonic: now,
+    };
+    let (next, effects) = reduce(unlocked, tick);
+    assert!(
+        effects.is_empty(),
+        "auto-lock transition emits no effects; got {effects:?}",
+    );
+    match next {
+        AppState::Locked {
+            path: p,
+            pending_clipboard_clear,
+        } => {
+            assert_eq!(p, path, "Locked must carry the original vault path");
+            assert!(
+                pending_clipboard_clear.is_none(),
+                "no pending clipboard clear was seeded — lock must not synthesize one",
+            );
+        }
+        other => panic!(
+            "expected Locked (Add modal and its uri_text buffer must be gone), got {other:?}",
+        ),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Import modal — submit emits Effect::Import via auto-detect routing
 // (IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Import modal" >
 //  "Format auto-detect routes through `paladin_core::import::from_file`.")
