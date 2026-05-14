@@ -10,7 +10,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - After changing code, format and lint it with `cargo fmt` and `cargo clippy`, ensuring no warnings remain.
 - Commit after making changes.  Do not push.
 - For containers, use Containerfile and compose.yaml and always build and run with rootless podman unless explicitly told otherwise.
-- Multiple agents may be working in this repository simultaneously.  Serialize commits with `flock(1)` against `.git/paladin-commit.lock`, e.g. `flock -w 300 .git/paladin-commit.lock -c 'git add <files> && git commit -m "<msg>"'`.  `flock` acquires the lock atomically, releases it when the wrapped process exits (even on crash, so no stale locks), and the `-w 300` timeout prevents indefinite blocking.  Do not `rm` the lock file — ownership is by file descriptor, not file existence.
+- Multiple agents may be working in this repository simultaneously.  Serialize commits with a simple lock file at `commit.lock`.  Use three separate shell commands so failures at any step stay visible — do **not** bundle creation, commit, and removal into one chained command:
+  1. **Acquire**: check the lock does not exist and create it.  Run `[ ! -e commit.lock ] && touch commit.lock` as its own command.  If the file already exists, another agent is mid-commit — wait briefly and retry rather than overwriting it.
+  2. **Commit**: `git add <files> && git commit -m "<msg>"` as its own command.
+  3. **Release**: `rm commit.lock` as its own command, only after the commit step has returned.
+  Keeping these as three discrete commands minimizes the window where a created lock could be paired with a failed-but-unobserved commit, and lets you see at each step what state the working tree is in.  If you find a stale lock from a crashed prior agent (no commit in flight per `git status` / `git log`), remove it before proceeding.
 
 ## Project status
 
