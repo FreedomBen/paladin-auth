@@ -18,7 +18,24 @@ jobs:
   clippy:
     name: cargo clippy
     runs-on: ubuntu-latest
+    # The workspace includes `paladin-gtk`, which binds `gtk4` `v4_16`
+    # and `libadwaita` `v1_6` per IMPLEMENTATION_PLAN_04_GTK.md
+    # §"Dependencies (per §9)". The `ubuntu-24.04` image ships GTK 4.14
+    # and libadwaita 1.5 — too old for those `v*` feature gates, so the
+    # `gtk4-sys` / `libadwaita-sys` build scripts reject it. Build
+    # inside a Fedora 42 container so the system headers satisfy the
+    # version floor the plan locked in.
+    container:
+      image: fedora:42
     steps:
+      - name: Install system dependencies (GTK4 + libadwaita + Rust)
+        run: |
+          dnf install -y --setopt=install_weak_deps=False \
+            rustup gcc pkg-config openssl-devel \
+            gtk4-devel libadwaita-devel \
+            git ca-certificates
+          rustup-init -y --no-modify-path --default-toolchain none --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - uses: actions/checkout@v4
       - run: rustup show
       - run: cargo clippy --workspace --all-targets -- -D warnings
@@ -26,7 +43,24 @@ jobs:
   test:
     name: cargo test
     runs-on: ubuntu-latest
+    # Same Fedora 42 container as `clippy` for the GTK 4.16 / libadwaita
+    # 1.6 floor; additionally installs `xorg-x11-server-Xvfb` so
+    # `crates/paladin-gtk/tests/gtk_smoke.rs` runs under `xvfb-run`
+    # instead of skipping. The §"Smoke test" bullet in
+    # IMPLEMENTATION_PLAN_04_GTK.md gates Milestone 7 sign-off on that
+    # test being green.
+    container:
+      image: fedora:42
     steps:
+      - name: Install system dependencies (GTK4 + libadwaita + Xvfb + Rust)
+        run: |
+          dnf install -y --setopt=install_weak_deps=False \
+            rustup gcc pkg-config openssl-devel \
+            gtk4-devel libadwaita-devel \
+            xorg-x11-server-Xvfb \
+            git ca-certificates
+          rustup-init -y --no-modify-path --default-toolchain none --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - uses: actions/checkout@v4
       - run: rustup show
       - run: cargo test --workspace --all-targets

@@ -1007,8 +1007,16 @@ These run without a display server. Each lives under
 
 Required for Milestone 7 sign-off. Runs in CI under `xvfb-run`.
 
-- [ ] `xvfb-run` launches `paladin-gtk` and the process exits
-  cleanly.
+- [x] `xvfb-run` launches `paladin-gtk` and the process exits
+  cleanly. Asserted by
+  `crates/paladin-gtk/tests/gtk_smoke.rs::xvfb_run_launches_paladin_gtk_and_process_exits`;
+  `.github/workflows/ci.yml` provisions the `clippy` and `test` jobs
+  inside a `fedora:42` container with `gtk4-devel`, `libadwaita-devel`,
+  and (`test` only) `xorg-x11-server-Xvfb` so the test runs under a
+  synthetic display instead of skipping. The container is required
+  because `ubuntu-24.04` ships GTK 4.14 / libadwaita 1.5 — too old
+  for the `v4_16` / `v1_6` feature gates in
+  `crates/paladin-gtk/Cargo.toml`.
 - [ ] App opens a prepared plaintext vault.
 - [ ] `AccountListComponent` renders the prepared accounts.
 
