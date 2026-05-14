@@ -927,20 +927,20 @@ These run without a display server. Each lives under
 
 #### `tests/passphrase_dialog_logic.rs`
 
-- [ ] Sub-flow gating against `Vault::is_encrypted()`: `set` is
+- [x] Sub-flow gating against `Vault::is_encrypted()`: `set` is
   available only when the getter returns `false`; `change` and
   `remove` only when `true`.
-- [ ] `set` / `change` twice-confirm match accepts; mismatch
+- [x] `set` / `change` twice-confirm match accepts; mismatch
   rejects with `invalid_passphrase`
   (`reason: "confirmation_mismatch"`).
-- [ ] `set` / `change` reject zero-length new passphrases with
+- [x] `set` / `change` reject zero-length new passphrases with
   `invalid_passphrase` (`reason: "zero_length"`).
-- [ ] `remove` renders
+- [x] `remove` renders
   `paladin_core::format_plaintext_storage_warning()` verbatim and
   requires explicit confirmation before mutation.
-- [ ] Switching sub-flows clears all passphrase rows and pending
+- [x] Switching sub-flows clears all passphrase rows and pending
   plaintext-removal confirmation.
-- [ ] Passphrase entry buffers zeroize on submit / cancel / dialog
+- [x] Passphrase entry buffers zeroize on submit / cancel / dialog
   close.
 
 #### `tests/settings_logic.rs`

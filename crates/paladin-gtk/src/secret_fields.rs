@@ -30,6 +30,8 @@ use zeroize::{Zeroize, Zeroizing};
 
 use paladin_core::{ValidatedAccount, VaultInit};
 
+use crate::passphrase_dialog::SubFlow;
+
 /// Why a secret-bearing buffer or pending slot is being cleared.
 ///
 /// All variants flow through [`SecretEntry::clear`] and the
@@ -332,5 +334,84 @@ impl InitSecretState {
         self.passphrase.clear();
         self.confirm.clear();
         self.pending.take()
+    }
+}
+
+/// Secret-bearing state owned by the `PassphraseDialog`.
+///
+/// Holds the active sub-flow, the two passphrase entries shared by
+/// the [`SubFlow::Set`] and [`SubFlow::Change`] paths, and the
+/// pending plaintext-removal acknowledgement carried across the
+/// [`SubFlow::Remove`] destructive gate. Sub-flow switches and
+/// every `clear_for` reason wipe both passphrase buffers and reset
+/// the acknowledgement so a stale flag cannot survive a cancel /
+/// close / auto-lock and re-arm a future attempt.
+pub struct PassphraseSecretState {
+    /// Currently-active sub-flow. Driven by the dialog's segmented
+    /// control; transitions through [`switch_sub_flow`].
+    pub sub_flow: SubFlow,
+    /// New-passphrase entry for [`SubFlow::Set`] / [`SubFlow::Change`].
+    /// Hidden on the [`SubFlow::Remove`] path.
+    pub new_passphrase: SecretEntry,
+    /// Confirmation entry. Must match `new_passphrase` before the
+    /// dialog's submit button arms on [`SubFlow::Set`] /
+    /// [`SubFlow::Change`].
+    pub confirm_passphrase: SecretEntry,
+    /// Plaintext-removal acknowledgement flag for the
+    /// [`SubFlow::Remove`] destructive gate. Must be `true` before
+    /// the dialog calls [`paladin_core::Vault::remove_passphrase`].
+    /// Reset by sub-flow switches and by every
+    /// [`PassphraseSecretState::clear_for`] reason.
+    pub remove_confirmed: bool,
+}
+
+impl PassphraseSecretState {
+    /// Construct a fresh state for `sub_flow` with empty passphrase
+    /// buffers and no pending plaintext-removal acknowledgement.
+    #[must_use]
+    pub fn new(sub_flow: SubFlow) -> Self {
+        Self {
+            sub_flow,
+            new_passphrase: SecretEntry::new(),
+            confirm_passphrase: SecretEntry::new(),
+            remove_confirmed: false,
+        }
+    }
+
+    /// Switch the active sub-flow.
+    ///
+    /// * Same-target call is a no-op so idempotent re-entries do
+    ///   not erase typed buffers or a pending acknowledgement
+    ///   (mirrors [`AddSecretState::switch_path`]).
+    /// * Otherwise wipes both passphrase buffers and clears the
+    ///   plaintext-removal acknowledgement before switching, so a
+    ///   stale value cannot apply to the new sub-flow.
+    pub fn switch_sub_flow(&mut self, to: SubFlow) {
+        if self.sub_flow == to {
+            return;
+        }
+        self.new_passphrase.clear();
+        self.confirm_passphrase.clear();
+        self.remove_confirmed = false;
+        self.sub_flow = to;
+    }
+
+    /// Flip the plaintext-removal acknowledgement flag to `true`,
+    /// arming the [`SubFlow::Remove`] destructive gate. The flag is
+    /// reset by sub-flow switches and by every
+    /// [`PassphraseSecretState::clear_for`] reason.
+    pub fn acknowledge_remove(&mut self) {
+        self.remove_confirmed = true;
+    }
+
+    /// Wipe both passphrase buffers and reset the plaintext-removal
+    /// acknowledgement. Covers Submit / Cancel / Close / `AutoLock`
+    /// / Replace — same DESIGN §8 invariant the Init / Add paths
+    /// obey. Does not change the active sub-flow (the dialog is
+    /// closing, not switching).
+    pub fn clear_for(&mut self, _reason: ClearReason) {
+        self.new_passphrase.clear();
+        self.confirm_passphrase.clear();
+        self.remove_confirmed = false;
     }
 }
