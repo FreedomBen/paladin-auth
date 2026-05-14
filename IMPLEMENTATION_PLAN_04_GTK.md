@@ -1119,7 +1119,7 @@ an X11 session before sign-off.
 - [ ] Linux desktop file, AppStream metadata, and icon.
 - [ ] `.deb`, `.rpm`, Flatpak, and AppImage artifacts for `paladin-gtk`,
   signed and published per §11.3–§11.6; Flathub submission filed.
-- [ ] Manual test plan documented.
+- [x] Manual test plan documented.
 - [ ] `xvfb-run` headless smoke test green in CI (plaintext vault opens
   and renders the list).
 
