@@ -52,21 +52,23 @@ pub const APP_ID: &str = "org.tamx.Paladin.Gui";
 
 /// Run the `paladin-gtk` binary.
 ///
-/// Milestone 7 foundation per `IMPLEMENTATION_PLAN_04_GTK.md`: parse
-/// [`cli::GlobalArgs`], initialize libadwaita against the live
-/// display, and exit. The `relm4::RelmApp::new(APP_ID).run::<AppModel>(…)`
-/// event loop that mounts the §"Component tree" `AppModel` lands in
-/// a follow-up commit alongside the first widget-bearing component;
-/// constructing `RelmApp` here would require the not-yet-wired
-/// `AppModel` type to satisfy its `M: Debug` parameter. This
-/// entrypoint is validated by `tests/gtk_smoke.rs` to prove the dep
-/// stack links and `libadwaita::init()` works against the live
-/// display.
+/// Milestone 7 foundation per `IMPLEMENTATION_PLAN_04_GTK.md`:
+/// parse [`cli::GlobalArgs`], initialize libadwaita, construct the
+/// relm4 [`RelmApp`](relm4::RelmApp) around [`app::model::AppModel`],
+/// and run the main loop. The hidden `--exit-after-startup` flag
+/// (wired by `tests/gtk_smoke.rs`) enqueues `AppMsg::Quit` on the
+/// first frame so the smoke test can exercise the libadwaita /
+/// relm4 bootstrap under `xvfb-run` without a real desktop session
+/// to dismiss the window. Subsequent commits expand `AppModel`
+/// with startup-routing probes (`default_vault_path` → `inspect`
+/// → optional plaintext `open`) and the per-`AppState` child
+/// components.
 #[must_use]
 pub fn run() -> ExitCode {
     use clap::Parser;
+    use relm4::RelmApp;
 
-    let _args = match cli::GlobalArgs::try_parse() {
+    let args = match cli::GlobalArgs::try_parse() {
         Ok(args) => args,
         // `Error::exit` writes clap's text diagnostic / help / version
         // output and exits with the appropriate code (`2` for usage
@@ -84,6 +86,13 @@ pub fn run() -> ExitCode {
         eprintln!("paladin-gtk: failed to initialize libadwaita: {err}");
         return ExitCode::FAILURE;
     }
+
+    let init = app::model::AppInit {
+        vault_path: args.vault,
+        exit_after_startup: args.exit_after_startup,
+    };
+
+    RelmApp::new(APP_ID).run::<app::model::AppModel>(init);
 
     ExitCode::SUCCESS
 }

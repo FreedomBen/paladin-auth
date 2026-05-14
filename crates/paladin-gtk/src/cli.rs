@@ -14,6 +14,13 @@
 //! argument" text diagnostic and the GUI never emits a JSON
 //! envelope. There is no positional file or URI argument either —
 //! imports start from `ImportDialog`, never from argv.
+//!
+//! The hidden `--exit-after-startup` flag exists solely for
+//! `tests/gtk_smoke.rs`: it lets the smoke test exercise the
+//! libadwaita / relm4 bootstrap under `xvfb-run` and still return
+//! cleanly without a real desktop session to dismiss the window.
+//! It is not documented in `--help` (`hide = true`) so end users do
+//! not see it.
 
 use std::path::PathBuf;
 
@@ -34,4 +41,11 @@ pub struct GlobalArgs {
     /// Accepted for parity with the CLI / TUI; a parser-level no-op.
     #[arg(long)]
     pub no_color: bool,
+
+    /// Hidden smoke-test flag: enqueue `AppMsg::Quit` on first
+    /// frame so the relm4 main loop exits without a desktop
+    /// session to dismiss the window. Wired by
+    /// `tests/gtk_smoke.rs`; suppressed from `--help`.
+    #[arg(long, hide = true)]
+    pub exit_after_startup: bool,
 }

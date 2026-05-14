@@ -7,6 +7,9 @@
 //! siblings), `--no-color` is a parser-level no-op, `--json` is
 //! rejected at parse time with clap's text diagnostic (never a JSON
 //! envelope), and no positional file / URI arguments are accepted.
+//! The hidden `--exit-after-startup` flag (used only by
+//! `tests/gtk_smoke.rs`) parses but is intentionally absent from
+//! `--help`.
 
 use std::path::Path;
 
@@ -127,5 +130,33 @@ fn version_flag_returns_clap_text_output() {
     assert!(
         !rendered.trim_start().starts_with('{'),
         "--version output must be text, not a JSON envelope: {rendered}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// --exit-after-startup (hidden testing flag wired by `tests/gtk_smoke.rs`)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn exit_after_startup_flag_is_accepted() {
+    let args = GlobalArgs::try_parse_from(["paladin-gtk", "--exit-after-startup"])
+        .expect("--exit-after-startup should parse");
+    assert!(args.exit_after_startup);
+}
+
+#[test]
+fn default_exit_after_startup_is_false() {
+    let args = GlobalArgs::try_parse_from(["paladin-gtk"]).expect("no args should parse");
+    assert!(!args.exit_after_startup);
+}
+
+#[test]
+fn exit_after_startup_flag_is_hidden_from_help() {
+    let err =
+        GlobalArgs::try_parse_from(["paladin-gtk", "--help"]).expect_err("--help exits via Err");
+    let rendered = err.to_string();
+    assert!(
+        !rendered.contains("--exit-after-startup"),
+        "--exit-after-startup must be hidden from --help; got: {rendered}"
     );
 }

@@ -12,12 +12,13 @@
 //! `tests/app_state_logic.rs` without a display server or a real
 //! `(Vault, Store)` pair.
 //!
-//! The widget-bearing Relm4 component (`AppModel` itself, plus
-//! `AppMsg` / `AppOutput`) lands in a follow-up commit alongside
-//! the rest of the §"Component tree" wiring; this module reserves
-//! the path layout from the crate-layout block and keeps the pure-
-//! logic state machine importable as
-//! `paladin_gtk::app::state::AppState` so later commits can extend
-//! it without churning the test-side imports.
+//! The widget-bearing relm4 component lives in [`model`]; this
+//! skeleton stage mounts an empty `adw::ApplicationWindow` and
+//! respects the hidden `--exit-after-startup` smoke-test flag. The
+//! startup probes that drive routing and the per-`AppState` child
+//! views (`InitDialog`, `UnlockComponent`, `AccountListComponent`,
+//! …) land in subsequent commits without churning the test-side
+//! imports.
 
+pub mod model;
 pub mod state;

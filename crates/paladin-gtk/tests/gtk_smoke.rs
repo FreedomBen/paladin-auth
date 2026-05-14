@@ -92,16 +92,17 @@ fn run_under_xvfb(args: &[&str]) -> std::process::Output {
 /// Plan bullet: "`xvfb-run` launches `paladin-gtk` and the process
 /// exits". This is the lowest rung — it proves that the binary
 /// links against the GTK / libadwaita / relm4 stack, initializes
-/// libadwaita under a synthetic display, and returns without the
-/// process getting stuck or panicking.
+/// libadwaita under a synthetic display, mounts the
+/// `AppModel` relm4 component, and returns from the main loop
+/// without the process getting stuck or panicking.
 ///
-/// The binary is invoked with no arguments so the full `run()`
-/// path is exercised — clap parsing succeeds, libadwaita is
-/// initialized against the xvfb display, and the process exits on
-/// its own. `clap`'s `--version` / `--help` short-circuit would
-/// bypass `adw::init()` and so would not validate the foundation,
-/// so they are intentionally not used here. Subsequent bullets
-/// exercise the relm4 main loop with a prepared vault.
+/// The hidden `--exit-after-startup` flag (see `cli.rs`) enqueues
+/// `AppMsg::Quit` on the first frame so the relm4 main loop tears
+/// down cleanly without a real desktop session to dismiss the
+/// window. `clap`'s `--version` / `--help` short-circuit would
+/// bypass `adw::init()` and `RelmApp::run` and so would not validate
+/// the foundation, so they are intentionally not used here.
+/// Subsequent bullets exercise the same path with a prepared vault.
 #[test]
 fn xvfb_run_launches_paladin_gtk_and_process_exits() {
     if !xvfb_run_available() {
@@ -112,7 +113,7 @@ fn xvfb_run_launches_paladin_gtk_and_process_exits() {
         return;
     }
 
-    let output = run_under_xvfb(&[]);
+    let output = run_under_xvfb(&["--exit-after-startup"]);
     assert!(
         output.status.success(),
         "xvfb-run paladin-gtk exited with status {:?}\n--- stdout ---\n{}\n--- stderr ---\n{}",
