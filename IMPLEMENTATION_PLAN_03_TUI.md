@@ -1157,7 +1157,16 @@ end-to-end.
   the re-opened on-disk source vault match the pre-export account
   snapshot, since the executor never calls `Vault::save` on the
   export path.)*
-- [ ] Refused overwrite gate rejects without writing.
+- [x] Refused overwrite gate rejects without writing.
+  *(`enter_in_export_modal_with_existing_destination_refuses_without_emitting_export_effect`
+  in `tests/reducer_tests.rs` seeds a pre-existing destination file,
+  opens `Modal::Export` with that path pre-populated, presses Enter,
+  and asserts no `Effect::Export` is emitted, the modal stays open,
+  the rendered `ValidationError { field: "path", reason:
+  "output_exists" }` lands inline on `ExportModal::error`, and the
+  seeded destination is byte-for-byte unchanged. Mirrors the CLI's
+  `refuse_existing_overwrite` gate (DESIGN.md §5) and the GTK
+  `overwrite_gate_needs_reset` flow.)*
 - [ ] Encrypted export prompts twice and rejects mismatch with
   `confirmation_mismatch`.
 - [ ] Encrypted export rejects empty new passphrase with `zero_length`.

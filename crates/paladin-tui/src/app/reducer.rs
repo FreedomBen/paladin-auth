@@ -1342,6 +1342,7 @@ fn route_modal_input(
         Some(Modal::Rename(rename)) => route_rename_modal_input(path, rename, key),
         Some(Modal::Remove(remove)) => route_remove_modal_input(path, remove, key),
         Some(Modal::Import(import)) => route_import_modal_input(path, import, key),
+        Some(Modal::Export(export)) => route_export_modal_input(export, key),
         Some(Modal::Settings(settings)) => {
             let (effects, close) = route_settings_modal_input(path, settings, vault, key);
             if close {
@@ -2035,6 +2036,46 @@ fn route_import_modal_input(
         }
         _ => Vec::new(),
     }
+}
+
+/// Export modal's input path.
+///
+/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Export:
+/// *"Overwriting an existing file is rejected unless the user
+/// confirms an inline overwrite gate (parity with CLI `--force`)."*
+/// The refused-overwrite gate is the first submit-time check: if the
+/// trimmed `path_text` resolves to a path that already exists on
+/// disk, the reducer rejects Enter inline — no [`Effect::Export`] is
+/// emitted, the modal stays open, and the rendered
+/// [`PaladinError::ValidationError`] with `field = "path"` /
+/// `reason = "output_exists"` lands in
+/// [`ExportModal::error`](crate::app::state::ExportModal::error) so
+/// the wording matches `paladin-cli/src/commands/export.rs`'s
+/// `refuse_existing_overwrite` (DESIGN.md §5) and the GTK
+/// `overwrite_gate_needs_reset` flow.
+///
+/// Subsequent gate / effect-emission slices (plaintext
+/// unencrypted-secrets confirmation, encrypted twice-confirm
+/// passphrase prompt, the actual [`Effect::Export`] emission) land
+/// alongside their own checklist entries; until then this slice
+/// stops at the refusal and treats all other Enter outcomes as a
+/// silent no-op so the modal-trap contract holds.
+fn route_export_modal_input(export: &mut ExportModal, key: &KeyEvent) -> Vec<Effect> {
+    if matches!(key.code, KeyCode::Enter) {
+        let target = std::path::PathBuf::from(export.path_text.trim());
+        if matches!(target.try_exists(), Ok(true)) {
+            export.error = Some(render_error_message(&PaladinError::ValidationError {
+                field: "path",
+                reason: "output_exists".to_string(),
+                source_index: None,
+                decoded_len: None,
+                recommended_min: None,
+                entry_type: None,
+            }));
+        }
+        return Vec::new();
+    }
+    Vec::new()
 }
 
 /// Map the (key character, current selection) pair to a status-line

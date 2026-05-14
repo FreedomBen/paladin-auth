@@ -18226,3 +18226,116 @@ fn tick_past_idle_deadline_with_open_import_modal_typed_paladin_passphrase_locks
         ),
     }
 }
+
+// ---------------------------------------------------------------------------
+// Export modal — refused overwrite gate
+// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Export modal":
+//  *"Refused overwrite gate rejects without writing."*)
+//
+// Slice covered: the reducer's Enter handler on `Modal::Export`. When
+// the typed destination path already exists on disk, the submit must
+// be refused — no `Effect::Export` is emitted, the modal stays open,
+// and the rendered `ValidationError { field: "path", reason:
+// "output_exists" }` lands inline in `ExportModal::error`. Wire
+// parity with the CLI's `refuse_existing_overwrite` gate
+// (`paladin-cli/src/commands/export.rs`, DESIGN.md §5) and the GTK
+// `overwrite_gate_needs_reset` flow keeps the user-facing reason
+// stable across all three front-ends — the typed PaladinError flows
+// through `render_error_message` so the wording matches the rest of
+// the TUI's error surface.
+//
+// Export does not mutate the vault, so there is no save-rollback to
+// reason about here; the assertion surface is "no effect emitted,
+// modal stays open with inline error, and the seeded destination is
+// byte-for-byte unchanged on disk."
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enter_in_export_modal_with_existing_destination_refuses_without_emitting_export_effect() {
+    let tmp = secure_tempdir();
+    let unlocked = fresh_plaintext_unlocked(&tmp);
+    // Pre-create the destination file so the overwrite gate has
+    // something to refuse.
+    let existing = tmp.path().join("existing-export.json");
+    fs::write(&existing, b"old contents").expect("seed existing export file");
+    assert!(
+        existing.exists(),
+        "harness precondition: destination file must exist before the test runs",
+    );
+
+    // Open the Export modal with the existing path pre-populated so
+    // the very first Enter exercises the refused-overwrite gate.
+    let state_with_modal = match unlocked {
+        AppState::Unlocked {
+            path, vault, store, ..
+        } => AppState::Unlocked {
+            path,
+            vault,
+            store,
+            search_query: String::new(),
+            idle_deadline: None,
+            pending_clipboard_clear: None,
+            hotp_reveal: None,
+            modal: Some(Modal::Export(ExportModal {
+                path_text: existing.to_string_lossy().into_owned(),
+                ..ExportModal::default()
+            })),
+            selected: None,
+            pending_chord_leader: None,
+            viewport_height: 0,
+            viewport_offset: 0,
+            focus: Focus::List,
+            status_line: None,
+            help_open: false,
+        },
+        other => panic!("expected Unlocked, got {other:?}"),
+    };
+
+    let (state, effects) = reduce(state_with_modal, key(KeyCode::Enter));
+
+    assert!(
+        effects.is_empty(),
+        "refused-overwrite gate must not emit Effect::Export; got {effects:?}",
+    );
+
+    let expected = render_error_message(&PaladinError::ValidationError {
+        field: "path",
+        reason: "output_exists".to_string(),
+        source_index: None,
+        decoded_len: None,
+        recommended_min: None,
+        entry_type: None,
+    });
+
+    match state {
+        AppState::Unlocked {
+            modal: Some(Modal::Export(export)),
+            status_line,
+            ..
+        } => {
+            assert_eq!(
+                export.path_text,
+                existing.to_string_lossy(),
+                "refused gate must leave path_text intact for the retry",
+            );
+            assert_eq!(
+                export.error.as_deref(),
+                Some(expected.as_str()),
+                "refused-overwrite gate must surface the rendered output_exists ValidationError inline",
+            );
+            assert!(
+                status_line.is_none(),
+                "refused-overwrite gate must stay inline on the modal — no status-line spill",
+            );
+        }
+        other => panic!("expected Modal::Export to stay open with inline error, got {other:?}"),
+    }
+
+    // Destination must be byte-for-byte unchanged — the gate refused
+    // before any writer touched the file.
+    let post = fs::read(&existing).expect("re-read destination file");
+    assert_eq!(
+        post, b"old contents",
+        "destination must be byte-for-byte unchanged after the refused gate",
+    );
+}
