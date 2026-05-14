@@ -36,6 +36,7 @@ pub mod search;
 pub mod secret_fields;
 pub mod settings;
 pub mod startup_error;
+pub mod unlock_dialog;
 
 /// Run the `paladin-gtk` binary.
 ///
