@@ -1326,7 +1326,17 @@ end-to-end.
   inline `durability` wording. Both run through the shared
   `Validation | Save` arm in `reduce_rename_result` and leave the
   status line untouched.)*
-- [ ] Import modal: same coverage as Add, asserted on `Vault::iter()`.
+- [x] Import modal: same coverage as Add, asserted on `Vault::iter()`.
+  *(`effect_result_import_save_not_committed_keeps_modal_open_with_inline_error`
+  asserts the rolled-back pre-attempt label list (just `"github"`)
+  via `Vault::iter()` with the inline `save_not_committed` wording;
+  the durability sibling
+  `effect_result_import_save_durability_unconfirmed_keeps_modal_open_with_inline_error`
+  seeds the merged accounts (`"github"`, `"imported_one"`,
+  `"imported_two"`) before injecting the failure and asserts the
+  committed iter via `Vault::iter()` with the inline `durability`
+  wording. Both run through `reduce_import_result`'s Err arm and
+  leave the status line untouched.)*
 - [x] Settings modal: same coverage as Add, asserted on
   `Vault::settings()`.
   *(`effect_result_settings_save_not_committed_keeps_modal_open_with_inline_error`

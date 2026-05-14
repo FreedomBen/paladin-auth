@@ -17707,28 +17707,164 @@ fn effect_result_import_err_io_error_renders_inline() {
     assert_eq!(import.error.as_deref(), Some(expected.as_str()));
 }
 
+// ---------------------------------------------------------------------------
+// Import modal — pre-commit save rollback / durability-unconfirmed
+// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Pre-commit save rollback":
+//  *"Import modal: same coverage as Add, asserted on `Vault::iter()`."*)
+//
+// Slice covered: the reducer's response to
+// `EffectResult::Import { Err(ImportFailure(PaladinError::*)) }` for
+// both the rolled-back `save_not_committed` path and the committed-
+// in-memory `save_durability_unconfirmed` path. The executor invokes
+// `Vault::import_accounts` followed by `Vault::mutate_and_save`; on
+// `save_not_committed`, core has rolled the merge back so the vault
+// iter still matches the pre-attempt snapshot, and on
+// `save_durability_unconfirmed`, core has committed the merge in
+// memory (and on disk modulo the uncertain parent fsync) so the
+// vault iter reflects the imported accounts. Either way the reducer
+// surfaces the typed error inline on `ImportModal::error` and leaves
+// the modal open so the user can retry or `Esc` out deliberately —
+// the status line stays untouched.
+// ---------------------------------------------------------------------------
+
 #[test]
-fn effect_result_import_err_save_not_committed_renders_inline_and_leaves_vault_unchanged() {
+fn effect_result_import_save_not_committed_keeps_modal_open_with_inline_error() {
+    // Core's `Vault::mutate_and_save` rolled the merge back inside on
+    // `save_not_committed`; the fixture's vault still holds just the
+    // pre-attempt "github" account, mirroring the rolled-back state
+    // core leaves behind. The reducer surfaces the typed error inline
+    // on `ImportModal::error` and leaves the modal open so the user
+    // can retry.
     let tmp = secure_tempdir();
-    let state = fresh_unlocked_with_import_modal(&tmp);
-    let pre = match &state {
-        AppState::Unlocked { vault, .. } => vault.iter().count(),
-        other => panic!("expected Unlocked, got {other:?}"),
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let _ = add_totp_account(&mut vault, &store, "github");
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Import(
+            paladin_tui::app::state::ImportModal::default(),
+        )),
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
     };
     let err = PaladinError::SaveNotCommitted {
         committed: false,
         backup_path: None,
     };
     let expected = render_error_message(&err);
-    let (state, effects) = reduce(state, import_result(Err(ImportFailure(err))));
-    assert!(effects.is_empty(), "Err must not emit follow-up effects");
+    let (state, effects) = reduce(unlocked, import_result(Err(ImportFailure(err))));
+    assert!(
+        effects.is_empty(),
+        "save error result must not emit follow-up effects"
+    );
     let import = import_modal_ref(&state);
-    assert_eq!(import.error.as_deref(), Some(expected.as_str()));
+    let surfaced = import
+        .error
+        .as_deref()
+        .expect("save_not_committed must set inline error");
+    assert_eq!(surfaced, expected.as_str());
+    assert!(
+        surfaced.contains("save not committed") || surfaced.contains("save_not_committed"),
+        "inline error must surface save_not_committed wording, got {surfaced:?}"
+    );
+    let labels: Vec<&str> = match &state {
+        AppState::Unlocked { vault, .. } => {
+            vault.iter().map(paladin_core::Account::label).collect()
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    };
+    assert_eq!(
+        labels,
+        vec!["github"],
+        "Vault::iter() must reflect the rolled-back pre-attempt state on save_not_committed"
+    );
     match &state {
-        AppState::Unlocked { vault, .. } => assert_eq!(
-            vault.iter().count(),
-            pre,
-            "save_not_committed rolled back inside core; reducer must not perturb the in-memory vault"
+        AppState::Unlocked { status_line, .. } => assert!(
+            status_line.is_none(),
+            "save_not_committed must not publish a status-line confirmation; got {status_line:?}"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_import_save_durability_unconfirmed_keeps_modal_open_with_inline_error() {
+    // Durability-unconfirmed: core merged the imported accounts in
+    // memory (and wrote to disk) but the parent-directory fsync was
+    // uncertain. The fixture mirrors that state by seeding both the
+    // pre-existing account and the "imported" accounts into the
+    // vault before injecting the failure, so the reducer observes
+    // the committed iter while surfacing the durability warning
+    // inline. The TUI's surfacing mirrors Add / Remove / Rename /
+    // Settings: modal stays open with the warning so the user can
+    // retry or `Esc` out deliberately.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let _ = add_totp_account(&mut vault, &store, "github");
+    let _ = add_totp_account(&mut vault, &store, "imported_one");
+    let _ = add_totp_account(&mut vault, &store, "imported_two");
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Import(
+            paladin_tui::app::state::ImportModal::default(),
+        )),
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let err = PaladinError::SaveDurabilityUnconfirmed;
+    let expected = render_error_message(&err);
+    let (state, effects) = reduce(unlocked, import_result(Err(ImportFailure(err))));
+    assert!(
+        effects.is_empty(),
+        "save error result must not emit follow-up effects"
+    );
+    let import = import_modal_ref(&state);
+    let surfaced = import
+        .error
+        .as_deref()
+        .expect("save_durability_unconfirmed must surface inline");
+    assert_eq!(surfaced, expected.as_str());
+    assert!(
+        surfaced.to_lowercase().contains("durability")
+            || surfaced.contains("save_durability_unconfirmed"),
+        "inline error must surface durability wording, got {surfaced:?}"
+    );
+    let labels: Vec<&str> = match &state {
+        AppState::Unlocked { vault, .. } => {
+            vault.iter().map(paladin_core::Account::label).collect()
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    };
+    assert_eq!(
+        labels,
+        vec!["github", "imported_one", "imported_two"],
+        "Vault::iter() must reflect the committed merged accounts on save_durability_unconfirmed"
+    );
+    match &state {
+        AppState::Unlocked { status_line, .. } => assert!(
+            status_line.is_none(),
+            "save_durability_unconfirmed must not publish a status-line confirmation; got {status_line:?}"
         ),
         other => panic!("expected Unlocked, got {other:?}"),
     }
