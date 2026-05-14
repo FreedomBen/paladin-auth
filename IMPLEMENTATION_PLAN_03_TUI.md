@@ -1724,7 +1724,25 @@ Layout / list views:
   the vault path itself is not rendered on the list view, so the
   tempdir-backed path stays out of the snapshot grid and the
   snapshot stays deterministic across hosts.)*
-- [ ] Single-TOTP list view.
+- [x] Single-TOTP list view.
+  *(`crates/paladin-tui/src/view/list.rs` now renders one row per
+  `AccountSummary`: selection marker (`▶` for `state.selected`,
+  space otherwise), a 32-char issuer/label column truncated with
+  `…`, the `Code.code` digits split on the width midpoint, a
+  10-cell `█`/`░` period-progress gauge, and the
+  `Code.seconds_remaining` suffix. `view::render` now takes
+  `now: SystemTime` (forwarded to `Vault::totp_code`) so the
+  rendered code/gauge/seconds tuple is a pure function of the
+  tick's wall-clock; the event-loop slice feeds it the latest
+  `AppEvent::Tick.wall_clock` and tests pin it via the new
+  `snapshot_now()` helper. `snapshot_list_view_single_totp` in
+  `tests/view_snapshots.rs` builds an `Unlocked` state with a
+  single TOTP account at `SNAPSHOT_NOW_SECS = 1_500_000_012`
+  (12 s into a 30-s window so 18 s remain and the gauge is 60%
+  full), and locks the rendered grid in
+  `tests/snapshots/view_snapshots__snapshot_list_view_single_totp.snap`.
+  HOTP rows still fall back to the shared `{marker} {title}`
+  prefix until the mixed-kind slice lands.)*
 - [ ] Mixed TOTP / HOTP list view with hidden + revealed rows.
 - [ ] Search-active list view.
 - [ ] List view after a `zz` recenter (selected row in viewport
