@@ -23,8 +23,8 @@ use std::time::{Instant, SystemTime};
 
 use paladin_core::{
     import as core_import, parse_icon_hint_token, parse_otpauth, validate_manual, Account,
-    AccountInput, ImportConflict, ImportFormat, ImportOptions, PaladinError, SettingPatch, Store,
-    ValidatedAccount, VaultLock,
+    AccountInput, ClipboardClearPolicy, ImportConflict, ImportFormat, ImportOptions, PaladinError,
+    SettingPatch, Store, ValidatedAccount, VaultLock,
 };
 
 use crate::app::event::{
@@ -87,21 +87,32 @@ pub fn execute(effect: Effect, state: &mut AppState, sender: &Sender<AppEvent>) 
             }));
             EffectOutcome::Continue
         }
-        Effect::ClearClipboard { value: _ } => {
-            // Placeholder: the live-clipboard read and
-            // `ClipboardClearPolicy::should_clear` decision land with
-            // the clipboard adapter slice (see
-            // `IMPLEMENTATION_PLAN_03_TUI.md` "Implementation
-            // checklist": *"Implement clipboard wrapper (arboard
-            // reads/writes) … only-if-unchanged auto-clear via
-            // `ClipboardClearPolicy::should_clear`."*). For now the
-            // captured bytes are dropped here — the reducer has
-            // already cleared `pending_clipboard_clear` before this
-            // executor arm runs.
+        Effect::ClearClipboard { value } => {
+            // Per `IMPLEMENTATION_PLAN_03_TUI.md` "Clipboard auto-clear
+            // (per §6)": *"on wake, it ignores stale tokens, reads the
+            // current clipboard, asks
+            // `ClipboardClearPolicy::should_clear`, and writes empty
+            // when the policy returns `true`."* The reducer has already
+            // filtered stale-token / no-pending wakes — the matching-
+            // token dispatch reaches us here with the captured bytes
+            // still wrapped in `Zeroizing<Vec<u8>>`, which wipes on
+            // drop regardless of which branch runs below.
+            //
+            // A read failure (e.g. arboard unavailable, or
+            // `PALADIN_CLIPBOARD_DRYRUN=fail` under `test-hooks`) is a
+            // silent no-op — without a live `current` we cannot honor
+            // the only-if-unchanged contract, and writing empty
+            // anyway would risk clobbering an unrelated value the
+            // user pasted in the interim.
             //
             // No `AppEvent` is sent back: clipboard wipe is fire-and-
             // forget at this layer.
             let _ = sender;
+            if let Ok(current) = crate::clipboard::read_text() {
+                if ClipboardClearPolicy::should_clear(&value, current.as_bytes()) {
+                    let _ = crate::clipboard::write_text("");
+                }
+            }
             EffectOutcome::Continue
         }
         Effect::HotpAdvance {

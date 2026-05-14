@@ -832,3 +832,205 @@ fn zeroizing_vec_zeroize_empties_buffer() {
         "Zeroize::zeroize must reset the buffer to empty"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Executor (`paladin_tui::app::effect::execute`) — only-if-unchanged
+// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Clipboard auto-clear)
+//
+//   * Bullet 4: *"\"Only-if-unchanged\" honored when an external copy
+//     mutates the clipboard between copy and wake."*
+//   * Bullet 6: *"Clipboard flows are exercised through the
+//     `PALADIN_CLIPBOARD_DRYRUN=1` adapter hook so they run without a
+//     clipboard server."*
+//
+// On `Effect::ClearClipboard`, the executor reads the live clipboard,
+// calls `ClipboardClearPolicy::should_clear(captured, current)`, and
+// writes empty only when the comparison returns `true`. The test
+// hooks below replace the production `arboard` backend with an
+// in-process fake addressable through `seed_test_clipboard` /
+// `read_test_clipboard`, gated on `PALADIN_CLIPBOARD_DRYRUN=1` so the
+// production path stays untouched outside
+// `cargo test … --features test-hooks`. The `fail` mode forces both
+// read and write to return `Err(())` so the executor's failure
+// branches stay covered without a live system clipboard. A
+// process-wide `test_clipboard_lock` mutex serializes the env-var
+// manipulation across the `cargo test` thread pool.
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "test-hooks")]
+mod executor_only_if_unchanged {
+    use super::*;
+
+    use std::sync::mpsc;
+
+    use paladin_tui::app::effect::{execute, EffectOutcome};
+    use paladin_tui::clipboard::{read_test_clipboard, seed_test_clipboard, test_clipboard_lock};
+
+    /// Run `body` with `PALADIN_CLIPBOARD_DRYRUN=mode` and the
+    /// process-wide test-clipboard lock held. The env var is removed
+    /// on the way out so a panicking test cannot leak state into the
+    /// next; the mutex guard runs first to flush poisoning before the
+    /// env var cleanup.
+    fn with_dryrun<R>(mode: &str, body: impl FnOnce() -> R) -> R {
+        let _guard = test_clipboard_lock();
+        std::env::set_var("PALADIN_CLIPBOARD_DRYRUN", mode);
+        let out = body();
+        std::env::remove_var("PALADIN_CLIPBOARD_DRYRUN");
+        out
+    }
+
+    #[test]
+    fn dryrun_adapter_round_trip_writes_and_reads_in_process_fake() {
+        with_dryrun("1", || {
+            seed_test_clipboard("");
+            assert!(
+                paladin_tui::clipboard::write_text("abc123").is_ok(),
+                "PALADIN_CLIPBOARD_DRYRUN=1 must accept writes via the fake"
+            );
+            assert_eq!(
+                read_test_clipboard(),
+                "abc123",
+                "DRYRUN write must land in the in-process fake clipboard"
+            );
+            assert_eq!(
+                paladin_tui::clipboard::read_text(),
+                Ok("abc123".to_string()),
+                "DRYRUN read must return the same bytes the fake holds"
+            );
+        });
+    }
+
+    #[test]
+    fn dryrun_adapter_fail_mode_returns_err_for_both_read_and_write() {
+        with_dryrun("fail", || {
+            assert_eq!(
+                paladin_tui::clipboard::write_text("ignored"),
+                Err(()),
+                "PALADIN_CLIPBOARD_DRYRUN=fail must surface a write error"
+            );
+            assert_eq!(
+                paladin_tui::clipboard::read_text(),
+                Err(()),
+                "PALADIN_CLIPBOARD_DRYRUN=fail must surface a read error"
+            );
+        });
+    }
+
+    #[test]
+    fn execute_clear_clipboard_writes_empty_when_live_clipboard_still_matches() {
+        with_dryrun("1", || {
+            seed_test_clipboard("123456");
+            let mut state = AppState::Locked {
+                path: PathBuf::from("/tmp/v.bin"),
+                pending_clipboard_clear: None,
+            };
+            let (tx, rx) = mpsc::channel();
+            let outcome = execute(
+                Effect::ClearClipboard {
+                    value: Zeroizing::new(b"123456".to_vec()),
+                },
+                &mut state,
+                &tx,
+            );
+            assert_eq!(outcome, EffectOutcome::Continue);
+            assert!(
+                rx.try_recv().is_err(),
+                "Effect::ClearClipboard emits no AppEvent at this layer"
+            );
+            assert_eq!(
+                read_test_clipboard(),
+                "",
+                "live clipboard byte-equals captured: executor must write empty"
+            );
+        });
+    }
+
+    #[test]
+    fn execute_clear_clipboard_preserves_clipboard_when_external_copy_intervenes() {
+        // The headline only-if-unchanged contract: a user (or another
+        // app) copied something else between the copy effect and the
+        // wake; the captured-vs-current byte comparison must fail and
+        // the executor must keep its hands off the live clipboard so
+        // the user's later selection survives.
+        with_dryrun("1", || {
+            seed_test_clipboard("user-pasted-other-content");
+            let mut state = AppState::Locked {
+                path: PathBuf::from("/tmp/v.bin"),
+                pending_clipboard_clear: None,
+            };
+            let (tx, rx) = mpsc::channel();
+            let outcome = execute(
+                Effect::ClearClipboard {
+                    value: Zeroizing::new(b"123456".to_vec()),
+                },
+                &mut state,
+                &tx,
+            );
+            assert_eq!(outcome, EffectOutcome::Continue);
+            assert!(
+                rx.try_recv().is_err(),
+                "Effect::ClearClipboard emits no AppEvent at this layer"
+            );
+            assert_eq!(
+                read_test_clipboard(),
+                "user-pasted-other-content",
+                "captured bytes differ from live clipboard: executor must not write"
+            );
+        });
+    }
+
+    #[test]
+    fn execute_clear_clipboard_preserves_clipboard_when_live_is_empty() {
+        // Edge case of the same rule: another app cleared the
+        // clipboard after the copy. The captured non-empty bytes do
+        // not byte-equal an empty live clipboard, so the executor
+        // must leave it alone (writing empty would be a no-op in
+        // outcome but still violates the "only-if-unchanged" rule
+        // when the policy returns `false`).
+        with_dryrun("1", || {
+            seed_test_clipboard("");
+            let mut state = AppState::Locked {
+                path: PathBuf::from("/tmp/v.bin"),
+                pending_clipboard_clear: None,
+            };
+            let (tx, _rx) = mpsc::channel();
+            let outcome = execute(
+                Effect::ClearClipboard {
+                    value: Zeroizing::new(b"123456".to_vec()),
+                },
+                &mut state,
+                &tx,
+            );
+            assert_eq!(outcome, EffectOutcome::Continue);
+            assert_eq!(
+                read_test_clipboard(),
+                "",
+                "empty-but-different live clipboard: executor must not write"
+            );
+        });
+    }
+
+    #[test]
+    fn execute_clear_clipboard_noop_when_clipboard_read_fails() {
+        // When the backend rejects the read (DRYRUN=fail or a real
+        // arboard error), the executor must not call write — it
+        // cannot know whether the live clipboard matches captured.
+        // The effect drops cleanly and the run loop continues.
+        with_dryrun("fail", || {
+            let mut state = AppState::Locked {
+                path: PathBuf::from("/tmp/v.bin"),
+                pending_clipboard_clear: None,
+            };
+            let (tx, rx) = mpsc::channel();
+            let outcome = execute(
+                Effect::ClearClipboard {
+                    value: Zeroizing::new(b"123456".to_vec()),
+                },
+                &mut state,
+                &tx,
+            );
+            assert_eq!(outcome, EffectOutcome::Continue);
+            assert!(rx.try_recv().is_err());
+        });
+    }
+}

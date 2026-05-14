@@ -785,8 +785,21 @@ end-to-end.
   token branch already cleared the slot drops cleanly. The
   Unlocked-wake branch lands alongside the clipboard adapter / copy
   slice.)*
-- [ ] "Only-if-unchanged" honored when an external copy mutates the
-  clipboard between copy and wake.
+- [x] "Only-if-unchanged" honored when an external copy mutates the
+  clipboard between copy and wake. *(Executor-level: the
+  `Effect::ClearClipboard` arm of `paladin_tui::app::effect::execute`
+  reads the live clipboard via `paladin_tui::clipboard::read_text`,
+  feeds the captured bytes plus the live `current` bytes into
+  `paladin_core::ClipboardClearPolicy::should_clear`, and only calls
+  `clipboard::write_text("")` when the byte comparison returns `true`.
+  A read failure (e.g. `arboard` unavailable, or
+  `PALADIN_CLIPBOARD_DRYRUN=fail`) is a silent no-op so the executor
+  cannot clobber unrelated bytes when it cannot verify the
+  invariant. Asserted by
+  `executor_only_if_unchanged::execute_clear_clipboard_writes_empty_when_live_clipboard_still_matches`,
+  `…_preserves_clipboard_when_external_copy_intervenes`,
+  `…_preserves_clipboard_when_live_is_empty`, and
+  `…_noop_when_clipboard_read_fails` in `tests/clipboard_tests.rs`.)*
 - [x] Pending copied values are zeroized after the clear attempt or
   stale-token drop. *(`PendingClipboardClear.value`,
   `AppEvent::ClipboardClear.value`, `Effect::ClearClipboard.value`, and
@@ -794,9 +807,22 @@ end-to-end.
   `Zeroizing<Vec<u8>>` so `Drop` wipes the bytes before the backing
   allocation is freed — covers the "after the clear attempt"
   executor-drop path and the "stale-token drop" reducer-drop path.)*
-- [ ] Clipboard flows are exercised through the
+- [x] Clipboard flows are exercised through the
   `PALADIN_CLIPBOARD_DRYRUN=1` adapter hook so they run without a
-  clipboard server.
+  clipboard server. *(`paladin-tui/src/clipboard.rs` mirrors the
+  `paladin-cli` adapter: under `cfg(feature = "test-hooks")`,
+  `PALADIN_CLIPBOARD_DRYRUN=1` routes `read_text` / `write_text`
+  through an in-process `Mutex<String>` fake addressable via
+  `seed_test_clipboard` / `read_test_clipboard`, and
+  `PALADIN_CLIPBOARD_DRYRUN=fail` collapses both calls to `Err(())`
+  so the `clipboard_write_failed` / read-failure branches stay
+  covered. A `test_clipboard_lock()` mutex serializes env-var
+  manipulation across the `cargo test` thread pool. Asserted by
+  `dryrun_adapter_round_trip_writes_and_reads_in_process_fake` and
+  `dryrun_adapter_fail_mode_returns_err_for_both_read_and_write`,
+  and exercised end-to-end by every
+  `executor_only_if_unchanged::execute_clear_clipboard_*` test in
+  `tests/clipboard_tests.rs`.)*
 
 ### Terminal lifecycle (`tests/terminal_tests.rs`)
 
