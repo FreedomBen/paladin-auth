@@ -22,15 +22,16 @@ use std::sync::mpsc::Sender;
 use std::time::{Instant, SystemTime};
 
 use paladin_core::{
-    import as core_import, parse_icon_hint_token, parse_otpauth, validate_manual, Account,
-    AccountInput, ClipboardClearPolicy, ImportConflict, ImportFormat, ImportOptions, PaladinError,
-    SettingPatch, Store, ValidatedAccount, VaultLock,
+    export as core_export, import as core_import, parse_icon_hint_token, parse_otpauth,
+    validate_manual, write_secret_file_atomic, Account, AccountInput, ClipboardClearPolicy,
+    EncryptionOptions, ImportConflict, ImportFormat, ImportOptions, PaladinError, SettingPatch,
+    Store, ValidatedAccount, VaultLock,
 };
 
 use crate::app::event::{
     AddFailure, AddSuccess, AppEvent, Effect, EffectResult, ImportFailure, ImportSuccess,
 };
-use crate::app::state::AppState;
+use crate::app::state::{AppState, ExportFormat};
 
 /// Outcome of executing a single [`Effect`].
 ///
@@ -318,6 +319,12 @@ pub fn execute(effect: Effect, state: &mut AppState, sender: &Sender<AppEvent>) 
             state,
             sender,
         ),
+        Effect::Export {
+            path,
+            target_path,
+            format,
+            passphrase,
+        } => execute_export(&path, &target_path, format, passphrase, state, sender),
     }
 }
 
@@ -727,5 +734,69 @@ fn execute_import(
     let _ = sender.send(AppEvent::EffectResult(EffectResult::Import {
         result: mapped,
     }));
+    EffectOutcome::Continue
+}
+
+/// Execute an [`Effect::Export`] for an Export-modal submit.
+///
+/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Export:
+///
+/// 1. Render the live vault's bytes:
+///    [`ExportFormat::Plaintext`] routes through
+///    [`paladin_core::export::otpauth_list`] (a JSON array of
+///    `otpauth://` URIs); [`ExportFormat::Encrypted`] routes through
+///    [`paladin_core::export::encrypted`] with the user-supplied
+///    twice-confirmed bundle passphrase.
+/// 2. Hand the bytes to [`paladin_core::write_secret_file_atomic`],
+///    which writes through a tmpfile + rename and enforces mode
+///    `0600` on the final file.
+/// 3. Post the outcome back through
+///    [`EffectResult::Export`](crate::app::event::EffectResult::Export).
+///
+/// Export does not mutate the vault, so the executor never calls
+/// `Vault::save` — `Vault::mutate_and_save` is not on this path per the
+/// plan's "Effect errors" > Export rule: *"Export does not mutate the
+/// vault, so save-error rollback does not apply."*
+///
+/// The path check protects against a stale effect emitted before an
+/// auto-lock or vault switch: if the live state is no longer
+/// `Unlocked` against the same path, drop the effect silently — the
+/// reducer would discard the corresponding `EffectResult::Export`
+/// anyway, and posting back would just synthesize an artificial
+/// mutation attempt against unrelated state.
+fn execute_export(
+    path: &std::path::Path,
+    target_path: &std::path::Path,
+    format: ExportFormat,
+    passphrase: Option<secrecy::SecretString>,
+    state: &mut AppState,
+    sender: &Sender<AppEvent>,
+) -> EffectOutcome {
+    let AppState::Unlocked {
+        path: state_path,
+        vault,
+        ..
+    } = state
+    else {
+        return EffectOutcome::Continue;
+    };
+    if state_path != path {
+        return EffectOutcome::Continue;
+    }
+
+    let bytes_result: Result<Vec<u8>, PaladinError> = match format {
+        ExportFormat::Plaintext => Ok(core_export::otpauth_list(vault).into_bytes()),
+        ExportFormat::Encrypted => {
+            // `passphrase` must be Some on the encrypted path; the
+            // reducer's twice-prompt gate guarantees this.
+            let secret =
+                passphrase.expect("ExportFormat::Encrypted requires a passphrase from the reducer");
+            EncryptionOptions::new(secret)
+                .and_then(|options| core_export::encrypted(vault, options))
+        }
+    };
+
+    let result = bytes_result.and_then(|bytes| write_secret_file_atomic(target_path, &bytes));
+    let _ = sender.send(AppEvent::EffectResult(EffectResult::Export { result }));
     EffectOutcome::Continue
 }

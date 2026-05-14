@@ -23,16 +23,16 @@ use secrecy::SecretString;
 use tempfile::TempDir;
 
 use paladin_core::{
-    validate_manual, AccountId, AccountInput, AccountKindInput, Algorithm, Argon2Params,
-    EncryptionOptions, IconHintInput, ImportConflict, ImportFormat, PaladinError, SettingPatch,
-    Store, Vault, VaultInit, VaultLock,
+    export as core_export, validate_manual, AccountId, AccountInput, AccountKindInput, Algorithm,
+    Argon2Params, EncryptionOptions, IconHintInput, ImportConflict, ImportFormat, PaladinError,
+    SettingPatch, Store, Vault, VaultInit, VaultLock,
 };
 
 use paladin_tui::app::effect::{execute, EffectOutcome};
 use paladin_tui::app::event::{
     AddFailure, AddSuccess, AppEvent, Effect, EffectResult, ImportFailure, ImportSuccess,
 };
-use paladin_tui::app::state::{AppState, Focus};
+use paladin_tui::app::state::{AppState, ExportFormat, Focus};
 
 /// Light Argon2 params for fast tests; mirrors the CLI test fixtures.
 fn light_params() -> Argon2Params {
@@ -2557,4 +2557,125 @@ mod import_save_not_committed {
             "save_not_committed must leave the on-disk vault untouched"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// Effect::Export — plaintext format routes through
+// `paladin_core::export::otpauth_list` and persists via
+// `paladin_core::write_secret_file_atomic`.
+//
+// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Tests" > "Export modal": *"Plaintext
+// format selector routes to `paladin_core::export::otpauth_list`"* and
+// *"Output is written through `paladin_core::write_secret_file_atomic`
+// with mode `0600`"*. The executor must render the live vault through
+// `core_export::otpauth_list`, hand the bytes to `write_secret_file_atomic`,
+// and post back `EffectResult::Export { result: Ok(()) }`. The vault
+// state (in-memory and on disk) must be unchanged — Export does not
+// mutate the vault per `IMPLEMENTATION_PLAN_03_TUI.md` "Effect errors" >
+// Export: *"Export does not mutate the vault, so there is no rollback
+// path."*
+// ---------------------------------------------------------------------------
+
+#[test]
+fn execute_export_with_plaintext_format_routes_through_otpauth_list_and_writes_via_write_secret_file_atomic(
+) {
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+
+    let (mut vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    add_totp_account(&mut vault, &store, "github");
+    add_totp_account(&mut vault, &store, "azure");
+
+    let expected_bytes = core_export::otpauth_list(&vault).into_bytes();
+    let initial_accounts: Vec<AccountId> = vault.iter().map(paladin_core::Account::id).collect();
+
+    let mut state = AppState::Unlocked {
+        path: path.clone(),
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+
+    let target_path = tmp.path().join("export.json");
+    assert!(
+        !target_path.exists(),
+        "target path must not exist before the executor writes it"
+    );
+
+    let (tx, rx) = mpsc::channel::<AppEvent>();
+    let effect = Effect::Export {
+        path: path.clone(),
+        target_path: target_path.clone(),
+        format: ExportFormat::Plaintext,
+        passphrase: None,
+    };
+    let outcome = execute(effect, &mut state, &tx);
+    assert_eq!(outcome, EffectOutcome::Continue);
+
+    let evt = rx.try_recv().expect("an AppEvent should be sent");
+    match evt {
+        AppEvent::EffectResult(EffectResult::Export { result: Ok(()) }) => {}
+        other => panic!("expected EffectResult::Export Ok, got {other:?}"),
+    }
+    assert!(
+        rx.try_recv().is_err(),
+        "executor must emit exactly one AppEvent per Effect::Export"
+    );
+
+    // The file on disk must match `core_export::otpauth_list` byte-for-byte:
+    // this pins down the routing axis — that plaintext export goes through
+    // `otpauth_list`, not through any other serializer.
+    let written = std::fs::read(&target_path).expect("read written export");
+    assert_eq!(
+        written, expected_bytes,
+        "plaintext export must contain exactly the bytes returned by core_export::otpauth_list"
+    );
+
+    // `write_secret_file_atomic` enforces mode `0600` on the final file
+    // per `DESIGN.md` §4.2 / §4.6 (mirrors the vault-file permission rule).
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&target_path)
+            .expect("stat export file")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(
+            mode, 0o600,
+            "plaintext export file must be written with mode 0600 via write_secret_file_atomic"
+        );
+    }
+
+    // Export must not mutate the vault — in-memory iteration order /
+    // count is unchanged, and the on-disk vault file is byte-identical.
+    let vault = match &state {
+        AppState::Unlocked { vault, .. } => vault,
+        other => panic!("expected Unlocked, got {other:?}"),
+    };
+    let after_accounts: Vec<AccountId> = vault.iter().map(paladin_core::Account::id).collect();
+    assert_eq!(
+        after_accounts, initial_accounts,
+        "Export must leave the in-memory vault iteration order unchanged"
+    );
+
+    let (reopened, _store) = Store::open(&path, VaultLock::Plaintext).expect("reopen plaintext");
+    let reopened_accounts: Vec<AccountId> =
+        reopened.iter().map(paladin_core::Account::id).collect();
+    assert_eq!(
+        reopened_accounts, initial_accounts,
+        "Export must leave the on-disk vault untouched (no Vault::save was issued)"
+    );
 }

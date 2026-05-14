@@ -1130,8 +1130,15 @@ end-to-end.
 
 ### Export modal (`tests/reducer_tests.rs`)
 
-- [ ] Plaintext format selector routes to
+- [x] Plaintext format selector routes to
   `paladin_core::export::otpauth_list`.
+  *(Executor-side coverage:
+  `execute_export_with_plaintext_format_routes_through_otpauth_list_and_writes_via_write_secret_file_atomic`
+  in `tests/effect_tests.rs` constructs an `Effect::Export` with
+  `ExportFormat::Plaintext`, asserts the written file's bytes equal
+  `paladin_core::export::otpauth_list(&vault).into_bytes()` exactly,
+  and asserts `EffectResult::Export { result: Ok(()) }` rides back on
+  the channel.)*
 - [ ] Encrypted format selector routes to
   `paladin_core::export::encrypted`.
 - [ ] Refused overwrite gate rejects without writing.
@@ -1140,8 +1147,13 @@ end-to-end.
 - [ ] Encrypted export rejects empty new passphrase with `zero_length`.
 - [ ] Plaintext export requires the unencrypted-secrets confirmation
   before writing.
-- [ ] Output is written through
+- [x] Output is written through
   `paladin_core::write_secret_file_atomic` with mode `0600`.
+  *(Locked alongside the plaintext-routing test: the same
+  `execute_export_with_plaintext_format_routes_through_otpauth_list_and_writes_via_write_secret_file_atomic`
+  test stats the written file under `#[cfg(unix)]` and asserts the
+  permissions land at `0o600`, which the executor inherits by handing
+  bytes to `paladin_core::write_secret_file_atomic`.)*
 - [ ] Writer `io_error`, `save_not_committed`, and
   `save_durability_unconfirmed` surface inline and the modal stays
   open.

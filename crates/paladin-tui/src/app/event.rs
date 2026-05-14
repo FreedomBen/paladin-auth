@@ -429,6 +429,36 @@ pub enum EffectResult {
         /// panel; `Err` carries the rendered inline-error reason.
         result: Result<ImportSuccess, ImportFailure>,
     },
+
+    /// Outcome of an [`Effect::Export`] attempt.
+    ///
+    /// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Export:
+    /// *"On success the modal closes with a status-line confirmation
+    /// showing the written path; `io_error`, `save_not_committed`,
+    /// `save_durability_unconfirmed`, `invalid_passphrase`, and the
+    /// refused overwrite gate stay in the modal as inline errors.
+    /// Export does not mutate the vault, so there is no rollback path."*
+    ///
+    /// On `Ok(())` the reducer closes the modal and publishes a
+    /// [`crate::app::state::StatusLine::Confirmation`] derived from the
+    /// written destination path.
+    ///
+    /// On `Err(...)` the modal stays open and the rendered error is
+    /// stashed in [`crate::app::state::ExportModal::error`]. Writer
+    /// failures (`io_error`, `save_not_committed`,
+    /// `save_durability_unconfirmed`) and encrypted-export passphrase
+    /// validation (`invalid_passphrase`) all ride this channel.
+    ///
+    /// Results delivered while not on
+    /// [`crate::app::state::AppState::Unlocked`], while a different
+    /// modal is open, or after the Export modal closed are discarded —
+    /// the carried [`PaladinError`] drops without mutating state.
+    Export {
+        /// The export outcome. `Ok(())` means the destination file is
+        /// written; `Err` carries the writer / encryption error for
+        /// inline rendering.
+        result: Result<(), PaladinError>,
+    },
 }
 
 /// Successful outcome of an [`Effect::Add`] attempt.
@@ -1000,5 +1030,47 @@ pub enum Effect {
         /// [`ImportFormat::Paladin`]. The auto-detect first slice
         /// passes [`None`].
         paladin_passphrase: Option<SecretString>,
+    },
+    /// Write the live vault to `target_path` as a plaintext
+    /// `otpauth://` JSON list or an encrypted Paladin bundle.
+    ///
+    /// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Export:
+    /// *"format selector (plaintext `otpauth://` JSON list or encrypted
+    /// Paladin bundle) and a destination path field. ... Writes go
+    /// through `paladin_core::write_secret_file_atomic`. ... Export
+    /// does not mutate the vault, so there is no rollback path."*
+    ///
+    /// The reducer emits this effect when `Enter` is pressed on
+    /// `Modal::Export` after the (plaintext) unencrypted-secrets
+    /// confirmation gate clears or the (encrypted) twice-prompt
+    /// passphrase entry resolves and the overwrite-confirmation gate
+    /// has cleared. The executor renders the bytes through
+    /// [`paladin_core::export::otpauth_list`] (plaintext) or
+    /// [`paladin_core::export::encrypted`] (encrypted) and hands them
+    /// off to [`paladin_core::write_secret_file_atomic`].
+    ///
+    /// `format` selects which renderer is invoked. `passphrase` is
+    /// consumed only when `format == ExportFormat::Encrypted`; the
+    /// plaintext path passes [`None`].
+    Export {
+        /// The current vault path; the executor uses it for error
+        /// reporting and to verify the path the effect was emitted
+        /// against in case the user has navigated away. The vault is
+        /// read-only on the export path — no `Vault::save` is issued.
+        path: PathBuf,
+        /// Destination file path passed to
+        /// [`paladin_core::write_secret_file_atomic`].
+        target_path: PathBuf,
+        /// Output format. [`crate::app::state::ExportFormat::Plaintext`]
+        /// routes through [`paladin_core::export::otpauth_list`];
+        /// [`crate::app::state::ExportFormat::Encrypted`] routes through
+        /// [`paladin_core::export::encrypted`].
+        format: crate::app::state::ExportFormat,
+        /// Bundle passphrase for encrypted exports, taken from the
+        /// modal's zeroizing twice-prompt buffer at submit time; the
+        /// buffer zeroizes in the same step. Consumed only when
+        /// `format == ExportFormat::Encrypted`; the plaintext path
+        /// passes [`None`].
+        passphrase: Option<SecretString>,
     },
 }

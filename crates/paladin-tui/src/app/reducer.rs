@@ -271,7 +271,34 @@ fn reduce_effect_result(state: AppState, result: EffectResult) -> (AppState, Vec
         EffectResult::Add { result } => reduce_add_result(state, result),
         EffectResult::QrImport { result } => reduce_qr_import_result(state, result),
         EffectResult::Import { result } => reduce_import_result(state, result),
+        EffectResult::Export { result } => reduce_export_result(state, result),
     }
+}
+
+/// Handle the outcome of an [`Effect::Export`].
+///
+/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Effect errors" > Export:
+/// *"writer errors (`io_error`, `save_not_committed`,
+/// `save_durability_unconfirmed`, `invalid_passphrase`) and the refused
+/// overwrite gate stay in the Export modal as inline errors. Export
+/// does not mutate the vault, so save-error rollback does not apply."*
+///
+/// On `Ok(())` while `Modal::Export` is open the reducer closes the
+/// modal and publishes a status-line confirmation; on `Err(...)` the
+/// modal stays open with the rendered error stashed in
+/// [`crate::app::state::ExportModal::error`]. Results delivered while
+/// not on `Unlocked` or while a different modal is open are discarded.
+///
+/// The success-close / status-line / inline-error wiring lands with the
+/// reducer Enter-handler slice; until then this handler is a
+/// passthrough that drops the carried `PaladinError` without mutating
+/// state — the executor-side routing axis is locked through the live
+/// file write, not the reducer's downstream UI surface.
+fn reduce_export_result(
+    state: AppState,
+    _result: Result<(), PaladinError>,
+) -> (AppState, Vec<Effect>) {
+    (state, Vec::new())
 }
 
 /// Handle the outcome of an [`Effect::CopyCode`].
