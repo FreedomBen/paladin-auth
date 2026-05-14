@@ -19785,3 +19785,481 @@ fn tick_past_idle_deadline_with_open_passphrase_modal_typed_buffers_locks_and_dr
         ),
     }
 }
+
+// ---------------------------------------------------------------------------
+// Passphrase modal — submit (Enter) axis: emit
+// Effect::Passphrase{Set,Change,Remove} + confirmation_mismatch /
+// zero_length validation gates, plus the modal-close-on-success axis
+// for EffectResult::Passphrase Ok.
+//
+// IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Sensitive UI buffers" >
+// "Passphrase set / change buffers zeroize on submit, cancel, modal
+// close, and auto-lock." (the cancel + auto-lock axes are above; the
+// submit + modal-close axes are below).
+//
+// IMPLEMENTATION_PLAN_03_TUI.md > Modals (per §6) > Passphrase:
+// *"three sub-flows mirroring CLI's `passphrase set / change /
+// remove`. ... New passphrases (`set`, `change`) are prompted twice
+// and confirmed; mismatch returns to the modal with an inline
+// `invalid_passphrase` (`reason: "confirmation_mismatch"`) error.
+// Empty new passphrases are rejected with `invalid_passphrase`
+// (`reason: "zero_length"`)."*
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enter_in_passphrase_modal_set_subflow_with_matching_passphrases_emits_effect_passphrase_set_and_zeroizes_buffers(
+) {
+    // Submit axis for the `Set` sub-flow (plaintext → encrypted).
+    // The user has typed matching non-empty bytes into
+    // `new_passphrase` / `confirm_passphrase`. Enter past every gate
+    // must emit a single `Effect::PassphraseSet` carrying the typed
+    // bytes as a `SecretString` and leave both buffers empty
+    // (`PassphraseBuffer::take` moves new into the secret;
+    // `PassphraseBuffer::clear` wipes confirm). Mirrors
+    // `enter_in_encrypted_export_modal_with_matching_passphrases_emits_effect_and_zeroizes_passphrase_buffers`.
+    let tmp = secure_tempdir();
+    let (vault_path, (vault, store)) = open_plaintext_pair(&tmp);
+
+    let state_with_modal = AppState::Unlocked {
+        path: vault_path.clone(),
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Passphrase(PassphraseModal {
+            sub_flow: paladin_tui::app::state::PassphraseSubFlow::Set,
+            new_passphrase: passphrase_buffer_with("hunter2"),
+            confirm_passphrase: passphrase_buffer_with("hunter2"),
+            error: None,
+        })),
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+
+    let (state, effects) = reduce(state_with_modal, key(KeyCode::Enter));
+
+    assert_eq!(
+        effects.len(),
+        1,
+        "Enter past every gate must emit a single Effect::PassphraseSet; got {effects:?}",
+    );
+    match &effects[0] {
+        Effect::PassphraseSet {
+            path: effect_path,
+            new_passphrase,
+        } => {
+            assert_eq!(
+                effect_path, &vault_path,
+                "Effect::PassphraseSet must carry the current vault path",
+            );
+            assert_eq!(
+                new_passphrase.expose_secret(),
+                "hunter2",
+                "Effect::PassphraseSet must carry the typed new passphrase",
+            );
+        }
+        other => panic!("expected Effect::PassphraseSet, got {other:?}"),
+    }
+
+    match &state {
+        AppState::Unlocked {
+            modal: Some(Modal::Passphrase(pp)),
+            status_line,
+            ..
+        } => {
+            assert!(
+                pp.new_passphrase.is_empty(),
+                "submit must consume new_passphrase via take() (which zeroizes it)",
+            );
+            assert!(
+                pp.confirm_passphrase.is_empty(),
+                "submit must wipe confirm_passphrase via clear() (which zeroizes it)",
+            );
+            assert!(
+                pp.error.is_none(),
+                "submit past every gate must not surface an inline error; got {:?}",
+                pp.error,
+            );
+            assert!(
+                status_line.is_none(),
+                "submit must leave the status-line clear until EffectResult arrives; got {status_line:?}",
+            );
+        }
+        other => panic!(
+            "expected Passphrase modal still open between Enter and EffectResult, got {other:?}",
+        ),
+    }
+}
+
+#[test]
+fn enter_in_passphrase_modal_change_subflow_with_matching_passphrases_emits_effect_passphrase_change_and_zeroizes_buffers(
+) {
+    // Submit axis for the `Change` sub-flow (encrypted → encrypted
+    // with a new key). Same buffer-zeroize / single-Effect contract
+    // as the `Set` test above, but the emitted variant is
+    // `Effect::PassphraseChange`.
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (vault, store) = create_encrypted_pair(&path, "current-pp");
+
+    let state_with_modal = AppState::Unlocked {
+        path: path.clone(),
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Passphrase(PassphraseModal {
+            sub_flow: paladin_tui::app::state::PassphraseSubFlow::Change,
+            new_passphrase: passphrase_buffer_with("new-pass"),
+            confirm_passphrase: passphrase_buffer_with("new-pass"),
+            error: None,
+        })),
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+
+    let (state, effects) = reduce(state_with_modal, key(KeyCode::Enter));
+
+    assert_eq!(
+        effects.len(),
+        1,
+        "Enter past every gate must emit a single Effect::PassphraseChange; got {effects:?}",
+    );
+    match &effects[0] {
+        Effect::PassphraseChange {
+            path: effect_path,
+            new_passphrase,
+        } => {
+            assert_eq!(
+                effect_path, &path,
+                "Effect::PassphraseChange must carry the current vault path",
+            );
+            assert_eq!(
+                new_passphrase.expose_secret(),
+                "new-pass",
+                "Effect::PassphraseChange must carry the typed new passphrase",
+            );
+        }
+        other => panic!("expected Effect::PassphraseChange, got {other:?}"),
+    }
+
+    match &state {
+        AppState::Unlocked {
+            modal: Some(Modal::Passphrase(pp)),
+            status_line,
+            ..
+        } => {
+            assert!(
+                pp.new_passphrase.is_empty(),
+                "submit must consume new_passphrase via take() (which zeroizes it)",
+            );
+            assert!(
+                pp.confirm_passphrase.is_empty(),
+                "submit must wipe confirm_passphrase via clear() (which zeroizes it)",
+            );
+            assert!(pp.error.is_none());
+            assert!(status_line.is_none());
+        }
+        other => panic!(
+            "expected Passphrase modal still open between Enter and EffectResult, got {other:?}",
+        ),
+    }
+}
+
+#[test]
+fn enter_in_passphrase_modal_remove_subflow_emits_effect_passphrase_remove() {
+    // Submit axis for the `Remove` sub-flow (encrypted → plaintext).
+    // The new_passphrase / confirm_passphrase buffers are unused;
+    // Enter emits a single `Effect::PassphraseRemove` carrying just
+    // the vault path. The plaintext-storage warning acknowledgement
+    // gate lands in a subsequent view-and-ack slice; this slice
+    // locks the Effect emission contract.
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (vault, store) = create_encrypted_pair(&path, "current-pp");
+
+    let state_with_modal = AppState::Unlocked {
+        path: path.clone(),
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Passphrase(PassphraseModal {
+            sub_flow: paladin_tui::app::state::PassphraseSubFlow::Remove,
+            new_passphrase: PassphraseBuffer::new(),
+            confirm_passphrase: PassphraseBuffer::new(),
+            error: None,
+        })),
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+
+    let (state, effects) = reduce(state_with_modal, key(KeyCode::Enter));
+
+    assert_eq!(
+        effects.len(),
+        1,
+        "Enter must emit a single Effect::PassphraseRemove; got {effects:?}",
+    );
+    match &effects[0] {
+        Effect::PassphraseRemove { path: effect_path } => {
+            assert_eq!(
+                effect_path, &path,
+                "Effect::PassphraseRemove must carry the current vault path",
+            );
+        }
+        other => panic!("expected Effect::PassphraseRemove, got {other:?}"),
+    }
+
+    match &state {
+        AppState::Unlocked {
+            modal: Some(Modal::Passphrase(pp)),
+            status_line,
+            ..
+        } => {
+            assert!(
+                pp.error.is_none(),
+                "Remove submit must not surface an inline error; got {:?}",
+                pp.error,
+            );
+            assert!(status_line.is_none());
+        }
+        other => panic!(
+            "expected Passphrase modal still open between Enter and EffectResult, got {other:?}",
+        ),
+    }
+}
+
+#[test]
+fn enter_in_passphrase_modal_set_with_mismatched_new_and_confirm_surfaces_confirmation_mismatch_inline_no_effect(
+) {
+    // Validation gate: new ≠ confirm in the `Set` sub-flow. Surfaces
+    // `invalid_passphrase { reason: "confirmation_mismatch" }`
+    // inline on `PassphraseModal::error` and emits no effects.
+    // Mirrors the Export modal's confirmation_mismatch gate.
+    let tmp = secure_tempdir();
+    let (vault_path, (vault, store)) = open_plaintext_pair(&tmp);
+
+    let state_with_modal = AppState::Unlocked {
+        path: vault_path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Passphrase(PassphraseModal {
+            sub_flow: paladin_tui::app::state::PassphraseSubFlow::Set,
+            new_passphrase: passphrase_buffer_with("hunter2"),
+            confirm_passphrase: passphrase_buffer_with("hunter3"),
+            error: None,
+        })),
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+
+    let expected_inline = render_error_message(&PaladinError::InvalidPassphrase {
+        reason: "confirmation_mismatch",
+    });
+
+    let (state, effects) = reduce(state_with_modal, key(KeyCode::Enter));
+
+    assert!(
+        effects.is_empty(),
+        "confirmation_mismatch must not emit effects; got {effects:?}",
+    );
+    match &state {
+        AppState::Unlocked {
+            modal: Some(Modal::Passphrase(pp)),
+            status_line,
+            ..
+        } => {
+            assert_eq!(
+                pp.error.as_deref(),
+                Some(expected_inline.as_str()),
+                "confirmation_mismatch must surface render_error_message verbatim on PassphraseModal::error",
+            );
+            assert!(
+                status_line.is_none(),
+                "validation gate must stay inline on the modal; status line must be clear, got {status_line:?}",
+            );
+        }
+        other => panic!("expected open Passphrase modal, got {other:?}"),
+    }
+}
+
+#[test]
+fn enter_in_passphrase_modal_change_with_mismatched_new_and_confirm_surfaces_confirmation_mismatch_inline_no_effect(
+) {
+    // Same gate as the `Set` test above, but on the `Change`
+    // sub-flow. Locks the gate-applies-to-both-sub-flows contract.
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (vault, store) = create_encrypted_pair(&path, "current-pp");
+
+    let state_with_modal = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Passphrase(PassphraseModal {
+            sub_flow: paladin_tui::app::state::PassphraseSubFlow::Change,
+            new_passphrase: passphrase_buffer_with("aa"),
+            confirm_passphrase: passphrase_buffer_with("bb"),
+            error: None,
+        })),
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+
+    let expected_inline = render_error_message(&PaladinError::InvalidPassphrase {
+        reason: "confirmation_mismatch",
+    });
+
+    let (state, effects) = reduce(state_with_modal, key(KeyCode::Enter));
+
+    assert!(effects.is_empty());
+    match &state {
+        AppState::Unlocked {
+            modal: Some(Modal::Passphrase(pp)),
+            ..
+        } => {
+            assert_eq!(pp.error.as_deref(), Some(expected_inline.as_str()));
+        }
+        other => panic!("expected open Passphrase modal, got {other:?}"),
+    }
+}
+
+#[test]
+fn enter_in_passphrase_modal_set_with_empty_new_passphrase_surfaces_zero_length_inline_no_effect() {
+    // Validation gate: empty new in the `Set` sub-flow. Surfaces
+    // `invalid_passphrase { reason: "zero_length" }` inline on
+    // `PassphraseModal::error` and emits no effects. The
+    // confirmation-mismatch gate fires first when buffers differ
+    // and one is empty; this test isolates the zero-length gate by
+    // keeping both buffers empty (so they match).
+    let tmp = secure_tempdir();
+    let (vault_path, (vault, store)) = open_plaintext_pair(&tmp);
+
+    let state_with_modal = AppState::Unlocked {
+        path: vault_path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Passphrase(PassphraseModal {
+            sub_flow: paladin_tui::app::state::PassphraseSubFlow::Set,
+            new_passphrase: PassphraseBuffer::new(),
+            confirm_passphrase: PassphraseBuffer::new(),
+            error: None,
+        })),
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+
+    let expected_inline = render_error_message(&PaladinError::InvalidPassphrase {
+        reason: "zero_length",
+    });
+
+    let (state, effects) = reduce(state_with_modal, key(KeyCode::Enter));
+
+    assert!(
+        effects.is_empty(),
+        "zero_length must not emit effects; got {effects:?}",
+    );
+    match &state {
+        AppState::Unlocked {
+            modal: Some(Modal::Passphrase(pp)),
+            ..
+        } => {
+            assert_eq!(
+                pp.error.as_deref(),
+                Some(expected_inline.as_str()),
+                "zero_length must surface render_error_message verbatim on PassphraseModal::error",
+            );
+        }
+        other => panic!("expected open Passphrase modal, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_passphrase_ok_closes_modal_and_publishes_status_line_confirmation() {
+    // Modal-close-on-success axis. `EffectResult::Passphrase { result:
+    // Ok(()) }` against an open Passphrase modal closes the modal
+    // and publishes a `StatusLine::Confirmation`. Mirrors the
+    // Export modal's `effect_result_export_ok_closes_modal_and_publishes_status_line_confirmation`.
+    let tmp = secure_tempdir();
+    let (_path, state_with_modal) = unlocked_with_encrypted_vault_and_open_passphrase_modal(
+        &tmp,
+        paladin_tui::app::state::PassphraseSubFlow::Change,
+    );
+
+    let (state, effects) = reduce(state_with_modal, passphrase_result(Ok(())));
+    assert!(
+        effects.is_empty(),
+        "EffectResult::Passphrase Ok must not emit follow-up effects; got {effects:?}",
+    );
+    match &state {
+        AppState::Unlocked {
+            modal, status_line, ..
+        } => {
+            assert!(
+                modal.is_none(),
+                "EffectResult::Passphrase Ok must close the Passphrase modal; got {modal:?}",
+            );
+            match status_line {
+                Some(StatusLine::Confirmation(msg)) => {
+                    assert!(
+                        !msg.is_empty(),
+                        "status-line confirmation must carry a non-empty message",
+                    );
+                }
+                other => panic!(
+                    "EffectResult::Passphrase Ok must publish a StatusLine::Confirmation; got {other:?}",
+                ),
+            }
+        }
+        other => panic!("expected AppState::Unlocked after EffectResult Ok, got {other:?}"),
+    }
+}

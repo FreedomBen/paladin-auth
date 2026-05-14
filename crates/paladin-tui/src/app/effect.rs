@@ -325,6 +325,15 @@ pub fn execute(effect: Effect, state: &mut AppState, sender: &Sender<AppEvent>) 
             format,
             passphrase,
         } => execute_export(&path, &target_path, format, passphrase, state, sender),
+        Effect::PassphraseSet {
+            path,
+            new_passphrase,
+        } => execute_passphrase_set(&path, new_passphrase, state, sender),
+        Effect::PassphraseChange {
+            path,
+            new_passphrase,
+        } => execute_passphrase_change(&path, new_passphrase, state, sender),
+        Effect::PassphraseRemove { path } => execute_passphrase_remove(&path, state, sender),
     }
 }
 
@@ -798,5 +807,111 @@ fn execute_export(
 
     let result = bytes_result.and_then(|bytes| write_secret_file_atomic(target_path, &bytes));
     let _ = sender.send(AppEvent::EffectResult(EffectResult::Export { result }));
+    EffectOutcome::Continue
+}
+
+/// Execute an [`Effect::PassphraseSet`] for a `Set` sub-flow submit
+/// (plaintext → encrypted).
+///
+/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" >
+/// Passphrase: *"The transition methods (`set_passphrase` /
+/// `change_passphrase` / `remove_passphrase`) save themselves through
+/// `&Store` and handle their own pre-commit rollback per DESIGN §4.5
+/// ..."* — this function wraps the typed `new_passphrase` in
+/// [`EncryptionOptions::new`] (default §4.4 Argon2 params) and calls
+/// [`paladin_core::Vault::set_passphrase`]. The outcome is sent back
+/// through [`EffectResult::Passphrase`] for the reducer to surface.
+///
+/// The path check protects against a stale effect emitted before an
+/// auto-lock or vault switch: if the live state is no longer
+/// `Unlocked` against the same path, drop the effect silently — the
+/// reducer would discard the corresponding `EffectResult::Passphrase`
+/// anyway, and posting back would just synthesize an artificial
+/// mutation attempt against unrelated state.
+fn execute_passphrase_set(
+    path: &std::path::Path,
+    new_passphrase: secrecy::SecretString,
+    state: &mut AppState,
+    sender: &Sender<AppEvent>,
+) -> EffectOutcome {
+    let AppState::Unlocked {
+        path: state_path,
+        vault,
+        store,
+        ..
+    } = state
+    else {
+        return EffectOutcome::Continue;
+    };
+    if state_path != path {
+        return EffectOutcome::Continue;
+    }
+
+    let result = EncryptionOptions::new(new_passphrase)
+        .and_then(|options| vault.set_passphrase(store, options));
+    let _ = sender.send(AppEvent::EffectResult(EffectResult::Passphrase { result }));
+    EffectOutcome::Continue
+}
+
+/// Execute an [`Effect::PassphraseChange`] for a `Change` sub-flow
+/// submit (encrypted → encrypted with a new key).
+///
+/// Mirrors [`execute_passphrase_set`] but routes through
+/// [`paladin_core::Vault::change_passphrase`]; core handles the
+/// pre-commit rollback (DESIGN §4.5) and the outcome is surfaced
+/// through [`EffectResult::Passphrase`].
+fn execute_passphrase_change(
+    path: &std::path::Path,
+    new_passphrase: secrecy::SecretString,
+    state: &mut AppState,
+    sender: &Sender<AppEvent>,
+) -> EffectOutcome {
+    let AppState::Unlocked {
+        path: state_path,
+        vault,
+        store,
+        ..
+    } = state
+    else {
+        return EffectOutcome::Continue;
+    };
+    if state_path != path {
+        return EffectOutcome::Continue;
+    }
+
+    let result = EncryptionOptions::new(new_passphrase)
+        .and_then(|options| vault.change_passphrase(store, options));
+    let _ = sender.send(AppEvent::EffectResult(EffectResult::Passphrase { result }));
+    EffectOutcome::Continue
+}
+
+/// Execute an [`Effect::PassphraseRemove`] for a `Remove` sub-flow
+/// submit (encrypted → plaintext).
+///
+/// Routes through [`paladin_core::Vault::remove_passphrase`]; the
+/// cached key in core decrypts the existing payload before the
+/// plaintext rewrite. Core handles the pre-commit rollback (DESIGN
+/// §4.5) and the outcome is surfaced through
+/// [`EffectResult::Passphrase`].
+fn execute_passphrase_remove(
+    path: &std::path::Path,
+    state: &mut AppState,
+    sender: &Sender<AppEvent>,
+) -> EffectOutcome {
+    let AppState::Unlocked {
+        path: state_path,
+        vault,
+        store,
+        ..
+    } = state
+    else {
+        return EffectOutcome::Continue;
+    };
+    if state_path != path {
+        return EffectOutcome::Continue;
+    }
+
+    let result = vault.remove_passphrase(store);
+    let _ = sender.send(AppEvent::EffectResult(EffectResult::Passphrase { result }));
     EffectOutcome::Continue
 }

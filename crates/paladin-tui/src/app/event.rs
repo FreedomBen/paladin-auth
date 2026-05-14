@@ -1120,4 +1120,64 @@ pub enum Effect {
         /// passes [`None`].
         passphrase: Option<SecretString>,
     },
+    /// Apply a `Set` passphrase transition (plaintext → encrypted) to
+    /// the open vault.
+    ///
+    /// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" >
+    /// Passphrase: *"three sub-flows mirroring CLI's `passphrase set
+    /// / change / remove`. ... `set` routes through
+    /// [`paladin_core::Vault::set_passphrase`]"*. The executor wraps
+    /// the carried `new_passphrase` in
+    /// [`paladin_core::EncryptionOptions::new`] (default §4.4 Argon2
+    /// params) and calls
+    /// [`paladin_core::Vault::set_passphrase`]; the core handles its
+    /// own pre-commit rollback per DESIGN §4.5 and the outcome is
+    /// surfaced through [`EffectResult::Passphrase`].
+    PassphraseSet {
+        /// The current vault path; the executor uses it for error
+        /// reporting and to verify the path the effect was emitted
+        /// against in case the user has navigated away (e.g.
+        /// auto-locked between submit and execute).
+        path: PathBuf,
+        /// New passphrase taken from the modal's zeroizing twice-
+        /// prompt buffer at submit time; the buffer zeroizes in the
+        /// same step. `SecretString` owns its bytes through
+        /// `secrecy`, so the secret zeroizes on drop once the
+        /// executor finishes its core call.
+        new_passphrase: SecretString,
+    },
+    /// Apply a `Change` passphrase transition (encrypted → encrypted
+    /// with a new key) to the open vault.
+    ///
+    /// The executor wraps the carried `new_passphrase` in
+    /// [`paladin_core::EncryptionOptions::new`] (default §4.4 Argon2
+    /// params) and calls
+    /// [`paladin_core::Vault::change_passphrase`]; the core handles
+    /// its own pre-commit rollback per DESIGN §4.5 and the outcome
+    /// is surfaced through [`EffectResult::Passphrase`].
+    PassphraseChange {
+        /// The current vault path; the executor uses it for error
+        /// reporting and to verify the path the effect was emitted
+        /// against in case the user has navigated away.
+        path: PathBuf,
+        /// New passphrase taken from the modal's zeroizing twice-
+        /// prompt buffer at submit time.
+        new_passphrase: SecretString,
+    },
+    /// Apply a `Remove` passphrase transition (encrypted → plaintext)
+    /// to the open vault.
+    ///
+    /// The executor calls
+    /// [`paladin_core::Vault::remove_passphrase`]; the core handles
+    /// its own pre-commit rollback per DESIGN §4.5 and the outcome
+    /// is surfaced through [`EffectResult::Passphrase`]. No
+    /// passphrase is carried — the cached key is used internally by
+    /// core to decrypt the existing payload before rewriting it as
+    /// plaintext.
+    PassphraseRemove {
+        /// The current vault path; the executor uses it for error
+        /// reporting and to verify the path the effect was emitted
+        /// against in case the user has navigated away.
+        path: PathBuf,
+    },
 }

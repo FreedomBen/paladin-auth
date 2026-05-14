@@ -1531,22 +1531,37 @@ end-to-end.
   `enter_in_plaintext_export_modal_with_confirmation_emits_effect_without_passphrase`
   (Enter past the unencrypted-secrets gate emits `Effect::Export`
   with `passphrase = None`). All in `tests/reducer_tests.rs`.)*
-- [ ] Passphrase set / change buffers zeroize on submit, cancel, modal
+- [x] Passphrase set / change buffers zeroize on submit, cancel, modal
   close, and auto-lock.
-  *(Cancel and auto-lock axes locked.
-  `PassphraseModal::new_passphrase` and `PassphraseModal::confirm_passphrase`
-  are `PassphraseBuffer`s wrapping `Zeroizing<String>`, so `Drop`
-  wipes in place on modal teardown. Cancel is covered by
+  *(`PassphraseModal::new_passphrase` and `PassphraseModal::confirm_passphrase`
+  are `PassphraseBuffer`s wrapping `Zeroizing<String>`, so
+  `clear()` / `take()` wipe in place and `Drop` wipes on modal
+  teardown. Submit is covered by
+  `enter_in_passphrase_modal_set_subflow_with_matching_passphrases_emits_effect_passphrase_set_and_zeroizes_buffers`
+  and
+  `enter_in_passphrase_modal_change_subflow_with_matching_passphrases_emits_effect_passphrase_change_and_zeroizes_buffers`
+  (Enter past every gate `take()`s `new_passphrase` into the
+  `SecretString` carried by `Effect::PassphraseSet` /
+  `Effect::PassphraseChange` and `clear()`s `confirm_passphrase`);
+  cancel by
   `passphrase_modal_esc_with_typed_buffers_closes_modal_and_drops_buffers`
   (`Esc` clears `modal` to `None` so the typed bytes drop with the
-  `Modal::Passphrase(PassphraseModal)`); auto-lock by
+  `Modal::Passphrase(PassphraseModal)`); modal close (success) by
+  `effect_result_passphrase_ok_closes_modal_and_publishes_status_line_confirmation`
+  (`EffectResult::Passphrase Ok` drops the now-empty
+  `PassphraseModal` while publishing a `StatusLine::Confirmation`);
+  auto-lock by
   `tick_past_idle_deadline_with_open_passphrase_modal_typed_buffers_locks_and_drops_buffers`
   (Tick past `idle_deadline` transitions to `Locked`, dropping the
-  whole `Unlocked` arm including the open `PassphraseModal`). Both in
-  `tests/reducer_tests.rs`. The submit and modal-close-on-success
-  axes require the not-yet-wired `route_passphrase_modal_input` /
-  `Effect::Passphrase{Set,Change,Remove}` slice and land alongside
-  it.)*
+  whole `Unlocked` arm including the open `PassphraseModal`). All in
+  `tests/reducer_tests.rs`. Confirmation-mismatch / zero-length
+  validation gates are locked alongside by
+  `enter_in_passphrase_modal_set_with_mismatched_new_and_confirm_surfaces_confirmation_mismatch_inline_no_effect`,
+  `enter_in_passphrase_modal_change_with_mismatched_new_and_confirm_surfaces_confirmation_mismatch_inline_no_effect`,
+  and
+  `enter_in_passphrase_modal_set_with_empty_new_passphrase_surfaces_zero_length_inline_no_effect`;
+  the `Remove` sub-flow's Effect emission is locked by
+  `enter_in_passphrase_modal_remove_subflow_emits_effect_passphrase_remove`.)*
 - [x] Add modal manual-secret field zeroizes on submit, cancel, modal
   close, mode switch, and auto-lock.
   *(`AddModal::manual_secret` is a `PassphraseBuffer` wrapping

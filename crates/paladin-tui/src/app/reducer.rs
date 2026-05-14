@@ -29,9 +29,9 @@ use crate::app::state::{
     compute_idle_deadline, format_account_display_label, format_duplicate_account_message,
     format_qr_import_failure, initial_selection, render_error_message, AddManualFocus, AddModal,
     AddMode, AppState, ChordLeader, CountsPanel, ExportFormat, ExportModal, Focus, HotpReveal,
-    ImportModal, Modal, PassphraseModal, PendingClipboardClear, PendingDuplicateAdd, RemoveModal,
-    RenameModal, SettingsFocus, SettingsModal, StatusLine, CLIPBOARD_WRITE_FAILED,
-    NO_ACCOUNT_SELECTED,
+    ImportModal, Modal, PassphraseModal, PassphraseSubFlow, PendingClipboardClear,
+    PendingDuplicateAdd, RemoveModal, RenameModal, SettingsFocus, SettingsModal, StatusLine,
+    CLIPBOARD_WRITE_FAILED, NO_ACCOUNT_SELECTED,
 };
 use crate::prompt::PassphraseBuffer;
 use crate::search::{filtered_account_ids, select_after_search};
@@ -1441,6 +1441,7 @@ fn route_modal_input(
         Some(Modal::Remove(remove)) => route_remove_modal_input(path, remove, key),
         Some(Modal::Import(import)) => route_import_modal_input(path, import, key),
         Some(Modal::Export(export)) => route_export_modal_input(path, export, key),
+        Some(Modal::Passphrase(passphrase)) => route_passphrase_modal_input(path, passphrase, key),
         Some(Modal::Settings(settings)) => {
             let (effects, close) = route_settings_modal_input(path, settings, vault, key);
             if close {
@@ -2263,6 +2264,86 @@ fn route_export_modal_input(
         }];
     }
     Vec::new()
+}
+
+/// Passphrase modal's input path (submit axis).
+///
+/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Passphrase:
+/// *"three sub-flows mirroring CLI's `passphrase set / change /
+/// remove`. ... New passphrases (`set`, `change`) are prompted twice
+/// and confirmed; mismatch returns to the modal with an inline
+/// `invalid_passphrase` (`reason: "confirmation_mismatch"`) error.
+/// Empty new passphrases are rejected with `invalid_passphrase`
+/// (`reason: "zero_length"`)."*
+///
+/// Validation order for [`PassphraseSubFlow::Set`] /
+/// [`PassphraseSubFlow::Change`]: confirmation mismatch first
+/// (`new_passphrase != confirm_passphrase` regardless of either
+/// being empty), then zero-length (`new_passphrase` empty when the
+/// two matched). Both gates render through [`render_error_message`]
+/// so the surfaced wording matches the rest of the TUI's error
+/// surface.
+///
+/// On a passing submit the `new_passphrase` buffer is moved through
+/// [`crate::prompt::PassphraseBuffer::take`] into the `SecretString`
+/// carried by the emitted [`Effect::PassphraseSet`] /
+/// [`Effect::PassphraseChange`], and the `confirm_passphrase`
+/// sibling is wiped via [`crate::prompt::PassphraseBuffer::clear`]
+/// — both operations zeroize in place per
+/// `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)": *"All
+/// passphrase-entry fields ... keep typed bytes in zeroizing
+/// buffers, convert to `secrecy::SecretString` only for core calls,
+/// and zeroize on submit, cancel, modal close, and auto-lock."*
+///
+/// [`PassphraseSubFlow::Remove`] does not consume either buffer
+/// (the cached key in core decrypts the existing payload before the
+/// plaintext rewrite); Enter emits an [`Effect::PassphraseRemove`]
+/// carrying only the vault path.
+fn route_passphrase_modal_input(
+    path: &std::path::Path,
+    passphrase: &mut PassphraseModal,
+    key: &KeyEvent,
+) -> Vec<Effect> {
+    if !matches!(key.code, KeyCode::Enter) {
+        return Vec::new();
+    }
+    match passphrase.sub_flow {
+        PassphraseSubFlow::Set | PassphraseSubFlow::Change => {
+            if passphrase.new_passphrase.as_str() != passphrase.confirm_passphrase.as_str() {
+                passphrase.error = Some(render_error_message(&PaladinError::InvalidPassphrase {
+                    reason: "confirmation_mismatch",
+                }));
+                return Vec::new();
+            }
+            if passphrase.new_passphrase.is_empty() {
+                passphrase.error = Some(render_error_message(&PaladinError::InvalidPassphrase {
+                    reason: "zero_length",
+                }));
+                return Vec::new();
+            }
+            let secret = passphrase.new_passphrase.take();
+            passphrase.confirm_passphrase.clear();
+            passphrase.error = None;
+            let effect = match passphrase.sub_flow {
+                PassphraseSubFlow::Set => Effect::PassphraseSet {
+                    path: path.to_path_buf(),
+                    new_passphrase: secret,
+                },
+                PassphraseSubFlow::Change => Effect::PassphraseChange {
+                    path: path.to_path_buf(),
+                    new_passphrase: secret,
+                },
+                PassphraseSubFlow::Remove => unreachable!("guarded by outer match arm"),
+            };
+            vec![effect]
+        }
+        PassphraseSubFlow::Remove => {
+            passphrase.error = None;
+            vec![Effect::PassphraseRemove {
+                path: path.to_path_buf(),
+            }]
+        }
+    }
 }
 
 /// Map the (key character, current selection) pair to a status-line
