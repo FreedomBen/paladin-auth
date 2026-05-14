@@ -18461,3 +18461,121 @@ fn enter_in_encrypted_export_modal_with_mismatched_passphrases_refuses_with_conf
         "destination must remain absent after a refused mismatch gate",
     );
 }
+
+// ---------------------------------------------------------------------------
+// Export modal — encrypted twice-confirm zero-length passphrase rejection
+// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Export modal":
+//  *"Encrypted export rejects empty new passphrase with `zero_length`."*)
+//
+// Slice covered: the reducer's Enter handler on `Modal::Export` when
+// `format = ExportFormat::Encrypted`. After the overwrite gate and
+// after the byte-for-byte mismatch gate (both empty buffers compare
+// equal and so slip past `confirmation_mismatch`), an empty new
+// passphrase is refused — no `Effect::Export` is emitted, the modal
+// stays open, and the rendered
+// `InvalidPassphrase { reason: "zero_length" }` lands inline on
+// `ExportModal::error`. Wire parity with the CLI's
+// `prompt_new_passphrase` (`paladin-cli/src/prompt.rs`, DESIGN.md §5)
+// and the GTK `SubmitRejection::ZeroLength` keeps the user-facing
+// reason stable across all three front-ends. Gate ordering matches
+// the CLI / GTK: mismatch first, then zero_length, so an empty-vs-
+// non-empty pair still surfaces `confirmation_mismatch` and only the
+// empty/empty pair reaches this slice.
+//
+// Export does not mutate the vault, so there is no save-rollback to
+// reason about here; the assertion surface is "no effect emitted,
+// modal stays open with inline error, and the destination path is
+// still absent on disk."
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enter_in_encrypted_export_modal_with_empty_new_passphrase_refuses_with_zero_length() {
+    let tmp = secure_tempdir();
+    let unlocked = fresh_plaintext_unlocked(&tmp);
+
+    // Destination is a fresh path — the overwrite gate must pass so
+    // the zero-length gate is the one exercised.
+    let dest = tmp.path().join("bundle.paladin");
+    assert!(
+        !dest.exists(),
+        "harness precondition: destination must not exist before the test runs",
+    );
+
+    let state_with_modal = match unlocked {
+        AppState::Unlocked {
+            path, vault, store, ..
+        } => AppState::Unlocked {
+            path,
+            vault,
+            store,
+            search_query: String::new(),
+            idle_deadline: None,
+            pending_clipboard_clear: None,
+            hotp_reveal: None,
+            modal: Some(Modal::Export(ExportModal {
+                path_text: dest.to_string_lossy().into_owned(),
+                format: ExportFormat::Encrypted,
+                // Both buffers empty: equality check passes, so the
+                // mismatch gate does not fire and the zero-length gate
+                // is what refuses the submit.
+                new_passphrase: PassphraseBuffer::new(),
+                confirm_passphrase: PassphraseBuffer::new(),
+                ..ExportModal::default()
+            })),
+            selected: None,
+            pending_chord_leader: None,
+            viewport_height: 0,
+            viewport_offset: 0,
+            focus: Focus::List,
+            status_line: None,
+            help_open: false,
+        },
+        other => panic!("expected Unlocked, got {other:?}"),
+    };
+
+    let (state, effects) = reduce(state_with_modal, key(KeyCode::Enter));
+
+    assert!(
+        effects.is_empty(),
+        "empty-passphrase zero-length gate must not emit Effect::Export; got {effects:?}",
+    );
+
+    let expected = render_error_message(&PaladinError::InvalidPassphrase {
+        reason: "zero_length",
+    });
+
+    match state {
+        AppState::Unlocked {
+            modal: Some(Modal::Export(export)),
+            status_line,
+            ..
+        } => {
+            assert_eq!(
+                export.path_text,
+                dest.to_string_lossy(),
+                "zero-length gate must leave path_text intact for the retry",
+            );
+            assert!(
+                matches!(export.format, ExportFormat::Encrypted),
+                "zero-length gate must leave the format selector on Encrypted",
+            );
+            assert_eq!(
+                export.error.as_deref(),
+                Some(expected.as_str()),
+                "zero-length gate must surface the rendered zero_length InvalidPassphrase inline",
+            );
+            assert!(
+                status_line.is_none(),
+                "zero-length gate must stay inline on the modal — no status-line spill",
+            );
+        }
+        other => panic!("expected Modal::Export to stay open with inline error, got {other:?}"),
+    }
+
+    // Destination must still be absent — the gate refused before any
+    // writer touched the filesystem.
+    assert!(
+        !dest.exists(),
+        "destination must remain absent after a refused zero-length gate",
+    );
+}

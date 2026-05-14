@@ -2067,12 +2067,25 @@ fn route_import_modal_input(
 /// (`paladin-cli/src/prompt.rs`, DESIGN.md §5) and the GTK
 /// `SubmitRejection::ConfirmationMismatch` wire code.
 ///
+/// The third submit-time check is the zero-length passphrase gate.
+/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Tests" > Export modal:
+/// *"Encrypted export rejects empty new passphrase with
+/// `zero_length`."*. When `format = ExportFormat::Encrypted` and the
+/// twice-confirmed buffer is empty (both rows blank slip past the
+/// equality check above), the reducer surfaces a rendered
+/// [`PaladinError::InvalidPassphrase`] with `reason = "zero_length"`
+/// inline on
+/// [`ExportModal::error`](crate::app::state::ExportModal::error). Gate
+/// order mirrors the CLI's `prompt_new_passphrase` (mismatch first,
+/// then `zero_length`) and the GTK `SubmitRejection::ZeroLength` wire
+/// code so the user-facing reason stays stable across all three
+/// front-ends.
+///
 /// Subsequent gate / effect-emission slices (plaintext
-/// unencrypted-secrets confirmation, zero-length passphrase
-/// rejection, the actual [`Effect::Export`] emission) land alongside
-/// their own checklist entries; until then this slice stops at the
-/// gate refusals and treats all other Enter outcomes as a silent
-/// no-op so the modal-trap contract holds.
+/// unencrypted-secrets confirmation, the actual [`Effect::Export`]
+/// emission) land alongside their own checklist entries; until then
+/// this slice stops at the gate refusals and treats all other Enter
+/// outcomes as a silent no-op so the modal-trap contract holds.
 fn route_export_modal_input(export: &mut ExportModal, key: &KeyEvent) -> Vec<Effect> {
     if matches!(key.code, KeyCode::Enter) {
         let target = std::path::PathBuf::from(export.path_text.trim());
@@ -2092,6 +2105,12 @@ fn route_export_modal_input(export: &mut ExportModal, key: &KeyEvent) -> Vec<Eff
         {
             export.error = Some(render_error_message(&PaladinError::InvalidPassphrase {
                 reason: "confirmation_mismatch",
+            }));
+            return Vec::new();
+        }
+        if matches!(export.format, ExportFormat::Encrypted) && export.new_passphrase.is_empty() {
+            export.error = Some(render_error_message(&PaladinError::InvalidPassphrase {
+                reason: "zero_length",
             }));
             return Vec::new();
         }

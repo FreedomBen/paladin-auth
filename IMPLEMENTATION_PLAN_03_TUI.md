@@ -1181,7 +1181,21 @@ end-to-end.
   disk. Mirrors the CLI's `prompt_new_passphrase` (DESIGN.md §5) and
   the GTK `SubmitRejection::ConfirmationMismatch` wire code so the
   user-facing reason stays stable across all three front-ends.)*
-- [ ] Encrypted export rejects empty new passphrase with `zero_length`.
+- [x] Encrypted export rejects empty new passphrase with `zero_length`.
+  *(`enter_in_encrypted_export_modal_with_empty_new_passphrase_refuses_with_zero_length`
+  in `tests/reducer_tests.rs` opens `Modal::Export` with
+  `format = ExportFormat::Encrypted`, a fresh destination path that
+  the overwrite gate accepts, and two empty `PassphraseBuffer`s (so
+  the byte-for-byte mismatch gate slips past — both buffers are
+  equal). Pressing Enter asserts no `Effect::Export` is emitted, the
+  modal stays open, the rendered
+  `InvalidPassphrase { reason: "zero_length" }` lands inline on
+  `ExportModal::error`, the format selector stays on `Encrypted`, no
+  status-line spill occurs, and the destination remains absent on
+  disk. Gate ordering matches the CLI's `prompt_new_passphrase`
+  (mismatch first, then `zero_length`, DESIGN.md §5) and the GTK
+  `SubmitRejection::ZeroLength` wire code so the user-facing reason
+  stays stable across all three front-ends.)*
 - [ ] Plaintext export requires the unencrypted-secrets confirmation
   before writing.
 - [x] Output is written through
