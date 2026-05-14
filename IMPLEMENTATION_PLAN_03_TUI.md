@@ -1065,18 +1065,68 @@ end-to-end.
   emits a fresh `AccountId` distinct from the existing one. The
   non-colliding `Skip` happy path remains covered by
   `execute_import_with_auto_format_routes_through_import_from_file_for_otpauth_payload_and_persists_via_mutate_and_save`.)*
-- [ ] Validation warnings are rendered through
+- [x] Validation warnings are rendered through
   `paladin_core::format_validation_warning()`.
-- [ ] Importer errors (`unsupported_import_format`,
+  *(Reducer's `reduce_import_result` Ok arm renders each
+  `ImportReport::warnings` entry through
+  `paladin_core::format_validation_warning` and seeds
+  `ImportModal::counts_panel.warnings`, mirroring the QR-add post-success
+  panel. Asserted by
+  `effect_result_import_ok_renders_warnings_through_format_validation_warning`,
+  `effect_result_import_ok_preserves_warning_order_across_multiple_warnings`,
+  and `effect_result_import_ok_with_no_warnings_yields_empty_warnings_list`
+  in `tests/reducer_tests.rs`.)*
+- [x] Importer errors (`unsupported_import_format`,
   `unsupported_plaintext_vault`, `unsupported_encrypted_aegis`,
   `unsupported_aegis_entry_type`, `validation_error`,
   `no_entries_to_import`, `decrypt_failed`, `invalid_header`,
   `invalid_payload`, `unsupported_format_version`,
   `kdf_params_out_of_bounds`, `io_error`) surface inline without
   mutation.
-- [ ] Successful imports persist via `Vault::mutate_and_save`.
-- [ ] A `save_not_committed` failure restores the core snapshot so
+  *(Reducer's `reduce_import_result` Err arm renders the carried
+  `PaladinError` through `render_error_message` and stashes it in
+  `ImportModal::error`, leaving the modal open. The `counts_panel` slot
+  stays unset on Err, and the in-memory vault is not mutated. One
+  reducer test per error variant —
+  `effect_result_import_err_unsupported_import_format_renders_inline`,
+  `effect_result_import_err_unsupported_plaintext_vault_renders_inline`,
+  `effect_result_import_err_unsupported_encrypted_aegis_renders_inline`,
+  `effect_result_import_err_unsupported_aegis_entry_type_renders_inline`,
+  `effect_result_import_err_validation_error_renders_inline`,
+  `effect_result_import_err_no_entries_to_import_renders_inline`,
+  `effect_result_import_err_decrypt_failed_renders_inline`,
+  `effect_result_import_err_invalid_header_renders_inline`,
+  `effect_result_import_err_invalid_payload_renders_inline`,
+  `effect_result_import_err_unsupported_format_version_renders_inline`,
+  `effect_result_import_err_kdf_params_out_of_bounds_renders_inline`,
+  `effect_result_import_err_io_error_renders_inline` — plus
+  `effect_result_import_err_keeps_modal_open` in
+  `tests/reducer_tests.rs`.)*
+- [x] Successful imports persist via `Vault::mutate_and_save`.
+  *(Reducer Ok-arm coverage:
+  `effect_result_import_ok_populates_counts_panel_with_all_four_counts`
+  asserts the four `ImportReport` merge totals
+  (`imported`/`skipped`/`replaced`/`appended`) flow into
+  `ImportModal::counts_panel`;
+  `effect_result_import_ok_does_not_close_modal`,
+  `effect_result_import_ok_clears_prior_inline_error`, and
+  `effect_result_import_ok_does_not_perturb_vault_state` lock the
+  rest of the Ok contract. The executor-side `mutate_and_save` route
+  is already locked by
+  `execute_import_with_auto_format_routes_through_import_from_file_for_otpauth_payload_and_persists_via_mutate_and_save`
+  in `tests/effect_tests.rs`.)*
+- [x] A `save_not_committed` failure restores the core snapshot so
   `Vault::iter()` matches its pre-attempt state.
+  *(Reducer side:
+  `effect_result_import_err_save_not_committed_renders_inline_and_leaves_vault_unchanged`
+  asserts the Err arm renders the inline error and does not perturb
+  the in-memory vault. Executor side: the fault-injection test
+  `import_save_not_committed::execute_import_with_save_not_committed_failure_rolls_back_live_vault_to_pre_attempt_snapshot`
+  in `tests/effect_tests.rs` (gated on `--features test-hooks`) drives
+  `Effect::Import` with `PALADIN_FAULT_INJECT=pre_commit` so
+  `Vault::mutate_and_save` exercises its snapshot-restore path; both
+  the live `vault.iter()` order/count and the on-disk vault match the
+  pre-attempt snapshot.)*
 
 ### Export modal (`tests/reducer_tests.rs`)
 

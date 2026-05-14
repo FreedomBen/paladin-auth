@@ -25,7 +25,8 @@ use paladin_core::{
     Store, ValidationWarning, Vault, VaultInit, VaultLock, VaultStatus,
 };
 use paladin_tui::app::event::{
-    AddFailure, AddSuccess, AppEvent, Effect, EffectResult, QrImportFailure, QrImportSuccess,
+    AddFailure, AddSuccess, AppEvent, Effect, EffectResult, ImportFailure, ImportSuccess,
+    QrImportFailure, QrImportSuccess,
 };
 use paladin_tui::app::reducer::reduce;
 use paladin_tui::app::state::{
@@ -17281,5 +17282,547 @@ fn typed_path_edit_after_reject_clears_error_so_user_sees_retry() {
             );
         }
         other => panic!("expected Import modal still open, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Import modal — `EffectResult::Import` Ok / Err handling.
+//
+// Covers `IMPLEMENTATION_PLAN_03_TUI.md` "Import modal" bullets:
+//
+//   - "Validation warnings are rendered through
+//     `paladin_core::format_validation_warning()`."
+//   - "Importer errors (`unsupported_import_format`,
+//     `unsupported_plaintext_vault`, `unsupported_encrypted_aegis`,
+//     `unsupported_aegis_entry_type`, `validation_error`,
+//     `no_entries_to_import`, `decrypt_failed`, `invalid_header`,
+//     `invalid_payload`, `unsupported_format_version`,
+//     `kdf_params_out_of_bounds`, `io_error`) surface inline without
+//     mutation."
+//   - "Successful imports persist via `Vault::mutate_and_save`."
+//   - "A `save_not_committed` failure restores the core snapshot so
+//     `Vault::iter()` matches its pre-attempt state." (reducer-side: the
+//     Err arm leaves the in-memory vault unchanged so it stays in sync
+//     with the rolled-back on-disk state.)
+// ---------------------------------------------------------------------------
+
+/// Build an `AppEvent` carrying an `EffectResult::Import` outcome.
+///
+/// Mirrors [`qr_import_result`] for the Import modal so reducer tests
+/// can deliver Ok / Err arms without re-running the executor.
+fn import_result(result: Result<ImportSuccess, ImportFailure>) -> AppEvent {
+    AppEvent::EffectResult(EffectResult::Import { result })
+}
+
+/// Build a fresh plaintext `AppState::Unlocked` and open the Import
+/// modal so reducer tests can deliver `EffectResult::Import` outcomes
+/// without driving the full Enter handler.
+fn fresh_unlocked_with_import_modal(tmp: &tempfile::TempDir) -> AppState {
+    let unlocked = fresh_plaintext_unlocked(tmp);
+    let (state, _) = reduce(unlocked, key(KeyCode::Char('i')));
+    match &state {
+        AppState::Unlocked {
+            modal: Some(Modal::Import(_)),
+            ..
+        } => {}
+        other => panic!("expected Modal::Import open, got {other:?}"),
+    }
+    state
+}
+
+fn import_modal_ref(state: &AppState) -> &paladin_tui::app::state::ImportModal {
+    match state {
+        AppState::Unlocked {
+            modal: Some(Modal::Import(i)),
+            ..
+        } => i,
+        AppState::Unlocked { modal, .. } => {
+            panic!("expected Modal::Import open, got modal={modal:?}")
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_import_ok_populates_counts_panel_with_all_four_counts() {
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_import_modal(&tmp);
+    let report = ImportReport {
+        imported: 3,
+        skipped: 1,
+        replaced: 2,
+        appended: 4,
+        accounts: Vec::new(),
+        warnings: Vec::new(),
+    };
+    let success = ImportSuccess { report };
+    let (state, effects) = reduce(state, import_result(Ok(success)));
+    assert!(effects.is_empty(), "Ok must not emit follow-up effects");
+    let import = import_modal_ref(&state);
+    let panel = import
+        .counts_panel
+        .as_ref()
+        .expect("Ok must populate ImportModal::counts_panel");
+    assert_eq!(panel.imported, 3, "imported total mirrors ImportReport");
+    assert_eq!(panel.skipped, 1, "skipped total mirrors ImportReport");
+    assert_eq!(panel.replaced, 2, "replaced total mirrors ImportReport");
+    assert_eq!(panel.appended, 4, "appended total mirrors ImportReport");
+}
+
+#[test]
+fn effect_result_import_ok_renders_warnings_through_format_validation_warning() {
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_import_modal(&tmp);
+    let warning_inner = ValidationWarning::ShortSecret {
+        decoded_len: 10,
+        recommended_min: 20,
+    };
+    let expected = format_validation_warning(&warning_inner);
+    let report = ImportReport {
+        imported: 1,
+        skipped: 0,
+        replaced: 0,
+        appended: 0,
+        accounts: Vec::new(),
+        warnings: vec![ImportWarning {
+            source_index: 0,
+            warning: warning_inner,
+        }],
+    };
+    let success = ImportSuccess { report };
+    let (state, _effects) = reduce(state, import_result(Ok(success)));
+    let import = import_modal_ref(&state);
+    let panel = import.counts_panel.as_ref().expect("panel populated");
+    assert_eq!(
+        panel.warnings,
+        vec![expected],
+        "each warning is rendered through format_validation_warning"
+    );
+}
+
+#[test]
+fn effect_result_import_ok_preserves_warning_order_across_multiple_warnings() {
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_import_modal(&tmp);
+    let w0 = ValidationWarning::ShortSecret {
+        decoded_len: 8,
+        recommended_min: 20,
+    };
+    let w1 = ValidationWarning::ShortSecret {
+        decoded_len: 12,
+        recommended_min: 20,
+    };
+    let expected_0 = format_validation_warning(&w0);
+    let expected_1 = format_validation_warning(&w1);
+    let report = ImportReport {
+        imported: 2,
+        skipped: 0,
+        replaced: 0,
+        appended: 0,
+        accounts: Vec::new(),
+        warnings: vec![
+            ImportWarning {
+                source_index: 0,
+                warning: w0,
+            },
+            ImportWarning {
+                source_index: 1,
+                warning: w1,
+            },
+        ],
+    };
+    let success = ImportSuccess { report };
+    let (state, _effects) = reduce(state, import_result(Ok(success)));
+    let import = import_modal_ref(&state);
+    let panel = import.counts_panel.as_ref().expect("panel populated");
+    assert_eq!(
+        panel.warnings,
+        vec![expected_0, expected_1],
+        "warning order mirrors the ImportReport::warnings order"
+    );
+}
+
+#[test]
+fn effect_result_import_ok_with_no_warnings_yields_empty_warnings_list() {
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_import_modal(&tmp);
+    let report = ImportReport {
+        imported: 5,
+        skipped: 0,
+        replaced: 0,
+        appended: 0,
+        accounts: Vec::new(),
+        warnings: Vec::new(),
+    };
+    let success = ImportSuccess { report };
+    let (state, _effects) = reduce(state, import_result(Ok(success)));
+    let import = import_modal_ref(&state);
+    let panel = import.counts_panel.as_ref().expect("panel populated");
+    assert!(
+        panel.warnings.is_empty(),
+        "empty report.warnings yields an empty rendered list; got {:?}",
+        panel.warnings
+    );
+}
+
+#[test]
+fn effect_result_import_ok_clears_prior_inline_error() {
+    let tmp = secure_tempdir();
+    let mut state = fresh_unlocked_with_import_modal(&tmp);
+    if let AppState::Unlocked {
+        modal: Some(Modal::Import(import)),
+        ..
+    } = &mut state
+    {
+        import.error = Some("stale prior rejection".to_string());
+    } else {
+        panic!("expected open Import modal");
+    }
+    let report = ImportReport {
+        imported: 1,
+        skipped: 0,
+        replaced: 0,
+        appended: 0,
+        accounts: Vec::new(),
+        warnings: Vec::new(),
+    };
+    let success = ImportSuccess { report };
+    let (state, _effects) = reduce(state, import_result(Ok(success)));
+    let import = import_modal_ref(&state);
+    assert!(
+        import.error.is_none(),
+        "Ok must clear any prior inline rejection"
+    );
+}
+
+#[test]
+fn effect_result_import_ok_does_not_close_modal() {
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_import_modal(&tmp);
+    let report = ImportReport {
+        imported: 1,
+        skipped: 0,
+        replaced: 0,
+        appended: 0,
+        accounts: Vec::new(),
+        warnings: Vec::new(),
+    };
+    let success = ImportSuccess { report };
+    let (state, _effects) = reduce(state, import_result(Ok(success)));
+    match &state {
+        AppState::Unlocked {
+            modal: Some(Modal::Import(_)),
+            ..
+        } => {}
+        other => panic!("Ok must leave Import modal open, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_import_ok_does_not_perturb_vault_state() {
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_import_modal(&tmp);
+    let pre = match &state {
+        AppState::Unlocked { vault, .. } => vault.iter().count(),
+        other => panic!("expected Unlocked, got {other:?}"),
+    };
+    // Ok arm itself does not mutate vault state — the executor already
+    // committed via `Vault::mutate_and_save` before posting back. The
+    // reducer must not double-mutate.
+    let report = ImportReport {
+        imported: 1,
+        skipped: 0,
+        replaced: 0,
+        appended: 0,
+        accounts: Vec::new(),
+        warnings: Vec::new(),
+    };
+    let success = ImportSuccess { report };
+    let (state, _effects) = reduce(state, import_result(Ok(success)));
+    match &state {
+        AppState::Unlocked { vault, .. } => assert_eq!(
+            vault.iter().count(),
+            pre,
+            "reducer Ok arm must not mutate vault state"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_import_err_unsupported_import_format_renders_inline() {
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_import_modal(&tmp);
+    let err = PaladinError::UnsupportedImportFormat {
+        format: "unknown".to_string(),
+    };
+    let expected = render_error_message(&err);
+    let (state, effects) = reduce(state, import_result(Err(ImportFailure(err))));
+    assert!(effects.is_empty(), "Err must not emit follow-up effects");
+    let import = import_modal_ref(&state);
+    assert_eq!(import.error.as_deref(), Some(expected.as_str()));
+    assert!(
+        import.counts_panel.is_none(),
+        "Err must not populate counts_panel"
+    );
+}
+
+#[test]
+fn effect_result_import_err_unsupported_plaintext_vault_renders_inline() {
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_import_modal(&tmp);
+    let err = PaladinError::UnsupportedPlaintextVault;
+    let expected = render_error_message(&err);
+    let (state, _effects) = reduce(state, import_result(Err(ImportFailure(err))));
+    let import = import_modal_ref(&state);
+    assert_eq!(import.error.as_deref(), Some(expected.as_str()));
+}
+
+#[test]
+fn effect_result_import_err_unsupported_encrypted_aegis_renders_inline() {
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_import_modal(&tmp);
+    let err = PaladinError::UnsupportedEncryptedAegis;
+    let expected = render_error_message(&err);
+    let (state, _effects) = reduce(state, import_result(Err(ImportFailure(err))));
+    let import = import_modal_ref(&state);
+    assert_eq!(import.error.as_deref(), Some(expected.as_str()));
+}
+
+#[test]
+fn effect_result_import_err_unsupported_aegis_entry_type_renders_inline() {
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_import_modal(&tmp);
+    let err = PaladinError::UnsupportedAegisEntryType {
+        source_index: 2,
+        entry_type: "steam".to_string(),
+    };
+    let expected = render_error_message(&err);
+    let (state, _effects) = reduce(state, import_result(Err(ImportFailure(err))));
+    let import = import_modal_ref(&state);
+    assert_eq!(import.error.as_deref(), Some(expected.as_str()));
+}
+
+#[test]
+fn effect_result_import_err_validation_error_renders_inline() {
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_import_modal(&tmp);
+    let err = PaladinError::ValidationError {
+        field: "secret",
+        reason: "bad_base32".to_string(),
+        source_index: Some(0),
+        decoded_len: None,
+        recommended_min: None,
+        entry_type: None,
+    };
+    let expected = render_error_message(&err);
+    let (state, _effects) = reduce(state, import_result(Err(ImportFailure(err))));
+    let import = import_modal_ref(&state);
+    assert_eq!(import.error.as_deref(), Some(expected.as_str()));
+}
+
+#[test]
+fn effect_result_import_err_no_entries_to_import_renders_inline() {
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_import_modal(&tmp);
+    let err = PaladinError::NoEntriesToImport;
+    let expected = render_error_message(&err);
+    let (state, _effects) = reduce(state, import_result(Err(ImportFailure(err))));
+    let import = import_modal_ref(&state);
+    assert_eq!(import.error.as_deref(), Some(expected.as_str()));
+}
+
+#[test]
+fn effect_result_import_err_decrypt_failed_renders_inline() {
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_import_modal(&tmp);
+    let err = PaladinError::DecryptFailed;
+    let expected = render_error_message(&err);
+    let (state, _effects) = reduce(state, import_result(Err(ImportFailure(err))));
+    let import = import_modal_ref(&state);
+    assert_eq!(import.error.as_deref(), Some(expected.as_str()));
+}
+
+#[test]
+fn effect_result_import_err_invalid_header_renders_inline() {
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_import_modal(&tmp);
+    let err = PaladinError::InvalidHeader;
+    let expected = render_error_message(&err);
+    let (state, _effects) = reduce(state, import_result(Err(ImportFailure(err))));
+    let import = import_modal_ref(&state);
+    assert_eq!(import.error.as_deref(), Some(expected.as_str()));
+}
+
+#[test]
+fn effect_result_import_err_invalid_payload_renders_inline() {
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_import_modal(&tmp);
+    let err = PaladinError::InvalidPayload {
+        reason: "decode_failed",
+    };
+    let expected = render_error_message(&err);
+    let (state, _effects) = reduce(state, import_result(Err(ImportFailure(err))));
+    let import = import_modal_ref(&state);
+    assert_eq!(import.error.as_deref(), Some(expected.as_str()));
+}
+
+#[test]
+fn effect_result_import_err_unsupported_format_version_renders_inline() {
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_import_modal(&tmp);
+    let err = PaladinError::UnsupportedFormatVersion { format_ver: 99 };
+    let expected = render_error_message(&err);
+    let (state, _effects) = reduce(state, import_result(Err(ImportFailure(err))));
+    let import = import_modal_ref(&state);
+    assert_eq!(import.error.as_deref(), Some(expected.as_str()));
+}
+
+#[test]
+fn effect_result_import_err_kdf_params_out_of_bounds_renders_inline() {
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_import_modal(&tmp);
+    let err = PaladinError::KdfParamsOutOfBounds {
+        m_kib: 1,
+        t: 0,
+        p: 0,
+    };
+    let expected = render_error_message(&err);
+    let (state, _effects) = reduce(state, import_result(Err(ImportFailure(err))));
+    let import = import_modal_ref(&state);
+    assert_eq!(import.error.as_deref(), Some(expected.as_str()));
+}
+
+#[test]
+fn effect_result_import_err_io_error_renders_inline() {
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_import_modal(&tmp);
+    let err = PaladinError::IoError {
+        operation: "read_import_file",
+        source: std::io::Error::from(std::io::ErrorKind::NotFound),
+    };
+    let expected = render_error_message(&err);
+    let (state, _effects) = reduce(state, import_result(Err(ImportFailure(err))));
+    let import = import_modal_ref(&state);
+    assert_eq!(import.error.as_deref(), Some(expected.as_str()));
+}
+
+#[test]
+fn effect_result_import_err_save_not_committed_renders_inline_and_leaves_vault_unchanged() {
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_import_modal(&tmp);
+    let pre = match &state {
+        AppState::Unlocked { vault, .. } => vault.iter().count(),
+        other => panic!("expected Unlocked, got {other:?}"),
+    };
+    let err = PaladinError::SaveNotCommitted {
+        committed: false,
+        backup_path: None,
+    };
+    let expected = render_error_message(&err);
+    let (state, effects) = reduce(state, import_result(Err(ImportFailure(err))));
+    assert!(effects.is_empty(), "Err must not emit follow-up effects");
+    let import = import_modal_ref(&state);
+    assert_eq!(import.error.as_deref(), Some(expected.as_str()));
+    match &state {
+        AppState::Unlocked { vault, .. } => assert_eq!(
+            vault.iter().count(),
+            pre,
+            "save_not_committed rolled back inside core; reducer must not perturb the in-memory vault"
+        ),
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_import_err_keeps_modal_open() {
+    let tmp = secure_tempdir();
+    let state = fresh_unlocked_with_import_modal(&tmp);
+    let err = PaladinError::UnsupportedImportFormat {
+        format: "unknown".to_string(),
+    };
+    let (state, _effects) = reduce(state, import_result(Err(ImportFailure(err))));
+    match &state {
+        AppState::Unlocked {
+            modal: Some(Modal::Import(_)),
+            ..
+        } => {}
+        other => panic!("Err must leave Import modal open, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_import_err_is_dropped_when_no_modal_open() {
+    let tmp = secure_tempdir();
+    let state = fresh_plaintext_unlocked(&tmp);
+    let err = PaladinError::UnsupportedImportFormat {
+        format: "unknown".to_string(),
+    };
+    let (state, effects) = reduce(state, import_result(Err(ImportFailure(err))));
+    assert!(effects.is_empty());
+    match &state {
+        AppState::Unlocked { modal: None, .. } => {}
+        other => panic!("modal must stay None, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_import_err_is_dropped_when_a_different_modal_is_open() {
+    let tmp = secure_tempdir();
+    let unlocked = fresh_plaintext_unlocked(&tmp);
+    // Open the Settings modal so the Import outcome arrives against a
+    // non-Import modal and must be discarded.
+    let (state, _) = reduce(unlocked, key(KeyCode::Char('s')));
+    let err = PaladinError::UnsupportedImportFormat {
+        format: "unknown".to_string(),
+    };
+    let (state, _effects) = reduce(state, import_result(Err(ImportFailure(err))));
+    match &state {
+        AppState::Unlocked { modal, .. } => {
+            assert!(matches!(modal, Some(Modal::Settings(_))));
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_import_ok_is_dropped_when_no_modal_open() {
+    let tmp = secure_tempdir();
+    let state = fresh_plaintext_unlocked(&tmp);
+    let report = ImportReport {
+        imported: 1,
+        skipped: 0,
+        replaced: 0,
+        appended: 0,
+        accounts: Vec::new(),
+        warnings: Vec::new(),
+    };
+    let (state, effects) = reduce(state, import_result(Ok(ImportSuccess { report })));
+    assert!(effects.is_empty());
+    match &state {
+        AppState::Unlocked { modal: None, .. } => {}
+        other => panic!("modal must stay None, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_import_ok_is_dropped_when_a_different_modal_is_open() {
+    let tmp = secure_tempdir();
+    let unlocked = fresh_plaintext_unlocked(&tmp);
+    let (state, _) = reduce(unlocked, key(KeyCode::Char('s')));
+    let report = ImportReport {
+        imported: 1,
+        skipped: 0,
+        replaced: 0,
+        appended: 0,
+        accounts: Vec::new(),
+        warnings: Vec::new(),
+    };
+    let (state, _effects) = reduce(state, import_result(Ok(ImportSuccess { report })));
+    match &state {
+        AppState::Unlocked { modal, .. } => {
+            assert!(matches!(modal, Some(Modal::Settings(_))));
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
     }
 }

@@ -738,6 +738,8 @@ fn reduce_qr_import_result(
             add.counts_panel = Some(CountsPanel {
                 imported: report.imported,
                 skipped: report.skipped,
+                replaced: report.replaced,
+                appended: report.appended,
                 warnings,
             });
             add.error = None;
@@ -752,9 +754,17 @@ fn reduce_qr_import_result(
 /// Handle the outcome of an [`Effect::Import`].
 ///
 /// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Import:
-/// on success the modal renders a post-success counts panel (the
-/// per-slice counts-panel state lands alongside that bullet); on
-/// failure the rendered importer / save error stashes inline so the
+/// on success the modal renders a post-success counts panel populated
+/// from the carried [`paladin_core::ImportReport`] — the four merge
+/// totals (`imported` / `skipped` / `replaced` / `appended`) flow
+/// through verbatim, and each [`paladin_core::ImportWarning`] is
+/// rendered through [`paladin_core::format_validation_warning`] up
+/// front so the view layer only needs to display the already-formatted
+/// strings. Any prior inline error from a failed retry is cleared so
+/// the user does not see stale rejection text alongside the success
+/// panel.
+///
+/// On failure the rendered importer / save error stashes inline so the
 /// user can adjust and retry. Pre-commit save failures are rolled
 /// back inside [`paladin_core::Vault::mutate_and_save`] — the executor
 /// reports them through the same [`ImportFailure`] channel as
@@ -779,11 +789,19 @@ fn reduce_import_result(
     };
 
     match result {
-        Ok(ImportSuccess { report: _ }) => {
-            // Counts panel rendering lands alongside the dedicated
-            // "Successful imports persist via `Vault::mutate_and_save`"
-            // slice; for now we clear any prior inline error so the
-            // user does not see stale rejection text after a success.
+        Ok(ImportSuccess { report }) => {
+            let warnings = report
+                .warnings
+                .iter()
+                .map(|w| format_validation_warning(&w.warning))
+                .collect();
+            import.counts_panel = Some(CountsPanel {
+                imported: report.imported,
+                skipped: report.skipped,
+                replaced: report.replaced,
+                appended: report.appended,
+                warnings,
+            });
             import.error = None;
         }
         Err(ImportFailure(err)) => {

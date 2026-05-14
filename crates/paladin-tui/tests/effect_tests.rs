@@ -2419,3 +2419,142 @@ fn execute_import_with_append_conflict_over_colliding_account_inserts_fresh_id_a
         "Append must persist the new account"
     );
 }
+
+#[cfg(feature = "test-hooks")]
+mod import_save_not_committed {
+    //! Effect-executor coverage for the "`save_not_committed` restores
+    //! the core snapshot" bullet in `IMPLEMENTATION_PLAN_03_TUI.md` >
+    //! "Import modal". Gated behind the `test-hooks` cargo feature so
+    //! the `PALADIN_FAULT_INJECT=pre_commit` hook is compiled into
+    //! `paladin-core::storage::fault`. The process-wide env var
+    //! serializes through a local mutex so concurrent tests in the
+    //! `cargo test` thread pool don't trip each other.
+    use super::*;
+    use std::sync::Mutex;
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    const ENV: &str = "PALADIN_FAULT_INJECT";
+
+    fn with_pre_commit_fault<R>(f: impl FnOnce() -> R) -> R {
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        std::env::set_var(ENV, "pre_commit");
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+        std::env::remove_var(ENV);
+        match result {
+            Ok(v) => v,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
+    }
+
+    #[test]
+    fn execute_import_with_save_not_committed_failure_rolls_back_live_vault_to_pre_attempt_snapshot(
+    ) {
+        // Per `IMPLEMENTATION_PLAN_03_TUI.md` "Import modal" >
+        //   "A `save_not_committed` failure restores the core snapshot
+        //    so `Vault::iter()` matches its pre-attempt state."
+        //
+        // `Vault::mutate_and_save` calls the mutator (here:
+        // `Vault::import_accounts`) against the live vault, then attempts
+        // to commit through `Store::save`. The fault hook fires at the
+        // pre-rename injection point so the surrounding save site bails
+        // out with `save_not_committed { committed: false, backup_path:
+        // None }`. `mutate_and_save` restores the pre-mutation snapshot
+        // in place so the live vault matches the (untouched) on-disk
+        // state. The executor reports the error through
+        // `EffectResult::Import { Err(ImportFailure(...)) }`.
+        let tmp = secure_tempdir();
+        let path = tmp.path().join("vault.bin");
+        create_plaintext_vault(&path);
+
+        let (vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+        let initial_count = vault.iter().count();
+        let initial_ids: Vec<AccountId> = vault.iter().map(paladin_core::Account::id).collect();
+        let mut state = AppState::Unlocked {
+            path: path.clone(),
+            vault,
+            store,
+            search_query: String::new(),
+            idle_deadline: None,
+            pending_clipboard_clear: None,
+            hotp_reveal: None,
+            modal: None,
+            selected: None,
+            pending_chord_leader: None,
+            viewport_height: 0,
+            viewport_offset: 0,
+            focus: Focus::List,
+            status_line: None,
+            help_open: false,
+        };
+
+        let source_path = tmp.path().join("import.txt");
+        std::fs::write(
+            &source_path,
+            "otpauth://totp/Example:alice@example.com?secret=JBSWY3DPEHPK3PXP&issuer=Example",
+        )
+        .expect("write otpauth source file");
+
+        let (tx, rx) = mpsc::channel::<AppEvent>();
+        let effect = Effect::Import {
+            path: path.clone(),
+            source_path: source_path.clone(),
+            format: None,
+            conflict: ImportConflict::Skip,
+            paladin_passphrase: None,
+        };
+        let outcome = with_pre_commit_fault(|| execute(effect, &mut state, &tx));
+
+        assert_eq!(outcome, EffectOutcome::Continue);
+        let evt = rx.try_recv().expect("an AppEvent should be sent");
+        match evt {
+            AppEvent::EffectResult(EffectResult::Import {
+                result: Err(ImportFailure(err)),
+            }) => match err {
+                PaladinError::SaveNotCommitted {
+                    committed,
+                    backup_path,
+                } => {
+                    assert!(!committed, "pre-commit fault must report committed=false");
+                    assert!(
+                        backup_path.is_none(),
+                        "regular save sites must not claim a .bak rotation"
+                    );
+                }
+                other => panic!("expected SaveNotCommitted, got {other:?}"),
+            },
+            other => panic!("expected EffectResult::Import Err, got {other:?}"),
+        }
+        assert!(
+            rx.try_recv().is_err(),
+            "executor must emit exactly one AppEvent per Effect::Import"
+        );
+
+        // Live vault rolled back to the pre-attempt snapshot.
+        match &state {
+            AppState::Unlocked { vault, .. } => {
+                assert_eq!(
+                    vault.iter().count(),
+                    initial_count,
+                    "save_not_committed must restore the in-memory snapshot"
+                );
+                let post_ids: Vec<AccountId> =
+                    vault.iter().map(paladin_core::Account::id).collect();
+                assert_eq!(
+                    post_ids, initial_ids,
+                    "post-rollback iteration order must match the pre-attempt snapshot"
+                );
+            }
+            other => panic!("expected Unlocked, got {other:?}"),
+        }
+
+        // On-disk vault is untouched (no tmpfile was renamed in).
+        let (reopened, _store) =
+            Store::open(&path, VaultLock::Plaintext).expect("reopen plaintext");
+        assert_eq!(
+            reopened.iter().count(),
+            initial_count,
+            "save_not_committed must leave the on-disk vault untouched"
+        );
+    }
+}

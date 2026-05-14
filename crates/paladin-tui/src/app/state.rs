@@ -684,14 +684,20 @@ pub struct AddModal {
 }
 
 /// Post-success counts panel for the Add modal's clipboard-QR import
-/// flow.
+/// flow and the Import modal's file-import flow.
 ///
-/// Carries the imported / skipped totals returned by
-/// `Vault::import_accounts` plus any [`paladin_core::ImportWarning`]
+/// Carries the imported / skipped / replaced / appended totals returned
+/// by `Vault::import_accounts` plus any [`paladin_core::ImportWarning`]
 /// rendered through [`paladin_core::format_validation_warning`] so the
 /// view layer can show advisory text alongside the counts. Lives on
-/// [`AddModal::counts_panel`] for the lifetime of the modal; cleared
-/// when the modal closes.
+/// [`AddModal::counts_panel`] / [`ImportModal::counts_panel`] for the
+/// lifetime of the modal; cleared when the modal closes.
+///
+/// The Add modal's clipboard-QR flow always runs with
+/// [`paladin_core::ImportConflict::Skip`] per the plan, so `replaced`
+/// and `appended` are always zero on that path. The Import modal
+/// surfaces all four counts because the user can pick the conflict
+/// policy.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CountsPanel {
     /// Number of source rows added as new accounts (no collision)
@@ -699,11 +705,18 @@ pub struct CountsPanel {
     pub imported: usize,
     /// Number of source rows skipped under
     /// [`paladin_core::ImportConflict::Skip`] — mirrors
-    /// [`paladin_core::ImportReport::skipped`]. Replaced / appended
-    /// totals are not surfaced for QR-add because the import always
-    /// runs with `ImportConflict::Skip` per the plan, so the four
-    /// counts collapse to `imported + skipped`.
+    /// [`paladin_core::ImportReport::skipped`].
     pub skipped: usize,
+    /// Number of source rows that replaced an existing account under
+    /// [`paladin_core::ImportConflict::Replace`] — mirrors
+    /// [`paladin_core::ImportReport::replaced`]. Always `0` for the
+    /// QR-add path (which forces `Skip`).
+    pub replaced: usize,
+    /// Number of source rows appended as new accounts under
+    /// [`paladin_core::ImportConflict::Append`] — mirrors
+    /// [`paladin_core::ImportReport::appended`]. Always `0` for the
+    /// QR-add path (which forces `Skip`).
+    pub appended: usize,
     /// Non-fatal validation warnings already rendered through
     /// [`paladin_core::format_validation_warning`]. Order mirrors
     /// the original [`paladin_core::ImportReport::warnings`] order
@@ -901,6 +914,21 @@ pub struct ImportModal {
     /// calls, and zeroize on submit, cancel, modal close, and
     /// auto-lock."*
     pub paladin_passphrase: Option<PassphraseBuffer>,
+    /// Post-success counts panel for the Import-modal flow.
+    ///
+    /// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Import:
+    /// *"The modal reports imported/skipped/replaced/appended/warning
+    /// counts plus validation-warning messages rendered through
+    /// `paladin_core::format_validation_warning()` in a post-success
+    /// counts panel."* The reducer's
+    /// [`EffectResult::Import`](crate::app::event::EffectResult::Import)
+    /// `Ok` arm seeds this slot from the carried
+    /// [`paladin_core::ImportReport`], rendering each
+    /// [`paladin_core::ImportWarning`] through
+    /// [`paladin_core::format_validation_warning`] up front so the view
+    /// layer only needs to display the already-formatted strings.
+    /// `None` means no post-success panel is being displayed.
+    pub counts_panel: Option<CountsPanel>,
 }
 
 impl Default for ImportModal {
@@ -911,6 +939,7 @@ impl Default for ImportModal {
             conflict: ImportConflict::Skip,
             error: None,
             paladin_passphrase: None,
+            counts_panel: None,
         }
     }
 }
