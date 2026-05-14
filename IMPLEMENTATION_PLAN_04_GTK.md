@@ -722,51 +722,51 @@ These run without a display server. Each lives under
 
 #### `tests/icon_resolution.rs`
 
-- [ ] `None` / empty slug routes to the placeholder icon without
+- [x] `None` / empty slug routes to the placeholder icon without
   invoking `gtk::IconTheme` (the actual lookup is exercised by the
   smoke test).
-- [ ] Failed `gtk::IconTheme` lookup falls back to the placeholder
+- [x] Failed `gtk::IconTheme` lookup falls back to the placeholder
   icon.
-- [ ] Icon-hint token parsing through
+- [x] Icon-hint token parsing through
   `paladin_core::parse_icon_hint_token` (slug / `default` / `none`)
   matches the CLI / TUI add-modal behavior.
 
 #### `tests/search_logic.rs`
 
-- [ ] Filtering routes through `paladin_core::account_matches_search`
+- [x] Filtering routes through `paladin_core::account_matches_search`
   with the same case-insensitive substring rules as the CLI / TUI
   (empty issuer keeps the colon in the match key, no Unicode
   normalization).
-- [ ] Post-filter selection routes through
+- [x] Post-filter selection routes through
   `paladin_core::select_after_filter` (preserve prior selection if
   still present, else first match).
-- [ ] CLI's `id:<hex>` prefix form is **not** honored by the GUI
+- [x] CLI's `id:<hex>` prefix form is **not** honored by the GUI
   search (parity with the TUI).
 
 #### `tests/auto_lock_logic.rs`
 
-- [ ] Idle-event source feeds
+- [x] Idle-event source feeds
   `paladin_core::policy::auto_lock::IdlePolicy::should_arm` /
   `next_deadline` / `is_expired` outcomes correctly for both
   encrypted and plaintext vaults (plaintext returns `None` from
   core, not via a GUI shortcut).
-- [ ] Re-arm decision after a successful `PassphraseDialog`
+- [x] Re-arm decision after a successful `PassphraseDialog`
   transition re-asks `IdlePolicy::should_arm` against the new
   `Vault::is_encrypted()` value.
-- [ ] On expiry, the model drops `Vault`, switches to `Locked`, and
+- [x] On expiry, the model drops `Vault`, switches to `Locked`, and
   discards open HOTP reveal windows, the search query, and any open
   dialog.
 
 #### `tests/clipboard_clear_logic.rs`
 
-- [ ] Copy capture routes through
+- [x] Copy capture routes through
   `paladin_core::policy::clipboard_clear::ClipboardClearPolicy::schedule`.
-- [ ] Wake routes through `should_clear` against the current
+- [x] Wake routes through `should_clear` against the current
   `gdk::Clipboard` text (only-if-unchanged).
-- [ ] Stale tokens are dropped first by the policy.
-- [ ] Pending copied value is zeroized after a clear attempt or
+- [x] Stale tokens are dropped first by the policy.
+- [x] Pending copied value is zeroized after a clear attempt or
   stale-token drop.
-- [ ] A clipboard auto-clear timer scheduled before lock survives
+- [x] A clipboard auto-clear timer scheduled before lock survives
   lock and still fires only-if-unchanged.
 
 #### `tests/hotp_reveal_logic.rs`
@@ -815,12 +815,12 @@ These run without a display server. Each lives under
 
 #### `tests/qr_clipboard_logic.rs`
 
-- [ ] RGBA byte-length / stride preparation matches `width * 4`
+- [x] RGBA byte-length / stride preparation matches `width * 4`
   rows / `width * height * 4` total with overflow-checked
   multiplication.
-- [ ] Sizes above `paladin_core::QR_RGBA_MAX_BYTES` reject before
+- [x] Sizes above `paladin_core::QR_RGBA_MAX_BYTES` reject before
   allocation / download.
-- [ ] Decoded buffer is passed to
+- [x] Decoded buffer is passed to
   `paladin_core::import::qr_image_bytes` with `ImportConflict::Skip`
   and reports imported / skipped / warning counts (parity with §6).
 

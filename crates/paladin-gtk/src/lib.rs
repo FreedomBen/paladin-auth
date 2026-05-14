@@ -23,6 +23,7 @@ pub mod auto_lock;
 pub mod clipboard_clear;
 pub mod hotp_reveal;
 pub mod icon_resolution;
+pub mod qr_clipboard;
 pub mod search;
 pub mod secret_fields;
 pub mod startup_error;
