@@ -834,6 +834,353 @@ fn zeroizing_vec_zeroize_empties_buffer() {
 }
 
 // ---------------------------------------------------------------------------
+// Pending clipboard-clear buffer: survives lock; zeroizes on
+// scheduled clear attempt, stale-token drop, replacement, and app
+// shutdown
+// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Sensitive UI buffers —
+//  bullet "Pending clipboard-clear buffers survive lock until the
+//  scheduled clear attempt, stale-token drop, replacement, or app
+//  shutdown, then zeroize.")
+//
+// The `PendingClipboardClear.value` field is a `Zeroizing<Vec<u8>>`,
+// so the captured bytes wipe on drop via the wrapper's `Drop` impl.
+// The four termination axes below each exercise a code path that
+// drops the buffer (`Drop::drop` on `Zeroizing<Vec<u8>>` runs
+// `Zeroize::zeroize` on the inner `Vec<u8>`, see
+// `zeroizing_vec_zeroize_empties_buffer`). The lock-survival axis
+// confirms the buffer is *not* dropped on the `Unlocked → Locked`
+// transition: it must ride through verbatim so the timer thread's
+// wake can still find pending state.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn auto_lock_carries_pending_clipboard_clear_into_locked_preserving_zeroizing_bytes() {
+    // Lock-survival axis. A `Tick` past `idle_deadline` transitions
+    // `Unlocked → Locked` via `maybe_auto_lock`; per
+    // `IMPLEMENTATION_PLAN_03_TUI.md` "Auto-lock (per §6)":
+    // *"A clipboard auto-clear timer scheduled before lock survives
+    // lock and still fires only-if-unchanged."* The bytes must
+    // arrive on `Locked` byte-equal to the captured value, the token
+    // must be unchanged so a later matching wake still finds them,
+    // and the wrapper type must remain `Zeroizing<Vec<u8>>` so the
+    // remaining termination axes can still rely on `Drop` for the
+    // wipe.
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (mut vault, store) = create_encrypted_pair(&path, "pp");
+    enable_clipboard_clear(&mut vault, &store, 30);
+    vault.set_auto_lock_enabled(true);
+    vault
+        .set_auto_lock_timeout_secs(60)
+        .expect("timeout within bounds");
+    vault.save(&store).expect("commit auto-lock settings");
+
+    let t0 = Instant::now();
+    let idle_deadline = t0 + Duration::from_secs(60);
+    let (token, wake_deadline) = ClipboardClearPolicy::schedule(t0, vault.settings())
+        .expect("schedule yields Some when clipboard_clear_enabled");
+    let captured = copy_bytes();
+    let mut state = build_unlocked(path.clone(), vault, store, None);
+    match &mut state {
+        AppState::Unlocked {
+            idle_deadline: id_slot,
+            pending_clipboard_clear,
+            ..
+        } => {
+            *id_slot = Some(idle_deadline);
+            *pending_clipboard_clear = Some(PendingClipboardClear {
+                token,
+                value: Zeroizing::new(captured.clone()),
+                deadline: wake_deadline,
+            });
+        }
+        other => panic!("build_unlocked must yield Unlocked, got {other:?}"),
+    }
+
+    let now = idle_deadline + Duration::from_millis(1);
+    let tick = AppEvent::Tick {
+        wall_clock: SystemTime::now(),
+        monotonic: now,
+    };
+    let (next, effects) = reduce(state, tick);
+    assert!(
+        effects.is_empty(),
+        "auto-lock transition must not emit effects; got {effects:?}",
+    );
+    match next {
+        AppState::Locked {
+            path: p,
+            pending_clipboard_clear: Some(pending),
+        } => {
+            assert_eq!(p, path, "Locked must retain the vault path");
+            assert_eq!(
+                pending.token, token,
+                "pending token must survive the Unlocked → Locked transition unchanged",
+            );
+            assert_eq!(
+                pending.deadline, wake_deadline,
+                "pending wake-deadline must survive the transition unchanged",
+            );
+            assert_eq!(
+                pending.value.as_slice(),
+                captured.as_slice(),
+                "pending captured bytes must survive the transition byte-for-byte",
+            );
+            // Wrapper-type binding: locks the lock-survived value in
+            // as a `Zeroizing<Vec<u8>>` so the matching-token wake
+            // and app-shutdown axes can still rely on `Drop` for
+            // the wipe.
+            let _: &Zeroizing<Vec<u8>> = &pending.value;
+        }
+        other => panic!("expected Locked carrying the pending clipboard clear, got {other:?}",),
+    }
+}
+
+#[test]
+fn matching_token_wake_on_locked_clears_pending_slot_post_state() {
+    // Scheduled-clear-attempt axis. A wake whose token matches the
+    // pending slot is handed off as `Effect::ClearClipboard` (carrying
+    // the bytes — see
+    // `matching_token_wake_hands_clear_clipboard_effect_zeroizing_bytes`).
+    // The reducer must clear `pending_clipboard_clear` to `None` on the
+    // post-state so the buffer drops out of `AppState` and the
+    // `Zeroizing<Vec<u8>>` carried by the dispatched effect is the
+    // sole remaining owner — its `Drop` (run by the executor after
+    // the wipe) wipes the bytes. A duplicate wake then no-ops.
+    let tmp = secure_tempdir();
+    let (_p, (mut vault, store)) = open_plaintext_pair(&tmp);
+    enable_clipboard_clear(&mut vault, &store, 30);
+    let (token, deadline) = ClipboardClearPolicy::schedule(Instant::now(), vault.settings())
+        .expect("schedule yields Some when clipboard_clear_enabled");
+    drop((vault, store));
+
+    let path = PathBuf::from("/tmp/v.bin");
+    let captured = copy_bytes();
+    let state = AppState::Locked {
+        path: path.clone(),
+        pending_clipboard_clear: Some(PendingClipboardClear {
+            token,
+            value: Zeroizing::new(captured.clone()),
+            deadline,
+        }),
+    };
+    let (next, effects) = reduce(
+        state,
+        AppEvent::ClipboardClear {
+            token,
+            value: Zeroizing::new(captured.clone()),
+        },
+    );
+
+    match &effects[..] {
+        [Effect::ClearClipboard { value }] => {
+            let _: &Zeroizing<Vec<u8>> = value;
+            assert_eq!(value.as_slice(), captured.as_slice());
+        }
+        other => panic!("expected one Effect::ClearClipboard, got {other:?}"),
+    }
+    match next {
+        AppState::Locked {
+            path: p,
+            pending_clipboard_clear,
+        } => {
+            assert_eq!(p, path);
+            assert!(
+                pending_clipboard_clear.is_none(),
+                "matching-token wake must consume the pending slot so the buffer drops out of state, got {pending_clipboard_clear:?}",
+            );
+        }
+        other => panic!("expected Locked with cleared pending slot, got {other:?}"),
+    }
+}
+
+#[test]
+fn stale_token_wake_drops_event_zeroizing_bytes_and_preserves_pending() {
+    // Stale-token-drop axis. The reducer rejects a wake whose token
+    // does not match the (fresher) pending slot. The wake event's
+    // `value: Zeroizing<Vec<u8>>` is consumed by `reduce` (moved in
+    // by value) and dropped on the rejection path — its `Drop` wipes
+    // the bytes before the backing allocation is freed. The pending
+    // slot itself stays intact so the *fresher* timer thread's later
+    // wake can still find it.
+    let tmp = secure_tempdir();
+    let (_p, (mut vault, store)) = open_plaintext_pair(&tmp);
+    enable_clipboard_clear(&mut vault, &store, 60);
+    let (stale_token, _stale_deadline) =
+        ClipboardClearPolicy::schedule(Instant::now(), vault.settings())
+            .expect("stale schedule yields Some");
+    let (fresh_token, fresh_deadline) =
+        ClipboardClearPolicy::schedule(Instant::now(), vault.settings())
+            .expect("fresh schedule yields Some");
+    drop((vault, store));
+    assert!(
+        fresh_token > stale_token,
+        "monotonic token precondition: fresh > stale",
+    );
+
+    let path = PathBuf::from("/tmp/v.bin");
+    let fresh_value: Vec<u8> = b"fresh!".to_vec();
+    let stale_value: Vec<u8> = b"stale!".to_vec();
+    let state = AppState::Locked {
+        path: path.clone(),
+        pending_clipboard_clear: Some(PendingClipboardClear {
+            token: fresh_token,
+            value: Zeroizing::new(fresh_value.clone()),
+            deadline: fresh_deadline,
+        }),
+    };
+
+    // Type binding: the event we hand to `reduce` owns a
+    // `Zeroizing<Vec<u8>>`. The reducer's stale-token branch drops
+    // the event (no field destructure carries the bytes out), so the
+    // wrapper's `Drop` runs and wipes the bytes here.
+    let event = AppEvent::ClipboardClear {
+        token: stale_token,
+        value: Zeroizing::new(stale_value.clone()),
+    };
+    match &event {
+        AppEvent::ClipboardClear { value, .. } => {
+            let _: &Zeroizing<Vec<u8>> = value;
+        }
+        _ => unreachable!(),
+    }
+
+    let (next, effects) = reduce(state, event);
+    assert!(
+        effects.is_empty(),
+        "stale-token wake must not dispatch any effect, got {effects:?}",
+    );
+    match next {
+        AppState::Locked {
+            path: p,
+            pending_clipboard_clear: Some(pending),
+        } => {
+            assert_eq!(p, path);
+            assert_eq!(
+                pending.token, fresh_token,
+                "fresher pending must survive a stale wake",
+            );
+            assert_eq!(
+                pending.value.as_slice(),
+                fresh_value.as_slice(),
+                "fresher pending bytes must survive a stale wake byte-for-byte",
+            );
+            let _: &Zeroizing<Vec<u8>> = &pending.value;
+        }
+        other => panic!("expected Locked with fresher pending preserved, got {other:?}",),
+    }
+}
+
+#[test]
+fn replacement_copy_drops_prior_pending_value_via_zeroizing_drop() {
+    // Replacement axis. A second successful `EffectResult::CopyCode`
+    // on `Unlocked` issues a fresh `(token, deadline)` from
+    // `ClipboardClearPolicy::schedule` and overwrites the prior
+    // `pending_clipboard_clear` slot. The prior `PendingClipboardClear`
+    // (and its `Zeroizing<Vec<u8>>`) is dropped in place by the
+    // assignment, so the captured bytes wipe before the backing
+    // allocation is freed. The replacement carries the *fresh* copy's
+    // bytes — not residue from the prior pending — so a snapshot of
+    // the post-state shows the prior bytes are gone.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let totp_id = add_totp_account(&mut vault, &store, "github");
+    enable_clipboard_clear(&mut vault, &store, 30);
+    let (earlier_token, earlier_deadline) =
+        ClipboardClearPolicy::schedule(Instant::now(), vault.settings())
+            .expect("prior schedule yields Some");
+    let prior_value: Vec<u8> = b"old".to_vec();
+    let prior = PendingClipboardClear {
+        token: earlier_token,
+        value: Zeroizing::new(prior_value.clone()),
+        deadline: earlier_deadline,
+    };
+    let mut state = build_unlocked(path, vault, store, Some(totp_id));
+    if let AppState::Unlocked {
+        ref mut pending_clipboard_clear,
+        ..
+    } = state
+    {
+        *pending_clipboard_clear = Some(prior);
+    }
+
+    let completed_at = Instant::now();
+    let fresh_bytes = copy_bytes();
+    let event = AppEvent::EffectResult(EffectResult::CopyCode {
+        account_id: totp_id,
+        result: Ok(Zeroizing::new(fresh_bytes.clone())),
+        completed_at,
+    });
+    let (next, _) = reduce(state, event);
+    match next {
+        AppState::Unlocked {
+            pending_clipboard_clear: Some(pending),
+            ..
+        } => {
+            assert!(
+                pending.token > earlier_token,
+                "replacement must issue a strictly-greater monotonic token",
+            );
+            assert_eq!(
+                pending.value.as_slice(),
+                fresh_bytes.as_slice(),
+                "replacement slot must carry the fresh bytes (not residue from the prior pending)",
+            );
+            assert_ne!(
+                pending.value.as_slice(),
+                prior_value.as_slice(),
+                "post-replacement value must not equal the prior captured bytes",
+            );
+            let _: &Zeroizing<Vec<u8>> = &pending.value;
+        }
+        other => panic!("expected Unlocked with replaced pending clipboard clear, got {other:?}",),
+    }
+}
+
+#[test]
+fn pending_clipboard_clear_drop_chain_zeroizes_value_via_zeroizing_drop() {
+    // App-shutdown axis (regression sentinel). A direct
+    // construct-and-`drop` exercises the wrapper's `Drop` chain
+    // end-to-end so future refactors that swap `value` away from a
+    // zeroizing wrapper fail this test. Concretely: at process exit
+    // the runtime drops the `AppState`, which drops the
+    // `PendingClipboardClear`, which drops its
+    // `Zeroizing<Vec<u8>>`, whose `Drop` calls `Zeroize::zeroize` on
+    // the inner `Vec<u8>` (covered as a contract by
+    // `zeroizing_vec_zeroize_empties_buffer`). The shutdown path
+    // has no observable side effect after the wipe (the memory is
+    // freed), so this test functions as a compile-and-drop
+    // sentinel: the type binding on `value` and the `drop(pending)`
+    // call together pin the discipline in place.
+    let tmp = secure_tempdir();
+    let (_p, (mut vault, store)) = open_plaintext_pair(&tmp);
+    enable_clipboard_clear(&mut vault, &store, 30);
+    let (token, deadline) = ClipboardClearPolicy::schedule(Instant::now(), vault.settings())
+        .expect("schedule yields Some when clipboard_clear_enabled");
+
+    let pending = PendingClipboardClear {
+        token,
+        value: Zeroizing::new(copy_bytes()),
+        deadline,
+    };
+    // Type binding: refactoring `PendingClipboardClear.value` to
+    // anything other than `Zeroizing<Vec<u8>>` would fail to compile
+    // here, breaking the app-shutdown zeroize contract loudly.
+    let _: &Zeroizing<Vec<u8>> = &pending.value;
+    assert_eq!(
+        pending.value.as_slice(),
+        copy_bytes().as_slice(),
+        "precondition: pending carries the sentinel bytes before drop",
+    );
+
+    // Explicit drop exercises the `Drop` chain (PendingClipboardClear
+    // → Zeroizing<Vec<u8>> → Zeroize::zeroize on Vec<u8>) at a
+    // well-defined point — the same chain runs implicitly when the
+    // `AppState` drops at process exit.
+    drop(pending);
+}
+
+// ---------------------------------------------------------------------------
 // Executor (`paladin_tui::app::effect::execute`) — only-if-unchanged
 // (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Clipboard auto-clear)
 //

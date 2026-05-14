@@ -1650,9 +1650,38 @@ end-to-end.
   (Tick past `idle_deadline` transitions to `Locked`, dropping the
   whole `Unlocked` arm including the open `hotp_reveal`). All in
   `tests/hotp_reveal_tests.rs`.)*
-- [ ] Pending clipboard-clear buffers survive lock until the scheduled
+- [x] Pending clipboard-clear buffers survive lock until the scheduled
   clear attempt, stale-token drop, replacement, or app shutdown, then
   zeroize.
+  *(`PendingClipboardClear::value` is a [`zeroize::Zeroizing<Vec<u8>>`]
+  whose `Drop` runs `Zeroize::zeroize` on the inner `Vec<u8>` — the
+  contract is exercised directly by `zeroizing_vec_zeroize_empties_buffer`
+  and pinned at every wrapper site by the type-binding tests in the
+  same file. Lock-survival is covered by
+  `auto_lock_carries_pending_clipboard_clear_into_locked_preserving_zeroizing_bytes`
+  (Tick past `idle_deadline` transitions `Unlocked → Locked` via
+  `maybe_auto_lock`, which moves `pending_clipboard_clear` onto the
+  resulting `Locked` arm byte-for-byte with the wrapper intact);
+  scheduled clear attempt by
+  `matching_token_wake_on_locked_clears_pending_slot_post_state` and
+  `matching_token_wake_hands_clear_clipboard_effect_zeroizing_bytes`
+  (the wake consumes the pending slot to `None` and hands the bytes
+  off as `Effect::ClearClipboard`, whose `Zeroizing<Vec<u8>>` drops
+  after the executor's wipe); stale-token drop by
+  `stale_token_wake_drops_event_zeroizing_bytes_and_preserves_pending`
+  (the stale wake event's `Zeroizing<Vec<u8>>` is consumed by
+  `reduce` and dropped on the rejection path while the fresher
+  pending slot stays intact); replacement by
+  `replacement_copy_drops_prior_pending_value_via_zeroizing_drop`
+  (a second `EffectResult::CopyCode` overwrites the prior pending
+  slot, dropping the prior `PendingClipboardClear` and its zeroizing
+  buffer in place); app shutdown by
+  `pending_clipboard_clear_drop_chain_zeroizes_value_via_zeroizing_drop`
+  (a direct construct-and-`drop` exercises the
+  `PendingClipboardClear → Zeroizing<Vec<u8>> → Zeroize::zeroize`
+  chain end-to-end as a regression sentinel against future refactors
+  that swap the field type away from a zeroizing wrapper). All in
+  `tests/clipboard_tests.rs`.)*
 
 ### Vault modes and startup (`tests/reducer_tests.rs`)
 
