@@ -1533,6 +1533,20 @@ end-to-end.
   with `passphrase = None`). All in `tests/reducer_tests.rs`.)*
 - [ ] Passphrase set / change buffers zeroize on submit, cancel, modal
   close, and auto-lock.
+  *(Cancel and auto-lock axes locked.
+  `PassphraseModal::new_passphrase` and `PassphraseModal::confirm_passphrase`
+  are `PassphraseBuffer`s wrapping `Zeroizing<String>`, so `Drop`
+  wipes in place on modal teardown. Cancel is covered by
+  `passphrase_modal_esc_with_typed_buffers_closes_modal_and_drops_buffers`
+  (`Esc` clears `modal` to `None` so the typed bytes drop with the
+  `Modal::Passphrase(PassphraseModal)`); auto-lock by
+  `tick_past_idle_deadline_with_open_passphrase_modal_typed_buffers_locks_and_drops_buffers`
+  (Tick past `idle_deadline` transitions to `Locked`, dropping the
+  whole `Unlocked` arm including the open `PassphraseModal`). Both in
+  `tests/reducer_tests.rs`. The submit and modal-close-on-success
+  axes require the not-yet-wired `route_passphrase_modal_input` /
+  `Effect::Passphrase{Set,Change,Remove}` slice and land alongside
+  it.)*
 - [x] Add modal manual-secret field zeroizes on submit, cancel, modal
   close, mode switch, and auto-lock.
   *(`AddModal::manual_secret` is a `PassphraseBuffer` wrapping

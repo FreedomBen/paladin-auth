@@ -19594,3 +19594,194 @@ fn effect_result_passphrase_save_durability_unconfirmed_keeps_modal_open_with_in
         ),
     }
 }
+
+// ---------------------------------------------------------------------------
+// Passphrase modal — buffer zeroize: cancel and auto-lock axes
+// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Sensitive UI buffers" >
+//  "Passphrase set / change buffers zeroize on submit, cancel, modal
+//  close, and auto-lock.")
+//
+// These two tests lock the cancel (Esc) and auto-lock axes — both
+// rely on the existing `apply_esc_dismiss` / `maybe_auto_lock`
+// machinery to drop `Modal::Passphrase(PassphraseModal)` and
+// therefore run `PassphraseBuffer`'s `Drop` (via `Zeroizing<String>`)
+// on `new_passphrase` and `confirm_passphrase`. The submit and
+// modal-close-on-success axes require the not-yet-wired
+// `route_passphrase_modal_input` / `Effect::Passphrase{Set,Change,
+// Remove}` slice; they land alongside that slice.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn passphrase_modal_esc_with_typed_buffers_closes_modal_and_drops_buffers() {
+    // Cancel axis. The user has typed passphrase chars into the
+    // Passphrase modal's `new_passphrase` / `confirm_passphrase`
+    // fields (the twice-prompt) and then dismissed the modal with
+    // `Esc` before submitting. The reducer's Esc precedence chain
+    // (`apply_esc_dismiss`) clears `modal` to `None`; dropping the
+    // `Modal::Passphrase(PassphraseModal)` runs `PassphraseBuffer`'s
+    // `Drop` via `Zeroizing<String>` on both buffers, wiping the
+    // typed bytes in place. Externally this is observable as the
+    // modal slot being empty after a single Esc, with no effects
+    // emitted (so no rogue Effect can carry the buffers elsewhere).
+    // Mirrors `add_modal_esc_with_typed_manual_secret_closes_modal_and_drops_buffer`,
+    // `import_modal_esc_with_typed_paladin_passphrase_closes_modal_and_drops_buffer`,
+    // and `export_modal_esc_with_typed_passphrases_closes_modal_and_drops_passphrase_buffers`.
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (vault, store) = create_encrypted_pair(&path, "current-pp");
+
+    let state_with_modal = AppState::Unlocked {
+        path: path.clone(),
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Passphrase(PassphraseModal {
+            sub_flow: paladin_tui::app::state::PassphraseSubFlow::Change,
+            new_passphrase: passphrase_buffer_with("new-pass-1"),
+            confirm_passphrase: passphrase_buffer_with("new-pass-1"),
+            error: None,
+        })),
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    match &state_with_modal {
+        AppState::Unlocked {
+            modal: Some(Modal::Passphrase(pp)),
+            ..
+        } => {
+            assert!(
+                !pp.new_passphrase.is_empty(),
+                "harness precondition: new_passphrase must hold typed bytes",
+            );
+            assert!(
+                !pp.confirm_passphrase.is_empty(),
+                "harness precondition: confirm_passphrase must hold typed bytes",
+            );
+        }
+        _ => panic!("expected Unlocked with Modal::Passphrase open"),
+    }
+
+    let (state, effects) = reduce(state_with_modal, key(KeyCode::Esc));
+    assert!(
+        effects.is_empty(),
+        "Esc cancelling the Passphrase modal must not emit effects; got {effects:?}",
+    );
+    match state {
+        AppState::Unlocked {
+            modal,
+            status_line,
+            search_query,
+            ..
+        } => {
+            assert!(
+                modal.is_none(),
+                "Esc must drop the Passphrase modal so its new_passphrase / confirm_passphrase buffers zeroize; got {modal:?}",
+            );
+            assert!(
+                status_line.is_none(),
+                "cancel path must not publish a status-line confirmation; got {status_line:?}",
+            );
+            assert!(
+                search_query.is_empty(),
+                "cancel path must not perturb the search query; got {search_query:?}",
+            );
+        }
+        other => panic!("expected Unlocked after Esc, got {other:?}"),
+    }
+}
+
+#[test]
+fn tick_past_idle_deadline_with_open_passphrase_modal_typed_buffers_locks_and_drops_buffers() {
+    // Auto-lock axis. `maybe_auto_lock` transitions `Unlocked →
+    // Locked` when `Tick.monotonic` is past `idle_deadline`. The
+    // `Locked` state carries only `path` (and any pending clipboard
+    // clear) — by construction every other slot of the prior
+    // `Unlocked` is dropped, including any open `Modal::Passphrase`
+    // and its `new_passphrase` / `confirm_passphrase` buffers. The
+    // buffers' `Zeroizing<String>` drop wipes the typed bytes in
+    // place. Mirrors `tick_past_idle_deadline_with_open_add_modal_typed_manual_secret_locks_and_drops_buffer`,
+    // `tick_past_idle_deadline_with_open_import_modal_typed_paladin_passphrase_locks_and_drops_buffer`,
+    // and `tick_past_idle_deadline_with_open_export_modal_typed_passphrases_locks_and_drops_passphrase_buffers`.
+    //
+    // The `Change` sub-flow is exercised here because it is the only
+    // one valid on the encrypted vault that auto-lock requires (the
+    // idle policy only arms on encrypted vaults per
+    // `IdlePolicy::should_arm`). The buffer-drop contract is
+    // sub-flow-independent — the same `PassphraseBuffer` fields back
+    // all three sub-flows — so a single test covers the axis.
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (mut vault, store) = create_encrypted_pair(&path, "current-pp");
+    enable_auto_lock(&mut vault, &store, 600);
+
+    let t0 = Instant::now();
+    let deadline = t0 + Duration::from_secs(600);
+    let passphrase_modal = PassphraseModal {
+        sub_flow: paladin_tui::app::state::PassphraseSubFlow::Change,
+        new_passphrase: passphrase_buffer_with("new-pass-1"),
+        confirm_passphrase: passphrase_buffer_with("new-pass-1"),
+        error: None,
+    };
+    assert!(
+        !passphrase_modal.new_passphrase.is_empty(),
+        "harness precondition: new_passphrase must hold typed bytes",
+    );
+    assert!(
+        !passphrase_modal.confirm_passphrase.is_empty(),
+        "harness precondition: confirm_passphrase must hold typed bytes",
+    );
+
+    let unlocked = AppState::Unlocked {
+        path: path.clone(),
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: Some(deadline),
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Passphrase(passphrase_modal)),
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+
+    let tick = AppEvent::Tick {
+        wall_clock: SystemTime::now(),
+        monotonic: deadline + Duration::from_millis(1),
+    };
+    let (state, effects) = reduce(unlocked, tick);
+    assert!(
+        effects.is_empty(),
+        "auto-lock Tick must not emit effects; got {effects:?}",
+    );
+    match state {
+        AppState::Locked {
+            path: locked_path,
+            pending_clipboard_clear,
+        } => {
+            assert_eq!(
+                locked_path, path,
+                "auto-lock must retain the resolved vault path for the next unlock attempt",
+            );
+            assert!(
+                pending_clipboard_clear.is_none(),
+                "no pending clipboard clear was seeded — lock must not synthesize one; got {pending_clipboard_clear:?}",
+            );
+        }
+        other => panic!(
+            "expected AppState::Locked after Tick past idle_deadline (Passphrase modal and its typed buffers must be gone), got {other:?}",
+        ),
+    }
+}
