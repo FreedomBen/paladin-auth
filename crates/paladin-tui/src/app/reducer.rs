@@ -14,10 +14,10 @@ use std::time::Instant;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 
 use paladin_core::{
-    classify_paladin_import_precheck, format_validation_warning, hotp_reveal_deadline,
-    validate_label, AccountId, AccountKindInput, Algorithm, ClipboardClearPolicy,
-    ClipboardClearToken, Code, IdlePolicy, PaladinError, PaladinImportPrecheck, SettingPatch,
-    Store, Vault,
+    classify_paladin_import_precheck, format_plaintext_export_warning, format_validation_warning,
+    hotp_reveal_deadline, validate_label, AccountId, AccountKindInput, Algorithm,
+    ClipboardClearPolicy, ClipboardClearToken, Code, IdlePolicy, PaladinError,
+    PaladinImportPrecheck, SettingPatch, Store, Vault,
 };
 use secrecy::SecretString;
 use zeroize::Zeroizing;
@@ -2081,11 +2081,27 @@ fn route_import_modal_input(
 /// code so the user-facing reason stays stable across all three
 /// front-ends.
 ///
-/// Subsequent gate / effect-emission slices (plaintext
-/// unencrypted-secrets confirmation, the actual [`Effect::Export`]
-/// emission) land alongside their own checklist entries; until then
-/// this slice stops at the gate refusals and treats all other Enter
-/// outcomes as a silent no-op so the modal-trap contract holds.
+/// The plaintext path has its own submit-time check: the
+/// unencrypted-secrets acknowledgement gate. Per
+/// `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Export:
+/// *"Plaintext exports render
+/// `paladin_core::format_plaintext_export_warning()` verbatim and the
+/// user must confirm before the write proceeds."*. When
+/// `format = ExportFormat::Plaintext` and
+/// [`ExportModal::plaintext_confirmed`](crate::app::state::ExportModal::plaintext_confirmed)
+/// is still `false`, the reducer refuses the submit — no
+/// [`Effect::Export`] is emitted and
+/// [`paladin_core::format_plaintext_export_warning`] lands verbatim
+/// on [`ExportModal::error`](crate::app::state::ExportModal::error) so
+/// the wording matches the CLI's stderr advisory
+/// (`paladin-cli/src/commands/export.rs`, DESIGN.md §4.6 / §6) and
+/// the GTK `ExportDialog`'s `plaintext_warning_body()` checkbox label.
+///
+/// Subsequent effect-emission slices (the actual [`Effect::Export`]
+/// emission, the plaintext-confirmation toggle key handler) land
+/// alongside their own checklist entries; until then this slice
+/// stops at the gate refusals and treats all other Enter outcomes as
+/// a silent no-op so the modal-trap contract holds.
 fn route_export_modal_input(export: &mut ExportModal, key: &KeyEvent) -> Vec<Effect> {
     if matches!(key.code, KeyCode::Enter) {
         let target = std::path::PathBuf::from(export.path_text.trim());
@@ -2112,6 +2128,10 @@ fn route_export_modal_input(export: &mut ExportModal, key: &KeyEvent) -> Vec<Eff
             export.error = Some(render_error_message(&PaladinError::InvalidPassphrase {
                 reason: "zero_length",
             }));
+            return Vec::new();
+        }
+        if matches!(export.format, ExportFormat::Plaintext) && !export.plaintext_confirmed {
+            export.error = Some(format_plaintext_export_warning());
             return Vec::new();
         }
         return Vec::new();

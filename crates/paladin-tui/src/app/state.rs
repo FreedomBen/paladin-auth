@@ -1025,6 +1025,22 @@ pub struct ExportModal {
     /// matching the CLI's twice-confirm prompt and the GTK
     /// `SubmitRejection::ConfirmationMismatch` wire code.
     pub confirm_passphrase: PassphraseBuffer,
+    /// Plaintext-export acknowledgement gate. `false` by default; the
+    /// reducer's submit handler refuses [`Effect::Export`] emission
+    /// on the [`ExportFormat::Plaintext`] path until the user
+    /// explicitly toggles this flag (per
+    /// `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Export:
+    /// *"Plaintext exports render
+    /// `paladin_core::format_plaintext_export_warning()` verbatim and
+    /// the user must confirm before the write proceeds."*). Mirrors
+    /// the GTK `ExportDialog`'s plaintext-warning checkbox and is
+    /// reset alongside the path / format change set so a stale
+    /// acknowledgement cannot apply to a different file or format
+    /// (parity with GTK's `plaintext_warning_needs_reset`). The toggle
+    /// itself (Space on the warning row) lands in its own slice; this
+    /// slice owns the gate refusal so the wire surface is locked
+    /// across the three front-ends.
+    pub plaintext_confirmed: bool,
     /// Inline writer / passphrase / overwrite-gate error from the most
     /// recent submit attempt, if any. Rendered through
     /// [`render_error_message`](crate::app::state::render_error_message)

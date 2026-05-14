@@ -1196,8 +1196,22 @@ end-to-end.
   (mismatch first, then `zero_length`, DESIGN.md §5) and the GTK
   `SubmitRejection::ZeroLength` wire code so the user-facing reason
   stays stable across all three front-ends.)*
-- [ ] Plaintext export requires the unencrypted-secrets confirmation
+- [x] Plaintext export requires the unencrypted-secrets confirmation
   before writing.
+  *(`enter_in_plaintext_export_modal_without_confirmation_refuses_with_plaintext_warning`
+  in `tests/reducer_tests.rs` opens `Modal::Export` with
+  `format = ExportFormat::Plaintext`, a fresh destination path that
+  the overwrite gate accepts, and `plaintext_confirmed = false`.
+  Pressing Enter asserts no `Effect::Export` is emitted, the modal
+  stays open, `paladin_core::format_plaintext_export_warning()` lands
+  verbatim on `ExportModal::error`, the format selector stays on
+  `Plaintext`, the acknowledgement flag is not flipped by the gate
+  itself, no status-line spill occurs, and the destination remains
+  absent on disk. Wording parity with the CLI's stderr advisory
+  (`paladin-cli/src/commands/export.rs`, DESIGN.md §4.6 / §6) and the
+  GTK `ExportDialog`'s `plaintext_warning_body()` checkbox label so
+  the unencrypted-secrets warning stays in lockstep across all three
+  front-ends.)*
 - [x] Output is written through
   `paladin_core::write_secret_file_atomic` with mode `0600`.
   *(Locked alongside the plaintext-routing test: the same

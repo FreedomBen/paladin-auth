@@ -19,10 +19,11 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use secrecy::{ExposeSecret, SecretString};
 
 use paladin_core::{
-    format_validation_warning, hotp_reveal_deadline, validate_manual, AccountId, AccountInput,
-    AccountKindInput, Algorithm, Argon2Params, EncryptionOptions, IconHintInput, IdlePolicy,
-    ImportFormat, ImportReport, ImportWarning, PaladinError, PermissionSubject, SettingPatch,
-    Store, ValidationWarning, Vault, VaultInit, VaultLock, VaultStatus,
+    format_plaintext_export_warning, format_validation_warning, hotp_reveal_deadline,
+    validate_manual, AccountId, AccountInput, AccountKindInput, Algorithm, Argon2Params,
+    EncryptionOptions, IconHintInput, IdlePolicy, ImportFormat, ImportReport, ImportWarning,
+    PaladinError, PermissionSubject, SettingPatch, Store, ValidationWarning, Vault, VaultInit,
+    VaultLock, VaultStatus,
 };
 use paladin_tui::app::event::{
     AddFailure, AddSuccess, AppEvent, Effect, EffectResult, ImportFailure, ImportSuccess,
@@ -18577,5 +18578,123 @@ fn enter_in_encrypted_export_modal_with_empty_new_passphrase_refuses_with_zero_l
     assert!(
         !dest.exists(),
         "destination must remain absent after a refused zero-length gate",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Export modal — plaintext unencrypted-secrets confirmation gate
+// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Export modal":
+//  *"Plaintext export requires the unencrypted-secrets confirmation
+//  before writing."*)
+//
+// Slice covered: the reducer's Enter handler on `Modal::Export` when
+// `format = ExportFormat::Plaintext` and the per-modal
+// `plaintext_confirmed` acknowledgement flag is still `false`. The
+// gate refuses the submit — no `Effect::Export` is emitted, the
+// modal stays open, and `paladin_core::format_plaintext_export_warning()`
+// lands verbatim on `ExportModal::error` so the wording matches the
+// CLI's stderr advisory (`paladin-cli/src/commands/export.rs`,
+// DESIGN.md §4.6 / §6) and the GTK `ExportDialog`'s
+// `plaintext_warning_body()` checkbox label.
+//
+// Toggling `plaintext_confirmed` (Space on the warning row) lands in
+// its own slice; this slice owns the refusal so the wire surface
+// stays stable across the three front-ends.
+//
+// Export does not mutate the vault, so there is no save-rollback to
+// reason about here; the assertion surface is "no effect emitted,
+// modal stays open with inline warning, and the destination path is
+// still absent on disk."
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enter_in_plaintext_export_modal_without_confirmation_refuses_with_plaintext_warning() {
+    let tmp = secure_tempdir();
+    let unlocked = fresh_plaintext_unlocked(&tmp);
+
+    // Destination is a fresh path — the overwrite gate must pass so
+    // the plaintext-confirmation gate is the one exercised.
+    let dest = tmp.path().join("export.json");
+    assert!(
+        !dest.exists(),
+        "harness precondition: destination must not exist before the test runs",
+    );
+
+    let state_with_modal = match unlocked {
+        AppState::Unlocked {
+            path, vault, store, ..
+        } => AppState::Unlocked {
+            path,
+            vault,
+            store,
+            search_query: String::new(),
+            idle_deadline: None,
+            pending_clipboard_clear: None,
+            hotp_reveal: None,
+            modal: Some(Modal::Export(ExportModal {
+                path_text: dest.to_string_lossy().into_owned(),
+                format: ExportFormat::Plaintext,
+                // Default `plaintext_confirmed = false` is what we want;
+                // be explicit so the test reads intent-first.
+                plaintext_confirmed: false,
+                ..ExportModal::default()
+            })),
+            selected: None,
+            pending_chord_leader: None,
+            viewport_height: 0,
+            viewport_offset: 0,
+            focus: Focus::List,
+            status_line: None,
+            help_open: false,
+        },
+        other => panic!("expected Unlocked, got {other:?}"),
+    };
+
+    let (state, effects) = reduce(state_with_modal, key(KeyCode::Enter));
+
+    assert!(
+        effects.is_empty(),
+        "plaintext-confirmation gate must not emit Effect::Export; got {effects:?}",
+    );
+
+    let expected = format_plaintext_export_warning();
+
+    match state {
+        AppState::Unlocked {
+            modal: Some(Modal::Export(export)),
+            status_line,
+            ..
+        } => {
+            assert_eq!(
+                export.path_text,
+                dest.to_string_lossy(),
+                "plaintext gate must leave path_text intact for the retry",
+            );
+            assert!(
+                matches!(export.format, ExportFormat::Plaintext),
+                "plaintext gate must leave the format selector on Plaintext",
+            );
+            assert!(
+                !export.plaintext_confirmed,
+                "plaintext gate must not flip the acknowledgement flag itself",
+            );
+            assert_eq!(
+                export.error.as_deref(),
+                Some(expected.as_str()),
+                "plaintext gate must surface paladin_core::format_plaintext_export_warning() verbatim inline",
+            );
+            assert!(
+                status_line.is_none(),
+                "plaintext gate must stay inline on the modal — no status-line spill",
+            );
+        }
+        other => panic!("expected Modal::Export to stay open with inline warning, got {other:?}"),
+    }
+
+    // Destination must still be absent — the gate refused before any
+    // writer touched the filesystem.
+    assert!(
+        !dest.exists(),
+        "destination must remain absent after a refused plaintext-confirmation gate",
     );
 }
