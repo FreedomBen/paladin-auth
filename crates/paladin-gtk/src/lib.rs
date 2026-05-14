@@ -20,6 +20,7 @@
 use std::process::ExitCode;
 
 pub mod account_row;
+pub mod add_account;
 pub mod app;
 pub mod auto_lock;
 pub mod cli;
