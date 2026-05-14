@@ -21,17 +21,26 @@ pub mod missing_vault;
 pub mod startup_error;
 pub mod unlock;
 
+use std::time::SystemTime;
+
 use ratatui::Frame;
 
 use crate::app::state::AppState;
 
 /// Render the given [`AppState`] onto `frame`.
 ///
+/// `now` is the wall-clock instant the renderer should use for
+/// TOTP-window math (code / `seconds_remaining` / progress gauge).
+/// The event loop feeds it the `wall_clock` from the latest
+/// [`crate::app::event::AppEvent::Tick`] so two consecutive frames
+/// inside the same TOTP window render identically. Variants that do
+/// not surface TOTP codes ignore the parameter.
+///
 /// Variants whose renderers have not yet landed in this slice draw
 /// nothing — the screen is left at the backend's default fill cell.
 /// Subsequent slices fill those branches in order; the per-variant
 /// fan-out matches the plan's "Tests > Insta snapshots" ordering.
-pub fn render(frame: &mut Frame<'_>, state: &AppState) {
+pub fn render(frame: &mut Frame<'_>, state: &AppState, now: SystemTime) {
     match state {
         AppState::MissingVault { path } => missing_vault::render(frame, path),
         AppState::StartupError { path, message } => {
@@ -44,7 +53,7 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState) {
         } => {
             unlock::render(frame, path, error.as_deref(), passphrase);
         }
-        AppState::Unlocked { .. } => list::render(frame, state),
+        AppState::Unlocked { .. } => list::render(frame, state, now),
         AppState::Locked { .. } => {
             // Renderer lands alongside the auto-lock re-unlock slice:
             // `Locked` re-uses the unlock screen with an empty

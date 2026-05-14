@@ -19,28 +19,45 @@
 //! search highlighting needs it.
 
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use ratatui::Terminal;
 
 use paladin_core::{
-    format_unsafe_permissions, PaladinError, PermissionSubject, Store, VaultInit, VaultLock,
+    format_unsafe_permissions, validate_manual, AccountInput, AccountKindInput, Algorithm,
+    IconHintInput, PaladinError, PermissionSubject, Store, Vault, VaultInit, VaultLock,
 };
 use paladin_tui::app::state::{AppState, Focus};
 use paladin_tui::prompt::PassphraseBuffer;
 use paladin_tui::view::render;
+use secrecy::SecretString;
 
 mod common;
 use common::secure_test_tempdir;
 
+/// Fixed wall-clock time threaded through every list-view snapshot so the
+/// TOTP code / gauge / `seconds_remaining` cells stay deterministic across
+/// hosts. `1_500_000_012 mod 30 == 12`, so for a 30-second TOTP window
+/// the cursor sits 12 s in and 18 s remain — matching the
+/// `DESIGN.md` §6 mock's `18s` and yielding a 6-of-10-cell gauge.
+const SNAPSHOT_NOW_SECS: u64 = 1_500_000_012;
+
+fn snapshot_now() -> SystemTime {
+    UNIX_EPOCH + Duration::from_secs(SNAPSHOT_NOW_SECS)
+}
+
 /// Draw `state` into an `width × height` [`TestBackend`] and return
-/// the resulting text grid (one line per row, cell symbols only).
-fn render_to_text(state: &AppState, width: u16, height: u16) -> String {
+/// the resulting text grid (one line per row, cell symbols only). The
+/// `now` parameter is forwarded to the list-view renderer so TOTP
+/// rows compute against a deterministic wall-clock instead of the
+/// host's real time.
+fn render_to_text(state: &AppState, now: SystemTime, width: u16, height: u16) -> String {
     let backend = TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend).expect("create TestBackend terminal");
     terminal
-        .draw(|frame| render(frame, state))
+        .draw(|frame| render(frame, state, now))
         .expect("draw frame");
     buffer_to_text(terminal.backend().buffer())
 }
@@ -74,7 +91,7 @@ fn snapshot_missing_vault_screen() {
     let state = AppState::MissingVault {
         path: PathBuf::from("/var/lib/paladin/vault.bin"),
     };
-    insta::assert_snapshot!(render_to_text(&state, 80, 12));
+    insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 12));
 }
 
 #[test]
@@ -86,7 +103,7 @@ fn snapshot_unlock_screen() {
         error: None,
         passphrase: PassphraseBuffer::new(),
     };
-    insta::assert_snapshot!(render_to_text(&state, 80, 12));
+    insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 12));
 }
 
 #[test]
@@ -102,7 +119,7 @@ fn snapshot_unlock_screen_with_wrong_passphrase_error() {
         error: Some(PaladinError::DecryptFailed.to_string()),
         passphrase: PassphraseBuffer::new(),
     };
-    insta::assert_snapshot!(render_to_text(&state, 80, 12));
+    insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 12));
 }
 
 /// Create an empty plaintext vault at `path` and commit it to disk so a
@@ -148,7 +165,74 @@ fn snapshot_list_view_empty() {
         status_line: None,
         help_open: false,
     };
-    insta::assert_snapshot!(render_to_text(&state, 80, 12));
+    insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 12));
+}
+
+/// Insert a single TOTP account into `vault` and commit it to `store`.
+/// The Base32 secret, algorithm, digits, and 30-second window mirror the
+/// CLI manual-add defaults so the rendered code/gauge/seconds tuple is a
+/// pure function of [`SNAPSHOT_NOW_SECS`].
+fn push_totp_account(
+    vault: &mut Vault,
+    store: &Store,
+    issuer: Option<&str>,
+    label: &str,
+) -> paladin_core::AccountId {
+    let input = AccountInput {
+        label: label.to_string(),
+        issuer: issuer.map(str::to_string),
+        secret: SecretString::from("JBSWY3DPEHPK3PXP".to_string()),
+        algorithm: Algorithm::Sha1,
+        digits: 6,
+        kind: AccountKindInput::Totp,
+        period_secs: None,
+        counter: None,
+        icon_hint: IconHintInput::Default,
+    };
+    let validated = validate_manual(input, snapshot_now()).expect("valid manual input");
+    let id = vault.add(validated.account);
+    vault.save(store).expect("commit added account");
+    id
+}
+
+#[test]
+fn snapshot_list_view_single_totp() {
+    // Plan L1727: "Single-TOTP list view." Construct an `Unlocked`
+    // AppState backed by a plaintext vault holding one TOTP account
+    // (`GitHub (ben@example.com)`) so the renderer exercises the
+    // populated-row branch: the selection marker, the issuer/label
+    // pair, the formatted TOTP code, the period-progress gauge, and
+    // the remaining-seconds suffix per `DESIGN.md` §6's list-view
+    // mock.
+    //
+    // `snapshot_now()` is 12 s into a 30-s TOTP window so 18 s remain
+    // and the gauge ends up 60% full — both values are encoded into
+    // the snapshot, so a regression that mishandles the
+    // `Code::seconds_remaining` math or the gauge ratio surfaces as
+    // a diff in this file.
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (mut vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let id = push_totp_account(&mut vault, &store, Some("GitHub"), "ben@example.com");
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 12));
 }
 
 #[test]
@@ -170,5 +254,5 @@ fn snapshot_startup_error_unsafe_permissions() {
         path: Some(path),
         message,
     };
-    insta::assert_snapshot!(render_to_text(&state, 80, 12));
+    insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 12));
 }

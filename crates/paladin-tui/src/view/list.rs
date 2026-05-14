@@ -8,33 +8,62 @@
 //! block containing a search bar, a separator, the account-row pane,
 //! a second separator, and a bottom keybinding hint.
 //!
-//! This slice lands the empty-vault branch: when `vault.iter()`
-//! yields nothing, the rows pane shows a single centered
-//! "No accounts. Press `a` to add one." line. The populated branches
-//! (single-TOTP, mixed TOTP/HOTP with hidden + revealed rows,
-//! search-active filtering, `zz`-recentered viewport) land in
-//! subsequent slices alongside their own snapshot tests.
+//! Empty branch: when `vault.iter()` yields nothing, the rows pane
+//! shows a single centered "No accounts. Press `a` to add one." line.
+//!
+//! Populated branch (this slice's TOTP fan-out): each `AccountSummary`
+//! becomes one row — a selection marker, the issuer/label pair, the
+//! `Code.code` digits split on the width midpoint, a 10-cell
+//! period-progress gauge, and the `Code.seconds_remaining` suffix.
+//! HOTP rows, search-active filtering, and `zz`-recentered viewports
+//! land in subsequent slices.
 //!
 //! The renderer never mutates application state and never performs
 //! I/O — every value it reads comes from the supplied [`AppState`].
 
-use ratatui::layout::{Alignment, Constraint, Layout};
+use std::time::SystemTime;
+
+use paladin_core::{AccountKindSummary, AccountSummary, Code, Vault};
+use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Padding, Paragraph};
 use ratatui::Frame;
 
 use crate::app::state::AppState;
 
+/// Width of the issuer/label column inside an account row. Truncated
+/// titles end with `…` so the column never bleeds into the code
+/// column at smaller terminal widths.
+const TITLE_COL_WIDTH: usize = 32;
+
+/// Width of the OTP-code column. Fits a 6-digit code with a
+/// mid-string space (`"123 456"` is 7 chars); the field is
+/// right-aligned in a 9-cell box so 7-/8-digit codes stay
+/// column-aligned with their 6-digit siblings.
+const CODE_COL_WIDTH: usize = 9;
+
+/// Number of cells in the TOTP period-progress gauge.
+const GAUGE_WIDTH: usize = 10;
+
+/// Filled cell used by the TOTP progress gauge.
+const GAUGE_FILLED: char = '█';
+
+/// Empty cell used by the TOTP progress gauge.
+const GAUGE_EMPTY: char = '░';
+
 /// Render the list-view screen for the given Unlocked `state`.
 ///
-/// Caller is responsible for matching `AppState::Unlocked` before
-/// dispatching here; non-Unlocked variants are a no-op so a future
-/// stray call leaves the backend at its default fill rather than
-/// panicking.
-pub fn render(frame: &mut Frame<'_>, state: &AppState) {
+/// `now` is the wall-clock instant fed to [`Vault::totp_code`] so
+/// TOTP windows / `seconds_remaining` / gauge math are deterministic
+/// across renders within the same tick. Caller is responsible for
+/// matching `AppState::Unlocked` before dispatching here;
+/// non-Unlocked variants are a no-op so a future stray call leaves
+/// the backend at its default fill rather than panicking.
+pub fn render(frame: &mut Frame<'_>, state: &AppState, now: SystemTime) {
     let AppState::Unlocked {
         vault,
         search_query,
+        selected,
         ..
     } = state
     else {
@@ -81,13 +110,148 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState) {
         ];
         let paragraph = Paragraph::new(lines).alignment(Alignment::Center);
         frame.render_widget(paragraph, chunks[2]);
+    } else {
+        render_rows(frame, chunks[2], vault, selected.as_ref(), now);
     }
-    // Populated branches land in the next slice (single-TOTP, then
-    // mixed TOTP / HOTP with hidden + revealed rows, then search and
-    // `zz` recenter). They share `chunks[2]` as the rows pane.
 
     frame.render_widget(Paragraph::new(divider), chunks[3]);
 
     let hint = "[↑↓] move  [enter] copy  [n] next-HOTP  [a] add  [/] find";
     frame.render_widget(Paragraph::new(hint), chunks[4]);
+}
+
+/// Render one account row per visible vault entry into `area`. Rows
+/// past the bottom of `area` are clipped — viewport scrolling for
+/// long lists lands alongside the `Ctrl-F` / `Ctrl-B` slice.
+fn render_rows(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    vault: &Vault,
+    selected: Option<&paladin_core::AccountId>,
+    now: SystemTime,
+) {
+    let capacity = area.height as usize;
+    for (idx, account) in vault.iter().take(capacity).enumerate() {
+        // `idx < capacity == area.height` (a `u16`), so the cast is
+        // lossless — the row offset cannot exceed the row pane's own
+        // height.
+        let row_offset = u16::try_from(idx).expect("row index ≤ area.height (u16)");
+        let row = Rect::new(area.x, area.y + row_offset, area.width, 1);
+        let summary = account.summary();
+        let is_selected = selected.is_some_and(|sel| *sel == summary.id);
+        let line = match summary.kind {
+            AccountKindSummary::Totp => render_totp_row(vault, &summary, is_selected, now),
+            // HOTP row formatting lands in the next snapshot slice
+            // (mixed-TOTP/HOTP with hidden + revealed rows); for now
+            // the empty placeholder keeps the renderer total over
+            // mixed-kind vaults so a stray HOTP entry does not panic.
+            AccountKindSummary::Hotp => format_row_prefix(&summary, is_selected),
+        };
+        frame.render_widget(Paragraph::new(line), row);
+    }
+}
+
+/// Render a single TOTP row: marker, title column, code, gauge, and
+/// remaining-seconds suffix. A code-compute failure (e.g.
+/// pre-Unix-epoch `now`) falls back to `------` so the row stays
+/// the same shape as a healthy row and never panics on a transient
+/// `now` argument.
+fn render_totp_row(
+    vault: &Vault,
+    summary: &AccountSummary,
+    is_selected: bool,
+    now: SystemTime,
+) -> String {
+    let prefix = format_row_prefix(summary, is_selected);
+    let period = summary.period.unwrap_or(30);
+    let (code_text, secs_remaining) = match vault.totp_code(summary.id, now) {
+        Ok(Code {
+            code,
+            seconds_remaining,
+            ..
+        }) => (format_code_digits(&code), seconds_remaining.unwrap_or(0)),
+        Err(_) => ("------".to_string(), 0),
+    };
+    let gauge = render_gauge(secs_remaining, period);
+    format!("{prefix}  {code_text:>CODE_COL_WIDTH$}   {gauge}  {secs_remaining:>3}s")
+}
+
+/// Build the `{marker} {title-padded-to-32}` prefix shared by TOTP
+/// and HOTP rows. The marker is a right-pointing wedge for the
+/// selected row and a space otherwise so unselected rows stay
+/// left-aligned with the marker column rather than shifting one cell
+/// when the selection changes.
+fn format_row_prefix(summary: &AccountSummary, is_selected: bool) -> String {
+    let marker = if is_selected { '▶' } else { ' ' };
+    let title = title_for(summary);
+    let title = truncate_to_chars(&title, TITLE_COL_WIDTH);
+    let pad = TITLE_COL_WIDTH.saturating_sub(title.chars().count());
+    format!("{marker} {title}{}", " ".repeat(pad))
+}
+
+/// Render the visible label for an account row.
+///
+/// Per `DESIGN.md` §6's mock, an account with an issuer renders as
+/// `{issuer} ({label})`; a label-only account renders bare. Either
+/// branch is then passed through [`truncate_to_chars`] so it fits
+/// the column.
+fn title_for(summary: &AccountSummary) -> String {
+    match &summary.issuer {
+        Some(issuer) => format!("{issuer} ({label})", issuer = issuer, label = summary.label),
+        None => summary.label.clone(),
+    }
+}
+
+/// Truncate `s` to at most `max_chars` Unicode scalar values,
+/// replacing the trailing character with `…` when truncation
+/// happens. Char-based (not byte-based) so multi-byte issuers do not
+/// produce mid-codepoint truncation.
+fn truncate_to_chars(s: &str, max_chars: usize) -> String {
+    let count = s.chars().count();
+    if count <= max_chars {
+        return s.to_string();
+    }
+    let take = max_chars.saturating_sub(1);
+    let mut out: String = s.chars().take(take).collect();
+    out.push('…');
+    out
+}
+
+/// Insert a space at the digit-width midpoint of a TOTP code so it
+/// reads as two groups (`"123456"` → `"123 456"`). Codes whose width
+/// is below 2 (cannot happen for valid TOTP outputs) are returned
+/// verbatim; odd widths split with the larger group on the left.
+fn format_code_digits(code: &str) -> String {
+    let chars: Vec<char> = code.chars().collect();
+    if chars.len() < 2 {
+        return code.to_string();
+    }
+    let mid = chars.len().div_ceil(2);
+    let mut out = String::with_capacity(chars.len() + 1);
+    out.extend(&chars[..mid]);
+    out.push(' ');
+    out.extend(&chars[mid..]);
+    out
+}
+
+/// Render the [`GAUGE_WIDTH`]-cell period-progress gauge for a TOTP
+/// row. The filled-cell count is `ceil(seconds_remaining / period *
+/// GAUGE_WIDTH)` so a single second remaining still shows one filled
+/// cell rather than rounding down to an all-empty bar.
+fn render_gauge(seconds_remaining: u32, period: u32) -> String {
+    if period == 0 {
+        return GAUGE_EMPTY.to_string().repeat(GAUGE_WIDTH);
+    }
+    let secs = seconds_remaining.min(period);
+    let filled = (secs as usize * GAUGE_WIDTH).div_ceil(period as usize);
+    let filled = filled.min(GAUGE_WIDTH);
+    let empty = GAUGE_WIDTH - filled;
+    let mut bar = String::with_capacity(GAUGE_WIDTH);
+    for _ in 0..filled {
+        bar.push(GAUGE_FILLED);
+    }
+    for _ in 0..empty {
+        bar.push(GAUGE_EMPTY);
+    }
+    bar
 }
