@@ -944,6 +944,77 @@ impl Default for ImportModal {
     }
 }
 
+/// Output-format selector for the Export modal.
+///
+/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Export:
+/// *"format selector (plaintext `otpauth://` JSON list or encrypted
+/// Paladin bundle)"*. [`Plaintext`](Self::Plaintext) routes the submit
+/// path through [`paladin_core::export::otpauth_list`] (a JSON array of
+/// `otpauth://` URIs); [`Encrypted`](Self::Encrypted) routes through
+/// [`paladin_core::export::encrypted`], which produces a Paladin bundle
+/// byte-compatible with the on-disk encrypted vault format.
+///
+/// [`Default`] yields [`Self::Plaintext`] so the modal opens to the
+/// otpauth-list selector — the simpler write path that does not prompt
+/// for an export-bundle passphrase. The plaintext path still requires
+/// the inline unencrypted-secrets confirmation gate before the write
+/// proceeds (covered alongside the gate's reducer slice).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum ExportFormat {
+    /// Route the submit path through
+    /// [`paladin_core::export::otpauth_list`].
+    #[default]
+    Plaintext,
+    /// Route the submit path through
+    /// [`paladin_core::export::encrypted`] with the user-supplied
+    /// twice-confirmed bundle passphrase.
+    Encrypted,
+}
+
+/// State for the Export modal.
+///
+/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Export:
+/// *"format selector (plaintext `otpauth://` JSON list or encrypted
+/// Paladin bundle) and a destination path field. Overwriting an
+/// existing file is rejected unless the user confirms an inline
+/// overwrite gate (parity with CLI `--force`). Encrypted exports
+/// prompt twice for the bundle passphrase ..."*. The submit path
+/// threads these through
+/// [`paladin_core::export::otpauth_list`] /
+/// [`paladin_core::export::encrypted`] and then through
+/// [`paladin_core::write_secret_file_atomic`]; the per-slice effect
+/// wiring lands alongside the executor.
+///
+/// [`Default`] yields an empty path buffer with
+/// [`ExportFormat::Plaintext`] selected and no inline error, so
+/// reducer tests that match on the modal discriminant can construct a
+/// placeholder without reaching into the vault.
+///
+/// Subsequent slices add the overwrite-confirmation gate, the
+/// unencrypted-secrets confirmation gate (plaintext path), the
+/// twice-prompt zeroizing passphrase buffers (encrypted path), and an
+/// inline-error slot for writer / passphrase failures.
+#[derive(Debug, Default)]
+pub struct ExportModal {
+    /// Destination-path text buffer; trimmed and passed to
+    /// [`paladin_core::write_secret_file_atomic`] on submit.
+    pub path_text: String,
+    /// Output-format selector. [`ExportFormat::Plaintext`] routes
+    /// through [`paladin_core::export::otpauth_list`];
+    /// [`ExportFormat::Encrypted`] routes through
+    /// [`paladin_core::export::encrypted`] with the user-supplied
+    /// twice-confirmed bundle passphrase.
+    pub format: ExportFormat,
+    /// Inline writer / passphrase / overwrite-gate error from the most
+    /// recent submit attempt, if any. Rendered through
+    /// [`render_error_message`](crate::app::state::render_error_message)
+    /// so the surfaced wording matches the rest of the TUI's error
+    /// surface. Subsequent edits clear this slot so the user sees they
+    /// are re-trying; the success-close / inline-error wiring lands
+    /// alongside the `EffectResult::Export` slice.
+    pub error: Option<String>,
+}
+
 /// An open modal dialog over the main list view.
 ///
 /// Discarded on the `Unlocked → Locked` auto-lock transition
@@ -971,7 +1042,7 @@ pub enum Modal {
     Import(ImportModal),
     /// Export the current vault (plaintext or twice-confirmed
     /// encrypted bundle).
-    Export,
+    Export(ExportModal),
     /// Passphrase set / change / remove sub-flow.
     Passphrase,
     /// Settings: auto-lock and clipboard-clear toggles + timeouts.

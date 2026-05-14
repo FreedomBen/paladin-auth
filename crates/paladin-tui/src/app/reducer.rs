@@ -28,8 +28,8 @@ use crate::app::event::{
 use crate::app::state::{
     compute_idle_deadline, format_account_display_label, format_duplicate_account_message,
     format_qr_import_failure, initial_selection, render_error_message, AddManualFocus, AddModal,
-    AddMode, AppState, ChordLeader, CountsPanel, Focus, HotpReveal, ImportModal, Modal,
-    PendingClipboardClear, PendingDuplicateAdd, RemoveModal, RenameModal, SettingsFocus,
+    AddMode, AppState, ChordLeader, CountsPanel, ExportModal, Focus, HotpReveal, ImportModal,
+    Modal, PendingClipboardClear, PendingDuplicateAdd, RemoveModal, RenameModal, SettingsFocus,
     SettingsModal, StatusLine, CLIPBOARD_WRITE_FAILED, NO_ACCOUNT_SELECTED,
 };
 use crate::prompt::PassphraseBuffer;
@@ -2544,7 +2544,7 @@ fn modal_opener_for_char(c: char) -> Option<Modal> {
     Some(match c {
         'a' => Modal::Add(AddModal::default()),
         'i' => Modal::Import(ImportModal::default()),
-        'e' => Modal::Export,
+        'e' => Modal::Export(ExportModal::default()),
         'p' => Modal::Passphrase,
         _ => return None,
     })

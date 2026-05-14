@@ -32,8 +32,8 @@ use paladin_tui::app::reducer::reduce;
 use paladin_tui::app::state::{
     compute_idle_deadline, decide_state_from_inspect, decide_state_from_open,
     format_account_display_label, format_duplicate_account_message, format_qr_import_failure,
-    render_error_message, AddManualFocus, AddModal, AddMode, AppState, ChordLeader, Focus,
-    HotpReveal, ImportFormatSelector, ImportModal, Modal, PendingDuplicateAdd, RemoveModal,
+    render_error_message, AddManualFocus, AddModal, AddMode, AppState, ChordLeader, ExportModal,
+    Focus, HotpReveal, ImportFormatSelector, ImportModal, Modal, PendingDuplicateAdd, RemoveModal,
     RenameModal, SettingsFocus, SettingsModal, StatusLine, NO_ACCOUNT_SELECTED,
 };
 use paladin_tui::cli::{should_disable_color, GlobalArgs};
@@ -4264,7 +4264,10 @@ fn pressing_i_on_unlocked_with_no_modal_open_opens_import_modal() {
 
 #[test]
 fn pressing_e_on_unlocked_with_no_modal_open_opens_export_modal() {
-    assert_key_opens_modal(key(KeyCode::Char('e')), &Modal::Export);
+    assert_key_opens_modal(
+        key(KeyCode::Char('e')),
+        &Modal::Export(ExportModal::default()),
+    );
 }
 
 #[test]
@@ -7195,7 +7198,7 @@ fn pressing_esc_on_unlocked_with_open_import_modal_closes_the_modal() {
 
 #[test]
 fn pressing_esc_on_unlocked_with_open_export_modal_closes_the_modal() {
-    assert_esc_closes_modal(Modal::Export);
+    assert_esc_closes_modal(Modal::Export(ExportModal::default()));
 }
 
 #[test]
@@ -12341,7 +12344,7 @@ fn pressing_non_selection_gated_opener_with_no_selection_does_not_set_status_lin
     for (letter, expected) in [
         ('a', Modal::Add(AddModal::default())),
         ('i', Modal::Import(ImportModal::default())),
-        ('e', Modal::Export),
+        ('e', Modal::Export(ExportModal::default())),
         ('p', Modal::Passphrase),
         ('s', Modal::Settings(SettingsModal::default())),
     ] {
@@ -13209,12 +13212,20 @@ fn pressing_ctrl_p_with_import_modal_open_aliases_shift_tab() {
 
 #[test]
 fn pressing_ctrl_n_with_export_modal_open_aliases_tab() {
-    assert_ctrl_modal_alias_is_silent_no_op(Modal::Export, ctrl(KeyCode::Char('n')), "`Ctrl-N`");
+    assert_ctrl_modal_alias_is_silent_no_op(
+        Modal::Export(ExportModal::default()),
+        ctrl(KeyCode::Char('n')),
+        "`Ctrl-N`",
+    );
 }
 
 #[test]
 fn pressing_ctrl_p_with_export_modal_open_aliases_shift_tab() {
-    assert_ctrl_modal_alias_is_silent_no_op(Modal::Export, ctrl(KeyCode::Char('p')), "`Ctrl-P`");
+    assert_ctrl_modal_alias_is_silent_no_op(
+        Modal::Export(ExportModal::default()),
+        ctrl(KeyCode::Char('p')),
+        "`Ctrl-P`",
+    );
 }
 
 #[test]
@@ -13305,7 +13316,11 @@ fn navigation_keys_for_stub_modal_trap() -> Vec<(AppEvent, &'static str)> {
 #[test]
 fn export_modal_navigation_keys_are_silent_no_op() {
     for (event, label) in navigation_keys_for_stub_modal_trap() {
-        assert_ctrl_modal_alias_is_silent_no_op(Modal::Export, event, label);
+        assert_ctrl_modal_alias_is_silent_no_op(
+            Modal::Export(ExportModal::default()),
+            event,
+            label,
+        );
     }
 }
 
