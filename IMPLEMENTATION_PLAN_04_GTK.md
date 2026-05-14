@@ -1171,7 +1171,7 @@ dialog operation without re-asserting `Send` itself.
 and OTP primitives must never be re-implemented or imported directly
 here — they belong in `paladin-core` per DESIGN §3.
 
-- [ ] Tests: `tests/thinness.rs` — a source-level guard that scans
+- [x] Tests: `tests/thinness.rs` — a source-level guard that scans
   `crates/paladin-gtk/src/` for forbidden crate-name spellings:
   `argon2`, `chacha20poly1305`, `bincode`, `hmac`, `sha1`, `sha2`,
   `rqrr`, `image`, `getrandom`, `directories`, `url`. Any direct
