@@ -1488,8 +1488,30 @@ end-to-end.
   (Tick past `idle_deadline` transitions to `Locked`, dropping the
   whole `Unlocked` arm including the open `ImportModal`). All in
   `tests/reducer_tests.rs`.)*
-- [ ] Encrypted export passphrase buffer zeroizes on submit, cancel,
+- [x] Encrypted export passphrase buffer zeroizes on submit, cancel,
   modal close, and auto-lock.
+  *(`ExportModal::new_passphrase` and `ExportModal::confirm_passphrase`
+  are `PassphraseBuffer`s wrapping `Zeroizing<String>`, so
+  `clear()` / `take()` wipe in place and `Drop` wipes on modal
+  teardown. Submit is covered by
+  `enter_in_encrypted_export_modal_with_matching_passphrases_emits_effect_and_zeroizes_passphrase_buffers`
+  (Enter past every gate `take()`s `new_passphrase` into the
+  `SecretString` carried by `Effect::Export` and `clear()`s
+  `confirm_passphrase`); cancel by
+  `export_modal_esc_with_typed_passphrases_closes_modal_and_drops_passphrase_buffers`
+  (`Esc` clears `modal` to `None` so the typed bytes drop with the
+  modal); modal close (success) by
+  `effect_result_export_ok_closes_modal_and_publishes_status_line_confirmation`
+  (Enter drains both buffers, then `EffectResult::Export Ok` drops
+  the now-empty `ExportModal` while publishing the
+  `StatusLine::Confirmation`); auto-lock by
+  `tick_past_idle_deadline_with_open_export_modal_typed_passphrases_locks_and_drops_passphrase_buffers`
+  (Tick past `idle_deadline` transitions to `Locked`, dropping the
+  whole `Unlocked` arm including the open `ExportModal`). The
+  companion plaintext-path emission contract is locked alongside by
+  `enter_in_plaintext_export_modal_with_confirmation_emits_effect_without_passphrase`
+  (Enter past the unencrypted-secrets gate emits `Effect::Export`
+  with `passphrase = None`). All in `tests/reducer_tests.rs`.)*
 - [ ] Passphrase set / change buffers zeroize on submit, cancel, modal
   close, and auto-lock.
 - [x] Add modal manual-secret field zeroizes on submit, cancel, modal

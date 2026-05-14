@@ -18941,3 +18941,462 @@ fn effect_result_export_ok_leaves_vault_iter_unchanged() {
         "Export Ok must not mutate Vault::iter() — Export never calls Vault::save",
     );
 }
+
+// ---------------------------------------------------------------------------
+// Sensitive UI buffers — Encrypted export passphrase buffer zeroizes on
+// submit, cancel, modal close, and auto-lock.
+//
+// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Tests > Sensitive UI buffers":
+// *"Encrypted export passphrase buffer zeroizes on submit, cancel,
+// modal close, and auto-lock."* The buffers (`new_passphrase`,
+// `confirm_passphrase`) are `PassphraseBuffer`s wrapping
+// `Zeroizing<String>`, so `clear()` / `take()` wipe in place and
+// `Drop` wipes on modal teardown. The four tests below pin each axis
+// end-to-end.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enter_in_encrypted_export_modal_with_matching_passphrases_emits_effect_and_zeroizes_passphrase_buffers(
+) {
+    // Submit axis. Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)":
+    // *"All passphrase-entry fields ... keep typed bytes in zeroizing
+    // buffers, convert to `secrecy::SecretString` only for core calls,
+    // and zeroize on submit, cancel, modal close, and auto-lock."*
+    //
+    // Enter on an encrypted Export modal that passes every gate
+    // (overwrite, twice-confirm, zero-length) must emit a single
+    // `Effect::Export` carrying the typed passphrase as a
+    // `SecretString` and leave both `new_passphrase` and
+    // `confirm_passphrase` empty (the bytes moved into the secret
+    // through `PassphraseBuffer::take` and the comparison sibling
+    // wiped through `PassphraseBuffer::clear`). Mirrors the Add
+    // modal's submit-axis coverage
+    // (`enter_in_add_modal_manual_mode_consumes_manual_secret_buffer`)
+    // and the Import modal's passphrase-phase submit
+    // (`enter_in_import_modal_passphrase_phase_emits_import_effect_with_typed_passphrase`).
+    let tmp = secure_tempdir();
+    let (vault_path, (vault, store)) = open_plaintext_pair(&tmp);
+    let dest = tmp.path().join("bundle.paladin");
+    assert!(
+        !dest.exists(),
+        "harness precondition: destination must not exist before the test runs",
+    );
+
+    let state_with_modal = AppState::Unlocked {
+        path: vault_path.clone(),
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Export(ExportModal {
+            path_text: dest.to_string_lossy().into_owned(),
+            format: ExportFormat::Encrypted,
+            new_passphrase: passphrase_buffer_with("hunter2"),
+            confirm_passphrase: passphrase_buffer_with("hunter2"),
+            ..ExportModal::default()
+        })),
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+
+    let (state, effects) = reduce(state_with_modal, key(KeyCode::Enter));
+
+    assert_eq!(
+        effects.len(),
+        1,
+        "Enter past every gate must emit a single Effect::Export; got {effects:?}",
+    );
+    match &effects[0] {
+        Effect::Export {
+            path: effect_path,
+            target_path,
+            format,
+            passphrase,
+        } => {
+            assert_eq!(
+                effect_path, &vault_path,
+                "Effect::Export must carry the current vault path",
+            );
+            assert_eq!(
+                target_path, &dest,
+                "Effect::Export must carry the trimmed destination path",
+            );
+            assert!(
+                matches!(format, ExportFormat::Encrypted),
+                "Effect::Export must carry the selected ExportFormat::Encrypted, got {format:?}",
+            );
+            let secret = passphrase
+                .as_ref()
+                .expect("encrypted Effect::Export must carry Some(SecretString)");
+            assert_eq!(
+                secret.expose_secret(),
+                "hunter2",
+                "Effect::Export must carry the typed passphrase",
+            );
+        }
+        other => panic!("expected Effect::Export, got {other:?}"),
+    }
+
+    match &state {
+        AppState::Unlocked {
+            modal: Some(Modal::Export(export)),
+            status_line,
+            ..
+        } => {
+            assert!(
+                export.new_passphrase.is_empty(),
+                "submit must consume new_passphrase via take() (which zeroizes it)",
+            );
+            assert!(
+                export.confirm_passphrase.is_empty(),
+                "submit must wipe confirm_passphrase via clear() (which zeroizes it)",
+            );
+            assert!(
+                export.error.is_none(),
+                "submit past every gate must not surface an inline error; got {:?}",
+                export.error,
+            );
+            assert!(
+                status_line.is_none(),
+                "submit must leave the status-line clear until EffectResult arrives; got {status_line:?}",
+            );
+        }
+        other => {
+            panic!("expected Export modal still open between Enter and EffectResult, got {other:?}")
+        }
+    }
+}
+
+#[test]
+fn enter_in_plaintext_export_modal_with_confirmation_emits_effect_without_passphrase() {
+    // Submit axis (plaintext companion). The plaintext path has no
+    // passphrase buffer to zeroize, but the Enter handler must still
+    // emit a single `Effect::Export` with `passphrase = None` once the
+    // unencrypted-secrets confirmation flag is set. Locks the Enter →
+    // Effect::Export emission contract for the plaintext path
+    // alongside its encrypted sibling (above).
+    let tmp = secure_tempdir();
+    let (vault_path, (vault, store)) = open_plaintext_pair(&tmp);
+    let dest = tmp.path().join("export.json");
+    assert!(
+        !dest.exists(),
+        "harness precondition: destination must not exist before the test runs",
+    );
+
+    let state_with_modal = AppState::Unlocked {
+        path: vault_path.clone(),
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Export(ExportModal {
+            path_text: dest.to_string_lossy().into_owned(),
+            format: ExportFormat::Plaintext,
+            plaintext_confirmed: true,
+            ..ExportModal::default()
+        })),
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+
+    let (state, effects) = reduce(state_with_modal, key(KeyCode::Enter));
+
+    assert_eq!(
+        effects.len(),
+        1,
+        "Enter past every gate must emit a single Effect::Export; got {effects:?}",
+    );
+    match &effects[0] {
+        Effect::Export {
+            path: effect_path,
+            target_path,
+            format,
+            passphrase,
+        } => {
+            assert_eq!(
+                effect_path, &vault_path,
+                "Effect::Export must carry the current vault path",
+            );
+            assert_eq!(
+                target_path, &dest,
+                "Effect::Export must carry the trimmed destination path",
+            );
+            assert!(
+                matches!(format, ExportFormat::Plaintext),
+                "Effect::Export must carry the selected ExportFormat::Plaintext, got {format:?}",
+            );
+            assert!(
+                passphrase.is_none(),
+                "plaintext Effect::Export must carry passphrase = None",
+            );
+        }
+        other => panic!("expected Effect::Export, got {other:?}"),
+    }
+
+    match &state {
+        AppState::Unlocked {
+            modal: Some(Modal::Export(_)),
+            status_line,
+            ..
+        } => {
+            assert!(
+                status_line.is_none(),
+                "submit must leave the status-line clear until EffectResult arrives; got {status_line:?}",
+            );
+        }
+        other => {
+            panic!("expected Export modal still open between Enter and EffectResult, got {other:?}")
+        }
+    }
+}
+
+#[test]
+fn export_modal_esc_with_typed_passphrases_closes_modal_and_drops_passphrase_buffers() {
+    // Cancel axis. The user has typed passphrase chars into the
+    // encrypted-export new_passphrase / confirm_passphrase fields and
+    // then dismissed the Export modal with Esc before submitting. The
+    // reducer's Esc precedence chain (`apply_esc_dismiss`) clears
+    // `modal` to `None`; dropping the `Modal::Export(ExportModal)`
+    // runs `PassphraseBuffer::Drop` via `Zeroizing<String>` on both
+    // buffers, wiping the typed bytes. Externally this is observable
+    // as the modal slot being empty after a single Esc, with no
+    // effects emitted (so no rogue Effect can carry the buffers
+    // elsewhere). Mirrors `add_modal_esc_with_typed_manual_secret_...`
+    // and `import_modal_esc_with_typed_paladin_passphrase_...`.
+    let tmp = secure_tempdir();
+    let (vault_path, (vault, store)) = open_plaintext_pair(&tmp);
+    let dest = tmp.path().join("bundle.paladin");
+
+    let state_with_modal = AppState::Unlocked {
+        path: vault_path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Export(ExportModal {
+            path_text: dest.to_string_lossy().into_owned(),
+            format: ExportFormat::Encrypted,
+            new_passphrase: passphrase_buffer_with("hunter2"),
+            confirm_passphrase: passphrase_buffer_with("hunter2"),
+            ..ExportModal::default()
+        })),
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    match &state_with_modal {
+        AppState::Unlocked {
+            modal: Some(Modal::Export(export)),
+            ..
+        } => {
+            assert!(
+                !export.new_passphrase.is_empty(),
+                "harness precondition: new_passphrase must hold typed bytes",
+            );
+            assert!(
+                !export.confirm_passphrase.is_empty(),
+                "harness precondition: confirm_passphrase must hold typed bytes",
+            );
+        }
+        _ => panic!("expected Unlocked with Modal::Export open"),
+    }
+
+    let (state, effects) = reduce(state_with_modal, key(KeyCode::Esc));
+    assert!(
+        effects.is_empty(),
+        "Esc cancelling the Export modal must not emit effects; got {effects:?}",
+    );
+    match state {
+        AppState::Unlocked {
+            modal,
+            status_line,
+            search_query,
+            ..
+        } => {
+            assert!(
+                modal.is_none(),
+                "Esc must drop the Export modal so its passphrase buffers zeroize; got {modal:?}",
+            );
+            assert!(
+                status_line.is_none(),
+                "cancel path must not publish a status-line confirmation; got {status_line:?}",
+            );
+            assert!(
+                search_query.is_empty(),
+                "cancel path must not perturb the search query; got {search_query:?}",
+            );
+        }
+        other => panic!("expected Unlocked after Esc, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_export_ok_closes_modal_and_publishes_status_line_confirmation() {
+    // Modal-close axis (post-success). By the time
+    // `EffectResult::Export { Ok(()) }` arrives, the Enter handler
+    // has already consumed `new_passphrase` via `PassphraseBuffer::take`
+    // and wiped `confirm_passphrase` via `PassphraseBuffer::clear` (see
+    // `enter_in_encrypted_export_modal_..._zeroizes_passphrase_buffers`),
+    // so the in-memory buffers are empty. Per
+    // `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)": *"On success
+    // the modal closes with a status-line confirmation showing the
+    // written path."* The Ok arm must drop the `Modal::Export` slot
+    // (so the now-empty buffers' `Drop` runs) and publish a
+    // `StatusLine::Confirmation`. Mirrors the Add modal's
+    // `effect_result_add_ok_closes_modal_with_already_taken_manual_secret`.
+    let tmp = secure_tempdir();
+    let (vault_path, (vault, store)) = open_plaintext_pair(&tmp);
+    let dest = tmp.path().join("bundle.paladin");
+
+    // Simulate the post-Enter state: the modal stays open with both
+    // buffers already drained (matching `Enter`'s contract above).
+    let state_with_modal = AppState::Unlocked {
+        path: vault_path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Export(ExportModal {
+            path_text: dest.to_string_lossy().into_owned(),
+            format: ExportFormat::Encrypted,
+            new_passphrase: PassphraseBuffer::new(),
+            confirm_passphrase: PassphraseBuffer::new(),
+            ..ExportModal::default()
+        })),
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+
+    let (state, effects) = reduce(state_with_modal, export_result(Ok(())));
+
+    assert!(
+        effects.is_empty(),
+        "Ok arm must not emit follow-up effects; got {effects:?}",
+    );
+    match state {
+        AppState::Unlocked {
+            modal, status_line, ..
+        } => {
+            assert!(
+                modal.is_none(),
+                "Ok arm must close the Export modal so its passphrase buffers drop; got {modal:?}",
+            );
+            match status_line {
+                Some(StatusLine::Confirmation(text)) => {
+                    assert!(
+                        text.contains(&dest.to_string_lossy().into_owned()),
+                        "Ok arm confirmation must reference the written destination path; got {text:?}",
+                    );
+                }
+                other => panic!("Ok arm must publish StatusLine::Confirmation; got {other:?}",),
+            }
+        }
+        other => panic!("expected Unlocked after Ok, got {other:?}"),
+    }
+}
+
+#[test]
+fn tick_past_idle_deadline_with_open_export_modal_typed_passphrases_locks_and_drops_passphrase_buffers(
+) {
+    // Auto-lock axis. `maybe_auto_lock` transitions `Unlocked →
+    // Locked` when `Tick.monotonic` is past `idle_deadline`. The
+    // `Locked` state carries only `path` (and any pending clipboard
+    // clear) — by construction every other slot of the prior
+    // `Unlocked` is dropped, including any open `Modal::Export` and
+    // its `new_passphrase` / `confirm_passphrase` buffers. The
+    // buffers' `Zeroizing<String>` drop wipes the typed bytes in
+    // place. Mirrors `tick_past_idle_deadline_with_open_add_modal_...`
+    // and `tick_past_idle_deadline_with_open_import_modal_...`.
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (mut vault, store) = create_encrypted_pair(&path, "pp");
+    enable_auto_lock(&mut vault, &store, 600);
+
+    let t0 = Instant::now();
+    let deadline = t0 + Duration::from_secs(600);
+    let export = ExportModal {
+        path_text: tmp
+            .path()
+            .join("bundle.paladin")
+            .to_string_lossy()
+            .into_owned(),
+        format: ExportFormat::Encrypted,
+        new_passphrase: passphrase_buffer_with("hunter2"),
+        confirm_passphrase: passphrase_buffer_with("hunter2"),
+        ..ExportModal::default()
+    };
+    assert!(
+        !export.new_passphrase.is_empty(),
+        "harness precondition: new_passphrase must hold typed bytes",
+    );
+    assert!(
+        !export.confirm_passphrase.is_empty(),
+        "harness precondition: confirm_passphrase must hold typed bytes",
+    );
+
+    let unlocked = AppState::Unlocked {
+        path: path.clone(),
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: Some(deadline),
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Export(export)),
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+
+    let tick = AppEvent::Tick {
+        wall_clock: SystemTime::now(),
+        monotonic: deadline + Duration::from_millis(1),
+    };
+    let (state, effects) = reduce(unlocked, tick);
+    assert!(
+        effects.is_empty(),
+        "auto-lock Tick must not emit effects; got {effects:?}",
+    );
+    match state {
+        AppState::Locked {
+            path: locked_path, ..
+        } => {
+            assert_eq!(
+                locked_path, path,
+                "auto-lock must retain the resolved vault path for the next unlock attempt",
+            );
+        }
+        other => panic!("expected AppState::Locked after Tick past idle_deadline, got {other:?}"),
+    }
+}

@@ -296,21 +296,39 @@ fn reduce_effect_result(state: AppState, result: EffectResult) -> (AppState, Vec
 /// Results delivered while not on `Unlocked` or while a different
 /// modal is open are discarded.
 ///
-/// The Ok-arm success-close + status-line confirmation wiring lands
-/// with a subsequent slice; until then `Ok(())` is a passthrough that
-/// leaves the Export modal open without surfacing a confirmation, so
-/// the user can `Esc`-close deliberately.
+/// On `Ok(())` while `Modal::Export` is open the reducer closes the
+/// modal (`modal = None`) and publishes a
+/// [`StatusLine::Confirmation`] referencing the written destination
+/// path — per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" >
+/// "Successful modal outcomes": *"manual Add, URI Add, Remove,
+/// Rename, Export, Passphrase, and Settings close the modal and
+/// publish a status-line confirmation."* Closing the modal drops the
+/// `ExportModal` value, which runs `PassphraseBuffer::Drop` on the
+/// (already drained) `new_passphrase` / `confirm_passphrase` buffers,
+/// covering the "modal close" axis of the sensitive-buffer zeroize
+/// contract.
 fn reduce_export_result(
     mut state: AppState,
     result: Result<(), PaladinError>,
 ) -> (AppState, Vec<Effect>) {
     if let AppState::Unlocked {
-        modal: Some(Modal::Export(ref mut export)),
+        ref mut modal,
+        ref mut status_line,
         ..
     } = state
     {
-        if let Err(err) = result {
-            export.error = Some(render_error_message(&err));
+        if let Some(Modal::Export(export)) = modal.as_mut() {
+            match result {
+                Ok(()) => {
+                    let display = export.path_text.trim().to_owned();
+                    *modal = None;
+                    *status_line =
+                        Some(StatusLine::Confirmation(format!("Exported to {display}.")));
+                }
+                Err(err) => {
+                    export.error = Some(render_error_message(&err));
+                }
+            }
         }
     }
     (state, Vec::new())
@@ -1357,7 +1375,7 @@ fn route_modal_input(
         Some(Modal::Rename(rename)) => route_rename_modal_input(path, rename, key),
         Some(Modal::Remove(remove)) => route_remove_modal_input(path, remove, key),
         Some(Modal::Import(import)) => route_import_modal_input(path, import, key),
-        Some(Modal::Export(export)) => route_export_modal_input(export, key),
+        Some(Modal::Export(export)) => route_export_modal_input(path, export, key),
         Some(Modal::Settings(settings)) => {
             let (effects, close) = route_settings_modal_input(path, settings, vault, key);
             if close {
@@ -2112,12 +2130,27 @@ fn route_import_modal_input(
 /// (`paladin-cli/src/commands/export.rs`, DESIGN.md §4.6 / §6) and
 /// the GTK `ExportDialog`'s `plaintext_warning_body()` checkbox label.
 ///
-/// Subsequent effect-emission slices (the actual [`Effect::Export`]
-/// emission, the plaintext-confirmation toggle key handler) land
-/// alongside their own checklist entries; until then this slice
-/// stops at the gate refusals and treats all other Enter outcomes as
-/// a silent no-op so the modal-trap contract holds.
-fn route_export_modal_input(export: &mut ExportModal, key: &KeyEvent) -> Vec<Effect> {
+/// Once every gate passes, the reducer emits a single
+/// [`Effect::Export`] carrying the current vault path, the trimmed
+/// destination path, the format selector, and — on the encrypted path
+/// — the typed passphrase as a `SecretString` produced by
+/// [`PassphraseBuffer::take`]. The companion `confirm_passphrase`
+/// buffer is wiped via [`PassphraseBuffer::clear`] in the same step so
+/// both halves of the twice-prompt zeroize on submit per
+/// `IMPLEMENTATION_PLAN_03_TUI.md` "Tests > Sensitive UI buffers":
+/// *"Encrypted export passphrase buffer zeroizes on submit, cancel,
+/// modal close, and auto-lock."* The plaintext path emits the same
+/// [`Effect::Export`] shape with `passphrase = None`.
+///
+/// The plaintext-confirmation toggle key handler lands alongside its
+/// own checklist entry; until then this slice consumes Enter and
+/// treats all other keys as a silent no-op so the modal-trap contract
+/// holds.
+fn route_export_modal_input(
+    path: &std::path::Path,
+    export: &mut ExportModal,
+    key: &KeyEvent,
+) -> Vec<Effect> {
     if matches!(key.code, KeyCode::Enter) {
         let target = std::path::PathBuf::from(export.path_text.trim());
         if matches!(target.try_exists(), Ok(true)) {
@@ -2149,7 +2182,20 @@ fn route_export_modal_input(export: &mut ExportModal, key: &KeyEvent) -> Vec<Eff
             export.error = Some(format_plaintext_export_warning());
             return Vec::new();
         }
-        return Vec::new();
+        let passphrase = match export.format {
+            ExportFormat::Encrypted => {
+                let secret = export.new_passphrase.take();
+                export.confirm_passphrase.clear();
+                Some(secret)
+            }
+            ExportFormat::Plaintext => None,
+        };
+        return vec![Effect::Export {
+            path: path.to_path_buf(),
+            target_path: target,
+            format: export.format,
+            passphrase,
+        }];
     }
     Vec::new()
 }
