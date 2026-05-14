@@ -961,23 +961,23 @@ These run without a display server. Each lives under
 
 #### `tests/effect_ownership_logic.rs`
 
-- [ ] Only one vault-touching worker is in flight at a time.
-- [ ] Mutating controls (row `next`, dialog submit buttons,
+- [x] Only one vault-touching worker is in flight at a time.
+- [x] Mutating controls (row `next`, dialog submit buttons,
   passphrase actions, import / export, settings) are disabled while
   `UnlockedBusy` is active.
-- [ ] Quit / window-close requests are deferred until the worker
+- [x] Quit / window-close requests are deferred until the worker
   returns.
-- [ ] Auto-lock expiry while `UnlockedBusy` is active records a
+- [x] Auto-lock expiry while `UnlockedBusy` is active records a
   lock-after-effect request and only locks if the returned vault is
   still encrypted; if the operation changed the vault to plaintext,
   the pending lock is discarded.
-- [ ] `(Vault, Store)` is reinstalled before UI outcome handling on
+- [x] `(Vault, Store)` is reinstalled before UI outcome handling on
   both success and typed failure.
-- [ ] Settings spinner debounce coalesces to the latest pre-save
+- [x] Settings spinner debounce coalesces to the latest pre-save
   value when an effect is in flight.
-- [ ] Toggle changes that would overlap an active vault effect are
+- [x] Toggle changes that would overlap an active vault effect are
   not accepted until the control is re-enabled.
-- [ ] Worker that fails before returning the `(Vault, Store)` pair
+- [x] Worker that fails before returning the `(Vault, Store)` pair
   routes the app to `StartupErrorComponent` without trying to
   reconstruct in-memory vault state.
 
