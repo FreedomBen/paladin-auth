@@ -71,6 +71,7 @@ crates/paladin-gtk/
     ├── qr_clipboard_logic.rs
     ├── init_dialog_logic.rs
     ├── rename_dialog_logic.rs
+    ├── remove_dialog_logic.rs
     ├── otpauth_uri_paste_logic.rs
     ├── import_dialog_logic.rs
     ├── export_dialog_logic.rs
@@ -865,6 +866,27 @@ These run without a display server. Each lives under
   keeps the dialog open with the inline error.
 - [x] `save_durability_unconfirmed` keeps the new label in memory
   and surfaces the warning attached to the dialog body.
+
+#### `tests/remove_dialog_logic.rs`
+
+- [x] `summary_display_label` renders `<issuer>:<label>` when the
+  issuer is set and non-empty, and the bare label otherwise (CLI /
+  TUI parity; `Some("")` collapses to the no-issuer form so the body
+  never renders a dangling `:label` colon).
+- [x] `account_not_found_error` builds the defensive §5
+  `invalid_state { operation: "remove", state: "account_not_found" }`
+  the `Vault::mutate_and_save` closure passes through when
+  `Vault::remove` returns `None`.
+- [x] `save_not_committed` (with and without a rotated `.bak` path)
+  routes to `RestorePrior` — `Vault::mutate_and_save` restores the
+  account at its previous position and the dialog stays open with
+  the inline error so the user can retry.
+- [x] `save_durability_unconfirmed` routes to
+  `KeepRemovedWithWarning` — the account stays gone from in-memory
+  state and the warning attaches to the dialog body.
+- [x] Every other typed error (`invalid_state { state:
+  "account_not_found" }`, `io_error`, defensive `validation_error`)
+  stays inline and does not transition the dialog out.
 
 #### `tests/otpauth_uri_paste_logic.rs`
 

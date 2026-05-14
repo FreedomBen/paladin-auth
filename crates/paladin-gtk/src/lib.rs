@@ -31,6 +31,7 @@ pub mod init_dialog;
 pub mod otpauth_uri_paste;
 pub mod passphrase_dialog;
 pub mod qr_clipboard;
+pub mod remove_dialog;
 pub mod rename_dialog;
 pub mod search;
 pub mod secret_fields;
