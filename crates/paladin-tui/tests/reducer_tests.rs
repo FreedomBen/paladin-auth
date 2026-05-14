@@ -16562,6 +16562,278 @@ fn tick_past_idle_deadline_with_open_add_modal_typed_uri_text_locks_and_drops_bu
 }
 
 // ---------------------------------------------------------------------------
+// Sensitive UI buffers — `AddModal::pending_duplicate_add`
+// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Sensitive UI buffers":
+//  "Pending duplicate-add validated accounts zeroize on add-anyway,
+//  cancel, modal close, and auto-lock.")
+//
+// `pending_duplicate_add: Option<Box<PendingDuplicateAdd>>` carries
+// the already-validated `ValidatedAccount` (with its `Secret`, which
+// is `ZeroizeOnDrop` per `paladin_core::domain::secret`) between the
+// initial `duplicate_account` rejection and the user's follow-up
+// "add anyway" confirmation. The slot has no `clear()` of its own —
+// zeroization happens by dropping the `Option`'s `Some(Box<...>)`,
+// which drops the `ValidatedAccount` whose `Secret` wipes in place.
+// The four axes:
+//
+//   * add-anyway — the Enter handler on a pending slot `take()`s the
+//     `Option`, moving the `Box<ValidatedAccount>` into the emitted
+//     [`Effect::AddAnyway`]; the modal-local slot is left `None` so
+//     no duplicate of the bytes remains on the modal. Locked by
+//     `enter_with_pending_duplicate_add_in_manual_mode_emits_add_anyway_effect`
+//     and `enter_with_pending_duplicate_add_in_uri_mode_emits_add_anyway_effect`
+//     above (both assert `add.pending_duplicate_add.is_none()` after
+//     emit).
+//   * cancel — `Esc` drops `Modal::Add(AddModal)`, dropping the
+//     `Option<Box<PendingDuplicateAdd>>` so the validated `Secret`
+//     zeroizes.
+//   * modal close (Add success) — `EffectResult::Add { Ok(_) }`
+//     drops the modal; combined with the prior Enter `take()` this
+//     closes the duplicate-resolution window without leaking the
+//     pending bytes. The reducer's Ok arm sets `*modal = None`
+//     unconditionally, so even if a pending slot somehow survives
+//     (e.g. an Ok arrives on a stale Add result while a new
+//     duplicate rejection just stashed a pending), the slot drops
+//     with the modal.
+//   * auto-lock — a `Tick` past `idle_deadline` transitions the
+//     `Unlocked` value (which owns the modal) to `Locked`, dropping
+//     `pending_duplicate_add` along with the rest of the modal.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn add_modal_esc_with_pending_duplicate_add_closes_modal_and_drops_pending() {
+    // Cancel axis. The user has hit a duplicate rejection — the
+    // reducer stashed a `PendingDuplicateAdd` and rendered the
+    // inline duplicate_account error — and the user has dismissed
+    // the Add modal with Esc instead of confirming "add anyway".
+    // The reducer's Esc precedence chain (apply_esc_dismiss) clears
+    // `modal` to `None`; dropping the `Modal::Add(AddModal)` runs
+    // `Option<Box<PendingDuplicateAdd>>`'s `Drop`, which drops the
+    // `Box<ValidatedAccount>` whose `Secret: ZeroizeOnDrop` wipes
+    // the secret bytes in place. Externally this is observable as
+    // the modal slot being empty after a single Esc, with no
+    // effects emitted (so no rogue Effect can carry the pending
+    // state elsewhere).
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let existing_id = add_totp_account(&mut vault, &store, "github");
+    let existing_summary = vault
+        .iter()
+        .find(|a| a.id() == existing_id)
+        .expect("existing account in vault")
+        .summary();
+    let pending = make_duplicate_validated("github");
+    let add_modal = AddModal {
+        error: Some(format_duplicate_account_message(&existing_summary)),
+        pending_duplicate_add: Some(Box::new(PendingDuplicateAdd {
+            existing: existing_summary,
+            validated: Box::new(pending),
+        })),
+        ..AddModal::default()
+    };
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Add(add_modal)),
+        selected: Some(existing_id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+
+    let (state, effects) = reduce(unlocked, key(KeyCode::Esc));
+    assert!(
+        effects.is_empty(),
+        "Esc cancelling the Add modal must not emit effects; got {effects:?}",
+    );
+    match state {
+        AppState::Unlocked {
+            modal,
+            status_line,
+            search_query,
+            ..
+        } => {
+            assert!(
+                modal.is_none(),
+                "Esc must drop the Add modal so its pending_duplicate_add zeroizes; got {modal:?}",
+            );
+            assert!(
+                status_line.is_none(),
+                "cancel path must not publish a status-line confirmation; got {status_line:?}",
+            );
+            assert!(
+                search_query.is_empty(),
+                "cancel path must not leak pending state into search_query; got {search_query:?}",
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_result_add_ok_with_pending_duplicate_add_closes_modal_and_drops_pending() {
+    // Modal-close-on-success axis. The reducer's
+    // `reduce_add_result` Ok arm clears the modal slot
+    // unconditionally (`*modal = None`), so any pending duplicate
+    // state still on the modal at delivery time drops along with
+    // the modal. The normal flow takes the pending out on Enter
+    // before the executor delivers Ok (see
+    // `enter_with_pending_duplicate_add_in_manual_mode_emits_add_anyway_effect`),
+    // but this test exercises the defensive path: we stage a
+    // pending slot on the modal *and* deliver a successful add
+    // result, asserting both the modal and the pending state are
+    // gone afterwards.
+    let tmp = secure_tempdir();
+    let (path, (mut vault, store)) = open_plaintext_pair(&tmp);
+    let existing_id = add_totp_account(&mut vault, &store, "github");
+    let existing_summary = vault
+        .iter()
+        .find(|a| a.id() == existing_id)
+        .expect("existing account in vault")
+        .summary();
+    let pending = make_duplicate_validated("github");
+    let add_modal = AddModal {
+        error: Some(format_duplicate_account_message(&existing_summary)),
+        pending_duplicate_add: Some(Box::new(PendingDuplicateAdd {
+            existing: existing_summary.clone(),
+            validated: Box::new(pending),
+        })),
+        ..AddModal::default()
+    };
+    let unlocked = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Add(add_modal)),
+        selected: Some(existing_id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+
+    let (state, effects) = reduce(
+        unlocked,
+        add_result(Ok(AddSuccess {
+            summary: existing_summary,
+            warnings: Vec::new(),
+        })),
+    );
+    assert!(effects.is_empty(), "Ok arm emits no follow-up effects");
+    match state {
+        AppState::Unlocked { modal, .. } => {
+            assert!(
+                modal.is_none(),
+                "Ok arm must close the Add modal so the pending_duplicate_add drops; got {modal:?}",
+            );
+        }
+        other => panic!("expected Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn tick_past_idle_deadline_with_open_add_modal_pending_duplicate_add_locks_and_drops_pending() {
+    // Auto-lock axis. `maybe_auto_lock` transitions `Unlocked →
+    // Locked` when `Tick.monotonic` is past `idle_deadline`. The
+    // `Locked` state carries only `path` (and any pending clipboard
+    // clear) — by construction every other slot of the prior
+    // `Unlocked` is dropped, including any open `Modal::Add` and
+    // its `pending_duplicate_add` slot. Dropping the
+    // `Option<Box<PendingDuplicateAdd>>` drops the
+    // `Box<ValidatedAccount>` whose `Secret: ZeroizeOnDrop` wipes
+    // the secret bytes in place.
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (mut vault, store) = create_encrypted_pair(&path, "pp");
+    enable_auto_lock(&mut vault, &store, 600);
+
+    let t0 = Instant::now();
+    let deadline = t0 + Duration::from_secs(600);
+
+    // The duplicate-add helper expects the existing account to live
+    // in the same vault so the `(secret, issuer, label)` triple
+    // collides. We mirror that here by seeding the encrypted vault
+    // with the canonical "github" TOTP and a matching pending state.
+    let existing_id = add_totp_account(&mut vault, &store, "github");
+    let existing_summary = vault
+        .iter()
+        .find(|a| a.id() == existing_id)
+        .expect("existing account in vault")
+        .summary();
+    let pending = make_duplicate_validated("github");
+    let add = AddModal {
+        error: Some(format_duplicate_account_message(&existing_summary)),
+        pending_duplicate_add: Some(Box::new(PendingDuplicateAdd {
+            existing: existing_summary,
+            validated: Box::new(pending),
+        })),
+        ..AddModal::default()
+    };
+    assert!(
+        add.pending_duplicate_add.is_some(),
+        "harness precondition: pending_duplicate_add must hold the validated secret",
+    );
+
+    let unlocked = AppState::Unlocked {
+        path: path.clone(),
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: Some(deadline),
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Add(add)),
+        selected: Some(existing_id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+
+    let now = deadline + Duration::from_millis(1);
+    let tick = AppEvent::Tick {
+        wall_clock: SystemTime::now(),
+        monotonic: now,
+    };
+    let (next, effects) = reduce(unlocked, tick);
+    assert!(
+        effects.is_empty(),
+        "auto-lock transition emits no effects; got {effects:?}",
+    );
+    match next {
+        AppState::Locked {
+            path: p,
+            pending_clipboard_clear,
+        } => {
+            assert_eq!(p, path, "Locked must carry the original vault path");
+            assert!(
+                pending_clipboard_clear.is_none(),
+                "no pending clipboard clear was seeded — lock must not synthesize one",
+            );
+        }
+        other => panic!(
+            "expected Locked (Add modal and its pending_duplicate_add must be gone), got {other:?}",
+        ),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Import modal — submit emits Effect::Import via auto-detect routing
 // (IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Import modal" >
 //  "Format auto-detect routes through `paladin_core::import::from_file`.")

@@ -1605,8 +1605,28 @@ end-to-end.
   (Tick past `idle_deadline` transitions to `Locked`, dropping the
   whole `Unlocked` arm including the open `AddModal`). All in
   `tests/reducer_tests.rs`.)*
-- [ ] Pending duplicate-add validated accounts zeroize on add-anyway,
+- [x] Pending duplicate-add validated accounts zeroize on add-anyway,
   cancel, modal close, and auto-lock.
+  *(`AddModal::pending_duplicate_add` is
+  `Option<Box<PendingDuplicateAdd>>`; the boxed
+  `Box<ValidatedAccount>` carries a `Secret` whose `ZeroizeOnDrop`
+  wipes the bytes when the option drops. Add-anyway is covered by
+  `enter_with_pending_duplicate_add_in_manual_mode_emits_add_anyway_effect`
+  and
+  `enter_with_pending_duplicate_add_in_uri_mode_emits_add_anyway_effect`
+  (Enter `take()`s the `Option`, moving the `Box<ValidatedAccount>`
+  into the emitted `Effect::AddAnyway` and leaving the modal-local
+  slot `None`); cancel by
+  `add_modal_esc_with_pending_duplicate_add_closes_modal_and_drops_pending`
+  (`Esc` clears `modal` to `None` so the pending state drops with
+  the modal); modal close (success) by
+  `effect_result_add_ok_with_pending_duplicate_add_closes_modal_and_drops_pending`
+  (the Ok arm sets `*modal = None` unconditionally so even a stale
+  pending slot drops with the modal); auto-lock by
+  `tick_past_idle_deadline_with_open_add_modal_pending_duplicate_add_locks_and_drops_pending`
+  (Tick past `idle_deadline` transitions to `Locked`, dropping the
+  whole `Unlocked` arm including the open `AddModal`). All in
+  `tests/reducer_tests.rs`.)*
 - [ ] HOTP reveal state zeroizes on expiry, replacement, drop, and
   auto-lock.
 - [ ] Pending clipboard-clear buffers survive lock until the scheduled
