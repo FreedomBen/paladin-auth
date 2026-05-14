@@ -16566,6 +16566,81 @@ fn enter_in_import_modal_with_qr_selector_emits_import_effect_with_some_qr_image
     );
 }
 
+// ---------------------------------------------------------------------------
+// Import modal — on-conflict policy threads through `Effect::Import.conflict`.
+//
+// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > "Import modal" > "On-conflict
+//  policy (`skip` / `replace` / `append`) is forwarded to
+//  `Vault::import_accounts` and reflected in the report counts.")
+//
+// Reducer slice: the modal's `conflict` field — whatever value it
+// holds at submit time — must be carried verbatim onto the emitted
+// `Effect::Import` so the executor can hand it to
+// `Vault::import_accounts`. The default (`Skip`) is already locked in
+// by
+// `enter_in_import_modal_with_default_state_emits_import_effect_with_auto_format_and_skip_conflict`;
+// the two siblings below lock the `Replace` and `Append` variants.
+// The matching report-count contract is asserted on the executor side
+// in `effect_tests.rs`
+// (`execute_import_with_{skip,replace,append}_conflict_over_colliding_account_*`).
+// ---------------------------------------------------------------------------
+
+/// Drive the Import modal Enter handler with `policy` pre-set on
+/// `ImportModal::conflict` and return the carried `conflict` on the
+/// emitted `Effect::Import`.
+fn import_conflict_after_enter_with_policy(
+    policy: paladin_core::ImportConflict,
+) -> paladin_core::ImportConflict {
+    let tmp = secure_tempdir();
+    let unlocked = fresh_plaintext_unlocked(&tmp);
+    let (mut state, _) = reduce(unlocked, key(KeyCode::Char('i')));
+    if let AppState::Unlocked {
+        modal: Some(Modal::Import(import)),
+        ..
+    } = &mut state
+    {
+        import.conflict = policy;
+    } else {
+        panic!("expected Import modal open after pressing `i`");
+    }
+    let (state, effects) = reduce(state, key(KeyCode::Enter));
+    assert_eq!(
+        effects.len(),
+        1,
+        "Enter on Modal::Import must emit exactly one Effect::Import; got {effects:?}"
+    );
+    let conflict = match &effects[0] {
+        Effect::Import { conflict, .. } => *conflict,
+        other => panic!("expected Effect::Import, got {other:?}"),
+    };
+    match &state {
+        AppState::Unlocked {
+            modal: Some(Modal::Import(_)),
+            ..
+        } => {}
+        other => panic!("Import modal must stay open pending the effect outcome, got {other:?}"),
+    }
+    conflict
+}
+
+#[test]
+fn enter_in_import_modal_with_replace_conflict_emits_import_effect_with_replace() {
+    assert_eq!(
+        import_conflict_after_enter_with_policy(paladin_core::ImportConflict::Replace),
+        paladin_core::ImportConflict::Replace,
+        "ImportConflict::Replace on the modal must thread through to Effect::Import.conflict so Vault::import_accounts overwrites colliding rows"
+    );
+}
+
+#[test]
+fn enter_in_import_modal_with_append_conflict_emits_import_effect_with_append() {
+    assert_eq!(
+        import_conflict_after_enter_with_policy(paladin_core::ImportConflict::Append),
+        paladin_core::ImportConflict::Append,
+        "ImportConflict::Append on the modal must thread through to Effect::Import.conflict so Vault::import_accounts inserts colliding rows as fresh accounts"
+    );
+}
+
 #[test]
 fn enter_in_import_modal_with_paladin_selector_on_missing_file_emits_import_with_none_passphrase() {
     // The forced `ImportFormatSelector::Paladin` path now runs the

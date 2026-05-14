@@ -1038,8 +1038,33 @@ end-to-end.
   and
   `enter_in_import_modal_with_forced_paladin_format_over_plaintext_paladin_surfaces_unsupported_plaintext_vault`
   for forced-Paladin coverage on both header shapes.)*
-- [ ] On-conflict policy (`skip` / `replace` / `append`) is forwarded
+- [x] On-conflict policy (`skip` / `replace` / `append`) is forwarded
   to `Vault::import_accounts` and reflected in the report counts.
+  *(Reducer side: `import.conflict` rides verbatim onto
+  `Effect::Import.conflict` — `Skip` is locked by the existing
+  `enter_in_import_modal_with_default_state_emits_import_effect_with_auto_format_and_skip_conflict`,
+  and the new
+  `enter_in_import_modal_with_replace_conflict_emits_import_effect_with_replace`
+  and
+  `enter_in_import_modal_with_append_conflict_emits_import_effect_with_append`
+  in `tests/reducer_tests.rs` lock the other two variants via a
+  shared `import_conflict_after_enter_with_policy` helper. Executor
+  side: three siblings in `tests/effect_tests.rs` —
+  `execute_import_with_skip_conflict_over_colliding_account_records_skip_and_leaves_vault_unchanged`,
+  `execute_import_with_replace_conflict_over_colliding_account_preserves_id_and_persists`,
+  and
+  `execute_import_with_append_conflict_over_colliding_account_inserts_fresh_id_and_persists`
+  — seed a single TOTP account whose `(secret, issuer=None, label)`
+  triple collides with an `otpauth://totp/{label}?secret=JBSWY3DPEHPK3PXP`
+  source payload, then drive each `ImportConflict` through
+  `Effect::Import` and assert the matching `ImportReport` count
+  (`skipped` / `replaced` / `appended`) increments, the other three
+  counts stay at zero, and the live + on-disk vault reflect the
+  chosen merge action: Skip keeps the original ID, Replace preserves
+  the existing `AccountId` in `ImportReport.accounts`, and Append
+  emits a fresh `AccountId` distinct from the existing one. The
+  non-colliding `Skip` happy path remains covered by
+  `execute_import_with_auto_format_routes_through_import_from_file_for_otpauth_payload_and_persists_via_mutate_and_save`.)*
 - [ ] Validation warnings are rendered through
   `paladin_core::format_validation_warning()`.
 - [ ] Importer errors (`unsupported_import_format`,

@@ -2094,3 +2094,328 @@ fn execute_import_with_forced_format_mismatch_returns_unsupported_import_format_
         "forced-format mismatch must not touch the on-disk primary"
     );
 }
+
+// Effect::Import — on-conflict policy is threaded into
+// `Vault::import_accounts` and the report counts reflect the chosen
+// merge action.
+// ---------------------------------------------------------------------------
+//
+// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Import modal" >
+// *"On-conflict policy (`skip` / `replace` / `append`) is forwarded to
+// `Vault::import_accounts` and reflected in the report counts."*
+// The three tests below seed a vault with a single TOTP row whose
+// `(secret, issuer=None, label)` triple is identical to the candidate
+// produced by the source otpauth URI, then run the executor under
+// each `ImportConflict` variant. They lock:
+//
+//   - Skip: `skipped += 1`, no live-vault size change, existing ID
+//     untouched, no entry in `ImportReport.accounts`.
+//   - Replace: `replaced += 1`, vault size unchanged, existing
+//     `AccountId` preserved in `ImportReport.accounts`.
+//   - Append: `appended += 1`, vault grows by one, a fresh
+//     `AccountId` distinct from the existing one lands in
+//     `ImportReport.accounts`.
+//
+// `add_totp_account` builds an `AccountInput` with `issuer: None`,
+// `secret: "JBSWY3DPEHPK3PXP"`, `algorithm: Sha1`, `digits: 6`,
+// `kind: Totp`. The otpauth URI `otpauth://totp/{label}?secret=JBSWY3DPEHPK3PXP`
+// parses to the matching triple (no `:` in the label → no issuer
+// prefix; no `issuer` query param → issuer stays `None`; missing
+// algorithm/digits → SHA1 / 6 defaults). Collisions are decided by
+// `Vault::import_accounts` on that exact triple per
+// `crates/paladin-core/src/vault.rs`.
+//
+// The non-colliding `Skip` happy path (no pre-existing account) is
+// covered by
+// `execute_import_with_auto_format_routes_through_import_from_file_for_otpauth_payload_and_persists_via_mutate_and_save`.
+
+fn unlocked_state_with_seeded_collision_target(
+    tmp: &TempDir,
+    label: &str,
+) -> (AppState, std::path::PathBuf, AccountId) {
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (mut vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let existing_id = add_totp_account(&mut vault, &store, label);
+    let state = AppState::Unlocked {
+        path: path.clone(),
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    (state, path, existing_id)
+}
+
+#[test]
+fn execute_import_with_skip_conflict_over_colliding_account_records_skip_and_leaves_vault_unchanged(
+) {
+    let tmp = secure_tempdir();
+    let label = "duplicate-target";
+    let (mut state, path, existing_id) = unlocked_state_with_seeded_collision_target(&tmp, label);
+    let initial_count = match &state {
+        AppState::Unlocked { vault, .. } => vault.iter().count(),
+        other => panic!("expected Unlocked, got {other:?}"),
+    };
+    assert_eq!(
+        initial_count, 1,
+        "fixture must seed exactly one collision-target account"
+    );
+
+    let source_path = tmp.path().join("import.txt");
+    std::fs::write(
+        &source_path,
+        format!("otpauth://totp/{label}?secret=JBSWY3DPEHPK3PXP"),
+    )
+    .expect("write otpauth source file");
+
+    let (tx, rx) = mpsc::channel::<AppEvent>();
+    let effect = Effect::Import {
+        path: path.clone(),
+        source_path,
+        format: None,
+        conflict: ImportConflict::Skip,
+        paladin_passphrase: None,
+    };
+    let outcome = execute(effect, &mut state, &tx);
+    assert_eq!(outcome, EffectOutcome::Continue);
+
+    let evt = rx.try_recv().expect("an AppEvent should be sent");
+    match evt {
+        AppEvent::EffectResult(EffectResult::Import {
+            result: Ok(ImportSuccess { report }),
+        }) => {
+            assert_eq!(
+                report.skipped, 1,
+                "Skip policy must record the colliding row under `skipped`"
+            );
+            assert_eq!(
+                report.imported, 0,
+                "Skip on a collision must not also count under `imported`"
+            );
+            assert_eq!(report.replaced, 0, "Skip never replaces");
+            assert_eq!(report.appended, 0, "Skip never appends");
+            assert!(
+                report.accounts.is_empty(),
+                "Skip leaves `ImportReport.accounts` empty per DESIGN §4.7"
+            );
+        }
+        other => panic!("expected EffectResult::Import Ok with Skip counts, got {other:?}"),
+    }
+    assert!(
+        rx.try_recv().is_err(),
+        "executor must emit exactly one AppEvent per Effect::Import"
+    );
+
+    let live_vault = match &state {
+        AppState::Unlocked { vault, .. } => vault,
+        other => panic!("expected Unlocked, got {other:?}"),
+    };
+    assert_eq!(
+        live_vault.iter().count(),
+        initial_count,
+        "Skip must not change live-vault size on a collision"
+    );
+    assert!(
+        live_vault.iter().any(|a| a.id() == existing_id),
+        "Skip must leave the existing account intact"
+    );
+
+    let (reopened, _store) = Store::open(&path, VaultLock::Plaintext).expect("reopen plaintext");
+    assert_eq!(
+        reopened.iter().count(),
+        initial_count,
+        "Skip must not change on-disk vault size on a collision"
+    );
+    assert!(
+        reopened.iter().any(|a| a.id() == existing_id),
+        "Skip must leave the existing account intact on disk"
+    );
+}
+
+#[test]
+fn execute_import_with_replace_conflict_over_colliding_account_preserves_id_and_persists() {
+    let tmp = secure_tempdir();
+    let label = "duplicate-target";
+    let (mut state, path, existing_id) = unlocked_state_with_seeded_collision_target(&tmp, label);
+    let initial_count = match &state {
+        AppState::Unlocked { vault, .. } => vault.iter().count(),
+        other => panic!("expected Unlocked, got {other:?}"),
+    };
+
+    let source_path = tmp.path().join("import.txt");
+    std::fs::write(
+        &source_path,
+        format!("otpauth://totp/{label}?secret=JBSWY3DPEHPK3PXP"),
+    )
+    .expect("write otpauth source file");
+
+    let (tx, rx) = mpsc::channel::<AppEvent>();
+    let effect = Effect::Import {
+        path: path.clone(),
+        source_path,
+        format: None,
+        conflict: ImportConflict::Replace,
+        paladin_passphrase: None,
+    };
+    let outcome = execute(effect, &mut state, &tx);
+    assert_eq!(outcome, EffectOutcome::Continue);
+
+    let evt = rx.try_recv().expect("an AppEvent should be sent");
+    match evt {
+        AppEvent::EffectResult(EffectResult::Import {
+            result: Ok(ImportSuccess { report }),
+        }) => {
+            assert_eq!(
+                report.replaced, 1,
+                "Replace policy must record the colliding row under `replaced`"
+            );
+            assert_eq!(
+                report.imported, 0,
+                "Replace on a collision must not also count under `imported`"
+            );
+            assert_eq!(report.skipped, 0, "Replace never skips");
+            assert_eq!(report.appended, 0, "Replace never appends");
+            assert_eq!(
+                report.accounts,
+                vec![existing_id],
+                "Replace preserves the existing AccountId; ImportReport.accounts echoes it"
+            );
+        }
+        other => panic!("expected EffectResult::Import Ok with Replace counts, got {other:?}"),
+    }
+    assert!(
+        rx.try_recv().is_err(),
+        "executor must emit exactly one AppEvent per Effect::Import"
+    );
+
+    let live_vault = match &state {
+        AppState::Unlocked { vault, .. } => vault,
+        other => panic!("expected Unlocked, got {other:?}"),
+    };
+    assert_eq!(
+        live_vault.iter().count(),
+        initial_count,
+        "Replace keeps vault size constant on a collision"
+    );
+    assert!(
+        live_vault.iter().any(|a| a.id() == existing_id),
+        "Replace preserves the existing AccountId in the live vault"
+    );
+
+    let (reopened, _store) = Store::open(&path, VaultLock::Plaintext).expect("reopen plaintext");
+    assert_eq!(
+        reopened.iter().count(),
+        initial_count,
+        "Replace keeps on-disk vault size constant on a collision"
+    );
+    assert!(
+        reopened.iter().any(|a| a.id() == existing_id),
+        "Replace persists the same AccountId on disk"
+    );
+}
+
+#[test]
+fn execute_import_with_append_conflict_over_colliding_account_inserts_fresh_id_and_persists() {
+    let tmp = secure_tempdir();
+    let label = "duplicate-target";
+    let (mut state, path, existing_id) = unlocked_state_with_seeded_collision_target(&tmp, label);
+    let initial_count = match &state {
+        AppState::Unlocked { vault, .. } => vault.iter().count(),
+        other => panic!("expected Unlocked, got {other:?}"),
+    };
+
+    let source_path = tmp.path().join("import.txt");
+    std::fs::write(
+        &source_path,
+        format!("otpauth://totp/{label}?secret=JBSWY3DPEHPK3PXP"),
+    )
+    .expect("write otpauth source file");
+
+    let (tx, rx) = mpsc::channel::<AppEvent>();
+    let effect = Effect::Import {
+        path: path.clone(),
+        source_path,
+        format: None,
+        conflict: ImportConflict::Append,
+        paladin_passphrase: None,
+    };
+    let outcome = execute(effect, &mut state, &tx);
+    assert_eq!(outcome, EffectOutcome::Continue);
+
+    let evt = rx.try_recv().expect("an AppEvent should be sent");
+    let appended_id = match evt {
+        AppEvent::EffectResult(EffectResult::Import {
+            result: Ok(ImportSuccess { report }),
+        }) => {
+            assert_eq!(
+                report.appended, 1,
+                "Append policy must record the colliding row under `appended`"
+            );
+            assert_eq!(
+                report.imported, 0,
+                "Append on a collision must not also count under `imported`"
+            );
+            assert_eq!(report.skipped, 0, "Append never skips");
+            assert_eq!(report.replaced, 0, "Append never replaces");
+            assert_eq!(
+                report.accounts.len(),
+                1,
+                "Append produces exactly one new entry in ImportReport.accounts"
+            );
+            assert_ne!(
+                report.accounts[0], existing_id,
+                "Append must assign a fresh AccountId distinct from the existing one"
+            );
+            report.accounts[0]
+        }
+        other => panic!("expected EffectResult::Import Ok with Append counts, got {other:?}"),
+    };
+    assert!(
+        rx.try_recv().is_err(),
+        "executor must emit exactly one AppEvent per Effect::Import"
+    );
+
+    let live_vault = match &state {
+        AppState::Unlocked { vault, .. } => vault,
+        other => panic!("expected Unlocked, got {other:?}"),
+    };
+    assert_eq!(
+        live_vault.iter().count(),
+        initial_count + 1,
+        "Append must grow the live vault by one on a collision"
+    );
+    assert!(
+        live_vault.iter().any(|a| a.id() == existing_id),
+        "Append must leave the original account in place"
+    );
+    assert!(
+        live_vault.iter().any(|a| a.id() == appended_id),
+        "Append must add the new account into the live vault"
+    );
+
+    let (reopened, _store) = Store::open(&path, VaultLock::Plaintext).expect("reopen plaintext");
+    assert_eq!(
+        reopened.iter().count(),
+        initial_count + 1,
+        "Append must grow the on-disk vault by one on a collision"
+    );
+    assert!(
+        reopened.iter().any(|a| a.id() == existing_id),
+        "Append must persist the original account"
+    );
+    assert!(
+        reopened.iter().any(|a| a.id() == appended_id),
+        "Append must persist the new account"
+    );
+}
