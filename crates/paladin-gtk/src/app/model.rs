@@ -7,24 +7,19 @@
 //! application window and routes the active child view by
 //! [`crate::app::state::AppState`].
 //!
-//! This commit lands the skeleton only: an
-//! `adw::ApplicationWindow` with an empty content slot plus an
-//! `AppMsg::Quit` handler that calls
-//! `relm4::main_application().quit()`. Subsequent commits will
+//! This commit wires the §"Vault interaction" startup probes into
+//! the model: `init` runs [`run_startup_probes`] to resolve the
+//! vault path, call `paladin_core::inspect`, and (for plaintext
+//! vaults) `paladin_core::Store::open` on the GTK main loop, then
+//! seeds [`AppModel::state`] / [`AppModel::vault`] from the result.
+//! Subsequent commits will mount the per-`AppState` child
+//! components (`InitDialog`, `UnlockComponent`,
+//! `AccountListComponent`, `StartupErrorComponent`).
 //!
-//! * run the startup probes
-//!   (`paladin_core::default_vault_path` → `paladin_core::inspect`
-//!   → optional plaintext `paladin_core::open`) and seed
-//!   [`AppModel::state`] from them, and
-//! * mount the per-`AppState` child components (`InitDialog`,
-//!   `UnlockComponent`, `AccountListComponent`,
-//!   `StartupErrorComponent`).
-//!
-//! The skeleton respects the hidden `--exit-after-startup` flag by
-//! enqueueing [`AppMsg::Quit`] right after the widgets mount, so
-//! `tests/gtk_smoke.rs` can exercise the libadwaita / relm4
-//! bootstrap under `xvfb-run` and still return cleanly without a
-//! real desktop session to dismiss the window.
+//! Under the hidden `--exit-after-startup` flag, the model prints
+//! [`startup_state_marker`] to stdout and enqueues [`AppMsg::Quit`]
+//! so `tests/gtk_smoke.rs` can assert which startup state was
+//! reached under `xvfb-run` without driving widgets.
 
 use std::path::PathBuf;
 
@@ -33,7 +28,10 @@ use libadwaita::prelude::*;
 use relm4::gtk;
 use relm4::prelude::*;
 
-use crate::app::state::AppState;
+use crate::app::state::{
+    decide_state_from_inspect, decide_state_from_open_error, AppState, OpenErrorOutcome,
+};
+use crate::startup_error::StartupError;
 
 /// Construction parameters for [`AppModel`].
 ///
@@ -53,22 +51,50 @@ pub struct AppInit {
     pub exit_after_startup: bool,
 }
 
+/// Outcome of [`run_startup_probes`].
+///
+/// `state` is always populated. `vault` carries the live
+/// `(Vault, Store)` pair only when the plaintext-open branch
+/// succeeded — every other branch (`Missing` / `Locked` / `StartupError`)
+/// owns no vault and leaves it `None`.
+pub struct StartupOutcome {
+    /// Resolved initial [`AppState`].
+    pub state: AppState,
+    /// Live `(Vault, Store)` pair when a plaintext vault was opened.
+    pub vault: Option<(paladin_core::Vault, paladin_core::Store)>,
+}
+
 /// Top-level relm4 component for `paladin-gtk`.
 ///
-/// Owns the resolved vault path plus the [`AppState`] that drives
-/// which child view is rendered. The skeleton leaves both fields
-/// inert; the follow-up commit that adds the startup-routing probes
-/// will populate them.
-#[derive(Debug)]
+/// Owns the resolved vault path override plus the [`AppState`] that
+/// drives which child view is rendered. The live `(Vault, Store)`
+/// pair lives in [`AppModel::vault`] alongside the state machine
+/// per `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree".
 pub struct AppModel {
-    /// Vault path override from [`AppInit`]. Consumed by the
-    /// startup-routing probes in a follow-up commit.
+    /// Vault path override from [`AppInit`]. Preserved for the
+    /// `StartupErrorComponent` retry action wired by a follow-up
+    /// commit; an override given via `--vault` should win on retry.
     #[allow(dead_code)]
     vault_path: Option<PathBuf>,
-    /// Cached `AppState` for the routed view. The skeleton leaves
-    /// it `None`; the follow-up startup-routing commit seeds it.
+    /// Cached `AppState` seeded by [`run_startup_probes`] in `init`.
     #[allow(dead_code)]
     state: Option<AppState>,
+    /// Live `(Vault, Store)` pair when [`AppModel::state`] is
+    /// `Unlocked` / `UnlockedBusy`; `None` for every other state.
+    /// `Vault` does not implement `Debug` (its secrets would leak),
+    /// so [`AppModel`]'s manual `Debug` impl below redacts it.
+    #[allow(dead_code)]
+    vault: Option<(paladin_core::Vault, paladin_core::Store)>,
+}
+
+impl std::fmt::Debug for AppModel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AppModel")
+            .field("vault_path", &self.vault_path)
+            .field("state", &self.state)
+            .field("vault", &self.vault.as_ref().map(|_| "<redacted>"))
+            .finish()
+    }
 }
 
 /// Messages handled by [`AppModel`].
@@ -111,9 +137,18 @@ impl SimpleComponent for AppModel {
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
         let exit_after_startup = init.exit_after_startup;
+        let vault_path_override = init.vault_path.clone();
+        let StartupOutcome { state, vault } = run_startup_probes(init.vault_path);
+
+        if exit_after_startup {
+            // Stable stdout contract consumed by `tests/gtk_smoke.rs`.
+            println!("{}", startup_state_marker(&state));
+        }
+
         let model = AppModel {
-            vault_path: init.vault_path,
-            state: None,
+            vault_path: vault_path_override,
+            state: Some(state),
+            vault,
         };
         let widgets = view_output!();
 
@@ -129,4 +164,93 @@ impl SimpleComponent for AppModel {
             AppMsg::Quit => relm4::main_application().quit(),
         }
     }
+}
+
+/// Run the §"Vault interaction" startup sequence.
+///
+/// 1. Resolve the vault path: `vault_path_override` (from `--vault`)
+///    if `Some`, otherwise `paladin_core::default_vault_path()`. A
+///    failure on the latter routes directly to
+///    [`AppState::StartupError`] tagged
+///    [`crate::startup_error::StartupErrorSource::PathResolution`].
+/// 2. `paladin_core::inspect(path)` resolves the mode. Missing
+///    routes to [`AppState::Missing`], Encrypted routes to
+///    [`AppState::Locked`] (the `UnlockComponent` runs Argon2 off
+///    the main loop later), and an `Err` routes to
+///    [`AppState::StartupError`] tagged
+///    [`crate::startup_error::StartupErrorSource::Inspect`].
+/// 3. Plaintext only: `paladin_core::Store::open(path,
+///    VaultLock::Plaintext)` directly on the GTK main loop. Per the
+///    plan, "no Argon2; just bincode decode and the §4.3 perm check,
+///    fast enough that the spawn-blocking thread hop costs more than
+///    the call itself". A successful open returns the live
+///    `(Vault, Store)` pair alongside [`AppState::Unlocked`]; a non-
+///    passphrase failure routes through
+///    [`decide_state_from_open_error`].
+///
+/// Inline-passphrase classification cannot arise on a plaintext
+/// open in practice — the function still funnels it through
+/// `StartupError` so a future divergence in `paladin_core` cannot
+/// silently surface a passphrase dialog from the plaintext branch.
+#[must_use]
+pub fn run_startup_probes(vault_path_override: Option<PathBuf>) -> StartupOutcome {
+    let path = match vault_path_override {
+        Some(p) => p,
+        None => match paladin_core::default_vault_path() {
+            Ok(p) => p,
+            Err(err) => {
+                return StartupOutcome {
+                    state: AppState::StartupError {
+                        path: None,
+                        error: StartupError::from_path_resolution(&err),
+                    },
+                    vault: None,
+                };
+            }
+        },
+    };
+
+    if let Some(state) = decide_state_from_inspect(&path, paladin_core::inspect(&path)) {
+        return StartupOutcome { state, vault: None };
+    }
+
+    match paladin_core::Store::open(&path, paladin_core::VaultLock::Plaintext) {
+        Ok(pair) => StartupOutcome {
+            state: AppState::Unlocked { path },
+            vault: Some(pair),
+        },
+        Err(err) => {
+            let state = match decide_state_from_open_error(&path, &err) {
+                OpenErrorOutcome::Startup(state) => state,
+                OpenErrorOutcome::InlinePassphrase => AppState::StartupError {
+                    path: Some(path),
+                    error: StartupError::from_open(&err),
+                },
+            };
+            StartupOutcome { state, vault: None }
+        }
+    }
+}
+
+/// Render the stdout marker emitted under `--exit-after-startup`.
+///
+/// Format: `paladin-gtk: startup_state=<Variant> path=<path>`. For
+/// `AppState::StartupError { path: None, .. }` (path-resolution
+/// failures), `path` renders as `(unresolved)`. `tests/gtk_smoke.rs`
+/// greps this line to verify which startup state the binary reached
+/// without driving widgets under `xvfb-run`.
+#[must_use]
+pub fn startup_state_marker(state: &AppState) -> String {
+    let variant = match state {
+        AppState::Missing { .. } => "Missing",
+        AppState::Locked { .. } => "Locked",
+        AppState::Unlocked { .. } => "Unlocked",
+        AppState::UnlockedBusy { .. } => "UnlockedBusy",
+        AppState::StartupError { .. } => "StartupError",
+    };
+    let path_repr = match state.path() {
+        Some(p) => p.display().to_string(),
+        None => "(unresolved)".to_string(),
+    };
+    format!("paladin-gtk: startup_state={variant} path={path_repr}")
 }

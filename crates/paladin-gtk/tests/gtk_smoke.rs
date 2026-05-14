@@ -122,3 +122,78 @@ fn xvfb_run_launches_paladin_gtk_and_process_exits() {
         String::from_utf8_lossy(&output.stderr),
     );
 }
+
+/// Plan bullet: "App opens a prepared plaintext vault."
+///
+/// Pre-creates a plaintext vault at a temporary path via
+/// `paladin_core::Store::create`, then launches `paladin-gtk` with
+/// `--vault <path> --exit-after-startup` under `xvfb-run`. The binary
+/// runs the §"Vault interaction" startup sequence — resolve path,
+/// `paladin_core::inspect`, and `paladin_core::Store::open` with
+/// `VaultLock::Plaintext` directly on the main loop — before the
+/// hidden flag quits the main loop. Under `--exit-after-startup`,
+/// `AppModel` emits a stable marker line to stdout naming the
+/// resolved [`crate::app::state::AppState`] variant and the resolved
+/// vault path; this test asserts on that marker so the foundation
+/// the next bullet (`AccountListComponent` rendering) builds on is
+/// observed rather than merely inferred from a clean exit.
+#[test]
+fn app_opens_prepared_plaintext_vault() {
+    if !xvfb_run_available() {
+        eprintln!(
+            "skipping: `xvfb-run` is not on PATH. CI installs the xvfb \
+             package; install it locally to exercise this smoke test."
+        );
+        return;
+    }
+
+    let tempdir = tempfile::tempdir().expect("create tempdir for prepared vault");
+    // `paladin_core` enforces `0700` on the vault parent directory
+    // (§4.3); pin it explicitly so a sandboxed test runner's umask
+    // (commonly `0770`) does not trip `UnsafePermissions` before the
+    // GTK binary even starts.
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(tempdir.path(), std::fs::Permissions::from_mode(0o700))
+            .expect("chmod tempdir to 0700");
+    }
+    let vault_path = tempdir.path().join("vault.bin");
+
+    // `Store::create` stages the in-memory vault; the file is not
+    // written until `Vault::save` runs the §4.3 atomic-write pipeline
+    // (see `paladin_core::Store::create` docs). The pair is dropped at
+    // the end of this scope so the file handle is closed before
+    // `paladin-gtk`'s own `Store::open` re-opens it.
+    {
+        let (vault, store) =
+            paladin_core::Store::create(&vault_path, paladin_core::VaultInit::Plaintext)
+                .expect("create plaintext vault on disk");
+        vault.save(&store).expect("persist plaintext vault to disk");
+    }
+
+    let path_str = vault_path
+        .to_str()
+        .expect("tempfile produced a non-UTF-8 vault path");
+    let output = run_under_xvfb(&["--vault", path_str, "--exit-after-startup"]);
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "xvfb-run paladin-gtk --vault {path_str} --exit-after-startup exited with status {:?}\n\
+         --- stdout ---\n{}\n--- stderr ---\n{}",
+        output.status,
+        stdout,
+        stderr,
+    );
+
+    // The marker format is fixed by `app::model::startup_state_marker`
+    // and is documented next to that helper so test + implementation
+    // share a single string contract.
+    let expected = format!("paladin-gtk: startup_state=Unlocked path={path_str}");
+    assert!(
+        stdout.contains(&expected),
+        "expected stdout to contain `{expected}`\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}",
+    );
+}

@@ -1017,7 +1017,18 @@ Required for Milestone 7 sign-off. Runs in CI under `xvfb-run`.
   because `ubuntu-24.04` ships GTK 4.14 / libadwaita 1.5 — too old
   for the `v4_16` / `v1_6` feature gates in
   `crates/paladin-gtk/Cargo.toml`.
-- [ ] App opens a prepared plaintext vault.
+- [x] App opens a prepared plaintext vault. `AppModel::init` runs
+  `app::model::run_startup_probes` (resolve path → `paladin_core::inspect`
+  → `paladin_core::Store::open` with `VaultLock::Plaintext` for the
+  plaintext branch) and seeds `AppModel::state` / `AppModel::vault`
+  from the result. Under `--exit-after-startup`, the model prints
+  `app::model::startup_state_marker(&state)` to stdout before quitting
+  so the smoke test
+  `crates/paladin-gtk/tests/gtk_smoke.rs::app_opens_prepared_plaintext_vault`
+  asserts the resolved `AppState::Unlocked` variant via that line.
+  Pure-logic coverage in `crates/paladin-gtk/tests/startup_probes.rs`
+  exercises the `Unlocked` / `Missing` / `StartupError` branches plus
+  the marker format without a display server.
 - [ ] `AccountListComponent` renders the prepared accounts.
 
 ### Thinness contract (`tests/thinness.rs`)
