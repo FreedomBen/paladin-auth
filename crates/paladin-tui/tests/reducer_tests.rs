@@ -34,8 +34,9 @@ use paladin_tui::app::state::{
     compute_idle_deadline, decide_state_from_inspect, decide_state_from_open,
     format_account_display_label, format_duplicate_account_message, format_qr_import_failure,
     render_error_message, AddManualFocus, AddModal, AddMode, AppState, ChordLeader, ExportFormat,
-    ExportModal, Focus, HotpReveal, ImportFormatSelector, ImportModal, Modal, PendingDuplicateAdd,
-    RemoveModal, RenameModal, SettingsFocus, SettingsModal, StatusLine, NO_ACCOUNT_SELECTED,
+    ExportModal, Focus, HotpReveal, ImportFormatSelector, ImportModal, Modal, PassphraseModal,
+    PendingDuplicateAdd, RemoveModal, RenameModal, SettingsFocus, SettingsModal, StatusLine,
+    NO_ACCOUNT_SELECTED,
 };
 use paladin_tui::cli::{should_disable_color, GlobalArgs};
 use paladin_tui::prompt::PassphraseBuffer;
@@ -5535,7 +5536,10 @@ fn effect_result_rename_with_mismatched_account_id_is_discarded() {
 
 #[test]
 fn pressing_p_on_unlocked_with_no_modal_open_opens_passphrase_modal() {
-    assert_key_opens_modal(key(KeyCode::Char('p')), &Modal::Passphrase);
+    assert_key_opens_modal(
+        key(KeyCode::Char('p')),
+        &Modal::Passphrase(PassphraseModal::default()),
+    );
 }
 
 #[test]
@@ -7214,7 +7218,7 @@ fn pressing_esc_on_unlocked_with_open_rename_modal_closes_the_modal() {
 
 #[test]
 fn pressing_esc_on_unlocked_with_open_passphrase_modal_closes_the_modal() {
-    assert_esc_closes_modal(Modal::Passphrase);
+    assert_esc_closes_modal(Modal::Passphrase(PassphraseModal::default()));
 }
 
 #[test]
@@ -12346,7 +12350,7 @@ fn pressing_non_selection_gated_opener_with_no_selection_does_not_set_status_lin
         ('a', Modal::Add(AddModal::default())),
         ('i', Modal::Import(ImportModal::default())),
         ('e', Modal::Export(ExportModal::default())),
-        ('p', Modal::Passphrase),
+        ('p', Modal::Passphrase(PassphraseModal::default())),
         ('s', Modal::Settings(SettingsModal::default())),
     ] {
         let tmp = secure_tempdir();
@@ -13268,7 +13272,7 @@ fn pressing_ctrl_p_with_rename_modal_open_aliases_shift_tab() {
 #[test]
 fn pressing_ctrl_n_with_passphrase_modal_open_aliases_tab() {
     assert_ctrl_modal_alias_is_silent_no_op(
-        Modal::Passphrase,
+        Modal::Passphrase(PassphraseModal::default()),
         ctrl(KeyCode::Char('n')),
         "`Ctrl-N`",
     );
@@ -13277,18 +13281,20 @@ fn pressing_ctrl_n_with_passphrase_modal_open_aliases_tab() {
 #[test]
 fn pressing_ctrl_p_with_passphrase_modal_open_aliases_shift_tab() {
     assert_ctrl_modal_alias_is_silent_no_op(
-        Modal::Passphrase,
+        Modal::Passphrase(PassphraseModal::default()),
         ctrl(KeyCode::Char('p')),
         "`Ctrl-P`",
     );
 }
 
-// Export / Passphrase remain unit-variant modal placeholders in v0.1:
-// `route_modal_input` falls through to `_ => Vec::new()` for both, so
-// every modal-local key (Tab / Shift-Tab / Enter / Space / the four
-// arrows / printable Char / Backspace) is a silent no-op while the
-// modal traps input. The `Ctrl-N` / `Ctrl-P` alias trap tests above
-// cover the Ctrl-modifier pair; Esc-close coverage lives in
+// Passphrase carries its payload-bearing variant ([`Modal::Passphrase`]
+// with a [`PassphraseModal`] form payload) but `route_modal_input`
+// still falls through to `_ => Vec::new()` for it, so every modal-local
+// key (Tab / Shift-Tab / Enter / Space / the four arrows / printable
+// Char / Backspace) is a silent no-op while the modal traps input.
+// Export shares the same pre-input-slice state. The `Ctrl-N` / `Ctrl-P`
+// alias trap tests above cover the Ctrl-modifier pair; Esc-close
+// coverage lives in
 // `pressing_esc_on_unlocked_with_open_{export,passphrase}_modal_closes_the_modal`.
 // The Import modal has its own routing — submit / path-text editing /
 // selector navigation slices add their own targeted tests.
@@ -13328,7 +13334,11 @@ fn export_modal_navigation_keys_are_silent_no_op() {
 #[test]
 fn passphrase_modal_navigation_keys_are_silent_no_op() {
     for (event, label) in navigation_keys_for_stub_modal_trap() {
-        assert_ctrl_modal_alias_is_silent_no_op(Modal::Passphrase, event, label);
+        assert_ctrl_modal_alias_is_silent_no_op(
+            Modal::Passphrase(PassphraseModal::default()),
+            event,
+            label,
+        );
     }
 }
 

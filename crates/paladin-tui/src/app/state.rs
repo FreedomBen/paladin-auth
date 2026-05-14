@@ -1051,6 +1051,101 @@ pub struct ExportModal {
     pub error: Option<String>,
 }
 
+/// Sub-flow selector for the Passphrase modal.
+///
+/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Passphrase:
+/// *"three sub-flows mirroring CLI's `passphrase set / change /
+/// remove`. The available sub-flow is gated by
+/// [`Vault::is_encrypted()`](paladin_core::Vault::is_encrypted): `set`
+/// is offered only on plaintext vaults (plaintext → encrypted), and
+/// `change` / `remove` are offered only on encrypted vaults."*
+///
+/// [`Default`] yields [`Self::Set`] so the modal opens to the
+/// plaintext-vault sub-flow — the reducer's gate selects [`Self::Change`]
+/// (with [`Self::Remove`] offered as a secondary) on encrypted vaults.
+/// This default lets reducer tests that match on the modal discriminant
+/// construct a placeholder via [`PassphraseModal::default()`] without
+/// reaching into the vault.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum PassphraseSubFlow {
+    /// Plaintext → encrypted transition. Routes the submit path
+    /// through [`paladin_core::Vault::set_passphrase`] with the
+    /// user-supplied twice-confirmed new passphrase.
+    #[default]
+    Set,
+    /// Encrypted → encrypted re-key transition. Routes the submit
+    /// path through [`paladin_core::Vault::change_passphrase`] with the
+    /// user-supplied twice-confirmed new passphrase; the previous key
+    /// comes from the live in-memory cache, so no current-passphrase
+    /// prompt is needed.
+    Change,
+    /// Encrypted → plaintext transition. Routes the submit path
+    /// through [`paladin_core::Vault::remove_passphrase`] after the
+    /// user acknowledges
+    /// [`paladin_core::format_plaintext_storage_warning()`] inline.
+    Remove,
+}
+
+/// State for the Passphrase modal.
+///
+/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Passphrase:
+/// *"three sub-flows mirroring CLI's `passphrase set / change /
+/// remove`. ... New passphrases (`set`, `change`) are prompted twice
+/// and confirmed; mismatch returns to the modal with an inline
+/// `invalid_passphrase` (`reason: "confirmation_mismatch"`) error.
+/// Empty new passphrases are rejected with `invalid_passphrase`
+/// (`reason: "zero_length"`)."*
+///
+/// [`Default`] yields a [`PassphraseSubFlow::Set`] modal with empty
+/// passphrase buffers and no inline error so reducer tests that match
+/// on the modal discriminant can construct a placeholder without
+/// reaching into the vault. The reducer's `'p'` opener picks the
+/// actual sub-flow based on the live vault's
+/// [`paladin_core::Vault::is_encrypted`] gate; that gating slice lands
+/// after this foundation.
+///
+/// Subsequent slices add the twice-prompt zeroizing passphrase
+/// buffers' typing handlers, the `confirmation_mismatch` and
+/// `zero_length` validation gates, the `remove` sub-flow's plaintext-
+/// storage warning acknowledgement gate, and the `Effect` /
+/// `EffectResult` wiring for the `set` / `change` / `remove` save
+/// paths.
+#[derive(Debug, Default)]
+pub struct PassphraseModal {
+    /// Which transition is being performed.
+    /// [`PassphraseSubFlow::Set`] routes through
+    /// [`paladin_core::Vault::set_passphrase`];
+    /// [`PassphraseSubFlow::Change`] routes through
+    /// [`paladin_core::Vault::change_passphrase`];
+    /// [`PassphraseSubFlow::Remove`] routes through
+    /// [`paladin_core::Vault::remove_passphrase`].
+    pub sub_flow: PassphraseSubFlow,
+    /// First of the two new-passphrase prompts (`set` / `change`
+    /// only — unused for `remove`). Held in a [`PassphraseBuffer`] so
+    /// typed bytes zeroize on drop. Per `IMPLEMENTATION_PLAN_03_TUI.md`
+    /// "Modals (per §6)": *"All passphrase-entry fields … keep typed
+    /// bytes in zeroizing buffers, convert to `secrecy::SecretString`
+    /// only for core calls, and zeroize on submit, cancel, modal close,
+    /// and auto-lock."*
+    pub new_passphrase: PassphraseBuffer,
+    /// Second of the two new-passphrase prompts (`set` / `change`
+    /// only — unused for `remove`). Compared byte-for-byte against
+    /// [`Self::new_passphrase`] on submit; divergence surfaces as
+    /// [`PaladinError::InvalidPassphrase`](paladin_core::PaladinError::InvalidPassphrase)
+    /// with `reason: "confirmation_mismatch"`. Held in a
+    /// [`PassphraseBuffer`] with the same zeroize-on-drop guarantees
+    /// as [`Self::new_passphrase`].
+    pub confirm_passphrase: PassphraseBuffer,
+    /// Inline validation / transition / save error from the most
+    /// recent submit attempt, if any. Rendered through
+    /// [`render_error_message`] so the surfaced wording matches the
+    /// rest of the TUI's error surface. Subsequent edits clear this
+    /// slot so the user sees they are re-trying; the success-close /
+    /// inline-error wiring lands alongside the `EffectResult::Passphrase`
+    /// slice.
+    pub error: Option<String>,
+}
+
 /// An open modal dialog over the main list view.
 ///
 /// Discarded on the `Unlocked → Locked` auto-lock transition
@@ -1080,7 +1175,7 @@ pub enum Modal {
     /// encrypted bundle).
     Export(ExportModal),
     /// Passphrase set / change / remove sub-flow.
-    Passphrase,
+    Passphrase(PassphraseModal),
     /// Settings: auto-lock and clipboard-clear toggles + timeouts.
     Settings(SettingsModal),
 }

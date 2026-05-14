@@ -29,8 +29,9 @@ use crate::app::state::{
     compute_idle_deadline, format_account_display_label, format_duplicate_account_message,
     format_qr_import_failure, initial_selection, render_error_message, AddManualFocus, AddModal,
     AddMode, AppState, ChordLeader, CountsPanel, ExportFormat, ExportModal, Focus, HotpReveal,
-    ImportModal, Modal, PendingClipboardClear, PendingDuplicateAdd, RemoveModal, RenameModal,
-    SettingsFocus, SettingsModal, StatusLine, CLIPBOARD_WRITE_FAILED, NO_ACCOUNT_SELECTED,
+    ImportModal, Modal, PassphraseModal, PendingClipboardClear, PendingDuplicateAdd, RemoveModal,
+    RenameModal, SettingsFocus, SettingsModal, StatusLine, CLIPBOARD_WRITE_FAILED,
+    NO_ACCOUNT_SELECTED,
 };
 use crate::prompt::PassphraseBuffer;
 use crate::search::{filtered_account_ids, select_after_search};
@@ -2735,7 +2736,7 @@ fn modal_opener_for_char(c: char) -> Option<Modal> {
         'a' => Modal::Add(AddModal::default()),
         'i' => Modal::Import(ImportModal::default()),
         'e' => Modal::Export(ExportModal::default()),
-        'p' => Modal::Passphrase,
+        'p' => Modal::Passphrase(PassphraseModal::default()),
         _ => return None,
     })
 }

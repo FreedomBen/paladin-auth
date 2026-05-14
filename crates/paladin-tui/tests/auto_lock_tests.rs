@@ -24,7 +24,7 @@ use paladin_core::{
 use paladin_tui::app::event::{AppEvent, Effect};
 use paladin_tui::app::reducer::reduce;
 use paladin_tui::app::state::{
-    AppState, ChordLeader, Focus, HotpReveal, Modal, PendingClipboardClear,
+    AppState, ChordLeader, Focus, HotpReveal, Modal, PassphraseModal, PendingClipboardClear,
 };
 
 // ---------------------------------------------------------------------------
@@ -451,7 +451,7 @@ fn tick_after_deadline_lock_discards_unlocked_modal() {
         idle_deadline: Some(deadline),
         pending_clipboard_clear: None,
         hotp_reveal: None,
-        modal: Some(Modal::Passphrase),
+        modal: Some(Modal::Passphrase(PassphraseModal::default())),
         selected: None,
         pending_chord_leader: None,
         viewport_height: 0,
