@@ -1478,11 +1478,27 @@ end-to-end.
   `paladin_core::policy::hotp_reveal::deadline(now)`
   (`paladin_core::HOTP_REVEAL_SECS` measured on a monotonic clock).
 - [x] `n` during an open reveal advances again (does not no-op).
-- [ ] Hidden rows show the stored next counter. (View-level; lands
-  with the list-view rendering slice.)
-- [ ] Revealed rows show the `Code.counter_used` that produced the
-  visible code until expiry. (View-level; lands with the list-view
-  rendering slice.)
+- [x] Hidden rows show the stored next counter.
+  *(`list_view_renders_hidden_hotp_row_with_stored_next_counter_and_press_n_prompt`
+  in `tests/hotp_reveal_tests.rs` drives an `AppState::Unlocked` with
+  an HOTP account at stored counter 42 and `hotp_reveal: None`
+  through the production `view::render` pipeline via
+  `ratatui::backend::TestBackend`. Asserts the rendered grid
+  contains `(#42)` and `press n to advance`, and — as a security
+  invariant — that the next-counter code from `hotp_peek` does NOT
+  appear; the renderer composes the row via `render_hotp_row` and
+  never calls into the OTP layer for a hidden row.)*
+- [x] Revealed rows show the `Code.counter_used` that produced the
+  visible code until expiry.
+  *(`list_view_renders_revealed_hotp_row_with_counter_used_and_visible_code_until_expiry`
+  in `tests/hotp_reveal_tests.rs` seeds an HOTP account at counter
+  41, calls `Vault::hotp_advance` to land the stored counter at 42
+  with `Code.counter_used = 41`, opens a `HotpReveal` pinned to that
+  `Code`, renders, and asserts the grid contains `(#41)` and the
+  formatted visible code while NOT containing `(#42)` or the
+  `press n to advance` prompt. `render_hotp_row` reads the counter
+  label from `reveal.counter_used` rather than `summary.counter`
+  whenever a reveal is open for the row's account.)*
 
 ### Sensitive UI buffers (`tests/reducer_tests.rs`)
 

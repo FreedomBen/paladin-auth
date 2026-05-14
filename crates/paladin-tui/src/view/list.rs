@@ -15,21 +15,33 @@
 //! becomes one row — a selection marker, the issuer/label pair, the
 //! `Code.code` digits split on the width midpoint, a 10-cell
 //! period-progress gauge, and the `Code.seconds_remaining` suffix.
-//! HOTP rows, search-active filtering, and `zz`-recentered viewports
-//! land in subsequent slices.
+//!
+//! HOTP rows are hidden by default: the title carries a `(#N)`
+//! counter suffix and the right-side column shows the
+//! `▸ press n to advance` prompt instead of digits — the renderer
+//! never calls into the OTP layer for a hidden HOTP row, so the
+//! next-counter code cannot leak. Once
+//! `HotpAdvance` opens a [`HotpReveal`] for the row, the title
+//! switches to the pre-advance counter (`Code.counter_used`) and the
+//! visible code from the reveal replaces the prompt until the
+//! reveal's deadline fires (per `DESIGN.md` §6).
+//!
+//! Search-active filtering and `zz`-recentered viewports land in
+//! subsequent slices.
 //!
 //! The renderer never mutates application state and never performs
 //! I/O — every value it reads comes from the supplied [`AppState`].
 
 use std::time::SystemTime;
 
-use paladin_core::{AccountKindSummary, AccountSummary, Code, Vault};
+use paladin_core::{AccountId, AccountKindSummary, AccountSummary, Code, Vault};
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Padding, Paragraph};
 use ratatui::Frame;
+use secrecy::ExposeSecret;
 
-use crate::app::state::AppState;
+use crate::app::state::{AppState, HotpReveal};
 
 /// Width of the issuer/label column inside an account row. Truncated
 /// titles end with `…` so the column never bleeds into the code
@@ -64,6 +76,7 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState, now: SystemTime) {
         vault,
         search_query,
         selected,
+        hotp_reveal,
         ..
     } = state
     else {
@@ -111,7 +124,14 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState, now: SystemTime) {
         let paragraph = Paragraph::new(lines).alignment(Alignment::Center);
         frame.render_widget(paragraph, chunks[2]);
     } else {
-        render_rows(frame, chunks[2], vault, selected.as_ref(), now);
+        render_rows(
+            frame,
+            chunks[2],
+            vault,
+            selected.as_ref(),
+            hotp_reveal.as_ref(),
+            now,
+        );
     }
 
     frame.render_widget(Paragraph::new(divider), chunks[3]);
@@ -127,7 +147,8 @@ fn render_rows(
     frame: &mut Frame<'_>,
     area: Rect,
     vault: &Vault,
-    selected: Option<&paladin_core::AccountId>,
+    selected: Option<&AccountId>,
+    hotp_reveal: Option<&HotpReveal>,
     now: SystemTime,
 ) {
     let capacity = area.height as usize;
@@ -141,11 +162,10 @@ fn render_rows(
         let is_selected = selected.is_some_and(|sel| *sel == summary.id);
         let line = match summary.kind {
             AccountKindSummary::Totp => render_totp_row(vault, &summary, is_selected, now),
-            // HOTP row formatting lands in the next snapshot slice
-            // (mixed-TOTP/HOTP with hidden + revealed rows); for now
-            // the empty placeholder keeps the renderer total over
-            // mixed-kind vaults so a stray HOTP entry does not panic.
-            AccountKindSummary::Hotp => format_row_prefix(&summary, is_selected),
+            AccountKindSummary::Hotp => {
+                let reveal = hotp_reveal.filter(|r| r.account_id == summary.id);
+                render_hotp_row(&summary, is_selected, reveal)
+            }
         };
         frame.render_widget(Paragraph::new(line), row);
     }
@@ -162,7 +182,7 @@ fn render_totp_row(
     is_selected: bool,
     now: SystemTime,
 ) -> String {
-    let prefix = format_row_prefix(summary, is_selected);
+    let prefix = format_row_prefix(summary, is_selected, None);
     let period = summary.period.unwrap_or(30);
     let (code_text, secs_remaining) = match vault.totp_code(summary.id, now) {
         Ok(Code {
@@ -176,14 +196,54 @@ fn render_totp_row(
     format!("{prefix}  {code_text:>CODE_COL_WIDTH$}   {gauge}  {secs_remaining:>3}s")
 }
 
+/// Render a single HOTP row.
+///
+/// * Hidden (`reveal` is `None`): title gets a `(#N)` suffix using
+///   `summary.counter` — the *stored next counter*, which is the
+///   value `hotp_advance` would consume on the next press of `n` —
+///   and the right-side column shows the `▸ press n to advance`
+///   prompt. The renderer never touches the OTP layer on this path,
+///   so the next-counter code cannot leak.
+/// * Revealed (`reveal` is the active [`HotpReveal`] for this
+///   account): title gets a `(#N)` suffix using
+///   `reveal.counter_used` — the *pre-advance* counter that
+///   produced the visible code — and the right-side column shows
+///   the visible code (formatted by [`format_code_digits`] for
+///   parity with TOTP rows).
+///
+/// The caller is responsible for filtering `reveal` to the row's
+/// account; passing the reveal slot for a different account would
+/// silently desync the displayed counter from the displayed code.
+fn render_hotp_row(
+    summary: &AccountSummary,
+    is_selected: bool,
+    reveal: Option<&HotpReveal>,
+) -> String {
+    let stored_counter = summary.counter.unwrap_or(0);
+    let (counter_label, right_col) = match reveal {
+        Some(r) => {
+            let code = format_code_digits(r.code.expose_secret());
+            (r.counter_used, format!("{code:>CODE_COL_WIDTH$}"))
+        }
+        None => (stored_counter, "▸ press n to advance".to_string()),
+    };
+    let prefix = format_row_prefix(summary, is_selected, Some(counter_label));
+    format!("{prefix}  {right_col}")
+}
+
 /// Build the `{marker} {title-padded-to-32}` prefix shared by TOTP
 /// and HOTP rows. The marker is a right-pointing wedge for the
 /// selected row and a space otherwise so unselected rows stay
 /// left-aligned with the marker column rather than shifting one cell
 /// when the selection changes.
-fn format_row_prefix(summary: &AccountSummary, is_selected: bool) -> String {
+///
+/// When `counter` is `Some(n)`, a ` (#n)` suffix is appended to the
+/// title before truncation so HOTP rows carry either the stored next
+/// counter (hidden) or `Code.counter_used` (revealed) per
+/// `DESIGN.md` §6.
+fn format_row_prefix(summary: &AccountSummary, is_selected: bool, counter: Option<u64>) -> String {
     let marker = if is_selected { '▶' } else { ' ' };
-    let title = title_for(summary);
+    let title = title_for(summary, counter);
     let title = truncate_to_chars(&title, TITLE_COL_WIDTH);
     let pad = TITLE_COL_WIDTH.saturating_sub(title.chars().count());
     format!("{marker} {title}{}", " ".repeat(pad))
@@ -192,13 +252,20 @@ fn format_row_prefix(summary: &AccountSummary, is_selected: bool) -> String {
 /// Render the visible label for an account row.
 ///
 /// Per `DESIGN.md` §6's mock, an account with an issuer renders as
-/// `{issuer} ({label})`; a label-only account renders bare. Either
-/// branch is then passed through [`truncate_to_chars`] so it fits
-/// the column.
-fn title_for(summary: &AccountSummary) -> String {
-    match &summary.issuer {
+/// `{issuer} ({label})`; a label-only account renders bare. HOTP
+/// rows append a ` (#N)` counter suffix (`counter` is `Some`) so the
+/// row carries the stored next counter (hidden) or
+/// `Code.counter_used` (revealed) inside the title column. The
+/// composed string is then passed through [`truncate_to_chars`] so
+/// it fits the column.
+fn title_for(summary: &AccountSummary, counter: Option<u64>) -> String {
+    let base = match &summary.issuer {
         Some(issuer) => format!("{issuer} ({label})", issuer = issuer, label = summary.label),
         None => summary.label.clone(),
+    };
+    match counter {
+        Some(n) => format!("{base} (#{n})"),
+        None => base,
     }
 }
 

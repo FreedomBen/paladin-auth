@@ -23,6 +23,9 @@ use std::time::{Duration, Instant, SystemTime};
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 
+use ratatui::backend::TestBackend;
+use ratatui::Terminal;
+
 use secrecy::{ExposeSecret, SecretString};
 
 use paladin_core::{
@@ -32,6 +35,7 @@ use paladin_core::{
 use paladin_tui::app::event::{AppEvent, Effect, EffectResult};
 use paladin_tui::app::reducer::reduce;
 use paladin_tui::app::state::{render_error_message, AppState, Focus, HotpReveal, StatusLine};
+use paladin_tui::view::render as view_render;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -65,6 +69,20 @@ fn create_encrypted_pair(path: &Path, passphrase: &str) -> (Vault, Store) {
 }
 
 fn add_hotp_account(vault: &mut Vault, store: &Store, label: &str) -> AccountId {
+    add_hotp_account_at_counter(vault, store, label, 0)
+}
+
+/// Variant of [`add_hotp_account`] that seeds the stored HOTP counter
+/// at `counter` rather than the default zero. Used by the view-level
+/// rendering tests so the rendered `(#N)` label can be pinned to a
+/// distinctive non-zero value and so a follow-up `hotp_advance` lands
+/// at a known `counter_used`.
+fn add_hotp_account_at_counter(
+    vault: &mut Vault,
+    store: &Store,
+    label: &str,
+    counter: u64,
+) -> AccountId {
     let input = AccountInput {
         label: label.to_string(),
         issuer: None,
@@ -73,13 +91,40 @@ fn add_hotp_account(vault: &mut Vault, store: &Store, label: &str) -> AccountId 
         digits: 6,
         kind: AccountKindInput::Hotp,
         period_secs: None,
-        counter: Some(0),
+        counter: Some(counter),
         icon_hint: IconHintInput::Default,
     };
     let validated = validate_manual(input, SystemTime::now()).expect("valid HOTP manual input");
     let id = vault.add(validated.account);
     vault.save(store).expect("commit hotp account");
     id
+}
+
+/// Drive `state` through [`paladin_tui::view::render`] using a
+/// [`ratatui::backend::TestBackend`] and return the rendered grid as
+/// a single text string (one line per row, cell symbols only,
+/// trailing spaces trimmed). Mirrors the helper in
+/// `tests/view_snapshots.rs` — duplicated locally because each
+/// integration-test crate is its own compilation unit.
+fn render_unlocked_to_text(state: &AppState, width: u16, height: u16) -> String {
+    let backend = TestBackend::new(width, height);
+    let mut terminal = Terminal::new(backend).expect("create TestBackend terminal");
+    terminal
+        .draw(|frame| view_render(frame, state, SystemTime::now()))
+        .expect("draw frame");
+    let buffer = terminal.backend().buffer();
+    let area = buffer.area();
+    let mut out = String::with_capacity((area.width as usize + 1) * area.height as usize);
+    for y in 0..area.height {
+        for x in 0..area.width {
+            out.push_str(buffer[(x, y)].symbol());
+        }
+        while out.ends_with(' ') {
+            out.pop();
+        }
+        out.push('\n');
+    }
+    out
 }
 
 fn tick_at(monotonic: Instant) -> AppEvent {
@@ -1359,4 +1404,125 @@ fn tick_past_idle_deadline_with_open_hotp_reveal_typed_code_locks_and_drops_reve
             "expected Locked (the HotpReveal and its code buffer must be gone), got {other:?}",
         ),
     }
+}
+
+// ---------------------------------------------------------------------------
+// View-level rendering of HOTP rows
+// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > HOTP reveal window —
+//  view-level bullets: hidden rows show the stored next counter;
+//  revealed rows show `Code.counter_used` until expiry.)
+//
+// Each test builds an `AppState::Unlocked` carrying a single HOTP
+// account, drives it through the production `view::render` pipeline
+// via `ratatui::backend::TestBackend`, and asserts on the resulting
+// text grid. The hidden case must not leak the next-counter code
+// digits into the rendered output; the revealed case must show the
+// visible code plus the *pre-advance* counter that produced it.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn list_view_renders_hidden_hotp_row_with_stored_next_counter_and_press_n_prompt() {
+    // Hidden axis (DESIGN.md §6: "Hidden HOTP rows show the stored
+    // next counter in the row label."). With no open reveal the row
+    // label must show `(#42)` — the *stored* next counter that
+    // `hotp_advance` would consume on the next press of `n` — and the
+    // "press n to advance" prompt in place of the code/gauge columns.
+    // The actual code digits at counter 42 must NOT leak into the
+    // rendered grid (security invariant: hidden means hidden).
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (mut vault, store) = create_encrypted_pair(&path, "pp");
+    let hotp_id = add_hotp_account_at_counter(&mut vault, &store, "AWS-HOTP", 42);
+
+    // Pre-compute the next-counter code via the non-mutating
+    // `hotp_peek` so the assertion can pin "must not appear in the
+    // rendered grid" to the same code the renderer would produce if
+    // it ever wrongly called the OTP layer.
+    let next_digits = vault
+        .hotp_peek(hotp_id)
+        .expect("hotp_peek of hidden HOTP account")
+        .code;
+
+    let state = unlocked_with_reveal(path, vault, store, Some(hotp_id), None);
+    let text = render_unlocked_to_text(&state, 80, 12);
+
+    assert!(
+        text.contains("(#42)"),
+        "hidden HOTP row must show the stored next counter `(#42)`; got:\n{text}",
+    );
+    assert!(
+        text.contains("press n to advance"),
+        "hidden HOTP row must show the `press n to advance` prompt; got:\n{text}",
+    );
+    assert!(
+        !text.contains(&next_digits),
+        "hidden HOTP row must NOT leak the next-counter code digits ({next_digits}); got:\n{text}",
+    );
+}
+
+#[test]
+fn list_view_renders_revealed_hotp_row_with_counter_used_and_visible_code_until_expiry() {
+    // Reveal axis (DESIGN.md §6: "Revealed rows show the counter
+    // that produced the visible code (`Code.counter_used`, the
+    // pre-advance counter) until the reveal expires"). With an open
+    // reveal the row label must show `(#counter_used)` — NOT the
+    // post-advance stored counter — and the visible code must
+    // replace the hidden-state prompt. Pre-advance the vault once so
+    // the stored counter is one ahead of `counter_used`, then pin
+    // the reveal to the returned `Code`.
+    let tmp = secure_tempdir();
+    let path = tmp.path().join("vault.bin");
+    let (mut vault, store) = create_encrypted_pair(&path, "pp");
+    let hotp_id = add_hotp_account_at_counter(&mut vault, &store, "AWS-HOTP", 41);
+
+    let code = vault
+        .hotp_advance(&store, hotp_id, SystemTime::now())
+        .expect("hotp_advance");
+    let counter_used = code
+        .counter_used
+        .expect("hotp_advance fills counter_used for HOTP accounts");
+    assert_eq!(
+        counter_used, 41,
+        "harness precondition: advance from stored 41 yields counter_used 41",
+    );
+    let visible = code.code.clone();
+
+    let reveal = HotpReveal {
+        account_id: hotp_id,
+        counter_used,
+        code: SecretString::from(visible.clone()),
+        deadline: hotp_reveal_deadline(Instant::now()),
+    };
+    let state = unlocked_with_reveal(path, vault, store, Some(hotp_id), Some(reveal));
+    let text = render_unlocked_to_text(&state, 80, 12);
+
+    assert!(
+        text.contains("(#41)"),
+        "revealed HOTP row must show counter_used `(#41)`; got:\n{text}",
+    );
+    assert!(
+        !text.contains("(#42)"),
+        "revealed HOTP row must NOT show the post-advance stored counter `(#42)`; got:\n{text}",
+    );
+    // The TOTP renderer splits the digits at the chars midpoint
+    // (`"123456"` → `"123 456"`); the HOTP renderer reuses that
+    // formatter so the visible code lands as the same two-group
+    // string. Assert on that exact form so the test fails if the
+    // HOTP path bypasses `format_code_digits` and prints the raw
+    // 6-digit run.
+    let mid = visible.chars().count().div_ceil(2);
+    let formatted: String = visible
+        .chars()
+        .take(mid)
+        .chain(std::iter::once(' '))
+        .chain(visible.chars().skip(mid))
+        .collect();
+    assert!(
+        text.contains(&formatted),
+        "revealed HOTP row must show the formatted visible code (`{formatted}`); got:\n{text}",
+    );
+    assert!(
+        !text.contains("press n to advance"),
+        "revealed HOTP row must NOT show the hidden-state prompt; got:\n{text}",
+    );
 }
