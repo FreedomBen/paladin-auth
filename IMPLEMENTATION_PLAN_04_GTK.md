@@ -855,15 +855,15 @@ These run without a display server. Each lives under
 
 #### `tests/rename_dialog_logic.rs`
 
-- [ ] Label validation (non-empty, §4.1 length limits) blocks
+- [x] Label validation (non-empty, §4.1 length limits) blocks
   submit inline.
-- [ ] Issuer is not editable (CLI parity with `rename <new-label>`).
-- [ ] Submitting with the new label equal to the current label
+- [x] Issuer is not editable (CLI parity with `rename <new-label>`).
+- [x] Submitting with the new label equal to the current label
   still calls `Vault::rename` inside `Vault::mutate_and_save` (no
   silent short-circuit, so `updated_at` always bumps).
-- [ ] `save_not_committed` restores the prior label in memory and
+- [x] `save_not_committed` restores the prior label in memory and
   keeps the dialog open with the inline error.
-- [ ] `save_durability_unconfirmed` keeps the new label in memory
+- [x] `save_durability_unconfirmed` keeps the new label in memory
   and surfaces the warning attached to the dialog body.
 
 #### `tests/otpauth_uri_paste_logic.rs`
