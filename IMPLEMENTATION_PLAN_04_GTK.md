@@ -883,28 +883,28 @@ These run without a display server. Each lives under
 
 #### `tests/import_dialog_logic.rs`
 
-- [ ] Format-selector routing (auto-detect / explicit `otpauth` /
+- [x] Format-selector routing (auto-detect / explicit `otpauth` /
   `aegis` / `paladin` / `qr`) reaches the correct
   `paladin_core::import::from_file` invocation.
-- [ ] On-conflict policy (`skip` / `replace` / `append`) threads
+- [x] On-conflict policy (`skip` / `replace` / `append`) threads
   through `Vault::import_accounts` and is reflected in the merge
   outcome.
-- [ ] `paladin_core::classify_paladin_import_precheck` routing for
+- [x] `paladin_core::classify_paladin_import_precheck` routing for
   `PromptForPassphrase`, `Reject(err)`, and `NoPrompt` covers
   encrypted Paladin, plaintext Paladin, malformed / unsupported
   Paladin headers, missing files, non-Paladin content, and
   forced-format mismatches.
-- [ ] Bundle-passphrase row clears when the source path or forced
+- [x] Bundle-passphrase row clears when the source path or forced
   format changes after entry, and the probe / prompt flow restarts.
-- [ ] Post-merge counts (`imported` / `skipped` / `replaced` /
+- [x] Post-merge counts (`imported` / `skipped` / `replaced` /
   `appended` / `warnings`) map to inline display.
-- [ ] Importer errors stay inline and never mutate vault state:
+- [x] Importer errors stay inline and never mutate vault state:
   `unsupported_import_format`, `unsupported_plaintext_vault`,
   `unsupported_encrypted_aegis`, `unsupported_aegis_entry_type`,
   `validation_error`, `no_entries_to_import`, `decrypt_failed`,
   `invalid_header`, `invalid_payload`, `unsupported_format_version`,
   `kdf_params_out_of_bounds`, `io_error`.
-- [ ] `save_not_committed` after a successful merge restores the
+- [x] `save_not_committed` after a successful merge restores the
   `Vault::mutate_and_save` snapshot;
   `save_durability_unconfirmed` keeps the merged accounts and
   surfaces the warning inline.

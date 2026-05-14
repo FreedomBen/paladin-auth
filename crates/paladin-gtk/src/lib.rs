@@ -23,6 +23,7 @@ pub mod auto_lock;
 pub mod clipboard_clear;
 pub mod hotp_reveal;
 pub mod icon_resolution;
+pub mod import_dialog;
 pub mod init_dialog;
 pub mod otpauth_uri_paste;
 pub mod qr_clipboard;
