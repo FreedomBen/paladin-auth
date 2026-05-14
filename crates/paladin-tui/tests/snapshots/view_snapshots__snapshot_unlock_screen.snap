@@ -1,0 +1,17 @@
+---
+source: crates/paladin-tui/tests/view_snapshots.rs
+assertion_line: 84
+expression: "render_to_text(&state, 80, 12)"
+---
+┌ Paladin — unlock ────────────────────────────────────────────────────────────┐
+│                                                                              │
+│  Vault: /var/lib/paladin/vault.bin                                           │
+│                                                                              │
+│  Passphrase:                                                                 │
+│                                                                              │
+│  Press Enter to unlock; Esc or Ctrl-C to quit.                               │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘

@@ -18,6 +18,7 @@
 
 pub mod missing_vault;
 pub mod startup_error;
+pub mod unlock;
 
 use ratatui::Frame;
 
@@ -35,8 +36,20 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState) {
         AppState::StartupError { path, message } => {
             startup_error::render(frame, path.as_deref(), message);
         }
-        AppState::Unlock { .. } | AppState::Locked { .. } | AppState::Unlocked { .. } => {
-            // Renderers land in subsequent slices.
+        AppState::Unlock {
+            path,
+            error,
+            passphrase,
+        } => {
+            unlock::render(frame, path, error.as_deref(), passphrase);
+        }
+        AppState::Locked { .. } | AppState::Unlocked { .. } => {
+            // Renderers land in subsequent slices. `Locked` re-uses
+            // the unlock screen with an empty passphrase on the next
+            // unlock attempt; the in-state-machine handoff
+            // (Locked → Unlock on first keystroke) is reducer
+            // territory and lands alongside the auto-lock re-unlock
+            // slice.
         }
     }
 }

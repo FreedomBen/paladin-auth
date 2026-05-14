@@ -26,6 +26,7 @@ use ratatui::Terminal;
 
 use paladin_core::{format_unsafe_permissions, PaladinError, PermissionSubject};
 use paladin_tui::app::state::AppState;
+use paladin_tui::prompt::PassphraseBuffer;
 use paladin_tui::view::render;
 
 /// Draw `state` into an `width × height` [`TestBackend`] and return
@@ -67,6 +68,34 @@ fn buffer_to_text(buffer: &Buffer) -> String {
 fn snapshot_missing_vault_screen() {
     let state = AppState::MissingVault {
         path: PathBuf::from("/var/lib/paladin/vault.bin"),
+    };
+    insta::assert_snapshot!(render_to_text(&state, 80, 12));
+}
+
+#[test]
+fn snapshot_unlock_screen() {
+    // Plan L1731: "Unlock screen." — encrypted-vault first-attempt
+    // state with no inline error and no typed bytes.
+    let state = AppState::Unlock {
+        path: PathBuf::from("/var/lib/paladin/vault.bin"),
+        error: None,
+        passphrase: PassphraseBuffer::new(),
+    };
+    insta::assert_snapshot!(render_to_text(&state, 80, 12));
+}
+
+#[test]
+fn snapshot_unlock_screen_with_wrong_passphrase_error() {
+    // Plan L1791: "Unlock screen with inline wrong-passphrase error."
+    // The reducer surfaces the `decrypt_failed` text via
+    // `render_error_message(&PaladinError::DecryptFailed)`, which
+    // falls back to `Display` for non-`unsafe_permissions` errors —
+    // that path is exercised here so the snapshot is bound to the
+    // core Display wording rather than a hand-typed string.
+    let state = AppState::Unlock {
+        path: PathBuf::from("/var/lib/paladin/vault.bin"),
+        error: Some(PaladinError::DecryptFailed.to_string()),
+        passphrase: PassphraseBuffer::new(),
     };
     insta::assert_snapshot!(render_to_text(&state, 80, 12));
 }

@@ -1728,7 +1728,13 @@ Modals and overlays:
 - [ ] Passphrase modal — `remove` sub-flow.
 - [ ] Settings modal.
 - [ ] Help overlay.
-- [ ] Unlock screen.
+- [x] Unlock screen.
+  *(`crates/paladin-tui/src/view/unlock.rs` renders a bordered
+  `Paladin — unlock` block with the bolded vault path, a masked
+  passphrase line (`•` per typed character, never the typed bytes),
+  the optional inline `error`, and the Enter / Esc / Ctrl-C
+  hint. `snapshot_unlock_screen` in `tests/view_snapshots.rs`
+  drives the no-error empty-buffer baseline.)*
 - [x] Missing-vault screen.
   *(`crates/paladin-tui/src/view/missing_vault.rs` renders the
   non-mutating guidance screen — a bordered `Paladin` block with
@@ -1798,7 +1804,13 @@ Status-line states:
 - [ ] Status-line error after rejected copy.
 - [ ] Status-line `save_durability_unconfirmed` after HOTP `n`.
 - [ ] Status-line `clipboard_write_failed` after a failed copy.
-- [ ] Unlock screen with inline wrong-passphrase error.
+- [x] Unlock screen with inline wrong-passphrase error.
+  *(`snapshot_unlock_screen_with_wrong_passphrase_error` in
+  `tests/view_snapshots.rs` sets
+  `error: Some(PaladinError::DecryptFailed.to_string())` —
+  binding the snapshot to the core `Display` wording rather than
+  a hand-typed string — and locks the rendered grid in
+  `tests/snapshots/view_snapshots__snapshot_unlock_screen_with_wrong_passphrase_error.snap`.)*
 - [ ] Status-line confirmation after manual Add.
 - [ ] Status-line confirmation after URI Add.
 - [ ] Status-line confirmation after Remove.
