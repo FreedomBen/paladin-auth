@@ -37,23 +37,12 @@ impl Secret {
     /// Borrow the secret bytes for OTP computation. The borrow must
     /// not outlive the `Secret`; callers must not copy the bytes
     /// into a non-zeroizing buffer.
+    ///
+    /// Crate-private: keeps the OTP secret byte projection inside the
+    /// crate so front ends cannot reach past `AccountSummary`.
     #[must_use]
-    pub fn expose_secret(&self) -> &[u8] {
+    pub(crate) fn expose_secret(&self) -> &[u8] {
         &self.0
-    }
-
-    /// Length of the underlying byte buffer.
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.0.len()
-    }
-
-    /// True iff the buffer is empty. Validation rejects empty
-    /// secrets, so this should never return true for an `Account`'s
-    /// secret in practice.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
     }
 }
 
@@ -109,15 +98,6 @@ mod tests {
     fn expose_secret_returns_inner_bytes() {
         let s = Secret::from_bytes(vec![0x01, 0x02, 0x03]);
         assert_eq!(s.expose_secret(), &[0x01, 0x02, 0x03]);
-        assert_eq!(s.len(), 3);
-        assert!(!s.is_empty());
-    }
-
-    #[test]
-    fn empty_secret_is_empty() {
-        let s = Secret::from_bytes(vec![]);
-        assert_eq!(s.len(), 0);
-        assert!(s.is_empty());
     }
 
     #[test]
@@ -139,10 +119,11 @@ mod tests {
         // pair is acceptable evidence that the secret bytes are gone.
         let mut s = Secret::from_bytes(vec![1, 2, 3, 4]);
         s.zeroize();
+        let bytes = s.expose_secret();
         assert!(
-            s.is_empty(),
+            bytes.is_empty(),
             "expected len=0 after zeroize, got {}",
-            s.len()
+            bytes.len()
         );
     }
 

@@ -287,8 +287,12 @@ impl Account {
 
     /// Borrow the secret bytes for OTP computation. Callers must not
     /// copy these bytes into a non-zeroizing buffer.
+    ///
+    /// Crate-private: front ends inspect accounts through
+    /// [`AccountSummary`] / [`Account::summary`]; the OTP secret never
+    /// leaves the crate via the public API.
     #[must_use]
-    pub fn secret(&self) -> &Secret {
+    pub(crate) fn secret(&self) -> &Secret {
         &self.secret
     }
 

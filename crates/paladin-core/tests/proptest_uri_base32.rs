@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// Property tests for the public URI parser and base32 secret decoder
-// entry points (DESIGN.md §4.4, §4.6).
+// No-panic property tests for the public URI and base32 entry points
+// (DESIGN.md §4.4, §4.6).
 //
-// The inline `proptests` module in `src/otpauth/mod.rs` already pins
-// the URI emit → parse round-trip and a no-panic property over the
-// URI path. This file adds independent property coverage for the
-// base32 decoder via the public `validate_manual` entry point and
-// re-pins the URI no-panic property at integration-test scope so a
-// future refactor of `otpauth/mod.rs` cannot silently drop it.
+// Round-trip property coverage that asserts decoded `Secret` byte
+// equality lives in `src/domain/validation.rs`'s `proptests` module:
+// secret bytes never leave the crate via the public API, so those
+// assertions must be expressed at internal-test scope. The two
+// no-panic properties below stay at integration-test scope to pin
+// the public surface against arbitrary UTF-8 input.
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -38,69 +38,6 @@ fn account_input_from_secret(secret: SecretString) -> AccountInput {
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(64))]
-
-    /// `bytes → base32 encode → validate_manual → Secret` recovers the
-    /// original bytes exactly. Length spans the §4.1 inclusive range
-    /// `[SECRET_MIN_BYTES = 10, SECRET_MAX_BYTES = 1024]`. Catches a
-    /// regression where the decoder silently rewrites bytes — the
-    /// inline `parse → emit → re-parse` self-consistency check would
-    /// not fail on such a bug.
-    #[test]
-    fn base32_secret_round_trips_to_original_bytes(
-        bytes in proptest::collection::vec(any::<u8>(), 10..=1024),
-    ) {
-        let encoded = base32::encode(
-            base32::Alphabet::Rfc4648 { padding: false },
-            &bytes,
-        );
-        let validated = validate_manual(
-            account_input_from_secret(SecretString::from(encoded)),
-            import_time(),
-        )
-        .expect("valid base32 of an in-range secret must decode");
-        prop_assert_eq!(validated.account.secret().expose_secret(), bytes.as_slice());
-    }
-
-    /// RFC 4648 case-insensitivity: lowercase base32 decodes to the
-    /// same bytes as the canonical uppercase form.
-    #[test]
-    fn base32_secret_round_trips_lowercase(
-        bytes in proptest::collection::vec(any::<u8>(), 10..=64),
-    ) {
-        let encoded = base32::encode(
-            base32::Alphabet::Rfc4648 { padding: false },
-            &bytes,
-        )
-        .to_ascii_lowercase();
-        let validated = validate_manual(
-            account_input_from_secret(SecretString::from(encoded)),
-            import_time(),
-        )
-        .expect("lowercase base32 must decode identically to uppercase");
-        prop_assert_eq!(validated.account.secret().expose_secret(), bytes.as_slice());
-    }
-
-    /// RFC 4648 trailing `=` padding is tolerated: an arbitrary number
-    /// of trailing `=` characters does not perturb the decoded bytes.
-    #[test]
-    fn base32_secret_round_trips_with_padding(
-        bytes in proptest::collection::vec(any::<u8>(), 10..=64),
-        pad_chars in 0usize..=8,
-    ) {
-        let mut encoded = base32::encode(
-            base32::Alphabet::Rfc4648 { padding: false },
-            &bytes,
-        );
-        for _ in 0..pad_chars {
-            encoded.push('=');
-        }
-        let validated = validate_manual(
-            account_input_from_secret(SecretString::from(encoded)),
-            import_time(),
-        )
-        .expect("trailing '=' padding must not perturb decoding");
-        prop_assert_eq!(validated.account.secret().expose_secret(), bytes.as_slice());
-    }
 
     /// No-panic over the public manual base32 entry point: any UTF-8
     /// input handed to `validate_manual` as the secret either

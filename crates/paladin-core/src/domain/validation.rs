@@ -704,3 +704,103 @@ mod tests {
         ));
     }
 }
+
+// Property tests asserting that the base32 secret decoder round-trips
+// to the original bytes. Internal to the crate because the assertions
+// inspect raw `Secret` bytes via the `pub(crate)` accessor; the
+// projection boundary keeps secret bytes off the public API.
+#[cfg(test)]
+mod proptests {
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    use proptest::prelude::*;
+    use secrecy::SecretString;
+
+    use super::{validate_manual, AccountInput};
+    use crate::domain::{AccountKindInput, Algorithm, IconHintInput};
+
+    fn import_time() -> SystemTime {
+        UNIX_EPOCH + Duration::from_secs(1_700_000_000)
+    }
+
+    fn account_input_from_secret(secret: SecretString) -> AccountInput {
+        AccountInput {
+            label: "alice".to_string(),
+            issuer: None,
+            secret,
+            algorithm: Algorithm::Sha1,
+            digits: 6,
+            kind: AccountKindInput::Totp,
+            period_secs: None,
+            counter: None,
+            icon_hint: IconHintInput::Default,
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(64))]
+
+        /// `bytes → base32 encode → validate_manual → Secret` recovers the
+        /// original bytes exactly. Length spans the §4.1 inclusive range
+        /// `[SECRET_MIN_BYTES = 10, SECRET_MAX_BYTES = 1024]`. Catches a
+        /// regression where the decoder silently rewrites bytes — the
+        /// inline `parse → emit → re-parse` self-consistency check would
+        /// not fail on such a bug.
+        #[test]
+        fn base32_secret_round_trips_to_original_bytes(
+            bytes in proptest::collection::vec(any::<u8>(), 10..=1024),
+        ) {
+            let encoded = base32::encode(
+                base32::Alphabet::Rfc4648 { padding: false },
+                &bytes,
+            );
+            let validated = validate_manual(
+                account_input_from_secret(SecretString::from(encoded)),
+                import_time(),
+            )
+            .expect("valid base32 of an in-range secret must decode");
+            prop_assert_eq!(validated.account.secret().expose_secret(), bytes.as_slice());
+        }
+
+        /// RFC 4648 case-insensitivity: lowercase base32 decodes to the
+        /// same bytes as the canonical uppercase form.
+        #[test]
+        fn base32_secret_round_trips_lowercase(
+            bytes in proptest::collection::vec(any::<u8>(), 10..=64),
+        ) {
+            let encoded = base32::encode(
+                base32::Alphabet::Rfc4648 { padding: false },
+                &bytes,
+            )
+            .to_ascii_lowercase();
+            let validated = validate_manual(
+                account_input_from_secret(SecretString::from(encoded)),
+                import_time(),
+            )
+            .expect("lowercase base32 must decode identically to uppercase");
+            prop_assert_eq!(validated.account.secret().expose_secret(), bytes.as_slice());
+        }
+
+        /// RFC 4648 trailing `=` padding is tolerated: an arbitrary number
+        /// of trailing `=` characters does not perturb the decoded bytes.
+        #[test]
+        fn base32_secret_round_trips_with_padding(
+            bytes in proptest::collection::vec(any::<u8>(), 10..=64),
+            pad_chars in 0usize..=8,
+        ) {
+            let mut encoded = base32::encode(
+                base32::Alphabet::Rfc4648 { padding: false },
+                &bytes,
+            );
+            for _ in 0..pad_chars {
+                encoded.push('=');
+            }
+            let validated = validate_manual(
+                account_input_from_secret(SecretString::from(encoded)),
+                import_time(),
+            )
+            .expect("trailing '=' padding must not perturb decoding");
+            prop_assert_eq!(validated.account.secret().expose_secret(), bytes.as_slice());
+        }
+    }
+}

@@ -1,3 +1,5 @@
+ Documenting paladin-core v0.0.1 (/home/ben/gitclone/paladin/crates/paladin-core)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.70s
 pub mod paladin_core
 pub mod paladin_core::export
 pub fn paladin_core::export::encrypted(vault: &paladin_core::Vault, options: paladin_core::EncryptionOptions) -> paladin_core::Result<alloc::vec::Vec<u8>>
@@ -177,6 +179,8 @@ pub fn paladin_core::AccountKindInput::clone(&self) -> paladin_core::AccountKind
 impl core::cmp::Eq for paladin_core::AccountKindInput
 impl core::cmp::PartialEq for paladin_core::AccountKindInput
 pub fn paladin_core::AccountKindInput::eq(&self, other: &paladin_core::AccountKindInput) -> bool
+impl core::default::Default for paladin_core::AccountKindInput
+pub fn paladin_core::AccountKindInput::default() -> paladin_core::AccountKindInput
 impl core::fmt::Debug for paladin_core::AccountKindInput
 pub fn paladin_core::AccountKindInput::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for paladin_core::AccountKindInput
@@ -652,7 +656,6 @@ pub fn paladin_core::Account::issuer(&self) -> core::option::Option<&str>
 pub fn paladin_core::Account::kind(&self) -> paladin_core::AccountKindSummary
 pub fn paladin_core::Account::label(&self) -> &str
 pub fn paladin_core::Account::period(&self) -> core::option::Option<u32>
-pub fn paladin_core::Account::secret(&self) -> &paladin_core::Secret
 pub fn paladin_core::Account::summary(&self) -> paladin_core::AccountSummary
 pub fn paladin_core::Account::updated_at(&self) -> u64
 impl bincode::enc::Encode for paladin_core::Account
@@ -918,10 +921,6 @@ impl core::marker::UnsafeUnpin for paladin_core::ImportWarning
 impl core::panic::unwind_safe::RefUnwindSafe for paladin_core::ImportWarning
 impl core::panic::unwind_safe::UnwindSafe for paladin_core::ImportWarning
 pub struct paladin_core::Secret(_)
-impl paladin_core::Secret
-pub fn paladin_core::Secret::expose_secret(&self) -> &[u8]
-pub fn paladin_core::Secret::is_empty(&self) -> bool
-pub fn paladin_core::Secret::len(&self) -> usize
 impl bincode::enc::Encode for paladin_core::Secret
 pub fn paladin_core::Secret::encode<E: bincode::enc::Encoder>(&self, encoder: &mut E) -> core::result::Result<(), bincode::error::EncodeError>
 impl core::clone::Clone for paladin_core::Secret
@@ -1041,9 +1040,15 @@ pub const paladin_core::AUTO_LOCK_SECS_MAX: u32
 pub const paladin_core::AUTO_LOCK_SECS_MIN: u32
 pub const paladin_core::CLIPBOARD_CLEAR_SECS_MAX: u32
 pub const paladin_core::CLIPBOARD_CLEAR_SECS_MIN: u32
+pub const paladin_core::DIGITS_DEFAULT: u8
+pub const paladin_core::DIGITS_MAX: u8
+pub const paladin_core::DIGITS_MIN: u8
 pub const paladin_core::HOTP_REVEAL_SECS: u64
 pub const paladin_core::QR_RGBA_MAX_BYTES: usize
 pub const paladin_core::TICK_INTERVAL_MS: u64
+pub const paladin_core::TOTP_PERIOD_DEFAULT: u32
+pub const paladin_core::TOTP_PERIOD_MAX: u32
+pub const paladin_core::TOTP_PERIOD_MIN: u32
 pub fn paladin_core::account_match_key(account: &paladin_core::Account) -> alloc::string::String
 pub fn paladin_core::account_matches_search(account: &paladin_core::Account, query: &str) -> bool
 pub fn paladin_core::classify_init_precheck(probe: paladin_core::Result<paladin_core::VaultStatus>) -> paladin_core::InitPrecheck
@@ -1063,6 +1068,7 @@ pub fn paladin_core::parse_otpauth(uri: &str, import_time: std::time::SystemTime
 pub fn paladin_core::parse_setting_key(key: &str) -> paladin_core::Result<paladin_core::SettingKey>
 pub fn paladin_core::parse_setting_patch(key: &str, value: &str) -> paladin_core::Result<paladin_core::SettingPatch>
 pub fn paladin_core::select_after_filter(prev: core::option::Option<paladin_core::AccountId>, filtered: &[paladin_core::AccountId]) -> core::option::Option<paladin_core::AccountId>
+pub fn paladin_core::validate_label(raw: &str) -> core::result::Result<alloc::string::String, paladin_core::PaladinError>
 pub fn paladin_core::validate_manual(input: paladin_core::AccountInput, now: std::time::SystemTime) -> core::result::Result<paladin_core::ValidatedAccount, paladin_core::PaladinError>
 pub fn paladin_core::write_secret_file_atomic(path: &std::path::Path, content: &[u8]) -> paladin_core::Result<()>
 pub type paladin_core::Result<T> = core::result::Result<T, paladin_core::PaladinError>

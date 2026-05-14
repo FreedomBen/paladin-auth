@@ -92,7 +92,11 @@ fn round_trip_yields_matching_validated_accounts_modulo_timestamps() {
         let imp = &va.account;
         assert_eq!(orig.label(), imp.label());
         assert_eq!(orig.issuer(), imp.issuer());
-        assert_eq!(orig.secret().expose_secret(), imp.secret().expose_secret());
+        // Secret-byte equality is asserted in the in-crate unit test
+        // `src/export/otpauth_list.rs::tests::
+        // round_trip_preserves_secret_bytes_for_every_account` —
+        // `Account::secret()` is `pub(crate)` so it cannot be checked
+        // from this integration-test scope.
         assert_eq!(orig.algorithm(), imp.algorithm());
         assert_eq!(orig.digits(), imp.digits());
         assert_eq!(orig.kind(), imp.kind());
