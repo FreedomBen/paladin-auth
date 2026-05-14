@@ -911,17 +911,17 @@ These run without a display server. Each lives under
 
 #### `tests/export_dialog_logic.rs`
 
-- [ ] Overwrite gate resets when the destination or format changes.
-- [ ] Plaintext-warning gate resets when the destination or format
+- [x] Overwrite gate resets when the destination or format changes.
+- [x] Plaintext-warning gate resets when the destination or format
   changes; the rendered text matches
   `paladin_core::format_plaintext_export_warning()` verbatim.
-- [ ] Encrypted twice-confirm match accepts; mismatch rejects with
+- [x] Encrypted twice-confirm match accepts; mismatch rejects with
   `invalid_passphrase` (`reason: "confirmation_mismatch"`).
-- [ ] Empty encrypted passphrase rejects with `invalid_passphrase`
+- [x] Empty encrypted passphrase rejects with `invalid_passphrase`
   (`reason: "zero_length"`).
-- [ ] Destination or format change after passphrase entry clears
+- [x] Destination or format change after passphrase entry clears
   the password rows and re-prompts.
-- [ ] Export writer errors (`io_error`, `save_not_committed`,
+- [x] Export writer errors (`io_error`, `save_not_committed`,
   `save_durability_unconfirmed`) stay inline; export does not
   mutate the vault, so no rollback path runs.
 
