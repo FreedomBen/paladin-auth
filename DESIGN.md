@@ -1712,7 +1712,20 @@ Concrete obligations and explicit user-controlled tradeoffs:
    enum, and OTP parameters must pass the §4.1 validation table.
 10. **No telemetry, no network calls.** Enforced by code review and tests;
     `cargo deny` covers dependency license/advisory policy, not runtime
-    network behavior.
+    network behavior. The deny list bans async runtimes and network stacks
+    (`tokio`, `reqwest`, `hyper`, …) from `paladin-core`, `paladin-cli`, and
+    `paladin-tui`, asserted by the lockfile-subtree guard in
+    `crates/paladin-core/tests/no_network.rs`. `paladin-gtk` is granted a
+    single carve-out: `tokio` is permitted when it reaches the lockfile
+    transitively through `relm4` (its GUI framework, which uses `tokio`'s
+    mpsc channels as a structured-concurrency primitive). GTK's main loop
+    remains the executor and `gio::spawn_blocking` runs the long work, so
+    no sockets are opened. The carve-out is locked down at three layers:
+    (a) `paladin-core` source / manifest / lockfile-subtree guards keep the
+    security-sensitive subtree tokio-free; (b) `deny.toml` admits `tokio`
+    only when its direct wrapper is `relm4`; and (c) a source-level guard
+    in `paladin-gtk` forbids direct `use tokio` / `tokio::` references so
+    the GUI never reaches around `relm4` to use `tokio` as a runtime.
 11. **Reproducible builds.** Pin `rust-toolchain.toml`. Lock all deps.
 12. **Threat model documented separately** in `SECURITY.md` before v1.
 

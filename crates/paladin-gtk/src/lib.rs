@@ -42,21 +42,48 @@ pub mod settings;
 pub mod startup_error;
 pub mod unlock_dialog;
 
+/// Stable application identifier per §"Linux desktop integration" /
+/// §"Packaging". Must stay in lockstep with the desktop file's
+/// `StartupWMClass`, the `AppStream` `<id>`, the icon-theme key,
+/// and the §11.4 Flatpak `app-id`, so a window opened by this
+/// binary is correctly grouped with its launcher entry across
+/// native packages, Flatpak, and `AppImage`.
+pub const APP_ID: &str = "org.tamx.Paladin.Gui";
+
 /// Run the `paladin-gtk` binary.
 ///
-/// Milestone 7 scaffold per `IMPLEMENTATION_PLAN_04_GTK.md`: parses
-/// [`cli::GlobalArgs`] and exits. The real entry (`adw::init`,
-/// gresource registration, `RelmApp::new` with the
-/// `org.tamx.Paladin.Gui` app ID) is wired in subsequent commits.
+/// Milestone 7 foundation per `IMPLEMENTATION_PLAN_04_GTK.md`: parse
+/// [`cli::GlobalArgs`], initialize libadwaita against the live
+/// display, and exit. The `relm4::RelmApp::new(APP_ID).run::<AppModel>(…)`
+/// event loop that mounts the §"Component tree" `AppModel` lands in
+/// a follow-up commit alongside the first widget-bearing component;
+/// constructing `RelmApp` here would require the not-yet-wired
+/// `AppModel` type to satisfy its `M: Debug` parameter. This
+/// entrypoint is validated by `tests/gtk_smoke.rs` to prove the dep
+/// stack links and `libadwaita::init()` works against the live
+/// display.
 #[must_use]
 pub fn run() -> ExitCode {
     use clap::Parser;
 
-    match cli::GlobalArgs::try_parse() {
-        Ok(_args) => ExitCode::SUCCESS,
+    let _args = match cli::GlobalArgs::try_parse() {
+        Ok(args) => args,
         // `Error::exit` writes clap's text diagnostic / help / version
         // output and exits with the appropriate code (`2` for usage
         // errors, `0` for `--help` / `--version`). Never returns.
         Err(err) => err.exit(),
+    };
+
+    // `libadwaita::init` internally drives `gtk::init` plus the
+    // Adwaita stylesheet bootstrap. It needs a live display server;
+    // the §"Smoke test" `xvfb-run` wrapper supplies one in CI, and
+    // graphical sessions supply one for normal launches. Propagate
+    // failure as a clean exit code rather than a panic so packagers
+    // and users see a readable diagnostic.
+    if let Err(err) = libadwaita::init() {
+        eprintln!("paladin-gtk: failed to initialize libadwaita: {err}");
+        return ExitCode::FAILURE;
     }
+
+    ExitCode::SUCCESS
 }

@@ -1149,9 +1149,36 @@ binary dependency. `data/style.css` (scoped via `gtk::CssProvider`)
 carries only Paladin-specific tweaks on top of Adwaita defaults — it
 never tries to recreate the Adwaita palette.
 
-**No `tokio`.** GTK's main loop is the executor; long work runs on
-`gio::spawn_blocking` with results delivered back to the main thread via
-Relm4 messages. The `gio::spawn_blocking` worker contract types
+## GUI runtime carve-out
+
+**No direct `tokio` use, with one transitive-dep carve-out.** GTK's
+main loop is the executor; long work runs on `gio::spawn_blocking`
+with results delivered back to the main thread via Relm4 messages.
+`paladin-gtk` source files therefore must not contain `use tokio`
+or `tokio::` references — `tests/no_tokio_source.rs` enforces this
+the same way `tests/thinness.rs` enforces the crypto / storage
+contract. The crate's own `[dependencies]` must not declare
+`tokio` directly either.
+
+The carve-out is the `tokio` package itself reaching `Cargo.lock`
+transitively through `relm4` (`relm4 → tokio`), which `relm4` uses
+for its mpsc-channel internals — a structured-concurrency
+primitive, not a network stack. `cargo deny check` admits this
+edge via the `wrappers = ["relm4"]` rule on `tokio` in
+`deny.toml`; the lockfile-subtree guard in
+`crates/paladin-core/tests/no_network.rs` continues to assert that
+no banned dep is reachable from `paladin-core`, `paladin-cli`, or
+`paladin-tui`, so the no-network rule remains in force for the
+security-sensitive subtree. See DESIGN.md §8 bullet 10 for the
+authoritative wording.
+
+No other tokio-adjacent crate (`tokio-util`, `tokio-rustls`, …) is
+permitted; only the base `tokio` package, only when reached via
+`relm4`. New direct deps of `paladin-gtk` that would pull in a
+different async runtime or network stack require a DESIGN.md update
+before being added.
+
+The `gio::spawn_blocking` worker contract types
 (including `Vault`, `Store`, `Account`, `AccountId`, `AccountSummary`,
 `AccountKindSummary`, `Algorithm`, `Code`, `ValidatedAccount`,
 `ValidationWarning`, `ImportReport`, `ImportWarning`, `ImportConflict`,

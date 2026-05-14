@@ -27,6 +27,11 @@ allow = [
     "AGPL-3.0",
     "AGPL-3.0-or-later",
     "Apache-2.0",
+    # `target-lexicon` (a transitive dep of `glib`'s gobject-sys build script)
+    # uses the LLVM-exception variant of Apache-2.0. The exception loosens the
+    # patent grant for downstream LLVM users and is GPLv3-compatible per the
+    # FSF list, so it does not conflict with our AGPL-3.0-or-later license.
+    "Apache-2.0 WITH LLVM-exception",
     "BSD-2-Clause",
     "BSD-3-Clause",
     "ISC",
@@ -51,9 +56,19 @@ wildcards = "deny"
 # `wildcards = "deny"` rule above.
 allow-wildcard-paths = true
 deny = [
-    # Async runtimes / network stacks have no place in paladin-core or any
-    # binary front-end; the §8 "no network" rule is enforced here.
-    { name = "tokio" },
+    # Async runtimes / network stacks have no place in `paladin-core`,
+    # `paladin-cli`, or `paladin-tui`; the §8 "no network" rule is enforced
+    # here. `paladin-gtk` is exempted for `tokio` only via the `wrappers`
+    # carve-out below: `relm4` (the GUI framework) uses `tokio` as a
+    # structured-concurrency primitive (mpsc channels). GTK's main loop is
+    # the executor and `gio::spawn_blocking` runs the long work, so no
+    # network sockets are opened. The lockfile-level guard in
+    # `crates/paladin-core/tests/no_network.rs` further asserts that no
+    # banned dep is reachable from `paladin-core`, `paladin-cli`, or
+    # `paladin-tui`, so the no-network rule remains in force for the
+    # security-sensitive subtree. See `IMPLEMENTATION_PLAN_04_GTK.md`
+    # §"Dependencies" / §"GUI runtime carve-out" and `DESIGN.md` §8.
+    { name = "tokio", wrappers = ["relm4"] },
     { name = "tokio-util" },
     { name = "tokio-rustls" },
     { name = "tokio-native-tls" },

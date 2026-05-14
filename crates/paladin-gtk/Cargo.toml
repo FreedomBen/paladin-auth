@@ -27,11 +27,11 @@ path = "src/main.rs"
 
 # Per §"Dependencies (per §9)" of IMPLEMENTATION_PLAN_04_GTK.md, the
 # v0.2 GUI binds `relm4`, `gtk4` (>=4.16), `libadwaita` (>=1.6),
-# `glib`, `gio`, `gdk4`, plus `paladin-core` and `clap`. These widget-
-# stack deps are added in the commit that introduces the first GTK-
-# touching module so the scaffold stays buildable on systems without
-# GTK dev headers and so each addition has a clear blame trail.
-# `paladin-core` is the only crate-level dep here today.
+# `glib`, `gio`, `gdk4`, plus `paladin-core` and `clap`. The widget-
+# stack deps land alongside the first relm4 wiring so the dep
+# additions have a clear blame trail; `glib` / `gio` / `gdk4` are
+# brought in through `gtk4`'s re-exports until a direct dep is
+# actually used.
 #
 # Thinness contract (tests/thinness.rs): this section MUST NOT
 # declare any of `argon2`, `chacha20poly1305`, `bincode`, `hmac`,
@@ -53,6 +53,15 @@ zeroize = { version = "1.8", features = ["zeroize_derive"] }
 # passphrase dialogs land in subsequent commits and use the same
 # crate; pinned at the workspace version `paladin-core` uses.
 secrecy = "0.10"
+# GTK4 / libadwaita / relm4 widget stack per §"Dependencies (per §9)".
+# `gtk4` `v4_16` matches the plan's >=4.16 baseline (gates APIs added
+# through GTK 4.16); `libadwaita` `v1_6` matches the §11.3 Debian dep
+# declaration and unlocks `AdwAlertDialog` + `AdwAboutDialog` without
+# a compatibility shim. `relm4` brings its own gtk4 / libadwaita
+# integration and pulls compatible re-exports of glib / gio / gdk4.
+gtk4 = { version = "0.11", features = ["v4_16"] }
+libadwaita = { version = "0.9", features = ["v1_6"] }
+relm4 = "0.11"
 
 [dev-dependencies]
 tempfile = "3"
