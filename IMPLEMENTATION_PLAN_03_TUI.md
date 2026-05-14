@@ -1759,7 +1759,25 @@ Layout / list views:
   `tests/snapshots/view_snapshots__snapshot_list_view_single_totp.snap`.
   HOTP rows still fall back to the shared `{marker} {title}`
   prefix until the mixed-kind slice lands.)*
-- [ ] Mixed TOTP / HOTP list view with hidden + revealed rows.
+- [x] Mixed TOTP / HOTP list view with hidden + revealed rows.
+  *(`crates/paladin-tui/tests/view_snapshots.rs` adds
+  `push_hotp_account` (mirrors `push_totp_account` with
+  `AccountKindInput::Hotp` + a stored `counter`) and the new
+  `snapshot_list_view_mixed_totp_hotp_hidden_and_revealed` test —
+  insertion order TOTP / hidden HOTP / revealed HOTP places one row
+  of each distinct shape into the snapshot grid. The hidden HOTP row
+  carries `(#0)` (the *stored next* counter from
+  `summary.counter`) plus the `▸ press n to advance` prompt; the
+  revealed HOTP row carries `(#41)` (the *pre-advance*
+  `HotpReveal.counter_used` while the stored next counter is `42`)
+  plus the `format_code_digits`-formatted reveal code in the
+  right-side column. The revealed HOTP is the selected row so the
+  `▶` marker lands on a HOTP row — a regression that ever stops
+  painting selection on HOTP rows surfaces as a diff. The reveal
+  `deadline` uses `hotp_reveal_deadline(Instant::now())` —
+  host-clock-derived but never read by the renderer, so the
+  snapshot stays deterministic. Locked in
+  `tests/snapshots/view_snapshots__snapshot_list_view_mixed_totp_hotp_hidden_and_revealed.snap`.)*
 - [ ] Search-active list view.
 - [ ] List view after a `zz` recenter (selected row in viewport
   middle).

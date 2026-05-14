@@ -19,17 +19,18 @@
 //! search highlighting needs it.
 
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use ratatui::Terminal;
 
 use paladin_core::{
-    format_unsafe_permissions, validate_manual, AccountInput, AccountKindInput, Algorithm,
-    IconHintInput, PaladinError, PermissionSubject, Store, Vault, VaultInit, VaultLock,
+    format_unsafe_permissions, hotp_reveal_deadline, validate_manual, AccountInput,
+    AccountKindInput, Algorithm, IconHintInput, PaladinError, PermissionSubject, Store, Vault,
+    VaultInit, VaultLock,
 };
-use paladin_tui::app::state::{AppState, Focus};
+use paladin_tui::app::state::{AppState, Focus, HotpReveal};
 use paladin_tui::prompt::PassphraseBuffer;
 use paladin_tui::view::render;
 use secrecy::SecretString;
@@ -225,6 +226,99 @@ fn snapshot_list_view_single_totp() {
         hotp_reveal: None,
         modal: None,
         selected: Some(id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 12));
+}
+
+/// Insert a single HOTP account at `counter` into `vault` and commit
+/// it to `store`. Mirrors [`push_totp_account`] for the HOTP fan-out
+/// of the list-view snapshots: the secret/algorithm/digits are
+/// identical so the only behavioral delta is the kind discriminant
+/// and the stored next counter.
+fn push_hotp_account(
+    vault: &mut Vault,
+    store: &Store,
+    issuer: Option<&str>,
+    label: &str,
+    counter: u64,
+) -> paladin_core::AccountId {
+    let input = AccountInput {
+        label: label.to_string(),
+        issuer: issuer.map(str::to_string),
+        secret: SecretString::from("JBSWY3DPEHPK3PXP".to_string()),
+        algorithm: Algorithm::Sha1,
+        digits: 6,
+        kind: AccountKindInput::Hotp,
+        period_secs: None,
+        counter: Some(counter),
+        icon_hint: IconHintInput::Default,
+    };
+    let validated = validate_manual(input, snapshot_now()).expect("valid manual input");
+    let id = vault.add(validated.account);
+    vault.save(store).expect("commit added account");
+    id
+}
+
+#[test]
+fn snapshot_list_view_mixed_totp_hotp_hidden_and_revealed() {
+    // Plan L1762: "Mixed TOTP / HOTP list view with hidden + revealed
+    // rows." Drive `view::list` against a vault whose insertion order
+    // (TOTP, hidden HOTP, revealed HOTP) places one row of each
+    // distinct shape onto the screen so the snapshot exercises every
+    // branch of `render_rows` in a single grid:
+    //
+    //   * TOTP row: marker / title / code / progress gauge / remaining
+    //     seconds (the same shape as `snapshot_list_view_single_totp`,
+    //     but unselected so the marker column is blank).
+    //   * Hidden HOTP row: title carries the *stored next* counter
+    //     (`(#0)` here) and the right-side column shows the
+    //     `▸ press n to advance` prompt. The renderer must not call
+    //     into the OTP layer on this path — the snapshot would diff
+    //     if a regression ever made it leak the next-counter code.
+    //   * Revealed HOTP row: title carries `HotpReveal.counter_used`
+    //     (the *pre-advance* counter that produced the visible code,
+    //     `41` here while the stored next counter is `42`) and the
+    //     right-side column shows the visible code from the reveal
+    //     formatted by `format_code_digits` for parity with TOTP rows.
+    //
+    // The revealed HOTP is the selected row so the `▶` marker lands
+    // on a HOTP row and a regression that ever stops painting
+    // selection on HOTP rows surfaces as a diff in this snapshot.
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (mut vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let _totp_id = push_totp_account(&mut vault, &store, Some("GitHub"), "ben@example.com");
+    let _hidden_hotp_id = push_hotp_account(&mut vault, &store, Some("Bank"), "savings", 0);
+    let revealed_hotp_id = push_hotp_account(&mut vault, &store, Some("VPN"), "work", 42);
+
+    let reveal = HotpReveal {
+        account_id: revealed_hotp_id,
+        counter_used: 41,
+        code: SecretString::from("654321".to_string()),
+        // The reveal deadline is monotonic and only consulted by the
+        // reducer's expiry tick — the renderer never reads it, so the
+        // host-clock-derived `Instant::now()` cannot leak into the
+        // rendered grid and the snapshot stays deterministic.
+        deadline: hotp_reveal_deadline(Instant::now()),
+    };
+
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: Some(reveal),
+        modal: None,
+        selected: Some(revealed_hotp_id),
         pending_chord_leader: None,
         viewport_height: 0,
         viewport_offset: 0,
