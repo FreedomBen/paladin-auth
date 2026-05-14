@@ -1833,7 +1833,7 @@ pinned for snapshot stability across runs. This mirrors the
 and OTP primitives must never be re-implemented or imported directly
 here — they belong in `paladin-core` per DESIGN §3.
 
-- [ ] Tests: `tests/thinness.rs` — a source-level guard that scans
+- [x] Tests: `tests/thinness.rs` — a source-level guard that scans
   `crates/paladin-tui/src/` for forbidden crate-name spellings:
   `argon2`, `chacha20poly1305`, `bincode`, `hmac`, `sha1`, `sha2`,
   `rqrr`, `image`, `getrandom`, `directories`, `url`. Any direct
@@ -1842,6 +1842,17 @@ here — they belong in `paladin-core` per DESIGN §3.
   The crate manifest is also checked: `paladin-tui` must not declare
   any of those crates as a direct `[dependencies]` entry. Keeps the
   TUI a thin shell over `paladin_core::*`.
+  *(`paladin_tui_source_tree_does_not_reference_forbidden_crates`
+  walks `src/` recursively and flags any of the three
+  `use {name}` / `{name}::` / `extern crate {name}` patterns with
+  the offending file path and line number;
+  `paladin_tui_manifest_does_not_declare_forbidden_dependency`
+  walks `Cargo.toml` table-by-table and flags either
+  `name = ...` entries inside `[dependencies]` or
+  `[dependencies.name]` sub-tables, leaving `[dev-dependencies]` /
+  `[build-dependencies]` / `[features]` alone. Mirrors
+  `crates/paladin-cli/tests/thinness.rs` and
+  `crates/paladin-core/tests/no_network.rs`.)*
 
 ## Global flags
 
