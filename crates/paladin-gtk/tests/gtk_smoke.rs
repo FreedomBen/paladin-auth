@@ -18,9 +18,11 @@
 //! `CARGO_BIN_EXE_paladin-gtk`, which Cargo provides to integration
 //! tests of crates that declare a `[[bin]]` of that name.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
+
+use secrecy::SecretString;
 
 /// Path to the built `paladin-gtk` binary. Cargo populates this at
 /// compile time per the §"Crate layout" `[[bin]]` declaration.
@@ -123,6 +125,28 @@ fn xvfb_run_launches_paladin_gtk_and_process_exits() {
     );
 }
 
+/// Set up a `0700` tempdir containing an empty plaintext vault at
+/// `<tempdir>/vault.bin`. Returns the tempdir handle (kept alive by
+/// the caller so the directory is not unlinked mid-test) and the
+/// vault path. The `(Vault, Store)` pair is dropped before returning
+/// so the file handle is closed before `paladin-gtk` re-opens it.
+fn prepare_empty_plaintext_vault() -> (tempfile::TempDir, PathBuf) {
+    let tempdir = tempfile::tempdir().expect("create tempdir for prepared vault");
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(tempdir.path(), std::fs::Permissions::from_mode(0o700))
+            .expect("chmod tempdir to 0700");
+    }
+    let vault_path = tempdir.path().join("vault.bin");
+    {
+        let (vault, store) =
+            paladin_core::Store::create(&vault_path, paladin_core::VaultInit::Plaintext)
+                .expect("create plaintext vault on disk");
+        vault.save(&store).expect("persist plaintext vault to disk");
+    }
+    (tempdir, vault_path)
+}
+
 /// Plan bullet: "App opens a prepared plaintext vault."
 ///
 /// Pre-creates a plaintext vault at a temporary path via
@@ -147,29 +171,7 @@ fn app_opens_prepared_plaintext_vault() {
         return;
     }
 
-    let tempdir = tempfile::tempdir().expect("create tempdir for prepared vault");
-    // `paladin_core` enforces `0700` on the vault parent directory
-    // (§4.3); pin it explicitly so a sandboxed test runner's umask
-    // (commonly `0770`) does not trip `UnsafePermissions` before the
-    // GTK binary even starts.
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(tempdir.path(), std::fs::Permissions::from_mode(0o700))
-            .expect("chmod tempdir to 0700");
-    }
-    let vault_path = tempdir.path().join("vault.bin");
-
-    // `Store::create` stages the in-memory vault; the file is not
-    // written until `Vault::save` runs the §4.3 atomic-write pipeline
-    // (see `paladin_core::Store::create` docs). The pair is dropped at
-    // the end of this scope so the file handle is closed before
-    // `paladin-gtk`'s own `Store::open` re-opens it.
-    {
-        let (vault, store) =
-            paladin_core::Store::create(&vault_path, paladin_core::VaultInit::Plaintext)
-                .expect("create plaintext vault on disk");
-        vault.save(&store).expect("persist plaintext vault to disk");
-    }
+    let (_tempdir, vault_path) = prepare_empty_plaintext_vault();
 
     let path_str = vault_path
         .to_str()
@@ -196,4 +198,109 @@ fn app_opens_prepared_plaintext_vault() {
         stdout.contains(&expected),
         "expected stdout to contain `{expected}`\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}",
     );
+}
+
+/// Plan bullet: "`AccountListComponent` renders the prepared accounts."
+///
+/// Pre-creates a plaintext vault containing two TOTP accounts and
+/// one HOTP account, then launches `paladin-gtk` with
+/// `--vault <path> --exit-after-startup` under `xvfb-run`. The
+/// `AccountListComponent` binds rows from `paladin_core::Vault::summaries()`
+/// via the `account_list::row_models_from_vault` projection; under
+/// `--exit-after-startup`, the bound rows are emitted as a stable
+/// stdout marker (`account_list::format_rendered_marker`). This test
+/// asserts on that marker so the render side of the row factory is
+/// observed rather than merely inferred from the `Unlocked` startup
+/// state line.
+#[test]
+fn app_renders_prepared_accounts() {
+    if !xvfb_run_available() {
+        eprintln!(
+            "skipping: `xvfb-run` is not on PATH. CI installs the xvfb \
+             package; install it locally to exercise this smoke test."
+        );
+        return;
+    }
+
+    let tempdir = tempfile::tempdir().expect("create tempdir for prepared vault");
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(tempdir.path(), std::fs::Permissions::from_mode(0o700))
+            .expect("chmod tempdir to 0700");
+    }
+    let vault_path = tempdir.path().join("vault.bin");
+
+    {
+        let (mut vault, store) =
+            paladin_core::Store::create(&vault_path, paladin_core::VaultInit::Plaintext)
+                .expect("create plaintext vault on disk");
+        // Two TOTP + one HOTP so the marker exercises both kinds and
+        // the issuer-collapse rule.
+        add_validated_account(&mut vault, &store, Some("GitHub"), "ben", false);
+        add_validated_account(&mut vault, &store, Some("GitLab"), "alice", false);
+        add_validated_account(&mut vault, &store, None, "solo", true);
+        vault.save(&store).expect("persist plaintext vault to disk");
+    }
+
+    let path_str = vault_path
+        .to_str()
+        .expect("tempfile produced a non-UTF-8 vault path");
+    let output = run_under_xvfb(&["--vault", path_str, "--exit-after-startup"]);
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "xvfb-run paladin-gtk --vault {path_str} --exit-after-startup exited with status {:?}\n\
+         --- stdout ---\n{}\n--- stderr ---\n{}",
+        output.status,
+        stdout,
+        stderr,
+    );
+
+    // The marker format is fixed by
+    // `account_list::format_rendered_marker`; the smoke test, the
+    // pure-logic test in `tests/account_list_logic.rs`, and the
+    // widget binding all use the same helper so the assertions
+    // stay aligned.
+    let expected = "paladin-gtk: account_list_rows=GitHub:ben|GitLab:alice|solo";
+    assert!(
+        stdout.contains(expected),
+        "expected stdout to contain `{expected}`\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}",
+    );
+}
+
+/// Add a validated TOTP or HOTP account to `vault` and persist to
+/// `store`. The secret is a fixed RFC 6238 base32 fixture; the same
+/// shape is used by the pure-logic fixtures in
+/// `tests/account_list_logic.rs` so the smoke test and the
+/// projection test stay aligned.
+fn add_validated_account(
+    vault: &mut paladin_core::Vault,
+    store: &paladin_core::Store,
+    issuer: Option<&str>,
+    label: &str,
+    hotp: bool,
+) {
+    let kind = if hotp {
+        paladin_core::AccountKindInput::Hotp
+    } else {
+        paladin_core::AccountKindInput::Totp
+    };
+    let input = paladin_core::AccountInput {
+        label: label.to_string(),
+        issuer: issuer.map(str::to_string),
+        secret: SecretString::from("JBSWY3DPEHPK3PXP".to_string()),
+        algorithm: paladin_core::Algorithm::Sha1,
+        digits: 6,
+        kind,
+        period_secs: None,
+        counter: if hotp { Some(0) } else { None },
+        icon_hint: paladin_core::IconHintInput::Default,
+    };
+    let validated =
+        paladin_core::validate_manual(input, SystemTime::now()).expect("valid manual input");
+    vault.add(validated.account);
+    vault.save(store).expect("commit added account");
 }

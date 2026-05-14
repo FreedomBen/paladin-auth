@@ -28,6 +28,10 @@ use libadwaita::prelude::*;
 use relm4::gtk;
 use relm4::prelude::*;
 
+use crate::account_list::{
+    format_rendered_marker, row_models_from_vault, AccountListComponent, AccountListInit,
+    AccountRowModel,
+};
 use crate::app::state::{
     decide_state_from_inspect, decide_state_from_open_error, AppState, OpenErrorOutcome,
 };
@@ -85,6 +89,13 @@ pub struct AppModel {
     /// so [`AppModel`]'s manual `Debug` impl below redacts it.
     #[allow(dead_code)]
     vault: Option<(paladin_core::Vault, paladin_core::Store)>,
+    /// Live [`AccountListComponent`] controller when the unlocked
+    /// list view is mounted. `None` for every non-`Unlocked` state.
+    /// Held on `self` so the controller (and therefore the rendered
+    /// `gtk::ListView` / its backing `gio::ListStore`) is not
+    /// dropped at the end of `init`.
+    #[allow(dead_code)]
+    account_list: Option<Controller<AccountListComponent>>,
 }
 
 impl std::fmt::Debug for AppModel {
@@ -93,6 +104,10 @@ impl std::fmt::Debug for AppModel {
             .field("vault_path", &self.vault_path)
             .field("state", &self.state)
             .field("vault", &self.vault.as_ref().map(|_| "<redacted>"))
+            .field(
+                "account_list",
+                &self.account_list.as_ref().map(|_| "<mounted>"),
+            )
             .finish()
     }
 }
@@ -127,6 +142,13 @@ impl SimpleComponent for AppModel {
             #[wrap(Some)]
             set_content = &gtk::Box {
                 set_orientation: gtk::Orientation::Vertical,
+
+                #[name = "content"]
+                append = &gtk::Box {
+                    set_orientation: gtk::Orientation::Vertical,
+                    set_hexpand: true,
+                    set_vexpand: true,
+                },
             },
         }
     }
@@ -140,17 +162,41 @@ impl SimpleComponent for AppModel {
         let vault_path_override = init.vault_path.clone();
         let StartupOutcome { state, vault } = run_startup_probes(init.vault_path);
 
+        let rows: Vec<AccountRowModel> = vault
+            .as_ref()
+            .map(|(v, _)| row_models_from_vault(v))
+            .unwrap_or_default();
+
         if exit_after_startup {
             // Stable stdout contract consumed by `tests/gtk_smoke.rs`.
             println!("{}", startup_state_marker(&state));
+            // The row marker is only meaningful when the
+            // `AccountListComponent` is actually mounted; emit it
+            // exclusively from the `Unlocked` branch so callers do
+            // not infer a render from a non-rendering state.
+            if state.is_unlocked() {
+                println!("{}", format_rendered_marker(&rows));
+            }
         }
+
+        let widgets = view_output!();
+
+        let account_list = if state.is_unlocked() {
+            let controller = AccountListComponent::builder()
+                .launch(AccountListInit { rows })
+                .detach();
+            widgets.content.append(controller.widget());
+            Some(controller)
+        } else {
+            None
+        };
 
         let model = AppModel {
             vault_path: vault_path_override,
             state: Some(state),
             vault,
+            account_list,
         };
-        let widgets = view_output!();
 
         if exit_after_startup {
             sender.input(AppMsg::Quit);

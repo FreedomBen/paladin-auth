@@ -1029,7 +1029,24 @@ Required for Milestone 7 sign-off. Runs in CI under `xvfb-run`.
   Pure-logic coverage in `crates/paladin-gtk/tests/startup_probes.rs`
   exercises the `Unlocked` / `Missing` / `StartupError` branches plus
   the marker format without a display server.
-- [ ] `AccountListComponent` renders the prepared accounts.
+- [x] `AccountListComponent` renders the prepared accounts. The
+  unlocked `AppModel` builds a `Vec<AccountRowModel>` via
+  `account_list::row_models_from_vault` (an `AccountSummary`-driven
+  projection — no secret bytes leave `paladin_core`) and launches an
+  `AccountListComponent` controller; the component binds a
+  `gio::ListStore` of `BoxedAnyObject<AccountRowModel>` to a
+  `gtk::ListView` through a `SignalListItemFactory` that reads only
+  `AccountRowModel::display_label`. Under `--exit-after-startup`,
+  `AppModel` emits a second stdout marker —
+  `paladin-gtk: account_list_rows=<labels>` produced by
+  `account_list::format_rendered_marker` — so the smoke test
+  `crates/paladin-gtk/tests/gtk_smoke.rs::app_renders_prepared_accounts`
+  asserts the rendered row set under `xvfb-run` without driving
+  widgets. Pure-logic coverage in
+  `crates/paladin-gtk/tests/account_list_logic.rs` exercises the
+  projection (insertion-order preservation, empty-issuer collapse,
+  TOTP / HOTP summary fields) and the marker format without a
+  display server.
 
 ### Thinness contract (`tests/thinness.rs`)
 

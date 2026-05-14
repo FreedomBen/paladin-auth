@@ -19,6 +19,7 @@
 
 use std::process::ExitCode;
 
+pub mod account_list;
 pub mod account_row;
 pub mod add_account;
 pub mod app;
