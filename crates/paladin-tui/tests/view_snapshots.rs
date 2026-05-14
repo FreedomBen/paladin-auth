@@ -24,6 +24,7 @@ use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use ratatui::Terminal;
 
+use paladin_core::{format_unsafe_permissions, PaladinError, PermissionSubject};
 use paladin_tui::app::state::AppState;
 use paladin_tui::view::render;
 
@@ -66,6 +67,28 @@ fn buffer_to_text(buffer: &Buffer) -> String {
 fn snapshot_missing_vault_screen() {
     let state = AppState::MissingVault {
         path: PathBuf::from("/var/lib/paladin/vault.bin"),
+    };
+    insta::assert_snapshot!(render_to_text(&state, 80, 12));
+}
+
+#[test]
+fn snapshot_startup_error_unsafe_permissions() {
+    // Plan L1806: "Startup-error screen rendered with `unsafe_permissions`
+    // (the `Some(text)` from `format_unsafe_permissions`)." Build the error
+    // through the public core API so the snapshot binds the verbatim
+    // wording from `paladin_core::format_unsafe_permissions`; any future
+    // wording change in core is then surfaced as a diff in this snapshot.
+    let path = PathBuf::from("/var/lib/paladin/vault.bin");
+    let err = PaladinError::UnsafePermissions {
+        path: path.clone(),
+        subject: PermissionSubject::VaultDir,
+        actual_mode: "0755".to_string(),
+        expected_mode: "0700".to_string(),
+    };
+    let message = format_unsafe_permissions(&err).expect("unsafe_permissions text");
+    let state = AppState::StartupError {
+        path: Some(path),
+        message,
     };
     insta::assert_snapshot!(render_to_text(&state, 80, 12));
 }

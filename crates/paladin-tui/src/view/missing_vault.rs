@@ -15,7 +15,7 @@ use std::path::Path;
 use ratatui::layout::Alignment;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Padding, Paragraph};
+use ratatui::widgets::{Block, Borders, Padding, Paragraph, Wrap};
 use ratatui::Frame;
 
 /// Render the missing-vault guidance screen for the given vault
@@ -44,6 +44,10 @@ pub fn render(frame: &mut Frame<'_>, path: &Path) {
         Line::from("Press Esc, q, or Ctrl-C to quit."),
     ];
 
-    let paragraph = Paragraph::new(lines).alignment(Alignment::Left);
+    // Wrap so long vault paths stay visible at narrow terminal widths
+    // instead of being truncated at the right border.
+    let paragraph = Paragraph::new(lines)
+        .alignment(Alignment::Left)
+        .wrap(Wrap { trim: false });
     frame.render_widget(paragraph, inner);
 }

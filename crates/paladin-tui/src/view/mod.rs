@@ -17,6 +17,7 @@
 //! then modals and overlays.
 
 pub mod missing_vault;
+pub mod startup_error;
 
 use ratatui::Frame;
 
@@ -31,10 +32,10 @@ use crate::app::state::AppState;
 pub fn render(frame: &mut Frame<'_>, state: &AppState) {
     match state {
         AppState::MissingVault { path } => missing_vault::render(frame, path),
-        AppState::Unlock { .. }
-        | AppState::Locked { .. }
-        | AppState::Unlocked { .. }
-        | AppState::StartupError { .. } => {
+        AppState::StartupError { path, message } => {
+            startup_error::render(frame, path.as_deref(), message);
+        }
+        AppState::Unlock { .. } | AppState::Locked { .. } | AppState::Unlocked { .. } => {
             // Renderers land in subsequent slices.
         }
     }

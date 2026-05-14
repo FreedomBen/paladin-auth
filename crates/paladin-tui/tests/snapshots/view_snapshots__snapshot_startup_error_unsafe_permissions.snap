@@ -1,0 +1,17 @@
+---
+source: crates/paladin-tui/tests/view_snapshots.rs
+assertion_line: 93
+expression: "render_to_text(&state, 80, 12)"
+---
+┌ Paladin — startup error ─────────────────────────────────────────────────────┐
+│                                                                              │
+│  Vault path: /var/lib/paladin/vault.bin                                      │
+│                                                                              │
+│  unsafe permissions on /var/lib/paladin/vault.bin: vault directory mode      │
+│  0755, expected 0700.                                                        │
+│  Run: chmod 0700 /var/lib/paladin/vault.bin                                  │
+│                                                                              │
+│  Press Esc, q, or Ctrl-C to quit.                                            │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘

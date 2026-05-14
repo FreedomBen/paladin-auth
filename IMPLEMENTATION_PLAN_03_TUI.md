@@ -1813,8 +1813,20 @@ Status-line states:
 
 Startup error:
 
-- [ ] Startup-error screen rendered with `unsafe_permissions` (the
+- [x] Startup-error screen rendered with `unsafe_permissions` (the
   `Some(text)` from `format_unsafe_permissions`).
+  *(`crates/paladin-tui/src/view/startup_error.rs` renders a bordered
+  `Paladin — startup error` block with an optional bolded vault path,
+  the pre-rendered message split on `\n`, and the quit-keys hint;
+  `Paragraph::wrap(Wrap { trim: false })` keeps long verbatim core
+  text and long paths fully visible at narrow widths.
+  `snapshot_startup_error_unsafe_permissions` in
+  `tests/view_snapshots.rs` constructs the error via
+  `PaladinError::UnsafePermissions { ... }`, threads it through
+  `paladin_core::format_unsafe_permissions`, and locks the rendered
+  grid in
+  `tests/snapshots/view_snapshots__snapshot_startup_error_unsafe_permissions.snap`
+  so any future wording change in core surfaces as a diff here.)*
 
 ## Dependencies
 
