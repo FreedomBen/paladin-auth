@@ -490,6 +490,7 @@ fn unlock_dialog_msg_passphrase_changed_carries_typed_text() {
     let msg = UnlockDialogMsg::PassphraseChanged("hunter2".to_string());
     match msg {
         UnlockDialogMsg::PassphraseChanged(text) => assert_eq!(text, "hunter2"),
+        UnlockDialogMsg::SubmitClicked => panic!("expected PassphraseChanged, got SubmitClicked"),
     }
 }
 
@@ -695,6 +696,144 @@ fn unlock_dialog_state_take_passphrase_also_clears_inline_error() {
         state.inline_error().is_none(),
         "take_passphrase must clear the inline error so worker results land into clean state",
     );
+}
+
+// ---------------------------------------------------------------------------
+// UnlockDialogState::submit — the pre-flight submit gate the widget's
+// `connect_clicked` handler runs when the user clicks "Unlock". Empty
+// passphrase short-circuits to `SubmitRejection::EmptyPassphrase` and
+// stages the inline error so the user sees the rejection without
+// spawning a worker. Non-empty submits build the
+// `VaultLock::Encrypted` for the (deferred) `paladin_core::open`
+// worker and consume the shadow buffer so the cleartext bytes do not
+// outlive the submit.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn unlock_dialog_state_submit_empty_passphrase_returns_rejection() {
+    // The "Unlock" button is sensitivity-gated on
+    // `submit_button_sensitive()` so the empty case should not fire
+    // through a click. Defense-in-depth: if a keyboard accelerator or
+    // a reactive race ever bypasses the gate, `submit` must still
+    // short-circuit to the stable §5 `invalid_passphrase`/`zero_length`
+    // rejection rather than spawning a worker.
+    let mut state = UnlockDialogState::new();
+    let result = state.submit();
+    match result {
+        Err(SubmitRejection::EmptyPassphrase) => {}
+        Ok(_) => panic!("expected EmptyPassphrase rejection, got Ok"),
+    }
+}
+
+#[test]
+fn unlock_dialog_state_submit_empty_passphrase_stages_inline_error() {
+    // The rejection must surface inline beneath the passphrase entry
+    // via the same projection the `gtk::Label` binding reads, so the
+    // user sees a rendered message without re-routing through the
+    // widget layer.
+    let mut state = UnlockDialogState::new();
+    let _ = state.submit();
+    let inline = state
+        .inline_error()
+        .expect("submit on empty passphrase must stage an inline error");
+    assert_eq!(inline.kind, ErrorKind::InvalidPassphrase);
+    let expected = InlineError::from_rejection(SubmitRejection::EmptyPassphrase);
+    assert_eq!(inline.rendered, expected.rendered);
+}
+
+#[test]
+fn unlock_dialog_state_submit_empty_passphrase_overwrites_prior_inline_error() {
+    // The user could have a stale `decrypt_failed` in the inline slot
+    // (e.g. the worker landed it, the user did not type, and triggered
+    // submit again via a keyboard shortcut). The new rejection must
+    // replace the prior projection so the visible message reflects the
+    // current cause.
+    let mut state = UnlockDialogState::new();
+    state.set_inline_error(Some(InlineError::from_error(&PaladinError::DecryptFailed)));
+    let _ = state.submit();
+    let inline = state
+        .inline_error()
+        .expect("submit on empty passphrase must stage an inline error");
+    assert_eq!(inline.kind, ErrorKind::InvalidPassphrase);
+}
+
+#[test]
+fn unlock_dialog_state_submit_non_empty_returns_encrypted_lock() {
+    // The submit handler hands the returned `VaultLock` to the
+    // (deferred) `gio::spawn_blocking paladin_core::open` worker.
+    // Pin the variant so future widget wiring can match it without a
+    // type assertion at the call site.
+    let mut state = UnlockDialogState::new();
+    state.set_passphrase("hunter2");
+    let lock = state
+        .submit()
+        .expect("non-empty passphrase must build a VaultLock");
+    match lock {
+        VaultLock::Encrypted(_) => {}
+        other => panic!("expected VaultLock::Encrypted, got {other:?}"),
+    }
+}
+
+#[test]
+fn unlock_dialog_state_submit_non_empty_consumes_passphrase_buffer() {
+    // Cleartext bytes must not outlive the submit. The widget hands the
+    // lock to the worker; the shadow buffer is wiped in the same step
+    // so a subsequent screenshot / accessibility scrape cannot recover
+    // the typed bytes.
+    let mut state = UnlockDialogState::new();
+    state.set_passphrase("hunter2");
+    let _ = state.submit();
+    assert!(
+        state.is_passphrase_empty(),
+        "submit must consume the buffer on the Ok path",
+    );
+}
+
+#[test]
+fn unlock_dialog_state_submit_non_empty_clears_prior_inline_error() {
+    // A stale `decrypt_failed` from a prior worker return must not
+    // outlive a successful re-submit. The worker result lands into
+    // clean state.
+    let mut state = UnlockDialogState::new();
+    state.set_passphrase("hunter2");
+    state.set_inline_error(Some(InlineError::from_error(&PaladinError::DecryptFailed)));
+    let _ = state.submit();
+    assert!(
+        state.inline_error().is_none(),
+        "submit on non-empty passphrase must clear the inline error",
+    );
+}
+
+#[test]
+fn unlock_dialog_state_submit_rejection_preserves_empty_buffer() {
+    // Rejection short-circuits before any worker spawn; the buffer was
+    // already empty, and `submit` must not mutate it into a non-empty
+    // state (would defeat the sensitivity gate on the next render).
+    let mut state = UnlockDialogState::new();
+    let _ = state.submit();
+    assert!(state.is_passphrase_empty());
+}
+
+// ---------------------------------------------------------------------------
+// UnlockDialogMsg::SubmitClicked — emitted from the Unlock button's
+// `connect_clicked` signal. The widget's `update` handler runs
+// `UnlockDialogState::submit` so the rejection path stages the inline
+// error and the Ok path will hand the `VaultLock` to the future
+// `gio::spawn_blocking paladin_core::open` worker.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn unlock_dialog_msg_submit_clicked_pattern_matches() {
+    // The variant carries no payload — `connect_clicked` fires on a
+    // raw click with no parameters. Pin the unit shape so a future
+    // refactor that adds a payload trips this test.
+    let msg = UnlockDialogMsg::SubmitClicked;
+    match msg {
+        UnlockDialogMsg::SubmitClicked => {}
+        UnlockDialogMsg::PassphraseChanged(_) => {
+            panic!("expected SubmitClicked, got PassphraseChanged")
+        }
+    }
 }
 
 // `format_unlock_dialog_marker` / `UNLOCK_DIALOG_MARKER_PREFIX` pin

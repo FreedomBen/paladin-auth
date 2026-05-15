@@ -11,9 +11,12 @@
 //! a `Missing` vault routes to [`crate::init_dialog`] instead.
 //!
 //! The widget layer hosts a single [`adw::PasswordEntryRow`] whose
-//! bytes shadow into a [`crate::secret_fields::SecretEntry`]. On
-//! submit the dialog calls [`prepare_unlock_lock`] to gate the empty
-//! passphrase short-circuit and to build the
+//! bytes shadow into a [`crate::secret_fields::SecretEntry`]. The
+//! "Unlock" button's `connect_clicked` signal dispatches
+//! [`UnlockDialogMsg::SubmitClicked`]; the handler runs
+//! [`UnlockDialogState::submit`], which calls [`prepare_unlock_lock`]
+//! to gate the empty passphrase short-circuit (rejection stages the
+//! inline projection) and to build the
 //! [`paladin_core::VaultLock::Encrypted`] handed to
 //! [`paladin_core::open`] inside a `gio::spawn_blocking` worker so
 //! the §4.4 Argon2id KDF (m=64 MiB defaults) does not block the GTK
@@ -375,6 +378,49 @@ impl UnlockDialogState {
     pub fn set_inline_error(&mut self, err: Option<InlineError>) {
         self.inline_error = err;
     }
+
+    /// Run the pre-flight submit gate when the "Unlock" button fires.
+    ///
+    /// Delegates to [`prepare_unlock_lock`] on the current shadow
+    /// buffer. The two outcomes:
+    ///
+    /// * `Ok(VaultLock)` — the typed passphrase is non-empty. The
+    ///   shadow buffer is consumed via [`Self::take_passphrase`]
+    ///   (which zeroizes the bytes in place and dismisses any prior
+    ///   [`InlineError`]) so cleartext does not outlive the submit.
+    ///   The returned [`VaultLock::Encrypted`] is handed to the
+    ///   (deferred) `gio::spawn_blocking paladin_core::open` worker.
+    /// * `Err(SubmitRejection)` — the buffer was empty. The stable §5
+    ///   `invalid_passphrase` / `zero_length` projection is staged
+    ///   inline via [`InlineError::from_rejection`] so the user sees
+    ///   the rejection without a worker spawn. The buffer is left
+    ///   untouched.
+    ///
+    /// The "Unlock" button binds `set_sensitive` to
+    /// [`Self::submit_button_sensitive`] so the empty path should not
+    /// fire through a normal click. Defense-in-depth: a keyboard
+    /// accelerator or a reactive race during an
+    /// [`crate::app::state::AppState::UnlockedBusy`] window could
+    /// still reach this branch, and the rendered §5 projection means
+    /// instrumentation matches the CLI / TUI without an extra widget
+    /// path.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SubmitRejection::EmptyPassphrase`] when the buffer is
+    /// the empty string.
+    pub fn submit(&mut self) -> Result<VaultLock, SubmitRejection> {
+        match prepare_unlock_lock(self.passphrase.text()) {
+            Ok(lock) => {
+                let _ = self.take_passphrase();
+                Ok(lock)
+            }
+            Err(rejection) => {
+                self.inline_error = Some(InlineError::from_rejection(rejection));
+                Err(rejection)
+            }
+        }
+    }
 }
 
 /// Messages handled by [`UnlockDialogComponent`].
@@ -384,10 +430,14 @@ impl UnlockDialogState {
 /// keystroke. The handler shadows the typed bytes into the
 /// [`UnlockDialogState`]'s [`SecretEntry`] so the cleartext lives in
 /// Paladin-owned memory rather than escaping through `AppMsg` /
-/// `AppOutput`. The submit transition and the `gio::spawn_blocking`
-/// `paladin_core::open` worker described in §"Component tree" >
-/// `UnlockComponent` land in a follow-up commit alongside the
-/// `UnlockedBusy` worker infrastructure.
+/// `AppOutput`. `SubmitClicked` arrives from the "Unlock" button's
+/// `connect_clicked` signal; the handler runs
+/// [`UnlockDialogState::submit`] so the pre-flight rejection stages
+/// inline. The `gio::spawn_blocking paladin_core::open` worker
+/// described in §"Component tree" > `UnlockComponent` lands in a
+/// follow-up commit alongside the `UnlockedBusy` worker
+/// infrastructure; for now the `Ok` branch of `submit` is intentionally
+/// discarded by the widget's `update`.
 #[derive(Debug)]
 pub enum UnlockDialogMsg {
     /// Raw text from the [`adw::PasswordEntryRow`] after a keystroke.
@@ -403,6 +453,14 @@ pub enum UnlockDialogMsg {
     /// drops and only the [`Zeroizing<String>`] copy in
     /// [`UnlockDialogState`] survives.
     PassphraseChanged(String),
+    /// The "Unlock" submit button was clicked. The widget's `update`
+    /// runs [`UnlockDialogState::submit`]: rejection stages the inline
+    /// error projection; the `Ok` branch carrying the
+    /// [`VaultLock::Encrypted`] is currently discarded — the
+    /// `gio::spawn_blocking paladin_core::open` worker that consumes
+    /// it lands in a follow-up commit alongside the `UnlockedBusy`
+    /// worker infrastructure.
+    SubmitClicked,
 }
 
 /// Widget-bearing dialog for the
@@ -411,16 +469,19 @@ pub enum UnlockDialogMsg {
 /// Mounts a libadwaita [`adw::StatusPage`] heading that names the
 /// resolved vault path so the user can confirm the destination, an
 /// [`adw::PasswordEntryRow`] whose keystrokes shadow into the model's
-/// [`UnlockDialogState`] [`SecretEntry`], a deferred inline-error
-/// label beneath the entry, and an "Unlock" submit button whose
-/// sensitivity binds to
-/// [`UnlockDialogState::submit_button_sensitive`] so the
+/// [`UnlockDialogState`] [`SecretEntry`], an inline-error label
+/// beneath the entry, and an "Unlock" submit button whose sensitivity
+/// binds to [`UnlockDialogState::submit_button_sensitive`] so the
 /// empty-passphrase pre-flight short-circuit in
-/// [`prepare_unlock_lock`] never fires through a click. The click
-/// handler wired to a `gio::spawn_blocking` `paladin_core::open`
-/// worker and the inline `DecryptFailed` / `InvalidPassphrase` error
-/// surface flip land in follow-up commits alongside the
-/// `UnlockedBusy` worker infrastructure.
+/// [`prepare_unlock_lock`] never fires through a click. The button's
+/// `connect_clicked` signal dispatches [`UnlockDialogMsg::SubmitClicked`],
+/// whose handler runs [`UnlockDialogState::submit`]: rejection stages
+/// the inline error projection; the `Ok` branch carrying the
+/// [`VaultLock::Encrypted`] is currently discarded — the
+/// `gio::spawn_blocking paladin_core::open` worker that consumes it
+/// and the inline `DecryptFailed` / `InvalidPassphrase` error surface
+/// flip land in follow-up commits alongside the `UnlockedBusy` worker
+/// infrastructure.
 pub struct UnlockDialogComponent {
     /// Resolved vault path the dialog will hand to a
     /// `paladin_core::open` worker on submit. Kept on `self` so a
@@ -516,17 +577,24 @@ impl SimpleComponent for UnlockDialogComponent {
                 // libadwaita HIG. `set_sensitive` binds to
                 // `submit_button_sensitive` so the empty-passphrase
                 // pre-flight short-circuit in `prepare_unlock_lock`
-                // never fires through a click. The click handler that
-                // hands the typed passphrase to a
-                // `gio::spawn_blocking paladin_core::open` worker
-                // lands in a follow-up commit alongside the
-                // `UnlockedBusy` worker infrastructure.
+                // never fires through a click. `connect_clicked`
+                // dispatches `SubmitClicked`, whose handler runs
+                // `UnlockDialogState::submit` — rejection stages the
+                // inline error inline beneath the entry. The
+                // `gio::spawn_blocking paladin_core::open` worker that
+                // consumes the `Ok(VaultLock)` lands in a follow-up
+                // commit alongside the `UnlockedBusy` worker
+                // infrastructure; until then the `Ok` branch is
+                // intentionally discarded.
                 #[name = "unlock_button"]
                 gtk::Button {
                     set_label: "Unlock",
                     add_css_class: "suggested-action",
                     #[watch]
                     set_sensitive: model.state.submit_button_sensitive(),
+                    connect_clicked[sender] => move |_| {
+                        sender.input(UnlockDialogMsg::SubmitClicked);
+                    },
                 },
             },
         }
@@ -549,6 +617,15 @@ impl SimpleComponent for UnlockDialogComponent {
         match msg {
             UnlockDialogMsg::PassphraseChanged(text) => {
                 self.state.set_passphrase(&text);
+            }
+            UnlockDialogMsg::SubmitClicked => {
+                // Rejection stages the inline error projection inside
+                // `submit`. The `Ok(VaultLock)` branch is intentionally
+                // discarded here — the `gio::spawn_blocking
+                // paladin_core::open` worker that consumes it lands in
+                // a follow-up commit alongside the `UnlockedBusy`
+                // worker infrastructure.
+                let _ = self.state.submit();
             }
         }
     }
