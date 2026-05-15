@@ -2699,7 +2699,33 @@ Add (QR) error and counts states:
   `tests/snapshots/view_snapshots__snapshot_add_modal_qr_counts_panel.snap`
   so any future change to the counts panel labels, column width,
   or post-success hint surfaces here as a diff.)*
-- [ ] Add modal `duplicate_account`.
+- [x] Add modal `duplicate_account`.
+  *(`snapshot_add_modal_duplicate_account` in
+  `crates/paladin-tui/tests/view_snapshots.rs` drives an `Unlocked`
+  state holding a plaintext vault with one TOTP account labelled
+  `github` and `Modal::Add(AddModal { error:
+  Some(format_duplicate_account_message(&existing_summary)), ..
+  AddModal::default() })`. Routing the wording through the shared
+  `format_duplicate_account_message` formatter (rather than a
+  hand-typed string) binds the snapshot to the reducer-side renderer
+  exercised by
+  `effect_result_add_duplicate_stashes_pending_and_sets_inline_error`
+  in `tests/reducer_tests.rs`, so any future rewording in
+  `crates/paladin-tui/src/app/state.rs` surfaces as a diff in both
+  the inline error and the snapshot grid. The full template runs
+  ~97 chars — `account already exists with the same (secret, issuer,
+  label): github (press Enter to add anyway)` — and exceeds the
+  modal's ~60-cell inline-error slot, so the rendered row truncates
+  to `account already exists with the same (secret, issuer, label)`,
+  mirroring the truncation pin the
+  `snapshot_add_modal_qr_no_clipboard_image` snapshot exercises. The
+  `pending_duplicate_add` slot is intentionally left `None` because
+  only the `error` field reaches the renderer (see
+  `crates/paladin-tui/src/view/add.rs:167`); the matching pending-
+  state coverage lives on the reducer side. Locked in
+  `tests/snapshots/view_snapshots__snapshot_add_modal_duplicate_account.snap`
+  so any future change to the inline-error template, the modal's
+  spacer layout, or the segmented mode selector surfaces as a diff.)*
 - [ ] Add modal "add anyway" confirmation.
 - [ ] QR-add counts panel with validation-warning messages.
 

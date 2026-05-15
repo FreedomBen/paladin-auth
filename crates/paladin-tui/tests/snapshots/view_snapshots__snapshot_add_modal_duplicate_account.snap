@@ -1,0 +1,25 @@
+---
+source: crates/paladin-tui/tests/view_snapshots.rs
+assertion_line: 1177
+expression: rendered
+---
+┌ Paladin ─────────────────────────────────────────────────────────────────────┐
+│ Search:                                                                      │
+│ ──────┌ Add account ─────────────────────────────────────────────────┐────── │
+│ ▶ gith│ Mode: ▶ Manual ◀     URI       QR                            │       │
+│       │                                                              │       │
+│       │ Label:      [  ]                                             │       │
+│       │ Issuer:     [  ]                                             │       │
+│       │ Secret:     [  ]                                             │       │
+│       │ Algorithm:  SHA1                                             │       │
+│       │ Digits:     6                                                │       │
+│       │ Kind:       TOTP                                             │       │
+│       │ Period (s): 30                                               │       │
+│       │ Icon hint:  [  ]                                             │       │
+│       │                                                              │       │
+│       │ account already exists with the same (secret, issuer, label) │       │
+│       │                                                              │       │
+│       │       Tab cycles fields  ·  Enter submit  ·  Esc cancel      │       │
+│ ──────└──────────────────────────────────────────────────────────────┘────── │
+│ [↑↓] move  [enter] copy  [n] next-HOTP  [a] add  [/] find                    │
+└──────────────────────────────────────────────────────────────────────────────┘

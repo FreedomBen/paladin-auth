@@ -33,9 +33,9 @@ use paladin_core::{
 };
 use paladin_tui::app::event::QrImportFailure;
 use paladin_tui::app::state::{
-    format_qr_import_failure, render_error_message, AddModal, AddMode, AppState, CountsPanel,
-    ExportFormat, ExportModal, Focus, HotpReveal, ImportModal, Modal, PassphraseModal,
-    PassphraseSubFlow, RemoveModal, RenameModal, SettingsModal,
+    format_duplicate_account_message, format_qr_import_failure, render_error_message, AddModal,
+    AddMode, AppState, CountsPanel, ExportFormat, ExportModal, Focus, HotpReveal, ImportModal,
+    Modal, PassphraseModal, PassphraseSubFlow, RemoveModal, RenameModal, SettingsModal,
 };
 use paladin_tui::prompt::PassphraseBuffer;
 use paladin_tui::view::render;
@@ -1082,6 +1082,97 @@ fn snapshot_add_modal_qr_counts_panel() {
     assert!(
         rendered.contains("Enter or Esc to close"),
         "expected post-success hint to appear in counts panel:\n{rendered}"
+    );
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn snapshot_add_modal_duplicate_account() {
+    // Plan L2702: "Add modal `duplicate_account`." Drive `view::render`
+    // against an `Unlocked` state holding
+    // `Modal::Add(AddModal { error: Some(format_duplicate_account_message(
+    // &existing_summary)), .. })` so the snapshot pins the inline-error
+    // row populated when `paladin_core::Vault::find_duplicate` matches
+    // an existing entry on the `(secret, issuer, label)` triple. Per
+    // `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6) > Add":
+    // *"manual and URI duplicate collisions call
+    // `Vault::find_duplicate(&validated)` before mutation. A collision
+    // initially rejects with the existing account in the modal and
+    // offers an 'add anyway' confirmation."*
+    //
+    // Routing the wording through `format_duplicate_account_message`
+    // pins the shared TUI renderer — the same one the reducer's
+    // `AddFailure::Duplicate` arm wires into `AddModal::error` per
+    // `effect_result_add_duplicate_stashes_pending_and_sets_inline_error`
+    // in `tests/reducer_tests.rs` — and binds the snapshot to the
+    // function's `"account already exists with the same (secret,
+    // issuer, label): {} (press Enter to add anyway)"` template. Any
+    // future wording change in the shared formatter surfaces as a
+    // diff here.
+    //
+    // The vault holds a single TOTP account labelled `github` (no
+    // issuer) so `format_account_display_label` returns the bare
+    // `github` form — the same shape exercised by the reducer-side
+    // test cited above — keeping the snapshot self-contained and
+    // independent of any specific `Vault::find_duplicate` invocation.
+    // `pending_duplicate_add` is intentionally left `None`: only the
+    // `error` slot reaches the renderer (see
+    // `crates/paladin-tui/src/view/add.rs:167`), and a follow-up "add
+    // anyway" confirmation snapshot lands as its own plan checklist
+    // row.
+    //
+    // The Manual mode keeps this as a sibling delta to
+    // `snapshot_add_modal_save_not_committed` /
+    // `snapshot_add_modal_save_durability_unconfirmed`: same field
+    // stack, same footer hint, only the inline-error row changes —
+    // a regression that ever swaps the duplicate wording for one of
+    // the save-failure templates surfaces as a diff.
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (mut vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let existing_id = push_totp_account(&mut vault, &store, None, "github");
+    let existing_summary = vault
+        .iter()
+        .find(|a| a.id() == existing_id)
+        .expect("existing account must be present in vault")
+        .summary();
+    let expected = format_duplicate_account_message(&existing_summary);
+    let modal = AddModal {
+        error: Some(expected.clone()),
+        ..AddModal::default()
+    };
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Add(modal)),
+        selected: Some(existing_id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let rendered = render_to_text(&state, snapshot_now(), 80, 20);
+    // Regression guard: a renderer that ever stops surfacing the
+    // duplicate rejection must fail this test even before the human
+    // reads the snapshot diff. Bind the assertion to the leading
+    // `account already exists with the same (secret, issuer, label)`
+    // substring — the full message (with the `: github (press Enter
+    // to add anyway)` tail) exceeds the inline-error slot's ~60-col
+    // width and is truncated by `Paragraph::new(Line::from(...))` in
+    // `view/add.rs::render_inline_error`, mirroring the truncation
+    // pin the `snapshot_add_modal_qr_no_clipboard_image` snapshot
+    // exercises.
+    assert!(
+        rendered.contains("account already exists with the same (secret, issuer, label)"),
+        "expected leading duplicate_account wording to appear in modal:\n{rendered}"
     );
     insta::assert_snapshot!(rendered);
 }
