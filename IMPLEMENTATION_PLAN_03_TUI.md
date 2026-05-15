@@ -2195,12 +2195,63 @@ Inline `save_not_committed` / `save_durability_unconfirmed`:
   "Durability-unconfirmed failures follow the committed-state path"
   contract this surfaces in the inline error slot identically to the
   pre-commit failure.)*
-- [ ] Passphrase set `save_not_committed`.
-- [ ] Passphrase set `save_durability_unconfirmed`.
-- [ ] Passphrase change `save_not_committed`.
-- [ ] Passphrase change `save_durability_unconfirmed`.
-- [ ] Passphrase remove `save_not_committed`.
-- [ ] Passphrase remove `save_durability_unconfirmed`.
+- [x] Passphrase set `save_not_committed`.
+  *(`tests/view_snapshots.rs::snapshot_passphrase_modal_set_save_not_committed`
+  drives `view::render` against an `AppState::Unlocked` carrying
+  `Modal::Passphrase(PassphraseModal { sub_flow: Set, error:
+  Some(render_error_message(&PaladinError::SaveNotCommitted {
+  committed: false, backup_path: None })), .. })`. The renderer's
+  new `render_inline_error` helper in
+  `crates/paladin-tui/src/view/passphrase.rs` paints the error one
+  blank row below the `Confirm:` row, foreground red, inside the
+  twice-confirm sub-flow's spacer — mirroring the Add / Remove /
+  Rename / Import modals' inline-error slots so every inline-error
+  surface in the TUI reads the same way. The
+  `snapshot_passphrase_modal_set_default` baseline is unchanged —
+  the conditional render fires only when `modal.error.is_some()`.)*
+- [x] Passphrase set `save_durability_unconfirmed`.
+  *(`tests/view_snapshots.rs::snapshot_passphrase_modal_set_save_durability_unconfirmed`
+  pins the same rendering path against
+  `PaladinError::SaveDurabilityUnconfirmed`; per the plan's
+  "Durability-unconfirmed failures follow the committed-state path"
+  contract this surfaces in the inline error slot identically to the
+  pre-commit failure.)*
+- [x] Passphrase change `save_not_committed`.
+  *(`tests/view_snapshots.rs::snapshot_passphrase_modal_change_save_not_committed`
+  drives the same rendering path as the `set` save_not_committed
+  test but with `sub_flow: PassphraseSubFlow::Change`; the
+  bordered-block title flips to ` Change passphrase ` and the
+  intent line reads `Re-encrypts this vault under a new passphrase.`
+  while the error row, the masked `Passphrase:` / `Confirm:` rows,
+  and the surrounding list-view chrome all match the `set` baseline
+  so the snapshot pins that the inline-error slot reads identically
+  across the twice-confirm sub-flows.)*
+- [x] Passphrase change `save_durability_unconfirmed`.
+  *(`tests/view_snapshots.rs::snapshot_passphrase_modal_change_save_durability_unconfirmed`
+  pins the same rendering path against
+  `PaladinError::SaveDurabilityUnconfirmed` for the `change`
+  sub-flow; per the plan's "Durability-unconfirmed failures follow
+  the committed-state path" contract this surfaces identically to
+  the pre-commit failure.)*
+- [x] Passphrase remove `save_not_committed`.
+  *(`tests/view_snapshots.rs::snapshot_passphrase_modal_remove_save_not_committed`
+  pins the inline-error row for the encrypted → plaintext
+  transition. The `render_remove_warning` body in
+  `crates/paladin-tui/src/view/passphrase.rs` gained a dedicated
+  `Length(1)` error row sandwiched between the wrapped
+  plaintext-storage warning (sourced verbatim from
+  [`paladin_core::format_plaintext_storage_warning`]) and the
+  `Enter confirm  ·  Esc cancel` hint so the destructive-mutation
+  verb remains visible alongside the save failure. The
+  `snapshot_passphrase_modal_remove_default` baseline is unchanged —
+  the conditional render fires only when `modal.error.is_some()`.)*
+- [x] Passphrase remove `save_durability_unconfirmed`.
+  *(`tests/view_snapshots.rs::snapshot_passphrase_modal_remove_save_durability_unconfirmed`
+  pins the same rendering path against
+  `PaladinError::SaveDurabilityUnconfirmed` for the `remove`
+  sub-flow; per the plan's "Durability-unconfirmed failures follow
+  the committed-state path" contract this surfaces identically to
+  the pre-commit failure.)*
 - [ ] Settings modal `save_not_committed`.
 - [ ] Settings modal `save_durability_unconfirmed`.
 

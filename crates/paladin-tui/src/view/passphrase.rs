@@ -36,14 +36,26 @@
 //! otherwise list-view content would bleed through transparent
 //! cells.
 //!
-//! Inline `confirmation_mismatch` / `zero_length` validation gates
-//! and `save_not_committed` / `save_durability_unconfirmed` variants
-//! of this modal land alongside their own
-//! [`PassphraseModal::error`](crate::app::state::PassphraseModal::error)
-//! rendering slices per the plan's later checklist rows.
+//! The [`PassphraseModal::error`](crate::app::state::PassphraseModal::error)
+//! slot surfaces inline near the bottom of the modal, painted in
+//! red and routed through
+//! [`render_error_message`](crate::app::state::render_error_message)
+//! so `save_not_committed` / `save_durability_unconfirmed` reads
+//! identically to the unlock screen's `decrypt_failed` line and the
+//! Add / Remove / Rename / Import / Export modals' inline-error
+//! slots. In the twice-confirm sub-flows (`set` / `change`) the
+//! error sits inside the spacer between the `Confirm:` row and the
+//! footer hint; in the `remove` sub-flow it sits between the
+//! wrapped plaintext-storage warning and the footer hint so the
+//! destructive-mutation verb (`Enter confirm  ·  Esc cancel`)
+//! remains visible alongside the save failure. Inline
+//! `confirmation_mismatch` / `zero_length` validation gates flow
+//! through the same slot, populated by the reducer when the user
+//! submits.
 
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
-use ratatui::text::Line;
+use ratatui::style::{Color, Style};
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Padding, Paragraph, Wrap};
 use ratatui::Frame;
 
@@ -84,7 +96,7 @@ pub fn render(frame: &mut Frame<'_>, modal: &PassphraseModal) {
         PassphraseSubFlow::Set | PassphraseSubFlow::Change => {
             render_twice_confirm(frame, inner, modal);
         }
-        PassphraseSubFlow::Remove => render_remove_warning(frame, inner, modal.sub_flow),
+        PassphraseSubFlow::Remove => render_remove_warning(frame, inner, modal),
     }
 }
 
@@ -103,15 +115,16 @@ fn modal_height(sub_flow: PassphraseSubFlow) -> u16 {
 
 /// Render the twice-confirm body shared by the `set` and `change`
 /// sub-flows: one-line intent, a blank spacer, the two masked
-/// passphrase input rows, a flexible spacer, and the centered
-/// `Enter submit  ·  Esc cancel` hint.
+/// passphrase input rows, a flexible spacer (carries the inline
+/// error when [`PassphraseModal::error`] is populated), and the
+/// centered `Enter submit  ·  Esc cancel` hint.
 fn render_twice_confirm(frame: &mut Frame<'_>, inner: Rect, modal: &PassphraseModal) {
     let chunks = Layout::vertical([
         Constraint::Length(1), // intent
         Constraint::Length(1), // blank
         Constraint::Length(1), // new passphrase
         Constraint::Length(1), // confirm
-        Constraint::Min(0),    // spacer
+        Constraint::Min(0),    // spacer (carries inline error if any)
         Constraint::Length(1), // hint
     ])
     .split(inner);
@@ -132,6 +145,10 @@ fn render_twice_confirm(frame: &mut Frame<'_>, inner: Rect, modal: &PassphraseMo
         chunks[3],
     );
 
+    if let Some(error) = &modal.error {
+        render_inline_error(frame, chunks[4], error);
+    }
+
     let hint = "Enter submit  ·  Esc cancel";
     frame.render_widget(Paragraph::new(hint).alignment(Alignment::Center), chunks[5]);
 }
@@ -139,25 +156,60 @@ fn render_twice_confirm(frame: &mut Frame<'_>, inner: Rect, modal: &PassphraseMo
 /// Render the `remove` sub-flow body: one-line intent, a blank
 /// spacer, the wrapped plaintext-storage warning sourced from
 /// [`paladin_core::format_plaintext_storage_warning`], a flexible
-/// spacer, and the centered `Enter confirm  ·  Esc cancel` hint
-/// (the verb shifts to `confirm` to flag the destructive mutation).
-fn render_remove_warning(frame: &mut Frame<'_>, inner: Rect, sub_flow: PassphraseSubFlow) {
+/// spacer (carries the inline error when [`PassphraseModal::error`]
+/// is populated), and the centered `Enter confirm  ·  Esc cancel`
+/// hint (the verb shifts to `confirm` to flag the destructive
+/// mutation).
+fn render_remove_warning(frame: &mut Frame<'_>, inner: Rect, modal: &PassphraseModal) {
     let chunks = Layout::vertical([
         Constraint::Length(1), // intent
         Constraint::Length(1), // blank
         Constraint::Min(1),    // wrapped warning
+        Constraint::Length(1), // spacer (carries inline error if any)
         Constraint::Length(1), // hint
     ])
     .split(inner);
 
-    frame.render_widget(Paragraph::new(intent_line(sub_flow)), chunks[0]);
+    frame.render_widget(Paragraph::new(intent_line(modal.sub_flow)), chunks[0]);
     frame.render_widget(
         Paragraph::new(format_plaintext_storage_warning()).wrap(Wrap { trim: true }),
         chunks[2],
     );
 
+    if let Some(error) = &modal.error {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                error.clone(),
+                Style::default().fg(Color::Red),
+            ))),
+            chunks[3],
+        );
+    }
+
     let hint = "Enter confirm  ·  Esc cancel";
-    frame.render_widget(Paragraph::new(hint).alignment(Alignment::Center), chunks[3]);
+    frame.render_widget(Paragraph::new(hint).alignment(Alignment::Center), chunks[4]);
+}
+
+/// Paint the inline error message inside the spacer area between the
+/// `Confirm:` row and the footer hint. The error sits one blank row
+/// below the `Confirm:` row, foreground red, mirroring the unlock
+/// screen's `decrypt_failed` styling and the Add / Remove / Rename /
+/// Import modals' inline errors so every inline-error surface in the
+/// TUI reads the same way.
+fn render_inline_error(frame: &mut Frame<'_>, spacer: Rect, message: &str) {
+    let spacer_chunks = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(0),
+    ])
+    .split(spacer);
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            message.to_string(),
+            Style::default().fg(Color::Red),
+        ))),
+        spacer_chunks[1],
+    );
 }
 
 /// Title text for the modal's bordered block. The active sub-flow

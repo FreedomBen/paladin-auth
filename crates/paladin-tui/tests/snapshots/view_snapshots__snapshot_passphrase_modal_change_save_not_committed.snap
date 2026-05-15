@@ -1,0 +1,25 @@
+---
+source: crates/paladin-tui/tests/view_snapshots.rs
+assertion_line: 1456
+expression: rendered
+---
+┌ Paladin ─────────────────────────────────────────────────────────────────────┐
+│ Search:                                                                      │
+│ ──────────────────────────────────────────────────────────────────────────── │
+│                                                                              │
+│                      No accounts. Press `a` to add one.                      │
+│       ┌ Change passphrase ───────────────────────────────────────────┐       │
+│       │ Re-encrypts this vault under a new passphrase.               │       │
+│       │                                                              │       │
+│       │ Passphrase:  [  ]                                            │       │
+│       │ Confirm:     [  ]                                            │       │
+│       │                                                              │       │
+│       │ save not committed (committed=false)                         │       │
+│       │                                                              │       │
+│       │                  Enter submit  ·  Esc cancel                 │       │
+│       └──────────────────────────────────────────────────────────────┘       │
+│                                                                              │
+│                                                                              │
+│ ──────────────────────────────────────────────────────────────────────────── │
+│ [↑↓] move  [enter] copy  [n] next-HOTP  [a] add  [/] find                    │
+└──────────────────────────────────────────────────────────────────────────────┘

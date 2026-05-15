@@ -1,0 +1,25 @@
+---
+source: crates/paladin-tui/tests/view_snapshots.rs
+assertion_line: 1545
+expression: rendered
+---
+┌ Paladin ─────────────────────────────────────────────────────────────────────┐
+│ Search:                                                                      │
+│ ──────────────────────────────────────────────────────────────────────────── │
+│       ┌ Remove passphrase ───────────────────────────────────────────┐       │
+│       │ Removes the passphrase and stores plaintext.                 │       │
+│       │                                                              │       │
+│       │ WARNING: Plaintext storage keeps account secrets unencrypted │       │
+│       │ on disk. The vault file is restricted to your user account   │       │
+│       │ (mode 0600), but anyone with read access to that file or its │       │
+│       │ backups can recover every secret. Use an encrypted vault     │       │
+│       │ unless you fully accept this risk.                           │       │
+│       │                                                              │       │
+│       │                                                              │       │
+│       │                                                              │       │
+│       │ save not committed (committed=false)                         │       │
+│       │                 Enter confirm  ·  Esc cancel                 │       │
+│       └──────────────────────────────────────────────────────────────┘       │
+│ ──────────────────────────────────────────────────────────────────────────── │
+│ [↑↓] move  [enter] copy  [n] next-HOTP  [a] add  [/] find                    │
+└──────────────────────────────────────────────────────────────────────────────┘

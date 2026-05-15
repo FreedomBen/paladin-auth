@@ -1309,6 +1309,286 @@ fn snapshot_passphrase_modal_remove_default() {
 }
 
 #[test]
+fn snapshot_passphrase_modal_set_save_not_committed() {
+    // Plan L2198: "Passphrase set `save_not_committed`." Drive
+    // `view::render` against an `Unlocked` state holding
+    // `Modal::Passphrase(PassphraseModal { sub_flow: Set, error:
+    // Some(render_error_message(&PaladinError::SaveNotCommitted {
+    // committed: false, backup_path: None })), .. })` so the
+    // snapshot pins the inline-error row populated from a pre-commit
+    // save failure per `DESIGN.md` §5's `save_not_committed`
+    // discriminator. Routing the wording through the shared
+    // `render_error_message` helper means the inline text matches
+    // the rest of the TUI's error surface — the unlock screen's
+    // `decrypt_failed` line and the Add / Remove / Rename / Import
+    // modals' inline-error slots.
+    //
+    // Every other PassphraseModal field stays at its default (empty
+    // `new_passphrase` / `confirm_passphrase` buffers) so the
+    // snapshot reads as a delta from the
+    // `snapshot_passphrase_modal_set_default` baseline: the inline
+    // error line appears inside the spacer area between the
+    // `Confirm:` row and the footer hint.
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Passphrase(PassphraseModal {
+            sub_flow: PassphraseSubFlow::Set,
+            error: Some(render_error_message(&PaladinError::SaveNotCommitted {
+                committed: false,
+                backup_path: None,
+            })),
+            ..PassphraseModal::default()
+        })),
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let rendered = render_to_text(&state, snapshot_now(), 80, 20);
+    assert!(
+        rendered.contains("save not committed"),
+        "expected inline save_not_committed wording to appear in modal:\n{rendered}"
+    );
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn snapshot_passphrase_modal_set_save_durability_unconfirmed() {
+    // Plan L2199: "Passphrase set `save_durability_unconfirmed`." Same
+    // rendering path as the `save_not_committed` snapshot above; the
+    // typed error here is `PaladinError::SaveDurabilityUnconfirmed`,
+    // which per `IMPLEMENTATION_PLAN_03_TUI.md` "Durability-unconfirmed
+    // failures follow the committed-state path" surfaces in the
+    // modal's inline error slot identically to the pre-commit
+    // failure — both paths run through `render_error_message`.
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Passphrase(PassphraseModal {
+            sub_flow: PassphraseSubFlow::Set,
+            error: Some(render_error_message(
+                &PaladinError::SaveDurabilityUnconfirmed,
+            )),
+            ..PassphraseModal::default()
+        })),
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let rendered = render_to_text(&state, snapshot_now(), 80, 20);
+    assert!(
+        rendered.contains("save durability unconfirmed"),
+        "expected inline save_durability_unconfirmed wording in modal:\n{rendered}"
+    );
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn snapshot_passphrase_modal_change_save_not_committed() {
+    // Plan L2200: "Passphrase change `save_not_committed`." Mirrors
+    // the `set` save_not_committed test above with
+    // `sub_flow: PassphraseSubFlow::Change` so the snapshot pins
+    // that the inline-error slot lights up identically in the
+    // encrypted → encrypted re-key transition. The bordered-block
+    // title flips to ` Change passphrase ` and the intent line
+    // reads `Re-encrypts this vault under a new passphrase.`; the
+    // body shape, the error row placement, and the surrounding
+    // list-view chrome all match the `set` baseline.
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Passphrase(PassphraseModal {
+            sub_flow: PassphraseSubFlow::Change,
+            error: Some(render_error_message(&PaladinError::SaveNotCommitted {
+                committed: false,
+                backup_path: None,
+            })),
+            ..PassphraseModal::default()
+        })),
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let rendered = render_to_text(&state, snapshot_now(), 80, 20);
+    assert!(
+        rendered.contains("save not committed"),
+        "expected inline save_not_committed wording in change modal:\n{rendered}"
+    );
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn snapshot_passphrase_modal_change_save_durability_unconfirmed() {
+    // Plan L2201: "Passphrase change `save_durability_unconfirmed`."
+    // Same rendering path as the `change` save_not_committed snapshot
+    // above; typed against `PaladinError::SaveDurabilityUnconfirmed`
+    // per the plan's "Durability-unconfirmed failures follow the
+    // committed-state path" contract.
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Passphrase(PassphraseModal {
+            sub_flow: PassphraseSubFlow::Change,
+            error: Some(render_error_message(
+                &PaladinError::SaveDurabilityUnconfirmed,
+            )),
+            ..PassphraseModal::default()
+        })),
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let rendered = render_to_text(&state, snapshot_now(), 80, 20);
+    assert!(
+        rendered.contains("save durability unconfirmed"),
+        "expected inline save_durability_unconfirmed wording in change modal:\n{rendered}"
+    );
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn snapshot_passphrase_modal_remove_save_not_committed() {
+    // Plan L2202: "Passphrase remove `save_not_committed`." Mirrors
+    // the `set` / `change` save_not_committed tests but for the
+    // encrypted → plaintext transition. The `remove` sub-flow's
+    // body — wrapped plaintext-storage warning sourced verbatim
+    // from [`paladin_core::format_plaintext_storage_warning`] — stays
+    // intact above the inline error, and the inline error is painted
+    // between the warning and the `Enter confirm  ·  Esc cancel`
+    // hint so the destructive-mutation verb remains visible while
+    // surfacing the save failure.
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Passphrase(PassphraseModal {
+            sub_flow: PassphraseSubFlow::Remove,
+            error: Some(render_error_message(&PaladinError::SaveNotCommitted {
+                committed: false,
+                backup_path: None,
+            })),
+            ..PassphraseModal::default()
+        })),
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let rendered = render_to_text(&state, snapshot_now(), 80, 20);
+    assert!(
+        rendered.contains("save not committed"),
+        "expected inline save_not_committed wording in remove modal:\n{rendered}"
+    );
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn snapshot_passphrase_modal_remove_save_durability_unconfirmed() {
+    // Plan L2203: "Passphrase remove `save_durability_unconfirmed`."
+    // Same rendering path as the `remove` save_not_committed
+    // snapshot above; typed against
+    // `PaladinError::SaveDurabilityUnconfirmed` per the plan's
+    // "Durability-unconfirmed failures follow the committed-state
+    // path" contract.
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Passphrase(PassphraseModal {
+            sub_flow: PassphraseSubFlow::Remove,
+            error: Some(render_error_message(
+                &PaladinError::SaveDurabilityUnconfirmed,
+            )),
+            ..PassphraseModal::default()
+        })),
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let rendered = render_to_text(&state, snapshot_now(), 80, 20);
+    assert!(
+        rendered.contains("save durability unconfirmed"),
+        "expected inline save_durability_unconfirmed wording in remove modal:\n{rendered}"
+    );
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn snapshot_settings_modal_default() {
     // Plan L2004: "Settings modal." Drive `view::render` against an
     // `Unlocked` state with `Modal::Settings(SettingsModal { .. })`
