@@ -1474,6 +1474,85 @@ fn snapshot_export_modal_default() {
 }
 
 #[test]
+fn snapshot_export_modal_refused_overwrite_gate() {
+    // Plan L2360: "Export modal refused overwrite gate." Drive
+    // `view::render` against an `Unlocked` state with
+    // `Modal::Export(ExportModal { error: Some(render_error_message(
+    // &PaladinError::ValidationError { field: "path",
+    // reason: "output_exists".to_string(), .. })), .. })` open so the
+    // snapshot pins the inline-error row populated from the
+    // refused-overwrite gate per `IMPLEMENTATION_PLAN_03_TUI.md`
+    // "Modals (per §6) > Export": *"Overwriting an existing file is
+    // rejected unless the user confirms an inline overwrite gate
+    // (parity with CLI `--force`)."* Routing the wording through
+    // `render_error_message` binds the snapshot to the core
+    // `PaladinError::ValidationError` `Display` impl
+    // (`validation error: path: output_exists`) rather than a
+    // hand-typed string so any future wording change in core surfaces
+    // here as a diff.
+    //
+    // The rest of the modal is at its default state (empty
+    // `path_text`, `ExportFormat::Plaintext`, empty passphrase
+    // buffers, `plaintext_confirmed: false`) so the snapshot reads as
+    // a delta from the `snapshot_export_modal_default` baseline: the
+    // inline error line appears inside the spacer area between the
+    // segmented `Format:` selector row and the footer hint, mirroring
+    // the Add / Remove / Rename modals' inline-error slots and the
+    // unlock screen's `decrypt_failed` styling so every inline-error
+    // surface in the TUI reads the same way.
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let modal = ExportModal {
+        error: Some(render_error_message(&PaladinError::ValidationError {
+            field: "path",
+            reason: "output_exists".to_string(),
+            source_index: None,
+            decoded_len: None,
+            recommended_min: None,
+            entry_type: None,
+        })),
+        ..ExportModal::default()
+    };
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Export(modal)),
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let rendered = render_to_text(&state, snapshot_now(), 80, 20);
+    // Regression guard: a renderer that ever stops surfacing the
+    // refused-overwrite gate's inline error must fail this test even
+    // before the human reads the snapshot diff. Binds the assertion
+    // to the core `Display` wording rather than a hand-typed string.
+    let expected = render_error_message(&PaladinError::ValidationError {
+        field: "path",
+        reason: "output_exists".to_string(),
+        source_index: None,
+        decoded_len: None,
+        recommended_min: None,
+        entry_type: None,
+    });
+    assert!(
+        rendered.contains(&expected),
+        "expected inline refused-overwrite wording {expected:?} to appear in modal:\n{rendered}"
+    );
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn snapshot_passphrase_modal_set_default() {
     // Plan L1968: "Passphrase modal — `set` sub-flow." Drive
     // `view::render` against an `Unlocked` state with

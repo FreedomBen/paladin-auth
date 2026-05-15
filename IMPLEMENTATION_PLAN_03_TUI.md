@@ -2357,7 +2357,21 @@ Import error and counts states:
 
 Export error states:
 
-- [ ] Export modal refused overwrite gate.
+- [x] Export modal refused overwrite gate.
+  *(`snapshot_export_modal_refused_overwrite_gate` in
+  `crates/paladin-tui/tests/view_snapshots.rs` constructs an
+  `ExportModal` with
+  `error: Some(render_error_message(&PaladinError::ValidationError { field: "path", reason: "output_exists".to_string(), .. }))` —
+  binding the snapshot to the core `Display` wording rather than a
+  hand-typed string — and renders through `view::render` at 80×20.
+  `crates/paladin-tui/src/view/export.rs` now paints the
+  [`ExportModal::error`] slot inside the spacer between the segmented
+  `Format:` selector row and the footer hint, foreground red,
+  mirroring the unlock screen's `decrypt_failed` styling and the Add
+  / Remove / Rename modals' inline-error slots. Locked in
+  `tests/snapshots/view_snapshots__snapshot_export_modal_refused_overwrite_gate.snap`
+  so any future wording change in core's `validation_error` /
+  `output_exists` surfaces here as a diff.)*
 - [ ] Export modal `confirmation_mismatch`.
 - [ ] Export modal `zero_length`.
 - [ ] Export modal plaintext-export warning.
