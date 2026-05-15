@@ -27,8 +27,10 @@ use paladin_core::{
     IconHintInput, Store, Vault, VaultInit, VaultLock,
 };
 use paladin_gtk::account_list::{
-    format_rendered_marker, format_widget_states_marker, hidden_row_display, row_models_from_vault,
-    AccountRowModel, ACCOUNT_LIST_WIDGET_STATES_MARKER_PREFIX,
+    dispatch_row_action, format_rendered_marker, format_widget_states_marker, hidden_row_display,
+    row_models_from_vault, AccountListOutput, AccountRowModel,
+    ACCOUNT_LIST_WIDGET_STATES_MARKER_PREFIX, ROW_ACTION_GROUP_NAME, ROW_REMOVE_ACTION_NAME,
+    ROW_RENAME_ACTION_NAME,
 };
 use paladin_gtk::account_row::{CodeDisplay, CounterText, RowDisplay};
 
@@ -380,5 +382,106 @@ fn widget_states_marker_pipe_joins_in_order() {
     assert_eq!(
         format_widget_states_marker(&displays),
         "paladin-gtk: account_list_widget_states=copy:on,next:off,kebab:on|copy:off,next:on,kebab:on|copy:on,next:off,kebab:on",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Row action wiring: action group name + per-row action names + dispatch
+// table.
+//
+// The kebab `gio::Menu` produced by `account_list::build_kebab_menu_model`
+// targets `row.rename` / `row.remove`; the widget layer installs a per-row
+// `gio::SimpleActionGroup` named [`ROW_ACTION_GROUP_NAME`] whose actions
+// match [`ROW_RENAME_ACTION_NAME`] / [`ROW_REMOVE_ACTION_NAME`]. The
+// dispatch table [`dispatch_row_action`] maps a fired action name back to
+// the typed [`AccountListOutput`] forwarded to `AppModel`. Pinning the
+// names + the dispatch table here keeps the kebab-menu targets, the
+// installed action group, and the typed output enum in lockstep — drift
+// in any of the three would surface as a failing test rather than a
+// silent no-op when the user clicks Rename… / Remove….
+// ---------------------------------------------------------------------------
+
+#[test]
+fn row_action_group_name_is_row() {
+    // The kebab menu items target `row.rename` / `row.remove`; the
+    // group name installed on each row container must match the
+    // prefix `row` so action lookup resolves at activation time.
+    assert_eq!(ROW_ACTION_GROUP_NAME, "row");
+}
+
+#[test]
+fn row_rename_action_name_is_rename() {
+    // The `row.rename` menu target resolves to the action named
+    // `rename` inside the `row` group.
+    assert_eq!(ROW_RENAME_ACTION_NAME, "rename");
+}
+
+#[test]
+fn row_remove_action_name_is_remove() {
+    // The `row.remove` menu target resolves to the action named
+    // `remove` inside the `row` group.
+    assert_eq!(ROW_REMOVE_ACTION_NAME, "remove");
+}
+
+#[test]
+fn dispatch_row_action_routes_rename_to_open_rename_dialog() {
+    let id = AccountId::new();
+    assert_eq!(
+        dispatch_row_action(ROW_RENAME_ACTION_NAME, id),
+        Some(AccountListOutput::OpenRenameDialog(id)),
+    );
+}
+
+#[test]
+fn dispatch_row_action_routes_remove_to_open_remove_dialog() {
+    let id = AccountId::new();
+    assert_eq!(
+        dispatch_row_action(ROW_REMOVE_ACTION_NAME, id),
+        Some(AccountListOutput::OpenRemoveDialog(id)),
+    );
+}
+
+#[test]
+fn dispatch_row_action_returns_none_for_unknown_action() {
+    // Defensive: the widget layer only installs `rename` / `remove`
+    // actions today, but the dispatch table is the single source of
+    // truth — an unrecognized name must return `None` so a future
+    // typo in the action group surfaces as a silent no-op the
+    // widget layer can catch in `debug_assert!`.
+    let id = AccountId::new();
+    assert_eq!(dispatch_row_action("nope", id), None);
+    assert_eq!(dispatch_row_action("", id), None);
+    assert_eq!(dispatch_row_action("row.rename", id), None);
+}
+
+#[test]
+fn account_list_output_carries_account_id_for_rename() {
+    let id = AccountId::new();
+    let out = AccountListOutput::OpenRenameDialog(id);
+    let AccountListOutput::OpenRenameDialog(carried) = out else {
+        panic!("OpenRenameDialog should round-trip its AccountId");
+    };
+    assert_eq!(carried, id);
+}
+
+#[test]
+fn account_list_output_carries_account_id_for_remove() {
+    let id = AccountId::new();
+    let out = AccountListOutput::OpenRemoveDialog(id);
+    let AccountListOutput::OpenRemoveDialog(carried) = out else {
+        panic!("OpenRemoveDialog should round-trip its AccountId");
+    };
+    assert_eq!(carried, id);
+}
+
+#[test]
+fn account_list_output_variants_are_distinct() {
+    // Same id, different variants must compare unequal — the
+    // dispatch table relies on the variant carrying the user's
+    // intent (rename vs. remove), not just the row identity.
+    let id = AccountId::new();
+    assert_ne!(
+        AccountListOutput::OpenRenameDialog(id),
+        AccountListOutput::OpenRemoveDialog(id),
     );
 }

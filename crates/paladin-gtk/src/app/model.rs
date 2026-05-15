@@ -40,7 +40,7 @@ use relm4::prelude::*;
 
 use crate::account_list::{
     format_rendered_marker, format_widget_states_marker, hidden_row_display, row_models_from_vault,
-    AccountListComponent, AccountListInit, AccountRowModel,
+    AccountListComponent, AccountListInit, AccountListOutput, AccountRowModel,
 };
 use crate::app::state::{
     decide_state_from_inspect, decide_state_from_open_error, AppState, OpenErrorOutcome,
@@ -128,6 +128,18 @@ pub struct AppModel {
     /// not dropped at the end of `init`.
     #[allow(dead_code)]
     unlock_dialog: Option<Controller<UnlockDialogComponent>>,
+    /// Latest row-level intent forwarded from
+    /// [`AccountListComponent`] via [`AppMsg::AccountListAction`].
+    ///
+    /// `None` until the user activates a kebab Rename… / Remove…
+    /// entry; the next commit replaces this single-slot buffer with
+    /// the actual `RenameDialogComponent` / `RemoveDialogComponent`
+    /// mount. Storing it here today keeps the dispatch path covered
+    /// end-to-end (`AccountRow` kebab activation → `AccountListOutput`
+    /// → `AppMsg::AccountListAction` → `AppModel` state) so the
+    /// dialog wiring is the only piece left to land.
+    #[allow(dead_code)]
+    pending_row_action: Option<AccountListOutput>,
 }
 
 impl std::fmt::Debug for AppModel {
@@ -152,6 +164,7 @@ impl std::fmt::Debug for AppModel {
                 "unlock_dialog",
                 &self.unlock_dialog.as_ref().map(|_| "<mounted>"),
             )
+            .field("pending_row_action", &self.pending_row_action)
             .finish()
     }
 }
@@ -164,6 +177,19 @@ pub enum AppMsg {
     /// idle callbacks see the shutdown rather than being dropped
     /// mid-flight.
     Quit,
+    /// Forwarded from [`AccountListComponent`] when the user
+    /// activates a row's kebab Rename… / Remove… action.
+    ///
+    /// `AppModel` is the owner of the dialog widget tree per
+    /// `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree", so the
+    /// per-row actions bubble the row's [`paladin_core::AccountId`]
+    /// up here for the dialog mount to consume. The
+    /// `RenameDialogComponent` / `RemoveDialogComponent` widgets are
+    /// not wired yet; today the handler stores the typed intent on
+    /// the model state without opening a dialog (see
+    /// [`AppModel::pending_row_action`]) so future commits can mount
+    /// the dialog widgets without re-plumbing the dispatch path.
+    AccountListAction(AccountListOutput),
 }
 
 // `relm4::component(pub)` generates a public `AppModelWidgets` struct so the
@@ -239,7 +265,7 @@ impl SimpleComponent for AppModel {
         let account_list = if state.is_unlocked() {
             let controller = AccountListComponent::builder()
                 .launch(AccountListInit { rows })
-                .detach();
+                .forward(sender.input_sender(), AppMsg::AccountListAction);
             widgets.content.append(controller.widget());
             Some(controller)
         } else {
@@ -290,6 +316,7 @@ impl SimpleComponent for AppModel {
             startup_error,
             init_dialog,
             unlock_dialog,
+            pending_row_action: None,
         };
 
         if exit_after_startup {
@@ -302,6 +329,11 @@ impl SimpleComponent for AppModel {
     fn update(&mut self, msg: Self::Input, _sender: ComponentSender<Self>) {
         match msg {
             AppMsg::Quit => relm4::main_application().quit(),
+            AppMsg::AccountListAction(out) => {
+                // Stash the typed intent until the dialog widgets land
+                // — see [`AppModel::pending_row_action`].
+                self.pending_row_action = Some(out);
+            }
         }
     }
 }

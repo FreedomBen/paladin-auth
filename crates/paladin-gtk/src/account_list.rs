@@ -54,6 +54,74 @@ pub const ACCOUNT_LIST_RENDERED_MARKER_PREFIX: &str = "paladin-gtk: account_list
 pub const ACCOUNT_LIST_WIDGET_STATES_MARKER_PREFIX: &str =
     "paladin-gtk: account_list_widget_states=";
 
+/// Name of the per-row [`gio::SimpleActionGroup`] installed on each
+/// row container.
+///
+/// Must match the prefix used by [`build_kebab_menu_model`] for the
+/// `row.rename` / `row.remove` menu targets — otherwise the kebab
+/// items dispatch into the void at activation time. Pinned by
+/// `tests/account_list_logic.rs` so a future rename forces the
+/// action-group install site and the menu-target string into
+/// lockstep.
+pub const ROW_ACTION_GROUP_NAME: &str = "row";
+
+/// Action name within [`ROW_ACTION_GROUP_NAME`] that opens the
+/// `RenameDialog` for the row's account.
+///
+/// Dispatch through [`dispatch_row_action`] routes this to
+/// [`AccountListOutput::OpenRenameDialog`] carrying the row's
+/// [`AccountId`].
+pub const ROW_RENAME_ACTION_NAME: &str = "rename";
+
+/// Action name within [`ROW_ACTION_GROUP_NAME`] that opens the
+/// `RemoveDialog` for the row's account.
+///
+/// Dispatch through [`dispatch_row_action`] routes this to
+/// [`AccountListOutput::OpenRemoveDialog`] carrying the row's
+/// [`AccountId`].
+pub const ROW_REMOVE_ACTION_NAME: &str = "remove";
+
+/// Output forwarded from [`AccountListComponent`] up to `AppModel`
+/// in response to a row-level user intent.
+///
+/// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+/// `AccountRowComponent`, the row kebab menu carries Rename… /
+/// Remove… entries whose action targets dispatch through the
+/// per-row [`gio::SimpleActionGroup`] installed by [`bind_row`]. The
+/// activation callback maps the fired action name onto one of these
+/// variants via [`dispatch_row_action`] and forwards it through
+/// `relm4::Sender::output` so `AppModel` can open the corresponding
+/// dialog widget against the row's [`AccountId`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AccountListOutput {
+    /// User asked to rename the account identified by the inner
+    /// [`AccountId`]. `AppModel` reaches into its live `Vault` to
+    /// look up the current label and opens `RenameDialog`.
+    OpenRenameDialog(AccountId),
+    /// User asked to remove the account identified by the inner
+    /// [`AccountId`]. `AppModel` opens `RemoveDialog` (the destructive
+    /// confirmation per §"Component tree" > `RemoveDialog`).
+    OpenRemoveDialog(AccountId),
+}
+
+/// Dispatch table mapping a row-level action name onto the typed
+/// [`AccountListOutput`] forwarded to `AppModel`.
+///
+/// Returns [`Some`] for [`ROW_RENAME_ACTION_NAME`] /
+/// [`ROW_REMOVE_ACTION_NAME`] and [`None`] for every other input —
+/// the widget layer installs exactly two actions on each row, so an
+/// unrecognized name signals a wiring drift (typo in the action
+/// group, stale kebab menu target, …) and stays a silent no-op
+/// rather than crashing the row.
+#[must_use]
+pub fn dispatch_row_action(name: &str, id: AccountId) -> Option<AccountListOutput> {
+    match name {
+        ROW_RENAME_ACTION_NAME => Some(AccountListOutput::OpenRenameDialog(id)),
+        ROW_REMOVE_ACTION_NAME => Some(AccountListOutput::OpenRemoveDialog(id)),
+        _ => None,
+    }
+}
+
 /// Non-secret projection of a single account into the form the
 /// row factory binds onto its widgets.
 ///
@@ -242,7 +310,7 @@ pub enum AccountListMsg {}
 impl SimpleComponent for AccountListComponent {
     type Init = AccountListInit;
     type Input = AccountListMsg;
-    type Output = ();
+    type Output = AccountListOutput;
 
     view! {
         #[root]
@@ -262,14 +330,14 @@ impl SimpleComponent for AccountListComponent {
     fn init(
         init: Self::Init,
         root: Self::Root,
-        _sender: ComponentSender<Self>,
+        sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
         let model = gio::ListStore::new::<glib::BoxedAnyObject>();
         for row in &init.rows {
             model.append(&glib::BoxedAnyObject::new(row.clone()));
         }
 
-        let factory = build_row_factory();
+        let factory = build_row_factory(sender.output_sender().clone());
         let widgets = view_output!();
 
         let component = AccountListComponent { model };
@@ -319,7 +387,14 @@ fn format_counter_label(counter: CounterText) -> String {
 /// per-row widget bundle expands incrementally; copy / "next" /
 /// kebab affordances per §"Component tree" > `AccountRowComponent`
 /// land in follow-up commits.
-fn build_row_factory() -> gtk::SignalListItemFactory {
+///
+/// `output_sender` is cloned into each row's
+/// [`gio::SimpleActionGroup`] activation closure so kebab Rename… /
+/// Remove… activations route through [`dispatch_row_action`] and
+/// forward typed [`AccountListOutput`] messages to `AppModel`.
+fn build_row_factory(
+    output_sender: relm4::Sender<AccountListOutput>,
+) -> gtk::SignalListItemFactory {
     let factory = gtk::SignalListItemFactory::new();
     factory.connect_setup(|_, item| {
         let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
@@ -327,7 +402,7 @@ fn build_row_factory() -> gtk::SignalListItemFactory {
         };
         list_item.set_child(Some(&build_row_widget()));
     });
-    factory.connect_bind(|_, item| {
+    factory.connect_bind(move |_, item| {
         let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
             return;
         };
@@ -346,6 +421,7 @@ fn build_row_factory() -> gtk::SignalListItemFactory {
         let row: std::cell::Ref<AccountRowModel> = boxed.borrow();
         let display = hidden_row_display(&row);
         bind_row(&container, &display);
+        install_row_action_group(&container, row.id, output_sender.clone());
     });
     factory
 }
@@ -427,18 +503,64 @@ fn build_row_widget() -> gtk::Box {
 /// * "Rename…" — opens `RenameDialog` for the row's account.
 /// * "Remove…" — opens `RemoveDialog` for the row's account.
 ///
-/// Each entry binds to a `row.rename` / `row.remove` action; the
-/// actual `gio::SimpleAction` wiring per row lands in a follow-up
-/// commit that introduces the corresponding
-/// `AccountListMsg::OpenRenameDialog` / `OpenRemoveDialog`
-/// round-trips. Centralizing the model here means the rows share a
-/// single canonical menu shape and the labels stay in lockstep with
-/// the smoke test.
+/// Each entry binds to a `row.rename` / `row.remove` action that
+/// resolves against the per-row [`gio::SimpleActionGroup`] installed
+/// by [`install_row_action_group`] in the row factory's bind step.
+/// Centralizing the model here means the rows share a single
+/// canonical menu shape and the labels stay in lockstep with the
+/// smoke test.
 fn build_kebab_menu_model() -> gio::Menu {
     let menu = gio::Menu::new();
-    menu.append(Some("Rename\u{2026}"), Some("row.rename"));
-    menu.append(Some("Remove\u{2026}"), Some("row.remove"));
+    menu.append(
+        Some("Rename\u{2026}"),
+        Some(&format!("{ROW_ACTION_GROUP_NAME}.{ROW_RENAME_ACTION_NAME}")),
+    );
+    menu.append(
+        Some("Remove\u{2026}"),
+        Some(&format!("{ROW_ACTION_GROUP_NAME}.{ROW_REMOVE_ACTION_NAME}")),
+    );
     menu
+}
+
+/// Install (or replace) the per-row [`gio::SimpleActionGroup`] that
+/// dispatches kebab Rename… / Remove… activations through
+/// [`dispatch_row_action`] back up to `AppModel`.
+///
+/// Called from the row factory's `connect_bind` callback because
+/// `gtk::ListView` recycles row containers as the user scrolls —
+/// each rebind re-captures the new row's [`AccountId`] in the
+/// activation closure so the dispatched [`AccountListOutput`] always
+/// targets the currently bound row.
+///
+/// The group name matches [`ROW_ACTION_GROUP_NAME`] so the menu
+/// targets `row.rename` / `row.remove` built by
+/// [`build_kebab_menu_model`] resolve correctly.
+fn install_row_action_group(
+    container: &gtk::Box,
+    id: AccountId,
+    output_sender: relm4::Sender<AccountListOutput>,
+) {
+    let actions = gio::SimpleActionGroup::new();
+
+    let rename = gio::SimpleAction::new(ROW_RENAME_ACTION_NAME, None);
+    let rename_sender = output_sender.clone();
+    rename.connect_activate(move |_, _| {
+        if let Some(out) = dispatch_row_action(ROW_RENAME_ACTION_NAME, id) {
+            let _ = rename_sender.send(out);
+        }
+    });
+    actions.add_action(&rename);
+
+    let remove = gio::SimpleAction::new(ROW_REMOVE_ACTION_NAME, None);
+    let remove_sender = output_sender;
+    remove.connect_activate(move |_, _| {
+        if let Some(out) = dispatch_row_action(ROW_REMOVE_ACTION_NAME, id) {
+            let _ = remove_sender.send(out);
+        }
+    });
+    actions.add_action(&remove);
+
+    container.insert_action_group(ROW_ACTION_GROUP_NAME, Some(&actions));
 }
 
 /// Bind a [`RowDisplay`] onto the child widgets of a
