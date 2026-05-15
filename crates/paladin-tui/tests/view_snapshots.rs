@@ -757,6 +757,79 @@ fn snapshot_add_modal_qr_image_decode_failure() {
 }
 
 #[test]
+fn snapshot_add_modal_qr_no_qrs_decoded() {
+    // Plan L2449: "Add modal QR-import inline error: zero decoded
+    // QRs." Drive `view::render` against an `Unlocked` state holding
+    // `Modal::Add(AddModal { mode: AddMode::Qr, error:
+    // Some(format_qr_import_failure(&QrImportFailure::Import(
+    //     PaladinError::NoEntriesToImport))), .. })` so the snapshot
+    // pins the inline-error row populated when
+    // `paladin_core::import::qr_image_bytes` decodes the clipboard
+    // raster but finds zero QR payloads in it — the
+    // `no_entries_to_import` discriminator per `DESIGN.md` §4.6 / §5.
+    // The reducer's Err arm (`reduce_qr_import_result` in
+    // `src/app/reducer.rs`) routes the failure through
+    // `format_qr_import_failure`, whose `Import(err)` arm delegates
+    // to `render_error_message` and binds the wording to the core
+    // `Display` impl (`no entries to import`). The view-snapshot
+    // pins the post-reduce rendering 1:1 with the reducer-side
+    // coverage from
+    // `effect_result_qr_import_no_qrs_decoded_sets_inline_error_via_render_error_message`
+    // in `tests/reducer_tests.rs`.
+    //
+    // Routing through `format_qr_import_failure` (rather than
+    // `render_error_message` directly) pins that the QR-failure
+    // pipeline's `Import` arm continues to forward `PaladinError`
+    // wording verbatim — a regression that ever wraps the core
+    // wording in a "QR import failed:" prefix on this arm surfaces
+    // here as a diff, distinguishing it from the bespoke
+    // `NoClipboardImage` and `ImageDecodeFailure` arms above. The
+    // 20-char core wording fits the ~60-col inline-error slot
+    // without truncation.
+    //
+    // The rest of the modal is at its default state (Manual field
+    // stack; `AddMode::Qr` selector) so the snapshot reads as a
+    // delta from `snapshot_add_modal_qr_image_decode_failure` on a
+    // single cell: the inline-error wording.
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let modal = AddModal {
+        mode: AddMode::Qr,
+        error: Some(format_qr_import_failure(&QrImportFailure::Import(
+            PaladinError::NoEntriesToImport,
+        ))),
+        ..AddModal::default()
+    };
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Add(modal)),
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let rendered = render_to_text(&state, snapshot_now(), 80, 20);
+    let expected =
+        format_qr_import_failure(&QrImportFailure::Import(PaladinError::NoEntriesToImport));
+    assert!(
+        rendered.contains(&expected),
+        "expected inline no-entries-to-import wording {expected:?} to appear in modal:\n{rendered}"
+    );
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn snapshot_remove_modal_default() {
     // Plan L1856: "Remove modal." Drive `view::render` against an
     // `Unlocked` state with one TOTP account and

@@ -2545,7 +2545,38 @@ Add (QR) error and counts states:
   `tests/snapshots/view_snapshots__snapshot_add_modal_qr_image_decode_failure.snap`
   so any future rewording in `format_qr_import_failure` for the
   `ImageDecodeFailure` arm surfaces here as a diff.)*
-- [ ] Add modal QR-import inline error: zero decoded QRs.
+- [x] Add modal QR-import inline error: zero decoded QRs.
+  *(`snapshot_add_modal_qr_no_qrs_decoded` in
+  `crates/paladin-tui/tests/view_snapshots.rs` constructs an
+  `AddModal` with
+  `mode: AddMode::Qr,
+  error: Some(format_qr_import_failure(&QrImportFailure::Import(PaladinError::NoEntriesToImport)))`
+  — binding the snapshot to the core `Display` wording (`no
+  entries to import`) routed through the shared TUI helper's
+  `Import(err)` arm rather than a hand-typed string — and renders
+  through `view::render` at 80×20. View-snapshot mirrors the
+  reducer-side fixture
+  (`effect_result_qr_import_no_qrs_decoded_sets_inline_error_via_render_error_message`
+  in `tests/reducer_tests.rs`) so the matrix stays 1:1.
+  `NoEntriesToImport` is the §4.6 / §5 discriminator
+  `paladin_core::import::qr_image_bytes` returns when it decodes
+  the clipboard raster but finds zero QR payloads in it. Routing
+  through `format_qr_import_failure` (rather than
+  `render_error_message` directly) pins that the `Import` arm
+  continues to forward `PaladinError` wording verbatim — a
+  regression that ever wraps the core wording in a "QR import
+  failed:" prefix on this arm surfaces here as a diff,
+  distinguishing it from the bespoke `NoClipboardImage` and
+  `ImageDecodeFailure` arms above. The 20-char core wording fits
+  the ~60-col inline-error slot without truncation. Reuses the
+  `render_inline_error` branch in `view/add.rs` exercised by the
+  Add modal's `save_not_committed` / `save_durability_unconfirmed`
+  / `no_clipboard_image` / `image_decode_failure` slices; the
+  segmented mode-selector wraps `QR` in `▶ … ◀`. Locked in
+  `tests/snapshots/view_snapshots__snapshot_add_modal_qr_no_qrs_decoded.snap`
+  so any future wording change in core's `no_entries_to_import`
+  `Display` or in `format_qr_import_failure`'s `Import` arm
+  surfaces here as a diff.)*
 - [ ] Add modal QR-import inline error: oversized raw RGBA buffer.
 - [ ] Add modal QR-import inline error: invalid QR payload.
 - [ ] Add modal post-QR-import counts panel.
