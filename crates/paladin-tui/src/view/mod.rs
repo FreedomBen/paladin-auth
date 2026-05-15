@@ -19,14 +19,30 @@
 pub mod add;
 pub mod list;
 pub mod missing_vault;
+pub mod remove;
 pub mod startup_error;
 pub mod unlock;
 
 use std::time::SystemTime;
 
+use ratatui::layout::Rect;
 use ratatui::Frame;
 
+use paladin_core::Vault;
+
 use crate::app::state::{AppState, Modal};
+
+/// Compute a `width × height` rect centered inside `outer`,
+/// saturating at `outer` if the requested size is larger than the
+/// frame in either dimension. Shared by every modal renderer so the
+/// modals all overlay the underlying screen with consistent centering.
+pub(super) fn centered_rect(outer: Rect, width: u16, height: u16) -> Rect {
+    let width = width.min(outer.width);
+    let height = height.min(outer.height);
+    let x = outer.x + (outer.width - width) / 2;
+    let y = outer.y + (outer.height - height) / 2;
+    Rect::new(x, y, width, height)
+}
 
 /// Render the given [`AppState`] onto `frame`.
 ///
@@ -54,10 +70,10 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState, now: SystemTime) {
         } => {
             unlock::render(frame, path, error.as_deref(), passphrase);
         }
-        AppState::Unlocked { modal, .. } => {
+        AppState::Unlocked { modal, vault, .. } => {
             list::render(frame, state, now);
             if let Some(open) = modal {
-                render_modal(frame, open);
+                render_modal(frame, open, vault);
             }
         }
         AppState::Locked { .. } => {
@@ -76,11 +92,17 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState, now: SystemTime) {
 /// dispatch table. Variants whose renderers have not yet landed in
 /// this slice draw nothing — the list view alone shows underneath
 /// until their slice ticks the corresponding plan checkbox.
-fn render_modal(frame: &mut Frame<'_>, modal: &Modal) {
+///
+/// The active [`Vault`] is threaded through so per-variant renderers
+/// that need to surface account metadata (e.g. the Remove
+/// confirmation prompt naming the selected account) can resolve their
+/// `AccountId` against the same in-memory vault the list view paints,
+/// rather than caching projection state on the modal struct.
+fn render_modal(frame: &mut Frame<'_>, modal: &Modal, vault: &Vault) {
     match modal {
         Modal::Add(add_modal) => add::render(frame, add_modal),
-        Modal::Remove(_)
-        | Modal::Rename(_)
+        Modal::Remove(remove_modal) => remove::render(frame, remove_modal, vault),
+        Modal::Rename(_)
         | Modal::Import(_)
         | Modal::Export(_)
         | Modal::Passphrase(_)

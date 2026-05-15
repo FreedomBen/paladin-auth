@@ -1853,7 +1853,35 @@ Modals and overlays:
   open modals through a private `render_modal` table; the
   non-Add variants are explicit no-ops that pin "list view alone
   shows underneath" until their own snapshot slice lands.)*
-- [ ] Remove modal.
+- [x] Remove modal. *(`snapshot_remove_modal_default` in
+  `crates/paladin-tui/tests/view_snapshots.rs` drives an `Unlocked`
+  state holding a single TOTP account (the
+  `GitHub` / `ben@example.com` issuer/label pair shared with the
+  single-TOTP list-view snapshot) and
+  `modal = Some(Modal::Remove(RemoveModal { account_id, error: None }))`,
+  then renders through `view::render` at 80×20 — the new
+  `crates/paladin-tui/src/view/remove.rs` paints a 64×10 centered
+  `Clear`-then-bordered ` Remove account ` block over the list-view
+  backdrop, with the `Remove the following account?` prompt on the
+  first inner line, the targeted account's display label on line
+  three (resolved via the shared
+  `format_account_display_label(&summary)` — same wording as the
+  duplicate-account inline error and the CLI's `display_label`), a
+  flexible spacer, and a centered `Enter confirms  ·  Esc cancels`
+  hint near the bottom border. `view::render` was extended in the
+  same slice to thread `&Vault` through `render_modal` so each
+  modal renderer can resolve its `AccountId` against the same
+  in-memory vault the list view paints; the Add-modal renderer
+  needs none of that vault metadata yet, so its signature is
+  unchanged. `centered_rect` moved from `view/add.rs` to
+  `view/mod.rs` as a shared `pub(super)` helper — both modal
+  renderers now share a single source of centering math, so a
+  regression that ever drifts one overlay off-center surfaces
+  symmetrically. Locked in
+  `tests/snapshots/view_snapshots__snapshot_remove_modal_default.snap`.
+  Inline `save_not_committed` / `save_durability_unconfirmed`
+  variants of this modal land alongside their own checklist rows
+  below.)*
 - [ ] Rename modal.
 - [ ] Import modal.
 - [ ] Export modal.

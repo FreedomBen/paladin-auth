@@ -21,11 +21,12 @@
 //! plain text so the snapshot pins only the layout contract.
 
 use paladin_core::{AccountKindInput, Algorithm};
-use ratatui::layout::{Alignment, Constraint, Layout, Rect};
+use ratatui::layout::{Alignment, Constraint, Layout};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, Clear, Padding, Paragraph};
 use ratatui::Frame;
 
+use super::centered_rect;
 use crate::app::state::{AddModal, AddMode};
 
 /// Width of the left-hand label column inside the modal. Long
@@ -178,15 +179,4 @@ fn kind_label(kind: AccountKindInput) -> &'static str {
         AccountKindInput::Totp => "TOTP",
         AccountKindInput::Hotp => "HOTP",
     }
-}
-
-/// Compute a `width × height` rect centered inside `outer`,
-/// saturating at `outer` if the requested size is larger than the
-/// frame in either dimension.
-fn centered_rect(outer: Rect, width: u16, height: u16) -> Rect {
-    let width = width.min(outer.width);
-    let height = height.min(outer.height);
-    let x = outer.x + (outer.width - width) / 2;
-    let y = outer.y + (outer.height - height) / 2;
-    Rect::new(x, y, width, height)
 }

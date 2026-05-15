@@ -30,7 +30,7 @@ use paladin_core::{
     AccountKindInput, Algorithm, IconHintInput, PaladinError, PermissionSubject, Store, Vault,
     VaultInit, VaultLock,
 };
-use paladin_tui::app::state::{AddModal, AppState, Focus, HotpReveal, Modal};
+use paladin_tui::app::state::{AddModal, AppState, Focus, HotpReveal, Modal, RemoveModal};
 use paladin_tui::prompt::PassphraseBuffer;
 use paladin_tui::view::render;
 use secrecy::SecretString;
@@ -481,6 +481,58 @@ fn snapshot_add_modal_default() {
         hotp_reveal: None,
         modal: Some(Modal::Add(AddModal::default())),
         selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 20));
+}
+
+#[test]
+fn snapshot_remove_modal_default() {
+    // Plan L1856: "Remove modal." Drive `view::render` against an
+    // `Unlocked` state with one TOTP account and
+    // `Modal::Remove(RemoveModal { account_id, error: None })` open
+    // so the snapshot pins the freshly-opened (no inline save-error,
+    // populated `account_id`) baseline of the Remove confirmation
+    // modal overlay rendered on top of the list view per `DESIGN.md`
+    // §6's "modal dialogs for add / remove / rename / import /
+    // export / passphrase / settings" call-out and the
+    // `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6) > Remove"
+    // contract — *"confirmation modal. On confirm, wraps
+    // `Vault::remove` in `Vault::mutate_and_save`."*
+    //
+    // The single account uses the same `GitHub` / `ben@example.com`
+    // issuer/label pair the single-TOTP list-view snapshot uses, so
+    // the `issuer:label` line painted inside the modal exercises the
+    // shared `format_account_display_label` rendering (identical
+    // wording to the duplicate-account inline error and the CLI's
+    // `display_label`). A future slice that re-wires the modal to a
+    // different display format then surfaces as a diff in this file.
+    // The inline `error` slot stays `None`; the
+    // `save_not_committed` / `save_durability_unconfirmed` variants
+    // land as their own snapshots per the plan's later checkboxes.
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (mut vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let id = push_totp_account(&mut vault, &store, Some("GitHub"), "ben@example.com");
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Remove(RemoveModal {
+            account_id: id,
+            error: None,
+        })),
+        selected: Some(id),
         pending_chord_leader: None,
         viewport_height: 0,
         viewport_offset: 0,
