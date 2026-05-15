@@ -1965,7 +1965,40 @@ Modals and overlays:
   `zero_length` validation gates, and writer-failure /
   `save_not_committed` / `save_durability_unconfirmed` inline-error
   variants land alongside their own checklist rows below.)*
-- [ ] Passphrase modal — `set` sub-flow.
+- [x] Passphrase modal — `set` sub-flow.
+  *(`snapshot_passphrase_modal_set_default` in
+  `crates/paladin-tui/tests/view_snapshots.rs` drives an `Unlocked`
+  state with an empty plaintext vault and
+  `modal = Some(Modal::Passphrase(PassphraseModal { sub_flow: PassphraseSubFlow::Set, ..PassphraseModal::default() }))`,
+  then renders through `view::render` at 80×20 — the new
+  `crates/paladin-tui/src/view/passphrase.rs` paints a 64×10
+  centered `Clear`-then-bordered ` Set passphrase ` block over the
+  list-view backdrop. The body holds a one-line intent description
+  (`Encrypts this vault under a new passphrase.` — wording mirrors
+  the CLI `paladin passphrase set` command help), a blank spacer,
+  the masked `Passphrase:` row, the masked `Confirm:` row, a
+  flexible spacer, and a centered `Enter submit  ·  Esc cancel`
+  hint near the bottom border. Both passphrase rows render the
+  typed character count as `•` bullets so the snapshot pins that
+  the renderer never paints the secret bytes — mirrors the Add
+  modal's `Secret:` field's `masked_field_line`; an empty buffer
+  renders as `[  ]`. The bordered block's title is sub-flow-aware
+  (` Set passphrase ` / ` Change passphrase ` / ` Remove
+  passphrase `) so a regression that ever opens the wrong
+  sub-flow surfaces as a diff. `view::render`'s `render_modal`
+  dispatch was extended in the same slice to route
+  `Modal::Passphrase` to the new module — Settings remains the
+  explicit no-op branch until its own snapshot slice lands. Locked
+  in `tests/snapshots/view_snapshots__snapshot_passphrase_modal_set_default.snap`.
+  The `change` and `remove` sub-flow snapshots land alongside their
+  own checklist rows below; the `remove` sub-flow's
+  plaintext-storage warning body fans out from the same renderer
+  in its own slice. Inline `confirmation_mismatch` / `zero_length`
+  validation gates and `save_not_committed` /
+  `save_durability_unconfirmed` variants of this modal land
+  alongside their own
+  [`PassphraseModal::error`](crate::app::state::PassphraseModal::error)
+  rendering slices below.)*
 - [ ] Passphrase modal — `change` sub-flow.
 - [ ] Passphrase modal — `remove` sub-flow.
 - [ ] Settings modal.

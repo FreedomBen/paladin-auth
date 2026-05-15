@@ -31,8 +31,8 @@ use paladin_core::{
     VaultInit, VaultLock,
 };
 use paladin_tui::app::state::{
-    AddModal, AppState, ExportModal, Focus, HotpReveal, ImportModal, Modal, RemoveModal,
-    RenameModal,
+    AddModal, AppState, ExportModal, Focus, HotpReveal, ImportModal, Modal, PassphraseModal,
+    PassphraseSubFlow, RemoveModal, RenameModal,
 };
 use paladin_tui::prompt::PassphraseBuffer;
 use paladin_tui::view::render;
@@ -702,6 +702,66 @@ fn snapshot_export_modal_default() {
         pending_clipboard_clear: None,
         hotp_reveal: None,
         modal: Some(Modal::Export(ExportModal::default())),
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 20));
+}
+
+#[test]
+fn snapshot_passphrase_modal_set_default() {
+    // Plan L1968: "Passphrase modal — `set` sub-flow." Drive
+    // `view::render` against an `Unlocked` state with
+    // `Modal::Passphrase(PassphraseModal::default())` open so the
+    // snapshot pins the freshly-opened (`PassphraseSubFlow::Set`,
+    // empty `new_passphrase` / `confirm_passphrase` buffers, no
+    // inline error) baseline of the Passphrase modal's `set`
+    // sub-flow overlay rendered on top of the list view per
+    // `DESIGN.md` §6's "modal dialogs for add / remove / rename /
+    // import / export / passphrase / settings" call-out and the
+    // `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6) >
+    // Passphrase" contract — *"three sub-flows mirroring CLI's
+    // `passphrase set / change / remove`. … New passphrases (`set`,
+    // `change`) are prompted twice and confirmed; mismatch returns
+    // to the modal with an inline `invalid_passphrase`
+    // (`reason: "confirmation_mismatch"`) error."*
+    //
+    // The background vault is empty (plaintext) so the underlying
+    // list view settles into its `No accounts. Press `a` to add
+    // one.` prompt — the modal overlay's Clear-region then erases
+    // that prompt where it would otherwise show through. The
+    // `Passphrase:` and `Confirm:` rows render as masked input
+    // slots mirroring the Add modal's `Secret:` field — `[ ]`
+    // empty, `[ ••• ]` non-empty — so the snapshot pins that the
+    // renderer never paints typed bytes (the buffers are zeroizing
+    // and the `Debug` impl is redacted, but the renderer is the
+    // last line of defense against onlookers reading the screen).
+    // Inline `confirmation_mismatch` / `zero_length` validation
+    // gates and `save_not_committed` / `save_durability_unconfirmed`
+    // variants land as their own snapshots per the plan's later
+    // checkboxes (L2002 / L2003), as do the `change` and `remove`
+    // sub-flow snapshots (L1969 / L1970).
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Passphrase(PassphraseModal {
+            sub_flow: PassphraseSubFlow::Set,
+            ..PassphraseModal::default()
+        })),
         selected: None,
         pending_chord_leader: None,
         viewport_height: 0,
