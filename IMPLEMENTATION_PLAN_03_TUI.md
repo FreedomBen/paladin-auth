@@ -2018,7 +2018,31 @@ Modals and overlays:
   sub-flow is gated by `Vault::is_encrypted()`" rule); a
   plaintext-vault background therefore matches the `set` test
   and keeps this snapshot focused on the renderer's contract.)*
-- [ ] Passphrase modal — `remove` sub-flow.
+- [x] Passphrase modal — `remove` sub-flow.
+  *(`snapshot_passphrase_modal_remove_default` in
+  `tests/view_snapshots.rs` drives `view::render` against the
+  `Unlocked` state with `Modal::Passphrase(PassphraseModal {
+  sub_flow: PassphraseSubFlow::Remove, ..default() })`, locking
+  the renderer's encrypted → plaintext baseline. The same slice
+  fans out the `remove` sub-flow's body in
+  `crates/paladin-tui/src/view/passphrase.rs`: the bordered block
+  grows taller (14 rows vs the twice-confirm sub-flows' 10), the
+  masked `Passphrase:` / `Confirm:` input rows drop away entirely
+  (the sub-flow takes no new secret), and the body is replaced by
+  the wrapped plaintext-storage warning sourced verbatim from
+  [`paladin_core::format_plaintext_storage_warning`] — so the TUI
+  wording stays byte-identical to the CLI `passphrase remove` /
+  GTK `PassphraseDialog::remove_warning_body` paths. The hint
+  shifts to `Enter confirm  ·  Esc cancel` to flag the destructive
+  mutation. A regression that ever paints the twice-confirm body
+  on a `remove` modal (or drifts the warning wording from core)
+  surfaces as a diff. Locked in
+  `tests/snapshots/view_snapshots__snapshot_passphrase_modal_remove_default.snap`.
+  The renderer doesn't gate on vault state (the gate is enforced
+  upstream by the modal-open reducer per the design's "available
+  sub-flow is gated by `Vault::is_encrypted()`" rule); a
+  plaintext-vault background therefore matches the `set` / `change`
+  tests and keeps the snapshot focused on the renderer's contract.)*
 - [ ] Settings modal.
 - [ ] Help overlay.
 - [x] Unlock screen.

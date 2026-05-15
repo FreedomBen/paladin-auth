@@ -14,17 +14,21 @@
 //! Empty new passphrases are rejected with `invalid_passphrase`
 //! (`reason: "zero_length"`)."*
 //!
-//! This slice paints the freshly-opened `set` sub-flow baseline —
-//! the modal title spells out which transition the user picked
+//! The modal title spells out which transition the user picked
 //! (`Set passphrase` / `Change passphrase` / `Remove passphrase`),
-//! the body shows a one-line intent description plus the
-//! twice-confirm passphrase prompts for the `set` / `change`
-//! sub-flows, and the footer keybinding hint sits flush near the
-//! bottom of the modal. The `remove` sub-flow's plaintext-storage
-//! warning body lands in its own snapshot slice (plan L1970); for
-//! now the renderer falls through to the same twice-confirm body
-//! shape so the layout contract stays consistent until the
-//! sub-flow-specific bodies fan out.
+//! the body fans out per sub-flow — `set` / `change` show a one-line
+//! intent description plus the twice-confirm passphrase prompts,
+//! and `remove` swaps the twice-confirm rows for a wrapped
+//! plaintext-storage warning sourced verbatim from
+//! [`paladin_core::format_plaintext_storage_warning`] so the TUI
+//! wording stays byte-identical to the CLI `passphrase remove` /
+//! GTK `PassphraseDialog::remove_warning_body` paths. The footer
+//! keybinding hint sits flush near the bottom of the modal in every
+//! sub-flow — `Enter submit  ·  Esc cancel` for the twice-confirm
+//! sub-flows, `Enter confirm  ·  Esc cancel` for `remove` to flag
+//! its destructive mutation. The `remove` modal is taller than the
+//! twice-confirm sub-flows because the wrapped warning consumes
+//! more rows than the masked input pair it replaces.
 //!
 //! The renderer is overlaid on top of the list view by
 //! [`super::render`], so the Passphrase modal call site is
@@ -36,15 +40,14 @@
 //! and `save_not_committed` / `save_durability_unconfirmed` variants
 //! of this modal land alongside their own
 //! [`PassphraseModal::error`](crate::app::state::PassphraseModal::error)
-//! rendering slices (plan L1990 / L1991 / L2002 / L2003 / L2004 /
-//! L2005 / L2006 / L2007); this baseline keeps the body to the
-//! intent / twice-prompt / hint quartet so the snapshot pins only
-//! the layout contract.
+//! rendering slices per the plan's later checklist rows.
 
-use ratatui::layout::{Alignment, Constraint, Layout};
+use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::text::Line;
-use ratatui::widgets::{Block, Borders, Clear, Padding, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, Padding, Paragraph, Wrap};
 use ratatui::Frame;
+
+use paladin_core::format_plaintext_storage_warning;
 
 use super::centered_rect;
 use crate::app::state::{PassphraseModal, PassphraseSubFlow};
@@ -57,15 +60,17 @@ const LABEL_COL_WIDTH: usize = 13;
 /// Render the Passphrase modal onto `frame`, on top of whatever the
 /// caller already painted underneath.
 ///
-/// The modal is a 64×10 bordered block centered inside the frame's
-/// rect; the rect is [`Clear`]-ed before the block is drawn so
-/// underlying list-view cells don't show through. Mirrors the
+/// The modal is a 64-wide bordered block centered inside the
+/// frame's rect; the rect is [`Clear`]-ed before the block is drawn
+/// so underlying list-view cells don't show through. Mirrors the
 /// overlay pattern used by the Add / Remove / Rename / Import /
-/// Export modal renderers. The title spells out the active
-/// sub-flow so the user always knows which transition is being
-/// performed.
+/// Export modal renderers. The title spells out the active sub-flow
+/// so the user always knows which transition is being performed.
+/// The block grows taller for the `remove` sub-flow because its
+/// wrapped plaintext-storage warning consumes more rows than the
+/// twice-confirm input pair used by `set` / `change`.
 pub fn render(frame: &mut Frame<'_>, modal: &PassphraseModal) {
-    let modal_area = centered_rect(frame.area(), 64, 10);
+    let modal_area = centered_rect(frame.area(), 64, modal_height(modal.sub_flow));
     frame.render_widget(Clear, modal_area);
 
     let block = Block::default()
@@ -75,8 +80,32 @@ pub fn render(frame: &mut Frame<'_>, modal: &PassphraseModal) {
     let inner = block.inner(modal_area);
     frame.render_widget(block, modal_area);
 
-    // Top-to-bottom: intent, blank, passphrase, confirm, spacer,
-    // hint.
+    match modal.sub_flow {
+        PassphraseSubFlow::Set | PassphraseSubFlow::Change => {
+            render_twice_confirm(frame, inner, modal);
+        }
+        PassphraseSubFlow::Remove => render_remove_warning(frame, inner, modal.sub_flow),
+    }
+}
+
+/// Modal height for the bordered block, per sub-flow. `set` and
+/// `change` share the compact twice-confirm layout; `remove` grows
+/// taller to fit the wrapped plaintext-storage warning. The widths
+/// (`64` cells) are equal across sub-flows so the user's eye lands
+/// on the same screen region regardless of which transition is
+/// being performed.
+fn modal_height(sub_flow: PassphraseSubFlow) -> u16 {
+    match sub_flow {
+        PassphraseSubFlow::Set | PassphraseSubFlow::Change => 10,
+        PassphraseSubFlow::Remove => 14,
+    }
+}
+
+/// Render the twice-confirm body shared by the `set` and `change`
+/// sub-flows: one-line intent, a blank spacer, the two masked
+/// passphrase input rows, a flexible spacer, and the centered
+/// `Enter submit  ·  Esc cancel` hint.
+fn render_twice_confirm(frame: &mut Frame<'_>, inner: Rect, modal: &PassphraseModal) {
     let chunks = Layout::vertical([
         Constraint::Length(1), // intent
         Constraint::Length(1), // blank
@@ -105,6 +134,30 @@ pub fn render(frame: &mut Frame<'_>, modal: &PassphraseModal) {
 
     let hint = "Enter submit  ·  Esc cancel";
     frame.render_widget(Paragraph::new(hint).alignment(Alignment::Center), chunks[5]);
+}
+
+/// Render the `remove` sub-flow body: one-line intent, a blank
+/// spacer, the wrapped plaintext-storage warning sourced from
+/// [`paladin_core::format_plaintext_storage_warning`], a flexible
+/// spacer, and the centered `Enter confirm  ·  Esc cancel` hint
+/// (the verb shifts to `confirm` to flag the destructive mutation).
+fn render_remove_warning(frame: &mut Frame<'_>, inner: Rect, sub_flow: PassphraseSubFlow) {
+    let chunks = Layout::vertical([
+        Constraint::Length(1), // intent
+        Constraint::Length(1), // blank
+        Constraint::Min(1),    // wrapped warning
+        Constraint::Length(1), // hint
+    ])
+    .split(inner);
+
+    frame.render_widget(Paragraph::new(intent_line(sub_flow)), chunks[0]);
+    frame.render_widget(
+        Paragraph::new(format_plaintext_storage_warning()).wrap(Wrap { trim: true }),
+        chunks[2],
+    );
+
+    let hint = "Enter confirm  ·  Esc cancel";
+    frame.render_widget(Paragraph::new(hint).alignment(Alignment::Center), chunks[3]);
 }
 
 /// Title text for the modal's bordered block. The active sub-flow
