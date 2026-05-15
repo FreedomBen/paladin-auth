@@ -407,6 +407,76 @@ fn unlock_dialog_state_empty_rejects_via_prepare_unlock_lock() {
 }
 
 // ---------------------------------------------------------------------------
+// submit_button_sensitive — the "Unlock" button's `set_sensitive`
+// binding. The widget's `#[watch] set_sensitive` reads this predicate
+// so the empty-passphrase pre-flight short-circuit in
+// `prepare_unlock_lock` never fires through a click. The contract is
+// `!is_passphrase_empty()`; pinning it through a dedicated accessor
+// keeps the widget binding stable as additional gating conditions
+// (e.g. `UnlockedBusy` worker activity) land in follow-up commits.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn unlock_dialog_state_submit_button_sensitive_false_when_empty() {
+    // Default state has an empty shadow buffer, so the "Unlock"
+    // submit button must start disabled. The user has to type at
+    // least one byte before the gate opens.
+    let state = UnlockDialogState::new();
+    assert!(!state.submit_button_sensitive());
+}
+
+#[test]
+fn unlock_dialog_state_submit_button_sensitive_true_when_non_empty() {
+    let mut state = UnlockDialogState::new();
+    state.set_passphrase("hunter2");
+    assert!(state.submit_button_sensitive());
+}
+
+#[test]
+fn unlock_dialog_state_submit_button_sensitive_toggles_with_set_then_clear() {
+    // The user types, then deletes everything — the button must
+    // re-disable so a stray Enter cannot fire the empty-passphrase
+    // pre-flight short-circuit.
+    let mut state = UnlockDialogState::new();
+    assert!(!state.submit_button_sensitive());
+    state.set_passphrase("h");
+    assert!(state.submit_button_sensitive());
+    state.clear_passphrase();
+    assert!(!state.submit_button_sensitive());
+}
+
+#[test]
+fn unlock_dialog_state_submit_button_sensitive_false_after_take_passphrase() {
+    // The future worker commit will call `take_passphrase` from the
+    // Submit handler to consume the bytes into a `VaultLock`. After
+    // the take, the state is empty, so the button must re-disable
+    // until the worker returns (preventing a duplicate submit while
+    // `UnlockedBusy` is active).
+    let mut state = UnlockDialogState::new();
+    state.set_passphrase("hunter2");
+    assert!(state.submit_button_sensitive());
+    let _ = state.take_passphrase();
+    assert!(!state.submit_button_sensitive());
+}
+
+#[test]
+fn unlock_dialog_state_submit_button_sensitive_matches_negated_is_passphrase_empty() {
+    // The accessor is documented as `!is_passphrase_empty()`. Pin
+    // that equivalence so future gating additions stay in sync with
+    // the widget binding point.
+    let mut state = UnlockDialogState::new();
+    assert_eq!(
+        state.submit_button_sensitive(),
+        !state.is_passphrase_empty()
+    );
+    state.set_passphrase("hunter2");
+    assert_eq!(
+        state.submit_button_sensitive(),
+        !state.is_passphrase_empty()
+    );
+}
+
+// ---------------------------------------------------------------------------
 // UnlockDialogMsg::PassphraseChanged — emitted by the entry row's
 // `connect_changed` signal on every keystroke. The handler shadows
 // the typed bytes into the SecretEntry buffer above.

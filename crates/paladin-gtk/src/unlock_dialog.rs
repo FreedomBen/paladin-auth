@@ -274,13 +274,30 @@ impl UnlockDialogState {
 
     /// True iff the shadow buffer is the empty string.
     ///
-    /// The future submit button will bind its `sensitive` property
-    /// to `!is_passphrase_empty()` so the empty-passphrase pre-flight
-    /// short-circuit in [`prepare_unlock_lock`] never fires through
-    /// a click.
+    /// The "Unlock" submit button binds its `sensitive` property to
+    /// the [`Self::submit_button_sensitive`] predicate (which is the
+    /// negation of this method) so the empty-passphrase pre-flight
+    /// short-circuit in [`prepare_unlock_lock`] never fires through a
+    /// click.
     #[must_use]
     pub fn is_passphrase_empty(&self) -> bool {
         self.passphrase.is_empty()
+    }
+
+    /// Whether the "Unlock" submit button is currently sensitive.
+    ///
+    /// The widget's `#[watch] set_sensitive` binding reads this
+    /// predicate so the empty-passphrase pre-flight short-circuit in
+    /// [`prepare_unlock_lock`] never fires through a click. Returns
+    /// `true` exactly when the shadow buffer is non-empty. Pinned
+    /// behind a dedicated accessor so future gating conditions
+    /// (e.g. disabling the button while an
+    /// [`crate::app::state::AppState::UnlockedBusy`] worker is in
+    /// flight) can be added in one place without re-touching the
+    /// widget binding.
+    #[must_use]
+    pub fn submit_button_sensitive(&self) -> bool {
+        !self.is_passphrase_empty()
     }
 
     /// Wipe the shadow buffer in place without consuming it.
@@ -366,13 +383,18 @@ pub enum UnlockDialogMsg {
 /// [`crate::app::state::AppState::Locked`] branch.
 ///
 /// Mounts a libadwaita [`adw::StatusPage`] heading that names the
-/// resolved vault path so the user can confirm the destination, plus
-/// an [`adw::PasswordEntryRow`] whose keystrokes shadow into the
-/// model's [`UnlockDialogState`] [`SecretEntry`]. The submit action
-/// wired to a `gio::spawn_blocking` `paladin_core::open` worker and
-/// the inline `DecryptFailed` / `InvalidPassphrase` error surface
-/// land in follow-up commits alongside the `UnlockedBusy` worker
-/// infrastructure.
+/// resolved vault path so the user can confirm the destination, an
+/// [`adw::PasswordEntryRow`] whose keystrokes shadow into the model's
+/// [`UnlockDialogState`] [`SecretEntry`], a deferred inline-error
+/// label beneath the entry, and an "Unlock" submit button whose
+/// sensitivity binds to
+/// [`UnlockDialogState::submit_button_sensitive`] so the
+/// empty-passphrase pre-flight short-circuit in
+/// [`prepare_unlock_lock`] never fires through a click. The click
+/// handler wired to a `gio::spawn_blocking` `paladin_core::open`
+/// worker and the inline `DecryptFailed` / `InvalidPassphrase` error
+/// surface flip land in follow-up commits alongside the
+/// `UnlockedBusy` worker infrastructure.
 pub struct UnlockDialogComponent {
     /// Resolved vault path the dialog will hand to a
     /// `paladin_core::open` worker on submit. Kept on `self` so a
@@ -383,7 +405,10 @@ pub struct UnlockDialogComponent {
     /// Live passphrase shadow buffer driven from the
     /// [`adw::PasswordEntryRow`]'s `connect_changed` signal. Also
     /// hosts the [`InlineError`] slot the view's error label binds
-    /// to. The submit handler will read
+    /// to. The view also `#[watch]`-binds the "Unlock" button's
+    /// `set_sensitive` property to
+    /// [`UnlockDialogState::submit_button_sensitive`] so the gate
+    /// tracks the live buffer. The submit handler will read
     /// [`UnlockDialogState::passphrase_text`] (or
     /// [`UnlockDialogState::take_passphrase`]) once the
     /// `UnlockedBusy` worker lands.
@@ -453,6 +478,30 @@ impl SimpleComponent for UnlockDialogComponent {
                     .map_or("", |err| err.rendered.as_str()),
                 #[watch]
                 set_visible: model.state.inline_error().is_some(),
+            },
+
+            gtk::Box {
+                set_orientation: gtk::Orientation::Horizontal,
+                set_spacing: 6,
+                set_halign: gtk::Align::End,
+
+                // "Unlock" submit button. The `suggested-action` CSS
+                // class renders it as the primary affordance per the
+                // libadwaita HIG. `set_sensitive` binds to
+                // `submit_button_sensitive` so the empty-passphrase
+                // pre-flight short-circuit in `prepare_unlock_lock`
+                // never fires through a click. The click handler that
+                // hands the typed passphrase to a
+                // `gio::spawn_blocking paladin_core::open` worker
+                // lands in a follow-up commit alongside the
+                // `UnlockedBusy` worker infrastructure.
+                #[name = "unlock_button"]
+                gtk::Button {
+                    set_label: "Unlock",
+                    add_css_class: "suggested-action",
+                    #[watch]
+                    set_sensitive: model.state.submit_button_sensitive(),
+                },
             },
         }
     }
