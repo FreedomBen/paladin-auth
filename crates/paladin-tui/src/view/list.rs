@@ -26,12 +26,22 @@
 //! visible code from the reveal replaces the prompt until the
 //! reveal's deadline fires (per `DESIGN.md` §6).
 //!
-//! Search-active filtering and `zz`-recentered viewports land in
-//! subsequent slices.
+//! Search-active filtering: when `state.search_query` is non-empty,
+//! `render_rows` walks the [`crate::search::filtered_account_ids`]
+//! subset of [`Vault::iter`] in insertion order — same predicate
+//! the reducer uses for incremental search — so the rows pane only
+//! paints accounts whose `"{issuer}:{label}"` match key contains the
+//! query case-insensitively. An empty query matches every account
+//! (per [`paladin_core::account_matches_search`]'s "empty needle
+//! matches everything" contract), keeping the no-search list view
+//! byte-for-byte identical to the pre-filter rendering.
+//!
+//! `zz`-recentered viewports land in subsequent slices.
 //!
 //! The renderer never mutates application state and never performs
 //! I/O — every value it reads comes from the supplied [`AppState`].
 
+use std::collections::HashSet;
 use std::time::SystemTime;
 
 use paladin_core::{AccountId, AccountKindSummary, AccountSummary, Code, Vault};
@@ -42,6 +52,7 @@ use ratatui::Frame;
 use secrecy::ExposeSecret;
 
 use crate::app::state::{AppState, HotpReveal};
+use crate::search::filtered_account_ids;
 
 /// Width of the issuer/label column inside an account row. Truncated
 /// titles end with `…` so the column never bleeds into the code
@@ -117,6 +128,10 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState, now: SystemTime) {
         // Empty-state guidance: the centered single-line prompt
         // mirrors the §6 / DESIGN.md add-flow keybinding (`a`) so a
         // user who lands on an empty vault sees what to press next.
+        // The check is against the unfiltered vault — a populated
+        // vault whose search-bar filter happens to yield zero rows
+        // is still "not empty" and keeps the rows pane blank rather
+        // than redirecting to the add-account prompt.
         let lines = vec![
             Line::from(""),
             Line::from(Span::raw("No accounts. Press `a` to add one.")),
@@ -124,10 +139,14 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState, now: SystemTime) {
         let paragraph = Paragraph::new(lines).alignment(Alignment::Center);
         frame.render_widget(paragraph, chunks[2]);
     } else {
+        let visible_ids: HashSet<AccountId> = filtered_account_ids(vault, search_query)
+            .into_iter()
+            .collect();
         render_rows(
             frame,
             chunks[2],
             vault,
+            &visible_ids,
             selected.as_ref(),
             hotp_reveal.as_ref(),
             now,
@@ -143,16 +162,29 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState, now: SystemTime) {
 /// Render one account row per visible vault entry into `area`. Rows
 /// past the bottom of `area` are clipped — viewport scrolling for
 /// long lists lands alongside the `Ctrl-F` / `Ctrl-B` slice.
+///
+/// `visible_ids` is the search-bar filter's matching set in vault
+/// insertion order (provided as a [`HashSet`] for O(1) membership
+/// while [`Vault::iter`] continues to drive the rendering order, so
+/// rows still paint in insertion order rather than the filter's
+/// return order — relevant once the filter ever switches away from
+/// insertion-order preservation).
 fn render_rows(
     frame: &mut Frame<'_>,
     area: Rect,
     vault: &Vault,
+    visible_ids: &HashSet<AccountId>,
     selected: Option<&AccountId>,
     hotp_reveal: Option<&HotpReveal>,
     now: SystemTime,
 ) {
     let capacity = area.height as usize;
-    for (idx, account) in vault.iter().take(capacity).enumerate() {
+    for (idx, account) in vault
+        .iter()
+        .filter(|account| visible_ids.contains(&account.id()))
+        .take(capacity)
+        .enumerate()
+    {
         // `idx < capacity == area.height` (a `u16`), so the cast is
         // lossless — the row offset cannot exceed the row pane's own
         // height.

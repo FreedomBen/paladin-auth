@@ -330,6 +330,56 @@ fn snapshot_list_view_mixed_totp_hotp_hidden_and_revealed() {
 }
 
 #[test]
+fn snapshot_list_view_search_active() {
+    // Plan L1781: "Search-active list view." Drive `view::list` against a
+    // vault holding three accounts where only two match a non-empty
+    // search query (`"git"`) so the snapshot pins two contracts:
+    //
+    //   * The `Search:` line carries the active query bytes verbatim
+    //     so a regression that ever stops painting the query into the
+    //     search bar surfaces as a diff.
+    //   * `render_rows` honors the search-bar filter — only the
+    //     matching accounts (`GitHub`, `GitLab`) appear in the rows
+    //     pane; `Bank (savings)` is filtered out via
+    //     [`paladin_core::account_matches_search`] (case-insensitive
+    //     `"{issuer}:{label}"` substring match, the same predicate
+    //     used by the reducer's incremental-search slice).
+    //
+    // The selected row is the first match (`GitHub`) so the `▶` marker
+    // lands on a visible row — a regression that ever paints the
+    // marker on a filtered-out row would surface as a diff. The
+    // snapshot stays deterministic across hosts: the vault path itself
+    // is not rendered on the list view, and TOTP codes/gauges/seconds
+    // are pinned by `SNAPSHOT_NOW_SECS`.
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (mut vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let github_id = push_totp_account(&mut vault, &store, Some("GitHub"), "ben@example.com");
+    let _gitlab_id = push_totp_account(&mut vault, &store, Some("GitLab"), "ben@example.com");
+    let _bank_id = push_hotp_account(&mut vault, &store, Some("Bank"), "savings", 0);
+
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: "git".to_string(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(github_id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::Search,
+        status_line: None,
+        help_open: false,
+    };
+    insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 12));
+}
+
+#[test]
 fn snapshot_startup_error_unsafe_permissions() {
     // Plan L1806: "Startup-error screen rendered with `unsafe_permissions`
     // (the `Some(text)` from `format_unsafe_permissions`)." Build the error

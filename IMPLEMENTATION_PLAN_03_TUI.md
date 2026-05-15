@@ -1778,7 +1778,31 @@ Layout / list views:
   host-clock-derived but never read by the renderer, so the
   snapshot stays deterministic. Locked in
   `tests/snapshots/view_snapshots__snapshot_list_view_mixed_totp_hotp_hidden_and_revealed.snap`.)*
-- [ ] Search-active list view.
+- [x] Search-active list view.
+  *(`crates/paladin-tui/src/view/list.rs` now respects
+  `state.search_query`: `render` builds the matching-account
+  `HashSet<AccountId>` via the existing
+  `paladin_tui::search::filtered_account_ids` helper — same
+  predicate (`paladin_core::account_matches_search`) the reducer's
+  incremental-search slice uses — and `render_rows` filters
+  `Vault::iter()` against it so only matching rows paint, in
+  insertion order. The empty-vault prompt branch stays bound to
+  the unfiltered `vault.iter().next().is_none()` check, so a
+  populated vault whose filter happens to yield zero rows leaves
+  the rows pane blank instead of swapping in the "Press `a` to add
+  one." add-flow prompt. `snapshot_list_view_search_active` in
+  `tests/view_snapshots.rs` drives an `Unlocked` state with three
+  inserted accounts (TOTP `GitHub (ben@example.com)`, TOTP
+  `GitLab (ben@example.com)`, hidden HOTP `Bank (savings)`),
+  `search_query = "git"`, `focus = Focus::Search`, and
+  `selected = Some(github_id)`; the locked grid in
+  `tests/snapshots/view_snapshots__snapshot_list_view_search_active.snap`
+  pins the `Search: git` line, the two surviving rows with their
+  TOTP codes / 60%-full gauge / `18s` suffix, and the `▶` marker
+  landing on the first match — regressions that ever stop
+  painting the query into the search bar, stop honoring the
+  filter, or paint the marker on a filtered-out row each surface
+  as a diff.)*
 - [ ] List view after a `zz` recenter (selected row in viewport
   middle).
 - [ ] `--no-color` variants of the list-view snapshots above.
