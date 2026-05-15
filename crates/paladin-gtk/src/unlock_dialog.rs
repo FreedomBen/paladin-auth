@@ -37,6 +37,11 @@
 //! `tests/unlock_dialog_logic.rs` can exercise every branch without
 //! spinning up GTK or libadwaita.
 
+use std::path::{Path, PathBuf};
+
+use libadwaita as adw;
+use libadwaita::prelude::*;
+use relm4::prelude::*;
 use secrecy::SecretString;
 
 use paladin_core::{ErrorKind, PaladinError, VaultLock, VaultStatus};
@@ -121,4 +126,114 @@ pub fn prepare_unlock_lock(passphrase: &str) -> Result<VaultLock, SubmitRejectio
 #[must_use]
 pub fn classify_unlock_error(err: &PaladinError) -> OpenErrorRouting {
     classify_open_error(err)
+}
+
+/// Stdout marker prefix emitted under `--exit-after-startup` once
+/// the [`UnlockDialogComponent`] has mounted on the
+/// [`crate::app::state::AppState::Locked`] branch.
+///
+/// The smoke test in `tests/gtk_smoke.rs` greps for this prefix to
+/// prove the widget actually mounted (rather than inferring the
+/// render from the `startup_state=Locked` line, which is emitted
+/// before any per-state widget is mounted).
+pub const UNLOCK_DIALOG_MARKER_PREFIX: &str = "paladin-gtk: unlock_dialog_path=";
+
+/// Format the smoke-test stdout marker line for a mounted
+/// [`UnlockDialogComponent`].
+///
+/// The marker is `paladin-gtk: unlock_dialog_path=<path>` where
+/// `<path>` is the resolved vault path the dialog will pass to
+/// `paladin_core::open` (inside `gio::spawn_blocking`) on submit.
+#[must_use]
+pub fn format_unlock_dialog_marker(path: &Path) -> String {
+    format!("{UNLOCK_DIALOG_MARKER_PREFIX}{}", path.display())
+}
+
+/// Construction parameters for [`UnlockDialogComponent`].
+#[derive(Debug, Clone)]
+pub struct UnlockDialogInit {
+    /// Resolved vault path the dialog targets on submit. Surfaced
+    /// in the dialog body so the user can confirm the destination
+    /// before typing a passphrase.
+    pub vault_path: PathBuf,
+}
+
+/// Messages handled by [`UnlockDialogComponent`].
+///
+/// This milestone scaffolds the read-only render path — the
+/// `submit` / inline-decrypt-failure / `gio::spawn_blocking`
+/// `paladin_core::open` wiring described in §"Component tree" lands
+/// in a follow-up commit alongside the passphrase-field widget on
+/// `AppModel`. The empty enum is the deliberate v0.2 starting point
+/// — relm4 requires the associated `Input` type to exist even when
+/// no inbound messages are wired yet.
+#[derive(Debug)]
+pub enum UnlockDialogMsg {}
+
+/// Widget-bearing dialog for the
+/// [`crate::app::state::AppState::Locked`] branch.
+///
+/// Mounts a libadwaita [`adw::StatusPage`] that surfaces the
+/// resolved vault path so the user can confirm the destination
+/// before typing a passphrase. Subsequent commits replace the
+/// placeholder body with the [`adw::PasswordEntryRow`] passphrase
+/// entry, the submit action wired to a `gio::spawn_blocking`
+/// `paladin_core::open` worker, and the inline `DecryptFailed` /
+/// `InvalidPassphrase` error surface; until then, keeping the
+/// widget read-only mirrors the
+/// [`crate::startup_error::StartupErrorComponent`] and
+/// [`crate::init_dialog::InitDialogComponent`] pattern (those
+/// branches also mounted a status page first and grew inbound
+/// actions later).
+pub struct UnlockDialogComponent {
+    /// Resolved vault path the dialog will hand to a
+    /// `paladin_core::open` worker on submit. Kept on `self` so a
+    /// future message handler can read it without re-plumbing the
+    /// value through every signal.
+    #[allow(dead_code)]
+    vault_path: PathBuf,
+}
+
+#[allow(missing_docs)]
+#[relm4::component(pub)]
+impl SimpleComponent for UnlockDialogComponent {
+    type Init = UnlockDialogInit;
+    type Input = UnlockDialogMsg;
+    type Output = ();
+
+    view! {
+        #[root]
+        adw::StatusPage {
+            // `dialog-password-symbolic` is the freedesktop-standard
+            // glyph for "passphrase / unlock"; it resolves through
+            // the system icon theme so the wordless icon matches
+            // every other GNOME app's unlock surface.
+            set_icon_name: Some("dialog-password-symbolic"),
+            set_title: "Unlock vault",
+            set_description: Some(&format!(
+                "Enter the passphrase for {path}.",
+                path = model.vault_path.display(),
+            )),
+            set_hexpand: true,
+            set_vexpand: true,
+        }
+    }
+
+    fn init(
+        init: Self::Init,
+        root: Self::Root,
+        _sender: ComponentSender<Self>,
+    ) -> ComponentParts<Self> {
+        let model = UnlockDialogComponent {
+            vault_path: init.vault_path,
+        };
+        let widgets = view_output!();
+        ComponentParts { model, widgets }
+    }
+
+    fn update(&mut self, _msg: Self::Input, _sender: ComponentSender<Self>) {
+        // No inbound messages handled at this milestone — see
+        // `UnlockDialogMsg` doc comment for the upcoming submit /
+        // inline-error / worker actions.
+    }
 }

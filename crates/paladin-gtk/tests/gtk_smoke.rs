@@ -443,6 +443,127 @@ fn app_renders_init_dialog_for_missing_vault() {
     );
 }
 
+/// Light Argon2 params for the encrypted-vault smoke fixture. Keeps
+/// the KDF fast under CI (the §4.4 defaults at `m=64 MiB, t=3` are
+/// designed for production and would balloon the suite); the same
+/// shape is used by the paladin-tui test fixtures.
+fn light_argon2_params() -> paladin_core::Argon2Params {
+    paladin_core::Argon2Params {
+        m_kib: 8192,
+        t: 1,
+        p: 1,
+    }
+}
+
+/// Set up a `0700` tempdir containing an empty encrypted vault at
+/// `<tempdir>/vault.bin`. Returns the tempdir handle (kept alive by
+/// the caller so the directory is not unlinked mid-test) and the
+/// vault path. The `(Vault, Store)` pair is dropped before returning
+/// so the file handle is closed before `paladin-gtk` re-opens it.
+fn prepare_empty_encrypted_vault(passphrase: &str) -> (tempfile::TempDir, PathBuf) {
+    let tempdir = tempfile::tempdir().expect("create tempdir for encrypted vault");
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(tempdir.path(), std::fs::Permissions::from_mode(0o700))
+            .expect("chmod tempdir to 0700");
+    }
+    let vault_path = tempdir.path().join("vault.bin");
+    {
+        let pp = SecretString::from(passphrase.to_string());
+        let opts = paladin_core::EncryptionOptions::with_params(pp, light_argon2_params())
+            .expect("encryption options accept light params");
+        let (vault, store) =
+            paladin_core::Store::create(&vault_path, paladin_core::VaultInit::Encrypted(opts))
+                .expect("create encrypted vault on disk");
+        vault.save(&store).expect("persist encrypted vault to disk");
+    }
+    (tempdir, vault_path)
+}
+
+/// Plan bullet: "`UnlockDialogComponent` renders the passphrase-
+/// entry surface for the `Locked` branch."
+///
+/// Routes the §"Vault interaction" startup sequence through
+/// `paladin_core::inspect` → `VaultStatus::Encrypted` by pre-
+/// creating an encrypted vault at a temporary path. `AppModel`
+/// then enters `AppState::Locked { path }` and mounts
+/// `UnlockDialogComponent`. Under `--exit-after-startup`, the
+/// model emits two stdout markers from the `Locked` branch — the
+/// existing `startup_state=Locked ...` line (produced before any
+/// per-state widget is mounted) and the new `unlock_dialog_path=...`
+/// line (emitted exclusively from the `Locked` branch immediately
+/// before `UnlockDialogComponent` is launched). Asserting on both
+/// proves the widget actually mounted with the resolved vault path,
+/// rather than the binary having merely classified the file as
+/// encrypted.
+#[test]
+fn app_renders_unlock_dialog_for_encrypted_vault() {
+    if !xvfb_run_available() {
+        eprintln!(
+            "skipping: `xvfb-run` is not on PATH. CI installs the xvfb \
+             package; install it locally to exercise this smoke test."
+        );
+        return;
+    }
+
+    let (_tempdir, vault_path) = prepare_empty_encrypted_vault("hunter2");
+
+    let path_str = vault_path
+        .to_str()
+        .expect("tempfile produced a non-UTF-8 vault path");
+    let output = run_under_xvfb(&["--vault", path_str, "--exit-after-startup"]);
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "xvfb-run paladin-gtk --vault {path_str} --exit-after-startup exited with status {:?}\n\
+         --- stdout ---\n{}\n--- stderr ---\n{}",
+        output.status,
+        stdout,
+        stderr,
+    );
+
+    // The `startup_state` marker is emitted before any per-state
+    // widget mount, so it proves only that `run_startup_probes`
+    // reached the `Locked` branch.
+    let state_expected = format!("paladin-gtk: startup_state=Locked path={path_str}");
+    assert!(
+        stdout.contains(&state_expected),
+        "expected stdout to contain `{state_expected}`\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}",
+    );
+
+    // The `unlock_dialog_path` marker is emitted exclusively from
+    // the `Locked` branch immediately before `UnlockDialogComponent`
+    // is launched; its presence proves the widget mounted with the
+    // resolved vault path. The marker format is fixed by
+    // `unlock_dialog::format_unlock_dialog_marker` and pinned by
+    // `tests/unlock_dialog_logic.rs::format_unlock_dialog_marker_renders_resolved_path`.
+    let unlock_expected = format!("paladin-gtk: unlock_dialog_path={path_str}");
+    assert!(
+        stdout.contains(&unlock_expected),
+        "expected stdout to contain `{unlock_expected}`\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}",
+    );
+
+    // The `Locked` branch never enters the unlocked, startup-error,
+    // or init-dialog branches; assert their per-branch markers are
+    // absent so an accidental fall-through to a non-rendering state
+    // is caught here.
+    assert!(
+        !stdout.contains("paladin-gtk: account_list_rows="),
+        "expected the Locked branch to skip the account list marker\n--- stdout ---\n{stdout}",
+    );
+    assert!(
+        !stdout.contains("paladin-gtk: startup_error_body="),
+        "expected the Locked branch to skip the startup-error marker\n--- stdout ---\n{stdout}",
+    );
+    assert!(
+        !stdout.contains("paladin-gtk: init_dialog_path="),
+        "expected the Locked branch to skip the init-dialog marker\n--- stdout ---\n{stdout}",
+    );
+}
+
 /// Add a validated TOTP or HOTP account to `vault` and persist to
 /// `store`. The secret is a fixed RFC 6238 base32 fixture; the same
 /// shape is used by the pure-logic fixtures in

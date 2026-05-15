@@ -29,6 +29,7 @@
 //! can stay a thin shell over the decisions.
 
 use std::io;
+use std::path::Path;
 
 use paladin_core::{ErrorKind, PaladinError, PermissionSubject, VaultLock, VaultMode, VaultStatus};
 
@@ -301,4 +302,35 @@ fn passphrase_entry_set_then_clear_round_trips() {
     assert_eq!(entry.text(), "hunter2");
     entry.clear();
     assert!(entry.text().is_empty());
+}
+
+// `format_unlock_dialog_marker` / `UNLOCK_DIALOG_MARKER_PREFIX` pin
+// the `--exit-after-startup` stdout contract consumed by
+// `tests/gtk_smoke.rs` for the `Locked` branch. Pure-logic tests
+// live here so the contract is verified without spinning up a
+// display server.
+
+#[test]
+fn unlock_dialog_marker_prefix_is_stable() {
+    assert_eq!(
+        paladin_gtk::unlock_dialog::UNLOCK_DIALOG_MARKER_PREFIX,
+        "paladin-gtk: unlock_dialog_path=",
+    );
+}
+
+#[test]
+fn format_unlock_dialog_marker_renders_resolved_path() {
+    let path = Path::new("/tmp/example/vault.bin");
+    assert_eq!(
+        paladin_gtk::unlock_dialog::format_unlock_dialog_marker(path),
+        "paladin-gtk: unlock_dialog_path=/tmp/example/vault.bin",
+    );
+}
+
+#[test]
+fn format_unlock_dialog_marker_starts_with_prefix() {
+    // Every rendered marker begins with `UNLOCK_DIALOG_MARKER_PREFIX`
+    // so the smoke test can grep by prefix when the path varies.
+    let marker = paladin_gtk::unlock_dialog::format_unlock_dialog_marker(Path::new("/x"));
+    assert!(marker.starts_with(paladin_gtk::unlock_dialog::UNLOCK_DIALOG_MARKER_PREFIX));
 }

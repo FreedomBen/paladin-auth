@@ -12,15 +12,19 @@
 //! vault path, call `paladin_core::inspect`, and (for plaintext
 //! vaults) `paladin_core::Store::open` on the GTK main loop, then
 //! seeds [`AppModel::state`] / [`AppModel::vault`] from the result.
-//! A subsequent commit will mount the `UnlockComponent` for the
-//! `Locked` branch. The `AccountListComponent`,
-//! `StartupErrorComponent`, and `InitDialogComponent` branches are
-//! already wired here: `AccountListComponent` renders the unlocked
-//! vault list, `StartupErrorComponent` renders a non-mutating
-//! `AdwStatusPage` whose body text is the typed
-//! [`crate::startup_error::StartupError`] projection, and
+//! The `AccountListComponent`, `StartupErrorComponent`,
+//! `InitDialogComponent`, and `UnlockDialogComponent` branches are
+//! all wired here as read-only mounts: `AccountListComponent`
+//! renders the unlocked vault list, `StartupErrorComponent` renders
+//! a non-mutating `AdwStatusPage` whose body text is the typed
+//! [`crate::startup_error::StartupError`] projection,
 //! `InitDialogComponent` renders the first-run / missing-vault
-//! surface seeded with the resolved vault path.
+//! surface seeded with the resolved vault path, and
+//! `UnlockDialogComponent` renders the encrypted-vault passphrase-
+//! entry surface seeded with the resolved vault path. The full
+//! passphrase-entry / `gio::spawn_blocking` `paladin_core::open`
+//! worker wiring for `UnlockDialogComponent` lands in follow-up
+//! commits.
 //!
 //! Under the hidden `--exit-after-startup` flag, the model prints
 //! [`startup_state_marker`] to stdout and enqueues [`AppMsg::Quit`]
@@ -45,6 +49,7 @@ use crate::init_dialog::{format_init_dialog_marker, InitDialogComponent, InitDia
 use crate::startup_error::{
     format_startup_error_marker, StartupError, StartupErrorComponent, StartupErrorInit,
 };
+use crate::unlock_dialog::{format_unlock_dialog_marker, UnlockDialogComponent, UnlockDialogInit};
 
 /// Construction parameters for [`AppModel`].
 ///
@@ -117,6 +122,12 @@ pub struct AppModel {
     /// not dropped at the end of `init`.
     #[allow(dead_code)]
     init_dialog: Option<Controller<InitDialogComponent>>,
+    /// Live [`UnlockDialogComponent`] controller when `AppModel`
+    /// routed to [`AppState::Locked`]. `None` for every
+    /// non-locked state. Held on `self` so the rendered widget is
+    /// not dropped at the end of `init`.
+    #[allow(dead_code)]
+    unlock_dialog: Option<Controller<UnlockDialogComponent>>,
 }
 
 impl std::fmt::Debug for AppModel {
@@ -136,6 +147,10 @@ impl std::fmt::Debug for AppModel {
             .field(
                 "init_dialog",
                 &self.init_dialog.as_ref().map(|_| "<mounted>"),
+            )
+            .field(
+                "unlock_dialog",
+                &self.unlock_dialog.as_ref().map(|_| "<mounted>"),
             )
             .finish()
     }
@@ -212,6 +227,9 @@ impl SimpleComponent for AppModel {
             if let AppState::Missing { path } = &state {
                 println!("{}", format_init_dialog_marker(path));
             }
+            if let AppState::Locked { path } = &state {
+                println!("{}", format_unlock_dialog_marker(path));
+            }
         }
 
         let widgets = view_output!();
@@ -250,6 +268,18 @@ impl SimpleComponent for AppModel {
             None
         };
 
+        let unlock_dialog = if let AppState::Locked { path } = &state {
+            let controller = UnlockDialogComponent::builder()
+                .launch(UnlockDialogInit {
+                    vault_path: path.clone(),
+                })
+                .detach();
+            widgets.content.append(controller.widget());
+            Some(controller)
+        } else {
+            None
+        };
+
         let model = AppModel {
             vault_path: vault_path_override,
             state: Some(state),
@@ -257,6 +287,7 @@ impl SimpleComponent for AppModel {
             account_list,
             startup_error,
             init_dialog,
+            unlock_dialog,
         };
 
         if exit_after_startup {

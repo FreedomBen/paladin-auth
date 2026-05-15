@@ -1094,6 +1094,31 @@ Required for Milestone 7 sign-off. Runs in CI under `xvfb-run`.
   Pure-logic coverage in
   `crates/paladin-gtk/tests/init_dialog_logic.rs` pins the marker
   prefix and the path-passthrough rendering.
+- [ ] `UnlockDialogComponent` renders the passphrase-entry surface
+  for the `Locked` branch. When `run_startup_probes` routes
+  `AppModel` to `AppState::Locked` (an encrypted vault at the
+  resolved path), `AppModel` launches an `UnlockDialogComponent`
+  controller whose `AdwStatusPage` body names the resolved path so
+  the user can confirm the destination before typing a passphrase.
+  The full passphrase-entry / `gio::spawn_blocking` `paladin_core::open`
+  worker / inline-decrypt-failure wiring described in the
+  §"Component tree" and §"Milestone 7 checklist" entry for
+  `UnlockComponent` lands in follow-up commits; this bullet covers
+  the read-only mount only, mirroring the staged rollout that the
+  `StartupErrorComponent` and `InitDialogComponent` bullets use.
+  Under `--exit-after-startup`, `AppModel` emits an additional
+  stdout marker — `paladin-gtk: unlock_dialog_path=<path>` produced
+  by `unlock_dialog::format_unlock_dialog_marker` — exclusively
+  from the `Locked` branch, so its presence proves the widget
+  actually mounted. The smoke test
+  `crates/paladin-gtk/tests/gtk_smoke.rs::app_renders_unlock_dialog_for_encrypted_vault`
+  drives the path with an encrypted vault built from light Argon2
+  params (`m_kib=8192, t=1, p=1`) so the test stays fast, and
+  asserts on both the existing `startup_state=Locked` line and the
+  new path marker, while also verifying that the unlocked /
+  startup-error / init-dialog markers stay absent. Pure-logic
+  coverage in `crates/paladin-gtk/tests/unlock_dialog_logic.rs`
+  pins the marker prefix and the path-passthrough rendering.
 
 ### Thinness contract (`tests/thinness.rs`)
 
