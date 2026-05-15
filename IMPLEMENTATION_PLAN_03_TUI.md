@@ -1910,7 +1910,34 @@ Modals and overlays:
   Inline `save_not_committed` / `save_durability_unconfirmed`
   variants of this modal land alongside their own checklist rows
   below.)*
-- [ ] Import modal.
+- [x] Import modal. *(`snapshot_import_modal_default` in
+  `crates/paladin-tui/tests/view_snapshots.rs` drives an `Unlocked`
+  state with an empty plaintext vault and
+  `modal = Some(Modal::Import(ImportModal::default()))`, then renders
+  through `view::render` at 80×20 — the new
+  `crates/paladin-tui/src/view/import.rs` paints a 72×12 centered
+  `Clear`-then-bordered ` Import accounts ` block over the list-view
+  backdrop. The 8-cell width bump over the 64-wide Remove / Rename
+  overlays gives the segmented `Format:` selector room for all five
+  [`ImportFormatSelector`] variants (`Auto` / `Otpauth` / `Aegis` /
+  `Paladin` / `QR`) without truncating the last segment under the
+  `▶ … ◀` active-variant markers. The body holds an editable
+  `Source:` text-input row carrying the `ImportModal::path_text`
+  buffer in `[ ... ]` brackets (mirrors the Add / Rename modals'
+  `text_field_line` so empty input renders as `[ ]`), the segmented
+  `Format:` selector wired to `modal.format`, the segmented
+  `On conflict:` selector wired to `modal.conflict` over the three
+  [`paladin_core::ImportConflict`] variants in the CLI's documented
+  `skip` / `replace` / `append` order, a flexible spacer, and a
+  centered `Tab cycles fields  ·  Enter submit  ·  Esc cancel` hint
+  near the bottom border. `view::render`'s `render_modal` dispatch
+  was extended in the same slice to route `Modal::Import` to the new
+  module — Export / Passphrase / Settings remain the explicit no-op
+  branch until their own snapshot slices land. Locked in
+  `tests/snapshots/view_snapshots__snapshot_import_modal_default.snap`.
+  Inline-error / encrypted-Paladin passphrase sub-phase / post-import
+  counts panel variants of this modal land alongside their own
+  checklist rows below.)*
 - [ ] Export modal.
 - [ ] Passphrase modal — `set` sub-flow.
 - [ ] Passphrase modal — `change` sub-flow.

@@ -31,7 +31,7 @@ use paladin_core::{
     VaultInit, VaultLock,
 };
 use paladin_tui::app::state::{
-    AddModal, AppState, Focus, HotpReveal, Modal, RemoveModal, RenameModal,
+    AddModal, AppState, Focus, HotpReveal, ImportModal, Modal, RemoveModal, RenameModal,
 };
 use paladin_tui::prompt::PassphraseBuffer;
 use paladin_tui::view::render;
@@ -589,6 +589,62 @@ fn snapshot_rename_modal_default() {
             error: None,
         })),
         selected: Some(id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 20));
+}
+
+#[test]
+fn snapshot_import_modal_default() {
+    // Plan L1886: "Import modal." Drive `view::render` against an
+    // `Unlocked` state with `Modal::Import(ImportModal::default())`
+    // open so the snapshot pins the freshly-opened (empty
+    // `path_text`, `Auto` format selector, `Skip` on-conflict policy,
+    // no inline error, no encrypted-Paladin passphrase sub-phase, no
+    // post-success counts panel) baseline of the Import modal overlay
+    // rendered on top of the list view per `DESIGN.md` §6's "Import
+    // takes a file path and optional explicit format … applies a
+    // user-selected on-conflict policy (skip / replace / append), and
+    // reports imported/skipped/replaced/appended/warning counts"
+    // contract and the `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per
+    // §6) > Import" checklist row.
+    //
+    // The background vault is empty so the underlying list view
+    // settles into its `No accounts. Press `a` to add one.` prompt
+    // — the modal overlay's Clear-region then erases that prompt
+    // where it would otherwise show through, and the snapshot
+    // captures only the bordered list chrome (top border + search +
+    // divider above, divider + hint + bottom border below) framing
+    // the modal. The `Source:` field renders as the editable
+    // `[ ... ]` text-input style mirroring the Add / Rename modals'
+    // editable rows; the `Format:` selector renders as the segmented
+    // `▶ Auto ◀  Otpauth  Aegis  Paladin  QR` line mirroring the Add
+    // modal's mode selector so a regression that ever swaps the
+    // active variant or stops painting the segmented selector
+    // surfaces as a diff; the `On conflict:` selector renders the
+    // same way over the three `ImportConflict` variants. Future
+    // slices land the inline-error / passphrase sub-phase / counts
+    // panel variants as their own snapshots per the plan's later
+    // checkboxes.
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Import(ImportModal::default())),
+        selected: None,
         pending_chord_leader: None,
         viewport_height: 0,
         viewport_offset: 0,
