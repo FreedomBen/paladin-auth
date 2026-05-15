@@ -13,8 +13,12 @@
 //! vaults) `paladin_core::Store::open` on the GTK main loop, then
 //! seeds [`AppModel::state`] / [`AppModel::vault`] from the result.
 //! Subsequent commits will mount the per-`AppState` child
-//! components (`InitDialog`, `UnlockComponent`,
-//! `AccountListComponent`, `StartupErrorComponent`).
+//! components (`InitDialog`, `UnlockComponent`). The
+//! `AccountListComponent` and `StartupErrorComponent` branches are
+//! already wired here: the former renders the unlocked vault list,
+//! the latter renders a non-mutating `AdwStatusPage` whose body
+//! text is the typed [`crate::startup_error::StartupError`]
+//! projection.
 //!
 //! Under the hidden `--exit-after-startup` flag, the model prints
 //! [`startup_state_marker`] to stdout and enqueues [`AppMsg::Quit`]
@@ -35,7 +39,9 @@ use crate::account_list::{
 use crate::app::state::{
     decide_state_from_inspect, decide_state_from_open_error, AppState, OpenErrorOutcome,
 };
-use crate::startup_error::StartupError;
+use crate::startup_error::{
+    format_startup_error_marker, StartupError, StartupErrorComponent, StartupErrorInit,
+};
 
 /// Construction parameters for [`AppModel`].
 ///
@@ -96,6 +102,12 @@ pub struct AppModel {
     /// dropped at the end of `init`.
     #[allow(dead_code)]
     account_list: Option<Controller<AccountListComponent>>,
+    /// Live [`StartupErrorComponent`] controller when `AppModel`
+    /// routed to [`AppState::StartupError`]. `None` for every
+    /// non-error state. Held on `self` so the rendered
+    /// `AdwStatusPage` is not dropped at the end of `init`.
+    #[allow(dead_code)]
+    startup_error: Option<Controller<StartupErrorComponent>>,
 }
 
 impl std::fmt::Debug for AppModel {
@@ -107,6 +119,10 @@ impl std::fmt::Debug for AppModel {
             .field(
                 "account_list",
                 &self.account_list.as_ref().map(|_| "<mounted>"),
+            )
+            .field(
+                "startup_error",
+                &self.startup_error.as_ref().map(|_| "<mounted>"),
             )
             .finish()
     }
@@ -170,12 +186,15 @@ impl SimpleComponent for AppModel {
         if exit_after_startup {
             // Stable stdout contract consumed by `tests/gtk_smoke.rs`.
             println!("{}", startup_state_marker(&state));
-            // The row marker is only meaningful when the
-            // `AccountListComponent` is actually mounted; emit it
-            // exclusively from the `Unlocked` branch so callers do
-            // not infer a render from a non-rendering state.
+            // Per-state body markers are only meaningful when the
+            // matching child component actually mounts; emit each
+            // one exclusively from its own branch so callers do not
+            // infer a render from a non-rendering state.
             if state.is_unlocked() {
                 println!("{}", format_rendered_marker(&rows));
+            }
+            if let AppState::StartupError { error, .. } = &state {
+                println!("{}", format_startup_error_marker(error));
             }
         }
 
@@ -191,11 +210,24 @@ impl SimpleComponent for AppModel {
             None
         };
 
+        let startup_error = if let AppState::StartupError { error, .. } = &state {
+            let controller = StartupErrorComponent::builder()
+                .launch(StartupErrorInit {
+                    error: error.clone(),
+                })
+                .detach();
+            widgets.content.append(controller.widget());
+            Some(controller)
+        } else {
+            None
+        };
+
         let model = AppModel {
             vault_path: vault_path_override,
             state: Some(state),
             vault,
             account_list,
+            startup_error,
         };
 
         if exit_after_startup {

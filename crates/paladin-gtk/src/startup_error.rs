@@ -32,6 +32,10 @@
 
 use std::path::{Path, PathBuf};
 
+use libadwaita as adw;
+use libadwaita::prelude::*;
+use relm4::prelude::*;
+
 use paladin_core::{format_unsafe_permissions, ErrorKind, PaladinError, VaultStatus};
 
 /// Which startup step produced the error.
@@ -143,6 +147,112 @@ pub fn classify_open_error(err: &PaladinError) -> OpenErrorRouting {
 #[must_use]
 pub fn render_startup_error(err: &PaladinError) -> String {
     format_unsafe_permissions(err).unwrap_or_else(|| err.to_string())
+}
+
+/// Stdout marker prefix emitted under `--exit-after-startup` once
+/// the `StartupErrorComponent` has mounted with a rendered body.
+///
+/// The smoke test in `tests/gtk_smoke.rs` greps for this prefix to
+/// prove that the widget actually mounted on the
+/// [`crate::app::state::AppState::StartupError`] branch (rather than
+/// inferring the render from the `startup_state=StartupError` line,
+/// which is emitted before any per-state widget is mounted).
+pub const STARTUP_ERROR_MARKER_PREFIX: &str = "paladin-gtk: startup_error_body=";
+
+/// Format the smoke-test stdout marker line for a mounted
+/// [`StartupError`].
+///
+/// The marker is `paladin-gtk: startup_error_body=<rendered>` where
+/// `<rendered>` is [`StartupError::rendered`] with any embedded
+/// `'\n'` collapsed to `'|'` so the marker fits on a single line and
+/// `tests/gtk_smoke.rs` can match it with `stdout.contains(...)`.
+/// Newline collapse only matters for the multi-line
+/// `UnsafePermissions` body (the chmod hint sits on its own line in
+/// the CLI / TUI rendering); single-line bodies pass through
+/// unchanged. The `'|'` separator is safe because no
+/// `paladin_core::format_unsafe_permissions` or `PaladinError`
+/// `Display` variant contains a pipe character.
+#[must_use]
+pub fn format_startup_error_marker(error: &StartupError) -> String {
+    let single_line = error.rendered.replace('\n', "|");
+    format!("{STARTUP_ERROR_MARKER_PREFIX}{single_line}")
+}
+
+/// Construction parameters for [`StartupErrorComponent`].
+#[derive(Debug, Clone)]
+pub struct StartupErrorInit {
+    /// Rendered error projection to bind into the status page body.
+    pub error: StartupError,
+}
+
+/// Messages handled by [`StartupErrorComponent`].
+///
+/// This milestone scaffolds the read-only render path; the
+/// `retry` and `quit` actions described in §"Vault interaction"
+/// land in a follow-up commit alongside the action-bar wiring on
+/// `AppModel`. The empty enum is the deliberate v0.2 starting
+/// point — relm4 requires the associated `Input` type to exist
+/// even when no inbound messages are wired yet.
+#[derive(Debug)]
+pub enum StartupErrorMsg {}
+
+/// Widget-bearing non-mutating error surface for the
+/// [`crate::app::state::AppState::StartupError`] branch.
+///
+/// Mounts a libadwaita [`adw::StatusPage`] whose body renders
+/// [`StartupError::rendered`] verbatim, so the wording the user
+/// sees matches `paladin_core::format_unsafe_permissions` /
+/// `PaladinError::Display` exactly (same text the CLI and TUI use).
+/// The component never creates, overwrites, or repairs vault files
+/// — per §"Vault interaction", a vault path entered the
+/// `StartupError` branch precisely because the binary could not
+/// safely operate on the underlying file.
+pub struct StartupErrorComponent {
+    /// Cloned projection of the typed [`PaladinError`] that routed
+    /// `AppModel` to `StartupError`. Kept on `self` so a future
+    /// message handler (retry action) can read the source / kind
+    /// without re-plumbing the value through every signal.
+    #[allow(dead_code)]
+    error: StartupError,
+}
+
+#[allow(missing_docs)]
+#[relm4::component(pub)]
+impl SimpleComponent for StartupErrorComponent {
+    type Init = StartupErrorInit;
+    type Input = StartupErrorMsg;
+    type Output = ();
+
+    view! {
+        #[root]
+        adw::StatusPage {
+            // `dialog-error-symbolic` is the freedesktop-standard
+            // error icon shipped by `adwaita-icon-theme`; it is
+            // resolved via the system icon theme so the wordless
+            // glyph matches every other GNOME app's error surface.
+            set_icon_name: Some("dialog-error-symbolic"),
+            set_title: "Startup error",
+            set_description: Some(model.error.rendered.as_str()),
+            set_hexpand: true,
+            set_vexpand: true,
+        }
+    }
+
+    fn init(
+        init: Self::Init,
+        root: Self::Root,
+        _sender: ComponentSender<Self>,
+    ) -> ComponentParts<Self> {
+        let model = StartupErrorComponent { error: init.error };
+        let widgets = view_output!();
+        ComponentParts { model, widgets }
+    }
+
+    fn update(&mut self, _msg: Self::Input, _sender: ComponentSender<Self>) {
+        // No inbound messages handled at this milestone — see
+        // `StartupErrorMsg` doc comment for the upcoming retry
+        // and quit actions.
+    }
 }
 
 /// Re-run the startup probe: vault-path resolution followed by

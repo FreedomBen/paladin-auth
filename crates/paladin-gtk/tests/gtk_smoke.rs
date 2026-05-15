@@ -271,6 +271,86 @@ fn app_renders_prepared_accounts() {
     );
 }
 
+/// Plan bullet: "`StartupErrorComponent` renders the
+/// non-mutating error surface for the `StartupError` branch."
+///
+/// Pre-creates a corrupt vault file at a temporary path — bytes
+/// that do not match the §4.4 header magic, exactly the fixture
+/// used by `tests/startup_probes.rs::run_startup_probes_routes_corrupted_file_to_startup_error`.
+/// `paladin_core::inspect` therefore routes to
+/// `InvalidHeader`, which the `AppModel` startup sequence funnels
+/// into `AppState::StartupError` tagged
+/// `StartupErrorSource::Inspect`. Under `--exit-after-startup`,
+/// `AppModel` emits two stdout markers from the `StartupError`
+/// branch — the existing `startup_state=StartupError ...` line
+/// (which is produced before the widget mount) and the new
+/// `startup_error_body=...` line (which is only emitted after the
+/// `StartupErrorComponent` is launched and bound). Asserting on
+/// both proves that the widget actually mounted with the typed
+/// error body rather than the binary having merely classified the
+/// failure.
+#[test]
+fn app_renders_startup_error_for_corrupt_vault() {
+    if !xvfb_run_available() {
+        eprintln!(
+            "skipping: `xvfb-run` is not on PATH. CI installs the xvfb \
+             package; install it locally to exercise this smoke test."
+        );
+        return;
+    }
+
+    let tempdir = tempfile::tempdir().expect("create tempdir for corrupt vault");
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(tempdir.path(), std::fs::Permissions::from_mode(0o700))
+            .expect("chmod tempdir to 0700");
+    }
+    let vault_path = tempdir.path().join("vault.bin");
+    // Non-magic prefix → `paladin_core::inspect` returns
+    // `PaladinError::InvalidHeader`, which routes to
+    // `StartupErrorSource::Inspect` per §"Vault interaction".
+    std::fs::write(&vault_path, b"not a paladin vault").expect("write corrupted vault");
+
+    let path_str = vault_path
+        .to_str()
+        .expect("tempfile produced a non-UTF-8 vault path");
+    let output = run_under_xvfb(&["--vault", path_str, "--exit-after-startup"]);
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "xvfb-run paladin-gtk --vault {path_str} --exit-after-startup exited with status {:?}\n\
+         --- stdout ---\n{}\n--- stderr ---\n{}",
+        output.status,
+        stdout,
+        stderr,
+    );
+
+    // The `startup_state` marker is emitted before any per-state
+    // widget mount, so it proves only that `run_startup_probes`
+    // reached the `StartupError` branch.
+    let state_expected = format!("paladin-gtk: startup_state=StartupError path={path_str}");
+    assert!(
+        stdout.contains(&state_expected),
+        "expected stdout to contain `{state_expected}`\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}",
+    );
+
+    // The `startup_error_body` marker is emitted exclusively from
+    // the `StartupError` branch immediately before
+    // `StartupErrorComponent` is launched; its presence proves the
+    // widget mounted with the typed error body. The body text comes
+    // from `paladin_core::PaladinError::InvalidHeader`'s `Display`
+    // impl (no `format_unsafe_permissions` projection for this
+    // variant), which is the literal "invalid vault header".
+    let body_expected = "paladin-gtk: startup_error_body=invalid vault header";
+    assert!(
+        stdout.contains(body_expected),
+        "expected stdout to contain `{body_expected}`\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}",
+    );
+}
+
 /// Add a validated TOTP or HOTP account to `vault` and persist to
 /// `store`. The secret is a fixed RFC 6238 base32 fixture; the same
 /// shape is used by the pure-logic fixtures in

@@ -28,8 +28,8 @@ use paladin_core::{
 };
 
 use paladin_gtk::startup_error::{
-    classify_open_error, render_startup_error, retry, OpenErrorRouting, StartupError,
-    StartupErrorSource,
+    classify_open_error, format_startup_error_marker, render_startup_error, retry,
+    OpenErrorRouting, StartupError, StartupErrorSource, STARTUP_ERROR_MARKER_PREFIX,
 };
 
 // ---------------------------------------------------------------------------
@@ -368,6 +368,82 @@ fn retry_inspect_unsafe_permissions_routes_with_formatter_text() {
     let err = retry(resolve, inspect).expect_err("inspect failure surfaces");
     assert_eq!(err.source, StartupErrorSource::Inspect);
     assert_eq!(err.rendered, expected);
+}
+
+// ---------------------------------------------------------------------------
+// `format_startup_error_marker` — stdout contract for the smoke test
+// ---------------------------------------------------------------------------
+
+#[test]
+fn startup_error_marker_prefix_is_paladin_gtk_namespaced() {
+    // Every smoke-test marker `paladin-gtk` emits under
+    // `--exit-after-startup` shares the `paladin-gtk: ` prefix so
+    // tests can grep for the namespace and tell our lines apart from
+    // GTK / libadwaita warnings on the same stream.
+    assert!(
+        STARTUP_ERROR_MARKER_PREFIX.starts_with("paladin-gtk: "),
+        "STARTUP_ERROR_MARKER_PREFIX must share the paladin-gtk namespace: {STARTUP_ERROR_MARKER_PREFIX:?}",
+    );
+    assert!(
+        STARTUP_ERROR_MARKER_PREFIX.ends_with('='),
+        "STARTUP_ERROR_MARKER_PREFIX must end with `=` so the body \
+         appears immediately after: {STARTUP_ERROR_MARKER_PREFIX:?}",
+    );
+}
+
+#[test]
+fn format_startup_error_marker_inlines_rendered_text() {
+    // Single-line variant: the entire rendered body fits on one line,
+    // so the marker is the prefix followed by the rendered text verbatim.
+    let err = invalid_header_err();
+    let routed = StartupError::from_inspect(&err);
+    let marker = format_startup_error_marker(&routed);
+    assert_eq!(
+        marker,
+        format!("{STARTUP_ERROR_MARKER_PREFIX}{}", routed.rendered),
+    );
+}
+
+#[test]
+fn format_startup_error_marker_replaces_newlines_with_pipes() {
+    // The `UnsafePermissions` formatter produces a multi-line body so
+    // the user sees the chmod hint on its own line. The smoke-test
+    // marker is single-line so test assertions can grep with
+    // `stdout.contains(&...)`; we collapse embedded `\n` to `|` which
+    // does not appear in any error renderer.
+    let err = unsafe_perms_err();
+    let routed = StartupError::from_open(&err);
+    let marker = format_startup_error_marker(&routed);
+    assert!(
+        !marker.contains('\n'),
+        "marker must be single-line: {marker:?}",
+    );
+    assert!(
+        marker.starts_with(STARTUP_ERROR_MARKER_PREFIX),
+        "marker must start with the namespaced prefix: {marker:?}",
+    );
+    // Sanity: the chmod hint and `expected_mode` from the formatter
+    // both survive the newline collapse, so the marker is still a
+    // faithful projection of `rendered` (just on one line).
+    assert!(
+        marker.contains("chmod 0600"),
+        "marker should retain the chmod hint from format_unsafe_permissions: {marker:?}",
+    );
+    assert!(
+        marker.contains("0644"),
+        "marker should retain the actual mode from format_unsafe_permissions: {marker:?}",
+    );
+}
+
+#[test]
+fn format_startup_error_marker_is_stable_across_sources() {
+    // The marker reads from `rendered` only; identical rendered text
+    // with different `StartupErrorSource` tags produces identical
+    // marker lines (the source is a routing field, not a display field).
+    let err = invalid_header_err();
+    let from_inspect = format_startup_error_marker(&StartupError::from_inspect(&err));
+    let from_open = format_startup_error_marker(&StartupError::from_open(&err));
+    assert_eq!(from_inspect, from_open);
 }
 
 // ---------------------------------------------------------------------------

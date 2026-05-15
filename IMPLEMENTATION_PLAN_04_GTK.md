@@ -1047,6 +1047,28 @@ Required for Milestone 7 sign-off. Runs in CI under `xvfb-run`.
   projection (insertion-order preservation, empty-issuer collapse,
   TOTP / HOTP summary fields) and the marker format without a
   display server.
+- [x] `StartupErrorComponent` renders the non-mutating error
+  surface for the `StartupError` branch. When `run_startup_probes`
+  routes `AppModel` to `AppState::StartupError`, `AppModel` launches
+  a `StartupErrorComponent` controller whose `AdwStatusPage` body
+  reads `StartupError::rendered` verbatim (the same text the CLI /
+  TUI surface via `paladin_core::format_unsafe_permissions` or
+  `PaladinError::Display`). Under `--exit-after-startup`, `AppModel`
+  emits an additional stdout marker —
+  `paladin-gtk: startup_error_body=<rendered>` produced by
+  `startup_error::format_startup_error_marker` (newlines collapsed
+  to `|` so the line stays single-line for `stdout.contains(...)`
+  assertions) — exclusively from the `StartupError` branch, so its
+  presence proves the widget actually mounted. The smoke test
+  `crates/paladin-gtk/tests/gtk_smoke.rs::app_renders_startup_error_for_corrupt_vault`
+  drives the path with a corrupt vault file that forces
+  `paladin_core::inspect` into `InvalidHeader` and asserts on both
+  the existing `startup_state=StartupError` line and the new body
+  marker. Pure-logic coverage in
+  `crates/paladin-gtk/tests/startup_error_logic.rs` pins the
+  marker prefix, the rendered passthrough for single-line bodies,
+  and the newline-collapse contract for the multi-line
+  `UnsafePermissions` body.
 
 ### Thinness contract (`tests/thinness.rs`)
 
