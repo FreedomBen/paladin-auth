@@ -16,6 +16,7 @@ use std::process::ExitCode;
 pub mod app;
 pub mod cli;
 pub mod clipboard;
+pub mod keybindings;
 pub mod prompt;
 pub mod search;
 pub mod terminal;

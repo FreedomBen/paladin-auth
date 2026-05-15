@@ -18,6 +18,7 @@
 
 pub mod add;
 pub mod export;
+pub mod help;
 pub mod import;
 pub mod list;
 pub mod missing_vault;
@@ -75,10 +76,26 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState, now: SystemTime) {
         } => {
             unlock::render(frame, path, error.as_deref(), passphrase);
         }
-        AppState::Unlocked { modal, vault, .. } => {
+        AppState::Unlocked {
+            modal,
+            vault,
+            help_open,
+            ..
+        } => {
             list::render(frame, state, now);
             if let Some(open) = modal {
                 render_modal(frame, open, vault);
+            }
+            // The read-only Help overlay paints last so it sits on
+            // top of any modal that might also be open. The reducer
+            // suppresses `?` while a modal is open (per
+            // `IMPLEMENTATION_PLAN_03_TUI.md` "Help overlay"), so in
+            // practice the two are mutually exclusive — drawing the
+            // overlay last is a defensive layer that keeps the
+            // dismiss-hint visible if the invariant were ever
+            // violated by a future event-source bug.
+            if *help_open {
+                help::render(frame);
             }
         }
         AppState::Locked { .. } => {

@@ -1,0 +1,35 @@
+---
+source: crates/paladin-tui/tests/view_snapshots.rs
+assertion_line: 1016
+expression: "render_to_text(&state, snapshot_now(), 80, 30)"
+---
+┌ Paladin ─────────────────────────────────────────────────────────────────────┐
+│┌ Help — keybindings ────────────────────────────────────────────────────────┐│
+││ Read-only — keys are listed for reference.                                 ││
+││                                                                            ││
+││ ↑ ↓ / j k                    Move selection up / down                      ││
+││ PgUp PgDn / Ctrl-B Ctrl-F    Page up / down by viewport height             ││
+││ Home End / gg G              Jump to first / last row of filtered set      ││
+││ Ctrl-U Ctrl-D                Half-page up / down                           ││
+││ zz                           Recenter viewport on selected row             ││
+││ Enter                        Copy selected code                            ││
+││ n                            HOTP next-code (advance + reveal)             ││
+││ a                            Open Add modal                                ││
+││ r                            Open Remove confirmation                      ││
+││ R                            Open Rename modal                             ││
+││ i                            Open Import modal                             ││
+││ e                            Open Export modal                             ││
+││ /                            Focus search bar                              ││
+││ Tab / Shift-Tab              Cycle focus between search bar and list       ││
+││ Ctrl-N / Ctrl-P              In modals: next / previous control            ││
+││ p                            Open Passphrase modal                         ││
+││ s                            Open Settings modal                           ││
+││ ?                            Open Help overlay                             ││
+││ Esc                          Close modal / overlay / search; quit dead-end ││
+││                              screens                                       ││
+││ q                            Quit from list and dead-end screens           ││
+││ Ctrl-C                       Quit (any screen)                             ││
+││                                 Esc closes                                 ││
+│└────────────────────────────────────────────────────────────────────────────┘│
+│ [↑↓] move  [enter] copy  [n] next-HOTP  [a] add  [/] find                    │
+└──────────────────────────────────────────────────────────────────────────────┘

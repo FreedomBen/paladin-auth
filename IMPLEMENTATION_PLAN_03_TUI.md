@@ -2068,7 +2068,35 @@ Modals and overlays:
   `save_not_committed` / `save_durability_unconfirmed` variants
   of this modal land alongside their own slices per the plan's
   later checklist rows.)*
-- [ ] Help overlay.
+- [x] Help overlay.
+  *(`crates/paladin-tui/src/view/help.rs` paints the read-only Help
+  overlay as a 78-wide bordered `Help — keybindings` block centered
+  inside the frame on top of the underlying list view, with a single
+  `Read-only — keys are listed for reference.` intro row, one body
+  line per row in `paladin_tui::keybindings::KEYBINDINGS`, and the
+  centered `Esc closes` hint flush near the bottom. The block height
+  scales with the rendered body so adding or removing a keybinding
+  adjusts the overlay automatically. Long actions wrap to a
+  continuation line indented under the action column so the
+  longest row (`Esc → Close modal / overlay / search; quit
+  dead-end screens`) stays fully readable without horizontal
+  truncation. `view::render` was extended in the same slice to
+  paint `help::render` last (after any open modal) when
+  `AppState::Unlocked { help_open: true, .. }`, so the dismiss-hint
+  stays visible even if a future reducer bug ever lets help and a
+  modal coexist. The single-source-of-truth keybindings table lives
+  in `crates/paladin-tui/src/keybindings.rs` so the future
+  `cargo xtask man` target can read the same constant when it
+  appends the "Keybindings" section to `paladin-tui.1` and the two
+  cannot drift; the module ships two unit tests asserting that no
+  row has an empty `keys` / `action` and that the `?` / `Esc` /
+  `q` / `Ctrl-C` rows are present so a regression that drops one
+  surfaces in cargo test rather than only in the rendered snapshot.
+  `snapshot_help_overlay` in `tests/view_snapshots.rs` drives the
+  overlay through `TestBackend(80, 30)` against a plaintext-vault
+  background (matching the modal-default snapshots above) so the
+  rendered frame stays deterministic. Locked in
+  `tests/snapshots/view_snapshots__snapshot_help_overlay.snap`.)*
 - [x] Unlock screen.
   *(`crates/paladin-tui/src/view/unlock.rs` renders a bordered
   `Paladin — unlock` block with the bolded vault path, a masked

@@ -967,6 +967,56 @@ fn snapshot_settings_modal_default() {
 }
 
 #[test]
+fn snapshot_help_overlay() {
+    // Plan L2071: "Help overlay." Drive `view::render` against an
+    // `Unlocked` state with `help_open: true` so the snapshot pins
+    // the read-only Help overlay rendered on top of the list view
+    // per `DESIGN.md` §6 and the `IMPLEMENTATION_PLAN_03_TUI.md`
+    // "Help overlay" contract — *"`?` from list focus opens a
+    // read-only Help overlay listing every keybinding from the
+    // table below; `Esc` closes the overlay and restores list
+    // focus. The overlay has no inputs and never mutates vault
+    // state."*
+    //
+    // The overlay's content is sourced from the workspace-wide
+    // `paladin_tui::keybindings::KEYBINDINGS` table — the same
+    // table the future `cargo xtask man` target will append into
+    // the man page after the clap-derived synopsis. Pinning the
+    // snapshot to that public table means any drift between the
+    // help-overlay wording and the man-page keybindings section
+    // surfaces as a diff here (and in the man-page golden test
+    // when that lands) rather than being silently introduced.
+    //
+    // A plaintext vault keeps the underlying list-view background
+    // deterministic and matches the modal-default snapshots above;
+    // the renderer doesn't gate on vault state (the gate is
+    // enforced upstream by the reducer's "list-focus only,
+    // no-modal" rule, per the design's "list-focus-only" line).
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: true,
+    };
+    insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 30));
+}
+
+#[test]
 fn snapshot_startup_error_unsafe_permissions() {
     // Plan L1806: "Startup-error screen rendered with `unsafe_permissions`
     // (the `Some(text)` from `format_unsafe_permissions`)." Build the error
