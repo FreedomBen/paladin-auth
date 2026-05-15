@@ -19,14 +19,21 @@
 //! for [`Clear`]-ing the modal's rect before painting — otherwise
 //! list-view content would bleed through transparent cells.
 //!
-//! Inline-error / encrypted-Paladin passphrase sub-phase / counts-
-//! panel rendering all land alongside their own reducer or effect
-//! slices; this slice keeps the body to the path / format / conflict
-//! / hint quartet so the snapshot pins only the layout contract.
+//! The [`ImportModal::error`] slot surfaces inline in the spacer
+//! between the conflict-selector row and the footer hint, painted in
+//! red and routed through
+//! [`render_error_message`](crate::app::state::render_error_message)
+//! so `save_not_committed` / `save_durability_unconfirmed` reads
+//! identically to the unlock screen's `decrypt_failed` line and the
+//! Add / Remove / Rename modals' inline-error slots.
+//!
+//! Encrypted-Paladin passphrase sub-phase / counts-panel rendering
+//! land alongside their own reducer or effect slices.
 
 use paladin_core::ImportConflict;
-use ratatui::layout::{Alignment, Constraint, Layout};
-use ratatui::text::Line;
+use ratatui::layout::{Alignment, Constraint, Layout, Rect};
+use ratatui::style::{Color, Style};
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Padding, Paragraph};
 use ratatui::Frame;
 
@@ -87,8 +94,34 @@ pub fn render(frame: &mut Frame<'_>, modal: &ImportModal) {
         chunks[4],
     );
 
+    if let Some(error) = &modal.error {
+        render_inline_error(frame, chunks[5], error);
+    }
+
     let hint = "Tab cycles fields  ·  Enter submit  ·  Esc cancel";
     frame.render_widget(Paragraph::new(hint).alignment(Alignment::Center), chunks[6]);
+}
+
+/// Paint the inline error message inside the spacer area between the
+/// conflict-selector row and the footer hint. The error sits one
+/// blank row below the conflict selector, foreground red, mirroring
+/// the unlock screen's `decrypt_failed` styling and the Add / Remove
+/// / Rename modals' inline errors so every inline-error surface in
+/// the TUI reads the same way.
+fn render_inline_error(frame: &mut Frame<'_>, spacer: Rect, message: &str) {
+    let spacer_chunks = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(0),
+    ])
+    .split(spacer);
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            message.to_string(),
+            Style::default().fg(Color::Red),
+        ))),
+        spacer_chunks[1],
+    );
 }
 
 /// Render a labeled text-input row. Editable fields show their

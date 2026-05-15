@@ -967,6 +967,104 @@ fn snapshot_import_modal_default() {
 }
 
 #[test]
+fn snapshot_import_modal_save_not_committed() {
+    // Plan L2161: "Import modal `save_not_committed`." Drive
+    // `view::render` against an `Unlocked` state holding
+    // `Modal::Import(ImportModal { error: Some(render_error_message(
+    // &PaladinError::SaveNotCommitted { .. })), .. })` so the
+    // snapshot pins the inline-error row populated from a pre-commit
+    // save failure per `DESIGN.md` §5's `save_not_committed`
+    // discriminator. Routing the wording through the shared
+    // `render_error_message` helper means the inline text matches
+    // the rest of the TUI's error surface — the unlock screen's
+    // `decrypt_failed` line and the Add / Remove / Rename modals'
+    // inline-error slots.
+    //
+    // Every other ImportModal field stays at its default
+    // (empty `path_text`, `Auto` format, `Skip` conflict, no
+    // passphrase sub-phase, no counts panel) so the snapshot reads
+    // as a delta from the `snapshot_import_modal_default` baseline:
+    // the inline error line appears inside the spacer area between
+    // the conflict-selector row and the footer hint.
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Import(ImportModal {
+            error: Some(render_error_message(&PaladinError::SaveNotCommitted {
+                committed: false,
+                backup_path: None,
+            })),
+            ..ImportModal::default()
+        })),
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let rendered = render_to_text(&state, snapshot_now(), 80, 20);
+    assert!(
+        rendered.contains("save not committed"),
+        "expected inline save_not_committed wording to appear in modal:\n{rendered}"
+    );
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn snapshot_import_modal_save_durability_unconfirmed() {
+    // Plan L2162: "Import modal `save_durability_unconfirmed`." Same
+    // rendering path as the `save_not_committed` snapshot above; the
+    // typed error here is `PaladinError::SaveDurabilityUnconfirmed`,
+    // which per `IMPLEMENTATION_PLAN_03_TUI.md` "Durability-unconfirmed
+    // failures follow the committed-state path" surfaces in the
+    // modal's inline error slot identically to the pre-commit
+    // failure — both paths run through `render_error_message`.
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Import(ImportModal {
+            error: Some(render_error_message(
+                &PaladinError::SaveDurabilityUnconfirmed,
+            )),
+            ..ImportModal::default()
+        })),
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let rendered = render_to_text(&state, snapshot_now(), 80, 20);
+    assert!(
+        rendered.contains("save durability unconfirmed"),
+        "expected inline save_durability_unconfirmed wording to appear in modal:\n{rendered}"
+    );
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn snapshot_export_modal_default() {
     // Plan L1887: "Export modal." Drive `view::render` against an
     // `Unlocked` state with `Modal::Export(ExportModal::default())`
