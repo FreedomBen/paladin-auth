@@ -26,6 +26,15 @@
 //! worker wiring for `UnlockDialogComponent` lands in follow-up
 //! commits.
 //!
+//! `AppMsg::AccountListAction(OpenRenameDialog(id))` mounts a
+//! [`RenameDialogComponent`] seeded from
+//! [`crate::rename_dialog::decide_rename_target`] so the kebab
+//! `Rename…` action is now reachable end-to-end (kebab activation →
+//! `AccountListOutput` → `AppMsg` → live dialog widget). The
+//! editable entry / submit-button / `Vault::mutate_and_save` worker
+//! land in subsequent commits. `OpenRemoveDialog(id)` still buffers
+//! in `pending_row_action` pending its widget mount.
+//!
 //! Under the hidden `--exit-after-startup` flag, the model prints
 //! [`startup_state_marker`] to stdout and enqueues [`AppMsg::Quit`]
 //! so `tests/gtk_smoke.rs` can assert which startup state was
@@ -46,6 +55,7 @@ use crate::app::state::{
     decide_state_from_inspect, decide_state_from_open_error, AppState, OpenErrorOutcome,
 };
 use crate::init_dialog::{format_init_dialog_marker, InitDialogComponent, InitDialogInit};
+use crate::rename_dialog::{decide_rename_target, RenameDialogComponent};
 use crate::startup_error::{
     format_startup_error_marker, StartupError, StartupErrorComponent, StartupErrorInit,
 };
@@ -128,16 +138,34 @@ pub struct AppModel {
     /// not dropped at the end of `init`.
     #[allow(dead_code)]
     unlock_dialog: Option<Controller<UnlockDialogComponent>>,
-    /// Latest row-level intent forwarded from
-    /// [`AccountListComponent`] via [`AppMsg::AccountListAction`].
+    /// Live [`RenameDialogComponent`] controller when the user has
+    /// activated a row's kebab `Rename…` action. `None` between
+    /// activations. Held on `self` so the rendered widget is not
+    /// dropped at the end of the [`AppMsg::AccountListAction`]
+    /// handler.
     ///
-    /// `None` until the user activates a kebab Rename… / Remove…
-    /// entry; the next commit replaces this single-slot buffer with
-    /// the actual `RenameDialogComponent` / `RemoveDialogComponent`
-    /// mount. Storing it here today keeps the dispatch path covered
-    /// end-to-end (`AccountRow` kebab activation → `AccountListOutput`
-    /// → `AppMsg::AccountListAction` → `AppModel` state) so the
-    /// dialog wiring is the only piece left to land.
+    /// `OpenRemoveDialog` still buffers in [`Self::pending_row_action`]
+    /// pending the `RemoveDialogComponent` mount in a follow-up
+    /// commit.
+    #[allow(dead_code)]
+    rename_dialog: Option<Controller<RenameDialogComponent>>,
+    /// Reference-counted handle to the window's content box.
+    ///
+    /// `gtk::Box` is a `GObject`, so cloning it just bumps the
+    /// reference count rather than duplicating the widget. The clone
+    /// lets [`AppMsg::AccountListAction`] reach the content tree from
+    /// `update` so kebab-driven dialog mounts (currently just
+    /// `RenameDialogComponent`) can append themselves to the active
+    /// view.
+    #[allow(dead_code)]
+    content: gtk::Box,
+    /// Buffered row-level intent for kebab actions that have not yet
+    /// grown a real dialog mount.
+    ///
+    /// Currently holds `OpenRemoveDialog(id)` activations between the
+    /// kebab dispatch and the follow-up commit that mounts
+    /// `RemoveDialogComponent`. `OpenRenameDialog(id)` is now handled
+    /// via [`Self::rename_dialog`].
     #[allow(dead_code)]
     pending_row_action: Option<AccountListOutput>,
 }
@@ -164,6 +192,11 @@ impl std::fmt::Debug for AppModel {
                 "unlock_dialog",
                 &self.unlock_dialog.as_ref().map(|_| "<mounted>"),
             )
+            .field(
+                "rename_dialog",
+                &self.rename_dialog.as_ref().map(|_| "<mounted>"),
+            )
+            .field("content", &"<gtk::Box>")
             .field("pending_row_action", &self.pending_row_action)
             .finish()
     }
@@ -316,6 +349,8 @@ impl SimpleComponent for AppModel {
             startup_error,
             init_dialog,
             unlock_dialog,
+            rename_dialog: None,
+            content: widgets.content.clone(),
             pending_row_action: None,
         };
 
@@ -329,9 +364,24 @@ impl SimpleComponent for AppModel {
     fn update(&mut self, msg: Self::Input, _sender: ComponentSender<Self>) {
         match msg {
             AppMsg::Quit => relm4::main_application().quit(),
+            AppMsg::AccountListAction(AccountListOutput::OpenRenameDialog(id)) => {
+                // Look up the targeted account in the live vault and
+                // mount the rename dialog. A `None` projection means
+                // the account was removed between the kebab
+                // activation and this dispatch — treat that as a
+                // benign race and drop the action.
+                if let Some((vault, _store)) = self.vault.as_ref() {
+                    if let Some(init) = decide_rename_target(vault, id) {
+                        let controller = RenameDialogComponent::builder().launch(init).detach();
+                        self.content.append(controller.widget());
+                        self.rename_dialog = Some(controller);
+                    }
+                }
+            }
             AppMsg::AccountListAction(out) => {
-                // Stash the typed intent until the dialog widgets land
-                // — see [`AppModel::pending_row_action`].
+                // `OpenRemoveDialog` still buffers here pending the
+                // `RemoveDialogComponent` mount in a follow-up
+                // commit; see [`AppModel::pending_row_action`].
                 self.pending_row_action = Some(out);
             }
         }
