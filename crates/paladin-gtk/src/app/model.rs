@@ -37,8 +37,14 @@
 //! tree. The submit button / `Vault::mutate_and_save` worker land
 //! in a follow-up commit. `OpenRemoveDialog(id)` mirrors the same
 //! shape: it mounts a [`RemoveDialogComponent`] seeded from
-//! [`crate::remove_dialog::decide_remove_target`]; the destructive
-//! confirmation chrome / Remove worker land in follow-up commits.
+//! [`crate::remove_dialog::decide_remove_target`] and routes its
+//! Cancel button back as
+//! `AppMsg::RemoveDialogAction(RemoveDialogOutput::Cancel)` so
+//! `AppModel` can drop the controller and remove the dialog widget
+//! from the content tree. The destructive `AdwAlertDialog` chrome,
+//! the Remove button, and the `Vault::mutate_and_save` worker land
+//! in follow-up commits alongside the `UnlockedBusy` worker
+//! infrastructure.
 //!
 //! Under the hidden `--exit-after-startup` flag, the model prints
 //! [`startup_state_marker`] to stdout and enqueues [`AppMsg::Quit`]
@@ -60,7 +66,7 @@ use crate::app::state::{
     decide_state_from_inspect, decide_state_from_open_error, AppState, OpenErrorOutcome,
 };
 use crate::init_dialog::{format_init_dialog_marker, InitDialogComponent, InitDialogInit};
-use crate::remove_dialog::{decide_remove_target, RemoveDialogComponent};
+use crate::remove_dialog::{decide_remove_target, RemoveDialogComponent, RemoveDialogOutput};
 use crate::rename_dialog::{decide_rename_target, RenameDialogComponent, RenameDialogOutput};
 use crate::startup_error::{
     format_startup_error_marker, StartupError, StartupErrorComponent, StartupErrorInit,
@@ -235,6 +241,14 @@ pub enum AppMsg {
     /// added in the follow-up commit that wires
     /// `Vault::mutate_and_save` through the `UnlockedBusy` worker.
     RenameDialogAction(RenameDialogOutput),
+    /// Forwarded from the live [`RemoveDialogComponent`] when the
+    /// user interacts with the dialog. Today only
+    /// [`RemoveDialogOutput::Cancel`] is emitted — `AppModel`
+    /// responds by dropping the controller and removing the dialog
+    /// widget from the content tree. Confirm / worker outputs are
+    /// added in the follow-up commit that wires
+    /// `Vault::mutate_and_save` through the `UnlockedBusy` worker.
+    RemoveDialogAction(RemoveDialogOutput),
 }
 
 // `relm4::component(pub)` generates a public `AppModelWidgets` struct so the
@@ -400,7 +414,9 @@ impl SimpleComponent for AppModel {
                 // benign race and drop the action.
                 if let Some((vault, _store)) = self.vault.as_ref() {
                     if let Some(init) = decide_remove_target(vault, id) {
-                        let controller = RemoveDialogComponent::builder().launch(init).detach();
+                        let controller = RemoveDialogComponent::builder()
+                            .launch(init)
+                            .forward(sender.input_sender(), AppMsg::RemoveDialogAction);
                         self.content.append(controller.widget());
                         self.remove_dialog = Some(controller);
                     }
@@ -412,6 +428,15 @@ impl SimpleComponent for AppModel {
                 // already `None` (controller swapped under us by a
                 // future race), this is a benign no-op.
                 if let Some(controller) = self.rename_dialog.take() {
+                    self.content.remove(controller.widget());
+                }
+            }
+            AppMsg::RemoveDialogAction(RemoveDialogOutput::Cancel) => {
+                // Detach the dialog widget from the content tree and
+                // drop the controller. Defensive: if the field is
+                // already `None` (controller swapped under us by a
+                // future race), this is a benign no-op.
+                if let Some(controller) = self.remove_dialog.take() {
                     self.content.remove(controller.widget());
                 }
             }

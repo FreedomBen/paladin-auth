@@ -43,9 +43,10 @@ use paladin_core::{
 };
 
 use paladin_gtk::remove_dialog::{
-    account_not_found_error, classify_remove_error, decide_remove_target,
+    account_not_found_error, apply_msg, classify_remove_error, decide_remove_target,
     format_remove_dialog_marker, summary_display_label, InlineError, InlineWarning,
-    RemoveDialogInit, RemoveErrorOutcome, REMOVE_DIALOG_MARKER_PREFIX,
+    RemoveDialogInit, RemoveDialogMsg, RemoveDialogOutput, RemoveErrorOutcome,
+    REMOVE_DIALOG_MARKER_PREFIX,
 };
 
 // ---------------------------------------------------------------------------
@@ -417,4 +418,35 @@ fn remove_dialog_init_clones_for_reactive_state() {
     let cloned = init.clone();
     assert_eq!(cloned.account_id, init.account_id);
     assert_eq!(cloned.display_label, init.display_label);
+}
+
+// ---------------------------------------------------------------------------
+// apply_msg — Cancel routing
+//
+// The widget's `update` delegates here so the routing decision (Cancel
+// emits `RemoveDialogOutput::Cancel`) stays a pure function that does
+// not require spinning up GTK to verify. The Confirm / Remove worker
+// path lands in a follow-up commit alongside the `UnlockedBusy` worker
+// infrastructure.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn apply_msg_cancel_emits_cancel_output() {
+    // Cancel button must bubble back to `AppModel` as
+    // `RemoveDialogOutput::Cancel` so the controller can be dropped
+    // and the dialog widget removed from the content tree. Mirrors
+    // the `RenameDialogComponent` Cancel staging.
+    let out = apply_msg(RemoveDialogMsg::Cancel);
+    assert_eq!(out, Some(RemoveDialogOutput::Cancel));
+}
+
+#[test]
+fn remove_dialog_output_cancel_is_distinct_variant() {
+    // Defensive: the variant exists and is comparable, so the
+    // AppModel can pattern-match on `RemoveDialogOutput::Cancel`
+    // without an `_` catch-all swallowing future variants (Confirm /
+    // typed worker outcomes ship in follow-up commits).
+    let out = RemoveDialogOutput::Cancel;
+    assert!(matches!(out, RemoveDialogOutput::Cancel));
+    assert_eq!(out.clone(), RemoveDialogOutput::Cancel);
 }

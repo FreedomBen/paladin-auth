@@ -49,6 +49,7 @@
 
 use libadwaita as adw;
 use libadwaita::prelude::*;
+use relm4::gtk;
 use relm4::prelude::*;
 
 use paladin_core::{AccountId, AccountSummary, ErrorKind, PaladinError, Vault};
@@ -242,16 +243,58 @@ pub fn decide_remove_target(vault: &Vault, id: AccountId) -> Option<RemoveDialog
 
 /// Messages handled by [`RemoveDialogComponent`].
 ///
-/// This milestone scaffolds the read-only render path — the
-/// `confirm` / `cancel` transitions and the
+/// `Cancel` arrives from the dialog's Cancel button and dismisses
+/// the dialog via [`RemoveDialogOutput::Cancel`] without touching
+/// the vault. The `Confirm` / Remove transition and the
 /// `Vault::mutate_and_save(|v| v.remove(...))` worker described in
 /// §"Component tree" > `RemoveDialog` and §"Effect errors" land in
-/// follow-up commits alongside the `UnlockedBusy` worker
-/// infrastructure. The empty enum is the deliberate starting point
-/// — relm4 requires the associated `Input` type to exist even when
-/// no inbound messages are wired yet.
+/// a follow-up commit alongside the `UnlockedBusy` worker
+/// infrastructure.
 #[derive(Debug)]
-pub enum RemoveDialogMsg {}
+pub enum RemoveDialogMsg {
+    /// Cancel button pressed. The handler forwards
+    /// [`RemoveDialogOutput::Cancel`] so `AppModel` can drop the
+    /// controller and remove the dialog widget from the content
+    /// tree.
+    Cancel,
+}
+
+/// Outputs forwarded from [`RemoveDialogComponent`] up to
+/// `AppModel`.
+///
+/// Pinned as a typed enum (rather than the `()` unit used by the
+/// initial render-only milestone) so future Confirm / worker
+/// transitions can be added as additional variants without an
+/// `_` catch-all in `AppModel` swallowing them silently.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RemoveDialogOutput {
+    /// User dismissed the dialog without removing. `AppModel` drops
+    /// the live [`RemoveDialogComponent`] controller and removes its
+    /// widget from the content tree.
+    Cancel,
+}
+
+/// Apply an inbound [`RemoveDialogMsg`] and return the optional
+/// [`RemoveDialogOutput`] the widget layer should forward to
+/// `AppModel`.
+///
+/// Pulled out of [`RemoveDialogComponent::update`] so the routing
+/// decision — [`RemoveDialogMsg::Cancel`] emits
+/// [`RemoveDialogOutput::Cancel`] — stays unit-testable in
+/// `tests/remove_dialog_logic.rs` without spinning up GTK. The
+/// helper takes the message by value (rather than `&mut state, msg`
+/// like the rename variant) because `RemoveDialog` carries no
+/// editable draft — every transition is a pure dismissal /
+/// confirmation today. The follow-up commits that add `Confirm` /
+/// worker-outcome variants will move owned payloads out of the
+/// message, so the by-value signature stays forward-compatible.
+#[must_use]
+#[allow(clippy::needless_pass_by_value)]
+pub fn apply_msg(msg: RemoveDialogMsg) -> Option<RemoveDialogOutput> {
+    match msg {
+        RemoveDialogMsg::Cancel => Some(RemoveDialogOutput::Cancel),
+    }
+}
 
 /// Widget-bearing dialog for the
 /// [`crate::account_list::AccountListOutput::OpenRemoveDialog`]
@@ -259,13 +302,13 @@ pub enum RemoveDialogMsg {}
 ///
 /// Mounts a libadwaita [`adw::StatusPage`] that surfaces the
 /// targeted account's `<issuer>:<label>` heading so the user can
-/// confirm which row will be removed. Subsequent commits replace the
-/// placeholder body with the destructive `AdwAlertDialog` chrome,
-/// Cancel / Remove buttons, and the `Vault::mutate_and_save` worker;
-/// until then, keeping the widget read-only mirrors the
-/// [`crate::rename_dialog::RenameDialogComponent`] staging pattern
-/// (every dialog branch landed as a status page first and grew
-/// inbound actions later).
+/// confirm which row will be removed, plus a Cancel button that
+/// forwards [`RemoveDialogOutput::Cancel`] so `AppModel` can dismiss
+/// the dialog. The destructive `AdwAlertDialog` chrome, the
+/// Remove button, and the `Vault::mutate_and_save` worker land in
+/// follow-up commits alongside the `UnlockedBusy` worker
+/// infrastructure; the Cancel-only staging mirrors the
+/// [`crate::rename_dialog::RenameDialogComponent`] rollout pattern.
 pub struct RemoveDialogComponent {
     /// Construction parameters retained on `self` so a future
     /// message handler can read the targeted account id and the
@@ -280,39 +323,63 @@ pub struct RemoveDialogComponent {
 impl SimpleComponent for RemoveDialogComponent {
     type Init = RemoveDialogInit;
     type Input = RemoveDialogMsg;
-    type Output = ();
+    type Output = RemoveDialogOutput;
 
     view! {
         #[root]
-        adw::StatusPage {
-            // `user-trash-symbolic` is the freedesktop-standard glyph
-            // for destructive removal; resolves through the system
-            // icon theme so the wordless icon matches the platform's
-            // other delete surfaces.
-            set_icon_name: Some("user-trash-symbolic"),
-            set_title: "Remove account",
-            set_description: Some(&format!(
-                "Removing {display}.",
-                display = model.init.display_label,
-            )),
+        gtk::Box {
+            set_orientation: gtk::Orientation::Vertical,
+            set_spacing: 12,
             set_hexpand: true,
             set_vexpand: true,
+
+            adw::StatusPage {
+                // `user-trash-symbolic` is the freedesktop-standard glyph
+                // for destructive removal; resolves through the system
+                // icon theme so the wordless icon matches the platform's
+                // other delete surfaces.
+                set_icon_name: Some("user-trash-symbolic"),
+                set_title: "Remove account",
+                set_description: Some(&format!(
+                    "Removing {display}.",
+                    display = model.init.display_label,
+                )),
+                set_hexpand: true,
+                set_vexpand: true,
+            },
+
+            gtk::Box {
+                set_orientation: gtk::Orientation::Horizontal,
+                set_spacing: 6,
+                set_halign: gtk::Align::End,
+
+                #[name = "cancel_button"]
+                gtk::Button {
+                    set_label: "Cancel",
+                    connect_clicked[sender] => move |_| {
+                        sender.input(RemoveDialogMsg::Cancel);
+                    },
+                },
+            },
         }
     }
 
     fn init(
         init: Self::Init,
         root: Self::Root,
-        _sender: ComponentSender<Self>,
+        sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
         let model = RemoveDialogComponent { init };
         let widgets = view_output!();
         ComponentParts { model, widgets }
     }
 
-    fn update(&mut self, _msg: Self::Input, _sender: ComponentSender<Self>) {
-        // No inbound messages handled at this milestone — see
-        // `RemoveDialogMsg` doc comment for the upcoming confirm /
-        // cancel / worker actions.
+    fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>) {
+        if let Some(output) = apply_msg(msg) {
+            // Ignore send failures: if `AppModel` has already dropped
+            // the controller (e.g. window closed mid-click), there's
+            // nothing left to dismiss.
+            let _ = sender.output(output);
+        }
     }
 }
