@@ -774,6 +774,70 @@ fn snapshot_passphrase_modal_set_default() {
 }
 
 #[test]
+fn snapshot_passphrase_modal_change_default() {
+    // Plan L2002: "Passphrase modal — `change` sub-flow." Drive
+    // `view::render` against an `Unlocked` state with
+    // `Modal::Passphrase` open and `sub_flow: PassphraseSubFlow::Change`
+    // so the snapshot pins the freshly-opened (empty `new_passphrase`
+    // / `confirm_passphrase` buffers, no inline error) baseline of
+    // the Passphrase modal's `change` sub-flow overlay. The `change`
+    // sub-flow is the encrypted → encrypted re-key transition per
+    // `DESIGN.md` §6's "modal dialogs for add / remove / rename /
+    // import / export / passphrase / settings" call-out and the
+    // `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6) > Passphrase"
+    // contract — *"three sub-flows mirroring CLI's `passphrase set /
+    // change / remove`. … New passphrases (`set`, `change`) are
+    // prompted twice and confirmed; mismatch returns to the modal
+    // with an inline `invalid_passphrase` (`reason:
+    // "confirmation_mismatch"`) error."*
+    //
+    // Compared to the `set` snapshot above, this snapshot's
+    // bordered-block title flips to ` Change passphrase ` and the
+    // one-line intent reads `Re-encrypts this vault under a new
+    // passphrase.` — so a regression that ever swaps the sub-flow
+    // wording (or paints the `set` intent on a `change` modal)
+    // surfaces as a diff in this snapshot rather than in a unit
+    // test against private helpers. The masked `Passphrase:` /
+    // `Confirm:` rows, the centered `Enter submit  ·  Esc cancel`
+    // hint, and the surrounding list-view chrome all match the
+    // `set` baseline so the snapshot pins that the body shape
+    // stays identical between the twice-confirm sub-flows.
+    //
+    // The renderer doesn't gate on vault state (the gate is enforced
+    // upstream by the modal-open reducer per the design's "available
+    // sub-flow is gated by `Vault::is_encrypted()`" rule); a
+    // plaintext-vault background therefore matches the `set` test
+    // and keeps this test focused on the renderer's contract. The
+    // `remove` sub-flow snapshot lands in its own slice below
+    // (plan L2003).
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Passphrase(PassphraseModal {
+            sub_flow: PassphraseSubFlow::Change,
+            ..PassphraseModal::default()
+        })),
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 20));
+}
+
+#[test]
 fn snapshot_startup_error_unsafe_permissions() {
     // Plan L1806: "Startup-error screen rendered with `unsafe_permissions`
     // (the `Some(text)` from `format_unsafe_permissions`)." Build the error

@@ -1999,7 +1999,25 @@ Modals and overlays:
   alongside their own
   [`PassphraseModal::error`](crate::app::state::PassphraseModal::error)
   rendering slices below.)*
-- [ ] Passphrase modal — `change` sub-flow.
+- [x] Passphrase modal — `change` sub-flow.
+  *(`snapshot_passphrase_modal_change_default` in
+  `tests/view_snapshots.rs` drives `view::render` against the
+  `Unlocked` state with `Modal::Passphrase(PassphraseModal {
+  sub_flow: PassphraseSubFlow::Change, ..default() })`, locking
+  the renderer's encrypted-vault re-key baseline — bordered block
+  title flips to ` Change passphrase `, the one-line intent
+  reads `Re-encrypts this vault under a new passphrase.`, and
+  the masked `Passphrase:` / `Confirm:` rows plus the centered
+  `Enter submit  ·  Esc cancel` hint match the `set` body shape
+  so a regression that ever swaps the sub-flow wording (or paints
+  the `set` intent on a `change` modal) surfaces as a diff.
+  Locked in
+  `tests/snapshots/view_snapshots__snapshot_passphrase_modal_change_default.snap`.
+  The renderer doesn't gate on vault state (the gate is enforced
+  upstream by the modal-open reducer per the design's "available
+  sub-flow is gated by `Vault::is_encrypted()`" rule); a
+  plaintext-vault background therefore matches the `set` test
+  and keeps this snapshot focused on the renderer's contract.)*
 - [ ] Passphrase modal — `remove` sub-flow.
 - [ ] Settings modal.
 - [ ] Help overlay.
