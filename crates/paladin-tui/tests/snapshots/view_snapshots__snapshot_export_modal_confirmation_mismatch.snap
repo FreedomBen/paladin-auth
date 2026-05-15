@@ -1,0 +1,25 @@
+---
+source: crates/paladin-tui/tests/view_snapshots.rs
+assertion_line: 1619
+expression: rendered
+---
+┌ Paladin ─────────────────────────────────────────────────────────────────────┐
+│ Search:                                                                      │
+│ ──────────────────────────────────────────────────────────────────────────── │
+│                                                                              │
+│                      No accounts. Press `a` to add one.                      │
+│   ┌ Export accounts ─────────────────────────────────────────────────────┐   │
+│   │ Destination: [  ]                                                    │   │
+│   │                                                                      │   │
+│   │ Format:        Plaintext    ▶ Encrypted ◀                            │   │
+│   │                                                                      │   │
+│   │ invalid passphrase: confirmation_mismatch                            │   │
+│   │                                                                      │   │
+│   │                                                                      │   │
+│   │           Tab cycles fields  ·  Enter submit  ·  Esc cancel          │   │
+│   └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│                                                                              │
+│ ──────────────────────────────────────────────────────────────────────────── │
+│ [↑↓] move  [enter] copy  [n] next-HOTP  [a] add  [/] find                    │
+└──────────────────────────────────────────────────────────────────────────────┘

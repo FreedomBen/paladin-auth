@@ -31,8 +31,8 @@ use paladin_core::{
     Store, ValidationWarning, Vault, VaultInit, VaultLock,
 };
 use paladin_tui::app::state::{
-    render_error_message, AddModal, AppState, CountsPanel, ExportModal, Focus, HotpReveal,
-    ImportModal, Modal, PassphraseModal, PassphraseSubFlow, RemoveModal, RenameModal,
+    render_error_message, AddModal, AppState, CountsPanel, ExportFormat, ExportModal, Focus,
+    HotpReveal, ImportModal, Modal, PassphraseModal, PassphraseSubFlow, RemoveModal, RenameModal,
     SettingsModal,
 };
 use paladin_tui::prompt::PassphraseBuffer;
@@ -1548,6 +1548,73 @@ fn snapshot_export_modal_refused_overwrite_gate() {
     assert!(
         rendered.contains(&expected),
         "expected inline refused-overwrite wording {expected:?} to appear in modal:\n{rendered}"
+    );
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn snapshot_export_modal_confirmation_mismatch() {
+    // Plan L2361: "Export modal `confirmation_mismatch`." Drive
+    // `view::render` against an `Unlocked` state with
+    // `Modal::Export(ExportModal { format: ExportFormat::Encrypted,
+    // error: Some(render_error_message(&PaladinError::InvalidPassphrase
+    // { reason: "confirmation_mismatch" })), .. })` open so the
+    // snapshot pins the inline-error row populated from the encrypted
+    // twice-confirm passphrase mismatch gate per
+    // `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6) > Export":
+    // *"Encrypted exports prompt twice for the bundle passphrase ..."*
+    // Mismatch surfaces a rendered `PaladinError::InvalidPassphrase`
+    // with `reason: "confirmation_mismatch"` per DESIGN.md §5,
+    // matching the CLI's `prompt_new_passphrase` and the GTK
+    // `SubmitRejection::ConfirmationMismatch` wire code. Routing the
+    // wording through `render_error_message` binds the snapshot to the
+    // core `Display` impl (`invalid passphrase: confirmation_mismatch`)
+    // rather than a hand-typed string so any future wording change in
+    // core surfaces here as a diff.
+    //
+    // The format selector reads `Encrypted` so the snapshot reads as
+    // an encrypted-path delta from the `snapshot_export_modal_default`
+    // baseline — the inline error line appears inside the spacer area
+    // between the segmented `Format:` selector row and the footer
+    // hint, mirroring the unlock screen's `decrypt_failed` styling and
+    // the Add / Remove / Rename modals' inline-error slots. The
+    // refused-overwrite gate's snapshot above already exercises the
+    // `Plaintext` selector with the same renderer.
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let modal = ExportModal {
+        format: ExportFormat::Encrypted,
+        error: Some(render_error_message(&PaladinError::InvalidPassphrase {
+            reason: "confirmation_mismatch",
+        })),
+        ..ExportModal::default()
+    };
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Export(modal)),
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let rendered = render_to_text(&state, snapshot_now(), 80, 20);
+    let expected = render_error_message(&PaladinError::InvalidPassphrase {
+        reason: "confirmation_mismatch",
+    });
+    assert!(
+        rendered.contains(&expected),
+        "expected inline confirmation_mismatch wording {expected:?} to appear in modal:\n{rendered}"
     );
     insta::assert_snapshot!(rendered);
 }
