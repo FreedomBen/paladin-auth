@@ -2491,7 +2491,34 @@ Export error states:
 
 Add (QR) error and counts states:
 
-- [ ] Add modal QR-import inline error: no clipboard image.
+- [x] Add modal QR-import inline error: no clipboard image.
+  *(`snapshot_add_modal_qr_no_clipboard_image` in
+  `crates/paladin-tui/tests/view_snapshots.rs` constructs an
+  `AddModal` with
+  `mode: AddMode::Qr,
+  error: Some(format_qr_import_failure(&QrImportFailure::NoClipboardImage))`
+  — binding the snapshot to the shared TUI helper wording (`QR
+  import failed: clipboard does not contain an image (copy a QR
+  image first).`) rather than a hand-typed string — and renders
+  through `view::render` at 80×20. The view-snapshot mirrors the
+  reducer-side fixture
+  (`effect_result_qr_import_no_clipboard_image_sets_inline_error_and_keeps_modal_open`
+  in `tests/reducer_tests.rs`) so the matrix stays 1:1. Snapshot
+  reads as a delta from `snapshot_add_modal_default` on two cells:
+  the segmented mode-selector wraps `QR` in `▶ … ◀` instead of
+  `Manual`, and the inline-error row appears in the spacer above
+  the footer hint via the same `render_inline_error` branch the
+  Add modal's `save_not_committed` /
+  `save_durability_unconfirmed` slices exercise. The assertion
+  pins the leading `QR import failed: clipboard does not contain
+  an image` substring — the full message exceeds the inline-error
+  slot's ~60-col width and is truncated by
+  `Paragraph::new(Line::from(...))` in
+  `view/add.rs::render_inline_error`, mirroring the truncation pin
+  the plaintext-export-warning snapshot exercises. Locked in
+  `tests/snapshots/view_snapshots__snapshot_add_modal_qr_no_clipboard_image.snap`
+  so any future rewording in `format_qr_import_failure` for the
+  `NoClipboardImage` arm surfaces here as a diff.)*
 - [ ] Add modal QR-import inline error: image decode failure.
 - [ ] Add modal QR-import inline error: zero decoded QRs.
 - [ ] Add modal QR-import inline error: oversized raw RGBA buffer.

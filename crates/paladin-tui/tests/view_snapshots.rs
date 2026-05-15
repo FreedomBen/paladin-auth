@@ -31,10 +31,11 @@ use paladin_core::{
     IconHintInput, PaladinError, PermissionSubject, Store, ValidationWarning, Vault, VaultInit,
     VaultLock,
 };
+use paladin_tui::app::event::QrImportFailure;
 use paladin_tui::app::state::{
-    render_error_message, AddModal, AppState, CountsPanel, ExportFormat, ExportModal, Focus,
-    HotpReveal, ImportModal, Modal, PassphraseModal, PassphraseSubFlow, RemoveModal, RenameModal,
-    SettingsModal,
+    format_qr_import_failure, render_error_message, AddModal, AddMode, AppState, CountsPanel,
+    ExportFormat, ExportModal, Focus, HotpReveal, ImportModal, Modal, PassphraseModal,
+    PassphraseSubFlow, RemoveModal, RenameModal, SettingsModal,
 };
 use paladin_tui::prompt::PassphraseBuffer;
 use paladin_tui::view::render;
@@ -594,6 +595,92 @@ fn snapshot_add_modal_save_durability_unconfirmed() {
     assert!(
         rendered.contains("save durability unconfirmed"),
         "expected inline save_durability_unconfirmed wording to appear in modal:\n{rendered}"
+    );
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn snapshot_add_modal_qr_no_clipboard_image() {
+    // Plan L2447: "Add modal QR-import inline error: no clipboard
+    // image." Drive `view::render` against an `Unlocked` state
+    // holding `Modal::Add(AddModal { mode: AddMode::Qr, error:
+    // Some(format_qr_import_failure(&QrImportFailure::NoClipboardImage)),
+    // .. })` so the snapshot pins the inline-error row populated
+    // when `arboard::Clipboard::get_image()` reports the clipboard
+    // does not hold an image — the no-image clipboard branch per
+    // `DESIGN.md` §6 and `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per
+    // §6) > Add": *"Scan a QR code from clipboard image bytes;
+    // imported via the shared QR-decode path"*. The reducer's Err
+    // arm (`reduce_qr_import_result` in `src/app/reducer.rs`) routes
+    // the failure through `format_qr_import_failure` and parks the
+    // wording on `AddModal::error` per the matching contract in
+    // `IMPLEMENTATION_PLAN_03_TUI.md` "Tests > Add modal": *"QR-
+    // import inline errors (no clipboard image, image decode
+    // failure, zero decoded QRs, oversized RGBA buffer, invalid QR
+    // payload) surface inline and the modal stays open in
+    // `AddMode::Qr`."*  The view-snapshot pins the post-reduce
+    // rendering 1:1 with the reducer-side coverage from
+    // `effect_result_qr_import_no_clipboard_image_sets_inline_error_and_keeps_modal_open`
+    // in `tests/reducer_tests.rs`.
+    //
+    // Routing the wording through `format_qr_import_failure` binds
+    // the snapshot to the shared TUI helper rather than a hand-typed
+    // string so any future rewording of the "QR import failed:
+    // clipboard does not contain an image …" prompt surfaces here as
+    // a diff. The `AddMode::Qr` selector also pins the segmented
+    // mode-selector row — a regression that ever wires the QR
+    // failure result against the wrong `AddMode` surfaces as a diff
+    // of the active mode wrapper (`▶ … ◀`).
+    //
+    // The rest of the modal is at its default state (empty Manual
+    // field stack — the Add view currently paints the Manual field
+    // column regardless of `AddMode`, with mode-specific rendering
+    // landing alongside its own slice) so the snapshot reads as a
+    // delta from `snapshot_add_modal_default` on two cells: the
+    // active mode selector wraps `QR` instead of `Manual`, and the
+    // inline-error row appears inside the spacer above the footer
+    // hint via the same `render_inline_error` branch the Add modal's
+    // `save_not_committed` / `save_durability_unconfirmed` slices
+    // exercise.
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let modal = AddModal {
+        mode: AddMode::Qr,
+        error: Some(format_qr_import_failure(&QrImportFailure::NoClipboardImage)),
+        ..AddModal::default()
+    };
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Add(modal)),
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let rendered = render_to_text(&state, snapshot_now(), 80, 20);
+    // Regression guard: a renderer that ever stops surfacing the
+    // QR-import failure must fail this test even before the human
+    // reads the snapshot diff. Bind the assertion to the leading
+    // `QR import failed: clipboard does not contain an image`
+    // substring — the full message (with the `(copy a QR image
+    // first).` parenthetical hint) exceeds the inline-error slot's
+    // ~60-col width and is truncated by `Paragraph::new(Line::from(...))`
+    // in `view/add.rs::render_inline_error`, mirroring the
+    // truncation pin the plaintext-export-warning snapshot exercises.
+    assert!(
+        rendered.contains("QR import failed: clipboard does not contain an image"),
+        "expected inline no-clipboard-image wording prefix to appear in modal:\n{rendered}"
     );
     insta::assert_snapshot!(rendered);
 }
