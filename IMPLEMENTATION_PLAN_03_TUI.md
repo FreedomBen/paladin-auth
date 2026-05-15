@@ -2252,8 +2252,26 @@ Inline `save_not_committed` / `save_durability_unconfirmed`:
   sub-flow; per the plan's "Durability-unconfirmed failures follow
   the committed-state path" contract this surfaces identically to
   the pre-commit failure.)*
-- [ ] Settings modal `save_not_committed`.
-- [ ] Settings modal `save_durability_unconfirmed`.
+- [x] Settings modal `save_not_committed`.
+  *(`tests/view_snapshots.rs::snapshot_settings_modal_save_not_committed`
+  drives `view::render` against an `AppState::Unlocked` carrying
+  `Modal::Settings(SettingsModal { error: Some(render_error_message(
+  &PaladinError::SaveNotCommitted { committed: false, backup_path:
+  None })), .. })`. The renderer's new `render_inline_error` helper
+  in `crates/paladin-tui/src/view/settings.rs` paints the error one
+  blank row below the clipboard-spinner row, foreground red, inside
+  the modal's `Min(0)` spacer — mirroring the Add / Remove / Rename
+  / Import / Passphrase modals' inline-error slots so every
+  inline-error surface in the TUI reads the same way. The
+  `snapshot_settings_modal_default` baseline is unchanged — the
+  conditional render fires only when `modal.error.is_some()`.)*
+- [x] Settings modal `save_durability_unconfirmed`.
+  *(`tests/view_snapshots.rs::snapshot_settings_modal_save_durability_unconfirmed`
+  pins the same rendering path against
+  `PaladinError::SaveDurabilityUnconfirmed`; per the plan's
+  "Durability-unconfirmed failures follow the committed-state path"
+  contract this surfaces in the inline error slot identically to the
+  pre-commit failure.)*
 
 Import error and counts states:
 
