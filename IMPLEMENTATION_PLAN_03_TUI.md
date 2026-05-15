@@ -1832,7 +1832,27 @@ Layout / list views:
 
 Modals and overlays:
 
-- [ ] Add modal.
+- [x] Add modal. *(`snapshot_add_modal_default` in
+  `crates/paladin-tui/tests/view_snapshots.rs` drives an `Unlocked`
+  state with an empty plaintext vault and
+  `modal = Some(Modal::Add(AddModal::default()))`, then renders
+  through `view::render` at 80×20 — the new
+  `crates/paladin-tui/src/view/add.rs` paints a 64×16 centered
+  `Clear`-then-bordered ` Add account ` block over the list-view
+  backdrop, with the segmented `Mode: ▶ Manual ◀   URI   QR`
+  selector on top, the eight Manual-mode fields (`Label`, `Issuer`,
+  `Secret`, `Algorithm`, `Digits`, `Kind`, `Period (s)` / `Counter`,
+  `Icon hint`) at their `DESIGN.md` §5 defaults, and a centered
+  `Tab cycles fields · Enter submit · Esc cancel` keybinding hint at
+  the bottom. The `Secret:` row renders the typed character count as
+  `•` bullets so the snapshot pins that the renderer never paints
+  the secret bytes; an empty buffer renders as `[ ]`. The
+  `Period (s)` / `Counter` row is fed by `modal.kind` so a
+  regression that ever swaps the TOTP / HOTP branches surfaces as a
+  diff. `view::render` was extended in the same slice to dispatch
+  open modals through a private `render_modal` table; the
+  non-Add variants are explicit no-ops that pin "list view alone
+  shows underneath" until their own snapshot slice lands.)*
 - [ ] Remove modal.
 - [ ] Rename modal.
 - [ ] Import modal.

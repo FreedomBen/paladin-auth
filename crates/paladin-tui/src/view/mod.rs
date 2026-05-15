@@ -16,6 +16,7 @@
 //! HOTP reveal labels, status-line states, and search highlighting),
 //! then modals and overlays.
 
+pub mod add;
 pub mod list;
 pub mod missing_vault;
 pub mod startup_error;
@@ -25,7 +26,7 @@ use std::time::SystemTime;
 
 use ratatui::Frame;
 
-use crate::app::state::AppState;
+use crate::app::state::{AppState, Modal};
 
 /// Render the given [`AppState`] onto `frame`.
 ///
@@ -53,13 +54,40 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState, now: SystemTime) {
         } => {
             unlock::render(frame, path, error.as_deref(), passphrase);
         }
-        AppState::Unlocked { .. } => list::render(frame, state, now),
+        AppState::Unlocked { modal, .. } => {
+            list::render(frame, state, now);
+            if let Some(open) = modal {
+                render_modal(frame, open);
+            }
+        }
         AppState::Locked { .. } => {
             // Renderer lands alongside the auto-lock re-unlock slice:
             // `Locked` re-uses the unlock screen with an empty
             // passphrase on the next unlock attempt, and the
             // in-state-machine `Locked → Unlock` handoff on the first
             // keystroke is reducer territory.
+        }
+    }
+}
+
+/// Dispatch an open [`Modal`] to its per-variant renderer. Each
+/// modal's renderer is responsible for the [`ratatui::widgets::Clear`]
+/// pass on its own rect before painting; this helper is a pure
+/// dispatch table. Variants whose renderers have not yet landed in
+/// this slice draw nothing — the list view alone shows underneath
+/// until their slice ticks the corresponding plan checkbox.
+fn render_modal(frame: &mut Frame<'_>, modal: &Modal) {
+    match modal {
+        Modal::Add(add_modal) => add::render(frame, add_modal),
+        Modal::Remove(_)
+        | Modal::Rename(_)
+        | Modal::Import(_)
+        | Modal::Export(_)
+        | Modal::Passphrase(_)
+        | Modal::Settings(_) => {
+            // Per-variant renderers land alongside each modal's
+            // own "Tests > Insta snapshots > Modals and overlays"
+            // checklist row in `IMPLEMENTATION_PLAN_03_TUI.md`.
         }
     }
 }

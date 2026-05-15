@@ -30,7 +30,7 @@ use paladin_core::{
     AccountKindInput, Algorithm, IconHintInput, PaladinError, PermissionSubject, Store, Vault,
     VaultInit, VaultLock,
 };
-use paladin_tui::app::state::{AppState, Focus, HotpReveal};
+use paladin_tui::app::state::{AddModal, AppState, Focus, HotpReveal, Modal};
 use paladin_tui::prompt::PassphraseBuffer;
 use paladin_tui::view::render;
 use secrecy::SecretString;
@@ -444,6 +444,51 @@ fn snapshot_list_view_after_zz_recenter() {
         help_open: false,
     };
     insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 12));
+}
+
+#[test]
+fn snapshot_add_modal_default() {
+    // Plan L1835: "Add modal." Drive `view::render` against an
+    // `Unlocked` state holding `Modal::Add(AddModal::default())` so
+    // the snapshot pins the freshly-opened (Manual-mode, no inline
+    // error, no pending duplicate-add, no counts panel) baseline of
+    // the Add modal overlay rendered on top of the list view per
+    // `DESIGN.md` §6's "modal dialogs for add / remove / rename /
+    // import / export / passphrase / settings" call-out and the
+    // `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6) > Add"
+    // contract.
+    //
+    // The background vault is empty so the underlying list view
+    // settles into its `No accounts. Press `a` to add one.`
+    // prompt — the modal overlay's Clear-region then erases that
+    // prompt where it would otherwise show through, and the
+    // snapshot captures only the bordered list chrome
+    // (top border + search + divider above, divider + hint + bottom
+    // border below) framing the modal. Future slices land the URI /
+    // QR modes, duplicate "add anyway" gate, and post-import counts
+    // panel as their own snapshots.
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Add(AddModal::default())),
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 20));
 }
 
 #[test]
