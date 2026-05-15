@@ -163,17 +163,29 @@ pub fn format_rendered_marker(rows: &[AccountRowModel]) -> String {
 /// The shape is
 /// `paladin-gtk: account_list_widget_states=<entries>` where
 /// `<entries>` is the pipe-joined per-row state in render order.
-/// Each entry currently encodes one key/value pair —
-/// `copy:on` if the row's copy button is sensitive,
-/// `copy:off` otherwise — driven by
-/// [`crate::account_row::RowDisplay::copy_enabled`]. Pipe is chosen
-/// to match [`format_rendered_marker`]; colon separates key from
-/// value because neither token shows up inside either side today.
+/// Each entry encodes comma-separated key/value pairs:
+///
+/// * `copy:on` / `copy:off` — driven by
+///   [`crate::account_row::RowDisplay::copy_enabled`].
+/// * `next:on` / `next:off` — driven by
+///   [`crate::account_row::RowDisplay::next_button_visible`]; the
+///   HOTP "next" button is exposed on HOTP rows and hidden on TOTP
+///   rows.
+///
+/// Pipe matches [`format_rendered_marker`]; colon separates key
+/// from value and comma separates key/value pairs within a row,
+/// because none of those tokens show up inside any value today.
 #[must_use]
 pub fn format_widget_states_marker(displays: &[RowDisplay]) -> String {
     let entries: Vec<String> = displays
         .iter()
-        .map(|d| format!("copy:{}", if d.copy_enabled { "on" } else { "off" }))
+        .map(|d| {
+            format!(
+                "copy:{},next:{}",
+                if d.copy_enabled { "on" } else { "off" },
+                if d.next_button_visible { "on" } else { "off" },
+            )
+        })
         .collect();
     format!(
         "{ACCOUNT_LIST_WIDGET_STATES_MARKER_PREFIX}{}",
@@ -374,10 +386,17 @@ fn build_row_widget() -> gtk::Box {
         .valign(gtk::Align::Center)
         .build();
     copy.add_css_class("flat");
+    let next = gtk::Button::builder()
+        .icon_name("view-refresh-symbolic")
+        .tooltip_text("Reveal next HOTP code")
+        .valign(gtk::Align::Center)
+        .build();
+    next.add_css_class("flat");
     container.append(&label);
     container.append(&counter);
     container.append(&code);
     container.append(&copy);
+    container.append(&next);
     container
 }
 
@@ -386,13 +405,18 @@ fn build_row_widget() -> gtk::Box {
 ///
 /// The children are reached by walking `first_child` / `next_sibling`
 /// in the same order [`build_row_widget`] appended them so the
-/// factory never has to stash typed widget handles on the row. The
-/// copy button's sensitive state mirrors
-/// [`RowDisplay::copy_enabled`]: TOTP rows are always sensitive;
-/// HOTP rows are sensitive only while a visible reveal code is in
-/// hand, matching the `IMPLEMENTATION_PLAN_04_GTK.md` §"Component
-/// tree" > `AccountRowComponent` rule that copying a hidden HOTP
-/// row is disabled.
+/// factory never has to stash typed widget handles on the row.
+///
+/// * The copy button's sensitive state mirrors
+///   [`RowDisplay::copy_enabled`]: TOTP rows are always sensitive;
+///   HOTP rows are sensitive only while a visible reveal code is in
+///   hand, matching the `IMPLEMENTATION_PLAN_04_GTK.md` §"Component
+///   tree" > `AccountRowComponent` rule that copying a hidden HOTP
+///   row is disabled.
+/// * The HOTP "next" button's visibility mirrors
+///   [`RowDisplay::next_button_visible`]: HOTP rows show it (the
+///   user activates it to advance the counter and open a reveal
+///   window); TOTP rows hide it.
 fn bind_row(container: &gtk::Box, display: &RowDisplay) {
     let Some(label) = container.first_child().and_downcast::<gtk::Label>() else {
         return;
@@ -404,6 +428,9 @@ fn bind_row(container: &gtk::Box, display: &RowDisplay) {
         return;
     };
     let Some(copy) = code.next_sibling().and_downcast::<gtk::Button>() else {
+        return;
+    };
+    let Some(next) = copy.next_sibling().and_downcast::<gtk::Button>() else {
         return;
     };
 
@@ -424,4 +451,5 @@ fn bind_row(container: &gtk::Box, display: &RowDisplay) {
     code.set_label(&code_text);
 
     copy.set_sensitive(display.copy_enabled);
+    next.set_visible(display.next_button_visible);
 }

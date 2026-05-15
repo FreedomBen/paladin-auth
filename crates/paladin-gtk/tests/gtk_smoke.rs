@@ -271,14 +271,15 @@ fn app_renders_prepared_accounts() {
     );
 
     // The widget-states marker fingerprints per-row affordance state
-    // (currently the copy button's sensitive flag), driven by
-    // `account_list::format_widget_states_marker` against the same
-    // `hidden_row_display` projection the row factory binds. TOTP
-    // rows render `copy:on`; the HOTP `solo` row renders `copy:off`
-    // because its hidden state disables copy per
+    // (copy button sensitivity + HOTP "next" button visibility),
+    // driven by `account_list::format_widget_states_marker` against
+    // the same `hidden_row_display` projection the row factory binds.
+    // TOTP rows render `copy:on,next:off`; the HOTP `solo` row
+    // renders `copy:off,next:on` because its hidden state disables
+    // copy and exposes the "next" button per
     // `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
     // `AccountRowComponent`.
-    let widget_states_expected = "paladin-gtk: account_list_widget_states=copy:on|copy:on|copy:off";
+    let widget_states_expected = "paladin-gtk: account_list_widget_states=copy:on,next:off|copy:on,next:off|copy:off,next:on";
     assert!(
         stdout.contains(widget_states_expected),
         "expected stdout to contain `{widget_states_expected}`\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}",

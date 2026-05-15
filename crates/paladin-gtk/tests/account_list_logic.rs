@@ -267,12 +267,13 @@ fn hidden_row_display_hotp_with_missing_counter_defaults_to_zero() {
 // `format_widget_states_marker` — single-line per-row widget state marker
 // emitted under `--exit-after-startup` once the per-row widget bundle is
 // bound. The smoke test in `tests/gtk_smoke.rs` greps for this prefix so
-// the per-row affordance states (currently just the copy button's sensitive
-// state) are observable end-to-end without driving widget signals.
+// the per-row affordance states are observable end-to-end without driving
+// widget signals.
 //
-// Future commits that add the HOTP "next" button and kebab menu append
-// new key/value pairs to each entry; pinning the current shape here so
-// any addition is an explicit test update.
+// Each row contributes a comma-separated key:value list (`copy:`, `next:`,
+// …) and rows are pipe-joined in order. Future commits that wire the
+// kebab menu append additional key/value pairs to each entry; pinning the
+// current shape here so any addition is an explicit test update.
 // ---------------------------------------------------------------------------
 
 fn totp_display(label: &str) -> RowDisplay {
@@ -317,20 +318,24 @@ fn widget_states_marker_empty_emits_empty_suffix() {
 }
 
 #[test]
-fn widget_states_marker_renders_copy_on_for_totp() {
+fn widget_states_marker_renders_copy_on_and_next_off_for_totp() {
+    // TOTP rows enable copy (the code is always computed) and never
+    // expose the HOTP "next" button.
     let displays = vec![totp_display("Acme:alice")];
     assert_eq!(
         format_widget_states_marker(&displays),
-        "paladin-gtk: account_list_widget_states=copy:on",
+        "paladin-gtk: account_list_widget_states=copy:on,next:off",
     );
 }
 
 #[test]
-fn widget_states_marker_renders_copy_off_for_hidden_hotp() {
+fn widget_states_marker_renders_copy_off_and_next_on_for_hidden_hotp() {
+    // Hidden HOTP rows disable copy (no visible code yet) and expose
+    // the "next" button so the user can advance the counter.
     let displays = vec![hotp_hidden_display("solo", 7)];
     assert_eq!(
         format_widget_states_marker(&displays),
-        "paladin-gtk: account_list_widget_states=copy:off",
+        "paladin-gtk: account_list_widget_states=copy:off,next:on",
     );
 }
 
@@ -343,6 +348,6 @@ fn widget_states_marker_pipe_joins_in_order() {
     ];
     assert_eq!(
         format_widget_states_marker(&displays),
-        "paladin-gtk: account_list_widget_states=copy:on|copy:off|copy:on",
+        "paladin-gtk: account_list_widget_states=copy:on,next:off|copy:off,next:on|copy:on,next:off",
     );
 }
