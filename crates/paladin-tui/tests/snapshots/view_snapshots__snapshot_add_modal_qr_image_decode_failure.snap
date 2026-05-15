@@ -1,0 +1,25 @@
+---
+source: crates/paladin-tui/tests/view_snapshots.rs
+assertion_line: 756
+expression: rendered
+---
+┌ Paladin ─────────────────────────────────────────────────────────────────────┐
+│ Search:                                                                      │
+│ ──────┌ Add account ─────────────────────────────────────────────────┐────── │
+│       │ Mode:   Manual       URI     ▶ QR ◀                          │       │
+│       │                                                              │       │
+│       │ Label:      [  ]                                             │       │
+│       │ Issuer:     [  ]                                             │       │
+│       │ Secret:     [  ]                                             │       │
+│       │ Algorithm:  SHA1                                             │       │
+│       │ Digits:     6                                                │       │
+│       │ Kind:       TOTP                                             │       │
+│       │ Period (s): 30                                               │       │
+│       │ Icon hint:  [  ]                                             │       │
+│       │                                                              │       │
+│       │ QR import failed: clipboard image could not be decoded.      │       │
+│       │                                                              │       │
+│       │       Tab cycles fields  ·  Enter submit  ·  Esc cancel      │       │
+│ ──────└──────────────────────────────────────────────────────────────┘────── │
+│ [↑↓] move  [enter] copy  [n] next-HOTP  [a] add  [/] find                    │
+└──────────────────────────────────────────────────────────────────────────────┘

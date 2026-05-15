@@ -686,6 +686,77 @@ fn snapshot_add_modal_qr_no_clipboard_image() {
 }
 
 #[test]
+fn snapshot_add_modal_qr_image_decode_failure() {
+    // Plan L2448: "Add modal QR-import inline error: image decode
+    // failure." Drive `view::render` against an `Unlocked` state
+    // holding `Modal::Add(AddModal { mode: AddMode::Qr, error:
+    // Some(format_qr_import_failure(&QrImportFailure::ImageDecodeFailure)),
+    // .. })` so the snapshot pins the inline-error row populated
+    // when `arboard` returned an image but the bytes could not be
+    // decoded as a usable raster — the malformed-raster branch per
+    // the `QrImportFailure::ImageDecodeFailure` discriminator
+    // documented in `crates/paladin-tui/src/app/event.rs`. The
+    // reducer's Err arm (`reduce_qr_import_result` in
+    // `src/app/reducer.rs`) routes the failure through
+    // `format_qr_import_failure` and parks the wording on
+    // `AddModal::error`. The view-snapshot pins the post-reduce
+    // rendering 1:1 with the reducer-side coverage from
+    // `effect_result_qr_import_image_decode_failure_sets_inline_error_and_keeps_modal_open`
+    // in `tests/reducer_tests.rs`.
+    //
+    // Routing the wording through `format_qr_import_failure` binds
+    // the snapshot to the shared TUI helper rather than a hand-typed
+    // string so any future rewording of the "QR import failed:
+    // clipboard image could not be decoded." prompt surfaces here as
+    // a diff. The `ImageDecodeFailure` arm of
+    // `format_qr_import_failure` returns a 56-char message that
+    // fits the ~60-col inline-error slot without truncation, unlike
+    // the longer `NoClipboardImage` companion slice — so this
+    // snapshot doubles as a regression guard that the renderer
+    // surfaces the full single-line message when it does fit.
+    //
+    // The rest of the modal is at its default state (Manual field
+    // stack; `AddMode::Qr` selector) so the snapshot reads as a
+    // delta from `snapshot_add_modal_qr_no_clipboard_image` on a
+    // single cell: the inline-error wording.
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let modal = AddModal {
+        mode: AddMode::Qr,
+        error: Some(format_qr_import_failure(
+            &QrImportFailure::ImageDecodeFailure,
+        )),
+        ..AddModal::default()
+    };
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Add(modal)),
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let rendered = render_to_text(&state, snapshot_now(), 80, 20);
+    let expected = format_qr_import_failure(&QrImportFailure::ImageDecodeFailure);
+    assert!(
+        rendered.contains(&expected),
+        "expected inline image-decode-failure wording {expected:?} to appear in modal:\n{rendered}"
+    );
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn snapshot_remove_modal_default() {
     // Plan L1856: "Remove modal." Drive `view::render` against an
     // `Unlocked` state with one TOTP account and
