@@ -31,7 +31,8 @@ use paladin_core::{
     VaultInit, VaultLock,
 };
 use paladin_tui::app::state::{
-    AddModal, AppState, Focus, HotpReveal, ImportModal, Modal, RemoveModal, RenameModal,
+    AddModal, AppState, ExportModal, Focus, HotpReveal, ImportModal, Modal, RemoveModal,
+    RenameModal,
 };
 use paladin_tui::prompt::PassphraseBuffer;
 use paladin_tui::view::render;
@@ -644,6 +645,63 @@ fn snapshot_import_modal_default() {
         pending_clipboard_clear: None,
         hotp_reveal: None,
         modal: Some(Modal::Import(ImportModal::default())),
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 20));
+}
+
+#[test]
+fn snapshot_export_modal_default() {
+    // Plan L1887: "Export modal." Drive `view::render` against an
+    // `Unlocked` state with `Modal::Export(ExportModal::default())`
+    // open so the snapshot pins the freshly-opened (empty
+    // `path_text`, `ExportFormat::Plaintext` format selector, empty
+    // twice-confirm passphrase buffers, `plaintext_confirmed: false`
+    // acknowledgement gate, no inline error) baseline of the Export
+    // modal overlay rendered on top of the list view per `DESIGN.md`
+    // §6's "Export writes either the plaintext `otpauth://` JSON list
+    // (with an explicit unencrypted-secrets warning before the write)
+    // or an encrypted Paladin bundle (passphrase prompted twice and
+    // matched), refuses overwrite without explicit confirmation"
+    // contract and the `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per
+    // §6) > Export" checklist row.
+    //
+    // The background vault is empty so the underlying list view
+    // settles into its `No accounts. Press `a` to add one.` prompt
+    // — the modal overlay's Clear-region then erases that prompt
+    // where it would otherwise show through. The `Destination:` field
+    // renders as the editable `[ ... ]` text-input style mirroring
+    // the Add / Rename / Import modals' editable rows; the `Format:`
+    // selector renders as the segmented `▶ Plaintext ◀  Encrypted`
+    // line mirroring the Add / Import modals' segmented selectors so
+    // a regression that ever swaps the active variant or stops
+    // painting the segmented selector surfaces as a diff; the
+    // plaintext-export warning rendering and the `[ ]` /
+    // `[x]` acknowledgement gate land in their own dedicated
+    // snapshot slices below (plan L1996 "Export modal plaintext-
+    // export warning."). Inline `confirmation_mismatch` /
+    // `zero_length` / refused-overwrite / writer-failure /
+    // `save_not_committed` / `save_durability_unconfirmed` variants
+    // land as their own snapshots per the plan's later checkboxes.
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Export(ExportModal::default())),
         selected: None,
         pending_chord_leader: None,
         viewport_height: 0,

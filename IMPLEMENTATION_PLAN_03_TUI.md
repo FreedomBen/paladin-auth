@@ -1938,7 +1938,33 @@ Modals and overlays:
   Inline-error / encrypted-Paladin passphrase sub-phase / post-import
   counts panel variants of this modal land alongside their own
   checklist rows below.)*
-- [ ] Export modal.
+- [x] Export modal. *(`snapshot_export_modal_default` in
+  `crates/paladin-tui/tests/view_snapshots.rs` drives an `Unlocked`
+  state with an empty plaintext vault and
+  `modal = Some(Modal::Export(ExportModal::default()))`, then renders
+  through `view::render` at 80×20 — the new
+  `crates/paladin-tui/src/view/export.rs` paints a 72×10 centered
+  `Clear`-then-bordered ` Export accounts ` block over the list-view
+  backdrop. The body holds an editable `Destination:` text-input row
+  carrying the `ExportModal::path_text` buffer in `[ ... ]` brackets
+  (mirrors the Add / Rename / Import modals' `text_field_line` so
+  empty input renders as `[ ]`), the segmented `Format:` selector
+  wired to `modal.format` over the two
+  [`paladin_core::ExportFormat`] variants (`▶ Plaintext ◀
+  Encrypted`), a flexible spacer, and a centered `Tab cycles fields
+  ·  Enter submit  ·  Esc cancel` hint near the bottom border. The
+  72-cell width matches the Import modal so the segmented selectors
+  line up across the two flows. `view::render`'s `render_modal`
+  dispatch was extended in the same slice to route `Modal::Export`
+  to the new module — Passphrase / Settings remain the explicit
+  no-op branch until their own snapshot slices land. Locked in
+  `tests/snapshots/view_snapshots__snapshot_export_modal_default.snap`.
+  The plaintext-export warning rendering and the `[ ]` / `[x]`
+  acknowledgement gate, the encrypted twice-confirm passphrase
+  prompts, refused-overwrite gate, `confirmation_mismatch` /
+  `zero_length` validation gates, and writer-failure /
+  `save_not_committed` / `save_durability_unconfirmed` inline-error
+  variants land alongside their own checklist rows below.)*
 - [ ] Passphrase modal — `set` sub-flow.
 - [ ] Passphrase modal — `change` sub-flow.
 - [ ] Passphrase modal — `remove` sub-flow.

@@ -17,6 +17,7 @@
 //! then modals and overlays.
 
 pub mod add;
+pub mod export;
 pub mod import;
 pub mod list;
 pub mod missing_vault;
@@ -106,7 +107,8 @@ fn render_modal(frame: &mut Frame<'_>, modal: &Modal, vault: &Vault) {
         Modal::Remove(remove_modal) => remove::render(frame, remove_modal, vault),
         Modal::Rename(rename_modal) => rename::render(frame, rename_modal, vault),
         Modal::Import(import_modal) => import::render(frame, import_modal),
-        Modal::Export(_) | Modal::Passphrase(_) | Modal::Settings(_) => {
+        Modal::Export(export_modal) => export::render(frame, export_modal),
+        Modal::Passphrase(_) | Modal::Settings(_) => {
             // Per-variant renderers land alongside each modal's
             // own "Tests > Insta snapshots > Modals and overlays"
             // checklist row in `IMPLEMENTATION_PLAN_03_TUI.md`.
