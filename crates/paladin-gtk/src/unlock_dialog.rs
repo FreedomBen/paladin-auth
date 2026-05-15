@@ -210,6 +210,32 @@ impl InlineError {
             rendered: err.to_string(),
         }
     }
+
+    /// Build an [`InlineError`] from a pre-flight [`SubmitRejection`].
+    ///
+    /// The "Unlock" submit button's `#[watch] set_sensitive` binding
+    /// gates the click on
+    /// [`UnlockDialogState::submit_button_sensitive`]
+    /// (== `!is_passphrase_empty()`) so the empty-passphrase short
+    /// circuit in [`prepare_unlock_lock`] never fires through a normal
+    /// click. Defense-in-depth: the future click handler will run
+    /// `prepare_unlock_lock` regardless and stage this projection if
+    /// the gate ever leaks (e.g. a keyboard accelerator firing before
+    /// the property binding settles).
+    ///
+    /// The rendered text and [`ErrorKind`] match the equivalent
+    /// [`PaladinError`] variant so the GUI surfaces the same stable §5
+    /// `error_kind` / `reason` pair the CLI / TUI do.
+    #[must_use]
+    pub fn from_rejection(rejection: SubmitRejection) -> Self {
+        match rejection {
+            SubmitRejection::EmptyPassphrase => {
+                Self::from_error(&PaladinError::InvalidPassphrase {
+                    reason: rejection.reason(),
+                })
+            }
+        }
+    }
 }
 
 /// Live shadow buffer for the dialog's [`adw::PasswordEntryRow`].

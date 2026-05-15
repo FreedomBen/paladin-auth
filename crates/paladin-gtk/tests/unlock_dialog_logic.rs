@@ -548,6 +548,71 @@ fn inline_error_is_clone() {
 }
 
 // ---------------------------------------------------------------------------
+// InlineError::from_rejection — render the pre-flight `SubmitRejection`
+// short-circuit inline beneath the passphrase entry. The "Unlock" submit
+// button's `#[watch] set_sensitive` binding gates the click on
+// `submit_button_sensitive()` (== `!is_passphrase_empty()`) so this path
+// should never fire through a normal click. Defense-in-depth still
+// matters: the future click handler will run `prepare_unlock_lock`
+// regardless and stage this projection if the gate ever leaks (e.g. a
+// keyboard accelerator firing before the property bindings settle, or a
+// reactive race during `UnlockedBusy` window). The rendered wording
+// must match `paladin_core::PaladinError::InvalidPassphrase { reason:
+// "zero_length" }` verbatim so the GUI surfaces the same stable §5
+// `error_kind` / `reason` pair the CLI / TUI do.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn inline_error_from_rejection_empty_passphrase_carries_invalid_passphrase_kind() {
+    let inline = InlineError::from_rejection(SubmitRejection::EmptyPassphrase);
+    assert_eq!(inline.kind, ErrorKind::InvalidPassphrase);
+}
+
+#[test]
+fn inline_error_from_rejection_empty_passphrase_renders_zero_length_display() {
+    // The rendered text must match the typed §5
+    // `PaladinError::InvalidPassphrase { reason: "zero_length" }`
+    // `Display` output verbatim so wording matches the CLI / TUI.
+    let inline = InlineError::from_rejection(SubmitRejection::EmptyPassphrase);
+    let expected = PaladinError::InvalidPassphrase {
+        reason: "zero_length",
+    }
+    .to_string();
+    assert_eq!(inline.rendered, expected);
+}
+
+#[test]
+fn inline_error_from_rejection_matches_from_error_for_zero_length() {
+    // `from_rejection(EmptyPassphrase)` must be field-for-field
+    // identical to `from_error(&PaladinError::InvalidPassphrase {
+    // reason: "zero_length" })`. Pinning the equivalence here means
+    // the GTK widget layer can use either constructor without
+    // diverging from the §5 stable error format.
+    let from_rejection = InlineError::from_rejection(SubmitRejection::EmptyPassphrase);
+    let from_error = InlineError::from_error(&PaladinError::InvalidPassphrase {
+        reason: "zero_length",
+    });
+    assert_eq!(from_rejection.kind, from_error.kind);
+    assert_eq!(from_rejection.rendered, from_error.rendered);
+}
+
+#[test]
+fn inline_error_from_rejection_preserves_stable_reason_in_rendered_text() {
+    // Defensive: the stable §5 `invalid_passphrase.reason` discriminator
+    // must be visible in the rendered text so instrumentation /
+    // accessibility tools can scrape the reason code without needing
+    // structured error access.
+    let inline = InlineError::from_rejection(SubmitRejection::EmptyPassphrase);
+    assert!(
+        inline
+            .rendered
+            .contains(SubmitRejection::EmptyPassphrase.reason()),
+        "rendered text must surface the stable reason code, got {:?}",
+        inline.rendered,
+    );
+}
+
+// ---------------------------------------------------------------------------
 // UnlockDialogState::inline_error — the live inline-error slot that the
 // future worker commit populates from `classify_unlock_error` results
 // and that the widget binds a `gtk::Label` to. Typing a new passphrase
