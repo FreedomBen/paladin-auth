@@ -2297,7 +2297,29 @@ Import error and counts states:
   `tests/reducer_tests.rs`, so adding or renaming a variant in
   either lane stays visible in the other. Locked in
   `tests/snapshots/view_snapshots__snapshot_import_modal_{unsupported_import_format,unsupported_plaintext_vault,unsupported_encrypted_aegis,unsupported_aegis_entry_type,validation_error,no_entries_to_import,decrypt_failed,invalid_header,invalid_payload,unsupported_format_version,kdf_params_out_of_bounds,io_error}.snap`.)*
-- [ ] Import modal post-import counts panel.
+- [x] Import modal post-import counts panel.
+  *(`crates/paladin-tui/src/view/import.rs::render` branches on
+  `ImportModal::counts_panel`: when `Some`, the input layout
+  (Source / Format / On conflict / footer hint) is replaced with the
+  new `render_counts_panel` helper, which paints `Import complete.`
+  in the top row, the four `ImportReport` merge totals in
+  `Imported:` / `Skipped:` / `Replaced:` / `Appended:` rows aligned
+  in the same `LABEL_COL_WIDTH` left-hand column as the path-entry
+  rows, and an `Enter or Esc to close` centered footer hint —
+  switching the modal cleanly from editable submission mode to
+  read-only summary mode. The reducer's `reduce_import_result` Ok
+  arm (`crates/paladin-tui/src/app/reducer.rs:917`) already seeds
+  `counts_panel` from `paladin_core::ImportReport`, so no reducer
+  changes were needed for this slice.
+  `snapshot_import_modal_counts_panel` in
+  `crates/paladin-tui/tests/view_snapshots.rs` constructs the panel
+  with deliberately distinct counts (3 / 1 / 2 / 4) so a regression
+  that ever swaps two counts surfaces as a diff rather than staying
+  silent under identical values, and guards the rendered grid with
+  per-row substring assertions before the snapshot lands. Locked in
+  `tests/snapshots/view_snapshots__snapshot_import_modal_counts_panel.snap`.
+  Validation-warning rendering inside the panel's spacer lands
+  alongside its own checklist row below.)*
 - [ ] Import counts panel with validation-warning messages.
 
 Export error states:

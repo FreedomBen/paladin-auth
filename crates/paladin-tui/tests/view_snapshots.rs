@@ -31,8 +31,9 @@ use paladin_core::{
     VaultInit, VaultLock,
 };
 use paladin_tui::app::state::{
-    render_error_message, AddModal, AppState, ExportModal, Focus, HotpReveal, ImportModal, Modal,
-    PassphraseModal, PassphraseSubFlow, RemoveModal, RenameModal, SettingsModal,
+    render_error_message, AddModal, AppState, CountsPanel, ExportModal, Focus, HotpReveal,
+    ImportModal, Modal, PassphraseModal, PassphraseSubFlow, RemoveModal, RenameModal,
+    SettingsModal,
 };
 use paladin_tui::prompt::PassphraseBuffer;
 use paladin_tui::view::render;
@@ -1250,6 +1251,85 @@ fn snapshot_import_modal_io_error() {
             source: std::io::Error::from(std::io::ErrorKind::NotFound),
         },
         "I/O error during read_import_file",
+    );
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn snapshot_import_modal_counts_panel() {
+    // Plan L2300: "Import modal post-import counts panel." Drive
+    // `view::render` against an `Unlocked` state holding
+    // `Modal::Import(ImportModal { counts_panel: Some(CountsPanel {
+    // imported, skipped, replaced, appended, warnings: vec![] }), .. })`
+    // so the snapshot pins the post-success summary panel — the four
+    // `ImportReport` merge totals (`imported`/`skipped`/`replaced`/
+    // `appended`) the reducer seeds from
+    // `paladin_core::ImportReport` per `DESIGN.md` §6's "The modal
+    // reports imported/skipped/replaced/appended/warning counts plus
+    // validation-warning messages rendered through
+    // `paladin_core::format_validation_warning()` in a post-success
+    // counts panel" contract and the `IMPLEMENTATION_PLAN_03_TUI.md`
+    // "Modals (per §6) > Import" checklist row.
+    //
+    // Every other ImportModal field stays at its default (empty
+    // `path_text`, `Auto` format, `Skip` conflict, no inline error,
+    // no passphrase sub-phase) so the snapshot reads as a delta from
+    // the `snapshot_import_modal_default` baseline: the input rows
+    // (Source / Format / On conflict / hint) are replaced with the
+    // counts summary panel. The `warnings` slot is empty here; the
+    // warnings-included variant lands in its own snapshot per the
+    // plan's next checklist row.
+    //
+    // The carried counts are deliberately distinct (3 / 1 / 2 / 4)
+    // so the snapshot pins each field to its slot — a regression
+    // that ever swaps two counts surfaces as a diff rather than
+    // staying silent under identical values.
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Import(ImportModal {
+            counts_panel: Some(CountsPanel {
+                imported: 3,
+                skipped: 1,
+                replaced: 2,
+                appended: 4,
+                warnings: Vec::new(),
+            }),
+            ..ImportModal::default()
+        })),
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let rendered = render_to_text(&state, snapshot_now(), 80, 20);
+    assert!(
+        rendered.contains("Imported:") && rendered.contains('3'),
+        "expected 'Imported:' row with count 3 to appear in counts panel:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("Skipped:") && rendered.contains('1'),
+        "expected 'Skipped:' row with count 1 to appear in counts panel:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("Replaced:") && rendered.contains('2'),
+        "expected 'Replaced:' row with count 2 to appear in counts panel:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("Appended:") && rendered.contains('4'),
+        "expected 'Appended:' row with count 4 to appear in counts panel:\n{rendered}"
     );
     insta::assert_snapshot!(rendered);
 }

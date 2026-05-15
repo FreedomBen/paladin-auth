@@ -27,8 +27,20 @@
 //! identically to the unlock screen's `decrypt_failed` line and the
 //! Add / Remove / Rename modals' inline-error slots.
 //!
-//! Encrypted-Paladin passphrase sub-phase / counts-panel rendering
-//! land alongside their own reducer or effect slices.
+//! When [`ImportModal::counts_panel`] is `Some`, the modal switches to
+//! the post-success summary view: the input rows (Source / Format /
+//! On conflict / footer hint) are replaced with the four
+//! `paladin_core::ImportReport` merge totals
+//! (`imported`/`skipped`/`replaced`/`appended`) plus an `Enter or Esc
+//! to close` hint. Per `DESIGN.md` §6's "The modal reports
+//! imported/skipped/replaced/appended/warning counts plus
+//! validation-warning messages rendered through
+//! `paladin_core::format_validation_warning()` in a post-success
+//! counts panel" contract. Warnings rendering lands alongside its own
+//! checklist row below.
+//!
+//! Encrypted-Paladin passphrase sub-phase rendering lands alongside
+//! its own reducer or effect slice.
 
 use paladin_core::ImportConflict;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
@@ -38,7 +50,7 @@ use ratatui::widgets::{Block, Borders, Clear, Padding, Paragraph};
 use ratatui::Frame;
 
 use super::centered_rect;
-use crate::app::state::{ImportFormatSelector, ImportModal};
+use crate::app::state::{CountsPanel, ImportFormatSelector, ImportModal};
 
 /// Width of the left-hand label column inside the modal. Long
 /// enough for the widest field name (`On conflict:`) so the value
@@ -67,6 +79,11 @@ pub fn render(frame: &mut Frame<'_>, modal: &ImportModal) {
         .padding(Padding::symmetric(1, 0));
     let inner = block.inner(modal_area);
     frame.render_widget(block, modal_area);
+
+    if let Some(panel) = &modal.counts_panel {
+        render_counts_panel(frame, inner, panel);
+        return;
+    }
 
     // Top-to-bottom: source path, blank, format selector, blank,
     // conflict selector, spacer, hint.
@@ -100,6 +117,71 @@ pub fn render(frame: &mut Frame<'_>, modal: &ImportModal) {
 
     let hint = "Tab cycles fields  ·  Enter submit  ·  Esc cancel";
     frame.render_widget(Paragraph::new(hint).alignment(Alignment::Center), chunks[6]);
+}
+
+/// Paint the post-success summary view inside the modal's inner area.
+///
+/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6) > Import":
+/// *"The modal reports imported/skipped/replaced/appended/warning
+/// counts plus validation-warning messages rendered through
+/// `paladin_core::format_validation_warning()` in a post-success
+/// counts panel."* The reducer seeds [`CountsPanel`] from the
+/// carried [`paladin_core::ImportReport`], so each of the four
+/// totals (`imported` / `skipped` / `replaced` / `appended`) flows
+/// through verbatim. The footer hint switches to
+/// `Enter or Esc to close` so the user sees that the modal is now
+/// in summary mode rather than the editable path-entry phase.
+///
+/// The warnings list is paid out in the spacer between the count
+/// rows and the footer hint, one rendered string per row. The Add
+/// modal's QR-import counts panel reuses the same layout — sharing
+/// the `Imported:` / `Skipped:` / `Replaced:` / `Appended:` label
+/// column with the import counts panel so the two surfaces read
+/// identically.
+fn render_counts_panel(frame: &mut Frame<'_>, inner: Rect, panel: &CountsPanel) {
+    // Top-to-bottom: header, blank, imported, skipped, replaced,
+    // appended, spacer (warnings land here once rendering for them
+    // ships), hint.
+    let chunks = Layout::vertical([
+        Constraint::Length(1), // header
+        Constraint::Length(1), // blank
+        Constraint::Length(1), // imported
+        Constraint::Length(1), // skipped
+        Constraint::Length(1), // replaced
+        Constraint::Length(1), // appended
+        Constraint::Min(0),    // spacer / warnings
+        Constraint::Length(1), // hint
+    ])
+    .split(inner);
+
+    frame.render_widget(Paragraph::new("Import complete."), chunks[0]);
+    frame.render_widget(
+        Paragraph::new(count_row_line("Imported:", panel.imported)),
+        chunks[2],
+    );
+    frame.render_widget(
+        Paragraph::new(count_row_line("Skipped:", panel.skipped)),
+        chunks[3],
+    );
+    frame.render_widget(
+        Paragraph::new(count_row_line("Replaced:", panel.replaced)),
+        chunks[4],
+    );
+    frame.render_widget(
+        Paragraph::new(count_row_line("Appended:", panel.appended)),
+        chunks[5],
+    );
+
+    let hint = "Enter or Esc to close";
+    frame.render_widget(Paragraph::new(hint).alignment(Alignment::Center), chunks[7]);
+}
+
+/// Build a single labeled count row (`"Imported:       3"`). The
+/// label sits in the same `LABEL_COL_WIDTH` left-hand column as the
+/// path-entry rows so the count row reads as a delta from the
+/// pre-success layout rather than a separate visual region.
+fn count_row_line(label: &str, count: usize) -> Line<'static> {
+    Line::from(format!("{label:<LABEL_COL_WIDTH$}{count}"))
 }
 
 /// Paint the inline error message inside the spacer area between the
