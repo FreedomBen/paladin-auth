@@ -1,0 +1,24 @@
+---
+source: crates/paladin-tui/tests/view_snapshots.rs
+expression: rendered
+---
+┌ Paladin ─────────────────────────────────────────────────────────────────────┐
+│ Search:                                                                      │
+│ ──────┌ Add account ─────────────────────────────────────────────────┐────── │
+│       │ Mode:   Manual       URI     ▶ QR ◀                          │       │
+│       │                                                              │       │
+│       │ Label:      [  ]                                             │       │
+│       │ Issuer:     [  ]                                             │       │
+│       │ Secret:     [  ]                                             │       │
+│       │ Algorithm:  SHA1                                             │       │
+│       │ Digits:     6                                                │       │
+│       │ Kind:       TOTP                                             │       │
+│       │ Period (s): 30                                               │       │
+│       │ Icon hint:  [  ]                                             │       │
+│       │                                                              │       │
+│       │ validation error: qr_image: non_otpauth_payload              │       │
+│       │                                                              │       │
+│       │       Tab cycles fields  ·  Enter submit  ·  Esc cancel      │       │
+│ ──────└──────────────────────────────────────────────────────────────┘────── │
+│ [↑↓] move  [enter] copy  [n] next-HOTP  [a] add  [/] find                    │
+└──────────────────────────────────────────────────────────────────────────────┘

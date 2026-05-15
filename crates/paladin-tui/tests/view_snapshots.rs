@@ -903,6 +903,95 @@ fn snapshot_add_modal_qr_oversized_rgba_buffer() {
 }
 
 #[test]
+fn snapshot_add_modal_qr_invalid_qr_payload() {
+    // Plan L2615: "Add modal QR-import inline error: invalid QR
+    // payload." Drive `view::render` against an `Unlocked` state
+    // holding `Modal::Add(AddModal { mode: AddMode::Qr, error:
+    // Some(format_qr_import_failure(&QrImportFailure::Import(
+    //     PaladinError::ValidationError { field: "qr_image", reason:
+    //     "non_otpauth_payload", source_index: Some(0), .. }))), .. })`
+    // so the snapshot pins the inline-error row populated when
+    // `paladin_core::import::qr_image_bytes` decodes a QR whose
+    // payload is not an `otpauth://` URI — the `non_otpauth_payload`
+    // discriminator emitted by `payloads_to_accounts` per `DESIGN.md`
+    // §4.6 / §5 (see `crates/paladin-core/src/import/qr.rs:87`).
+    // The reducer's Err arm (`reduce_qr_import_result` in
+    // `src/app/reducer.rs`) routes the failure through
+    // `format_qr_import_failure`, whose `Import(err)` arm delegates
+    // to `render_error_message` and binds the wording to the core
+    // `Display` impl (`validation error: qr_image: non_otpauth_payload`).
+    // The view-snapshot pins the post-reduce rendering 1:1 with the
+    // reducer-side coverage from
+    // `effect_result_qr_import_invalid_qr_payload_sets_inline_error_via_render_error_message`
+    // in `tests/reducer_tests.rs`.
+    //
+    // Routing the wording through `format_qr_import_failure`'s
+    // `Import(err)` arm — which delegates to `render_error_message`
+    // and binds to the core `Display` impl — pins that this arm
+    // forwards `PaladinError` wording verbatim without a "QR import
+    // failed:" prefix, matching the `NoEntriesToImport` and
+    // oversized-RGBA companion slices. Constructing the
+    // `ValidationError` variant directly (rather than driving a real
+    // non-otpauth QR through `qr_image_bytes`) keeps the snapshot
+    // self-contained — the field / reason codes are stable per
+    // `DESIGN.md` §5, and `crates/paladin-core/tests/import_qr.rs`'s
+    // `qr_image_bytes_with_non_otpauth_payload_rejects_with_source_index`
+    // already binds the real-API path. The 47-char core wording fits
+    // the ~60-col inline-error slot without truncation.
+    //
+    // `source_index: Some(0)` mirrors the value `payloads_to_accounts`
+    // tags on the first offending payload; the `Display` impl ignores
+    // the field, so this slot is locked here to document the
+    // attribution rather than influence the rendered text.
+    //
+    // The rest of the modal is at its default state (Manual field
+    // stack; `AddMode::Qr` selector) so the snapshot reads as a
+    // delta from `snapshot_add_modal_qr_oversized_rgba_buffer` on a
+    // single cell: the inline-error wording.
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let core_err = PaladinError::ValidationError {
+        field: "qr_image",
+        reason: "non_otpauth_payload".to_string(),
+        source_index: Some(0),
+        decoded_len: None,
+        recommended_min: None,
+        entry_type: None,
+    };
+    let expected = format_qr_import_failure(&QrImportFailure::Import(core_err));
+    let modal = AddModal {
+        mode: AddMode::Qr,
+        error: Some(expected.clone()),
+        ..AddModal::default()
+    };
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Add(modal)),
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let rendered = render_to_text(&state, snapshot_now(), 80, 20);
+    assert!(
+        rendered.contains(&expected),
+        "expected inline non-otpauth-payload wording {expected:?} to appear in modal:\n{rendered}"
+    );
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn snapshot_remove_modal_default() {
     // Plan L1856: "Remove modal." Drive `view::render` against an
     // `Unlocked` state with one TOTP account and

@@ -2612,7 +2612,52 @@ Add (QR) error and counts states:
   `Display`, in the `qr_image_bytes` size-rejection path's
   `field` / `reason` codes, or in `format_qr_import_failure`'s
   `Import` arm surfaces here as a diff.)*
-- [ ] Add modal QR-import inline error: invalid QR payload.
+- [x] Add modal QR-import inline error: invalid QR payload.
+  *(`snapshot_add_modal_qr_invalid_qr_payload` in
+  `crates/paladin-tui/tests/view_snapshots.rs` constructs an
+  `AddModal` with
+  `mode: AddMode::Qr,
+  error: Some(format_qr_import_failure(&QrImportFailure::Import(
+      PaladinError::ValidationError { field: "qr_image",
+      reason: "non_otpauth_payload".to_string(),
+      source_index: Some(0), .. })))` — pinning the wording
+  emitted by `payloads_to_accounts` in
+  `crates/paladin-core/src/import/qr.rs:87` when
+  `paladin_core::import::qr_image_bytes` decodes a QR whose
+  payload is not an `otpauth://` URI (`validation_error
+  { field: "qr_image", reason: "non_otpauth_payload" }` per
+  `DESIGN.md` §4.6 / §5). Mirrors the reducer-side fixture
+  (`effect_result_qr_import_invalid_qr_payload_sets_inline_error_via_render_error_message`
+  in `tests/reducer_tests.rs`) so the view-snapshot matrix stays
+  1:1 with the reducer matrix. Constructing the `ValidationError`
+  variant directly (rather than driving a real non-otpauth QR
+  through `qr_image_bytes`) keeps the snapshot self-contained —
+  the field / reason codes are stable per §5, and
+  `crates/paladin-core/tests/import_qr.rs`'s
+  `qr_image_bytes_with_non_otpauth_payload_rejects_with_source_index`
+  already binds the real-API path. Routing through
+  `format_qr_import_failure`'s `Import(err)` arm — which
+  delegates to `render_error_message` and binds to the core
+  `Display` impl (`validation error: qr_image:
+  non_otpauth_payload`) — pins that this arm forwards
+  `PaladinError` wording verbatim without a "QR import failed:"
+  prefix, matching the `NoEntriesToImport` and oversized-RGBA
+  companion slices. The 47-char core wording fits the ~60-col
+  inline-error slot without truncation. The `source_index: Some(0)`
+  slot is locked here to document the attribution
+  `payloads_to_accounts` tags on the offending payload; the
+  `Display` impl ignores the field, so this slot does not influence
+  the rendered text. Reuses the `render_inline_error` branch in
+  `view/add.rs` exercised by the Add modal's `save_not_committed` /
+  `save_durability_unconfirmed` / `no_clipboard_image` /
+  `image_decode_failure` / `no_qrs_decoded` / `oversized_rgba_buffer`
+  slices; the segmented mode-selector wraps `QR` in `▶ … ◀`.
+  Locked in
+  `tests/snapshots/view_snapshots__snapshot_add_modal_qr_invalid_qr_payload.snap`
+  so any future wording change in core's `validation_error`
+  `Display`, in the `non_otpauth_payload` reason code emitted by
+  `payloads_to_accounts`, or in `format_qr_import_failure`'s
+  `Import` arm surfaces here as a diff.)*
 - [ ] Add modal post-QR-import counts panel.
 - [ ] Add modal `duplicate_account`.
 - [ ] Add modal "add anyway" confirmation.
