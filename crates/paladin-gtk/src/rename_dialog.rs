@@ -48,6 +48,7 @@
 
 use libadwaita as adw;
 use libadwaita::prelude::*;
+use relm4::gtk;
 use relm4::prelude::*;
 
 use paladin_core::{validate_label, AccountId, ErrorKind, PaladinError, Vault};
@@ -249,39 +250,121 @@ pub fn decide_rename_target(vault: &Vault, id: AccountId) -> Option<RenameDialog
         })
 }
 
+/// Live draft + validation state for [`RenameDialogComponent`].
+///
+/// The widget binds an [`adw::EntryRow`] to [`Self::draft`] and
+/// re-runs [`classify_submit`] on every keystroke so the dialog
+/// surfaces inline label errors as the user types. The widget never
+/// trims the draft itself — trimming happens inside [`classify_submit`],
+/// so [`Self::draft`] keeps the exact raw characters in the row and
+/// the canonical trimmed value lives inside the [`SubmitOutcome`].
+#[derive(Debug, Clone)]
+pub struct RenameDialogState {
+    draft: String,
+    last_validation: SubmitOutcome,
+}
+
+impl RenameDialogState {
+    /// Seed the state from a freshly-projected [`RenameDialogInit`].
+    ///
+    /// The dialog opens with the entry row pre-filled with the
+    /// account's current label so the user can edit-in-place; the
+    /// initial validation always proceeds because labels persisted
+    /// by `Vault::add` / `Vault::rename` have already passed §4.1.
+    #[must_use]
+    pub fn new(init: &RenameDialogInit) -> Self {
+        let draft = init.current_label.clone();
+        let last_validation = classify_submit(&draft);
+        Self {
+            draft,
+            last_validation,
+        }
+    }
+
+    /// Current raw draft text from the entry row.
+    ///
+    /// The widget binds this directly to `adw::EntryRow::text`. No
+    /// trimming is applied here — see the struct doc comment.
+    #[must_use]
+    pub fn draft(&self) -> &str {
+        &self.draft
+    }
+
+    /// Latest [`classify_submit`] outcome for the current draft.
+    ///
+    /// Cached on `self` so the widget can re-render the inline-error
+    /// area without re-running validation on every redraw.
+    #[must_use]
+    pub fn last_validation(&self) -> &SubmitOutcome {
+        &self.last_validation
+    }
+
+    /// Replace the draft and re-classify.
+    ///
+    /// Called from the entry row's text-change signal. The cached
+    /// [`SubmitOutcome`] updates atomically alongside the draft so
+    /// the widget never observes the two fields out of sync.
+    pub fn set_draft(&mut self, draft: String) {
+        self.last_validation = classify_submit(&draft);
+        self.draft = draft;
+    }
+
+    /// Inline-error projection for the body of the dialog.
+    ///
+    /// Returns `Some(&InlineError)` while the draft is invalid,
+    /// `None` otherwise. The widget uses this to attach the `error`
+    /// CSS class to the row and render the status-line label below
+    /// it.
+    #[must_use]
+    pub fn inline_error(&self) -> Option<&InlineError> {
+        match &self.last_validation {
+            SubmitOutcome::InlineError(err) => Some(err),
+            SubmitOutcome::Proceed(_) => None,
+        }
+    }
+}
+
 /// Messages handled by [`RenameDialogComponent`].
 ///
-/// This milestone scaffolds the read-only render path — the
+/// `DraftChanged(text)` arrives from the entry row's text-change
+/// signal and runs [`RenameDialogState::set_draft`] so the cached
+/// validation outcome stays in sync with what the user typed. The
 /// `submit` / `cancel` transitions and the
 /// `Vault::mutate_and_save(|v| v.rename(...))` worker described in
 /// §"Component tree" > Rename dialog and §"Effect errors" land in
 /// follow-up commits alongside the `UnlockedBusy` worker
-/// infrastructure. The empty enum is the deliberate starting point
-/// — relm4 requires the associated `Input` type to exist even when
-/// no inbound messages are wired yet.
+/// infrastructure.
 #[derive(Debug)]
-pub enum RenameDialogMsg {}
+pub enum RenameDialogMsg {
+    /// Raw text from the [`adw::EntryRow`] after a keystroke. The
+    /// handler re-runs [`classify_submit`] via
+    /// [`RenameDialogState::set_draft`] so the inline-error area
+    /// reflects the live draft.
+    DraftChanged(String),
+}
 
 /// Widget-bearing dialog for the
 /// [`crate::account_list::AccountListOutput::OpenRenameDialog`]
 /// branch.
 ///
-/// Mounts a libadwaita [`adw::StatusPage`] that surfaces the
-/// targeted account's `<issuer>:<label>` heading alongside the
-/// current label that the entry field will prefill in the next
-/// commit. Subsequent commits replace the placeholder body with the
-/// editable [`adw::EntryRow`], the submit button, and the
-/// `Vault::mutate_and_save` worker; until then, keeping the widget
-/// read-only mirrors the [`crate::init_dialog::InitDialogComponent`]
-/// pattern (every dialog branch landed as a status page first and
-/// grew inbound actions later).
+/// Mounts a vertical layout with a heading naming the targeted
+/// `<issuer>:<label>` row, an editable [`adw::EntryRow`] pre-filled
+/// with the account's current label, and an inline-error label that
+/// reflects [`RenameDialogState::inline_error`] as the user types.
+/// The Save / Cancel buttons and the
+/// `Vault::mutate_and_save(|v| v.rename(...))` worker land in
+/// follow-up commits alongside the `UnlockedBusy` worker
+/// infrastructure.
 pub struct RenameDialogComponent {
-    /// Construction parameters retained on `self` so a future
-    /// message handler can read the targeted account id and the
-    /// pre-submit label without re-plumbing the values through every
-    /// signal.
-    #[allow(dead_code)]
+    /// Construction parameters retained on `self` so future message
+    /// handlers can read the targeted account id and reset the draft
+    /// back to the pre-submit label on `save_not_committed`.
     init: RenameDialogInit,
+    /// Live draft + validation state driven from the entry row's
+    /// `changed` signal. The view watches
+    /// [`RenameDialogState::inline_error`] so the error label
+    /// surfaces inline as the user types.
+    state: RenameDialogState,
 }
 
 #[allow(missing_docs)]
@@ -293,36 +376,73 @@ impl SimpleComponent for RenameDialogComponent {
 
     view! {
         #[root]
-        adw::StatusPage {
-            // `document-edit-symbolic` is the freedesktop-standard
-            // glyph for "edit this thing"; resolves through the
-            // system icon theme so the wordless icon matches the
-            // platform's other rename surfaces.
-            set_icon_name: Some("document-edit-symbolic"),
-            set_title: "Rename account",
-            set_description: Some(&format!(
-                "Renaming {display}.\n\nCurrent label: {current}",
-                display = model.init.display_label,
-                current = model.init.current_label,
-            )),
+        gtk::Box {
+            set_orientation: gtk::Orientation::Vertical,
+            set_spacing: 12,
             set_hexpand: true,
             set_vexpand: true,
+
+            gtk::Label {
+                set_label: "Rename account",
+                set_xalign: 0.0,
+                add_css_class: "title-2",
+            },
+            gtk::Label {
+                set_label: &format!("Renaming {}.", model.init.display_label),
+                set_xalign: 0.0,
+                set_wrap: true,
+            },
+
+            adw::PreferencesGroup {
+                #[name = "label_row"]
+                add = &adw::EntryRow {
+                    set_title: "Label",
+                    // `connect_changed` fires on every keystroke so
+                    // the cached `RenameDialogState::last_validation`
+                    // tracks the live draft.
+                    connect_changed[sender] => move |entry| {
+                        sender.input(RenameDialogMsg::DraftChanged(entry.text().to_string()));
+                    },
+                },
+            },
+
+            #[name = "error_label"]
+            gtk::Label {
+                set_xalign: 0.0,
+                set_wrap: true,
+                add_css_class: "error",
+                #[watch]
+                set_label: model
+                    .state
+                    .inline_error()
+                    .map_or("", |err| err.rendered.as_str()),
+                #[watch]
+                set_visible: model.state.inline_error().is_some(),
+            },
         }
     }
 
     fn init(
         init: Self::Init,
         root: Self::Root,
-        _sender: ComponentSender<Self>,
+        sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
-        let model = RenameDialogComponent { init };
+        let state = RenameDialogState::new(&init);
+        let model = RenameDialogComponent { init, state };
         let widgets = view_output!();
+        // Seed the entry row imperatively so the initial `set_text`
+        // does not run through the `connect_changed` round-trip on
+        // every redraw — keeping the cursor where the user expects
+        // it across state changes that do not reset the draft.
+        widgets.label_row.set_text(model.state.draft());
         ComponentParts { model, widgets }
     }
 
-    fn update(&mut self, _msg: Self::Input, _sender: ComponentSender<Self>) {
-        // No inbound messages handled at this milestone — see
-        // `RenameDialogMsg` doc comment for the upcoming submit /
-        // cancel / worker actions.
+    fn update(&mut self, msg: Self::Input, _sender: ComponentSender<Self>) {
+        match msg {
+            RenameDialogMsg::DraftChanged(text) => {
+                self.state.set_draft(text);
+            }
+        }
     }
 }

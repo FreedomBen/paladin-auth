@@ -34,8 +34,8 @@ use paladin_core::{
 
 use paladin_gtk::rename_dialog::{
     classify_rename_error, classify_submit, decide_rename_target, format_rename_dialog_marker,
-    InlineError, InlineWarning, RenameDialogInit, RenameErrorOutcome, SubmitOutcome,
-    RENAME_DIALOG_MARKER_PREFIX,
+    InlineError, InlineWarning, RenameDialogInit, RenameDialogState, RenameErrorOutcome,
+    SubmitOutcome, RENAME_DIALOG_MARKER_PREFIX,
 };
 
 /// §4.1 label length cap. The constant is internal to
@@ -435,4 +435,117 @@ fn rename_dialog_init_clones_for_reactive_state() {
     assert_eq!(cloned.account_id, init.account_id);
     assert_eq!(cloned.current_label, init.current_label);
     assert_eq!(cloned.display_label, init.display_label);
+}
+
+// ---------------------------------------------------------------------------
+// `RenameDialogState` — live draft + validation state machine
+//
+// The widget layer drives an `adw::EntryRow` pre-filled with the account's
+// current label. Every keystroke runs `classify_submit` so the dialog can
+// surface inline errors as the user types. This block tests the pure-logic
+// state machine; the widget binding is exercised separately via the smoke
+// test.
+// ---------------------------------------------------------------------------
+
+fn dummy_init(current_label: &str) -> RenameDialogInit {
+    RenameDialogInit {
+        account_id: AccountId::new(),
+        current_label: current_label.to_string(),
+        display_label: format!("Acme:{current_label}"),
+    }
+}
+
+#[test]
+fn rename_dialog_state_new_seeds_draft_from_current_label() {
+    let state = RenameDialogState::new(&dummy_init("ben"));
+    assert_eq!(state.draft(), "ben");
+}
+
+#[test]
+fn rename_dialog_state_new_validates_seeded_draft_positively() {
+    // The current label was stored in the vault by `Vault::add` /
+    // `Vault::rename`, which both validate, so a freshly-seeded
+    // draft must classify as Proceed and the inline-error helper
+    // must return None.
+    let state = RenameDialogState::new(&dummy_init("ben"));
+    let SubmitOutcome::Proceed(trimmed) = state.last_validation().clone() else {
+        panic!(
+            "expected Proceed on freshly-seeded state, got {:?}",
+            state.last_validation()
+        );
+    };
+    assert_eq!(trimmed, "ben");
+    assert!(state.inline_error().is_none());
+}
+
+#[test]
+fn rename_dialog_state_set_draft_to_empty_surfaces_inline_error() {
+    let mut state = RenameDialogState::new(&dummy_init("ben"));
+    state.set_draft(String::new());
+    assert_eq!(state.draft(), "");
+    let inline = state
+        .inline_error()
+        .expect("empty draft should surface inline error");
+    assert_eq!(inline.kind, ErrorKind::ValidationError);
+    assert!(inline.rendered.contains("label"));
+    assert!(inline.rendered.contains("empty"));
+}
+
+#[test]
+fn rename_dialog_state_set_draft_to_whitespace_only_surfaces_inline_error() {
+    let mut state = RenameDialogState::new(&dummy_init("ben"));
+    state.set_draft("   \t  ".to_string());
+    let inline = state
+        .inline_error()
+        .expect("whitespace-only draft should surface inline error");
+    assert_eq!(inline.kind, ErrorKind::ValidationError);
+    assert!(inline.rendered.contains("empty"));
+}
+
+#[test]
+fn rename_dialog_state_set_draft_to_overlong_surfaces_inline_error() {
+    let mut state = RenameDialogState::new(&dummy_init("ben"));
+    state.set_draft("x".repeat(LABEL_MAX_BYTES + 1));
+    let inline = state
+        .inline_error()
+        .expect("overlong draft should surface inline error");
+    assert_eq!(inline.kind, ErrorKind::ValidationError);
+    assert!(inline.rendered.contains("too_long"));
+}
+
+#[test]
+fn rename_dialog_state_set_draft_back_to_valid_clears_inline_error() {
+    let mut state = RenameDialogState::new(&dummy_init("ben"));
+    state.set_draft(String::new());
+    assert!(state.inline_error().is_some());
+    state.set_draft("alice".to_string());
+    assert!(state.inline_error().is_none());
+    let SubmitOutcome::Proceed(trimmed) = state.last_validation().clone() else {
+        panic!("expected Proceed after switching back to valid draft");
+    };
+    assert_eq!(trimmed, "alice");
+}
+
+#[test]
+fn rename_dialog_state_preserves_untrimmed_draft_for_round_trip() {
+    // The visible entry value is the raw draft; trimming happens
+    // inside `classify_submit` so the user keeps the whitespace they
+    // typed until they commit. Re-classifying the same string later
+    // must therefore still trim to the same canonical value.
+    let mut state = RenameDialogState::new(&dummy_init("ben"));
+    state.set_draft("  Acme:user  ".to_string());
+    assert_eq!(state.draft(), "  Acme:user  ");
+    let SubmitOutcome::Proceed(trimmed) = state.last_validation().clone() else {
+        panic!("expected Proceed");
+    };
+    assert_eq!(trimmed, "Acme:user");
+}
+
+#[test]
+fn rename_dialog_state_clones_for_reactive_state() {
+    // The widget stores the state on `self` and may clone it across
+    // re-renders or into messages; the type must implement Clone.
+    let state = RenameDialogState::new(&dummy_init("ben"));
+    let cloned = state.clone();
+    assert_eq!(cloned.draft(), state.draft());
 }
