@@ -28,7 +28,10 @@ use relm4::prelude::*;
 
 use paladin_core::{AccountId, AccountKindSummary, Vault};
 
-use crate::account_row::display_label;
+use crate::account_row::{
+    copy_enabled, display_label, next_button_visible, progress_visible, CodeDisplay, CounterText,
+    RowDisplay,
+};
 
 /// Stdout marker prefix emitted under `--exit-after-startup` once
 /// the [`AccountListComponent`] has bound rows from the live vault.
@@ -93,6 +96,39 @@ pub fn row_models_from_vault(vault: &Vault) -> Vec<AccountRowModel> {
         .collect()
 }
 
+/// Project an [`AccountRowModel`] onto the no-visible-code
+/// [`RowDisplay`] the row factory binds at mount time.
+///
+/// The widget layer holds no live `Code` before the first per-tick
+/// TOTP compute, and HOTP rows stay hidden until the user activates
+/// "next". The row factory therefore binds every row through this
+/// helper, which mirrors `account_row::project_row(summary, None)`
+/// but works off the already-projected summary (`AccountRowModel`)
+/// instead of the raw `AccountSummary`. Pairing the two helpers in
+/// one place keeps the hidden and revealed projections from
+/// drifting.
+///
+/// For HOTP rows whose `counter` is `None`, the helper defensively
+/// renders [`CounterText::Stored`]`(0)` so the row factory never
+/// has to branch on a missing summary counter — same fallback as
+/// `account_row::counter_display`.
+#[must_use]
+pub fn hidden_row_display(model: &AccountRowModel) -> RowDisplay {
+    let counter = match model.kind {
+        AccountKindSummary::Totp => None,
+        AccountKindSummary::Hotp => Some(CounterText::Stored(model.counter.unwrap_or(0))),
+    };
+    RowDisplay {
+        label: model.display_label.clone(),
+        kind: model.kind,
+        code: CodeDisplay::Hidden,
+        counter,
+        copy_enabled: copy_enabled(model.kind, false),
+        next_button_visible: next_button_visible(model.kind),
+        progress_visible: progress_visible(model.kind),
+    }
+}
+
 /// Format the §"Smoke test" stdout marker line for the currently
 /// rendered row set.
 ///
@@ -124,9 +160,11 @@ pub struct AccountListInit {
 ///
 /// Owns a `gio::ListStore` of `glib::BoxedAnyObject` items wrapping
 /// [`AccountRowModel`] entries and a `gtk::SignalListItemFactory`
-/// that maps each model onto a single-line label. The factory does
-/// not touch the live `Account` — it only reads the already-
-/// projected `AccountRowModel`, so the row binding is secret-free.
+/// that maps each model onto a per-row widget bundle (display
+/// label, HOTP counter, code label) driven by [`hidden_row_display`].
+/// The factory does not touch the live `Account` or `Code` — it
+/// only reads the already-projected [`AccountRowModel`], so the
+/// row binding is secret-free.
 pub struct AccountListComponent {
     /// Backing `gio::ListStore` of `BoxedAnyObject<AccountRowModel>`.
     /// Retained on `self` so future messages (add / remove / rename)
@@ -193,25 +231,47 @@ impl SimpleComponent for AccountListComponent {
     }
 }
 
-/// Build the `gtk::SignalListItemFactory` that maps an
-/// `AccountRowModel` (wrapped in `BoxedAnyObject`) onto a single
-/// `gtk::Label` showing `display_label`.
+/// Placeholder rendered in the code column whenever the row's
+/// projection carries [`CodeDisplay::Hidden`].
 ///
-/// Subsequent commits will expand the row child into the full
-/// per-row widget bundle (label, code, counter, copy button,
-/// progress indicator, "next" button, kebab menu) per §"Component
-/// tree" > `AccountRowComponent`. The factory still reads only the
-/// already-projected `AccountRowModel`, so it stays secret-free.
+/// TOTP rows land here before the first per-tick compute; HOTP
+/// rows land here before "next" and after the reveal window
+/// expires. A fixed six-bullet glyph keeps the column width
+/// stable across hidden / revealed transitions for the common
+/// six-digit code without reaching into per-account `digits`.
+const HIDDEN_CODE_PLACEHOLDER: &str = "••••••";
+
+/// Render a [`CounterText`] into the `#N` label the row binds.
+///
+/// The HOTP row never distinguishes `Stored` vs `Used` in the
+/// rendered text; the source of the counter is captured in the
+/// projection so future per-row diagnostics can branch on it
+/// without re-reading the row.
+fn format_counter_label(counter: CounterText) -> String {
+    let n = match counter {
+        CounterText::Stored(n) | CounterText::Used(n) => n,
+    };
+    format!("#{n}")
+}
+
+/// Build the `gtk::SignalListItemFactory` that maps an
+/// `AccountRowModel` (wrapped in `BoxedAnyObject`) onto the per-row
+/// widget bundle (display label, HOTP counter, code label).
+///
+/// Each row binds [`hidden_row_display`] to drive the visible text;
+/// the factory itself never reaches for the live `Account` or
+/// `Code` — it only reads the already-projected
+/// [`AccountRowModel`], so the row binding stays secret-free. The
+/// per-row widget bundle expands incrementally; copy / "next" /
+/// kebab affordances per §"Component tree" > `AccountRowComponent`
+/// land in follow-up commits.
 fn build_row_factory() -> gtk::SignalListItemFactory {
     let factory = gtk::SignalListItemFactory::new();
     factory.connect_setup(|_, item| {
-        let label = gtk::Label::builder()
-            .halign(gtk::Align::Start)
-            .xalign(0.0)
-            .build();
-        if let Some(list_item) = item.downcast_ref::<gtk::ListItem>() {
-            list_item.set_child(Some(&label));
-        }
+        let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
+            return;
+        };
+        list_item.set_child(Some(&build_row_widget()));
     });
     factory.connect_bind(|_, item| {
         let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
@@ -220,7 +280,7 @@ fn build_row_factory() -> gtk::SignalListItemFactory {
         let Some(child) = list_item.child() else {
             return;
         };
-        let Ok(label) = child.downcast::<gtk::Label>() else {
+        let Ok(container) = child.downcast::<gtk::Box>() else {
             return;
         };
         let Some(obj) = list_item.item() else {
@@ -230,7 +290,78 @@ fn build_row_factory() -> gtk::SignalListItemFactory {
             return;
         };
         let row: std::cell::Ref<AccountRowModel> = boxed.borrow();
-        label.set_label(&row.display_label);
+        let display = hidden_row_display(&row);
+        bind_row(&container, &display);
     });
     factory
+}
+
+/// Construct one row's widget bundle.
+///
+/// The container is a horizontal `gtk::Box` whose children are
+/// appended in the order `display label → HOTP counter → code
+/// label`. The label expands to claim the row's free space so the
+/// counter / code labels stay end-aligned and the column edges
+/// line up across rows. [`bind_row`] walks the children in this
+/// same order to apply the projection.
+fn build_row_widget() -> gtk::Box {
+    let container = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(12)
+        .hexpand(true)
+        .build();
+    let label = gtk::Label::builder()
+        .halign(gtk::Align::Start)
+        .xalign(0.0)
+        .hexpand(true)
+        .ellipsize(gtk::pango::EllipsizeMode::End)
+        .build();
+    let counter = gtk::Label::builder()
+        .halign(gtk::Align::End)
+        .xalign(1.0)
+        .build();
+    counter.add_css_class("dim-label");
+    let code = gtk::Label::builder()
+        .halign(gtk::Align::End)
+        .xalign(1.0)
+        .build();
+    code.add_css_class("numeric");
+    container.append(&label);
+    container.append(&counter);
+    container.append(&code);
+    container
+}
+
+/// Bind a [`RowDisplay`] onto the three child labels of a
+/// previously-constructed row container.
+///
+/// The children are reached by walking `first_child` / `next_sibling`
+/// in the same order [`build_row_widget`] appended them so the
+/// factory never has to stash typed widget handles on the row.
+fn bind_row(container: &gtk::Box, display: &RowDisplay) {
+    let Some(label) = container.first_child().and_downcast::<gtk::Label>() else {
+        return;
+    };
+    let Some(counter) = label.next_sibling().and_downcast::<gtk::Label>() else {
+        return;
+    };
+    let Some(code) = counter.next_sibling().and_downcast::<gtk::Label>() else {
+        return;
+    };
+
+    label.set_label(&display.label);
+
+    if let Some(c) = display.counter {
+        counter.set_label(&format_counter_label(c));
+        counter.set_visible(true);
+    } else {
+        counter.set_label("");
+        counter.set_visible(false);
+    }
+
+    let code_text = match &display.code {
+        CodeDisplay::Hidden => HIDDEN_CODE_PLACEHOLDER.to_string(),
+        CodeDisplay::Visible(c) => c.clone(),
+    };
+    code.set_label(&code_text);
 }

@@ -26,7 +26,10 @@ use paladin_core::{
     validate_manual, AccountId, AccountInput, AccountKindInput, AccountKindSummary, Algorithm,
     IconHintInput, Store, Vault, VaultInit, VaultLock,
 };
-use paladin_gtk::account_list::{format_rendered_marker, row_models_from_vault, AccountRowModel};
+use paladin_gtk::account_list::{
+    format_rendered_marker, hidden_row_display, row_models_from_vault, AccountRowModel,
+};
+use paladin_gtk::account_row::{CodeDisplay, CounterText, RowDisplay};
 
 // --- fixtures ----------------------------------------------------------------
 
@@ -191,4 +194,70 @@ fn marker_pipe_joins_display_labels_in_order() {
         format_rendered_marker(&rows),
         "paladin-gtk: account_list_rows=GitHub:ben|GitLab:alice|solo",
     );
+}
+
+// ---------------------------------------------------------------------------
+// `hidden_row_display` — projects an `AccountRowModel` onto the initial
+// (no-visible-code) `RowDisplay` the row factory binds at mount time.
+//
+// The widget layer holds no live `Code` before the first per-tick TOTP
+// compute and never before "next" for HOTP, so the row factory binds
+// every row through this helper. Pairing the helper with
+// `account_row::project_row` keeps the hidden / revealed projections in
+// one place — any drift would surface here under TDD.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn hidden_row_display_totp_renders_hidden_code_and_no_counter() {
+    let model = AccountRowModel {
+        id: AccountId::new(),
+        display_label: "Acme:alice".to_string(),
+        kind: AccountKindSummary::Totp,
+        counter: None,
+    };
+    let expected = RowDisplay {
+        label: "Acme:alice".to_string(),
+        kind: AccountKindSummary::Totp,
+        code: CodeDisplay::Hidden,
+        counter: None,
+        copy_enabled: true,
+        next_button_visible: false,
+        progress_visible: true,
+    };
+    assert_eq!(hidden_row_display(&model), expected);
+}
+
+#[test]
+fn hidden_row_display_hotp_renders_stored_counter_and_disabled_copy() {
+    let model = AccountRowModel {
+        id: AccountId::new(),
+        display_label: "solo".to_string(),
+        kind: AccountKindSummary::Hotp,
+        counter: Some(7),
+    };
+    let expected = RowDisplay {
+        label: "solo".to_string(),
+        kind: AccountKindSummary::Hotp,
+        code: CodeDisplay::Hidden,
+        counter: Some(CounterText::Stored(7)),
+        copy_enabled: false,
+        next_button_visible: true,
+        progress_visible: false,
+    };
+    assert_eq!(hidden_row_display(&model), expected);
+}
+
+#[test]
+fn hidden_row_display_hotp_with_missing_counter_defaults_to_zero() {
+    // `Vault::summaries` always supplies a counter for HOTP, but the
+    // helper must defensively render `0` if it ever sees `None`,
+    // matching `counter_display`'s contract for revealed codes.
+    let model = AccountRowModel {
+        id: AccountId::new(),
+        display_label: "solo".to_string(),
+        kind: AccountKindSummary::Hotp,
+        counter: None,
+    };
+    let display = hidden_row_display(&model);
+    assert_eq!(display.counter, Some(CounterText::Stored(0)));
 }
