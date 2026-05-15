@@ -468,3 +468,33 @@ fn destructive_gate_plaintext_pending_round_trips_through_init_state() {
     assert!(matches!(taken, VaultInit::Plaintext));
     assert!(state.pending.is_none());
 }
+
+// `format_init_dialog_marker` / `INIT_DIALOG_MARKER_PREFIX` pin the
+// `--exit-after-startup` stdout contract consumed by `tests/gtk_smoke.rs`
+// for the `Missing` branch. Pure-logic tests live here so the
+// contract is verified without spinning up a display server.
+
+#[test]
+fn init_dialog_marker_prefix_is_stable() {
+    assert_eq!(
+        paladin_gtk::init_dialog::INIT_DIALOG_MARKER_PREFIX,
+        "paladin-gtk: init_dialog_path=",
+    );
+}
+
+#[test]
+fn format_init_dialog_marker_renders_resolved_path() {
+    let path = Path::new("/tmp/example/vault.bin");
+    assert_eq!(
+        paladin_gtk::init_dialog::format_init_dialog_marker(path),
+        "paladin-gtk: init_dialog_path=/tmp/example/vault.bin",
+    );
+}
+
+#[test]
+fn format_init_dialog_marker_starts_with_prefix() {
+    // Every rendered marker begins with `INIT_DIALOG_MARKER_PREFIX`
+    // so the smoke test can grep by prefix when the path varies.
+    let marker = paladin_gtk::init_dialog::format_init_dialog_marker(Path::new("/x"));
+    assert!(marker.starts_with(paladin_gtk::init_dialog::INIT_DIALOG_MARKER_PREFIX));
+}

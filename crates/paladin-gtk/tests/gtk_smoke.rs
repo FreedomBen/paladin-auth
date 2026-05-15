@@ -351,6 +351,98 @@ fn app_renders_startup_error_for_corrupt_vault() {
     );
 }
 
+/// Plan bullet: "`InitDialog` renders for the `Missing` branch
+/// (no vault file at the resolved path)."
+///
+/// Routes the §"Vault interaction" startup sequence through
+/// `paladin_core::inspect` → `VaultStatus::Missing` by pointing
+/// `--vault` at a `0700`-mode tempdir entry that does not exist on
+/// disk. `AppModel` then enters `AppState::Missing { path }` and
+/// mounts `InitDialogComponent`. Under `--exit-after-startup`, the
+/// model emits two stdout markers from the `Missing` branch — the
+/// existing `startup_state=Missing ...` line (produced before any
+/// per-state widget is mounted) and the new `init_dialog_path=...`
+/// line (emitted exclusively from the `Missing` branch immediately
+/// before `InitDialogComponent` is launched). Asserting on both
+/// proves the widget actually mounted with the resolved vault path,
+/// rather than the binary having merely classified the file as
+/// missing.
+#[test]
+fn app_renders_init_dialog_for_missing_vault() {
+    if !xvfb_run_available() {
+        eprintln!(
+            "skipping: `xvfb-run` is not on PATH. CI installs the xvfb \
+             package; install it locally to exercise this smoke test."
+        );
+        return;
+    }
+
+    let tempdir = tempfile::tempdir().expect("create tempdir for missing vault");
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(tempdir.path(), std::fs::Permissions::from_mode(0o700))
+            .expect("chmod tempdir to 0700");
+    }
+    // Path is *inside* the 0700 tempdir but the file is deliberately
+    // never created — `paladin_core::inspect` returns
+    // `VaultStatus::Missing`, which `AppModel` maps to
+    // `AppState::Missing { path }` per §"Vault interaction".
+    let vault_path = tempdir.path().join("missing.bin");
+    assert!(
+        !vault_path.exists(),
+        "tempdir entry must be absent before launching paladin-gtk: {}",
+        vault_path.display()
+    );
+
+    let path_str = vault_path
+        .to_str()
+        .expect("tempfile produced a non-UTF-8 vault path");
+    let output = run_under_xvfb(&["--vault", path_str, "--exit-after-startup"]);
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "xvfb-run paladin-gtk --vault {path_str} --exit-after-startup exited with status {:?}\n\
+         --- stdout ---\n{}\n--- stderr ---\n{}",
+        output.status,
+        stdout,
+        stderr,
+    );
+
+    let state_expected = format!("paladin-gtk: startup_state=Missing path={path_str}");
+    assert!(
+        stdout.contains(&state_expected),
+        "expected stdout to contain `{state_expected}`\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}",
+    );
+
+    // The `init_dialog_path` marker is emitted exclusively from the
+    // `Missing` branch immediately before `InitDialogComponent` is
+    // launched; its presence proves the widget mounted with the
+    // resolved vault path. The marker format is fixed by
+    // `init_dialog::format_init_dialog_marker` and pinned by
+    // `tests/init_dialog_logic.rs::format_init_dialog_marker_renders_resolved_path`.
+    let init_expected = format!("paladin-gtk: init_dialog_path={path_str}");
+    assert!(
+        stdout.contains(&init_expected),
+        "expected stdout to contain `{init_expected}`\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}",
+    );
+
+    // The `Missing` branch never enters the unlocked or
+    // startup-error branches; assert their per-branch markers are
+    // absent so an accidental fall-through to a non-rendering state
+    // is caught here.
+    assert!(
+        !stdout.contains("paladin-gtk: account_list_rows="),
+        "expected the Missing branch to skip the account list marker\n--- stdout ---\n{stdout}",
+    );
+    assert!(
+        !stdout.contains("paladin-gtk: startup_error_body="),
+        "expected the Missing branch to skip the startup-error marker\n--- stdout ---\n{stdout}",
+    );
+}
+
 /// Add a validated TOTP or HOTP account to `vault` and persist to
 /// `store`. The secret is a fixed RFC 6238 base32 fixture; the same
 /// shape is used by the pure-logic fixtures in

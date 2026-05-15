@@ -81,6 +81,10 @@
 
 use std::path::{Path, PathBuf};
 
+use libadwaita as adw;
+use libadwaita::prelude::*;
+use relm4::prelude::*;
+
 use paladin_core::{
     classify_init_precheck, format_init_force_warning, format_plaintext_storage_warning,
     format_unsafe_permissions, EncryptionOptions, ErrorKind, InitPrecheck, PaladinError, VaultInit,
@@ -335,5 +339,113 @@ fn backup_path_of(err: &PaladinError) -> Option<PathBuf> {
     match err {
         PaladinError::SaveNotCommitted { backup_path, .. } => backup_path.clone(),
         _ => None,
+    }
+}
+
+/// Stdout marker prefix emitted under `--exit-after-startup` once
+/// the [`InitDialogComponent`] has mounted on the
+/// [`crate::app::state::AppState::Missing`] branch.
+///
+/// The smoke test in `tests/gtk_smoke.rs` greps for this prefix to
+/// prove the widget actually mounted (rather than inferring the
+/// render from the `startup_state=Missing` line, which is emitted
+/// before any per-state widget is mounted).
+pub const INIT_DIALOG_MARKER_PREFIX: &str = "paladin-gtk: init_dialog_path=";
+
+/// Format the smoke-test stdout marker line for a mounted
+/// [`InitDialogComponent`].
+///
+/// The marker is `paladin-gtk: init_dialog_path=<path>` where
+/// `<path>` is the resolved vault path the dialog will pass to
+/// `paladin_core::Store::create` on submit.
+#[must_use]
+pub fn format_init_dialog_marker(path: &Path) -> String {
+    format!("{INIT_DIALOG_MARKER_PREFIX}{}", path.display())
+}
+
+/// Construction parameters for [`InitDialogComponent`].
+#[derive(Debug, Clone)]
+pub struct InitDialogInit {
+    /// Resolved vault path the dialog targets on submit. Surfaced
+    /// in the dialog body so the user can confirm the destination
+    /// before creating a vault.
+    pub vault_path: PathBuf,
+}
+
+/// Messages handled by [`InitDialogComponent`].
+///
+/// This milestone scaffolds the read-only render path — the
+/// `submit` / `cancel` / destructive-gate transitions described in
+/// §"Component tree" land in a follow-up commit alongside the
+/// passphrase-field wiring on `AppModel`. The empty enum is the
+/// deliberate v0.2 starting point — relm4 requires the associated
+/// `Input` type to exist even when no inbound messages are wired
+/// yet.
+#[derive(Debug)]
+pub enum InitDialogMsg {}
+
+/// Widget-bearing dialog for the
+/// [`crate::app::state::AppState::Missing`] branch.
+///
+/// Mounts a libadwaita [`adw::StatusPage`] that surfaces the
+/// resolved vault path alongside the standard plaintext-storage
+/// warning copy. Subsequent commits replace the placeholder body
+/// with the two-field passphrase entry, the warning checkbox, and
+/// the destructive-`create_force` confirmation gate; until then,
+/// keeping the widget read-only mirrors the
+/// [`crate::startup_error::StartupErrorComponent`] pattern (the
+/// `StartupError` branch also mounted a status page first and grew
+/// inbound actions later).
+pub struct InitDialogComponent {
+    /// Resolved vault path the dialog will hand to a
+    /// `Store::create` worker on submit. Kept on `self` so a
+    /// future message handler can read it without re-plumbing the
+    /// value through every signal.
+    #[allow(dead_code)]
+    vault_path: PathBuf,
+}
+
+#[allow(missing_docs)]
+#[relm4::component(pub)]
+impl SimpleComponent for InitDialogComponent {
+    type Init = InitDialogInit;
+    type Input = InitDialogMsg;
+    type Output = ();
+
+    view! {
+        #[root]
+        adw::StatusPage {
+            // `document-new-symbolic` is the freedesktop-standard
+            // glyph for "create a new document"; it resolves
+            // through the system icon theme so the wordless icon
+            // matches every other GNOME app's first-run surface.
+            set_icon_name: Some("document-new-symbolic"),
+            set_title: "Create a new vault",
+            set_description: Some(&format!(
+                "No vault found at {path}.\n\n{warning}",
+                path = model.vault_path.display(),
+                warning = plaintext_warning_body(),
+            )),
+            set_hexpand: true,
+            set_vexpand: true,
+        }
+    }
+
+    fn init(
+        init: Self::Init,
+        root: Self::Root,
+        _sender: ComponentSender<Self>,
+    ) -> ComponentParts<Self> {
+        let model = InitDialogComponent {
+            vault_path: init.vault_path,
+        };
+        let widgets = view_output!();
+        ComponentParts { model, widgets }
+    }
+
+    fn update(&mut self, _msg: Self::Input, _sender: ComponentSender<Self>) {
+        // No inbound messages handled at this milestone — see
+        // `InitDialogMsg` doc comment for the upcoming submit /
+        // cancel / destructive-gate actions.
     }
 }

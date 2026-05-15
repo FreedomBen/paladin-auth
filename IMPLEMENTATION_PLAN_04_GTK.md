@@ -1069,6 +1069,31 @@ Required for Milestone 7 sign-off. Runs in CI under `xvfb-run`.
   marker prefix, the rendered passthrough for single-line bodies,
   and the newline-collapse contract for the multi-line
   `UnsafePermissions` body.
+- [x] `InitDialogComponent` renders the first-run / missing-vault
+  surface for the `Missing` branch. When `run_startup_probes`
+  routes `AppModel` to `AppState::Missing` (no vault at the resolved
+  path), `AppModel` launches an `InitDialogComponent` controller
+  whose `AdwStatusPage` body names the resolved path alongside the
+  shared `paladin_core::format_plaintext_storage_warning()` copy
+  (so warning wording stays in lockstep with the CLI and TUI). The
+  full passphrase-field / destructive-`create_force` wiring described
+  in the §"Component tree" and §"Milestone 7 checklist" entry for
+  `InitDialog` lands in follow-up commits; this bullet covers the
+  read-only mount only, mirroring the staged rollout that the
+  `StartupErrorComponent` bullet uses. Under `--exit-after-startup`,
+  `AppModel` emits an additional stdout marker —
+  `paladin-gtk: init_dialog_path=<path>` produced by
+  `init_dialog::format_init_dialog_marker` — exclusively from the
+  `Missing` branch, so its presence proves the widget actually
+  mounted. The smoke test
+  `crates/paladin-gtk/tests/gtk_smoke.rs::app_renders_init_dialog_for_missing_vault`
+  drives the path with a `0700`-mode tempdir entry that never gets
+  created on disk and asserts on both the existing
+  `startup_state=Missing` line and the new path marker, while also
+  verifying that the unlocked / startup-error markers stay absent.
+  Pure-logic coverage in
+  `crates/paladin-gtk/tests/init_dialog_logic.rs` pins the marker
+  prefix and the path-passthrough rendering.
 
 ### Thinness contract (`tests/thinness.rs`)
 

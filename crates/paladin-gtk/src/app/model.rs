@@ -12,13 +12,15 @@
 //! vault path, call `paladin_core::inspect`, and (for plaintext
 //! vaults) `paladin_core::Store::open` on the GTK main loop, then
 //! seeds [`AppModel::state`] / [`AppModel::vault`] from the result.
-//! Subsequent commits will mount the per-`AppState` child
-//! components (`InitDialog`, `UnlockComponent`). The
-//! `AccountListComponent` and `StartupErrorComponent` branches are
-//! already wired here: the former renders the unlocked vault list,
-//! the latter renders a non-mutating `AdwStatusPage` whose body
-//! text is the typed [`crate::startup_error::StartupError`]
-//! projection.
+//! A subsequent commit will mount the `UnlockComponent` for the
+//! `Locked` branch. The `AccountListComponent`,
+//! `StartupErrorComponent`, and `InitDialogComponent` branches are
+//! already wired here: `AccountListComponent` renders the unlocked
+//! vault list, `StartupErrorComponent` renders a non-mutating
+//! `AdwStatusPage` whose body text is the typed
+//! [`crate::startup_error::StartupError`] projection, and
+//! `InitDialogComponent` renders the first-run / missing-vault
+//! surface seeded with the resolved vault path.
 //!
 //! Under the hidden `--exit-after-startup` flag, the model prints
 //! [`startup_state_marker`] to stdout and enqueues [`AppMsg::Quit`]
@@ -39,6 +41,7 @@ use crate::account_list::{
 use crate::app::state::{
     decide_state_from_inspect, decide_state_from_open_error, AppState, OpenErrorOutcome,
 };
+use crate::init_dialog::{format_init_dialog_marker, InitDialogComponent, InitDialogInit};
 use crate::startup_error::{
     format_startup_error_marker, StartupError, StartupErrorComponent, StartupErrorInit,
 };
@@ -108,6 +111,12 @@ pub struct AppModel {
     /// `AdwStatusPage` is not dropped at the end of `init`.
     #[allow(dead_code)]
     startup_error: Option<Controller<StartupErrorComponent>>,
+    /// Live [`InitDialogComponent`] controller when `AppModel`
+    /// routed to [`AppState::Missing`]. `None` for every
+    /// non-missing state. Held on `self` so the rendered widget is
+    /// not dropped at the end of `init`.
+    #[allow(dead_code)]
+    init_dialog: Option<Controller<InitDialogComponent>>,
 }
 
 impl std::fmt::Debug for AppModel {
@@ -123,6 +132,10 @@ impl std::fmt::Debug for AppModel {
             .field(
                 "startup_error",
                 &self.startup_error.as_ref().map(|_| "<mounted>"),
+            )
+            .field(
+                "init_dialog",
+                &self.init_dialog.as_ref().map(|_| "<mounted>"),
             )
             .finish()
     }
@@ -196,6 +209,9 @@ impl SimpleComponent for AppModel {
             if let AppState::StartupError { error, .. } = &state {
                 println!("{}", format_startup_error_marker(error));
             }
+            if let AppState::Missing { path } = &state {
+                println!("{}", format_init_dialog_marker(path));
+            }
         }
 
         let widgets = view_output!();
@@ -222,12 +238,25 @@ impl SimpleComponent for AppModel {
             None
         };
 
+        let init_dialog = if let AppState::Missing { path } = &state {
+            let controller = InitDialogComponent::builder()
+                .launch(InitDialogInit {
+                    vault_path: path.clone(),
+                })
+                .detach();
+            widgets.content.append(controller.widget());
+            Some(controller)
+        } else {
+            None
+        };
+
         let model = AppModel {
             vault_path: vault_path_override,
             state: Some(state),
             vault,
             account_list,
             startup_error,
+            init_dialog,
         };
 
         if exit_after_startup {
