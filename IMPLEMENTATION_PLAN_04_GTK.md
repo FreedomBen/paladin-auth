@@ -1187,7 +1187,7 @@ an X11 session before sign-off.
 
 ## Milestone 7 checklist (expanded from §12)
 
-- [ ] Add the `paladin-gtk` crate to the workspace.
+- [x] Add the `paladin-gtk` crate to the workspace.
 - [ ] Relm4 component tree (Init / Unlock / List / Row / Add / Remove /
   Rename / Import / Export / Passphrase / Settings / StartupError).
 - [ ] In-app vault initialization (`InitDialog` for missing vaults;
@@ -1203,7 +1203,7 @@ an X11 session before sign-off.
 - [ ] Add-via-`otpauth://`-URI paste path in `AddAccountComponent`,
   decoded via `paladin_core::parse_otpauth` and sharing the manual
   duplicate / validation paths.
-- [ ] Conditional unlock view (encrypted vaults only).
+- [x] Conditional unlock view (encrypted vaults only).
 - [ ] Header-bar `+` button and primary menu wired with the pinned
   entries (Import…, Export…, Passphrase…, Preferences, About Paladin,
   Quit) per §"libadwaita usage", with Unlocked / `UnlockedBusy` gating
@@ -1216,19 +1216,19 @@ an X11 session before sign-off.
   mutating controls disabled while busy, and worker results restore
   `(Vault, Store)` before UI state applies success / typed failure handling;
   quit and auto-lock requests are deferred until the worker returns.
-- [ ] Use `paladin_core::account_matches_search` for `search.rs` filtering,
+- [x] Use `paladin_core::account_matches_search` for `search.rs` filtering,
   `paladin_core::format_validation_warning()` for validation-warning
   messages, and `paladin_core::format_plaintext_export_warning()` for the
   `ExportDialog` plaintext path so the GUI never re-implements shared text
   or match-key logic.
-- [ ] Use `paladin_core::classify_paladin_import_precheck` before any
+- [x] Use `paladin_core::classify_paladin_import_precheck` before any
   encrypted-Paladin-bundle import prompt so the GUI shares the CLI / TUI
   Paladin header decision table.
 - [ ] Linux desktop file, AppStream metadata, and icon.
 - [ ] `.deb`, `.rpm`, Flatpak, and AppImage artifacts for `paladin-gtk`,
   signed and published per §11.3–§11.6; Flathub submission filed.
 - [x] Manual test plan documented.
-- [ ] `xvfb-run` headless smoke test green in CI (plaintext vault opens
+- [x] `xvfb-run` headless smoke test green in CI (plaintext vault opens
   and renders the list).
 
 ## Dependencies (per §9)
