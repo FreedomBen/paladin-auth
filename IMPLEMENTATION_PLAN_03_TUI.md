@@ -2385,7 +2385,21 @@ Export error states:
   `tests/snapshots/view_snapshots__snapshot_export_modal_confirmation_mismatch.snap`
   so any future wording change in core's `invalid_passphrase` /
   `confirmation_mismatch` surfaces here as a diff.)*
-- [ ] Export modal `zero_length`.
+- [x] Export modal `zero_length`.
+  *(`snapshot_export_modal_zero_length` in
+  `crates/paladin-tui/tests/view_snapshots.rs` constructs an
+  `ExportModal` with `format: ExportFormat::Encrypted` and
+  `error: Some(render_error_message(&PaladinError::InvalidPassphrase { reason: "zero_length" }))` —
+  binding the snapshot to the core `Display` wording rather than a
+  hand-typed string — and renders through `view::render` at 80×20.
+  Reuses the inline-error rendering branch in
+  `crates/paladin-tui/src/view/export.rs` exercised by the
+  `confirmation_mismatch` slice above; the format selector reads
+  `Encrypted` so the snapshot reads as an encrypted-path delta from
+  the `snapshot_export_modal_default` baseline. Locked in
+  `tests/snapshots/view_snapshots__snapshot_export_modal_zero_length.snap`
+  so any future wording change in core's `invalid_passphrase` /
+  `zero_length` surfaces here as a diff.)*
 - [ ] Export modal plaintext-export warning.
 - [ ] Export modal `io_error` writer failure.
 - [ ] Export modal `save_not_committed`.

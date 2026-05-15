@@ -1620,6 +1620,79 @@ fn snapshot_export_modal_confirmation_mismatch() {
 }
 
 #[test]
+fn snapshot_export_modal_zero_length() {
+    // Plan L2388: "Export modal `zero_length`." Drive `view::render`
+    // against an `Unlocked` state with
+    // `Modal::Export(ExportModal { format: ExportFormat::Encrypted,
+    // error: Some(render_error_message(&PaladinError::InvalidPassphrase
+    // { reason: "zero_length" })), .. })` open so the snapshot pins the
+    // inline-error row populated from the encrypted twice-confirm
+    // empty-passphrase gate per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals
+    // (per §6) > Export": *"Encrypted exports prompt twice for the
+    // bundle passphrase and reject mismatch with inline
+    // `invalid_passphrase` (`reason: "confirmation_mismatch"`) or
+    // empty entry with `reason: "zero_length"`."*. When the encrypted
+    // path is selected and both prompts are blank (so the mismatch
+    // gate passes by both buffers being equal), the reducer surfaces
+    // a rendered `PaladinError::InvalidPassphrase` with
+    // `reason: "zero_length"` per DESIGN.md §5, matching the CLI's
+    // `prompt_new_passphrase` (mismatch first, then `zero_length`) and
+    // the GTK `SubmitRejection::ZeroLength` wire code so the
+    // user-facing reason stays stable across all three front-ends.
+    // Routing the wording through `render_error_message` binds the
+    // snapshot to the core `Display` impl
+    // (`invalid passphrase: zero_length`) rather than a hand-typed
+    // string so any future wording change in core surfaces here as a
+    // diff.
+    //
+    // The format selector reads `Encrypted` so the snapshot reads as
+    // an encrypted-path delta from the `snapshot_export_modal_default`
+    // baseline — the inline error line appears inside the spacer area
+    // between the segmented `Format:` selector row and the footer
+    // hint, sharing the same renderer branch the
+    // `confirmation_mismatch` snapshot above exercises. The
+    // refused-overwrite gate's snapshot already exercises the
+    // `Plaintext` selector with the same renderer.
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let modal = ExportModal {
+        format: ExportFormat::Encrypted,
+        error: Some(render_error_message(&PaladinError::InvalidPassphrase {
+            reason: "zero_length",
+        })),
+        ..ExportModal::default()
+    };
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Export(modal)),
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let rendered = render_to_text(&state, snapshot_now(), 80, 20);
+    let expected = render_error_message(&PaladinError::InvalidPassphrase {
+        reason: "zero_length",
+    });
+    assert!(
+        rendered.contains(&expected),
+        "expected inline zero_length wording {expected:?} to appear in modal:\n{rendered}"
+    );
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn snapshot_passphrase_modal_set_default() {
     // Plan L1968: "Passphrase modal — `set` sub-flow." Drive
     // `view::render` against an `Unlocked` state with
