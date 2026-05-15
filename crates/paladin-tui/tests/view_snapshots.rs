@@ -31,8 +31,8 @@ use paladin_core::{
     VaultInit, VaultLock,
 };
 use paladin_tui::app::state::{
-    AddModal, AppState, ExportModal, Focus, HotpReveal, ImportModal, Modal, PassphraseModal,
-    PassphraseSubFlow, RemoveModal, RenameModal, SettingsModal,
+    render_error_message, AddModal, AppState, ExportModal, Focus, HotpReveal, ImportModal, Modal,
+    PassphraseModal, PassphraseSubFlow, RemoveModal, RenameModal, SettingsModal,
 };
 use paladin_tui::prompt::PassphraseBuffer;
 use paladin_tui::view::render;
@@ -492,6 +492,108 @@ fn snapshot_add_modal_default() {
         help_open: false,
     };
     insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 20));
+}
+
+#[test]
+fn snapshot_add_modal_save_not_committed() {
+    // Plan L2121: "Add modal `save_not_committed`." Drive
+    // `view::render` against an `Unlocked` state holding
+    // `Modal::Add(AddModal { error: Some(render_error_message(
+    // &PaladinError::SaveNotCommitted { .. })), .. })` so the snapshot
+    // pins the inline-error row populated from a pre-commit save
+    // failure per `DESIGN.md` §5's `save_not_committed` discriminator
+    // and the `IMPLEMENTATION_PLAN_03_TUI.md` "Pre-commit effect
+    // failures leave visible state unchanged and surface the typed
+    // error through `render_error_message`" contract. Routing the
+    // wording through the shared helper means the inline text matches
+    // the rest of the TUI's error surface.
+    //
+    // The rest of the modal is at its default state (Manual mode,
+    // empty fields) so the snapshot reads as a delta from the
+    // `snapshot_add_modal_default` baseline: the inline error line
+    // appears inside the spacer area between the icon-hint row and
+    // the footer hint.
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let modal = AddModal {
+        error: Some(render_error_message(&PaladinError::SaveNotCommitted {
+            committed: false,
+            backup_path: None,
+        })),
+        ..AddModal::default()
+    };
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Add(modal)),
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let rendered = render_to_text(&state, snapshot_now(), 80, 20);
+    // Regression guard: a renderer that ever stops surfacing the
+    // inline error field must fail this test even before the
+    // human reads the snapshot diff.
+    assert!(
+        rendered.contains("save not committed"),
+        "expected inline save_not_committed wording to appear in modal:\n{rendered}"
+    );
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn snapshot_add_modal_save_durability_unconfirmed() {
+    // Plan L2122: "Add modal `save_durability_unconfirmed`." Same
+    // rendering path as the `save_not_committed` snapshot above; the
+    // typed error here is `PaladinError::SaveDurabilityUnconfirmed`,
+    // which per `IMPLEMENTATION_PLAN_03_TUI.md` "Durability-unconfirmed
+    // failures follow the committed-state path" surfaces in the
+    // modal's inline error slot identically to the pre-commit
+    // failure — both paths run through `render_error_message`.
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let modal = AddModal {
+        error: Some(render_error_message(
+            &PaladinError::SaveDurabilityUnconfirmed,
+        )),
+        ..AddModal::default()
+    };
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Add(modal)),
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let rendered = render_to_text(&state, snapshot_now(), 80, 20);
+    assert!(
+        rendered.contains("save durability unconfirmed"),
+        "expected inline save_durability_unconfirmed wording to appear in modal:\n{rendered}"
+    );
+    insta::assert_snapshot!(rendered);
 }
 
 #[test]

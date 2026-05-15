@@ -15,14 +15,18 @@
 //! [`Clear`]-ing the modal's rect before painting — otherwise list-
 //! view content would bleed through transparent cells.
 //!
-//! Inline-error / pending-duplicate / counts-panel / URI / QR /
-//! per-field focus highlighting all land alongside their own
-//! reducer or effect slices; this slice keeps the field column
-//! plain text so the snapshot pins only the layout contract.
+//! The [`AddModal::error`] slot surfaces inline in the spacer above
+//! the footer hint so `duplicate_account`, pre-commit
+//! `save_not_committed`, and durability-unconfirmed save failures all
+//! read at the same place. Pending-duplicate / counts-panel / URI /
+//! QR / per-field focus highlighting all land alongside their own
+//! reducer or effect slices; this slice keeps the field column plain
+//! text so the snapshot pins only the layout contract.
 
 use paladin_core::{AccountKindInput, Algorithm};
 use ratatui::layout::{Alignment, Constraint, Layout};
-use ratatui::text::Line;
+use ratatui::style::{Color, Style};
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Padding, Paragraph};
 use ratatui::Frame;
 
@@ -107,10 +111,36 @@ pub fn render(frame: &mut Frame<'_>, modal: &AddModal) {
         chunks[9],
     );
 
+    if let Some(error) = &modal.error {
+        render_inline_error(frame, chunks[10], error);
+    }
+
     let hint = "Tab cycles fields  ·  Enter submit  ·  Esc cancel";
     frame.render_widget(
         Paragraph::new(hint).alignment(Alignment::Center),
         chunks[11],
+    );
+}
+
+/// Paint the inline error message inside the spacer area between the
+/// icon-hint row and the footer hint. The error sits one blank row
+/// below the icon-hint row for breathing room, mirroring the unlock
+/// screen's spacing convention; foreground red matches the unlock
+/// screen's inline `decrypt_failed` styling so all inline error
+/// surfaces in the TUI read the same way.
+fn render_inline_error(frame: &mut Frame<'_>, spacer: ratatui::layout::Rect, message: &str) {
+    let spacer_chunks = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(0),
+    ])
+    .split(spacer);
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            message.to_string(),
+            Style::default().fg(Color::Red),
+        ))),
+        spacer_chunks[1],
     );
 }
 
