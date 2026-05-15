@@ -2419,7 +2419,26 @@ Export error states:
   `tests/snapshots/view_snapshots__snapshot_export_modal_plaintext_export_warning.snap`
   so any future wording change in core's
   `format_plaintext_export_warning` surfaces here as a diff.)*
-- [ ] Export modal `io_error` writer failure.
+- [x] Export modal `io_error` writer failure.
+  *(`snapshot_export_modal_io_error` in
+  `crates/paladin-tui/tests/view_snapshots.rs` constructs an
+  `ExportModal` with
+  `error: Some(render_error_message(&PaladinError::IoError { operation: "write_secret_file_atomic", source: std::io::Error::new(std::io::ErrorKind::PermissionDenied, "synthetic-denied") }))` —
+  binding the snapshot to the core `Display` wording (`I/O error
+  during write_secret_file_atomic: synthetic-denied`) rather than a
+  hand-typed string — and renders through `view::render` at 80×20.
+  Operation tag and underlying `ErrorKind` mirror the reducer-side
+  fixture
+  (`effect_result_export_err_io_error_surfaces_inline_and_keeps_modal_open`
+  in `tests/reducer_tests.rs`) so the view-snapshot matrix stays 1:1
+  with the reducer matrix. Reuses the inline-error rendering branch
+  in `crates/paladin-tui/src/view/export.rs` exercised by the
+  preceding refused-overwrite / `confirmation_mismatch` /
+  `zero_length` / plaintext-export-warning slices; the format
+  selector stays at the `Plaintext` default. Locked in
+  `tests/snapshots/view_snapshots__snapshot_export_modal_io_error.snap`
+  so any future wording change in core's `io_error` `Display`
+  surfaces here as a diff.)*
 - [ ] Export modal `save_not_committed`.
 - [ ] Export modal `save_durability_unconfirmed`.
 

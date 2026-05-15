@@ -1764,6 +1764,82 @@ fn snapshot_export_modal_plaintext_export_warning() {
 }
 
 #[test]
+fn snapshot_export_modal_io_error() {
+    // Plan L2390: "Export modal `io_error` writer failure." Drive
+    // `view::render` against an `Unlocked` state with
+    // `Modal::Export(ExportModal { error:
+    // Some(render_error_message(&PaladinError::IoError { ... })), .. })`
+    // open so the snapshot pins the inline-error row populated when
+    // `paladin_core::write_secret_file_atomic` fails anywhere along
+    // the staging / rename / parent-dir-fsync chain. The reducer's Err
+    // arm (`reduce_export_result` in `src/app/reducer.rs`) routes the
+    // error through `render_error_message` and parks the wording on
+    // `ExportModal::error` per `IMPLEMENTATION_PLAN_03_TUI.md` "Tests
+    // > Export modal": *"Writer `io_error`, `save_not_committed`, and
+    // `save_durability_unconfirmed` surface inline and the modal stays
+    // open."* The view-snapshot pins the post-reduce rendering 1:1
+    // with the reducer-side coverage from
+    // `effect_result_export_err_io_error_surfaces_inline_and_keeps_modal_open`
+    // in `tests/reducer_tests.rs`.
+    //
+    // Routing the wording through `render_error_message` binds the
+    // snapshot to the core `Display` impl (`I/O error during
+    // write_secret_file_atomic`) rather than a hand-typed string so
+    // any future wording change in core's `io_error` `Display` surfaces
+    // here as a diff. The operation tag mirrors the writer the export
+    // executor invokes; the underlying `std::io::ErrorKind` is
+    // deliberately `PermissionDenied` to match the reducer-side
+    // fixture and bind both surfaces to the same `Debug`-stable kind.
+    //
+    // The format selector stays at the `Plaintext` default so the
+    // snapshot reads as a plaintext-path delta from
+    // `snapshot_export_modal_default` — the inline error appears
+    // inside the spacer area between the segmented `Format:` selector
+    // row and the footer hint via the same `render_inline_error`
+    // branch the refused-overwrite, `confirmation_mismatch`,
+    // `zero_length`, and plaintext-export-warning snapshots exercise.
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let err = PaladinError::IoError {
+        operation: "write_secret_file_atomic",
+        source: std::io::Error::new(std::io::ErrorKind::PermissionDenied, "synthetic-denied"),
+    };
+    let modal = ExportModal {
+        error: Some(render_error_message(&err)),
+        ..ExportModal::default()
+    };
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Export(modal)),
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let rendered = render_to_text(&state, snapshot_now(), 80, 20);
+    let expected = render_error_message(&PaladinError::IoError {
+        operation: "write_secret_file_atomic",
+        source: std::io::Error::new(std::io::ErrorKind::PermissionDenied, "synthetic-denied"),
+    });
+    assert!(
+        rendered.contains(&expected),
+        "expected inline io_error wording {expected:?} to appear in modal:\n{rendered}"
+    );
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn snapshot_passphrase_modal_set_default() {
     // Plan L1968: "Passphrase modal — `set` sub-flow." Drive
     // `view::render` against an `Unlocked` state with
