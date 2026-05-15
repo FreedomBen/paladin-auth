@@ -31,9 +31,12 @@
 //! [`crate::rename_dialog::decide_rename_target`] so the kebab
 //! `Rename…` action is now reachable end-to-end (kebab activation →
 //! `AccountListOutput` → `AppMsg` → live dialog widget). The
-//! editable entry / submit-button / `Vault::mutate_and_save` worker
-//! land in subsequent commits. `OpenRemoveDialog(id)` mirrors the
-//! same shape: it mounts a [`RemoveDialogComponent`] seeded from
+//! dialog's Cancel button bubbles back here as
+//! `AppMsg::RenameDialogAction(RenameDialogOutput::Cancel)`, which
+//! drops the controller and removes its widget from the content
+//! tree. The submit button / `Vault::mutate_and_save` worker land
+//! in a follow-up commit. `OpenRemoveDialog(id)` mirrors the same
+//! shape: it mounts a [`RemoveDialogComponent`] seeded from
 //! [`crate::remove_dialog::decide_remove_target`]; the destructive
 //! confirmation chrome / Remove worker land in follow-up commits.
 //!
@@ -58,7 +61,7 @@ use crate::app::state::{
 };
 use crate::init_dialog::{format_init_dialog_marker, InitDialogComponent, InitDialogInit};
 use crate::remove_dialog::{decide_remove_target, RemoveDialogComponent};
-use crate::rename_dialog::{decide_rename_target, RenameDialogComponent};
+use crate::rename_dialog::{decide_rename_target, RenameDialogComponent, RenameDialogOutput};
 use crate::startup_error::{
     format_startup_error_marker, StartupError, StartupErrorComponent, StartupErrorInit,
 };
@@ -224,6 +227,14 @@ pub enum AppMsg {
     /// editable / destructive chrome and the `Vault::mutate_and_save`
     /// workers land in follow-up commits.
     AccountListAction(AccountListOutput),
+    /// Forwarded from the live [`RenameDialogComponent`] when the
+    /// user interacts with the dialog. Today only
+    /// [`RenameDialogOutput::Cancel`] is emitted — `AppModel`
+    /// responds by dropping the controller and removing the dialog
+    /// widget from the content tree. Save / worker outputs are
+    /// added in the follow-up commit that wires
+    /// `Vault::mutate_and_save` through the `UnlockedBusy` worker.
+    RenameDialogAction(RenameDialogOutput),
 }
 
 // `relm4::component(pub)` generates a public `AppModelWidgets` struct so the
@@ -362,7 +373,7 @@ impl SimpleComponent for AppModel {
         ComponentParts { model, widgets }
     }
 
-    fn update(&mut self, msg: Self::Input, _sender: ComponentSender<Self>) {
+    fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>) {
         match msg {
             AppMsg::Quit => relm4::main_application().quit(),
             AppMsg::AccountListAction(AccountListOutput::OpenRenameDialog(id)) => {
@@ -373,7 +384,9 @@ impl SimpleComponent for AppModel {
                 // benign race and drop the action.
                 if let Some((vault, _store)) = self.vault.as_ref() {
                     if let Some(init) = decide_rename_target(vault, id) {
-                        let controller = RenameDialogComponent::builder().launch(init).detach();
+                        let controller = RenameDialogComponent::builder()
+                            .launch(init)
+                            .forward(sender.input_sender(), AppMsg::RenameDialogAction);
                         self.content.append(controller.widget());
                         self.rename_dialog = Some(controller);
                     }
@@ -391,6 +404,15 @@ impl SimpleComponent for AppModel {
                         self.content.append(controller.widget());
                         self.remove_dialog = Some(controller);
                     }
+                }
+            }
+            AppMsg::RenameDialogAction(RenameDialogOutput::Cancel) => {
+                // Detach the dialog widget from the content tree and
+                // drop the controller. Defensive: if the field is
+                // already `None` (controller swapped under us by a
+                // future race), this is a benign no-op.
+                if let Some(controller) = self.rename_dialog.take() {
+                    self.content.remove(controller.widget());
                 }
             }
         }

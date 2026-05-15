@@ -328,11 +328,13 @@ impl RenameDialogState {
 ///
 /// `DraftChanged(text)` arrives from the entry row's text-change
 /// signal and runs [`RenameDialogState::set_draft`] so the cached
-/// validation outcome stays in sync with what the user typed. The
-/// `submit` / `cancel` transitions and the
+/// validation outcome stays in sync with what the user typed.
+/// `Cancel` arrives from the dialog's Cancel button and dismisses
+/// the dialog via [`RenameDialogOutput::Cancel`] without touching
+/// the draft or the vault. The `submit` transition and the
 /// `Vault::mutate_and_save(|v| v.rename(...))` worker described in
 /// §"Component tree" > Rename dialog and §"Effect errors" land in
-/// follow-up commits alongside the `UnlockedBusy` worker
+/// a follow-up commit alongside the `UnlockedBusy` worker
 /// infrastructure.
 #[derive(Debug)]
 pub enum RenameDialogMsg {
@@ -341,6 +343,49 @@ pub enum RenameDialogMsg {
     /// [`RenameDialogState::set_draft`] so the inline-error area
     /// reflects the live draft.
     DraftChanged(String),
+    /// Cancel button pressed. The handler forwards
+    /// [`RenameDialogOutput::Cancel`] so `AppModel` can drop the
+    /// controller and remove the dialog widget from the content
+    /// tree.
+    Cancel,
+}
+
+/// Outputs forwarded from [`RenameDialogComponent`] up to
+/// `AppModel`.
+///
+/// Pinned as a typed enum (rather than the `()` unit used by the
+/// initial render-only milestone) so future Save / worker
+/// transitions can be added as additional variants without an
+/// `_` catch-all in `AppModel` swallowing them silently.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RenameDialogOutput {
+    /// User dismissed the dialog without saving. `AppModel` drops
+    /// the live [`RenameDialogComponent`] controller and removes
+    /// its widget from the content tree.
+    Cancel,
+}
+
+/// Apply an inbound [`RenameDialogMsg`] to `state` and return the
+/// optional [`RenameDialogOutput`] the widget layer should forward
+/// to `AppModel`.
+///
+/// Pulled out of [`RenameDialogComponent::update`] so the routing
+/// decision — [`RenameDialogMsg::DraftChanged`] mutates the cached
+/// validation and emits no output; [`RenameDialogMsg::Cancel`]
+/// emits [`RenameDialogOutput::Cancel`] without touching the draft
+/// — stays unit-testable in `tests/rename_dialog_logic.rs` without
+/// spinning up GTK.
+pub fn apply_msg(
+    state: &mut RenameDialogState,
+    msg: RenameDialogMsg,
+) -> Option<RenameDialogOutput> {
+    match msg {
+        RenameDialogMsg::DraftChanged(text) => {
+            state.set_draft(text);
+            None
+        }
+        RenameDialogMsg::Cancel => Some(RenameDialogOutput::Cancel),
+    }
 }
 
 /// Widget-bearing dialog for the
@@ -349,11 +394,13 @@ pub enum RenameDialogMsg {
 ///
 /// Mounts a vertical layout with a heading naming the targeted
 /// `<issuer>:<label>` row, an editable [`adw::EntryRow`] pre-filled
-/// with the account's current label, and an inline-error label that
-/// reflects [`RenameDialogState::inline_error`] as the user types.
-/// The Save / Cancel buttons and the
-/// `Vault::mutate_and_save(|v| v.rename(...))` worker land in
-/// follow-up commits alongside the `UnlockedBusy` worker
+/// with the account's current label, an inline-error label that
+/// reflects [`RenameDialogState::inline_error`] as the user types,
+/// and a Cancel button that forwards
+/// [`RenameDialogOutput::Cancel`] so `AppModel` can dismiss the
+/// dialog. The Save button and the
+/// `Vault::mutate_and_save(|v| v.rename(...))` worker land in a
+/// follow-up commit alongside the `UnlockedBusy` worker
 /// infrastructure.
 pub struct RenameDialogComponent {
     /// Construction parameters retained on `self` so future message
@@ -372,7 +419,7 @@ pub struct RenameDialogComponent {
 impl SimpleComponent for RenameDialogComponent {
     type Init = RenameDialogInit;
     type Input = RenameDialogMsg;
-    type Output = ();
+    type Output = RenameDialogOutput;
 
     view! {
         #[root]
@@ -419,6 +466,20 @@ impl SimpleComponent for RenameDialogComponent {
                 #[watch]
                 set_visible: model.state.inline_error().is_some(),
             },
+
+            gtk::Box {
+                set_orientation: gtk::Orientation::Horizontal,
+                set_spacing: 6,
+                set_halign: gtk::Align::End,
+
+                #[name = "cancel_button"]
+                gtk::Button {
+                    set_label: "Cancel",
+                    connect_clicked[sender] => move |_| {
+                        sender.input(RenameDialogMsg::Cancel);
+                    },
+                },
+            },
         }
     }
 
@@ -438,11 +499,12 @@ impl SimpleComponent for RenameDialogComponent {
         ComponentParts { model, widgets }
     }
 
-    fn update(&mut self, msg: Self::Input, _sender: ComponentSender<Self>) {
-        match msg {
-            RenameDialogMsg::DraftChanged(text) => {
-                self.state.set_draft(text);
-            }
+    fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>) {
+        if let Some(output) = apply_msg(&mut self.state, msg) {
+            // Ignore send failures: if `AppModel` has already dropped
+            // the controller (e.g. window closed mid-click), there's
+            // nothing left to dismiss.
+            let _ = sender.output(output);
         }
     }
 }

@@ -21,6 +21,12 @@
 //! widgets; the widget layer drives `classify_submit` on the typed
 //! draft and `classify_rename_error` on the worker outcome, then
 //! reacts to the [`RenameErrorOutcome`] routing decision.
+//!
+//! The widget layer also routes the `Cancel` button click through
+//! [`apply_msg`] so the dialog dismissal contract — Cancel emits
+//! [`RenameDialogOutput::Cancel`] without touching the draft —
+//! lives in pure logic alongside the validation / error-routing
+//! helpers and stays unit-testable here.
 
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -33,9 +39,10 @@ use paladin_core::{
 };
 
 use paladin_gtk::rename_dialog::{
-    classify_rename_error, classify_submit, decide_rename_target, format_rename_dialog_marker,
-    InlineError, InlineWarning, RenameDialogInit, RenameDialogState, RenameErrorOutcome,
-    SubmitOutcome, RENAME_DIALOG_MARKER_PREFIX,
+    apply_msg, classify_rename_error, classify_submit, decide_rename_target,
+    format_rename_dialog_marker, InlineError, InlineWarning, RenameDialogInit, RenameDialogMsg,
+    RenameDialogOutput, RenameDialogState, RenameErrorOutcome, SubmitOutcome,
+    RENAME_DIALOG_MARKER_PREFIX,
 };
 
 /// §4.1 label length cap. The constant is internal to
@@ -548,4 +555,65 @@ fn rename_dialog_state_clones_for_reactive_state() {
     let state = RenameDialogState::new(&dummy_init("ben"));
     let cloned = state.clone();
     assert_eq!(cloned.draft(), state.draft());
+}
+
+// ---------------------------------------------------------------------------
+// apply_msg — Cancel routing and DraftChanged state mutation
+//
+// The widget's `update` delegates here so the routing decision (Cancel
+// emits `RenameDialogOutput::Cancel`; DraftChanged mutates the draft
+// in-place and emits no output) stays a pure function that does not
+// require spinning up GTK to verify.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn apply_msg_cancel_emits_cancel_output() {
+    let mut state = RenameDialogState::new(&dummy_init("ben"));
+    let out = apply_msg(&mut state, RenameDialogMsg::Cancel);
+    assert_eq!(out, Some(RenameDialogOutput::Cancel));
+}
+
+#[test]
+fn apply_msg_cancel_does_not_mutate_draft() {
+    // Cancel is a pure dismissal — the draft must round-trip
+    // unchanged so the user's typed value is not silently dropped
+    // before a future `save_not_committed` rollback that re-opens
+    // the same dialog instance can re-seed the prior label.
+    let mut state = RenameDialogState::new(&dummy_init("ben"));
+    state.set_draft("draft-in-progress".to_string());
+    let before = state.draft().to_string();
+    let _ = apply_msg(&mut state, RenameDialogMsg::Cancel);
+    assert_eq!(state.draft(), before);
+}
+
+#[test]
+fn apply_msg_draft_changed_updates_draft_and_emits_no_output() {
+    let mut state = RenameDialogState::new(&dummy_init("ben"));
+    let out = apply_msg(
+        &mut state,
+        RenameDialogMsg::DraftChanged("new-label".to_string()),
+    );
+    assert_eq!(out, None);
+    assert_eq!(state.draft(), "new-label");
+}
+
+#[test]
+fn apply_msg_draft_changed_to_invalid_surfaces_inline_error() {
+    let mut state = RenameDialogState::new(&dummy_init("ben"));
+    let out = apply_msg(&mut state, RenameDialogMsg::DraftChanged(String::new()));
+    assert_eq!(out, None);
+    let inline = state
+        .inline_error()
+        .expect("empty draft should surface inline error after apply_msg");
+    assert_eq!(inline.kind, ErrorKind::ValidationError);
+}
+
+#[test]
+fn rename_dialog_output_cancel_is_distinct_variant() {
+    // Defensive: the variant exists and is comparable, so the
+    // AppModel can pattern-match on `RenameDialogOutput::Cancel`
+    // without an `_` catch-all swallowing future variants.
+    let out = RenameDialogOutput::Cancel;
+    assert!(matches!(out, RenameDialogOutput::Cancel));
+    assert_eq!(out.clone(), RenameDialogOutput::Cancel);
 }
