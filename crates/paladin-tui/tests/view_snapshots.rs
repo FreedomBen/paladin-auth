@@ -1064,6 +1064,196 @@ fn snapshot_import_modal_save_durability_unconfirmed() {
     insta::assert_snapshot!(rendered);
 }
 
+/// Render the Import modal overlay against a fresh `Unlocked` state
+/// with the supplied `PaladinError` pre-rendered into
+/// `ImportModal::error` via `render_error_message`, and return the
+/// resulting text grid.
+///
+/// Mirrors the `snapshot_import_modal_save_not_committed` /
+/// `snapshot_import_modal_save_durability_unconfirmed` setups so the
+/// per-importer-error-kind snapshots below read as deltas from the
+/// `snapshot_import_modal_default` baseline. The `expected_substring`
+/// argument doubles as a guard that the rendered grid does carry the
+/// rendered error wording before the snapshot lands — a regression
+/// that ever drops the inline error or strips the rendered wording
+/// surfaces as the assertion message rather than a silent snapshot
+/// diff.
+fn render_import_modal_with_inline_error(err: &PaladinError, expected_substring: &str) -> String {
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Import(ImportModal {
+            error: Some(render_error_message(err)),
+            ..ImportModal::default()
+        })),
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let rendered = render_to_text(&state, snapshot_now(), 80, 20);
+    assert!(
+        rendered.contains(expected_substring),
+        "expected inline error substring {expected_substring:?} to appear in modal:\n{rendered}"
+    );
+    rendered
+}
+
+// ---------------------------------------------------------------------------
+// Import modal — per-importer-error-kind inline rendering
+// (IMPLEMENTATION_PLAN_03_TUI.md > Tests > Insta snapshots:
+//  *"Import modal with each importer error kind."*)
+//
+// One snapshot per `PaladinError` variant the reducer's
+// `reduce_import_result` Err arm surfaces. Each pins the
+// `render_error_message`-formatted wording inside the spacer area
+// between the conflict-selector row and the footer hint, mirroring
+// the pre-commit / durability-unconfirmed snapshots above. The set
+// of variants matches the plan's "Importer errors" list (L1079–1084)
+// and the reducer tests'
+// `effect_result_import_err_*_renders_inline` coverage in
+// `tests/reducer_tests.rs` — keeping the view-snapshot matrix
+// 1:1 with the reducer matrix so a regression that ever changes
+// the rendered wording for one kind surfaces here as a diff.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn snapshot_import_modal_unsupported_import_format() {
+    let rendered = render_import_modal_with_inline_error(
+        &PaladinError::UnsupportedImportFormat {
+            format: "unknown".to_string(),
+        },
+        "unsupported import format",
+    );
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn snapshot_import_modal_unsupported_plaintext_vault() {
+    let rendered = render_import_modal_with_inline_error(
+        &PaladinError::UnsupportedPlaintextVault,
+        "Paladin import bundle is plaintext",
+    );
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn snapshot_import_modal_unsupported_encrypted_aegis() {
+    let rendered = render_import_modal_with_inline_error(
+        &PaladinError::UnsupportedEncryptedAegis,
+        "Aegis encrypted backups are not supported",
+    );
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn snapshot_import_modal_unsupported_aegis_entry_type() {
+    let rendered = render_import_modal_with_inline_error(
+        &PaladinError::UnsupportedAegisEntryType {
+            source_index: 2,
+            entry_type: "steam".to_string(),
+        },
+        "Aegis entry type",
+    );
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn snapshot_import_modal_validation_error() {
+    let rendered = render_import_modal_with_inline_error(
+        &PaladinError::ValidationError {
+            field: "secret",
+            reason: "bad_base32".to_string(),
+            source_index: Some(0),
+            decoded_len: None,
+            recommended_min: None,
+            entry_type: None,
+        },
+        "validation error",
+    );
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn snapshot_import_modal_no_entries_to_import() {
+    let rendered = render_import_modal_with_inline_error(
+        &PaladinError::NoEntriesToImport,
+        "no entries to import",
+    );
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn snapshot_import_modal_decrypt_failed() {
+    let rendered =
+        render_import_modal_with_inline_error(&PaladinError::DecryptFailed, "decryption failed");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn snapshot_import_modal_invalid_header() {
+    let rendered =
+        render_import_modal_with_inline_error(&PaladinError::InvalidHeader, "invalid vault header");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn snapshot_import_modal_invalid_payload() {
+    let rendered = render_import_modal_with_inline_error(
+        &PaladinError::InvalidPayload {
+            reason: "decode_failed",
+        },
+        "invalid vault payload",
+    );
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn snapshot_import_modal_unsupported_format_version() {
+    let rendered = render_import_modal_with_inline_error(
+        &PaladinError::UnsupportedFormatVersion { format_ver: 99 },
+        "unsupported vault format version",
+    );
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn snapshot_import_modal_kdf_params_out_of_bounds() {
+    let rendered = render_import_modal_with_inline_error(
+        &PaladinError::KdfParamsOutOfBounds {
+            m_kib: 1,
+            t: 0,
+            p: 0,
+        },
+        "Argon2 KDF parameters out of bounds",
+    );
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn snapshot_import_modal_io_error() {
+    let rendered = render_import_modal_with_inline_error(
+        &PaladinError::IoError {
+            operation: "read_import_file",
+            source: std::io::Error::from(std::io::ErrorKind::NotFound),
+        },
+        "I/O error during read_import_file",
+    );
+    insta::assert_snapshot!(rendered);
+}
+
 #[test]
 fn snapshot_export_modal_default() {
     // Plan L1887: "Export modal." Drive `view::render` against an

@@ -2275,7 +2275,28 @@ Inline `save_not_committed` / `save_durability_unconfirmed`:
 
 Import error and counts states:
 
-- [ ] Import modal with each importer error kind.
+- [x] Import modal with each importer error kind.
+  *(`crates/paladin-tui/tests/view_snapshots.rs` adds the shared
+  `render_import_modal_with_inline_error` helper and twelve thin
+  `snapshot_import_modal_*` tests — one per `PaladinError` variant
+  the reducer's `reduce_import_result` Err arm surfaces:
+  `unsupported_import_format`, `unsupported_plaintext_vault`,
+  `unsupported_encrypted_aegis`, `unsupported_aegis_entry_type`,
+  `validation_error`, `no_entries_to_import`, `decrypt_failed`,
+  `invalid_header`, `invalid_payload`, `unsupported_format_version`,
+  `kdf_params_out_of_bounds`, `io_error`. Each pins the
+  `render_error_message`-formatted wording inside the spacer area
+  between the conflict-selector row and the footer hint — same
+  rendering path as the pre-commit / durability-unconfirmed
+  snapshots — and the helper guards the rendered grid with a
+  per-variant substring assertion before the snapshot lands so a
+  regression that ever drops the inline error or strips the
+  rendered wording surfaces as the assertion message rather than a
+  silent snapshot diff. The matrix is 1:1 with the reducer tests'
+  `effect_result_import_err_*_renders_inline` coverage in
+  `tests/reducer_tests.rs`, so adding or renaming a variant in
+  either lane stays visible in the other. Locked in
+  `tests/snapshots/view_snapshots__snapshot_import_modal_{unsupported_import_format,unsupported_plaintext_vault,unsupported_encrypted_aegis,unsupported_aegis_entry_type,validation_error,no_entries_to_import,decrypt_failed,invalid_header,invalid_payload,unsupported_format_version,kdf_params_out_of_bounds,io_error}.snap`.)*
 - [ ] Import modal post-import counts panel.
 - [ ] Import counts panel with validation-warning messages.
 

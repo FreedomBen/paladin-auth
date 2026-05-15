@@ -1,0 +1,24 @@
+---
+source: crates/paladin-tui/tests/view_snapshots.rs
+expression: rendered
+---
+┌ Paladin ─────────────────────────────────────────────────────────────────────┐
+│ Search:                                                                      │
+│ ──────────────────────────────────────────────────────────────────────────── │
+│                                                                              │
+│   ┌ Import accounts ─────────────────────────────────────────────────────┐   │
+│   │ Source:      [  ]                                                    │   │
+│   │                                                                      │   │
+│   │ Format:      ▶ Auto ◀    Otpauth      Aegis      Paladin      QR     │   │
+│   │                                                                      │   │
+│   │ On conflict: ▶ Skip ◀    Replace      Append                         │   │
+│   │                                                                      │   │
+│   │ Paladin import bundle is plaintext; v0.1 imports require encrypted b │   │
+│   │                                                                      │   │
+│   │                                                                      │   │
+│   │           Tab cycles fields  ·  Enter submit  ·  Esc cancel          │   │
+│   └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│ ──────────────────────────────────────────────────────────────────────────── │
+│ [↑↓] move  [enter] copy  [n] next-HOTP  [a] add  [/] find                    │
+└──────────────────────────────────────────────────────────────────────────────┘
