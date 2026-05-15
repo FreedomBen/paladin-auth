@@ -41,11 +41,14 @@ use std::path::{Path, PathBuf};
 
 use libadwaita as adw;
 use libadwaita::prelude::*;
+use relm4::gtk;
 use relm4::prelude::*;
 use secrecy::SecretString;
+use zeroize::Zeroizing;
 
 use paladin_core::{ErrorKind, PaladinError, VaultLock, VaultStatus};
 
+use crate::secret_fields::SecretEntry;
 use crate::startup_error::{classify_open_error, OpenErrorRouting};
 
 /// Whether `AppModel` should present the unlock view for `status`.
@@ -158,33 +161,124 @@ pub struct UnlockDialogInit {
     pub vault_path: PathBuf,
 }
 
+/// Live shadow buffer for the dialog's [`adw::PasswordEntryRow`].
+///
+/// The widget's `connect_changed` signal pushes every keystroke into
+/// [`UnlockDialogState::set_passphrase`], which mirrors the typed
+/// bytes into a Paladin-owned [`SecretEntry`]
+/// ([`Zeroizing<String>`]). On submit, the widget reads
+/// [`UnlockDialogState::passphrase_text`] and hands it to
+/// [`prepare_unlock_lock`] to build the
+/// [`paladin_core::VaultLock::Encrypted`] passed to
+/// `paladin_core::open` inside `gio::spawn_blocking`. On submit /
+/// cancel / auto-lock the widget calls [`Self::clear_passphrase`] or
+/// [`Self::take_passphrase`] so the cleartext bytes do not outlive
+/// the event.
+///
+/// The struct deliberately does not derive `Clone` or `Debug` —
+/// [`SecretEntry`] is the §8 boundary that keeps secret bytes
+/// inside `Zeroizing<String>` and out of `Debug` output.
+#[derive(Default)]
+pub struct UnlockDialogState {
+    passphrase: SecretEntry,
+}
+
+impl UnlockDialogState {
+    /// Construct an empty state — equivalent to `Self::default()`.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Replace the shadow buffer with the entry row's current text.
+    ///
+    /// Called from the widget's `connect_changed` signal on every
+    /// keystroke. The previous buffer's bytes are zeroized in place
+    /// when the temporary [`Zeroizing<String>`] inside
+    /// [`SecretEntry`] drops.
+    pub fn set_passphrase(&mut self, text: &str) {
+        self.passphrase.set(text);
+    }
+
+    /// Borrow the shadow buffer as a `&str` for
+    /// [`prepare_unlock_lock`] and for the `is_empty` sensitivity
+    /// gate on a future submit button.
+    #[must_use]
+    pub fn passphrase_text(&self) -> &str {
+        self.passphrase.text()
+    }
+
+    /// True iff the shadow buffer is the empty string.
+    ///
+    /// The future submit button will bind its `sensitive` property
+    /// to `!is_passphrase_empty()` so the empty-passphrase pre-flight
+    /// short-circuit in [`prepare_unlock_lock`] never fires through
+    /// a click.
+    #[must_use]
+    pub fn is_passphrase_empty(&self) -> bool {
+        self.passphrase.is_empty()
+    }
+
+    /// Wipe the shadow buffer in place without consuming it.
+    ///
+    /// The widget calls this on cancel / auto-lock so cleartext bytes
+    /// do not survive the dismissal. Submit uses [`Self::take_passphrase`]
+    /// instead so the bytes flow into the worker.
+    pub fn clear_passphrase(&mut self) {
+        self.passphrase.clear();
+    }
+
+    /// Move the shadow buffer out, leaving the state empty.
+    ///
+    /// The widget's submit path will call this and hand the returned
+    /// [`Zeroizing<String>`] to `SecretString::from(...)` inside the
+    /// [`paladin_core::VaultLock::Encrypted`], dropping the wrapper
+    /// once `paladin_core::open` returns so the bytes zeroize.
+    #[must_use]
+    pub fn take_passphrase(&mut self) -> Zeroizing<String> {
+        self.passphrase.take()
+    }
+}
+
 /// Messages handled by [`UnlockDialogComponent`].
 ///
-/// This milestone scaffolds the read-only render path — the
-/// `submit` / inline-decrypt-failure / `gio::spawn_blocking`
-/// `paladin_core::open` wiring described in §"Component tree" lands
-/// in a follow-up commit alongside the passphrase-field widget on
-/// `AppModel`. The empty enum is the deliberate v0.2 starting point
-/// — relm4 requires the associated `Input` type to exist even when
-/// no inbound messages are wired yet.
+/// `PassphraseChanged(text)` arrives from the
+/// [`adw::PasswordEntryRow`]'s `connect_changed` signal on every
+/// keystroke. The handler shadows the typed bytes into the
+/// [`UnlockDialogState`]'s [`SecretEntry`] so the cleartext lives in
+/// Paladin-owned memory rather than escaping through `AppMsg` /
+/// `AppOutput`. The submit transition and the `gio::spawn_blocking`
+/// `paladin_core::open` worker described in §"Component tree" >
+/// `UnlockComponent` land in a follow-up commit alongside the
+/// `UnlockedBusy` worker infrastructure.
 #[derive(Debug)]
-pub enum UnlockDialogMsg {}
+pub enum UnlockDialogMsg {
+    /// Raw text from the [`adw::PasswordEntryRow`] after a keystroke.
+    /// The widget's `update` runs [`UnlockDialogState::set_passphrase`]
+    /// so the shadow buffer tracks the live entry.
+    ///
+    /// The variant carries `String` rather than [`SecretString`]
+    /// because the GTK [`gtk::EntryBuffer`] is the unavoidable §8 UI
+    /// boundary: the bytes arrive as a `GString` from
+    /// [`gtk::Editable::text`] and live transiently in the relm4
+    /// channel before the handler shadows them into the
+    /// [`SecretEntry`]. Once the handler returns, the `String`
+    /// drops and only the [`Zeroizing<String>`] copy in
+    /// [`UnlockDialogState`] survives.
+    PassphraseChanged(String),
+}
 
 /// Widget-bearing dialog for the
 /// [`crate::app::state::AppState::Locked`] branch.
 ///
-/// Mounts a libadwaita [`adw::StatusPage`] that surfaces the
-/// resolved vault path so the user can confirm the destination
-/// before typing a passphrase. Subsequent commits replace the
-/// placeholder body with the [`adw::PasswordEntryRow`] passphrase
-/// entry, the submit action wired to a `gio::spawn_blocking`
-/// `paladin_core::open` worker, and the inline `DecryptFailed` /
-/// `InvalidPassphrase` error surface; until then, keeping the
-/// widget read-only mirrors the
-/// [`crate::startup_error::StartupErrorComponent`] and
-/// [`crate::init_dialog::InitDialogComponent`] pattern (those
-/// branches also mounted a status page first and grew inbound
-/// actions later).
+/// Mounts a libadwaita [`adw::StatusPage`] heading that names the
+/// resolved vault path so the user can confirm the destination, plus
+/// an [`adw::PasswordEntryRow`] whose keystrokes shadow into the
+/// model's [`UnlockDialogState`] [`SecretEntry`]. The submit action
+/// wired to a `gio::spawn_blocking` `paladin_core::open` worker and
+/// the inline `DecryptFailed` / `InvalidPassphrase` error surface
+/// land in follow-up commits alongside the `UnlockedBusy` worker
+/// infrastructure.
 pub struct UnlockDialogComponent {
     /// Resolved vault path the dialog will hand to a
     /// `paladin_core::open` worker on submit. Kept on `self` so a
@@ -192,6 +286,13 @@ pub struct UnlockDialogComponent {
     /// value through every signal.
     #[allow(dead_code)]
     vault_path: PathBuf,
+    /// Live passphrase shadow buffer driven from the
+    /// [`adw::PasswordEntryRow`]'s `connect_changed` signal. The
+    /// submit handler will read [`UnlockDialogState::passphrase_text`]
+    /// (or [`UnlockDialogState::take_passphrase`]) once the
+    /// `UnlockedBusy` worker lands.
+    #[allow(dead_code)]
+    state: UnlockDialogState,
 }
 
 #[allow(missing_docs)]
@@ -203,37 +304,62 @@ impl SimpleComponent for UnlockDialogComponent {
 
     view! {
         #[root]
-        adw::StatusPage {
-            // `dialog-password-symbolic` is the freedesktop-standard
-            // glyph for "passphrase / unlock"; it resolves through
-            // the system icon theme so the wordless icon matches
-            // every other GNOME app's unlock surface.
-            set_icon_name: Some("dialog-password-symbolic"),
-            set_title: "Unlock vault",
-            set_description: Some(&format!(
-                "Enter the passphrase for {path}.",
-                path = model.vault_path.display(),
-            )),
+        gtk::Box {
+            set_orientation: gtk::Orientation::Vertical,
+            set_spacing: 12,
             set_hexpand: true,
             set_vexpand: true,
+
+            adw::StatusPage {
+                // `dialog-password-symbolic` is the freedesktop-standard
+                // glyph for "passphrase / unlock"; it resolves through
+                // the system icon theme so the wordless icon matches
+                // every other GNOME app's unlock surface.
+                set_icon_name: Some("dialog-password-symbolic"),
+                set_title: "Unlock vault",
+                set_description: Some(&format!(
+                    "Enter the passphrase for {path}.",
+                    path = model.vault_path.display(),
+                )),
+                set_hexpand: true,
+            },
+
+            adw::PreferencesGroup {
+                #[name = "passphrase_row"]
+                add = &adw::PasswordEntryRow {
+                    set_title: "Passphrase",
+                    // `connect_changed` fires on every keystroke so the
+                    // `SecretEntry` shadow buffer tracks the live entry
+                    // and Paladin-owned `Zeroizing<String>` is the only
+                    // long-lived home for the cleartext bytes.
+                    connect_changed[sender] => move |entry| {
+                        sender.input(UnlockDialogMsg::PassphraseChanged(
+                            entry.text().to_string(),
+                        ));
+                    },
+                },
+            },
         }
     }
 
     fn init(
         init: Self::Init,
         root: Self::Root,
-        _sender: ComponentSender<Self>,
+        sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
         let model = UnlockDialogComponent {
             vault_path: init.vault_path,
+            state: UnlockDialogState::new(),
         };
         let widgets = view_output!();
         ComponentParts { model, widgets }
     }
 
-    fn update(&mut self, _msg: Self::Input, _sender: ComponentSender<Self>) {
-        // No inbound messages handled at this milestone — see
-        // `UnlockDialogMsg` doc comment for the upcoming submit /
-        // inline-error / worker actions.
+    fn update(&mut self, msg: Self::Input, _sender: ComponentSender<Self>) {
+        match msg {
+            UnlockDialogMsg::PassphraseChanged(text) => {
+                self.state.set_passphrase(&text);
+            }
+        }
     }
 }

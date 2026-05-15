@@ -37,6 +37,7 @@ use paladin_gtk::secret_fields::SecretEntry;
 use paladin_gtk::startup_error::{OpenErrorRouting, StartupErrorSource};
 use paladin_gtk::unlock_dialog::{
     classify_unlock_error, prepare_unlock_lock, unlock_view_required, SubmitRejection,
+    UnlockDialogMsg, UnlockDialogState,
 };
 
 // ---------------------------------------------------------------------------
@@ -302,6 +303,124 @@ fn passphrase_entry_set_then_clear_round_trips() {
     assert_eq!(entry.text(), "hunter2");
     entry.clear();
     assert!(entry.text().is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// UnlockDialogState: live passphrase shadow buffer driven by the
+// `adw::PasswordEntryRow` text-change signal. The state owns a
+// `SecretEntry` (Zeroizing<String>) shadow copy so cleartext bytes
+// live in Paladin-owned memory rather than escaping into AppMsg /
+// AppOutput. The widget submit / worker / decrypt-failed inline error
+// land in a follow-up commit alongside the `UnlockedBusy` worker
+// infrastructure; this milestone wires only the entry-row shadow path.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn unlock_dialog_state_new_is_empty() {
+    let state = UnlockDialogState::new();
+    assert!(
+        state.is_passphrase_empty(),
+        "freshly-constructed state must report an empty passphrase",
+    );
+    assert!(
+        state.passphrase_text().is_empty(),
+        "freshly-constructed state must read back as an empty &str",
+    );
+}
+
+#[test]
+fn unlock_dialog_state_default_matches_new() {
+    let state = UnlockDialogState::default();
+    assert!(state.is_passphrase_empty());
+    assert!(state.passphrase_text().is_empty());
+}
+
+#[test]
+fn unlock_dialog_state_set_passphrase_shadows_typed_bytes() {
+    let mut state = UnlockDialogState::new();
+    state.set_passphrase("hunter2");
+    assert_eq!(state.passphrase_text(), "hunter2");
+    assert!(!state.is_passphrase_empty());
+}
+
+#[test]
+fn unlock_dialog_state_set_passphrase_replaces_previous() {
+    // `connect_changed` fires on every keystroke; the shadow buffer
+    // must atomically replace, not append.
+    let mut state = UnlockDialogState::new();
+    state.set_passphrase("first");
+    state.set_passphrase("second");
+    assert_eq!(state.passphrase_text(), "second");
+}
+
+#[test]
+fn unlock_dialog_state_set_passphrase_to_empty_reports_empty() {
+    // Backspacing the entry back to "" must surface as an empty
+    // passphrase so `prepare_unlock_lock` rejects pre-flight.
+    let mut state = UnlockDialogState::new();
+    state.set_passphrase("hunter2");
+    state.set_passphrase("");
+    assert!(state.is_passphrase_empty());
+    assert_eq!(state.passphrase_text(), "");
+}
+
+#[test]
+fn unlock_dialog_state_clear_passphrase_wipes_buffer() {
+    // The widget's `update` calls `clear_passphrase` on submit /
+    // cancel / auto-lock so cleartext bytes do not outlive the
+    // event.
+    let mut state = UnlockDialogState::new();
+    state.set_passphrase("hunter2");
+    state.clear_passphrase();
+    assert!(state.is_passphrase_empty());
+    assert_eq!(state.passphrase_text(), "");
+}
+
+#[test]
+fn unlock_dialog_state_take_passphrase_returns_zeroizing_and_empties_state() {
+    use zeroize::Zeroizing;
+    let mut state = UnlockDialogState::new();
+    state.set_passphrase("hunter2");
+    let taken: Zeroizing<String> = state.take_passphrase();
+    assert_eq!(taken.as_str(), "hunter2");
+    assert!(state.is_passphrase_empty());
+}
+
+#[test]
+fn unlock_dialog_state_passphrase_flows_into_prepare_unlock_lock() {
+    // The widget's submit path will read `state.passphrase_text()`
+    // and hand it to `prepare_unlock_lock`. Non-empty drafts build a
+    // `VaultLock::Encrypted`.
+    let mut state = UnlockDialogState::new();
+    state.set_passphrase("hunter2");
+    let lock =
+        prepare_unlock_lock(state.passphrase_text()).expect("non-empty state must build VaultLock");
+    assert!(matches!(lock, VaultLock::Encrypted(_)));
+}
+
+#[test]
+fn unlock_dialog_state_empty_rejects_via_prepare_unlock_lock() {
+    let state = UnlockDialogState::new();
+    let rej = prepare_unlock_lock(state.passphrase_text())
+        .expect_err("empty state must reject pre-flight");
+    assert_eq!(rej, SubmitRejection::EmptyPassphrase);
+}
+
+// ---------------------------------------------------------------------------
+// UnlockDialogMsg::PassphraseChanged — emitted by the entry row's
+// `connect_changed` signal on every keystroke. The handler shadows
+// the typed bytes into the SecretEntry buffer above.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn unlock_dialog_msg_passphrase_changed_carries_typed_text() {
+    // Construct the variant in a test to confirm the public payload
+    // shape matches `String` so the GTK signal handler can hand the
+    // entry's `.text().to_string()` through unmodified.
+    let msg = UnlockDialogMsg::PassphraseChanged("hunter2".to_string());
+    match msg {
+        UnlockDialogMsg::PassphraseChanged(text) => assert_eq!(text, "hunter2"),
+    }
 }
 
 // `format_unlock_dialog_marker` / `UNLOCK_DIALOG_MARKER_PREFIX` pin
