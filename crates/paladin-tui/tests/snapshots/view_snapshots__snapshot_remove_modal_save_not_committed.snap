@@ -1,0 +1,25 @@
+---
+source: crates/paladin-tui/tests/view_snapshots.rs
+assertion_line: 707
+expression: rendered
+---
+┌ Paladin ─────────────────────────────────────────────────────────────────────┐
+│ Search:                                                                      │
+│ ──────────────────────────────────────────────────────────────────────────── │
+│ ▶ GitHub (ben@example.com)            914 994   ██████░░░░   18s             │
+│                                                                              │
+│       ┌ Remove account ──────────────────────────────────────────────┐       │
+│       │ Remove the following account?                                │       │
+│       │                                                              │       │
+│       │ GitHub:ben@example.com                                       │       │
+│       │                                                              │       │
+│       │ save not committed (committed=false)                         │       │
+│       │                                                              │       │
+│       │                                                              │       │
+│       │                Enter confirms  ·  Esc cancels                │       │
+│       └──────────────────────────────────────────────────────────────┘       │
+│                                                                              │
+│                                                                              │
+│ ──────────────────────────────────────────────────────────────────────────── │
+│ [↑↓] move  [enter] copy  [n] next-HOTP  [a] add  [/] find                    │
+└──────────────────────────────────────────────────────────────────────────────┘

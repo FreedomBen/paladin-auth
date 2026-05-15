@@ -15,16 +15,18 @@
 //! for [`Clear`]-ing the modal's rect before painting — otherwise
 //! list-view content would bleed through transparent cells.
 //!
-//! Inline `save_not_committed` / `save_durability_unconfirmed`
-//! variants of this modal land alongside their own
-//! [`RemoveModal::error`](crate::app::state::RemoveModal::error)
-//! rendering slice; this baseline keeps the body to the prompt /
-//! account-label / hint trio so the snapshot pins only the layout
-//! contract.
+//! The [`RemoveModal::error`] slot surfaces inline in the spacer
+//! between the account-label row and the footer hint, painted in
+//! red and routed through
+//! [`render_error_message`](crate::app::state::render_error_message)
+//! so `save_not_committed` / `save_durability_unconfirmed` reads
+//! identically to the unlock screen's `decrypt_failed` line and the
+//! Add modal's inline-error slot.
 
 use paladin_core::Vault;
-use ratatui::layout::{Alignment, Constraint, Layout};
-use ratatui::text::Line;
+use ratatui::layout::{Alignment, Constraint, Layout, Rect};
+use ratatui::style::{Color, Style};
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Padding, Paragraph};
 use ratatui::Frame;
 
@@ -68,6 +70,10 @@ pub fn render(frame: &mut Frame<'_>, modal: &RemoveModal, vault: &Vault) {
     );
     frame.render_widget(Paragraph::new(account_label_line(modal, vault)), chunks[2]);
 
+    if let Some(error) = &modal.error {
+        render_inline_error(frame, chunks[3], error);
+    }
+
     let hint = "Enter confirms  ·  Esc cancels";
     frame.render_widget(Paragraph::new(hint).alignment(Alignment::Center), chunks[4]);
 }
@@ -85,4 +91,25 @@ fn account_label_line(modal: &RemoveModal, vault: &Vault) -> Line<'static> {
         Some(summary) => Line::from(format_account_display_label(&summary)),
         None => Line::from("(account no longer present)"),
     }
+}
+
+/// Paint the inline error message inside the spacer area between the
+/// account-label row and the footer hint. The error sits one blank
+/// row below the account label, foreground red, mirroring the unlock
+/// screen's `decrypt_failed` styling and the Add modal's inline error
+/// so every inline-error surface in the TUI reads the same way.
+fn render_inline_error(frame: &mut Frame<'_>, spacer: Rect, message: &str) {
+    let spacer_chunks = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(0),
+    ])
+    .split(spacer);
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            message.to_string(),
+            Style::default().fg(Color::Red),
+        ))),
+        spacer_chunks[1],
+    );
 }

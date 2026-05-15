@@ -649,6 +649,109 @@ fn snapshot_remove_modal_default() {
 }
 
 #[test]
+fn snapshot_remove_modal_save_not_committed() {
+    // Plan L2140: "Remove modal `save_not_committed`." Drive
+    // `view::render` against an `Unlocked` state holding
+    // `Modal::Remove(RemoveModal { account_id, error: Some(
+    // render_error_message(&PaladinError::SaveNotCommitted { .. })) })`
+    // so the snapshot pins the inline-error row populated from a
+    // pre-commit save failure per `DESIGN.md` §5's
+    // `save_not_committed` discriminator and the
+    // `IMPLEMENTATION_PLAN_03_TUI.md` "Pre-commit save rollback >
+    // Remove modal: same coverage as Add, asserted on `Vault::iter()`"
+    // contract. Routing the wording through the shared
+    // `render_error_message` helper means the inline text matches
+    // the rest of the TUI's error surface.
+    //
+    // The rest of the modal is at its default state (single TOTP
+    // account, `GitHub` / `ben@example.com`) so the snapshot reads
+    // as a delta from the `snapshot_remove_modal_default` baseline:
+    // the inline error line appears inside the spacer area between
+    // the account-label row and the footer hint.
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (mut vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let id = push_totp_account(&mut vault, &store, Some("GitHub"), "ben@example.com");
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Remove(RemoveModal {
+            account_id: id,
+            error: Some(render_error_message(&PaladinError::SaveNotCommitted {
+                committed: false,
+                backup_path: None,
+            })),
+        })),
+        selected: Some(id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let rendered = render_to_text(&state, snapshot_now(), 80, 20);
+    // Regression guard: a renderer that ever stops surfacing the
+    // inline error field must fail this test even before the
+    // human reads the snapshot diff.
+    assert!(
+        rendered.contains("save not committed"),
+        "expected inline save_not_committed wording to appear in modal:\n{rendered}"
+    );
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn snapshot_remove_modal_save_durability_unconfirmed() {
+    // Plan L2141: "Remove modal `save_durability_unconfirmed`." Same
+    // rendering path as the `save_not_committed` snapshot above; the
+    // typed error here is `PaladinError::SaveDurabilityUnconfirmed`,
+    // which per `IMPLEMENTATION_PLAN_03_TUI.md` "Durability-unconfirmed
+    // failures follow the committed-state path" surfaces in the
+    // modal's inline error slot identically to the pre-commit
+    // failure — both paths run through `render_error_message`.
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (mut vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let id = push_totp_account(&mut vault, &store, Some("GitHub"), "ben@example.com");
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Remove(RemoveModal {
+            account_id: id,
+            error: Some(render_error_message(
+                &PaladinError::SaveDurabilityUnconfirmed,
+            )),
+        })),
+        selected: Some(id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let rendered = render_to_text(&state, snapshot_now(), 80, 20);
+    assert!(
+        rendered.contains("save durability unconfirmed"),
+        "expected inline save_durability_unconfirmed wording to appear in modal:\n{rendered}"
+    );
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn snapshot_rename_modal_default() {
     // Plan L1885: "Rename modal." Drive `view::render` against an
     // `Unlocked` state with one TOTP account and
