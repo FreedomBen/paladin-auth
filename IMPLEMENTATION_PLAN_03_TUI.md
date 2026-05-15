@@ -2577,7 +2577,41 @@ Add (QR) error and counts states:
   so any future wording change in core's `no_entries_to_import`
   `Display` or in `format_qr_import_failure`'s `Import` arm
   surfaces here as a diff.)*
-- [ ] Add modal QR-import inline error: oversized raw RGBA buffer.
+- [x] Add modal QR-import inline error: oversized raw RGBA buffer.
+  *(`snapshot_add_modal_qr_oversized_rgba_buffer` in
+  `crates/paladin-tui/tests/view_snapshots.rs` constructs an
+  `AddModal` with
+  `mode: AddMode::Qr,
+  error: Some(format_qr_import_failure(&QrImportFailure::Import(
+      paladin_core::import::qr_image_bytes(5000, 5000, &[], snapshot_now())
+          .expect_err(...))))` — routing the error through the real
+  public-API call rather than constructing the `PaladinError`
+  directly binds the snapshot to the contract that
+  `paladin_core::import::qr_image_bytes` rejects oversized RGBA
+  buffers (dimensions whose `width * height * 4` exceeds
+  `paladin_core::QR_RGBA_MAX_BYTES`) with `validation_error
+  { field: "qr_image", reason: "image_too_large" }` per
+  `DESIGN.md` §4.6. Mirrors the reducer-side fixture's trigger
+  (`effect_result_qr_import_oversized_rgba_buffer_sets_inline_error_via_render_error_message`
+  in `tests/reducer_tests.rs`) so the view-snapshot matrix stays
+  1:1 with the reducer matrix. Routing through
+  `format_qr_import_failure`'s `Import(err)` arm — which
+  delegates to `render_error_message` and binds to the core
+  `Display` impl (`validation error: qr_image: image_too_large`)
+  — pins that this arm forwards `PaladinError` wording verbatim
+  without a "QR import failed:" prefix, matching the
+  `NoEntriesToImport` companion slice. The 43-char core wording
+  fits the ~60-col inline-error slot without truncation. Reuses
+  the `render_inline_error` branch in `view/add.rs` exercised by
+  the Add modal's `save_not_committed` /
+  `save_durability_unconfirmed` / `no_clipboard_image` /
+  `image_decode_failure` / `no_qrs_decoded` slices; the
+  segmented mode-selector wraps `QR` in `▶ … ◀`. Locked in
+  `tests/snapshots/view_snapshots__snapshot_add_modal_qr_oversized_rgba_buffer.snap`
+  so any future wording change in core's `validation_error`
+  `Display`, in the `qr_image_bytes` size-rejection path's
+  `field` / `reason` codes, or in `format_qr_import_failure`'s
+  `Import` arm surfaces here as a diff.)*
 - [ ] Add modal QR-import inline error: invalid QR payload.
 - [ ] Add modal post-QR-import counts panel.
 - [ ] Add modal `duplicate_account`.

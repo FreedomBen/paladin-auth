@@ -830,6 +830,79 @@ fn snapshot_add_modal_qr_no_qrs_decoded() {
 }
 
 #[test]
+fn snapshot_add_modal_qr_oversized_rgba_buffer() {
+    // Plan L2450: "Add modal QR-import inline error: oversized raw
+    // RGBA buffer." Drive `view::render` against an `Unlocked` state
+    // holding `Modal::Add(AddModal { mode: AddMode::Qr, error:
+    // Some(format_qr_import_failure(&QrImportFailure::Import(
+    //     paladin_core::import::qr_image_bytes(5000, 5000, &[], _)
+    //         .expect_err(...)))), .. })` so the snapshot pins the
+    // inline-error row populated when
+    // `paladin_core::import::qr_image_bytes` rejects oversized RGBA
+    // buffers (dimensions whose `width * height * 4` exceeds
+    // `paladin_core::QR_RGBA_MAX_BYTES`) with `validation_error
+    // { field: "qr_image", reason: "image_too_large" }` per
+    // `DESIGN.md` §4.6. Routing through the real `qr_image_bytes`
+    // call rather than constructing the error directly binds the
+    // snapshot to the public API contract — the reducer-side
+    // fixture
+    // (`effect_result_qr_import_oversized_rgba_buffer_sets_inline_error_via_render_error_message`
+    // in `tests/reducer_tests.rs`) uses the same trigger so the
+    // view-snapshot matrix stays 1:1 with the reducer matrix.
+    //
+    // Routing the wording through `format_qr_import_failure`'s
+    // `Import(err)` arm — which delegates to `render_error_message`
+    // and binds to the core `Display` impl (`validation error:
+    // qr_image: image_too_large`) — pins that this arm forwards
+    // `PaladinError` wording verbatim without a "QR import failed:"
+    // prefix, matching the `NoEntriesToImport` companion slice. The
+    // 43-char core wording fits the ~60-col inline-error slot
+    // without truncation.
+    //
+    // The rest of the modal is at its default state (Manual field
+    // stack; `AddMode::Qr` selector) so the snapshot reads as a
+    // delta from `snapshot_add_modal_qr_no_qrs_decoded` on a single
+    // cell: the inline-error wording.
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let oversized_side: u32 = 5000;
+    let core_err =
+        paladin_core::import::qr_image_bytes(oversized_side, oversized_side, &[], snapshot_now())
+            .expect_err("oversized RGBA dimensions must reject");
+    let expected = format_qr_import_failure(&QrImportFailure::Import(core_err));
+    let modal = AddModal {
+        mode: AddMode::Qr,
+        error: Some(expected.clone()),
+        ..AddModal::default()
+    };
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Add(modal)),
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let rendered = render_to_text(&state, snapshot_now(), 80, 20);
+    assert!(
+        rendered.contains(&expected),
+        "expected inline oversized-rgba wording {expected:?} to appear in modal:\n{rendered}"
+    );
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn snapshot_remove_modal_default() {
     // Plan L1856: "Remove modal." Drive `view::render` against an
     // `Unlocked` state with one TOTP account and
