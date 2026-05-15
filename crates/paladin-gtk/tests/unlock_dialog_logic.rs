@@ -36,8 +36,8 @@ use paladin_core::{ErrorKind, PaladinError, PermissionSubject, VaultLock, VaultM
 use paladin_gtk::secret_fields::SecretEntry;
 use paladin_gtk::startup_error::{OpenErrorRouting, StartupErrorSource};
 use paladin_gtk::unlock_dialog::{
-    classify_unlock_error, prepare_unlock_lock, unlock_view_required, InlineError, SubmitRejection,
-    UnlockDialogMsg, UnlockDialogState,
+    apply_msg, classify_unlock_error, prepare_unlock_lock, unlock_view_required, InlineError,
+    SubmitRejection, UnlockDialogMsg, UnlockDialogOutput, UnlockDialogState,
 };
 
 // ---------------------------------------------------------------------------
@@ -834,6 +834,143 @@ fn unlock_dialog_msg_submit_clicked_pattern_matches() {
             panic!("expected SubmitClicked, got PassphraseChanged")
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// apply_msg — routing decisions
+//
+// The pure-logic shim wraps `UnlockDialogState::set_passphrase` and
+// `UnlockDialogState::submit` so the widget's `update` handler stays
+// a one-liner over a unit-testable router. `PassphraseChanged`
+// mutates the shadow buffer and emits no output. `SubmitClicked`
+// runs `submit`: rejection stages the inline error and emits no
+// output; the `Ok(VaultLock)` branch is forwarded to `AppModel` as
+// `UnlockDialogOutput::SubmitLock` so the future
+// `gio::spawn_blocking paladin_core::open` worker can consume it.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn apply_msg_passphrase_changed_updates_buffer_and_emits_no_output() {
+    let mut state = UnlockDialogState::new();
+    let out = apply_msg(
+        &mut state,
+        UnlockDialogMsg::PassphraseChanged("hunter2".to_string()),
+    );
+    assert!(
+        out.is_none(),
+        "PassphraseChanged must not emit an output — it only shadows the typed bytes",
+    );
+    assert_eq!(state.passphrase_text(), "hunter2");
+}
+
+#[test]
+fn apply_msg_passphrase_changed_to_empty_reports_empty() {
+    let mut state = UnlockDialogState::new();
+    state.set_passphrase("hunter2");
+    let out = apply_msg(
+        &mut state,
+        UnlockDialogMsg::PassphraseChanged(String::new()),
+    );
+    assert!(out.is_none());
+    assert!(
+        state.is_passphrase_empty(),
+        "PassphraseChanged with empty text must clear the buffer so the gate re-closes",
+    );
+}
+
+#[test]
+fn apply_msg_passphrase_changed_clears_prior_inline_error() {
+    // A `decrypt_failed` from a prior worker return must be dismissed
+    // the moment the user keeps typing — the dismissal contract that
+    // `set_passphrase` enforces must survive the `apply_msg` shim.
+    let mut state = UnlockDialogState::new();
+    state.set_inline_error(Some(InlineError::from_error(&PaladinError::DecryptFailed)));
+    let _ = apply_msg(
+        &mut state,
+        UnlockDialogMsg::PassphraseChanged("h".to_string()),
+    );
+    assert!(state.inline_error().is_none());
+}
+
+#[test]
+fn apply_msg_submit_clicked_empty_returns_none() {
+    // Empty passphrase short-circuits inside `submit`. No `VaultLock`
+    // ever materializes, so no output is forwarded to `AppModel`.
+    let mut state = UnlockDialogState::new();
+    let out = apply_msg(&mut state, UnlockDialogMsg::SubmitClicked);
+    assert!(
+        out.is_none(),
+        "SubmitClicked on an empty buffer must not forward an output",
+    );
+}
+
+#[test]
+fn apply_msg_submit_clicked_empty_stages_inline_error() {
+    // Mirrors the state-level `submit_empty_passphrase_stages_inline_error`
+    // test: the rejection projection is staged into the inline-error slot
+    // even when routed through `apply_msg`.
+    let mut state = UnlockDialogState::new();
+    let _ = apply_msg(&mut state, UnlockDialogMsg::SubmitClicked);
+    let err = state
+        .inline_error()
+        .expect("rejection must stage an inline error");
+    assert_eq!(err.kind, ErrorKind::InvalidPassphrase);
+}
+
+#[test]
+fn apply_msg_submit_clicked_non_empty_returns_submit_lock() {
+    let mut state = UnlockDialogState::new();
+    state.set_passphrase("hunter2");
+    let out = apply_msg(&mut state, UnlockDialogMsg::SubmitClicked);
+    let output = out.expect("non-empty submit must forward a VaultLock");
+    match output {
+        UnlockDialogOutput::SubmitLock(lock) => match lock {
+            VaultLock::Encrypted(_) => {}
+            other => panic!("expected VaultLock::Encrypted, got {other:?}"),
+        },
+    }
+}
+
+#[test]
+fn apply_msg_submit_clicked_non_empty_consumes_passphrase_buffer() {
+    // Cleartext bytes must not outlive the submit. The widget hands
+    // the lock to the worker; the shadow buffer is wiped in the same
+    // step so a subsequent screenshot / accessibility scrape cannot
+    // recover the typed bytes.
+    let mut state = UnlockDialogState::new();
+    state.set_passphrase("hunter2");
+    let _ = apply_msg(&mut state, UnlockDialogMsg::SubmitClicked);
+    assert!(
+        state.is_passphrase_empty(),
+        "apply_msg(SubmitClicked) on the Ok path must consume the buffer",
+    );
+}
+
+#[test]
+fn apply_msg_submit_clicked_non_empty_clears_prior_inline_error() {
+    // A stale `decrypt_failed` from a prior worker return must not
+    // outlive a successful re-submit routed through `apply_msg`.
+    let mut state = UnlockDialogState::new();
+    state.set_passphrase("hunter2");
+    state.set_inline_error(Some(InlineError::from_error(&PaladinError::DecryptFailed)));
+    let _ = apply_msg(&mut state, UnlockDialogMsg::SubmitClicked);
+    assert!(state.inline_error().is_none());
+}
+
+#[test]
+fn unlock_dialog_output_submit_lock_carries_encrypted_variant() {
+    // `UnlockDialogOutput::SubmitLock` must wrap the `VaultLock` so
+    // `AppModel` can pattern-match on the variant when the future
+    // `gio::spawn_blocking paladin_core::open` worker is wired up.
+    let mut state = UnlockDialogState::new();
+    state.set_passphrase("hunter2");
+    let out = apply_msg(&mut state, UnlockDialogMsg::SubmitClicked)
+        .expect("non-empty submit must forward");
+    let UnlockDialogOutput::SubmitLock(lock) = out;
+    assert!(
+        matches!(lock, VaultLock::Encrypted(_)),
+        "SubmitLock must carry the encrypted lock built from the typed passphrase",
+    );
 }
 
 // `format_unlock_dialog_marker` / `UNLOCK_DIALOG_MARKER_PREFIX` pin

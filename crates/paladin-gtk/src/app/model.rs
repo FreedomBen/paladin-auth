@@ -71,7 +71,9 @@ use crate::rename_dialog::{decide_rename_target, RenameDialogComponent, RenameDi
 use crate::startup_error::{
     format_startup_error_marker, StartupError, StartupErrorComponent, StartupErrorInit,
 };
-use crate::unlock_dialog::{format_unlock_dialog_marker, UnlockDialogComponent, UnlockDialogInit};
+use crate::unlock_dialog::{
+    format_unlock_dialog_marker, UnlockDialogComponent, UnlockDialogInit, UnlockDialogOutput,
+};
 
 /// Construction parameters for [`AppModel`].
 ///
@@ -249,6 +251,19 @@ pub enum AppMsg {
     /// added in the follow-up commit that wires
     /// `Vault::mutate_and_save` through the `UnlockedBusy` worker.
     RemoveDialogAction(RemoveDialogOutput),
+    /// Forwarded from the live [`UnlockDialogComponent`] when the
+    /// user submits a non-empty passphrase. Today only
+    /// [`UnlockDialogOutput::SubmitLock`] is emitted — the
+    /// `gio::spawn_blocking paladin_core::open` worker that consumes
+    /// the forwarded [`paladin_core::VaultLock`] and transitions
+    /// [`AppState::Locked`] → [`AppState::UnlockedBusy`] →
+    /// [`AppState::Unlocked`] (or routes the open failure inline
+    /// for `decrypt_failed` / `invalid_passphrase` and to
+    /// [`StartupErrorComponent`] for every other open failure per
+    /// `IMPLEMENTATION_PLAN_04_GTK.md` §"Effect errors") lands in a
+    /// follow-up commit alongside the `UnlockedBusy` worker
+    /// infrastructure.
+    UnlockDialogAction(UnlockDialogOutput),
 }
 
 // `relm4::component(pub)` generates a public `AppModelWidgets` struct so the
@@ -360,7 +375,7 @@ impl SimpleComponent for AppModel {
                 .launch(UnlockDialogInit {
                     vault_path: path.clone(),
                 })
-                .detach();
+                .forward(sender.input_sender(), AppMsg::UnlockDialogAction);
             widgets.content.append(controller.widget());
             Some(controller)
         } else {
@@ -439,6 +454,20 @@ impl SimpleComponent for AppModel {
                 if let Some(controller) = self.remove_dialog.take() {
                     self.content.remove(controller.widget());
                 }
+            }
+            AppMsg::UnlockDialogAction(UnlockDialogOutput::SubmitLock(_lock)) => {
+                // The `gio::spawn_blocking paladin_core::open` worker
+                // that consumes the forwarded `VaultLock`, transitions
+                // `AppState::Locked` → `AppState::UnlockedBusy` →
+                // `AppState::Unlocked` on success, and routes the open
+                // failure (inline for `decrypt_failed` /
+                // `invalid_passphrase`; to `StartupErrorComponent` for
+                // every other open failure per
+                // `IMPLEMENTATION_PLAN_04_GTK.md` §"Effect errors")
+                // lands in a follow-up commit alongside the
+                // `UnlockedBusy` worker infrastructure. Until then
+                // `AppModel` acknowledges receipt — the dialog stays
+                // mounted so the user sees their typed click landed.
             }
         }
     }
