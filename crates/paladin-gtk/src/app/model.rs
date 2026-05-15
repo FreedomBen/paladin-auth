@@ -32,8 +32,10 @@
 //! `Rename…` action is now reachable end-to-end (kebab activation →
 //! `AccountListOutput` → `AppMsg` → live dialog widget). The
 //! editable entry / submit-button / `Vault::mutate_and_save` worker
-//! land in subsequent commits. `OpenRemoveDialog(id)` still buffers
-//! in `pending_row_action` pending its widget mount.
+//! land in subsequent commits. `OpenRemoveDialog(id)` mirrors the
+//! same shape: it mounts a [`RemoveDialogComponent`] seeded from
+//! [`crate::remove_dialog::decide_remove_target`]; the destructive
+//! confirmation chrome / Remove worker land in follow-up commits.
 //!
 //! Under the hidden `--exit-after-startup` flag, the model prints
 //! [`startup_state_marker`] to stdout and enqueues [`AppMsg::Quit`]
@@ -55,6 +57,7 @@ use crate::app::state::{
     decide_state_from_inspect, decide_state_from_open_error, AppState, OpenErrorOutcome,
 };
 use crate::init_dialog::{format_init_dialog_marker, InitDialogComponent, InitDialogInit};
+use crate::remove_dialog::{decide_remove_target, RemoveDialogComponent};
 use crate::rename_dialog::{decide_rename_target, RenameDialogComponent};
 use crate::startup_error::{
     format_startup_error_marker, StartupError, StartupErrorComponent, StartupErrorInit,
@@ -143,31 +146,25 @@ pub struct AppModel {
     /// activations. Held on `self` so the rendered widget is not
     /// dropped at the end of the [`AppMsg::AccountListAction`]
     /// handler.
-    ///
-    /// `OpenRemoveDialog` still buffers in [`Self::pending_row_action`]
-    /// pending the `RemoveDialogComponent` mount in a follow-up
-    /// commit.
     #[allow(dead_code)]
     rename_dialog: Option<Controller<RenameDialogComponent>>,
+    /// Live [`RemoveDialogComponent`] controller when the user has
+    /// activated a row's kebab `Remove…` action. `None` between
+    /// activations. Held on `self` so the rendered widget is not
+    /// dropped at the end of the [`AppMsg::AccountListAction`]
+    /// handler.
+    #[allow(dead_code)]
+    remove_dialog: Option<Controller<RemoveDialogComponent>>,
     /// Reference-counted handle to the window's content box.
     ///
     /// `gtk::Box` is a `GObject`, so cloning it just bumps the
     /// reference count rather than duplicating the widget. The clone
     /// lets [`AppMsg::AccountListAction`] reach the content tree from
-    /// `update` so kebab-driven dialog mounts (currently just
-    /// `RenameDialogComponent`) can append themselves to the active
-    /// view.
+    /// `update` so kebab-driven dialog mounts
+    /// (`RenameDialogComponent` / `RemoveDialogComponent`) can append
+    /// themselves to the active view.
     #[allow(dead_code)]
     content: gtk::Box,
-    /// Buffered row-level intent for kebab actions that have not yet
-    /// grown a real dialog mount.
-    ///
-    /// Currently holds `OpenRemoveDialog(id)` activations between the
-    /// kebab dispatch and the follow-up commit that mounts
-    /// `RemoveDialogComponent`. `OpenRenameDialog(id)` is now handled
-    /// via [`Self::rename_dialog`].
-    #[allow(dead_code)]
-    pending_row_action: Option<AccountListOutput>,
 }
 
 impl std::fmt::Debug for AppModel {
@@ -196,8 +193,11 @@ impl std::fmt::Debug for AppModel {
                 "rename_dialog",
                 &self.rename_dialog.as_ref().map(|_| "<mounted>"),
             )
+            .field(
+                "remove_dialog",
+                &self.remove_dialog.as_ref().map(|_| "<mounted>"),
+            )
             .field("content", &"<gtk::Box>")
-            .field("pending_row_action", &self.pending_row_action)
             .finish()
     }
 }
@@ -216,12 +216,13 @@ pub enum AppMsg {
     /// `AppModel` is the owner of the dialog widget tree per
     /// `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree", so the
     /// per-row actions bubble the row's [`paladin_core::AccountId`]
-    /// up here for the dialog mount to consume. The
-    /// `RenameDialogComponent` / `RemoveDialogComponent` widgets are
-    /// not wired yet; today the handler stores the typed intent on
-    /// the model state without opening a dialog (see
-    /// [`AppModel::pending_row_action`]) so future commits can mount
-    /// the dialog widgets without re-plumbing the dispatch path.
+    /// up here for the dialog mount to consume.
+    /// `OpenRenameDialog(id)` and `OpenRemoveDialog(id)` each mount
+    /// their widget-bearing controller (`RenameDialogComponent` /
+    /// `RemoveDialogComponent`) seeded from the live vault via
+    /// [`decide_rename_target`] / [`decide_remove_target`]; the
+    /// editable / destructive chrome and the `Vault::mutate_and_save`
+    /// workers land in follow-up commits.
     AccountListAction(AccountListOutput),
 }
 
@@ -350,8 +351,8 @@ impl SimpleComponent for AppModel {
             init_dialog,
             unlock_dialog,
             rename_dialog: None,
+            remove_dialog: None,
             content: widgets.content.clone(),
-            pending_row_action: None,
         };
 
         if exit_after_startup {
@@ -378,11 +379,19 @@ impl SimpleComponent for AppModel {
                     }
                 }
             }
-            AppMsg::AccountListAction(out) => {
-                // `OpenRemoveDialog` still buffers here pending the
-                // `RemoveDialogComponent` mount in a follow-up
-                // commit; see [`AppModel::pending_row_action`].
-                self.pending_row_action = Some(out);
+            AppMsg::AccountListAction(AccountListOutput::OpenRemoveDialog(id)) => {
+                // Look up the targeted account in the live vault and
+                // mount the remove dialog. A `None` projection means
+                // the account was removed between the kebab
+                // activation and this dispatch — treat that as a
+                // benign race and drop the action.
+                if let Some((vault, _store)) = self.vault.as_ref() {
+                    if let Some(init) = decide_remove_target(vault, id) {
+                        let controller = RemoveDialogComponent::builder().launch(init).detach();
+                        self.content.append(controller.widget());
+                        self.remove_dialog = Some(controller);
+                    }
+                }
             }
         }
     }

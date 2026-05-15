@@ -47,7 +47,11 @@
 //!   [`RemoveErrorOutcome::InlineError`] without transitioning the
 //!   dialog out.
 
-use paladin_core::{AccountSummary, ErrorKind, PaladinError};
+use libadwaita as adw;
+use libadwaita::prelude::*;
+use relm4::prelude::*;
+
+use paladin_core::{AccountId, AccountSummary, ErrorKind, PaladinError, Vault};
 
 /// Render the dialog's confirmation body label.
 ///
@@ -172,5 +176,143 @@ impl InlineWarning {
             kind: err.kind(),
             rendered: err.to_string(),
         }
+    }
+}
+
+/// Stdout marker prefix emitted under `--exit-after-startup` once the
+/// [`RemoveDialogComponent`] has mounted in response to a kebab
+/// `Remove…` activation.
+///
+/// The smoke test in `tests/gtk_smoke.rs` greps for this prefix to
+/// prove the widget actually mounted rather than inferring the render
+/// from the kebab dispatch alone (which fires before the dialog
+/// widget exists).
+pub const REMOVE_DIALOG_MARKER_PREFIX: &str = "paladin-gtk: remove_dialog_account=";
+
+/// Format the smoke-test stdout marker line for a mounted
+/// [`RemoveDialogComponent`].
+///
+/// The marker is `paladin-gtk: remove_dialog_account=<id> label=<display>`
+/// where `<id>` is the [`AccountId`] the dialog targets and
+/// `<display>` is the row's pre-formatted `<issuer>:<label>` heading.
+#[must_use]
+pub fn format_remove_dialog_marker(account_id: AccountId, display_label: &str) -> String {
+    format!("{REMOVE_DIALOG_MARKER_PREFIX}{account_id} label={display_label}")
+}
+
+/// Construction parameters for [`RemoveDialogComponent`].
+///
+/// `AppModel` builds this from the live vault when a kebab
+/// `AccountListOutput::OpenRemoveDialog(id)` arrives — see
+/// [`decide_remove_target`].
+#[derive(Debug, Clone)]
+pub struct RemoveDialogInit {
+    /// Stable account identifier. The widget passes this to
+    /// `Vault::remove` inside `Vault::mutate_and_save` on confirm so
+    /// the worker targets the same account the kebab dispatched.
+    pub account_id: AccountId,
+    /// Pre-formatted `<issuer>:<label>` heading mirroring
+    /// `account_row::display_label` (and identical to
+    /// [`summary_display_label`]). Used as the dialog body so the
+    /// user can confirm which row they are removing. Empty issuer
+    /// collapses to the bare label (parity with the row projection).
+    pub display_label: String,
+}
+
+/// Look up an [`AccountSummary`] by id and project it into the
+/// [`RemoveDialogInit`] the widget binds.
+///
+/// Returns `None` if no account with the given id exists in `vault`
+/// — the caller (`AppModel`) treats that as a benign race (the
+/// account was removed between the kebab activation and the
+/// dispatch) and does not mount the dialog.
+///
+/// The display label uses [`summary_display_label`] so the dialog
+/// body and the row's heading never drift.
+#[must_use]
+pub fn decide_remove_target(vault: &Vault, id: AccountId) -> Option<RemoveDialogInit> {
+    vault
+        .summaries()
+        .find(|summary| summary.id == id)
+        .map(|summary| RemoveDialogInit {
+            account_id: summary.id,
+            display_label: summary_display_label(&summary),
+        })
+}
+
+/// Messages handled by [`RemoveDialogComponent`].
+///
+/// This milestone scaffolds the read-only render path — the
+/// `confirm` / `cancel` transitions and the
+/// `Vault::mutate_and_save(|v| v.remove(...))` worker described in
+/// §"Component tree" > `RemoveDialog` and §"Effect errors" land in
+/// follow-up commits alongside the `UnlockedBusy` worker
+/// infrastructure. The empty enum is the deliberate starting point
+/// — relm4 requires the associated `Input` type to exist even when
+/// no inbound messages are wired yet.
+#[derive(Debug)]
+pub enum RemoveDialogMsg {}
+
+/// Widget-bearing dialog for the
+/// [`crate::account_list::AccountListOutput::OpenRemoveDialog`]
+/// branch.
+///
+/// Mounts a libadwaita [`adw::StatusPage`] that surfaces the
+/// targeted account's `<issuer>:<label>` heading so the user can
+/// confirm which row will be removed. Subsequent commits replace the
+/// placeholder body with the destructive `AdwAlertDialog` chrome,
+/// Cancel / Remove buttons, and the `Vault::mutate_and_save` worker;
+/// until then, keeping the widget read-only mirrors the
+/// [`crate::rename_dialog::RenameDialogComponent`] staging pattern
+/// (every dialog branch landed as a status page first and grew
+/// inbound actions later).
+pub struct RemoveDialogComponent {
+    /// Construction parameters retained on `self` so a future
+    /// message handler can read the targeted account id and the
+    /// confirmation body without re-plumbing the values through every
+    /// signal.
+    #[allow(dead_code)]
+    init: RemoveDialogInit,
+}
+
+#[allow(missing_docs)]
+#[relm4::component(pub)]
+impl SimpleComponent for RemoveDialogComponent {
+    type Init = RemoveDialogInit;
+    type Input = RemoveDialogMsg;
+    type Output = ();
+
+    view! {
+        #[root]
+        adw::StatusPage {
+            // `user-trash-symbolic` is the freedesktop-standard glyph
+            // for destructive removal; resolves through the system
+            // icon theme so the wordless icon matches the platform's
+            // other delete surfaces.
+            set_icon_name: Some("user-trash-symbolic"),
+            set_title: "Remove account",
+            set_description: Some(&format!(
+                "Removing {display}.",
+                display = model.init.display_label,
+            )),
+            set_hexpand: true,
+            set_vexpand: true,
+        }
+    }
+
+    fn init(
+        init: Self::Init,
+        root: Self::Root,
+        _sender: ComponentSender<Self>,
+    ) -> ComponentParts<Self> {
+        let model = RemoveDialogComponent { init };
+        let widgets = view_output!();
+        ComponentParts { model, widgets }
+    }
+
+    fn update(&mut self, _msg: Self::Input, _sender: ComponentSender<Self>) {
+        // No inbound messages handled at this milestone — see
+        // `RemoveDialogMsg` doc comment for the upcoming confirm /
+        // cancel / worker actions.
     }
 }
