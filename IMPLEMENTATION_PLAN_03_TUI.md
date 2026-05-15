@@ -2400,7 +2400,25 @@ Export error states:
   `tests/snapshots/view_snapshots__snapshot_export_modal_zero_length.snap`
   so any future wording change in core's `invalid_passphrase` /
   `zero_length` surfaces here as a diff.)*
-- [ ] Export modal plaintext-export warning.
+- [x] Export modal plaintext-export warning.
+  *(`snapshot_export_modal_plaintext_export_warning` in
+  `crates/paladin-tui/tests/view_snapshots.rs` constructs an
+  `ExportModal` with `format: ExportFormat::Plaintext` and
+  `error: Some(format_plaintext_export_warning())` — binding the
+  snapshot to the core helper rather than a hand-typed string — and
+  renders through `view::render` at 80×20. The warning surfaces via
+  the same `render_inline_error` branch the refused-overwrite,
+  `confirmation_mismatch`, and `zero_length` snapshots exercise; the
+  format selector reads `Plaintext` so the snapshot reads as a
+  plaintext-path delta from the `snapshot_export_modal_default`
+  baseline. `view/export.rs::render_inline_error` paints a single
+  line per `Paragraph::new(Line::from(...))` (no `Wrap`), so the
+  snapshot also pins the truncation behavior — a regression that
+  ever swaps the slot for a multi-line `Wrap` widget surfaces here
+  as a diff. Locked in
+  `tests/snapshots/view_snapshots__snapshot_export_modal_plaintext_export_warning.snap`
+  so any future wording change in core's
+  `format_plaintext_export_warning` surfaces here as a diff.)*
 - [ ] Export modal `io_error` writer failure.
 - [ ] Export modal `save_not_committed`.
 - [ ] Export modal `save_durability_unconfirmed`.

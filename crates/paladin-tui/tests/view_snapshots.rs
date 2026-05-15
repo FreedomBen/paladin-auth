@@ -26,9 +26,10 @@ use ratatui::buffer::Buffer;
 use ratatui::Terminal;
 
 use paladin_core::{
-    format_unsafe_permissions, format_validation_warning, hotp_reveal_deadline, validate_manual,
-    AccountInput, AccountKindInput, Algorithm, IconHintInput, PaladinError, PermissionSubject,
-    Store, ValidationWarning, Vault, VaultInit, VaultLock,
+    format_plaintext_export_warning, format_unsafe_permissions, format_validation_warning,
+    hotp_reveal_deadline, validate_manual, AccountInput, AccountKindInput, Algorithm,
+    IconHintInput, PaladinError, PermissionSubject, Store, ValidationWarning, Vault, VaultInit,
+    VaultLock,
 };
 use paladin_tui::app::state::{
     render_error_message, AddModal, AppState, CountsPanel, ExportFormat, ExportModal, Focus,
@@ -1688,6 +1689,76 @@ fn snapshot_export_modal_zero_length() {
     assert!(
         rendered.contains(&expected),
         "expected inline zero_length wording {expected:?} to appear in modal:\n{rendered}"
+    );
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn snapshot_export_modal_plaintext_export_warning() {
+    // Plan L2389: "Export modal plaintext-export warning." Drive
+    // `view::render` against an `Unlocked` state with
+    // `Modal::Export(ExportModal { format: ExportFormat::Plaintext,
+    // error: Some(format_plaintext_export_warning()),
+    // plaintext_confirmed: false, .. })` open so the snapshot pins the
+    // inline-error row populated from the plaintext unencrypted-secrets
+    // acknowledgement gate per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals
+    // (per §6) > Export": *"Plaintext exports render
+    // `paladin_core::format_plaintext_export_warning()` verbatim and
+    // the user must confirm before the write proceeds."*. Routing the
+    // wording through `paladin_core::format_plaintext_export_warning`
+    // binds the snapshot to the core helper rather than a hand-typed
+    // string so wording stays in lockstep with the CLI's stderr
+    // advisory (`paladin-cli/src/commands/export.rs`, DESIGN.md §4.6 /
+    // §6) and the GTK `ExportDialog`'s `plaintext_warning_body()`
+    // checkbox label — any future wording change in core surfaces here
+    // as a diff.
+    //
+    // The format selector reads `Plaintext` so the snapshot reads as a
+    // plaintext-path delta from the `snapshot_export_modal_default`
+    // baseline — the warning appears inside the spacer area between
+    // the segmented `Format:` selector row and the footer hint via the
+    // same `render_inline_error` branch the refused-overwrite,
+    // `confirmation_mismatch`, and `zero_length` snapshots exercise.
+    // The renderer paints a single line per `view/export.rs`'s
+    // `render_inline_error` (no `Wrap`), so the snapshot also pins the
+    // truncation behavior — a regression that ever swaps the slot for
+    // a multi-line `Wrap` widget surfaces here as a diff.
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let modal = ExportModal {
+        format: ExportFormat::Plaintext,
+        error: Some(format_plaintext_export_warning()),
+        ..ExportModal::default()
+    };
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Export(modal)),
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let rendered = render_to_text(&state, snapshot_now(), 80, 20);
+    // Regression guard: a renderer that ever stops surfacing the
+    // plaintext-export warning must fail this test even before the
+    // human reads the snapshot diff. Bind the assertion to the leading
+    // `WARNING: Plaintext export` substring (the full ~270-char
+    // warning exceeds the inline-error slot's width and is truncated
+    // by `Paragraph::new(Line::from(...))` per `view/export.rs`).
+    assert!(
+        rendered.contains("WARNING: Plaintext export"),
+        "expected plaintext-export warning prefix to appear in modal:\n{rendered}"
     );
     insta::assert_snapshot!(rendered);
 }
