@@ -36,8 +36,15 @@
 //! imported/skipped/replaced/appended/warning counts plus
 //! validation-warning messages rendered through
 //! `paladin_core::format_validation_warning()` in a post-success
-//! counts panel" contract. Warnings rendering lands alongside its own
-//! checklist row below.
+//! counts panel" contract. The reducer pre-renders each
+//! [`paladin_core::ImportWarning`] through
+//! [`paladin_core::format_validation_warning`] so this renderer only
+//! has to lay out the already-formatted strings: each warning becomes
+//! one [`Line`] in a wrapped [`Paragraph`] painted into a dedicated
+//! row band between the count rows and the footer hint. The modal
+//! grows vertically to fit the wrapped warnings so long advisory
+//! text stays fully visible at the standard 80-column terminal width
+//! instead of being truncated at the right border.
 //!
 //! Encrypted-Paladin passphrase sub-phase rendering lands alongside
 //! its own reducer or effect slice.
@@ -46,7 +53,7 @@ use paladin_core::ImportConflict;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Padding, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, Padding, Paragraph, Wrap};
 use ratatui::Frame;
 
 use super::centered_rect;
@@ -56,6 +63,31 @@ use crate::app::state::{CountsPanel, ImportFormatSelector, ImportModal};
 /// enough for the widest field name (`On conflict:`) so the value
 /// column lines up across every row.
 const LABEL_COL_WIDTH: usize = 13;
+
+/// Outer modal width in cells. Pinned so the segmented `Format:`
+/// selector fits all five [`ImportFormatSelector`] variants without
+/// truncating the last segment under the `▶ … ◀` active-variant
+/// markers, and so the counts panel's `Enter or Esc to close` footer
+/// hint sits inside a wide enough rect to render centered.
+const MODAL_WIDTH: u16 = 72;
+
+/// Inner content width inside the modal block.
+/// `MODAL_WIDTH - 2 borders - 2 horizontal padding (Padding::symmetric(1, 0))`.
+/// Used to predict the wrapped row count of the counts panel's
+/// warnings paragraph before allocating the modal rect.
+const MODAL_INNER_WIDTH: u16 = MODAL_WIDTH - 4;
+
+/// Base modal height when no counts panel is open and when the
+/// counts panel carries no validation warnings. Holds the
+/// `header(1) + blank(1) + 4 count rows + Min(0) spacer + hint(1)`
+/// inner layout plus the top/bottom border rows.
+const MODAL_BASE_HEIGHT: u16 = 12;
+
+/// Inner rows used by the counts panel's fixed regions
+/// (`header(1) + blank(1) + 4 count rows + hint(1)`).
+/// Anything beyond this — the blank separator and the wrapped
+/// warnings band — is what grows the modal vertically.
+const COUNTS_FIXED_ROWS: u16 = 7;
 
 /// Render the Import modal onto `frame`, on top of whatever the
 /// caller already painted underneath.
@@ -70,7 +102,8 @@ const LABEL_COL_WIDTH: usize = 13;
 /// `Paladin` / `QR`) without truncating the last segment under the
 /// `▶ … ◀` active-variant markers.
 pub fn render(frame: &mut Frame<'_>, modal: &ImportModal) {
-    let modal_area = centered_rect(frame.area(), 72, 12);
+    let modal_height = modal_height_for(modal);
+    let modal_area = centered_rect(frame.area(), MODAL_WIDTH, modal_height);
     frame.render_widget(Clear, modal_area);
 
     let block = Block::default()
@@ -132,27 +165,49 @@ pub fn render(frame: &mut Frame<'_>, modal: &ImportModal) {
 /// `Enter or Esc to close` so the user sees that the modal is now
 /// in summary mode rather than the editable path-entry phase.
 ///
-/// The warnings list is paid out in the spacer between the count
-/// rows and the footer hint, one rendered string per row. The Add
-/// modal's QR-import counts panel reuses the same layout — sharing
-/// the `Imported:` / `Skipped:` / `Replaced:` / `Appended:` label
-/// column with the import counts panel so the two surfaces read
-/// identically.
+/// Each carried [`CountsPanel::warnings`] string was already rendered
+/// through [`paladin_core::format_validation_warning`] by the reducer,
+/// so the renderer only needs to lay the strings out. They are stacked
+/// in a dedicated row band between the count rows and the footer hint:
+/// one [`Line`] per warning, joined into a single wrapped
+/// [`Paragraph`] (`Wrap { trim: false }`) so long advisory text stays
+/// fully visible at the standard 80-column terminal width instead of
+/// being truncated at the right border. A blank separator row sits
+/// above the warnings band so the count rows and the warnings region
+/// read as two distinct sections of the same panel. The Add modal's
+/// QR-import counts panel reuses the same layout — sharing the
+/// `Imported:` / `Skipped:` / `Replaced:` / `Appended:` label column
+/// with the import counts panel so the two surfaces read identically.
 fn render_counts_panel(frame: &mut Frame<'_>, inner: Rect, panel: &CountsPanel) {
+    let warnings_rows = u16::try_from(total_wrapped_rows(
+        &panel.warnings,
+        usize::from(inner.width),
+    ))
+    .unwrap_or(u16::MAX);
+
     // Top-to-bottom: header, blank, imported, skipped, replaced,
-    // appended, spacer (warnings land here once rendering for them
-    // ships), hint.
-    let chunks = Layout::vertical([
+    // appended; if warnings exist, blank separator + warnings band;
+    // Min(0) absorbs any leftover; hint.
+    let mut constraints: Vec<Constraint> = vec![
         Constraint::Length(1), // header
         Constraint::Length(1), // blank
         Constraint::Length(1), // imported
         Constraint::Length(1), // skipped
         Constraint::Length(1), // replaced
         Constraint::Length(1), // appended
-        Constraint::Min(0),    // spacer / warnings
-        Constraint::Length(1), // hint
-    ])
-    .split(inner);
+    ];
+    let warnings_slot = if warnings_rows > 0 {
+        constraints.push(Constraint::Length(1)); // blank separator
+        constraints.push(Constraint::Length(warnings_rows));
+        Some(constraints.len() - 1)
+    } else {
+        None
+    };
+    constraints.push(Constraint::Min(0)); // leftover spacer
+    constraints.push(Constraint::Length(1)); // hint
+    let hint_idx = constraints.len() - 1;
+
+    let chunks = Layout::vertical(constraints).split(inner);
 
     frame.render_widget(Paragraph::new("Import complete."), chunks[0]);
     frame.render_widget(
@@ -172,8 +227,90 @@ fn render_counts_panel(frame: &mut Frame<'_>, inner: Rect, panel: &CountsPanel) 
         chunks[5],
     );
 
+    if let Some(idx) = warnings_slot {
+        let lines: Vec<Line<'_>> = panel
+            .warnings
+            .iter()
+            .map(|s| Line::from(s.clone()))
+            .collect();
+        frame.render_widget(
+            Paragraph::new(lines).wrap(Wrap { trim: false }),
+            chunks[idx],
+        );
+    }
+
     let hint = "Enter or Esc to close";
-    frame.render_widget(Paragraph::new(hint).alignment(Alignment::Center), chunks[7]);
+    frame.render_widget(
+        Paragraph::new(hint).alignment(Alignment::Center),
+        chunks[hint_idx],
+    );
+}
+
+/// Compute the rendered modal height so the warnings band fits
+/// fully on screen when the counts panel is open. Returns
+/// [`MODAL_BASE_HEIGHT`] for the no-counts-panel and the
+/// counts-panel-with-no-warnings cases — both of which already fit
+/// inside the base layout's 3-row `Min(0)` spacer — so existing
+/// snapshots stay locked at 12 cells tall.
+fn modal_height_for(modal: &ImportModal) -> u16 {
+    let Some(panel) = &modal.counts_panel else {
+        return MODAL_BASE_HEIGHT;
+    };
+    let wrap_rows = u16::try_from(total_wrapped_rows(
+        &panel.warnings,
+        usize::from(MODAL_INNER_WIDTH),
+    ))
+    .unwrap_or(u16::MAX);
+    if wrap_rows == 0 {
+        return MODAL_BASE_HEIGHT;
+    }
+    // Inner rows needed = COUNTS_FIXED_ROWS + 1 blank separator + wrap_rows.
+    // Modal height = inner rows + 2 borders.
+    let inner = COUNTS_FIXED_ROWS
+        .saturating_add(1)
+        .saturating_add(wrap_rows);
+    inner.saturating_add(2).max(MODAL_BASE_HEIGHT)
+}
+
+/// Total wrapped-row count across all warnings for a given inner
+/// width. Each warning gets its own [`Line`] in the rendered
+/// [`Paragraph`], so the per-warning row counts sum to the band's
+/// row count. The algorithm mirrors ratatui's word wrapper for the
+/// ASCII output of [`paladin_core::format_validation_warning`]: words
+/// are separated by single spaces and broken at the last whitespace
+/// boundary that still fits the line.
+fn total_wrapped_rows(warnings: &[String], width: usize) -> usize {
+    warnings.iter().map(|s| wrapped_row_count(s, width)).sum()
+}
+
+/// How many rendered rows a single warning takes at the given width.
+/// Returns `1` for an empty string (an empty `Line` still occupies
+/// one display row), `0` if `width == 0`. Greedy word wrap on ASCII
+/// whitespace boundaries; matches ratatui's
+/// [`Wrap { trim: false }`](Wrap) behavior for the ASCII strings
+/// emitted by [`paladin_core::format_validation_warning`].
+fn wrapped_row_count(text: &str, width: usize) -> usize {
+    if width == 0 {
+        return 0;
+    }
+    if text.is_empty() {
+        return 1;
+    }
+    let mut rows = 1usize;
+    let mut col = 0usize;
+    let mut first_word = true;
+    for word in text.split(' ') {
+        let word_len = word.chars().count();
+        let needed = if first_word { word_len } else { 1 + word_len };
+        if col + needed <= width {
+            col += needed;
+        } else {
+            rows += 1;
+            col = word_len;
+        }
+        first_word = false;
+    }
+    rows
 }
 
 /// Build a single labeled count row (`"Imported:       3"`). The

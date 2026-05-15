@@ -2318,9 +2318,42 @@ Import error and counts states:
   silent under identical values, and guards the rendered grid with
   per-row substring assertions before the snapshot lands. Locked in
   `tests/snapshots/view_snapshots__snapshot_import_modal_counts_panel.snap`.
-  Validation-warning rendering inside the panel's spacer lands
-  alongside its own checklist row below.)*
-- [ ] Import counts panel with validation-warning messages.
+  Validation-warning rendering inside the panel landed in the
+  follow-up checklist row below.)*
+- [x] Import counts panel with validation-warning messages.
+  *(`crates/paladin-tui/src/view/import.rs::render_counts_panel`
+  now lays out the carried `CountsPanel::warnings` strings — each
+  one already pre-rendered by the reducer through
+  `paladin_core::format_validation_warning()` (see
+  `reduce_import_result`'s `Ok` arm at
+  `crates/paladin-tui/src/app/reducer.rs:917`) — as one `Line`
+  apiece inside a single `Paragraph` wrapped with
+  `Wrap { trim: false }`, painted into a dedicated row band sitting
+  between the four count rows and the footer hint. A blank separator
+  row sits above the warnings band so the count rows and the
+  warnings region read as two distinct sections of the same panel.
+  When the carried warnings are non-empty the modal grows vertically
+  so the wrapped warning rows stay fully visible at the standard
+  80-column terminal width instead of being truncated at the right
+  border; pre-flighting the wrapped row count via the new
+  `wrapped_row_count` helper (greedy ASCII word wrap matching
+  ratatui's `Wrap { trim: false }` behavior on the
+  `format_validation_warning` output) keeps the modal-rect
+  computation in `modal_height_for` aligned with the layout work in
+  `render_counts_panel`. The no-warnings branches — both the
+  no-counts-panel case and `CountsPanel { warnings: [], .. }` —
+  short-circuit back to the pinned `MODAL_BASE_HEIGHT = 12`, so the
+  `snapshot_import_modal_default` and
+  `snapshot_import_modal_counts_panel` baselines stay locked.
+  `snapshot_import_modal_counts_panel_with_validation_warnings` in
+  `crates/paladin-tui/tests/view_snapshots.rs` constructs two
+  `ValidationWarning::ShortSecret` warnings with distinct
+  `decoded_len` values (5, 1) — routed through
+  `paladin_core::format_validation_warning` so the snapshot binds to
+  the core wording rather than a hand-typed string — and asserts
+  that both warning texts plus the `Imported: 2` row remain visible
+  before the snapshot lands. Locked in
+  `tests/snapshots/view_snapshots__snapshot_import_modal_counts_panel_with_validation_warnings.snap`.)*
 
 Export error states:
 

@@ -26,9 +26,9 @@ use ratatui::buffer::Buffer;
 use ratatui::Terminal;
 
 use paladin_core::{
-    format_unsafe_permissions, hotp_reveal_deadline, validate_manual, AccountInput,
-    AccountKindInput, Algorithm, IconHintInput, PaladinError, PermissionSubject, Store, Vault,
-    VaultInit, VaultLock,
+    format_unsafe_permissions, format_validation_warning, hotp_reveal_deadline, validate_manual,
+    AccountInput, AccountKindInput, Algorithm, IconHintInput, PaladinError, PermissionSubject,
+    Store, ValidationWarning, Vault, VaultInit, VaultLock,
 };
 use paladin_tui::app::state::{
     render_error_message, AddModal, AppState, CountsPanel, ExportModal, Focus, HotpReveal,
@@ -1330,6 +1330,88 @@ fn snapshot_import_modal_counts_panel() {
     assert!(
         rendered.contains("Appended:") && rendered.contains('4'),
         "expected 'Appended:' row with count 4 to appear in counts panel:\n{rendered}"
+    );
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn snapshot_import_modal_counts_panel_with_validation_warnings() {
+    // Plan L2323: "Import counts panel with validation-warning messages."
+    // Drive `view::render` against an `Unlocked` state holding
+    // `Modal::Import(ImportModal { counts_panel: Some(CountsPanel {
+    // ..., warnings: vec![...] }), .. })` so the snapshot pins the
+    // post-success counts panel rendering each
+    // `paladin_core::ImportWarning` through
+    // `paladin_core::format_validation_warning()` per `DESIGN.md` §6's
+    // "The modal reports imported/skipped/replaced/appended/warning
+    // counts plus validation-warning messages rendered through
+    // `paladin_core::format_validation_warning()` in a post-success
+    // counts panel" contract. The reducer's `reduce_import_result` Ok
+    // arm seeds `CountsPanel::warnings` from
+    // `ImportReport::warnings.iter().map(format_validation_warning)`,
+    // so the warnings strings flow through the same helper here —
+    // binding the snapshot to the core wording rather than a
+    // hand-typed string keeps the rendered text in sync with the core
+    // library if the warning phrasing is ever revised.
+    //
+    // Two warnings with distinct `decoded_len` values (5, 1) so a
+    // regression that ever swaps two warnings or collapses them onto
+    // a single line surfaces as a diff rather than staying silent
+    // under identical values. The remaining counts (`imported: 2`) are
+    // distinct from the no-warnings snapshot so the two snapshots read
+    // as deltas of the same panel and a future renderer change that
+    // hides the counts in the presence of warnings is caught.
+    let warning_short = format_validation_warning(&ValidationWarning::ShortSecret {
+        decoded_len: 5,
+        recommended_min: 16,
+    });
+    let warning_shortest = format_validation_warning(&ValidationWarning::ShortSecret {
+        decoded_len: 1,
+        recommended_min: 16,
+    });
+
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Import(ImportModal {
+            counts_panel: Some(CountsPanel {
+                imported: 2,
+                skipped: 0,
+                replaced: 0,
+                appended: 0,
+                warnings: vec![warning_short.clone(), warning_shortest.clone()],
+            }),
+            ..ImportModal::default()
+        })),
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let rendered = render_to_text(&state, snapshot_now(), 80, 22);
+    assert!(
+        rendered.contains("decoded length 5 bytes"),
+        "expected first warning's decoded_len text in counts panel:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("decoded length 1 bytes"),
+        "expected second warning's decoded_len text in counts panel:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("Imported:") && rendered.contains('2'),
+        "expected 'Imported:' row with count 2 to remain visible above warnings:\n{rendered}"
     );
     insta::assert_snapshot!(rendered);
 }

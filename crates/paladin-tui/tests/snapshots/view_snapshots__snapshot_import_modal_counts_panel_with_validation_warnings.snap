@@ -1,0 +1,26 @@
+---
+source: crates/paladin-tui/tests/view_snapshots.rs
+expression: rendered
+---
+┌ Paladin ─────────────────────────────────────────────────────────────────────┐
+│ Search:                                                                      │
+│ ──────────────────────────────────────────────────────────────────────────── │
+│                                                                              │
+│   ┌ Import accounts ─────────────────────────────────────────────────────┐   │
+│   │ Import complete.                                                     │   │
+│   │                                                                      │   │
+│   │ Imported:    2                                                       │   │
+│   │ Skipped:     0                                                       │   │
+│   │ Replaced:    0                                                       │   │
+│   │ Appended:    0                                                       │   │
+│   │                                                                      │   │
+│   │ secret is shorter than recommended (decoded length 5 bytes;          │   │
+│   │ recommended minimum 16 bytes)                                        │   │
+│   │ secret is shorter than recommended (decoded length 1 bytes;          │   │
+│   │ recommended minimum 16 bytes)                                        │   │
+│   │                         Enter or Esc to close                        │   │
+│   └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│ ──────────────────────────────────────────────────────────────────────────── │
+│ [↑↓] move  [enter] copy  [n] next-HOTP  [a] add  [/] find                    │
+└──────────────────────────────────────────────────────────────────────────────┘
