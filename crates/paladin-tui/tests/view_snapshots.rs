@@ -992,6 +992,101 @@ fn snapshot_add_modal_qr_invalid_qr_payload() {
 }
 
 #[test]
+fn snapshot_add_modal_qr_counts_panel() {
+    // Plan L2616: "Add modal post-QR-import counts panel." Drive
+    // `view::render` against an `Unlocked` state holding
+    // `Modal::Add(AddModal { mode: AddMode::Qr, counts_panel:
+    // Some(CountsPanel { imported, skipped, replaced: 0, appended: 0,
+    // warnings: vec![] }), .. })` so the snapshot pins the post-success
+    // summary panel — the four `ImportReport` merge totals the reducer
+    // seeds from `paladin_core::ImportReport` per `DESIGN.md` §6's
+    // "The modal reports imported/skipped/replaced/appended/warning
+    // counts plus validation-warning messages rendered through
+    // `paladin_core::format_validation_warning()` in a post-success
+    // counts panel" contract and the `IMPLEMENTATION_PLAN_03_TUI.md`
+    // "Modals (per §6) > Add" checklist row: *"Clipboard QR import
+    // uses `ImportConflict::Skip` and reports imported / skipped
+    // counts."*
+    //
+    // Per `AddModal::counts_panel` and the [`CountsPanel`] doc, the
+    // clipboard-QR flow always runs with [`ImportConflict::Skip`], so
+    // `replaced` and `appended` are always `0` on this path; only
+    // `imported` and `skipped` carry meaningful counts. The snapshot
+    // still pins all four rows so the layout matches the Import modal's
+    // counts panel — which means a regression that ever hides the
+    // always-zero rows for the QR-add path (or paints a different
+    // label) surfaces as a diff. The `warnings` slot is empty here; the
+    // warnings-included variant lands in its own snapshot per the
+    // plan's "QR-add counts panel with validation-warning messages"
+    // checklist row at L2619.
+    //
+    // The carried counts (imported: 2, skipped: 1) are distinct from
+    // the Import modal's no-warnings (3 / 1 / 2 / 4) and warnings
+    // (2 / 0 / 0 / 0) snapshots so the three counts-panel snapshots
+    // read as deltas across the three flows; a regression that ever
+    // swaps two counts surfaces as a diff rather than staying silent
+    // under identical values.
+    //
+    // Background vault is empty so the underlying list view paints
+    // its `(no accounts yet)` empty-state row through the modal's
+    // clipped border, mirroring the other Add modal snapshots.
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let modal = AddModal {
+        mode: AddMode::Qr,
+        counts_panel: Some(CountsPanel {
+            imported: 2,
+            skipped: 1,
+            replaced: 0,
+            appended: 0,
+            warnings: Vec::new(),
+        }),
+        ..AddModal::default()
+    };
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Add(modal)),
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let rendered = render_to_text(&state, snapshot_now(), 80, 20);
+    assert!(
+        rendered.contains("Imported:") && rendered.contains('2'),
+        "expected 'Imported:' row with count 2 to appear in counts panel:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("Skipped:") && rendered.contains('1'),
+        "expected 'Skipped:' row with count 1 to appear in counts panel:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("Replaced:") && rendered.contains('0'),
+        "expected 'Replaced:' row with count 0 to appear in counts panel:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("Appended:"),
+        "expected 'Appended:' row to appear in counts panel:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("Enter or Esc to close"),
+        "expected post-success hint to appear in counts panel:\n{rendered}"
+    );
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn snapshot_remove_modal_default() {
     // Plan L1856: "Remove modal." Drive `view::render` against an
     // `Unlocked` state with one TOTP account and

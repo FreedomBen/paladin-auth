@@ -2658,7 +2658,47 @@ Add (QR) error and counts states:
   `Display`, in the `non_otpauth_payload` reason code emitted by
   `payloads_to_accounts`, or in `format_qr_import_failure`'s
   `Import` arm surfaces here as a diff.)*
-- [ ] Add modal post-QR-import counts panel.
+- [x] Add modal post-QR-import counts panel.
+  *(`snapshot_add_modal_qr_counts_panel` in
+  `crates/paladin-tui/tests/view_snapshots.rs` constructs an
+  `AddModal` with `mode: AddMode::Qr, counts_panel: Some(CountsPanel
+  { imported: 2, skipped: 1, replaced: 0, appended: 0, warnings: vec![] })`
+  so the snapshot pins the post-success summary panel — the four
+  `ImportReport` merge totals
+  (`imported`/`skipped`/`replaced`/`appended`) the reducer seeds
+  from `paladin_core::ImportReport` per `DESIGN.md` §6's "The modal
+  reports imported/skipped/replaced/appended/warning counts plus
+  validation-warning messages rendered through
+  `paladin_core::format_validation_warning()` in a post-success
+  counts panel" contract and the `IMPLEMENTATION_PLAN_03_TUI.md`
+  "Modals (per §6) > Add" checklist row: *"Clipboard QR import uses
+  `ImportConflict::Skip` and reports imported / skipped counts."*
+  Implements the rendering in `crates/paladin-tui/src/view/add.rs`'s
+  new `render_counts_panel` / `modal_height_for` helpers, which
+  mirror the matching helpers in `view/import.rs` so the QR-add and
+  file-import counts panels paint identical labels
+  (`Imported:` / `Skipped:` / `Replaced:` / `Appended:`) at the same
+  13-cell column (`COUNTS_LABEL_COL_WIDTH`) and share the
+  `Enter or Esc to close` post-success hint — a regression that ever
+  drifts the two columns surfaces as a diff across the matched
+  snapshot pair. Per `AddModal::counts_panel`, the clipboard-QR flow
+  always runs with `ImportConflict::Skip`, so `replaced` and
+  `appended` are always `0` on this path; the rows still render so
+  the surface reads identically to the Import modal's counts panel,
+  and a regression that ever hides the always-zero rows for the
+  QR-add path (or paints a different label) surfaces as a diff. The
+  carried counts (`imported: 2, skipped: 1`) are distinct from the
+  Import modal's no-warnings (3 / 1 / 2 / 4) and warnings (2 / 0 /
+  0 / 0) snapshots so the three counts-panel snapshots read as
+  deltas across the three flows; a regression that ever swaps two
+  counts surfaces as a diff rather than staying silent under
+  identical values. The `warnings` slot is empty here; the
+  warnings-included variant lands in its own snapshot per the
+  plan's "QR-add counts panel with validation-warning messages"
+  checklist row below. Locked in
+  `tests/snapshots/view_snapshots__snapshot_add_modal_qr_counts_panel.snap`
+  so any future change to the counts panel labels, column width,
+  or post-success hint surfaces here as a diff.)*
 - [ ] Add modal `duplicate_account`.
 - [ ] Add modal "add anyway" confirmation.
 - [ ] QR-add counts panel with validation-warning messages.
