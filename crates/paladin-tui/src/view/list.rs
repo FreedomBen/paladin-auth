@@ -36,7 +36,12 @@
 //! matches everything" contract), keeping the no-search list view
 //! byte-for-byte identical to the pre-filter rendering.
 //!
-//! `zz`-recentered viewports land in subsequent slices.
+//! Viewport scrolling: `render_rows` skips the first
+//! `state.viewport_offset` rows of the (post-filter) insertion-order
+//! list before painting, so the `zz` recenter chord and the page /
+//! half-page bindings can shift the visible window without changing
+//! row layout. A `viewport_offset` of `0` (the default) keeps the
+//! window pinned to the top of the list.
 //!
 //! The renderer never mutates application state and never performs
 //! I/O — every value it reads comes from the supplied [`AppState`].
@@ -88,6 +93,7 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState, now: SystemTime) {
         search_query,
         selected,
         hotp_reveal,
+        viewport_offset,
         ..
     } = state
     else {
@@ -149,6 +155,7 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState, now: SystemTime) {
             &visible_ids,
             selected.as_ref(),
             hotp_reveal.as_ref(),
+            *viewport_offset,
             now,
         );
     }
@@ -159,9 +166,10 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState, now: SystemTime) {
     frame.render_widget(Paragraph::new(hint), chunks[4]);
 }
 
-/// Render one account row per visible vault entry into `area`. Rows
-/// past the bottom of `area` are clipped — viewport scrolling for
-/// long lists lands alongside the `Ctrl-F` / `Ctrl-B` slice.
+/// Render one account row per visible vault entry into `area`. The
+/// first `viewport_offset` post-filter rows are skipped so the `zz`
+/// recenter chord and page / half-page bindings can shift the
+/// visible window; rows past the bottom of `area` are clipped.
 ///
 /// `visible_ids` is the search-bar filter's matching set in vault
 /// insertion order (provided as a [`HashSet`] for O(1) membership
@@ -169,6 +177,10 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState, now: SystemTime) {
 /// rows still paint in insertion order rather than the filter's
 /// return order — relevant once the filter ever switches away from
 /// insertion-order preservation).
+// Private single-call helper that ferries the row-relevant slices
+// of `AppState::Unlocked` into the painting loop; the alternative
+// (one bag-of-state struct per renderer helper) buys nothing here.
+#[allow(clippy::too_many_arguments)]
 fn render_rows(
     frame: &mut Frame<'_>,
     area: Rect,
@@ -176,12 +188,14 @@ fn render_rows(
     visible_ids: &HashSet<AccountId>,
     selected: Option<&AccountId>,
     hotp_reveal: Option<&HotpReveal>,
+    viewport_offset: u16,
     now: SystemTime,
 ) {
     let capacity = area.height as usize;
     for (idx, account) in vault
         .iter()
         .filter(|account| visible_ids.contains(&account.id()))
+        .skip(viewport_offset as usize)
         .take(capacity)
         .enumerate()
     {

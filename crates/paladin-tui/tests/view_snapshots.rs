@@ -380,6 +380,73 @@ fn snapshot_list_view_search_active() {
 }
 
 #[test]
+fn snapshot_list_view_after_zz_recenter() {
+    // Plan L1806: "List view after a `zz` recenter (selected row in
+    // viewport middle)." Drive `view::list` against a vault holding
+    // twelve TOTP accounts (more than the 6-row rows pane in an
+    // 80x12 terminal) with the selected row deep enough into the
+    // list that a centered viewport requires a non-zero
+    // `viewport_offset` — pinning that the renderer honors
+    // `viewport_offset` to slice the visible window.
+    //
+    // `viewport_height = 6` matches the rows pane height with a
+    // terminal height of 12; the 9th account (`Acct09 (u09)`,
+    // insertion-order index 8) is selected; and `viewport_offset = 5`
+    // is the value `recenter_viewport` would compute from
+    // `sel_pos.saturating_sub(viewport_height / 2)` (`8 - 3 = 5`).
+    // The snapshot therefore pins:
+    //   * Only insertion-order indices `[5..=10]`
+    //     (`Acct06`..`Acct11`) appear in the rows pane —
+    //     `Acct01`..`Acct05` are scrolled past the top, `Acct12` is
+    //     scrolled past the bottom.
+    //   * The selected row (`Acct09`) lands at viewport row position
+    //     3 (the 4th of 6 visible rows) so the `▶` marker sits in
+    //     the middle of the viewport, matching vim's `zz` semantics.
+    //
+    // A regression that ever stops applying `viewport_offset` would
+    // shift the visible window back to indices `[0..=5]`, leaving
+    // the selected row off-screen and the marker absent — surfacing
+    // as a diff in this snapshot.
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (mut vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let mut ids = Vec::with_capacity(12);
+    for i in 1..=12u8 {
+        let issuer = format!("Acct{i:02}");
+        let label = format!("u{i:02}");
+        ids.push(push_totp_account(
+            &mut vault,
+            &store,
+            Some(issuer.as_str()),
+            &label,
+        ));
+    }
+    let selected_index: usize = 8;
+    let viewport_height: u16 = 6;
+    let viewport_offset: u16 =
+        u16::try_from(selected_index).expect("index fits u16") - viewport_height / 2;
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(ids[selected_index]),
+        pending_chord_leader: None,
+        viewport_height,
+        viewport_offset,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 12));
+}
+
+#[test]
 fn snapshot_startup_error_unsafe_permissions() {
     // Plan L1806: "Startup-error screen rendered with `unsafe_permissions`
     // (the `Some(text)` from `format_unsafe_permissions`)." Build the error

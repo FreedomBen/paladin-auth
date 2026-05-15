@@ -1803,8 +1803,22 @@ Layout / list views:
   painting the query into the search bar, stop honoring the
   filter, or paint the marker on a filtered-out row each surface
   as a diff.)*
-- [ ] List view after a `zz` recenter (selected row in viewport
-  middle).
+- [x] List view after a `zz` recenter (selected row in viewport
+  middle). *(`snapshot_list_view_after_zz_recenter` in
+  `crates/paladin-tui/tests/view_snapshots.rs` builds a vault with
+  twelve TOTP accounts (`Acct01 (u01)` .. `Acct12 (u12)`) so the
+  list overflows the 6-row rows pane in an 80×12 terminal. The state
+  is constructed with `selected = Acct09` (insertion-order index 8)
+  and `viewport_offset = 5` — the value `recenter_viewport` would
+  commit from `sel_pos.saturating_sub(viewport_height / 2)` for a
+  centered viewport on that row. The locked grid in
+  `tests/snapshots/view_snapshots__snapshot_list_view_after_zz_recenter.snap`
+  pins `Acct06`..`Acct11` in the rows pane with the `▶` marker
+  landing on `Acct09` (the 4th of 6 visible rows); the renderer's
+  `render_rows` was extended in the same slice to
+  `.skip(viewport_offset)` post-filter so a regression that ever
+  stops applying the offset shifts the window back to
+  `Acct01`..`Acct06` and drops the marker, surfacing as a diff.)*
 - [ ] `--no-color` variants of the list-view snapshots above.
 
 Modals and overlays:
