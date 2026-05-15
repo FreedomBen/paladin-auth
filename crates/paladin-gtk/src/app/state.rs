@@ -58,6 +58,7 @@ use std::path::{Path, PathBuf};
 use paladin_core::{PaladinError, VaultStatus};
 
 use crate::startup_error::{classify_open_error, OpenErrorRouting, StartupError};
+use crate::unlock_dialog::{route_unlock_open_error, InlineError, UnlockOpenRouting};
 
 /// `AppModel` lifecycle state.
 ///
@@ -308,5 +309,69 @@ pub fn decide_state_from_open_error(path: &Path, err: &PaladinError) -> OpenErro
             path: Some(path.to_path_buf()),
             error: startup,
         }),
+    }
+}
+
+/// Routing decision for a `paladin_core::open` failure reported by
+/// the future `gio::spawn_blocking` unlock worker fired by
+/// [`crate::unlock_dialog::UnlockDialogComponent`].
+///
+/// Pairs with [`OpenErrorOutcome`] (used by `run_startup_probes` on
+/// the plaintext-startup path) but carries the typed
+/// [`crate::unlock_dialog::InlineError`] projection so `AppModel`'s
+/// worker call site can dispatch
+/// [`crate::unlock_dialog::UnlockDialogMsg::OpenFailedInline`]
+/// directly without re-routing the typed `PaladinError` here.
+///
+/// [`crate::unlock_dialog::route_unlock_open_error`] returns a unit
+/// `Startup` variant because the resolved vault path is owned by
+/// `AppModel`; this completion helper attaches the path to build
+/// the full [`AppState::StartupError`] transition the caller can
+/// install verbatim.
+#[derive(Debug, Clone)]
+pub enum UnlockFailureAction {
+    /// Wrong / empty passphrase. Dispatch
+    /// [`crate::unlock_dialog::UnlockDialogMsg::OpenFailedInline`]
+    /// carrying the [`InlineError`] back to the live
+    /// [`crate::unlock_dialog::UnlockDialogComponent`] so the user
+    /// sees the inline error at the passphrase entry and re-types.
+    /// `AppState` stays at [`AppState::Locked`] — the dialog
+    /// surface itself remains mounted.
+    SendInlineToDialog(InlineError),
+    /// Non-passphrase open failure. Transition `AppModel` to the
+    /// non-mutating [`AppState::StartupError`] surface, dropping
+    /// the live [`crate::unlock_dialog::UnlockDialogComponent`].
+    /// Carries the populated state with the resolved path attached
+    /// and the error tagged
+    /// [`crate::startup_error::StartupErrorSource::Open`].
+    TransitionToStartup(AppState),
+}
+
+/// Complete the routing of an unlock-worker `paladin_core::open`
+/// failure by attaching the resolved vault path that `AppModel`
+/// owns.
+///
+/// Combines [`crate::unlock_dialog::route_unlock_open_error`] with
+/// the path so the worker call site stays a thin shell. Wrong-
+/// passphrase failures (`DecryptFailed`, `InvalidPassphrase`)
+/// return [`UnlockFailureAction::SendInlineToDialog`] carrying the
+/// typed [`InlineError`] projection that
+/// [`crate::unlock_dialog::route_unlock_open_error`] already built;
+/// every other failure (`UnsafePermissions`, `WrongVaultLock`,
+/// `InvalidHeader`, `InvalidPayload`, `UnsupportedFormatVersion`,
+/// `KdfParamsOutOfBounds`, `IoError`) returns
+/// [`UnlockFailureAction::TransitionToStartup`] carrying a fully-
+/// constructed [`AppState::StartupError`] tagged
+/// [`crate::startup_error::StartupErrorSource::Open`].
+#[must_use]
+pub fn decide_unlock_failure_action(path: &Path, err: &PaladinError) -> UnlockFailureAction {
+    match route_unlock_open_error(err) {
+        UnlockOpenRouting::Inline(inline) => UnlockFailureAction::SendInlineToDialog(inline),
+        UnlockOpenRouting::Startup => {
+            UnlockFailureAction::TransitionToStartup(AppState::StartupError {
+                path: Some(path.to_path_buf()),
+                error: StartupError::from_open(err),
+            })
+        }
     }
 }

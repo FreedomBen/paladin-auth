@@ -43,9 +43,10 @@ use paladin_core::{
 
 use paladin_gtk::app::state::{
     decide_state_from_inspect, decide_state_from_open_error, decide_state_from_path_resolution,
-    AppState, OpenErrorOutcome,
+    decide_unlock_failure_action, AppState, OpenErrorOutcome, UnlockFailureAction,
 };
 use paladin_gtk::startup_error::StartupErrorSource;
+use paladin_gtk::unlock_dialog::{route_unlock_open_error, UnlockOpenRouting};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -529,4 +530,206 @@ fn is_unlocked_covers_both_idle_and_busy_branches() {
     let startup = decide_state_from_inspect(&path, Err(invalid_header_err()))
         .expect("inspect Err yields StartupError state");
     assert!(!startup.is_unlocked());
+}
+
+// ---------------------------------------------------------------------------
+// decide_unlock_failure_action — completes the routing of an unlock-worker
+// `paladin_core::open` failure by attaching the resolved vault path that
+// `AppModel` owns. `DecryptFailed` / `InvalidPassphrase` stay inline on the
+// live UnlockDialogComponent surface (carrying the typed InlineError so
+// AppModel can dispatch UnlockDialogMsg::OpenFailedInline directly); every
+// other failure transitions to AppState::StartupError tagged
+// StartupErrorSource::Open with the path attached.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn decide_unlock_failure_action_decrypt_failed_routes_to_send_inline_to_dialog() {
+    let path = vault_path();
+    let err = decrypt_failed_err();
+    match decide_unlock_failure_action(&path, &err) {
+        UnlockFailureAction::SendInlineToDialog(inline) => {
+            assert_eq!(inline.kind, ErrorKind::DecryptFailed);
+            assert_eq!(inline.rendered, err.to_string());
+        }
+        UnlockFailureAction::TransitionToStartup(state) => {
+            panic!("DecryptFailed must route to SendInlineToDialog, got TransitionToStartup({state:?})")
+        }
+    }
+}
+
+#[test]
+fn decide_unlock_failure_action_invalid_passphrase_routes_to_send_inline_to_dialog() {
+    let path = vault_path();
+    let err = invalid_passphrase_empty_err();
+    match decide_unlock_failure_action(&path, &err) {
+        UnlockFailureAction::SendInlineToDialog(inline) => {
+            assert_eq!(inline.kind, ErrorKind::InvalidPassphrase);
+            assert_eq!(inline.rendered, err.to_string());
+        }
+        UnlockFailureAction::TransitionToStartup(state) => {
+            panic!("InvalidPassphrase must route to SendInlineToDialog, got TransitionToStartup({state:?})")
+        }
+    }
+}
+
+#[test]
+fn decide_unlock_failure_action_inline_matches_route_unlock_open_error_projection() {
+    // The completion helper must not re-derive the InlineError — it
+    // passes through whatever `route_unlock_open_error` produced so
+    // a single edit there propagates here for free. Pin the
+    // projection equality so future divergence is caught at the test
+    // boundary.
+    let path = vault_path();
+    let err = decrypt_failed_err();
+    let routed_inline = match route_unlock_open_error(&err) {
+        UnlockOpenRouting::Inline(inline) => inline,
+        UnlockOpenRouting::Startup => {
+            panic!("route_unlock_open_error must route DecryptFailed to Inline")
+        }
+    };
+    match decide_unlock_failure_action(&path, &err) {
+        UnlockFailureAction::SendInlineToDialog(inline) => {
+            assert_eq!(inline.kind, routed_inline.kind);
+            assert_eq!(inline.rendered, routed_inline.rendered);
+        }
+        UnlockFailureAction::TransitionToStartup(state) => {
+            panic!("expected SendInlineToDialog, got TransitionToStartup({state:?})")
+        }
+    }
+}
+
+#[test]
+fn decide_unlock_failure_action_unsafe_permissions_routes_to_transition_to_startup_with_formatter_text(
+) {
+    let path = vault_path();
+    let err = unsafe_perms_err();
+    let expected_rendered = format_unsafe_permissions(&err).expect("formatter text");
+    match decide_unlock_failure_action(&path, &err) {
+        UnlockFailureAction::TransitionToStartup(state) => match state {
+            AppState::StartupError {
+                path: state_path,
+                error,
+            } => {
+                assert_eq!(state_path.as_deref(), Some(path.as_path()));
+                assert_eq!(error.source, StartupErrorSource::Open);
+                assert_eq!(error.rendered, expected_rendered);
+            }
+            other => panic!("expected AppState::StartupError, got {other:?}"),
+        },
+        UnlockFailureAction::SendInlineToDialog(_) => {
+            panic!("unsafe_permissions must transition to StartupError")
+        }
+    }
+}
+
+#[test]
+fn decide_unlock_failure_action_wrong_vault_lock_routes_to_transition_to_startup() {
+    let path = vault_path();
+    let err = wrong_vault_lock_err();
+    match decide_unlock_failure_action(&path, &err) {
+        UnlockFailureAction::TransitionToStartup(AppState::StartupError {
+            path: state_path,
+            error,
+        }) => {
+            assert_eq!(state_path.as_deref(), Some(path.as_path()));
+            assert_eq!(error.source, StartupErrorSource::Open);
+        }
+        other => panic!("wrong_vault_lock must transition to StartupError, got {other:?}"),
+    }
+}
+
+#[test]
+fn decide_unlock_failure_action_invalid_header_routes_to_transition_to_startup() {
+    let path = vault_path();
+    match decide_unlock_failure_action(&path, &invalid_header_err()) {
+        UnlockFailureAction::TransitionToStartup(AppState::StartupError {
+            path: state_path,
+            error,
+        }) => {
+            assert_eq!(state_path.as_deref(), Some(path.as_path()));
+            assert_eq!(error.source, StartupErrorSource::Open);
+        }
+        other => panic!("invalid_header must transition to StartupError, got {other:?}"),
+    }
+}
+
+#[test]
+fn decide_unlock_failure_action_invalid_payload_routes_to_transition_to_startup() {
+    let path = vault_path();
+    match decide_unlock_failure_action(&path, &invalid_payload_err()) {
+        UnlockFailureAction::TransitionToStartup(AppState::StartupError {
+            path: state_path,
+            error,
+        }) => {
+            assert_eq!(state_path.as_deref(), Some(path.as_path()));
+            assert_eq!(error.source, StartupErrorSource::Open);
+        }
+        other => panic!("invalid_payload must transition to StartupError, got {other:?}"),
+    }
+}
+
+#[test]
+fn decide_unlock_failure_action_unsupported_format_version_routes_to_transition_to_startup() {
+    let path = vault_path();
+    match decide_unlock_failure_action(&path, &unsupported_format_version_err()) {
+        UnlockFailureAction::TransitionToStartup(AppState::StartupError {
+            path: state_path,
+            error,
+        }) => {
+            assert_eq!(state_path.as_deref(), Some(path.as_path()));
+            assert_eq!(error.source, StartupErrorSource::Open);
+        }
+        other => {
+            panic!("unsupported_format_version must transition to StartupError, got {other:?}")
+        }
+    }
+}
+
+#[test]
+fn decide_unlock_failure_action_kdf_params_out_of_bounds_routes_to_transition_to_startup() {
+    let path = vault_path();
+    match decide_unlock_failure_action(&path, &kdf_oob_err()) {
+        UnlockFailureAction::TransitionToStartup(AppState::StartupError {
+            path: state_path,
+            error,
+        }) => {
+            assert_eq!(state_path.as_deref(), Some(path.as_path()));
+            assert_eq!(error.source, StartupErrorSource::Open);
+        }
+        other => panic!("kdf_params_out_of_bounds must transition to StartupError, got {other:?}"),
+    }
+}
+
+#[test]
+fn decide_unlock_failure_action_io_error_routes_to_transition_to_startup() {
+    let path = vault_path();
+    match decide_unlock_failure_action(&path, &io_err()) {
+        UnlockFailureAction::TransitionToStartup(AppState::StartupError {
+            path: state_path,
+            error,
+        }) => {
+            assert_eq!(state_path.as_deref(), Some(path.as_path()));
+            assert_eq!(error.source, StartupErrorSource::Open);
+        }
+        other => panic!("io_error must transition to StartupError, got {other:?}"),
+    }
+}
+
+#[test]
+fn decide_unlock_failure_action_attaches_caller_provided_path() {
+    // `route_unlock_open_error` returns a unit `Startup` variant; the
+    // completion helper is the *only* place the resolved vault path
+    // gets stitched into the StartupError state. Pin path-passthrough
+    // explicitly so a future refactor that drops the `path` argument
+    // is caught at the test boundary rather than at the call site.
+    let alt = PathBuf::from("/var/lib/paladin/alt-vault.bin");
+    match decide_unlock_failure_action(&alt, &invalid_header_err()) {
+        UnlockFailureAction::TransitionToStartup(AppState::StartupError {
+            path: state_path,
+            ..
+        }) => {
+            assert_eq!(state_path.as_deref(), Some(alt.as_path()));
+        }
+        other => panic!("expected StartupError carrying the alt path, got {other:?}"),
+    }
 }
