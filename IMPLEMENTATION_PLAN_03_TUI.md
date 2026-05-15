@@ -2043,7 +2043,31 @@ Modals and overlays:
   sub-flow is gated by `Vault::is_encrypted()`" rule); a
   plaintext-vault background therefore matches the `set` / `change`
   tests and keeps the snapshot focused on the renderer's contract.)*
-- [ ] Settings modal.
+- [x] Settings modal.
+  *(`crates/paladin-tui/src/view/settings.rs` paints the
+  freshly-opened Settings modal as a 64×12 bordered `Settings`
+  block with four labeled value rows in reading order — the
+  `Auto-lock:` toggle, the indented `Timeout (s):` spinner, a
+  blank spacer, the `Clipboard-clear:` toggle, and the indented
+  `Timeout (s):` spinner — plus the centered `Tab cycles fields
+  ·  Enter submit  ·  Esc cancel` hint. Toggles render as
+  `[ ✓ ]` / `[   ]` and spinners as `[ {value} ]` so a regression
+  that ever drifts the glyphs, the row order, or the indent of
+  the timeout rows under their parent toggles surfaces as a diff.
+  `view::render`'s `render_modal` dispatch was extended in the
+  same slice to route `Modal::Settings` to the new module.
+  `snapshot_settings_modal_default` in
+  `tests/view_snapshots.rs` drives the snapshot seeded with the
+  `paladin_core::VaultSettings::default()` values (both toggles
+  off, `auto_lock.timeout_secs = 300`, `clipboard.clear_secs =
+  20`) so the snapshot mirrors what the production modal-open
+  path produces against a freshly initialized vault rather than
+  the doc-only `SettingsModal::default()` placeholder. Locked in
+  `tests/snapshots/view_snapshots__snapshot_settings_modal_default.snap`.
+  Per-field focus painting and the inline
+  `save_not_committed` / `save_durability_unconfirmed` variants
+  of this modal land alongside their own slices per the plan's
+  later checklist rows.)*
 - [ ] Help overlay.
 - [x] Unlock screen.
   *(`crates/paladin-tui/src/view/unlock.rs` renders a bordered

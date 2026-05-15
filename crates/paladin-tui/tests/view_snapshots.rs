@@ -32,7 +32,7 @@ use paladin_core::{
 };
 use paladin_tui::app::state::{
     AddModal, AppState, ExportModal, Focus, HotpReveal, ImportModal, Modal, PassphraseModal,
-    PassphraseSubFlow, RemoveModal, RenameModal,
+    PassphraseSubFlow, RemoveModal, RenameModal, SettingsModal,
 };
 use paladin_tui::prompt::PassphraseBuffer;
 use paladin_tui::view::render;
@@ -888,6 +888,72 @@ fn snapshot_passphrase_modal_remove_default() {
         modal: Some(Modal::Passphrase(PassphraseModal {
             sub_flow: PassphraseSubFlow::Remove,
             ..PassphraseModal::default()
+        })),
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 20));
+}
+
+#[test]
+fn snapshot_settings_modal_default() {
+    // Plan L2004: "Settings modal." Drive `view::render` against an
+    // `Unlocked` state with `Modal::Settings(SettingsModal { .. })`
+    // open so the snapshot pins the freshly-opened (no inline error)
+    // baseline of the Settings modal overlay rendered on top of the
+    // list view per `DESIGN.md` §6 and the
+    // `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6) > Settings"
+    // contract — *"toggles for `auto_lock.enabled` and
+    // `clipboard.clear_enabled`, spinners for `auto_lock.timeout_secs`
+    // and `clipboard.clear_secs`. … The modal accumulates pending
+    // edits in modal-local state and only commits on Confirm."*
+    //
+    // The modal's four pending-edit fields are seeded with the
+    // `paladin_core::VaultSettings::default()` values — both toggles
+    // off, `auto_lock.timeout_secs = 300`, `clipboard.clear_secs =
+    // 20` — so the snapshot mirrors what the production modal-open
+    // path produces against a freshly initialized vault rather than
+    // the doc-only `SettingsModal::default()` placeholder (which
+    // exists for reducer-test ergonomics and underflows the spinner
+    // bounds with `0`). A regression that ever drifts the toggle
+    // glyphs, the spinner formatting, or the row order from the
+    // documented "auto-lock toggle / auto-lock timeout / clipboard
+    // toggle / clipboard timeout" reading order surfaces as a diff
+    // in this snapshot rather than in a unit test against private
+    // helpers.
+    //
+    // Inline `save_not_committed` / `save_durability_unconfirmed`
+    // variants of this modal land alongside their own
+    // [`SettingsModal::error`](crate::app::state::SettingsModal::error)
+    // rendering slices per the plan's later checklist rows; the
+    // per-field focus marker fans out alongside the focus-paint
+    // slice (matching the Add modal's deferred focus-highlighting
+    // precedent), so this baseline keeps the body to the four
+    // labeled value rows plus the hint and pins only the layout
+    // contract.
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Settings(SettingsModal {
+            auto_lock_enabled: false,
+            auto_lock_timeout_secs: 300,
+            clipboard_clear_enabled: false,
+            clipboard_clear_secs: 20,
+            ..SettingsModal::default()
         })),
         selected: None,
         pending_chord_leader: None,
