@@ -36,8 +36,9 @@ use paladin_core::{ErrorKind, PaladinError, PermissionSubject, VaultLock, VaultM
 use paladin_gtk::secret_fields::SecretEntry;
 use paladin_gtk::startup_error::{OpenErrorRouting, StartupErrorSource};
 use paladin_gtk::unlock_dialog::{
-    apply_msg, classify_unlock_error, prepare_unlock_lock, unlock_view_required, InlineError,
-    SubmitRejection, UnlockDialogMsg, UnlockDialogOutput, UnlockDialogState,
+    apply_msg, classify_unlock_error, prepare_unlock_lock, route_unlock_open_error,
+    unlock_view_required, InlineError, SubmitRejection, UnlockDialogMsg, UnlockDialogOutput,
+    UnlockDialogState, UnlockOpenRouting,
 };
 
 // ---------------------------------------------------------------------------
@@ -259,6 +260,204 @@ fn classify_unlock_error_io_error_routes_to_startup() {
         OpenErrorRouting::InlinePassphrase => {
             panic!("io_error must route to StartupErrorComponent, not stay inline")
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// route_unlock_open_error — single helper combining
+// `classify_unlock_error` with an eager `InlineError::from_error` build
+// so the future `gio::spawn_blocking paladin_core::open` worker call
+// site stays a thin shell. `InlinePassphrase` routes (`decrypt_failed`,
+// `invalid_passphrase`) return `UnlockOpenRouting::Inline(InlineError)`
+// carrying the already-rendered §5 projection; every other open
+// failure returns `UnlockOpenRouting::Startup` so `AppModel` knows to
+// transition to `StartupErrorComponent` (the path is owned by
+// `AppModel`, which calls `StartupError::from_open(&err)` itself).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn route_unlock_open_error_decrypt_failed_returns_inline_with_kind_and_text() {
+    let err = PaladinError::DecryptFailed;
+    match route_unlock_open_error(&err) {
+        UnlockOpenRouting::Inline(inline) => {
+            assert_eq!(inline.kind, ErrorKind::DecryptFailed);
+            assert_eq!(inline.rendered, err.to_string());
+        }
+        UnlockOpenRouting::Startup => {
+            panic!("decrypt_failed must surface inline at the passphrase entry")
+        }
+    }
+}
+
+#[test]
+fn route_unlock_open_error_invalid_passphrase_returns_inline_with_kind_and_text() {
+    let err = PaladinError::InvalidPassphrase {
+        reason: "zero_length",
+    };
+    match route_unlock_open_error(&err) {
+        UnlockOpenRouting::Inline(inline) => {
+            assert_eq!(inline.kind, ErrorKind::InvalidPassphrase);
+            assert_eq!(inline.rendered, err.to_string());
+        }
+        UnlockOpenRouting::Startup => {
+            panic!("invalid_passphrase must surface inline at the passphrase entry")
+        }
+    }
+}
+
+#[test]
+fn route_unlock_open_error_inline_matches_inline_error_from_error() {
+    // Pinned equivalence: `route_unlock_open_error` must build the
+    // exact same `InlineError` an explicit `InlineError::from_error`
+    // call would on the inline branch. The worker call site can rely
+    // on the wrapper without diverging from the §5 stable error
+    // wording.
+    let err = PaladinError::DecryptFailed;
+    let routed = route_unlock_open_error(&err);
+    let direct = InlineError::from_error(&err);
+    match routed {
+        UnlockOpenRouting::Inline(inline) => {
+            assert_eq!(inline.kind, direct.kind);
+            assert_eq!(inline.rendered, direct.rendered);
+        }
+        UnlockOpenRouting::Startup => panic!("expected Inline routing"),
+    }
+}
+
+#[test]
+fn route_unlock_open_error_unsafe_permissions_returns_startup() {
+    let err = PaladinError::UnsafePermissions {
+        path: std::path::PathBuf::from("/tmp/vault.bin"),
+        subject: PermissionSubject::VaultFile,
+        actual_mode: "0644".to_string(),
+        expected_mode: "0600".to_string(),
+    };
+    assert!(
+        matches!(route_unlock_open_error(&err), UnlockOpenRouting::Startup),
+        "unsafe_permissions must route to StartupErrorComponent, not stay inline",
+    );
+}
+
+#[test]
+fn route_unlock_open_error_wrong_vault_lock_returns_startup() {
+    let err = PaladinError::WrongVaultLock {
+        expected: VaultMode::Plaintext,
+        actual: VaultMode::Encrypted,
+    };
+    assert!(matches!(
+        route_unlock_open_error(&err),
+        UnlockOpenRouting::Startup
+    ));
+}
+
+#[test]
+fn route_unlock_open_error_invalid_header_returns_startup() {
+    let err = PaladinError::InvalidHeader;
+    assert!(matches!(
+        route_unlock_open_error(&err),
+        UnlockOpenRouting::Startup
+    ));
+}
+
+#[test]
+fn route_unlock_open_error_invalid_payload_returns_startup() {
+    let err = PaladinError::InvalidPayload {
+        reason: "decode_failed",
+    };
+    assert!(matches!(
+        route_unlock_open_error(&err),
+        UnlockOpenRouting::Startup
+    ));
+}
+
+#[test]
+fn route_unlock_open_error_unsupported_format_version_returns_startup() {
+    let err = PaladinError::UnsupportedFormatVersion { format_ver: 99 };
+    assert!(matches!(
+        route_unlock_open_error(&err),
+        UnlockOpenRouting::Startup
+    ));
+}
+
+#[test]
+fn route_unlock_open_error_kdf_params_out_of_bounds_returns_startup() {
+    let err = PaladinError::KdfParamsOutOfBounds {
+        m_kib: 0,
+        t: 0,
+        p: 0,
+    };
+    assert!(matches!(
+        route_unlock_open_error(&err),
+        UnlockOpenRouting::Startup
+    ));
+}
+
+#[test]
+fn route_unlock_open_error_io_error_returns_startup() {
+    let err = PaladinError::IoError {
+        operation: "read_vault_file",
+        source: io::Error::new(io::ErrorKind::PermissionDenied, "denied"),
+    };
+    assert!(matches!(
+        route_unlock_open_error(&err),
+        UnlockOpenRouting::Startup
+    ));
+}
+
+#[test]
+fn route_unlock_open_error_agrees_with_classify_unlock_error_inline_branch() {
+    // Defensive parity: every error that `classify_unlock_error`
+    // routes to `OpenErrorRouting::InlinePassphrase` must also route
+    // through `route_unlock_open_error` to
+    // `UnlockOpenRouting::Inline(_)`. Wraps both inline-routed §5
+    // errors at once so a future divergence trips a test.
+    for err in [
+        PaladinError::DecryptFailed,
+        PaladinError::InvalidPassphrase {
+            reason: "zero_length",
+        },
+    ] {
+        let classified = classify_unlock_error(&err);
+        let routed = route_unlock_open_error(&err);
+        assert!(
+            matches!(classified, OpenErrorRouting::InlinePassphrase),
+            "precondition: classify_unlock_error must report InlinePassphrase for {err:?}",
+        );
+        assert!(
+            matches!(routed, UnlockOpenRouting::Inline(_)),
+            "route_unlock_open_error must agree with classify_unlock_error on the inline branch for {err:?}",
+        );
+    }
+}
+
+#[test]
+fn route_unlock_open_error_agrees_with_classify_unlock_error_startup_branch() {
+    // Defensive parity: every error that `classify_unlock_error`
+    // routes to `OpenErrorRouting::Startup` must also route through
+    // `route_unlock_open_error` to `UnlockOpenRouting::Startup`.
+    let startup_cases = [
+        PaladinError::InvalidHeader,
+        PaladinError::InvalidPayload {
+            reason: "decode_failed",
+        },
+        PaladinError::UnsupportedFormatVersion { format_ver: 99 },
+        PaladinError::KdfParamsOutOfBounds {
+            m_kib: 0,
+            t: 0,
+            p: 0,
+        },
+    ];
+    for err in startup_cases {
+        let classified = classify_unlock_error(&err);
+        let routed = route_unlock_open_error(&err);
+        assert!(
+            matches!(classified, OpenErrorRouting::Startup(_)),
+            "precondition: classify_unlock_error must report Startup for {err:?}",
+        );
+        assert!(
+            matches!(routed, UnlockOpenRouting::Startup),
+            "route_unlock_open_error must agree with classify_unlock_error on the startup branch for {err:?}",
+        );
     }
 }
 

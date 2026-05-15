@@ -241,6 +241,52 @@ impl InlineError {
     }
 }
 
+/// Routing decision for a [`paladin_core::open`] failure reported by
+/// the future `gio::spawn_blocking` unlock worker.
+///
+/// Combines [`classify_unlock_error`] with an eager
+/// [`InlineError::from_error`] build so the worker call site stays a
+/// thin shell: the inline branch already carries the rendered §5
+/// projection the [`UnlockDialogComponent`] needs to display, and the
+/// startup branch is a unit variant because the resolved vault path
+/// is owned by `AppModel` (the caller builds
+/// [`crate::startup_error::StartupError::from_open`] there).
+#[derive(Debug, Clone)]
+pub enum UnlockOpenRouting {
+    /// Wrong / empty passphrase. The carried [`InlineError`] renders
+    /// the stable §5 `decrypt_failed` / `invalid_passphrase` text
+    /// verbatim through the [`PaladinError::Display`] impl so the
+    /// dialog wording matches the CLI / TUI exactly.
+    Inline(InlineError),
+    /// Every other open failure (`unsafe_permissions`,
+    /// `wrong_vault_lock`, `invalid_header`, `invalid_payload`,
+    /// `unsupported_format_version`, `kdf_params_out_of_bounds`,
+    /// `io_error`). `AppModel` transitions to
+    /// [`crate::app::state::AppState::StartupError`] tagged
+    /// [`crate::startup_error::StartupErrorSource::Open`].
+    Startup,
+}
+
+/// Route a [`paladin_core::open`] failure into the corresponding
+/// [`UnlockOpenRouting`] decision.
+///
+/// Wrong-passphrase failures
+/// ([`PaladinError::DecryptFailed`], [`PaladinError::InvalidPassphrase`])
+/// return [`UnlockOpenRouting::Inline`] carrying an already-built
+/// [`InlineError`]; every other failure returns
+/// [`UnlockOpenRouting::Startup`]. Pinned as a single helper so the
+/// `gio::spawn_blocking` unlock worker call site does not have to
+/// re-derive the routing + rendering split itself.
+#[must_use]
+pub fn route_unlock_open_error(err: &PaladinError) -> UnlockOpenRouting {
+    match classify_unlock_error(err) {
+        OpenErrorRouting::InlinePassphrase => {
+            UnlockOpenRouting::Inline(InlineError::from_error(err))
+        }
+        OpenErrorRouting::Startup(_) => UnlockOpenRouting::Startup,
+    }
+}
+
 /// Live shadow buffer for the dialog's [`adw::PasswordEntryRow`].
 ///
 /// The widget's `connect_changed` signal pushes every keystroke into
