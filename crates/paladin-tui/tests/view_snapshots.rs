@@ -1918,6 +1918,85 @@ fn snapshot_export_modal_save_not_committed() {
 }
 
 #[test]
+fn snapshot_export_modal_save_durability_unconfirmed() {
+    // Plan L2443: "Export modal `save_durability_unconfirmed`." Drive
+    // `view::render` against an `Unlocked` state with
+    // `Modal::Export(ExportModal { error:
+    // Some(render_error_message(&PaladinError::SaveDurabilityUnconfirmed)), .. })`
+    // open so the snapshot pins the inline-error row populated when
+    // `paladin_core::write_secret_file_atomic`'s primary rename
+    // succeeded but the parent-directory `fsync` failed — the
+    // durability-unconfirmed failure mode per `DESIGN.md` §4.3 / §5
+    // `save_durability_unconfirmed`. The reducer's Err arm
+    // (`reduce_export_result` in `src/app/reducer.rs`) routes the
+    // error through `render_error_message` and parks the wording on
+    // `ExportModal::error` per `IMPLEMENTATION_PLAN_03_TUI.md`
+    // "Tests > Export modal": *"Writer `io_error`,
+    // `save_not_committed`, and `save_durability_unconfirmed`
+    // surface inline and the modal stays open."* The view-snapshot
+    // pins the post-reduce rendering 1:1 with the reducer-side
+    // coverage from
+    // `effect_result_export_err_save_durability_unconfirmed_surfaces_inline_and_keeps_modal_open`
+    // in `tests/reducer_tests.rs`.
+    //
+    // Routing the wording through `render_error_message` binds the
+    // snapshot to the core `Display` impl (`save durability
+    // unconfirmed`) rather than a hand-typed string so any future
+    // wording change in core's `save_durability_unconfirmed`
+    // `Display` surfaces here as a diff. The variant is a unit
+    // (`PaladinError::SaveDurabilityUnconfirmed` carries no fields),
+    // mirroring the §4.3 contract — the destination file is in
+    // place on disk; only the parent-directory metadata sync is
+    // unconfirmed — so this slice deliberately differs from
+    // `save_not_committed` (pre-rename failure with `committed` /
+    // `backup_path` discriminators) in the rendered wording even
+    // though both surface inline through the same modal slot.
+    //
+    // The format selector stays at the `Plaintext` default so the
+    // snapshot reads as a plaintext-path delta from
+    // `snapshot_export_modal_default` — the inline error appears
+    // inside the spacer area between the segmented `Format:`
+    // selector row and the footer hint via the same
+    // `render_inline_error` branch the refused-overwrite,
+    // `confirmation_mismatch`, `zero_length`, plaintext-export-
+    // warning, `io_error`, and `save_not_committed` snapshots
+    // exercise.
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let err = PaladinError::SaveDurabilityUnconfirmed;
+    let modal = ExportModal {
+        error: Some(render_error_message(&err)),
+        ..ExportModal::default()
+    };
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Export(modal)),
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let rendered = render_to_text(&state, snapshot_now(), 80, 20);
+    let expected = render_error_message(&PaladinError::SaveDurabilityUnconfirmed);
+    assert!(
+        rendered.contains(&expected),
+        "expected inline save_durability_unconfirmed wording {expected:?} to appear in modal:\n{rendered}"
+    );
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn snapshot_passphrase_modal_set_default() {
     // Plan L1968: "Passphrase modal — `set` sub-flow." Drive
     // `view::render` against an `Unlocked` state with
