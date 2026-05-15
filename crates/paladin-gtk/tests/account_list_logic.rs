@@ -224,6 +224,7 @@ fn hidden_row_display_totp_renders_hidden_code_and_no_counter() {
         copy_enabled: true,
         next_button_visible: false,
         progress_visible: true,
+        kebab_visible: true,
     };
     assert_eq!(hidden_row_display(&model), expected);
 }
@@ -244,6 +245,7 @@ fn hidden_row_display_hotp_renders_stored_counter_and_disabled_copy() {
         copy_enabled: false,
         next_button_visible: true,
         progress_visible: false,
+        kebab_visible: true,
     };
     assert_eq!(hidden_row_display(&model), expected);
 }
@@ -271,9 +273,11 @@ fn hidden_row_display_hotp_with_missing_counter_defaults_to_zero() {
 // widget signals.
 //
 // Each row contributes a comma-separated key:value list (`copy:`, `next:`,
-// …) and rows are pipe-joined in order. Future commits that wire the
-// kebab menu append additional key/value pairs to each entry; pinning the
-// current shape here so any addition is an explicit test update.
+// `kebab:`) and rows are pipe-joined in order. The kebab key always renders
+// `on` — every row exposes the Rename… / Remove… menu unconditionally —
+// but pinning the entry here keeps "the bundle mounted the kebab" an
+// explicit, observable invariant. Pinning the current shape so any future
+// addition is an explicit test update.
 // ---------------------------------------------------------------------------
 
 fn totp_display(label: &str) -> RowDisplay {
@@ -285,6 +289,7 @@ fn totp_display(label: &str) -> RowDisplay {
         copy_enabled: true,
         next_button_visible: false,
         progress_visible: true,
+        kebab_visible: true,
     }
 }
 
@@ -297,6 +302,7 @@ fn hotp_hidden_display(label: &str, counter: u64) -> RowDisplay {
         copy_enabled: false,
         next_button_visible: true,
         progress_visible: false,
+        kebab_visible: true,
     }
 }
 
@@ -318,24 +324,49 @@ fn widget_states_marker_empty_emits_empty_suffix() {
 }
 
 #[test]
-fn widget_states_marker_renders_copy_on_and_next_off_for_totp() {
-    // TOTP rows enable copy (the code is always computed) and never
-    // expose the HOTP "next" button.
+fn widget_states_marker_renders_copy_on_next_off_kebab_on_for_totp() {
+    // TOTP rows enable copy (the code is always computed), never
+    // expose the HOTP "next" button, and always show the kebab menu.
     let displays = vec![totp_display("Acme:alice")];
     assert_eq!(
         format_widget_states_marker(&displays),
-        "paladin-gtk: account_list_widget_states=copy:on,next:off",
+        "paladin-gtk: account_list_widget_states=copy:on,next:off,kebab:on",
     );
 }
 
 #[test]
-fn widget_states_marker_renders_copy_off_and_next_on_for_hidden_hotp() {
-    // Hidden HOTP rows disable copy (no visible code yet) and expose
-    // the "next" button so the user can advance the counter.
+fn widget_states_marker_renders_copy_off_next_on_kebab_on_for_hidden_hotp() {
+    // Hidden HOTP rows disable copy (no visible code yet), expose
+    // the "next" button so the user can advance the counter, and
+    // still show the kebab menu.
     let displays = vec![hotp_hidden_display("solo", 7)];
     assert_eq!(
         format_widget_states_marker(&displays),
-        "paladin-gtk: account_list_widget_states=copy:off,next:on",
+        "paladin-gtk: account_list_widget_states=copy:off,next:on,kebab:on",
+    );
+}
+
+#[test]
+fn widget_states_marker_renders_kebab_off_when_projection_hides_it() {
+    // Defensive: the `kebab_visible` field is a `bool`, so the
+    // marker must still render `kebab:off` if a caller ever
+    // constructs a row that hides the kebab. Today the projection
+    // never produces this; pinning it keeps the encoding symmetric
+    // with `copy:` and `next:`.
+    let display = RowDisplay {
+        label: "spy:row".to_string(),
+        kind: AccountKindSummary::Totp,
+        code: CodeDisplay::Hidden,
+        counter: None,
+        copy_enabled: true,
+        next_button_visible: false,
+        progress_visible: true,
+        kebab_visible: false,
+    };
+    let displays = vec![display];
+    assert_eq!(
+        format_widget_states_marker(&displays),
+        "paladin-gtk: account_list_widget_states=copy:on,next:off,kebab:off",
     );
 }
 
@@ -348,6 +379,6 @@ fn widget_states_marker_pipe_joins_in_order() {
     ];
     assert_eq!(
         format_widget_states_marker(&displays),
-        "paladin-gtk: account_list_widget_states=copy:on,next:off|copy:off,next:on|copy:on,next:off",
+        "paladin-gtk: account_list_widget_states=copy:on,next:off,kebab:on|copy:off,next:on,kebab:on|copy:on,next:off,kebab:on",
     );
 }

@@ -271,15 +271,17 @@ fn app_renders_prepared_accounts() {
     );
 
     // The widget-states marker fingerprints per-row affordance state
-    // (copy button sensitivity + HOTP "next" button visibility),
-    // driven by `account_list::format_widget_states_marker` against
-    // the same `hidden_row_display` projection the row factory binds.
-    // TOTP rows render `copy:on,next:off`; the HOTP `solo` row
-    // renders `copy:off,next:on` because its hidden state disables
-    // copy and exposes the "next" button per
+    // (copy button sensitivity + HOTP "next" button visibility +
+    // kebab menu mount), driven by
+    // `account_list::format_widget_states_marker` against the same
+    // `hidden_row_display` projection the row factory binds. TOTP
+    // rows render `copy:on,next:off,kebab:on`; the HOTP `solo` row
+    // renders `copy:off,next:on,kebab:on` because its hidden state
+    // disables copy and exposes the "next" button per
     // `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
-    // `AccountRowComponent`.
-    let widget_states_expected = "paladin-gtk: account_list_widget_states=copy:on,next:off|copy:on,next:off|copy:off,next:on";
+    // `AccountRowComponent`. The kebab pair is `on` on every row
+    // because every row exposes the Rename… / Remove… menu.
+    let widget_states_expected = "paladin-gtk: account_list_widget_states=copy:on,next:off,kebab:on|copy:on,next:off,kebab:on|copy:off,next:on,kebab:on";
     assert!(
         stdout.contains(widget_states_expected),
         "expected stdout to contain `{widget_states_expected}`\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}",

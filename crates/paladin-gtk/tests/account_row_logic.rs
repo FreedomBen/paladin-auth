@@ -29,7 +29,7 @@
 use paladin_core::{AccountId, AccountKindSummary, AccountSummary, Algorithm, Code};
 
 use paladin_gtk::account_row::{
-    code_display, copy_enabled, counter_display, display_label, next_button_visible,
+    code_display, copy_enabled, counter_display, display_label, kebab_visible, next_button_visible,
     progress_visible, project_row, CodeDisplay, CounterText, RowDisplay,
 };
 
@@ -139,6 +139,22 @@ fn next_button_visible_only_for_hotp() {
 fn progress_visible_only_for_totp() {
     assert!(progress_visible(AccountKindSummary::Totp));
     assert!(!progress_visible(AccountKindSummary::Hotp));
+}
+
+// ---------------------------------------------------------------------------
+// `kebab_visible` — always on (every row exposes the kebab menu)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn kebab_visible_always_on_for_totp_and_hotp() {
+    // Every row in `AccountListComponent` exposes the kebab
+    // `MenuButton` (Rename… / Remove…) per
+    // `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+    // `AccountRowComponent`. The projection returns `true`
+    // unconditionally so the row factory can build the affordance
+    // without branching on kind.
+    assert!(kebab_visible(AccountKindSummary::Totp));
+    assert!(kebab_visible(AccountKindSummary::Hotp));
 }
 
 // ---------------------------------------------------------------------------
@@ -266,6 +282,7 @@ fn project_row_totp_with_visible_code() {
         copy_enabled: true,
         next_button_visible: false,
         progress_visible: true,
+        kebab_visible: true,
     };
     assert_eq!(row, expected);
 }
@@ -282,6 +299,7 @@ fn project_row_hotp_hidden() {
         copy_enabled: false,
         next_button_visible: true,
         progress_visible: false,
+        kebab_visible: true,
     };
     assert_eq!(row, expected);
 }
@@ -299,6 +317,7 @@ fn project_row_hotp_revealed() {
         copy_enabled: true,
         next_button_visible: true,
         progress_visible: false,
+        kebab_visible: true,
     };
     assert_eq!(row, expected);
 }

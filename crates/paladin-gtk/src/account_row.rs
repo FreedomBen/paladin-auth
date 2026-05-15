@@ -75,6 +75,18 @@ pub fn progress_visible(kind: AccountKindSummary) -> bool {
     matches!(kind, AccountKindSummary::Totp)
 }
 
+/// Whether the row exposes its kebab `MenuButton`.
+///
+/// Every row exposes the kebab (Rename… / Remove…) unconditionally
+/// per `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+/// `AccountRowComponent`. The kind argument is taken so the helper
+/// reads symmetrically alongside [`next_button_visible`] /
+/// [`progress_visible`]; the projection itself does not depend on it.
+#[must_use]
+pub fn kebab_visible(_kind: AccountKindSummary) -> bool {
+    true
+}
+
 /// Whether the row's copy button is enabled.
 ///
 /// TOTP rows: always enabled.
@@ -172,6 +184,7 @@ pub fn code_display(_kind: AccountKindSummary, visible_code: Option<&Code>) -> C
 /// progress `gtk::ProgressBar`, "next" `gtk::Button`). Carrying the
 /// projections as a single struct means the row factory cannot
 /// silently skip a helper and let the label / code / counter drift.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RowDisplay {
     /// Result of [`display_label`].
@@ -190,15 +203,18 @@ pub struct RowDisplay {
     pub next_button_visible: bool,
     /// Result of [`progress_visible`].
     pub progress_visible: bool,
+    /// Result of [`kebab_visible`].
+    pub kebab_visible: bool,
 }
 
 /// Bundle every row projection together.
 ///
 /// Composes [`display_label`], [`code_display`], [`counter_display`],
-/// [`copy_enabled`], [`next_button_visible`], and [`progress_visible`]
-/// into a [`RowDisplay`]. The widget layer reads `Some(&Code)` from
-/// either the TOTP per-tick compute slot or the HOTP reveal slot and
-/// passes it through; the helpers all agree on `None ⇒ hidden`.
+/// [`copy_enabled`], [`next_button_visible`], [`progress_visible`],
+/// and [`kebab_visible`] into a [`RowDisplay`]. The widget layer
+/// reads `Some(&Code)` from either the TOTP per-tick compute slot or
+/// the HOTP reveal slot and passes it through; the helpers all agree
+/// on `None ⇒ hidden`.
 #[must_use]
 pub fn project_row(summary: &AccountSummary, visible_code: Option<&Code>) -> RowDisplay {
     let has_visible_code = visible_code.is_some();
@@ -210,5 +226,6 @@ pub fn project_row(summary: &AccountSummary, visible_code: Option<&Code>) -> Row
         copy_enabled: copy_enabled(summary.kind, has_visible_code),
         next_button_visible: next_button_visible(summary.kind),
         progress_visible: progress_visible(summary.kind),
+        kebab_visible: kebab_visible(summary.kind),
     }
 }

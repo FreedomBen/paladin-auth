@@ -29,8 +29,8 @@ use relm4::prelude::*;
 use paladin_core::{AccountId, AccountKindSummary, Vault};
 
 use crate::account_row::{
-    copy_enabled, display_label, next_button_visible, progress_visible, CodeDisplay, CounterText,
-    RowDisplay,
+    copy_enabled, display_label, kebab_visible, next_button_visible, progress_visible, CodeDisplay,
+    CounterText, RowDisplay,
 };
 
 /// Stdout marker prefix emitted under `--exit-after-startup` once
@@ -46,12 +46,11 @@ pub const ACCOUNT_LIST_RENDERED_MARKER_PREFIX: &str = "paladin-gtk: account_list
 /// the per-row widget bundle has been bound for every row.
 ///
 /// The marker pipe-joins one entry per row, where each entry
-/// fingerprints the visible per-row affordance states (currently
-/// just the copy button). This is what makes the addition of the
-/// copy button observable from the smoke test without driving
-/// widget signals. Future commits that wire the HOTP "next" button
-/// or the kebab menu append additional key/value pairs to each
-/// entry.
+/// fingerprints the visible per-row affordance states (the copy
+/// button's sensitivity, the HOTP "next" button's visibility, and
+/// the kebab menu's mount). This is what makes the per-row widget
+/// bundle observable from the smoke test without driving widget
+/// signals.
 pub const ACCOUNT_LIST_WIDGET_STATES_MARKER_PREFIX: &str =
     "paladin-gtk: account_list_widget_states=";
 
@@ -139,6 +138,7 @@ pub fn hidden_row_display(model: &AccountRowModel) -> RowDisplay {
         copy_enabled: copy_enabled(model.kind, false),
         next_button_visible: next_button_visible(model.kind),
         progress_visible: progress_visible(model.kind),
+        kebab_visible: kebab_visible(model.kind),
     }
 }
 
@@ -171,6 +171,11 @@ pub fn format_rendered_marker(rows: &[AccountRowModel]) -> String {
 ///   [`crate::account_row::RowDisplay::next_button_visible`]; the
 ///   HOTP "next" button is exposed on HOTP rows and hidden on TOTP
 ///   rows.
+/// * `kebab:on` / `kebab:off` — driven by
+///   [`crate::account_row::RowDisplay::kebab_visible`]; every row
+///   exposes the Rename… / Remove… kebab menu unconditionally, so
+///   this key renders `on` in practice. Pinning the entry keeps
+///   "the bundle mounted the kebab" an explicit invariant.
 ///
 /// Pipe matches [`format_rendered_marker`]; colon separates key
 /// from value and comma separates key/value pairs within a row,
@@ -181,9 +186,10 @@ pub fn format_widget_states_marker(displays: &[RowDisplay]) -> String {
         .iter()
         .map(|d| {
             format!(
-                "copy:{},next:{}",
+                "copy:{},next:{},kebab:{}",
                 if d.copy_enabled { "on" } else { "off" },
                 if d.next_button_visible { "on" } else { "off" },
+                if d.kebab_visible { "on" } else { "off" },
             )
         })
         .collect();
@@ -348,16 +354,20 @@ fn build_row_factory() -> gtk::SignalListItemFactory {
 ///
 /// The container is a horizontal `gtk::Box` whose children are
 /// appended in the order `display label → HOTP counter → code
-/// label → copy button`. The label expands to claim the row's free
-/// space so the counter / code labels and the trailing copy button
-/// stay end-aligned and the column edges line up across rows.
-/// [`bind_row`] walks the children in this same order to apply the
-/// projection. The copy button carries an `edit-copy-symbolic`
-/// icon, the `.flat` style class for the row-trailing affordance
-/// look, and its sensitive state is driven by
-/// [`RowDisplay::copy_enabled`] in [`bind_row`]; the click handler
-/// lands in a follow-up commit that introduces the
-/// `AccountListMsg::CopyRow` round-trip.
+/// label → copy button → HOTP next button → kebab menu`. The label
+/// expands to claim the row's free space so the counter / code
+/// labels and the trailing affordances stay end-aligned and the
+/// column edges line up across rows. [`bind_row`] walks the children
+/// in this same order to apply the projection.
+///
+/// The kebab `gtk::MenuButton` carries a `view-more-symbolic` icon,
+/// the `.flat` style class for the row-trailing affordance look, and
+/// a `gio::Menu` model built by [`build_kebab_menu_model`] with the
+/// Rename… / Remove… entries described in
+/// `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+/// `AccountRowComponent`. The action targets land in a follow-up
+/// commit that wires `AccountListMsg::OpenRenameDialog` /
+/// `OpenRemoveDialog` per row.
 fn build_row_widget() -> gtk::Box {
     let container = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
@@ -392,12 +402,43 @@ fn build_row_widget() -> gtk::Box {
         .valign(gtk::Align::Center)
         .build();
     next.add_css_class("flat");
+    let kebab = gtk::MenuButton::builder()
+        .icon_name("view-more-symbolic")
+        .tooltip_text("More actions")
+        .valign(gtk::Align::Center)
+        .menu_model(&build_kebab_menu_model())
+        .build();
+    kebab.add_css_class("flat");
     container.append(&label);
     container.append(&counter);
     container.append(&code);
     container.append(&copy);
     container.append(&next);
+    container.append(&kebab);
     container
+}
+
+/// Build the kebab `gio::Menu` shared by every row.
+///
+/// The menu carries two entries per
+/// `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+/// `AccountRowComponent`:
+///
+/// * "Rename…" — opens `RenameDialog` for the row's account.
+/// * "Remove…" — opens `RemoveDialog` for the row's account.
+///
+/// Each entry binds to a `row.rename` / `row.remove` action; the
+/// actual `gio::SimpleAction` wiring per row lands in a follow-up
+/// commit that introduces the corresponding
+/// `AccountListMsg::OpenRenameDialog` / `OpenRemoveDialog`
+/// round-trips. Centralizing the model here means the rows share a
+/// single canonical menu shape and the labels stay in lockstep with
+/// the smoke test.
+fn build_kebab_menu_model() -> gio::Menu {
+    let menu = gio::Menu::new();
+    menu.append(Some("Rename\u{2026}"), Some("row.rename"));
+    menu.append(Some("Remove\u{2026}"), Some("row.remove"));
+    menu
 }
 
 /// Bind a [`RowDisplay`] onto the child widgets of a
@@ -417,6 +458,11 @@ fn build_row_widget() -> gtk::Box {
 ///   [`RowDisplay::next_button_visible`]: HOTP rows show it (the
 ///   user activates it to advance the counter and open a reveal
 ///   window); TOTP rows hide it.
+/// * The kebab `MenuButton`'s visibility mirrors
+///   [`RowDisplay::kebab_visible`]: every row exposes the
+///   Rename… / Remove… menu unconditionally. The visibility bind is
+///   kept for parity with the other affordances so a future
+///   per-row override stays a one-line projection change.
 fn bind_row(container: &gtk::Box, display: &RowDisplay) {
     let Some(label) = container.first_child().and_downcast::<gtk::Label>() else {
         return;
@@ -431,6 +477,9 @@ fn bind_row(container: &gtk::Box, display: &RowDisplay) {
         return;
     };
     let Some(next) = copy.next_sibling().and_downcast::<gtk::Button>() else {
+        return;
+    };
+    let Some(kebab) = next.next_sibling().and_downcast::<gtk::MenuButton>() else {
         return;
     };
 
@@ -452,4 +501,5 @@ fn bind_row(container: &gtk::Box, display: &RowDisplay) {
 
     copy.set_sensitive(display.copy_enabled);
     next.set_visible(display.next_button_visible);
+    kebab.set_visible(display.kebab_visible);
 }
