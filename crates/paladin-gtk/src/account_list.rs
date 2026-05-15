@@ -42,6 +42,19 @@ use crate::account_row::{
 /// implementation aligned.
 pub const ACCOUNT_LIST_RENDERED_MARKER_PREFIX: &str = "paladin-gtk: account_list_rows=";
 
+/// Stdout marker prefix emitted under `--exit-after-startup` once
+/// the per-row widget bundle has been bound for every row.
+///
+/// The marker pipe-joins one entry per row, where each entry
+/// fingerprints the visible per-row affordance states (currently
+/// just the copy button). This is what makes the addition of the
+/// copy button observable from the smoke test without driving
+/// widget signals. Future commits that wire the HOTP "next" button
+/// or the kebab menu append additional key/value pairs to each
+/// entry.
+pub const ACCOUNT_LIST_WIDGET_STATES_MARKER_PREFIX: &str =
+    "paladin-gtk: account_list_widget_states=";
+
 /// Non-secret projection of a single account into the form the
 /// row factory binds onto its widgets.
 ///
@@ -143,6 +156,29 @@ pub fn hidden_row_display(model: &AccountRowModel) -> RowDisplay {
 pub fn format_rendered_marker(rows: &[AccountRowModel]) -> String {
     let labels: Vec<&str> = rows.iter().map(|r| r.display_label.as_str()).collect();
     format!("{ACCOUNT_LIST_RENDERED_MARKER_PREFIX}{}", labels.join("|"))
+}
+
+/// Format the per-row widget-state stdout marker line.
+///
+/// The shape is
+/// `paladin-gtk: account_list_widget_states=<entries>` where
+/// `<entries>` is the pipe-joined per-row state in render order.
+/// Each entry currently encodes one key/value pair —
+/// `copy:on` if the row's copy button is sensitive,
+/// `copy:off` otherwise — driven by
+/// [`crate::account_row::RowDisplay::copy_enabled`]. Pipe is chosen
+/// to match [`format_rendered_marker`]; colon separates key from
+/// value because neither token shows up inside either side today.
+#[must_use]
+pub fn format_widget_states_marker(displays: &[RowDisplay]) -> String {
+    let entries: Vec<String> = displays
+        .iter()
+        .map(|d| format!("copy:{}", if d.copy_enabled { "on" } else { "off" }))
+        .collect();
+    format!(
+        "{ACCOUNT_LIST_WIDGET_STATES_MARKER_PREFIX}{}",
+        entries.join("|"),
+    )
 }
 
 /// Construction parameters for [`AccountListComponent`].
@@ -300,10 +336,16 @@ fn build_row_factory() -> gtk::SignalListItemFactory {
 ///
 /// The container is a horizontal `gtk::Box` whose children are
 /// appended in the order `display label → HOTP counter → code
-/// label`. The label expands to claim the row's free space so the
-/// counter / code labels stay end-aligned and the column edges
-/// line up across rows. [`bind_row`] walks the children in this
-/// same order to apply the projection.
+/// label → copy button`. The label expands to claim the row's free
+/// space so the counter / code labels and the trailing copy button
+/// stay end-aligned and the column edges line up across rows.
+/// [`bind_row`] walks the children in this same order to apply the
+/// projection. The copy button carries an `edit-copy-symbolic`
+/// icon, the `.flat` style class for the row-trailing affordance
+/// look, and its sensitive state is driven by
+/// [`RowDisplay::copy_enabled`] in [`bind_row`]; the click handler
+/// lands in a follow-up commit that introduces the
+/// `AccountListMsg::CopyRow` round-trip.
 fn build_row_widget() -> gtk::Box {
     let container = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
@@ -326,18 +368,31 @@ fn build_row_widget() -> gtk::Box {
         .xalign(1.0)
         .build();
     code.add_css_class("numeric");
+    let copy = gtk::Button::builder()
+        .icon_name("edit-copy-symbolic")
+        .tooltip_text("Copy code")
+        .valign(gtk::Align::Center)
+        .build();
+    copy.add_css_class("flat");
     container.append(&label);
     container.append(&counter);
     container.append(&code);
+    container.append(&copy);
     container
 }
 
-/// Bind a [`RowDisplay`] onto the three child labels of a
+/// Bind a [`RowDisplay`] onto the child widgets of a
 /// previously-constructed row container.
 ///
 /// The children are reached by walking `first_child` / `next_sibling`
 /// in the same order [`build_row_widget`] appended them so the
-/// factory never has to stash typed widget handles on the row.
+/// factory never has to stash typed widget handles on the row. The
+/// copy button's sensitive state mirrors
+/// [`RowDisplay::copy_enabled`]: TOTP rows are always sensitive;
+/// HOTP rows are sensitive only while a visible reveal code is in
+/// hand, matching the `IMPLEMENTATION_PLAN_04_GTK.md` §"Component
+/// tree" > `AccountRowComponent` rule that copying a hidden HOTP
+/// row is disabled.
 fn bind_row(container: &gtk::Box, display: &RowDisplay) {
     let Some(label) = container.first_child().and_downcast::<gtk::Label>() else {
         return;
@@ -346,6 +401,9 @@ fn bind_row(container: &gtk::Box, display: &RowDisplay) {
         return;
     };
     let Some(code) = counter.next_sibling().and_downcast::<gtk::Label>() else {
+        return;
+    };
+    let Some(copy) = code.next_sibling().and_downcast::<gtk::Button>() else {
         return;
     };
 
@@ -364,4 +422,6 @@ fn bind_row(container: &gtk::Box, display: &RowDisplay) {
         CodeDisplay::Visible(c) => c.clone(),
     };
     code.set_label(&code_text);
+
+    copy.set_sensitive(display.copy_enabled);
 }

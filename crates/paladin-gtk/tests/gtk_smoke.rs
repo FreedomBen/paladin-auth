@@ -269,6 +269,20 @@ fn app_renders_prepared_accounts() {
         stdout.contains(expected),
         "expected stdout to contain `{expected}`\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}",
     );
+
+    // The widget-states marker fingerprints per-row affordance state
+    // (currently the copy button's sensitive flag), driven by
+    // `account_list::format_widget_states_marker` against the same
+    // `hidden_row_display` projection the row factory binds. TOTP
+    // rows render `copy:on`; the HOTP `solo` row renders `copy:off`
+    // because its hidden state disables copy per
+    // `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+    // `AccountRowComponent`.
+    let widget_states_expected = "paladin-gtk: account_list_widget_states=copy:on|copy:on|copy:off";
+    assert!(
+        stdout.contains(widget_states_expected),
+        "expected stdout to contain `{widget_states_expected}`\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}",
+    );
 }
 
 /// Plan bullet: "`StartupErrorComponent` renders the
@@ -438,6 +452,10 @@ fn app_renders_init_dialog_for_missing_vault() {
         "expected the Missing branch to skip the account list marker\n--- stdout ---\n{stdout}",
     );
     assert!(
+        !stdout.contains("paladin-gtk: account_list_widget_states="),
+        "expected the Missing branch to skip the widget-states marker\n--- stdout ---\n{stdout}",
+    );
+    assert!(
         !stdout.contains("paladin-gtk: startup_error_body="),
         "expected the Missing branch to skip the startup-error marker\n--- stdout ---\n{stdout}",
     );
@@ -553,6 +571,10 @@ fn app_renders_unlock_dialog_for_encrypted_vault() {
     assert!(
         !stdout.contains("paladin-gtk: account_list_rows="),
         "expected the Locked branch to skip the account list marker\n--- stdout ---\n{stdout}",
+    );
+    assert!(
+        !stdout.contains("paladin-gtk: account_list_widget_states="),
+        "expected the Locked branch to skip the widget-states marker\n--- stdout ---\n{stdout}",
     );
     assert!(
         !stdout.contains("paladin-gtk: startup_error_body="),

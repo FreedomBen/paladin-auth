@@ -27,7 +27,8 @@ use paladin_core::{
     IconHintInput, Store, Vault, VaultInit, VaultLock,
 };
 use paladin_gtk::account_list::{
-    format_rendered_marker, hidden_row_display, row_models_from_vault, AccountRowModel,
+    format_rendered_marker, format_widget_states_marker, hidden_row_display, row_models_from_vault,
+    AccountRowModel, ACCOUNT_LIST_WIDGET_STATES_MARKER_PREFIX,
 };
 use paladin_gtk::account_row::{CodeDisplay, CounterText, RowDisplay};
 
@@ -260,4 +261,88 @@ fn hidden_row_display_hotp_with_missing_counter_defaults_to_zero() {
     };
     let display = hidden_row_display(&model);
     assert_eq!(display.counter, Some(CounterText::Stored(0)));
+}
+
+// ---------------------------------------------------------------------------
+// `format_widget_states_marker` — single-line per-row widget state marker
+// emitted under `--exit-after-startup` once the per-row widget bundle is
+// bound. The smoke test in `tests/gtk_smoke.rs` greps for this prefix so
+// the per-row affordance states (currently just the copy button's sensitive
+// state) are observable end-to-end without driving widget signals.
+//
+// Future commits that add the HOTP "next" button and kebab menu append
+// new key/value pairs to each entry; pinning the current shape here so
+// any addition is an explicit test update.
+// ---------------------------------------------------------------------------
+
+fn totp_display(label: &str) -> RowDisplay {
+    RowDisplay {
+        label: label.to_string(),
+        kind: AccountKindSummary::Totp,
+        code: CodeDisplay::Hidden,
+        counter: None,
+        copy_enabled: true,
+        next_button_visible: false,
+        progress_visible: true,
+    }
+}
+
+fn hotp_hidden_display(label: &str, counter: u64) -> RowDisplay {
+    RowDisplay {
+        label: label.to_string(),
+        kind: AccountKindSummary::Hotp,
+        code: CodeDisplay::Hidden,
+        counter: Some(CounterText::Stored(counter)),
+        copy_enabled: false,
+        next_button_visible: true,
+        progress_visible: false,
+    }
+}
+
+#[test]
+fn widget_states_marker_prefix_is_pinned() {
+    assert_eq!(
+        ACCOUNT_LIST_WIDGET_STATES_MARKER_PREFIX,
+        "paladin-gtk: account_list_widget_states=",
+    );
+}
+
+#[test]
+fn widget_states_marker_empty_emits_empty_suffix() {
+    let displays: Vec<RowDisplay> = Vec::new();
+    assert_eq!(
+        format_widget_states_marker(&displays),
+        "paladin-gtk: account_list_widget_states=",
+    );
+}
+
+#[test]
+fn widget_states_marker_renders_copy_on_for_totp() {
+    let displays = vec![totp_display("Acme:alice")];
+    assert_eq!(
+        format_widget_states_marker(&displays),
+        "paladin-gtk: account_list_widget_states=copy:on",
+    );
+}
+
+#[test]
+fn widget_states_marker_renders_copy_off_for_hidden_hotp() {
+    let displays = vec![hotp_hidden_display("solo", 7)];
+    assert_eq!(
+        format_widget_states_marker(&displays),
+        "paladin-gtk: account_list_widget_states=copy:off",
+    );
+}
+
+#[test]
+fn widget_states_marker_pipe_joins_in_order() {
+    let displays = vec![
+        totp_display("GitHub:ben"),
+        hotp_hidden_display("solo", 0),
+        totp_display("GitLab:alice"),
+    ];
+    assert_eq!(
+        format_widget_states_marker(&displays),
+        "paladin-gtk: account_list_widget_states=copy:on|copy:off|copy:on",
+    );
 }

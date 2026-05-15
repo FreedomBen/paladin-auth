@@ -39,8 +39,8 @@ use relm4::gtk;
 use relm4::prelude::*;
 
 use crate::account_list::{
-    format_rendered_marker, row_models_from_vault, AccountListComponent, AccountListInit,
-    AccountRowModel,
+    format_rendered_marker, format_widget_states_marker, hidden_row_display, row_models_from_vault,
+    AccountListComponent, AccountListInit, AccountRowModel,
 };
 use crate::app::state::{
     decide_state_from_inspect, decide_state_from_open_error, AppState, OpenErrorOutcome,
@@ -220,6 +220,8 @@ impl SimpleComponent for AppModel {
             // infer a render from a non-rendering state.
             if state.is_unlocked() {
                 println!("{}", format_rendered_marker(&rows));
+                let displays: Vec<_> = rows.iter().map(hidden_row_display).collect();
+                println!("{}", format_widget_states_marker(&displays));
             }
             if let AppState::StartupError { error, .. } = &state {
                 println!("{}", format_startup_error_marker(error));
