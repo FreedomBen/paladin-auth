@@ -509,6 +509,21 @@ pub enum UnlockDialogMsg {
     /// follow-up commit alongside the `UnlockedBusy` worker
     /// infrastructure.
     SubmitClicked,
+    /// `AppModel` pushes the inline branch of
+    /// [`route_unlock_open_error`] back to the dialog after the
+    /// future `gio::spawn_blocking paladin_core::open` worker
+    /// reports a `decrypt_failed` / `invalid_passphrase` failure.
+    ///
+    /// The variant carries the already-projected [`InlineError`]
+    /// (built once by `AppModel` from the typed `PaladinError`) so
+    /// the dialog's handler does not have to re-route the error
+    /// itself — [`apply_msg`] simply calls
+    /// [`UnlockDialogState::set_inline_error`] with `Some(err)`.
+    /// The shadow passphrase buffer is left untouched so a user
+    /// who has started re-typing does not lose the live entry; the
+    /// next keystroke clears the inline error through
+    /// [`UnlockDialogState::set_passphrase`]'s built-in dismissal.
+    OpenFailedInline(InlineError),
 }
 
 /// Outputs forwarded from [`UnlockDialogComponent`] up to
@@ -548,9 +563,11 @@ pub enum UnlockDialogOutput {
 /// typed bytes into the buffer and emits no output;
 /// [`UnlockDialogMsg::SubmitClicked`] runs
 /// [`UnlockDialogState::submit`] and either stages the inline
-/// rejection or forwards [`UnlockDialogOutput::SubmitLock`] —
-/// stays unit-testable in `tests/unlock_dialog_logic.rs` without
-/// spinning up GTK.
+/// rejection or forwards [`UnlockDialogOutput::SubmitLock`];
+/// [`UnlockDialogMsg::OpenFailedInline`] stages the inline branch
+/// of [`route_unlock_open_error`] back into the state's inline-
+/// error slot and emits no output — stays unit-testable in
+/// `tests/unlock_dialog_logic.rs` without spinning up GTK.
 pub fn apply_msg(
     state: &mut UnlockDialogState,
     msg: UnlockDialogMsg,
@@ -561,6 +578,10 @@ pub fn apply_msg(
             None
         }
         UnlockDialogMsg::SubmitClicked => state.submit().ok().map(UnlockDialogOutput::SubmitLock),
+        UnlockDialogMsg::OpenFailedInline(err) => {
+            state.set_inline_error(Some(err));
+            None
+        }
     }
 }
 

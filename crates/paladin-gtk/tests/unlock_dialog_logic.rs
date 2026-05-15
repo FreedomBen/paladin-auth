@@ -690,6 +690,9 @@ fn unlock_dialog_msg_passphrase_changed_carries_typed_text() {
     match msg {
         UnlockDialogMsg::PassphraseChanged(text) => assert_eq!(text, "hunter2"),
         UnlockDialogMsg::SubmitClicked => panic!("expected PassphraseChanged, got SubmitClicked"),
+        UnlockDialogMsg::OpenFailedInline(_) => {
+            panic!("expected PassphraseChanged, got OpenFailedInline")
+        }
     }
 }
 
@@ -1032,6 +1035,30 @@ fn unlock_dialog_msg_submit_clicked_pattern_matches() {
         UnlockDialogMsg::PassphraseChanged(_) => {
             panic!("expected SubmitClicked, got PassphraseChanged")
         }
+        UnlockDialogMsg::OpenFailedInline(_) => {
+            panic!("expected SubmitClicked, got OpenFailedInline")
+        }
+    }
+}
+
+#[test]
+fn unlock_dialog_msg_open_failed_inline_pattern_matches() {
+    // Pin the carried payload shape so a future refactor that drops
+    // the `InlineError` (e.g. moving the routing back into the
+    // dialog) trips this test.
+    let inline = InlineError::from_error(&PaladinError::DecryptFailed);
+    let msg = UnlockDialogMsg::OpenFailedInline(inline.clone());
+    match msg {
+        UnlockDialogMsg::OpenFailedInline(carried) => {
+            assert_eq!(carried.kind, inline.kind);
+            assert_eq!(carried.rendered, inline.rendered);
+        }
+        UnlockDialogMsg::SubmitClicked => {
+            panic!("expected OpenFailedInline, got SubmitClicked")
+        }
+        UnlockDialogMsg::PassphraseChanged(_) => {
+            panic!("expected OpenFailedInline, got PassphraseChanged")
+        }
     }
 }
 
@@ -1170,6 +1197,126 @@ fn unlock_dialog_output_submit_lock_carries_encrypted_variant() {
         matches!(lock, VaultLock::Encrypted(_)),
         "SubmitLock must carry the encrypted lock built from the typed passphrase",
     );
+}
+
+// UnlockDialogMsg::OpenFailedInline — pushed back into the dialog
+// by `AppModel` after the future `gio::spawn_blocking
+// paladin_core::open` worker returns a `PaladinError` that
+// `route_unlock_open_error` routed to
+// `UnlockOpenRouting::Inline(InlineError)` (i.e. `decrypt_failed` /
+// `invalid_passphrase`). The variant carries the already-projected
+// `InlineError` so the dialog does not have to re-route the typed
+// `PaladinError` itself; the call site (`AppModel`) routes once and
+// hands the inline projection here.
+
+#[test]
+fn apply_msg_open_failed_inline_populates_state_inline_error() {
+    let mut state = UnlockDialogState::new();
+    let inline = InlineError::from_error(&PaladinError::DecryptFailed);
+    let out = apply_msg(
+        &mut state,
+        UnlockDialogMsg::OpenFailedInline(inline.clone()),
+    );
+    assert!(
+        out.is_none(),
+        "OpenFailedInline must not forward an output — it only stages the inline error",
+    );
+    let staged = state
+        .inline_error()
+        .expect("OpenFailedInline must stage the inline error");
+    assert_eq!(staged.kind, inline.kind);
+    assert_eq!(staged.rendered, inline.rendered);
+}
+
+#[test]
+fn apply_msg_open_failed_inline_invalid_passphrase_stages_kind_and_text() {
+    // Mirrors the second `UnlockOpenRouting::Inline` source: the
+    // pre-KDF `invalid_passphrase` rejection from `paladin_core::open`
+    // routes inline with its stable §5 `reason` discriminator preserved.
+    let mut state = UnlockDialogState::new();
+    let err = PaladinError::InvalidPassphrase {
+        reason: "zero_length",
+    };
+    let inline = InlineError::from_error(&err);
+    let _ = apply_msg(
+        &mut state,
+        UnlockDialogMsg::OpenFailedInline(inline.clone()),
+    );
+    let staged = state
+        .inline_error()
+        .expect("OpenFailedInline must stage the inline error");
+    assert_eq!(staged.kind, ErrorKind::InvalidPassphrase);
+    assert_eq!(staged.rendered, err.to_string());
+    assert_eq!(staged.rendered, inline.rendered);
+}
+
+#[test]
+fn apply_msg_open_failed_inline_preserves_passphrase_buffer() {
+    // The worker error returns *after* `SubmitClicked` consumed the
+    // typed buffer via `take_passphrase`, so the buffer is normally
+    // empty when this message lands. But the user may have started
+    // re-typing — `OpenFailedInline` must touch only the inline-error
+    // slot, never the live shadow buffer.
+    let mut state = UnlockDialogState::new();
+    state.set_passphrase("retype");
+    let inline = InlineError::from_error(&PaladinError::DecryptFailed);
+    let _ = apply_msg(&mut state, UnlockDialogMsg::OpenFailedInline(inline));
+    assert_eq!(
+        state.passphrase_text(),
+        "retype",
+        "OpenFailedInline must not mutate the shadow buffer",
+    );
+    assert!(
+        !state.is_passphrase_empty(),
+        "OpenFailedInline must not clear the live entry",
+    );
+}
+
+#[test]
+fn apply_msg_open_failed_inline_overwrites_prior_inline_error() {
+    // A second worker round-trip lands on the same dialog — the new
+    // inline error must replace, not chain onto, the prior one so the
+    // entry never shows a stale message.
+    let mut state = UnlockDialogState::new();
+    state.set_inline_error(Some(InlineError::from_error(
+        &PaladinError::InvalidPassphrase {
+            reason: "zero_length",
+        },
+    )));
+    let next = InlineError::from_error(&PaladinError::DecryptFailed);
+    let _ = apply_msg(&mut state, UnlockDialogMsg::OpenFailedInline(next.clone()));
+    let staged = state
+        .inline_error()
+        .expect("OpenFailedInline must stage the inline error");
+    assert_eq!(staged.kind, next.kind);
+    assert_eq!(staged.rendered, next.rendered);
+}
+
+#[test]
+fn apply_msg_open_failed_inline_with_routed_decrypt_failed_round_trip() {
+    // Integration with `route_unlock_open_error`: AppModel will route
+    // the typed `PaladinError` once, then send the `InlineError` it
+    // unwrapped from `UnlockOpenRouting::Inline` here. The end-to-end
+    // contract is that the staged inline error matches the routed one.
+    let err = PaladinError::DecryptFailed;
+    let routed = route_unlock_open_error(&err);
+    let inline = match routed {
+        UnlockOpenRouting::Inline(inline) => inline,
+        UnlockOpenRouting::Startup => {
+            panic!("decrypt_failed must route to Inline, not Startup")
+        }
+    };
+    let mut state = UnlockDialogState::new();
+    let out = apply_msg(
+        &mut state,
+        UnlockDialogMsg::OpenFailedInline(inline.clone()),
+    );
+    assert!(out.is_none());
+    let staged = state
+        .inline_error()
+        .expect("routed inline error must land in the state slot");
+    assert_eq!(staged.kind, inline.kind);
+    assert_eq!(staged.rendered, inline.rendered);
 }
 
 // `format_unlock_dialog_marker` / `UNLOCK_DIALOG_MARKER_PREFIX` pin
