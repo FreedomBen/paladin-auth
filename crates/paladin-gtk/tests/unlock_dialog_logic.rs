@@ -36,7 +36,7 @@ use paladin_core::{ErrorKind, PaladinError, PermissionSubject, VaultLock, VaultM
 use paladin_gtk::secret_fields::SecretEntry;
 use paladin_gtk::startup_error::{OpenErrorRouting, StartupErrorSource};
 use paladin_gtk::unlock_dialog::{
-    classify_unlock_error, prepare_unlock_lock, unlock_view_required, SubmitRejection,
+    classify_unlock_error, prepare_unlock_lock, unlock_view_required, InlineError, SubmitRejection,
     UnlockDialogMsg, UnlockDialogState,
 };
 
@@ -421,6 +421,145 @@ fn unlock_dialog_msg_passphrase_changed_carries_typed_text() {
     match msg {
         UnlockDialogMsg::PassphraseChanged(text) => assert_eq!(text, "hunter2"),
     }
+}
+
+// ---------------------------------------------------------------------------
+// InlineError — rendered representation of an `OpenErrorRouting::InlinePassphrase`
+// outcome. The widget binds a `gtk::Label` to
+// `UnlockDialogState::inline_error()` and renders the `.rendered` text
+// while the option is `Some`. Errors are populated by the future
+// `gio::spawn_blocking paladin_core::open` worker (deferred); this
+// milestone wires the rendering surface so the follow-up commit only
+// needs to flip the state.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn inline_error_from_decrypt_failed_renders_display_text() {
+    // `decrypt_failed` (AEAD authentication failure) is the canonical
+    // wrong-passphrase outcome. The dialog renders the typed §5
+    // `PaladinError::Display` text unchanged so the wording matches
+    // the CLI / TUI verbatim.
+    let err = PaladinError::DecryptFailed;
+    let inline = InlineError::from_error(&err);
+    assert_eq!(inline.kind, ErrorKind::DecryptFailed);
+    assert_eq!(inline.rendered, err.to_string());
+    assert!(
+        !inline.rendered.is_empty(),
+        "DecryptFailed display text must be non-empty",
+    );
+}
+
+#[test]
+fn inline_error_from_invalid_passphrase_renders_display_text() {
+    // `invalid_passphrase` covers the pre-KDF empty-passphrase short
+    // circuit. `prepare_unlock_lock` rejects empty entries before any
+    // worker spawns, but the inline error rendering still needs to
+    // exist for defensive parity (e.g. a future code path that calls
+    // `paladin_core::open` directly with a zero-length passphrase).
+    let err = PaladinError::InvalidPassphrase {
+        reason: "zero_length",
+    };
+    let inline = InlineError::from_error(&err);
+    assert_eq!(inline.kind, ErrorKind::InvalidPassphrase);
+    assert_eq!(inline.rendered, err.to_string());
+}
+
+#[test]
+fn inline_error_is_clone() {
+    // `UnlockDialogState::inline_error()` returns `Option<&InlineError>`
+    // but reactive state often clones for use in `#[watch]` bindings.
+    // Defensive: pin the `Clone` derive so accidental removal trips a
+    // test instead of breaking the binding silently.
+    let err = PaladinError::DecryptFailed;
+    let inline = InlineError::from_error(&err);
+    let cloned = inline.clone();
+    assert_eq!(cloned.kind, inline.kind);
+    assert_eq!(cloned.rendered, inline.rendered);
+}
+
+// ---------------------------------------------------------------------------
+// UnlockDialogState::inline_error — the live inline-error slot that the
+// future worker commit populates from `classify_unlock_error` results
+// and that the widget binds a `gtk::Label` to. Typing a new passphrase
+// dismisses the prior error so the entry never carries a stale
+// `decrypt_failed` message into the next attempt.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn unlock_dialog_state_inline_error_is_none_by_default() {
+    let state = UnlockDialogState::new();
+    assert!(
+        state.inline_error().is_none(),
+        "freshly-constructed state must report no inline error",
+    );
+}
+
+#[test]
+fn unlock_dialog_state_set_inline_error_stores_some() {
+    let mut state = UnlockDialogState::new();
+    let inline = InlineError::from_error(&PaladinError::DecryptFailed);
+    state.set_inline_error(Some(inline.clone()));
+    let stored = state.inline_error().expect("inline error must be Some");
+    assert_eq!(stored.kind, inline.kind);
+    assert_eq!(stored.rendered, inline.rendered);
+}
+
+#[test]
+fn unlock_dialog_state_set_inline_error_none_clears() {
+    // Defensive: after surfacing a `decrypt_failed`, the worker
+    // commit's success path will call `set_inline_error(None)` so
+    // the dialog dismisses the error before transitioning to
+    // `Unlocked`.
+    let mut state = UnlockDialogState::new();
+    state.set_inline_error(Some(InlineError::from_error(&PaladinError::DecryptFailed)));
+    state.set_inline_error(None);
+    assert!(state.inline_error().is_none());
+}
+
+#[test]
+fn unlock_dialog_state_set_passphrase_clears_prior_inline_error() {
+    // After a `decrypt_failed` lands, the user re-types. The first
+    // keystroke must dismiss the prior inline error so the entry
+    // does not carry a stale "wrong passphrase" message into the
+    // next attempt. This matches the standard GNOME unlock-surface
+    // affordance.
+    let mut state = UnlockDialogState::new();
+    state.set_inline_error(Some(InlineError::from_error(&PaladinError::DecryptFailed)));
+    assert!(state.inline_error().is_some());
+    state.set_passphrase("h");
+    assert!(
+        state.inline_error().is_none(),
+        "first keystroke after a decrypt_failed must dismiss the inline error",
+    );
+}
+
+#[test]
+fn unlock_dialog_state_clear_passphrase_also_clears_inline_error() {
+    // `clear_passphrase` runs on cancel / auto-lock; both
+    // transitions must leave a clean state so a re-mounted dialog
+    // does not flash a stale `decrypt_failed`.
+    let mut state = UnlockDialogState::new();
+    state.set_passphrase("hunter2");
+    state.set_inline_error(Some(InlineError::from_error(&PaladinError::DecryptFailed)));
+    state.clear_passphrase();
+    assert!(state.is_passphrase_empty());
+    assert!(state.inline_error().is_none());
+}
+
+#[test]
+fn unlock_dialog_state_take_passphrase_also_clears_inline_error() {
+    // Submit consumes the passphrase bytes via `take_passphrase`; the
+    // worker is about to run, so any stale inline error from a prior
+    // attempt must clear before the result lands.
+    let mut state = UnlockDialogState::new();
+    state.set_passphrase("hunter2");
+    state.set_inline_error(Some(InlineError::from_error(&PaladinError::DecryptFailed)));
+    let _ = state.take_passphrase();
+    assert!(state.is_passphrase_empty());
+    assert!(
+        state.inline_error().is_none(),
+        "take_passphrase must clear the inline error so worker results land into clean state",
+    );
 }
 
 // `format_unlock_dialog_marker` / `UNLOCK_DIALOG_MARKER_PREFIX` pin

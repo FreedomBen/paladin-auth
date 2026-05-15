@@ -32,6 +32,11 @@
 //!     `IoError`) transitions `AppModel` to
 //!     `StartupErrorComponent`, which is non-mutating per the plan.
 //!
+//! The widget binds a `gtk::Label` to
+//! [`UnlockDialogState::inline_error`] so the `InlinePassphrase`
+//! outcome surfaces directly beneath the passphrase entry once the
+//! worker populates the slot; typing dismisses the prior message.
+//!
 //! The module is a pure-logic shell — it owns no widgets and no
 //! `gio::spawn_blocking` plumbing — so
 //! `tests/unlock_dialog_logic.rs` can exercise every branch without
@@ -161,6 +166,52 @@ pub struct UnlockDialogInit {
     pub vault_path: PathBuf,
 }
 
+/// Inline-error projection rendered beneath the passphrase entry.
+///
+/// The widget binds a [`gtk::Label`] to
+/// [`UnlockDialogState::inline_error`] and shows the [`Self::rendered`]
+/// text while the option is `Some`. The slot is populated by the
+/// `gio::spawn_blocking` [`paladin_core::open`] worker (deferred —
+/// see the module-level doc comment) whenever
+/// [`classify_unlock_error`] returns
+/// [`OpenErrorRouting::InlinePassphrase`]
+/// (`decrypt_failed` / `invalid_passphrase`); typing in the entry
+/// dismisses the prior error so the dialog never carries a stale
+/// "wrong passphrase" message into the next attempt.
+#[derive(Debug, Clone)]
+pub struct InlineError {
+    /// Stable §5 [`ErrorKind`] discriminator copied from
+    /// [`PaladinError::kind`]. Kept on the projection so the widget
+    /// layer can inspect the cause without re-deriving it from the
+    /// rendered text.
+    pub kind: ErrorKind,
+    /// Display body rendered inline beneath the passphrase entry.
+    /// Uses the typed [`PaladinError::Display`] verbatim so the
+    /// wording matches the CLI / TUI exactly.
+    pub rendered: String,
+}
+
+impl InlineError {
+    /// Build an [`InlineError`] from a [`PaladinError`].
+    ///
+    /// Renders through the typed [`std::fmt::Display`] impl which
+    /// already carries the stable §5 field values (e.g. the
+    /// `invalid_passphrase.reason` discriminator). Intended for
+    /// [`PaladinError::DecryptFailed`] and
+    /// [`PaladinError::InvalidPassphrase`] — the §5 errors
+    /// [`classify_unlock_error`] routes to
+    /// [`OpenErrorRouting::InlinePassphrase`] — but the constructor
+    /// is variant-agnostic so the worker commit can hand any
+    /// [`PaladinError`] through without re-routing here.
+    #[must_use]
+    pub fn from_error(err: &PaladinError) -> Self {
+        Self {
+            kind: err.kind(),
+            rendered: err.to_string(),
+        }
+    }
+}
+
 /// Live shadow buffer for the dialog's [`adw::PasswordEntryRow`].
 ///
 /// The widget's `connect_changed` signal pushes every keystroke into
@@ -175,12 +226,20 @@ pub struct UnlockDialogInit {
 /// [`Self::take_passphrase`] so the cleartext bytes do not outlive
 /// the event.
 ///
+/// The [`Self::inline_error`] slot renders the deferred
+/// `decrypt_failed` / `invalid_passphrase` outcome from the future
+/// `gio::spawn_blocking paladin_core::open` worker. Typing,
+/// [`Self::clear_passphrase`], and [`Self::take_passphrase`] all
+/// dismiss any prior inline error so the dialog never carries a
+/// stale message into the next attempt.
+///
 /// The struct deliberately does not derive `Clone` or `Debug` —
 /// [`SecretEntry`] is the §8 boundary that keeps secret bytes
 /// inside `Zeroizing<String>` and out of `Debug` output.
 #[derive(Default)]
 pub struct UnlockDialogState {
     passphrase: SecretEntry,
+    inline_error: Option<InlineError>,
 }
 
 impl UnlockDialogState {
@@ -195,9 +254,14 @@ impl UnlockDialogState {
     /// Called from the widget's `connect_changed` signal on every
     /// keystroke. The previous buffer's bytes are zeroized in place
     /// when the temporary [`Zeroizing<String>`] inside
-    /// [`SecretEntry`] drops.
+    /// [`SecretEntry`] drops. The first keystroke after a worker
+    /// error also dismisses any prior [`InlineError`] so the entry
+    /// never carries a stale "wrong passphrase" message into the
+    /// next attempt — matches the standard GNOME unlock-surface
+    /// affordance.
     pub fn set_passphrase(&mut self, text: &str) {
         self.passphrase.set(text);
+        self.inline_error = None;
     }
 
     /// Borrow the shadow buffer as a `&str` for
@@ -223,9 +287,12 @@ impl UnlockDialogState {
     ///
     /// The widget calls this on cancel / auto-lock so cleartext bytes
     /// do not survive the dismissal. Submit uses [`Self::take_passphrase`]
-    /// instead so the bytes flow into the worker.
+    /// instead so the bytes flow into the worker. Also clears any
+    /// pending [`InlineError`] so a re-mounted dialog does not flash
+    /// a stale `decrypt_failed` message.
     pub fn clear_passphrase(&mut self) {
         self.passphrase.clear();
+        self.inline_error = None;
     }
 
     /// Move the shadow buffer out, leaving the state empty.
@@ -233,10 +300,37 @@ impl UnlockDialogState {
     /// The widget's submit path will call this and hand the returned
     /// [`Zeroizing<String>`] to `SecretString::from(...)` inside the
     /// [`paladin_core::VaultLock::Encrypted`], dropping the wrapper
-    /// once `paladin_core::open` returns so the bytes zeroize.
+    /// once `paladin_core::open` returns so the bytes zeroize. Any
+    /// prior [`InlineError`] is dismissed in the same step so the
+    /// worker result lands into clean state.
     #[must_use]
     pub fn take_passphrase(&mut self) -> Zeroizing<String> {
+        self.inline_error = None;
         self.passphrase.take()
+    }
+
+    /// Borrow the inline-error slot for the widget's `gtk::Label`
+    /// binding.
+    ///
+    /// `None` while no error is pending; `Some` after the future
+    /// `gio::spawn_blocking paladin_core::open` worker reports a
+    /// [`PaladinError::DecryptFailed`] or
+    /// [`PaladinError::InvalidPassphrase`] result (per
+    /// [`classify_unlock_error`]).
+    #[must_use]
+    pub fn inline_error(&self) -> Option<&InlineError> {
+        self.inline_error.as_ref()
+    }
+
+    /// Replace the inline-error slot.
+    ///
+    /// Called by the future worker commit on
+    /// [`OpenErrorRouting::InlinePassphrase`] results
+    /// (`set_inline_error(Some(_))`) and on the successful unlock
+    /// transition (`set_inline_error(None)`) so the dialog hands a
+    /// clean state to whatever surface mounts next.
+    pub fn set_inline_error(&mut self, err: Option<InlineError>) {
+        self.inline_error = err;
     }
 }
 
@@ -287,11 +381,12 @@ pub struct UnlockDialogComponent {
     #[allow(dead_code)]
     vault_path: PathBuf,
     /// Live passphrase shadow buffer driven from the
-    /// [`adw::PasswordEntryRow`]'s `connect_changed` signal. The
-    /// submit handler will read [`UnlockDialogState::passphrase_text`]
-    /// (or [`UnlockDialogState::take_passphrase`]) once the
+    /// [`adw::PasswordEntryRow`]'s `connect_changed` signal. Also
+    /// hosts the [`InlineError`] slot the view's error label binds
+    /// to. The submit handler will read
+    /// [`UnlockDialogState::passphrase_text`] (or
+    /// [`UnlockDialogState::take_passphrase`]) once the
     /// `UnlockedBusy` worker lands.
-    #[allow(dead_code)]
     state: UnlockDialogState,
 }
 
@@ -338,6 +433,26 @@ impl SimpleComponent for UnlockDialogComponent {
                         ));
                     },
                 },
+            },
+
+            // Inline-error surface beneath the passphrase entry. The
+            // future `gio::spawn_blocking paladin_core::open` worker
+            // populates `state.inline_error` from
+            // `classify_unlock_error`'s `InlinePassphrase` outcome
+            // (decrypt_failed / invalid_passphrase); typing a new
+            // passphrase dismisses the prior message.
+            #[name = "error_label"]
+            gtk::Label {
+                set_xalign: 0.0,
+                set_wrap: true,
+                add_css_class: "error",
+                #[watch]
+                set_label: model
+                    .state
+                    .inline_error()
+                    .map_or("", |err| err.rendered.as_str()),
+                #[watch]
+                set_visible: model.state.inline_error().is_some(),
             },
         }
     }
