@@ -20,6 +20,7 @@ pub mod add;
 pub mod list;
 pub mod missing_vault;
 pub mod remove;
+pub mod rename;
 pub mod startup_error;
 pub mod unlock;
 
@@ -102,11 +103,8 @@ fn render_modal(frame: &mut Frame<'_>, modal: &Modal, vault: &Vault) {
     match modal {
         Modal::Add(add_modal) => add::render(frame, add_modal),
         Modal::Remove(remove_modal) => remove::render(frame, remove_modal, vault),
-        Modal::Rename(_)
-        | Modal::Import(_)
-        | Modal::Export(_)
-        | Modal::Passphrase(_)
-        | Modal::Settings(_) => {
+        Modal::Rename(rename_modal) => rename::render(frame, rename_modal, vault),
+        Modal::Import(_) | Modal::Export(_) | Modal::Passphrase(_) | Modal::Settings(_) => {
             // Per-variant renderers land alongside each modal's
             // own "Tests > Insta snapshots > Modals and overlays"
             // checklist row in `IMPLEMENTATION_PLAN_03_TUI.md`.

@@ -1882,7 +1882,34 @@ Modals and overlays:
   Inline `save_not_committed` / `save_durability_unconfirmed`
   variants of this modal land alongside their own checklist rows
   below.)*
-- [ ] Rename modal.
+- [x] Rename modal. *(`snapshot_rename_modal_default` in
+  `crates/paladin-tui/tests/view_snapshots.rs` drives an `Unlocked`
+  state holding a single TOTP account (the same
+  `GitHub` / `ben@example.com` issuer/label pair shared with the
+  Remove modal snapshot) and
+  `modal = Some(Modal::Rename(RenameModal { account_id, draft, error: None }))`
+  with `draft` pre-populated from the account's current label, then
+  renders through `view::render` at 80×20 — the new
+  `crates/paladin-tui/src/view/rename.rs` paints a 64×10 centered
+  `Clear`-then-bordered ` Rename account ` block over the list-view
+  backdrop, with the `Renaming the following account:` prompt on the
+  first inner line, the targeted account's display label on line two
+  (resolved via the shared `format_account_display_label(&summary)` —
+  same wording as the duplicate-account inline error, the Remove
+  modal, and the CLI's `display_label`), a blank, the editable
+  `New label:` text-input row carrying the `RenameModal::draft`
+  buffer in `[ ... ]` brackets (mirrors the Add modal's
+  `text_field_line` so an empty draft renders as `[ ]` rather than
+  blank), a flexible spacer, and a centered `Enter submit  ·  Esc
+  cancel` hint near the bottom border. `view::render`'s `render_modal`
+  dispatch was extended in the same slice to route `Modal::Rename`
+  to the new module — Import / Export / Passphrase / Settings remain
+  the explicit no-op branch until their own snapshot slices land.
+  Locked in
+  `tests/snapshots/view_snapshots__snapshot_rename_modal_default.snap`.
+  Inline `save_not_committed` / `save_durability_unconfirmed`
+  variants of this modal land alongside their own checklist rows
+  below.)*
 - [ ] Import modal.
 - [ ] Export modal.
 - [ ] Passphrase modal — `set` sub-flow.
