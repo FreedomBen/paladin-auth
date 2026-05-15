@@ -1820,6 +1820,15 @@ Layout / list views:
   stops applying the offset shifts the window back to
   `Acct01`..`Acct06` and drops the marker, surfacing as a diff.)*
 - [ ] `--no-color` variants of the list-view snapshots above.
+  (Deferred: `tests/view_snapshots.rs::buffer_to_text` already
+  serializes cell symbols only, dropping foreground / background /
+  modifier attributes — so a no-color snapshot is byte-identical to
+  its styled twin until either (a) a styled-grid harness lands that
+  preserves attributes in the body, or (b) the renderer starts
+  emitting different symbols in no-color mode. The harness's
+  module-level doc already notes this matrix lands "when the list
+  view's search highlighting needs it"; this task tracks that future
+  slice rather than locking in identical-snapshot duplicates today.)
 
 Modals and overlays:
 
