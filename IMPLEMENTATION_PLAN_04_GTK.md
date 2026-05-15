@@ -1094,7 +1094,7 @@ Required for Milestone 7 sign-off. Runs in CI under `xvfb-run`.
   Pure-logic coverage in
   `crates/paladin-gtk/tests/init_dialog_logic.rs` pins the marker
   prefix and the path-passthrough rendering.
-- [ ] `UnlockDialogComponent` renders the passphrase-entry surface
+- [x] `UnlockDialogComponent` renders the passphrase-entry surface
   for the `Locked` branch. When `run_startup_probes` routes
   `AppModel` to `AppState::Locked` (an encrypted vault at the
   resolved path), `AppModel` launches an `UnlockDialogComponent`
