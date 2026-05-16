@@ -42,11 +42,14 @@ use paladin_core::{
 };
 
 use paladin_gtk::app::state::{
-    decide_state_from_inspect, decide_state_from_open_error, decide_state_from_path_resolution,
-    decide_unlock_failure_action, AppState, OpenErrorOutcome, UnlockFailureAction,
+    apply_unlock_failure_action, decide_state_from_inspect, decide_state_from_open_error,
+    decide_state_from_path_resolution, decide_unlock_failure_action, AppState, OpenErrorOutcome,
+    UnlockFailureAction, UnlockFailureEffect,
 };
 use paladin_gtk::startup_error::StartupErrorSource;
-use paladin_gtk::unlock_dialog::{route_unlock_open_error, UnlockOpenRouting};
+use paladin_gtk::unlock_dialog::{
+    route_unlock_open_error, InlineError, UnlockDialogMsg, UnlockOpenRouting,
+};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -731,5 +734,141 @@ fn decide_unlock_failure_action_attaches_caller_provided_path() {
             assert_eq!(state_path.as_deref(), Some(alt.as_path()));
         }
         other => panic!("expected StartupError carrying the alt path, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// apply_unlock_failure_action — translate the typed
+// `UnlockFailureAction` into the concrete `UnlockFailureEffect`
+// `AppModel`'s update branch applies (forward a `UnlockDialogMsg`
+// to the live dialog, or replace `AppModel.state` with a new
+// `AppState`). Pulled out of `AppModel::update` so the per-variant
+// decision stays unit-testable without spinning up GTK / libadwaita
+// or constructing a real vault file.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn apply_unlock_failure_action_send_inline_to_dialog_translates_to_send_unlock_dialog_msg() {
+    // `SendInlineToDialog(inline)` becomes
+    // `SendUnlockDialogMsg(UnlockDialogMsg::OpenFailedInline(inline))`
+    // — the carried `InlineError` survives the translation byte-
+    // identical so the dialog renders the same projection
+    // `decide_unlock_failure_action` chose.
+    let inline = InlineError::from_error(&PaladinError::DecryptFailed);
+    let action = UnlockFailureAction::SendInlineToDialog(inline.clone());
+    match apply_unlock_failure_action(action) {
+        UnlockFailureEffect::SendUnlockDialogMsg(UnlockDialogMsg::OpenFailedInline(staged)) => {
+            assert_eq!(staged.kind, inline.kind);
+            assert_eq!(staged.rendered, inline.rendered);
+        }
+        other => panic!("expected SendUnlockDialogMsg(OpenFailedInline), got {other:?}"),
+    }
+}
+
+#[test]
+fn apply_unlock_failure_action_send_inline_invalid_passphrase_preserves_kind_and_text() {
+    // Mirrors the second `UnlockOpenRouting::Inline` source: the
+    // pre-KDF `invalid_passphrase` rejection from `paladin_core::open`
+    // routes through with its stable §5 `reason` discriminator and
+    // `Display` text preserved.
+    let err = PaladinError::InvalidPassphrase {
+        reason: "zero_length",
+    };
+    let inline = InlineError::from_error(&err);
+    let action = UnlockFailureAction::SendInlineToDialog(inline.clone());
+    match apply_unlock_failure_action(action) {
+        UnlockFailureEffect::SendUnlockDialogMsg(UnlockDialogMsg::OpenFailedInline(staged)) => {
+            assert_eq!(staged.kind, ErrorKind::InvalidPassphrase);
+            assert_eq!(staged.rendered, err.to_string());
+            assert_eq!(staged.rendered, inline.rendered);
+        }
+        other => panic!("expected SendUnlockDialogMsg(OpenFailedInline), got {other:?}"),
+    }
+}
+
+#[test]
+fn apply_unlock_failure_action_transition_to_startup_translates_to_set_app_state() {
+    // `TransitionToStartup(state)` becomes `SetAppState(state)`
+    // verbatim — the carried `AppState::StartupError` (with the
+    // resolved path attached and the typed projection populated)
+    // survives the translation so `AppModel` installs exactly what
+    // `decide_unlock_failure_action` chose.
+    let path = vault_path();
+    let action = decide_unlock_failure_action(&path, &invalid_header_err());
+    match apply_unlock_failure_action(action) {
+        UnlockFailureEffect::SetAppState(AppState::StartupError {
+            path: state_path,
+            error,
+        }) => {
+            assert_eq!(state_path.as_deref(), Some(path.as_path()));
+            assert_eq!(error.source, StartupErrorSource::Open);
+        }
+        other => panic!("expected SetAppState(StartupError), got {other:?}"),
+    }
+}
+
+#[test]
+fn apply_unlock_failure_action_round_trip_decrypt_failed_dispatches_inline() {
+    // End-to-end through both helpers: `decide_unlock_failure_action`
+    // routes `DecryptFailed` to `SendInlineToDialog(inline)`;
+    // `apply_unlock_failure_action` translates that into a
+    // `SendUnlockDialogMsg(UnlockDialogMsg::OpenFailedInline(inline))`.
+    // The staged inline projection carries the `decrypt_failed`
+    // discriminator and matches `PaladinError::DecryptFailed`'s
+    // `Display` text so the dialog label renders the §5 contract.
+    let path = vault_path();
+    let err = PaladinError::DecryptFailed;
+    let action = decide_unlock_failure_action(&path, &err);
+    match apply_unlock_failure_action(action) {
+        UnlockFailureEffect::SendUnlockDialogMsg(UnlockDialogMsg::OpenFailedInline(inline)) => {
+            assert_eq!(inline.kind, ErrorKind::DecryptFailed);
+            assert_eq!(inline.rendered, err.to_string());
+        }
+        other => panic!("expected SendUnlockDialogMsg(OpenFailedInline), got {other:?}"),
+    }
+}
+
+#[test]
+fn apply_unlock_failure_action_round_trip_unsafe_permissions_installs_startup_error() {
+    // End-to-end through both helpers: `decide_unlock_failure_action`
+    // routes `UnsafePermissions` to
+    // `TransitionToStartup(AppState::StartupError { path, error })`;
+    // `apply_unlock_failure_action` translates that into a
+    // `SetAppState(...)` that `AppModel` installs verbatim.
+    let path = vault_path();
+    let err = unsafe_perms_err();
+    let action = decide_unlock_failure_action(&path, &err);
+    match apply_unlock_failure_action(action) {
+        UnlockFailureEffect::SetAppState(AppState::StartupError {
+            path: state_path,
+            error,
+        }) => {
+            assert_eq!(state_path.as_deref(), Some(path.as_path()));
+            assert_eq!(error.source, StartupErrorSource::Open);
+        }
+        other => panic!("expected SetAppState(StartupError), got {other:?}"),
+    }
+}
+
+#[test]
+fn apply_unlock_failure_action_round_trip_io_error_installs_startup_error() {
+    // Pin the IO-error variant explicitly: `route_unlock_open_error`
+    // routes every non-passphrase variant to `Startup`, but the §5
+    // catalog contract is enforced at this boundary too — a future
+    // refactor that adds a fourth `UnlockOpenRouting` variant must
+    // either route through `apply_unlock_failure_action` or fail this
+    // test.
+    let path = vault_path();
+    let err = io_err();
+    let action = decide_unlock_failure_action(&path, &err);
+    match apply_unlock_failure_action(action) {
+        UnlockFailureEffect::SetAppState(AppState::StartupError {
+            path: state_path,
+            error,
+        }) => {
+            assert_eq!(state_path.as_deref(), Some(path.as_path()));
+            assert_eq!(error.source, StartupErrorSource::Open);
+        }
+        other => panic!("expected SetAppState(StartupError), got {other:?}"),
     }
 }

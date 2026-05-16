@@ -58,7 +58,9 @@ use std::path::{Path, PathBuf};
 use paladin_core::{PaladinError, VaultStatus};
 
 use crate::startup_error::{classify_open_error, OpenErrorRouting, StartupError};
-use crate::unlock_dialog::{route_unlock_open_error, InlineError, UnlockOpenRouting};
+use crate::unlock_dialog::{
+    route_unlock_open_error, InlineError, UnlockDialogMsg, UnlockOpenRouting,
+};
 
 /// `AppModel` lifecycle state.
 ///
@@ -373,5 +375,69 @@ pub fn decide_unlock_failure_action(path: &Path, err: &PaladinError) -> UnlockFa
                 error: StartupError::from_open(err),
             })
         }
+    }
+}
+
+/// Concrete effect `AppModel`'s update branch applies after
+/// [`decide_unlock_failure_action`] returns a typed
+/// [`UnlockFailureAction`].
+///
+/// Splits the typed action into the two side-effect shapes
+/// `AppModel::update` needs to apply:
+///
+/// * [`UnlockFailureEffect::SendUnlockDialogMsg`] — forward a
+///   [`crate::unlock_dialog::UnlockDialogMsg`] to the live
+///   [`crate::unlock_dialog::UnlockDialogComponent`] controller via
+///   its input channel. `AppState` stays at [`AppState::Locked`];
+///   the dialog stays mounted; the inline error label flips on
+///   through [`crate::unlock_dialog::apply_msg`]'s
+///   [`crate::unlock_dialog::UnlockDialogMsg::OpenFailedInline`]
+///   branch.
+/// * [`UnlockFailureEffect::SetAppState`] — replace
+///   `AppModel.state` with the carried state, drop the live
+///   `UnlockDialogComponent` controller, and re-mount the active
+///   surface (typically [`crate::startup_error::StartupErrorComponent`]
+///   for the `AppState::StartupError` carried by
+///   [`UnlockFailureAction::TransitionToStartup`]).
+///
+/// Pinned as a typed enum (rather than bubbling
+/// [`UnlockFailureAction`] up to the update branch) so a future
+/// effect — cancel, auto-lock, passphrase rotation — can be added
+/// as an additional variant without an `_` catch-all in
+/// `AppModel::update` swallowing it silently.
+#[derive(Debug)]
+pub enum UnlockFailureEffect {
+    /// Forward this [`UnlockDialogMsg`] to the live
+    /// [`crate::unlock_dialog::UnlockDialogComponent`] controller.
+    /// `AppState` stays at [`AppState::Locked`].
+    SendUnlockDialogMsg(UnlockDialogMsg),
+    /// Replace `AppModel.state` with this new state and re-mount
+    /// the active surface (drop the `UnlockDialogComponent`
+    /// controller, mount [`crate::startup_error::StartupErrorComponent`]
+    /// for the [`AppState::StartupError`] carried by
+    /// [`UnlockFailureAction::TransitionToStartup`]).
+    SetAppState(AppState),
+}
+
+/// Translate a typed [`UnlockFailureAction`] into the concrete
+/// [`UnlockFailureEffect`] `AppModel`'s update branch applies.
+///
+/// Pulled out of `AppModel::update` so the per-variant decision —
+/// [`UnlockFailureAction::SendInlineToDialog`] becomes a
+/// [`UnlockDialogMsg::OpenFailedInline`] forward to the live
+/// dialog; [`UnlockFailureAction::TransitionToStartup`] becomes an
+/// [`AppState`] replacement — stays unit-testable in
+/// `tests/app_state_logic.rs` without spinning up GTK / libadwaita
+/// or constructing a real vault file. The typed `InlineError`
+/// `decide_unlock_failure_action` already built survives the
+/// translation byte-identical so the dialog renders the same §5
+/// projection the router chose.
+#[must_use]
+pub fn apply_unlock_failure_action(action: UnlockFailureAction) -> UnlockFailureEffect {
+    match action {
+        UnlockFailureAction::SendInlineToDialog(inline) => {
+            UnlockFailureEffect::SendUnlockDialogMsg(UnlockDialogMsg::OpenFailedInline(inline))
+        }
+        UnlockFailureAction::TransitionToStartup(state) => UnlockFailureEffect::SetAppState(state),
     }
 }
