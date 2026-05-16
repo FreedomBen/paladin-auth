@@ -9,6 +9,7 @@
 //! (core calls, clipboard writes, terminal I/O) are confined to
 //! the `run` boundary, which is wired in subsequent slices.
 
+pub mod dispatch;
 pub mod effect;
 pub mod event;
 pub mod input;
@@ -16,6 +17,7 @@ pub mod reducer;
 pub mod state;
 pub mod ticker;
 
+pub use dispatch::dispatch;
 pub use effect::{execute, EffectOutcome};
 pub use event::{AppEvent, Effect, EffectResult};
 pub use reducer::reduce;
