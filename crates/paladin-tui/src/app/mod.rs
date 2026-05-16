@@ -11,6 +11,7 @@
 
 pub mod effect;
 pub mod event;
+pub mod input;
 pub mod reducer;
 pub mod state;
 pub mod ticker;

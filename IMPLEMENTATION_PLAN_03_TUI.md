@@ -862,6 +862,40 @@ end-to-end.
   shutdown path is the same on `Effect::Quit`, `Ctrl-C`, and panic
   unwind.)*
 
+### Input thread (`tests/input_tests.rs`)
+
+- [x] Input thread reads `crossterm::event::Event` values in a loop
+  and emits each one as `AppEvent::Input { event, at }` with `at`
+  sampled from `Instant::now()` after the blocking read returns, then
+  exits cleanly on receiver hangup (`Sender::send` failure) and on
+  read error (terminal disconnect / `crossterm::event::read` `Err`).
+  *(`paladin_tui::app::input::spawn(sender)` is the production entry —
+  it wraps `crossterm::event::read` as its read source and returns a
+  `JoinHandle<()>` for a named OS thread `paladin-tui-input`. The
+  test seam is `paladin_tui::app::input::spawn_with(sender, read)`
+  which takes any `FnMut() -> io::Result<crossterm::event::Event> +
+  Send + 'static` so the fake reader in
+  `crates/paladin-tui/tests/input_tests.rs` can drive the loop
+  without a real terminal. Three tests pin the contract:
+  `spawn_with_emits_app_event_input_for_each_crossterm_event` feeds
+  a `KeyEvent` and a `Resize` through the fake reader, consumes two
+  `AppEvent::Input` values off the channel, and pins the carried
+  `event` is byte-identical and the `at` instants advance strictly
+  between reads (so a regression that ever samples `at` before the
+  read returns surfaces here); `spawn_with_thread_exits_when_receiver_is_dropped`
+  consumes one event, drops the `Receiver`, signals the fake reader
+  to return one more event, and watchdogs the `JoinHandle::join`
+  from a helper thread on a bounded `mpsc` so a regression that
+  fails to terminate on hangup surfaces as a `recv_timeout` rather
+  than a hung suite; `spawn_with_thread_exits_when_read_returns_error`
+  feeds an `io::ErrorKind::BrokenPipe` from the fake reader and
+  watchdogs the join, pinning the terminal-disconnect shutdown path
+  the production loop hits when `crossterm::event::read` returns
+  `Err` on a closed terminal. The thread does not poll any other
+  shutdown signal — `Sender::send` failure and `read()` `Err` are
+  the only ways the loop learns to exit, matching the ticker's
+  shutdown shape.)*
+
 ### Global args (`tests/reducer_tests.rs`)
 
 - [x] `--vault` selects the inspected / opened vault path.
