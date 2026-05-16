@@ -491,3 +491,51 @@ pub fn decide_unlock_success_state(path: &Path) -> AppState {
         path: path.to_path_buf(),
     }
 }
+
+/// Concrete effect `AppModel`'s update branch applies after
+/// [`decide_unlock_success_state`] decides the new [`AppState`].
+///
+/// Pinned as a typed enum (rather than bubbling a bare [`AppState`]
+/// up to the update branch) so a future success-branch effect —
+/// dropping the live [`crate::unlock_dialog::UnlockDialogComponent`]
+/// controller, mounting the [`crate::account_list::AccountListComponent`]
+/// controller, or installing the live `(Vault, Store)` pair into
+/// `AppModel.vault` — can be added as an additional variant without
+/// an `_` catch-all in `AppModel::update` swallowing it silently.
+/// Mirrors [`UnlockFailureEffect`] on the failure branch so the two
+/// sides of the unlock-worker dispatch present matching shapes to
+/// the update path.
+#[derive(Debug)]
+pub enum UnlockSuccessEffect {
+    /// Replace `AppModel.state` with this new state. `AppModel`'s
+    /// update branch follows up by dropping the
+    /// [`crate::unlock_dialog::UnlockDialogComponent`] controller
+    /// and mounting the
+    /// [`crate::account_list::AccountListComponent`] controller for
+    /// the [`AppState::Unlocked`] carried here; the live
+    /// `(Vault, Store)` pair returned by the worker is installed
+    /// alongside this state into the sibling `AppModel.vault` slot.
+    SetAppState(AppState),
+}
+
+/// Compose [`decide_unlock_success_state`] into the single entry
+/// point `AppModel`'s future worker-success branch calls when the
+/// `gio::spawn_blocking paladin_core::open` worker returns an
+/// `Ok((Vault, Store))`.
+///
+/// Mirrors [`route_unlock_failure_effect`] on the failure branch so
+/// `AppModel::update` stays a thin shell on both worker outcomes:
+/// one call goes from the resolved vault path directly to the
+/// concrete [`UnlockSuccessEffect`] the update path applies —
+/// replacing `AppModel.state` with the new [`AppState::Unlocked`].
+/// The live `(Vault, Store)` pair the worker produced is installed
+/// separately into the sibling `AppModel.vault` slot; this helper
+/// owns only the state-machine transition so the routing rule stays
+/// unit-testable in `tests/app_state_logic.rs` without spinning up
+/// GTK / libadwaita or constructing a real vault file. The
+/// intermediate [`decide_unlock_success_state`] helper stays public
+/// so the per-step transition stays pinned independently.
+#[must_use]
+pub fn route_unlock_success_effect(path: &Path) -> UnlockSuccessEffect {
+    UnlockSuccessEffect::SetAppState(decide_unlock_success_state(path))
+}

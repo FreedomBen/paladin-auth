@@ -44,8 +44,8 @@ use paladin_core::{
 use paladin_gtk::app::state::{
     apply_unlock_failure_action, decide_state_from_inspect, decide_state_from_open_error,
     decide_state_from_path_resolution, decide_unlock_failure_action, decide_unlock_success_state,
-    route_unlock_failure_effect, AppState, OpenErrorOutcome, UnlockFailureAction,
-    UnlockFailureEffect,
+    route_unlock_failure_effect, route_unlock_success_effect, AppState, OpenErrorOutcome,
+    UnlockFailureAction, UnlockFailureEffect, UnlockSuccessEffect,
 };
 use paladin_gtk::startup_error::StartupErrorSource;
 use paladin_gtk::unlock_dialog::{
@@ -1212,5 +1212,84 @@ fn decide_unlock_success_state_reports_unlocked_predicate() {
     assert!(
         !state.is_busy(),
         "expected AppState::Unlocked to report is_busy == false, got {state:?}",
+    );
+}
+
+#[test]
+fn route_unlock_success_effect_returns_set_app_state_unlocked() {
+    // Mirror of `route_unlock_failure_effect` on the success branch:
+    // `AppModel`'s future `gio::spawn_blocking paladin_core::open`
+    // worker calls this when the worker returns `Ok((Vault, Store))`
+    // so the typed effect `AppModel::update` applies stays pinned by
+    // a pure-logic test even though the live `(Vault, Store)` pair
+    // is installed separately into `AppModel.vault`.
+    let path = vault_path();
+    let UnlockSuccessEffect::SetAppState(state) = route_unlock_success_effect(&path);
+    match state {
+        AppState::Unlocked { path: state_path } => {
+            assert_eq!(state_path, path);
+        }
+        other => panic!("expected AppState::Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn route_unlock_success_effect_attaches_caller_provided_path() {
+    // The composed router is the *only* boundary that joins the
+    // caller-owned vault path to the typed `UnlockSuccessEffect` on
+    // the success branch. A future refactor that drops the `path`
+    // argument must fail this test rather than silently produce the
+    // wrong path.
+    let alt = PathBuf::from("/var/lib/paladin/alt-vault.bin");
+    let UnlockSuccessEffect::SetAppState(state) = route_unlock_success_effect(&alt);
+    match state {
+        AppState::Unlocked { path: state_path } => {
+            assert_eq!(state_path, alt);
+        }
+        other => panic!("expected AppState::Unlocked with alt path, got {other:?}"),
+    }
+}
+
+#[test]
+fn route_unlock_success_effect_matches_decide_unlock_success_state() {
+    // Pin the composition contract: `route_unlock_success_effect`
+    // must surface the same `AppState::Unlocked` that
+    // `decide_unlock_success_state` returns, wrapped in
+    // `UnlockSuccessEffect::SetAppState`. Any future refactor that
+    // changes one half of the relationship without the other has to
+    // fail this test rather than silently drift the success-branch
+    // contract from the failure-branch mirror.
+    let path = vault_path();
+    let UnlockSuccessEffect::SetAppState(composed) = route_unlock_success_effect(&path);
+    let stepwise = decide_unlock_success_state(&path);
+    match (composed, stepwise) {
+        (
+            AppState::Unlocked { path: composed_path },
+            AppState::Unlocked { path: stepwise_path },
+        ) => {
+            assert_eq!(composed_path, stepwise_path);
+        }
+        (composed, stepwise) => panic!(
+            "expected matching AppState::Unlocked on both sides, got composed={composed:?}, stepwise={stepwise:?}"
+        ),
+    }
+}
+
+#[test]
+fn route_unlock_success_effect_does_not_produce_other_variants() {
+    // The success branch has exactly one effect today —
+    // `SetAppState(Unlocked)`. Pin the contract so a future refactor
+    // that adds a new variant (drop dialog, mount account list,
+    // install `(Vault, Store)`) must explicitly wire the dispatch in
+    // `route_unlock_success_effect` rather than silently letting
+    // `AppModel::update` keep an `_` catch-all.
+    let path = vault_path();
+    let effect = route_unlock_success_effect(&path);
+    assert!(
+        matches!(
+            effect,
+            UnlockSuccessEffect::SetAppState(AppState::Unlocked { .. })
+        ),
+        "expected SetAppState(Unlocked), got {effect:?}",
     );
 }
