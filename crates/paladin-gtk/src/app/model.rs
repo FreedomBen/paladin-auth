@@ -74,9 +74,9 @@ use crate::account_list::{
     AccountListComponent, AccountListInit, AccountListOutput, AccountRowModel,
 };
 use crate::app::state::{
-    apply_submit_unlock_inplace, apply_unlock_dispatch_inplace, compose_unlock_dispatch,
-    decide_state_from_inspect, decide_state_from_open_error, AppState, OpenErrorOutcome,
-    UnlockWorkerEffect,
+    apply_submit_unlock_inplace, apply_unlock_dispatch_inplace, apply_unlock_vault_install_inplace,
+    compose_unlock_dispatch, decide_state_from_inspect, decide_state_from_open_error, AppState,
+    OpenErrorOutcome, UnlockWorkerCompletion,
 };
 use crate::init_dialog::{format_init_dialog_marker, InitDialogComponent, InitDialogInit};
 use crate::remove_dialog::{decide_remove_target, RemoveDialogComponent, RemoveDialogOutput};
@@ -279,9 +279,13 @@ pub enum AppMsg {
     UnlockDialogAction(UnlockDialogOutput),
     /// Posted by the `gio::spawn_blocking paladin_core::open` worker
     /// after it consumes the forwarded [`paladin_core::VaultLock`]
-    /// and reports its routed outcome as an [`UnlockWorkerEffect`].
+    /// and reports its routed outcome as an
+    /// [`UnlockWorkerCompletion`] — the typed
+    /// [`crate::app::state::UnlockWorkerEffect`] bundled with the live
+    /// `Option<(Vault, Store)>` pair returned by
+    /// `paladin_core::Store::open` on the success branch.
     ///
-    /// The handler bundles the worker outcome over the cached
+    /// The handler bundles the worker effect over the cached
     /// [`AppState`] through
     /// [`crate::app::state::compose_unlock_dispatch`] into a single
     /// [`crate::app::state::UnlockDispatch`]: a state replacement
@@ -292,15 +296,23 @@ pub enum AppMsg {
     /// optional [`crate::unlock_dialog::UnlockDialogMsg::OpenFailedInline`]
     /// forwarded to the live [`UnlockDialogComponent`] on the inline branch, and
     /// a `drop_dialog` flag that detaches the dialog widget from
-    /// the content tree on the two replacement branches. See
-    /// `IMPLEMENTATION_PLAN_04_GTK.md` §"Vault interaction" and
+    /// the content tree on the two replacement branches.
+    ///
+    /// In parallel, the carried pair is installed into
+    /// [`AppModel::vault`] via
+    /// [`crate::app::state::apply_unlock_vault_install_inplace`]:
+    /// `Some(pair)` writes through on the success branch, `None`
+    /// leaves the slot byte-for-byte intact on every failure branch
+    /// (both inline-passphrase rollback and startup-routed failures)
+    /// so a stray completion can never clobber a live unlocked pair.
+    /// See `IMPLEMENTATION_PLAN_04_GTK.md` §"Vault interaction" and
     /// §"Effect errors".
     ///
     /// The `gio::spawn_blocking paladin_core::open` worker that
     /// produces this message lands in a follow-up commit; this
-    /// commit only wires the consumer so the dispatch path is in
-    /// place before the worker spawn.
-    UnlockWorkerCompleted(UnlockWorkerEffect),
+    /// commit only wires the consumer so the full dispatch + vault
+    /// install path is in place before the worker spawn.
+    UnlockWorkerCompleted(UnlockWorkerCompletion),
 }
 
 // `relm4::component(pub)` generates a public `AppModelWidgets` struct so the
@@ -513,7 +525,7 @@ impl SimpleComponent for AppModel {
                     apply_submit_unlock_inplace(state);
                 }
             }
-            AppMsg::UnlockWorkerCompleted(effect) => {
+            AppMsg::UnlockWorkerCompleted(completion) => {
                 // Worker-outcome dispatch. `compose_unlock_dispatch`
                 // bundles the typed `UnlockWorkerEffect` over the
                 // cached `AppState` into the three projections
@@ -542,6 +554,18 @@ impl SimpleComponent for AppModel {
                 //   exclusive: replacement branches carry
                 //   `dialog_msg = None` and inline branches carry
                 //   `drop_dialog = false`.
+                //
+                // The carried `pair` is installed into
+                // `AppModel::vault` via
+                // `apply_unlock_vault_install_inplace`: `Some(pair)`
+                // writes through on the success branch (the only
+                // outcome of `route_unlock_open_completion` that
+                // carries a live `(Vault, Store)`), `None` leaves
+                // the slot byte-for-byte intact on every failure
+                // branch so a stray completion can never clobber a
+                // live unlocked pair.
+                let UnlockWorkerCompletion { effect, pair } = completion;
+                apply_unlock_vault_install_inplace(&mut self.vault, pair);
                 let dispatch = self.state.as_mut().map(|state| {
                     let dispatch = compose_unlock_dispatch(state, &effect);
                     apply_unlock_dispatch_inplace(state, &dispatch);
