@@ -866,3 +866,82 @@ pub fn unlock_final_app_state(current: &AppState, effect: &UnlockWorkerEffect) -
         None => current.clone().leave_unlocking_busy(),
     }
 }
+
+/// Bundled `AppModel::update` instructions for an unlock-worker
+/// completion. Carries the three decisions the existing trio
+/// projects ([`should_drop_unlock_dialog_after`],
+/// [`unlock_dialog_msg_after`], and [`unlock_final_app_state`]) so
+/// the dispatch site can apply the worker outcome in a single shot
+/// without re-routing the [`UnlockWorkerEffect`].
+///
+/// Owning [`UnlockDialogMsg`] (rather than a borrow into the
+/// effect) lets `AppModel::update` move the message straight into
+/// the live [`crate::unlock_dialog::UnlockDialogComponent`] sender
+/// after the borrow on the effect has ended.
+#[derive(Debug, Clone)]
+pub struct UnlockDispatch {
+    /// New [`AppState`] to install on `AppModel.state`. `Some` for
+    /// the two replacement branches (success → `Unlocked`,
+    /// startup-routed failure → `StartupError`) and the inline
+    /// branch's `UnlockedBusy → Locked` rollback. `None` is the
+    /// defensive case where the inline branch fires but `current`
+    /// is not [`AppState::UnlockedBusy`] — `AppModel::update`
+    /// leaves the state untouched rather than installing a phantom
+    /// `Locked` over another idle state.
+    pub app_state: Option<AppState>,
+    /// Inline message to forward to the live
+    /// [`crate::unlock_dialog::UnlockDialogComponent`] controller.
+    /// `Some(UnlockDialogMsg::OpenFailedInline(_))` for the inline
+    /// branch (the dialog stays mounted and re-renders the typed
+    /// passphrase error); `None` for the replacement branches that
+    /// drop the dialog.
+    pub dialog_msg: Option<UnlockDialogMsg>,
+    /// Whether `AppModel::update` should drop the live
+    /// [`crate::unlock_dialog::UnlockDialogComponent`] controller
+    /// after applying [`Self::app_state`]. Drops on the two
+    /// replacement branches; stays mounted on the inline branch so
+    /// the user can retype their passphrase.
+    pub drop_dialog: bool,
+}
+
+/// Bundle the trio of unlock-dispatch decisions into a single
+/// [`UnlockDispatch`] result so `AppModel::update` can apply the
+/// worker outcome in one shot.
+///
+/// The composer is a pure aggregator over the existing trio — it
+/// never re-derives the routing:
+///
+/// * `drop_dialog` mirrors [`should_drop_unlock_dialog_after`].
+/// * `dialog_msg` is the cloned projection of
+///   [`unlock_dialog_msg_after`]; `UnlockDialogMsg` derives `Clone`
+///   so the bundled message outlives the borrow on `effect`.
+/// * `app_state` mirrors [`unlock_final_app_state`], which itself
+///   composes [`unlock_app_state_after`] (replacement branches)
+///   with [`AppState::leave_unlocking_busy`] (inline rollback).
+///
+/// The same invariants pinned at the trio level carry through:
+///
+/// * `drop_dialog == true` iff the worker outcome routes through
+///   one of the two replacement branches — the dialog is dropped
+///   exactly when [`unlock_app_state_after`] reports `Some`. The
+///   replacement branches set `dialog_msg = None`; the inline
+///   branch leaves `app_state` as the `Locked` rollback alongside
+///   the forwarded inline message.
+/// * For the inline branch from a non-[`AppState::UnlockedBusy`]
+///   source state (a stray dispatch), `app_state` is `None` while
+///   `dialog_msg` and `drop_dialog` still mirror the trio.
+///   `AppModel::update` leaves the source state in place rather
+///   than installing a phantom rollback.
+///
+/// The composer stays shape-only — it delegates to the trio without
+/// inspecting the typed [`UnlockWorkerEffect`] variant itself — so
+/// `tests/app_state_logic.rs` exercises the dispatch contract
+/// without spinning up GTK / libadwaita.
+#[must_use]
+pub fn compose_unlock_dispatch(current: &AppState, effect: &UnlockWorkerEffect) -> UnlockDispatch {
+    UnlockDispatch {
+        app_state: unlock_final_app_state(current, effect),
+        dialog_msg: unlock_dialog_msg_after(effect).cloned(),
+        drop_dialog: should_drop_unlock_dialog_after(effect),
+    }
+}

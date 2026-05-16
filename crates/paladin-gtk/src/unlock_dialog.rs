@@ -484,7 +484,13 @@ impl UnlockDialogState {
 /// follow-up commit alongside the `UnlockedBusy` worker
 /// infrastructure; for now the `Ok` branch of `submit` is intentionally
 /// discarded by the widget's `update`.
-#[derive(Debug)]
+///
+/// `Clone` lets [`crate::app::state::compose_unlock_dispatch`] hand
+/// `AppModel::update` an owned [`UnlockDialogMsg`] inside the
+/// bundled [`crate::app::state::UnlockDispatch`] result, so the
+/// forwarded inline-error message survives past the borrowed
+/// `UnlockWorkerEffect` projected by [`crate::app::state::route_unlock_worker_outcome`].
+#[derive(Debug, Clone)]
 pub enum UnlockDialogMsg {
     /// Raw text from the [`adw::PasswordEntryRow`] after a keystroke.
     /// The widget's `update` runs [`UnlockDialogState::set_passphrase`]

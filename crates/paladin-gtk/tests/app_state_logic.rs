@@ -42,12 +42,12 @@ use paladin_core::{
 };
 
 use paladin_gtk::app::state::{
-    apply_unlock_failure_action, decide_state_from_inspect, decide_state_from_open_error,
-    decide_state_from_path_resolution, decide_unlock_failure_action, decide_unlock_success_state,
-    route_unlock_failure_effect, route_unlock_success_effect, route_unlock_worker_outcome,
-    should_drop_unlock_dialog_after, unlock_app_state_after, unlock_dialog_msg_after,
-    unlock_final_app_state, AppState, OpenErrorOutcome, UnlockFailureAction, UnlockFailureEffect,
-    UnlockSuccessEffect, UnlockWorkerEffect,
+    apply_unlock_failure_action, compose_unlock_dispatch, decide_state_from_inspect,
+    decide_state_from_open_error, decide_state_from_path_resolution, decide_unlock_failure_action,
+    decide_unlock_success_state, route_unlock_failure_effect, route_unlock_success_effect,
+    route_unlock_worker_outcome, should_drop_unlock_dialog_after, unlock_app_state_after,
+    unlock_dialog_msg_after, unlock_final_app_state, AppState, OpenErrorOutcome,
+    UnlockFailureAction, UnlockFailureEffect, UnlockSuccessEffect, UnlockWorkerEffect,
 };
 use paladin_gtk::startup_error::StartupErrorSource;
 use paladin_gtk::unlock_dialog::{
@@ -2776,5 +2776,234 @@ fn unlock_final_app_state_some_iff_drop_dialog_or_unlocked_busy_source() {
                  drop={drops}, is_busy={is_busy}, source={source:?}, effect={effect:?}",
             );
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// compose_unlock_dispatch
+// ---------------------------------------------------------------------------
+
+#[test]
+fn compose_unlock_dispatch_success_bundles_drop_and_unlocked_replacement() {
+    // Success outcome: the dialog is dropped, no inline message is
+    // forwarded, and `AppModel.state` is replaced with the new
+    // `Unlocked(path)` projected by `decide_unlock_success_state`.
+    // The composer's three fields must match the existing trio
+    // exactly so `AppModel::update` can apply the worker outcome in
+    // a single shot without re-routing the effect.
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let effect = route_unlock_worker_outcome(&path, Ok(()));
+    let dispatch = compose_unlock_dispatch(&busy, &effect);
+    assert!(
+        dispatch.drop_dialog,
+        "success replacement must drop the UnlockDialog controller",
+    );
+    assert!(
+        dispatch.dialog_msg.is_none(),
+        "success replacement must not forward an inline message",
+    );
+    let next = dispatch
+        .app_state
+        .expect("success replacement carries a state");
+    assert!(
+        matches!(next, AppState::Unlocked { .. }),
+        "success replacement target must be Unlocked, got {next:?}",
+    );
+    assert_path_eq(&next, &path);
+}
+
+#[test]
+fn compose_unlock_dispatch_startup_failure_bundles_drop_and_startup_replacement() {
+    // A `unsafe_permissions` open failure routes through the
+    // startup-error branch: the dialog drops, no inline message is
+    // forwarded, and `AppModel.state` is replaced with the new
+    // `StartupError(path)` carrying the routed error. Same one-shot
+    // contract as the success branch.
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let err = unsafe_perms_err();
+    let effect = route_unlock_worker_outcome(&path, Err(&err));
+    let dispatch = compose_unlock_dispatch(&busy, &effect);
+    assert!(
+        dispatch.drop_dialog,
+        "startup-routed failure must drop the UnlockDialog controller",
+    );
+    assert!(
+        dispatch.dialog_msg.is_none(),
+        "startup-routed failure must not forward an inline message",
+    );
+    let next = dispatch
+        .app_state
+        .expect("startup-routed failure carries a state");
+    assert!(
+        matches!(next, AppState::StartupError { .. }),
+        "startup-routed failure target must be StartupError, got {next:?}",
+    );
+    assert_eq!(
+        next.path().map(Path::to_path_buf),
+        Some(path),
+        "startup-routed failure preserves the resolved path",
+    );
+}
+
+#[test]
+fn compose_unlock_dispatch_inline_failure_keeps_dialog_with_msg_and_rolls_back_to_locked() {
+    // A `decrypt_failed` open failure routes through the inline
+    // branch: the dialog stays mounted (drop_dialog = false), an
+    // `OpenFailedInline` message is forwarded to the live dialog
+    // controller, and the busy window rolls back from
+    // `UnlockedBusy(path)` to `Locked(path)` so the entry row
+    // becomes interactive again.
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let err = decrypt_failed_err();
+    let effect = route_unlock_worker_outcome(&path, Err(&err));
+    let dispatch = compose_unlock_dispatch(&busy, &effect);
+    assert!(
+        !dispatch.drop_dialog,
+        "inline failure must keep the UnlockDialog controller mounted",
+    );
+    let msg = dispatch
+        .dialog_msg
+        .as_ref()
+        .expect("inline failure forwards an OpenFailedInline message");
+    assert!(
+        matches!(msg, UnlockDialogMsg::OpenFailedInline(_)),
+        "inline failure must forward OpenFailedInline, got {msg:?}",
+    );
+    let next = dispatch
+        .app_state
+        .expect("inline failure rolls back UnlockedBusy → Locked");
+    assert!(
+        matches!(next, AppState::Locked { .. }),
+        "inline rollback target must be Locked, got {next:?}",
+    );
+    assert_path_eq(&next, &path);
+}
+
+#[test]
+fn compose_unlock_dispatch_inline_failure_invalid_passphrase_matches_decrypt_failed_shape() {
+    // The two inline-routed errors (`decrypt_failed` and
+    // `invalid_passphrase`) must share the dispatch shape: dialog
+    // stays mounted, an `OpenFailedInline` message is forwarded,
+    // and the busy window rolls back to `Locked(path)`. Only the
+    // `InlineError` payload inside the message differs — the
+    // composer treats them identically.
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let err = invalid_passphrase_empty_err();
+    let effect = route_unlock_worker_outcome(&path, Err(&err));
+    let dispatch = compose_unlock_dispatch(&busy, &effect);
+    assert!(!dispatch.drop_dialog);
+    assert!(matches!(
+        dispatch.dialog_msg.as_ref(),
+        Some(UnlockDialogMsg::OpenFailedInline(_)),
+    ));
+    let next = dispatch
+        .app_state
+        .expect("inline failure rolls back UnlockedBusy → Locked");
+    assert!(matches!(next, AppState::Locked { .. }));
+    assert_path_eq(&next, &path);
+}
+
+#[test]
+fn compose_unlock_dispatch_mirrors_trio_for_every_effect() {
+    // Cross-check: the composer must mirror the existing trio
+    // exactly. `drop_dialog`, `dialog_msg`, and `app_state` are the
+    // three projections `AppModel::update` would otherwise call
+    // separately — bundling them must not change any individual
+    // decision. Pins that the composer is a pure aggregator and
+    // never re-routes the effect.
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let effects = [
+        route_unlock_worker_outcome(&path, Ok(())),
+        route_unlock_worker_outcome(&path, Err(&decrypt_failed_err())),
+        route_unlock_worker_outcome(&path, Err(&invalid_passphrase_empty_err())),
+        route_unlock_worker_outcome(&path, Err(&unsafe_perms_err())),
+        route_unlock_worker_outcome(&path, Err(&io_err())),
+        route_unlock_worker_outcome(&path, Err(&wrong_vault_lock_err())),
+        route_unlock_worker_outcome(&path, Err(&invalid_header_err())),
+        route_unlock_worker_outcome(&path, Err(&invalid_payload_err())),
+        route_unlock_worker_outcome(&path, Err(&unsupported_format_version_err())),
+        route_unlock_worker_outcome(&path, Err(&kdf_oob_err())),
+    ];
+    for effect in &effects {
+        let dispatch = compose_unlock_dispatch(&busy, effect);
+        assert_eq!(
+            dispatch.drop_dialog,
+            should_drop_unlock_dialog_after(effect),
+            "drop_dialog must mirror the trio for effect={effect:?}",
+        );
+        let trio_msg = unlock_dialog_msg_after(effect).cloned();
+        match (&dispatch.dialog_msg, &trio_msg) {
+            (None, None)
+            | (
+                Some(UnlockDialogMsg::OpenFailedInline(_)),
+                Some(UnlockDialogMsg::OpenFailedInline(_)),
+            ) => {}
+            other => {
+                panic!("dialog_msg must mirror the trio for effect={effect:?}, got {other:?}",)
+            }
+        }
+        let trio_state = unlock_final_app_state(&busy, effect);
+        match (&dispatch.app_state, &trio_state) {
+            (None, None) => {}
+            (Some(a), Some(b)) => {
+                assert_eq!(
+                    std::mem::discriminant::<AppState>(a),
+                    std::mem::discriminant::<AppState>(b),
+                    "app_state variant must mirror the trio for effect={effect:?}",
+                );
+                assert_eq!(
+                    a.path().map(Path::to_path_buf),
+                    b.path().map(Path::to_path_buf),
+                    "app_state path must mirror the trio for effect={effect:?}",
+                );
+            }
+            other => panic!(
+                "app_state Some/None must mirror the trio for effect={effect:?}, got {other:?}",
+            ),
+        }
+    }
+}
+
+#[test]
+fn compose_unlock_dispatch_inline_from_non_unlocked_busy_keeps_dialog_with_no_state() {
+    // Defensive: when the worker reports an inline failure but
+    // `current` is not `UnlockedBusy` (a stray dispatch from any
+    // other source state), the composer must keep the dialog
+    // mounted (drop_dialog = false), still forward the inline
+    // message, and refuse to install a phantom `Locked` transition
+    // (app_state = None). Mirrors the `leave_unlocking_busy`
+    // contract pinned by `unlock_final_app_state_inline_from_non_unlocked_busy_returns_none`.
+    let path = vault_path();
+    let err = decrypt_failed_err();
+    let effect = route_unlock_worker_outcome(&path, Err(&err));
+    let invalid_sources = [
+        AppState::Missing { path: path.clone() },
+        AppState::Locked { path: path.clone() },
+        AppState::Unlocked { path: path.clone() },
+    ];
+    for source in &invalid_sources {
+        let dispatch = compose_unlock_dispatch(source, &effect);
+        assert!(
+            !dispatch.drop_dialog,
+            "inline branch keeps the dialog mounted regardless of source={source:?}",
+        );
+        assert!(
+            matches!(
+                dispatch.dialog_msg.as_ref(),
+                Some(UnlockDialogMsg::OpenFailedInline(_)),
+            ),
+            "inline branch forwards OpenFailedInline regardless of source={source:?}",
+        );
+        assert!(
+            dispatch.app_state.is_none(),
+            "inline branch must refuse to install a phantom Locked from source={source:?}, \
+             got {:?}",
+            dispatch.app_state,
+        );
     }
 }
