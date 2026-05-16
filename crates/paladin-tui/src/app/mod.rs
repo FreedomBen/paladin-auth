@@ -14,6 +14,7 @@ pub mod effect;
 pub mod event;
 pub mod input;
 pub mod reducer;
+pub mod render;
 pub mod state;
 pub mod ticker;
 
@@ -21,6 +22,7 @@ pub use dispatch::dispatch;
 pub use effect::{execute, EffectOutcome};
 pub use event::{AppEvent, Effect, EffectResult};
 pub use reducer::reduce;
+pub use render::draw_frame;
 pub use state::{
     build_initial_state, build_initial_state_with_resolver, decide_state_from_inspect,
     decide_state_from_open, render_error_message, AppState, StatusLine, CLIPBOARD_WRITE_FAILED,
