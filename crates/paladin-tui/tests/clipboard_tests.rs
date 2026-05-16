@@ -1381,3 +1381,127 @@ mod executor_only_if_unchanged {
         });
     }
 }
+
+// ---------------------------------------------------------------------------
+// Clipboard image adapter — `read_image` (IMPLEMENTATION_PLAN_03_TUI.md >
+// Implementation checklist: "Implement clipboard wrapper (arboard
+// reads/writes), QR image import from clipboard bytes, ...").
+//
+// `read_image` is the third adapter primitive (alongside `read_text` /
+// `write_text`). Production calls `arboard::Clipboard::get_image()` and
+// re-shapes the returned bytes into a stable `ClipboardImage { width,
+// height, rgba }` shape that does not leak the `arboard` type into
+// `paladin-tui`'s public surface. Errors collapse to two variants the
+// executor maps onto `QrImportFailure::{NoClipboardImage,
+// ImageDecodeFailure}` — distinct user-facing wording per
+// `IMPLEMENTATION_PLAN_03_TUI.md` "Add modal" QR-import bullets:
+// *"No-image, no-QR, and invalid-QR cases reject inline."*
+//
+// Under `paladin-tui/test-hooks` the same env-var protocol used for
+// `read_text` / `write_text` covers images: `PALADIN_CLIPBOARD_DRYRUN=1`
+// returns an in-process seeded image (or `NoImage` when not seeded);
+// `=fail` returns `DecodeFailure` so both inline-error wordings are
+// reachable from CI.
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "test-hooks")]
+mod adapter_read_image {
+    use paladin_tui::clipboard::{
+        clear_test_clipboard_image, read_image, seed_test_clipboard_image, test_clipboard_lock,
+        ClipboardImage, ImageReadError,
+    };
+
+    /// Run `body` with `PALADIN_CLIPBOARD_DRYRUN=mode`, the process-wide
+    /// test-clipboard lock held, and the fake image cleared on exit so
+    /// the next test cannot see leaked state.
+    fn with_dryrun_image<R>(mode: &str, body: impl FnOnce() -> R) -> R {
+        let _guard = test_clipboard_lock();
+        std::env::set_var("PALADIN_CLIPBOARD_DRYRUN", mode);
+        let out = body();
+        std::env::remove_var("PALADIN_CLIPBOARD_DRYRUN");
+        clear_test_clipboard_image();
+        out
+    }
+
+    #[test]
+    fn dryrun_image_round_trip_returns_seeded_dimensions_and_bytes() {
+        with_dryrun_image("1", || {
+            // 2x1 RGBA8 image — 8 bytes — opaque red then opaque blue.
+            let rgba: Vec<u8> = vec![255, 0, 0, 255, 0, 0, 255, 255];
+            seed_test_clipboard_image(2, 1, rgba.clone());
+            match read_image() {
+                Ok(ClipboardImage {
+                    width,
+                    height,
+                    rgba: out,
+                }) => {
+                    assert_eq!(width, 2, "seeded width must round-trip");
+                    assert_eq!(height, 1, "seeded height must round-trip");
+                    assert_eq!(out, rgba, "seeded RGBA bytes must round-trip");
+                }
+                other => panic!("expected Ok(ClipboardImage), got {other:?}"),
+            }
+        });
+    }
+
+    #[test]
+    fn dryrun_image_returns_no_image_when_clipboard_unseeded() {
+        with_dryrun_image("1", || {
+            clear_test_clipboard_image();
+            assert_eq!(
+                read_image(),
+                Err(ImageReadError::NoImage),
+                "DRYRUN=1 without a seeded image must surface NoImage"
+            );
+        });
+    }
+
+    #[test]
+    fn dryrun_image_fail_mode_returns_decode_failure() {
+        with_dryrun_image("fail", || {
+            assert_eq!(
+                read_image(),
+                Err(ImageReadError::DecodeFailure),
+                "DRYRUN=fail must surface DecodeFailure so the executor \
+                 reaches the QrImportFailure::ImageDecodeFailure branch"
+            );
+        });
+    }
+
+    #[test]
+    fn dryrun_image_seed_overwrites_prior_seed() {
+        // Each `seed_test_clipboard_image` replaces any prior seed so
+        // tests do not accumulate stale image state across calls
+        // within the same `with_dryrun_image` block.
+        with_dryrun_image("1", || {
+            seed_test_clipboard_image(2, 1, vec![1, 2, 3, 4, 5, 6, 7, 8]);
+            seed_test_clipboard_image(1, 1, vec![9, 9, 9, 9]);
+            match read_image() {
+                Ok(ClipboardImage {
+                    width,
+                    height,
+                    rgba,
+                }) => {
+                    assert_eq!(width, 1);
+                    assert_eq!(height, 1);
+                    assert_eq!(rgba, vec![9, 9, 9, 9]);
+                }
+                other => panic!("expected Ok(ClipboardImage), got {other:?}"),
+            }
+        });
+    }
+
+    #[test]
+    fn dryrun_image_clear_seed_returns_no_image_on_subsequent_read() {
+        with_dryrun_image("1", || {
+            seed_test_clipboard_image(1, 1, vec![1, 2, 3, 4]);
+            assert!(read_image().is_ok(), "sanity: seed should succeed");
+            clear_test_clipboard_image();
+            assert_eq!(
+                read_image(),
+                Err(ImageReadError::NoImage),
+                "after clear, the fake clipboard image must report NoImage"
+            );
+        });
+    }
+}

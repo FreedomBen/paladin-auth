@@ -3219,9 +3219,49 @@ is never expected to be scripted.
   encrypted-Paladin-bundle import prompt so the TUI does not duplicate the
   CLI / GUI Paladin header decision table.
 - [ ] Route export writes through `paladin_core::write_secret_file_atomic`.
-- [ ] Implement clipboard wrapper (arboard reads/writes), QR image
+- [x] Implement clipboard wrapper (arboard reads/writes), QR image
   import from clipboard bytes, and only-if-unchanged auto-clear via
   `paladin_core::policy::clipboard_clear::ClipboardClearPolicy::should_clear`.
+  *(Adapter primitives live in `crates/paladin-tui/src/clipboard.rs`:
+  `read_text` / `write_text` already routed through `arboard` for both
+  production and `test-hooks` builds. This slice adds the third
+  primitive — `read_image() -> Result<ClipboardImage, ImageReadError>`
+  — that wraps `arboard::Clipboard::get_image()` and re-shapes the
+  result into the adapter-owned `ClipboardImage { width, height, rgba }`
+  type so the `arboard` dependency does not leak through the adapter
+  boundary. Errors collapse to a two-variant `ImageReadError`
+  (`NoImage` from `arboard::Error::ContentNotAvailable`,
+  `DecodeFailure` from everything else) so the executor can route to
+  the matching `QrImportFailure::{NoClipboardImage, ImageDecodeFailure}`
+  for the two distinct user-facing wordings the reducer renders. The
+  `paladin-tui/test-hooks` env-var protocol grows to cover images:
+  `PALADIN_CLIPBOARD_DRYRUN=1` returns the in-process seeded image
+  (or `NoImage` when not seeded, via the new
+  `seed_test_clipboard_image` / `clear_test_clipboard_image` helpers);
+  `=fail` returns `DecodeFailure` so both error variants are reachable
+  from CI. The executor side lands in
+  `crates/paladin-tui/src/app/effect.rs::execute_add_from_clipboard_qr`
+  — `Effect::AddFromClipboardQr { path }` calls `read_image`, hands
+  the RGBA buffer to `paladin_core::import::qr_image_bytes` (which
+  re-validates dimensions and rejects oversized buffers with the
+  `image_too_large` validation surface), then commits the resulting
+  `ValidatedAccount` batch through `Vault::import_accounts(_,
+  ImportConflict::Skip, _)` wrapped in `Vault::mutate_and_save` and
+  posts back `EffectResult::QrImport { result: ... }`. The
+  only-if-unchanged auto-clear was wired earlier with the clipboard
+  scheduling slice (`Effect::ClearClipboard` reads the live clipboard
+  through `read_text` and writes empty only when
+  `ClipboardClearPolicy::should_clear` returns `true`). Coverage:
+  `tests/clipboard_tests.rs::adapter_read_image` pins the new
+  primitive's DRYRUN protocol (round-trip seeded image, `NoImage` on
+  unseeded, `DecodeFailure` on `=fail`, seed-overwrite, clear);
+  `tests/effect_tests.rs::add_from_clipboard_qr` pins the executor —
+  happy-path import + persistence, `NoClipboardImage` /
+  `ImageDecodeFailure` routing, `NoEntriesToImport` on a blank image,
+  `image_too_large` on oversized dimensions, `Skip` conflict on
+  re-import, and silent-drop on path-mismatch / non-Unlocked. Real
+  QR fixtures are rendered through `qrcode` + `image` dev-deps that
+  mirror `paladin-core`'s `tests/import_qr.rs::make_qr_rgba`.)*
 - [ ] Add reducer, search, auto-lock, clipboard, HOTP reveal, terminal
   lifecycle, sensitive-buffer, and snapshot coverage. Tracked at the
   bullet level in the Tests checklist; this top-level item only ticks

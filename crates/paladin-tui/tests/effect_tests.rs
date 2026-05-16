@@ -2819,3 +2819,634 @@ fn execute_export_with_encrypted_format_routes_through_export_encrypted_and_writ
         "on-disk vault unchanged"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Effect::AddFromClipboardQr — live clipboard image + QR decode + import
+// (IMPLEMENTATION_PLAN_03_TUI.md > Implementation checklist:
+//   * "Implement clipboard wrapper (arboard reads/writes), QR image
+//     import from clipboard bytes, ...")
+//
+// The executor:
+//   1. Reads the live clipboard image via `paladin_tui::clipboard::read_image`.
+//      `ImageReadError::NoImage` → `QrImportFailure::NoClipboardImage`;
+//      `ImageReadError::DecodeFailure` → `QrImportFailure::ImageDecodeFailure`.
+//   2. Calls `paladin_core::import::qr_image_bytes(width, height, &rgba, now)`
+//      which re-validates dimensions, rejects oversized buffers
+//      (`image_too_large`), and decodes every QR as `otpauth://`.
+//   3. Wraps `Vault::import_accounts(_, ImportConflict::Skip, now)` in
+//      `Vault::mutate_and_save`; pre-commit save failures roll back
+//      and `save_durability_unconfirmed` commits in-memory.
+//   4. Posts the outcome through `EffectResult::QrImport { result: ... }`.
+//
+// Tests use the `paladin-tui/test-hooks` clipboard DRYRUN seam to feed
+// in synthetic clipboard images without a system clipboard server.
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "test-hooks")]
+mod add_from_clipboard_qr {
+    use super::*;
+
+    use image::Luma;
+    use qrcode::QrCode;
+
+    use paladin_core::ErrorKind;
+    use paladin_tui::app::event::{QrImportFailure, QrImportSuccess};
+    use paladin_tui::clipboard::{
+        clear_test_clipboard_image, seed_test_clipboard_image, test_clipboard_lock,
+    };
+
+    /// Render `payload` as a QR code into an RGBA8 buffer of
+    /// `(width, height, rgba)`. Mirrors `paladin-core`'s
+    /// `tests/import_qr.rs::make_qr_rgba` so the two suites render QRs
+    /// through the same encoder.
+    fn make_qr_rgba(payload: &str) -> (u32, u32, Vec<u8>) {
+        let code = QrCode::new(payload.as_bytes()).expect("encode QR");
+        let luma = code
+            .render::<Luma<u8>>()
+            .min_dimensions(160, 160)
+            .quiet_zone(true)
+            .build();
+        let (w, h) = luma.dimensions();
+        let raw = luma.into_raw();
+        let mut rgba = Vec::with_capacity(raw.len() * 4);
+        for v in raw {
+            rgba.extend_from_slice(&[v, v, v, 0xFF]);
+        }
+        (w, h, rgba)
+    }
+
+    /// Run `body` with `PALADIN_CLIPBOARD_DRYRUN=mode` and the
+    /// process-wide test-clipboard lock held; clear the fake image
+    /// on exit so no test leaks state into the next.
+    fn with_dryrun<R>(mode: &str, body: impl FnOnce() -> R) -> R {
+        let _guard = test_clipboard_lock();
+        std::env::set_var("PALADIN_CLIPBOARD_DRYRUN", mode);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(body));
+        std::env::remove_var("PALADIN_CLIPBOARD_DRYRUN");
+        clear_test_clipboard_image();
+        match result {
+            Ok(v) => v,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
+    }
+
+    const URI_TOTP_A: &str = "otpauth://totp/Acme:alice?secret=JBSWY3DPEHPK3PXP&issuer=Acme";
+
+    #[test]
+    fn execute_add_from_clipboard_qr_with_valid_otpauth_qr_imports_and_persists_via_mutate_and_save(
+    ) {
+        // Happy path: clipboard holds a valid `otpauth://` QR. The
+        // executor decodes via `qr_image_bytes`, commits through
+        // `Vault::import_accounts(_, ImportConflict::Skip, _)` wrapped
+        // in `mutate_and_save`, and posts back `EffectResult::QrImport`
+        // with a `QrImportSuccess { report }` whose `imported == 1`.
+        with_dryrun("1", || {
+            let tmp = secure_tempdir();
+            let path = tmp.path().join("vault.bin");
+            create_plaintext_vault(&path);
+            let (vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+            let initial_count = vault.iter().count();
+            let mut state = AppState::Unlocked {
+                path: path.clone(),
+                vault,
+                store,
+                search_query: String::new(),
+                idle_deadline: None,
+                pending_clipboard_clear: None,
+                hotp_reveal: None,
+                modal: None,
+                selected: None,
+                pending_chord_leader: None,
+                viewport_height: 0,
+                viewport_offset: 0,
+                focus: Focus::List,
+                status_line: None,
+                help_open: false,
+            };
+
+            let (w, h, rgba) = make_qr_rgba(URI_TOTP_A);
+            seed_test_clipboard_image(w, h, rgba);
+
+            let (tx, rx) = mpsc::channel::<AppEvent>();
+            let outcome = execute(
+                Effect::AddFromClipboardQr { path: path.clone() },
+                &mut state,
+                &tx,
+            );
+            assert_eq!(outcome, EffectOutcome::Continue);
+
+            let evt = rx.try_recv().expect("an AppEvent should be sent");
+            match evt {
+                AppEvent::EffectResult(EffectResult::QrImport {
+                    result: Ok(QrImportSuccess { report }),
+                }) => {
+                    assert_eq!(
+                        report.imported, 1,
+                        "single-QR otpauth payload must produce exactly one imported account"
+                    );
+                    assert_eq!(report.skipped, 0, "no skip path on an empty starting vault");
+                    assert_eq!(report.replaced, 0, "Skip policy never replaces");
+                    assert_eq!(report.appended, 0, "Skip policy never appends");
+                }
+                other => panic!("expected EffectResult::QrImport Ok, got {other:?}"),
+            }
+            assert!(
+                rx.try_recv().is_err(),
+                "executor must emit exactly one AppEvent per Effect::AddFromClipboardQr"
+            );
+
+            // Live in-memory vault grew by one.
+            let vault = match state {
+                AppState::Unlocked { vault, .. } => vault,
+                other => panic!("expected Unlocked, got {other:?}"),
+            };
+            assert_eq!(
+                vault.iter().count(),
+                initial_count + 1,
+                "successful QR import must grow the live vault"
+            );
+
+            // On-disk primary committed (mutate_and_save persists the merge).
+            let (reopened, _store) =
+                Store::open(&path, VaultLock::Plaintext).expect("reopen plaintext");
+            assert_eq!(
+                reopened.iter().count(),
+                initial_count + 1,
+                "successful QR import must commit to the on-disk primary"
+            );
+        });
+    }
+
+    #[test]
+    fn execute_add_from_clipboard_qr_with_no_image_on_clipboard_sends_no_clipboard_image_failure() {
+        // Clipboard has no image (text-only target, or platform reports
+        // `ContentNotAvailable`). The executor must surface the inline
+        // `QrImportFailure::NoClipboardImage` variant — the reducer
+        // renders a distinct user-facing wording for this case.
+        with_dryrun("1", || {
+            let tmp = secure_tempdir();
+            let path = tmp.path().join("vault.bin");
+            create_plaintext_vault(&path);
+            let (vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+            let initial_count = vault.iter().count();
+            let mut state = AppState::Unlocked {
+                path: path.clone(),
+                vault,
+                store,
+                search_query: String::new(),
+                idle_deadline: None,
+                pending_clipboard_clear: None,
+                hotp_reveal: None,
+                modal: None,
+                selected: None,
+                pending_chord_leader: None,
+                viewport_height: 0,
+                viewport_offset: 0,
+                focus: Focus::List,
+                status_line: None,
+                help_open: false,
+            };
+
+            clear_test_clipboard_image();
+
+            let (tx, rx) = mpsc::channel::<AppEvent>();
+            let outcome = execute(
+                Effect::AddFromClipboardQr { path: path.clone() },
+                &mut state,
+                &tx,
+            );
+            assert_eq!(outcome, EffectOutcome::Continue);
+
+            let evt = rx.try_recv().expect("an AppEvent should be sent");
+            match evt {
+                AppEvent::EffectResult(EffectResult::QrImport {
+                    result: Err(QrImportFailure::NoClipboardImage),
+                }) => {}
+                other => {
+                    panic!("expected EffectResult::QrImport Err(NoClipboardImage), got {other:?}")
+                }
+            }
+
+            // Vault untouched on both sides.
+            let vault = match state {
+                AppState::Unlocked { vault, .. } => vault,
+                other => panic!("expected Unlocked, got {other:?}"),
+            };
+            assert_eq!(
+                vault.iter().count(),
+                initial_count,
+                "no-image failure must leave the live vault untouched"
+            );
+            let (reopened, _store) =
+                Store::open(&path, VaultLock::Plaintext).expect("reopen plaintext");
+            assert_eq!(
+                reopened.iter().count(),
+                initial_count,
+                "no-image failure must leave the on-disk vault untouched"
+            );
+        });
+    }
+
+    #[test]
+    fn execute_add_from_clipboard_qr_with_decode_failure_sends_image_decode_failure() {
+        // `arboard` reported an image but the bytes could not be
+        // converted to a usable raster (or the backend itself failed
+        // to init). Modeled in tests through `PALADIN_CLIPBOARD_DRYRUN=fail`.
+        with_dryrun("fail", || {
+            let tmp = secure_tempdir();
+            let path = tmp.path().join("vault.bin");
+            create_plaintext_vault(&path);
+            let (vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+            let initial_count = vault.iter().count();
+            let mut state = AppState::Unlocked {
+                path: path.clone(),
+                vault,
+                store,
+                search_query: String::new(),
+                idle_deadline: None,
+                pending_clipboard_clear: None,
+                hotp_reveal: None,
+                modal: None,
+                selected: None,
+                pending_chord_leader: None,
+                viewport_height: 0,
+                viewport_offset: 0,
+                focus: Focus::List,
+                status_line: None,
+                help_open: false,
+            };
+
+            let (tx, rx) = mpsc::channel::<AppEvent>();
+            let outcome = execute(
+                Effect::AddFromClipboardQr { path: path.clone() },
+                &mut state,
+                &tx,
+            );
+            assert_eq!(outcome, EffectOutcome::Continue);
+
+            let evt = rx.try_recv().expect("an AppEvent should be sent");
+            match evt {
+                AppEvent::EffectResult(EffectResult::QrImport {
+                    result: Err(QrImportFailure::ImageDecodeFailure),
+                }) => {}
+                other => {
+                    panic!("expected EffectResult::QrImport Err(ImageDecodeFailure), got {other:?}")
+                }
+            }
+
+            let vault = match state {
+                AppState::Unlocked { vault, .. } => vault,
+                other => panic!("expected Unlocked, got {other:?}"),
+            };
+            assert_eq!(
+                vault.iter().count(),
+                initial_count,
+                "decode-failure must leave the live vault untouched"
+            );
+        });
+    }
+
+    #[test]
+    fn execute_add_from_clipboard_qr_with_image_containing_no_qrs_sends_no_entries_to_import_failure(
+    ) {
+        // Clipboard holds an image but the QR decoder finds no codes.
+        // `qr_image_bytes` rejects with `PaladinError::NoEntriesToImport`
+        // per `DESIGN.md` §4.6, which the executor wraps in
+        // `QrImportFailure::Import(_)` for the reducer to render through
+        // `render_error_message`.
+        with_dryrun("1", || {
+            let tmp = secure_tempdir();
+            let path = tmp.path().join("vault.bin");
+            create_plaintext_vault(&path);
+            let (vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+            let initial_count = vault.iter().count();
+            let mut state = AppState::Unlocked {
+                path: path.clone(),
+                vault,
+                store,
+                search_query: String::new(),
+                idle_deadline: None,
+                pending_clipboard_clear: None,
+                hotp_reveal: None,
+                modal: None,
+                selected: None,
+                pending_chord_leader: None,
+                viewport_height: 0,
+                viewport_offset: 0,
+                focus: Focus::List,
+                status_line: None,
+                help_open: false,
+            };
+
+            // Solid-white 32x32 RGBA8 buffer — no QR code present, so
+            // `read_qr_image_bytes` returns an empty vec which
+            // `qr_image_bytes` converts to NoEntriesToImport.
+            let blank: Vec<u8> = std::iter::repeat_n([0xFFu8, 0xFF, 0xFF, 0xFF], 32 * 32)
+                .flatten()
+                .collect();
+            seed_test_clipboard_image(32, 32, blank);
+
+            let (tx, rx) = mpsc::channel::<AppEvent>();
+            let outcome = execute(
+                Effect::AddFromClipboardQr { path: path.clone() },
+                &mut state,
+                &tx,
+            );
+            assert_eq!(outcome, EffectOutcome::Continue);
+
+            let evt = rx.try_recv().expect("an AppEvent should be sent");
+            match evt {
+                AppEvent::EffectResult(EffectResult::QrImport {
+                    result: Err(QrImportFailure::Import(err)),
+                }) => {
+                    assert_eq!(
+                        err.kind(),
+                        ErrorKind::NoEntriesToImport,
+                        "blank image must surface no_entries_to_import"
+                    );
+                }
+                other => panic!(
+                    "expected EffectResult::QrImport Err(Import(NoEntriesToImport)), got {other:?}"
+                ),
+            }
+
+            let vault = match state {
+                AppState::Unlocked { vault, .. } => vault,
+                other => panic!("expected Unlocked, got {other:?}"),
+            };
+            assert_eq!(
+                vault.iter().count(),
+                initial_count,
+                "no-QRs-decoded failure must leave the live vault untouched"
+            );
+        });
+    }
+
+    #[test]
+    fn execute_add_from_clipboard_qr_with_oversized_rgba_buffer_sends_validation_image_too_large() {
+        // `qr_image_bytes` rejects RGBA buffers above `QR_RGBA_MAX_BYTES`
+        // (64 MiB) with `validation_error { field: "qr_image",
+        // reason: "image_too_large" }`. Reach the guard by seeding
+        // dimensions whose `w * h * 4` exceeds the cap. The seeded
+        // `rgba` length need only satisfy the dimensions check the
+        // adapter performs (none — production uses arboard's byte
+        // length verbatim), so we send the matching byte count via a
+        // sparse buffer constructed with `vec![0; ...]`.
+        //
+        // We pick a 5000x5000 image: 100 MiB > 64 MiB. Allocating that
+        // up-front would be wasteful, so we exploit the
+        // `seed_test_clipboard_image` contract — the fake stores the
+        // bytes verbatim and the production `read_image` would have
+        // already allocated them. To avoid the 100 MiB allocation in
+        // tests, the adapter validates dimensions internally; if not,
+        // `qr_image_bytes` would have done so via `validate_rgba_dims`.
+        // Here we send a 0-byte buffer with oversized dimensions so the
+        // `buffer_length_mismatch` route would fire instead of
+        // `image_too_large` — that breaks our test contract. Use
+        // dimensions just past the cap and matching byte count.
+        //
+        // Pick 4097x4097 → ~67.1 MiB, just above 64 MiB. To keep
+        // memory cheap in CI, the executor must run the
+        // size-vs-`QR_RGBA_MAX_BYTES` check before passing through to
+        // `qr_image_bytes` so the buffer length never has to match. The
+        // executor pre-screens the dimensions; see the
+        // `image_too_large` guard documented at the placeholder site.
+        with_dryrun("1", || {
+            let tmp = secure_tempdir();
+            let path = tmp.path().join("vault.bin");
+            create_plaintext_vault(&path);
+            let (vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+            let initial_count = vault.iter().count();
+            let mut state = AppState::Unlocked {
+                path: path.clone(),
+                vault,
+                store,
+                search_query: String::new(),
+                idle_deadline: None,
+                pending_clipboard_clear: None,
+                hotp_reveal: None,
+                modal: None,
+                selected: None,
+                pending_chord_leader: None,
+                viewport_height: 0,
+                viewport_offset: 0,
+                focus: Focus::List,
+                status_line: None,
+                help_open: false,
+            };
+
+            // Dimensions whose `w*h*4` exceeds `QR_RGBA_MAX_BYTES`
+            // (64 MiB). 5000*5000*4 = 100 MB > 64 MiB. Use a 0-byte
+            // payload — the executor's pre-screen catches the
+            // dimension-derived overflow before reaching
+            // `qr_image_bytes`'s buffer-length check.
+            seed_test_clipboard_image(5000, 5000, Vec::new());
+
+            let (tx, rx) = mpsc::channel::<AppEvent>();
+            let outcome = execute(
+                Effect::AddFromClipboardQr { path: path.clone() },
+                &mut state,
+                &tx,
+            );
+            assert_eq!(outcome, EffectOutcome::Continue);
+
+            let evt = rx.try_recv().expect("an AppEvent should be sent");
+            match evt {
+                AppEvent::EffectResult(EffectResult::QrImport {
+                    result: Err(QrImportFailure::Import(err)),
+                }) => match err.kind() {
+                    ErrorKind::ValidationError => {
+                        // Wording is owned by the core; the executor
+                        // only needs to confirm the routed `kind`.
+                    }
+                    other => {
+                        panic!("expected ValidationError (image_too_large), got kind={other:?}")
+                    }
+                },
+                other => panic!(
+                    "expected EffectResult::QrImport Err(Import(ValidationError)), got {other:?}"
+                ),
+            }
+
+            let vault = match state {
+                AppState::Unlocked { vault, .. } => vault,
+                other => panic!("expected Unlocked, got {other:?}"),
+            };
+            assert_eq!(
+                vault.iter().count(),
+                initial_count,
+                "oversized-buffer failure must leave the live vault untouched"
+            );
+        });
+    }
+
+    #[test]
+    fn execute_add_from_clipboard_qr_with_mismatched_path_is_silently_dropped() {
+        // Stale effect emitted before a vault switch must drop without
+        // touching the clipboard or sending an AppEvent — mirrors the
+        // `execute_import_with_mismatched_path_is_silently_dropped`
+        // contract.
+        with_dryrun("1", || {
+            let tmp = secure_tempdir();
+            let path = tmp.path().join("vault.bin");
+            create_plaintext_vault(&path);
+            let (vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+            let mut state = AppState::Unlocked {
+                path: path.clone(),
+                vault,
+                store,
+                search_query: String::new(),
+                idle_deadline: None,
+                pending_clipboard_clear: None,
+                hotp_reveal: None,
+                modal: None,
+                selected: None,
+                pending_chord_leader: None,
+                viewport_height: 0,
+                viewport_offset: 0,
+                focus: Focus::List,
+                status_line: None,
+                help_open: false,
+            };
+
+            let (w, h, rgba) = make_qr_rgba(URI_TOTP_A);
+            seed_test_clipboard_image(w, h, rgba);
+
+            let other_path = tmp.path().join("other.bin");
+            let (tx, rx) = mpsc::channel::<AppEvent>();
+            let outcome = execute(
+                Effect::AddFromClipboardQr { path: other_path },
+                &mut state,
+                &tx,
+            );
+            assert_eq!(outcome, EffectOutcome::Continue);
+            assert!(
+                rx.try_recv().is_err(),
+                "mismatched-path effect must drop without emitting an AppEvent"
+            );
+        });
+    }
+
+    #[test]
+    fn execute_add_from_clipboard_qr_on_locked_state_is_silently_dropped() {
+        // Same drop rule on a non-Unlocked state — the reducer would
+        // discard a corresponding `EffectResult::QrImport` anyway, and
+        // posting back would just synthesize a mutation attempt
+        // against unrelated state.
+        with_dryrun("1", || {
+            let tmp = secure_tempdir();
+            let path = tmp.path().join("vault.bin");
+            create_plaintext_vault(&path);
+
+            let mut state = AppState::Locked {
+                path: path.clone(),
+                pending_clipboard_clear: None,
+            };
+
+            let (w, h, rgba) = make_qr_rgba(URI_TOTP_A);
+            seed_test_clipboard_image(w, h, rgba);
+
+            let (tx, rx) = mpsc::channel::<AppEvent>();
+            let outcome = execute(
+                Effect::AddFromClipboardQr { path: path.clone() },
+                &mut state,
+                &tx,
+            );
+            assert_eq!(outcome, EffectOutcome::Continue);
+            assert!(
+                rx.try_recv().is_err(),
+                "Locked-state effect must drop without emitting an AppEvent"
+            );
+        });
+    }
+
+    #[test]
+    fn execute_add_from_clipboard_qr_with_skip_conflict_over_existing_account_records_skip() {
+        // Re-importing a QR for an account that already exists with
+        // matching `(secret, issuer, label)` produces 0 imports +
+        // 1 skip under `ImportConflict::Skip`. Asserts the executor
+        // wires `Vault::import_accounts` with the Skip policy as the
+        // event docstring requires.
+        with_dryrun("1", || {
+            let tmp = secure_tempdir();
+            let path = tmp.path().join("vault.bin");
+            create_plaintext_vault(&path);
+            let (vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+            let mut state = AppState::Unlocked {
+                path: path.clone(),
+                vault,
+                store,
+                search_query: String::new(),
+                idle_deadline: None,
+                pending_clipboard_clear: None,
+                hotp_reveal: None,
+                modal: None,
+                selected: None,
+                pending_chord_leader: None,
+                viewport_height: 0,
+                viewport_offset: 0,
+                focus: Focus::List,
+                status_line: None,
+                help_open: false,
+            };
+
+            let (w, h, rgba) = make_qr_rgba(URI_TOTP_A);
+            seed_test_clipboard_image(w, h, rgba.clone());
+
+            // First import: lands.
+            let (tx, rx) = mpsc::channel::<AppEvent>();
+            let _ = execute(
+                Effect::AddFromClipboardQr { path: path.clone() },
+                &mut state,
+                &tx,
+            );
+            let evt = rx.try_recv().expect("first AppEvent");
+            match evt {
+                AppEvent::EffectResult(EffectResult::QrImport {
+                    result: Ok(QrImportSuccess { report }),
+                }) => assert_eq!(report.imported, 1, "first import must add the account"),
+                other => panic!("expected Ok first time, got {other:?}"),
+            }
+            let count_after_first = match &state {
+                AppState::Unlocked { vault, .. } => vault.iter().count(),
+                other => panic!("expected Unlocked, got {other:?}"),
+            };
+
+            // Second import: same QR, same `(secret, issuer, label)` —
+            // Skip policy records 1 skip and 0 imports.
+            seed_test_clipboard_image(w, h, rgba);
+            let (tx2, rx2) = mpsc::channel::<AppEvent>();
+            let _ = execute(
+                Effect::AddFromClipboardQr { path: path.clone() },
+                &mut state,
+                &tx2,
+            );
+            let evt2 = rx2.try_recv().expect("second AppEvent");
+            match evt2 {
+                AppEvent::EffectResult(EffectResult::QrImport {
+                    result: Ok(QrImportSuccess { report }),
+                }) => {
+                    assert_eq!(
+                        report.imported, 0,
+                        "second import with Skip conflict must not insert"
+                    );
+                    assert_eq!(
+                        report.skipped, 1,
+                        "second import with Skip conflict must record one skip"
+                    );
+                    assert_eq!(report.replaced, 0, "Skip policy does not replace");
+                    assert_eq!(report.appended, 0, "Skip policy does not append");
+                }
+                other => panic!("expected Ok with skip on second import, got {other:?}"),
+            }
+            let count_after_second = match &state {
+                AppState::Unlocked { vault, .. } => vault.iter().count(),
+                other => panic!("expected Unlocked, got {other:?}"),
+            };
+            assert_eq!(
+                count_after_second, count_after_first,
+                "Skip conflict must not grow the live vault"
+            );
+        });
+    }
+}

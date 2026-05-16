@@ -64,3 +64,9 @@ tempfile = "3"
 # Matches the version `paladin-cli` uses for its stub-based wrapper
 # tests so the two suites stay on the same minor.
 assert_cmd = "2.0"
+# QR-image fixture generator for `Effect::AddFromClipboardQr` executor
+# tests in `tests/effect_tests.rs`. Mirrors the version + features
+# `paladin-core`'s `tests/import_qr.rs` uses so the two suites render
+# QRs through the same encoder.
+qrcode = { version = "0.14", default-features = false, features = ["image"] }
+image = { version = "0.25", default-features = false }

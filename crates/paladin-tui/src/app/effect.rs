@@ -30,6 +30,7 @@ use paladin_core::{
 
 use crate::app::event::{
     AddFailure, AddSuccess, AppEvent, Effect, EffectResult, ImportFailure, ImportSuccess,
+    QrImportFailure, QrImportSuccess,
 };
 use crate::app::state::{AppState, ExportFormat};
 
@@ -287,23 +288,7 @@ pub fn execute(effect: Effect, state: &mut AppState, sender: &Sender<AppEvent>) 
         Effect::AddAnyway { path, validated } => {
             execute_add_anyway(&path, *validated, state, sender)
         }
-        Effect::AddFromClipboardQr { path: _ } => {
-            // Placeholder: the live `arboard::Clipboard::get_image()`
-            // read, the `width * height * 4` vs
-            // `paladin_core::QR_RGBA_MAX_BYTES` guard, the
-            // `paladin_core::import::qr_image_bytes` decode, and the
-            // `Vault::import_accounts(_, ImportConflict::Skip, _)`
-            // wrapped in `Vault::mutate_and_save` land alongside the
-            // QR-add inline-error / counts-panel slices (see
-            // `IMPLEMENTATION_PLAN_03_TUI.md` "Add modal" QR-import
-            // bullets). Until that wiring lands the reducer emit is
-            // exercised by reducer-level tests
-            // (`enter_in_add_modal_qr_mode_emits_add_from_clipboard_qr_effect`)
-            // and the executor consumes the variant without emitting
-            // an `AppEvent`.
-            let _ = sender;
-            EffectOutcome::Continue
-        }
+        Effect::AddFromClipboardQr { path } => execute_add_from_clipboard_qr(&path, state, sender),
         Effect::Import {
             path,
             source_path,
@@ -665,6 +650,105 @@ fn commit_validated_add(
         Ok(summary) => Ok(AddSuccess { summary, warnings }),
         Err(err) => Err(AddFailure::Save(err)),
     }
+}
+
+/// Execute an [`Effect::AddFromClipboardQr`] for an Add-modal QR submit.
+///
+/// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)" > Add: *"QR
+/// imports call `Vault::import_accounts` with `ImportConflict::Skip`
+/// and report imported/skipped/warning counts plus any warning
+/// messages in the post-success counts panel."*
+///
+/// 1. Read the live clipboard image via
+///    [`crate::clipboard::read_image`]. The two
+///    [`crate::clipboard::ImageReadError`] variants route to the
+///    matching [`QrImportFailure`] inline-error variants
+///    (`NoClipboardImage` / `ImageDecodeFailure`) and post back
+///    immediately without ever calling
+///    [`paladin_core::import::qr_image_bytes`] — the reducer renders
+///    each with its own user-facing wording.
+/// 2. Hand the RGBA buffer to
+///    [`paladin_core::import::qr_image_bytes`], which re-validates
+///    dimensions (`zero_dimensions`, `dimensions_overflow`,
+///    `image_too_large`, `buffer_length_mismatch`), decodes every QR
+///    via `rqrr`, and feeds each payload through
+///    [`paladin_core::parse_otpauth`]. Errors map to
+///    [`QrImportFailure::Import`] so the reducer renders through
+///    [`crate::app::state::render_error_message`].
+/// 3. Commit the resulting `ValidatedAccount` batch through
+///    [`paladin_core::Vault::import_accounts`] wrapped in
+///    [`paladin_core::Vault::mutate_and_save`] with the same
+///    `import_time`, always under `ImportConflict::Skip` (clipboard QR
+///    imports never replace or append). Save errors
+///    (`save_not_committed`, `save_durability_unconfirmed`,
+///    `io_error`) ride the same `QrImportFailure::Import` channel; the
+///    reducer surfaces them inline per the plan's "Effect errors" >
+///    "Add / remove / rename / settings saves" rule (pre-commit
+///    rollback inside core).
+///
+/// The path check protects against a stale effect emitted before an
+/// auto-lock or vault switch: if the live state is no longer
+/// `Unlocked` against the same path, drop the effect silently — the
+/// reducer would discard the corresponding `EffectResult::QrImport`
+/// anyway, and posting back would just synthesize an artificial
+/// mutation attempt against unrelated state.
+fn execute_add_from_clipboard_qr(
+    path: &std::path::Path,
+    state: &mut AppState,
+    sender: &Sender<AppEvent>,
+) -> EffectOutcome {
+    let AppState::Unlocked {
+        path: state_path,
+        vault,
+        store,
+        ..
+    } = state
+    else {
+        return EffectOutcome::Continue;
+    };
+    if state_path != path {
+        return EffectOutcome::Continue;
+    }
+
+    let image = match crate::clipboard::read_image() {
+        Ok(img) => img,
+        Err(crate::clipboard::ImageReadError::NoImage) => {
+            let _ = sender.send(AppEvent::EffectResult(EffectResult::QrImport {
+                result: Err(QrImportFailure::NoClipboardImage),
+            }));
+            return EffectOutcome::Continue;
+        }
+        Err(crate::clipboard::ImageReadError::DecodeFailure) => {
+            let _ = sender.send(AppEvent::EffectResult(EffectResult::QrImport {
+                result: Err(QrImportFailure::ImageDecodeFailure),
+            }));
+            return EffectOutcome::Continue;
+        }
+    };
+
+    let import_time = SystemTime::now();
+    let accounts =
+        match core_import::qr_image_bytes(image.width, image.height, &image.rgba, import_time) {
+            Ok(v) => v,
+            Err(err) => {
+                let _ = sender.send(AppEvent::EffectResult(EffectResult::QrImport {
+                    result: Err(QrImportFailure::Import(err)),
+                }));
+                return EffectOutcome::Continue;
+            }
+        };
+
+    let result = vault.mutate_and_save(store, move |v| {
+        v.import_accounts(accounts, ImportConflict::Skip, import_time)
+    });
+    let mapped = match result {
+        Ok(report) => Ok(QrImportSuccess { report }),
+        Err(err) => Err(QrImportFailure::Import(err)),
+    };
+    let _ = sender.send(AppEvent::EffectResult(EffectResult::QrImport {
+        result: mapped,
+    }));
+    EffectOutcome::Continue
 }
 
 /// Execute an [`Effect::Import`] for an Import-modal submit.
