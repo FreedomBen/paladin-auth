@@ -2824,9 +2824,57 @@ Passphrase inline errors:
 
 Status-line states:
 
-- [ ] Status-line error after rejected copy.
-- [ ] Status-line `save_durability_unconfirmed` after HOTP `n`.
-- [ ] Status-line `clipboard_write_failed` after a failed copy.
+- [x] Status-line error after rejected copy.
+  *(`snapshot_list_view_status_line_error_after_rejected_copy` in
+  `crates/paladin-tui/tests/view_snapshots.rs` drives `view::render`
+  against an `Unlocked` state holding
+  `status_line: Some(StatusLine::Error(NO_ACCOUNT_SELECTED.to_string()))`.
+  Routing through the `NO_ACCOUNT_SELECTED` constant binds the
+  snapshot to the source-of-truth wording the reducer publishes for
+  the selection-gated rejection fan-out (`n` / `r` / `R`, and
+  `Enter`-as-copy by the same gate). `crates/paladin-tui/src/view/list.rs`
+  now routes the bottom row through a `bottom_line` helper: when
+  `status_line` is `Some(StatusLine::Error(msg))` the published
+  prose takes over the keybinding-hint slot (red-tinted for live
+  terminals; the snapshot harness drops styling), and when `None`
+  the default `[↑↓] move … [/] find` hint is unchanged from
+  `snapshot_list_view_single_totp`. Locked in
+  `tests/snapshots/view_snapshots__snapshot_list_view_status_line_error_after_rejected_copy.snap`.)*
+- [x] Status-line `save_durability_unconfirmed` after HOTP `n`.
+  *(`snapshot_list_view_status_line_save_durability_unconfirmed_after_hotp_advance`
+  in `crates/paladin-tui/tests/view_snapshots.rs` drives
+  `view::render` against an `Unlocked` state mirroring the reducer's
+  post-advance "committed-but-uncertain" shape from
+  `reduce_hotp_advance_result`: the selected HOTP account has an
+  open `HotpReveal` (the staged code survives the
+  durability-unconfirmed failure per the reducer body) and
+  `status_line` carries `StatusLine::Error(render_error_message(
+    &PaladinError::SaveDurabilityUnconfirmed))`. Routing the wording
+  through `render_error_message` binds the snapshot to the core
+  `Display` impl (`save durability unconfirmed`) rather than a
+  hand-typed string, keeping the surfaced text in lockstep with the
+  CLI's `save_durability_unconfirmed` envelope key and the GTK
+  equivalent surface. The HotpReveal is seeded so the rows pane
+  shows the revealed code under the pre-advance `(#41)` counter,
+  pinning that the renderer paints the reveal alongside the
+  durability warning rather than collapsing back to the hidden
+  prompt. Locked in
+  `tests/snapshots/view_snapshots__snapshot_list_view_status_line_save_durability_unconfirmed_after_hotp_advance.snap`.)*
+- [x] Status-line `clipboard_write_failed` after a failed copy.
+  *(`snapshot_list_view_status_line_clipboard_write_failed_after_failed_copy`
+  in `crates/paladin-tui/tests/view_snapshots.rs` drives
+  `view::render` against an `Unlocked` state whose `status_line`
+  carries `StatusLine::Error(CLIPBOARD_WRITE_FAILED.to_string())` —
+  the exact wording `reduce_copy_code_result` publishes on the
+  `EffectResult::CopyCode { result: Err(()), .. }` branch when the
+  executor's `arboard` write fails. Routing through the
+  `CLIPBOARD_WRITE_FAILED` constant binds the snapshot to the
+  source-of-truth string so a future rewording stays in sync with
+  the reducer-level `clipboard_write_failed` assertion. Reads as a
+  bottom-row delta from the `rejected_copy` sibling — both share
+  the `StatusLine::Error` renderer branch — pinning that the
+  message content is the only difference. Locked in
+  `tests/snapshots/view_snapshots__snapshot_list_view_status_line_clipboard_write_failed_after_failed_copy.snap`.)*
 - [x] Unlock screen with inline wrong-passphrase error.
   *(`snapshot_unlock_screen_with_wrong_passphrase_error` in
   `tests/view_snapshots.rs` sets

@@ -51,12 +51,13 @@ use std::time::SystemTime;
 
 use paladin_core::{AccountId, AccountKindSummary, AccountSummary, Code, Vault};
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
+use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Padding, Paragraph};
 use ratatui::Frame;
 use secrecy::ExposeSecret;
 
-use crate::app::state::{AppState, HotpReveal};
+use crate::app::state::{AppState, HotpReveal, StatusLine};
 use crate::search::filtered_account_ids;
 
 /// Width of the issuer/label column inside an account row. Truncated
@@ -94,6 +95,7 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState, now: SystemTime) {
         selected,
         hotp_reveal,
         viewport_offset,
+        status_line,
         ..
     } = state
     else {
@@ -162,8 +164,36 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState, now: SystemTime) {
 
     frame.render_widget(Paragraph::new(divider), chunks[3]);
 
-    let hint = "[↑↓] move  [enter] copy  [n] next-HOTP  [a] add  [/] find";
-    frame.render_widget(Paragraph::new(hint), chunks[4]);
+    frame.render_widget(Paragraph::new(bottom_line(status_line.as_ref())), chunks[4]);
+}
+
+/// Build the bottom-row [`Line`] for the list view.
+///
+/// When `status_line` is `None`, returns the default keybinding hint
+/// that documents the §6 mock's bottom bar. When `status_line` is
+/// `Some`, the published prose takes over the slot — per
+/// `DESIGN.md` §6's *"errors surface inline in the active modal or
+/// in the status line"* and the
+/// `IMPLEMENTATION_PLAN_03_TUI.md` "Status-line states" snapshot
+/// fan-out, the carried text from `StatusLine::Error` /
+/// `StatusLine::Confirmation` replaces the hint until the next event
+/// either clears it (a follow-up successful effect re-publishes
+/// `None` per the reducer's last-write-wins contract) or overwrites
+/// it. `Error` is tinted red and `Confirmation` is tinted green so a
+/// live terminal distinguishes them; the styled-grid `--no-color`
+/// variant arrives with the search-highlighting matrix (per the
+/// header note in `tests/view_snapshots.rs`).
+fn bottom_line(status_line: Option<&StatusLine>) -> Line<'_> {
+    match status_line {
+        Some(StatusLine::Error(msg)) => {
+            Line::from(Span::styled(msg.as_str(), Style::default().fg(Color::Red)))
+        }
+        Some(StatusLine::Confirmation(msg)) => Line::from(Span::styled(
+            msg.as_str(),
+            Style::default().fg(Color::Green),
+        )),
+        None => Line::from("[↑↓] move  [enter] copy  [n] next-HOTP  [a] add  [/] find"),
+    }
 }
 
 /// Render one account row per visible vault entry into `area`. The

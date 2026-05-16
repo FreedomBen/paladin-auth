@@ -36,7 +36,7 @@ use paladin_tui::app::state::{
     format_duplicate_account_message, format_qr_import_failure, render_error_message, AddModal,
     AddMode, AppState, CountsPanel, ExportFormat, ExportModal, Focus, HotpReveal, ImportModal,
     Modal, PassphraseModal, PassphraseSubFlow, PendingDuplicateAdd, RemoveModal, RenameModal,
-    SettingsModal,
+    SettingsModal, StatusLine, CLIPBOARD_WRITE_FAILED, NO_ACCOUNT_SELECTED,
 };
 use paladin_tui::prompt::PassphraseBuffer;
 use paladin_tui::view::render;
@@ -448,6 +448,154 @@ fn snapshot_list_view_after_zz_recenter() {
         viewport_offset,
         focus: Focus::List,
         status_line: None,
+        help_open: false,
+    };
+    insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 12));
+}
+
+#[test]
+fn snapshot_list_view_status_line_error_after_rejected_copy() {
+    // Plan L2827: "Status-line error after rejected copy." Drive
+    // `view::render` against an `Unlocked` state whose `status_line`
+    // carries `StatusLine::Error(NO_ACCOUNT_SELECTED.to_string())`.
+    // The reducer publishes this exact wording when an action key
+    // (`n` / `r` / `R`, and `Enter`-as-copy by the same gate) fires
+    // with `selected = None`; routing through the
+    // `NO_ACCOUNT_SELECTED` constant binds the snapshot to the
+    // source-of-truth string rather than a hand-typed copy and
+    // mirrors the reducer-level assertions in
+    // `tests/reducer_tests.rs` (`expect a `selection_gated`
+    // status-line error` fan-out).
+    //
+    // The vault holds a single TOTP account so the rows pane still
+    // renders a populated list — pinning that the status-line text
+    // takes over the keybinding-hint slot (per `DESIGN.md` §6
+    // "errors surface inline in the active modal or in the status
+    // line") rather than appending a new row, and that the chrome
+    // around it is unchanged from `snapshot_list_view_single_totp`.
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (mut vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let id = push_totp_account(&mut vault, &store, Some("GitHub"), "ben@example.com");
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: Some(StatusLine::Error(NO_ACCOUNT_SELECTED.to_string())),
+        help_open: false,
+    };
+    insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 12));
+}
+
+#[test]
+fn snapshot_list_view_status_line_save_durability_unconfirmed_after_hotp_advance() {
+    // Plan L2828: "Status-line `save_durability_unconfirmed` after
+    // HOTP `n`." Drive `view::render` against an `Unlocked` state
+    // mirroring the reducer's post-advance "committed-but-uncertain"
+    // shape from `reduce_hotp_advance_result`: a `HotpReveal` is
+    // open for the selected HOTP account (the staged code survives
+    // the durability-unconfirmed failure per the reducer body) and
+    // `status_line` carries
+    // `StatusLine::Error(render_error_message(
+    //   &PaladinError::SaveDurabilityUnconfirmed))`.
+    //
+    // Routing the wording through `render_error_message` binds the
+    // snapshot to the core `Display` impl
+    // (`save durability unconfirmed`) rather than a hand-typed
+    // string, keeping the surfaced text in lockstep with the CLI's
+    // `save_durability_unconfirmed` envelope key and the GTK
+    // equivalent surface. The HotpReveal is seeded so the rows pane
+    // shows the revealed code under the pre-advance `(#N)` counter,
+    // pinning that the renderer paints the reveal alongside the
+    // durability warning rather than collapsing back to the hidden
+    // prompt.
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (mut vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let hotp_id = push_hotp_account(&mut vault, &store, Some("AWS"), "prod", 41);
+    let reveal = HotpReveal {
+        account_id: hotp_id,
+        counter_used: 41,
+        code: SecretString::from("123456".to_string()),
+        // `Instant`-based deadline is irrelevant to the static
+        // snapshot (the renderer never inspects it) but
+        // `hotp_reveal_deadline` keeps the construction shape
+        // identical to the reducer's `Ok` arm.
+        deadline: hotp_reveal_deadline(Instant::now()),
+    };
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: Some(reveal),
+        modal: None,
+        selected: Some(hotp_id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: Some(StatusLine::Error(render_error_message(
+            &PaladinError::SaveDurabilityUnconfirmed,
+        ))),
+        help_open: false,
+    };
+    insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 12));
+}
+
+#[test]
+fn snapshot_list_view_status_line_clipboard_write_failed_after_failed_copy() {
+    // Plan L2829: "Status-line `clipboard_write_failed` after a
+    // failed copy." Drive `view::render` against an `Unlocked` state
+    // whose `status_line` carries
+    // `StatusLine::Error(CLIPBOARD_WRITE_FAILED.to_string())` — the
+    // exact wording `reduce_copy_code_result` publishes on the
+    // `EffectResult::CopyCode { result: Err(()), .. }` branch when
+    // the executor's `arboard` write fails. Routing through the
+    // `CLIPBOARD_WRITE_FAILED` constant binds the snapshot to the
+    // source-of-truth string so a future rewording stays in sync
+    // with the reducer-level `effect_result_copy_code_err_publishes_
+    // clipboard_write_failed_status_line` assertion.
+    //
+    // The vault holds a single TOTP account so the rows pane renders
+    // a populated list around the status-line slot — pinning the
+    // delta from `snapshot_list_view_status_line_error_after_
+    // rejected_copy` is the message content alone, since both share
+    // the `StatusLine::Error` renderer branch.
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (mut vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let id = push_totp_account(&mut vault, &store, Some("GitHub"), "ben@example.com");
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: Some(StatusLine::Error(CLIPBOARD_WRITE_FAILED.to_string())),
         help_open: false,
     };
     insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 12));
