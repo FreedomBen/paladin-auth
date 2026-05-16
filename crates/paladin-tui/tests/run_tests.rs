@@ -26,7 +26,7 @@
 //! unit-testable; `run_with_terminal_guard` is the thin layer that
 //! ties the two together.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::io;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -38,8 +38,16 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 
 use std::process::ExitCode;
 
+use ratatui::backend::{Backend, TestBackend, WindowSize};
+use ratatui::buffer::Cell as BufferCell;
+use ratatui::layout::{Position, Size};
+use ratatui::Terminal;
+
 use paladin_tui::app::event::AppEvent;
-use paladin_tui::app::run::{exit_code_from_run_result, run_event_loop, run_with_terminal_guard};
+use paladin_tui::app::render::draw_frame;
+use paladin_tui::app::run::{
+    build_render_closure, exit_code_from_run_result, run_event_loop, run_with_terminal_guard,
+};
 use paladin_tui::app::state::AppState;
 use paladin_tui::terminal::TerminalBackend;
 
@@ -589,5 +597,216 @@ fn run_with_terminal_guard_seeds_first_render_with_initial_wall_clock() {
     assert_eq!(
         r[0], seed,
         "first render's wall-clock must equal initial_wall_clock"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// build_render_closure (IMPLEMENTATION_PLAN_03_TUI.md > Implementation
+// checklist: "Implement terminal raw-mode / alternate-screen lifecycle with
+// guarded restoration on exit, error, Ctrl-C, and panic unwind")
+//
+// `build_render_closure` is the small composer that wraps a
+// `ratatui::Terminal` and an error-capture sink into the infallible
+// `FnMut(&AppState, SystemTime)` slot that `run_event_loop` /
+// `run_with_terminal_guard` consume. On each call it routes the state +
+// wall-clock through `draw_frame` (which itself drives `view::render`);
+// any `io::Error` returned by the draw is recorded into the sink and the
+// closure becomes a no-op for subsequent invocations so additional
+// failures don't pile up after the terminal has already gone bad. The
+// production `paladin-tui::run` reads the sink after
+// `run_with_terminal_guard` returns and merges any captured error into
+// the result it hands to `exit_code_from_run_result`.
+// ---------------------------------------------------------------------------
+
+/// `Backend` impl whose `draw` always errors and counts invocations.
+/// Lets the error-capture tests below pin both the capture and the
+/// short-circuit behavior without disturbing the host terminal or
+/// relying on the production `CrosstermBackend`. All non-draw methods
+/// succeed trivially so `Terminal::new` and `Terminal::draw`'s
+/// surrounding scaffolding (cursor query, resize accounting) stay out
+/// of the failure path being asserted.
+struct DrawFailureBackend {
+    draw_calls: Rc<Cell<u32>>,
+    width: u16,
+    height: u16,
+}
+
+impl Backend for DrawFailureBackend {
+    fn draw<'a, I>(&mut self, _content: I) -> io::Result<()>
+    where
+        I: Iterator<Item = (u16, u16, &'a BufferCell)>,
+    {
+        self.draw_calls.set(self.draw_calls.get() + 1);
+        Err(io::Error::other("simulated draw failure"))
+    }
+
+    fn hide_cursor(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+
+    fn show_cursor(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+
+    fn get_cursor_position(&mut self) -> io::Result<Position> {
+        Ok(Position::ORIGIN)
+    }
+
+    fn set_cursor_position<P: Into<Position>>(&mut self, _position: P) -> io::Result<()> {
+        Ok(())
+    }
+
+    fn clear(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+
+    fn size(&self) -> io::Result<Size> {
+        Ok(Size::new(self.width, self.height))
+    }
+
+    fn window_size(&mut self) -> io::Result<WindowSize> {
+        Ok(WindowSize {
+            columns_rows: Size::new(self.width, self.height),
+            pixels: Size::ZERO,
+        })
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Build a fresh `Terminal<TestBackend>` of the given dimensions for
+/// the happy-path tests.
+fn fresh_test_terminal(width: u16, height: u16) -> Terminal<TestBackend> {
+    Terminal::new(TestBackend::new(width, height)).expect("create TestBackend terminal")
+}
+
+#[test]
+fn build_render_closure_routes_state_through_draw_frame_into_terminal_buffer() {
+    // Pin: a single closure call paints the terminal buffer
+    // identically to a direct `draw_frame` invocation with the same
+    // state and wall-clock. The composer is meant to be a thin
+    // wrapper around `draw_frame`; a regression that ever short-
+    // circuits before reaching the renderer, or substitutes a
+    // different draw call, surfaces as a buffer diff against the
+    // baseline.
+    let state = missing("/tmp/v.bin");
+    let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_500_000_012);
+
+    let mut terminal = fresh_test_terminal(80, 12);
+    let sink: RefCell<Option<io::Error>> = RefCell::new(None);
+    {
+        let mut render = build_render_closure(&mut terminal, &sink);
+        render(&state, now);
+    }
+    let adapter_buf = terminal.backend().buffer().clone();
+
+    let mut baseline_term = fresh_test_terminal(80, 12);
+    draw_frame(&mut baseline_term, &state, now)
+        .expect("baseline draw_frame should succeed against TestBackend");
+    let baseline_buf = baseline_term.backend().buffer().clone();
+
+    assert_eq!(
+        adapter_buf, baseline_buf,
+        "build_render_closure must route through draw_frame; buffers should match",
+    );
+    assert!(
+        sink.borrow().is_none(),
+        "no draw failure should be recorded on the success path, got {:?}",
+        sink.borrow().as_ref().map(io::Error::to_string),
+    );
+}
+
+#[test]
+fn build_render_closure_is_a_noop_when_error_sink_already_holds_an_error() {
+    // Pin: once the sink has captured a draw failure, subsequent
+    // closure calls must short-circuit before touching the terminal.
+    // The test seeds the sink with a sentinel error and asserts both
+    // that the terminal buffer is unchanged from its initial blank
+    // state and that the sink still holds the sentinel (not an
+    // overwritten / wrapped variant).
+    let state = missing("/tmp/v.bin");
+    let now = SystemTime::UNIX_EPOCH;
+
+    let mut terminal = fresh_test_terminal(80, 12);
+    let blank_buf = terminal.backend().buffer().clone();
+
+    let sink: RefCell<Option<io::Error>> = RefCell::new(Some(io::Error::other("sentinel")));
+    {
+        let mut render = build_render_closure(&mut terminal, &sink);
+        render(&state, now);
+    }
+
+    assert_eq!(
+        terminal.backend().buffer(),
+        &blank_buf,
+        "closure must not touch the terminal once the sink holds an error",
+    );
+    let captured = sink.into_inner().expect("sink still holds an error");
+    assert_eq!(
+        captured.to_string(),
+        "sentinel",
+        "closure must not overwrite an already-captured error",
+    );
+}
+
+#[test]
+fn build_render_closure_captures_draw_failure_and_short_circuits_subsequent_calls() {
+    // Pin: when `terminal.draw()` returns an `io::Error`, the
+    // closure records it into the sink. On the *next* call the
+    // closure must short-circuit before invoking `draw` again, so a
+    // single transient terminal failure does not pile up follow-on
+    // errors across every subsequent frame. Asserted by counting
+    // `Backend::draw` invocations on a backend whose draw always
+    // errors — the count must reach 1 (first call hit the failure
+    // path) and stay at 1 across additional closure calls.
+    let state = missing("/tmp/v.bin");
+    let now = SystemTime::UNIX_EPOCH;
+
+    let draw_calls: Rc<Cell<u32>> = Rc::new(Cell::new(0));
+    let backend = DrawFailureBackend {
+        draw_calls: draw_calls.clone(),
+        width: 80,
+        height: 12,
+    };
+    let mut terminal = Terminal::new(backend).expect("construct terminal over DrawFailureBackend");
+    let sink: RefCell<Option<io::Error>> = RefCell::new(None);
+
+    {
+        let mut render = build_render_closure(&mut terminal, &sink);
+        render(&state, now);
+        let captured_after_first = sink
+            .borrow()
+            .as_ref()
+            .map(io::Error::to_string)
+            .expect("first call should capture the simulated draw failure");
+        assert!(
+            captured_after_first.contains("simulated draw failure"),
+            "captured error must carry the backend's failure wording, got {captured_after_first:?}",
+        );
+        assert_eq!(
+            draw_calls.get(),
+            1,
+            "the first closure call must reach the failing draw exactly once",
+        );
+
+        // Subsequent calls must short-circuit — neither the draw
+        // method nor the sink should observe any further activity.
+        render(&state, now);
+        render(&state, now);
+    }
+
+    assert_eq!(
+        draw_calls.get(),
+        1,
+        "subsequent closure calls must short-circuit before invoking Backend::draw",
+    );
+    let final_err = sink
+        .into_inner()
+        .expect("sink retains the first captured error");
+    assert!(
+        final_err.to_string().contains("simulated draw failure"),
+        "subsequent calls must not overwrite the first captured error, got {final_err}",
     );
 }

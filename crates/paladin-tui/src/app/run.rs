@@ -32,6 +32,7 @@
 //!   adds (setup-before-first-render, teardown-after-quit,
 //!   panic-unwind survival, setup-failure short-circuit).
 
+use std::cell::RefCell;
 use std::io;
 use std::io::Write;
 use std::process::ExitCode;
@@ -39,8 +40,12 @@ use std::sync::mpsc::{self, Sender};
 use std::thread::JoinHandle;
 use std::time::SystemTime;
 
+use ratatui::backend::Backend;
+use ratatui::Terminal;
+
 use crate::app::dispatch::dispatch;
 use crate::app::event::AppEvent;
+use crate::app::render::draw_frame;
 use crate::app::state::AppState;
 use crate::terminal::{TerminalBackend, TerminalGuard};
 
@@ -182,6 +187,44 @@ pub fn exit_code_from_run_result<W: Write>(
         Err(err) => {
             let _ = writeln!(stderr, "paladin-tui: {err}");
             ExitCode::FAILURE
+        }
+    }
+}
+
+/// Build the production render closure that wraps a
+/// [`ratatui::Terminal`] into the infallible
+/// `FnMut(&AppState, SystemTime)` slot [`run_event_loop`] and
+/// [`run_with_terminal_guard`] consume.
+///
+/// On each call the closure routes `state` and `now` through
+/// [`crate::app::render::draw_frame`] (which itself drives
+/// [`crate::view::render`]). If `draw_frame` returns an
+/// [`io::Error`], the error is recorded into `error_sink` and the
+/// closure becomes a no-op for every subsequent invocation — a
+/// single transient terminal failure must not pile up follow-on
+/// errors across every remaining frame, and the alternate-screen
+/// teardown that runs after the loop exits should not race a doomed
+/// re-draw.
+///
+/// Production [`crate::run`] owns both the terminal and the sink;
+/// after [`run_with_terminal_guard`] returns it inspects the sink
+/// and merges any captured error into the result it hands to
+/// [`exit_code_from_run_result`], so a draw failure surfaces on the
+/// same `paladin-tui: <err>` stderr path as a terminal-setup
+/// failure. The captured error is owned by the sink (it is never
+/// re-emitted into the dispatch loop), which matches the
+/// [`crate::app::dispatch::dispatch`] contract of consuming an
+/// infallible render closure.
+pub fn build_render_closure<'a, B: Backend>(
+    terminal: &'a mut Terminal<B>,
+    error_sink: &'a RefCell<Option<io::Error>>,
+) -> impl FnMut(&AppState, SystemTime) + 'a {
+    move |state: &AppState, now: SystemTime| {
+        if error_sink.borrow().is_some() {
+            return;
+        }
+        if let Err(err) = draw_frame(terminal, state, now) {
+            *error_sink.borrow_mut() = Some(err);
         }
     }
 }
