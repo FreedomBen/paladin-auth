@@ -45,8 +45,8 @@ use paladin_gtk::app::state::{
     apply_unlock_failure_action, decide_state_from_inspect, decide_state_from_open_error,
     decide_state_from_path_resolution, decide_unlock_failure_action, decide_unlock_success_state,
     route_unlock_failure_effect, route_unlock_success_effect, route_unlock_worker_outcome,
-    AppState, OpenErrorOutcome, UnlockFailureAction, UnlockFailureEffect, UnlockSuccessEffect,
-    UnlockWorkerEffect,
+    should_drop_unlock_dialog_after, unlock_dialog_msg_after, AppState, OpenErrorOutcome,
+    UnlockFailureAction, UnlockFailureEffect, UnlockSuccessEffect, UnlockWorkerEffect,
 };
 use paladin_gtk::startup_error::StartupErrorSource;
 use paladin_gtk::unlock_dialog::{
@@ -1745,4 +1745,238 @@ fn should_drop_unlock_dialog_after_partitions_inline_vs_non_inline() {
         vec![true, false, false, true, true],
         "expected [success, inline_a, inline_b, startup_a, startup_b] = [drop, keep, keep, drop, drop]",
     );
+}
+
+// ---------------------------------------------------------------------------
+// unlock_dialog_msg_after — inline-dialog-message extraction
+// ---------------------------------------------------------------------------
+//
+// The complement of `should_drop_unlock_dialog_after`: when the
+// worker outcome routes through the inline-passphrase branch,
+// `AppModel::update` needs the typed `UnlockDialogMsg` to forward to
+// the live `UnlockDialogComponent` controller so the user sees the
+// wrong-passphrase error without losing the dialog surface. The
+// extraction is pure-logic — it only inspects the typed
+// `UnlockWorkerEffect` shape — so pin it here alongside the other
+// unlock-worker dispatch helpers rather than re-deriving the rule at
+// every call site.
+
+#[test]
+fn unlock_dialog_msg_after_success_returns_none() {
+    // `UnlockWorkerEffect::Success(SetAppState(Unlocked))` means the
+    // worker decrypted the vault. There is no inline error to
+    // forward — `AppModel::update` drops the dialog instead.
+    let path = vault_path();
+    let effect = route_unlock_worker_outcome(&path, Ok(()));
+    assert!(
+        unlock_dialog_msg_after(&effect).is_none(),
+        "expected success outcome to carry no dialog message, got {:?}",
+        unlock_dialog_msg_after(&effect),
+    );
+}
+
+#[test]
+fn unlock_dialog_msg_after_decrypt_failed_returns_open_failed_inline() {
+    // `decrypt_failed` routes through the inline branch per
+    // `route_unlock_open_error`. The extracted message must be the
+    // `OpenFailedInline` variant carrying an `InlineError` whose
+    // `kind` / `rendered` fields match the typed `PaladinError`
+    // projection that `InlineError::from_error` would produce.
+    let path = vault_path();
+    let err = decrypt_failed_err();
+    let effect = route_unlock_worker_outcome(&path, Err(&err));
+    match unlock_dialog_msg_after(&effect) {
+        Some(UnlockDialogMsg::OpenFailedInline(inline)) => {
+            assert_eq!(
+                inline.kind,
+                err.kind(),
+                "inline error kind should match the typed PaladinError"
+            );
+            assert_eq!(
+                inline.rendered,
+                err.to_string(),
+                "inline rendered text should match the typed Display projection"
+            );
+        }
+        other => panic!("expected Some(OpenFailedInline(_)), got {other:?}"),
+    }
+}
+
+#[test]
+fn unlock_dialog_msg_after_invalid_passphrase_returns_open_failed_inline() {
+    // Empty-passphrase failure is the second inline-routed branch.
+    // Pin that it also surfaces the `OpenFailedInline` message so
+    // both inline branches share the same extraction contract.
+    let path = vault_path();
+    let err = invalid_passphrase_empty_err();
+    let effect = route_unlock_worker_outcome(&path, Err(&err));
+    match unlock_dialog_msg_after(&effect) {
+        Some(UnlockDialogMsg::OpenFailedInline(inline)) => {
+            assert_eq!(
+                inline.kind,
+                err.kind(),
+                "inline error kind should match the typed PaladinError"
+            );
+            assert_eq!(
+                inline.rendered,
+                err.to_string(),
+                "inline rendered text should match the typed Display projection"
+            );
+        }
+        other => panic!("expected Some(OpenFailedInline(_)), got {other:?}"),
+    }
+}
+
+#[test]
+fn unlock_dialog_msg_after_unsafe_permissions_returns_none() {
+    // `UnlockWorkerEffect::Failure(SetAppState(StartupError))` means
+    // a non-passphrase precondition failed. No inline message is
+    // forwarded — the dialog gets dropped in favor of the
+    // `StartupErrorComponent` surface.
+    let path = vault_path();
+    let err = unsafe_perms_err();
+    let effect = route_unlock_worker_outcome(&path, Err(&err));
+    assert!(
+        unlock_dialog_msg_after(&effect).is_none(),
+        "expected unsafe-permissions failure to carry no dialog message, got {:?}",
+        unlock_dialog_msg_after(&effect),
+    );
+}
+
+#[test]
+fn unlock_dialog_msg_after_io_error_returns_none() {
+    // Generic IO error is the catch-all startup-routed branch. Pin
+    // that it shares the same "no inline message" extraction as
+    // every other non-inline failure.
+    let path = vault_path();
+    let err = io_err();
+    let effect = route_unlock_worker_outcome(&path, Err(&err));
+    assert!(
+        unlock_dialog_msg_after(&effect).is_none(),
+        "expected io-error failure to carry no dialog message, got {:?}",
+        unlock_dialog_msg_after(&effect),
+    );
+}
+
+#[test]
+fn unlock_dialog_msg_after_wrong_vault_lock_returns_none() {
+    let path = vault_path();
+    let err = wrong_vault_lock_err();
+    let effect = route_unlock_worker_outcome(&path, Err(&err));
+    assert!(
+        unlock_dialog_msg_after(&effect).is_none(),
+        "expected wrong-vault-lock failure to carry no dialog message, got {:?}",
+        unlock_dialog_msg_after(&effect),
+    );
+}
+
+#[test]
+fn unlock_dialog_msg_after_invalid_header_returns_none() {
+    let path = vault_path();
+    let err = invalid_header_err();
+    let effect = route_unlock_worker_outcome(&path, Err(&err));
+    assert!(
+        unlock_dialog_msg_after(&effect).is_none(),
+        "expected invalid-header failure to carry no dialog message, got {:?}",
+        unlock_dialog_msg_after(&effect),
+    );
+}
+
+#[test]
+fn unlock_dialog_msg_after_invalid_payload_returns_none() {
+    let path = vault_path();
+    let err = invalid_payload_err();
+    let effect = route_unlock_worker_outcome(&path, Err(&err));
+    assert!(
+        unlock_dialog_msg_after(&effect).is_none(),
+        "expected invalid-payload failure to carry no dialog message, got {:?}",
+        unlock_dialog_msg_after(&effect),
+    );
+}
+
+#[test]
+fn unlock_dialog_msg_after_unsupported_format_version_returns_none() {
+    let path = vault_path();
+    let err = unsupported_format_version_err();
+    let effect = route_unlock_worker_outcome(&path, Err(&err));
+    assert!(
+        unlock_dialog_msg_after(&effect).is_none(),
+        "expected unsupported-format-version failure to carry no dialog message, got {:?}",
+        unlock_dialog_msg_after(&effect),
+    );
+}
+
+#[test]
+fn unlock_dialog_msg_after_kdf_params_out_of_bounds_returns_none() {
+    let path = vault_path();
+    let err = kdf_oob_err();
+    let effect = route_unlock_worker_outcome(&path, Err(&err));
+    assert!(
+        unlock_dialog_msg_after(&effect).is_none(),
+        "expected kdf-params-out-of-bounds failure to carry no dialog message, got {:?}",
+        unlock_dialog_msg_after(&effect),
+    );
+}
+
+#[test]
+fn unlock_dialog_msg_after_inspects_effect_only_not_path() {
+    // The extraction is shape-only: it must not depend on the
+    // attached path. Two different paths with the same inline-error
+    // shape must produce equivalent `OpenFailedInline` projections so
+    // a future refactor cannot accidentally introduce path-dependent
+    // dialog forwarding.
+    let path_a = vault_path();
+    let path_b = PathBuf::from("/var/lib/paladin/alt-vault.bin");
+    let err = decrypt_failed_err();
+    let effect_a = route_unlock_worker_outcome(&path_a, Err(&err));
+    let effect_b = route_unlock_worker_outcome(&path_b, Err(&err));
+    match (
+        unlock_dialog_msg_after(&effect_a),
+        unlock_dialog_msg_after(&effect_b),
+    ) {
+        (
+            Some(UnlockDialogMsg::OpenFailedInline(inline_a)),
+            Some(UnlockDialogMsg::OpenFailedInline(inline_b)),
+        ) => {
+            assert_eq!(
+                inline_a.kind, inline_b.kind,
+                "inline kind must be shape-only, got differing values for paths {path_a:?} and {path_b:?}",
+            );
+            assert_eq!(
+                inline_a.rendered, inline_b.rendered,
+                "inline rendered text must be shape-only, got differing values for paths {path_a:?} and {path_b:?}",
+            );
+        }
+        other => panic!("expected both paths to yield Some(OpenFailedInline(_)), got {other:?}"),
+    }
+}
+
+#[test]
+fn unlock_dialog_msg_after_inverts_should_drop_unlock_dialog_after() {
+    // Cross-check the partitioning rule: a dialog message is
+    // available iff the dialog stays mounted. Equivalently, the drop
+    // decision is the inverse of "has inline message". This guards
+    // against a future enum variant being added without updating one
+    // of the two dispatch helpers in lockstep with the other.
+    let path = vault_path();
+    let effects = [
+        route_unlock_worker_outcome(&path, Ok(())),
+        route_unlock_worker_outcome(&path, Err(&decrypt_failed_err())),
+        route_unlock_worker_outcome(&path, Err(&invalid_passphrase_empty_err())),
+        route_unlock_worker_outcome(&path, Err(&unsafe_perms_err())),
+        route_unlock_worker_outcome(&path, Err(&io_err())),
+        route_unlock_worker_outcome(&path, Err(&wrong_vault_lock_err())),
+        route_unlock_worker_outcome(&path, Err(&invalid_header_err())),
+        route_unlock_worker_outcome(&path, Err(&invalid_payload_err())),
+        route_unlock_worker_outcome(&path, Err(&unsupported_format_version_err())),
+        route_unlock_worker_outcome(&path, Err(&kdf_oob_err())),
+    ];
+    for effect in &effects {
+        let drops = should_drop_unlock_dialog_after(effect);
+        let has_msg = unlock_dialog_msg_after(effect).is_some();
+        assert_eq!(
+            drops, !has_msg,
+            "drop decision should be the inverse of having an inline dialog message for effect={effect:?}",
+        );
+    }
 }

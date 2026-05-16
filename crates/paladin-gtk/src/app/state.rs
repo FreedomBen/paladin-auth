@@ -644,3 +644,53 @@ pub fn should_drop_unlock_dialog_after(effect: &UnlockWorkerEffect) -> bool {
         | UnlockWorkerEffect::Failure(UnlockFailureEffect::SetAppState(_)) => true,
     }
 }
+
+/// Extract the optional [`crate::unlock_dialog::UnlockDialogMsg`]
+/// `AppModel`'s update branch should forward to the live
+/// [`crate::unlock_dialog::UnlockDialogComponent`] controller after
+/// applying the given [`UnlockWorkerEffect`].
+///
+/// Mirror of [`should_drop_unlock_dialog_after`]: the drop decision
+/// reports whether the dialog goes away, this extractor reports
+/// whether (and which) inline error message goes to the still-mounted
+/// dialog. Across the full set of worker outcomes, the two are
+/// inverses — a dialog message is available iff the dialog stays
+/// mounted — so `AppModel::update` can apply both in lockstep without
+/// re-deriving the partition.
+///
+/// The extraction is shape-only — it inspects the typed
+/// [`UnlockWorkerEffect`] variant without touching the carried path,
+/// error projection, or state — so the side-effect decision in
+/// `AppModel::update` stays unit-testable in
+/// `tests/app_state_logic.rs` without spinning up GTK / libadwaita.
+///
+/// The one outcome that carries a dialog message:
+///
+/// * [`UnlockWorkerEffect::Failure`] carrying
+///   [`UnlockFailureEffect::SendUnlockDialogMsg`] — wrong / empty
+///   passphrase. The carried
+///   [`crate::unlock_dialog::UnlockDialogMsg::OpenFailedInline`]
+///   already wraps the [`crate::unlock_dialog::InlineError`]
+///   projection built by [`crate::unlock_dialog::InlineError::from_error`],
+///   so `AppModel::update` forwards it verbatim to the live controller.
+///
+/// The two outcomes that carry no dialog message:
+///
+/// * [`UnlockWorkerEffect::Success`] — the worker decrypted the
+///   vault. The dialog is dropped, not messaged.
+/// * [`UnlockWorkerEffect::Failure`] carrying
+///   [`UnlockFailureEffect::SetAppState`] — a non-passphrase open
+///   failure routes to the [`crate::startup_error::StartupErrorComponent`]
+///   surface. The dialog is dropped, not messaged.
+#[must_use]
+pub fn unlock_dialog_msg_after(effect: &UnlockWorkerEffect) -> Option<&UnlockDialogMsg> {
+    // Listed by explicit variant rather than `_` so a future
+    // `UnlockWorkerEffect` / `UnlockFailureEffect` variant fails the
+    // match exhaustively and forces an explicit extraction decision
+    // here, in lockstep with `should_drop_unlock_dialog_after`.
+    match effect {
+        UnlockWorkerEffect::Failure(UnlockFailureEffect::SendUnlockDialogMsg(msg)) => Some(msg),
+        UnlockWorkerEffect::Success(_)
+        | UnlockWorkerEffect::Failure(UnlockFailureEffect::SetAppState(_)) => None,
+    }
+}
