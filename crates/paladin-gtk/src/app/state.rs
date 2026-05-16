@@ -938,6 +938,39 @@ pub fn submit_unlock_app_state(current: &AppState) -> Option<AppState> {
     current.clone().enter_unlocking_busy()
 }
 
+/// Decide the [`AppState`] transition when `AppModel::update`
+/// receives [`crate::rename_dialog::RenameDialogOutput::SubmitLabel`].
+///
+/// Symmetric partner of [`submit_unlock_app_state`] for the rename
+/// path: where [`submit_unlock_app_state`] owns the
+/// `Locked → UnlockedBusy` handoff for the open worker (which is
+/// about to compute the `(Vault, Store)` pair), this composer owns
+/// the `Unlocked → UnlockedBusy` handoff for the rename worker
+/// (which takes the already-decrypted pair through
+/// `Vault::mutate_and_save`). Together they bracket every typed
+/// dispatch with a documented source-state contract at the
+/// `AppModel::update` call site per `IMPLEMENTATION_PLAN_04_GTK.md`
+/// §"Vault interaction".
+///
+/// The helper is a name-the-entry-point wrapper over
+/// [`AppState::enter_busy`]: it returns
+/// `Some(UnlockedBusy { path })` iff `current` is
+/// `Unlocked { path }`, and `None` for every other source state
+/// (`Missing`, `Locked`, `UnlockedBusy`, `StartupError`). The
+/// `None` arm is the defensive case for a stray dispatch — a
+/// `SubmitLabel` that arrives from any other source state leaves
+/// `AppModel` in place rather than installing a phantom
+/// `UnlockedBusy` that would clobber the idle state.
+///
+/// The composer stays shape-only — it delegates the transition to
+/// [`AppState::enter_busy`] — so the side-effect decision in
+/// `AppModel::update` stays unit-testable in
+/// `tests/app_state_logic.rs` without spinning up GTK / libadwaita.
+#[must_use]
+pub fn submit_rename_app_state(current: &AppState) -> Option<AppState> {
+    current.clone().enter_busy()
+}
+
 /// Apply [`submit_unlock_app_state`] in-place to `state`, leaving
 /// it unchanged when the composer returns `None`.
 ///
