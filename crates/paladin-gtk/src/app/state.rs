@@ -55,7 +55,7 @@
 
 use std::path::{Path, PathBuf};
 
-use paladin_core::{PaladinError, VaultStatus};
+use paladin_core::{PaladinError, VaultLock, VaultStatus};
 
 use crate::startup_error::{classify_open_error, OpenErrorRouting, StartupError};
 use crate::unlock_dialog::{
@@ -1049,5 +1049,80 @@ pub fn apply_unlock_dispatch_inplace(state: &mut AppState, dispatch: &UnlockDisp
         true
     } else {
         false
+    }
+}
+
+/// Worker input bundled by `AppMsg::UnlockDialogAction(SubmitLock)`
+/// for the `gio::spawn_blocking paladin_core::open` worker.
+///
+/// Carries the resolved vault path captured from the current
+/// [`AppState::Locked`] source state alongside the typed
+/// [`paladin_core::VaultLock`] forwarded from
+/// [`crate::unlock_dialog::UnlockDialogOutput::SubmitLock`]. Both
+/// fields are owned values so the worker closure can `move` them
+/// across the `gio::spawn_blocking` boundary without borrowing into
+/// `AppModel`.
+///
+/// `Debug` is derived — `VaultLock`'s own `Debug` impl redacts the
+/// `Encrypted(SecretString)` payload via `secrecy`, so a debug print
+/// shows `Encrypted([REDACTED])` rather than leaking the passphrase.
+/// `Clone` / `PartialEq` are deliberately *not* derived:
+/// `VaultLock::Encrypted` wraps a non-`Clone` `SecretString`, and
+/// `AppModel::update` consumes the input exactly once when it moves
+/// it into the worker closure.
+#[derive(Debug)]
+pub struct UnlockWorkerInput {
+    /// Resolved vault path passed to `paladin_core::open`.
+    pub path: PathBuf,
+    /// Typed lock (`VaultLock::Plaintext` or `VaultLock::Encrypted`)
+    /// passed to `paladin_core::open`.
+    pub lock: VaultLock,
+}
+
+/// Bundle a [`VaultLock`] with the resolved vault path from `current`
+/// so the `gio::spawn_blocking paladin_core::open` worker can move
+/// both into its closure.
+///
+/// Symmetric partner of [`submit_unlock_app_state`] for the entry
+/// side of the open worker: that composer owns the
+/// `Locked → UnlockedBusy` state transition, this composer owns the
+/// `(path, VaultLock)` capture the worker closure consumes. Both
+/// inspect `current` *before* the transition so the path is captured
+/// before [`AppState::enter_unlocking_busy`] would consume the
+/// [`AppState::Locked`] variant. Together the two composers bracket
+/// the worker spawn: running the state transition without the input
+/// bundle (or vice versa) would leave `AppModel` with a busy gate
+/// but no worker (or a worker but no busy gate).
+///
+/// Returns `Some(UnlockWorkerInput { path, lock })` iff `current` is
+/// [`AppState::Locked`]; returns `None` for every other source state
+/// (`Missing`, `Unlocked`, `UnlockedBusy`, `StartupError`) so a stray
+/// `SubmitLock` from a non-`Locked` source is a benign no-op for the
+/// worker spawn just as it is for the state machine.
+///
+/// `lock` is consumed by value because [`VaultLock::Encrypted`] wraps
+/// a [`secrecy::SecretString`] that must move (not clone) into the
+/// worker closure to keep zeroize-on-drop semantics intact across
+/// the `gio::spawn_blocking` boundary.
+///
+/// The composer stays shape-only — it inspects only the [`AppState`]
+/// variant and clones the carried path out — so the side-effect
+/// decision in `AppModel::update` stays unit-testable in
+/// `tests/app_state_logic.rs` without spinning up GTK / libadwaita
+/// or constructing a real vault file.
+#[must_use]
+pub fn compose_unlock_worker_input(
+    current: &AppState,
+    lock: VaultLock,
+) -> Option<UnlockWorkerInput> {
+    match current {
+        AppState::Locked { path } => Some(UnlockWorkerInput {
+            path: path.clone(),
+            lock,
+        }),
+        AppState::Missing { .. }
+        | AppState::Unlocked { .. }
+        | AppState::UnlockedBusy { .. }
+        | AppState::StartupError { .. } => None,
     }
 }

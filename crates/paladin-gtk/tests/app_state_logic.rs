@@ -38,17 +38,19 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use paladin_core::{
-    format_unsafe_permissions, ErrorKind, PaladinError, PermissionSubject, VaultMode, VaultStatus,
+    format_unsafe_permissions, ErrorKind, PaladinError, PermissionSubject, VaultLock, VaultMode,
+    VaultStatus,
 };
 
 use paladin_gtk::app::state::{
     apply_submit_unlock_inplace, apply_unlock_dispatch_inplace, apply_unlock_failure_action,
-    compose_unlock_dispatch, decide_state_from_inspect, decide_state_from_open_error,
-    decide_state_from_path_resolution, decide_unlock_failure_action, decide_unlock_success_state,
-    route_unlock_failure_effect, route_unlock_success_effect, route_unlock_worker_outcome,
-    should_drop_unlock_dialog_after, submit_unlock_app_state, unlock_app_state_after,
-    unlock_dialog_msg_after, unlock_final_app_state, AppState, OpenErrorOutcome,
-    UnlockFailureAction, UnlockFailureEffect, UnlockSuccessEffect, UnlockWorkerEffect,
+    compose_unlock_dispatch, compose_unlock_worker_input, decide_state_from_inspect,
+    decide_state_from_open_error, decide_state_from_path_resolution, decide_unlock_failure_action,
+    decide_unlock_success_state, route_unlock_failure_effect, route_unlock_success_effect,
+    route_unlock_worker_outcome, should_drop_unlock_dialog_after, submit_unlock_app_state,
+    unlock_app_state_after, unlock_dialog_msg_after, unlock_final_app_state, AppState,
+    OpenErrorOutcome, UnlockFailureAction, UnlockFailureEffect, UnlockSuccessEffect,
+    UnlockWorkerEffect,
 };
 use paladin_gtk::startup_error::StartupErrorSource;
 use paladin_gtk::unlock_dialog::{
@@ -3435,5 +3437,128 @@ fn apply_unlock_dispatch_inplace_mirrors_compose_unlock_dispatch_for_every_effec
                  for effect={effect:?}",
             );
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// compose_unlock_worker_input — pre-worker `(path, VaultLock)` bundler
+// ---------------------------------------------------------------------------
+//
+// Symmetric partner of `submit_unlock_app_state`: that composer owns
+// the entry-side `Locked → UnlockedBusy` state transition,
+// `compose_unlock_worker_input` owns the entry-side bundling of the
+// resolved vault path with the typed `VaultLock` forwarded from
+// `UnlockDialogOutput::SubmitLock`. The bundled `UnlockWorkerInput` is
+// the value `AppModel::update` moves into the `gio::spawn_blocking
+// paladin_core::open` worker closure. Both composers inspect `current`
+// before the transition so the path is captured before
+// `AppState::enter_unlocking_busy` consumes the `Locked` variant; both
+// return `None` for every non-`Locked` source so a stray `SubmitLock`
+// is a benign no-op for the worker spawn just as it is for the state
+// machine.
+
+#[test]
+fn compose_unlock_worker_input_from_locked_bundles_path_and_plaintext_lock() {
+    // Happy path: `AppModel::update` receives `SubmitLock(VaultLock)`
+    // while the model is `Locked(path)`. The composer must hand the
+    // worker a `(path, VaultLock)` pair that names the same
+    // destination the dialog is currently showing. The plaintext
+    // variant has no secrets to redact, so the lock is preserved
+    // verbatim — `matches!` is enough to pin the variant.
+    let path = vault_path();
+    let locked = AppState::Locked { path: path.clone() };
+    let input = compose_unlock_worker_input(&locked, VaultLock::Plaintext)
+        .expect("Locked must produce a worker input");
+    assert_eq!(input.path, path);
+    assert!(matches!(input.lock, VaultLock::Plaintext));
+}
+
+#[test]
+fn compose_unlock_worker_input_preserves_encrypted_passphrase_through_bundle() {
+    // Encrypted variant: the `SecretString` carried by
+    // `VaultLock::Encrypted` must move (not clone) through the
+    // composer so zeroize-on-drop semantics stay intact across the
+    // `gio::spawn_blocking` boundary. `expose_secret` is the only way
+    // to compare the inner string in a test; production code never
+    // calls it (the worker hands the lock straight to
+    // `paladin_core::open`).
+    use secrecy::{ExposeSecret, SecretString};
+    let path = vault_path();
+    let locked = AppState::Locked { path: path.clone() };
+    let lock = VaultLock::Encrypted(SecretString::from("hunter2".to_string()));
+    let input =
+        compose_unlock_worker_input(&locked, lock).expect("Locked must produce a worker input");
+    assert_eq!(input.path, path);
+    match input.lock {
+        VaultLock::Encrypted(pp) => assert_eq!(pp.expose_secret(), "hunter2"),
+        VaultLock::Plaintext => panic!("encrypted lock must be preserved verbatim"),
+        _ => panic!("unexpected VaultLock variant"),
+    }
+}
+
+#[test]
+fn compose_unlock_worker_input_from_non_locked_returns_none() {
+    // Defensive: a stray `SubmitLock` dispatch from any source state
+    // other than `Locked` is a no-op for the worker spawn just as it
+    // is for the state machine. Missing has no encrypted vault to
+    // open, Unlocked / UnlockedBusy already own a different busy
+    // window through `enter_busy`, and StartupError is the
+    // non-mutating surface. Returning `None` mirrors
+    // `submit_unlock_app_state`'s refusal contract so the two
+    // composers agree on every source variant — see the cross-check
+    // test below.
+    let path = vault_path();
+    assert!(compose_unlock_worker_input(
+        &AppState::Missing { path: path.clone() },
+        VaultLock::Plaintext,
+    )
+    .is_none());
+    assert!(compose_unlock_worker_input(
+        &AppState::Unlocked { path: path.clone() },
+        VaultLock::Plaintext,
+    )
+    .is_none());
+    assert!(compose_unlock_worker_input(
+        &AppState::UnlockedBusy { path: path.clone() },
+        VaultLock::Plaintext,
+    )
+    .is_none());
+    let startup = decide_state_from_inspect(&path, Err(invalid_header_err()))
+        .expect("inspect Err yields StartupError state");
+    assert!(compose_unlock_worker_input(&startup, VaultLock::Plaintext).is_none());
+}
+
+#[test]
+fn compose_unlock_worker_input_mirrors_submit_unlock_app_state_gating() {
+    // Cross-check: both entry-side composers — "transition the state"
+    // (`submit_unlock_app_state`) and "bundle the worker input"
+    // (`compose_unlock_worker_input`) — must agree on the Some/None
+    // partition for every source variant. The pair brackets the
+    // `gio::spawn_blocking paladin_core::open` worker spawn: if one
+    // fires without the other, `AppModel` ends up with a busy gate
+    // and no worker, or a spawned worker and no busy gate. Pin the
+    // agreement here so neither composer can drift away from
+    // `AppState::enter_unlocking_busy`'s `Locked → UnlockedBusy`
+    // refusal contract without breaking here first.
+    let path = vault_path();
+    let sources = [
+        AppState::Missing { path: path.clone() },
+        AppState::Locked { path: path.clone() },
+        AppState::Unlocked { path: path.clone() },
+        AppState::UnlockedBusy { path: path.clone() },
+        decide_state_from_inspect(&path, Err(invalid_header_err()))
+            .expect("inspect Err yields StartupError state"),
+    ];
+    for source in &sources {
+        let state_transition = submit_unlock_app_state(source).is_some();
+        // Fresh `VaultLock::Plaintext` per call because the helper
+        // consumes the lock by value; `Plaintext` is a unit variant
+        // so this is free.
+        let worker_input = compose_unlock_worker_input(source, VaultLock::Plaintext).is_some();
+        assert_eq!(
+            state_transition, worker_input,
+            "submit_unlock_app_state and compose_unlock_worker_input must agree on Some/None \
+             for source={source:?}",
+        );
     }
 }
