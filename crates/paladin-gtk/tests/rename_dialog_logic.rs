@@ -40,8 +40,9 @@ use paladin_core::{
 
 use paladin_gtk::rename_dialog::{
     apply_msg, classify_rename_error, classify_submit, decide_rename_target,
-    format_rename_dialog_marker, InlineError, InlineWarning, RenameDialogInit, RenameDialogMsg,
-    RenameDialogOutput, RenameDialogState, RenameErrorOutcome, SubmitOutcome,
+    format_rename_dialog_marker, run_rename_worker, InlineError, InlineWarning, RenameDialogInit,
+    RenameDialogMsg, RenameDialogOutput, RenameDialogState, RenameErrorOutcome,
+    RenameWorkerCompletion, RenameWorkerEffect, RenameWorkerInput, SubmitOutcome,
     RENAME_DIALOG_MARKER_PREFIX,
 };
 
@@ -912,4 +913,203 @@ fn rename_dialog_msg_submit_clicked_is_distinct_variant() {
     // trips through the enum.
     let msg = RenameDialogMsg::SubmitClicked;
     assert!(matches!(msg, RenameDialogMsg::SubmitClicked));
+}
+
+// ---------------------------------------------------------------------------
+// run_rename_worker — synchronous body of the spawn_blocking rename worker
+//
+// `run_rename_worker` is the body of the `gio::spawn_blocking
+// Vault::mutate_and_save(|v| v.rename(...))` worker fired by
+// `AppModel::update` from
+// `AppMsg::RenameDialogAction(RenameDialogOutput::SubmitLabel)`. The
+// helper consumes the live `(Vault, Store)` pair by value so the busy
+// gate reinstalls whichever pair the worker returns — success,
+// `save_durability_unconfirmed`, or pre-commit rollback. Extracting
+// the worker body as a pure function lets `AppModel::update`'s
+// closure stay a thin `gio::spawn_blocking(move || run_rename_worker(
+// input))` while the real `mutate_and_save` call stays unit-testable
+// here against tempfile-backed plaintext vaults — no GTK /
+// libadwaita main loop required.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn run_rename_worker_plaintext_rename_succeeds_and_returns_live_pair() {
+    // Happy path: rename a TOTP account on a plaintext vault and
+    // verify the worker reports Success, the renamed account carries
+    // the new label, and the `(Vault, Store)` pair survives the
+    // worker so `AppModel::update` can reinstall it.
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+    let id = add_totp(&mut vault, &store, Some("Acme"), "alice");
+
+    let completion = run_rename_worker(RenameWorkerInput {
+        vault,
+        store,
+        account_id: id,
+        label: "bob".to_string(),
+        now: SystemTime::now(),
+    });
+
+    let RenameWorkerCompletion {
+        effect,
+        vault,
+        store: _,
+    } = completion;
+    assert!(
+        matches!(effect, RenameWorkerEffect::Success),
+        "plaintext rename success must surface as RenameWorkerEffect::Success, got {effect:?}",
+    );
+    let summary = vault
+        .summaries()
+        .find(|s| s.id == id)
+        .expect("renamed account still exists in the returned vault");
+    assert_eq!(summary.label, "bob");
+}
+
+#[test]
+fn run_rename_worker_unknown_account_routes_inline_error_and_returns_pair() {
+    // Defensive: a mid-flight removal between the kebab activation
+    // and the worker dispatch leaves the worker targeting an unknown
+    // id. `Vault::rename` surfaces `invalid_state { state:
+    // "account_not_found" }` which `classify_rename_error` routes to
+    // `RenameErrorOutcome::InlineError`. The vault returned by the
+    // worker must be unchanged so `AppModel::update` reinstalls it
+    // without losing other accounts.
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+    let surviving = add_totp(&mut vault, &store, None, "alice");
+    let stray = AccountId::new();
+
+    let completion = run_rename_worker(RenameWorkerInput {
+        vault,
+        store,
+        account_id: stray,
+        label: "bob".to_string(),
+        now: SystemTime::now(),
+    });
+
+    match completion.effect {
+        RenameWorkerEffect::Failure(RenameErrorOutcome::InlineError(inline)) => {
+            assert_eq!(inline.kind, ErrorKind::InvalidState);
+        }
+        other => panic!("expected Failure(InlineError) for unknown id, got {other:?}"),
+    }
+    let summary = completion
+        .vault
+        .summaries()
+        .find(|s| s.id == surviving)
+        .expect("surviving account stays in the returned vault");
+    assert_eq!(summary.label, "alice");
+}
+
+#[test]
+fn run_rename_worker_validation_error_routes_inline_error() {
+    // Defensive: a widget that bypasses `classify_submit` and sends
+    // an empty label is still caught by `Vault::rename`'s
+    // `validate_label` call. `classify_rename_error` routes the typed
+    // `validation_error` to `RenameErrorOutcome::InlineError` so the
+    // dialog stays open with the inline error visible. The
+    // `mutate_and_save` snapshot rollback keeps the prior label in
+    // place on the returned vault.
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+    let id = add_totp(&mut vault, &store, None, "alice");
+
+    let completion = run_rename_worker(RenameWorkerInput {
+        vault,
+        store,
+        account_id: id,
+        label: String::new(),
+        now: SystemTime::now(),
+    });
+
+    match completion.effect {
+        RenameWorkerEffect::Failure(RenameErrorOutcome::InlineError(inline)) => {
+            assert_eq!(inline.kind, ErrorKind::ValidationError);
+        }
+        other => panic!("expected Failure(InlineError) for empty label, got {other:?}"),
+    }
+    let summary = completion
+        .vault
+        .summaries()
+        .find(|s| s.id == id)
+        .expect("account survives validation failure");
+    assert_eq!(
+        summary.label, "alice",
+        "validation failure must not mutate the visible label",
+    );
+}
+
+#[test]
+fn run_rename_worker_same_label_still_bumps_updated_at() {
+    // CLI parity: `Vault::rename` always bumps `updated_at`, even
+    // when the new label matches the prior one. The worker must not
+    // short-circuit on a same-label rename — `classify_submit` and
+    // the dialog already refuse to short-circuit, and the worker is
+    // the final gate before persistence.
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+    let id = add_totp(&mut vault, &store, None, "alice");
+    let before = vault
+        .summaries()
+        .find(|s| s.id == id)
+        .expect("account exists pre-rename")
+        .updated_at;
+
+    // Pin `now` to a value strictly later than the original
+    // `updated_at` so the bump is observable regardless of the
+    // wall-clock resolution between the `add_totp` call and here.
+    let now = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(before + 5);
+    let completion = run_rename_worker(RenameWorkerInput {
+        vault,
+        store,
+        account_id: id,
+        label: "alice".to_string(),
+        now,
+    });
+
+    assert!(matches!(completion.effect, RenameWorkerEffect::Success));
+    let after = completion
+        .vault
+        .summaries()
+        .find(|s| s.id == id)
+        .expect("account survives same-label rename")
+        .updated_at;
+    assert!(
+        after > before,
+        "same-label rename must bump updated_at ({before} → {after})",
+    );
+}
+
+#[test]
+fn run_rename_worker_persists_label_to_disk() {
+    // The worker must not just mutate the in-memory vault — it goes
+    // through `mutate_and_save` so the new label survives a reopen.
+    // This pins the round trip through the §4.3 atomic-write pipeline
+    // without exercising the GTK loop.
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+    let id = add_totp(&mut vault, &store, Some("Acme"), "alice");
+
+    let completion = run_rename_worker(RenameWorkerInput {
+        vault,
+        store,
+        account_id: id,
+        label: "bob".to_string(),
+        now: SystemTime::now(),
+    });
+    assert!(matches!(completion.effect, RenameWorkerEffect::Success));
+    drop(completion);
+
+    let (reopened, _store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let summary = reopened
+        .summaries()
+        .find(|s| s.id == id)
+        .expect("renamed account survives reopen");
+    assert_eq!(summary.label, "bob");
 }

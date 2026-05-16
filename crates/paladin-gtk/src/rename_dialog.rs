@@ -46,12 +46,14 @@
 //!   …) → [`RenameErrorOutcome::InlineError`] without transitioning
 //!   out of the dialog.
 
+use std::time::SystemTime;
+
 use libadwaita as adw;
 use libadwaita::prelude::*;
 use relm4::gtk;
 use relm4::prelude::*;
 
-use paladin_core::{validate_label, AccountId, ErrorKind, PaladinError, Vault};
+use paladin_core::{validate_label, AccountId, ErrorKind, PaladinError, Store, Vault};
 
 use crate::account_row::display_label;
 
@@ -126,6 +128,147 @@ pub fn classify_rename_error(err: &PaladinError) -> RenameErrorOutcome {
             RenameErrorOutcome::KeepNewWithWarning(InlineWarning::from_error(err))
         }
         _ => RenameErrorOutcome::InlineError(InlineError::from_error(err)),
+    }
+}
+
+/// Inputs consumed by [`run_rename_worker`] when `AppModel::update`
+/// fires the `gio::spawn_blocking
+/// Vault::mutate_and_save(|v| v.rename(...))` worker.
+///
+/// The live `(Vault, Store)` pair is moved by value into the worker
+/// closure so the busy gate can re-install whichever pair the worker
+/// returns — success, durability-unconfirmed, or pre-commit
+/// rollback. The targeted [`AccountId`] and the trimmed label come
+/// off [`RenameDialogOutput::SubmitLabel`]; `now` is captured at the
+/// dispatch site so the test surface can pin a deterministic
+/// timestamp.
+///
+/// `Clone` / `PartialEq` are deliberately not derived: [`Store`]
+/// holds non-`Clone` filesystem state, and `AppModel::update`
+/// consumes the input exactly once when it moves it into the
+/// `gio::spawn_blocking` closure.
+#[derive(Debug)]
+pub struct RenameWorkerInput {
+    /// Live vault from the `Unlocked` `(Vault, Store)` pair. Moved
+    /// into the worker so `mutate_and_save` can borrow it mutably
+    /// without keeping `AppModel` in `Unlocked` for the duration of
+    /// the open call.
+    pub vault: Vault,
+    /// Live store from the `Unlocked` `(Vault, Store)` pair. Moved
+    /// alongside `vault` so the same `(Vault, Store)` pair returns
+    /// from the worker even on typed failure.
+    pub store: Store,
+    /// Stable account id from
+    /// [`RenameDialogOutput::SubmitLabel::account_id`]. Forwarded to
+    /// `Vault::rename` so the worker targets the same account the
+    /// dialog seeded.
+    pub account_id: AccountId,
+    /// Canonical trimmed label from
+    /// [`RenameDialogOutput::SubmitLabel::label`]. Passed to
+    /// `Vault::rename` which re-runs `validate_label` — a defensive
+    /// validation failure here is treated as
+    /// [`RenameErrorOutcome::InlineError`] so the dialog stays open.
+    pub label: String,
+    /// Wall-clock the worker hands to `Vault::rename` as the new
+    /// `updated_at`. `AppModel::update` captures `SystemTime::now()`
+    /// at the dispatch site so the worker thread does not race
+    /// against later wall-clock drift.
+    pub now: SystemTime,
+}
+
+/// Outcome of [`run_rename_worker`] for `AppModel::update` to apply.
+///
+/// `Success` indicates the rename committed and the visible label
+/// stays on the new value. `Failure` wraps the [`RenameErrorOutcome`]
+/// from [`classify_rename_error`] so the dialog can re-render the
+/// matching inline error / durability warning without re-deriving
+/// the routing decision off the [`PaladinError`].
+#[derive(Debug, Clone)]
+pub enum RenameWorkerEffect {
+    /// `Vault::mutate_and_save(|v| v.rename(...))` returned `Ok(())`.
+    /// The dialog dismisses itself and the visible row label updates
+    /// to the new value.
+    Success,
+    /// `Vault::mutate_and_save(|v| v.rename(...))` returned a typed
+    /// failure. The carried [`RenameErrorOutcome`] tells the dialog
+    /// whether to restore the prior label (`save_not_committed`),
+    /// keep the new label with a warning attached
+    /// (`save_durability_unconfirmed`), or stay inline with the typed
+    /// error (defensive `validation_error` / `invalid_state` / …).
+    Failure(RenameErrorOutcome),
+}
+
+/// Bundle returned by [`run_rename_worker`].
+///
+/// Carries the live `(Vault, Store)` pair on every branch so
+/// `AppModel::update` can reinstall it before applying the UI
+/// outcome — `Vault::mutate_and_save` already restores the snapshot
+/// on `save_not_committed`, so the returned vault is the
+/// authoritative post-effect state regardless of the
+/// [`RenameWorkerEffect`] variant. Per `IMPLEMENTATION_PLAN_04_GTK.md`
+/// §"Vault interaction" > "Every worker returns `(Vault, Store,
+/// EffectOutcome)`".
+///
+/// `Clone` / `PartialEq` are deliberately not derived for the same
+/// reason as on [`RenameWorkerInput`].
+#[derive(Debug)]
+pub struct RenameWorkerCompletion {
+    /// Routed effect for `AppModel::update` to apply to the dialog.
+    pub effect: RenameWorkerEffect,
+    /// Live vault after the `mutate_and_save` call. On
+    /// [`RenameWorkerEffect::Success`] the targeted account's label
+    /// reflects the new value and `updated_at` has bumped; on
+    /// [`RenameWorkerEffect::Failure`] the vault is whatever
+    /// `mutate_and_save` rolled back to (pre-commit snapshot for
+    /// `save_not_committed`; post-commit state with the new label for
+    /// `save_durability_unconfirmed`; pre-call state for defensive
+    /// `validation_error` / `invalid_state` cases).
+    pub vault: Vault,
+    /// Live store moved through unchanged so `AppModel::update` can
+    /// reinstall the `(Vault, Store)` pair after the worker returns.
+    pub store: Store,
+}
+
+/// Synchronous body of the `gio::spawn_blocking
+/// Vault::mutate_and_save(|v| v.rename(...))` rename worker fired by
+/// `AppModel::update` from
+/// `AppMsg::RenameDialogAction(RenameDialogOutput::SubmitLabel)`.
+///
+/// Consumes the [`RenameWorkerInput`] by value, runs
+/// `vault.mutate_and_save(&store, |v| v.rename(account_id, &label,
+/// now))`, and bundles the outcome into a
+/// [`RenameWorkerCompletion`] via [`classify_rename_error`]. The
+/// live `(Vault, Store)` pair is always returned so `AppModel`
+/// reinstalls it regardless of the typed effect — `mutate_and_save`
+/// is authoritative for the rollback / durability-unconfirmed
+/// semantics per DESIGN.md §4.3.
+///
+/// Extracting the worker body as a pure function lets
+/// `AppModel::update`'s closure stay a thin
+/// `gio::spawn_blocking(move || run_rename_worker(input))` while the
+/// real `mutate_and_save` call stays unit-testable in
+/// `tests/rename_dialog_logic.rs` against tempfile-backed plaintext
+/// vaults — no GTK / libadwaita main loop required. The
+/// `AppModel::update` wire-up and the `apply_rename_*` reinstall
+/// helpers land in follow-up commits alongside the `UnlockedBusy`
+/// worker infrastructure.
+#[must_use]
+pub fn run_rename_worker(input: RenameWorkerInput) -> RenameWorkerCompletion {
+    let RenameWorkerInput {
+        mut vault,
+        store,
+        account_id,
+        label,
+        now,
+    } = input;
+    let effect = match vault.mutate_and_save(&store, |v| v.rename(account_id, &label, now)) {
+        Ok(()) => RenameWorkerEffect::Success,
+        Err(err) => RenameWorkerEffect::Failure(classify_rename_error(&err)),
+    };
+    RenameWorkerCompletion {
+        effect,
+        vault,
+        store,
     }
 }
 
