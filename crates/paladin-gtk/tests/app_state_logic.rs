@@ -43,8 +43,9 @@ use paladin_core::{
 
 use paladin_gtk::app::state::{
     apply_unlock_failure_action, decide_state_from_inspect, decide_state_from_open_error,
-    decide_state_from_path_resolution, decide_unlock_failure_action, route_unlock_failure_effect,
-    AppState, OpenErrorOutcome, UnlockFailureAction, UnlockFailureEffect,
+    decide_state_from_path_resolution, decide_unlock_failure_action, decide_unlock_success_state,
+    route_unlock_failure_effect, AppState, OpenErrorOutcome, UnlockFailureAction,
+    UnlockFailureEffect,
 };
 use paladin_gtk::startup_error::StartupErrorSource;
 use paladin_gtk::unlock_dialog::{
@@ -1107,4 +1108,109 @@ fn route_unlock_failure_effect_matches_decide_then_apply_for_startup_branch() {
             "expected matching SetAppState(StartupError) on both sides, got composed={composed:?}, stepwise={stepwise:?}"
         ),
     }
+}
+
+#[test]
+fn decide_unlock_success_state_returns_unlocked_variant() {
+    // Mirror of `decide_unlock_failure_action` on the success branch:
+    // `AppModel`'s future `gio::spawn_blocking paladin_core::open`
+    // worker calls this when the worker returns `Ok((Vault, Store))`
+    // so the state-machine transition stays pinned by a pure-logic
+    // test even though the live `(Vault, Store)` pair is installed
+    // separately into `AppModel.vault`.
+    let path = vault_path();
+    let state = decide_unlock_success_state(&path);
+    assert!(
+        matches!(state, AppState::Unlocked { .. }),
+        "expected AppState::Unlocked, got {state:?}",
+    );
+}
+
+#[test]
+fn decide_unlock_success_state_preserves_resolved_path() {
+    // The vault path resolved at startup (or supplied via `--vault`)
+    // is owned by `AppModel`; the helper must thread it verbatim
+    // into the new `Unlocked` state so the active surface
+    // (`AccountListComponent`) can pass it back to subsequent vault
+    // effects.
+    let path = vault_path();
+    let state = decide_unlock_success_state(&path);
+    match state {
+        AppState::Unlocked { path: state_path } => {
+            assert_eq!(state_path, path);
+        }
+        other => panic!("expected AppState::Unlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn decide_unlock_success_state_attaches_caller_provided_path() {
+    // Pin that the helper does not capture a static / default path:
+    // a future refactor that drops the `path` argument must fail
+    // this test rather than silently produce the wrong path.
+    let alt = PathBuf::from("/var/lib/paladin/alt-vault.bin");
+    let state = decide_unlock_success_state(&alt);
+    match state {
+        AppState::Unlocked { path: state_path } => {
+            assert_eq!(state_path, alt);
+        }
+        other => panic!("expected AppState::Unlocked with alt path, got {other:?}"),
+    }
+}
+
+#[test]
+fn decide_unlock_success_state_does_not_produce_busy_or_other_states() {
+    // The unlock worker leaves `AppState::Locked` for `Unlocked`
+    // directly (no `UnlockedBusy` intermediate — the worker is
+    // producing the `(Vault, Store)` pair, not consuming one).
+    // Pin the contract so a future refactor that wires through
+    // `UnlockedBusy` must fail this test rather than silently
+    // strand the dialog mid-busy.
+    let path = vault_path();
+    let state = decide_unlock_success_state(&path);
+    assert!(
+        !matches!(state, AppState::UnlockedBusy { .. }),
+        "expected AppState::Unlocked, not UnlockedBusy: {state:?}",
+    );
+    assert!(
+        !matches!(state, AppState::Locked { .. }),
+        "expected AppState::Unlocked, not Locked: {state:?}",
+    );
+    assert!(
+        !matches!(state, AppState::Missing { .. }),
+        "expected AppState::Unlocked, not Missing: {state:?}",
+    );
+    assert!(
+        !matches!(state, AppState::StartupError { .. }),
+        "expected AppState::Unlocked, not StartupError: {state:?}",
+    );
+}
+
+#[test]
+fn decide_unlock_success_state_path_query_returns_supplied_path() {
+    // Cross-check through the [`AppState::path`] projection so the
+    // accessor downstream surfaces use sees the same path the helper
+    // received. `AppModel` will pass the returned state path to the
+    // `AccountListComponent` mount and to subsequent vault effects.
+    let path = vault_path();
+    let state = decide_unlock_success_state(&path);
+    assert_eq!(state.path(), Some(path.as_path()));
+}
+
+#[test]
+fn decide_unlock_success_state_reports_unlocked_predicate() {
+    // `AppState::is_unlocked` returns `true` for `Unlocked` /
+    // `UnlockedBusy` only. Pin that the success transition flips
+    // the predicate on so menu / header-bar gating sites that key
+    // off `is_unlocked` see the unlocked surface immediately.
+    let path = vault_path();
+    let state = decide_unlock_success_state(&path);
+    assert!(
+        state.is_unlocked(),
+        "expected AppState::Unlocked to report is_unlocked == true, got {state:?}",
+    );
+    assert!(
+        !state.is_busy(),
+        "expected AppState::Unlocked to report is_busy == false, got {state:?}",
+    );
 }

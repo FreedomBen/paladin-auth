@@ -463,3 +463,31 @@ pub fn apply_unlock_failure_action(action: UnlockFailureAction) -> UnlockFailure
 pub fn route_unlock_failure_effect(path: &Path, err: &PaladinError) -> UnlockFailureEffect {
     apply_unlock_failure_action(decide_unlock_failure_action(path, err))
 }
+
+/// Decide the new [`AppState`] after the unlock worker reports an
+/// `Ok((Vault, Store))` outcome.
+///
+/// The `gio::spawn_blocking paladin_core::open` worker fired by
+/// [`crate::unlock_dialog::UnlockDialogComponent`] on the encrypted
+/// path returns the live `(Vault, Store)` pair on success.
+/// `AppModel` installs the pair into its sibling
+/// `Option<(Vault, Store)>` slot and replaces `AppModel.state` with
+/// the value this helper returns. Mirrors
+/// [`decide_unlock_failure_action`] on the failure branch so the
+/// pure-logic transition rule stays pinned by
+/// `tests/app_state_logic.rs` without spinning up GTK / libadwaita
+/// or constructing a real vault file.
+///
+/// Returns [`AppState::Unlocked`] carrying the supplied vault path.
+/// The unlock worker leaves [`AppState::Locked`] for
+/// [`AppState::Unlocked`] directly — no [`AppState::UnlockedBusy`]
+/// intermediate, because the worker is *producing* the
+/// `(Vault, Store)` pair, not consuming an existing one. The
+/// `UnlockedBusy` state is reserved for vault-touching effects fired
+/// from the unlocked surface per §"In-flight effect ownership".
+#[must_use]
+pub fn decide_unlock_success_state(path: &Path) -> AppState {
+    AppState::Unlocked {
+        path: path.to_path_buf(),
+    }
+}
