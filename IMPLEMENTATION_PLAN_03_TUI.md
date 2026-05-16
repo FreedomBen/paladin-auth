@@ -2726,7 +2726,36 @@ Add (QR) error and counts states:
   `tests/snapshots/view_snapshots__snapshot_add_modal_duplicate_account.snap`
   so any future change to the inline-error template, the modal's
   spacer layout, or the segmented mode selector surfaces as a diff.)*
-- [ ] Add modal "add anyway" confirmation.
+- [x] Add modal "add anyway" confirmation.
+  *(`snapshot_add_modal_add_anyway_confirmation` in
+  `crates/paladin-tui/tests/view_snapshots.rs` constructs an
+  `AddModal` with both `error: Some(format_duplicate_account_message(
+  &existing_summary))` and
+  `pending_duplicate_add: Some(Box::new(PendingDuplicateAdd { ... }))`
+  populated — mirroring the reducer state established by
+  `effect_result_add_duplicate_stashes_pending_and_sets_inline_error`
+  and consumed by
+  `enter_with_pending_duplicate_add_in_manual_mode_emits_add_anyway_effect`
+  / `enter_with_pending_duplicate_add_in_uri_mode_emits_add_anyway_effect`
+  — and renders through `view::render` at 80×20. The pending
+  `ValidatedAccount` is built from the same `(secret, issuer,
+  label)` triple as the existing entry (the shape exercised by
+  `make_duplicate_validated` in `tests/reducer_tests.rs`).
+  `crates/paladin-tui/src/view/add.rs` now branches the footer hint
+  on `modal.pending_duplicate_add.is_some()`: the editable-modal
+  default (`Tab cycles fields  ·  Enter submit  ·  Esc cancel`) is
+  replaced with the confirmation form
+  (`Enter add anyway  ·  Esc cancel`), since Tab-cycling fields no
+  longer applies — the next Enter commits the stashed pending
+  account via `Effect::AddAnyway` (per the reducer's `Enter`
+  short-circuit on `pending_duplicate_add.take()`), and Esc drops
+  the stash. The truncated inline-error row from the
+  `snapshot_add_modal_duplicate_account` sibling is unchanged, so
+  the snapshot reads as a one-line footer-swap delta and surfaces
+  as a regression if the renderer ever stops branching on
+  `pending_duplicate_add` or if the confirmation wording changes.
+  Locked in
+  `tests/snapshots/view_snapshots__snapshot_add_modal_add_anyway_confirmation.snap`.)*
 - [ ] QR-add counts panel with validation-warning messages.
 
 Passphrase inline errors:

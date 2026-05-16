@@ -23,6 +23,14 @@
 //! slices; this slice keeps the field column plain text so the
 //! snapshot pins only the layout contract.
 //!
+//! When [`AddModal::pending_duplicate_add`] is `Some` — the
+//! follow-up "add anyway" confirmation form of the duplicate
+//! rejection — the footer hint switches to
+//! `Enter add anyway  ·  Esc cancel` so the user sees that the next
+//! Enter commits the stashed pending account rather than re-running
+//! the editable submit path. The inline rejection message stays
+//! visible alongside it.
+//!
 //! When [`AddModal::counts_panel`] is `Some`, the modal switches to
 //! the post-success summary view: the field stack is replaced with
 //! the four `paladin_core::ImportReport` merge totals
@@ -168,7 +176,11 @@ pub fn render(frame: &mut Frame<'_>, modal: &AddModal) {
         render_inline_error(frame, chunks[10], error);
     }
 
-    let hint = "Tab cycles fields  ·  Enter submit  ·  Esc cancel";
+    let hint = if modal.pending_duplicate_add.is_some() {
+        "Enter add anyway  ·  Esc cancel"
+    } else {
+        "Tab cycles fields  ·  Enter submit  ·  Esc cancel"
+    };
     frame.render_widget(
         Paragraph::new(hint).alignment(Alignment::Center),
         chunks[11],

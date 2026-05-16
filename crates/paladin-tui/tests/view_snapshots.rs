@@ -35,7 +35,8 @@ use paladin_tui::app::event::QrImportFailure;
 use paladin_tui::app::state::{
     format_duplicate_account_message, format_qr_import_failure, render_error_message, AddModal,
     AddMode, AppState, CountsPanel, ExportFormat, ExportModal, Focus, HotpReveal, ImportModal,
-    Modal, PassphraseModal, PassphraseSubFlow, RemoveModal, RenameModal, SettingsModal,
+    Modal, PassphraseModal, PassphraseSubFlow, PendingDuplicateAdd, RemoveModal, RenameModal,
+    SettingsModal,
 };
 use paladin_tui::prompt::PassphraseBuffer;
 use paladin_tui::view::render;
@@ -1173,6 +1174,114 @@ fn snapshot_add_modal_duplicate_account() {
     assert!(
         rendered.contains("account already exists with the same (secret, issuer, label)"),
         "expected leading duplicate_account wording to appear in modal:\n{rendered}"
+    );
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn snapshot_add_modal_add_anyway_confirmation() {
+    // Plan L2729: "Add modal 'add anyway' confirmation." Drive
+    // `view::render` against an `Unlocked` state holding the
+    // follow-up confirmation form of the duplicate-rejection: both
+    // `AddModal::error` (the `format_duplicate_account_message`
+    // template) and `AddModal::pending_duplicate_add` are populated,
+    // matching the reducer state established by
+    // `effect_result_add_duplicate_stashes_pending_and_sets_inline_error`
+    // (`tests/reducer_tests.rs`) and consumed by
+    // `enter_with_pending_duplicate_add_in_manual_mode_emits_add_anyway_effect`
+    // / `enter_with_pending_duplicate_add_in_uri_mode_emits_add_anyway_effect`.
+    //
+    // Per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6) > Add":
+    // *"A collision initially rejects with the existing account in
+    // the modal and offers an 'add anyway' confirmation."* The
+    // initial rejection is locked by
+    // `snapshot_add_modal_duplicate_account` (siblings of this slice
+    // — same vault, same `format_duplicate_account_message` wording).
+    // This snapshot then pins the visual delta the user sees once
+    // the pending `ValidatedAccount` is stashed: the footer hint
+    // switches from the editable-modal default
+    // (`Tab cycles fields  ·  Enter submit  ·  Esc cancel`) to the
+    // confirmation form (`Enter add anyway  ·  Esc cancel`), since
+    // Tab-cycling fields no longer applies — the next Enter commits
+    // the pending account via `Effect::AddAnyway`, and Esc drops
+    // the stash. The truncated inline-error row is unchanged, so the
+    // diff against the duplicate-rejection sibling reads as a
+    // one-line footer swap, surfacing as a regression if the
+    // renderer ever stops branching on `pending_duplicate_add` or if
+    // the confirmation wording changes.
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (mut vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let existing_id = push_totp_account(&mut vault, &store, None, "github");
+    let existing_summary = vault
+        .iter()
+        .find(|a| a.id() == existing_id)
+        .expect("existing account must be present in vault")
+        .summary();
+    // Pending validated account uses the same (secret, issuer, label)
+    // triple as the existing entry — the shape exercised by
+    // `make_duplicate_validated` in `tests/reducer_tests.rs` — so the
+    // state mirrors what the reducer stashes on
+    // `AddFailure::Duplicate`.
+    let pending_input = AccountInput {
+        label: "github".to_string(),
+        issuer: None,
+        secret: SecretString::from("JBSWY3DPEHPK3PXP".to_string()),
+        algorithm: Algorithm::Sha1,
+        digits: 6,
+        kind: AccountKindInput::Totp,
+        period_secs: None,
+        counter: None,
+        icon_hint: IconHintInput::Default,
+    };
+    let pending_validated =
+        validate_manual(pending_input, snapshot_now()).expect("valid pending manual input");
+    let modal = AddModal {
+        error: Some(format_duplicate_account_message(&existing_summary)),
+        pending_duplicate_add: Some(Box::new(PendingDuplicateAdd {
+            existing: existing_summary.clone(),
+            validated: Box::new(pending_validated),
+        })),
+        ..AddModal::default()
+    };
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Add(modal)),
+        selected: Some(existing_id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let rendered = render_to_text(&state, snapshot_now(), 80, 20);
+    // Regression guard: the renderer must surface the duplicate
+    // rejection alongside the confirmation footer so the user sees
+    // *what* they are about to confirm.
+    assert!(
+        rendered.contains("account already exists with the same (secret, issuer, label)"),
+        "expected leading duplicate_account wording to appear in modal:\n{rendered}"
+    );
+    // The confirmation footer hint replaces the editable-modal
+    // default. Tab-cycling no longer applies (the next Enter commits
+    // the stashed pending account), so the hint drops the
+    // `Tab cycles fields` segment and renames `Enter submit` to
+    // `Enter add anyway`.
+    assert!(
+        rendered.contains("Enter add anyway"),
+        "expected confirmation footer hint to appear in modal:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("Tab cycles fields"),
+        "expected the editable-modal footer hint to be replaced in the confirmation form:\n{rendered}"
     );
     insta::assert_snapshot!(rendered);
 }
