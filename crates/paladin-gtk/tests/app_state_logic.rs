@@ -43,8 +43,8 @@ use paladin_core::{
 
 use paladin_gtk::app::state::{
     apply_unlock_failure_action, decide_state_from_inspect, decide_state_from_open_error,
-    decide_state_from_path_resolution, decide_unlock_failure_action, AppState, OpenErrorOutcome,
-    UnlockFailureAction, UnlockFailureEffect,
+    decide_state_from_path_resolution, decide_unlock_failure_action, route_unlock_failure_effect,
+    AppState, OpenErrorOutcome, UnlockFailureAction, UnlockFailureEffect,
 };
 use paladin_gtk::startup_error::StartupErrorSource;
 use paladin_gtk::unlock_dialog::{
@@ -870,5 +870,241 @@ fn apply_unlock_failure_action_round_trip_io_error_installs_startup_error() {
             assert_eq!(error.source, StartupErrorSource::Open);
         }
         other => panic!("expected SetAppState(StartupError), got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// route_unlock_failure_effect — single-shot entry point that composes
+// `decide_unlock_failure_action` + `apply_unlock_failure_action` so
+// `AppModel`'s future worker-error branch can go from a typed
+// `PaladinError` to the concrete `UnlockFailureEffect` in one call
+// without bubbling the intermediate `UnlockFailureAction` through the
+// update path. Tests pin the composition contract: every
+// `route_unlock_failure_effect(path, err)` result must match
+// `apply_unlock_failure_action(decide_unlock_failure_action(path,
+// err))` byte-for-byte, so a future refactor that drops either
+// intermediate helper is caught here.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn route_unlock_failure_effect_decrypt_failed_dispatches_inline_open_failed() {
+    // `DecryptFailed` is the dominant wrong-passphrase outcome
+    // (Argon2 succeeds, AEAD authentication fails). The composed
+    // router must surface `SendUnlockDialogMsg(OpenFailedInline(_))`
+    // carrying the rendered §5 `decrypt_failed` projection so the
+    // dialog can flip the inline error label without re-routing the
+    // typed `PaladinError`.
+    let path = vault_path();
+    let err = decrypt_failed_err();
+    match route_unlock_failure_effect(&path, &err) {
+        UnlockFailureEffect::SendUnlockDialogMsg(UnlockDialogMsg::OpenFailedInline(inline)) => {
+            assert_eq!(inline.kind, ErrorKind::DecryptFailed);
+            assert_eq!(inline.rendered, err.to_string());
+        }
+        other => panic!("expected SendUnlockDialogMsg(OpenFailedInline), got {other:?}"),
+    }
+}
+
+#[test]
+fn route_unlock_failure_effect_invalid_passphrase_dispatches_inline_open_failed() {
+    // `InvalidPassphrase` covers the pre-KDF rejection path
+    // (`zero_length` discriminator). The composed router preserves
+    // the kind / rendered text so the dialog renders the §5
+    // `invalid_passphrase` line verbatim.
+    let path = vault_path();
+    let err = invalid_passphrase_empty_err();
+    match route_unlock_failure_effect(&path, &err) {
+        UnlockFailureEffect::SendUnlockDialogMsg(UnlockDialogMsg::OpenFailedInline(inline)) => {
+            assert_eq!(inline.kind, ErrorKind::InvalidPassphrase);
+            assert_eq!(inline.rendered, err.to_string());
+        }
+        other => panic!("expected SendUnlockDialogMsg(OpenFailedInline), got {other:?}"),
+    }
+}
+
+#[test]
+fn route_unlock_failure_effect_unsafe_permissions_sets_startup_state_with_path() {
+    // `UnsafePermissions` is the canonical non-passphrase open
+    // failure that includes the locked-down `format_unsafe_permissions`
+    // rendering. The composed router must build the full
+    // `AppState::StartupError { path: Some(path), .. }` so `AppModel`
+    // can install it verbatim without re-attaching the path.
+    let path = vault_path();
+    let err = unsafe_perms_err();
+    match route_unlock_failure_effect(&path, &err) {
+        UnlockFailureEffect::SetAppState(AppState::StartupError {
+            path: state_path,
+            error,
+        }) => {
+            assert_eq!(state_path.as_deref(), Some(path.as_path()));
+            assert_eq!(error.source, StartupErrorSource::Open);
+            assert_eq!(
+                error.rendered,
+                format_unsafe_permissions(&err).expect("UnsafePermissions has formatter text")
+            );
+        }
+        other => panic!("expected SetAppState(StartupError), got {other:?}"),
+    }
+}
+
+#[test]
+fn route_unlock_failure_effect_wrong_vault_lock_sets_startup_state() {
+    let path = vault_path();
+    match route_unlock_failure_effect(&path, &wrong_vault_lock_err()) {
+        UnlockFailureEffect::SetAppState(AppState::StartupError {
+            path: state_path,
+            error,
+        }) => {
+            assert_eq!(state_path.as_deref(), Some(path.as_path()));
+            assert_eq!(error.source, StartupErrorSource::Open);
+        }
+        other => panic!("expected SetAppState(StartupError), got {other:?}"),
+    }
+}
+
+#[test]
+fn route_unlock_failure_effect_invalid_header_sets_startup_state() {
+    let path = vault_path();
+    match route_unlock_failure_effect(&path, &invalid_header_err()) {
+        UnlockFailureEffect::SetAppState(AppState::StartupError {
+            path: state_path,
+            error,
+        }) => {
+            assert_eq!(state_path.as_deref(), Some(path.as_path()));
+            assert_eq!(error.source, StartupErrorSource::Open);
+        }
+        other => panic!("expected SetAppState(StartupError), got {other:?}"),
+    }
+}
+
+#[test]
+fn route_unlock_failure_effect_invalid_payload_sets_startup_state() {
+    let path = vault_path();
+    match route_unlock_failure_effect(&path, &invalid_payload_err()) {
+        UnlockFailureEffect::SetAppState(AppState::StartupError {
+            path: state_path,
+            error,
+        }) => {
+            assert_eq!(state_path.as_deref(), Some(path.as_path()));
+            assert_eq!(error.source, StartupErrorSource::Open);
+        }
+        other => panic!("expected SetAppState(StartupError), got {other:?}"),
+    }
+}
+
+#[test]
+fn route_unlock_failure_effect_unsupported_format_version_sets_startup_state() {
+    let path = vault_path();
+    match route_unlock_failure_effect(&path, &unsupported_format_version_err()) {
+        UnlockFailureEffect::SetAppState(AppState::StartupError {
+            path: state_path,
+            error,
+        }) => {
+            assert_eq!(state_path.as_deref(), Some(path.as_path()));
+            assert_eq!(error.source, StartupErrorSource::Open);
+        }
+        other => panic!("expected SetAppState(StartupError), got {other:?}"),
+    }
+}
+
+#[test]
+fn route_unlock_failure_effect_kdf_params_out_of_bounds_sets_startup_state() {
+    let path = vault_path();
+    match route_unlock_failure_effect(&path, &kdf_oob_err()) {
+        UnlockFailureEffect::SetAppState(AppState::StartupError {
+            path: state_path,
+            error,
+        }) => {
+            assert_eq!(state_path.as_deref(), Some(path.as_path()));
+            assert_eq!(error.source, StartupErrorSource::Open);
+        }
+        other => panic!("expected SetAppState(StartupError), got {other:?}"),
+    }
+}
+
+#[test]
+fn route_unlock_failure_effect_io_error_sets_startup_state() {
+    let path = vault_path();
+    match route_unlock_failure_effect(&path, &io_err()) {
+        UnlockFailureEffect::SetAppState(AppState::StartupError {
+            path: state_path,
+            error,
+        }) => {
+            assert_eq!(state_path.as_deref(), Some(path.as_path()));
+            assert_eq!(error.source, StartupErrorSource::Open);
+        }
+        other => panic!("expected SetAppState(StartupError), got {other:?}"),
+    }
+}
+
+#[test]
+fn route_unlock_failure_effect_attaches_caller_provided_path() {
+    // The composed router is the *only* boundary that joins the
+    // caller-owned vault path to the typed `StartupError` projection
+    // on the non-passphrase branch. A future refactor that drops the
+    // `path` argument must fail this test rather than silently
+    // produce `path: None`.
+    let alt = PathBuf::from("/var/lib/paladin/alt-vault.bin");
+    match route_unlock_failure_effect(&alt, &invalid_header_err()) {
+        UnlockFailureEffect::SetAppState(AppState::StartupError {
+            path: state_path, ..
+        }) => {
+            assert_eq!(state_path.as_deref(), Some(alt.as_path()));
+        }
+        other => panic!("expected SetAppState(StartupError) with alt path, got {other:?}"),
+    }
+}
+
+#[test]
+fn route_unlock_failure_effect_matches_decide_then_apply_for_inline_branch() {
+    // Pin the composition contract: every `route_unlock_failure_effect`
+    // result on the inline branch must equal
+    // `apply_unlock_failure_action(decide_unlock_failure_action(...))`
+    // up to the carried `InlineError`'s observable fields.
+    let path = vault_path();
+    let err = decrypt_failed_err();
+    let composed = route_unlock_failure_effect(&path, &err);
+    let stepwise = apply_unlock_failure_action(decide_unlock_failure_action(&path, &err));
+    match (composed, stepwise) {
+        (
+            UnlockFailureEffect::SendUnlockDialogMsg(UnlockDialogMsg::OpenFailedInline(a)),
+            UnlockFailureEffect::SendUnlockDialogMsg(UnlockDialogMsg::OpenFailedInline(b)),
+        ) => {
+            assert_eq!(a.kind, b.kind);
+            assert_eq!(a.rendered, b.rendered);
+        }
+        (composed, stepwise) => panic!(
+            "expected matching SendUnlockDialogMsg(OpenFailedInline) on both sides, got composed={composed:?}, stepwise={stepwise:?}"
+        ),
+    }
+}
+
+#[test]
+fn route_unlock_failure_effect_matches_decide_then_apply_for_startup_branch() {
+    // Pin the composition contract on the non-passphrase branch:
+    // both arms must surface the same `AppState::StartupError`
+    // (path attached, `StartupErrorSource::Open` tagged).
+    let path = vault_path();
+    let err = unsafe_perms_err();
+    let composed = route_unlock_failure_effect(&path, &err);
+    let stepwise = apply_unlock_failure_action(decide_unlock_failure_action(&path, &err));
+    match (composed, stepwise) {
+        (
+            UnlockFailureEffect::SetAppState(AppState::StartupError {
+                path: composed_path,
+                error: composed_err,
+            }),
+            UnlockFailureEffect::SetAppState(AppState::StartupError {
+                path: stepwise_path,
+                error: stepwise_err,
+            }),
+        ) => {
+            assert_eq!(composed_path, stepwise_path);
+            assert_eq!(composed_err.source, stepwise_err.source);
+            assert_eq!(composed_err.rendered, stepwise_err.rendered);
+        }
+        (composed, stepwise) => panic!(
+            "expected matching SetAppState(StartupError) on both sides, got composed={composed:?}, stepwise={stepwise:?}"
+        ),
     }
 }

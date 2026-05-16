@@ -441,3 +441,25 @@ pub fn apply_unlock_failure_action(action: UnlockFailureAction) -> UnlockFailure
         UnlockFailureAction::TransitionToStartup(state) => UnlockFailureEffect::SetAppState(state),
     }
 }
+
+/// Compose [`decide_unlock_failure_action`] and
+/// [`apply_unlock_failure_action`] into the single entry point
+/// `AppModel`'s future worker-error branch calls when the
+/// `gio::spawn_blocking paladin_core::open` worker returns an
+/// `Err(PaladinError)`.
+///
+/// Bypassing the intermediate [`UnlockFailureAction`] keeps
+/// `AppModel::update` a thin shell: one call goes from the typed
+/// `PaladinError` directly to the concrete [`UnlockFailureEffect`]
+/// the update path applies — forwarding a
+/// [`UnlockDialogMsg::OpenFailedInline`] to the live
+/// [`crate::unlock_dialog::UnlockDialogComponent`] for the wrong-
+/// passphrase branch, or replacing `AppModel.state` with the
+/// carried [`AppState::StartupError`] for every other open failure.
+/// The intermediate helpers stay public so the pure-logic tests in
+/// `tests/app_state_logic.rs` can pin the per-step decisions
+/// independently.
+#[must_use]
+pub fn route_unlock_failure_effect(path: &Path, err: &PaladinError) -> UnlockFailureEffect {
+    apply_unlock_failure_action(decide_unlock_failure_action(path, err))
+}
