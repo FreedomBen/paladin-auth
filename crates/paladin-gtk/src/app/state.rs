@@ -818,3 +818,51 @@ pub fn unlock_app_state_after(effect: &UnlockWorkerEffect) -> Option<&AppState> 
         UnlockWorkerEffect::Failure(UnlockFailureEffect::SendUnlockDialogMsg(_)) => None,
     }
 }
+
+/// Unified state-transition composer for the unlock worker outcome.
+///
+/// [`unlock_app_state_after`] reports the new [`AppState`] for the
+/// two state-replacing branches (success → `Unlocked`,
+/// startup-routed failure → `StartupError`) and `None` for the
+/// inline-passphrase branch (the dialog stays mounted). The inline
+/// branch leaves `AppModel` in [`AppState::UnlockedBusy`] — set by
+/// [`AppState::enter_unlocking_busy`] before the worker spawned —
+/// so `AppModel::update` must roll the busy window back to
+/// [`AppState::Locked`] via [`AppState::leave_unlocking_busy`] to
+/// release the busy gate and let the dialog's passphrase entry
+/// become interactive again.
+///
+/// This composer hides that asymmetry behind a single call:
+///
+/// * For the two replacement branches, it returns
+///   `Some(replacement.clone())` directly from
+///   [`unlock_app_state_after`] — `current` is not consulted
+///   because the new state replaces outright.
+/// * For the inline branch, it delegates to
+///   `current.clone().leave_unlocking_busy()` so the busy window
+///   rolls back to `Locked(path)` while preserving the resolved
+///   path.
+///
+/// The `Some` / `None` return matches the
+/// [`AppState::leave_unlocking_busy`] contract: `None` is reserved
+/// for the defensive case where the inline branch fires but
+/// `current` is not [`AppState::UnlockedBusy`]. A stray call from
+/// any other source state refuses to install a phantom `Locked`
+/// transition that would clobber another idle state —
+/// `AppModel::update` is expected to call this from the
+/// worker-completion handler where `current` is always
+/// [`AppState::UnlockedBusy`].
+///
+/// The composer is shape-only — it inspects the typed
+/// [`UnlockWorkerEffect`] variant via [`unlock_app_state_after`]
+/// without re-deriving the routing, and it delegates the rollback
+/// to [`AppState::leave_unlocking_busy`] — so the side-effect
+/// decision in `AppModel::update` stays unit-testable in
+/// `tests/app_state_logic.rs` without spinning up GTK / libadwaita.
+#[must_use]
+pub fn unlock_final_app_state(current: &AppState, effect: &UnlockWorkerEffect) -> Option<AppState> {
+    match unlock_app_state_after(effect) {
+        Some(replacement) => Some(replacement.clone()),
+        None => current.clone().leave_unlocking_busy(),
+    }
+}

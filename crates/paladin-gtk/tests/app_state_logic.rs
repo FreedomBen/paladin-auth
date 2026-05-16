@@ -45,9 +45,9 @@ use paladin_gtk::app::state::{
     apply_unlock_failure_action, decide_state_from_inspect, decide_state_from_open_error,
     decide_state_from_path_resolution, decide_unlock_failure_action, decide_unlock_success_state,
     route_unlock_failure_effect, route_unlock_success_effect, route_unlock_worker_outcome,
-    should_drop_unlock_dialog_after, unlock_app_state_after, unlock_dialog_msg_after, AppState,
-    OpenErrorOutcome, UnlockFailureAction, UnlockFailureEffect, UnlockSuccessEffect,
-    UnlockWorkerEffect,
+    should_drop_unlock_dialog_after, unlock_app_state_after, unlock_dialog_msg_after,
+    unlock_final_app_state, AppState, OpenErrorOutcome, UnlockFailureAction, UnlockFailureEffect,
+    UnlockSuccessEffect, UnlockWorkerEffect,
 };
 use paladin_gtk::startup_error::StartupErrorSource;
 use paladin_gtk::unlock_dialog::{
@@ -2460,5 +2460,321 @@ fn unlock_app_state_after_is_mutually_exclusive_with_unlock_dialog_msg_after() {
             !(has_state && has_msg),
             "state replacement and inline dialog message must be mutually exclusive for effect={effect:?}",
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// unlock_final_app_state — unified state-transition composer
+// ---------------------------------------------------------------------------
+//
+// `unlock_app_state_after` reports the new `AppState` for the two
+// state-replacing branches (success → `Unlocked`, startup-routed
+// failure → `StartupError`) and `None` for the inline-passphrase
+// branch (the dialog stays mounted). The inline branch leaves
+// `AppModel` in `AppState::UnlockedBusy` (set by
+// `enter_unlocking_busy` before the worker spawned), so
+// `AppModel::update` must roll the busy window back to `Locked` via
+// `leave_unlocking_busy` to release the busy gate.
+//
+// `unlock_final_app_state` hides that asymmetry behind a single
+// call: it composes `unlock_app_state_after` (replacement cases)
+// with `leave_unlocking_busy` (inline rollback case) so callers see
+// a uniform `Option<AppState>` regardless of which branch the
+// worker outcome took. The `None` return is reserved for the
+// defensive case where the inline branch fires but `current` is not
+// `UnlockedBusy` — a stray call from an unexpected source state
+// that should not silently install a phantom `Locked` transition.
+
+#[test]
+fn unlock_final_app_state_success_replaces_with_unlocked_path() {
+    // Worker returned `Ok((Vault, Store))`. The trio's
+    // `unlock_app_state_after` reports `Some(Unlocked(path))`, so the
+    // unified composer must return that same `Unlocked` regardless
+    // of `current` — the new state replaces the busy window outright.
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let effect = route_unlock_worker_outcome(&path, Ok(()));
+    let next =
+        unlock_final_app_state(&busy, &effect).expect("success outcome installs an Unlocked state");
+    assert!(matches!(next, AppState::Unlocked { .. }));
+    assert_path_eq(&next, &path);
+}
+
+#[test]
+fn unlock_final_app_state_decrypt_failed_rolls_back_to_locked() {
+    // Worker returned `Err(DecryptFailed)`. The trio reports `None`
+    // (state unchanged), so the unified composer rolls the busy
+    // window back via `leave_unlocking_busy` → `Locked(path)`. The
+    // dialog stays mounted with its inline error and the user can
+    // retype without losing the surface.
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let err = decrypt_failed_err();
+    let effect = route_unlock_worker_outcome(&path, Err(&err));
+    let next = unlock_final_app_state(&busy, &effect)
+        .expect("inline failure rolls back UnlockedBusy → Locked");
+    assert!(matches!(next, AppState::Locked { .. }));
+    assert_path_eq(&next, &path);
+}
+
+#[test]
+fn unlock_final_app_state_invalid_passphrase_rolls_back_to_locked() {
+    // Second inline-routed branch — empty passphrase. Pin the same
+    // rollback so both inline failures share the contract.
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let err = invalid_passphrase_empty_err();
+    let effect = route_unlock_worker_outcome(&path, Err(&err));
+    let next = unlock_final_app_state(&busy, &effect)
+        .expect("inline failure rolls back UnlockedBusy → Locked");
+    assert!(matches!(next, AppState::Locked { .. }));
+    assert_path_eq(&next, &path);
+}
+
+#[test]
+fn unlock_final_app_state_unsafe_permissions_replaces_with_startup_error() {
+    // Worker returned `Err(UnsafePermissions)`. The trio reports
+    // `Some(StartupError(path, ...))`, so the unified composer
+    // returns the absolute startup-error state — no rollback needed
+    // because the new state replaces outright. The carried
+    // `StartupError.rendered` matches `format_unsafe_permissions`
+    // per the trio's existing pinning.
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let err = unsafe_perms_err();
+    let effect = route_unlock_worker_outcome(&path, Err(&err));
+    let next = unlock_final_app_state(&busy, &effect)
+        .expect("startup-routed failure installs a StartupError");
+    match next {
+        AppState::StartupError {
+            path: state_path,
+            error,
+        } => {
+            assert_eq!(state_path.as_deref(), Some(path.as_path()));
+            let expected = format_unsafe_permissions(&err)
+                .expect("UnsafePermissions has a formatter-provided rendering");
+            assert_eq!(error.rendered, expected);
+            assert!(matches!(error.source, StartupErrorSource::Open));
+        }
+        other => panic!("expected AppState::StartupError, got {other:?}"),
+    }
+}
+
+#[test]
+fn unlock_final_app_state_io_error_replaces_with_startup_error() {
+    // Non-passphrase, non-UnsafePermissions failure variant.
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let err = io_err();
+    let effect = route_unlock_worker_outcome(&path, Err(&err));
+    let next = unlock_final_app_state(&busy, &effect)
+        .expect("startup-routed failure installs a StartupError");
+    assert!(matches!(next, AppState::StartupError { .. }));
+}
+
+#[test]
+fn unlock_final_app_state_wrong_vault_lock_replaces_with_startup_error() {
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let err = wrong_vault_lock_err();
+    let effect = route_unlock_worker_outcome(&path, Err(&err));
+    let next =
+        unlock_final_app_state(&busy, &effect).expect("wrong_vault_lock installs a StartupError");
+    assert!(matches!(next, AppState::StartupError { .. }));
+}
+
+#[test]
+fn unlock_final_app_state_invalid_header_replaces_with_startup_error() {
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let err = invalid_header_err();
+    let effect = route_unlock_worker_outcome(&path, Err(&err));
+    let next =
+        unlock_final_app_state(&busy, &effect).expect("invalid_header installs a StartupError");
+    assert!(matches!(next, AppState::StartupError { .. }));
+}
+
+#[test]
+fn unlock_final_app_state_invalid_payload_replaces_with_startup_error() {
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let err = invalid_payload_err();
+    let effect = route_unlock_worker_outcome(&path, Err(&err));
+    let next =
+        unlock_final_app_state(&busy, &effect).expect("invalid_payload installs a StartupError");
+    assert!(matches!(next, AppState::StartupError { .. }));
+}
+
+#[test]
+fn unlock_final_app_state_unsupported_format_version_replaces_with_startup_error() {
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let err = unsupported_format_version_err();
+    let effect = route_unlock_worker_outcome(&path, Err(&err));
+    let next = unlock_final_app_state(&busy, &effect)
+        .expect("unsupported_format_version installs a StartupError");
+    assert!(matches!(next, AppState::StartupError { .. }));
+}
+
+#[test]
+fn unlock_final_app_state_kdf_params_out_of_bounds_replaces_with_startup_error() {
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let err = kdf_oob_err();
+    let effect = route_unlock_worker_outcome(&path, Err(&err));
+    let next = unlock_final_app_state(&busy, &effect)
+        .expect("kdf_params_out_of_bounds installs a StartupError");
+    assert!(matches!(next, AppState::StartupError { .. }));
+}
+
+#[test]
+fn unlock_final_app_state_inline_from_non_unlocked_busy_returns_none() {
+    // Defensive: the inline branch can only roll back the busy
+    // window if `current` is `UnlockedBusy`. A stray call from any
+    // other state returns `None` rather than silently installing a
+    // phantom `Locked` transition that would replace another idle
+    // state. Mirrors the `leave_unlocking_busy` contract pinned by
+    // `non_unlocked_busy_states_do_not_leave_unlocking_busy`.
+    let path = vault_path();
+    let err = decrypt_failed_err();
+    let effect = route_unlock_worker_outcome(&path, Err(&err));
+    let invalid_sources = [
+        AppState::Missing { path: path.clone() },
+        AppState::Locked { path: path.clone() },
+        AppState::Unlocked { path: path.clone() },
+        decide_state_from_inspect(&path, Err(invalid_header_err()))
+            .expect("inspect Err yields StartupError state"),
+    ];
+    for source in &invalid_sources {
+        assert!(
+            unlock_final_app_state(source, &effect).is_none(),
+            "inline rollback from {source:?} must refuse to install a phantom Locked",
+        );
+    }
+}
+
+#[test]
+fn unlock_final_app_state_replacement_branches_ignore_current_state() {
+    // For the two replacement branches (success, startup-routed
+    // failure), the new state replaces `current` outright. Pin that
+    // the composer returns the same `Some(new_state)` regardless of
+    // which source state is passed in — the trio's
+    // `unlock_app_state_after` already projects the absolute new
+    // state, so `current` is not consulted for replacement.
+    let path = vault_path();
+    let success_effect = route_unlock_worker_outcome(&path, Ok(()));
+    let unsafe_err = unsafe_perms_err();
+    let startup_effect = route_unlock_worker_outcome(&path, Err(&unsafe_err));
+    let sources = [
+        AppState::Missing { path: path.clone() },
+        AppState::Locked { path: path.clone() },
+        AppState::Unlocked { path: path.clone() },
+        AppState::UnlockedBusy { path: path.clone() },
+    ];
+    for source in &sources {
+        let next = unlock_final_app_state(source, &success_effect)
+            .expect("success replacement ignores current");
+        assert!(matches!(next, AppState::Unlocked { .. }));
+        let next = unlock_final_app_state(source, &startup_effect)
+            .expect("startup replacement ignores current");
+        assert!(matches!(next, AppState::StartupError { .. }));
+    }
+}
+
+#[test]
+fn unlock_final_app_state_matches_unlock_app_state_after_on_replacement_branches() {
+    // Cross-check: when `unlock_app_state_after` reports
+    // `Some(state)`, the composer must return exactly that state.
+    // This pins that the composer never re-derives the projection —
+    // it only fills in the inline gap with `leave_unlocking_busy`.
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let effects = [
+        route_unlock_worker_outcome(&path, Ok(())),
+        route_unlock_worker_outcome(&path, Err(&unsafe_perms_err())),
+        route_unlock_worker_outcome(&path, Err(&io_err())),
+        route_unlock_worker_outcome(&path, Err(&wrong_vault_lock_err())),
+        route_unlock_worker_outcome(&path, Err(&invalid_header_err())),
+        route_unlock_worker_outcome(&path, Err(&invalid_payload_err())),
+        route_unlock_worker_outcome(&path, Err(&unsupported_format_version_err())),
+        route_unlock_worker_outcome(&path, Err(&kdf_oob_err())),
+    ];
+    for effect in &effects {
+        let trio_state = unlock_app_state_after(effect)
+            .expect("replacement-branch effect carries a state replacement");
+        let composer_state = unlock_final_app_state(&busy, effect)
+            .expect("replacement-branch composer mirrors the trio");
+        assert_eq!(
+            std::mem::discriminant(trio_state),
+            std::mem::discriminant(&composer_state),
+            "composer must mirror the trio's variant for effect={effect:?}",
+        );
+        assert_eq!(
+            trio_state.path().map(Path::to_path_buf),
+            composer_state.path().map(Path::to_path_buf),
+            "composer must mirror the trio's path for effect={effect:?}",
+        );
+    }
+}
+
+#[test]
+fn unlock_final_app_state_inline_branches_roll_back_to_locked_only() {
+    // Cross-check: for both inline-routed branches the composer
+    // returns exactly `Some(Locked(path))` when `current` is
+    // `UnlockedBusy(path)`. Guards against a future enum variant
+    // routing through the inline branch with a different rollback
+    // target — the rollback rule must stay `UnlockedBusy → Locked`.
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let inline_effects = [
+        route_unlock_worker_outcome(&path, Err(&decrypt_failed_err())),
+        route_unlock_worker_outcome(&path, Err(&invalid_passphrase_empty_err())),
+    ];
+    for effect in &inline_effects {
+        let next = unlock_final_app_state(&busy, effect)
+            .expect("inline failure rolls back UnlockedBusy → Locked");
+        assert!(
+            matches!(next, AppState::Locked { .. }),
+            "inline rollback target must be Locked for effect={effect:?}",
+        );
+        assert_path_eq(&next, &path);
+    }
+}
+
+#[test]
+fn unlock_final_app_state_some_iff_drop_dialog_or_unlocked_busy_source() {
+    // Cross-check: the composer returns `Some` exactly when either
+    // (a) the trio drops the dialog (replacement branch — current
+    // is ignored) or (b) the trio keeps the dialog mounted but
+    // `current` is `UnlockedBusy` (inline branch — `leave_unlocking_busy`
+    // accepts). Any other combination returns `None`. This pins the
+    // composer's partitioning so a future refactor cannot silently
+    // accept an unexpected source state through the inline branch.
+    let path = vault_path();
+    let sources = [
+        AppState::Missing { path: path.clone() },
+        AppState::Locked { path: path.clone() },
+        AppState::Unlocked { path: path.clone() },
+        AppState::UnlockedBusy { path: path.clone() },
+    ];
+    let effects = [
+        route_unlock_worker_outcome(&path, Ok(())),
+        route_unlock_worker_outcome(&path, Err(&decrypt_failed_err())),
+        route_unlock_worker_outcome(&path, Err(&invalid_passphrase_empty_err())),
+        route_unlock_worker_outcome(&path, Err(&unsafe_perms_err())),
+        route_unlock_worker_outcome(&path, Err(&io_err())),
+    ];
+    for effect in &effects {
+        let drops = should_drop_unlock_dialog_after(effect);
+        for source in &sources {
+            let is_busy = matches!(source, AppState::UnlockedBusy { .. });
+            let expected_some = drops || is_busy;
+            let actual_some = unlock_final_app_state(source, effect).is_some();
+            assert_eq!(
+                expected_some, actual_some,
+                "composer must return Some iff drop=true or source is UnlockedBusy; \
+                 drop={drops}, is_busy={is_busy}, source={source:?}, effect={effect:?}",
+            );
+        }
     }
 }
