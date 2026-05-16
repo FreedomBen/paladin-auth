@@ -33,6 +33,8 @@
 //!   panic-unwind survival, setup-failure short-circuit).
 
 use std::io;
+use std::io::Write;
+use std::process::ExitCode;
 use std::sync::mpsc::{self, Sender};
 use std::thread::JoinHandle;
 use std::time::SystemTime;
@@ -154,4 +156,32 @@ where
     // during panic unwind out of `run_event_loop`, so the user's
     // terminal is always restored.
     Ok(final_state)
+}
+
+/// Map the `io::Result<AppState>` returned by
+/// [`run_with_terminal_guard`] onto the [`ExitCode`] the binary's
+/// `main` must return, writing a single-line `paladin-tui: <err>`
+/// advisory to `stderr` on the failure path.
+///
+/// Production callers in [`crate::run`] hand `std::io::stderr().lock()`
+/// as the writer; tests inject a `Vec<u8>` so they can pin the
+/// wording without capturing the per-test stderr stream. A writer
+/// that itself errors mid-write is swallowed silently — losing the
+/// advisory is strictly worse than the binary exiting with a
+/// misleading success code.
+///
+/// `AppState` carried by the `Ok(_)` variant is intentionally
+/// ignored: [`dispatch`] only returns through `Effect::Quit`, so any
+/// final state arriving here means a clean exit.
+pub fn exit_code_from_run_result<W: Write>(
+    result: io::Result<AppState>,
+    mut stderr: W,
+) -> ExitCode {
+    match result {
+        Ok(_) => ExitCode::SUCCESS,
+        Err(err) => {
+            let _ = writeln!(stderr, "paladin-tui: {err}");
+            ExitCode::FAILURE
+        }
+    }
 }

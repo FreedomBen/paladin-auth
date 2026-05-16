@@ -36,8 +36,10 @@ use std::time::{Duration, Instant, SystemTime};
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 
+use std::process::ExitCode;
+
 use paladin_tui::app::event::AppEvent;
-use paladin_tui::app::run::{run_event_loop, run_with_terminal_guard};
+use paladin_tui::app::run::{exit_code_from_run_result, run_event_loop, run_with_terminal_guard};
 use paladin_tui::app::state::AppState;
 use paladin_tui::terminal::TerminalBackend;
 
@@ -457,6 +459,103 @@ fn run_with_terminal_guard_restores_terminal_when_render_panics() {
         tail,
         &["leave_alt_screen", "disable_raw_mode"],
         "guard drop must restore terminal during panic unwind"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// exit_code_from_run_result (IMPLEMENTATION_PLAN_03_TUI.md > Implementation
+// checklist: "Implement terminal raw-mode / alternate-screen lifecycle with
+// guarded restoration on exit, error, Ctrl-C, and panic unwind")
+//
+// `exit_code_from_run_result` is the last small composer between
+// `run_with_terminal_guard` and the binary's `main()`: it maps the
+// composer's `io::Result<AppState>` into the `ExitCode` `main` must return,
+// and writes the `io::Error` advisory to the supplied stderr sink on the
+// failure path. Keeping the writer injectable is what lets these tests pin
+// the wording without driving a real `process::exit` or capturing the
+// per-test stderr stream.
+//
+// `ExitCode` does not implement `PartialEq` (rust-lang/rust#67939) so the
+// tests compare via the stable `Debug` representation.
+// ---------------------------------------------------------------------------
+
+/// Stable `Debug` rendering of an `ExitCode` for equality assertions —
+/// rust-lang/rust#67939 deliberately keeps `ExitCode` non-`Eq` so the
+/// stable surface is `Debug` + `From<u8>` + `Termination`. The Debug
+/// strings for `SUCCESS` and `FAILURE` are well-defined and stable.
+fn debug_exit_code(code: ExitCode) -> String {
+    format!("{code:?}")
+}
+
+#[test]
+fn exit_code_from_run_result_success_returns_exit_code_success_and_writes_nothing() {
+    // Pin: on `Ok(_)`, the helper returns `ExitCode::SUCCESS` and
+    // writes nothing to the stderr sink. The `AppState` value carried
+    // by the `Ok` variant is intentionally ignored — dispatch only
+    // returns through the Quit path, so any final state means a clean
+    // exit.
+    let mut stderr: Vec<u8> = Vec::new();
+    let code = exit_code_from_run_result(Ok(missing("/tmp/v.bin")), &mut stderr);
+
+    assert_eq!(
+        debug_exit_code(code),
+        debug_exit_code(ExitCode::SUCCESS),
+        "Ok(_) must map to ExitCode::SUCCESS",
+    );
+    assert!(
+        stderr.is_empty(),
+        "no stderr advisory should be written on the success path, got {:?}",
+        String::from_utf8_lossy(&stderr),
+    );
+}
+
+#[test]
+fn exit_code_from_run_result_io_error_returns_exit_code_failure_and_writes_advisory() {
+    // Pin: on `Err(io_error)`, the helper returns `ExitCode::FAILURE`
+    // and writes a single-line `paladin-tui: <err>\n` advisory to the
+    // stderr sink. The wording matches the CLI's `paladin: <err>`
+    // pattern so users see a consistent prefix across the two
+    // binaries.
+    let mut stderr: Vec<u8> = Vec::new();
+    let err = io::Error::other("simulated terminal setup failure");
+    let code = exit_code_from_run_result(Err(err), &mut stderr);
+
+    assert_eq!(
+        debug_exit_code(code),
+        debug_exit_code(ExitCode::FAILURE),
+        "Err(_) must map to ExitCode::FAILURE",
+    );
+    let written = String::from_utf8(stderr).expect("stderr advisory is UTF-8");
+    assert_eq!(
+        written, "paladin-tui: simulated terminal setup failure\n",
+        "the failure advisory must be the binary-prefixed io::Error wording with a trailing newline",
+    );
+}
+
+#[test]
+fn exit_code_from_run_result_writer_failure_does_not_change_exit_code() {
+    // Pin: if the stderr sink itself errors mid-write, the helper
+    // must still return `ExitCode::FAILURE` — losing the advisory is
+    // strictly worse than the binary exiting with a misleading
+    // success code. Drives a `Write` impl whose `write_all` always
+    // returns an error so the helper has to swallow it.
+    struct FailingWriter;
+    impl io::Write for FailingWriter {
+        fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
+            Err(io::Error::other("simulated stderr write failure"))
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Err(io::Error::other("simulated stderr flush failure"))
+        }
+    }
+
+    let err = io::Error::other("simulated terminal setup failure");
+    let code = exit_code_from_run_result(Err(err), FailingWriter);
+
+    assert_eq!(
+        debug_exit_code(code),
+        debug_exit_code(ExitCode::FAILURE),
+        "writer failure must not downgrade ExitCode::FAILURE to SUCCESS",
     );
 }
 

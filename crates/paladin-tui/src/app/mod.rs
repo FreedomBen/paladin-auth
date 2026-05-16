@@ -24,7 +24,7 @@ pub use effect::{execute, EffectOutcome};
 pub use event::{AppEvent, Effect, EffectResult};
 pub use reducer::reduce;
 pub use render::draw_frame;
-pub use run::{run_event_loop, run_with_terminal_guard};
+pub use run::{exit_code_from_run_result, run_event_loop, run_with_terminal_guard};
 pub use state::{
     build_initial_state, build_initial_state_with_resolver, decide_state_from_inspect,
     decide_state_from_open, render_error_message, AppState, StatusLine, CLIPBOARD_WRITE_FAILED,
