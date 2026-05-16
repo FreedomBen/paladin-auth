@@ -258,8 +258,16 @@ pub fn decide_rename_target(vault: &Vault, id: AccountId) -> Option<RenameDialog
 /// trims the draft itself — trimming happens inside [`classify_submit`],
 /// so [`Self::draft`] keeps the exact raw characters in the row and
 /// the canonical trimmed value lives inside the [`SubmitOutcome`].
+///
+/// The targeted [`AccountId`] is copied off the [`RenameDialogInit`]
+/// at construction so the future
+/// `RenameDialogMsg::SubmitClicked` → `RenameDialogOutput::SubmitLabel`
+/// routing can run through [`apply_msg`] without an extra
+/// `account_id` argument. Mirrors the `UnlockDialogState` pattern
+/// where the state owns everything the worker input needs.
 #[derive(Debug, Clone)]
 pub struct RenameDialogState {
+    account_id: AccountId,
     draft: String,
     last_validation: SubmitOutcome,
 }
@@ -276,9 +284,23 @@ impl RenameDialogState {
         let draft = init.current_label.clone();
         let last_validation = classify_submit(&draft);
         Self {
+            account_id: init.account_id,
             draft,
             last_validation,
         }
+    }
+
+    /// Stable account identifier the dialog targets.
+    ///
+    /// Copied off the [`RenameDialogInit`] in [`Self::new`] so the
+    /// future submit routing can build a
+    /// `RenameDialogOutput::SubmitLabel { account_id, label }`
+    /// payload directly from the state. A mid-flight keystroke
+    /// never retargets the rename: [`set_draft`] mutates only the
+    /// visible draft and cached validation.
+    #[must_use]
+    pub fn account_id(&self) -> AccountId {
+        self.account_id
     }
 
     /// Current raw draft text from the entry row.

@@ -469,6 +469,34 @@ fn rename_dialog_state_new_seeds_draft_from_current_label() {
 }
 
 #[test]
+fn rename_dialog_state_new_stores_account_id_from_init() {
+    // `RenameDialogState` carries the targeted account id alongside
+    // the draft so the future `RenameDialogMsg::SubmitClicked` →
+    // `RenameDialogOutput::SubmitLabel { account_id, label }`
+    // routing can run through `apply_msg(state, msg)` without an
+    // extra `account_id` argument. Mirrors the `UnlockDialogState`
+    // pattern where the state owns the entire data needed to build
+    // the worker input.
+    let init = dummy_init("ben");
+    let expected = init.account_id;
+    let state = RenameDialogState::new(&init);
+    assert_eq!(state.account_id(), expected);
+}
+
+#[test]
+fn rename_dialog_state_account_id_survives_draft_mutations() {
+    // `set_draft` only mutates the visible draft and cached
+    // validation outcome — the stable account-id projection used
+    // by the worker must remain the original target so a mid-flight
+    // keystroke does not retarget the rename.
+    let init = dummy_init("ben");
+    let expected = init.account_id;
+    let mut state = RenameDialogState::new(&init);
+    state.set_draft("draft-in-progress".to_string());
+    assert_eq!(state.account_id(), expected);
+}
+
+#[test]
 fn rename_dialog_state_new_validates_seeded_draft_positively() {
     // The current label was stored in the vault by `Vault::add` /
     // `Vault::rename`, which both validate, so a freshly-seeded
