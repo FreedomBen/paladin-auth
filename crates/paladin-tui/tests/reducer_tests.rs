@@ -31,12 +31,12 @@ use paladin_tui::app::event::{
 };
 use paladin_tui::app::reducer::reduce;
 use paladin_tui::app::state::{
-    compute_idle_deadline, decide_state_from_inspect, decide_state_from_open,
-    format_account_display_label, format_duplicate_account_message, format_qr_import_failure,
-    render_error_message, AddManualFocus, AddModal, AddMode, AppState, ChordLeader, ExportFormat,
-    ExportModal, Focus, HotpReveal, ImportFormatSelector, ImportModal, Modal, PassphraseModal,
-    PendingDuplicateAdd, RemoveModal, RenameModal, SettingsFocus, SettingsModal, StatusLine,
-    NO_ACCOUNT_SELECTED,
+    build_initial_state_with_resolver, compute_idle_deadline, decide_state_from_inspect,
+    decide_state_from_open, format_account_display_label, format_duplicate_account_message,
+    format_qr_import_failure, render_error_message, AddManualFocus, AddModal, AddMode, AppState,
+    ChordLeader, ExportFormat, ExportModal, Focus, HotpReveal, ImportFormatSelector, ImportModal,
+    Modal, PassphraseModal, PendingDuplicateAdd, RemoveModal, RenameModal, SettingsFocus,
+    SettingsModal, StatusLine, NO_ACCOUNT_SELECTED,
 };
 use paladin_tui::cli::{should_disable_color, GlobalArgs};
 use paladin_tui::prompt::PassphraseBuffer;
@@ -402,6 +402,79 @@ fn render_error_message_falls_back_to_display_for_non_unsafe_permissions_error()
 
     let rendered = render_error_message(&err);
     assert_eq!(rendered, err.to_string());
+}
+
+#[test]
+fn build_initial_state_resolver_failure_yields_startup_error_with_no_path_and_no_file_mutation() {
+    // Bullet: "Vault-path resolution failures from `default_vault_path`
+    // open the non-mutating startup-error screen and do not create or
+    // mutate files."
+    //
+    // `paladin_core::default_vault_path` only fails when
+    // `ProjectDirs::from` returns `None` — not portably forceable from a
+    // test — so `build_initial_state_with_resolver` accepts an
+    // injectable resolver. We pass a closure that mimics the production
+    // resolver's `io_error` shape and verify the resolver-failure branch
+    // returns `StartupError { path: None, message }` without touching
+    // the filesystem.
+    fn make_err() -> PaladinError {
+        PaladinError::IoError {
+            operation: "resolve_default_vault_path",
+            source: std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "ProjectDirs::from returned None (no platform home directory)",
+            ),
+        }
+    }
+    let expected_message = render_error_message(&make_err());
+
+    // Tempdir observed before and after to verify the function does not
+    // create or mutate any sibling files on the resolver-failure branch.
+    let tmp = test_tempdir();
+    let before: Vec<_> = fs::read_dir(tmp.path())
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|e| e.file_name())
+        .collect();
+
+    let state = build_initial_state_with_resolver(None, || Err(make_err()));
+
+    match state {
+        AppState::StartupError { path, message } => {
+            assert!(
+                path.is_none(),
+                "resolver failure must leave path unset, got {path:?}"
+            );
+            assert_eq!(message, expected_message);
+        }
+        other => panic!("expected StartupError, got {other:?}"),
+    }
+
+    let after: Vec<_> = fs::read_dir(tmp.path())
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|e| e.file_name())
+        .collect();
+    assert_eq!(
+        before, after,
+        "resolver-failure entry point must not create or mutate files"
+    );
+}
+
+#[test]
+fn build_initial_state_resolver_skipped_when_vault_override_supplied() {
+    // Sentinel: when `--vault` is supplied the resolver is never
+    // consulted. Locks in the precedence so a future refactor that ever
+    // shifts the override-vs-resolver order surfaces here.
+    let tmp = test_tempdir();
+    let path = tmp.path().join("missing.bin");
+    let state = build_initial_state_with_resolver(Some(path.clone()), || {
+        panic!("resolver must not be consulted when vault override is supplied")
+    });
+    match state {
+        AppState::MissingVault { path: p } => assert_eq!(p, path),
+        other => panic!("expected MissingVault, got {other:?}"),
+    }
 }
 
 // ---------------------------------------------------------------------------

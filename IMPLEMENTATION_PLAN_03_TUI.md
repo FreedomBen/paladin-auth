@@ -1708,12 +1708,25 @@ end-to-end.
 - [x] Encrypted vault correct passphrase advances to the list.
 - [x] Missing vault opens the missing-vault screen and does not create
   or mutate files.
-- [ ] Vault-path resolution failures from `default_vault_path` open
+- [x] Vault-path resolution failures from `default_vault_path` open
   the non-mutating startup-error screen and do not create or mutate
-  files. (Deferred: `build_initial_state` calls `default_vault_path`
-  directly with no injectable resolver, and the resolver only fails
-  when `ProjectDirs::from` returns `None` — not portably forceable
-  from a test. Lands alongside a refactor that takes a resolver.)
+  files.
+  *(`crates/paladin-tui/src/app/state.rs::build_initial_state` now
+  delegates to a sibling `build_initial_state_with_resolver(vault,
+  resolver)` that accepts an injectable resolver
+  (`FnOnce() -> paladin_core::Result<PathBuf>`); the production entry
+  point wires `paladin_core::default_vault_path` as the resolver.
+  `build_initial_state_resolver_failure_yields_startup_error_with_no_path_and_no_file_mutation`
+  in `tests/reducer_tests.rs` drives the resolver-failure branch by
+  passing a closure that returns the same `io_error` shape
+  `default_vault_path` produces when `ProjectDirs::from` returns
+  `None` — the test asserts the returned `AppState::StartupError`
+  carries `path: None` and the verbatim rendered message, and reads
+  `test_tempdir()` before / after to lock in the no-file-creation /
+  no-file-mutation guarantee. A companion
+  `build_initial_state_resolver_skipped_when_vault_override_supplied`
+  test pins the override-vs-resolver precedence by passing a
+  `panic!`ing resolver alongside a `Some(path)` override.)*
 - [x] Non-`decrypt_failed` errors from `inspect` / `open` (including
   `unsafe_permissions`) open the non-mutating startup-error screen
   and do not create or mutate files.

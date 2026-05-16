@@ -1595,9 +1595,22 @@ pub fn format_qr_import_failure(failure: &crate::app::event::QrImportFailure) ->
 ///    path resolution / `inspect` / plaintext `open` lands on the
 ///    non-mutating startup-error screen.
 pub fn build_initial_state(vault: Option<PathBuf>) -> AppState {
+    build_initial_state_with_resolver(vault, paladin_core::default_vault_path)
+}
+
+/// Identical to [`build_initial_state`] but takes an injectable
+/// resolver for the default vault path. Production callers use
+/// [`build_initial_state`], which wires
+/// [`paladin_core::default_vault_path`] as the resolver. Tests use this
+/// entry point to drive the resolver-failure branch on hosts where
+/// `ProjectDirs::from` always succeeds.
+pub fn build_initial_state_with_resolver<F>(vault: Option<PathBuf>, resolve_default: F) -> AppState
+where
+    F: FnOnce() -> paladin_core::Result<PathBuf>,
+{
     let path: PathBuf = match vault {
         Some(p) => p,
-        None => match paladin_core::default_vault_path() {
+        None => match resolve_default() {
             Ok(p) => p,
             Err(err) => {
                 return AppState::StartupError {
