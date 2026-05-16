@@ -2784,8 +2784,43 @@ Add (QR) error and counts states:
 
 Passphrase inline errors:
 
-- [ ] Passphrase modal `confirmation_mismatch` inline error.
-- [ ] Passphrase modal `zero_length` inline error.
+- [x] Passphrase modal `confirmation_mismatch` inline error.
+  *(`snapshot_passphrase_modal_confirmation_mismatch` in
+  `crates/paladin-tui/tests/view_snapshots.rs` drives `view::render`
+  against an `Unlocked` state holding
+  `Modal::Passphrase(PassphraseModal { sub_flow: Set, error:
+  Some(render_error_message(&PaladinError::InvalidPassphrase {
+  reason: "confirmation_mismatch" })), .. })`. Routing the wording
+  through `render_error_message` binds the snapshot to the core
+  `Display` impl (`invalid passphrase: confirmation_mismatch`)
+  rather than a hand-typed string, keeping the surfaced text in
+  lockstep with the CLI's `prompt_new_passphrase` and the GTK
+  `SubmitRejection::ConfirmationMismatch` wire code. The carried
+  sub-flow is `Set` so the snapshot reads as an inline-error delta
+  from `snapshot_passphrase_modal_set_default`: the error line
+  appears inside the spacer between the masked `Confirm:` row and
+  the centered `Enter submit · Esc cancel` footer hint, sharing
+  the same `error` slot the `save_not_committed` /
+  `save_durability_unconfirmed` snapshots exercise. Locked in
+  `tests/snapshots/view_snapshots__snapshot_passphrase_modal_confirmation_mismatch.snap`.)*
+- [x] Passphrase modal `zero_length` inline error.
+  *(`snapshot_passphrase_modal_zero_length` in
+  `crates/paladin-tui/tests/view_snapshots.rs` drives `view::render`
+  against an `Unlocked` state holding
+  `Modal::Passphrase(PassphraseModal { sub_flow: Set, error:
+  Some(render_error_message(&PaladinError::InvalidPassphrase {
+  reason: "zero_length" })), .. })`. Routing the wording through
+  `render_error_message` binds the snapshot to the core `Display`
+  impl (`invalid passphrase: zero_length`), keeping the surfaced
+  text in lockstep with the CLI's `prompt_new_passphrase` (mismatch
+  first, then `zero_length`) and the GTK
+  `SubmitRejection::ZeroLength` wire code. The `Set` sub-flow
+  reads as an inline-error delta from
+  `snapshot_passphrase_modal_set_default` and shares the renderer
+  branch the `confirmation_mismatch` snapshot above exercises;
+  the `change` sub-flow runs the same branch so a single `Set`
+  carrier covers both twice-confirm flows. Locked in
+  `tests/snapshots/view_snapshots__snapshot_passphrase_modal_zero_length.snap`.)*
 
 Status-line states:
 

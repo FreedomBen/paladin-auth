@@ -2984,6 +2984,151 @@ fn snapshot_passphrase_modal_remove_default() {
 }
 
 #[test]
+fn snapshot_passphrase_modal_confirmation_mismatch() {
+    // Plan L2787: "Passphrase modal `confirmation_mismatch` inline error."
+    // Drive `view::render` against an `Unlocked` state with
+    // `Modal::Passphrase(PassphraseModal { sub_flow: Set, error:
+    // Some(render_error_message(&PaladinError::InvalidPassphrase
+    // { reason: "confirmation_mismatch" })), .. })` open so the
+    // snapshot pins the inline-error row populated from the twice-confirm
+    // mismatch gate per `IMPLEMENTATION_PLAN_03_TUI.md` "Modals (per §6)
+    // > Passphrase": *"New passphrases (`set`, `change`) are prompted
+    // twice and confirmed; mismatch returns to the modal with an inline
+    // `invalid_passphrase` (`reason: "confirmation_mismatch"`) error."*
+    // The reducer's `Passphrase` arm in
+    // `crates/paladin-tui/src/app/reducer.rs` surfaces the mismatch
+    // through `PaladinError::InvalidPassphrase { reason:
+    // "confirmation_mismatch" }`, matching the CLI's
+    // `prompt_new_passphrase` and the GTK `SubmitRejection::
+    // ConfirmationMismatch` wire code so the user-facing reason stays
+    // stable across all three front-ends. Routing the wording through
+    // the shared `render_error_message` helper binds the snapshot to
+    // the core `Display` impl (`invalid passphrase: confirmation_mismatch`)
+    // rather than a hand-typed string so any future wording change in
+    // core surfaces here as a diff.
+    //
+    // The sub-flow is `Set` so the snapshot reads as an inline-error
+    // delta from the `snapshot_passphrase_modal_set_default` baseline —
+    // the error line appears inside the spacer area between the masked
+    // `Confirm:` row and the centered footer hint, sharing the same
+    // `error` slot the `save_not_committed` /
+    // `save_durability_unconfirmed` snapshots exercise. The mismatch
+    // gate's renderer branch is identical for the `change` sub-flow
+    // (twice-confirm semantics are shared); a `Set` carrier here keeps
+    // the matrix focused on the validation slot's text. The `remove`
+    // sub-flow has no second prompt and so cannot enter this branch.
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let modal = PassphraseModal {
+        sub_flow: PassphraseSubFlow::Set,
+        error: Some(render_error_message(&PaladinError::InvalidPassphrase {
+            reason: "confirmation_mismatch",
+        })),
+        ..PassphraseModal::default()
+    };
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Passphrase(modal)),
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let rendered = render_to_text(&state, snapshot_now(), 80, 20);
+    let expected = render_error_message(&PaladinError::InvalidPassphrase {
+        reason: "confirmation_mismatch",
+    });
+    assert!(
+        rendered.contains(&expected),
+        "expected inline confirmation_mismatch wording {expected:?} to appear in modal:\n{rendered}"
+    );
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn snapshot_passphrase_modal_zero_length() {
+    // Plan L2788: "Passphrase modal `zero_length` inline error." Drive
+    // `view::render` against an `Unlocked` state with
+    // `Modal::Passphrase(PassphraseModal { sub_flow: Set, error:
+    // Some(render_error_message(&PaladinError::InvalidPassphrase
+    // { reason: "zero_length" })), .. })` open so the snapshot pins
+    // the inline-error row populated from the twice-confirm
+    // empty-passphrase gate per `IMPLEMENTATION_PLAN_03_TUI.md`
+    // "Modals (per §6) > Passphrase": *"Empty passphrase entries are
+    // rejected with an inline `invalid_passphrase` (`reason:
+    // "zero_length"`) error."*. When both `new_passphrase` and
+    // `confirm_passphrase` are empty (so the mismatch gate passes by
+    // both buffers being equal), the reducer surfaces a rendered
+    // `PaladinError::InvalidPassphrase` with `reason: "zero_length"`
+    // per DESIGN.md §5, matching the CLI's `prompt_new_passphrase`
+    // (mismatch first, then `zero_length`) and the GTK
+    // `SubmitRejection::ZeroLength` wire code so the user-facing
+    // reason stays stable across all three front-ends. Routing the
+    // wording through `render_error_message` binds the snapshot to
+    // the core `Display` impl (`invalid passphrase: zero_length`)
+    // rather than a hand-typed string so any future wording change in
+    // core surfaces here as a diff.
+    //
+    // The sub-flow is `Set` so the snapshot reads as a delta from the
+    // `snapshot_passphrase_modal_set_default` baseline — the inline
+    // error line appears inside the spacer area between the masked
+    // `Confirm:` row and the footer hint, sharing the same `error`
+    // slot the `confirmation_mismatch` snapshot above exercises. The
+    // `change` sub-flow runs the same renderer branch; a `Set`
+    // carrier here keeps the matrix focused on the validation slot's
+    // text. The `remove` sub-flow has no new-passphrase prompt and so
+    // cannot enter this branch.
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let modal = PassphraseModal {
+        sub_flow: PassphraseSubFlow::Set,
+        error: Some(render_error_message(&PaladinError::InvalidPassphrase {
+            reason: "zero_length",
+        })),
+        ..PassphraseModal::default()
+    };
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Passphrase(modal)),
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let rendered = render_to_text(&state, snapshot_now(), 80, 20);
+    let expected = render_error_message(&PaladinError::InvalidPassphrase {
+        reason: "zero_length",
+    });
+    assert!(
+        rendered.contains(&expected),
+        "expected inline zero_length wording {expected:?} to appear in modal:\n{rendered}"
+    );
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn snapshot_passphrase_modal_set_save_not_committed() {
     // Plan L2198: "Passphrase set `save_not_committed`." Drive
     // `view::render` against an `Unlocked` state holding
