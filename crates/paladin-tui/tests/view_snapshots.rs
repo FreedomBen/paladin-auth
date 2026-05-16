@@ -1088,6 +1088,118 @@ fn snapshot_add_modal_qr_counts_panel() {
 }
 
 #[test]
+fn snapshot_add_modal_qr_counts_panel_with_validation_warnings() {
+    // Plan L2759: "QR-add counts panel with validation-warning messages."
+    // Drive `view::render` against an `Unlocked` state holding
+    // `Modal::Add(AddModal { mode: AddMode::Qr, counts_panel:
+    // Some(CountsPanel { ..., warnings: vec![...] }), .. })` so the
+    // snapshot pins the post-success summary panel rendering each
+    // `paladin_core::ImportWarning` through
+    // `paladin_core::format_validation_warning()` per `DESIGN.md` §6's
+    // "The modal reports imported/skipped/replaced/appended/warning
+    // counts plus validation-warning messages rendered through
+    // `paladin_core::format_validation_warning()` in a post-success
+    // counts panel" contract. The reducer seeds `CountsPanel::warnings`
+    // from the carried `ImportReport::warnings` map through
+    // `format_validation_warning`, so routing the strings through the
+    // helper here binds the snapshot to the core wording rather than a
+    // hand-typed string — a future revision of the warning phrasing
+    // stays in sync without an extra snapshot edit.
+    //
+    // Two warnings with distinct `decoded_len` values (5, 1) so a
+    // regression that ever swaps two warnings or collapses them onto a
+    // single line surfaces as a diff rather than staying silent under
+    // identical values. The carried counts (`imported: 1`, `skipped: 1`)
+    // are distinct from the no-warnings QR-add snapshot
+    // (`imported: 2`, `skipped: 1`) so the two snapshots read as deltas
+    // of the same panel — a future renderer change that ever hides the
+    // counts in the presence of warnings is caught. The clipboard-QR
+    // flow always runs with [`paladin_core::ImportConflict::Skip`], so
+    // `replaced` and `appended` are pinned to `0` on this path,
+    // matching the always-zero rows in the sibling snapshot.
+    //
+    // Mirrors `snapshot_import_modal_counts_panel_with_validation_warnings`
+    // so the QR-add and file-import warnings panels read as a matched
+    // pair: a regression that ever stops painting the warnings band
+    // for one surface but not the other surfaces as a diff. The Add
+    // modal's `MODAL_INNER_WIDTH` is 62 cells (vs the Import modal's
+    // 70), so the warnings strings rendered at this width fit on a
+    // single row each at the carried `decoded_len` values — the panel
+    // grows by exactly the warnings_rows count rather than wrapping.
+    // A wider 24-row TestBackend gives the modal vertical room to grow
+    // past the 16-row base height; `modal_height_for` in
+    // `crates/paladin-tui/src/view/add.rs` predicts the wrapped row
+    // count and allocates the modal rect accordingly.
+    //
+    // Background vault is empty so the underlying list view paints its
+    // empty-state prompt where the modal's clipped border does not
+    // erase it, mirroring the other Add modal snapshots.
+    let warning_short = format_validation_warning(&ValidationWarning::ShortSecret {
+        decoded_len: 5,
+        recommended_min: 16,
+    });
+    let warning_shortest = format_validation_warning(&ValidationWarning::ShortSecret {
+        decoded_len: 1,
+        recommended_min: 16,
+    });
+
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let modal = AddModal {
+        mode: AddMode::Qr,
+        counts_panel: Some(CountsPanel {
+            imported: 1,
+            skipped: 1,
+            replaced: 0,
+            appended: 0,
+            warnings: vec![warning_short.clone(), warning_shortest.clone()],
+        }),
+        ..AddModal::default()
+    };
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: Some(Modal::Add(modal)),
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: None,
+        help_open: false,
+    };
+    let rendered = render_to_text(&state, snapshot_now(), 80, 24);
+    assert!(
+        rendered.contains("decoded length 5 bytes"),
+        "expected first warning's decoded_len text in counts panel:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("decoded length 1 bytes"),
+        "expected second warning's decoded_len text in counts panel:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("Imported:") && rendered.contains('1'),
+        "expected 'Imported:' row with count 1 to remain visible above warnings:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("Skipped:") && rendered.contains('1'),
+        "expected 'Skipped:' row with count 1 to remain visible above warnings:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("Enter or Esc to close"),
+        "expected post-success hint to appear below warnings:\n{rendered}"
+    );
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn snapshot_add_modal_duplicate_account() {
     // Plan L2702: "Add modal `duplicate_account`." Drive `view::render`
     // against an `Unlocked` state holding

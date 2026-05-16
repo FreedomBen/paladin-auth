@@ -2756,7 +2756,31 @@ Add (QR) error and counts states:
   `pending_duplicate_add` or if the confirmation wording changes.
   Locked in
   `tests/snapshots/view_snapshots__snapshot_add_modal_add_anyway_confirmation.snap`.)*
-- [ ] QR-add counts panel with validation-warning messages.
+- [x] QR-add counts panel with validation-warning messages.
+  *(`snapshot_add_modal_qr_counts_panel_with_validation_warnings`
+  in `crates/paladin-tui/tests/view_snapshots.rs` drives `view::render`
+  against an `Unlocked` state holding
+  `Modal::Add(AddModal { mode: AddMode::Qr, counts_panel:
+  Some(CountsPanel { imported: 1, skipped: 1, replaced: 0,
+  appended: 0, warnings: vec![short, shortest] }), .. })`. Each
+  warning is built through `paladin_core::format_validation_warning`
+  with distinct `decoded_len` values (5 / 1) so the snapshot binds
+  to the core wording and a regression that ever swaps two
+  warnings or collapses them onto a single line surfaces as a diff.
+  The carried counts (`imported: 1`, `skipped: 1`) are distinct
+  from the no-warnings QR-add snapshot (`imported: 2`,
+  `skipped: 1`) so the two snapshots read as deltas of the same
+  panel — a future renderer change that ever hides the counts in
+  the presence of warnings is caught; `replaced` and `appended`
+  stay pinned to `0` per the clipboard-QR
+  [`ImportConflict::Skip`] contract. The renderer's existing
+  `render_counts_panel` band in `crates/paladin-tui/src/view/add.rs`
+  (which mirrors `super::import::render_counts_panel`) already
+  paints the warnings band above the `Enter or Esc to close`
+  footer; `modal_height_for` grew the modal vertically so both
+  warning strings fit fully below the four count rows inside an
+  80×24 [`TestBackend`]. Locked in
+  `tests/snapshots/view_snapshots__snapshot_add_modal_qr_counts_panel_with_validation_warnings.snap`.)*
 
 Passphrase inline errors:
 
