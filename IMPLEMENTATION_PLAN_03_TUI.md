@@ -2882,17 +2882,140 @@ Status-line states:
   binding the snapshot to the core `Display` wording rather than
   a hand-typed string — and locks the rendered grid in
   `tests/snapshots/view_snapshots__snapshot_unlock_screen_with_wrong_passphrase_error.snap`.)*
-- [ ] Status-line confirmation after manual Add.
-- [ ] Status-line confirmation after URI Add.
-- [ ] Status-line confirmation after Remove.
-- [ ] Status-line confirmation after Rename.
-- [ ] Status-line confirmation after Export.
-- [ ] Status-line confirmation after Passphrase set.
-- [ ] Status-line confirmation after Passphrase change.
-- [ ] Status-line confirmation after Passphrase remove.
-- [ ] Status-line confirmation after Settings save.
-- [ ] Manual Add status-line confirmation with validation warnings.
-- [ ] URI Add status-line confirmation with validation warnings.
+- [x] Status-line confirmation after manual Add.
+  *(`snapshot_list_view_status_line_after_manual_add` in
+  `crates/paladin-tui/tests/view_snapshots.rs` drives `view::render`
+  against an `Unlocked` state whose `status_line` carries
+  `StatusLine::Confirmation(format!("Added {}.", format_account_display_label(&summary)))`
+  — the exact wording `reduce_add_result` publishes on the
+  no-warnings Ok-arm of `EffectResult::Add`. Routing through
+  `format_account_display_label` binds the snapshot to the shared
+  CLI / TUI label-formatting source of truth so any wording change
+  in `issuer:label` rendering surfaces here. Reads as a bottom-row
+  delta from the `StatusLine::Error` siblings above — both share
+  the renderer's `bottom_line` slot but route through the
+  `Confirmation` branch (green-tinted on live terminals; the
+  harness drops styling). Locked in
+  `tests/snapshots/view_snapshots__snapshot_list_view_status_line_after_manual_add.snap`.)*
+- [x] Status-line confirmation after URI Add.
+  *(`snapshot_list_view_status_line_after_uri_add` in
+  `crates/paladin-tui/tests/view_snapshots.rs` follows the same
+  pattern as the manual-add sibling: the URI add flow shares
+  `reduce_add_result`, so the published wording is the same
+  `Added {display}.` template against
+  `format_account_display_label`. A separate snapshot anchors the
+  URI entry point against a future reducer divergence in wording
+  per `AddMode`. The just-added account uses an issuer / label
+  combination typical of an
+  `otpauth://totp/Example:alice@example.com?issuer=Example` payload
+  so the bottom-row text differs visibly from the manual sibling
+  without invoking a different renderer branch. Locked in
+  `tests/snapshots/view_snapshots__snapshot_list_view_status_line_after_uri_add.snap`.)*
+- [x] Status-line confirmation after Remove.
+  *(`snapshot_list_view_status_line_after_remove` in
+  `crates/paladin-tui/tests/view_snapshots.rs` drives `view::render`
+  against an `Unlocked` state whose `status_line` carries
+  `StatusLine::Confirmation(format!("Removed {}.", format_account_display_label(&summary)))`
+  — the exact wording `reduce_remove_result` publishes on the
+  Ok-arm of `EffectResult::Remove`. The reducer plugs the carried
+  display-label `String` directly into the format template; that
+  string is built by the executor via `format_account_display_label`
+  in the `effect.rs` Remove closure, so the snapshot is bound to
+  the shared label-formatting source of truth. To keep the
+  snapshot a pure view test with no effect plumbing, the vault
+  keeps the captured account live and `selected = None` — visually
+  representing "the user navigated away after a successful remove"
+  rather than the literal post-remove vault contents. Locked in
+  `tests/snapshots/view_snapshots__snapshot_list_view_status_line_after_remove.snap`.)*
+- [x] Status-line confirmation after Rename.
+  *(`snapshot_list_view_status_line_after_rename` in
+  `crates/paladin-tui/tests/view_snapshots.rs` drives `view::render`
+  against an `Unlocked` state whose `status_line` carries
+  `StatusLine::Confirmation(format!("Renamed to {label}"))` —
+  the exact wording `reduce_rename_result` publishes on the
+  Ok-arm, where `label` is the post-rename `a.label()` (just the
+  bare label, NOT the issuer-prefixed display label). The vault
+  is populated with the account already carrying its post-rename
+  label `"ben-personal@example.com"`, then the test extracts the
+  label off `Vault::iter` the same way the reducer does, binding
+  the snapshot to the live vault state rather than a hand-typed
+  literal. Locked in
+  `tests/snapshots/view_snapshots__snapshot_list_view_status_line_after_rename.snap`.)*
+- [x] Status-line confirmation after Export.
+  *(`snapshot_list_view_status_line_after_export` in
+  `crates/paladin-tui/tests/view_snapshots.rs` drives `view::render`
+  against an `Unlocked` state whose `status_line` carries
+  `StatusLine::Confirmation(format!("Exported to {display}."))`
+  — the exact wording `reduce_export_result` publishes on the
+  Ok-arm, where `display` is the user-supplied
+  `ExportModal::path_text.trim()`. The Export effect does not
+  mutate the vault, so the rows pane stays identical to its
+  pre-export state — only the bottom row reflects the
+  confirmation. The path string is a tilde-style relative path
+  (`~/exports/paladin-export.json`) that stays host-independent
+  so the snapshot is deterministic across systems. Locked in
+  `tests/snapshots/view_snapshots__snapshot_list_view_status_line_after_export.snap`.)*
+- [x] Status-line confirmation after Passphrase set.
+  *(`snapshot_list_view_status_line_after_passphrase_set` in
+  `crates/paladin-tui/tests/view_snapshots.rs` drives `view::render`
+  against an `Unlocked` state whose `status_line` carries
+  `StatusLine::Confirmation("Passphrase updated.")` — the exact
+  wording `reduce_passphrase_result` publishes on the Ok-arm. All
+  three passphrase sub-flows (`Set`, `Change`, `Remove`) share
+  the same Ok-arm string, so this snapshot and its `change` /
+  `remove` siblings are byte-identical in the rendered body until
+  / unless the reducer diverges the wording per sub-flow — at
+  which point only the affected snapshot needs updating, giving
+  each entry point its own regression sentinel. Locked in
+  `tests/snapshots/view_snapshots__snapshot_list_view_status_line_after_passphrase_set.snap`.)*
+- [x] Status-line confirmation after Passphrase change.
+  *(`snapshot_list_view_status_line_after_passphrase_change` —
+  sibling of `..._after_passphrase_set`. The `Change` sub-flow
+  shares the same `reduce_passphrase_result` Ok-arm wording
+  (`"Passphrase updated."`), so the rendered body is byte-identical
+  until a future reducer divergence makes them differ. Locked in
+  `tests/snapshots/view_snapshots__snapshot_list_view_status_line_after_passphrase_change.snap`.)*
+- [x] Status-line confirmation after Passphrase remove.
+  *(`snapshot_list_view_status_line_after_passphrase_remove` —
+  sibling of `..._after_passphrase_set` /
+  `..._after_passphrase_change`. The `Remove` sub-flow shares the
+  same Ok-arm wording. Locked in
+  `tests/snapshots/view_snapshots__snapshot_list_view_status_line_after_passphrase_remove.snap`.)*
+- [x] Status-line confirmation after Settings save.
+  *(`snapshot_list_view_status_line_after_settings_save` in
+  `crates/paladin-tui/tests/view_snapshots.rs` drives `view::render`
+  against an `Unlocked` state whose `status_line` carries
+  `StatusLine::Confirmation("Settings updated.")` — the exact
+  wording `reduce_settings_result` publishes on the Ok-arm of
+  `EffectResult::ApplySettings`. The settings save closes the
+  modal and leaves the rows pane unchanged; only the bottom row
+  reflects the confirmation. Locked in
+  `tests/snapshots/view_snapshots__snapshot_list_view_status_line_after_settings_save.snap`.)*
+- [x] Manual Add status-line confirmation with validation warnings.
+  *(`snapshot_list_view_status_line_after_manual_add_with_warnings`
+  in `crates/paladin-tui/tests/view_snapshots.rs` drives
+  `view::render` against an `Unlocked` state whose `status_line`
+  carries the warning-appended confirmation `reduce_add_result`
+  publishes when `success.warnings` is non-empty:
+  `Added {display}. warning: {rendered}` where `rendered` is the
+  `; `-joined output of `format_validation_warning` over the
+  carried warnings. A `ValidationWarning::ShortSecret { decoded_len:
+  8, recommended_min: 16 }` seeds the warnings list so the
+  snapshot is bound to `format_validation_warning` — any wording
+  change in the core warning text surfaces here. At 80-col
+  snapshot width the warning text overflows the bottom row and
+  ratatui truncates without wrapping; the truncation point itself
+  is a useful regression sentinel against prefix / join-literal
+  changes. Locked in
+  `tests/snapshots/view_snapshots__snapshot_list_view_status_line_after_manual_add_with_warnings.snap`.)*
+- [x] URI Add status-line confirmation with validation warnings.
+  *(`snapshot_list_view_status_line_after_uri_add_with_warnings`
+  — sibling of `..._manual_add_with_warnings`. The URI add flow
+  shares `reduce_add_result`, so the warning-appended confirmation
+  template is identical. A separate snapshot anchors the URI
+  entry point against a future reducer divergence in wording per
+  `AddMode`. Locked in
+  `tests/snapshots/view_snapshots__snapshot_list_view_status_line_after_uri_add_with_warnings.snap`.)*
 
 Startup error:
 

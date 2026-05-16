@@ -33,10 +33,11 @@ use paladin_core::{
 };
 use paladin_tui::app::event::QrImportFailure;
 use paladin_tui::app::state::{
-    format_duplicate_account_message, format_qr_import_failure, render_error_message, AddModal,
-    AddMode, AppState, CountsPanel, ExportFormat, ExportModal, Focus, HotpReveal, ImportModal,
-    Modal, PassphraseModal, PassphraseSubFlow, PendingDuplicateAdd, RemoveModal, RenameModal,
-    SettingsModal, StatusLine, CLIPBOARD_WRITE_FAILED, NO_ACCOUNT_SELECTED,
+    format_account_display_label, format_duplicate_account_message, format_qr_import_failure,
+    render_error_message, AddModal, AddMode, AppState, CountsPanel, ExportFormat, ExportModal,
+    Focus, HotpReveal, ImportModal, Modal, PassphraseModal, PassphraseSubFlow, PendingDuplicateAdd,
+    RemoveModal, RenameModal, SettingsModal, StatusLine, CLIPBOARD_WRITE_FAILED,
+    NO_ACCOUNT_SELECTED,
 };
 use paladin_tui::prompt::PassphraseBuffer;
 use paladin_tui::view::render;
@@ -596,6 +597,507 @@ fn snapshot_list_view_status_line_clipboard_write_failed_after_failed_copy() {
         viewport_offset: 0,
         focus: Focus::List,
         status_line: Some(StatusLine::Error(CLIPBOARD_WRITE_FAILED.to_string())),
+        help_open: false,
+    };
+    insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 12));
+}
+
+#[test]
+fn snapshot_list_view_status_line_after_manual_add() {
+    // Plan L2884: "Status-line confirmation after manual Add." Drive
+    // `view::render` against an `Unlocked` state whose `status_line`
+    // carries `StatusLine::Confirmation("Added {display}.")` — the
+    // exact wording `reduce_add_result` publishes on the no-warnings
+    // Ok-arm of `EffectResult::Add`. The display string is built
+    // through `format_account_display_label` against the just-added
+    // account's `AccountSummary`, so the snapshot is bound to the
+    // shared CLI/TUI label-formatting source of truth rather than a
+    // hand-typed `"issuer:label"` literal. Reads as a bottom-row
+    // delta from the `StatusLine::Error` siblings above — both share
+    // the renderer's `bottom_line` slot but route through the
+    // `Confirmation` branch (green-tinted on live terminals; the
+    // harness drops styling).
+    //
+    // The vault holds the just-added account so the rows pane
+    // renders a populated list around the status-line slot, with
+    // `selected = Some(id)` to reflect the §6 mock's "highlight the
+    // freshly-added row" behavior the reducer pins via the modal-
+    // open path.
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (mut vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let id = push_totp_account(&mut vault, &store, Some("GitHub"), "ben@example.com");
+    let summary = vault
+        .iter()
+        .find(|a| a.id() == id)
+        .expect("added account must be present in vault")
+        .summary();
+    let confirmation = format!("Added {}.", format_account_display_label(&summary));
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: Some(StatusLine::Confirmation(confirmation)),
+        help_open: false,
+    };
+    insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 12));
+}
+
+#[test]
+fn snapshot_list_view_status_line_after_uri_add() {
+    // Plan L2885: "Status-line confirmation after URI Add." The URI
+    // add flow shares `reduce_add_result` with the manual flow, so
+    // the published wording is the same `Added {display}.` template
+    // — the bound source of truth is `format_account_display_label`
+    // applied to whatever `ValidatedAccount` the URI parser produced.
+    // Pinning a separate snapshot here gives a redundant sentinel
+    // against the reducer ever diverging the wording per AddMode
+    // (e.g. "Imported {display}." for the URI path), in which case
+    // only this snapshot will need to update.
+    //
+    // The just-added account uses an issuer / label combination
+    // typical of an `otpauth://totp/Example:alice@example.com?issuer=Example`
+    // payload so the bottom-row text differs visibly from the manual
+    // sibling above without invoking a different renderer branch.
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (mut vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let id = push_totp_account(&mut vault, &store, Some("Example"), "alice@example.com");
+    let summary = vault
+        .iter()
+        .find(|a| a.id() == id)
+        .expect("added account must be present in vault")
+        .summary();
+    let confirmation = format!("Added {}.", format_account_display_label(&summary));
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: Some(StatusLine::Confirmation(confirmation)),
+        help_open: false,
+    };
+    insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 12));
+}
+
+#[test]
+fn snapshot_list_view_status_line_after_remove() {
+    // Plan L2886: "Status-line confirmation after Remove." Drive
+    // `view::render` against an `Unlocked` state whose `status_line`
+    // carries `StatusLine::Confirmation("Removed {label}.")` — the
+    // exact wording `reduce_remove_result` publishes on the Ok-arm
+    // of `EffectResult::Remove`. The reducer plugs the carried
+    // display-label `String` directly into the format template;
+    // that string is built by the executor via
+    // `format_account_display_label` over the to-be-removed
+    // account's `AccountSummary` (see `effect.rs` Remove closure).
+    // The test captures the summary off `vault.iter()` and builds
+    // the confirmation through the same helper, binding the
+    // snapshot to the shared label-formatting source of truth so
+    // any wording change in `format_account_display_label`
+    // surfaces here.
+    //
+    // To keep the snapshot a pure view test with no effect plumbing,
+    // the vault keeps the captured account live (rows pane renders
+    // a populated list around the status-line slot) and
+    // `selected = None` so no row gets the `▶` marker — visually
+    // representing "the user navigated away after a successful
+    // remove" rather than the literal post-remove vault contents.
+    // A reader of the snapshot sees the account in the rows pane
+    // alongside a `Removed X.` confirmation; the test is anchoring
+    // the bottom-row wording, not simulating a removal round-trip
+    // (which `tests/reducer_tests.rs` covers).
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (mut vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let id = push_totp_account(&mut vault, &store, Some("GitHub"), "ben@example.com");
+    let summary = vault
+        .iter()
+        .find(|a| a.id() == id)
+        .expect("account must be present in vault")
+        .summary();
+    let confirmation = format!("Removed {}.", format_account_display_label(&summary));
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: None,
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: Some(StatusLine::Confirmation(confirmation)),
+        help_open: false,
+    };
+    insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 12));
+}
+
+#[test]
+fn snapshot_list_view_status_line_after_rename() {
+    // Plan L2887: "Status-line confirmation after Rename." Drive
+    // `view::render` against an `Unlocked` state whose `status_line`
+    // carries `StatusLine::Confirmation("Renamed to {label}")` — the
+    // exact wording `reduce_rename_result` publishes on the Ok-arm,
+    // where `label` is the post-rename `a.label()` (just the bare
+    // label, NOT the issuer-prefixed display label). The vault is
+    // populated with the account already carrying its post-rename
+    // label, then the test extracts that label from
+    // `Vault::iter` the same way the reducer does, so the snapshot
+    // is bound to the live vault state rather than a hand-typed
+    // literal.
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (mut vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let id = push_totp_account(
+        &mut vault,
+        &store,
+        Some("GitHub"),
+        "ben-personal@example.com",
+    );
+    let label = vault
+        .iter()
+        .find(|a| a.id() == id)
+        .expect("renamed account must be present in vault")
+        .summary()
+        .label;
+    let confirmation = format!("Renamed to {label}");
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: Some(StatusLine::Confirmation(confirmation)),
+        help_open: false,
+    };
+    insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 12));
+}
+
+#[test]
+fn snapshot_list_view_status_line_after_export() {
+    // Plan L2888: "Status-line confirmation after Export." Drive
+    // `view::render` against an `Unlocked` state whose `status_line`
+    // carries `StatusLine::Confirmation("Exported to {display}.")`
+    // — the exact wording `reduce_export_result` publishes on the
+    // Ok-arm, where `display` is the user-supplied
+    // `ExportModal::path_text.trim()`. The Export effect does not
+    // mutate the vault (per the modal's "Export does not mutate the
+    // vault" doc in `reduce_export_result`), so the rows pane stays
+    // identical to its pre-export state — only the bottom row
+    // changes to show the confirmation.
+    //
+    // The path string is a tilde-style relative path that stays
+    // host-independent so the snapshot is deterministic across
+    // systems; long absolute paths would either truncate at the 80-
+    // col snapshot width or pull in a tempdir prefix that varies
+    // per run.
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (mut vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let id = push_totp_account(&mut vault, &store, Some("GitHub"), "ben@example.com");
+    let display = "~/exports/paladin-export.json";
+    let confirmation = format!("Exported to {display}.");
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: Some(StatusLine::Confirmation(confirmation)),
+        help_open: false,
+    };
+    insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 12));
+}
+
+#[test]
+fn snapshot_list_view_status_line_after_passphrase_set() {
+    // Plan L2889: "Status-line confirmation after Passphrase set."
+    // Drive `view::render` against an `Unlocked` state whose
+    // `status_line` carries `StatusLine::Confirmation("Passphrase
+    // updated.")` — the exact wording `reduce_passphrase_result`
+    // publishes on the Ok-arm. All three passphrase sub-flows
+    // (`Set`, `Change`, `Remove`) share the same Ok-arm string, so
+    // this snapshot and its `change` / `remove` siblings will be
+    // byte-identical in the rendered body until / unless the
+    // reducer diverges the wording per sub-flow — at which point
+    // only the affected snapshot needs updating, giving each entry
+    // point its own regression sentinel.
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (mut vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let id = push_totp_account(&mut vault, &store, Some("GitHub"), "ben@example.com");
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: Some(StatusLine::Confirmation("Passphrase updated.".to_string())),
+        help_open: false,
+    };
+    insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 12));
+}
+
+#[test]
+fn snapshot_list_view_status_line_after_passphrase_change() {
+    // Plan L2890: "Status-line confirmation after Passphrase
+    // change." Sibling of `..._after_passphrase_set`: the
+    // `Change` sub-flow shares the same `reduce_passphrase_result`
+    // Ok-arm wording, so the rendered body is byte-identical until
+    // a future reducer divergence makes them differ. See the `_set`
+    // sibling for the full doc comment.
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (mut vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let id = push_totp_account(&mut vault, &store, Some("GitHub"), "ben@example.com");
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: Some(StatusLine::Confirmation("Passphrase updated.".to_string())),
+        help_open: false,
+    };
+    insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 12));
+}
+
+#[test]
+fn snapshot_list_view_status_line_after_passphrase_remove() {
+    // Plan L2891: "Status-line confirmation after Passphrase
+    // remove." Sibling of `..._after_passphrase_set` /
+    // `..._after_passphrase_change`: the `Remove` sub-flow shares
+    // the same Ok-arm wording.
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (mut vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let id = push_totp_account(&mut vault, &store, Some("GitHub"), "ben@example.com");
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: Some(StatusLine::Confirmation("Passphrase updated.".to_string())),
+        help_open: false,
+    };
+    insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 12));
+}
+
+#[test]
+fn snapshot_list_view_status_line_after_settings_save() {
+    // Plan L2892: "Status-line confirmation after Settings save."
+    // Drive `view::render` against an `Unlocked` state whose
+    // `status_line` carries `StatusLine::Confirmation("Settings
+    // updated.")` — the exact wording `reduce_settings_result`
+    // publishes on the Ok-arm of `EffectResult::ApplySettings`.
+    // The settings save closes the modal and leaves the rows pane
+    // unchanged; only the bottom row reflects the confirmation.
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (mut vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let id = push_totp_account(&mut vault, &store, Some("GitHub"), "ben@example.com");
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: Some(StatusLine::Confirmation("Settings updated.".to_string())),
+        help_open: false,
+    };
+    insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 12));
+}
+
+#[test]
+fn snapshot_list_view_status_line_after_manual_add_with_warnings() {
+    // Plan L2893: "Manual Add status-line confirmation with
+    // validation warnings." Drive `view::render` against an
+    // `Unlocked` state whose `status_line` carries the warning-
+    // appended confirmation `reduce_add_result` publishes when
+    // `success.warnings` is non-empty: `Added {display}. warning:
+    // {rendered}` where `rendered` is the `; `-joined output of
+    // `format_validation_warning` over the carried warnings. The
+    // snapshot is bound to `format_validation_warning` so any
+    // wording change in the core warning text surfaces here.
+    //
+    // At 80-col snapshot width the warning text typically overflows
+    // the bottom row and ratatui truncates without wrapping — the
+    // truncation point itself is a useful regression sentinel: if
+    // the prefix or the joining literal change, the visible head
+    // shifts.
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (mut vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let id = push_totp_account(&mut vault, &store, Some("GitHub"), "ben@example.com");
+    let summary = vault
+        .iter()
+        .find(|a| a.id() == id)
+        .expect("added account must be present in vault")
+        .summary();
+    let warnings = [ValidationWarning::ShortSecret {
+        decoded_len: 8,
+        recommended_min: 16,
+    }];
+    let rendered = warnings
+        .iter()
+        .map(format_validation_warning)
+        .collect::<Vec<_>>()
+        .join("; ");
+    let confirmation = format!(
+        "Added {}. warning: {}",
+        format_account_display_label(&summary),
+        rendered
+    );
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: Some(StatusLine::Confirmation(confirmation)),
+        help_open: false,
+    };
+    insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 12));
+}
+
+#[test]
+fn snapshot_list_view_status_line_after_uri_add_with_warnings() {
+    // Plan L2894: "URI Add status-line confirmation with validation
+    // warnings." Sibling of `..._manual_add_with_warnings`: the URI
+    // add flow shares `reduce_add_result`, so the warning-appended
+    // confirmation template is identical. A separate snapshot
+    // anchors the URI entry point against a future reducer
+    // divergence in wording per AddMode.
+    let tmp = secure_test_tempdir();
+    let path = tmp.path().join("vault.bin");
+    create_plaintext_vault(&path);
+    let (mut vault, store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let id = push_totp_account(&mut vault, &store, Some("Example"), "alice@example.com");
+    let summary = vault
+        .iter()
+        .find(|a| a.id() == id)
+        .expect("added account must be present in vault")
+        .summary();
+    let warnings = [ValidationWarning::ShortSecret {
+        decoded_len: 8,
+        recommended_min: 16,
+    }];
+    let rendered = warnings
+        .iter()
+        .map(format_validation_warning)
+        .collect::<Vec<_>>()
+        .join("; ");
+    let confirmation = format!(
+        "Added {}. warning: {}",
+        format_account_display_label(&summary),
+        rendered
+    );
+    let state = AppState::Unlocked {
+        path,
+        vault,
+        store,
+        search_query: String::new(),
+        idle_deadline: None,
+        pending_clipboard_clear: None,
+        hotp_reveal: None,
+        modal: None,
+        selected: Some(id),
+        pending_chord_leader: None,
+        viewport_height: 0,
+        viewport_offset: 0,
+        focus: Focus::List,
+        status_line: Some(StatusLine::Confirmation(confirmation)),
         help_open: false,
     };
     insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 12));
