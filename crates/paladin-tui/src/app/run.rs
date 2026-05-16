@@ -228,3 +228,54 @@ pub fn build_render_closure<'a, B: Backend>(
         }
     }
 }
+
+/// Merge the [`io::Result`] returned by [`run_with_terminal_guard`]
+/// with the [`io::Error`] captured by the render-closure error sink
+/// built by [`build_render_closure`].
+///
+/// Production [`crate::run`] holds both halves: `run_result` is what
+/// [`run_with_terminal_guard`] returned, and `captured_render_error`
+/// is the `Option<io::Error>` extracted from the sink (typically via
+/// `RefCell::into_inner`) after the loop exited. Either side may
+/// carry a failure, and the caller needs a single
+/// [`io::Result<AppState>`] to hand to [`exit_code_from_run_result`]
+/// so a draw failure surfaces on the same `paladin-tui: <err>`
+/// stderr path as a terminal-setup failure.
+///
+/// Merge policy:
+///
+/// * `(Ok(state), None)` → `Ok(state)`. Clean exit through
+///   [`crate::app::EffectOutcome::Quit`] with no captured render
+///   failure.
+/// * `(Ok(_), Some(render_err))` → `Err(render_err)`. The dispatch
+///   loop exited cleanly (the reducer's `Effect::Quit` path runs
+///   regardless of earlier per-frame failures since
+///   [`build_render_closure`] short-circuits subsequent frames after
+///   capturing) but at least one frame failed; promote that failure
+///   so the binary exits with FAILURE rather than swallowing a draw
+///   error under `ExitCode::SUCCESS`. The final `AppState` is
+///   discarded because [`exit_code_from_run_result`] ignores it.
+/// * `(Err(setup_err), None)` → `Err(setup_err)`. Terminal setup
+///   failed before any render ran; preserve the setup error
+///   unchanged.
+/// * `(Err(setup_err), Some(_))` → `Err(setup_err)`. Defensive
+///   quadrant. In production [`run_with_terminal_guard`] short-
+///   circuits before constructing the render closure when setup
+///   fails, so the sink should be empty here. We still need to
+///   define behavior for every input; the setup error wins because
+///   it is the proximate cause of the failure the user saw, and a
+///   stale or unrelated sink entry must not displace it.
+///
+/// `AppState` is moved through unchanged on the success path —
+/// [`exit_code_from_run_result`] discards it, but a future caller
+/// that wants the final state retains the option.
+pub fn merge_render_failure_into_run_result(
+    run_result: io::Result<AppState>,
+    captured_render_error: Option<io::Error>,
+) -> io::Result<AppState> {
+    match (run_result, captured_render_error) {
+        (Ok(state), None) => Ok(state),
+        (Ok(_), Some(render_err)) => Err(render_err),
+        (Err(setup_err), _) => Err(setup_err),
+    }
+}

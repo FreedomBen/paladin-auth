@@ -46,7 +46,8 @@ use ratatui::Terminal;
 use paladin_tui::app::event::AppEvent;
 use paladin_tui::app::render::draw_frame;
 use paladin_tui::app::run::{
-    build_render_closure, exit_code_from_run_result, run_event_loop, run_with_terminal_guard,
+    build_render_closure, exit_code_from_run_result, merge_render_failure_into_run_result,
+    run_event_loop, run_with_terminal_guard,
 };
 use paladin_tui::app::state::AppState;
 use paladin_tui::terminal::TerminalBackend;
@@ -808,5 +809,97 @@ fn build_render_closure_captures_draw_failure_and_short_circuits_subsequent_call
     assert!(
         final_err.to_string().contains("simulated draw failure"),
         "subsequent calls must not overwrite the first captured error, got {final_err}",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// merge_render_failure_into_run_result
+//
+// Production `crate::run` owns both the `io::Result<AppState>` returned by
+// `run_with_terminal_guard` *and* the `Option<io::Error>` extracted from the
+// render-closure error sink built by `build_render_closure`. Those two
+// failure sources must be merged into a single `io::Result<AppState>` so
+// `exit_code_from_run_result` sees one combined outcome and a draw failure
+// reaches the user on the same `paladin-tui: <err>` stderr path as a
+// terminal-setup failure. Pinning the four quadrants here keeps that
+// merge policy stable.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn merge_render_failure_into_run_result_returns_ok_when_loop_clean_and_sink_empty() {
+    // Pin: with no setup failure and no captured render error, the
+    // helper threads the final `AppState` through unchanged so the
+    // success path is byte-identical to the un-merged result.
+    let result: io::Result<AppState> = Ok(missing("/tmp/v.bin"));
+    let merged = merge_render_failure_into_run_result(result, None);
+
+    let final_state = merged.expect("clean run with empty sink must stay Ok");
+    // AppState is `Debug`-only at the enum level (variants carry
+    // non-`Clone` fields such as `Vault`), so compare via the
+    // stable `Debug` rendering — mirrors the `debug_exit_code`
+    // approach used for the `ExitCode` comparisons above.
+    assert_eq!(
+        format!("{final_state:?}"),
+        format!("{:?}", missing("/tmp/v.bin")),
+        "the merger must preserve the AppState carried by Ok(_) when no render failure is captured",
+    );
+}
+
+#[test]
+fn merge_render_failure_into_run_result_surfaces_render_failure_when_loop_exited_cleanly() {
+    // Pin: dispatch returned `Ok(_)` via `Effect::Quit` but the render
+    // sink captured an `io::Error` along the way. The helper promotes
+    // that captured error to the merged result so the binary exits
+    // with FAILURE and a `paladin-tui: <render-err>` advisory rather
+    // than swallowing a draw failure under a SUCCESS exit code.
+    let result: io::Result<AppState> = Ok(missing("/tmp/v.bin"));
+    let render_err = io::Error::other("simulated draw failure");
+    let merged = merge_render_failure_into_run_result(result, Some(render_err));
+
+    let err = merged.expect_err("captured render failure must surface as Err");
+    assert_eq!(
+        err.to_string(),
+        "simulated draw failure",
+        "the merger must preserve the render error's wording so the stderr advisory matches the captured failure",
+    );
+}
+
+#[test]
+fn merge_render_failure_into_run_result_returns_setup_error_when_sink_is_empty() {
+    // Pin: terminal setup failed; `run_with_terminal_guard` short-
+    // circuited before the render closure was constructed, so the
+    // sink is empty. The merger must return the setup error
+    // unchanged.
+    let setup_err = io::Error::other("simulated terminal setup failure");
+    let result: io::Result<AppState> = Err(setup_err);
+    let merged = merge_render_failure_into_run_result(result, None);
+
+    let err = merged.expect_err("setup failure must stay Err");
+    assert_eq!(
+        err.to_string(),
+        "simulated terminal setup failure",
+        "the merger must preserve the setup error's wording when no render failure was captured",
+    );
+}
+
+#[test]
+fn merge_render_failure_into_run_result_prefers_setup_error_when_both_sources_failed() {
+    // Pin: defensive case. In production a setup failure short-
+    // circuits before any render runs, so the sink should always be
+    // empty here. But the helper is a pure function that must define
+    // behavior for every input; we preserve the setup error because
+    // it is the more proximate cause — a stale or unrelated entry in
+    // the sink must not displace the real failure the loop already
+    // surfaced.
+    let setup_err = io::Error::other("simulated terminal setup failure");
+    let result: io::Result<AppState> = Err(setup_err);
+    let render_err = io::Error::other("stale render entry");
+    let merged = merge_render_failure_into_run_result(result, Some(render_err));
+
+    let err = merged.expect_err("setup failure must stay Err");
+    assert_eq!(
+        err.to_string(),
+        "simulated terminal setup failure",
+        "the setup error must win when both sources report failure so the stderr advisory points at the real cause",
     );
 }

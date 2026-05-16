@@ -25,7 +25,8 @@ pub use event::{AppEvent, Effect, EffectResult};
 pub use reducer::reduce;
 pub use render::draw_frame;
 pub use run::{
-    build_render_closure, exit_code_from_run_result, run_event_loop, run_with_terminal_guard,
+    build_render_closure, exit_code_from_run_result, merge_render_failure_into_run_result,
+    run_event_loop, run_with_terminal_guard,
 };
 pub use state::{
     build_initial_state, build_initial_state_with_resolver, decide_state_from_inspect,
