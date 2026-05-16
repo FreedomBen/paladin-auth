@@ -1553,3 +1553,196 @@ fn route_unlock_worker_outcome_attaches_caller_provided_path_on_startup_failure(
         other => panic!("expected Failure(SetAppState(StartupError)) with alt path, got {other:?}"),
     }
 }
+
+// ---------------------------------------------------------------------------
+// should_drop_unlock_dialog_after — side-effect dispatch decision
+// ---------------------------------------------------------------------------
+//
+// `AppModel::update` applies an `UnlockWorkerEffect` returned by
+// `route_unlock_worker_outcome` by transitioning state and either
+// dropping the live `UnlockDialogComponent` controller (success or
+// startup-error failure) or keeping it mounted so the user can retype
+// (inline passphrase failure). The drop decision is pure-logic — it
+// only inspects the typed `UnlockWorkerEffect` shape — so pin it here
+// alongside the other unlock-worker dispatch helpers rather than
+// re-deriving the rule at every call site.
+
+#[test]
+fn should_drop_unlock_dialog_after_success_returns_true() {
+    // `UnlockWorkerEffect::Success(SetAppState(Unlocked))` means the
+    // worker decrypted the vault. `AppModel::update` follows up by
+    // dropping the dialog widget and mounting the
+    // `AccountListComponent`, so the helper must report `true`.
+    let path = vault_path();
+    let effect = route_unlock_worker_outcome(&path, Ok(()));
+    assert!(
+        paladin_gtk::app::state::should_drop_unlock_dialog_after(&effect),
+        "expected success outcome to drop the unlock dialog, got effect={effect:?}",
+    );
+}
+
+#[test]
+fn should_drop_unlock_dialog_after_decrypt_failed_returns_false() {
+    // `UnlockWorkerEffect::Failure(SendUnlockDialogMsg(OpenFailedInline))`
+    // means the typed passphrase was wrong. `AppModel::update` keeps
+    // the dialog mounted and forwards the inline error so the user
+    // can retype without losing the dialog surface.
+    let path = vault_path();
+    let err = decrypt_failed_err();
+    let effect = route_unlock_worker_outcome(&path, Err(&err));
+    assert!(
+        !paladin_gtk::app::state::should_drop_unlock_dialog_after(&effect),
+        "expected inline-passphrase failure to keep the unlock dialog mounted, got effect={effect:?}",
+    );
+}
+
+#[test]
+fn should_drop_unlock_dialog_after_invalid_passphrase_returns_false() {
+    // Empty-passphrase failure is the second inline-routed error per
+    // `route_unlock_open_error`. Pin that it also keeps the dialog
+    // mounted so the user can retype — both inline branches share the
+    // same dispatch contract.
+    let path = vault_path();
+    let err = invalid_passphrase_empty_err();
+    let effect = route_unlock_worker_outcome(&path, Err(&err));
+    assert!(
+        !paladin_gtk::app::state::should_drop_unlock_dialog_after(&effect),
+        "expected invalid-passphrase failure to keep the unlock dialog mounted, got effect={effect:?}",
+    );
+}
+
+#[test]
+fn should_drop_unlock_dialog_after_unsafe_permissions_returns_true() {
+    // `UnlockWorkerEffect::Failure(SetAppState(StartupError))` means
+    // the vault file failed a non-passphrase precondition. The dialog
+    // gets replaced by the `StartupErrorComponent` surface, so the
+    // helper must report `true` to trigger the drop.
+    let path = vault_path();
+    let err = unsafe_perms_err();
+    let effect = route_unlock_worker_outcome(&path, Err(&err));
+    assert!(
+        paladin_gtk::app::state::should_drop_unlock_dialog_after(&effect),
+        "expected unsafe-permissions failure to drop the unlock dialog, got effect={effect:?}",
+    );
+}
+
+#[test]
+fn should_drop_unlock_dialog_after_io_error_returns_true() {
+    // Generic IO error is the catch-all startup-routed branch. Pin
+    // that it shares the same drop decision as `UnsafePermissions`
+    // and every other non-inline failure — the dialog goes away when
+    // the GUI flips onto the `StartupErrorComponent` surface.
+    let path = vault_path();
+    let err = io_err();
+    let effect = route_unlock_worker_outcome(&path, Err(&err));
+    assert!(
+        paladin_gtk::app::state::should_drop_unlock_dialog_after(&effect),
+        "expected io-error failure to drop the unlock dialog, got effect={effect:?}",
+    );
+}
+
+#[test]
+fn should_drop_unlock_dialog_after_wrong_vault_lock_returns_true() {
+    // `WrongVaultLock` routes to startup-error per the
+    // `route_unlock_open_error` table. Pin the dispatch decision for
+    // this branch so a future routing refactor that re-classifies
+    // this error must explicitly update this test.
+    let path = vault_path();
+    let err = wrong_vault_lock_err();
+    let effect = route_unlock_worker_outcome(&path, Err(&err));
+    assert!(
+        paladin_gtk::app::state::should_drop_unlock_dialog_after(&effect),
+        "expected wrong-vault-lock failure to drop the unlock dialog, got effect={effect:?}",
+    );
+}
+
+#[test]
+fn should_drop_unlock_dialog_after_invalid_header_returns_true() {
+    // Cover every typed startup-routed error so the table of "drop on
+    // startup-error" branches is pinned exhaustively, not just on
+    // representative variants.
+    let path = vault_path();
+    let err = invalid_header_err();
+    let effect = route_unlock_worker_outcome(&path, Err(&err));
+    assert!(
+        paladin_gtk::app::state::should_drop_unlock_dialog_after(&effect),
+        "expected invalid-header failure to drop the unlock dialog, got effect={effect:?}",
+    );
+}
+
+#[test]
+fn should_drop_unlock_dialog_after_invalid_payload_returns_true() {
+    let path = vault_path();
+    let err = invalid_payload_err();
+    let effect = route_unlock_worker_outcome(&path, Err(&err));
+    assert!(
+        paladin_gtk::app::state::should_drop_unlock_dialog_after(&effect),
+        "expected invalid-payload failure to drop the unlock dialog, got effect={effect:?}",
+    );
+}
+
+#[test]
+fn should_drop_unlock_dialog_after_unsupported_format_version_returns_true() {
+    let path = vault_path();
+    let err = unsupported_format_version_err();
+    let effect = route_unlock_worker_outcome(&path, Err(&err));
+    assert!(
+        paladin_gtk::app::state::should_drop_unlock_dialog_after(&effect),
+        "expected unsupported-format-version failure to drop the unlock dialog, got effect={effect:?}",
+    );
+}
+
+#[test]
+fn should_drop_unlock_dialog_after_kdf_params_out_of_bounds_returns_true() {
+    let path = vault_path();
+    let err = kdf_oob_err();
+    let effect = route_unlock_worker_outcome(&path, Err(&err));
+    assert!(
+        paladin_gtk::app::state::should_drop_unlock_dialog_after(&effect),
+        "expected kdf-params-out-of-bounds failure to drop the unlock dialog, got effect={effect:?}",
+    );
+}
+
+#[test]
+fn should_drop_unlock_dialog_after_inspects_effect_only_not_path() {
+    // The drop decision is shape-only: it must not depend on the
+    // attached path. Two different paths with the same effect shape
+    // must produce the same drop decision so a future refactor cannot
+    // accidentally introduce path-dependent dialog persistence.
+    let path_a = vault_path();
+    let path_b = PathBuf::from("/var/lib/paladin/alt-vault.bin");
+    let err = decrypt_failed_err();
+    let effect_a = route_unlock_worker_outcome(&path_a, Err(&err));
+    let effect_b = route_unlock_worker_outcome(&path_b, Err(&err));
+    assert_eq!(
+        paladin_gtk::app::state::should_drop_unlock_dialog_after(&effect_a),
+        paladin_gtk::app::state::should_drop_unlock_dialog_after(&effect_b),
+        "drop decision must be shape-only, got differing results for paths {path_a:?} and {path_b:?}",
+    );
+}
+
+#[test]
+fn should_drop_unlock_dialog_after_partitions_inline_vs_non_inline() {
+    // Cross-check the partitioning rule: across the full set of
+    // worker outcomes, exactly the two inline-passphrase failures
+    // keep the dialog mounted; everything else drops it. This guards
+    // against a future enum variant being added without updating the
+    // dispatch rule.
+    let path = vault_path();
+    let success = route_unlock_worker_outcome(&path, Ok(()));
+    let inline_a = route_unlock_worker_outcome(&path, Err(&decrypt_failed_err()));
+    let inline_b = route_unlock_worker_outcome(&path, Err(&invalid_passphrase_empty_err()));
+    let startup_a = route_unlock_worker_outcome(&path, Err(&unsafe_perms_err()));
+    let startup_b = route_unlock_worker_outcome(&path, Err(&io_err()));
+
+    let drops: Vec<bool> = [&success, &inline_a, &inline_b, &startup_a, &startup_b]
+        .iter()
+        .map(|effect| paladin_gtk::app::state::should_drop_unlock_dialog_after(effect))
+        .collect();
+
+    assert_eq!(
+        drops,
+        vec![true, false, false, true, true],
+        "expected [success, inline_a, inline_b, startup_a, startup_b] = [drop, keep, keep, drop, drop]",
+    );
+}

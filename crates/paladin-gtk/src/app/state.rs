@@ -598,3 +598,49 @@ pub fn route_unlock_worker_outcome(
         Err(err) => UnlockWorkerEffect::Failure(route_unlock_failure_effect(path, err)),
     }
 }
+
+/// Decide whether `AppModel`'s update branch should drop the live
+/// [`crate::unlock_dialog::UnlockDialogComponent`] controller after
+/// applying the given [`UnlockWorkerEffect`].
+///
+/// The dispatch rule is shape-only — it inspects the typed
+/// [`UnlockWorkerEffect`] variant without touching the carried path,
+/// error projection, or state — so the side-effect decision in
+/// `AppModel::update` stays unit-testable in
+/// `tests/app_state_logic.rs` without spinning up GTK / libadwaita.
+///
+/// The two outcomes that drop the dialog:
+///
+/// * [`UnlockWorkerEffect::Success`] — the worker decrypted the
+///   vault. The dialog has done its job; `AppModel::update` follows
+///   up by mounting the [`crate::account_list::AccountListComponent`]
+///   controller and installing the live `(Vault, Store)` pair into
+///   `AppModel.vault`.
+/// * [`UnlockWorkerEffect::Failure`] carrying
+///   [`UnlockFailureEffect::SetAppState`] — a non-passphrase open
+///   failure (`UnsafePermissions`, `WrongVaultLock`, `InvalidHeader`,
+///   `InvalidPayload`, `UnsupportedFormatVersion`,
+///   `KdfParamsOutOfBounds`, `IoError`, …) routes to the
+///   non-mutating [`crate::startup_error::StartupErrorComponent`]
+///   surface per `IMPLEMENTATION_PLAN_04_GTK.md` §"Effect errors".
+///   The dialog gets replaced by the startup-error component.
+///
+/// The one outcome that keeps the dialog mounted:
+///
+/// * [`UnlockWorkerEffect::Failure`] carrying
+///   [`UnlockFailureEffect::SendUnlockDialogMsg`] — wrong
+///   passphrase or empty passphrase. The user retypes without
+///   losing the dialog surface, so `AppModel::update` forwards the
+///   inline error to the still-mounted controller via
+///   [`crate::unlock_dialog::UnlockDialogMsg::OpenFailedInline`].
+#[must_use]
+pub fn should_drop_unlock_dialog_after(effect: &UnlockWorkerEffect) -> bool {
+    // Listed by explicit variant rather than `_` so a future
+    // `UnlockWorkerEffect` / `UnlockFailureEffect` variant fails the
+    // match exhaustively and forces an explicit drop decision here.
+    match effect {
+        UnlockWorkerEffect::Failure(UnlockFailureEffect::SendUnlockDialogMsg(_)) => false,
+        UnlockWorkerEffect::Success(_)
+        | UnlockWorkerEffect::Failure(UnlockFailureEffect::SetAppState(_)) => true,
+    }
+}
