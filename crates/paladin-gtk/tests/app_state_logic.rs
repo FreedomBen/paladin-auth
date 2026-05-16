@@ -42,13 +42,13 @@ use paladin_core::{
 };
 
 use paladin_gtk::app::state::{
-    apply_submit_unlock_inplace, apply_unlock_failure_action, compose_unlock_dispatch,
-    decide_state_from_inspect, decide_state_from_open_error, decide_state_from_path_resolution,
-    decide_unlock_failure_action, decide_unlock_success_state, route_unlock_failure_effect,
-    route_unlock_success_effect, route_unlock_worker_outcome, should_drop_unlock_dialog_after,
-    submit_unlock_app_state, unlock_app_state_after, unlock_dialog_msg_after,
-    unlock_final_app_state, AppState, OpenErrorOutcome, UnlockFailureAction, UnlockFailureEffect,
-    UnlockSuccessEffect, UnlockWorkerEffect,
+    apply_submit_unlock_inplace, apply_unlock_dispatch_inplace, apply_unlock_failure_action,
+    compose_unlock_dispatch, decide_state_from_inspect, decide_state_from_open_error,
+    decide_state_from_path_resolution, decide_unlock_failure_action, decide_unlock_success_state,
+    route_unlock_failure_effect, route_unlock_success_effect, route_unlock_worker_outcome,
+    should_drop_unlock_dialog_after, submit_unlock_app_state, unlock_app_state_after,
+    unlock_dialog_msg_after, unlock_final_app_state, AppState, OpenErrorOutcome,
+    UnlockFailureAction, UnlockFailureEffect, UnlockSuccessEffect, UnlockWorkerEffect,
 };
 use paladin_gtk::startup_error::StartupErrorSource;
 use paladin_gtk::unlock_dialog::{
@@ -3224,6 +3224,215 @@ fn apply_submit_unlock_inplace_mirrors_submit_unlock_app_state_for_every_variant
                 state.path().map(Path::to_path_buf),
                 source.path().map(Path::to_path_buf),
                 "wrapper must leave path unchanged when composer returns None for source={source:?}",
+            );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// apply_unlock_dispatch_inplace — `AppModel::update` mut-state wrapper
+// ---------------------------------------------------------------------------
+//
+// `compose_unlock_dispatch(&AppState, &UnlockWorkerEffect) -> UnlockDispatch`
+// bundles the three worker-completion decisions (`app_state`,
+// `dialog_msg`, `drop_dialog`) so `AppModel::update` can apply the
+// worker outcome in a single shot. The wrapper here lets the
+// `AppMsg::UnlockWorkerCompleted` handler install the new
+// `dispatch.app_state` against the cached `AppState` in place,
+// mirroring `apply_submit_unlock_inplace`'s contract for the entry
+// transition. The remaining `dialog_msg` and `drop_dialog` projections
+// drive widget-side work in the handler and are not the wrapper's
+// concern.
+
+#[test]
+fn apply_unlock_dispatch_inplace_success_replaces_with_unlocked_and_returns_true() {
+    // Worker reported `Ok((Vault, Store))`: `compose_unlock_dispatch`
+    // carries `Some(Unlocked(path))` in `app_state`. The wrapper
+    // installs the replacement against the cached `UnlockedBusy`
+    // state and returns `true` so `AppModel::update` can release the
+    // busy gate and proceed to mount `AccountListComponent`.
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let effect = route_unlock_worker_outcome(&path, Ok(()));
+    let dispatch = compose_unlock_dispatch(&busy, &effect);
+    let mut state = busy.clone();
+    let transitioned = apply_unlock_dispatch_inplace(&mut state, &dispatch);
+    assert!(
+        transitioned,
+        "apply_unlock_dispatch_inplace must return true on the Success replacement",
+    );
+    assert!(
+        matches!(state, AppState::Unlocked { .. }),
+        "Success replacement target must be Unlocked, got {state:?}",
+    );
+    assert_path_eq(&state, &path);
+}
+
+#[test]
+fn apply_unlock_dispatch_inplace_startup_failure_replaces_with_startup_error_and_returns_true() {
+    // Worker reported a non-passphrase open failure
+    // (`unsafe_permissions`): `compose_unlock_dispatch` carries
+    // `Some(StartupError(path))` in `app_state`. The wrapper installs
+    // the replacement against the cached `UnlockedBusy` state and
+    // returns `true` so `AppModel::update` can drop the
+    // `UnlockDialogComponent` and surface `StartupErrorComponent`.
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let err = unsafe_perms_err();
+    let effect = route_unlock_worker_outcome(&path, Err(&err));
+    let dispatch = compose_unlock_dispatch(&busy, &effect);
+    let mut state = busy.clone();
+    let transitioned = apply_unlock_dispatch_inplace(&mut state, &dispatch);
+    assert!(
+        transitioned,
+        "apply_unlock_dispatch_inplace must return true on the startup-routed failure replacement",
+    );
+    assert!(
+        matches!(state, AppState::StartupError { .. }),
+        "startup-routed failure target must be StartupError, got {state:?}",
+    );
+    assert_eq!(
+        state.path().map(Path::to_path_buf),
+        Some(path),
+        "startup-routed failure preserves the resolved path",
+    );
+}
+
+#[test]
+fn apply_unlock_dispatch_inplace_inline_failure_rolls_back_to_locked_and_returns_true() {
+    // Worker reported an inline open failure (`decrypt_failed`):
+    // `compose_unlock_dispatch` carries `Some(Locked(path))` in
+    // `app_state` (the rollback) alongside the inline message.
+    // The wrapper installs the rollback against the cached
+    // `UnlockedBusy` state and returns `true` so `AppModel::update`
+    // releases the busy gate and lets the still-mounted dialog
+    // accept a fresh passphrase entry.
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let err = decrypt_failed_err();
+    let effect = route_unlock_worker_outcome(&path, Err(&err));
+    let dispatch = compose_unlock_dispatch(&busy, &effect);
+    let mut state = busy.clone();
+    let transitioned = apply_unlock_dispatch_inplace(&mut state, &dispatch);
+    assert!(
+        transitioned,
+        "apply_unlock_dispatch_inplace must return true on the inline rollback",
+    );
+    assert!(
+        matches!(state, AppState::Locked { .. }),
+        "inline rollback target must be Locked, got {state:?}",
+    );
+    assert_path_eq(&state, &path);
+}
+
+#[test]
+fn apply_unlock_dispatch_inplace_inline_from_non_unlocked_busy_leaves_state_unchanged_and_returns_false(
+) {
+    // Defensive: when the worker reports an inline failure but the
+    // cached state is not `UnlockedBusy` (a stray dispatch from any
+    // other source), `compose_unlock_dispatch` reports `app_state =
+    // None` to refuse a phantom `Locked` transition. The wrapper must
+    // leave the cached state untouched byte-for-byte and return
+    // `false` so `AppModel::update` does not clobber an idle state
+    // (`Missing` / `Locked` / `Unlocked`) with a phantom rollback.
+    let path = vault_path();
+    let err = decrypt_failed_err();
+    let effect = route_unlock_worker_outcome(&path, Err(&err));
+    let invalid_sources = [
+        AppState::Missing { path: path.clone() },
+        AppState::Locked { path: path.clone() },
+        AppState::Unlocked { path: path.clone() },
+    ];
+    for source in invalid_sources {
+        let dispatch = compose_unlock_dispatch(&source, &effect);
+        assert!(
+            dispatch.app_state.is_none(),
+            "fixture invariant: inline branch from non-UnlockedBusy must carry app_state=None",
+        );
+        let original_discriminant = std::mem::discriminant::<AppState>(&source);
+        let original_path = source.path().map(Path::to_path_buf);
+        let mut state = source.clone();
+        let transitioned = apply_unlock_dispatch_inplace(&mut state, &dispatch);
+        assert!(
+            !transitioned,
+            "apply_unlock_dispatch_inplace must return false when dispatch.app_state is None \
+             for source={source:?}",
+        );
+        assert_eq!(
+            std::mem::discriminant::<AppState>(&state),
+            original_discriminant,
+            "wrapper must leave variant unchanged when dispatch.app_state is None \
+             for source={source:?}",
+        );
+        assert_eq!(
+            state.path().map(Path::to_path_buf),
+            original_path,
+            "wrapper must leave path unchanged when dispatch.app_state is None \
+             for source={source:?}",
+        );
+    }
+}
+
+#[test]
+fn apply_unlock_dispatch_inplace_mirrors_compose_unlock_dispatch_for_every_effect() {
+    // Cross-check: the wrapper must mirror the
+    // `compose_unlock_dispatch.app_state` Some/None partition exactly
+    // — it is a name-the-call-site wrapper, not a re-derivation. The
+    // resulting state on `true` matches the `Some(_)` variant + path
+    // the composer reports. Pinning this contract here means the
+    // wrapper can't drift away from the composer without breaking
+    // here first. The cached source is always `UnlockedBusy(path)`
+    // since that is the only state `AppModel::update` ever reaches
+    // when the worker returns.
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let effects = [
+        route_unlock_worker_outcome(&path, Ok(())),
+        route_unlock_worker_outcome(&path, Err(&decrypt_failed_err())),
+        route_unlock_worker_outcome(&path, Err(&invalid_passphrase_empty_err())),
+        route_unlock_worker_outcome(&path, Err(&unsafe_perms_err())),
+        route_unlock_worker_outcome(&path, Err(&io_err())),
+        route_unlock_worker_outcome(&path, Err(&wrong_vault_lock_err())),
+        route_unlock_worker_outcome(&path, Err(&invalid_header_err())),
+        route_unlock_worker_outcome(&path, Err(&invalid_payload_err())),
+        route_unlock_worker_outcome(&path, Err(&unsupported_format_version_err())),
+        route_unlock_worker_outcome(&path, Err(&kdf_oob_err())),
+    ];
+    for effect in &effects {
+        let dispatch = compose_unlock_dispatch(&busy, effect);
+        let mut state = busy.clone();
+        let transitioned = apply_unlock_dispatch_inplace(&mut state, &dispatch);
+        if let Some(expected) = dispatch.app_state.as_ref() {
+            assert!(
+                transitioned,
+                "wrapper must return true when dispatch.app_state is Some for effect={effect:?}",
+            );
+            assert_eq!(
+                std::mem::discriminant::<AppState>(&state),
+                std::mem::discriminant::<AppState>(expected),
+                "wrapper variant must mirror composer for effect={effect:?}",
+            );
+            assert_eq!(
+                state.path().map(Path::to_path_buf),
+                expected.path().map(Path::to_path_buf),
+                "wrapper path must mirror composer for effect={effect:?}",
+            );
+        } else {
+            assert!(
+                !transitioned,
+                "wrapper must return false when dispatch.app_state is None for effect={effect:?}",
+            );
+            assert_eq!(
+                std::mem::discriminant::<AppState>(&state),
+                std::mem::discriminant::<AppState>(&busy),
+                "wrapper must leave variant unchanged when dispatch.app_state is None \
+                 for effect={effect:?}",
+            );
+            assert_eq!(
+                state.path().map(Path::to_path_buf),
+                busy.path().map(Path::to_path_buf),
+                "wrapper must leave path unchanged when dispatch.app_state is None \
+                 for effect={effect:?}",
             );
         }
     }

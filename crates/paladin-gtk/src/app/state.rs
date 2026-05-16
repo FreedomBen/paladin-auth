@@ -1013,3 +1013,41 @@ pub fn compose_unlock_dispatch(current: &AppState, effect: &UnlockWorkerEffect) 
         drop_dialog: should_drop_unlock_dialog_after(effect),
     }
 }
+
+/// Apply [`compose_unlock_dispatch`]'s state field in-place to
+/// `state`, leaving it unchanged when the dispatch carries
+/// `app_state = None`.
+///
+/// `AppModel::update`'s `AppMsg::UnlockWorkerCompleted` handler
+/// holds the cached [`AppState`] behind `&mut AppState`; this
+/// wrapper bridges the `Option<AppState>` field of [`UnlockDispatch`]
+/// to that mut-reference call site so the handler does not have to
+/// manage a take-and-restore dance around `dispatch.app_state`. The
+/// remaining [`UnlockDispatch::dialog_msg`] and
+/// [`UnlockDispatch::drop_dialog`] projections drive widget-side
+/// work in the handler (forwarding the inline message to the live
+/// [`crate::unlock_dialog::UnlockDialogComponent`] controller and
+/// dropping the controller on the two replacement branches) and
+/// are not the wrapper's concern.
+///
+/// Returns `true` when the state actually transitioned
+/// (`dispatch.app_state` was `Some(_)` and `*state` now mirrors the
+/// composer's projection), `false` otherwise. `AppModel::update`
+/// can use the `true` return to gate any state-installation-only
+/// follow-up work — a `false` return is the defensive no-op for the
+/// inline branch from a non-[`AppState::UnlockedBusy`] source state
+/// (a stray dispatch).
+///
+/// The wrapper stays shape-only — it inspects only the
+/// `dispatch.app_state` field and clones the replacement out — so
+/// the side-effect decision in `AppModel::update` stays unit-
+/// testable in `tests/app_state_logic.rs` without spinning up GTK /
+/// libadwaita.
+pub fn apply_unlock_dispatch_inplace(state: &mut AppState, dispatch: &UnlockDispatch) -> bool {
+    if let Some(new_state) = dispatch.app_state.as_ref() {
+        *state = new_state.clone();
+        true
+    } else {
+        false
+    }
+}
