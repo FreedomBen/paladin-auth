@@ -539,3 +539,62 @@ pub enum UnlockSuccessEffect {
 pub fn route_unlock_success_effect(path: &Path) -> UnlockSuccessEffect {
     UnlockSuccessEffect::SetAppState(decide_unlock_success_state(path))
 }
+
+/// Concrete effect `AppModel`'s update branch applies after the
+/// `gio::spawn_blocking paladin_core::open` unlock worker returns.
+///
+/// Wraps the success / failure halves into a single typed enum so the
+/// worker callback in `AppModel::update` can dispatch on the unified
+/// outcome with a single match. Mirrors the `Result<(Vault, Store),
+/// PaladinError>` shape the worker produces: `Success` carries the
+/// existing [`UnlockSuccessEffect`] (state transition to
+/// [`AppState::Unlocked`]); `Failure` carries the existing
+/// [`UnlockFailureEffect`] (either an inline dialog message or a
+/// transition to [`AppState::StartupError`]).
+///
+/// The variant boundary is explicit so a future success-branch effect
+/// (drop dialog, mount account list, install `(Vault, Store)`) or
+/// failure-branch effect (auto-lock cancellation, passphrase
+/// rotation) can be added without an `_` catch-all in
+/// `AppModel::update` swallowing the new dispatch silently.
+#[derive(Debug)]
+pub enum UnlockWorkerEffect {
+    /// The worker returned `Ok((Vault, Store))`. `AppModel`'s update
+    /// branch installs the live pair into the sibling
+    /// `Option<(Vault, Store)>` slot separately; this variant only
+    /// owns the state-machine transition piece.
+    Success(UnlockSuccessEffect),
+    /// The worker returned `Err(PaladinError)`. The carried effect
+    /// either keeps the dialog mounted with an inline error
+    /// (wrong / empty passphrase) or transitions `AppModel` to the
+    /// non-mutating [`AppState::StartupError`] surface.
+    Failure(UnlockFailureEffect),
+}
+
+/// Unified dispatch for the `gio::spawn_blocking paladin_core::open`
+/// unlock worker outcome.
+///
+/// Wraps [`route_unlock_success_effect`] and
+/// [`route_unlock_failure_effect`] so `AppModel::update` can fan out
+/// from the worker's `Result` into the correct
+/// [`UnlockWorkerEffect`] variant with a single call. The
+/// `Ok(())` arm represents `Ok((Vault, Store))` from the worker — the
+/// pure-logic dispatch only owns the state-machine transition, while
+/// the live pair is installed separately into `AppModel.vault`. The
+/// `Err(&PaladinError)` arm forwards the typed error to
+/// [`route_unlock_failure_effect`] so the inline-passphrase vs
+/// startup-transition routing decision stays in one place.
+///
+/// The intermediate helpers stay public so the pure-logic tests in
+/// `tests/app_state_logic.rs` can pin the per-step decisions
+/// independently from this unified entry.
+#[must_use]
+pub fn route_unlock_worker_outcome(
+    path: &Path,
+    outcome: Result<(), &PaladinError>,
+) -> UnlockWorkerEffect {
+    match outcome {
+        Ok(()) => UnlockWorkerEffect::Success(route_unlock_success_effect(path)),
+        Err(err) => UnlockWorkerEffect::Failure(route_unlock_failure_effect(path, err)),
+    }
+}

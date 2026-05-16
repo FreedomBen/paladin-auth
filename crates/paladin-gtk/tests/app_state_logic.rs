@@ -44,8 +44,9 @@ use paladin_core::{
 use paladin_gtk::app::state::{
     apply_unlock_failure_action, decide_state_from_inspect, decide_state_from_open_error,
     decide_state_from_path_resolution, decide_unlock_failure_action, decide_unlock_success_state,
-    route_unlock_failure_effect, route_unlock_success_effect, AppState, OpenErrorOutcome,
-    UnlockFailureAction, UnlockFailureEffect, UnlockSuccessEffect,
+    route_unlock_failure_effect, route_unlock_success_effect, route_unlock_worker_outcome,
+    AppState, OpenErrorOutcome, UnlockFailureAction, UnlockFailureEffect, UnlockSuccessEffect,
+    UnlockWorkerEffect,
 };
 use paladin_gtk::startup_error::StartupErrorSource;
 use paladin_gtk::unlock_dialog::{
@@ -1292,4 +1293,263 @@ fn route_unlock_success_effect_does_not_produce_other_variants() {
         ),
         "expected SetAppState(Unlocked), got {effect:?}",
     );
+}
+
+// ---------------------------------------------------------------------------
+// route_unlock_worker_outcome — unified worker-outcome dispatch
+//
+// `AppModel::update` calls this from the future `gio::spawn_blocking
+// paladin_core::open` worker callback to fan out into the success or
+// failure effect with a single entry point, matching the thin-shell
+// pattern the rest of `app::state` uses. The two halves stay
+// individually testable through `route_unlock_success_effect` /
+// `route_unlock_failure_effect`; this composition entry pins the
+// success-vs-failure dispatch on the worker `Result`.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn route_unlock_worker_outcome_ok_returns_success_set_app_state_unlocked() {
+    // `Ok(())` represents the `gio::spawn_blocking paladin_core::open`
+    // worker returning `Ok((Vault, Store))`. The pair itself is
+    // installed separately into `AppModel.vault`; the pure-logic
+    // dispatch only owns the state-machine transition, so the unit-
+    // tag on the success branch is sufficient to pin the effect.
+    let path = vault_path();
+    let effect = route_unlock_worker_outcome(&path, Ok(()));
+    match effect {
+        UnlockWorkerEffect::Success(UnlockSuccessEffect::SetAppState(AppState::Unlocked {
+            path: state_path,
+        })) => {
+            assert_eq!(state_path, path);
+        }
+        other => panic!("expected Success(SetAppState(Unlocked)), got {other:?}"),
+    }
+}
+
+#[test]
+fn route_unlock_worker_outcome_decrypt_failed_returns_failure_send_unlock_dialog_msg() {
+    // Wrong-passphrase failures stay inline on the live
+    // `UnlockDialogComponent`. `route_unlock_worker_outcome` must
+    // surface the `Failure(SendUnlockDialogMsg(OpenFailedInline(..)))`
+    // branch produced by `route_unlock_failure_effect` byte-identical
+    // so the typed `InlineError` projection survives the dispatch.
+    let path = vault_path();
+    let err = decrypt_failed_err();
+    let effect = route_unlock_worker_outcome(&path, Err(&err));
+    match effect {
+        UnlockWorkerEffect::Failure(UnlockFailureEffect::SendUnlockDialogMsg(
+            UnlockDialogMsg::OpenFailedInline(inline),
+        )) => {
+            assert_eq!(inline.kind, ErrorKind::DecryptFailed);
+            assert!(
+                !inline.rendered.is_empty(),
+                "expected non-empty inline rendered text, got empty"
+            );
+        }
+        other => panic!(
+            "expected Failure(SendUnlockDialogMsg(OpenFailedInline(..))) for DecryptFailed, got {other:?}"
+        ),
+    }
+}
+
+#[test]
+fn route_unlock_worker_outcome_invalid_passphrase_returns_failure_send_unlock_dialog_msg() {
+    // Empty-passphrase pre-flight rejections classify as
+    // `InvalidPassphrase` once they round-trip through
+    // `paladin_core::open`. Same inline-routing rule as
+    // `DecryptFailed` — assert both passphrase variants land on the
+    // dialog surface so a future drift in
+    // `route_unlock_open_error` cannot silently push one to the
+    // `StartupError` branch.
+    let path = vault_path();
+    let err = invalid_passphrase_empty_err();
+    let effect = route_unlock_worker_outcome(&path, Err(&err));
+    match effect {
+        UnlockWorkerEffect::Failure(UnlockFailureEffect::SendUnlockDialogMsg(
+            UnlockDialogMsg::OpenFailedInline(inline),
+        )) => {
+            assert_eq!(inline.kind, ErrorKind::InvalidPassphrase);
+        }
+        other => panic!(
+            "expected Failure(SendUnlockDialogMsg(OpenFailedInline(..))) for InvalidPassphrase, got {other:?}"
+        ),
+    }
+}
+
+#[test]
+fn route_unlock_worker_outcome_unsafe_permissions_returns_failure_set_app_state_startup() {
+    // Non-passphrase `paladin_core::open` failures drop the live
+    // `UnlockDialogComponent` and transition `AppModel` to
+    // `StartupError`. `route_unlock_worker_outcome` must surface the
+    // `Failure(SetAppState(StartupError { path: Some(_), error: ... }))`
+    // branch produced by `route_unlock_failure_effect`, including
+    // the formatter-built text per `paladin_core::format_unsafe_permissions`.
+    let path = vault_path();
+    let err = unsafe_perms_err();
+    let effect = route_unlock_worker_outcome(&path, Err(&err));
+    match effect {
+        UnlockWorkerEffect::Failure(UnlockFailureEffect::SetAppState(AppState::StartupError {
+            path: state_path,
+            error,
+        })) => {
+            assert_eq!(state_path.as_deref(), Some(path.as_path()));
+            assert_eq!(error.source, StartupErrorSource::Open);
+            assert_eq!(
+                error.rendered,
+                format_unsafe_permissions(&err).expect("UnsafePermissions has formatter text"),
+            );
+        }
+        other => panic!(
+            "expected Failure(SetAppState(StartupError {{ source: Open, .. }})), got {other:?}"
+        ),
+    }
+}
+
+#[test]
+fn route_unlock_worker_outcome_io_error_returns_failure_set_app_state_startup() {
+    // Generic `IoError` is the catch-all branch in
+    // `route_unlock_open_error`. Pin it routes to the same
+    // `Failure(SetAppState(StartupError))` shape as `UnsafePermissions`
+    // so the GUI surface flips off the inline error label and onto
+    // the non-mutating `StartupErrorComponent`.
+    let path = vault_path();
+    let err = io_err();
+    let effect = route_unlock_worker_outcome(&path, Err(&err));
+    match effect {
+        UnlockWorkerEffect::Failure(UnlockFailureEffect::SetAppState(AppState::StartupError {
+            path: state_path,
+            ..
+        })) => {
+            assert_eq!(state_path.as_deref(), Some(path.as_path()));
+        }
+        other => panic!("expected Failure(SetAppState(StartupError)), got {other:?}"),
+    }
+}
+
+#[test]
+fn route_unlock_worker_outcome_ok_matches_route_unlock_success_effect() {
+    // Composition contract: the `Ok(())` branch must surface byte-
+    // identical to calling `route_unlock_success_effect(path)`
+    // directly so a future refactor that drops or changes one helper
+    // cannot silently drift the unified dispatch.
+    let path = vault_path();
+    let unified = route_unlock_worker_outcome(&path, Ok(()));
+    let direct = route_unlock_success_effect(&path);
+    match (unified, direct) {
+        (
+            UnlockWorkerEffect::Success(UnlockSuccessEffect::SetAppState(unified_state)),
+            UnlockSuccessEffect::SetAppState(direct_state),
+        ) => match (unified_state, direct_state) {
+            (
+                AppState::Unlocked {
+                    path: unified_path,
+                },
+                AppState::Unlocked { path: direct_path },
+            ) => {
+                assert_eq!(unified_path, direct_path);
+            }
+            (u, d) => panic!(
+                "expected matching AppState::Unlocked on both sides, got unified={u:?}, direct={d:?}"
+            ),
+        },
+        (u, d) => panic!("expected matching Success effects, got unified={u:?}, direct={d:?}"),
+    }
+}
+
+#[test]
+fn route_unlock_worker_outcome_err_decrypt_failed_matches_route_unlock_failure_effect() {
+    // Composition contract on the inline-passphrase branch: the
+    // `Err(..)` arm must wrap exactly what `route_unlock_failure_effect`
+    // returns. The typed `InlineError` projection survives unchanged,
+    // including the `kind` and `body` text.
+    let path = vault_path();
+    let err = decrypt_failed_err();
+    let unified = route_unlock_worker_outcome(&path, Err(&err));
+    let direct = route_unlock_failure_effect(&path, &err);
+    match (unified, direct) {
+        (
+            UnlockWorkerEffect::Failure(UnlockFailureEffect::SendUnlockDialogMsg(
+                UnlockDialogMsg::OpenFailedInline(unified_inline),
+            )),
+            UnlockFailureEffect::SendUnlockDialogMsg(UnlockDialogMsg::OpenFailedInline(
+                direct_inline,
+            )),
+        ) => {
+            assert_eq!(unified_inline.kind, direct_inline.kind);
+            assert_eq!(unified_inline.rendered, direct_inline.rendered);
+        }
+        (u, d) => panic!(
+            "expected matching Failure(SendUnlockDialogMsg(OpenFailedInline)), got unified={u:?}, direct={d:?}"
+        ),
+    }
+}
+
+#[test]
+fn route_unlock_worker_outcome_err_unsafe_permissions_matches_route_unlock_failure_effect() {
+    // Composition contract on the startup-transition branch: the
+    // `Err(..)` arm must wrap exactly what `route_unlock_failure_effect`
+    // returns, including the path attached by `decide_unlock_failure_action`
+    // and the formatter text on the carried `StartupError`.
+    let path = vault_path();
+    let err = unsafe_perms_err();
+    let unified = route_unlock_worker_outcome(&path, Err(&err));
+    let direct = route_unlock_failure_effect(&path, &err);
+    match (unified, direct) {
+        (
+            UnlockWorkerEffect::Failure(UnlockFailureEffect::SetAppState(AppState::StartupError {
+                path: unified_path,
+                error: unified_error,
+            })),
+            UnlockFailureEffect::SetAppState(AppState::StartupError {
+                path: direct_path,
+                error: direct_error,
+            }),
+        ) => {
+            assert_eq!(unified_path, direct_path);
+            assert_eq!(unified_error.source, direct_error.source);
+            assert_eq!(unified_error.rendered, direct_error.rendered);
+        }
+        (u, d) => panic!(
+            "expected matching Failure(SetAppState(StartupError)), got unified={u:?}, direct={d:?}"
+        ),
+    }
+}
+
+#[test]
+fn route_unlock_worker_outcome_attaches_caller_provided_path_on_success() {
+    // The composed router is the only boundary that joins the caller-
+    // owned vault path to the typed `UnlockWorkerEffect` on the
+    // success branch. A future refactor that drops the `path`
+    // argument must fail this test rather than silently produce the
+    // wrong path.
+    let alt = PathBuf::from("/var/lib/paladin/alt-vault.bin");
+    let effect = route_unlock_worker_outcome(&alt, Ok(()));
+    match effect {
+        UnlockWorkerEffect::Success(UnlockSuccessEffect::SetAppState(AppState::Unlocked {
+            path: state_path,
+        })) => {
+            assert_eq!(state_path, alt);
+        }
+        other => panic!("expected Success(SetAppState(Unlocked)) with alt path, got {other:?}"),
+    }
+}
+
+#[test]
+fn route_unlock_worker_outcome_attaches_caller_provided_path_on_startup_failure() {
+    // Mirror of the success-branch path-attaching test on the
+    // failure-startup branch: `decide_unlock_failure_action` attaches
+    // the caller-provided path to the carried `AppState::StartupError`.
+    // Pin that the unified router preserves it.
+    let alt = PathBuf::from("/var/lib/paladin/alt-vault.bin");
+    let err = io_err();
+    let effect = route_unlock_worker_outcome(&alt, Err(&err));
+    match effect {
+        UnlockWorkerEffect::Failure(UnlockFailureEffect::SetAppState(AppState::StartupError {
+            path: state_path,
+            ..
+        })) => {
+            assert_eq!(state_path.as_deref(), Some(alt.as_path()));
+        }
+        other => panic!("expected Failure(SetAppState(StartupError)) with alt path, got {other:?}"),
+    }
 }
