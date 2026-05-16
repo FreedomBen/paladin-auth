@@ -45,8 +45,9 @@ use paladin_gtk::app::state::{
     apply_unlock_failure_action, decide_state_from_inspect, decide_state_from_open_error,
     decide_state_from_path_resolution, decide_unlock_failure_action, decide_unlock_success_state,
     route_unlock_failure_effect, route_unlock_success_effect, route_unlock_worker_outcome,
-    should_drop_unlock_dialog_after, unlock_dialog_msg_after, AppState, OpenErrorOutcome,
-    UnlockFailureAction, UnlockFailureEffect, UnlockSuccessEffect, UnlockWorkerEffect,
+    should_drop_unlock_dialog_after, unlock_app_state_after, unlock_dialog_msg_after, AppState,
+    OpenErrorOutcome, UnlockFailureAction, UnlockFailureEffect, UnlockSuccessEffect,
+    UnlockWorkerEffect,
 };
 use paladin_gtk::startup_error::StartupErrorSource;
 use paladin_gtk::unlock_dialog::{
@@ -1977,6 +1978,317 @@ fn unlock_dialog_msg_after_inverts_should_drop_unlock_dialog_after() {
         assert_eq!(
             drops, !has_msg,
             "drop decision should be the inverse of having an inline dialog message for effect={effect:?}",
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// unlock_app_state_after — `AppState` replacement extraction
+// ---------------------------------------------------------------------------
+//
+// The third leg of the unlock-worker dispatch trio. `AppModel::update`
+// needs three things from a `UnlockWorkerEffect`: whether to drop the
+// dialog (`should_drop_unlock_dialog_after`), what message to forward
+// to the still-mounted dialog (`unlock_dialog_msg_after`), and what
+// `AppState` to install in place of `Locked` / `UnlockedBusy`. The
+// state-replacement extractor reports `Some(state)` for both
+// state-replacing branches (success → `Unlocked`, startup-routed
+// failure → `StartupError`) and `None` for the inline-passphrase
+// failure (the dialog stays mounted, the state is unchanged). The
+// extraction is shape-only — it inspects the typed `UnlockWorkerEffect`
+// variant without re-deriving the routing — so the side-effect
+// decision in `AppModel::update` stays unit-testable without spinning
+// up GTK / libadwaita.
+
+#[test]
+fn unlock_app_state_after_success_returns_unlocked_with_path() {
+    // `UnlockWorkerEffect::Success(SetAppState(Unlocked))` carries the
+    // resolved vault path through the dispatch chain. Pin both the
+    // variant shape and the path passthrough so a future refactor
+    // cannot silently swap in a stale or empty path.
+    let path = vault_path();
+    let effect = route_unlock_worker_outcome(&path, Ok(()));
+    match unlock_app_state_after(&effect) {
+        Some(AppState::Unlocked { path: state_path }) => {
+            assert_eq!(state_path, &path);
+        }
+        other => panic!("expected Some(AppState::Unlocked), got {other:?}"),
+    }
+}
+
+#[test]
+fn unlock_app_state_after_decrypt_failed_returns_none() {
+    // Wrong-passphrase failure routes inline — the dialog stays
+    // mounted and `AppState` is unchanged. The extractor must report
+    // `None` so `AppModel::update` does not clobber the live
+    // `Locked` / `UnlockedBusy` state with a phantom transition.
+    let path = vault_path();
+    let err = decrypt_failed_err();
+    let effect = route_unlock_worker_outcome(&path, Err(&err));
+    assert!(
+        unlock_app_state_after(&effect).is_none(),
+        "expected decrypt-failed failure to carry no state replacement, got {:?}",
+        unlock_app_state_after(&effect),
+    );
+}
+
+#[test]
+fn unlock_app_state_after_invalid_passphrase_returns_none() {
+    // Empty-passphrase failure is the second inline-routed branch.
+    // Pin that it also reports `None` so both inline branches share
+    // the same extraction contract.
+    let path = vault_path();
+    let err = invalid_passphrase_empty_err();
+    let effect = route_unlock_worker_outcome(&path, Err(&err));
+    assert!(
+        unlock_app_state_after(&effect).is_none(),
+        "expected invalid-passphrase failure to carry no state replacement, got {:?}",
+        unlock_app_state_after(&effect),
+    );
+}
+
+#[test]
+fn unlock_app_state_after_unsafe_permissions_returns_startup_error_with_formatter_text() {
+    // `UnlockWorkerEffect::Failure(SetAppState(StartupError))` carries
+    // the resolved vault path plus a `StartupError` whose `rendered`
+    // matches `paladin_core::format_unsafe_permissions`. Pin both the
+    // variant shape and the rendered passthrough so a future refactor
+    // cannot accidentally desync from the CLI / TUI wording.
+    let path = vault_path();
+    let err = unsafe_perms_err();
+    let effect = route_unlock_worker_outcome(&path, Err(&err));
+    match unlock_app_state_after(&effect) {
+        Some(AppState::StartupError {
+            path: state_path,
+            error,
+        }) => {
+            assert_eq!(state_path.as_deref(), Some(path.as_path()));
+            assert_eq!(error.source, StartupErrorSource::Open);
+            assert_eq!(
+                error.rendered,
+                format_unsafe_permissions(&err).expect("UnsafePermissions has formatter text"),
+            );
+        }
+        other => panic!("expected Some(AppState::StartupError), got {other:?}"),
+    }
+}
+
+#[test]
+fn unlock_app_state_after_io_error_returns_startup_error() {
+    // Generic IO error is the catch-all startup-routed branch. Pin
+    // that it also surfaces a state replacement so every non-inline
+    // failure shares the same extraction contract.
+    let path = vault_path();
+    let err = io_err();
+    let effect = route_unlock_worker_outcome(&path, Err(&err));
+    match unlock_app_state_after(&effect) {
+        Some(AppState::StartupError {
+            path: state_path,
+            error,
+        }) => {
+            assert_eq!(state_path.as_deref(), Some(path.as_path()));
+            assert_eq!(error.source, StartupErrorSource::Open);
+        }
+        other => panic!("expected Some(AppState::StartupError), got {other:?}"),
+    }
+}
+
+#[test]
+fn unlock_app_state_after_wrong_vault_lock_returns_startup_error() {
+    let path = vault_path();
+    let err = wrong_vault_lock_err();
+    let effect = route_unlock_worker_outcome(&path, Err(&err));
+    match unlock_app_state_after(&effect) {
+        Some(AppState::StartupError {
+            path: state_path,
+            error,
+        }) => {
+            assert_eq!(state_path.as_deref(), Some(path.as_path()));
+            assert_eq!(error.source, StartupErrorSource::Open);
+        }
+        other => panic!("expected Some(AppState::StartupError), got {other:?}"),
+    }
+}
+
+#[test]
+fn unlock_app_state_after_invalid_header_returns_startup_error() {
+    let path = vault_path();
+    let err = invalid_header_err();
+    let effect = route_unlock_worker_outcome(&path, Err(&err));
+    match unlock_app_state_after(&effect) {
+        Some(AppState::StartupError {
+            path: state_path,
+            error,
+        }) => {
+            assert_eq!(state_path.as_deref(), Some(path.as_path()));
+            assert_eq!(error.source, StartupErrorSource::Open);
+        }
+        other => panic!("expected Some(AppState::StartupError), got {other:?}"),
+    }
+}
+
+#[test]
+fn unlock_app_state_after_invalid_payload_returns_startup_error() {
+    let path = vault_path();
+    let err = invalid_payload_err();
+    let effect = route_unlock_worker_outcome(&path, Err(&err));
+    match unlock_app_state_after(&effect) {
+        Some(AppState::StartupError {
+            path: state_path,
+            error,
+        }) => {
+            assert_eq!(state_path.as_deref(), Some(path.as_path()));
+            assert_eq!(error.source, StartupErrorSource::Open);
+        }
+        other => panic!("expected Some(AppState::StartupError), got {other:?}"),
+    }
+}
+
+#[test]
+fn unlock_app_state_after_unsupported_format_version_returns_startup_error() {
+    let path = vault_path();
+    let err = unsupported_format_version_err();
+    let effect = route_unlock_worker_outcome(&path, Err(&err));
+    match unlock_app_state_after(&effect) {
+        Some(AppState::StartupError {
+            path: state_path,
+            error,
+        }) => {
+            assert_eq!(state_path.as_deref(), Some(path.as_path()));
+            assert_eq!(error.source, StartupErrorSource::Open);
+        }
+        other => panic!("expected Some(AppState::StartupError), got {other:?}"),
+    }
+}
+
+#[test]
+fn unlock_app_state_after_kdf_params_out_of_bounds_returns_startup_error() {
+    let path = vault_path();
+    let err = kdf_oob_err();
+    let effect = route_unlock_worker_outcome(&path, Err(&err));
+    match unlock_app_state_after(&effect) {
+        Some(AppState::StartupError {
+            path: state_path,
+            error,
+        }) => {
+            assert_eq!(state_path.as_deref(), Some(path.as_path()));
+            assert_eq!(error.source, StartupErrorSource::Open);
+        }
+        other => panic!("expected Some(AppState::StartupError), got {other:?}"),
+    }
+}
+
+#[test]
+fn unlock_app_state_after_attaches_caller_provided_path_on_success() {
+    // The caller-provided path threads through the dispatch chain on
+    // the success branch and lands on the resulting `Unlocked` state.
+    // Vary the path independently of the routing decision to pin
+    // the passthrough.
+    let alt = PathBuf::from("/var/lib/paladin/alt-vault.bin");
+    let effect = route_unlock_worker_outcome(&alt, Ok(()));
+    match unlock_app_state_after(&effect) {
+        Some(AppState::Unlocked { path: state_path }) => {
+            assert_eq!(state_path, &alt);
+        }
+        other => panic!("expected Some(AppState::Unlocked) with alt path, got {other:?}"),
+    }
+}
+
+#[test]
+fn unlock_app_state_after_attaches_caller_provided_path_on_startup_failure() {
+    // Same passthrough on the startup-routed failure branch. The
+    // `StartupError` carries `Some(alt_path)` so retry can re-run
+    // from the same target.
+    let alt = PathBuf::from("/var/lib/paladin/alt-vault.bin");
+    let err = unsafe_perms_err();
+    let effect = route_unlock_worker_outcome(&alt, Err(&err));
+    match unlock_app_state_after(&effect) {
+        Some(AppState::StartupError {
+            path: state_path, ..
+        }) => {
+            assert_eq!(state_path.as_deref(), Some(alt.as_path()));
+        }
+        other => panic!("expected Some(AppState::StartupError) with alt path, got {other:?}"),
+    }
+}
+
+#[test]
+fn unlock_app_state_after_inspects_effect_only_not_path() {
+    // The presence-or-absence decision is shape-only: it must not
+    // depend on the attached path. Two different paths with the same
+    // effect shape must produce the same Some/None outcome so a
+    // future refactor cannot accidentally introduce path-dependent
+    // state replacement.
+    let path_a = vault_path();
+    let path_b = PathBuf::from("/var/lib/paladin/alt-vault.bin");
+    let err = decrypt_failed_err();
+    let effect_a = route_unlock_worker_outcome(&path_a, Err(&err));
+    let effect_b = route_unlock_worker_outcome(&path_b, Err(&err));
+    assert_eq!(
+        unlock_app_state_after(&effect_a).is_some(),
+        unlock_app_state_after(&effect_b).is_some(),
+        "state-replacement presence must be shape-only, got differing results for paths {path_a:?} and {path_b:?}",
+    );
+}
+
+#[test]
+fn unlock_app_state_after_matches_should_drop_unlock_dialog_after() {
+    // Cross-check the partitioning rule: a state replacement is
+    // available iff the dialog gets dropped. Every state-replacing
+    // outcome drops the dialog (success → mount account list;
+    // startup-routed failure → mount startup-error component) and
+    // every inline outcome keeps it mounted. This guards against a
+    // future enum variant being added without updating the two
+    // dispatch helpers in lockstep.
+    let path = vault_path();
+    let effects = [
+        route_unlock_worker_outcome(&path, Ok(())),
+        route_unlock_worker_outcome(&path, Err(&decrypt_failed_err())),
+        route_unlock_worker_outcome(&path, Err(&invalid_passphrase_empty_err())),
+        route_unlock_worker_outcome(&path, Err(&unsafe_perms_err())),
+        route_unlock_worker_outcome(&path, Err(&io_err())),
+        route_unlock_worker_outcome(&path, Err(&wrong_vault_lock_err())),
+        route_unlock_worker_outcome(&path, Err(&invalid_header_err())),
+        route_unlock_worker_outcome(&path, Err(&invalid_payload_err())),
+        route_unlock_worker_outcome(&path, Err(&unsupported_format_version_err())),
+        route_unlock_worker_outcome(&path, Err(&kdf_oob_err())),
+    ];
+    for effect in &effects {
+        let drops = should_drop_unlock_dialog_after(effect);
+        let has_state = unlock_app_state_after(effect).is_some();
+        assert_eq!(
+            drops, has_state,
+            "drop decision should equal state-replacement presence for effect={effect:?}",
+        );
+    }
+}
+
+#[test]
+fn unlock_app_state_after_is_mutually_exclusive_with_unlock_dialog_msg_after() {
+    // Cross-check the second partitioning rule: a state replacement
+    // and an inline dialog message are mutually exclusive. Every
+    // outcome carries either a state replacement, an inline dialog
+    // message, or neither — but never both. Guards against a future
+    // hybrid variant landing without an explicit dispatch decision.
+    let path = vault_path();
+    let effects = [
+        route_unlock_worker_outcome(&path, Ok(())),
+        route_unlock_worker_outcome(&path, Err(&decrypt_failed_err())),
+        route_unlock_worker_outcome(&path, Err(&invalid_passphrase_empty_err())),
+        route_unlock_worker_outcome(&path, Err(&unsafe_perms_err())),
+        route_unlock_worker_outcome(&path, Err(&io_err())),
+        route_unlock_worker_outcome(&path, Err(&wrong_vault_lock_err())),
+        route_unlock_worker_outcome(&path, Err(&invalid_header_err())),
+        route_unlock_worker_outcome(&path, Err(&invalid_payload_err())),
+        route_unlock_worker_outcome(&path, Err(&unsupported_format_version_err())),
+        route_unlock_worker_outcome(&path, Err(&kdf_oob_err())),
+    ];
+    for effect in &effects {
+        let has_state = unlock_app_state_after(effect).is_some();
+        let has_msg = unlock_dialog_msg_after(effect).is_some();
+        assert!(
+            !(has_state && has_msg),
+            "state replacement and inline dialog message must be mutually exclusive for effect={effect:?}",
         );
     }
 }

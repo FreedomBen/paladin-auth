@@ -694,3 +694,58 @@ pub fn unlock_dialog_msg_after(effect: &UnlockWorkerEffect) -> Option<&UnlockDia
         | UnlockWorkerEffect::Failure(UnlockFailureEffect::SetAppState(_)) => None,
     }
 }
+
+/// Extract the optional [`AppState`] replacement `AppModel`'s update
+/// branch should install after applying the given
+/// [`UnlockWorkerEffect`].
+///
+/// Third leg of the unlock-worker dispatch trio alongside
+/// [`should_drop_unlock_dialog_after`] (drop the dialog?) and
+/// [`unlock_dialog_msg_after`] (forward an inline message?). Across
+/// the full set of worker outcomes:
+///
+/// * [`UnlockWorkerEffect::Success`] — returns `Some(Unlocked)`. The
+///   dialog is dropped and `AppModel` transitions from `Locked` /
+///   `UnlockedBusy` to `Unlocked` carrying the resolved vault path.
+///   The live `(Vault, Store)` pair is installed separately into
+///   `AppModel.vault` by the worker callback.
+/// * [`UnlockWorkerEffect::Failure`] carrying
+///   [`UnlockFailureEffect::SetAppState`] — returns
+///   `Some(StartupError)`. A non-passphrase open failure
+///   (`UnsafePermissions`, `WrongVaultLock`, `InvalidHeader`,
+///   `InvalidPayload`, `UnsupportedFormatVersion`,
+///   `KdfParamsOutOfBounds`, `IoError`, …) replaces the dialog with
+///   the non-mutating [`crate::startup_error::StartupErrorComponent`]
+///   surface per `IMPLEMENTATION_PLAN_04_GTK.md` §"Effect errors".
+/// * [`UnlockWorkerEffect::Failure`] carrying
+///   [`UnlockFailureEffect::SendUnlockDialogMsg`] — returns `None`.
+///   The dialog stays mounted with the inline error and `AppState`
+///   is unchanged so the user can retype without losing the surface.
+///
+/// The extraction is shape-only — it inspects the typed
+/// [`UnlockWorkerEffect`] variant without re-deriving the routing —
+/// so the side-effect decision in `AppModel::update` stays unit-
+/// testable in `tests/app_state_logic.rs` without spinning up GTK /
+/// libadwaita. The two invariants pinned by the cross-check tests
+/// there:
+///
+/// * State-replacement presence equals
+///   [`should_drop_unlock_dialog_after`] — the dialog is dropped iff
+///   a new state is installed.
+/// * State-replacement and inline dialog message are mutually
+///   exclusive — every outcome carries one, the other, or neither,
+///   but never both.
+#[must_use]
+pub fn unlock_app_state_after(effect: &UnlockWorkerEffect) -> Option<&AppState> {
+    // Listed by explicit variant rather than `_` so a future
+    // `UnlockWorkerEffect` / `UnlockFailureEffect` / `UnlockSuccessEffect`
+    // variant fails the match exhaustively and forces an explicit
+    // extraction decision here, in lockstep with the sibling
+    // `should_drop_unlock_dialog_after` and `unlock_dialog_msg_after`
+    // helpers.
+    match effect {
+        UnlockWorkerEffect::Success(UnlockSuccessEffect::SetAppState(state))
+        | UnlockWorkerEffect::Failure(UnlockFailureEffect::SetAppState(state)) => Some(state),
+        UnlockWorkerEffect::Failure(UnlockFailureEffect::SendUnlockDialogMsg(_)) => None,
+    }
+}
