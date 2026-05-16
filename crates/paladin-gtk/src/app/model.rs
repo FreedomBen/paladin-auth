@@ -75,8 +75,9 @@ use crate::account_list::{
 };
 use crate::app::state::{
     apply_submit_unlock_inplace, apply_unlock_dispatch_inplace, apply_unlock_vault_install_inplace,
-    compose_unlock_dispatch, decide_state_from_inspect, decide_state_from_open_error, AppState,
-    OpenErrorOutcome, UnlockWorkerCompletion,
+    compose_unlock_dispatch, compose_unlock_worker_input, decide_state_from_inspect,
+    decide_state_from_open_error, run_unlock_worker, AppState, OpenErrorOutcome,
+    UnlockWorkerCompletion,
 };
 use crate::init_dialog::{format_init_dialog_marker, InitDialogComponent, InitDialogInit};
 use crate::remove_dialog::{decide_remove_target, RemoveDialogComponent, RemoveDialogOutput};
@@ -504,25 +505,60 @@ impl SimpleComponent for AppModel {
                     self.content.remove(controller.widget());
                 }
             }
-            AppMsg::UnlockDialogAction(UnlockDialogOutput::SubmitLock(_lock)) => {
-                // Pre-worker state transition: `Locked → UnlockedBusy`.
-                // `apply_submit_unlock_inplace` runs the typed entry-
-                // side composer over `AppModel::state`, opening the
-                // busy gate so `is_busy()` /
-                // `allows_mutating_menu()` cover the open worker's
-                // lifetime per `IMPLEMENTATION_PLAN_04_GTK.md`
-                // §"Vault interaction". The dialog stays mounted —
-                // `should_drop_unlock_dialog_after` keeps it on the
-                // inline branch and the worker's success / startup-
-                // failure dispatch drops it once the worker returns.
+            AppMsg::UnlockDialogAction(UnlockDialogOutput::SubmitLock(lock)) => {
+                // Entry side of the `gio::spawn_blocking
+                // paladin_core::open` worker. Three steps run in
+                // order per `IMPLEMENTATION_PLAN_04_GTK.md`
+                // §"Vault interaction":
                 //
-                // The `gio::spawn_blocking paladin_core::open` worker
-                // that consumes the forwarded `VaultLock` and posts
-                // `AppMsg::UnlockWorkerCompleted` on completion lands
-                // in a follow-up commit; the consumer-side dispatch
-                // for that message is already wired below.
+                // 1. Capture `(path, VaultLock)` into an
+                //    `UnlockWorkerInput` via
+                //    `compose_unlock_worker_input` while the cached
+                //    `AppState` is still `Locked` — the composer
+                //    inspects the variant and clones the path out
+                //    before the busy-gate transition would consume
+                //    it. `VaultLock` moves into the bundle by value
+                //    so the `secrecy::SecretString` carried by
+                //    `VaultLock::Encrypted` zeroes on drop after the
+                //    Argon2 KDF step.
+                // 2. Apply the `Locked → UnlockedBusy` busy-gate
+                //    transition via `apply_submit_unlock_inplace`
+                //    so `is_busy()` / `allows_mutating_menu()`
+                //    cover the worker's lifetime. The dialog stays
+                //    mounted — `should_drop_unlock_dialog_after`
+                //    keeps it on the inline branch and the
+                //    worker's success / startup-failure dispatch
+                //    drops it once the worker returns.
+                // 3. Spawn `run_unlock_worker` on
+                //    `gtk::gio::spawn_blocking` so the §4.4
+                //    Argon2 KDF (m=64 MiB defaults) does not
+                //    block the GTK main loop. The wrapping
+                //    `gtk::glib::spawn_future_local` awaits the
+                //    blocking handle and posts the bundled
+                //    `UnlockWorkerCompletion` back to `AppModel`
+                //    via `AppMsg::UnlockWorkerCompleted`, which is
+                //    consumed by the dispatch branch wired below.
+                //
+                // A `None` capture from `compose_unlock_worker_input`
+                // means `SubmitLock` arrived from a non-`Locked`
+                // state — a benign no-op for the worker spawn just
+                // as `apply_submit_unlock_inplace` is a no-op for
+                // the same source variants.
+                let worker_input = self
+                    .state
+                    .as_ref()
+                    .and_then(|state| compose_unlock_worker_input(state, lock));
                 if let Some(state) = self.state.as_mut() {
                     apply_submit_unlock_inplace(state);
+                }
+                if let Some(input) = worker_input {
+                    let sender = sender.clone();
+                    gtk::glib::spawn_future_local(async move {
+                        let completion = gtk::gio::spawn_blocking(move || run_unlock_worker(input))
+                            .await
+                            .expect("paladin_core::Store::open unlock worker panicked");
+                        sender.input(AppMsg::UnlockWorkerCompleted(completion));
+                    });
                 }
             }
             AppMsg::UnlockWorkerCompleted(completion) => {
