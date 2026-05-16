@@ -3238,10 +3238,30 @@ is never expected to be scripted.
   same `paladin-tui/test-hooks` feature so production builds never link
   the hook. Lets CI exercise the copy → schedule → only-if-unchanged
   auto-clear loop end-to-end without a clipboard server.
-- [ ] Add a TUI-side smoke test that spawns `paladin tui` (CLI) and
+- [x] Add a TUI-side smoke test that spawns `paladin tui` (CLI) and
   asserts it execs `paladin-tui` on shared-`PATH` installs; the
   Flatpak `exec_paladin_tui` failure mode is exercised by the CLI
   plan's tests.
+  *(`crates/paladin-tui/tests/tui_exec_wrapper.rs` adds two tests that
+  use the real `paladin-tui` binary via `env!("CARGO_BIN_EXE_paladin-tui")`,
+  set `PATH` to the directory containing it (the shared-`PATH`
+  install shape), then invoke the real `paladin` CLI binary via
+  `assert_cmd::Command::cargo_bin("paladin")` with the `tui`
+  subcommand.
+  `paladin_tui_subcommand_execs_real_paladin_tui_on_shared_path` is
+  the bare-args smoke test; the companion
+  `paladin_tui_subcommand_forwards_vault_to_real_paladin_tui_on_shared_path`
+  re-verifies the wrapper-to-binary handoff with `--vault` in the
+  argv so the forwarded bytes survive the chain. Both assert
+  `success()` and that stderr does not surface the wrapper's
+  `exec_paladin_tui` failure tag — its absence after a successful
+  exit proves `execvp` resolved `paladin-tui` on the controlled
+  `PATH` and the real binary ran to completion. The companion stub-
+  based suite in `crates/paladin-cli/tests/cli_exec_tui.rs` continues
+  to own the precise argv-forwarding contract and the Flatpak
+  `exec_paladin_tui` failure mode. `assert_cmd = "2.0"` is added to
+  `crates/paladin-tui/Cargo.toml` `[dev-dependencies]`, matching the
+  pin already in `paladin-cli`.)*
 
 ## Definition of done
 

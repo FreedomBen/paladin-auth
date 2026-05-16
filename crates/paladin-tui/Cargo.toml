@@ -58,3 +58,9 @@ arboard = "3.4"
 # Pinned for snapshot stability across runs.
 insta = { version = "1.40", features = ["json"] }
 tempfile = "3"
+# Drives the TUI-side smoke test (`tests/tui_exec_wrapper.rs`) that
+# spawns the real `paladin` CLI binary and verifies `paladin tui`
+# execs into the real `paladin-tui` binary on a shared-`PATH` install.
+# Matches the version `paladin-cli` uses for its stub-based wrapper
+# tests so the two suites stay on the same minor.
+assert_cmd = "2.0"
