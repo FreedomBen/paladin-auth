@@ -63,7 +63,8 @@ use crate::account_list::{
     AccountListComponent, AccountListInit, AccountListOutput, AccountRowModel,
 };
 use crate::app::state::{
-    decide_state_from_inspect, decide_state_from_open_error, AppState, OpenErrorOutcome,
+    apply_submit_unlock_inplace, decide_state_from_inspect, decide_state_from_open_error, AppState,
+    OpenErrorOutcome,
 };
 use crate::init_dialog::{format_init_dialog_marker, InitDialogComponent, InitDialogInit};
 use crate::remove_dialog::{decide_remove_target, RemoveDialogComponent, RemoveDialogOutput};
@@ -456,18 +457,25 @@ impl SimpleComponent for AppModel {
                 }
             }
             AppMsg::UnlockDialogAction(UnlockDialogOutput::SubmitLock(_lock)) => {
+                // Pre-worker state transition: `Locked → UnlockedBusy`.
+                // `apply_submit_unlock_inplace` runs the typed entry-
+                // side composer over `AppModel::state`, opening the
+                // busy gate so `is_busy()` /
+                // `allows_mutating_menu()` cover the open worker's
+                // lifetime per `IMPLEMENTATION_PLAN_04_GTK.md`
+                // §"Vault interaction". The dialog stays mounted —
+                // `should_drop_unlock_dialog_after` keeps it on the
+                // inline branch and the worker's success / startup-
+                // failure dispatch drops it once the worker returns.
+                //
                 // The `gio::spawn_blocking paladin_core::open` worker
-                // that consumes the forwarded `VaultLock`, transitions
-                // `AppState::Locked` → `AppState::UnlockedBusy` →
-                // `AppState::Unlocked` on success, and routes the open
-                // failure (inline for `decrypt_failed` /
-                // `invalid_passphrase`; to `StartupErrorComponent` for
-                // every other open failure per
-                // `IMPLEMENTATION_PLAN_04_GTK.md` §"Effect errors")
-                // lands in a follow-up commit alongside the
-                // `UnlockedBusy` worker infrastructure. Until then
-                // `AppModel` acknowledges receipt — the dialog stays
-                // mounted so the user sees their typed click landed.
+                // that consumes the forwarded `VaultLock` and the
+                // `AppMsg::UnlockWorkerCompleted(UnlockWorkerEffect)`
+                // dispatch that calls `compose_unlock_dispatch` on the
+                // worker outcome land in follow-up commits.
+                if let Some(state) = self.state.as_mut() {
+                    apply_submit_unlock_inplace(state);
+                }
             }
         }
     }

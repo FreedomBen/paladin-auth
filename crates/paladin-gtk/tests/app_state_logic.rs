@@ -42,13 +42,13 @@ use paladin_core::{
 };
 
 use paladin_gtk::app::state::{
-    apply_unlock_failure_action, compose_unlock_dispatch, decide_state_from_inspect,
-    decide_state_from_open_error, decide_state_from_path_resolution, decide_unlock_failure_action,
-    decide_unlock_success_state, route_unlock_failure_effect, route_unlock_success_effect,
-    route_unlock_worker_outcome, should_drop_unlock_dialog_after, submit_unlock_app_state,
-    unlock_app_state_after, unlock_dialog_msg_after, unlock_final_app_state, AppState,
-    OpenErrorOutcome, UnlockFailureAction, UnlockFailureEffect, UnlockSuccessEffect,
-    UnlockWorkerEffect,
+    apply_submit_unlock_inplace, apply_unlock_failure_action, compose_unlock_dispatch,
+    decide_state_from_inspect, decide_state_from_open_error, decide_state_from_path_resolution,
+    decide_unlock_failure_action, decide_unlock_success_state, route_unlock_failure_effect,
+    route_unlock_success_effect, route_unlock_worker_outcome, should_drop_unlock_dialog_after,
+    submit_unlock_app_state, unlock_app_state_after, unlock_dialog_msg_after,
+    unlock_final_app_state, AppState, OpenErrorOutcome, UnlockFailureAction, UnlockFailureEffect,
+    UnlockSuccessEffect, UnlockWorkerEffect,
 };
 use paladin_gtk::startup_error::StartupErrorSource;
 use paladin_gtk::unlock_dialog::{
@@ -3099,6 +3099,132 @@ fn submit_unlock_app_state_mirrors_enter_unlocking_busy_for_every_variant() {
                 "composed Some/None must mirror enter_unlocking_busy for source={source:?}, \
                  got {other:?}",
             ),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// apply_submit_unlock_inplace — `AppModel::update` mut-state wrapper
+// ---------------------------------------------------------------------------
+//
+// `submit_unlock_app_state(&AppState) -> Option<AppState>` carries the
+// composer's typed refusal contract for the entry transition. The wrapper
+// here lets `AppModel::update`'s `UnlockDialogOutput::SubmitLock` handler
+// mutate the cached `AppState` in place without managing the take-and-
+// restore dance itself — it keeps the side-effect decision unit-testable
+// in `tests/app_state_logic.rs` without spinning up GTK / libadwaita.
+
+#[test]
+fn apply_submit_unlock_inplace_from_locked_mutates_to_unlocked_busy_and_returns_true() {
+    // Happy path: `AppModel::update` mutates `self.state` in place via
+    // the helper when `UnlockDialogOutput::SubmitLock` arrives. The
+    // resolved path is preserved verbatim so the live
+    // `UnlockDialogComponent` (still mounted until the worker returns)
+    // names the same destination. The `true` return signals that the
+    // state actually transitioned so the caller can spawn the
+    // `gio::spawn_blocking paladin_core::open` worker — the `false`
+    // arm of the API is the defensive no-op for stray dispatches.
+    let path = vault_path();
+    let mut state = AppState::Locked { path: path.clone() };
+    let transitioned = apply_submit_unlock_inplace(&mut state);
+    assert!(
+        transitioned,
+        "apply_submit_unlock_inplace must return true on the Locked → UnlockedBusy transition",
+    );
+    assert!(matches!(state, AppState::UnlockedBusy { .. }));
+    assert_path_eq(&state, &path);
+}
+
+#[test]
+fn apply_submit_unlock_inplace_from_non_locked_leaves_state_unchanged_and_returns_false() {
+    // Defensive: a stray `SubmitLock` dispatch from any non-`Locked`
+    // source is a no-op. The wrapped state must survive the call
+    // byte-for-byte so `AppModel::update` cannot accidentally clobber
+    // an idle state (`Missing` / `Unlocked` / `UnlockedBusy` /
+    // `StartupError`) with a phantom `UnlockedBusy`. The `false`
+    // return tells the caller not to spawn the open worker.
+    let path = vault_path();
+    let sources = [
+        AppState::Missing { path: path.clone() },
+        AppState::Unlocked { path: path.clone() },
+        AppState::UnlockedBusy { path: path.clone() },
+        decide_state_from_inspect(&path, Err(invalid_header_err()))
+            .expect("inspect Err yields StartupError state"),
+    ];
+    for source in sources {
+        let original_discriminant = std::mem::discriminant::<AppState>(&source);
+        let original_path = source.path().map(Path::to_path_buf);
+        let mut state = source.clone();
+        let transitioned = apply_submit_unlock_inplace(&mut state);
+        assert!(
+            !transitioned,
+            "apply_submit_unlock_inplace must return false for non-Locked source={source:?}",
+        );
+        assert_eq!(
+            std::mem::discriminant::<AppState>(&state),
+            original_discriminant,
+            "apply_submit_unlock_inplace must leave variant unchanged for source={source:?}",
+        );
+        assert_eq!(
+            state.path().map(Path::to_path_buf),
+            original_path,
+            "apply_submit_unlock_inplace must leave path unchanged for source={source:?}",
+        );
+    }
+}
+
+#[test]
+fn apply_submit_unlock_inplace_mirrors_submit_unlock_app_state_for_every_variant() {
+    // Cross-check: the wrapper must mirror `submit_unlock_app_state`
+    // exactly. It is a name-the-call-site wrapper, not a re-derivation
+    // — the `true` / `false` partition matches the `Some` / `None`
+    // partition of the composer, and the resulting state on `true`
+    // matches the `Some(_)` variant + path the composer reports. This
+    // test pins that contract so the wrapper can't drift away from
+    // `submit_unlock_app_state` without breaking here first.
+    let path = vault_path();
+    let sources = [
+        AppState::Missing { path: path.clone() },
+        AppState::Locked { path: path.clone() },
+        AppState::Unlocked { path: path.clone() },
+        AppState::UnlockedBusy { path: path.clone() },
+        decide_state_from_inspect(&path, Err(invalid_header_err()))
+            .expect("inspect Err yields StartupError state"),
+    ];
+    for source in &sources {
+        let composed = submit_unlock_app_state(source);
+        let mut state = source.clone();
+        let transitioned = apply_submit_unlock_inplace(&mut state);
+        if let Some(expected) = composed {
+            assert!(
+                transitioned,
+                "wrapper must return true when composer returns Some for source={source:?}",
+            );
+            assert_eq!(
+                std::mem::discriminant::<AppState>(&state),
+                std::mem::discriminant::<AppState>(&expected),
+                "wrapper variant must mirror composer for source={source:?}",
+            );
+            assert_eq!(
+                state.path().map(Path::to_path_buf),
+                expected.path().map(Path::to_path_buf),
+                "wrapper path must mirror composer for source={source:?}",
+            );
+        } else {
+            assert!(
+                !transitioned,
+                "wrapper must return false when composer returns None for source={source:?}",
+            );
+            assert_eq!(
+                std::mem::discriminant::<AppState>(&state),
+                std::mem::discriminant::<AppState>(source),
+                "wrapper must leave variant unchanged when composer returns None for source={source:?}",
+            );
+            assert_eq!(
+                state.path().map(Path::to_path_buf),
+                source.path().map(Path::to_path_buf),
+                "wrapper must leave path unchanged when composer returns None for source={source:?}",
+            );
         }
     }
 }

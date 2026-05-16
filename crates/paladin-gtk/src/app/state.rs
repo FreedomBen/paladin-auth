@@ -853,6 +853,40 @@ pub fn submit_unlock_app_state(current: &AppState) -> Option<AppState> {
     current.clone().enter_unlocking_busy()
 }
 
+/// Apply [`submit_unlock_app_state`] in-place to `state`, leaving
+/// it unchanged when the composer returns `None`.
+///
+/// `AppModel::update`'s
+/// [`crate::unlock_dialog::UnlockDialogOutput::SubmitLock`] handler
+/// holds the cached [`AppState`] behind `&mut AppState`; this
+/// wrapper bridges the owned-`self` [`AppState::enter_unlocking_busy`]
+/// contract underlying `submit_unlock_app_state` to the mut-reference
+/// call site so the handler does not have to manage a take-and-
+/// restore dance around `submit_unlock_app_state`'s
+/// `Option<AppState>` return.
+///
+/// Returns `true` when the state actually transitioned (source was
+/// `Locked` → destination is `UnlockedBusy`), `false` otherwise.
+/// `AppModel::update` uses the `true` return to gate the
+/// `gio::spawn_blocking paladin_core::open` worker spawn — a `false`
+/// return is the defensive no-op for a stray `SubmitLock` from any
+/// non-`Locked` source state (`Missing`, `Unlocked`, `UnlockedBusy`,
+/// `StartupError`).
+///
+/// The wrapper stays shape-only — it delegates to
+/// `submit_unlock_app_state` without re-deriving the transition —
+/// so the side-effect decision in `AppModel::update` stays unit-
+/// testable in `tests/app_state_logic.rs` without spinning up GTK /
+/// libadwaita.
+pub fn apply_submit_unlock_inplace(state: &mut AppState) -> bool {
+    if let Some(new_state) = submit_unlock_app_state(state) {
+        *state = new_state;
+        true
+    } else {
+        false
+    }
+}
+
 /// Unified state-transition composer for the unlock worker outcome.
 ///
 /// [`unlock_app_state_after`] reports the new [`AppState`] for the
