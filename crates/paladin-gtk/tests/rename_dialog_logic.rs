@@ -617,3 +617,116 @@ fn rename_dialog_output_cancel_is_distinct_variant() {
     assert!(matches!(out, RenameDialogOutput::Cancel));
     assert_eq!(out.clone(), RenameDialogOutput::Cancel);
 }
+
+// ---------------------------------------------------------------------------
+// RenameDialogState::submit — on-demand classification for the Save
+// button / entry `entry-activated` routing branch
+//
+// Mirrors `UnlockDialogState::submit` so the widget layer can call
+// `state.submit()` from the Save click handler and either forward
+// the validated label up to `AppModel` or render the inline error
+// without touching the entry row. Pure-logic so the routing decision
+// is exercisable here without spinning up GTK. The `RenameDialogMsg`
+// `SubmitClicked` variant, the `RenameDialogOutput::SubmitLabel`
+// projection, and the `Vault::mutate_and_save` worker land in
+// follow-up commits alongside the `UnlockedBusy` worker
+// infrastructure.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn rename_dialog_state_submit_returns_proceed_for_valid_draft() {
+    let mut state = RenameDialogState::new(&dummy_init("ben"));
+    state.set_draft("renamed".to_string());
+    let outcome = state.submit();
+    let SubmitOutcome::Proceed(trimmed) = outcome else {
+        panic!("expected Proceed, got {outcome:?}");
+    };
+    assert_eq!(trimmed, "renamed");
+}
+
+#[test]
+fn rename_dialog_state_submit_trims_surrounding_whitespace() {
+    // The visible draft preserves the user's spacing while the
+    // forwarded label is the canonical trimmed value `classify_submit`
+    // produces. See `rename_dialog_state_preserves_untrimmed_draft_for_round_trip`
+    // for the round-trip side of the same invariant.
+    let mut state = RenameDialogState::new(&dummy_init("ben"));
+    state.set_draft("  Acme:user  ".to_string());
+    let outcome = state.submit();
+    let SubmitOutcome::Proceed(trimmed) = outcome else {
+        panic!("expected Proceed, got {outcome:?}");
+    };
+    assert_eq!(trimmed, "Acme:user");
+}
+
+#[test]
+fn rename_dialog_state_submit_rejects_empty_draft_inline() {
+    let mut state = RenameDialogState::new(&dummy_init("ben"));
+    state.set_draft(String::new());
+    let outcome = state.submit();
+    let SubmitOutcome::InlineError(inline) = outcome else {
+        panic!("expected InlineError, got {outcome:?}");
+    };
+    assert_eq!(inline.kind, ErrorKind::ValidationError);
+}
+
+#[test]
+fn rename_dialog_state_submit_rejects_whitespace_only_draft_inline() {
+    let mut state = RenameDialogState::new(&dummy_init("ben"));
+    state.set_draft("   ".to_string());
+    let outcome = state.submit();
+    let SubmitOutcome::InlineError(inline) = outcome else {
+        panic!("expected InlineError, got {outcome:?}");
+    };
+    assert_eq!(inline.kind, ErrorKind::ValidationError);
+}
+
+#[test]
+fn rename_dialog_state_submit_rejects_overlong_draft_inline() {
+    let mut state = RenameDialogState::new(&dummy_init("ben"));
+    state.set_draft("x".repeat(LABEL_MAX_BYTES + 1));
+    let outcome = state.submit();
+    let SubmitOutcome::InlineError(inline) = outcome else {
+        panic!("expected InlineError, got {outcome:?}");
+    };
+    assert_eq!(inline.kind, ErrorKind::ValidationError);
+}
+
+#[test]
+fn rename_dialog_state_submit_does_not_mutate_draft() {
+    // Submit is a pure read of the draft. The visible value stays
+    // until the worker callback applies the success / restore-prior
+    // routing decision — otherwise the entry row would flash blank
+    // mid-flight.
+    let mut state = RenameDialogState::new(&dummy_init("ben"));
+    state.set_draft("  Acme:user  ".to_string());
+    let before = state.draft().to_string();
+    let _ = state.submit();
+    assert_eq!(state.draft(), before);
+}
+
+#[test]
+fn rename_dialog_state_submit_matches_last_validation_for_valid_draft() {
+    // The two read paths must agree so the widget can render the
+    // pre-submit inline-error projection from `last_validation()`
+    // and still forward the same `SubmitOutcome` on click without a
+    // reclassify race.
+    let mut state = RenameDialogState::new(&dummy_init("ben"));
+    state.set_draft("renamed".to_string());
+    let from_submit = state.submit();
+    let from_cache = state.last_validation().clone();
+    let (SubmitOutcome::Proceed(a), SubmitOutcome::Proceed(b)) = (from_submit, from_cache) else {
+        panic!("expected both outcomes to be Proceed");
+    };
+    assert_eq!(a, b);
+}
+
+#[test]
+fn rename_dialog_state_submit_matches_last_validation_for_invalid_draft() {
+    let mut state = RenameDialogState::new(&dummy_init("ben"));
+    state.set_draft(String::new());
+    let from_submit = state.submit();
+    let from_cache = state.last_validation().clone();
+    assert!(matches!(from_submit, SubmitOutcome::InlineError(_)));
+    assert!(matches!(from_cache, SubmitOutcome::InlineError(_)));
+}

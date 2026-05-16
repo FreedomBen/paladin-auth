@@ -322,6 +322,27 @@ impl RenameDialogState {
             SubmitOutcome::Proceed(_) => None,
         }
     }
+
+    /// On-demand classification of the current draft for the Save
+    /// button / entry `entry-activated` routing branch.
+    ///
+    /// Re-runs [`classify_submit`] against the live draft so the
+    /// returned [`SubmitOutcome`] reflects the same value the entry
+    /// row currently shows. Pure — does not mutate the draft or the
+    /// cached `last_validation`, so the visible value survives the
+    /// `gio::spawn_blocking Vault::mutate_and_save` round trip and
+    /// the routing decision is exercisable in
+    /// `tests/rename_dialog_logic.rs` without GTK.
+    ///
+    /// The `RenameDialogMsg::SubmitClicked` variant, the
+    /// `RenameDialogOutput::SubmitLabel` projection, and the
+    /// `Vault::mutate_and_save` worker that consume this outcome
+    /// land in follow-up commits alongside the `UnlockedBusy` worker
+    /// infrastructure.
+    #[must_use]
+    pub fn submit(&self) -> SubmitOutcome {
+        classify_submit(&self.draft)
+    }
 }
 
 /// Messages handled by [`RenameDialogComponent`].
