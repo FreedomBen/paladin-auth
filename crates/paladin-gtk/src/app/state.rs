@@ -1137,6 +1137,53 @@ pub fn apply_unlock_dispatch_inplace(state: &mut AppState, dispatch: &UnlockDisp
     }
 }
 
+/// Install the worker's `(Vault, Store)` pair from
+/// [`UnlockWorkerCompletion::pair`] into `AppModel::vault` in-place,
+/// leaving the slot unchanged when the completion carries `None`.
+///
+/// `AppModel::update`'s `AppMsg::UnlockWorkerCompleted` handler holds
+/// the live vault slot behind `&mut Option<(Vault, Store)>` next to
+/// the state machine; this wrapper bridges the `Option<(Vault, Store)>`
+/// field of [`UnlockWorkerCompletion`] to that mut-reference call
+/// site so the handler can absorb the worker outcome without
+/// spreading the unpack across the dispatch path. It is the sibling
+/// of [`apply_unlock_dispatch_inplace`] on the vault-slot side: the
+/// dispatch wrapper handles the `AppState` replacement, this wrapper
+/// handles the vault-slot install.
+///
+/// Returns `true` when the slot was written to (`pair` was
+/// `Some(_)`), `false` otherwise. `AppModel::update` does not need
+/// the return value for the unlock flow today — the slot is always
+/// `None` entering the flow and the dispatch decision drives the
+/// follow-up `AccountListComponent` mount — but the return mirrors
+/// [`apply_unlock_dispatch_inplace`]'s `true`-on-write contract so
+/// the two wrappers stay symmetric for future call sites.
+///
+/// `pair` is consumed by value because [`Vault`] and [`Store`] are
+/// non-`Clone`; an incoming `Some(_)` always overwrites the slot so
+/// the wrapper is idempotent against a stray double-fire and so the
+/// same shape can be reused by other vault-touching workers (HOTP
+/// `next`, add / remove / rename, settings saves, import / export,
+/// passphrase transitions) when they reinstall the pair after a
+/// worker return.
+///
+/// The wrapper stays shape-only — it inspects only the `Option`
+/// discriminant — so the side-effect decision in `AppModel::update`
+/// stays unit-testable in `tests/app_state_logic.rs` against real
+/// `(Vault, Store)` pairs constructed via `paladin_core::Store::create`
+/// over a tempfile vault.
+pub fn apply_unlock_vault_install_inplace(
+    vault_slot: &mut Option<(Vault, Store)>,
+    pair: Option<(Vault, Store)>,
+) -> bool {
+    if let Some(pair) = pair {
+        *vault_slot = Some(pair);
+        true
+    } else {
+        false
+    }
+}
+
 /// Worker input bundled by `AppMsg::UnlockDialogAction(SubmitLock)`
 /// for the `gio::spawn_blocking paladin_core::open` worker.
 ///

@@ -44,13 +44,13 @@ use paladin_core::{
 
 use paladin_gtk::app::state::{
     apply_submit_unlock_inplace, apply_unlock_dispatch_inplace, apply_unlock_failure_action,
-    compose_unlock_dispatch, compose_unlock_worker_input, decide_state_from_inspect,
-    decide_state_from_open_error, decide_state_from_path_resolution, decide_unlock_failure_action,
-    decide_unlock_success_state, route_unlock_failure_effect, route_unlock_success_effect,
-    route_unlock_worker_outcome, should_drop_unlock_dialog_after, submit_unlock_app_state,
-    unlock_app_state_after, unlock_dialog_msg_after, unlock_final_app_state, AppState,
-    OpenErrorOutcome, UnlockFailureAction, UnlockFailureEffect, UnlockSuccessEffect,
-    UnlockWorkerEffect,
+    apply_unlock_vault_install_inplace, compose_unlock_dispatch, compose_unlock_worker_input,
+    decide_state_from_inspect, decide_state_from_open_error, decide_state_from_path_resolution,
+    decide_unlock_failure_action, decide_unlock_success_state, route_unlock_failure_effect,
+    route_unlock_success_effect, route_unlock_worker_outcome, should_drop_unlock_dialog_after,
+    submit_unlock_app_state, unlock_app_state_after, unlock_dialog_msg_after,
+    unlock_final_app_state, AppState, OpenErrorOutcome, UnlockFailureAction, UnlockFailureEffect,
+    UnlockSuccessEffect, UnlockWorkerEffect,
 };
 use paladin_gtk::startup_error::StartupErrorSource;
 use paladin_gtk::unlock_dialog::{
@@ -3786,6 +3786,152 @@ fn compose_unlock_worker_input_mirrors_submit_unlock_app_state_gating() {
             state_transition, worker_input,
             "submit_unlock_app_state and compose_unlock_worker_input must agree on Some/None \
              for source={source:?}",
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// apply_unlock_vault_install_inplace — `AppModel::vault` mut-slot wrapper
+// ---------------------------------------------------------------------------
+//
+// `route_unlock_open_completion(&Path, Result<(Vault, Store), PaladinError>)
+// -> UnlockWorkerCompletion` bundles the worker's pair alongside the
+// routed effect: on `Ok(_)` it carries `pair = Some(_)`, on every
+// `Err(_)` it carries `pair = None`. The wrapper here lets the
+// `AppMsg::UnlockWorkerCompleted` handler install that pair against
+// the `AppModel::vault` sibling `Option<(Vault, Store)>` slot in
+// place, mirroring `apply_unlock_dispatch_inplace`'s contract for
+// the state side. Together the two wrappers absorb the full
+// `UnlockWorkerCompletion` without spreading the unpack across
+// `AppModel::update`.
+
+#[test]
+fn apply_unlock_vault_install_inplace_installs_some_pair_into_empty_slot_and_returns_true() {
+    // Happy path: worker returned `Ok(pair)`, the slot was empty
+    // (vault was `Locked` entering the flow, so `AppModel::vault`
+    // was `None` through `UnlockedBusy`). The wrapper installs the
+    // pair and returns `true` so `AppModel::update` can mount
+    // `AccountListComponent` against a live vault.
+    let (_tempdir, _path, pair) = fresh_plaintext_vault_pair();
+    let mut slot: Option<(paladin_core::Vault, paladin_core::Store)> = None;
+    let installed = apply_unlock_vault_install_inplace(&mut slot, Some(pair));
+    assert!(
+        installed,
+        "apply_unlock_vault_install_inplace must return true on the Some-pair install",
+    );
+    assert!(
+        slot.is_some(),
+        "slot must hold the installed pair after a Some-pair call",
+    );
+}
+
+#[test]
+fn apply_unlock_vault_install_inplace_none_pair_leaves_empty_slot_untouched_and_returns_false() {
+    // Every `Err(_)` branch from `route_unlock_open_completion`
+    // carries `pair = None`. The wrapper must leave the slot
+    // untouched and return `false` so `AppModel::update` does not
+    // flip the slot to `Some(_)` on a failure outcome.
+    let mut slot: Option<(paladin_core::Vault, paladin_core::Store)> = None;
+    let installed = apply_unlock_vault_install_inplace(&mut slot, None);
+    assert!(
+        !installed,
+        "apply_unlock_vault_install_inplace must return false when pair is None",
+    );
+    assert!(
+        slot.is_none(),
+        "slot must remain empty when pair is None and slot started empty",
+    );
+}
+
+#[test]
+fn apply_unlock_vault_install_inplace_some_pair_replaces_existing_slot_and_returns_true() {
+    // Defensive: although the unlock flow only ever calls this
+    // wrapper against an empty slot, the contract for symmetry with
+    // every other vault-touching worker (HOTP `next`, add / remove /
+    // rename, settings saves, import / export, passphrase
+    // transitions) is that an incoming `Some(_)` always overwrites.
+    // Those workers take `(Vault, Store)` out into the closure, leave
+    // `AppModel::vault` `None` through `UnlockedBusy`, and reinstall
+    // a fresh pair on completion — the wrapper must be idempotent
+    // against a non-empty slot so a stray double-fire of the install
+    // path does not panic or silently no-op.
+    let (_tempdir_a, _path_a, pair_a) = fresh_plaintext_vault_pair();
+    let (_tempdir_b, _path_b, pair_b) = fresh_plaintext_vault_pair();
+    let mut slot = Some(pair_a);
+    let installed = apply_unlock_vault_install_inplace(&mut slot, Some(pair_b));
+    assert!(
+        installed,
+        "apply_unlock_vault_install_inplace must return true when replacing an existing pair",
+    );
+    assert!(slot.is_some(), "slot must remain filled after replacement",);
+}
+
+#[test]
+fn apply_unlock_vault_install_inplace_none_pair_with_filled_slot_leaves_existing_intact() {
+    // Defensive: a `pair = None` call against an already-filled slot
+    // (which the unlock flow never produces, but other flows can
+    // reach if a stray dispatch arrives before the worker returns)
+    // must not clobber the existing pair. The wrapper is a pure
+    // no-op on the `None` branch.
+    let (_tempdir, _path, pair) = fresh_plaintext_vault_pair();
+    let mut slot = Some(pair);
+    let installed = apply_unlock_vault_install_inplace(&mut slot, None);
+    assert!(
+        !installed,
+        "apply_unlock_vault_install_inplace must return false when pair is None \
+         even against a filled slot",
+    );
+    assert!(
+        slot.is_some(),
+        "filled slot must remain filled when pair is None",
+    );
+}
+
+#[test]
+fn apply_unlock_vault_install_inplace_mirrors_route_unlock_open_completion_pair_partition() {
+    // Cross-check: the wrapper must mirror the
+    // `route_unlock_open_completion.pair` Some/None partition exactly
+    // — it is a name-the-call-site wrapper, not a re-derivation.
+    // `Ok((Vault, Store))` carries `Some(pair)` and yields `true`;
+    // every routed `Err(_)` carries `None` and yields `false`.
+    // Pinning this contract here means the wrapper can't drift away
+    // from `route_unlock_open_completion` without breaking here
+    // first.
+    let (_tempdir, ok_path, pair) = fresh_plaintext_vault_pair();
+    let completion = paladin_gtk::app::state::route_unlock_open_completion(&ok_path, Ok(pair));
+    let mut slot = None;
+    let installed = apply_unlock_vault_install_inplace(&mut slot, completion.pair);
+    assert!(
+        installed,
+        "Ok-branch pair must install (mirrors route_unlock_open_completion's pair=Some(_))",
+    );
+    assert!(slot.is_some(), "Ok-branch must leave slot filled");
+
+    let path = vault_path();
+    let errs: [PaladinError; 9] = [
+        decrypt_failed_err(),
+        invalid_passphrase_empty_err(),
+        unsafe_perms_err(),
+        io_err(),
+        wrong_vault_lock_err(),
+        invalid_header_err(),
+        invalid_payload_err(),
+        unsupported_format_version_err(),
+        kdf_oob_err(),
+    ];
+    for err in errs {
+        let err_dbg = format!("{err:?}");
+        let completion = paladin_gtk::app::state::route_unlock_open_completion(&path, Err(err));
+        let mut slot = None;
+        let installed = apply_unlock_vault_install_inplace(&mut slot, completion.pair);
+        assert!(
+            !installed,
+            "Err-branch pair must not install (mirrors route_unlock_open_completion's \
+             pair=None) for err={err_dbg}",
+        );
+        assert!(
+            slot.is_none(),
+            "Err-branch must leave slot empty for err={err_dbg}",
         );
     }
 }
