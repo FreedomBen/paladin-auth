@@ -13,6 +13,7 @@ pub mod effect;
 pub mod event;
 pub mod reducer;
 pub mod state;
+pub mod ticker;
 
 pub use effect::{execute, EffectOutcome};
 pub use event::{AppEvent, Effect, EffectResult};

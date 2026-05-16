@@ -830,6 +830,38 @@ end-to-end.
   alternate-screen state on normal exit, startup failure after setup,
   `Ctrl-C`, and panic unwind.
 
+### Ticker thread (`tests/ticker_tests.rs`)
+
+- [x] Ticker thread emits `AppEvent::Tick { wall_clock, monotonic }`
+  events on a `paladin_core::TICK_INTERVAL_MS` cadence, sampling both
+  the wall-clock (`SystemTime::now`) and the monotonic clock
+  (`Instant::now`) at each tick, and exits on the next iteration after
+  the receiver is dropped (channel hangup).
+  *(`paladin_tui::app::ticker::spawn(sender)` returns a `JoinHandle<()>`
+  for a named OS thread `paladin-tui-ticker`; the thread loop is
+  *sleep first, then emit* so a startup tick never races the
+  initial render or the auto-lock idle accounting. Asserted by three
+  tests in `crates/paladin-tui/tests/ticker_tests.rs`:
+  `spawn_emits_tick_events_with_advancing_wall_and_monotonic_clocks`
+  consumes two ticks, pins each as `AppEvent::Tick` (not `Input` /
+  `EffectResult` / `ClipboardClear`), and asserts the monotonic
+  sample advances strictly while the wall-clock gap is at least
+  `TICK_INTERVAL_MS - 50 ms` (50 ms of cadence slack so a busy CI
+  host whose `thread::sleep` undershoots its interval does not
+  flake the assertion); `spawn_thread_exits_when_receiver_is_dropped`
+  consumes the first tick, drops the `Receiver`, and watchdogs the
+  `JoinHandle::join` from a helper thread that signals over a bounded
+  `mpsc` so a regression that fails to terminate on hangup surfaces
+  as a `recv_timeout` error rather than a hung suite;
+  `spawn_first_tick_is_not_emitted_synchronously` consumes within
+  50 ms of spawn and asserts a `RecvTimeoutError::Timeout`, pinning
+  the *sleep first, then emit* ordering against a refactor that
+  ever inverts it. The thread does not poll any other shutdown
+  signal — `Sender::send` failing on a hung-up receiver is the only
+  way the ticker learns the reducer has gone away, so the production
+  shutdown path is the same on `Effect::Quit`, `Ctrl-C`, and panic
+  unwind.)*
+
 ### Global args (`tests/reducer_tests.rs`)
 
 - [x] `--vault` selects the inspected / opened vault path.
