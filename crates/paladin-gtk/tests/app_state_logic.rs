@@ -418,6 +418,89 @@ fn non_busy_states_do_not_leave_busy() {
         .is_none());
 }
 
+#[test]
+fn locked_enters_unlocking_busy_and_preserves_path() {
+    // The `gio::spawn_blocking paladin_core::open` worker takes the
+    // submitted `VaultLock` from the live `UnlockDialogComponent`
+    // and runs Argon2 + AEAD decryption off the main loop. Per
+    // `IMPLEMENTATION_PLAN_04_GTK.md` §"Vault interaction", the
+    // model transitions `AppState::Locked → AppState::UnlockedBusy`
+    // for the worker's lifetime so the busy gating in
+    // `is_busy()` / `allows_mutating_menu()` covers the open path
+    // alongside the post-unlock mutation path.
+    let path = vault_path();
+    let locked = AppState::Locked { path: path.clone() };
+    let busy = locked
+        .clone()
+        .enter_unlocking_busy()
+        .expect("Locked transitions to UnlockedBusy when open worker takes the VaultLock");
+    assert!(matches!(busy, AppState::UnlockedBusy { .. }));
+    assert_path_eq(&busy, &path);
+}
+
+#[test]
+fn non_locked_states_do_not_enter_unlocking_busy() {
+    // The unlock-busy entry transition is the symmetric partner of
+    // `enter_busy`. `enter_busy` covers `Unlocked → UnlockedBusy`
+    // for vault-touching mutations that take the live
+    // `(Vault, Store)` pair; this method covers `Locked → UnlockedBusy`
+    // for the open worker that is about to compute the pair. Every
+    // other state — `Missing` (no encrypted vault to open),
+    // `Unlocked` (`enter_busy` already owns that source),
+    // `UnlockedBusy` (already serializes through one worker per
+    // §"In-flight effect ownership"), and `StartupError` (non-
+    // mutating surface) — has no `VaultLock` to hand off, so the
+    // transition must refuse.
+    let path = vault_path();
+    assert!(AppState::Missing { path: path.clone() }
+        .enter_unlocking_busy()
+        .is_none());
+    assert!(AppState::Unlocked { path: path.clone() }
+        .enter_unlocking_busy()
+        .is_none());
+    assert!(AppState::UnlockedBusy { path: path.clone() }
+        .enter_unlocking_busy()
+        .is_none());
+    let startup = decide_state_from_inspect(&path, Err(invalid_header_err()))
+        .expect("inspect Err yields StartupError state");
+    assert!(startup.enter_unlocking_busy().is_none());
+}
+
+#[test]
+fn enter_busy_and_enter_unlocking_busy_partition_idle_source_states() {
+    // Cross-check: the two busy-entry transitions cover disjoint
+    // source states. `Unlocked` (vault is live, worker takes the
+    // pair) goes through `enter_busy`; `Locked` (vault is
+    // encrypted, worker is about to build the pair) goes through
+    // `enter_unlocking_busy`. Neither method should accept the
+    // source state the other one owns. Pinned here so a future
+    // refactor that widened either method to also accept the other
+    // source — collapsing the two typed transitions into a single
+    // catch-all — would fail the partition assertion and force an
+    // explicit decision.
+    let path = vault_path();
+
+    let unlocked = AppState::Unlocked { path: path.clone() };
+    assert!(
+        unlocked.clone().enter_busy().is_some(),
+        "Unlocked must enter busy via enter_busy",
+    );
+    assert!(
+        unlocked.enter_unlocking_busy().is_none(),
+        "Unlocked must not enter busy via enter_unlocking_busy — enter_busy already owns this source",
+    );
+
+    let locked = AppState::Locked { path: path.clone() };
+    assert!(
+        locked.clone().enter_busy().is_none(),
+        "Locked must not enter busy via enter_busy — enter_unlocking_busy owns this source",
+    );
+    assert!(
+        locked.enter_unlocking_busy().is_some(),
+        "Locked must enter busy via enter_unlocking_busy",
+    );
+}
+
 // ---------------------------------------------------------------------------
 // AppState transitions: unlock (Locked / Missing → Unlocked) and lock
 // (Unlocked → Locked)

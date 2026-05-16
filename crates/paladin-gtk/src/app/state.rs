@@ -173,11 +173,43 @@ impl AppState {
     /// Returns `None` from every other state — `Missing` / `Locked`
     /// / `StartupError` have no vault to hand off, and
     /// `UnlockedBusy` already serializes through one worker per
-    /// §"In-flight effect ownership".
+    /// §"In-flight effect ownership". The `Locked → UnlockedBusy`
+    /// transition for the unlock open worker lives in the symmetric
+    /// partner [`Self::enter_unlocking_busy`] so each typed
+    /// transition documents its own source state.
     #[must_use]
     pub fn enter_busy(self) -> Option<Self> {
         match self {
             Self::Unlocked { path } => Some(Self::UnlockedBusy { path }),
+            _ => None,
+        }
+    }
+
+    /// Transition [`AppState::Locked`] → [`AppState::UnlockedBusy`]
+    /// when the `gio::spawn_blocking paladin_core::open` worker takes
+    /// the submitted [`paladin_core::VaultLock`].
+    ///
+    /// Symmetric partner of [`Self::enter_busy`] for the unlock path:
+    /// where `enter_busy` covers the `Unlocked → UnlockedBusy`
+    /// handoff for vault-touching mutations (which take the live
+    /// `(Vault, Store)` pair), this method covers the
+    /// `Locked → UnlockedBusy` handoff for the open worker (which is
+    /// about to compute the pair). The two methods partition the
+    /// idle source states — `enter_busy` only accepts `Unlocked`;
+    /// this one only accepts `Locked` — so the `is_busy()` /
+    /// `allows_mutating_menu()` gating already in place covers the
+    /// open path alongside the post-unlock mutation path per
+    /// `IMPLEMENTATION_PLAN_04_GTK.md` §"Vault interaction".
+    ///
+    /// Returns `None` from every other state — `Missing` has no
+    /// encrypted vault to open, `Unlocked` is owned by
+    /// [`Self::enter_busy`], `UnlockedBusy` already serializes
+    /// through one worker per §"In-flight effect ownership", and
+    /// `StartupError` is the non-mutating surface.
+    #[must_use]
+    pub fn enter_unlocking_busy(self) -> Option<Self> {
+        match self {
+            Self::Locked { path } => Some(Self::UnlockedBusy { path }),
             _ => None,
         }
     }
