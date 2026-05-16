@@ -47,10 +47,11 @@ use paladin_gtk::app::state::{
     apply_unlock_vault_install_inplace, compose_unlock_dispatch, compose_unlock_worker_input,
     decide_state_from_inspect, decide_state_from_open_error, decide_state_from_path_resolution,
     decide_unlock_failure_action, decide_unlock_success_state, route_unlock_failure_effect,
-    route_unlock_success_effect, route_unlock_worker_outcome, should_drop_unlock_dialog_after,
-    submit_unlock_app_state, unlock_app_state_after, unlock_dialog_msg_after,
-    unlock_final_app_state, AppState, OpenErrorOutcome, UnlockFailureAction, UnlockFailureEffect,
-    UnlockSuccessEffect, UnlockWorkerEffect,
+    route_unlock_success_effect, route_unlock_worker_outcome, run_unlock_worker,
+    should_drop_unlock_dialog_after, submit_unlock_app_state, unlock_app_state_after,
+    unlock_dialog_msg_after, unlock_final_app_state, AppState, OpenErrorOutcome,
+    UnlockFailureAction, UnlockFailureEffect, UnlockSuccessEffect, UnlockWorkerEffect,
+    UnlockWorkerInput,
 };
 use paladin_gtk::startup_error::StartupErrorSource;
 use paladin_gtk::unlock_dialog::{
@@ -3933,5 +3934,268 @@ fn apply_unlock_vault_install_inplace_mirrors_route_unlock_open_completion_pair_
             slot.is_none(),
             "Err-branch must leave slot empty for err={err_dbg}",
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// run_unlock_worker — synchronous body of the spawn_blocking unlock worker
+// ---------------------------------------------------------------------------
+//
+// `run_unlock_worker` is the body of the `gio::spawn_blocking
+// paladin_core::open` worker fired by `AppModel::update` from
+// `AppMsg::UnlockDialogAction(UnlockDialogOutput::SubmitLock)`. It
+// consumes an `UnlockWorkerInput` by value, calls
+// `paladin_core::Store::open(&path, lock)`, and bundles the outcome
+// via `route_unlock_open_completion`. Extracting it lets the worker
+// closure stay a thin `gio::spawn_blocking(move || run_unlock_worker(
+// input))` while the real `Store::open` call stays unit-testable here
+// against tempfile-backed plaintext and encrypted vaults — no GTK /
+// libadwaita main loop required.
+
+/// Create a fresh plaintext vault on disk at `<tempdir>/vault.bin`
+/// and return the tempdir handle (kept alive by the caller so the
+/// directory is not unlinked mid-test) plus the resolved path. The
+/// in-memory `(Vault, Store)` pair is persisted via `Vault::save`
+/// and then dropped before returning so the file handle is closed
+/// before `Store::open` re-opens it.
+fn persist_fresh_plaintext_vault() -> (tempfile::TempDir, PathBuf) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tempdir = tempfile::tempdir().expect("create tempdir for plaintext vault");
+    std::fs::set_permissions(tempdir.path(), std::fs::Permissions::from_mode(0o700))
+        .expect("chmod tempdir to 0700 so paladin_core::Store::create accepts it");
+    let path = tempdir.path().join("vault.bin");
+    {
+        let (vault, store) = paladin_core::Store::create(&path, paladin_core::VaultInit::Plaintext)
+            .expect("create plaintext vault");
+        vault.save(&store).expect("persist plaintext vault to disk");
+    }
+    (tempdir, path)
+}
+
+/// Light Argon2 params for the encrypted-vault round-trip fixtures.
+/// Keeps the KDF fast under CI (the §4.4 defaults at `m=64 MiB, t=3`
+/// are designed for production and would balloon the suite); the
+/// same shape is used by `tests/gtk_smoke.rs` and the paladin-tui
+/// test fixtures.
+fn light_argon2_params() -> paladin_core::Argon2Params {
+    paladin_core::Argon2Params {
+        m_kib: 8192,
+        t: 1,
+        p: 1,
+    }
+}
+
+/// Create a fresh encrypted vault on disk at `<tempdir>/vault.bin`
+/// using `passphrase` and the light Argon2 params from
+/// [`light_argon2_params`]. Same drop-and-close contract as
+/// [`persist_fresh_plaintext_vault`]: the file is closed before
+/// returning so `Store::open` can re-open it cleanly.
+fn persist_fresh_encrypted_vault(passphrase: &str) -> (tempfile::TempDir, PathBuf) {
+    use secrecy::SecretString;
+    use std::os::unix::fs::PermissionsExt;
+
+    let tempdir = tempfile::tempdir().expect("create tempdir for encrypted vault");
+    std::fs::set_permissions(tempdir.path(), std::fs::Permissions::from_mode(0o700))
+        .expect("chmod tempdir to 0700 so paladin_core::Store::create accepts it");
+    let path = tempdir.path().join("vault.bin");
+    {
+        let pp = SecretString::from(passphrase.to_string());
+        let opts = paladin_core::EncryptionOptions::with_params(pp, light_argon2_params())
+            .expect("encryption options accept light Argon2 params");
+        let (vault, store) =
+            paladin_core::Store::create(&path, paladin_core::VaultInit::Encrypted(opts))
+                .expect("create encrypted vault");
+        vault.save(&store).expect("persist encrypted vault to disk");
+    }
+    (tempdir, path)
+}
+
+#[test]
+fn run_unlock_worker_opens_plaintext_vault_and_returns_live_pair() {
+    // A plaintext vault on disk with the §4.3 permissions in place
+    // is the simplest success path: `Store::open` returns `Ok((Vault,
+    // Store))`, `route_unlock_open_completion` bundles it into a
+    // success-effect `UnlockWorkerCompletion`, and the live pair is
+    // available for `apply_unlock_vault_install_inplace` to write
+    // through.
+    let (_tempdir, path) = persist_fresh_plaintext_vault();
+    let input = UnlockWorkerInput {
+        path: path.clone(),
+        lock: VaultLock::Plaintext,
+    };
+
+    let completion = run_unlock_worker(input);
+
+    assert!(
+        completion.pair.is_some(),
+        "Plaintext open success must carry the live (Vault, Store) pair forward",
+    );
+    match completion.effect {
+        UnlockWorkerEffect::Success(UnlockSuccessEffect::SetAppState(AppState::Unlocked {
+            path: state_path,
+        })) => {
+            assert_eq!(
+                state_path, path,
+                "Success effect must carry the input vault path verbatim",
+            );
+        }
+        other => panic!("expected Success(SetAppState(Unlocked)), got {other:?}"),
+    }
+}
+
+#[test]
+fn run_unlock_worker_opens_encrypted_vault_with_correct_passphrase() {
+    // Encrypted-vault happy path: the worker drives the Argon2 KDF
+    // off the GTK main loop and returns the decrypted `(Vault, Store)`
+    // pair. The light Argon2 params keep the test fast; the same
+    // shape is used by the smoke-test fixture.
+    use secrecy::SecretString;
+
+    let (_tempdir, path) = persist_fresh_encrypted_vault("hunter2");
+    let input = UnlockWorkerInput {
+        path: path.clone(),
+        lock: VaultLock::Encrypted(SecretString::from("hunter2".to_string())),
+    };
+
+    let completion = run_unlock_worker(input);
+
+    assert!(
+        completion.pair.is_some(),
+        "Encrypted open with the correct passphrase must carry the live pair forward",
+    );
+    match completion.effect {
+        UnlockWorkerEffect::Success(UnlockSuccessEffect::SetAppState(AppState::Unlocked {
+            path: state_path,
+        })) => {
+            assert_eq!(
+                state_path, path,
+                "Success effect must carry the input vault path verbatim",
+            );
+        }
+        other => panic!("expected Success(SetAppState(Unlocked)), got {other:?}"),
+    }
+}
+
+#[test]
+fn run_unlock_worker_returns_inline_failure_for_wrong_passphrase() {
+    // Wrong-passphrase failures stay inline on the dialog so the
+    // user can retype without losing the surface. The worker must
+    // surface a `Failure(SendUnlockDialogMsg(OpenFailedInline))`
+    // bundle with `pair = None` so `AppModel::update` does not
+    // attempt to install a phantom pair.
+    use secrecy::SecretString;
+
+    let (_tempdir, path) = persist_fresh_encrypted_vault("hunter2");
+    let input = UnlockWorkerInput {
+        path: path.clone(),
+        lock: VaultLock::Encrypted(SecretString::from("wrong-passphrase".to_string())),
+    };
+
+    let completion = run_unlock_worker(input);
+
+    assert!(
+        completion.pair.is_none(),
+        "Wrong-passphrase failure must not carry a (Vault, Store) pair",
+    );
+    match completion.effect {
+        UnlockWorkerEffect::Failure(UnlockFailureEffect::SendUnlockDialogMsg(
+            UnlockDialogMsg::OpenFailedInline(inline),
+        )) => {
+            assert_eq!(
+                inline.kind,
+                ErrorKind::DecryptFailed,
+                "Encrypted-vault wrong passphrase must surface as DecryptFailed",
+            );
+            assert!(
+                !inline.rendered.is_empty(),
+                "expected non-empty inline rendered text",
+            );
+        }
+        other => panic!(
+            "expected Failure(SendUnlockDialogMsg(OpenFailedInline(..))) for wrong passphrase, \
+             got {other:?}"
+        ),
+    }
+}
+
+#[test]
+fn run_unlock_worker_routes_missing_file_to_startup_error_with_no_pair() {
+    // Pointing the worker at a non-existent vault file is one of
+    // the non-passphrase failure modes. `Store::open` surfaces
+    // `io_error { operation: "read_vault_file" }`, which
+    // `route_unlock_worker_outcome` routes to
+    // `StartupErrorComponent` rather than the inline dialog. The
+    // completion carries `pair = None` so the inline / startup
+    // partition pinned by `apply_unlock_vault_install_inplace`
+    // stays intact.
+    let tempdir = tempfile::tempdir().expect("create tempdir for missing-file test");
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(tempdir.path(), std::fs::Permissions::from_mode(0o700))
+            .expect("chmod tempdir to 0700");
+    }
+    let missing_path = tempdir.path().join("absent-vault.bin");
+    assert!(
+        !missing_path.exists(),
+        "the missing-file fixture must not pre-create the vault file",
+    );
+
+    let input = UnlockWorkerInput {
+        path: missing_path.clone(),
+        lock: VaultLock::Plaintext,
+    };
+
+    let completion = run_unlock_worker(input);
+
+    assert!(
+        completion.pair.is_none(),
+        "Missing-file failure must not carry a (Vault, Store) pair",
+    );
+    match completion.effect {
+        UnlockWorkerEffect::Failure(UnlockFailureEffect::SetAppState(AppState::StartupError {
+            path: Some(state_path),
+            ..
+        })) => {
+            assert_eq!(
+                state_path, missing_path,
+                "StartupError must retain the failed vault path so retry can re-run from it",
+            );
+        }
+        other => panic!(
+            "expected Failure(SetAppState(StartupError {{ path: Some(..) }})) for missing file, \
+             got {other:?}"
+        ),
+    }
+}
+
+#[test]
+fn run_unlock_worker_success_attaches_caller_provided_path_to_completion_effect() {
+    // The worker uses the path carried by the `UnlockWorkerInput`
+    // — not whatever `Store::open` would otherwise have known —
+    // when routing the outcome. This pins that the completion
+    // effect's path mirrors the caller's input so `AppModel::update`
+    // can rely on the post-worker `AppState::Unlocked { path }`
+    // matching the path it captured pre-spawn via
+    // `compose_unlock_worker_input`.
+    let (_tempdir, real_path) = persist_fresh_plaintext_vault();
+    let input = UnlockWorkerInput {
+        path: real_path.clone(),
+        lock: VaultLock::Plaintext,
+    };
+
+    let completion = run_unlock_worker(input);
+
+    match completion.effect {
+        UnlockWorkerEffect::Success(UnlockSuccessEffect::SetAppState(AppState::Unlocked {
+            path: state_path,
+        })) => {
+            assert_eq!(
+                state_path, real_path,
+                "the success-branch path must come from the input, mirroring \
+                 route_unlock_open_completion's path-passthrough contract",
+            );
+        }
+        other => panic!("expected Success(SetAppState(Unlocked)), got {other:?}"),
     }
 }

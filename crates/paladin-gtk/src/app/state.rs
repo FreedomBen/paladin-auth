@@ -1258,3 +1258,34 @@ pub fn compose_unlock_worker_input(
         | AppState::StartupError { .. } => None,
     }
 }
+
+/// Synchronous body of the `gio::spawn_blocking paladin_core::open`
+/// unlock worker fired by `AppModel::update` from
+/// `AppMsg::UnlockDialogAction(UnlockDialogOutput::SubmitLock)`.
+///
+/// Consumes the [`UnlockWorkerInput`] by value, calls
+/// `paladin_core::Store::open(&path, lock)`, and bundles the outcome
+/// into an [`UnlockWorkerCompletion`] via
+/// [`route_unlock_open_completion`]. The carried [`VaultLock`] is
+/// moved into the open call so the [`secrecy::SecretString`] held by
+/// [`VaultLock::Encrypted`] zeroes on drop after the Argon2 KDF step
+/// per DESIGN §4.4.
+///
+/// Extracting the worker body as a pure function lets
+/// `AppModel::update`'s closure stay a thin
+/// `gio::spawn_blocking(move || run_unlock_worker(input))` while the
+/// real `Store::open` call stays unit-testable in
+/// `tests/app_state_logic.rs` against tempfile-backed plaintext and
+/// encrypted vaults — no GTK / libadwaita main loop required.
+///
+/// The returned [`UnlockWorkerCompletion`] carries the live
+/// `(Vault, Store)` pair on success and `None` on every failure so
+/// `AppModel::update`'s `apply_unlock_vault_install_inplace` /
+/// `apply_unlock_dispatch_inplace` pair can apply the outcome
+/// uniformly per `IMPLEMENTATION_PLAN_04_GTK.md` §"Vault interaction".
+#[must_use]
+pub fn run_unlock_worker(input: UnlockWorkerInput) -> UnlockWorkerCompletion {
+    let UnlockWorkerInput { path, lock } = input;
+    let outcome = Store::open(&path, lock);
+    route_unlock_open_completion(&path, outcome)
+}
