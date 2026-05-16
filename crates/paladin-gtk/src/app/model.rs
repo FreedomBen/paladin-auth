@@ -496,6 +496,21 @@ impl SimpleComponent for AppModel {
                     self.content.remove(controller.widget());
                 }
             }
+            AppMsg::RenameDialogAction(RenameDialogOutput::SubmitLabel {
+                account_id: _,
+                label: _,
+            }) => {
+                // Save-button entry. The Save click handler in the
+                // dialog view and the `gio::spawn_blocking
+                // Vault::mutate_and_save(|v| v.rename(account_id,
+                // label, now))` worker that consumes the forwarded
+                // pair land in follow-up commits alongside the
+                // `UnlockedBusy` worker infrastructure. Pinned as an
+                // explicit no-op arm so the typed variant additions
+                // in `crate::rename_dialog` keep `AppModel::update`
+                // exhaustive without an `_` catch-all silently
+                // swallowing future variants.
+            }
             AppMsg::RemoveDialogAction(RemoveDialogOutput::Cancel) => {
                 // Detach the dialog widget from the content tree and
                 // drop the controller. Defensive: if the field is

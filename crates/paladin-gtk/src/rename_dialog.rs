@@ -374,10 +374,16 @@ impl RenameDialogState {
 /// validation outcome stays in sync with what the user typed.
 /// `Cancel` arrives from the dialog's Cancel button and dismisses
 /// the dialog via [`RenameDialogOutput::Cancel`] without touching
-/// the draft or the vault. The `submit` transition and the
-/// `Vault::mutate_and_save(|v| v.rename(...))` worker described in
-/// §"Component tree" > Rename dialog and §"Effect errors" land in
-/// a follow-up commit alongside the `UnlockedBusy` worker
+/// the draft or the vault. `SubmitClicked` arrives from the dialog's
+/// Save button and routes through [`RenameDialogState::submit`]:
+/// a [`SubmitOutcome::Proceed`] forwards
+/// [`RenameDialogOutput::SubmitLabel`] with the stable account id
+/// and the canonical trimmed label; a [`SubmitOutcome::InlineError`]
+/// emits no output so the dialog stays open with the cached inline
+/// error visible. The `gio::spawn_blocking
+/// Vault::mutate_and_save(|v| v.rename(...))` worker that consumes
+/// the forwarded [`RenameDialogOutput::SubmitLabel`] lands in a
+/// follow-up commit alongside the `UnlockedBusy` worker
 /// infrastructure.
 #[derive(Debug)]
 pub enum RenameDialogMsg {
@@ -391,6 +397,12 @@ pub enum RenameDialogMsg {
     /// controller and remove the dialog widget from the content
     /// tree.
     Cancel,
+    /// Save button pressed. The handler routes through
+    /// [`RenameDialogState::submit`]: a [`SubmitOutcome::Proceed`]
+    /// forwards [`RenameDialogOutput::SubmitLabel`] with the stable
+    /// account id and trimmed label; a [`SubmitOutcome::InlineError`]
+    /// keeps the dialog open with the cached inline error visible.
+    SubmitClicked,
 }
 
 /// Outputs forwarded from [`RenameDialogComponent`] up to
@@ -406,6 +418,25 @@ pub enum RenameDialogOutput {
     /// the live [`RenameDialogComponent`] controller and removes
     /// its widget from the content tree.
     Cancel,
+    /// Save button pressed with a validated label. Carries the
+    /// stable [`AccountId`] the dialog was seeded with so the
+    /// `AppModel` worker dispatch targets the same account the
+    /// kebab activation resolved, and the canonical trimmed label
+    /// [`classify_submit`] produced from the live draft. `AppModel`
+    /// hands the pair to the future `gio::spawn_blocking
+    /// Vault::mutate_and_save(|v| v.rename(account_id, label, now))`
+    /// worker.
+    SubmitLabel {
+        /// Stable identifier of the account whose label is being
+        /// changed. Copied off [`RenameDialogState::account_id`] so
+        /// a mid-flight keystroke never retargets the rename.
+        account_id: AccountId,
+        /// Canonical trimmed label from [`classify_submit`]. The
+        /// visible draft on the dialog preserves the user's
+        /// whitespace; the forwarded value is the trimmed string
+        /// `Vault::rename` will persist.
+        label: String,
+    },
 }
 
 /// Apply an inbound [`RenameDialogMsg`] to `state` and return the
@@ -415,9 +446,14 @@ pub enum RenameDialogOutput {
 /// Pulled out of [`RenameDialogComponent::update`] so the routing
 /// decision — [`RenameDialogMsg::DraftChanged`] mutates the cached
 /// validation and emits no output; [`RenameDialogMsg::Cancel`]
-/// emits [`RenameDialogOutput::Cancel`] without touching the draft
-/// — stays unit-testable in `tests/rename_dialog_logic.rs` without
-/// spinning up GTK.
+/// emits [`RenameDialogOutput::Cancel`] without touching the draft;
+/// [`RenameDialogMsg::SubmitClicked`] routes through
+/// [`RenameDialogState::submit`] and forwards
+/// [`RenameDialogOutput::SubmitLabel`] on
+/// [`SubmitOutcome::Proceed`] or emits no output on
+/// [`SubmitOutcome::InlineError`] so the dialog stays open with the
+/// cached inline error visible — stays unit-testable in
+/// `tests/rename_dialog_logic.rs` without spinning up GTK.
 pub fn apply_msg(
     state: &mut RenameDialogState,
     msg: RenameDialogMsg,
@@ -428,6 +464,13 @@ pub fn apply_msg(
             None
         }
         RenameDialogMsg::Cancel => Some(RenameDialogOutput::Cancel),
+        RenameDialogMsg::SubmitClicked => match state.submit() {
+            SubmitOutcome::Proceed(label) => Some(RenameDialogOutput::SubmitLabel {
+                account_id: state.account_id(),
+                label,
+            }),
+            SubmitOutcome::InlineError(_) => None,
+        },
     }
 }
 

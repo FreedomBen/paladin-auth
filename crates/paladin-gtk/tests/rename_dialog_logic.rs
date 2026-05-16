@@ -758,3 +758,158 @@ fn rename_dialog_state_submit_matches_last_validation_for_invalid_draft() {
     assert!(matches!(from_submit, SubmitOutcome::InlineError(_)));
     assert!(matches!(from_cache, SubmitOutcome::InlineError(_)));
 }
+
+// ---------------------------------------------------------------------------
+// SubmitClicked → SubmitLabel routing through apply_msg
+//
+// Mirrors `UnlockDialogMsg::SubmitClicked` → `UnlockDialogOutput::SubmitLock`
+// so the widget's Save click goes through the same pure-logic dispatch the
+// inline `DraftChanged` / `Cancel` messages already use. `Proceed` produces
+// `SubmitLabel { account_id, label }` carrying the canonical trimmed value
+// and the stable account id seeded by `RenameDialogState::new`. `InlineError`
+// emits `None` so the dialog stays open with the cached inline error
+// visible — the worker spawn and the `Vault::mutate_and_save(|v| v.rename(...))`
+// invocation land in follow-up commits.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn rename_dialog_output_submit_label_carries_account_id_and_label() {
+    let account_id = AccountId::new();
+    let out = RenameDialogOutput::SubmitLabel {
+        account_id,
+        label: "renamed".to_string(),
+    };
+    let RenameDialogOutput::SubmitLabel {
+        account_id: out_id,
+        label,
+    } = out
+    else {
+        panic!("expected SubmitLabel variant");
+    };
+    assert_eq!(out_id, account_id);
+    assert_eq!(label, "renamed");
+}
+
+#[test]
+fn rename_dialog_output_submit_label_distinct_from_cancel() {
+    // `AppModel` pattern-matches on the typed enum; the variants must
+    // stay distinct under `PartialEq` so a future Cancel match arm
+    // cannot accidentally consume a SubmitLabel and silently drop the
+    // rename.
+    let cancel = RenameDialogOutput::Cancel;
+    let submit = RenameDialogOutput::SubmitLabel {
+        account_id: AccountId::new(),
+        label: "x".to_string(),
+    };
+    assert_ne!(cancel, submit);
+}
+
+#[test]
+fn apply_msg_submit_clicked_with_valid_draft_emits_submit_label() {
+    let init = dummy_init("ben");
+    let expected_id = init.account_id;
+    let mut state = RenameDialogState::new(&init);
+    state.set_draft("renamed".to_string());
+    let out = apply_msg(&mut state, RenameDialogMsg::SubmitClicked);
+    let Some(RenameDialogOutput::SubmitLabel { account_id, label }) = out else {
+        panic!("expected SubmitLabel output, got {out:?}");
+    };
+    assert_eq!(account_id, expected_id);
+    assert_eq!(label, "renamed");
+}
+
+#[test]
+fn apply_msg_submit_clicked_trims_whitespace_in_emitted_label() {
+    // The visible draft preserves the user's spacing; the forwarded
+    // label is the canonical trimmed value `classify_submit` produces.
+    // Mirrors `rename_dialog_state_submit_trims_surrounding_whitespace`
+    // but exercised through the `apply_msg` routing the widget uses.
+    let mut state = RenameDialogState::new(&dummy_init("ben"));
+    state.set_draft("  Acme:user  ".to_string());
+    let out = apply_msg(&mut state, RenameDialogMsg::SubmitClicked);
+    let Some(RenameDialogOutput::SubmitLabel { label, .. }) = out else {
+        panic!("expected SubmitLabel output, got {out:?}");
+    };
+    assert_eq!(label, "Acme:user");
+}
+
+#[test]
+fn apply_msg_submit_clicked_uses_state_account_id() {
+    // Defensive: the routing reads the stable account id off the
+    // state (seeded by `RenameDialogState::new`), never from the
+    // message payload. A keystroke between mount and click must not
+    // be able to retarget the rename.
+    let init = dummy_init("ben");
+    let expected_id = init.account_id;
+    let mut state = RenameDialogState::new(&init);
+    state.set_draft("renamed".to_string());
+    let _ = apply_msg(
+        &mut state,
+        RenameDialogMsg::DraftChanged("renamed-again".to_string()),
+    );
+    let out = apply_msg(&mut state, RenameDialogMsg::SubmitClicked);
+    let Some(RenameDialogOutput::SubmitLabel { account_id, .. }) = out else {
+        panic!("expected SubmitLabel output");
+    };
+    assert_eq!(account_id, expected_id);
+}
+
+#[test]
+fn apply_msg_submit_clicked_with_empty_draft_emits_no_output() {
+    // The Save button binds `set_sensitive` to a future
+    // `state.submit_button_sensitive()` accessor that disables it
+    // while the cached validation is `InlineError`; defense-in-depth
+    // here verifies that a keyboard accelerator or reactive race
+    // still routes safely (no output, no transition out of the
+    // dialog).
+    let mut state = RenameDialogState::new(&dummy_init("ben"));
+    state.set_draft(String::new());
+    let out = apply_msg(&mut state, RenameDialogMsg::SubmitClicked);
+    assert_eq!(out, None);
+}
+
+#[test]
+fn apply_msg_submit_clicked_with_overlong_draft_emits_no_output() {
+    let mut state = RenameDialogState::new(&dummy_init("ben"));
+    state.set_draft("x".repeat(LABEL_MAX_BYTES + 1));
+    let out = apply_msg(&mut state, RenameDialogMsg::SubmitClicked);
+    assert_eq!(out, None);
+}
+
+#[test]
+fn apply_msg_submit_clicked_with_invalid_draft_keeps_inline_error_visible() {
+    // `SubmitClicked` on an invalid draft must keep the inline error
+    // visible so the user sees why submission was refused. The cached
+    // `last_validation` already tracks the live draft (via
+    // `set_draft`); the routing must not blank it out.
+    let mut state = RenameDialogState::new(&dummy_init("ben"));
+    state.set_draft(String::new());
+    let _ = apply_msg(&mut state, RenameDialogMsg::SubmitClicked);
+    let inline = state
+        .inline_error()
+        .expect("invalid draft inline error must survive SubmitClicked routing");
+    assert_eq!(inline.kind, ErrorKind::ValidationError);
+}
+
+#[test]
+fn apply_msg_submit_clicked_does_not_mutate_draft() {
+    // The visible draft must survive the round trip so the user's
+    // typed value is not silently dropped before the worker callback
+    // applies the success / restore-prior routing decision. Mirrors
+    // `rename_dialog_state_submit_does_not_mutate_draft` but at the
+    // routing layer.
+    let mut state = RenameDialogState::new(&dummy_init("ben"));
+    state.set_draft("  Acme:user  ".to_string());
+    let before = state.draft().to_string();
+    let _ = apply_msg(&mut state, RenameDialogMsg::SubmitClicked);
+    assert_eq!(state.draft(), before);
+}
+
+#[test]
+fn rename_dialog_msg_submit_clicked_is_distinct_variant() {
+    // Defensive: the variant exists so the widget can dispatch it
+    // from the Save button click signal. Pattern-matching round-
+    // trips through the enum.
+    let msg = RenameDialogMsg::SubmitClicked;
+    assert!(matches!(msg, RenameDialogMsg::SubmitClicked));
+}
