@@ -55,7 +55,7 @@
 
 use std::path::{Path, PathBuf};
 
-use paladin_core::{PaladinError, VaultLock, VaultStatus};
+use paladin_core::{PaladinError, Store, Vault, VaultLock, VaultStatus};
 
 use crate::startup_error::{classify_open_error, OpenErrorRouting, StartupError};
 use crate::unlock_dialog::{
@@ -665,6 +665,91 @@ pub fn route_unlock_worker_outcome(
     match outcome {
         Ok(()) => UnlockWorkerEffect::Success(route_unlock_success_effect(path)),
         Err(err) => UnlockWorkerEffect::Failure(route_unlock_failure_effect(path, err)),
+    }
+}
+
+/// Bundled outcome of the `gio::spawn_blocking paladin_core::open`
+/// unlock worker.
+///
+/// The worker calls `paladin_core::Store::open(path, lock)` which
+/// returns `Result<(Vault, Store), PaladinError>`. This struct fans
+/// that out into the two pieces `AppModel::update` needs to apply
+/// from a single [`crate::app::model::AppMsg`] dispatch:
+///
+/// * [`UnlockWorkerCompletion::effect`] drives the state-machine
+///   transition (`UnlockedBusy` → `Unlocked` on success,
+///   → `StartupError` on a non-passphrase failure, or the inline
+///   rollback path that keeps the dialog mounted).
+/// * [`UnlockWorkerCompletion::pair`] carries the live
+///   `(Vault, Store)` pair on the `Ok` branch so `AppModel` can
+///   install it into its sibling `Option<(Vault, Store)>` slot
+///   before the success-side UI mounts the
+///   [`crate::account_list::AccountListComponent`].
+///
+/// Both fields are owned values so the worker closure can `move`
+/// them across the `gio::spawn_blocking` boundary without borrowing
+/// into `AppModel`. `Clone` / `PartialEq` are deliberately *not*
+/// derived: [`paladin_core::Vault`] / [`paladin_core::Store`] are
+/// non-`Clone` (the live pair must move, not duplicate, to keep
+/// zeroize-on-drop semantics intact), and the carried
+/// [`UnlockWorkerEffect`] is consumed exactly once when
+/// `AppModel::update` applies the dispatch.
+#[derive(Debug)]
+pub struct UnlockWorkerCompletion {
+    /// Routed state-machine effect derived from the worker's open
+    /// outcome by [`route_unlock_worker_outcome`].
+    pub effect: UnlockWorkerEffect,
+    /// Live `(Vault, Store)` pair on the success branch; `None` on
+    /// every failure branch (both inline-passphrase rollback and
+    /// startup-routed failures). `AppModel::update` installs the
+    /// pair into its sibling `Option<(Vault, Store)>` slot when
+    /// `Some(_)`.
+    pub pair: Option<(Vault, Store)>,
+}
+
+/// Bundle the `Result<(Vault, Store), PaladinError>` returned by
+/// `paladin_core::Store::open` into an [`UnlockWorkerCompletion`].
+///
+/// Symmetric partner of [`compose_unlock_worker_input`] on the exit
+/// side of the open worker: that composer captures the
+/// `(path, VaultLock)` the worker consumes, this composer bundles
+/// the pair + routed effect the worker produces. Both keep the
+/// worker closure thin — the closure does not need to hand-roll the
+/// `Ok` / `Err` split or borrow into `AppModel` to translate the
+/// open `Result` for [`route_unlock_worker_outcome`].
+///
+/// The routing rule itself is delegated to
+/// [`route_unlock_worker_outcome`] so the per-error-kind decisions
+/// stay in one place; this helper is shape-only over the worker
+/// `Result`. The path is taken by reference so the caller (the
+/// worker closure) keeps ownership for the dispatch message.
+///
+/// `outcome.Ok((vault, store))` is consumed by value because both
+/// [`paladin_core::Vault`] and [`paladin_core::Store`] are non-
+/// `Clone`; the live pair must move into the resulting
+/// [`UnlockWorkerCompletion`] so zeroize-on-drop semantics survive
+/// the `gio::spawn_blocking` boundary.
+///
+/// The composer stays shape-only — it inspects only the worker
+/// `Result` discriminant — so the side-effect decision in
+/// `AppModel::update` stays unit-testable in
+/// `tests/app_state_logic.rs` against real `(Vault, Store)` pairs
+/// constructed via `paladin_core::Store::create` over a tempfile
+/// vault.
+#[must_use]
+pub fn route_unlock_open_completion(
+    path: &Path,
+    outcome: Result<(Vault, Store), PaladinError>,
+) -> UnlockWorkerCompletion {
+    match outcome {
+        Ok(pair) => UnlockWorkerCompletion {
+            effect: route_unlock_worker_outcome(path, Ok(())),
+            pair: Some(pair),
+        },
+        Err(err) => UnlockWorkerCompletion {
+            effect: route_unlock_worker_outcome(path, Err(&err)),
+            pair: None,
+        },
     }
 }
 

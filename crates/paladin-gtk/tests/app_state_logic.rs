@@ -1729,6 +1729,233 @@ fn route_unlock_worker_outcome_attaches_caller_provided_path_on_startup_failure(
 }
 
 // ---------------------------------------------------------------------------
+// route_unlock_open_completion — bundle worker pair + effect
+//
+// The `gio::spawn_blocking paladin_core::open` worker returns
+// `Result<(Vault, Store), PaladinError>`. Bundling that outcome into a
+// single `UnlockWorkerCompletion { effect, pair }` keeps the worker
+// closure thin (extract pair on `Ok`, route effect on either branch)
+// and lets `AppModel::update` install the pair into the sibling
+// `Option<(Vault, Store)>` slot from the same message that drives the
+// state transition. The routing rule itself stays delegated to
+// `route_unlock_worker_outcome` — this helper is shape-only over the
+// worker `Result`.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn route_unlock_open_completion_ok_carries_pair_and_success_effect() {
+    // A successful worker open delivers the live `(Vault, Store)` pair
+    // alongside the success-effect transition. The pair must survive
+    // the bundling so `AppModel::update` can install it into the
+    // sibling `Option<(Vault, Store)>` slot.
+    let (_tempdir, path, pair) = fresh_plaintext_vault_pair();
+
+    let completion = paladin_gtk::app::state::route_unlock_open_completion(&path, Ok(pair));
+
+    assert!(
+        completion.pair.is_some(),
+        "Ok branch must carry the (Vault, Store) pair forward to AppModel",
+    );
+    match completion.effect {
+        UnlockWorkerEffect::Success(UnlockSuccessEffect::SetAppState(AppState::Unlocked {
+            path: state_path,
+        })) => {
+            assert_eq!(state_path, path);
+        }
+        other => panic!("expected Success(SetAppState(Unlocked)), got {other:?}"),
+    }
+}
+
+#[test]
+fn route_unlock_open_completion_err_decrypt_failed_carries_inline_effect_no_pair() {
+    // Wrong-passphrase failures stay inline on the dialog. The
+    // completion bundle must report `pair = None` so `AppModel` does
+    // not attempt to install a phantom pair, and must surface the
+    // typed inline `OpenFailedInline` message verbatim.
+    let path = vault_path();
+    let err = decrypt_failed_err();
+
+    let completion = paladin_gtk::app::state::route_unlock_open_completion(&path, Err(err));
+
+    assert!(
+        completion.pair.is_none(),
+        "Err branch must not carry a (Vault, Store) pair",
+    );
+    match completion.effect {
+        UnlockWorkerEffect::Failure(UnlockFailureEffect::SendUnlockDialogMsg(
+            UnlockDialogMsg::OpenFailedInline(inline),
+        )) => {
+            assert_eq!(inline.kind, ErrorKind::DecryptFailed);
+            assert!(
+                !inline.rendered.is_empty(),
+                "expected non-empty inline rendered text, got empty",
+            );
+        }
+        other => panic!(
+            "expected Failure(SendUnlockDialogMsg(OpenFailedInline(..))) for DecryptFailed, got {other:?}"
+        ),
+    }
+}
+
+#[test]
+fn route_unlock_open_completion_err_invalid_passphrase_carries_inline_effect_no_pair() {
+    // Empty-passphrase failures also stay inline. Same bundling
+    // contract: `pair = None` and the typed inline message preserved.
+    let path = vault_path();
+    let err = invalid_passphrase_empty_err();
+
+    let completion = paladin_gtk::app::state::route_unlock_open_completion(&path, Err(err));
+
+    assert!(completion.pair.is_none());
+    match completion.effect {
+        UnlockWorkerEffect::Failure(UnlockFailureEffect::SendUnlockDialogMsg(
+            UnlockDialogMsg::OpenFailedInline(inline),
+        )) => {
+            assert_eq!(inline.kind, ErrorKind::InvalidPassphrase);
+        }
+        other => panic!(
+            "expected Failure(SendUnlockDialogMsg(OpenFailedInline(..))) for InvalidPassphrase, got {other:?}"
+        ),
+    }
+}
+
+#[test]
+fn route_unlock_open_completion_err_unsafe_permissions_carries_startup_effect_no_pair() {
+    // Non-passphrase open failures route the app to
+    // `StartupErrorComponent`. The bundle must mirror that with
+    // `pair = None` and the `StartupError` state carrying the
+    // caller-provided path.
+    let path = vault_path();
+    let err = unsafe_perms_err();
+
+    let completion = paladin_gtk::app::state::route_unlock_open_completion(&path, Err(err));
+
+    assert!(completion.pair.is_none());
+    match completion.effect {
+        UnlockWorkerEffect::Failure(UnlockFailureEffect::SetAppState(AppState::StartupError {
+            path: state_path,
+            ..
+        })) => {
+            assert_eq!(state_path.as_deref(), Some(path.as_path()));
+        }
+        other => panic!(
+            "expected Failure(SetAppState(StartupError)) for UnsafePermissions, got {other:?}"
+        ),
+    }
+}
+
+#[test]
+fn route_unlock_open_completion_err_io_error_carries_startup_effect_no_pair() {
+    // IoError is the other commonly-hit non-passphrase failure
+    // (vault parent dir gone between inspect and open). Same bundling
+    // contract as UnsafePermissions.
+    let path = vault_path();
+    let err = io_err();
+
+    let completion = paladin_gtk::app::state::route_unlock_open_completion(&path, Err(err));
+
+    assert!(completion.pair.is_none());
+    match completion.effect {
+        UnlockWorkerEffect::Failure(UnlockFailureEffect::SetAppState(AppState::StartupError {
+            path: state_path,
+            ..
+        })) => {
+            assert_eq!(state_path.as_deref(), Some(path.as_path()));
+        }
+        other => panic!("expected Failure(SetAppState(StartupError)) for IoError, got {other:?}"),
+    }
+}
+
+#[test]
+fn route_unlock_open_completion_err_routing_matches_route_unlock_worker_outcome() {
+    // The completion helper bundles over `route_unlock_worker_outcome`
+    // — the routed effect must match byte-identical so a future
+    // refactor cannot silently diverge the two boundaries.
+    let path = vault_path();
+    for err in [
+        decrypt_failed_err(),
+        invalid_passphrase_empty_err(),
+        unsafe_perms_err(),
+        wrong_vault_lock_err(),
+        invalid_header_err(),
+        invalid_payload_err(),
+        unsupported_format_version_err(),
+        kdf_oob_err(),
+        io_err(),
+    ] {
+        let direct = route_unlock_worker_outcome(&path, Err(&err));
+        let completion = paladin_gtk::app::state::route_unlock_open_completion(&path, Err(err));
+        assert_eq!(
+            format!("{direct:?}"),
+            format!("{:?}", completion.effect),
+            "route_unlock_open_completion must produce the same effect as route_unlock_worker_outcome",
+        );
+    }
+}
+
+#[test]
+fn route_unlock_open_completion_attaches_caller_provided_path_on_success() {
+    // Path attachment must travel through the bundling helper on the
+    // success branch so the carried `AppState::Unlocked` reflects the
+    // caller-provided path (not the path stored anywhere on the
+    // `(Vault, Store)` pair).
+    let (_tempdir, _real_path, pair) = fresh_plaintext_vault_pair();
+    let alt = PathBuf::from("/var/lib/paladin/alt-vault.bin");
+
+    let completion = paladin_gtk::app::state::route_unlock_open_completion(&alt, Ok(pair));
+
+    match completion.effect {
+        UnlockWorkerEffect::Success(UnlockSuccessEffect::SetAppState(AppState::Unlocked {
+            path: state_path,
+        })) => {
+            assert_eq!(state_path, alt);
+        }
+        other => panic!("expected Success(SetAppState(Unlocked)) with alt path, got {other:?}"),
+    }
+}
+
+#[test]
+fn route_unlock_open_completion_attaches_caller_provided_path_on_failure() {
+    // Mirror on the failure-startup branch.
+    let alt = PathBuf::from("/var/lib/paladin/alt-vault.bin");
+    let err = io_err();
+
+    let completion = paladin_gtk::app::state::route_unlock_open_completion(&alt, Err(err));
+
+    match completion.effect {
+        UnlockWorkerEffect::Failure(UnlockFailureEffect::SetAppState(AppState::StartupError {
+            path: state_path,
+            ..
+        })) => {
+            assert_eq!(state_path.as_deref(), Some(alt.as_path()));
+        }
+        other => panic!("expected Failure(SetAppState(StartupError)) with alt path, got {other:?}"),
+    }
+}
+
+/// Create a fresh plaintext `(Vault, Store)` pair backed by a
+/// tempfile vault. The tempdir is chmodded to `0700` so
+/// `Store::create` accepts it (§4.3 parent-directory permission
+/// check). The tempdir handle is returned so the caller keeps the
+/// vault file alive for the duration of the test.
+fn fresh_plaintext_vault_pair() -> (
+    tempfile::TempDir,
+    PathBuf,
+    (paladin_core::Vault, paladin_core::Store),
+) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tempdir = tempfile::tempdir().expect("create tempdir");
+    std::fs::set_permissions(tempdir.path(), std::fs::Permissions::from_mode(0o700))
+        .expect("chmod tempdir to 0700 so paladin_core::Store::create accepts it");
+
+    let path = tempdir.path().join("vault.bin");
+    let pair = paladin_core::Store::create(&path, paladin_core::VaultInit::Plaintext)
+        .expect("create plaintext vault");
+    (tempdir, path, pair)
+}
+
+// ---------------------------------------------------------------------------
 // should_drop_unlock_dialog_after — side-effect dispatch decision
 // ---------------------------------------------------------------------------
 //
