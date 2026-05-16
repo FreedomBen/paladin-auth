@@ -45,9 +45,10 @@ use paladin_gtk::app::state::{
     apply_unlock_failure_action, compose_unlock_dispatch, decide_state_from_inspect,
     decide_state_from_open_error, decide_state_from_path_resolution, decide_unlock_failure_action,
     decide_unlock_success_state, route_unlock_failure_effect, route_unlock_success_effect,
-    route_unlock_worker_outcome, should_drop_unlock_dialog_after, unlock_app_state_after,
-    unlock_dialog_msg_after, unlock_final_app_state, AppState, OpenErrorOutcome,
-    UnlockFailureAction, UnlockFailureEffect, UnlockSuccessEffect, UnlockWorkerEffect,
+    route_unlock_worker_outcome, should_drop_unlock_dialog_after, submit_unlock_app_state,
+    unlock_app_state_after, unlock_dialog_msg_after, unlock_final_app_state, AppState,
+    OpenErrorOutcome, UnlockFailureAction, UnlockFailureEffect, UnlockSuccessEffect,
+    UnlockWorkerEffect,
 };
 use paladin_gtk::startup_error::StartupErrorSource;
 use paladin_gtk::unlock_dialog::{
@@ -3005,5 +3006,99 @@ fn compose_unlock_dispatch_inline_from_non_unlocked_busy_keeps_dialog_with_no_st
              got {:?}",
             dispatch.app_state,
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// submit_unlock_app_state — pre-worker `Locked → UnlockedBusy` composer
+// ---------------------------------------------------------------------------
+//
+// Symmetric partner of `unlock_final_app_state`: the worker-completion
+// composer rolls `UnlockedBusy` back to `Locked` (inline branch) or
+// installs `Unlocked` / `StartupError` (replacement branches), while
+// `submit_unlock_app_state` covers the *entry* side — the
+// `Locked → UnlockedBusy` handoff that `AppModel::update` runs when
+// `UnlockDialogOutput::SubmitLock` arrives and the open worker is about
+// to spawn. Together the two composers bracket the busy gate so the
+// `is_busy()` / `allows_mutating_menu()` gating in `AppState` covers the
+// full open worker lifetime per `IMPLEMENTATION_PLAN_04_GTK.md`
+// §"Vault interaction".
+
+#[test]
+fn submit_unlock_app_state_from_locked_returns_unlocked_busy_preserving_path() {
+    // Happy path: `AppModel::update` receives `SubmitLock` while the
+    // model is `AppState::Locked(path)`. The composer must hand
+    // `AppModel` the `UnlockedBusy(path)` transition that opens the
+    // busy gate for the `gio::spawn_blocking paladin_core::open`
+    // worker. The resolved path is preserved verbatim so the
+    // `UnlockDialogComponent` (kept mounted until the worker
+    // completes) still names the same destination.
+    let path = vault_path();
+    let locked = AppState::Locked { path: path.clone() };
+    let next =
+        submit_unlock_app_state(&locked).expect("Locked must transition to UnlockedBusy on submit");
+    assert!(matches!(next, AppState::UnlockedBusy { .. }));
+    assert_path_eq(&next, &path);
+}
+
+#[test]
+fn submit_unlock_app_state_from_non_locked_returns_none() {
+    // Defensive: a stray `SubmitLock` dispatch from any source state
+    // other than `Locked` is a no-op for the state machine. Missing
+    // has no encrypted vault to open, Unlocked / UnlockedBusy already
+    // own a different busy window through `enter_busy`, and
+    // StartupError is the non-mutating surface. Returning `None`
+    // matches `AppState::enter_unlocking_busy`'s own refusal contract
+    // so `AppModel::update` leaves the source state in place rather
+    // than installing a phantom `UnlockedBusy` that would clobber the
+    // idle state.
+    let path = vault_path();
+    assert!(submit_unlock_app_state(&AppState::Missing { path: path.clone() }).is_none());
+    assert!(submit_unlock_app_state(&AppState::Unlocked { path: path.clone() }).is_none());
+    assert!(submit_unlock_app_state(&AppState::UnlockedBusy { path: path.clone() }).is_none());
+    let startup = decide_state_from_inspect(&path, Err(invalid_header_err()))
+        .expect("inspect Err yields StartupError state");
+    assert!(submit_unlock_app_state(&startup).is_none());
+}
+
+#[test]
+fn submit_unlock_app_state_mirrors_enter_unlocking_busy_for_every_variant() {
+    // Cross-check: the composer must mirror `AppState::enter_unlocking_busy`
+    // exactly — the entry transition is `Locked → UnlockedBusy` for
+    // both helpers and `None` for every other source. `submit_unlock_app_state`
+    // is a name-the-entry-point wrapper, not a re-derivation; this test pins
+    // that contract so the helper can't drift away from
+    // `enter_unlocking_busy` without breaking here first.
+    let path = vault_path();
+    let sources = [
+        AppState::Missing { path: path.clone() },
+        AppState::Locked { path: path.clone() },
+        AppState::Unlocked { path: path.clone() },
+        AppState::UnlockedBusy { path: path.clone() },
+        decide_state_from_inspect(&path, Err(invalid_header_err()))
+            .expect("inspect Err yields StartupError state"),
+    ];
+    for source in &sources {
+        let mirror = source.clone().enter_unlocking_busy();
+        let composed = submit_unlock_app_state(source);
+        match (&mirror, &composed) {
+            (None, None) => {}
+            (Some(a), Some(b)) => {
+                assert_eq!(
+                    std::mem::discriminant::<AppState>(a),
+                    std::mem::discriminant::<AppState>(b),
+                    "composed variant must mirror enter_unlocking_busy for source={source:?}",
+                );
+                assert_eq!(
+                    a.path().map(Path::to_path_buf),
+                    b.path().map(Path::to_path_buf),
+                    "composed path must mirror enter_unlocking_busy for source={source:?}",
+                );
+            }
+            other => panic!(
+                "composed Some/None must mirror enter_unlocking_busy for source={source:?}, \
+                 got {other:?}",
+            ),
+        }
     }
 }

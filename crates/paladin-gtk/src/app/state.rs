@@ -819,6 +819,40 @@ pub fn unlock_app_state_after(effect: &UnlockWorkerEffect) -> Option<&AppState> 
     }
 }
 
+/// Decide the [`AppState`] transition when `AppModel::update`
+/// receives [`crate::unlock_dialog::UnlockDialogOutput::SubmitLock`].
+///
+/// Symmetric partner of [`unlock_final_app_state`] for the entry
+/// side of the open worker: where the final composer rolls
+/// [`AppState::UnlockedBusy`] back to [`AppState::Locked`] (inline
+/// branch) or installs `Unlocked` / `StartupError` (replacement
+/// branches) after the worker returns, this composer covers the
+/// `Locked → UnlockedBusy` handoff that opens the busy gate just
+/// before the `gio::spawn_blocking paladin_core::open` worker
+/// spawns. Together the two composers bracket the busy window so
+/// the [`AppState::is_busy`] / [`AppState::allows_mutating_menu`]
+/// gating in [`AppState`] covers the full open worker lifetime per
+/// `IMPLEMENTATION_PLAN_04_GTK.md` §"Vault interaction".
+///
+/// The helper is a name-the-entry-point wrapper over
+/// [`AppState::enter_unlocking_busy`]: it returns
+/// `Some(UnlockedBusy { path })` iff `current` is
+/// `Locked { path }`, and `None` for every other source state
+/// (`Missing`, `Unlocked`, `UnlockedBusy`, `StartupError`). The
+/// `None` arm is the defensive case for a stray dispatch — a
+/// `SubmitLock` that arrives from any other source state leaves
+/// `AppModel` in place rather than installing a phantom
+/// `UnlockedBusy` that would clobber the idle state.
+///
+/// The composer stays shape-only — it delegates the transition to
+/// [`AppState::enter_unlocking_busy`] — so the side-effect decision
+/// in `AppModel::update` stays unit-testable in
+/// `tests/app_state_logic.rs` without spinning up GTK / libadwaita.
+#[must_use]
+pub fn submit_unlock_app_state(current: &AppState) -> Option<AppState> {
+    current.clone().enter_unlocking_busy()
+}
+
 /// Unified state-transition composer for the unlock worker outcome.
 ///
 /// [`unlock_app_state_after`] reports the new [`AppState`] for the
