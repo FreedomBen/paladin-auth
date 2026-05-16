@@ -21,10 +21,21 @@
 //! `InitDialogComponent` renders the first-run / missing-vault
 //! surface seeded with the resolved vault path, and
 //! `UnlockDialogComponent` renders the encrypted-vault passphrase-
-//! entry surface seeded with the resolved vault path. The full
-//! passphrase-entry / `gio::spawn_blocking` `paladin_core::open`
-//! worker wiring for `UnlockDialogComponent` lands in follow-up
-//! commits.
+//! entry surface seeded with the resolved vault path.
+//!
+//! Unlock-worker dispatch is wired here: `AppMsg::UnlockDialogAction(
+//! SubmitLock)` opens the busy gate via `apply_submit_unlock_inplace`,
+//! and `AppMsg::UnlockWorkerCompleted(UnlockWorkerEffect)` runs the
+//! bundled `compose_unlock_dispatch` projection over the cached
+//! `AppState`. The composer's three side-effects — state replacement
+//! via `apply_unlock_dispatch_inplace`, optional inline
+//! `UnlockDialogMsg` forwarded to the live `UnlockDialogComponent`,
+//! and the `drop_dialog` flag that detaches the dialog widget on
+//! replacement branches (per `IMPLEMENTATION_PLAN_04_GTK.md`
+//! §"Vault interaction") — fan out from a single handler. The
+//! `gio::spawn_blocking paladin_core::open` worker that consumes the
+//! forwarded `VaultLock` and posts `AppMsg::UnlockWorkerCompleted` on
+//! completion lands in a follow-up commit.
 //!
 //! `AppMsg::AccountListAction(OpenRenameDialog(id))` mounts a
 //! [`RenameDialogComponent`] seeded from
@@ -63,8 +74,9 @@ use crate::account_list::{
     AccountListComponent, AccountListInit, AccountListOutput, AccountRowModel,
 };
 use crate::app::state::{
-    apply_submit_unlock_inplace, decide_state_from_inspect, decide_state_from_open_error, AppState,
-    OpenErrorOutcome,
+    apply_submit_unlock_inplace, apply_unlock_dispatch_inplace, compose_unlock_dispatch,
+    decide_state_from_inspect, decide_state_from_open_error, AppState, OpenErrorOutcome,
+    UnlockWorkerEffect,
 };
 use crate::init_dialog::{format_init_dialog_marker, InitDialogComponent, InitDialogInit};
 use crate::remove_dialog::{decide_remove_target, RemoveDialogComponent, RemoveDialogOutput};
@@ -265,6 +277,30 @@ pub enum AppMsg {
     /// follow-up commit alongside the `UnlockedBusy` worker
     /// infrastructure.
     UnlockDialogAction(UnlockDialogOutput),
+    /// Posted by the `gio::spawn_blocking paladin_core::open` worker
+    /// after it consumes the forwarded [`paladin_core::VaultLock`]
+    /// and reports its routed outcome as an [`UnlockWorkerEffect`].
+    ///
+    /// The handler bundles the worker outcome over the cached
+    /// [`AppState`] through
+    /// [`crate::app::state::compose_unlock_dispatch`] into a single
+    /// [`crate::app::state::UnlockDispatch`]: a state replacement
+    /// (success → [`AppState::Unlocked`], startup-routed failure →
+    /// [`AppState::StartupError`], inline rollback →
+    /// [`AppState::Locked`]) applied via
+    /// [`crate::app::state::apply_unlock_dispatch_inplace`], an
+    /// optional [`crate::unlock_dialog::UnlockDialogMsg::OpenFailedInline`]
+    /// forwarded to the live [`UnlockDialogComponent`] on the inline branch, and
+    /// a `drop_dialog` flag that detaches the dialog widget from
+    /// the content tree on the two replacement branches. See
+    /// `IMPLEMENTATION_PLAN_04_GTK.md` §"Vault interaction" and
+    /// §"Effect errors".
+    ///
+    /// The `gio::spawn_blocking paladin_core::open` worker that
+    /// produces this message lands in a follow-up commit; this
+    /// commit only wires the consumer so the dispatch path is in
+    /// place before the worker spawn.
+    UnlockWorkerCompleted(UnlockWorkerEffect),
 }
 
 // `relm4::component(pub)` generates a public `AppModelWidgets` struct so the
@@ -469,12 +505,59 @@ impl SimpleComponent for AppModel {
                 // failure dispatch drops it once the worker returns.
                 //
                 // The `gio::spawn_blocking paladin_core::open` worker
-                // that consumes the forwarded `VaultLock` and the
-                // `AppMsg::UnlockWorkerCompleted(UnlockWorkerEffect)`
-                // dispatch that calls `compose_unlock_dispatch` on the
-                // worker outcome land in follow-up commits.
+                // that consumes the forwarded `VaultLock` and posts
+                // `AppMsg::UnlockWorkerCompleted` on completion lands
+                // in a follow-up commit; the consumer-side dispatch
+                // for that message is already wired below.
                 if let Some(state) = self.state.as_mut() {
                     apply_submit_unlock_inplace(state);
+                }
+            }
+            AppMsg::UnlockWorkerCompleted(effect) => {
+                // Worker-outcome dispatch. `compose_unlock_dispatch`
+                // bundles the typed `UnlockWorkerEffect` over the
+                // cached `AppState` into the three projections
+                // pinned in `IMPLEMENTATION_PLAN_04_GTK.md` §"Vault
+                // interaction":
+                //
+                // * `app_state` — the state replacement
+                //   (`UnlockedBusy` → `Unlocked` on success, →
+                //   `StartupError` on a non-passphrase failure, or
+                //   rollback to `Locked` on the inline branch),
+                //   applied in-place via
+                //   `apply_unlock_dispatch_inplace`. The `None`
+                //   defensive case (inline branch from a non-
+                //   `UnlockedBusy` source — a stray dispatch) leaves
+                //   `AppModel::state` byte-for-byte intact.
+                // * `dialog_msg` — `Some(OpenFailedInline(_))` on
+                //   the inline branch, forwarded to the live
+                //   `UnlockDialogComponent` so the typed
+                //   passphrase-failure error re-renders inline.
+                // * `drop_dialog` — `true` on the two replacement
+                //   branches, detaching the dialog widget from the
+                //   content tree and dropping the controller so the
+                //   replacement view (`AccountListComponent` /
+                //   `StartupErrorComponent`) is the only visible
+                //   chrome. The two side-effects are mutually
+                //   exclusive: replacement branches carry
+                //   `dialog_msg = None` and inline branches carry
+                //   `drop_dialog = false`.
+                let dispatch = self.state.as_mut().map(|state| {
+                    let dispatch = compose_unlock_dispatch(state, &effect);
+                    apply_unlock_dispatch_inplace(state, &dispatch);
+                    dispatch
+                });
+                if let Some(dispatch) = dispatch {
+                    if let Some(msg) = dispatch.dialog_msg {
+                        if let Some(controller) = self.unlock_dialog.as_ref() {
+                            controller.emit(msg);
+                        }
+                    }
+                    if dispatch.drop_dialog {
+                        if let Some(controller) = self.unlock_dialog.take() {
+                            self.content.remove(controller.widget());
+                        }
+                    }
                 }
             }
         }
