@@ -230,6 +230,43 @@ impl AppState {
         }
     }
 
+    /// Transition [`AppState::UnlockedBusy`] → [`AppState::Locked`]
+    /// when the `gio::spawn_blocking paladin_core::open` worker
+    /// returns a typed wrong-passphrase failure (`DecryptFailed`,
+    /// `InvalidPassphrase`).
+    ///
+    /// Symmetric partner of [`Self::enter_unlocking_busy`] for the
+    /// failure return path: the busy window that
+    /// `enter_unlocking_busy` opens for the unlock worker is rolled
+    /// back here so the dialog's passphrase entry becomes
+    /// interactive again. Per `IMPLEMENTATION_PLAN_04_GTK.md`
+    /// §"Effect errors", the live
+    /// [`crate::unlock_dialog::UnlockDialogComponent`] stays mounted
+    /// with the inline error so the user can retype without losing
+    /// the surface; the dispatch trio
+    /// ([`should_drop_unlock_dialog_after`],
+    /// [`unlock_dialog_msg_after`], [`unlock_app_state_after`])
+    /// reports the inline-message side, and this method owns the
+    /// state-machine roll-back side so `is_busy()` /
+    /// `allows_mutating_menu()` release the gate the moment the
+    /// worker returns.
+    ///
+    /// Returns `None` from every other state — `Missing` has no
+    /// encrypted vault to open, `Locked` has no busy window in
+    /// flight, `Unlocked` has the live vault decrypted, and
+    /// `StartupError` is the non-mutating surface. Sister method
+    /// [`Self::leave_busy`] consumes the same `UnlockedBusy` source
+    /// but lands on `Unlocked` for the success / mutation-completed
+    /// path; the worker outcome picks which method `AppModel::update`
+    /// calls.
+    #[must_use]
+    pub fn leave_unlocking_busy(self) -> Option<Self> {
+        match self {
+            Self::UnlockedBusy { path } => Some(Self::Locked { path }),
+            _ => None,
+        }
+    }
+
     /// Transition [`AppState::Locked`] or [`AppState::Missing`] →
     /// [`AppState::Unlocked`] after a successful unlock / create.
     ///

@@ -501,6 +501,93 @@ fn enter_busy_and_enter_unlocking_busy_partition_idle_source_states() {
     );
 }
 
+#[test]
+fn unlocked_busy_leaves_unlocking_busy_to_locked_and_preserves_path() {
+    // The `gio::spawn_blocking paladin_core::open` worker can return
+    // a typed wrong-passphrase failure (`DecryptFailed`,
+    // `InvalidPassphrase`). Per `IMPLEMENTATION_PLAN_04_GTK.md`
+    // §"Effect errors", the live `UnlockDialogComponent` stays
+    // mounted with the inline error so the user can retype, which
+    // means `AppState::UnlockedBusy → AppState::Locked` must release
+    // the busy gate so the dialog's passphrase entry becomes
+    // interactive again. Symmetric partner of `enter_unlocking_busy`
+    // for the failure return path.
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let locked = busy
+        .clone()
+        .leave_unlocking_busy()
+        .expect("UnlockedBusy reverts back to Locked on wrong-passphrase failure");
+    assert!(matches!(locked, AppState::Locked { .. }));
+    assert_path_eq(&locked, &path);
+}
+
+#[test]
+fn non_unlocked_busy_states_do_not_leave_unlocking_busy() {
+    // Only the busy window opened by `enter_unlocking_busy` can be
+    // reverted. `Missing` (no encrypted vault to open), `Locked`
+    // (no busy window in flight), `Unlocked` (vault already
+    // decrypted), and `StartupError` (non-mutating surface) all
+    // have no open unlock worker to roll back, so the reversal must
+    // refuse so a stray call cannot clobber another idle state.
+    let path = vault_path();
+    assert!(AppState::Missing { path: path.clone() }
+        .leave_unlocking_busy()
+        .is_none());
+    assert!(AppState::Locked { path: path.clone() }
+        .leave_unlocking_busy()
+        .is_none());
+    assert!(AppState::Unlocked { path: path.clone() }
+        .leave_unlocking_busy()
+        .is_none());
+    let startup = decide_state_from_inspect(&path, Err(invalid_header_err()))
+        .expect("inspect Err yields StartupError state");
+    assert!(startup.leave_unlocking_busy().is_none());
+}
+
+#[test]
+fn leave_busy_and_leave_unlocking_busy_share_source_but_diverge_on_destination() {
+    // Cross-check: both `leave_busy` and `leave_unlocking_busy`
+    // consume the same `UnlockedBusy` source (the busy window
+    // opened by either `enter_busy` or `enter_unlocking_busy`), but
+    // the worker outcome decides which destination is correct:
+    //
+    // * `leave_busy → Unlocked` — the worker returned the
+    //   `(Vault, Store)` pair (successful unlock, or a save-bearing
+    //   mutation that completed). `AppModel` reinstalls the pair
+    //   onto its sibling slot per §"In-flight effect ownership".
+    // * `leave_unlocking_busy → Locked` — the worker returned a
+    //   wrong-passphrase failure. The dialog stays mounted with the
+    //   inline error and the user retypes without losing the
+    //   surface.
+    //
+    // Pinned here so a future refactor that collapsed the two
+    // transitions into a single catch-all — losing the destination
+    // distinction — would fail the partition assertion and force an
+    // explicit decision.
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+
+    let leave_busy_dest = busy
+        .clone()
+        .leave_busy()
+        .expect("leave_busy accepts UnlockedBusy");
+    assert!(
+        matches!(leave_busy_dest, AppState::Unlocked { .. }),
+        "leave_busy must land on Unlocked",
+    );
+    assert_path_eq(&leave_busy_dest, &path);
+
+    let leave_unlocking_busy_dest = busy
+        .leave_unlocking_busy()
+        .expect("leave_unlocking_busy accepts UnlockedBusy");
+    assert!(
+        matches!(leave_unlocking_busy_dest, AppState::Locked { .. }),
+        "leave_unlocking_busy must land on Locked",
+    );
+    assert_path_eq(&leave_unlocking_busy_dest, &path);
+}
+
 // ---------------------------------------------------------------------------
 // AppState transitions: unlock (Locked / Missing → Unlocked) and lock
 // (Unlocked → Locked)
