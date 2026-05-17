@@ -45,14 +45,14 @@ use paladin_core::{
 
 use paladin_gtk::add_account::AddWorkerInput;
 use paladin_gtk::app::state::{
-    apply_submit_add_inplace, apply_submit_rename_inplace, apply_submit_unlock_inplace,
-    apply_unlock_dispatch_inplace, apply_unlock_failure_action, apply_unlock_vault_install_inplace,
-    compose_add_worker_input, compose_rename_worker_input, compose_unlock_dispatch,
-    compose_unlock_worker_input, decide_state_from_inspect, decide_state_from_open_error,
-    decide_state_from_path_resolution, decide_unlock_failure_action, decide_unlock_success_state,
-    route_unlock_failure_effect, route_unlock_success_effect, route_unlock_worker_outcome,
-    run_unlock_worker, should_drop_unlock_dialog_after, submit_add_app_state,
-    submit_rename_app_state, submit_unlock_app_state, unlock_app_state_after,
+    apply_add_vault_install_inplace, apply_submit_add_inplace, apply_submit_rename_inplace,
+    apply_submit_unlock_inplace, apply_unlock_dispatch_inplace, apply_unlock_failure_action,
+    apply_unlock_vault_install_inplace, compose_add_worker_input, compose_rename_worker_input,
+    compose_unlock_dispatch, compose_unlock_worker_input, decide_state_from_inspect,
+    decide_state_from_open_error, decide_state_from_path_resolution, decide_unlock_failure_action,
+    decide_unlock_success_state, route_unlock_failure_effect, route_unlock_success_effect,
+    route_unlock_worker_outcome, run_unlock_worker, should_drop_unlock_dialog_after,
+    submit_add_app_state, submit_rename_app_state, submit_unlock_app_state, unlock_app_state_after,
     unlock_dialog_msg_after, unlock_final_app_state, AppState, OpenErrorOutcome,
     UnlockFailureAction, UnlockFailureEffect, UnlockSuccessEffect, UnlockWorkerEffect,
     UnlockWorkerInput,
@@ -4383,6 +4383,116 @@ fn apply_submit_add_inplace_agrees_with_apply_submit_rename_inplace() {
              path for source={source:?}",
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// apply_add_vault_install_inplace — `AppModel::vault` mut-slot wrapper
+// ---------------------------------------------------------------------------
+//
+// Symmetric partner of `apply_rename_vault_install_inplace` for the
+// add path. `AddWorkerCompletion` carries the live `(Vault, Store)`
+// pair *unconditionally* (every effect branch — `Success`,
+// `save_durability_unconfirmed`, `save_not_committed`, and the
+// defensive `validation_error` / `invalid_state` / `io_error`
+// projections — comes back with the same pair because
+// `Vault::mutate_and_save` is the authoritative rollback /
+// durability source per DESIGN.md §4.3), so this wrapper takes the
+// pair by value rather than the `Option<(Vault, Store)>` shape
+// `apply_unlock_vault_install_inplace` uses. The
+// `AppMsg::AddWorkerCompleted` handler that lands in a follow-up
+// commit will call it next to `apply_add_dispatch_inplace` the same
+// way the rename dispatch installs the pair next to
+// `apply_rename_dispatch_inplace`.
+
+#[test]
+fn apply_add_vault_install_inplace_writes_pair_into_empty_slot() {
+    // Defensive: the add flow enters with `AppModel::vault =
+    // Some(_)` (the dispatch comes from `Unlocked`), but a stray
+    // dispatch from a non-`Unlocked` source state could leave the
+    // slot empty when the completion arrives. The wrapper must still
+    // install the pair — `Vault::mutate_and_save` returned an
+    // authoritative `(Vault, Store)` and silently dropping it on the
+    // floor would leak the unlocked state.
+    let (_tempdir, _path, pair) = fresh_plaintext_vault_pair();
+    let mut slot: Option<(paladin_core::Vault, paladin_core::Store)> = None;
+    apply_add_vault_install_inplace(&mut slot, pair);
+    assert!(
+        slot.is_some(),
+        "apply_add_vault_install_inplace must install the pair into an empty slot",
+    );
+}
+
+#[test]
+fn apply_add_vault_install_inplace_replaces_existing_slot() {
+    // Happy path: add dispatch enters with `AppModel::vault =
+    // Some(pair_a)` from the pre-`UnlockedBusy` snapshot. The worker
+    // takes the pair out, runs `mutate_and_save`, and returns a
+    // fresh `(Vault, Store)` pair (`pair_b`). The wrapper must
+    // overwrite `pair_a` with `pair_b` so the live slot reflects
+    // the post-save state — `Vault::mutate_and_save` is the
+    // authoritative rollback / durability source, so the returned
+    // pair is the only correct slot value regardless of the typed
+    // effect.
+    let (_tempdir_a, _path_a, pair_a) = fresh_plaintext_vault_pair();
+    let (_tempdir_b, _path_b, pair_b) = fresh_plaintext_vault_pair();
+    let mut slot = Some(pair_a);
+    apply_add_vault_install_inplace(&mut slot, pair_b);
+    assert!(
+        slot.is_some(),
+        "apply_add_vault_install_inplace must leave the slot filled after a replacement",
+    );
+}
+
+#[test]
+fn apply_add_vault_install_inplace_consumes_run_add_worker_completion_pair() {
+    // Cross-check: the wrapper must round-trip the unconditional
+    // `(Vault, Store)` pair carried by `AddWorkerCompletion`
+    // regardless of the `AddWorkerEffect` variant. The add worker
+    // always returns the pair — `Success`, durability-unconfirmed
+    // warnings, and `save_not_committed` rollbacks all come back
+    // with the same shape — so the wrapper is contract-identical
+    // across every effect branch. Pinning this here means the
+    // wrapper can't drift away from `run_add_worker`'s pair
+    // contract without breaking here first.
+    use paladin_core::{validate_manual, AccountInput, AccountKindInput, Algorithm, IconHintInput};
+    use secrecy::SecretString;
+
+    let (_tempdir, _vault_path, pair) = fresh_plaintext_vault_pair();
+    let (vault, store) = pair;
+    let input = AccountInput {
+        label: "label".to_string(),
+        issuer: Some("issuer".to_string()),
+        secret: SecretString::from("JBSWY3DPEHPK3PXP".to_string()),
+        algorithm: Algorithm::Sha1,
+        digits: 6,
+        kind: AccountKindInput::Totp,
+        period_secs: None,
+        counter: None,
+        icon_hint: IconHintInput::Default,
+    };
+    let validated =
+        validate_manual(input, SystemTime::UNIX_EPOCH).expect("totp account input validates");
+
+    let worker_input = AddWorkerInput {
+        vault,
+        store,
+        account: validated.account,
+    };
+    let completion = paladin_gtk::add_account::run_add_worker(worker_input);
+
+    let mut slot: Option<(paladin_core::Vault, paladin_core::Store)> = None;
+    apply_add_vault_install_inplace(&mut slot, (completion.vault, completion.store));
+    assert!(
+        slot.is_some(),
+        "run_add_worker completion pair must install (add always returns the pair)",
+    );
+    let (installed_vault, _installed_store) = slot.expect("installed pair");
+    assert_eq!(
+        installed_vault.accounts().len(),
+        1,
+        "installed vault must reflect the post-save state from run_add_worker — \
+         the just-added account should be present after the wrapper installs the pair",
+    );
 }
 
 // ---------------------------------------------------------------------------
