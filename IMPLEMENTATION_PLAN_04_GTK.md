@@ -118,9 +118,20 @@ inclusion.
   or mismatched pairs reject inline with `invalid_passphrase`
   (`reason: "confirmation_mismatch"`). On submit, builds a
   `VaultInit` (`VaultInit::Plaintext` or
-  `VaultInit::Encrypted(EncryptionOptions::new(secret)?)`) and calls
-  `paladin_core::create(path, init)` on `gio::spawn_blocking` (the
-  encrypted path validates the passphrase and runs the §4.4 Argon2id KDF).
+  `VaultInit::Encrypted(EncryptionOptions::new(secret)?)`) and
+  dispatches `init_dialog::run_init_worker` on `gio::spawn_blocking`
+  — the pure-logic worker body that calls
+  `paladin_core::Store::create(path, init)` then `Vault::save(&store)`
+  (the encrypted path validates the passphrase and runs the §4.4
+  Argon2id KDF before save). The explicit save mirrors the CLI
+  `paladin init` flow so the freshly created vault is durable on
+  disk by the time the worker returns, even when the user never
+  adds an account. `run_init_worker` routes failures through
+  `classify_create_error` so the dispatch site receives
+  `InitWorkerEffect::Success { vault, store }`,
+  `InitWorkerEffect::DestructiveGate`, or
+  `InitWorkerEffect::InlineError(InlineError)` without re-deriving
+  the routing off the raw `PaladinError`.
   On success, swaps
   `AppModel` to `Unlocked` with the returned
   `(Vault, Store)` and routes to `AccountListComponent`. The dialog
@@ -134,8 +145,11 @@ inclusion.
   styling whose body is rendered from
   `paladin_core::format_init_force_warning(existing_path)` so wording
   stays identical to the CLI `init --force` confirmation. On
-  confirm, the dialog re-runs the operation with
-  `paladin_core::create_force(path, init)` on `gio::spawn_blocking`,
+  confirm, the dialog re-dispatches `run_init_worker` with
+  `InitWorkerMode::CreateForce` so the worker calls
+  `paladin_core::Store::create_force(path, init)` on
+  `gio::spawn_blocking` (the §5 staged-clobber pipeline commits
+  inline, no extra `Vault::save` step needed),
   consuming the pending `VaultInit` created from the already-entered
   passphrase choice; on cancel, the
   destructive dialog closes and `InitDialog` returns to its
@@ -853,6 +867,16 @@ These run without a display server. Each lives under
   `create` / `create_force` stay inline; `save_not_committed`
   carries the `backup_path` field on the `create_force` path when
   the failure occurs after backup rotation.
+- [x] `run_init_worker` end-to-end against tempfile-backed plaintext
+  and (light-Argon2) encrypted vaults: `InitWorkerMode::Create`
+  returns `InitWorkerEffect::Success { vault, store }` and commits
+  the empty vault to disk (parity with the CLI `Store::create` +
+  `Vault::save` pattern); `InitWorkerMode::Create` against a
+  pre-existing seeded vault routes to
+  `InitWorkerEffect::DestructiveGate`; `InitWorkerMode::CreateForce`
+  against a pre-existing seeded vault returns `Success` and rotates
+  the prior primary to `vault.bin.bak`; the post-success vault
+  survives a `Store::open` round trip.
 
 #### `tests/rename_dialog_logic.rs`
 

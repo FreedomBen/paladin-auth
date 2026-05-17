@@ -88,7 +88,7 @@ use relm4::prelude::*;
 use paladin_core::{
     classify_init_precheck, format_create_vault_dir_error, format_init_force_warning,
     format_plaintext_storage_warning, format_unsafe_permissions, EncryptionOptions, ErrorKind,
-    InitPrecheck, PaladinError, VaultInit, VaultStatus,
+    InitPrecheck, PaladinError, Store, Vault, VaultInit, VaultStatus,
 };
 use secrecy::SecretString;
 
@@ -303,6 +303,199 @@ pub fn classify_create_error(err: &PaladinError, attempted_dir: &Path) -> Create
 #[must_use]
 pub fn classify_create_force_error(err: &PaladinError, attempted_dir: &Path) -> InlineError {
     InlineError::from_create_error(err, attempted_dir)
+}
+
+/// Whether [`run_init_worker`] should route through
+/// [`paladin_core::Store::create`] or
+/// [`paladin_core::Store::create_force`].
+///
+/// The first-pass create submit lands as
+/// [`InitWorkerMode::Create`]; the destructive-gate confirm re-run
+/// lands as [`InitWorkerMode::CreateForce`]. The mode is the only
+/// signal the worker uses to pick the underlying core call, so
+/// the dialog state machine never needs to plumb two parallel
+/// worker functions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InitWorkerMode {
+    /// First-pass create. `vault_exists` routes to
+    /// [`InitWorkerEffect::DestructiveGate`].
+    Create,
+    /// Post-confirmation force create. `vault_exists` cannot occur on
+    /// this path (force always overwrites), so the destructive-gate
+    /// arm is unreachable; every failure stays inline.
+    CreateForce,
+}
+
+/// Input to [`run_init_worker`] consumed once.
+///
+/// `AppModel::update` builds this from the dialog state when the
+/// user confirms a create submit (or the destructive-gate
+/// confirmation). The [`VaultInit`] is the same value
+/// [`prepare_vault_init`] returned — the worker does not re-derive
+/// it from the passphrase fields so the
+/// [`crate::secret_fields::InitSecretState::pending`] hand-off
+/// stays the single source of truth across the destructive gate.
+///
+/// `Clone` / `PartialEq` are deliberately not derived: [`VaultInit`]
+/// carries a [`EncryptionOptions`] whose passphrase is a
+/// [`secrecy::SecretString`] (non-`Clone`), and `AppModel::update`
+/// consumes the input exactly once when it moves it into the
+/// `gio::spawn_blocking` closure.
+#[derive(Debug)]
+pub struct InitWorkerInput {
+    /// Vault initialization parameters from [`prepare_vault_init`].
+    /// Moved into the worker so the encrypted variant's
+    /// [`EncryptionOptions`] passphrase travels into the
+    /// `Store::create` call without being borrowed back into the UI
+    /// thread.
+    pub init: VaultInit,
+    /// Resolved vault path the worker passes to
+    /// [`paladin_core::Store::create`] or
+    /// [`paladin_core::Store::create_force`]. Threaded through to
+    /// [`classify_create_error`] / [`classify_create_force_error`]
+    /// so a `create_vault_dir` `IoError` renders the friendly
+    /// [`paladin_core::format_create_vault_dir_error`] wording
+    /// naming the directory paladin tried to `mkdir -p`.
+    pub vault_path: PathBuf,
+    /// Toggle between [`paladin_core::Store::create`] and
+    /// [`paladin_core::Store::create_force`].
+    pub mode: InitWorkerMode,
+}
+
+/// Outcome of [`run_init_worker`] for `AppModel::update` to apply.
+///
+/// On [`Self::Success`] the dialog dismisses itself and `AppModel`
+/// transitions `Missing → Unlocked` with the returned
+/// `(Vault, Store)` pair. On [`Self::DestructiveGate`] the dialog
+/// reopens the destructive-confirmation gate worded by
+/// [`paladin_core::format_init_force_warning`]; the pending
+/// [`VaultInit`] stays in
+/// [`crate::secret_fields::InitSecretState::pending`] for the
+/// create-force re-run. On [`Self::InlineError`] the dialog stays
+/// open with the inline error attached.
+///
+/// `Clone` / `PartialEq` are deliberately not derived because the
+/// `Success` arm carries non-`Clone` [`Vault`] / [`Store`] handles.
+#[derive(Debug)]
+pub enum InitWorkerEffect {
+    /// `Store::create` / `create_force` returned a live
+    /// `(Vault, Store)` pair. The dialog dismisses and `AppModel`
+    /// transitions to `Unlocked` with this pair.
+    Success {
+        /// Live vault returned by the underlying `Store::create*`
+        /// call. The `Missing → Unlocked` transition installs this
+        /// into the `AppState::Unlocked` slot.
+        vault: Vault,
+        /// Live store returned alongside `vault`. Installed into the
+        /// `Unlocked` slot so subsequent `Vault::mutate_and_save`
+        /// calls reuse the same `(Vault, Store)` pair.
+        store: Store,
+    },
+    /// `Store::create` reported `vault_exists` (the only error that
+    /// can race past a `Clear` precheck). The dialog reopens the
+    /// destructive-confirmation gate; the pending [`VaultInit`]
+    /// stays in [`crate::secret_fields::InitSecretState::pending`]
+    /// for the create-force re-run.
+    ///
+    /// Unreachable on the [`InitWorkerMode::CreateForce`] path —
+    /// `create_force` always overwrites, so a `vault_exists`
+    /// classification cannot occur there.
+    DestructiveGate,
+    /// Typed error stays inline; the dialog does not transition
+    /// out. Carries the same [`InlineError`] projection
+    /// [`classify_create_error`] / [`classify_create_force_error`]
+    /// would have returned synchronously.
+    InlineError(InlineError),
+}
+
+/// Bundle returned by [`run_init_worker`].
+///
+/// Currently a transparent wrapper around the [`InitWorkerEffect`]
+/// — unlike [`crate::rename_dialog::RenameWorkerCompletion`], the
+/// init worker has no live `(Vault, Store)` pair to reinstall on
+/// the failure paths (the pair only exists once `Store::create`
+/// succeeds). The struct shape is kept so the type evolves
+/// uniformly with the rename worker if a future failure path grows
+/// a live-pair return.
+#[derive(Debug)]
+pub struct InitWorkerCompletion {
+    /// Routed effect for `AppModel::update` to apply to the dialog.
+    pub effect: InitWorkerEffect,
+}
+
+/// Synchronous body of the `gio::spawn_blocking
+/// Store::create` / `Store::create_force` init worker fired by
+/// `AppModel::update` from the `InitDialog` submit dispatch.
+///
+/// Consumes the [`InitWorkerInput`] by value, dispatches to
+/// [`paladin_core::Store::create`] or
+/// [`paladin_core::Store::create_force`] per [`InitWorkerMode`],
+/// and bundles the outcome into an [`InitWorkerCompletion`] via
+/// [`classify_create_error`] / [`classify_create_force_error`].
+///
+/// # Commit semantics
+///
+/// On the [`InitWorkerMode::Create`] path the freshly minted
+/// [`Vault`] is committed to disk via [`Vault::save`] before the
+/// `(Vault, Store)` pair is handed back — mirrors the CLI's
+/// `paladin init` flow (`Store::create` + `vault.save(&store)`) so
+/// the on-disk vault survives an app restart even when the user
+/// never adds an account. [`InitWorkerMode::CreateForce`] does not
+/// need this hand-off because [`paladin_core::Store::create_force`]
+/// runs the §5 staged-clobber pipeline inline — it has already
+/// written the new primary by the time it returns. A `save`
+/// failure on the [`Create`] path is classified through the same
+/// [`classify_create_error`] table as the underlying
+/// `Store::create` failure (`vault_exists` cannot arise after
+/// save, so the routing collapses to inline errors there).
+///
+/// [`InitWorkerMode::Create`]: InitWorkerMode::Create
+/// [`Create`]: InitWorkerMode::Create
+///
+/// Extracting the worker body as a pure function lets
+/// `AppModel::update`'s closure stay a thin
+/// `gio::spawn_blocking(move || run_init_worker(input))` while the
+/// real `Store::create*` call stays unit-testable in
+/// `tests/init_dialog_logic.rs` against tempfile-backed plaintext
+/// vaults — no GTK / libadwaita main loop required. The
+/// `AppModel::update` wire-up and the `apply_init_*` reinstall
+/// helpers land in follow-up commits alongside the destructive-gate
+/// dispatch routing.
+#[must_use]
+pub fn run_init_worker(input: InitWorkerInput) -> InitWorkerCompletion {
+    let InitWorkerInput {
+        init,
+        vault_path,
+        mode,
+    } = input;
+    // `Store::create*` always writes to a path with a parent (the GUI
+    // resolves vaults under `$XDG_DATA_HOME/paladin/`). Falling back
+    // to `.` keeps the typed `create_vault_dir` IoError message
+    // sensible for the degenerate root-path case that should never
+    // reach this worker in practice.
+    let attempted_dir = vault_path
+        .parent()
+        .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
+    let result = match mode {
+        InitWorkerMode::Create => Store::create(&vault_path, init).and_then(|(vault, store)| {
+            vault.save(&store)?;
+            Ok((vault, store))
+        }),
+        InitWorkerMode::CreateForce => Store::create_force(&vault_path, init),
+    };
+    let effect = match result {
+        Ok((vault, store)) => InitWorkerEffect::Success { vault, store },
+        Err(err) => match mode {
+            InitWorkerMode::Create => match classify_create_error(&err, &attempted_dir) {
+                CreateOutcome::DestructiveGate => InitWorkerEffect::DestructiveGate,
+                CreateOutcome::InlineError(inline) => InitWorkerEffect::InlineError(inline),
+            },
+            InitWorkerMode::CreateForce => {
+                InitWorkerEffect::InlineError(classify_create_force_error(&err, &attempted_dir))
+            }
+        },
+    };
+    InitWorkerCompletion { effect }
 }
 
 /// Inline-error projection for the `InitDialog` body.

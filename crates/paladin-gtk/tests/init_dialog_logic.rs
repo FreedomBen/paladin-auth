@@ -43,14 +43,16 @@
 use std::path::{Path, PathBuf};
 
 use paladin_core::{
-    format_init_force_warning, format_plaintext_storage_warning, ErrorKind, PaladinError,
-    PermissionSubject, VaultInit, VaultStatus,
+    format_init_force_warning, format_plaintext_storage_warning, Argon2Params, EncryptionOptions,
+    ErrorKind, PaladinError, PermissionSubject, Store, VaultInit, VaultLock, VaultStatus,
 };
+use secrecy::SecretString;
 
 use paladin_gtk::init_dialog::{
     classify_create_error, classify_create_force_error, classify_mode, classify_precheck,
-    destructive_gate_body, plaintext_warning_body, prepare_vault_init, CreateOutcome, InitMode,
-    InlineError, PrecheckOutcome, SubmitRejection,
+    destructive_gate_body, plaintext_warning_body, prepare_vault_init, run_init_worker,
+    CreateOutcome, InitMode, InitWorkerCompletion, InitWorkerEffect, InitWorkerInput,
+    InitWorkerMode, InlineError, PrecheckOutcome, SubmitRejection,
 };
 use paladin_gtk::secret_fields::{ClearReason, InitSecretState};
 
@@ -548,4 +550,191 @@ fn format_init_dialog_marker_starts_with_prefix() {
     // so the smoke test can grep by prefix when the path varies.
     let marker = paladin_gtk::init_dialog::format_init_dialog_marker(Path::new("/x"));
     assert!(marker.starts_with(paladin_gtk::init_dialog::INIT_DIALOG_MARKER_PREFIX));
+}
+
+// ---------------------------------------------------------------------------
+// run_init_worker — synchronous body of the spawn_blocking Store::create
+// worker fired by `AppModel::update` from the InitDialog submit dispatch.
+//
+// Mirrors the `rename_dialog::run_rename_worker` pattern: the
+// `InitWorkerInput` is consumed once and routed through the matching
+// `Store::create` / `Store::create_force` call. The worker returns a
+// `(Vault, Store)` pair on success; on failure it routes the typed
+// `PaladinError` through `classify_create_error` /
+// `classify_create_force_error` so AppModel reopens the destructive
+// gate or surfaces an inline error without re-deriving the routing
+// off the raw error.
+//
+// Extracting the worker body as a pure function lets `AppModel::update`
+// stay a thin `gio::spawn_blocking(move || run_init_worker(input))`
+// while keeping the real `Store::create` round-trip unit-testable
+// against tempfile-backed plaintext vaults — no GTK / libadwaita main
+// loop required.
+// ---------------------------------------------------------------------------
+
+fn secure_tempdir_for_worker() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().expect("create tempdir for init worker fixture");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700))
+            .expect("chmod tempdir to 0700");
+    }
+    dir
+}
+
+#[test]
+fn run_init_worker_plaintext_create_succeeds_and_returns_live_pair() {
+    // Happy path: a `Plaintext` `VaultInit` against a fresh path is
+    // routed through `Store::create` and the worker returns the live
+    // `(Vault, Store)` pair the `Unlocked` transition needs.
+    let dir = secure_tempdir_for_worker();
+    let path = dir.path().join("vault.bin");
+
+    let completion = run_init_worker(InitWorkerInput {
+        init: VaultInit::Plaintext,
+        vault_path: path.clone(),
+        mode: InitWorkerMode::Create,
+    });
+
+    let InitWorkerCompletion { effect } = completion;
+    match effect {
+        InitWorkerEffect::Success { vault, store: _ } => {
+            assert!(
+                vault.summaries().next().is_none(),
+                "freshly created vault must be empty",
+            );
+        }
+        other => panic!("expected Success for plaintext create, got {other:?}"),
+    }
+    assert!(path.exists(), "vault file must be created on disk");
+}
+
+#[test]
+fn run_init_worker_encrypted_create_succeeds_with_light_params() {
+    // Encrypted path exercises `Store::create` via the
+    // `VaultInit::Encrypted` arm. Light Argon2 params keep the test
+    // fast — the production defaults (m_kib=65_536, t=3) are
+    // unsuitable for unit tests.
+    let dir = secure_tempdir_for_worker();
+    let path = dir.path().join("vault.bin");
+
+    let cheap = Argon2Params {
+        m_kib: 8_192,
+        t: 1,
+        p: 1,
+    };
+    let opts = EncryptionOptions::with_params(SecretString::from("hunter2".to_string()), cheap)
+        .expect("cheap params + non-empty passphrase accepted");
+
+    let completion = run_init_worker(InitWorkerInput {
+        init: VaultInit::Encrypted(opts),
+        vault_path: path.clone(),
+        mode: InitWorkerMode::Create,
+    });
+
+    assert!(
+        matches!(completion.effect, InitWorkerEffect::Success { .. }),
+        "encrypted create must surface as Success, got {effect:?}",
+        effect = completion.effect,
+    );
+    assert!(
+        path.exists(),
+        "encrypted vault file must be created on disk"
+    );
+}
+
+/// Seed an on-disk plaintext vault so subsequent `Store::create`
+/// calls land on `vault_exists` (the destructive-gate trigger) and
+/// `Store::create_force` calls see a primary to rotate to `.bak`.
+/// Mirrors the CLI / TUI `init` flow: `Store::create` only builds
+/// the in-memory pair, so the seed must commit via `Vault::save`.
+fn seed_plaintext_vault_on_disk(path: &Path) {
+    let (vault, store) =
+        Store::create(path, VaultInit::Plaintext).expect("seed Store::create plaintext");
+    vault.save(&store).expect("commit seed vault to disk");
+}
+
+#[test]
+fn run_init_worker_create_existing_vault_routes_destructive_gate() {
+    // `Store::create` against a path that already holds a vault
+    // surfaces `vault_exists`. `classify_create_error` maps that onto
+    // `CreateOutcome::DestructiveGate`, and the worker hoists it to
+    // `InitWorkerEffect::DestructiveGate` so AppModel reopens the
+    // destructive-confirmation gate worded by
+    // `paladin_core::format_init_force_warning`. The pending
+    // `VaultInit` lives in `InitSecretState::pending` for the
+    // create-force re-run.
+    let dir = secure_tempdir_for_worker();
+    let path = dir.path().join("vault.bin");
+    seed_plaintext_vault_on_disk(&path);
+
+    let completion = run_init_worker(InitWorkerInput {
+        init: VaultInit::Plaintext,
+        vault_path: path.clone(),
+        mode: InitWorkerMode::Create,
+    });
+
+    assert!(
+        matches!(completion.effect, InitWorkerEffect::DestructiveGate),
+        "vault_exists on Create must route to DestructiveGate, got {effect:?}",
+        effect = completion.effect,
+    );
+    assert!(path.exists(), "seeded vault file must remain on disk");
+}
+
+#[test]
+fn run_init_worker_create_force_overwrites_existing_vault() {
+    // `Store::create_force` always overwrites — `vault_exists` cannot
+    // surface on this path. The worker therefore routes the
+    // existing-vault scenario to `Success` and rotates the prior file
+    // to `vault.bin.bak`.
+    let dir = secure_tempdir_for_worker();
+    let path = dir.path().join("vault.bin");
+    let backup = dir.path().join("vault.bin.bak");
+    seed_plaintext_vault_on_disk(&path);
+
+    let completion = run_init_worker(InitWorkerInput {
+        init: VaultInit::Plaintext,
+        vault_path: path.clone(),
+        mode: InitWorkerMode::CreateForce,
+    });
+
+    assert!(
+        matches!(completion.effect, InitWorkerEffect::Success { .. }),
+        "create_force must succeed against an existing vault, got {effect:?}",
+        effect = completion.effect,
+    );
+    assert!(path.exists(), "primary vault file must remain on disk");
+    assert!(
+        backup.exists(),
+        "prior vault must rotate to vault.bin.bak (§5 backup rotation)",
+    );
+}
+
+#[test]
+fn run_init_worker_persists_plaintext_to_disk() {
+    // Worker goes through the §4.3 atomic-write pipeline; the freshly
+    // created vault must survive a reopen via `Store::open`. This
+    // pins the round-trip without exercising the GTK loop.
+    let dir = secure_tempdir_for_worker();
+    let path = dir.path().join("vault.bin");
+
+    let completion = run_init_worker(InitWorkerInput {
+        init: VaultInit::Plaintext,
+        vault_path: path.clone(),
+        mode: InitWorkerMode::Create,
+    });
+    assert!(matches!(
+        completion.effect,
+        InitWorkerEffect::Success { .. }
+    ));
+    drop(completion);
+
+    let (reopened, _store) =
+        Store::open(&path, VaultLock::Plaintext).expect("reopen newly created plaintext vault");
+    assert!(
+        reopened.summaries().next().is_none(),
+        "freshly created vault stays empty after reopen",
+    );
 }
