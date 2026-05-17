@@ -1812,7 +1812,7 @@ end-to-end.
 - [x] Encrypted vault wrong passphrase shows inline `decrypt_failed`
   and stays on the unlock screen.
 - [x] Encrypted vault correct passphrase advances to the list.
-- [ ] Missing vault opens the in-app create-vault flow
+- [x] Missing vault opens the in-app create-vault flow
   (`AppState::CreateVault { path, step: ChooseMode { selection:
   Encrypted }, error: None }`) and does not create or mutate files
   until the user confirms in the final step. Reducer drives the
@@ -1834,7 +1834,7 @@ end-to-end.
     on match. Empty passphrase or mismatch sets `error: Some(...)`
     and zeroizes the failing buffer; `Esc` returns to ChooseMode
     with both buffers zeroized; `Ctrl-C` quits and zeroizes.
-- [ ] `Effect::CreateVault` executor calls
+- [x] `Effect::CreateVault` executor calls
   `paladin_core::EncryptionOptions::new` (defaults-only Argon2id;
   encrypted only), then `paladin_core::Store::create(path, init)`
   followed by `Vault::save(&store)`. On success transitions to
@@ -1845,7 +1845,7 @@ end-to-end.
   validation, `Store::create`, or `Vault::save`) the state stays
   `CreateVault` with `error: Some(text)` populated and the typed
   passphrase buffer zeroized.
-- [ ] `format_unsafe_permissions` is honored for `unsafe_permissions`
+- [x] `format_unsafe_permissions` is honored for `unsafe_permissions`
   errors surfaced from `Vault::save` in the create-vault flow,
   matching the startup-error screen's behavior.
 - [x] Vault-path resolution failures from `default_vault_path` open
@@ -2291,19 +2291,19 @@ Modals and overlays:
   *(Superseded by the create-vault snapshots below once the
   in-app create-vault flow lands; the old `missing_vault.rs`
   module and its snapshot file are retired in the same slice.)*
-- [ ] Create-vault Choose-mode screen (Encrypted selected — default).
-- [ ] Create-vault Choose-mode screen (Plaintext selected).
-- [ ] Create-vault Confirm-plaintext screen (plaintext-storage
+- [x] Create-vault Choose-mode screen (Encrypted selected — default).
+- [x] Create-vault Choose-mode screen (Plaintext selected).
+- [x] Create-vault Confirm-plaintext screen (plaintext-storage
   warning rendered via `paladin_core::format_plaintext_storage_warning`).
-- [ ] Create-vault Enter-passphrase screen (both fields empty,
+- [x] Create-vault Enter-passphrase screen (both fields empty,
   focus on Passphrase).
-- [ ] Create-vault Enter-passphrase screen (Passphrase has typed
+- [x] Create-vault Enter-passphrase screen (Passphrase has typed
   characters, focus on Confirmation, mask renders one `•` per
   char).
-- [ ] Create-vault Enter-passphrase mismatch error (inline
+- [x] Create-vault Enter-passphrase mismatch error (inline
   `passphrases do not match` style error, focused buffer
   zeroized).
-- [ ] Create-vault inline create error (e.g.,
+- [x] Create-vault inline create error (e.g.,
   `unsafe_permissions` rendered via
   `format_unsafe_permissions`, passphrase buffer zeroized).
 
@@ -3352,7 +3352,7 @@ is never expected to be scripted.
 - [x] Implement CLI args, vault path resolution, encrypted unlock,
   plaintext direct-open, missing-vault, and startup-error flows
   (including `format_unsafe_permissions` rendering).
-- [ ] Replace the read-only missing-vault guidance screen with the
+- [x] Replace the read-only missing-vault guidance screen with the
   in-app create-vault flow: rename `AppState::MissingVault` to
   `AppState::CreateVault { path, step, error }`, add
   `CreateVaultStep` / `CreateVaultMode` / `PassphraseFieldFocus`,
