@@ -735,6 +735,20 @@ pub enum AddAccountMsg {
     /// typing in both fields. Dialog-local — no [`AddAccountOutput`]
     /// is emitted.
     ManualKindChanged(AccountKindInput),
+    /// TOTP period (seconds) from the period spinner shadowed into
+    /// [`ManualDraftState::period_secs`].
+    ///
+    /// Sibling of [`Self::ManualDigitsChanged`] on the period
+    /// spinner. The widget configures the `AdwSpinRow` adjustment to
+    /// the §5 valid range so dispatch normally only carries valid
+    /// values, but [`apply_msg`] does **not** re-clamp — the draft
+    /// preserves whatever value arrives so [`validate_manual`] at
+    /// Save time can surface the typed `period_secs` inline error.
+    /// The field is consulted only when `kind == AccountKindInput::Totp`
+    /// (see [`classify_manual_submit`]) but the draft preserves it
+    /// regardless so a kind round trip does not lose the user's
+    /// typing. Dialog-local — no [`AddAccountOutput`] is emitted.
+    ManualPeriodChanged(u32),
     /// Per-keystroke shadow of the manual Base32 secret entry into
     /// the Paladin-owned [`crate::secret_fields::SecretEntry`] inside
     /// [`crate::secret_fields::AddSecretState::manual_secret`].
@@ -1102,6 +1116,10 @@ pub fn apply_msg(state: &mut AddDialogState, msg: AddAccountMsg) -> Option<AddAc
         }
         AddAccountMsg::ManualKindChanged(kind) => {
             state.manual_draft.kind = kind;
+            None
+        }
+        AddAccountMsg::ManualPeriodChanged(period_secs) => {
+            state.manual_draft.period_secs = period_secs;
             None
         }
         AddAccountMsg::ManualSecretChanged(text) => {

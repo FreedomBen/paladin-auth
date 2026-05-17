@@ -2147,6 +2147,104 @@ fn apply_msg_manual_kind_changed_preserves_other_draft_fields_including_period_a
 }
 
 #[test]
+fn apply_msg_manual_period_changed_shadows_into_manual_draft() {
+    // TOTP period spinner value routes through
+    // `AddAccountMsg::ManualPeriodChanged(u32)` and shadows into
+    // `ManualDraftState::period_secs` so the widget view's `#[watch]`
+    // projection and `classify_manual_submit` at Save time both see
+    // the live draft. The arm emits no output — period changes are
+    // dialog-local until Save. Mirror of the existing
+    // `apply_msg_manual_digits_changed_shadows_into_manual_draft`
+    // contract on the sibling numeric-spinner field.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    assert_eq!(state.manual_draft().period_secs, 30);
+
+    let output = apply_msg(&mut state, AddAccountMsg::ManualPeriodChanged(60));
+
+    assert!(
+        output.is_none(),
+        "ManualPeriodChanged stays dialog-local; no output flows to AppModel",
+    );
+    assert_eq!(
+        state.manual_draft().period_secs,
+        60,
+        "ManualPeriodChanged shadows the spinner value into ManualDraftState::period_secs",
+    );
+}
+
+#[test]
+fn apply_msg_manual_period_changed_replaces_prior_shadow() {
+    // A second spinner step replaces (does not accumulate) the prior
+    // period shadow so the draft stays in lockstep with the
+    // spinner's current value. Mirror of the existing
+    // `apply_msg_manual_digits_changed_replaces_prior_shadow`
+    // contract on the sibling numeric-spinner field.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(&mut state, AddAccountMsg::ManualPeriodChanged(45));
+    let _ = apply_msg(&mut state, AddAccountMsg::ManualPeriodChanged(60));
+
+    assert_eq!(
+        state.manual_draft().period_secs,
+        60,
+        "second ManualPeriodChanged replaces the prior shadow",
+    );
+}
+
+#[test]
+fn apply_msg_manual_period_changed_preserves_other_draft_fields_including_counter() {
+    // The period spinner step must not disturb the rest of the
+    // manual draft — and in particular must not clear the sibling
+    // HOTP counter buffer so a `Kind::Hotp -> Kind::Totp -> tweak
+    // period -> Kind::Hotp` round trip preserves the user's prior
+    // counter value.
+    use paladin_core::{AccountKindInput, Algorithm};
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(&mut state, AddAccountMsg::ManualPeriodChanged(60));
+
+    let draft = state.manual_draft();
+    assert_eq!(draft.label, "");
+    assert_eq!(draft.issuer, "");
+    assert_eq!(draft.algorithm, Algorithm::Sha1);
+    assert_eq!(draft.digits, 6);
+    assert_eq!(draft.kind, AccountKindInput::Totp);
+    assert_eq!(draft.period_secs, 60);
+    assert_eq!(
+        draft.counter, 0,
+        "period spinner step must not clear the HOTP counter buffer",
+    );
+    assert_eq!(draft.icon_hint_text, "");
+}
+
+#[test]
+fn apply_msg_manual_period_changed_preserves_out_of_range_for_validate_manual() {
+    // The spinner's GTK widget clamps to the §5 valid range by
+    // configuration, but `apply_msg` must not silently re-clamp — if
+    // dispatch ever carries an out-of-range value (e.g. a test driver
+    // or a misuse path), the draft preserves it verbatim so
+    // `validate_manual` at Save time can surface the typed
+    // `period_secs` inline error. Mirrors the existing
+    // `apply_msg_manual_digits_changed_preserves_out_of_range_for_validate_manual`
+    // contract on the period field — both numeric spinners defer
+    // validation to submit.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(&mut state, AddAccountMsg::ManualPeriodChanged(0));
+
+    assert_eq!(
+        state.manual_draft().period_secs,
+        0,
+        "apply_msg preserves the spinner value verbatim — clamping lives in the widget",
+    );
+}
+
+#[test]
 fn manual_draft_state_default_matches_cli_manual_add_defaults() {
     // The `AdwPreferencesGroup` body of `AddAccountComponent` opens
     // with the same defaults the CLI interactive prompts use (DESIGN
