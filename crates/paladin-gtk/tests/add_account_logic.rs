@@ -1154,3 +1154,54 @@ fn add_dialog_state_default_secret_state_matches_new() {
     assert!(secret.uri_text.is_empty());
     assert!(secret.pending.is_none());
 }
+
+#[test]
+fn apply_msg_switch_path_to_uri_flips_active_path_and_emits_no_output() {
+    // The `AdwViewSwitcher` between the manual / URI sub-paths drives
+    // `apply_msg` via `AddAccountMsg::SwitchPath`. The arm must
+    // delegate to `AddSecretState::switch_path`, which is tested
+    // exhaustively in `tests/secret_fields_logic.rs` for buffer-clear
+    // / pending-drop. Here we pin the routing: the visible
+    // `active_path` flips and no `AddAccountOutput` escapes the
+    // dialog — path switches stay local until Submit is pressed.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+    use paladin_gtk::secret_fields::AddPath;
+
+    let mut state = AddDialogState::new();
+    assert_eq!(
+        state.secret_state().active_path,
+        AddPath::Manual,
+        "precondition: fresh dialog opens on Manual",
+    );
+
+    let output = apply_msg(&mut state, AddAccountMsg::SwitchPath(AddPath::Uri));
+    assert!(
+        output.is_none(),
+        "SwitchPath is dialog-local; no output flows back to AppModel",
+    );
+    assert_eq!(
+        state.secret_state().active_path,
+        AddPath::Uri,
+        "SwitchPath(Uri) advances the active path",
+    );
+}
+
+#[test]
+fn apply_msg_switch_path_same_path_is_idempotent_noop() {
+    // Idempotent re-entry on the active path must not erase buffers
+    // or emit a stray output. Mirrors the
+    // `AddSecretState::switch_path` same-path early-return guard in
+    // `tests/secret_fields_logic.rs` lifted to the `apply_msg`
+    // boundary.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+    use paladin_gtk::secret_fields::AddPath;
+
+    let mut state = AddDialogState::new();
+    let output = apply_msg(&mut state, AddAccountMsg::SwitchPath(AddPath::Manual));
+    assert!(output.is_none());
+    assert_eq!(
+        state.secret_state().active_path,
+        AddPath::Manual,
+        "same-path SwitchPath leaves active_path on Manual",
+    );
+}

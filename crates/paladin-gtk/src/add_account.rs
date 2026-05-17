@@ -95,7 +95,7 @@ use paladin_core::{
     AccountSummary, Algorithm, ErrorKind, PaladinError, Store, ValidatedAccount, Vault,
 };
 
-use crate::secret_fields::AddSecretState;
+use crate::secret_fields::{AddPath, AddSecretState};
 
 /// Widget-side bundle of typed manual-add fields.
 ///
@@ -576,6 +576,15 @@ pub enum AddAccountMsg {
         /// [`AddWorkerEffect::Success`].
         account: Account,
     },
+    /// `AdwViewSwitcher` selection between the manual / URI sub-
+    /// paths. [`apply_msg`] delegates to
+    /// [`crate::secret_fields::AddSecretState::switch_path`], which
+    /// is a no-op on same-path re-entry and otherwise wipes the
+    /// leaving path's secret buffer and drops any pending duplicate-
+    /// add staged for the prior path. The decision is dialog-local —
+    /// no [`AddAccountOutput`] is emitted; `AppModel` only sees the
+    /// path that was active when the user pressed Save.
+    SwitchPath(AddPath),
 }
 
 /// Outbound messages emitted by [`AddAccountComponent`] back to
@@ -794,6 +803,15 @@ pub fn apply_msg(state: &mut AddDialogState, msg: AddAccountMsg) -> Option<AddAc
             // next routing decision.
             state.worker_outcome = None;
             Some(AddAccountOutput::Submit { account })
+        }
+        AddAccountMsg::SwitchPath(to) => {
+            // Let-binding the returned `Option<Box<ValidatedAccount>>`
+            // so the prior pending duplicate (if any) drops at the
+            // end of this arm — the secret bytes inside the
+            // `ValidatedAccount` zero out via
+            // `paladin_core::Secret`'s `ZeroizeOnDrop` impl.
+            let _dropped_pending = state.secret_state.switch_path(to);
+            None
         }
     }
 }
