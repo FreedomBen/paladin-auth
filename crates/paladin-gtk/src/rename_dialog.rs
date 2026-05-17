@@ -528,7 +528,7 @@ impl RenameDialogState {
 /// the forwarded [`RenameDialogOutput::SubmitLabel`] lands in a
 /// follow-up commit alongside the `UnlockedBusy` worker
 /// infrastructure.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum RenameDialogMsg {
     /// Raw text from the [`adw::EntryRow`] after a keystroke. The
     /// handler re-runs [`classify_submit`] via

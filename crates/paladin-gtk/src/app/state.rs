@@ -1286,6 +1286,95 @@ pub fn rename_dialog_msg_after(effect: &RenameWorkerEffect) -> Option<RenameDial
     }
 }
 
+/// Bundled `AppModel::update` instructions for a rename-worker
+/// completion. Carries the three decisions the existing trio
+/// projects ([`should_drop_rename_dialog_after`],
+/// [`rename_dialog_msg_after`], and [`rename_final_app_state`]) so
+/// the dispatch site can apply the worker outcome in a single shot
+/// without re-routing the [`RenameWorkerEffect`].
+///
+/// Symmetric partner of [`UnlockDispatch`] for the rename path. The
+/// shape mirrors the unlock variant: an optional state replacement,
+/// an optional inline message, and a drop-dialog flag. `dialog_msg`
+/// is owned rather than borrowed because
+/// [`rename_dialog_msg_after`] returns an owned
+/// [`Option<RenameDialogMsg>`] — the unlock effect carries its dialog
+/// message inside `UnlockFailureEffect::SendUnlockDialogMsg` so the
+/// unlock variant can borrow, whereas the rename effect carries the
+/// typed [`crate::rename_dialog::RenameErrorOutcome`] and the message
+/// is constructed at projection time.
+#[derive(Debug, Clone)]
+pub struct RenameDispatch {
+    /// New [`AppState`] to install on `AppModel.state`. `Some` for
+    /// the `UnlockedBusy → Unlocked` rollback that
+    /// [`rename_final_app_state`] returns regardless of typed effect
+    /// (the rename worker always rolls the busy gate back because
+    /// `Vault::mutate_and_save` is authoritative for the rollback /
+    /// durability-unconfirmed semantics per DESIGN.md §4.3). `None`
+    /// is the defensive case where the worker outcome arrives but
+    /// `current` is not [`AppState::UnlockedBusy`] — `AppModel::update`
+    /// leaves the state untouched rather than installing a phantom
+    /// `Unlocked` over another idle state.
+    pub app_state: Option<AppState>,
+    /// Inline message to forward to the live
+    /// [`crate::rename_dialog::RenameDialogComponent`] controller.
+    /// `Some(RenameDialogMsg::WorkerFailed(outcome))` for the
+    /// failure branches (the dialog stays mounted and re-renders the
+    /// typed outcome — `RestorePrior`, `KeepNewWithWarning`, or
+    /// defensive `InlineError`); `None` for the success branch that
+    /// drops the dialog.
+    pub dialog_msg: Option<RenameDialogMsg>,
+    /// Whether `AppModel::update` should drop the live
+    /// [`crate::rename_dialog::RenameDialogComponent`] controller
+    /// after applying [`Self::app_state`]. Drops on the success
+    /// branch; stays mounted on every failure branch so the inline
+    /// error / body warning is visible and the user can retry.
+    pub drop_dialog: bool,
+}
+
+/// Bundle the trio of rename-dispatch decisions into a single
+/// [`RenameDispatch`] result so `AppModel::update` can apply the
+/// worker outcome in one shot.
+///
+/// The composer is a pure aggregator over the existing trio — it
+/// never re-derives the routing:
+///
+/// * `drop_dialog` mirrors [`should_drop_rename_dialog_after`].
+/// * `dialog_msg` mirrors [`rename_dialog_msg_after`], which returns
+///   an owned [`Option<RenameDialogMsg>`] so the bundled message
+///   outlives the borrow on `effect`.
+/// * `app_state` mirrors [`rename_final_app_state`], which is the
+///   `UnlockedBusy → Unlocked` rollback for every typed effect (the
+///   rename worker always rolls the busy gate back, regardless of
+///   typed outcome).
+///
+/// The same invariants pinned at the trio level carry through:
+///
+/// * `drop_dialog == true` iff the worker outcome is
+///   [`RenameWorkerEffect::Success`] — the dialog drops on success
+///   and stays mounted on every `Failure(RenameErrorOutcome)`
+///   variant.
+/// * `dialog_msg.is_some() == !drop_dialog`: a dropped dialog gets no
+///   inline message; a mounted dialog gets a `WorkerFailed(outcome)`.
+/// * For the failure branches from a non-[`AppState::UnlockedBusy`]
+///   source state (a stray dispatch), `app_state` is `None` while
+///   `dialog_msg` and `drop_dialog` still mirror the trio.
+///   `AppModel::update` leaves the source state in place rather than
+///   installing a phantom rollback.
+///
+/// The composer stays shape-only — it delegates to the trio without
+/// inspecting the typed [`RenameWorkerEffect`] variant itself — so
+/// `tests/app_state_logic.rs` exercises the dispatch contract
+/// without spinning up GTK / libadwaita.
+#[must_use]
+pub fn compose_rename_dispatch(current: &AppState, effect: &RenameWorkerEffect) -> RenameDispatch {
+    RenameDispatch {
+        app_state: rename_final_app_state(current, effect),
+        dialog_msg: rename_dialog_msg_after(effect),
+        drop_dialog: should_drop_rename_dialog_after(effect),
+    }
+}
+
 /// Bundled `AppModel::update` instructions for an unlock-worker
 /// completion. Carries the three decisions the existing trio
 /// projects ([`should_drop_unlock_dialog_after`],

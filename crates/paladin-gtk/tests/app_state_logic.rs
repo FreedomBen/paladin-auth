@@ -4986,6 +4986,285 @@ fn rename_dialog_msg_after_is_mutually_exclusive_with_should_drop() {
 }
 
 // ---------------------------------------------------------------------------
+// compose_rename_dispatch — bundling composer for the rename worker outcome
+// ---------------------------------------------------------------------------
+//
+// Symmetric partner of `compose_unlock_dispatch` for the rename path.
+// Bundles the trio (`rename_final_app_state`,
+// `rename_dialog_msg_after`, `should_drop_rename_dialog_after`) into
+// a single `RenameDispatch` value so `AppModel::update` can apply the
+// worker outcome in one shot — no re-routing of the
+// `RenameWorkerEffect` and no spreading of the trio across the
+// dispatch site.
+//
+// Invariants pinned at the trio level carry through:
+//
+// * `drop_dialog == true` iff the worker outcome is
+//   `RenameWorkerEffect::Success` — the dialog drops on success and
+//   stays mounted on every `Failure(RenameErrorOutcome)` variant.
+// * `dialog_msg.is_some() == !drop_dialog`: a dropped dialog gets no
+//   inline message; a mounted dialog gets `WorkerFailed(outcome)`.
+// * `app_state` mirrors `rename_final_app_state` — `Some(Unlocked)`
+//   for the `UnlockedBusy → Unlocked` rollback regardless of typed
+//   effect, `None` for non-`UnlockedBusy` source states.
+//
+// The composer stays shape-only — it delegates to the trio without
+// inspecting the typed `RenameWorkerEffect` variant itself — so the
+// dispatch contract stays unit-testable without spinning up GTK /
+// libadwaita.
+
+#[test]
+fn compose_rename_dispatch_success_bundles_drop_and_unlocked_rollback() {
+    use paladin_gtk::app::state::compose_rename_dispatch;
+    use paladin_gtk::rename_dialog::RenameWorkerEffect;
+
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let effect = RenameWorkerEffect::Success;
+    let dispatch = compose_rename_dispatch(&busy, &effect);
+    assert!(
+        dispatch.drop_dialog,
+        "Success drops the RenameDialog controller so the row label updates and the dialog dismisses",
+    );
+    assert!(
+        dispatch.dialog_msg.is_none(),
+        "Success drops the dialog, so no inline message is forwarded",
+    );
+    let next = dispatch
+        .app_state
+        .expect("Success rolls UnlockedBusy back to Unlocked");
+    assert!(
+        matches!(next, AppState::Unlocked { .. }),
+        "Success rollback target must be Unlocked, got {next:?}",
+    );
+    assert_path_eq(&next, &path);
+}
+
+#[test]
+fn compose_rename_dispatch_failure_restore_prior_keeps_dialog_with_msg_and_unlocked_rollback() {
+    use paladin_gtk::app::state::compose_rename_dispatch;
+    use paladin_gtk::rename_dialog::{
+        classify_rename_error, RenameDialogMsg, RenameErrorOutcome, RenameWorkerEffect,
+    };
+
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let err = PaladinError::SaveNotCommitted {
+        committed: false,
+        backup_path: None,
+    };
+    let outcome = classify_rename_error(&err);
+    assert!(matches!(outcome, RenameErrorOutcome::RestorePrior(_)));
+    let effect = RenameWorkerEffect::Failure(outcome);
+    let dispatch = compose_rename_dispatch(&busy, &effect);
+    assert!(
+        !dispatch.drop_dialog,
+        "RestorePrior keeps the RenameDialog mounted so the inline error is visible",
+    );
+    let msg = dispatch
+        .dialog_msg
+        .as_ref()
+        .expect("RestorePrior forwards a WorkerFailed message");
+    assert!(
+        matches!(
+            msg,
+            RenameDialogMsg::WorkerFailed(RenameErrorOutcome::RestorePrior(_))
+        ),
+        "RestorePrior must forward WorkerFailed(RestorePrior), got {msg:?}",
+    );
+    let next = dispatch
+        .app_state
+        .expect("Failure still rolls UnlockedBusy back to Unlocked");
+    assert!(matches!(next, AppState::Unlocked { .. }));
+    assert_path_eq(&next, &path);
+}
+
+#[test]
+fn compose_rename_dispatch_failure_keep_new_with_warning_keeps_dialog_with_msg_and_unlocked_rollback(
+) {
+    use paladin_gtk::app::state::compose_rename_dispatch;
+    use paladin_gtk::rename_dialog::{
+        classify_rename_error, RenameDialogMsg, RenameErrorOutcome, RenameWorkerEffect,
+    };
+
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let err = PaladinError::SaveDurabilityUnconfirmed;
+    let outcome = classify_rename_error(&err);
+    assert!(matches!(outcome, RenameErrorOutcome::KeepNewWithWarning(_)));
+    let effect = RenameWorkerEffect::Failure(outcome);
+    let dispatch = compose_rename_dispatch(&busy, &effect);
+    assert!(
+        !dispatch.drop_dialog,
+        "KeepNewWithWarning keeps the RenameDialog mounted so the warning attaches to the body",
+    );
+    let msg = dispatch
+        .dialog_msg
+        .as_ref()
+        .expect("KeepNewWithWarning forwards a WorkerFailed message");
+    assert!(matches!(
+        msg,
+        RenameDialogMsg::WorkerFailed(RenameErrorOutcome::KeepNewWithWarning(_)),
+    ));
+    let next = dispatch
+        .app_state
+        .expect("Failure still rolls UnlockedBusy back to Unlocked");
+    assert!(matches!(next, AppState::Unlocked { .. }));
+    assert_path_eq(&next, &path);
+}
+
+#[test]
+fn compose_rename_dispatch_failure_inline_error_keeps_dialog_with_msg_and_unlocked_rollback() {
+    use paladin_gtk::app::state::compose_rename_dispatch;
+    use paladin_gtk::rename_dialog::{
+        classify_rename_error, RenameDialogMsg, RenameErrorOutcome, RenameWorkerEffect,
+    };
+
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let err = PaladinError::InvalidState {
+        operation: "rename",
+        state: "account_not_found",
+    };
+    let outcome = classify_rename_error(&err);
+    assert!(matches!(outcome, RenameErrorOutcome::InlineError(_)));
+    let effect = RenameWorkerEffect::Failure(outcome);
+    let dispatch = compose_rename_dispatch(&busy, &effect);
+    assert!(
+        !dispatch.drop_dialog,
+        "defensive InlineError keeps the RenameDialog mounted so the typed error is visible",
+    );
+    let msg = dispatch
+        .dialog_msg
+        .as_ref()
+        .expect("defensive InlineError forwards a WorkerFailed message");
+    assert!(matches!(
+        msg,
+        RenameDialogMsg::WorkerFailed(RenameErrorOutcome::InlineError(_)),
+    ));
+    let next = dispatch
+        .app_state
+        .expect("Failure still rolls UnlockedBusy back to Unlocked");
+    assert!(matches!(next, AppState::Unlocked { .. }));
+    assert_path_eq(&next, &path);
+}
+
+#[test]
+fn compose_rename_dispatch_mirrors_trio_for_every_effect() {
+    use paladin_gtk::app::state::{
+        compose_rename_dispatch, rename_dialog_msg_after, rename_final_app_state,
+        should_drop_rename_dialog_after,
+    };
+    use paladin_gtk::rename_dialog::{classify_rename_error, RenameWorkerEffect};
+
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let effects = [
+        RenameWorkerEffect::Success,
+        RenameWorkerEffect::Failure(classify_rename_error(&PaladinError::SaveNotCommitted {
+            committed: false,
+            backup_path: None,
+        })),
+        RenameWorkerEffect::Failure(classify_rename_error(&PaladinError::SaveNotCommitted {
+            committed: true,
+            backup_path: None,
+        })),
+        RenameWorkerEffect::Failure(classify_rename_error(
+            &PaladinError::SaveDurabilityUnconfirmed,
+        )),
+        RenameWorkerEffect::Failure(classify_rename_error(&PaladinError::InvalidState {
+            operation: "rename",
+            state: "account_not_found",
+        })),
+    ];
+    for effect in &effects {
+        let dispatch = compose_rename_dispatch(&busy, effect);
+        assert_eq!(
+            dispatch.drop_dialog,
+            should_drop_rename_dialog_after(effect),
+            "drop_dialog must mirror the trio for effect={effect:?}",
+        );
+        let trio_msg = rename_dialog_msg_after(effect);
+        match (&dispatch.dialog_msg, &trio_msg) {
+            (None, None) | (Some(_), Some(_)) => {}
+            other => panic!(
+                "dialog_msg Some/None must mirror the trio for effect={effect:?}, got {other:?}",
+            ),
+        }
+        let trio_state = rename_final_app_state(&busy, effect);
+        match (&dispatch.app_state, &trio_state) {
+            (None, None) => {}
+            (Some(a), Some(b)) => {
+                assert_eq!(
+                    std::mem::discriminant::<AppState>(a),
+                    std::mem::discriminant::<AppState>(b),
+                    "app_state variant must mirror the trio for effect={effect:?}",
+                );
+                assert_eq!(
+                    a.path().map(Path::to_path_buf),
+                    b.path().map(Path::to_path_buf),
+                    "app_state path must mirror the trio for effect={effect:?}",
+                );
+            }
+            other => panic!(
+                "app_state Some/None must mirror the trio for effect={effect:?}, got {other:?}",
+            ),
+        }
+    }
+}
+
+#[test]
+fn compose_rename_dispatch_from_non_unlocked_busy_returns_no_app_state() {
+    // Defensive: when the rename worker returns but `current` is not
+    // `UnlockedBusy` (a stray dispatch from any other source state),
+    // the composer mirrors `rename_final_app_state` and reports
+    // `app_state = None`. `drop_dialog` and `dialog_msg` still mirror
+    // the trio because they inspect only the typed effect — the
+    // worker outcome is visible to the dialog regardless of the
+    // source state.
+    use paladin_gtk::app::state::compose_rename_dispatch;
+    use paladin_gtk::rename_dialog::{
+        classify_rename_error, RenameDialogMsg, RenameErrorOutcome, RenameWorkerEffect,
+    };
+
+    let path = vault_path();
+    let err = PaladinError::SaveNotCommitted {
+        committed: false,
+        backup_path: None,
+    };
+    let outcome = classify_rename_error(&err);
+    assert!(matches!(outcome, RenameErrorOutcome::RestorePrior(_)));
+    let effect = RenameWorkerEffect::Failure(outcome);
+    let invalid_sources = [
+        AppState::Missing { path: path.clone() },
+        AppState::Locked { path: path.clone() },
+        AppState::Unlocked { path: path.clone() },
+    ];
+    for source in &invalid_sources {
+        let dispatch = compose_rename_dispatch(source, &effect);
+        assert!(
+            !dispatch.drop_dialog,
+            "Failure keeps the dialog mounted regardless of source={source:?}",
+        );
+        assert!(
+            matches!(
+                dispatch.dialog_msg.as_ref(),
+                Some(RenameDialogMsg::WorkerFailed(
+                    RenameErrorOutcome::RestorePrior(_)
+                )),
+            ),
+            "Failure forwards WorkerFailed regardless of source={source:?}",
+        );
+        assert!(
+            dispatch.app_state.is_none(),
+            "non-UnlockedBusy source={source:?} must refuse to install a phantom Unlocked, \
+             got {:?}",
+            dispatch.app_state,
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // run_unlock_worker — synchronous body of the spawn_blocking unlock worker
 // ---------------------------------------------------------------------------
 //
