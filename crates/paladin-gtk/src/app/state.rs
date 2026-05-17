@@ -1066,6 +1066,44 @@ pub fn apply_submit_unlock_inplace(state: &mut AppState) -> bool {
     }
 }
 
+/// Apply [`submit_rename_app_state`] in-place to `state`, leaving
+/// it unchanged when the composer returns `None`.
+///
+/// Symmetric partner of [`apply_submit_unlock_inplace`] for the
+/// rename path: where `apply_submit_unlock_inplace` covers
+/// `Locked → UnlockedBusy` (the open worker is about to compute the
+/// `(Vault, Store)` pair), this wrapper covers
+/// `Unlocked → UnlockedBusy` (the rename worker takes the already-
+/// decrypted pair through `Vault::mutate_and_save`). Both bridge
+/// the owned-`self` [`AppState::enter_busy`] /
+/// [`AppState::enter_unlocking_busy`] contracts to the mut-reference
+/// call site so `AppModel::update`'s
+/// [`crate::rename_dialog::RenameDialogOutput::SubmitLabel`] handler
+/// does not have to manage a take-and-restore dance around
+/// `submit_rename_app_state`'s `Option<AppState>` return.
+///
+/// Returns `true` when the state actually transitioned (source was
+/// `Unlocked` → destination is `UnlockedBusy`), `false` otherwise.
+/// `AppModel::update` uses the `true` return to gate the
+/// `gio::spawn_blocking Vault::mutate_and_save(|v| v.rename(...))`
+/// worker spawn — a `false` return is the defensive no-op for a
+/// stray `SubmitLabel` from any non-`Unlocked` source state
+/// (`Missing`, `Locked`, `UnlockedBusy`, `StartupError`).
+///
+/// The wrapper stays shape-only — it delegates to
+/// `submit_rename_app_state` without re-deriving the transition —
+/// so the side-effect decision in `AppModel::update` stays unit-
+/// testable in `tests/app_state_logic.rs` without spinning up GTK /
+/// libadwaita.
+pub fn apply_submit_rename_inplace(state: &mut AppState) -> bool {
+    if let Some(new_state) = submit_rename_app_state(state) {
+        *state = new_state;
+        true
+    } else {
+        false
+    }
+}
+
 /// Unified state-transition composer for the unlock worker outcome.
 ///
 /// [`unlock_app_state_after`] reports the new [`AppState`] for the
