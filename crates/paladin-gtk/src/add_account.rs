@@ -671,6 +671,18 @@ pub enum AddAccountMsg {
     /// no [`AddAccountOutput`] is emitted; `AppModel` only sees the
     /// path that was active when the user pressed Save.
     SwitchPath(AddPath),
+    /// Per-keystroke shadow of the non-secret label entry into
+    /// [`ManualDraftState::label`].
+    ///
+    /// Carries a plain `String` from the GTK [`gtk::EntryBuffer`] at
+    /// the §8 UI boundary; the bytes are not secret-bearing (the
+    /// `validate_manual` field-name `label` rule rejects empty /
+    /// overlong but the label itself is rendered to the user as a
+    /// row title once committed). [`apply_msg`] replaces (does not
+    /// append) the prior shadow so the draft stays in lockstep with
+    /// the visible entry text. Dialog-local — no [`AddAccountOutput`]
+    /// is emitted.
+    ManualLabelChanged(String),
     /// Per-keystroke shadow of the manual Base32 secret entry into
     /// the Paladin-owned [`crate::secret_fields::SecretEntry`] inside
     /// [`crate::secret_fields::AddSecretState::manual_secret`].
@@ -1018,6 +1030,10 @@ pub fn apply_msg(state: &mut AddDialogState, msg: AddAccountMsg) -> Option<AddAc
             // `ValidatedAccount` zero out via
             // `paladin_core::Secret`'s `ZeroizeOnDrop` impl.
             let _dropped_pending = state.secret_state.switch_path(to);
+            None
+        }
+        AddAccountMsg::ManualLabelChanged(text) => {
+            state.manual_draft.label = text;
             None
         }
         AddAccountMsg::ManualSecretChanged(text) => {
