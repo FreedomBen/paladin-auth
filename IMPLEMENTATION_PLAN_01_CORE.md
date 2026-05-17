@@ -322,8 +322,10 @@ Each step lands as its own commit. Tests come first.
   again, and assert `iter()` and `summaries()` yield A, B, C in that
   order. Pins the on-disk `VaultPayload.accounts` field as an ordered
   `Vec<Account>` rather than an unordered collection.
-- [x] Tests: primary, temp, and backup files written `0600`, parent created
-  `0700`, atomic write via same-directory tempfile + rename, `.bak` rotated on
+- [x] Tests: primary, temp, and backup files written `0600`, parent
+  auto-created at `0700` by `Store::create` / `Store::create_force`
+  when missing (existing parents are never silently tightened), atomic
+  write via same-directory tempfile + rename, `.bak` rotated on
   each save after a primary exists (one generation), `unsafe_permissions`
   rejection at `open`
   (parent directory + primary + backup when present) and at `create`
@@ -332,6 +334,18 @@ Each step lands as its own commit. Tests come first.
   carries `path`, `subject` (one of `vault_dir`, `vault_file`,
   `backup_file`), `actual_mode`, and `expected_mode` (mode strings as
   four-digit octal, e.g. `"0644"`).
+- [x] Tests: parent-directory auto-creation on `Store::create` /
+  `Store::create_force` per DESIGN.md §4.3 — a missing parent is
+  `mkdir -p`'d at `0700` (with explicit `chmod 0700` on the leaf so a
+  permissive umask cannot widen the final mode), then enters the same
+  symlink + perms gate as an existing parent. Existing parents are
+  left untouched (a 0700 parent stays 0700; a loose parent is rejected,
+  not silently tightened). `mkdir` failures (e.g. EACCES under a
+  read-only ancestor) surface as `io_error` with
+  `operation: "create_vault_dir"`. Regression guard: `Store::open` does
+  **not** auto-create a missing parent — it still surfaces
+  `io_error { operation: "stat_vault_dir" }` so the open path stays
+  read-only.
 - [x] Tests: leftover `vault.bin.tmp` / `vault.bin.bak.tmp` files from a prior
   partial save are unlinked by the next `open` (per §4.3 step 2,
   `vault.bin.bak.tmp` is staged whenever a prior primary exists — regular

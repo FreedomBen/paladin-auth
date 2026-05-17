@@ -242,18 +242,25 @@ salt, `aead_id`, and 24-byte nonce).
   (`operation: "resolve_default_vault_path"`) if the platform path
   cannot be resolved.
 - **Permissions.** File is created `0600` regardless of mode; temporary
-  files and backups are also `0600`. The parent directory, if we create
-  it, is `0700`. In plaintext mode these permissions are the *only*
-  protection on the secrets, so we enforce them. On Linux v0.1, `open`
-  rejects a vault before decoding if the parent directory grants any
-  group/other permissions, or if the primary or backup file, when present,
-  grants any group/other permissions. `create` performs the same
-  parent-directory permission check upfront against an existing parent
-  directory and rejects with `unsafe_permissions` before writing any
-  vault content, so `paladin init` cannot leave a freshly-created vault
-  in a directory that the next `open` would refuse. (Parent
-  directories that `create` creates itself are made `0700`; existing
-  parent directories are not silently tightened.) The CLI text error
+  files and backups are also `0600`. The parent directory is `0700`
+  whenever `create` / `create_force` brings it into existence. In
+  plaintext mode these permissions are the *only* protection on the
+  secrets, so we enforce them. On Linux v0.1, `open` rejects a vault
+  before decoding if the parent directory grants any group/other
+  permissions, or if the primary or backup file, when present, grants
+  any group/other permissions. `create` / `create_force` `mkdir -p` a
+  missing parent at `0700` (with an explicit `chmod 0700` on the leaf so
+  a permissive umask cannot widen the final mode) before any other
+  work, then apply the same symlink + perms gate as `open` to confirm
+  the result. An existing parent is checked but never silently
+  tightened: a loose parent is rejected with `unsafe_permissions` and a
+  `0700` parent is left at `0700`. This invariant means `paladin init`
+  needn't pre-create the data dir and cannot leave a freshly-created
+  vault in a directory that the next `open` would refuse. `open` does
+  **not** auto-create a missing parent — a missing parent on `open`
+  surfaces as `io_error { operation: "stat_vault_dir" }`; `mkdir`
+  failures on the `create` side surface as
+  `io_error { operation: "create_vault_dir" }`. The CLI text error
   names the failing path, actual mode, expected repair mode, and the
   `chmod` command that would repair it; `--json` reports
   `unsafe_permissions` with `path`, `subject`, `actual_mode`, and

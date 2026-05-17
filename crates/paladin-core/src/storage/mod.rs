@@ -71,9 +71,9 @@ use header::{
 use payload::MAX_PAYLOAD_BYTES;
 
 #[cfg(not(unix))]
-use perms_other::{enforce_dir_perms, enforce_file_perms_from_meta};
+use perms_other::{enforce_dir_perms, enforce_file_perms_from_meta, ensure_vault_dir};
 #[cfg(unix)]
-use perms_unix::{enforce_dir_perms, enforce_file_perms_from_meta};
+use perms_unix::{enforce_dir_perms, enforce_file_perms_from_meta, ensure_vault_dir};
 
 use crate::error::PermissionSubject;
 
@@ -500,10 +500,13 @@ impl Store {
 fn create_plaintext(path: &Path) -> Result<(crate::Vault, Store)> {
     // §4.3: parent dir mode must not grant any group / other perms
     // before we ever stage a vault here. (The primary doesn't yet
-    // exist, so vault_file / backup_file checks are skipped.)
+    // exist, so vault_file / backup_file checks are skipped.) A
+    // missing parent is `mkdir -p`'d at `0700`; an existing parent is
+    // never silently tightened — same rule used by `paladin init` on
+    // the CLI side so a fresh install needn't pre-create the data dir.
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
-            enforce_dir_perms(parent)?;
+            ensure_vault_dir(parent)?;
         }
     }
     if path.exists() {
@@ -782,10 +785,11 @@ fn cleanup_leftover_temp(path: &Path) -> Result<()> {
 
 fn create_force_plaintext(path: &Path) -> Result<(crate::Vault, Store)> {
     // §4.3: parent dir checks (symlink + perms) fire before we ever
-    // touch the file — same gate as `create`.
+    // touch the file — same gate as `create`, including `mkdir -p` at
+    // `0700` for a missing parent.
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
-            enforce_dir_perms(parent)?;
+            ensure_vault_dir(parent)?;
         }
     }
     // Symlink rejection on the existing primary, if any. We deliberately
@@ -1000,10 +1004,11 @@ fn create_encrypted(path: &Path, opts: EncryptionOptions) -> Result<(crate::Vaul
 
 fn create_force_encrypted(path: &Path, opts: EncryptionOptions) -> Result<(crate::Vault, Store)> {
     // §4.3 parent-dir check + §5 staged-clobber path. Symlink rejection
-    // on the existing primary mirrors the plaintext clobber path.
+    // on the existing primary mirrors the plaintext clobber path. A
+    // missing parent is `mkdir -p`'d at `0700`.
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
-            enforce_dir_perms(parent)?;
+            ensure_vault_dir(parent)?;
         }
     }
     match fs::symlink_metadata(path) {
@@ -1042,7 +1047,7 @@ fn create_encrypted_internal(
     if !allow_clobber {
         if let Some(parent) = path.parent() {
             if !parent.as_os_str().is_empty() {
-                enforce_dir_perms(parent)?;
+                ensure_vault_dir(parent)?;
             }
         }
         if path.exists() {

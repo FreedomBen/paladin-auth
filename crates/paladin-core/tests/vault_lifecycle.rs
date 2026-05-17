@@ -969,3 +969,117 @@ fn write_secret_file_atomic_does_not_enforce_directory_perms_on_caller_dir() {
     fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
     assert_eq!(fs::read(&path).unwrap(), b"loose-perms-ok");
 }
+
+// -----------------------------------------------------------------------------
+// §4.3 parent-dir auto-creation (DESIGN.md §4.3: "Parent directories that
+// `create` creates itself are made `0700`; existing parent directories are
+// not silently tightened.")
+// -----------------------------------------------------------------------------
+
+#[test]
+fn create_plaintext_mkdir_p_missing_single_level_parent_at_0700() {
+    let tmp = vault_test_dir();
+    let parent = tmp.path().join("paladin");
+    let path = parent.join("vault.bin");
+    assert!(!parent.exists(), "parent must be missing for the test");
+
+    let (vault, store) = Store::create(&path, VaultInit::Plaintext).expect("create succeeds");
+    vault.save(&store).expect("save succeeds");
+
+    assert!(parent.is_dir(), "parent dir was auto-created");
+    let mode = fs::symlink_metadata(&parent).unwrap().permissions().mode() & 0o7777;
+    assert_eq!(
+        mode, 0o700,
+        "auto-created parent must be 0700, got {mode:04o}"
+    );
+    assert!(path.is_file(), "vault file landed at the requested path");
+}
+
+#[test]
+fn create_plaintext_mkdir_p_missing_multi_level_parent_at_0700() {
+    let tmp = vault_test_dir();
+    let parent = tmp.path().join("a").join("b").join("paladin");
+    let path = parent.join("vault.bin");
+    assert!(!tmp.path().join("a").exists());
+
+    let (vault, store) = Store::create(&path, VaultInit::Plaintext).expect("create succeeds");
+    vault.save(&store).expect("save succeeds");
+
+    assert!(parent.is_dir(), "leaf parent was auto-created");
+    // §4.3 fixes the mode on the leaf this call brought into existence.
+    let leaf_mode = fs::symlink_metadata(&parent).unwrap().permissions().mode() & 0o7777;
+    assert_eq!(
+        leaf_mode, 0o700,
+        "leaf parent must be 0700, got {leaf_mode:04o}"
+    );
+}
+
+#[test]
+fn create_plaintext_existing_parent_perms_are_not_silently_tightened() {
+    // DESIGN.md §4.3: "existing parent directories are not silently
+    // tightened." A 0700 parent stays 0700; a 0750 parent is rejected
+    // outright (the existing-loose-dir behavior is unchanged).
+    let tmp = vault_test_dir();
+    // Sanity: tmp is already 0700 from vault_test_dir.
+    let path = tmp.path().join("vault.bin");
+    let (vault, store) = Store::create(&path, VaultInit::Plaintext).expect("create succeeds");
+    vault.save(&store).expect("save succeeds");
+
+    let mode = fs::symlink_metadata(tmp.path())
+        .unwrap()
+        .permissions()
+        .mode()
+        & 0o7777;
+    assert_eq!(
+        mode, 0o700,
+        "existing parent must be left untouched at 0700"
+    );
+}
+
+#[test]
+fn create_plaintext_when_mkdir_eacces_returns_create_vault_dir() {
+    // Grandparent is `r-x------` (0o500): traversable + statable but not
+    // writable. mkdir into it fails with EACCES — the §5
+    // `create_vault_dir` surface a fresh `paladin init` would hit on a
+    // sandboxed data dir.
+    let tmp = vault_test_dir();
+    let grandparent = tmp.path().join("ro");
+    fs::create_dir(&grandparent).unwrap();
+    fs::set_permissions(&grandparent, fs::Permissions::from_mode(0o500)).unwrap();
+    let path = grandparent.join("paladin").join("vault.bin");
+
+    let result = Store::create(&path, VaultInit::Plaintext);
+
+    // Restore perms so TempDir cleanup is unconstrained on drop.
+    fs::set_permissions(&grandparent, fs::Permissions::from_mode(0o700)).unwrap();
+
+    let err = result.expect_err("mkdir into 0500 parent must fail");
+    match err {
+        PaladinError::IoError { operation, source } => {
+            assert_eq!(
+                operation, "create_vault_dir",
+                "missing-parent mkdir failure surfaces as create_vault_dir per §5"
+            );
+            assert_eq!(source.kind(), std::io::ErrorKind::PermissionDenied);
+        }
+        other => panic!("expected create_vault_dir IO error, got {other:?}"),
+    }
+}
+
+#[test]
+fn open_with_missing_parent_still_surfaces_stat_vault_dir() {
+    // Regression guard: `open` must NOT auto-create the parent. Only
+    // `create` / `create_force` do. A missing parent on `open` is still
+    // a stat failure, surfaced as `stat_vault_dir` (not `vault_missing`,
+    // which is reserved for "parent OK, primary absent").
+    let tmp = vault_test_dir();
+    let path = tmp.path().join("absent").join("vault.bin");
+    let err = Store::open(&path, VaultLock::Plaintext).expect_err("open must fail");
+    match err {
+        PaladinError::IoError { operation, source } => {
+            assert_eq!(operation, "stat_vault_dir");
+            assert_eq!(source.kind(), std::io::ErrorKind::NotFound);
+        }
+        other => panic!("expected stat_vault_dir IO error, got {other:?}"),
+    }
+}
