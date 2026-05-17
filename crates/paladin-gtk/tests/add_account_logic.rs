@@ -2930,3 +2930,164 @@ fn apply_msg_confirm_add_anyway_with_no_pending_is_defensive_noop() {
         "pending stays empty when there was nothing to consume",
     );
 }
+
+#[test]
+fn compose_submit_outcome_manual_path_with_valid_state_proceeds() {
+    // The widget Save handler chains the path-aware
+    // `compose_submit_outcome` against the live `AddDialogState`.
+    // With `active_path == Manual` (the default), a non-empty label
+    // shadowed into the manual draft, and a valid Base32 secret in
+    // `secret_state.manual_secret`, the unified composer must route
+    // through `compose_manual_submit_outcome` and surface `Proceed`
+    // so the widget can hand the validated account to
+    // `Vault::find_duplicate` next.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_submit_outcome, AddAccountMsg, AddDialogState, SubmitOutcome,
+    };
+    use paladin_gtk::secret_fields::AddPath;
+
+    let mut state = AddDialogState::new();
+    assert_eq!(
+        state.secret_state().active_path,
+        AddPath::Manual,
+        "fresh state defaults to the manual sub-path",
+    );
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualLabelChanged("alice".to_string()),
+    );
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualSecretChanged(SECRET_20_B32.to_string()),
+    );
+
+    let outcome = compose_submit_outcome(&state, now_for_tests());
+
+    assert!(
+        matches!(outcome, SubmitOutcome::Proceed(_)),
+        "manual path with valid label + secret should chain through to Proceed",
+    );
+}
+
+#[test]
+fn compose_submit_outcome_uri_path_with_valid_uri_proceeds() {
+    // Mirror of `compose_submit_outcome_manual_path_with_valid_state_proceeds`
+    // on the URI sub-path. After `SwitchPath(Uri)` the unified
+    // composer must route through `compose_uri_submit_outcome` and
+    // surface `Proceed` for a well-formed `otpauth://` URI.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_submit_outcome, AddAccountMsg, AddDialogState, SubmitOutcome,
+    };
+    use paladin_gtk::secret_fields::AddPath;
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(&mut state, AddAccountMsg::SwitchPath(AddPath::Uri));
+    let uri = format!("otpauth://totp/Acme:alice?secret={SECRET_20_B32}&issuer=Acme");
+    let _ = apply_msg(&mut state, AddAccountMsg::UriTextChanged(uri));
+
+    let outcome = compose_submit_outcome(&state, now_for_tests());
+
+    assert!(
+        matches!(outcome, SubmitOutcome::Proceed(_)),
+        "URI path with valid otpauth URI should chain through to Proceed",
+    );
+}
+
+#[test]
+fn compose_submit_outcome_manual_path_default_state_rejects_inline() {
+    // The freshly-opened dialog has an empty label / empty secret
+    // and the default `active_path == Manual`. The unified composer
+    // must route through `compose_manual_submit_outcome` and surface
+    // the typed inline error rather than `Proceed`.
+    use paladin_gtk::add_account::{compose_submit_outcome, AddDialogState, SubmitOutcome};
+
+    let state = AddDialogState::new();
+
+    let outcome = compose_submit_outcome(&state, now_for_tests());
+
+    assert!(
+        matches!(outcome, SubmitOutcome::InlineError(_)),
+        "default manual-path state has no label / secret and must reject inline",
+    );
+}
+
+#[test]
+fn compose_submit_outcome_uri_path_default_state_rejects_inline() {
+    // After `SwitchPath(Uri)` the URI buffer is empty (the switch
+    // wipes the leaving manual_secret buffer; the URI buffer starts
+    // empty too). The unified composer must route through
+    // `compose_uri_submit_outcome` and surface the typed inline
+    // error rather than `Proceed`.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_submit_outcome, AddAccountMsg, AddDialogState, SubmitOutcome,
+    };
+    use paladin_gtk::secret_fields::AddPath;
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(&mut state, AddAccountMsg::SwitchPath(AddPath::Uri));
+
+    let outcome = compose_submit_outcome(&state, now_for_tests());
+
+    assert!(
+        matches!(outcome, SubmitOutcome::InlineError(_)),
+        "default URI-path state has no URI text and must reject inline",
+    );
+}
+
+#[test]
+fn compose_submit_outcome_routes_by_active_path_not_by_buffer_contents() {
+    // Routing decision keys off `active_path`, not "which buffer
+    // happens to be populated". Seed the URI buffer with a valid
+    // otpauth URI but leave `active_path == Manual` (the default).
+    // The unified composer must still route through the manual
+    // composer — which rejects because the manual label is empty —
+    // rather than peeking at the URI buffer and proceeding.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_submit_outcome, AddAccountMsg, AddDialogState, SubmitOutcome,
+    };
+    use paladin_gtk::secret_fields::AddPath;
+
+    let mut state = AddDialogState::new();
+    assert_eq!(state.secret_state().active_path, AddPath::Manual);
+    let uri = format!("otpauth://totp/Acme:alice?secret={SECRET_20_B32}&issuer=Acme");
+    let _ = apply_msg(&mut state, AddAccountMsg::UriTextChanged(uri));
+
+    let outcome = compose_submit_outcome(&state, now_for_tests());
+
+    assert!(
+        matches!(outcome, SubmitOutcome::InlineError(_)),
+        "active_path == Manual must drive routing; a populated URI buffer is irrelevant",
+    );
+}
+
+#[test]
+fn compose_submit_outcome_preserves_state_so_retry_keeps_typing() {
+    // The helper borrows the state so the dialog can re-call it on
+    // every Save click after a typed-but-inline-rejected attempt —
+    // the user fixes the failing field, re-submits, and the prior
+    // typing is still live. Mirror of
+    // `compose_manual_submit_outcome_preserves_state_so_retry_keeps_typing`
+    // at the unified path-aware layer.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_submit_outcome, AddAccountMsg, AddDialogState,
+    };
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualLabelChanged("alice".to_string()),
+    );
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualSecretChanged(SECRET_20_B32.to_string()),
+    );
+    let draft_before = state.manual_draft().clone();
+    let secret_before = state.secret_state().manual_secret.text().to_string();
+    let active_path_before = state.secret_state().active_path;
+
+    let _outcome = compose_submit_outcome(&state, now_for_tests());
+
+    assert_eq!(state.manual_draft(), &draft_before);
+    assert_eq!(state.secret_state().manual_secret.text(), secret_before);
+    assert_eq!(state.secret_state().active_path, active_path_before);
+}

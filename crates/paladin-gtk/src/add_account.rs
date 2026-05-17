@@ -398,6 +398,81 @@ pub fn compose_uri_submit_outcome(
     crate::otpauth_uri_paste::classify_uri_submit(state.secret_state().uri_text.text(), now)
 }
 
+/// Unified validation outcome for the path-aware
+/// [`compose_submit_outcome`].
+///
+/// Collapses the structurally-identical
+/// [`ManualSubmitOutcome`] and
+/// [`crate::otpauth_uri_paste::UriSubmitOutcome`] into a single
+/// shape so the widget Save handler has one downstream branch
+/// regardless of which sub-path is active. Both per-path composers
+/// continue to return their own typed outcome — the unified enum
+/// is built by `compose_submit_outcome` at the boundary the widget
+/// consults.
+///
+/// Naming parallels [`crate::rename_dialog::SubmitOutcome`] on the
+/// rename path; each dialog scopes its own `SubmitOutcome` to its
+/// module so the variants stay narrow.
+///
+/// * [`SubmitOutcome::Proceed`] — validated account; the widget
+///   hands it to [`paladin_core::Vault::find_duplicate`] plus
+///   [`classify_duplicate`] next to decide
+///   [`AddAccountMsg::SubmitProceed`] vs
+///   [`AddAccountMsg::StagePendingDuplicate`].
+/// * [`SubmitOutcome::InlineError`] — typed §5 error body; the
+///   widget renders the rejection inline against the active sub-
+///   path's failing field and leaves the form populated for retry.
+#[derive(Debug)]
+pub enum SubmitOutcome {
+    /// Validated account ready for the duplicate-detection pre-
+    /// flight, regardless of whether it was produced by the manual
+    /// or URI sub-path.
+    Proceed(ValidatedAccount),
+    /// Typed §5 inline error; the widget renders the rejection
+    /// against the active sub-path's failing field.
+    InlineError(InlineError),
+}
+
+/// Path-aware state-driven submit composer.
+///
+/// Dispatches to [`compose_manual_submit_outcome`] or
+/// [`compose_uri_submit_outcome`] based on
+/// [`crate::secret_fields::AddSecretState::active_path`] and
+/// rewraps the per-path outcome as the unified [`SubmitOutcome`]
+/// so the widget Save handler has a single downstream branch.
+/// Routing keys off `active_path` only — a populated buffer on
+/// the inactive sub-path is ignored, so a stale URI typed before
+/// the user switched back to the manual path cannot bypass the
+/// manual fields' validation.
+///
+/// The borrow keeps the dialog state intact so a typed-but-
+/// rejected attempt can retry against the same buffers without
+/// losing the user's input on either sub-path.
+#[must_use]
+pub fn compose_submit_outcome(state: &AddDialogState, now: SystemTime) -> SubmitOutcome {
+    match state.secret_state().active_path {
+        crate::secret_fields::AddPath::Manual => match compose_manual_submit_outcome(state, now) {
+            ManualSubmitOutcome::Proceed(validated) => SubmitOutcome::Proceed(validated),
+            ManualSubmitOutcome::InlineError(err) => SubmitOutcome::InlineError(err),
+        },
+        crate::secret_fields::AddPath::Uri => match compose_uri_submit_outcome(state, now) {
+            crate::otpauth_uri_paste::UriSubmitOutcome::Proceed(validated) => {
+                SubmitOutcome::Proceed(validated)
+            }
+            // The URI sub-path's [`crate::otpauth_uri_paste::InlineError`]
+            // is structurally identical to [`InlineError`] but a
+            // distinct type, so copy the fields rather than handing
+            // the value through directly.
+            crate::otpauth_uri_paste::UriSubmitOutcome::InlineError(err) => {
+                SubmitOutcome::InlineError(InlineError {
+                    kind: err.kind,
+                    rendered: err.rendered,
+                })
+            }
+        },
+    }
+}
+
 /// Post-validate duplicate-detection routing decision.
 ///
 /// See [`classify_duplicate`]. The carried `ValidatedAccount` on
