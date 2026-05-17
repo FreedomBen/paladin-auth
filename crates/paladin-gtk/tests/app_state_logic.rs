@@ -50,7 +50,7 @@ use paladin_gtk::app::state::{
     decide_state_from_open_error, decide_state_from_path_resolution, decide_unlock_failure_action,
     decide_unlock_success_state, route_unlock_failure_effect, route_unlock_success_effect,
     route_unlock_worker_outcome, run_unlock_worker, should_drop_unlock_dialog_after,
-    submit_rename_app_state, submit_unlock_app_state, unlock_app_state_after,
+    submit_add_app_state, submit_rename_app_state, submit_unlock_app_state, unlock_app_state_after,
     unlock_dialog_msg_after, unlock_final_app_state, AppState, OpenErrorOutcome,
     UnlockFailureAction, UnlockFailureEffect, UnlockSuccessEffect, UnlockWorkerEffect,
     UnlockWorkerInput,
@@ -3429,6 +3429,147 @@ fn submit_rename_app_state_mirrors_enter_busy_for_every_variant() {
             other => panic!(
                 "composed Some/None must mirror enter_busy for source={source:?}, \
                  got {other:?}",
+            ),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// submit_add_app_state — pre-worker `Unlocked → UnlockedBusy` composer
+// ---------------------------------------------------------------------------
+//
+// Symmetric partner of `submit_rename_app_state` for the add path:
+// where `submit_rename_app_state` covers the `Unlocked → UnlockedBusy`
+// handoff for the `gio::spawn_blocking Vault::mutate_and_save(|v|
+// v.rename(...))` worker, `submit_add_app_state` covers the same
+// `Unlocked → UnlockedBusy` handoff for the `gio::spawn_blocking
+// Vault::mutate_and_save(|v| v.add(...))` worker. Both are name-the-
+// entry-point wrappers over `AppState::enter_busy()` so the call site
+// in `AppModel::update` documents which typed dispatch is opening the
+// busy gate. Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Vault interaction".
+
+#[test]
+fn submit_add_app_state_from_unlocked_returns_unlocked_busy_preserving_path() {
+    // Happy path: `AppModel::update` receives the validated
+    // `AddAccountOutput::Submit{Manual,Uri}` while the model is
+    // `AppState::Unlocked(path)`. The composer must hand `AppModel`
+    // the `UnlockedBusy(path)` transition that opens the busy gate
+    // for the `gio::spawn_blocking Vault::mutate_and_save(|v|
+    // v.add(account))` worker. The resolved path is preserved
+    // verbatim so the rest of `AppModel` (account list, header bar,
+    // dialog chrome) still names the same vault destination.
+    let path = vault_path();
+    let unlocked = AppState::Unlocked { path: path.clone() };
+    let next = submit_add_app_state(&unlocked)
+        .expect("Unlocked must transition to UnlockedBusy on submit");
+    assert!(matches!(next, AppState::UnlockedBusy { .. }));
+    assert_path_eq(&next, &path);
+}
+
+#[test]
+fn submit_add_app_state_from_non_unlocked_returns_none() {
+    // Defensive: a stray `AddAccountOutput::Submit{Manual,Uri}`
+    // dispatch from any source state other than `Unlocked` is a no-op
+    // for the state machine. `Missing` / `Locked` have no live
+    // `(Vault, Store)` pair to hand off, `UnlockedBusy` already
+    // serializes through one worker per §"In-flight effect ownership",
+    // and `StartupError` is the non-mutating surface. Returning `None`
+    // matches `AppState::enter_busy`'s own refusal contract so
+    // `AppModel::update` leaves the source state in place rather than
+    // installing a phantom `UnlockedBusy` that would clobber the idle
+    // state.
+    let path = vault_path();
+    assert!(submit_add_app_state(&AppState::Missing { path: path.clone() }).is_none());
+    assert!(submit_add_app_state(&AppState::Locked { path: path.clone() }).is_none());
+    assert!(submit_add_app_state(&AppState::UnlockedBusy { path: path.clone() }).is_none());
+    let startup = decide_state_from_inspect(&path, Err(invalid_header_err()))
+        .expect("inspect Err yields StartupError state");
+    assert!(submit_add_app_state(&startup).is_none());
+}
+
+#[test]
+fn submit_add_app_state_mirrors_enter_busy_for_every_variant() {
+    // Cross-check: the composer must mirror `AppState::enter_busy`
+    // exactly — the entry transition is `Unlocked → UnlockedBusy` for
+    // both helpers and `None` for every other source.
+    // `submit_add_app_state` is a name-the-entry-point wrapper, not a
+    // re-derivation; this test pins that contract so the helper can't
+    // drift away from `enter_busy` without breaking here first.
+    let path = vault_path();
+    let sources = [
+        AppState::Missing { path: path.clone() },
+        AppState::Locked { path: path.clone() },
+        AppState::Unlocked { path: path.clone() },
+        AppState::UnlockedBusy { path: path.clone() },
+        decide_state_from_inspect(&path, Err(invalid_header_err()))
+            .expect("inspect Err yields StartupError state"),
+    ];
+    for source in &sources {
+        let mirror = source.clone().enter_busy();
+        let composed = submit_add_app_state(source);
+        match (&mirror, &composed) {
+            (None, None) => {}
+            (Some(a), Some(b)) => {
+                assert_eq!(
+                    std::mem::discriminant::<AppState>(a),
+                    std::mem::discriminant::<AppState>(b),
+                    "composed variant must mirror enter_busy for source={source:?}",
+                );
+                assert_eq!(
+                    a.path().map(Path::to_path_buf),
+                    b.path().map(Path::to_path_buf),
+                    "composed path must mirror enter_busy for source={source:?}",
+                );
+            }
+            other => panic!(
+                "composed Some/None must mirror enter_busy for source={source:?}, \
+                 got {other:?}",
+            ),
+        }
+    }
+}
+
+#[test]
+fn submit_add_app_state_agrees_with_submit_rename_app_state() {
+    // Both `submit_add_app_state` and `submit_rename_app_state` are
+    // name-the-entry-point wrappers over `AppState::enter_busy` for
+    // the same `Unlocked → UnlockedBusy` handoff — the rename worker
+    // and the add worker both consume the already-decrypted
+    // `(Vault, Store)` pair through `Vault::mutate_and_save`. Pin
+    // that they agree on Some/None and produce equivalent variant /
+    // path so a future refactor of either composer can't silently
+    // diverge.
+    let path = vault_path();
+    let sources = [
+        AppState::Missing { path: path.clone() },
+        AppState::Locked { path: path.clone() },
+        AppState::Unlocked { path: path.clone() },
+        AppState::UnlockedBusy { path: path.clone() },
+        decide_state_from_inspect(&path, Err(invalid_header_err()))
+            .expect("inspect Err yields StartupError state"),
+    ];
+    for source in &sources {
+        let add = submit_add_app_state(source);
+        let rename = submit_rename_app_state(source);
+        match (&add, &rename) {
+            (None, None) => {}
+            (Some(a), Some(r)) => {
+                assert_eq!(
+                    std::mem::discriminant::<AppState>(a),
+                    std::mem::discriminant::<AppState>(r),
+                    "add composer must produce same variant as rename composer for \
+                     source={source:?}",
+                );
+                assert_eq!(
+                    a.path().map(Path::to_path_buf),
+                    r.path().map(Path::to_path_buf),
+                    "add composer must produce same path as rename composer for \
+                     source={source:?}",
+                );
+            }
+            other => panic!(
+                "submit_add_app_state and submit_rename_app_state must agree on Some/None for \
+                 source={source:?}, got {other:?}",
             ),
         }
     }

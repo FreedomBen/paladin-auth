@@ -974,6 +974,40 @@ pub fn submit_rename_app_state(current: &AppState) -> Option<AppState> {
     current.clone().enter_busy()
 }
 
+/// Decide the [`AppState`] transition when `AppModel::update`
+/// receives the validated `AddAccountOutput::Submit{Manual,Uri}`
+/// dispatch from `AddAccountComponent`.
+///
+/// Symmetric partner of [`submit_rename_app_state`] for the add
+/// path: both helpers cover the `Unlocked → UnlockedBusy` handoff
+/// for a `gio::spawn_blocking Vault::mutate_and_save(...)` worker
+/// that consumes the already-decrypted `(Vault, Store)` pair. The
+/// rename composer fires from
+/// [`crate::rename_dialog::RenameDialogOutput::SubmitLabel`]; this
+/// one fires from the add dialog's manual / URI submit branch so
+/// `AppModel::update` can serialize through one vault-touching
+/// worker at a time per `IMPLEMENTATION_PLAN_04_GTK.md` §"Vault
+/// interaction".
+///
+/// The helper is a name-the-entry-point wrapper over
+/// [`AppState::enter_busy`]: it returns
+/// `Some(UnlockedBusy { path })` iff `current` is
+/// `Unlocked { path }`, and `None` for every other source state
+/// (`Missing`, `Locked`, `UnlockedBusy`, `StartupError`). The
+/// `None` arm is the defensive case for a stray dispatch — an add
+/// submit that arrives from any other source state leaves
+/// `AppModel` in place rather than installing a phantom
+/// `UnlockedBusy` that would clobber the idle state.
+///
+/// The composer stays shape-only — it delegates the transition to
+/// [`AppState::enter_busy`] — so the side-effect decision in
+/// `AppModel::update` stays unit-testable in
+/// `tests/app_state_logic.rs` without spinning up GTK / libadwaita.
+#[must_use]
+pub fn submit_add_app_state(current: &AppState) -> Option<AppState> {
+    current.clone().enter_busy()
+}
+
 /// Bundle the live `(Vault, Store)` pair and the
 /// [`crate::rename_dialog::RenameDialogOutput::SubmitLabel`] payload
 /// into a [`RenameWorkerInput`] for the `gio::spawn_blocking
