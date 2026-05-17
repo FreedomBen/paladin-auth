@@ -1,5 +1,5 @@
  Documenting paladin-core v0.0.1 (/home/ben/gitclone/paladin/crates/paladin-core)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.70s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.67s
 pub mod paladin_core
 pub mod paladin_core::export
 pub fn paladin_core::export::encrypted(vault: &paladin_core::Vault, options: paladin_core::EncryptionOptions) -> paladin_core::Result<alloc::vec::Vec<u8>>
@@ -1055,6 +1055,7 @@ pub fn paladin_core::classify_init_precheck(probe: paladin_core::Result<paladin_
 pub fn paladin_core::classify_paladin_import_precheck(path: &std::path::Path, forced_format: core::option::Option<paladin_core::import::ImportFormat>) -> paladin_core::PaladinImportPrecheck
 pub fn paladin_core::default_vault_path() -> paladin_core::Result<std::path::PathBuf>
 pub fn paladin_core::detect(bytes: &[u8]) -> paladin_core::import::ImportFormat
+pub fn paladin_core::format_create_vault_dir_error(err: &paladin_core::PaladinError, attempted_dir: &std::path::Path) -> core::option::Option<alloc::string::String>
 pub fn paladin_core::format_init_force_warning(existing_vault: &std::path::Path) -> alloc::string::String
 pub fn paladin_core::format_plaintext_export_warning() -> alloc::string::String
 pub fn paladin_core::format_plaintext_storage_warning() -> alloc::string::String

@@ -1065,11 +1065,14 @@ fn reduce_create_vault_result(
                     passphrase.clear();
                     confirmation.clear();
                 }
+                // Path-aware rendering: a `create_vault_dir` IoError
+                // names the parent directory paladin tried to mkdir.
+                let rendered = crate::app::state::render_create_vault_error_message(&err, &path);
                 (
                     AppState::CreateVault {
                         path,
                         step,
-                        error: Some(render_error_message(&err)),
+                        error: Some(rendered),
                     },
                     Vec::new(),
                 )

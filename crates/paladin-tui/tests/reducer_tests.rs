@@ -403,6 +403,37 @@ fn render_error_message_falls_back_to_display_for_non_unsafe_permissions_error()
 }
 
 #[test]
+fn render_create_vault_error_message_uses_friendly_helper_for_create_vault_dir() {
+    // The create-vault wizard routes `create_vault_dir` IoErrors through
+    // `format_create_vault_dir_error` so the inline error names the
+    // directory paladin tried to mkdir. The vault path the user passed
+    // to `Store::create` lives in `AppState::CreateVault`, and its parent
+    // is the attempted dir.
+    let err = PaladinError::IoError {
+        operation: "create_vault_dir",
+        source: std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+    };
+    let vault_path = PathBuf::from("/home/u/.local/share/paladin/vault.bin");
+    let rendered = paladin_tui::app::state::render_create_vault_error_message(&err, &vault_path);
+    assert_eq!(
+        rendered,
+        "Could not create the paladin data directory at /home/u/.local/share/paladin: permission denied.\n\
+         Check that you have write permission to the parent directory."
+    );
+}
+
+#[test]
+fn render_create_vault_error_message_falls_back_for_other_errors() {
+    // For non-create_vault_dir failures, the wizard renders identical
+    // wording to `render_error_message` so the rest of the TUI stays
+    // visually consistent.
+    let err = PaladinError::VaultExists;
+    let vault_path = PathBuf::from("/anywhere/vault.bin");
+    let rendered = paladin_tui::app::state::render_create_vault_error_message(&err, &vault_path);
+    assert_eq!(rendered, render_error_message(&err));
+}
+
+#[test]
 fn build_initial_state_resolver_failure_yields_startup_error_with_no_path_and_no_file_mutation() {
     // Bullet: "Vault-path resolution failures from `default_vault_path`
     // open the non-mutating startup-error screen and do not create or

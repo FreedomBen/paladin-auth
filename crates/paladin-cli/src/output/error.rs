@@ -8,7 +8,11 @@
 
 use std::io::Write;
 
-use paladin_core::{format_unsafe_permissions, AccountSummary, PaladinError};
+use std::path::PathBuf;
+
+use paladin_core::{
+    format_create_vault_dir_error, format_unsafe_permissions, AccountSummary, PaladinError,
+};
 use serde::Serialize;
 
 use super::Mode;
@@ -98,6 +102,21 @@ pub enum CliError {
         /// `counter_used` in the §5 JSON envelope.
         counter_used: Option<u64>,
     },
+    /// `Store::create` / `Store::create_force` failed to `mkdir -p` the
+    /// vault parent directory (§4.3). Path-aware specialization of
+    /// `PaladinError::IoError { operation: "create_vault_dir", .. }` —
+    /// the typed variant doesn't carry a path, so the CLI threads the
+    /// `path.parent()` it was operating on into this variant so the
+    /// text mode can render the friendly
+    /// `format_create_vault_dir_error` wording. JSON mode still emits
+    /// the stable §5 `io_error` envelope.
+    CreateVaultDir {
+        /// Directory `paladin init` tried to `mkdir -p` — typically
+        /// `vault_path.parent()`.
+        attempted_dir: PathBuf,
+        /// Underlying OS error reported by `DirBuilder::create`.
+        source: std::io::Error,
+    },
 }
 
 impl From<PaladinError> for CliError {
@@ -135,6 +154,23 @@ impl std::fmt::Display for CliError {
                     display_label(account),
                 )
             }
+            Self::CreateVaultDir {
+                attempted_dir,
+                source,
+            } => {
+                // Defense in depth: render rebuilds a synthetic
+                // PaladinError so the shared core formatter owns the
+                // wording. The renderer above ALSO uses the formatter
+                // path, so this Display impl is only hit by fallback
+                // callers (e.g. `{cli_error}` interpolation in tests).
+                let synth = PaladinError::IoError {
+                    operation: "create_vault_dir",
+                    source: std::io::Error::new(source.kind(), source.to_string()),
+                };
+                let body = format_create_vault_dir_error(&synth, attempted_dir)
+                    .unwrap_or_else(|| synth.to_string());
+                f.write_str(&body)
+            }
         }
     }
 }
@@ -152,6 +188,7 @@ impl std::error::Error for CliError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Paladin(p) => Some(p),
+            Self::CreateVaultDir { source, .. } => Some(source),
             _ => None,
         }
     }
@@ -215,6 +252,17 @@ pub fn render(err: &CliError, mode: Mode, mut out: impl Write) -> std::io::Resul
             serde_json::to_writer(&mut out, &envelope).map_err(std::io::Error::other)?;
             writeln!(out)?;
         }
+        (Mode::Json, CliError::CreateVaultDir { .. }) => {
+            // Preserve the stable §5 `io_error` JSON envelope so tooling
+            // sees the same shape as before. The friendly text wording
+            // is text-mode only — automation reads `operation`.
+            let envelope = serde_json::json!({
+                "error_kind": "io_error",
+                "operation": "create_vault_dir",
+            });
+            serde_json::to_writer(&mut out, &envelope).map_err(std::io::Error::other)?;
+            writeln!(out)?;
+        }
         (Mode::Text { .. }, CliError::Usage { text_message }) => {
             // Clap's render() already terminates with a newline.
             write!(out, "{text_message}")?;
@@ -225,6 +273,24 @@ pub fn render(err: &CliError, mode: Mode, mut out: impl Write) -> std::io::Resul
             // `unwrap_or_else` is defense in depth: `format_unsafe_permissions`
             // returns `Some(_)` for this variant by construction.
             let body = format_unsafe_permissions(p).unwrap_or_else(|| format!("{p}"));
+            writeln!(out, "paladin: {body}")?;
+        }
+        (
+            Mode::Text { .. },
+            CliError::CreateVaultDir {
+                attempted_dir,
+                source,
+            },
+        ) => {
+            // Path-aware friendly message via paladin-core. Rebuild a
+            // synthetic IoError to feed the formatter (the typed
+            // variant doesn't carry the path itself).
+            let synth = PaladinError::IoError {
+                operation: "create_vault_dir",
+                source: std::io::Error::new(source.kind(), source.to_string()),
+            };
+            let body = format_create_vault_dir_error(&synth, attempted_dir)
+                .unwrap_or_else(|| synth.to_string());
             writeln!(out, "paladin: {body}")?;
         }
         (
@@ -308,6 +374,34 @@ mod tests {
             "expected program-name prefix, got {s:?}"
         );
         assert!(s.ends_with('\n'));
+    }
+
+    #[test]
+    fn text_mode_create_vault_dir_renders_friendly_message_with_path() {
+        let err = CliError::CreateVaultDir {
+            attempted_dir: PathBuf::from("/home/u/.local/share/paladin"),
+            source: std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+        };
+        let s = render_to_string(&err, Mode::Text { color: false });
+        assert_eq!(
+            s,
+            "paladin: Could not create the paladin data directory at /home/u/.local/share/paladin: permission denied.\n\
+             Check that you have write permission to the parent directory.\n"
+        );
+    }
+
+    #[test]
+    fn json_mode_create_vault_dir_emits_stable_io_error_envelope() {
+        // Tooling reads operation strings — the friendly text must NOT
+        // leak into JSON output.
+        let err = CliError::CreateVaultDir {
+            attempted_dir: PathBuf::from("/anywhere"),
+            source: std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+        };
+        let s = render_to_string(&err, Mode::Json);
+        let v: serde_json::Value = serde_json::from_str(s.trim()).unwrap();
+        assert_eq!(v["error_kind"], serde_json::json!("io_error"));
+        assert_eq!(v["operation"], serde_json::json!("create_vault_dir"));
     }
 
     #[test]

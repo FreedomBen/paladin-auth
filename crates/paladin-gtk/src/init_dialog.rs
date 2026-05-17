@@ -86,9 +86,9 @@ use libadwaita::prelude::*;
 use relm4::prelude::*;
 
 use paladin_core::{
-    classify_init_precheck, format_init_force_warning, format_plaintext_storage_warning,
-    format_unsafe_permissions, EncryptionOptions, ErrorKind, InitPrecheck, PaladinError, VaultInit,
-    VaultStatus,
+    classify_init_precheck, format_create_vault_dir_error, format_init_force_warning,
+    format_plaintext_storage_warning, format_unsafe_permissions, EncryptionOptions, ErrorKind,
+    InitPrecheck, PaladinError, VaultInit, VaultStatus,
 };
 use secrecy::SecretString;
 
@@ -270,13 +270,21 @@ pub enum CreateOutcome {
 ///
 /// `vault_exists` is the only kind that opens the destructive gate;
 /// every other variant — including `unsafe_permissions`,
-/// `save_not_committed`, `save_durability_unconfirmed`, and
-/// defensive `invalid_passphrase` — stays inline.
+/// `save_not_committed`, `save_durability_unconfirmed`,
+/// `create_vault_dir`, and defensive `invalid_passphrase` — stays
+/// inline.
+///
+/// `attempted_dir` is the parent directory the dialog passed to
+/// `Store::create` (i.e. `vault_path.parent()`). It is threaded into
+/// [`InlineError::from_create_error`] so a
+/// `create_vault_dir` `IoError` renders the friendly
+/// [`paladin_core::format_create_vault_dir_error`] wording naming the
+/// directory paladin tried to `mkdir -p`.
 #[must_use]
-pub fn classify_create_error(err: &PaladinError) -> CreateOutcome {
+pub fn classify_create_error(err: &PaladinError, attempted_dir: &Path) -> CreateOutcome {
     match err.kind() {
         ErrorKind::VaultExists => CreateOutcome::DestructiveGate,
-        _ => CreateOutcome::InlineError(InlineError::from_error(err)),
+        _ => CreateOutcome::InlineError(InlineError::from_create_error(err, attempted_dir)),
     }
 }
 
@@ -289,10 +297,12 @@ pub fn classify_create_error(err: &PaladinError) -> CreateOutcome {
 /// dialog never transitions out on a `create_force` failure.
 /// `save_not_committed` threads through the optional `backup_path`
 /// from the §5 error so the dialog can name the rotated `.bak`
-/// path inline.
+/// path inline; `create_vault_dir` renders the friendly
+/// [`paladin_core::format_create_vault_dir_error`] wording using
+/// `attempted_dir`.
 #[must_use]
-pub fn classify_create_force_error(err: &PaladinError) -> InlineError {
-    InlineError::from_error(err)
+pub fn classify_create_force_error(err: &PaladinError, attempted_dir: &Path) -> InlineError {
+    InlineError::from_create_error(err, attempted_dir)
 }
 
 /// Inline-error projection for the `InitDialog` body.
@@ -329,10 +339,30 @@ impl InlineError {
             backup_path: backup_path_of(err),
         }
     }
+
+    /// Build an [`InlineError`] for a `Store::create` / `create_force`
+    /// failure. Identical to [`InlineError::from_error`] except that a
+    /// `create_vault_dir` `IoError` renders via the path-aware
+    /// [`paladin_core::format_create_vault_dir_error`] helper, so the
+    /// dialog body names the directory paladin tried to `mkdir -p`.
+    /// `attempted_dir` is typically the dialog's
+    /// `InitDialogInit::vault_path.parent()`.
+    #[must_use]
+    pub fn from_create_error(err: &PaladinError, attempted_dir: &Path) -> Self {
+        Self {
+            kind: err.kind(),
+            rendered: render_create_inline(err, attempted_dir),
+            backup_path: backup_path_of(err),
+        }
+    }
 }
 
 fn render_inline(err: &PaladinError) -> String {
     format_unsafe_permissions(err).unwrap_or_else(|| err.to_string())
+}
+
+fn render_create_inline(err: &PaladinError, attempted_dir: &Path) -> String {
+    format_create_vault_dir_error(err, attempted_dir).unwrap_or_else(|| render_inline(err))
 }
 
 fn backup_path_of(err: &PaladinError) -> Option<PathBuf> {

@@ -83,15 +83,42 @@ pub fn run(global: &GlobalArgs, args: &InitArgs) -> Result<(), CliError> {
     };
 
     let vault = if args.force {
-        let (vault, _store) = Store::create_force(&path, init)?;
+        let (vault, _store) =
+            Store::create_force(&path, init).map_err(|e| classify_init_error(e, &path))?;
         vault
     } else {
-        let (vault, store) = Store::create(&path, init)?;
-        vault.save(&store)?;
+        let (vault, store) =
+            Store::create(&path, init).map_err(|e| classify_init_error(e, &path))?;
+        vault
+            .save(&store)
+            .map_err(|e| classify_init_error(e, &path))?;
         vault
     };
 
     render_success(mode, &vault, &path)
+}
+
+/// Specialize `paladin_core::Store::create{,_force}` / `Vault::save`
+/// failures for path-aware CLI rendering. Currently routes
+/// `IoError { operation: "create_vault_dir", .. }` into
+/// [`CliError::CreateVaultDir`] so the text-mode renderer can surface
+/// the friendly `format_create_vault_dir_error` message naming the
+/// parent directory; every other variant passes through as
+/// [`CliError::Paladin`].
+fn classify_init_error(err: PaladinError, vault_path: &Path) -> CliError {
+    match err {
+        PaladinError::IoError {
+            operation: "create_vault_dir",
+            source,
+        } => CliError::CreateVaultDir {
+            attempted_dir: vault_path
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_default(),
+            source,
+        },
+        other => CliError::Paladin(other),
+    }
 }
 
 fn render_success(mode: Mode, vault: &Vault, path: &Path) -> Result<(), CliError> {

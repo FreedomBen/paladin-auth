@@ -41,6 +41,33 @@ pub fn format_unsafe_permissions(err: &PaladinError) -> Option<String> {
     }
 }
 
+/// Render a `create_vault_dir` `IoError` (§4.3 mkdir failure) as a
+/// human-readable message naming the directory that paladin was trying
+/// to create and the underlying OS error. Returns `None` for any other
+/// error kind so callers can fall through to their default error path.
+///
+/// `PaladinError::IoError` doesn't carry a path, so the caller supplies
+/// `attempted_dir` — typically `vault_path.parent()` from the
+/// `Store::create` / `Store::create_force` call site. The returned
+/// string ends with a hint pointing the user at the most common cause
+/// (no write permission on the parent directory).
+///
+/// CLI, TUI, and GUI all route their create-vault-dir error rendering
+/// through this helper so wording never drifts between front ends.
+#[must_use]
+pub fn format_create_vault_dir_error(err: &PaladinError, attempted_dir: &Path) -> Option<String> {
+    match err {
+        PaladinError::IoError {
+            operation: "create_vault_dir",
+            source,
+        } => Some(format!(
+            "Could not create the paladin data directory at {dir}: {source}.\nCheck that you have write permission to the parent directory.",
+            dir = attempted_dir.display(),
+        )),
+        _ => None,
+    }
+}
+
 fn subject_label(subject: PermissionSubject) -> &'static str {
     match subject {
         PermissionSubject::VaultDir => "vault directory",
@@ -245,6 +272,51 @@ mod tests {
         assert!(format_unsafe_permissions(&dir)
             .unwrap()
             .contains("chmod 0700 /d"));
+    }
+
+    #[test]
+    fn format_create_vault_dir_error_renders_path_source_and_hint() {
+        let err = PaladinError::IoError {
+            operation: "create_vault_dir",
+            source: std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+        };
+        let dir = Path::new("/home/u/.local/share/paladin");
+        assert_eq!(
+            format_create_vault_dir_error(&err, dir).unwrap(),
+            "Could not create the paladin data directory at /home/u/.local/share/paladin: permission denied.\n\
+             Check that you have write permission to the parent directory."
+        );
+    }
+
+    #[test]
+    fn format_create_vault_dir_error_returns_none_for_other_ops_and_kinds() {
+        // The helper must only fire for io_error { operation = "create_vault_dir" };
+        // every other variant (and every other operation string) falls
+        // through to the caller's default renderer.
+        let dir = Path::new("/somewhere");
+        let cases: [PaladinError; 4] = [
+            PaladinError::VaultMissing,
+            PaladinError::UnsafePermissions {
+                path: std::path::PathBuf::from("/x"),
+                subject: PermissionSubject::VaultDir,
+                actual_mode: "0755".to_string(),
+                expected_mode: "0700".to_string(),
+            },
+            PaladinError::IoError {
+                operation: "stat_vault_dir",
+                source: std::io::Error::from(std::io::ErrorKind::NotFound),
+            },
+            PaladinError::IoError {
+                operation: "read_vault_file",
+                source: std::io::Error::other("x"),
+            },
+        ];
+        for err in &cases {
+            assert!(
+                format_create_vault_dir_error(err, dir).is_none(),
+                "expected None for {err:?}"
+            );
+        }
     }
 
     #[test]

@@ -71,6 +71,13 @@ fn unsafe_permissions_err() -> PaladinError {
     }
 }
 
+/// Representative attempted-mkdir directory for create classifier
+/// tests. Matches the `unsafe_permissions_err()` vault file's parent
+/// so a fixture sees a coherent (path, parent) pair.
+fn attempted_dir() -> &'static Path {
+    Path::new("/tmp")
+}
+
 fn save_not_committed_no_backup() -> PaladinError {
     PaladinError::SaveNotCommitted {
         committed: false,
@@ -271,14 +278,14 @@ fn classify_precheck_vault_missing_propagates_inline_error() {
 
 #[test]
 fn classify_create_error_vault_exists_opens_destructive_gate() {
-    let outcome = classify_create_error(&PaladinError::VaultExists);
+    let outcome = classify_create_error(&PaladinError::VaultExists, attempted_dir());
     assert!(matches!(outcome, CreateOutcome::DestructiveGate));
 }
 
 #[test]
 fn classify_create_error_unsafe_permissions_stays_inline() {
     let err = unsafe_permissions_err();
-    let outcome = classify_create_error(&err);
+    let outcome = classify_create_error(&err, attempted_dir());
     let CreateOutcome::InlineError(inline) = outcome else {
         panic!("expected InlineError, got {outcome:?}");
     };
@@ -292,7 +299,7 @@ fn classify_create_error_save_not_committed_stays_inline_without_backup() {
     // `create` never rotates a backup (only `create_force` does), so
     // the `backup_path` field is always `None` on this path.
     let err = save_not_committed_no_backup();
-    let outcome = classify_create_error(&err);
+    let outcome = classify_create_error(&err, attempted_dir());
     let CreateOutcome::InlineError(inline) = outcome else {
         panic!("expected InlineError, got {outcome:?}");
     };
@@ -303,7 +310,7 @@ fn classify_create_error_save_not_committed_stays_inline_without_backup() {
 #[test]
 fn classify_create_error_save_durability_unconfirmed_stays_inline() {
     let err = PaladinError::SaveDurabilityUnconfirmed;
-    let outcome = classify_create_error(&err);
+    let outcome = classify_create_error(&err, attempted_dir());
     let CreateOutcome::InlineError(inline) = outcome else {
         panic!("expected InlineError, got {outcome:?}");
     };
@@ -319,11 +326,40 @@ fn classify_create_error_invalid_passphrase_stays_inline() {
     let err = PaladinError::InvalidPassphrase {
         reason: "zero_length",
     };
-    let outcome = classify_create_error(&err);
+    let outcome = classify_create_error(&err, attempted_dir());
     let CreateOutcome::InlineError(inline) = outcome else {
         panic!("expected InlineError, got {outcome:?}");
     };
     assert_eq!(inline.kind, ErrorKind::InvalidPassphrase);
+}
+
+#[test]
+fn classify_create_error_create_vault_dir_renders_friendly_message_with_path() {
+    // §4.3 mkdir failure on a fresh `Store::create` surfaces as the
+    // friendly path-aware wording from
+    // `paladin_core::format_create_vault_dir_error`, naming the
+    // directory paladin tried to `mkdir -p`.
+    let err = PaladinError::IoError {
+        operation: "create_vault_dir",
+        source: std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+    };
+    let outcome = classify_create_error(&err, Path::new("/home/u/.local/share/paladin"));
+    let CreateOutcome::InlineError(inline) = outcome else {
+        panic!("expected InlineError, got {outcome:?}");
+    };
+    assert_eq!(inline.kind, ErrorKind::IoError);
+    assert!(
+        inline.rendered.contains("/home/u/.local/share/paladin"),
+        "rendered text should name the attempted dir, got {:?}",
+        inline.rendered
+    );
+    assert!(
+        inline
+            .rendered
+            .contains("Check that you have write permission"),
+        "rendered text should include the friendly hint, got {:?}",
+        inline.rendered
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -334,7 +370,7 @@ fn classify_create_error_invalid_passphrase_stays_inline() {
 #[test]
 fn classify_create_force_error_unsafe_permissions_stays_inline() {
     let err = unsafe_permissions_err();
-    let inline = classify_create_force_error(&err);
+    let inline = classify_create_force_error(&err, attempted_dir());
     assert_eq!(inline.kind, ErrorKind::UnsafePermissions);
     assert!(inline.rendered.contains("/tmp/vault.bin"));
     assert!(inline.backup_path.is_none());
@@ -347,7 +383,7 @@ fn classify_create_force_error_save_not_committed_threads_backup_path() {
     // `save_not_committed` carries the rotated path so the dialog
     // can show it inline.
     let err = save_not_committed_with_backup();
-    let inline = classify_create_force_error(&err);
+    let inline = classify_create_force_error(&err, attempted_dir());
     assert_eq!(inline.kind, ErrorKind::SaveNotCommitted);
     assert_eq!(
         inline.backup_path.as_deref(),
@@ -360,7 +396,7 @@ fn classify_create_force_error_save_not_committed_without_backup_threads_none() 
     // Failure before the backup rotation runs leaves `backup_path`
     // unset — the dialog must not invent a path.
     let err = save_not_committed_no_backup();
-    let inline = classify_create_force_error(&err);
+    let inline = classify_create_force_error(&err, attempted_dir());
     assert_eq!(inline.kind, ErrorKind::SaveNotCommitted);
     assert!(inline.backup_path.is_none());
 }
@@ -368,9 +404,24 @@ fn classify_create_force_error_save_not_committed_without_backup_threads_none() 
 #[test]
 fn classify_create_force_error_save_durability_unconfirmed_stays_inline() {
     let err = PaladinError::SaveDurabilityUnconfirmed;
-    let inline = classify_create_force_error(&err);
+    let inline = classify_create_force_error(&err, attempted_dir());
     assert_eq!(inline.kind, ErrorKind::SaveDurabilityUnconfirmed);
     assert!(inline.backup_path.is_none());
+}
+
+#[test]
+fn classify_create_force_error_create_vault_dir_renders_friendly_message_with_path() {
+    let err = PaladinError::IoError {
+        operation: "create_vault_dir",
+        source: std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+    };
+    let inline = classify_create_force_error(&err, Path::new("/home/u/.local/share/paladin"));
+    assert_eq!(inline.kind, ErrorKind::IoError);
+    assert!(
+        inline.rendered.contains("/home/u/.local/share/paladin"),
+        "rendered text should name the attempted dir, got {:?}",
+        inline.rendered
+    );
 }
 
 // ---------------------------------------------------------------------------

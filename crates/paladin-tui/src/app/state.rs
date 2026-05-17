@@ -11,9 +11,10 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use paladin_core::{
-    format_unsafe_permissions, AccountId, AccountKindInput, AccountSummary, Algorithm,
-    ClipboardClearToken, IdlePolicy, ImportConflict, ImportFormat, PaladinError, Store,
-    ValidatedAccount, Vault, VaultLock, VaultStatus, DIGITS_DEFAULT, TOTP_PERIOD_DEFAULT,
+    format_create_vault_dir_error, format_unsafe_permissions, AccountId, AccountKindInput,
+    AccountSummary, Algorithm, ClipboardClearToken, IdlePolicy, ImportConflict, ImportFormat,
+    PaladinError, Store, ValidatedAccount, Vault, VaultLock, VaultStatus, DIGITS_DEFAULT,
+    TOTP_PERIOD_DEFAULT,
 };
 use secrecy::SecretString;
 use zeroize::Zeroizing;
@@ -1616,6 +1617,30 @@ pub fn compute_idle_deadline(now: Instant, vault: &Vault) -> Option<Instant> {
 #[must_use]
 pub fn render_error_message(error: &PaladinError) -> String {
     format_unsafe_permissions(error).unwrap_or_else(|| error.to_string())
+}
+
+/// Path-aware error renderer for the in-app create-vault wizard.
+///
+/// Routes `create_vault_dir` `IoError`s through
+/// [`paladin_core::format_create_vault_dir_error`] so the wizard's
+/// inline error names the directory paladin tried to `mkdir -p`; every
+/// other error falls back to [`render_error_message`] so wording stays
+/// identical to the rest of the TUI.
+///
+/// `vault_path` is the path the user submitted to the wizard — the
+/// helper threads `vault_path.parent()` into the formatter because
+/// `PaladinError::IoError` does not carry the attempted path.
+#[must_use]
+pub fn render_create_vault_error_message(
+    error: &PaladinError,
+    vault_path: &std::path::Path,
+) -> String {
+    let attempted_dir = vault_path
+        .parent()
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_default();
+    format_create_vault_dir_error(error, &attempted_dir)
+        .unwrap_or_else(|| render_error_message(error))
 }
 
 /// Render the `"issuer:label"` (or bare `"label"`) display string
