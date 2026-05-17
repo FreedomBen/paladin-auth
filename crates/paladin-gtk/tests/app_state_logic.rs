@@ -7508,3 +7508,285 @@ fn add_dialog_msg_after_is_mutually_exclusive_with_should_drop() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// compose_add_dispatch — bundling composer for the add worker outcome
+// ---------------------------------------------------------------------------
+//
+// Symmetric partner of `compose_rename_dispatch` for the add path.
+// Bundles the trio of add-dispatch decisions (`add_final_app_state`,
+// `add_dialog_msg_after`, `should_drop_add_dialog_after`) into a
+// single `AddDispatch` value so `AppModel::update` can apply the
+// worker outcome in one shot.
+//
+// Invariants pinned at the trio level carry through:
+//
+// * `drop_dialog == true` iff the worker outcome is
+//   `AddWorkerEffect::Success` — the dialog drops on success and
+//   stays mounted on every `Failure(AddPostEffectOutcome)` variant.
+// * `dialog_msg.is_some() == !drop_dialog`: a dropped dialog gets no
+//   inline message; a mounted dialog gets a `WorkerFailed(outcome)`.
+// * For the failure branches from a non-`UnlockedBusy` source state
+//   (a stray dispatch), `app_state` is `None` while `dialog_msg` and
+//   `drop_dialog` still mirror the trio.
+
+#[test]
+fn compose_add_dispatch_success_bundles_drop_and_unlocked_rollback() {
+    use paladin_gtk::add_account::AddWorkerEffect;
+    use paladin_gtk::app::state::compose_add_dispatch;
+
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let effect = AddWorkerEffect::Success {
+        account_id: AccountId::new(),
+    };
+    let dispatch = compose_add_dispatch(&busy, &effect);
+    assert!(
+        dispatch.drop_dialog,
+        "Success drops the AddAccountComponent so the new row appears and the dialog dismisses",
+    );
+    assert!(
+        dispatch.dialog_msg.is_none(),
+        "Success drops the dialog, so no inline message is forwarded",
+    );
+    let next = dispatch
+        .app_state
+        .expect("Success rolls UnlockedBusy back to Unlocked");
+    assert!(
+        matches!(next, AppState::Unlocked { .. }),
+        "Success rollback target must be Unlocked, got {next:?}",
+    );
+    assert_path_eq(&next, &path);
+}
+
+#[test]
+fn compose_add_dispatch_failure_inline_keeps_dialog_with_msg_and_unlocked_rollback() {
+    use paladin_gtk::add_account::{
+        classify_add_post_effect_error, AddAccountMsg, AddPostEffectOutcome, AddWorkerEffect,
+    };
+    use paladin_gtk::app::state::compose_add_dispatch;
+
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let err = PaladinError::SaveNotCommitted {
+        committed: false,
+        backup_path: None,
+    };
+    let outcome = classify_add_post_effect_error(&err);
+    assert!(matches!(outcome, AddPostEffectOutcome::Inline(_)));
+    let effect = AddWorkerEffect::Failure(outcome);
+    let dispatch = compose_add_dispatch(&busy, &effect);
+    assert!(
+        !dispatch.drop_dialog,
+        "Inline failure keeps the AddAccountComponent mounted so the inline error is visible",
+    );
+    let msg = dispatch
+        .dialog_msg
+        .as_ref()
+        .expect("Inline failure forwards a WorkerFailed message");
+    assert!(
+        matches!(
+            msg,
+            AddAccountMsg::WorkerFailed(AddPostEffectOutcome::Inline(_))
+        ),
+        "Inline failure must forward WorkerFailed(Inline), got {msg:?}",
+    );
+    let next = dispatch
+        .app_state
+        .expect("Failure still rolls UnlockedBusy back to Unlocked");
+    assert!(matches!(next, AppState::Unlocked { .. }));
+    assert_path_eq(&next, &path);
+}
+
+#[test]
+fn compose_add_dispatch_failure_keep_with_warning_keeps_dialog_with_msg_and_unlocked_rollback() {
+    use paladin_gtk::add_account::{
+        classify_add_post_effect_error, AddAccountMsg, AddPostEffectOutcome, AddWorkerEffect,
+    };
+    use paladin_gtk::app::state::compose_add_dispatch;
+
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let err = PaladinError::SaveDurabilityUnconfirmed;
+    let outcome = classify_add_post_effect_error(&err);
+    assert!(matches!(outcome, AddPostEffectOutcome::KeepWithWarning(_)));
+    let effect = AddWorkerEffect::Failure(outcome);
+    let dispatch = compose_add_dispatch(&busy, &effect);
+    assert!(
+        !dispatch.drop_dialog,
+        "KeepWithWarning keeps the AddAccountComponent mounted so the warning attaches to the body",
+    );
+    let msg = dispatch
+        .dialog_msg
+        .as_ref()
+        .expect("KeepWithWarning forwards a WorkerFailed message");
+    assert!(matches!(
+        msg,
+        AddAccountMsg::WorkerFailed(AddPostEffectOutcome::KeepWithWarning(_)),
+    ));
+    let next = dispatch
+        .app_state
+        .expect("Failure still rolls UnlockedBusy back to Unlocked");
+    assert!(matches!(next, AppState::Unlocked { .. }));
+    assert_path_eq(&next, &path);
+}
+
+#[test]
+fn compose_add_dispatch_failure_defensive_inline_keeps_dialog_with_msg_and_unlocked_rollback() {
+    use paladin_gtk::add_account::{
+        classify_add_post_effect_error, AddAccountMsg, AddPostEffectOutcome, AddWorkerEffect,
+    };
+    use paladin_gtk::app::state::compose_add_dispatch;
+
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let err = PaladinError::InvalidState {
+        operation: "add",
+        state: "duplicate_account",
+    };
+    let outcome = classify_add_post_effect_error(&err);
+    assert!(
+        matches!(outcome, AddPostEffectOutcome::Inline(_)),
+        "defensive invalid_state routes to Inline",
+    );
+    let effect = AddWorkerEffect::Failure(outcome);
+    let dispatch = compose_add_dispatch(&busy, &effect);
+    assert!(
+        !dispatch.drop_dialog,
+        "defensive Inline keeps the AddAccountComponent mounted so the typed error is visible",
+    );
+    let msg = dispatch
+        .dialog_msg
+        .as_ref()
+        .expect("defensive Inline forwards a WorkerFailed message");
+    assert!(matches!(
+        msg,
+        AddAccountMsg::WorkerFailed(AddPostEffectOutcome::Inline(_)),
+    ));
+    let next = dispatch
+        .app_state
+        .expect("Failure still rolls UnlockedBusy back to Unlocked");
+    assert!(matches!(next, AppState::Unlocked { .. }));
+    assert_path_eq(&next, &path);
+}
+
+#[test]
+fn compose_add_dispatch_mirrors_trio_for_every_effect() {
+    use paladin_gtk::add_account::{classify_add_post_effect_error, AddWorkerEffect};
+    use paladin_gtk::app::state::{
+        add_dialog_msg_after, add_final_app_state, compose_add_dispatch,
+        should_drop_add_dialog_after,
+    };
+
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let effects = [
+        AddWorkerEffect::Success {
+            account_id: AccountId::new(),
+        },
+        AddWorkerEffect::Failure(classify_add_post_effect_error(
+            &PaladinError::SaveNotCommitted {
+                committed: false,
+                backup_path: None,
+            },
+        )),
+        AddWorkerEffect::Failure(classify_add_post_effect_error(
+            &PaladinError::SaveNotCommitted {
+                committed: true,
+                backup_path: None,
+            },
+        )),
+        AddWorkerEffect::Failure(classify_add_post_effect_error(
+            &PaladinError::SaveDurabilityUnconfirmed,
+        )),
+        AddWorkerEffect::Failure(classify_add_post_effect_error(
+            &PaladinError::InvalidState {
+                operation: "add",
+                state: "duplicate_account",
+            },
+        )),
+    ];
+    for effect in &effects {
+        let dispatch = compose_add_dispatch(&busy, effect);
+        assert_eq!(
+            dispatch.drop_dialog,
+            should_drop_add_dialog_after(effect),
+            "drop_dialog must mirror the trio for effect={effect:?}",
+        );
+        let trio_msg = add_dialog_msg_after(effect);
+        match (&dispatch.dialog_msg, &trio_msg) {
+            (None, None) | (Some(_), Some(_)) => {}
+            other => panic!(
+                "dialog_msg Some/None must mirror the trio for effect={effect:?}, got {other:?}",
+            ),
+        }
+        let trio_state = add_final_app_state(&busy, effect);
+        match (&dispatch.app_state, &trio_state) {
+            (None, None) => {}
+            (Some(a), Some(b)) => {
+                assert_eq!(
+                    std::mem::discriminant::<AppState>(a),
+                    std::mem::discriminant::<AppState>(b),
+                    "app_state variant must mirror the trio for effect={effect:?}",
+                );
+                assert_eq!(
+                    a.path().map(Path::to_path_buf),
+                    b.path().map(Path::to_path_buf),
+                    "app_state path must mirror the trio for effect={effect:?}",
+                );
+            }
+            other => panic!(
+                "app_state Some/None must mirror the trio for effect={effect:?}, got {other:?}",
+            ),
+        }
+    }
+}
+
+#[test]
+fn compose_add_dispatch_from_non_unlocked_busy_returns_no_app_state() {
+    // Defensive: when the add worker returns but `current` is not
+    // `UnlockedBusy` (a stray dispatch from any other source state),
+    // the composer mirrors `add_final_app_state` and reports
+    // `app_state = None`. `drop_dialog` and `dialog_msg` still mirror
+    // the trio because they inspect only the typed effect — the
+    // worker outcome is visible to the dialog regardless of the
+    // source state.
+    use paladin_gtk::add_account::{
+        classify_add_post_effect_error, AddAccountMsg, AddPostEffectOutcome, AddWorkerEffect,
+    };
+    use paladin_gtk::app::state::compose_add_dispatch;
+
+    let path = vault_path();
+    let err = PaladinError::SaveNotCommitted {
+        committed: false,
+        backup_path: None,
+    };
+    let outcome = classify_add_post_effect_error(&err);
+    assert!(matches!(outcome, AddPostEffectOutcome::Inline(_)));
+    let effect = AddWorkerEffect::Failure(outcome);
+    let invalid_sources = [
+        AppState::Missing { path: path.clone() },
+        AppState::Locked { path: path.clone() },
+        AppState::Unlocked { path: path.clone() },
+    ];
+    for source in &invalid_sources {
+        let dispatch = compose_add_dispatch(source, &effect);
+        assert!(
+            !dispatch.drop_dialog,
+            "Failure keeps the dialog mounted regardless of source={source:?}",
+        );
+        assert!(
+            matches!(
+                dispatch.dialog_msg.as_ref(),
+                Some(AddAccountMsg::WorkerFailed(AddPostEffectOutcome::Inline(_))),
+            ),
+            "Failure forwards WorkerFailed regardless of source={source:?}",
+        );
+        assert!(
+            dispatch.app_state.is_none(),
+            "non-UnlockedBusy source={source:?} must refuse to install a phantom Unlocked, \
+             got {:?}",
+            dispatch.app_state,
+        );
+    }
+}

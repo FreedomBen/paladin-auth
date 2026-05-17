@@ -1925,6 +1925,95 @@ pub fn add_dialog_msg_after(effect: &AddWorkerEffect) -> Option<AddAccountMsg> {
     }
 }
 
+/// Bundled `AppModel::update` instructions for an add-worker
+/// completion. Carries the three decisions the existing trio
+/// projects ([`should_drop_add_dialog_after`],
+/// [`add_dialog_msg_after`], and [`add_final_app_state`]) so the
+/// dispatch site can apply the worker outcome in a single shot
+/// without re-routing the [`AddWorkerEffect`].
+///
+/// Symmetric partner of [`RenameDispatch`] for the add path. The
+/// shape mirrors the rename variant: an optional state replacement,
+/// an optional inline message, and a drop-dialog flag. `dialog_msg`
+/// is owned rather than borrowed because [`add_dialog_msg_after`]
+/// returns an owned [`Option<AddAccountMsg>`] — the rename effect
+/// carries the typed [`crate::rename_dialog::RenameErrorOutcome`]
+/// and the add effect carries the typed
+/// [`crate::add_account::AddPostEffectOutcome`]; the message is
+/// constructed at projection time in both cases.
+#[derive(Debug, Clone)]
+pub struct AddDispatch {
+    /// New [`AppState`] to install on `AppModel.state`. `Some` for
+    /// the `UnlockedBusy → Unlocked` rollback that
+    /// [`add_final_app_state`] returns regardless of typed effect
+    /// (the add worker always rolls the busy gate back because
+    /// `Vault::mutate_and_save` is authoritative for the rollback /
+    /// durability-unconfirmed semantics per DESIGN.md §4.3). `None`
+    /// is the defensive case where the worker outcome arrives but
+    /// `current` is not [`AppState::UnlockedBusy`] — `AppModel::update`
+    /// leaves the state untouched rather than installing a phantom
+    /// `Unlocked` over another idle state.
+    pub app_state: Option<AppState>,
+    /// Inline message to forward to the live
+    /// [`crate::add_account::AddAccountComponent`] controller.
+    /// `Some(AddAccountMsg::WorkerFailed(outcome))` for the failure
+    /// branches (the dialog stays mounted and re-renders the typed
+    /// outcome — `Inline` for `save_not_committed` / `io_error` /
+    /// defensive `validation_error` / `invalid_state`, and
+    /// `KeepWithWarning` for `save_durability_unconfirmed`); `None`
+    /// for the success branch that drops the dialog.
+    pub dialog_msg: Option<AddAccountMsg>,
+    /// Whether `AppModel::update` should drop the live
+    /// [`crate::add_account::AddAccountComponent`] controller after
+    /// applying [`Self::app_state`]. Drops on the success branch;
+    /// stays mounted on every failure branch so the inline error /
+    /// body warning is visible and the user can retry or acknowledge.
+    pub drop_dialog: bool,
+}
+
+/// Bundle the trio of add-dispatch decisions into a single
+/// [`AddDispatch`] result so `AppModel::update` can apply the worker
+/// outcome in one shot.
+///
+/// Symmetric partner of [`compose_rename_dispatch`] for the add
+/// path. The composer is a pure aggregator over the existing trio —
+/// it never re-derives the routing:
+///
+/// * `drop_dialog` mirrors [`should_drop_add_dialog_after`].
+/// * `dialog_msg` mirrors [`add_dialog_msg_after`], which returns an
+///   owned [`Option<AddAccountMsg>`] so the bundled message outlives
+///   the borrow on `effect`.
+/// * `app_state` mirrors [`add_final_app_state`], which is the
+///   `UnlockedBusy → Unlocked` rollback for every typed effect (the
+///   add worker always rolls the busy gate back, regardless of typed
+///   outcome).
+///
+/// The same invariants pinned at the trio level carry through:
+///
+/// * `drop_dialog == true` iff the worker outcome is
+///   [`AddWorkerEffect::Success`] — the dialog drops on success and
+///   stays mounted on every `Failure(AddPostEffectOutcome)` variant.
+/// * `dialog_msg.is_some() == !drop_dialog`: a dropped dialog gets no
+///   inline message; a mounted dialog gets a `WorkerFailed(outcome)`.
+/// * For the failure branches from a non-[`AppState::UnlockedBusy`]
+///   source state (a stray dispatch), `app_state` is `None` while
+///   `dialog_msg` and `drop_dialog` still mirror the trio.
+///   `AppModel::update` leaves the source state in place rather than
+///   installing a phantom rollback.
+///
+/// The composer stays shape-only — it delegates to the trio without
+/// inspecting the typed [`AddWorkerEffect`] variant itself — so
+/// `tests/app_state_logic.rs` exercises the dispatch contract
+/// without spinning up GTK / libadwaita.
+#[must_use]
+pub fn compose_add_dispatch(current: &AppState, effect: &AddWorkerEffect) -> AddDispatch {
+    AddDispatch {
+        app_state: add_final_app_state(current, effect),
+        dialog_msg: add_dialog_msg_after(effect),
+        drop_dialog: should_drop_add_dialog_after(effect),
+    }
+}
+
 /// Compose the [`AppState`] transition for the
 /// [`crate::remove_dialog::RemoveDialogOutput::SubmitConfirm`] dispatch.
 ///
