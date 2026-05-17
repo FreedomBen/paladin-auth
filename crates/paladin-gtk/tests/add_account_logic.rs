@@ -917,9 +917,10 @@ fn add_account_init_clones_for_reactive_state() {
 
 #[test]
 fn apply_msg_cancel_routes_to_cancel_output() {
-    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddAccountOutput};
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddAccountOutput, AddDialogState};
 
-    let output = apply_msg(AddAccountMsg::Cancel);
+    let mut state = AddDialogState::new();
+    let output = apply_msg(&mut state, AddAccountMsg::Cancel);
     assert!(
         matches!(output, Some(AddAccountOutput::Cancel)),
         "Cancel must route to AddAccountOutput::Cancel, got {output:?}",
@@ -927,13 +928,18 @@ fn apply_msg_cancel_routes_to_cancel_output() {
 }
 
 #[test]
-fn apply_msg_worker_failed_emits_no_output() {
+fn apply_msg_worker_failed_emits_no_output_and_stores_outcome() {
     // `WorkerFailed` is consumed by the dialog to re-render the
     // inline error / durability warning; it never bubbles back to
     // `AppModel`. Pinned so a future `apply_msg` refactor cannot
-    // forward it past the Component boundary.
+    // forward it past the Component boundary. The typed outcome
+    // is stored on `AddDialogState::worker_outcome` so the widget
+    // view can route `Inline` / `KeepWithWarning` into the dialog
+    // body without re-deriving the routing decision (mirror of the
+    // `RenameDialogState::worker_outcome` contract).
     use paladin_gtk::add_account::{
-        apply_msg, classify_add_post_effect_error, AddAccountMsg, AddPostEffectOutcome,
+        apply_msg, classify_add_post_effect_error, AddAccountMsg, AddDialogState,
+        AddPostEffectOutcome,
     };
 
     let err = PaladinError::SaveNotCommitted {
@@ -942,11 +948,66 @@ fn apply_msg_worker_failed_emits_no_output() {
     };
     let outcome = classify_add_post_effect_error(&err);
     assert!(matches!(outcome, AddPostEffectOutcome::Inline(_)));
-    let output = apply_msg(AddAccountMsg::WorkerFailed(outcome));
+    let mut state = AddDialogState::new();
+    let output = apply_msg(&mut state, AddAccountMsg::WorkerFailed(outcome));
     assert!(
         output.is_none(),
         "WorkerFailed must not bubble back to AppModel, got {output:?}",
     );
+    let stored = state
+        .worker_outcome()
+        .expect("Inline outcome should be stored on the state");
+    assert!(matches!(stored, AddPostEffectOutcome::Inline(_)));
+}
+
+#[test]
+fn apply_msg_worker_failed_keep_with_warning_stores_outcome() {
+    // `save_durability_unconfirmed` means `Vault::add` committed but
+    // the parent fsync was not confirmed. The post-effect routing
+    // returns `KeepWithWarning`, and the dialog stores it so the
+    // view can attach the durability warning to the body. The
+    // success-with-warning case keeps the dialog open at the Cancel-
+    // only state so the user can see the warning before dismissing.
+    use paladin_gtk::add_account::{
+        apply_msg, classify_add_post_effect_error, AddAccountMsg, AddDialogState,
+        AddPostEffectOutcome,
+    };
+
+    let outcome = classify_add_post_effect_error(&PaladinError::SaveDurabilityUnconfirmed);
+    assert!(matches!(outcome, AddPostEffectOutcome::KeepWithWarning(_)));
+    let mut state = AddDialogState::new();
+    let returned = apply_msg(&mut state, AddAccountMsg::WorkerFailed(outcome));
+    assert!(
+        returned.is_none(),
+        "WorkerFailed must not emit an Output, got {returned:?}",
+    );
+    let stored = state
+        .worker_outcome()
+        .expect("KeepWithWarning outcome should be stored");
+    assert!(matches!(stored, AddPostEffectOutcome::KeepWithWarning(_)));
+}
+
+#[test]
+fn add_dialog_state_new_initializes_worker_outcome_to_none() {
+    // No worker has run yet on a freshly-opened dialog, so the
+    // body should not render any prior outcome. Mirror of
+    // `RenameDialogState::new` — both dialogs share the no-prior-
+    // outcome invariant at construction time.
+    use paladin_gtk::add_account::AddDialogState;
+
+    let state = AddDialogState::new();
+    assert!(state.worker_outcome().is_none());
+}
+
+#[test]
+fn add_dialog_state_default_matches_new() {
+    // `AddDialogState::default()` and `::new()` agree, so reactive
+    // state holders that derive `Default` get the same empty state
+    // the explicit constructor returns.
+    use paladin_gtk::add_account::AddDialogState;
+
+    let default_state = AddDialogState::default();
+    assert!(default_state.worker_outcome().is_none());
 }
 
 #[test]
@@ -961,7 +1022,7 @@ fn apply_msg_submit_proceed_routes_to_submit_output() {
     // and spawn the `gio::spawn_blocking Vault::mutate_and_save(|v|
     // v.add(account))` worker.
     use paladin_core::{validate_manual, AccountInput, IconHintInput};
-    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddAccountOutput};
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddAccountOutput, AddDialogState};
 
     let input = AccountInput {
         label: "test-label".to_string(),
@@ -979,9 +1040,13 @@ fn apply_msg_submit_proceed_routes_to_submit_output() {
     let expected_id = validated.account.id();
     let expected_label = validated.account.label().to_string();
 
-    let output = apply_msg(AddAccountMsg::SubmitProceed {
-        account: validated.account,
-    });
+    let mut state = AddDialogState::new();
+    let output = apply_msg(
+        &mut state,
+        AddAccountMsg::SubmitProceed {
+            account: validated.account,
+        },
+    );
     match output {
         Some(AddAccountOutput::Submit { account }) => {
             assert_eq!(
@@ -997,4 +1062,51 @@ fn apply_msg_submit_proceed_routes_to_submit_output() {
         }
         other => panic!("expected Some(Submit), got {other:?}"),
     }
+}
+
+#[test]
+fn apply_msg_submit_proceed_clears_prior_worker_outcome() {
+    // After a `save_not_committed` failure, the user fixes the
+    // underlying issue and retries. The stored worker outcome must
+    // clear when SubmitProceed re-enters the worker so the body
+    // does not render a stale post-effect error alongside the live
+    // attempt. Mirror of the rename dialog's
+    // `apply_msg_draft_changed_clears_prior_worker_outcome` contract,
+    // adapted for the add dialog's submit-only retry surface.
+    use paladin_core::{validate_manual, AccountInput, IconHintInput};
+    use paladin_gtk::add_account::{
+        apply_msg, classify_add_post_effect_error, AddAccountMsg, AddDialogState,
+    };
+
+    let mut state = AddDialogState::new();
+    let outcome = classify_add_post_effect_error(&PaladinError::SaveNotCommitted {
+        committed: false,
+        backup_path: None,
+    });
+    let _ = apply_msg(&mut state, AddAccountMsg::WorkerFailed(outcome));
+    assert!(state.worker_outcome().is_some());
+
+    let input = AccountInput {
+        label: "retry-label".to_string(),
+        issuer: None,
+        secret: SecretString::from("JBSWY3DPEHPK3PXP".to_string()),
+        algorithm: Algorithm::Sha1,
+        digits: 6,
+        kind: AccountKindInput::Totp,
+        period_secs: None,
+        counter: None,
+        icon_hint: IconHintInput::Default,
+    };
+    let validated =
+        validate_manual(input, SystemTime::UNIX_EPOCH).expect("totp account input validates");
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::SubmitProceed {
+            account: validated.account,
+        },
+    );
+    assert!(
+        state.worker_outcome().is_none(),
+        "SubmitProceed must clear any prior worker outcome before the new attempt",
+    );
 }

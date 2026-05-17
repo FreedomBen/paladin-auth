@@ -683,15 +683,87 @@ pub fn format_add_dialog_marker(path: &Path) -> String {
 ///   `AppModel::update`'s submit handler does not re-derive the
 ///   validation pipeline.
 ///
+/// Reactive state owned by the live [`AddAccountComponent`].
+///
+/// Symmetric partner of
+/// [`crate::rename_dialog::RenameDialogState`] on the add path: the
+/// only field at present is `worker_outcome`, the typed
+/// [`AddPostEffectOutcome`] from the most recent
+/// `Vault::mutate_and_save` worker completion. The widget view
+/// matches on [`Self::worker_outcome`] so the dialog body can route
+/// `Inline` (render the typed inline error and keep the form
+/// populated for retry) or `KeepWithWarning` (attach the durability
+/// warning) without re-deriving the routing decision.
+///
+/// Cleared by [`apply_msg`] on every fresh
+/// [`AddAccountMsg::SubmitProceed`] so a retry never renders stale
+/// post-effect text alongside the live attempt. The
+/// draft-text / manual-fields / URI / QR sub-path state lands as
+/// additional fields in follow-up commits alongside the editable
+/// form widgets.
+#[derive(Debug, Default)]
+pub struct AddDialogState {
+    /// Latest [`AddPostEffectOutcome`] from a completed
+    /// `Vault::mutate_and_save` add worker.
+    ///
+    /// `None` between a dialog open and the first worker
+    /// completion, and re-cleared by every
+    /// [`AddAccountMsg::SubmitProceed`] so a retry does not render
+    /// stale text from a previous worker attempt.
+    worker_outcome: Option<AddPostEffectOutcome>,
+}
+
+impl AddDialogState {
+    /// Construct an empty state for a freshly-opened dialog.
+    ///
+    /// No worker has run yet, so [`Self::worker_outcome`] returns
+    /// `None`. Mirror of [`crate::rename_dialog::RenameDialogState::new`]
+    /// on the add path; pre-populated dialog state lands as
+    /// additional construction arguments when the editable manual /
+    /// URI / QR sub-paths are wired in follow-up commits.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Latest [`AddPostEffectOutcome`] from a completed
+    /// `Vault::mutate_and_save` add worker, or `None` if no worker
+    /// has reported back yet (or a fresh submit has cleared it).
+    ///
+    /// The widget view matches on this so the body can route
+    /// `Inline` (render the typed inline error) or
+    /// `KeepWithWarning` (attach the durability warning) without
+    /// re-deriving the typed routing decision.
+    #[must_use]
+    pub fn worker_outcome(&self) -> Option<&AddPostEffectOutcome> {
+        self.worker_outcome.as_ref()
+    }
+}
+
+/// Per-message routing decisions for [`AddAccountComponent`].
+///
 /// Draft-changed / duplicate-confirm routing land in follow-up
 /// commits as additional variants are added to [`AddAccountMsg`] /
-/// [`AddAccountOutput`].
+/// [`AddAccountOutput`]. Mirror of
+/// [`crate::rename_dialog::apply_msg`] on the add path: the per-
+/// message decisions stay co-located with the state struct so a
+/// future refactor cannot silently reorder them.
 #[must_use]
-pub fn apply_msg(msg: AddAccountMsg) -> Option<AddAccountOutput> {
+pub fn apply_msg(state: &mut AddDialogState, msg: AddAccountMsg) -> Option<AddAccountOutput> {
     match msg {
         AddAccountMsg::Cancel => Some(AddAccountOutput::Cancel),
-        AddAccountMsg::WorkerFailed(_outcome) => None,
-        AddAccountMsg::SubmitProceed { account } => Some(AddAccountOutput::Submit { account }),
+        AddAccountMsg::WorkerFailed(outcome) => {
+            state.worker_outcome = Some(outcome);
+            None
+        }
+        AddAccountMsg::SubmitProceed { account } => {
+            // Clear any prior worker outcome so the body does not
+            // render stale post-effect text alongside the live
+            // retry. The fresh worker run is authoritative for the
+            // next routing decision.
+            state.worker_outcome = None;
+            Some(AddAccountOutput::Submit { account })
+        }
     }
 }
 
@@ -715,6 +787,13 @@ pub struct AddAccountComponent {
     /// handlers can read the resolved vault path. Held by value so
     /// the dialog never re-resolves the path mid-flight.
     init: AddAccountInit,
+    /// Reactive state owned by the dialog. Currently carries the
+    /// latest [`AddPostEffectOutcome`] from the
+    /// `Vault::mutate_and_save` add worker so the view can route
+    /// inline-error / durability-warning rendering. The editable
+    /// manual / URI / QR sub-path state lands as additional fields
+    /// in follow-up commits.
+    state: AddDialogState,
 }
 
 #[allow(missing_docs)]
@@ -766,13 +845,16 @@ impl SimpleComponent for AddAccountComponent {
         root: Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
-        let model = AddAccountComponent { init };
+        let model = AddAccountComponent {
+            init,
+            state: AddDialogState::new(),
+        };
         let widgets = view_output!();
         ComponentParts { model, widgets }
     }
 
     fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>) {
-        if let Some(output) = apply_msg(msg) {
+        if let Some(output) = apply_msg(&mut self.state, msg) {
             // Ignore send failures: if `AppModel` has already dropped
             // the controller (e.g. window closed mid-click), there's
             // nothing left to dismiss.
@@ -789,5 +871,17 @@ impl AddAccountComponent {
     #[must_use]
     pub fn vault_path(&self) -> &Path {
         &self.init.vault_path
+    }
+
+    /// Read-only view of the dialog's reactive state.
+    ///
+    /// Lets the future widget view bind `#[watch]` projections
+    /// against [`AddDialogState::worker_outcome`] without exposing
+    /// the field directly. Integration tests can use this to assert
+    /// post-worker state without driving the `gio::spawn_blocking`
+    /// boundary.
+    #[must_use]
+    pub fn state(&self) -> &AddDialogState {
+        &self.state
     }
 }
