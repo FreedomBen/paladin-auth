@@ -1196,6 +1196,40 @@ pub fn rename_final_app_state(
     current.clone().leave_busy()
 }
 
+/// Drop-decision projection for the [`crate::rename_dialog::RenameDialogComponent`]
+/// after a rename worker outcome.
+///
+/// Symmetric partner of [`should_drop_unlock_dialog_after`] for the
+/// rename path. `AppMsg::RenameWorkerCompleted` consults this to
+/// decide whether to detach the live `RenameDialogComponent` from
+/// the content tree after applying the worker outcome:
+///
+/// * [`RenameWorkerEffect::Success`] → `true`. The dialog dismisses
+///   itself and the visible row label updates to the new value, in
+///   lockstep with the `AppState::UnlockedBusy → Unlocked` rollback
+///   that [`rename_final_app_state`] returns.
+/// * [`RenameWorkerEffect::Failure`] (every
+///   [`crate::rename_dialog::RenameErrorOutcome`] variant —
+///   `RestorePrior`, `KeepNewWithWarning`, defensive `InlineError`)
+///   → `false`. The dialog stays mounted so the inline error / body
+///   warning is visible and the user can retry, mirroring how the
+///   unlock dialog stays mounted on the inline-passphrase failure
+///   branch.
+///
+/// The projection inspects only the typed [`RenameWorkerEffect`]
+/// variant — it does not consult [`AppState`], the live
+/// `(Vault, Store)` pair, or the [`crate::rename_dialog::RenameDialogState`] —
+/// so the side-effect decision in `AppModel::update` stays unit-
+/// testable in `tests/app_state_logic.rs` without spinning up GTK /
+/// libadwaita.
+#[must_use]
+pub fn should_drop_rename_dialog_after(effect: &RenameWorkerEffect) -> bool {
+    match effect {
+        RenameWorkerEffect::Success => true,
+        RenameWorkerEffect::Failure(_) => false,
+    }
+}
+
 /// Bundled `AppModel::update` instructions for an unlock-worker
 /// completion. Carries the three decisions the existing trio
 /// projects ([`should_drop_unlock_dialog_after`],
