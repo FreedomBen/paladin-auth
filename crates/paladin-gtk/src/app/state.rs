@@ -58,7 +58,7 @@ use std::time::SystemTime;
 
 use paladin_core::{Account, AccountId, PaladinError, Store, Vault, VaultLock, VaultStatus};
 
-use crate::add_account::{AddWorkerEffect, AddWorkerInput};
+use crate::add_account::{AddAccountMsg, AddWorkerEffect, AddWorkerInput};
 use crate::remove_dialog::{RemoveDialogMsg, RemoveWorkerEffect, RemoveWorkerInput};
 use crate::rename_dialog::{RenameDialogMsg, RenameWorkerEffect, RenameWorkerInput};
 use crate::startup_error::{classify_open_error, OpenErrorRouting, StartupError};
@@ -1868,6 +1868,60 @@ pub fn should_drop_add_dialog_after(effect: &AddWorkerEffect) -> bool {
     match effect {
         AddWorkerEffect::Success { .. } => true,
         AddWorkerEffect::Failure(_) => false,
+    }
+}
+
+/// Inline-message projection for the live
+/// [`crate::add_account::AddAccountComponent`] after an add worker
+/// outcome.
+///
+/// Symmetric partner of [`rename_dialog_msg_after`] for the add
+/// path. `AppMsg::AddWorkerCompleted` consults this to decide what
+/// message (if any) to forward into the live dialog after applying
+/// the worker outcome:
+///
+/// * [`AddWorkerEffect::Success`] → `None`. The dialog is being
+///   dropped (see [`should_drop_add_dialog_after`]), so there is
+///   no live controller to forward to.
+/// * [`AddWorkerEffect::Failure`] → `Some(AddAccountMsg::
+///   WorkerFailed(outcome.clone()))`. The dialog stays mounted;
+///   the message carries the typed
+///   [`crate::add_account::AddPostEffectOutcome`] so the dialog
+///   can route `Inline` (render the typed inline error and keep
+///   the form populated for retry) or `KeepWithWarning` (attach
+///   the durability warning to the body) without re-deriving the
+///   routing off the [`paladin_core::PaladinError`].
+///
+/// The projection returns an *owned* [`Option<AddAccountMsg>`]
+/// rather than a borrow into the effect because
+/// [`AddWorkerEffect`] carries the typed
+/// [`crate::add_account::AddPostEffectOutcome`] rather than a
+/// pre-built dialog message (parity with the rename path; the
+/// unlock effect carries its dialog message directly via
+/// `UnlockFailureEffect::SendUnlockDialogMsg` so the unlock
+/// variant can borrow). The clone is cheap — the outcome only
+/// holds an [`crate::add_account::InlineError`] /
+/// [`crate::add_account::InlineWarning`] of a stable
+/// [`paladin_core::ErrorKind`] and a `String` body.
+///
+/// The projection inspects only the typed [`AddWorkerEffect`]
+/// variant — it does not consult [`AppState`], the live
+/// `(Vault, Store)` pair, or any
+/// [`crate::add_account::AddAccountComponent`] state — so the
+/// side-effect decision in `AppModel::update` stays unit-testable
+/// in `tests/app_state_logic.rs` without spinning up GTK /
+/// libadwaita.
+///
+/// The `Some` / `None` partition matches
+/// [`should_drop_add_dialog_after`] exactly (a dropped dialog
+/// receives no message; a mounted dialog receives a message) and
+/// this contract is pinned in `tests/app_state_logic.rs` so the
+/// two projections cannot drift apart silently.
+#[must_use]
+pub fn add_dialog_msg_after(effect: &AddWorkerEffect) -> Option<AddAccountMsg> {
+    match effect {
+        AddWorkerEffect::Success { .. } => None,
+        AddWorkerEffect::Failure(outcome) => Some(AddAccountMsg::WorkerFailed(outcome.clone())),
     }
 }
 

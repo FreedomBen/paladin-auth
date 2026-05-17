@@ -7309,3 +7309,202 @@ fn should_drop_add_dialog_after_partitions_on_success_only() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// add_dialog_msg_after — inline-message projection
+// ---------------------------------------------------------------------------
+//
+// Symmetric partner of `rename_dialog_msg_after` for the add path.
+// `AppMsg::AddWorkerCompleted` consults this to decide what message
+// (if any) to forward into the live `AddAccountComponent` after
+// applying the worker outcome:
+//
+// * `Success` → `None`. The dialog is being dropped — there is no
+//   live controller to forward to.
+// * `Failure(outcome)` → `Some(AddAccountMsg::WorkerFailed(
+//   outcome.clone()))`. The dialog stays mounted; the message
+//   carries the typed `AddPostEffectOutcome` so the dialog can
+//   route `Inline` (render the typed inline error and keep the
+//   form populated for retry) or `KeepWithWarning` (attach the
+//   durability warning to the body) without re-deriving the
+//   routing off the `PaladinError`.
+//
+// The projection returns an *owned* `Option<AddAccountMsg>` rather
+// than a borrow into the effect because `AddWorkerEffect` carries
+// the typed `AddPostEffectOutcome` rather than a pre-built dialog
+// message. The clone is cheap — the outcome only holds an
+// `InlineError` / `InlineWarning` struct of an `ErrorKind` and a
+// `String` body.
+//
+// The projection inspects only the typed `AddWorkerEffect`
+// variant — it does not consult `AppState`, the live `(Vault,
+// Store)` pair, or any `AddAccountComponent` state — so the
+// side-effect decision in `AppModel::update` stays unit-testable
+// without spinning up GTK / libadwaita.
+
+#[test]
+fn add_dialog_msg_after_success_returns_none() {
+    use paladin_core::AccountId;
+    use paladin_gtk::add_account::AddWorkerEffect;
+    use paladin_gtk::app::state::add_dialog_msg_after;
+
+    let effect = AddWorkerEffect::Success {
+        account_id: AccountId::new(),
+    };
+    assert!(
+        add_dialog_msg_after(&effect).is_none(),
+        "Success drops the dialog, so no inline message is forwarded",
+    );
+}
+
+#[test]
+fn add_dialog_msg_after_failure_inline_forwards_worker_failed_with_outcome() {
+    use paladin_gtk::add_account::{
+        classify_add_post_effect_error, AddAccountMsg, AddPostEffectOutcome, AddWorkerEffect,
+    };
+    use paladin_gtk::app::state::add_dialog_msg_after;
+
+    let err = PaladinError::SaveNotCommitted {
+        committed: false,
+        backup_path: None,
+    };
+    let outcome = classify_add_post_effect_error(&err);
+    assert!(
+        matches!(outcome, AddPostEffectOutcome::Inline(_)),
+        "save_not_committed routes to Inline",
+    );
+    let effect = AddWorkerEffect::Failure(outcome);
+    let msg = add_dialog_msg_after(&effect)
+        .expect("Failure forwards a WorkerFailed message so the dialog stays mounted");
+    let AddAccountMsg::WorkerFailed(forwarded) = msg;
+    match forwarded {
+        AddPostEffectOutcome::Inline(inline) => assert_eq!(
+            inline.kind,
+            ErrorKind::SaveNotCommitted,
+            "Inline must round-trip the SaveNotCommitted ErrorKind",
+        ),
+        AddPostEffectOutcome::KeepWithWarning(warning) => {
+            panic!("expected WorkerFailed(Inline), got WorkerFailed(KeepWithWarning({warning:?}))")
+        }
+    }
+}
+
+#[test]
+fn add_dialog_msg_after_failure_keep_with_warning_forwards_worker_failed_with_outcome() {
+    use paladin_gtk::add_account::{
+        classify_add_post_effect_error, AddAccountMsg, AddPostEffectOutcome, AddWorkerEffect,
+    };
+    use paladin_gtk::app::state::add_dialog_msg_after;
+
+    let err = PaladinError::SaveDurabilityUnconfirmed;
+    let outcome = classify_add_post_effect_error(&err);
+    assert!(
+        matches!(outcome, AddPostEffectOutcome::KeepWithWarning(_)),
+        "save_durability_unconfirmed routes to KeepWithWarning",
+    );
+    let effect = AddWorkerEffect::Failure(outcome);
+    let msg = add_dialog_msg_after(&effect)
+        .expect("Failure forwards a WorkerFailed message so the dialog stays mounted");
+    let AddAccountMsg::WorkerFailed(forwarded) = msg;
+    match forwarded {
+        AddPostEffectOutcome::KeepWithWarning(warning) => assert_eq!(
+            warning.kind,
+            ErrorKind::SaveDurabilityUnconfirmed,
+            "KeepWithWarning must round-trip the SaveDurabilityUnconfirmed ErrorKind",
+        ),
+        AddPostEffectOutcome::Inline(inline) => {
+            panic!("expected WorkerFailed(KeepWithWarning), got WorkerFailed(Inline({inline:?}))")
+        }
+    }
+}
+
+#[test]
+fn add_dialog_msg_after_failure_defensive_inline_forwards_worker_failed_with_outcome() {
+    // Defensive: a `validation_error` / `invalid_state` from
+    // `Vault::mutate_and_save` rolls back the snapshot and routes
+    // through `classify_add_post_effect_error` to the `Inline`
+    // arm. Pin the message-forwarding contract for the defensive
+    // branch so the dialog can render the typed error without
+    // re-deriving the routing.
+    use paladin_gtk::add_account::{
+        classify_add_post_effect_error, AddAccountMsg, AddPostEffectOutcome, AddWorkerEffect,
+    };
+    use paladin_gtk::app::state::add_dialog_msg_after;
+
+    let err = PaladinError::InvalidState {
+        operation: "add",
+        state: "account_not_found",
+    };
+    let outcome = classify_add_post_effect_error(&err);
+    assert!(
+        matches!(outcome, AddPostEffectOutcome::Inline(_)),
+        "defensive invalid_state routes to Inline",
+    );
+    let effect = AddWorkerEffect::Failure(outcome);
+    let msg = add_dialog_msg_after(&effect)
+        .expect("Failure forwards a WorkerFailed message so the dialog stays mounted");
+    let AddAccountMsg::WorkerFailed(forwarded) = msg;
+    match forwarded {
+        AddPostEffectOutcome::Inline(inline) => assert_eq!(
+            inline.kind,
+            ErrorKind::InvalidState,
+            "defensive Inline must round-trip the InvalidState ErrorKind",
+        ),
+        AddPostEffectOutcome::KeepWithWarning(warning) => panic!(
+            "expected defensive WorkerFailed(Inline), got WorkerFailed(KeepWithWarning({warning:?}))"
+        ),
+    }
+}
+
+#[test]
+fn add_dialog_msg_after_is_mutually_exclusive_with_should_drop() {
+    // Cross-check: the inline-message projection must report `Some`
+    // exactly when `should_drop_add_dialog_after` reports `false`
+    // (dialog stays mounted), and `None` when the dispatch drops
+    // the dialog. Pinned across every typed effect so the two
+    // projections can't drift apart silently — a future routing
+    // refinement that puts a Failure variant on the drop side
+    // would need to update both helpers in lockstep, and this
+    // test catches the partial update.
+    use paladin_core::AccountId;
+    use paladin_gtk::add_account::{classify_add_post_effect_error, AddWorkerEffect};
+    use paladin_gtk::app::state::{add_dialog_msg_after, should_drop_add_dialog_after};
+
+    let effects = [
+        AddWorkerEffect::Success {
+            account_id: AccountId::new(),
+        },
+        AddWorkerEffect::Failure(classify_add_post_effect_error(
+            &PaladinError::SaveNotCommitted {
+                committed: false,
+                backup_path: None,
+            },
+        )),
+        AddWorkerEffect::Failure(classify_add_post_effect_error(
+            &PaladinError::SaveNotCommitted {
+                committed: true,
+                backup_path: None,
+            },
+        )),
+        AddWorkerEffect::Failure(classify_add_post_effect_error(
+            &PaladinError::SaveDurabilityUnconfirmed,
+        )),
+        AddWorkerEffect::Failure(classify_add_post_effect_error(
+            &PaladinError::InvalidState {
+                operation: "add",
+                state: "account_not_found",
+            },
+        )),
+    ];
+    for effect in &effects {
+        let drops = should_drop_add_dialog_after(effect);
+        let msg = add_dialog_msg_after(effect);
+        assert_eq!(
+            drops,
+            msg.is_none(),
+            "drop/keep partition must match Some/None partition for effect={effect:?} \
+             (drops={drops}, msg.is_some()={})",
+            msg.is_some(),
+        );
+    }
+}

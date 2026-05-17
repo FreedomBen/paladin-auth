@@ -508,3 +508,41 @@ impl InlineWarning {
         }
     }
 }
+
+/// Inbound messages handled by `AddAccountComponent`.
+///
+/// Symmetric partner of [`crate::rename_dialog::RenameDialogMsg`]
+/// on the add path. Pinned as a typed enum so future Component
+/// scaffolding (manual / URI / QR input plumbing, switching path,
+/// duplicate prompt, etc.) can land as additional variants without
+/// an `_` catch-all in the dispatch silently swallowing them.
+///
+/// Initial milestone defines only the
+/// [`AddAccountMsg::WorkerFailed`] variant so
+/// [`crate::app::state::add_dialog_msg_after`] has a typed message
+/// to forward into the live `AddAccountComponent` after the
+/// `gio::spawn_blocking
+/// Vault::mutate_and_save(|v| v.add(account); … )` worker reports
+/// a failure. The Component-side `apply_msg` routing for this
+/// variant — the dialog-body re-render that attaches the inline
+/// error / durability warning — lands in a follow-up commit
+/// alongside the `AddAccountComponent` scaffold itself; for now
+/// the variant exists so the dispatch path can build cleanly
+/// while the rendering side catches up (parity with the rename
+/// staged rollout in commit `ae8fd44`).
+#[derive(Debug, Clone)]
+pub enum AddAccountMsg {
+    /// `AppModel` pushes the typed [`AddPostEffectOutcome`] back
+    /// to the dialog after the
+    /// `gio::spawn_blocking Vault::mutate_and_save(|v| v.add(...))`
+    /// worker reports a failure. Symmetric partner of
+    /// [`crate::rename_dialog::RenameDialogMsg::WorkerFailed`] on
+    /// the add path: where the rename variant carries the typed
+    /// [`crate::rename_dialog::RenameErrorOutcome`], the add
+    /// variant carries the typed [`AddPostEffectOutcome`] so the
+    /// dialog's handler can route `Inline` (render the typed
+    /// inline error and keep the form populated for retry) or
+    /// `KeepWithWarning` (attach the durability warning to the
+    /// body) in one `apply_msg` arm.
+    WorkerFailed(AddPostEffectOutcome),
+}
