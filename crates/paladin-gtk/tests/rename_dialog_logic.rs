@@ -648,6 +648,164 @@ fn rename_dialog_output_cancel_is_distinct_variant() {
 }
 
 // ---------------------------------------------------------------------------
+// apply_msg — WorkerFailed routing
+//
+// Implements the §"Component tree" > RenameDialog contract that
+// pre-commit save failures (`save_not_committed`) restore the prior
+// label in memory and keep the dialog open with the inline error,
+// while durability-unconfirmed failures (`save_durability_unconfirmed`)
+// leave the new label in memory and surface the warning. Routing
+// lives in `apply_msg` so the per-message decisions stay
+// unit-testable here without spinning up the relm4 widget tree.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn rename_dialog_state_new_initializes_worker_outcome_to_none() {
+    // No worker has run yet on a freshly-opened dialog, so the
+    // body should not render any prior outcome.
+    let state = RenameDialogState::new(&dummy_init("ben"));
+    assert!(state.worker_outcome().is_none());
+}
+
+#[test]
+fn apply_msg_worker_failed_restore_prior_stores_outcome() {
+    let mut state = RenameDialogState::new(&dummy_init("alice"));
+    state.set_draft("alicia".to_string());
+    let outcome = classify_rename_error(&save_not_committed_no_backup());
+    let returned = apply_msg(&mut state, RenameDialogMsg::WorkerFailed(outcome));
+    assert!(returned.is_none(), "WorkerFailed must not emit an Output");
+    let stored = state
+        .worker_outcome()
+        .expect("RestorePrior outcome should be stored on the state");
+    assert!(matches!(stored, RenameErrorOutcome::RestorePrior(_)));
+}
+
+#[test]
+fn apply_msg_worker_failed_restore_prior_resets_draft_to_init_label() {
+    // `save_not_committed` rolls the in-memory vault back, so the
+    // dialog must roll the visible draft back to the label the user
+    // saw before they started typing — i.e. `init.current_label`.
+    let mut state = RenameDialogState::new(&dummy_init("alice"));
+    state.set_draft("alicia".to_string());
+    let outcome = classify_rename_error(&save_not_committed_no_backup());
+    let _ = apply_msg(&mut state, RenameDialogMsg::WorkerFailed(outcome));
+    assert_eq!(state.draft(), "alice");
+}
+
+#[test]
+fn apply_msg_worker_failed_restore_prior_with_backup_resets_draft_to_init_label() {
+    // The presence of a rotated `.bak` path does not change the
+    // visible-state rollback — `mutate_and_save` restored the
+    // in-memory vault to the pre-rename snapshot, so the draft
+    // returns to the dialog's seeded label either way.
+    let mut state = RenameDialogState::new(&dummy_init("alice"));
+    state.set_draft("alicia".to_string());
+    let outcome = classify_rename_error(&save_not_committed_with_backup());
+    let _ = apply_msg(&mut state, RenameDialogMsg::WorkerFailed(outcome));
+    assert_eq!(state.draft(), "alice");
+    let stored = state
+        .worker_outcome()
+        .expect("RestorePrior outcome should be stored");
+    assert!(matches!(stored, RenameErrorOutcome::RestorePrior(_)));
+}
+
+#[test]
+fn apply_msg_worker_failed_keep_new_with_warning_keeps_draft() {
+    // `save_durability_unconfirmed` means the rename committed but
+    // the parent fsync failed. The visible draft stays on the new
+    // value while the warning attaches to the dialog body.
+    let mut state = RenameDialogState::new(&dummy_init("alice"));
+    state.set_draft("alicia".to_string());
+    let outcome = classify_rename_error(&PaladinError::SaveDurabilityUnconfirmed);
+    let returned = apply_msg(&mut state, RenameDialogMsg::WorkerFailed(outcome));
+    assert!(returned.is_none(), "WorkerFailed must not emit an Output");
+    assert_eq!(state.draft(), "alicia");
+    let stored = state
+        .worker_outcome()
+        .expect("KeepNewWithWarning outcome should be stored");
+    assert!(matches!(stored, RenameErrorOutcome::KeepNewWithWarning(_)));
+}
+
+#[test]
+fn apply_msg_worker_failed_defensive_inline_error_keeps_draft() {
+    // Defensive: a `validation_error` only fires if the dialog's
+    // pre-submit check is bypassed, but if it does, the visible
+    // draft stays untouched so the user can edit and retry.
+    let mut state = RenameDialogState::new(&dummy_init("alice"));
+    state.set_draft("alicia".to_string());
+    let err = PaladinError::ValidationError {
+        field: "label",
+        reason: "too_long".into(),
+        source_index: None,
+        decoded_len: None,
+        recommended_min: None,
+        entry_type: None,
+    };
+    let outcome = classify_rename_error(&err);
+    let _ = apply_msg(&mut state, RenameDialogMsg::WorkerFailed(outcome));
+    assert_eq!(state.draft(), "alicia");
+    let stored = state
+        .worker_outcome()
+        .expect("defensive InlineError outcome should be stored");
+    assert!(matches!(stored, RenameErrorOutcome::InlineError(_)));
+}
+
+#[test]
+fn apply_msg_draft_changed_clears_prior_worker_outcome() {
+    // After a `save_not_committed` rollback, the user types again
+    // to retry. The stored worker outcome must clear so a fresh
+    // submit does not re-render a stale error from a previous
+    // worker attempt.
+    let mut state = RenameDialogState::new(&dummy_init("alice"));
+    state.set_draft("alicia".to_string());
+    let outcome = classify_rename_error(&save_not_committed_no_backup());
+    let _ = apply_msg(&mut state, RenameDialogMsg::WorkerFailed(outcome));
+    assert!(state.worker_outcome().is_some());
+
+    let _ = apply_msg(
+        &mut state,
+        RenameDialogMsg::DraftChanged("alicia-2".to_string()),
+    );
+    assert!(
+        state.worker_outcome().is_none(),
+        "DraftChanged must clear the stored worker outcome on retry"
+    );
+}
+
+#[test]
+fn apply_msg_submit_clicked_clears_prior_worker_outcome() {
+    // Re-submitting after a stored failure must clear the stale
+    // outcome so the body does not render two layers of error
+    // while the worker runs.
+    let mut state = RenameDialogState::new(&dummy_init("alice"));
+    state.set_draft("alicia".to_string());
+    let outcome = classify_rename_error(&save_not_committed_no_backup());
+    let _ = apply_msg(&mut state, RenameDialogMsg::WorkerFailed(outcome));
+    assert!(state.worker_outcome().is_some());
+
+    let _ = apply_msg(&mut state, RenameDialogMsg::SubmitClicked);
+    assert!(
+        state.worker_outcome().is_none(),
+        "SubmitClicked must clear the stored worker outcome before the worker re-runs"
+    );
+}
+
+#[test]
+fn rename_dialog_state_clone_preserves_worker_outcome() {
+    // The widget stores the state on `self` and may clone it across
+    // re-renders; the worker outcome must survive the clone so the
+    // body keeps rendering after the next redraw.
+    let mut state = RenameDialogState::new(&dummy_init("alice"));
+    let outcome = classify_rename_error(&PaladinError::SaveDurabilityUnconfirmed);
+    let _ = apply_msg(&mut state, RenameDialogMsg::WorkerFailed(outcome));
+    let cloned = state.clone();
+    let stored = cloned
+        .worker_outcome()
+        .expect("worker outcome should clone through");
+    assert!(matches!(stored, RenameErrorOutcome::KeepNewWithWarning(_)));
+}
+
+// ---------------------------------------------------------------------------
 // RenameDialogState::submit — on-demand classification for the Save
 // button / entry `entry-activated` routing branch
 //

@@ -411,8 +411,21 @@ pub fn decide_rename_target(vault: &Vault, id: AccountId) -> Option<RenameDialog
 #[derive(Debug, Clone)]
 pub struct RenameDialogState {
     account_id: AccountId,
+    /// Persisted label at dialog open. `save_not_committed` rolls
+    /// the in-memory vault back to this value, so [`apply_msg`]
+    /// rolls the visible draft back to match.
+    prior_label: String,
     draft: String,
     last_validation: SubmitOutcome,
+    /// Latest worker outcome from a completed `mutate_and_save`
+    /// rename, surfaced via [`Self::worker_outcome`] so the widget
+    /// view can render the inline error / durability warning
+    /// attached to the dialog body. `None` between an open and the
+    /// first worker completion, and re-cleared by any subsequent
+    /// [`RenameDialogMsg::DraftChanged`] or
+    /// [`RenameDialogMsg::SubmitClicked`] so a retry does not
+    /// render stale text alongside the live attempt.
+    worker_outcome: Option<RenameErrorOutcome>,
 }
 
 impl RenameDialogState {
@@ -428,8 +441,10 @@ impl RenameDialogState {
         let last_validation = classify_submit(&draft);
         Self {
             account_id: init.account_id,
+            prior_label: init.current_label.clone(),
             draft,
             last_validation,
+            worker_outcome: None,
         }
     }
 
@@ -469,9 +484,28 @@ impl RenameDialogState {
     /// Called from the entry row's text-change signal. The cached
     /// [`SubmitOutcome`] updates atomically alongside the draft so
     /// the widget never observes the two fields out of sync.
+    /// Any prior worker outcome clears as part of the same update
+    /// so a retry never renders stale post-effect text alongside
+    /// the live draft.
     pub fn set_draft(&mut self, draft: String) {
         self.last_validation = classify_submit(&draft);
         self.draft = draft;
+        self.worker_outcome = None;
+    }
+
+    /// Latest [`RenameErrorOutcome`] from a completed
+    /// `Vault::mutate_and_save` rename worker.
+    ///
+    /// The widget view matches on this so the body can route
+    /// `RestorePrior` (inline error, draft already rolled back),
+    /// `KeepNewWithWarning` (warning attached, draft kept on the
+    /// new value), or the defensive `InlineError` (inline error,
+    /// draft kept) without re-deriving the typed routing decision.
+    /// Cleared by [`Self::set_draft`] and [`RenameDialogMsg::SubmitClicked`]
+    /// so a retry never renders stale text.
+    #[must_use]
+    pub fn worker_outcome(&self) -> Option<&RenameErrorOutcome> {
+        self.worker_outcome.as_ref()
     }
 
     /// Inline-error projection for the body of the dialog.
@@ -629,21 +663,36 @@ pub fn apply_msg(
             None
         }
         RenameDialogMsg::Cancel => Some(RenameDialogOutput::Cancel),
-        RenameDialogMsg::SubmitClicked => match state.submit() {
-            SubmitOutcome::Proceed(label) => Some(RenameDialogOutput::SubmitLabel {
-                account_id: state.account_id(),
-                label,
-            }),
-            SubmitOutcome::InlineError(_) => None,
-        },
-        RenameDialogMsg::WorkerFailed(_) => {
-            // Placeholder: the `RenameDialogState` storage for the
-            // worker outcome and the dialog-body re-render land in
-            // a follow-up commit. Accepting the variant here as a
-            // no-op lets `AppMsg::RenameWorkerCompleted` forward
-            // the message through `apply_rename_dispatch_inplace`
-            // / the controller sender without an `unreachable!`
-            // panic while the rendering side catches up.
+        RenameDialogMsg::SubmitClicked => {
+            // Clear any prior worker outcome so the body does not
+            // render stale post-effect text alongside the live
+            // attempt. A defensive `InlineError` from
+            // `state.submit()` only fires if the widget bypassed
+            // the entry-row validation gate, and in that case the
+            // dialog stays open with the validation inline error
+            // (not the stale worker outcome).
+            state.worker_outcome = None;
+            match state.submit() {
+                SubmitOutcome::Proceed(label) => Some(RenameDialogOutput::SubmitLabel {
+                    account_id: state.account_id(),
+                    label,
+                }),
+                SubmitOutcome::InlineError(_) => None,
+            }
+        }
+        RenameDialogMsg::WorkerFailed(outcome) => {
+            if matches!(outcome, RenameErrorOutcome::RestorePrior(_)) {
+                // `save_not_committed` rolled the in-memory vault
+                // back to the pre-rename snapshot; roll the
+                // visible draft back to the same persisted label
+                // so the dialog and the vault stay in agreement.
+                // `set_draft` also clears `worker_outcome`, so the
+                // assignment below re-sets it to the actual
+                // routing decision.
+                let prior = state.prior_label.clone();
+                state.set_draft(prior);
+            }
+            state.worker_outcome = Some(outcome);
             None
         }
     }
