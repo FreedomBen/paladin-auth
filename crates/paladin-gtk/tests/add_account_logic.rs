@@ -2702,6 +2702,124 @@ fn compose_manual_fields_threads_through_classify_manual_submit_proceed() {
 }
 
 #[test]
+fn compose_manual_submit_outcome_with_valid_state_proceeds() {
+    // The widget Save handler chains
+    // `compose_manual_fields → classify_manual_submit` against the
+    // live `AddDialogState`. With a non-empty label shadowed into
+    // the manual draft and a valid Base32 secret in
+    // `secret_state.manual_secret`, the chained call must classify
+    // as `Proceed` so the widget can hand the validated account to
+    // `Vault::find_duplicate` next.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_manual_submit_outcome, AddAccountMsg, AddDialogState,
+        ManualSubmitOutcome,
+    };
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualLabelChanged("alice".to_string()),
+    );
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualSecretChanged(SECRET_20_B32.to_string()),
+    );
+
+    let outcome = compose_manual_submit_outcome(&state, now_for_tests());
+
+    assert!(
+        matches!(outcome, ManualSubmitOutcome::Proceed(_)),
+        "valid label + secret should chain through to Proceed",
+    );
+}
+
+#[test]
+fn compose_manual_submit_outcome_with_default_state_rejects_inline() {
+    // The freshly-opened dialog has an empty label / empty secret.
+    // `validate_manual` rejects on the `label` field; the chained
+    // call must surface the typed inline error rather than the
+    // `Proceed` path so the widget can render the rejection
+    // without mutating the vault.
+    use paladin_gtk::add_account::{
+        compose_manual_submit_outcome, AddDialogState, ManualSubmitOutcome,
+    };
+
+    let state = AddDialogState::new();
+
+    let outcome = compose_manual_submit_outcome(&state, now_for_tests());
+
+    assert!(
+        matches!(outcome, ManualSubmitOutcome::InlineError(_)),
+        "default state has no label / secret and must reject inline",
+    );
+}
+
+#[test]
+fn compose_manual_submit_outcome_reads_secret_state_manual_secret_text() {
+    // The helper must source the secret from
+    // `secret_state.manual_secret.text()` — *not* from a stray
+    // reuse of the URI buffer — so the manual sub-path stays
+    // isolated from the URI sub-path's text. Drive the
+    // `ManualSecretChanged` shadow, leave the URI buffer empty,
+    // and assert that the chained call still proceeds.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_manual_submit_outcome, AddAccountMsg, AddDialogState,
+        ManualSubmitOutcome,
+    };
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualLabelChanged("alice".to_string()),
+    );
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualSecretChanged(SECRET_20_B32.to_string()),
+    );
+    assert!(
+        state.secret_state().uri_text.is_empty(),
+        "URI buffer must stay empty for this scenario",
+    );
+
+    let outcome = compose_manual_submit_outcome(&state, now_for_tests());
+
+    assert!(
+        matches!(outcome, ManualSubmitOutcome::Proceed(_)),
+        "helper must source the secret from secret_state.manual_secret, not uri_text",
+    );
+}
+
+#[test]
+fn compose_manual_submit_outcome_preserves_state_so_retry_keeps_typing() {
+    // The helper borrows the state so the dialog can re-call it on
+    // every Save click after a typed-but-inline-rejected attempt —
+    // the user fixes the failing field, re-submits, and the prior
+    // typing is still live. Mirror of
+    // `compose_manual_fields_preserves_draft_so_retry_keeps_typing`
+    // at the chained-call layer.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_manual_submit_outcome, AddAccountMsg, AddDialogState,
+    };
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualLabelChanged("alice".to_string()),
+    );
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualSecretChanged(SECRET_20_B32.to_string()),
+    );
+    let draft_before = state.manual_draft().clone();
+    let secret_before = state.secret_state().manual_secret.text().to_string();
+
+    let _outcome = compose_manual_submit_outcome(&state, now_for_tests());
+
+    assert_eq!(state.manual_draft(), &draft_before);
+    assert_eq!(state.secret_state().manual_secret.text(), secret_before);
+}
+
+#[test]
 fn apply_msg_confirm_add_anyway_with_no_pending_is_defensive_noop() {
     // Defensive: the widget should only dispatch ConfirmAddAnyway
     // after a `StagePendingDuplicate` parks a value. A stray dispatch

@@ -327,6 +327,42 @@ pub fn classify_manual_submit(
     }
 }
 
+/// Chained `compose_manual_fields → classify_manual_submit` against
+/// the live [`AddDialogState`].
+///
+/// The widget Save handler calls this on every click to drive the
+/// manual sub-path's validation pipeline as a single boundary —
+/// sourcing the non-secret fields from
+/// [`AddDialogState::manual_draft`] and the secret text from
+/// [`crate::secret_fields::AddSecretState::manual_secret`] via
+/// [`crate::secret_fields::SecretEntry::text`]. The borrow keeps
+/// the dialog state intact so a typed-but-rejected attempt can
+/// retry against the same buffers without losing the user's
+/// input.
+///
+/// The carried [`ManualSubmitOutcome`] is the same shape
+/// [`classify_manual_submit`] produces on its own:
+///
+/// * [`ManualSubmitOutcome::Proceed`] — validated account; the
+///   widget hands it to [`paladin_core::Vault::find_duplicate`]
+///   plus [`classify_duplicate`] next to decide
+///   [`AddAccountMsg::SubmitProceed`] vs
+///   [`AddAccountMsg::StagePendingDuplicate`].
+/// * [`ManualSubmitOutcome::InlineError`] — typed §5 error body;
+///   the widget renders the rejection inline and leaves the form
+///   populated for retry.
+#[must_use]
+pub fn compose_manual_submit_outcome(
+    state: &AddDialogState,
+    now: SystemTime,
+) -> ManualSubmitOutcome {
+    let fields = compose_manual_fields(
+        state.manual_draft(),
+        state.secret_state().manual_secret.text(),
+    );
+    classify_manual_submit(fields, now)
+}
+
 /// Post-validate duplicate-detection routing decision.
 ///
 /// See [`classify_duplicate`]. The carried `ValidatedAccount` on
