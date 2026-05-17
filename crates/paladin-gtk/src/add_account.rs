@@ -95,7 +95,7 @@ use paladin_core::{
     AccountSummary, Algorithm, ErrorKind, PaladinError, Store, ValidatedAccount, Vault,
 };
 
-use crate::secret_fields::{AddPath, AddSecretState};
+use crate::secret_fields::{AddPath, AddSecretState, ClearReason};
 
 /// Widget-side bundle of typed manual-add fields.
 ///
@@ -815,7 +815,19 @@ impl AddDialogState {
 #[must_use]
 pub fn apply_msg(state: &mut AddDialogState, msg: AddAccountMsg) -> Option<AddAccountOutput> {
     match msg {
-        AddAccountMsg::Cancel => Some(AddAccountOutput::Cancel),
+        AddAccountMsg::Cancel => {
+            // DESIGN §8: secret fields clear on cancel. Wipe the
+            // manual / URI shadow buffers and drop any pending
+            // duplicate-add before emitting the output so the
+            // secrets are not live between this return and
+            // `AppModel` dropping the controller. The let-binding
+            // names the returned `Option<Box<ValidatedAccount>>`
+            // so the prior pending (if any) drops at the end of
+            // this arm — `paladin_core::Secret`'s `ZeroizeOnDrop`
+            // wipes the carried bytes.
+            let _dropped_pending = state.secret_state.clear_for(ClearReason::Cancel);
+            Some(AddAccountOutput::Cancel)
+        }
         AddAccountMsg::WorkerFailed(outcome) => {
             state.worker_outcome = Some(outcome);
             None

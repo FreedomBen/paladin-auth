@@ -928,6 +928,48 @@ fn apply_msg_cancel_routes_to_cancel_output() {
 }
 
 #[test]
+fn apply_msg_cancel_wipes_secret_state_buffers() {
+    // DESIGN §8 mandates secret fields clear on cancel. Relying on
+    // `AddSecretState`'s `Drop` would leave the secrets live between
+    // the `Cancel` output and the controller drop by `AppModel`; an
+    // explicit `clear_for(ClearReason::Cancel)` in the arm closes
+    // that window. Pin both the manual Base32 buffer and the URI
+    // shadow so a future refactor cannot accidentally wipe only one.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualSecretChanged("JBSWY3DPEHPK3PXP".to_string()),
+    );
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::UriTextChanged(
+            "otpauth://totp/Issuer:label?secret=JBSWY3DPEHPK3PXP&issuer=Issuer".to_string(),
+        ),
+    );
+    assert!(
+        !state.secret_state().manual_secret.is_empty(),
+        "precondition: manual buffer is non-empty before Cancel",
+    );
+    assert!(
+        !state.secret_state().uri_text.is_empty(),
+        "precondition: URI buffer is non-empty before Cancel",
+    );
+
+    let _ = apply_msg(&mut state, AddAccountMsg::Cancel);
+
+    assert!(
+        state.secret_state().manual_secret.is_empty(),
+        "Cancel must wipe the manual Base32 buffer",
+    );
+    assert!(
+        state.secret_state().uri_text.is_empty(),
+        "Cancel must wipe the URI shadow buffer",
+    );
+}
+
+#[test]
 fn apply_msg_worker_failed_emits_no_output_and_stores_outcome() {
     // `WorkerFailed` is consumed by the dialog to re-render the
     // inline error / durability warning; it never bubbles back to
