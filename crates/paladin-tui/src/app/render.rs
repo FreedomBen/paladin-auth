@@ -35,9 +35,10 @@ use crate::view::render;
 
 /// Drive one frame of [`crate::view::render`] through `terminal`.
 ///
-/// Forwards `state` and `now` straight into the renderer; `now` is
-/// the wall-clock the TOTP-window math should use (see
-/// [`crate::view::render`]).
+/// Forwards `state`, `now`, and `no_color` straight into the
+/// renderer; `now` is the wall-clock the TOTP-window math should
+/// use and `no_color` suppresses foreground / background color
+/// attributes on styled cells (see [`crate::view::render`]).
 ///
 /// # Errors
 ///
@@ -49,7 +50,8 @@ pub fn draw_frame<B: Backend>(
     terminal: &mut Terminal<B>,
     state: &AppState,
     now: SystemTime,
+    no_color: bool,
 ) -> io::Result<()> {
-    terminal.draw(|frame| render(frame, state, now))?;
+    terminal.draw(|frame| render(frame, state, now, no_color))?;
     Ok(())
 }

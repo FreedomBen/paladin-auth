@@ -88,7 +88,14 @@ const GAUGE_EMPTY: char = '░';
 /// matching `AppState::Unlocked` before dispatching here;
 /// non-Unlocked variants are a no-op so a future stray call leaves
 /// the backend at its default fill rather than panicking.
-pub fn render(frame: &mut Frame<'_>, state: &AppState, now: SystemTime) {
+///
+/// `no_color` suppresses foreground / background color attributes
+/// on styled cells (the `--no-color` flag and the `NO_COLOR`
+/// environment variable both flow here through
+/// [`crate::cli::should_disable_color`]). For this slice that
+/// affects only the bottom-line status row; other styled paths in
+/// the modal renderers gain the same gating in their own slices.
+pub fn render(frame: &mut Frame<'_>, state: &AppState, now: SystemTime, no_color: bool) {
     let AppState::Unlocked {
         vault,
         search_query,
@@ -164,7 +171,10 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState, now: SystemTime) {
 
     frame.render_widget(Paragraph::new(divider), chunks[3]);
 
-    frame.render_widget(Paragraph::new(bottom_line(status_line.as_ref())), chunks[4]);
+    frame.render_widget(
+        Paragraph::new(bottom_line(status_line.as_ref(), no_color)),
+        chunks[4],
+    );
 }
 
 /// Build the bottom-row [`Line`] for the list view.
@@ -180,19 +190,38 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState, now: SystemTime) {
 /// either clears it (a follow-up successful effect re-publishes
 /// `None` per the reducer's last-write-wins contract) or overwrites
 /// it. `Error` is tinted red and `Confirmation` is tinted green so a
-/// live terminal distinguishes them; the styled-grid `--no-color`
-/// variant arrives with the search-highlighting matrix (per the
-/// header note in `tests/view_snapshots.rs`).
-fn bottom_line(status_line: Option<&StatusLine>) -> Line<'_> {
+/// live terminal distinguishes them; `no_color = true` drops the
+/// foreground attribute via [`fg_unless_no_color`] so the cells
+/// render with the terminal's default color (matching the
+/// `IMPLEMENTATION_PLAN_03_TUI.md` "Global flags" wording that
+/// `--no-color` disables ratatui styling).
+fn bottom_line(status_line: Option<&StatusLine>, no_color: bool) -> Line<'_> {
     match status_line {
-        Some(StatusLine::Error(msg)) => {
-            Line::from(Span::styled(msg.as_str(), Style::default().fg(Color::Red)))
-        }
+        Some(StatusLine::Error(msg)) => Line::from(Span::styled(
+            msg.as_str(),
+            fg_unless_no_color(Color::Red, no_color),
+        )),
         Some(StatusLine::Confirmation(msg)) => Line::from(Span::styled(
             msg.as_str(),
-            Style::default().fg(Color::Green),
+            fg_unless_no_color(Color::Green, no_color),
         )),
         None => Line::from("[↑↓] move  [enter] copy  [n] next-HOTP  [a] add  [/] find"),
+    }
+}
+
+/// Build a foreground-only [`Style`] honoring the `--no-color`
+/// policy: returns `Style::default().fg(color)` in styled mode and
+/// `Style::default()` (no fg attribute) when `no_color` is set.
+///
+/// Local to `list.rs` for this slice; the same helper shape will
+/// move to a shared `view::style` module once the other modal
+/// renderers grow their own `no_color` gating per the
+/// `IMPLEMENTATION_PLAN_03_TUI.md` "Global flags" section.
+fn fg_unless_no_color(color: Color, no_color: bool) -> Style {
+    if no_color {
+        Style::default()
+    } else {
+        Style::default().fg(color)
     }
 }
 

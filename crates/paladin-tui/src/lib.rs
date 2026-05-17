@@ -61,8 +61,18 @@ pub fn run() -> ExitCode {
         Err(err) => err.exit(),
     };
 
+    // Compute the `--no-color` policy once at the binary boundary —
+    // `should_disable_color` honors either the explicit `--no-color`
+    // flag or the presence of the `NO_COLOR` environment variable
+    // (per <https://no-color.org/> and `IMPLEMENTATION_PLAN_03_TUI.md`
+    // "Global flags"). The resulting bool is captured by the render
+    // closure so per-frame work never re-reads the env.
+    let no_color =
+        cli::should_disable_color(args.no_color, std::env::var_os("NO_COLOR").as_deref());
+
     run_with_components(
         args,
+        no_color,
         terminal::CrosstermBackend::stdout(),
         || Terminal::new(ratatui::backend::CrosstermBackend::new(io::stdout())),
         app::input::spawn,
@@ -73,9 +83,17 @@ pub fn run() -> ExitCode {
 }
 
 /// Top-level composer that ties together the parsed CLI args, the
-/// initial-state builder, the ratatui [`Terminal`] construction, the
-/// lifecycle [`TerminalBackend`], the render-error sink, and the
-/// `ExitCode` mapper into a single call.
+/// resolved `no_color` policy, the initial-state builder, the
+/// ratatui [`Terminal`] construction, the lifecycle
+/// [`TerminalBackend`], the render-error sink, and the `ExitCode`
+/// mapper into a single call.
+///
+/// `no_color` is computed by the caller (production [`run`] derives
+/// it via [`cli::should_disable_color`] from `args.no_color` plus
+/// the `NO_COLOR` environment variable, per
+/// `IMPLEMENTATION_PLAN_03_TUI.md` "Global flags"). Tests pass an
+/// explicit bool so the styled vs. no-color paths are exercised
+/// without manipulating process-level state.
 ///
 /// This is the testable surface beneath [`run`]: production wires the
 /// real backends + producers + writers, while integration tests in
@@ -108,9 +126,15 @@ pub fn run() -> ExitCode {
 ///    setup failure.
 /// 6. Map the merged result onto an [`ExitCode`] via
 ///    [`crate::app::exit_code_from_run_result`].
+// Composition root: each parameter wires one collaborator into the
+// production composer. Bundling them into a struct would just
+// rename the same eight wirings and would not reduce the number of
+// integration tests that need to thread them.
+#[allow(clippy::too_many_arguments)]
 #[must_use]
 pub fn run_with_components<B, TB, MT, I, T, W>(
     args: cli::GlobalArgs,
+    no_color: bool,
     lifecycle_backend: TB,
     make_terminal: MT,
     spawn_input: I,
@@ -142,7 +166,7 @@ where
     };
 
     let error_sink: RefCell<Option<io::Error>> = RefCell::new(None);
-    let render = app::build_render_closure(&mut terminal, &error_sink);
+    let render = app::build_render_closure(&mut terminal, &error_sink, no_color);
 
     let run_result = app::run_with_terminal_guard(
         initial_state,

@@ -702,13 +702,13 @@ fn build_render_closure_routes_state_through_draw_frame_into_terminal_buffer() {
     let mut terminal = fresh_test_terminal(80, 12);
     let sink: RefCell<Option<io::Error>> = RefCell::new(None);
     {
-        let mut render = build_render_closure(&mut terminal, &sink);
+        let mut render = build_render_closure(&mut terminal, &sink, false);
         render(&state, now);
     }
     let adapter_buf = terminal.backend().buffer().clone();
 
     let mut baseline_term = fresh_test_terminal(80, 12);
-    draw_frame(&mut baseline_term, &state, now)
+    draw_frame(&mut baseline_term, &state, now, false)
         .expect("baseline draw_frame should succeed against TestBackend");
     let baseline_buf = baseline_term.backend().buffer().clone();
 
@@ -739,7 +739,7 @@ fn build_render_closure_is_a_noop_when_error_sink_already_holds_an_error() {
 
     let sink: RefCell<Option<io::Error>> = RefCell::new(Some(io::Error::other("sentinel")));
     {
-        let mut render = build_render_closure(&mut terminal, &sink);
+        let mut render = build_render_closure(&mut terminal, &sink, false);
         render(&state, now);
     }
 
@@ -779,7 +779,7 @@ fn build_render_closure_captures_draw_failure_and_short_circuits_subsequent_call
     let sink: RefCell<Option<io::Error>> = RefCell::new(None);
 
     {
-        let mut render = build_render_closure(&mut terminal, &sink);
+        let mut render = build_render_closure(&mut terminal, &sink, false);
         render(&state, now);
         let captured_after_first = sink
             .borrow()
@@ -955,6 +955,7 @@ fn run_with_components_returns_success_after_dispatch_quits_cleanly() {
 
     let exit_code = paladin_tui::run_with_components(
         args,
+        false,
         RecordingBackend(log.clone()),
         || Terminal::new(TestBackend::new(80, 24)),
         one_shot_ctrl_c,
@@ -1012,6 +1013,7 @@ fn run_with_components_returns_failure_with_stderr_advisory_on_terminal_construc
 
     let exit_code = paladin_tui::run_with_components::<TestBackend, _, _, _, _, _>(
         args,
+        false,
         RecordingBackend(log.clone()),
         || Err(io::Error::other("synthetic terminal construction failure")),
         |_tx| panic!("input spawner must not be invoked when Terminal::new fails"),

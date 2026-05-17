@@ -62,11 +62,17 @@ fn snapshot_now() -> SystemTime {
 /// `now` parameter is forwarded to the list-view renderer so TOTP
 /// rows compute against a deterministic wall-clock instead of the
 /// host's real time.
+///
+/// `no_color = false` is passed through unconditionally so the
+/// existing symbol-only snapshots stay byte-identical regardless of
+/// the renderer's `--no-color` gating; the `no_color = true` branch
+/// is exercised in `tests/no_color_tests.rs`, which inspects the
+/// cell fg/bg attributes that `buffer_to_text` deliberately strips.
 fn render_to_text(state: &AppState, now: SystemTime, width: u16, height: u16) -> String {
     let backend = TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend).expect("create TestBackend terminal");
     terminal
-        .draw(|frame| render(frame, state, now))
+        .draw(|frame| render(frame, state, now, false))
         .expect("draw frame");
     buffer_to_text(terminal.backend().buffer())
 }

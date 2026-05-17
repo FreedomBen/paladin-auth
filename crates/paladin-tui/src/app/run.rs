@@ -196,11 +196,15 @@ pub fn exit_code_from_run_result<W: Write>(
 /// `FnMut(&AppState, SystemTime)` slot [`run_event_loop`] and
 /// [`run_with_terminal_guard`] consume.
 ///
-/// On each call the closure routes `state` and `now` through
-/// [`crate::app::render::draw_frame`] (which itself drives
-/// [`crate::view::render`]). If `draw_frame` returns an
-/// [`io::Error`], the error is recorded into `error_sink` and the
-/// closure becomes a no-op for every subsequent invocation — a
+/// On each call the closure routes `state`, `now`, and the captured
+/// `no_color` through [`crate::app::render::draw_frame`] (which
+/// itself drives [`crate::view::render`]). `no_color` is captured
+/// at composer-construction time so the closure does not re-read
+/// the flag on every frame; production [`crate::run`] computes it
+/// once from [`crate::cli::should_disable_color`] and threads it
+/// through [`crate::run_with_components`]. If `draw_frame` returns
+/// an [`io::Error`], the error is recorded into `error_sink` and
+/// the closure becomes a no-op for every subsequent invocation — a
 /// single transient terminal failure must not pile up follow-on
 /// errors across every remaining frame, and the alternate-screen
 /// teardown that runs after the loop exits should not race a doomed
@@ -218,12 +222,13 @@ pub fn exit_code_from_run_result<W: Write>(
 pub fn build_render_closure<'a, B: Backend>(
     terminal: &'a mut Terminal<B>,
     error_sink: &'a RefCell<Option<io::Error>>,
+    no_color: bool,
 ) -> impl FnMut(&AppState, SystemTime) + 'a {
     move |state: &AppState, now: SystemTime| {
         if error_sink.borrow().is_some() {
             return;
         }
-        if let Err(err) = draw_frame(terminal, state, now) {
+        if let Err(err) = draw_frame(terminal, state, now, no_color) {
             *error_sink.borrow_mut() = Some(err);
         }
     }

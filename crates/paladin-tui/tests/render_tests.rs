@@ -51,9 +51,16 @@ fn fresh_terminal(width: u16, height: u16) -> Terminal<TestBackend> {
 }
 
 /// Render `state` via the adapter and return the resulting buffer.
+///
+/// `no_color = false` is threaded into both `draw_frame` and the
+/// `render_via_view` baseline so the adapter-vs-baseline diff is
+/// invariant under the `--no-color` gating that landed alongside
+/// the `paladin_tui::cli::should_disable_color` wiring; the
+/// `no_color = true` branch is exercised in `tests/no_color_tests.rs`.
 fn render_via_adapter(state: &AppState, now: SystemTime, width: u16, height: u16) -> Buffer {
     let mut terminal = fresh_terminal(width, height);
-    draw_frame(&mut terminal, state, now).expect("draw_frame should succeed against TestBackend");
+    draw_frame(&mut terminal, state, now, false)
+        .expect("draw_frame should succeed against TestBackend");
     terminal.backend().buffer().clone()
 }
 
@@ -62,7 +69,7 @@ fn render_via_adapter(state: &AppState, now: SystemTime, width: u16, height: u16
 fn render_via_view(state: &AppState, now: SystemTime, width: u16, height: u16) -> Buffer {
     let mut terminal = fresh_terminal(width, height);
     terminal
-        .draw(|frame| view_render(frame, state, now))
+        .draw(|frame| view_render(frame, state, now, false))
         .expect("baseline draw");
     terminal.backend().buffer().clone()
 }

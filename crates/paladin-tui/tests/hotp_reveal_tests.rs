@@ -110,7 +110,7 @@ fn render_unlocked_to_text(state: &AppState, width: u16, height: u16) -> String 
     let backend = TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend).expect("create TestBackend terminal");
     terminal
-        .draw(|frame| view_render(frame, state, SystemTime::now()))
+        .draw(|frame| view_render(frame, state, SystemTime::now(), false))
         .expect("draw frame");
     let buffer = terminal.backend().buffer();
     let area = buffer.area();

@@ -59,11 +59,21 @@ pub(super) fn centered_rect(outer: Rect, width: u16, height: u16) -> Rect {
 /// inside the same TOTP window render identically. Variants that do
 /// not surface TOTP codes ignore the parameter.
 ///
+/// `no_color` suppresses ratatui foreground / background color
+/// attributes on styled cells — the `--no-color` CLI flag and the
+/// `NO_COLOR` environment variable both flow here via
+/// [`crate::cli::should_disable_color`], wired through
+/// [`crate::app::render::draw_frame`] and
+/// [`crate::app::build_render_closure`]. For this slice the flag
+/// only gates the list-view's bottom-line status row; the modal
+/// renderers grow the same gating in their own slices per
+/// `IMPLEMENTATION_PLAN_03_TUI.md` "Global flags".
+///
 /// Variants whose renderers have not yet landed in this slice draw
 /// nothing — the screen is left at the backend's default fill cell.
 /// Subsequent slices fill those branches in order; the per-variant
 /// fan-out matches the plan's "Tests > Insta snapshots" ordering.
-pub fn render(frame: &mut Frame<'_>, state: &AppState, now: SystemTime) {
+pub fn render(frame: &mut Frame<'_>, state: &AppState, now: SystemTime, no_color: bool) {
     match state {
         AppState::MissingVault { path } => missing_vault::render(frame, path),
         AppState::StartupError { path, message } => {
@@ -82,7 +92,7 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState, now: SystemTime) {
             help_open,
             ..
         } => {
-            list::render(frame, state, now);
+            list::render(frame, state, now, no_color);
             if let Some(open) = modal {
                 render_modal(frame, open, vault);
             }
