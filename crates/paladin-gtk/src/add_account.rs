@@ -838,6 +838,14 @@ pub fn apply_msg(state: &mut AddDialogState, msg: AddAccountMsg) -> Option<AddAc
             // retry. The fresh worker run is authoritative for the
             // next routing decision.
             state.worker_outcome = None;
+            // DESIGN §8: secret fields clear on submit. The
+            // validated `Account` already carries its `Secret` in
+            // `ZeroizeOnDrop` form across the Component boundary,
+            // but the manual / URI shadow buffers and any pending
+            // duplicate slot in `secret_state` are *not* consumed
+            // by the output — wipe them here so the buffers are
+            // empty before the worker spawns.
+            let _dropped_pending = state.secret_state.clear_for(ClearReason::Submit);
             Some(AddAccountOutput::Submit { account })
         }
         AddAccountMsg::SwitchPath(to) => {

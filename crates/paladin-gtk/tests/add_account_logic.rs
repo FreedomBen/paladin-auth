@@ -1154,6 +1154,69 @@ fn apply_msg_submit_proceed_clears_prior_worker_outcome() {
 }
 
 #[test]
+fn apply_msg_submit_proceed_wipes_secret_state_buffers() {
+    // DESIGN §8 mandates secret fields clear on submit. The validated
+    // `Account` (with `Secret` already wrapped in `ZeroizeOnDrop`)
+    // crosses the Component boundary in `AddAccountOutput::Submit`,
+    // but the manual Base32 / URI shadow buffers in
+    // `secret_state` are *also* secret-bearing and must wipe before
+    // the worker spawns — they are not consumed by the output.
+    // Symmetric partner of `apply_msg_cancel_wipes_secret_state_buffers`
+    // for the success-path exit.
+    use paladin_core::{validate_manual, AccountInput, IconHintInput};
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualSecretChanged("JBSWY3DPEHPK3PXP".to_string()),
+    );
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::UriTextChanged(
+            "otpauth://totp/Issuer:label?secret=JBSWY3DPEHPK3PXP&issuer=Issuer".to_string(),
+        ),
+    );
+    assert!(
+        !state.secret_state().manual_secret.is_empty(),
+        "precondition: manual buffer is non-empty before SubmitProceed",
+    );
+    assert!(
+        !state.secret_state().uri_text.is_empty(),
+        "precondition: URI buffer is non-empty before SubmitProceed",
+    );
+
+    let input = AccountInput {
+        label: "submit-label".to_string(),
+        issuer: None,
+        secret: SecretString::from("JBSWY3DPEHPK3PXP".to_string()),
+        algorithm: Algorithm::Sha1,
+        digits: 6,
+        kind: AccountKindInput::Totp,
+        period_secs: None,
+        counter: None,
+        icon_hint: IconHintInput::Default,
+    };
+    let validated =
+        validate_manual(input, SystemTime::UNIX_EPOCH).expect("totp account input validates");
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::SubmitProceed {
+            account: validated.account,
+        },
+    );
+
+    assert!(
+        state.secret_state().manual_secret.is_empty(),
+        "SubmitProceed must wipe the manual Base32 buffer",
+    );
+    assert!(
+        state.secret_state().uri_text.is_empty(),
+        "SubmitProceed must wipe the URI shadow buffer",
+    );
+}
+
+#[test]
 fn add_dialog_state_new_initializes_secret_state_to_manual_path_with_empty_buffers() {
     // The freshly-opened dialog defaults to the manual sub-path with
     // empty secret buffers and no pending duplicate-add, matching
