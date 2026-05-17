@@ -1835,6 +1835,42 @@ pub fn add_final_app_state(current: &AppState, _effect: &AddWorkerEffect) -> Opt
     current.clone().leave_busy()
 }
 
+/// Drop-decision projection for the [`crate::add_account::AddAccountComponent`]
+/// after an add worker outcome.
+///
+/// Symmetric partner of [`should_drop_rename_dialog_after`] for the
+/// add path. `AppMsg::AddWorkerCompleted` consults this to decide
+/// whether to detach the live `AddAccountComponent` from the
+/// content tree after applying the worker outcome:
+///
+/// * [`AddWorkerEffect::Success`] → `true`. The dialog dismisses
+///   itself and the new row appears in the visible account list,
+///   in lockstep with the `AppState::UnlockedBusy → Unlocked`
+///   rollback that [`add_final_app_state`] returns.
+/// * [`AddWorkerEffect::Failure`] (every
+///   [`crate::add_account::AddPostEffectOutcome`] variant —
+///   `Inline` for `save_not_committed` / `io_error` / defensive
+///   `validation_error` / `invalid_state`, and `KeepWithWarning`
+///   for `save_durability_unconfirmed`) → `false`. The dialog
+///   stays mounted so the inline error / durability warning is
+///   visible and the user can retry or acknowledge, mirroring how
+///   the rename dialog stays mounted on every failure branch.
+///
+/// The projection inspects only the typed [`AddWorkerEffect`]
+/// variant — it does not consult [`AppState`], the live
+/// `(Vault, Store)` pair, or any
+/// [`crate::add_account::AddAccountComponent`] state — so the
+/// side-effect decision in `AppModel::update` stays unit-
+/// testable in `tests/app_state_logic.rs` without spinning up
+/// GTK / libadwaita.
+#[must_use]
+pub fn should_drop_add_dialog_after(effect: &AddWorkerEffect) -> bool {
+    match effect {
+        AddWorkerEffect::Success { .. } => true,
+        AddWorkerEffect::Failure(_) => false,
+    }
+}
+
 /// Compose the [`AppState`] transition for the
 /// [`crate::remove_dialog::RemoveDialogOutput::SubmitConfirm`] dispatch.
 ///

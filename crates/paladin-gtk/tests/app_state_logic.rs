@@ -7148,3 +7148,164 @@ fn apply_remove_vault_install_inplace_replaces_existing_slot() {
     apply_remove_vault_install_inplace(&mut slot, (vault2, store2));
     assert!(slot.is_some());
 }
+
+// ---------------------------------------------------------------------------
+// should_drop_add_dialog_after — drop-decision projection
+// ---------------------------------------------------------------------------
+//
+// Symmetric partner of `should_drop_rename_dialog_after` for the
+// add path. `AppMsg::AddWorkerCompleted` consults this to decide
+// whether to detach the live `AddAccountComponent` from the
+// content tree after applying the worker outcome:
+//
+// * `Success { account_id }` → drop (the dialog dismisses itself
+//   and the new row appears in the visible account list).
+// * `Failure(AddPostEffectOutcome::Inline)` → stay mounted (the
+//   vault was not mutated and the dialog surfaces the inline
+//   error so the user can retry).
+// * `Failure(AddPostEffectOutcome::KeepWithWarning)` → stay
+//   mounted (the new account committed to disk but the parent-
+//   directory `fsync` failed; the dialog body attaches the
+//   durability warning so the user sees it before dismissing).
+//
+// The projection inspects only the typed `AddWorkerEffect`
+// variant — it does not consult `AppState`, the live `(Vault,
+// Store)` pair, or any `AddAccountComponent` state — so the
+// side-effect decision in `AppModel::update` stays unit-testable
+// without spinning up GTK / libadwaita.
+
+#[test]
+fn should_drop_add_dialog_after_success_returns_true() {
+    use paladin_core::AccountId;
+    use paladin_gtk::add_account::AddWorkerEffect;
+    use paladin_gtk::app::state::should_drop_add_dialog_after;
+
+    let effect = AddWorkerEffect::Success {
+        account_id: AccountId::new(),
+    };
+    assert!(
+        should_drop_add_dialog_after(&effect),
+        "Success must drop the add dialog so the new row appears and the dialog dismisses",
+    );
+}
+
+#[test]
+fn should_drop_add_dialog_after_failure_inline_returns_false() {
+    use paladin_gtk::add_account::{
+        classify_add_post_effect_error, AddPostEffectOutcome, AddWorkerEffect,
+    };
+    use paladin_gtk::app::state::should_drop_add_dialog_after;
+
+    let err = PaladinError::SaveNotCommitted {
+        committed: false,
+        backup_path: None,
+    };
+    let outcome = classify_add_post_effect_error(&err);
+    assert!(
+        matches!(outcome, AddPostEffectOutcome::Inline(_)),
+        "save_not_committed routes to Inline",
+    );
+    let effect = AddWorkerEffect::Failure(outcome);
+    assert!(
+        !should_drop_add_dialog_after(&effect),
+        "Inline failure keeps the dialog mounted so the inline error is visible",
+    );
+}
+
+#[test]
+fn should_drop_add_dialog_after_failure_keep_with_warning_returns_false() {
+    use paladin_gtk::add_account::{
+        classify_add_post_effect_error, AddPostEffectOutcome, AddWorkerEffect,
+    };
+    use paladin_gtk::app::state::should_drop_add_dialog_after;
+
+    let err = PaladinError::SaveDurabilityUnconfirmed;
+    let outcome = classify_add_post_effect_error(&err);
+    assert!(
+        matches!(outcome, AddPostEffectOutcome::KeepWithWarning(_)),
+        "save_durability_unconfirmed routes to KeepWithWarning",
+    );
+    let effect = AddWorkerEffect::Failure(outcome);
+    assert!(
+        !should_drop_add_dialog_after(&effect),
+        "KeepWithWarning keeps the dialog mounted so the durability warning attaches to the body",
+    );
+}
+
+#[test]
+fn should_drop_add_dialog_after_failure_defensive_inline_returns_false() {
+    // Defensive: `invalid_state` would only fire if the
+    // `Vault::mutate_and_save` closure observed an unexpected
+    // post-condition. `classify_add_post_effect_error` routes it
+    // to `Inline`, so the dialog stays mounted.
+    use paladin_gtk::add_account::{
+        classify_add_post_effect_error, AddPostEffectOutcome, AddWorkerEffect,
+    };
+    use paladin_gtk::app::state::should_drop_add_dialog_after;
+
+    let err = PaladinError::InvalidState {
+        operation: "add",
+        state: "account_not_found",
+    };
+    let outcome = classify_add_post_effect_error(&err);
+    assert!(
+        matches!(outcome, AddPostEffectOutcome::Inline(_)),
+        "defensive invalid_state routes to Inline",
+    );
+    let effect = AddWorkerEffect::Failure(outcome);
+    assert!(
+        !should_drop_add_dialog_after(&effect),
+        "defensive Inline keeps the dialog mounted so the typed error is visible",
+    );
+}
+
+#[test]
+fn should_drop_add_dialog_after_partitions_on_success_only() {
+    // Cross-check: the projection partitions effects into "drop"
+    // (Success only) and "keep" (every Failure variant). Pin the
+    // partition across every typed outcome so a future routing
+    // refinement that swaps a Failure branch into the drop side
+    // (or vice versa) is caught here.
+    use paladin_core::AccountId;
+    use paladin_gtk::add_account::{classify_add_post_effect_error, AddWorkerEffect};
+    use paladin_gtk::app::state::should_drop_add_dialog_after;
+
+    let drop_effects = [AddWorkerEffect::Success {
+        account_id: AccountId::new(),
+    }];
+    let keep_effects = [
+        AddWorkerEffect::Failure(classify_add_post_effect_error(
+            &PaladinError::SaveNotCommitted {
+                committed: false,
+                backup_path: None,
+            },
+        )),
+        AddWorkerEffect::Failure(classify_add_post_effect_error(
+            &PaladinError::SaveNotCommitted {
+                committed: true,
+                backup_path: None,
+            },
+        )),
+        AddWorkerEffect::Failure(classify_add_post_effect_error(
+            &PaladinError::SaveDurabilityUnconfirmed,
+        )),
+        AddWorkerEffect::Failure(classify_add_post_effect_error(
+            &PaladinError::InvalidState {
+                operation: "add",
+                state: "account_not_found",
+            },
+        )),
+    ];
+    for effect in &drop_effects {
+        assert!(
+            should_drop_add_dialog_after(effect),
+            "drop partition expects true for effect={effect:?}",
+        );
+    }
+    for effect in &keep_effects {
+        assert!(
+            !should_drop_add_dialog_after(effect),
+            "keep partition expects false for effect={effect:?}",
+        );
+    }
+}
