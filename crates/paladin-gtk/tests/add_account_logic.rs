@@ -1504,3 +1504,225 @@ fn apply_msg_stage_pending_duplicate_replaces_prior_pending() {
         "second StagePendingDuplicate replaces the prior pending",
     );
 }
+
+#[test]
+fn apply_msg_confirm_add_anyway_routes_to_submit_with_pending_account() {
+    // After `StagePendingDuplicate` parks the validated account, the
+    // user clicks "Add anyway" and the widget dispatches
+    // `AddAccountMsg::ConfirmAddAnyway`. `apply_msg` consumes the
+    // parked `ValidatedAccount` out of `AddSecretState::pending` and
+    // forwards it as `AddAccountOutput::Submit { account }` so
+    // `AppModel::update` can spawn the
+    // `gio::spawn_blocking Vault::mutate_and_save(|v| v.add(...))`
+    // worker. Mirror of the CLI `--allow-duplicate` and TUI
+    // `Effect::AddAnyway` follow-up paths.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddAccountOutput, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    let validated = match classify_manual_submit(manual_totp_defaults(), now_for_tests()) {
+        ManualSubmitOutcome::Proceed(v) => v,
+        ManualSubmitOutcome::InlineError(err) => panic!("fixture failed: {err:?}"),
+    };
+    let DuplicateOutcome::AwaitConfirmation {
+        existing: _,
+        validated,
+    } = classify_duplicate(validated, Some(dummy_existing_summary()))
+    else {
+        panic!("expected AwaitConfirmation");
+    };
+    let expected_id = validated.account.id();
+    let expected_label = validated.account.label().to_string();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::StagePendingDuplicate {
+            account: validated.account,
+            warnings: validated.warnings,
+        },
+    );
+
+    let output = apply_msg(&mut state, AddAccountMsg::ConfirmAddAnyway);
+    match output {
+        Some(AddAccountOutput::Submit { account }) => {
+            assert_eq!(
+                account.id(),
+                expected_id,
+                "ConfirmAddAnyway forwards the validated-time id without re-stamping",
+            );
+            assert_eq!(
+                account.label(),
+                expected_label,
+                "ConfirmAddAnyway forwards the pending label byte-for-byte",
+            );
+        }
+        other => panic!("expected Some(Submit), got {other:?}"),
+    }
+}
+
+#[test]
+fn apply_msg_confirm_add_anyway_clears_pending_slot() {
+    // The pending slot must drain when the user confirms "Add anyway"
+    // so a follow-up worker failure cannot accidentally re-emit a
+    // stale pending into a second submit. `consume_pending` takes
+    // the value out of the slot; pin the resulting state here.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    let validated = match classify_manual_submit(manual_totp_defaults(), now_for_tests()) {
+        ManualSubmitOutcome::Proceed(v) => v,
+        ManualSubmitOutcome::InlineError(err) => panic!("fixture failed: {err:?}"),
+    };
+    let DuplicateOutcome::AwaitConfirmation {
+        existing: _,
+        validated,
+    } = classify_duplicate(validated, Some(dummy_existing_summary()))
+    else {
+        panic!("expected AwaitConfirmation");
+    };
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::StagePendingDuplicate {
+            account: validated.account,
+            warnings: validated.warnings,
+        },
+    );
+    assert!(
+        state.secret_state().pending.is_some(),
+        "precondition: pending is parked before ConfirmAddAnyway",
+    );
+
+    let _ = apply_msg(&mut state, AddAccountMsg::ConfirmAddAnyway);
+
+    assert!(
+        state.secret_state().pending.is_none(),
+        "ConfirmAddAnyway drains the pending slot via consume_pending",
+    );
+}
+
+#[test]
+fn apply_msg_confirm_add_anyway_wipes_secret_state_buffers() {
+    // `AddSecretState::consume_pending` wipes both the manual Base32
+    // and `otpauth://` URI shadow buffers alongside taking the
+    // pending. The duplicate-confirm path must honor that contract —
+    // the worker spawns with empty secret buffers per DESIGN §8.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualSecretChanged(SECRET_20_B32.to_string()),
+    );
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::UriTextChanged(
+            "otpauth://totp/Issuer:label?secret=JBSWY3DPEHPK3PXP&issuer=Issuer".to_string(),
+        ),
+    );
+    let validated = match classify_manual_submit(manual_totp_defaults(), now_for_tests()) {
+        ManualSubmitOutcome::Proceed(v) => v,
+        ManualSubmitOutcome::InlineError(err) => panic!("fixture failed: {err:?}"),
+    };
+    let DuplicateOutcome::AwaitConfirmation {
+        existing: _,
+        validated,
+    } = classify_duplicate(validated, Some(dummy_existing_summary()))
+    else {
+        panic!("expected AwaitConfirmation");
+    };
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::StagePendingDuplicate {
+            account: validated.account,
+            warnings: validated.warnings,
+        },
+    );
+    assert!(
+        !state.secret_state().manual_secret.is_empty(),
+        "precondition: manual buffer is non-empty before ConfirmAddAnyway",
+    );
+    assert!(
+        !state.secret_state().uri_text.is_empty(),
+        "precondition: URI buffer is non-empty before ConfirmAddAnyway",
+    );
+
+    let _ = apply_msg(&mut state, AddAccountMsg::ConfirmAddAnyway);
+
+    assert!(
+        state.secret_state().manual_secret.is_empty(),
+        "ConfirmAddAnyway must wipe the manual Base32 buffer",
+    );
+    assert!(
+        state.secret_state().uri_text.is_empty(),
+        "ConfirmAddAnyway must wipe the URI shadow buffer",
+    );
+}
+
+#[test]
+fn apply_msg_confirm_add_anyway_clears_prior_worker_outcome() {
+    // After a `save_not_committed` on a non-duplicate submit, the
+    // user might re-trigger the manual path, hit a duplicate, and
+    // confirm "Add anyway". The prior worker outcome must clear when
+    // ConfirmAddAnyway re-enters the worker so the body does not
+    // render a stale post-effect error alongside the live attempt.
+    // Mirror of `apply_msg_submit_proceed_clears_prior_worker_outcome`
+    // for the duplicate-confirm path.
+    use paladin_gtk::add_account::{
+        apply_msg, classify_add_post_effect_error, AddAccountMsg, AddDialogState,
+    };
+
+    let mut state = AddDialogState::new();
+    let outcome = classify_add_post_effect_error(&PaladinError::SaveNotCommitted {
+        committed: false,
+        backup_path: None,
+    });
+    let _ = apply_msg(&mut state, AddAccountMsg::WorkerFailed(outcome));
+    assert!(state.worker_outcome().is_some());
+
+    let validated = match classify_manual_submit(manual_totp_defaults(), now_for_tests()) {
+        ManualSubmitOutcome::Proceed(v) => v,
+        ManualSubmitOutcome::InlineError(err) => panic!("fixture failed: {err:?}"),
+    };
+    let DuplicateOutcome::AwaitConfirmation {
+        existing: _,
+        validated,
+    } = classify_duplicate(validated, Some(dummy_existing_summary()))
+    else {
+        panic!("expected AwaitConfirmation");
+    };
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::StagePendingDuplicate {
+            account: validated.account,
+            warnings: validated.warnings,
+        },
+    );
+
+    let _ = apply_msg(&mut state, AddAccountMsg::ConfirmAddAnyway);
+
+    assert!(
+        state.worker_outcome().is_none(),
+        "ConfirmAddAnyway must clear any prior worker outcome before the new attempt",
+    );
+}
+
+#[test]
+fn apply_msg_confirm_add_anyway_with_no_pending_is_defensive_noop() {
+    // Defensive: the widget should only dispatch ConfirmAddAnyway
+    // after a `StagePendingDuplicate` parks a value. A stray dispatch
+    // with no pending stays dialog-local — emit no output and leave
+    // state alone — so the worker boundary cannot be entered without
+    // a validated account in hand.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+
+    let output = apply_msg(&mut state, AddAccountMsg::ConfirmAddAnyway);
+
+    assert!(
+        output.is_none(),
+        "ConfirmAddAnyway with no pending must not bubble Submit up to AppModel",
+    );
+    assert!(
+        state.secret_state().pending.is_none(),
+        "pending stays empty when there was nothing to consume",
+    );
+}

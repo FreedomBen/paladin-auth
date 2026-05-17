@@ -560,15 +560,22 @@ pub enum AddAccountMsg {
     WorkerFailed(AddPostEffectOutcome),
     /// Internal Save-clicked routing produced by the widget once
     /// [`classify_manual_submit`] / [`crate::otpauth_uri_paste::classify_uri_submit`]
-    /// returned `Proceed` and [`classify_duplicate`] either reported
-    /// `Proceed` or an "add anyway" confirmation consumed the
-    /// pending duplicate. Carries the validated [`Account`] so
-    /// [`apply_msg`] can forward [`AddAccountOutput::Submit`] to
-    /// `AppModel` without re-running the validation pipeline. The
-    /// [`Account`]'s secret is wrapped in [`paladin_core::Secret`]
-    /// (which is `ZeroizeOnDrop`) so the message stays compliant
-    /// with §"Secret entry handling" when it crosses the
-    /// Component boundary.
+    /// returned `Proceed` and [`classify_duplicate`] reported a
+    /// non-collision `Proceed(ValidatedAccount)`. Carries the
+    /// validated [`Account`] so [`apply_msg`] can forward
+    /// [`AddAccountOutput::Submit`] to `AppModel` without re-running
+    /// the validation pipeline. The [`Account`]'s secret is wrapped
+    /// in [`paladin_core::Secret`] (which is `ZeroizeOnDrop`) so the
+    /// message stays compliant with §"Secret entry handling" when it
+    /// crosses the Component boundary.
+    ///
+    /// The duplicate-collision "add anyway" path uses
+    /// [`Self::ConfirmAddAnyway`] instead — that variant sources the
+    /// account from
+    /// [`crate::secret_fields::AddSecretState::pending`] (parked by
+    /// [`Self::StagePendingDuplicate`]) rather than from the widget,
+    /// so a stray Save click cannot bypass the parked-pending
+    /// invariant.
     SubmitProceed {
         /// Validated account ready for insertion via
         /// `Vault::mutate_and_save(|v| v.add(account))`. The
@@ -625,9 +632,10 @@ pub enum AddAccountMsg {
     ///
     /// Dialog-local — no [`AddAccountOutput`] is emitted. The
     /// duplicate-confirm round trip stays inside the dialog until
-    /// the user confirms (which consumes the pending and dispatches
-    /// [`Self::SubmitProceed`]) or cancels (which drops the pending
-    /// via [`Self::Cancel`]).
+    /// the user confirms (via [`Self::ConfirmAddAnyway`], which
+    /// consumes the pending and forwards
+    /// [`AddAccountOutput::Submit`]) or cancels (via
+    /// [`Self::Cancel`], which drops the pending).
     StagePendingDuplicate {
         /// Validated account ready for insertion via
         /// `Vault::mutate_and_save(|v| v.add(account))` once the
@@ -642,6 +650,21 @@ pub enum AddAccountMsg {
         /// [`validate_manual`].
         warnings: Vec<ValidationWarning>,
     },
+    /// "Add anyway" confirmation from the duplicate-collision modal.
+    /// [`apply_msg`] consumes the pending [`ValidatedAccount`] out of
+    /// [`crate::secret_fields::AddSecretState::pending`] via
+    /// [`crate::secret_fields::AddSecretState::consume_pending`] —
+    /// which also wipes the manual / URI shadow buffers — and
+    /// forwards the carried [`Account`] as
+    /// [`AddAccountOutput::Submit`] so `AppModel::update` can spawn
+    /// the `gio::spawn_blocking Vault::mutate_and_save(|v|
+    /// v.add(account))` worker. CLI parity with `--allow-duplicate`
+    /// and TUI parity with `Effect::AddAnyway`.
+    ///
+    /// Defensive: a dispatch with no pending parked is a no-op (no
+    /// output, no state change) so a stray click cannot punch through
+    /// to the worker without a validated account in hand.
+    ConfirmAddAnyway,
 }
 
 /// Outbound messages emitted by [`AddAccountComponent`] back to
@@ -747,9 +770,16 @@ pub fn format_add_dialog_marker(path: &Path) -> String {
 ///   [`crate::otpauth_uri_paste::classify_uri_submit`] and
 ///   [`classify_duplicate`] on the main thread; this arm only
 ///   forwards the validated [`Account`] once a `Proceed` outcome
-///   (or a consumed "add anyway" duplicate) is in hand, so
-///   `AppModel::update`'s submit handler does not re-derive the
-///   validation pipeline.
+///   is in hand, so `AppModel::update`'s submit handler does not
+///   re-derive the validation pipeline.
+/// * [`AddAccountMsg::ConfirmAddAnyway`] →
+///   `Some(AddAccountOutput::Submit { account })` sourced from
+///   the pending [`ValidatedAccount`] parked by
+///   [`AddAccountMsg::StagePendingDuplicate`]. The arm consumes
+///   the pending via
+///   [`crate::secret_fields::AddSecretState::consume_pending`]
+///   (which also wipes the manual / URI shadow buffers) and is a
+///   defensive no-op when no pending is parked.
 ///
 /// Reactive state owned by the live [`AddAccountComponent`].
 ///
@@ -912,6 +942,22 @@ pub fn apply_msg(state: &mut AddDialogState, msg: AddAccountMsg) -> Option<AddAc
                 .secret_state
                 .replace_pending(ValidatedAccount { account, warnings });
             None
+        }
+        AddAccountMsg::ConfirmAddAnyway => {
+            // Defensive: no pending → no output. The widget should
+            // only dispatch this after `StagePendingDuplicate` parked
+            // a value, but a stray click cannot punch through to the
+            // `(Vault, Store)` worker without an account in hand.
+            let validated = state.secret_state.consume_pending()?;
+            // Clear any prior worker outcome so the body does not
+            // render stale post-effect text alongside the live
+            // worker attempt. Symmetric with the `SubmitProceed`
+            // arm — both enter the worker through the same
+            // `AddAccountOutput::Submit` boundary.
+            state.worker_outcome = None;
+            Some(AddAccountOutput::Submit {
+                account: validated.account,
+            })
         }
     }
 }
