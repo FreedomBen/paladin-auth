@@ -1,0 +1,19 @@
+---
+source: crates/paladin-tui/tests/view_snapshots.rs
+assertion_line: 668
+expression: "render_to_styled_text(&state, snapshot_now(), true, 80, 12)"
+---
+┌ Paladin ─────────────────────────────────────────────────────────────────────┐
+│ Search: git                                                                  │
+│ ──────────────────────────────────────────────────────────────────────────── │
+│ ▶ GitHub (ben@example.com)            914 994   ██████░░░░   18s             │
+│   GitLab (ben@example.com)            914 994   ██████░░░░   18s             │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│ ──────────────────────────────────────────────────────────────────────────── │
+│ [↑↓] move  [enter] copy  [n] next-HOTP  [a] add  [/] find                    │
+└──────────────────────────────────────────────────────────────────────────────┘
+─── styles ───
+(none)

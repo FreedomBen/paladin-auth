@@ -1898,24 +1898,36 @@ Layout / list views:
   `.skip(viewport_offset)` post-filter so a regression that ever
   stops applying the offset shifts the window back to
   `Acct01`..`Acct06` and drops the marker, surfacing as a diff.)*
-- [ ] `--no-color` variants of the list-view snapshots above.
-  (Deferred for the snapshot-variant form: `tests/view_snapshots.rs::buffer_to_text`
-  serializes cell symbols only and drops fg/bg/modifier attributes,
-  so a no-color *snapshot* is still byte-identical to its styled
-  twin even though the renderer now actually changes its emitted
-  styles under `no_color = true` — locking in
-  identical-snapshot duplicates would obscure rather than catch
-  regressions. The *contract* the snapshot variants would assert is
-  pinned today by `tests/no_color_tests.rs`, which renders through a
-  styled-buffer harness and inspects per-cell `fg` directly: the
-  list-view's bottom-line `StatusLine::Error` / `Confirmation`
-  cells lose their `Color::Red` / `Color::Green` foreground under
-  `no_color = true` and keep it under `no_color = false`, plus a
-  `build_render_closure` plumbing test pins the
-  `GlobalArgs::no_color` → `view::render` capture path. The snapshot-
-  variant matrix per se still tracks a future styled-grid serializer
-  in `view_snapshots.rs` once the matrix's signal-to-noise ratio
-  beats the per-cell tests' targeted assertions.)
+- [x] `--no-color` variants of the list-view snapshots above.
+  *(`tests/view_snapshots.rs` grows a styled-grid serializer
+  `buffer_to_styled_text` that emits the symbol grid (identical to
+  the existing `buffer_to_text` body) followed by a deterministic
+  style annotation section listing each run-length-compressed run of
+  cells whose `(fg, bg, modifier)` triple differs from the default
+  `(Color::Reset, Color::Reset, Modifier::empty())`; rows with no
+  styled cells emit a `(none)` sentinel. The companion
+  `render_to_styled_text(state, now, no_color, w, h)` helper threads
+  the `no_color` bool through `view::render`. Every list-view
+  `snapshot_*` test grows a matching `assert_snapshot!(
+  "<name>_no_color", render_to_styled_text(.., true, ..))` companion,
+  producing nineteen `.snap` files in `tests/snapshots/` whose styles
+  section is `(none)` because the renderer drops the bottom-line
+  `StatusLine::Error` / `Confirmation` foreground under
+  `no_color = true`. A regression that ever leaks color into the
+  no-color path adds entries to the section, surfacing as a diff in
+  whichever list-view snapshot exercises the affected status-line.
+  Eight unit tests `styled_serializer_tests::*` cover the
+  serializer itself: default-style sentinel detection, empty-modifier
+  rendering as `NONE`, modifier captured via Debug, `(none)` marker
+  for unstyled buffers, run-length compaction for `Color::Red` cells,
+  new-run start when style changes, `Modifier::BOLD` capture, and
+  byte-identical grid prefix vs `buffer_to_text` above the section
+  header. The companion styled-mode contract — `Color::Red` /
+  `Color::Green` foreground actually applied to the bottom-line
+  cells when `no_color = false` — stays pinned by the per-cell
+  assertions in `tests/no_color_tests.rs`, so the snapshot-variant
+  matrix and the per-cell matrix together cover both halves of the
+  `--no-color` × styled-color contract.)*
 
 Modals and overlays:
 
@@ -3342,7 +3354,7 @@ is never expected to be scripted.
   re-import, and silent-drop on path-mismatch / non-Unlocked. Real
   QR fixtures are rendered through `qrcode` + `image` dev-deps that
   mirror `paladin-core`'s `tests/import_qr.rs::make_qr_rgba`.)*
-- [ ] Add reducer, search, auto-lock, clipboard, HOTP reveal, terminal
+- [x] Add reducer, search, auto-lock, clipboard, HOTP reveal, terminal
   lifecycle, sensitive-buffer, and snapshot coverage. Tracked at the
   bullet level in the Tests checklist; this top-level item only ticks
   once every Tests sub-bullet is checked.

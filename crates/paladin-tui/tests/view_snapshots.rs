@@ -10,19 +10,28 @@
 //! regression shows up as a `git diff`-readable text change.
 //!
 //! Tracks the "Tests > Insta snapshots" checklist in
-//! `IMPLEMENTATION_PLAN_03_TUI.md`. The harness deliberately drops
-//! styling (foreground / background / modifiers) from the snapshot
-//! body — only the cell symbols are serialized — so the snapshot
-//! file stays diff-readable and the `--no-color` variants share a
-//! single text body. A styled-grid harness for the eventual
-//! `--no-color` × styled-color matrix lands when the list view's
-//! search highlighting needs it.
+//! `IMPLEMENTATION_PLAN_03_TUI.md`. Two parallel serializers cover
+//! the rendered grid:
+//!
+//!   * [`buffer_to_text`] / [`render_to_text`] emit a symbol-only
+//!     grid (foreground / background / modifiers are intentionally
+//!     dropped). Used by the existing `snapshot_*` tests so the
+//!     primary `.snap` files stay diff-readable.
+//!   * [`buffer_to_styled_text`] / [`render_to_styled_text`] emit
+//!     the same symbol grid followed by a deterministic style
+//!     annotation section listing each consecutive run of cells
+//!     whose `(fg, bg, modifier)` triple differs from the default
+//!     `(Color::Reset, Color::Reset, Modifier::empty())`. Used by
+//!     the list-view `_no_color` companion snapshots so a future
+//!     regression that ever leaks color into the `no_color = true`
+//!     path surfaces as new entries in the styles section.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use ratatui::backend::TestBackend;
-use ratatui::buffer::Buffer;
+use ratatui::buffer::{Buffer, Cell};
+use ratatui::style::{Color, Modifier};
 use ratatui::Terminal;
 
 use paladin_core::{
@@ -99,6 +108,259 @@ fn buffer_to_text(buffer: &Buffer) -> String {
         out.push('\n');
     }
     out
+}
+
+/// Header that introduces the styles annotation section emitted by
+/// [`buffer_to_styled_text`]. Pinned as a separate constant so the
+/// unit tests below and the snapshot files share an exact byte
+/// sequence; a rewording here drives a single update across both.
+const STYLES_SECTION_HEADER: &str = "─── styles ───\n";
+
+/// Sentinel written into the styles section when no cell in the
+/// buffer carries a non-default `(fg, bg, modifier)` triple.
+const STYLES_SECTION_EMPTY_MARKER: &str = "(none)\n";
+
+/// `(fg, bg, modifier)` triple captured per cell by
+/// [`buffer_to_styled_text`]. Cells whose signature equals
+/// [`DEFAULT_STYLE_SIG`] are unstyled and skipped.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+struct StyleSig {
+    fg: Color,
+    bg: Color,
+    modifier: Modifier,
+}
+
+const DEFAULT_STYLE_SIG: StyleSig = StyleSig {
+    fg: Color::Reset,
+    bg: Color::Reset,
+    modifier: Modifier::empty(),
+};
+
+fn cell_style_signature(cell: &Cell) -> StyleSig {
+    StyleSig {
+        fg: cell.fg,
+        bg: cell.bg,
+        modifier: cell.modifier,
+    }
+}
+
+fn format_style_signature(sig: StyleSig) -> String {
+    let modifier_repr = if sig.modifier.is_empty() {
+        "NONE".to_string()
+    } else {
+        format!("{:?}", sig.modifier)
+    };
+    format!("fg={:?} bg={:?} mod={modifier_repr}", sig.fg, sig.bg)
+}
+
+/// Serialize a ratatui [`Buffer`] as the symbol grid (identical to
+/// [`buffer_to_text`]) followed by a deterministic style annotation
+/// section. The styles section lists, in row-major order, each
+/// consecutive run of cells whose `(fg, bg, modifier)` triple differs
+/// from the default `(Color::Reset, Color::Reset, Modifier::empty())`;
+/// cells with the default style are omitted. If no cell carries a
+/// non-default style, the section is the [`STYLES_SECTION_EMPTY_MARKER`]
+/// sentinel so the absence is still pinned.
+///
+/// Used by the list-view `_no_color` snapshot variants: under
+/// `no_color = true` the renderer drops the foreground attribute on
+/// status-line `Error` / `Confirmation` cells, so the styles section
+/// of those snapshots is `(none)`. A regression that ever leaks
+/// color into the no-color path adds entries to the section,
+/// surfacing as a diff in the snapshot file. The companion symbol-
+/// only snapshots locked by [`buffer_to_text`] / [`render_to_text`]
+/// remain in place to pin the rendered text grid itself.
+fn buffer_to_styled_text(buffer: &Buffer) -> String {
+    use std::fmt::Write as _;
+
+    let mut out = buffer_to_text(buffer);
+    out.push_str(STYLES_SECTION_HEADER);
+
+    let area = buffer.area();
+    let width = area.width;
+    let height = area.height;
+    let mut any_styled = false;
+    for y in 0..height {
+        let mut x: u16 = 0;
+        while x < width {
+            let sig = cell_style_signature(&buffer[(x, y)]);
+            if sig == DEFAULT_STYLE_SIG {
+                x += 1;
+                continue;
+            }
+            let start = x;
+            let mut run_text = String::new();
+            run_text.push_str(buffer[(x, y)].symbol());
+            x += 1;
+            while x < width && cell_style_signature(&buffer[(x, y)]) == sig {
+                run_text.push_str(buffer[(x, y)].symbol());
+                x += 1;
+            }
+            let end = x;
+            let _ = writeln!(
+                &mut out,
+                "({start}..{end}, {y}) {run_text:?} {sig_repr}",
+                sig_repr = format_style_signature(sig),
+            );
+            any_styled = true;
+        }
+    }
+    if !any_styled {
+        out.push_str(STYLES_SECTION_EMPTY_MARKER);
+    }
+    out
+}
+
+/// Drive `state` through the view pipeline with the supplied
+/// `no_color` flag and serialize the resulting [`Buffer`] via
+/// [`buffer_to_styled_text`]. Used by the `_no_color` list-view
+/// snapshot variants to lock the no-color-mode style contract; see
+/// [`render_to_text`] for the symbol-only sibling used by the
+/// existing styled snapshots.
+fn render_to_styled_text(
+    state: &AppState,
+    now: SystemTime,
+    no_color: bool,
+    width: u16,
+    height: u16,
+) -> String {
+    let backend = TestBackend::new(width, height);
+    let mut terminal = Terminal::new(backend).expect("create TestBackend terminal");
+    terminal
+        .draw(|frame| render(frame, state, now, no_color))
+        .expect("draw frame");
+    buffer_to_styled_text(terminal.backend().buffer())
+}
+
+#[cfg(test)]
+mod styled_serializer_tests {
+    use super::{
+        buffer_to_styled_text, format_style_signature, StyleSig, DEFAULT_STYLE_SIG,
+        STYLES_SECTION_EMPTY_MARKER, STYLES_SECTION_HEADER,
+    };
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+    use ratatui::style::{Color, Modifier, Style};
+
+    fn styles_section(serialized: &str) -> &str {
+        serialized
+            .rsplit_once(STYLES_SECTION_HEADER)
+            .expect("STYLES_SECTION_HEADER must appear exactly once")
+            .1
+    }
+
+    #[test]
+    fn default_style_sig_uses_reset_colors_and_empty_modifier() {
+        // Pins the default contract `buffer_to_styled_text` keys
+        // off so a future ratatui upgrade that changes `Cell`'s
+        // default (e.g. swapping `Color::Reset` for a richer
+        // "inherit" value) surfaces here rather than as a silently
+        // populated styles section in every snapshot.
+        assert_eq!(
+            DEFAULT_STYLE_SIG,
+            StyleSig {
+                fg: Color::Reset,
+                bg: Color::Reset,
+                modifier: Modifier::empty(),
+            },
+        );
+    }
+
+    #[test]
+    fn format_style_signature_renders_empty_modifier_as_none() {
+        let sig = StyleSig {
+            fg: Color::Red,
+            bg: Color::Reset,
+            modifier: Modifier::empty(),
+        };
+        assert_eq!(format_style_signature(sig), "fg=Red bg=Reset mod=NONE");
+    }
+
+    #[test]
+    fn format_style_signature_renders_non_empty_modifier_via_debug() {
+        let sig = StyleSig {
+            fg: Color::Reset,
+            bg: Color::Reset,
+            modifier: Modifier::BOLD,
+        };
+        assert_eq!(format_style_signature(sig), "fg=Reset bg=Reset mod=BOLD");
+    }
+
+    #[test]
+    fn buffer_to_styled_text_appends_none_marker_when_no_cell_is_styled() {
+        let buf = Buffer::empty(Rect::new(0, 0, 3, 2));
+        let out = buffer_to_styled_text(&buf);
+        assert!(
+            out.ends_with(&format!(
+                "{STYLES_SECTION_HEADER}{STYLES_SECTION_EMPTY_MARKER}"
+            )),
+            "expected styles section to be `(none)` for an empty buffer, got:\n{out}",
+        );
+        assert_eq!(styles_section(&out), STYLES_SECTION_EMPTY_MARKER);
+    }
+
+    #[test]
+    fn buffer_to_styled_text_lists_red_fg_cells_with_run_compaction() {
+        // Build a 5x2 buffer; cells (0..3, 0) carry `Color::Red`,
+        // every other cell stays default. The serializer must emit
+        // exactly one run entry and no spurious row-1 entry.
+        let mut buf = Buffer::empty(Rect::new(0, 0, 5, 2));
+        buf.set_string(0, 0, "Err", Style::default().fg(Color::Red));
+        let out = buffer_to_styled_text(&buf);
+        assert_eq!(
+            styles_section(&out),
+            "(0..3, 0) \"Err\" fg=Red bg=Reset mod=NONE\n",
+        );
+    }
+
+    #[test]
+    fn buffer_to_styled_text_starts_a_new_run_when_style_changes() {
+        // Two adjacent runs with differing fg colors must split
+        // into two entries, with the second run's x-start aligned
+        // to where the first run ended.
+        let mut buf = Buffer::empty(Rect::new(0, 0, 6, 1));
+        buf.set_string(0, 0, "Er", Style::default().fg(Color::Red));
+        buf.set_string(2, 0, "Ok", Style::default().fg(Color::Green));
+        let out = buffer_to_styled_text(&buf);
+        assert_eq!(
+            styles_section(&out),
+            "(0..2, 0) \"Er\" fg=Red bg=Reset mod=NONE\n\
+             (2..4, 0) \"Ok\" fg=Green bg=Reset mod=NONE\n",
+        );
+    }
+
+    #[test]
+    fn buffer_to_styled_text_captures_bold_modifier() {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 3, 1));
+        buf.set_string(0, 0, "Hi", Style::default().add_modifier(Modifier::BOLD));
+        let out = buffer_to_styled_text(&buf);
+        assert_eq!(
+            styles_section(&out),
+            "(0..2, 0) \"Hi\" fg=Reset bg=Reset mod=BOLD\n",
+        );
+    }
+
+    #[test]
+    fn buffer_to_styled_text_keeps_symbol_grid_unchanged_above_section_header() {
+        // A regression that ever reformats the symbol-grid portion
+        // of the styled output would invalidate the existing
+        // symbol-only `.snap` files. Pin that the prefix above
+        // `STYLES_SECTION_HEADER` matches `buffer_to_text` byte-for-
+        // byte.
+        let mut buf = Buffer::empty(Rect::new(0, 0, 4, 1));
+        buf.set_string(0, 0, "AB", Style::default().fg(Color::Red));
+        let styled = buffer_to_styled_text(&buf);
+        let grid_only = super::buffer_to_text(&buf);
+        assert!(
+            styled.starts_with(&grid_only),
+            "expected styled output to start with the symbol grid, got:\n{styled}\nexpected prefix:\n{grid_only}",
+        );
+        // And the styles section sits immediately after the grid.
+        assert_eq!(
+            &styled[grid_only.len()..grid_only.len() + STYLES_SECTION_HEADER.len()],
+            STYLES_SECTION_HEADER,
+        );
+    }
 }
 
 #[test]
@@ -181,6 +443,10 @@ fn snapshot_list_view_empty() {
         help_open: false,
     };
     insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 12));
+    insta::assert_snapshot!(
+        "snapshot_list_view_empty_no_color",
+        render_to_styled_text(&state, snapshot_now(), true, 80, 12),
+    );
 }
 
 /// Insert a single TOTP account into `vault` and commit it to `store`.
@@ -248,6 +514,10 @@ fn snapshot_list_view_single_totp() {
         help_open: false,
     };
     insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 12));
+    insta::assert_snapshot!(
+        "snapshot_list_view_single_totp_no_color",
+        render_to_styled_text(&state, snapshot_now(), true, 80, 12),
+    );
 }
 
 /// Insert a single HOTP account at `counter` into `vault` and commit
@@ -341,6 +611,10 @@ fn snapshot_list_view_mixed_totp_hotp_hidden_and_revealed() {
         help_open: false,
     };
     insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 12));
+    insta::assert_snapshot!(
+        "snapshot_list_view_mixed_totp_hotp_hidden_and_revealed_no_color",
+        render_to_styled_text(&state, snapshot_now(), true, 80, 12),
+    );
 }
 
 #[test]
@@ -391,6 +665,10 @@ fn snapshot_list_view_search_active() {
         help_open: false,
     };
     insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 12));
+    insta::assert_snapshot!(
+        "snapshot_list_view_search_active_no_color",
+        render_to_styled_text(&state, snapshot_now(), true, 80, 12),
+    );
 }
 
 #[test]
@@ -458,6 +736,10 @@ fn snapshot_list_view_after_zz_recenter() {
         help_open: false,
     };
     insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 12));
+    insta::assert_snapshot!(
+        "snapshot_list_view_after_zz_recenter_no_color",
+        render_to_styled_text(&state, snapshot_now(), true, 80, 12),
+    );
 }
 
 #[test]
@@ -503,6 +785,10 @@ fn snapshot_list_view_status_line_error_after_rejected_copy() {
         help_open: false,
     };
     insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 12));
+    insta::assert_snapshot!(
+        "snapshot_list_view_status_line_error_after_rejected_copy_no_color",
+        render_to_styled_text(&state, snapshot_now(), true, 80, 12),
+    );
 }
 
 #[test]
@@ -562,6 +848,10 @@ fn snapshot_list_view_status_line_save_durability_unconfirmed_after_hotp_advance
         help_open: false,
     };
     insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 12));
+    insta::assert_snapshot!(
+        "snapshot_list_view_status_line_save_durability_unconfirmed_after_hotp_advance_no_color",
+        render_to_styled_text(&state, snapshot_now(), true, 80, 12),
+    );
 }
 
 #[test]
@@ -606,6 +896,10 @@ fn snapshot_list_view_status_line_clipboard_write_failed_after_failed_copy() {
         help_open: false,
     };
     insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 12));
+    insta::assert_snapshot!(
+        "snapshot_list_view_status_line_clipboard_write_failed_after_failed_copy_no_color",
+        render_to_styled_text(&state, snapshot_now(), true, 80, 12),
+    );
 }
 
 #[test]
@@ -658,6 +952,10 @@ fn snapshot_list_view_status_line_after_manual_add() {
         help_open: false,
     };
     insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 12));
+    insta::assert_snapshot!(
+        "snapshot_list_view_status_line_after_manual_add_no_color",
+        render_to_styled_text(&state, snapshot_now(), true, 80, 12),
+    );
 }
 
 #[test]
@@ -705,6 +1003,10 @@ fn snapshot_list_view_status_line_after_uri_add() {
         help_open: false,
     };
     insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 12));
+    insta::assert_snapshot!(
+        "snapshot_list_view_status_line_after_uri_add_no_color",
+        render_to_styled_text(&state, snapshot_now(), true, 80, 12),
+    );
 }
 
 #[test]
@@ -763,6 +1065,10 @@ fn snapshot_list_view_status_line_after_remove() {
         help_open: false,
     };
     insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 12));
+    insta::assert_snapshot!(
+        "snapshot_list_view_status_line_after_remove_no_color",
+        render_to_styled_text(&state, snapshot_now(), true, 80, 12),
+    );
 }
 
 #[test]
@@ -813,6 +1119,10 @@ fn snapshot_list_view_status_line_after_rename() {
         help_open: false,
     };
     insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 12));
+    insta::assert_snapshot!(
+        "snapshot_list_view_status_line_after_rename_no_color",
+        render_to_styled_text(&state, snapshot_now(), true, 80, 12),
+    );
 }
 
 #[test]
@@ -858,6 +1168,10 @@ fn snapshot_list_view_status_line_after_export() {
         help_open: false,
     };
     insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 12));
+    insta::assert_snapshot!(
+        "snapshot_list_view_status_line_after_export_no_color",
+        render_to_styled_text(&state, snapshot_now(), true, 80, 12),
+    );
 }
 
 #[test]
@@ -896,6 +1210,10 @@ fn snapshot_list_view_status_line_after_passphrase_set() {
         help_open: false,
     };
     insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 12));
+    insta::assert_snapshot!(
+        "snapshot_list_view_status_line_after_passphrase_set_no_color",
+        render_to_styled_text(&state, snapshot_now(), true, 80, 12),
+    );
 }
 
 #[test]
@@ -929,6 +1247,10 @@ fn snapshot_list_view_status_line_after_passphrase_change() {
         help_open: false,
     };
     insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 12));
+    insta::assert_snapshot!(
+        "snapshot_list_view_status_line_after_passphrase_change_no_color",
+        render_to_styled_text(&state, snapshot_now(), true, 80, 12),
+    );
 }
 
 #[test]
@@ -960,6 +1282,10 @@ fn snapshot_list_view_status_line_after_passphrase_remove() {
         help_open: false,
     };
     insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 12));
+    insta::assert_snapshot!(
+        "snapshot_list_view_status_line_after_passphrase_remove_no_color",
+        render_to_styled_text(&state, snapshot_now(), true, 80, 12),
+    );
 }
 
 #[test]
@@ -994,6 +1320,10 @@ fn snapshot_list_view_status_line_after_settings_save() {
         help_open: false,
     };
     insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 12));
+    insta::assert_snapshot!(
+        "snapshot_list_view_status_line_after_settings_save_no_color",
+        render_to_styled_text(&state, snapshot_now(), true, 80, 12),
+    );
 }
 
 #[test]
@@ -1055,6 +1385,10 @@ fn snapshot_list_view_status_line_after_manual_add_with_warnings() {
         help_open: false,
     };
     insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 12));
+    insta::assert_snapshot!(
+        "snapshot_list_view_status_line_after_manual_add_with_warnings_no_color",
+        render_to_styled_text(&state, snapshot_now(), true, 80, 12),
+    );
 }
 
 #[test]
@@ -1107,6 +1441,10 @@ fn snapshot_list_view_status_line_after_uri_add_with_warnings() {
         help_open: false,
     };
     insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 12));
+    insta::assert_snapshot!(
+        "snapshot_list_view_status_line_after_uri_add_with_warnings_no_color",
+        render_to_styled_text(&state, snapshot_now(), true, 80, 12),
+    );
 }
 
 #[test]
