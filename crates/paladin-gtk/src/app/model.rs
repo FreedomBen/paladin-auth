@@ -74,6 +74,7 @@ use crate::account_list::{
     format_rendered_marker, format_widget_states_marker, hidden_row_display, row_models_from_vault,
     AccountListComponent, AccountListInit, AccountListOutput, AccountRowModel,
 };
+use crate::add_account::{AddAccountComponent, AddAccountInit, AddAccountOutput};
 use crate::app::state::{
     apply_remove_dispatch_inplace, apply_remove_vault_install_inplace,
     apply_rename_dispatch_inplace, apply_rename_vault_install_inplace, apply_submit_remove_inplace,
@@ -190,6 +191,12 @@ pub struct AppModel {
     /// handler.
     #[allow(dead_code)]
     remove_dialog: Option<Controller<RemoveDialogComponent>>,
+    /// Live [`AddAccountComponent`] controller when the user has
+    /// activated the header-bar `+` button. `None` between
+    /// activations. Held on `self` so the rendered widget is not
+    /// dropped at the end of the [`AppMsg::OpenAddDialog`] handler.
+    #[allow(dead_code)]
+    add_dialog: Option<Controller<AddAccountComponent>>,
     /// Reference-counted handle to the window's content box.
     ///
     /// `gtk::Box` is a `GObject`, so cloning it just bumps the
@@ -232,6 +239,7 @@ impl std::fmt::Debug for AppModel {
                 "remove_dialog",
                 &self.remove_dialog.as_ref().map(|_| "<mounted>"),
             )
+            .field("add_dialog", &self.add_dialog.as_ref().map(|_| "<mounted>"))
             .field("content", &"<gtk::Box>")
             .finish()
     }
@@ -275,6 +283,26 @@ pub enum AppMsg {
     /// added in the follow-up commit that wires
     /// `Vault::mutate_and_save` through the `UnlockedBusy` worker.
     RemoveDialogAction(RemoveDialogOutput),
+    /// Posted by the header-bar `+` button click handler. Mounts a
+    /// fresh [`AddAccountComponent`] seeded with the resolved vault
+    /// path so the manual / URI / QR sub-paths can commit a new
+    /// account via `Vault::mutate_and_save(|v| v.add(...))` on
+    /// submit. Today only the Cancel button is wired — the editable
+    /// form widgets and the worker spawn land in follow-up commits.
+    ///
+    /// Defensive: dispatched only when [`AppState::is_unlocked`] is
+    /// `true` and a live `(Vault, Store)` pair is present. A click
+    /// arriving in any other state (the `+` button is hidden, but a
+    /// stray dispatch from a future keyboard shortcut would still
+    /// land here) is a benign no-op.
+    OpenAddDialog,
+    /// Forwarded from the live [`AddAccountComponent`] when the
+    /// user interacts with the dialog. Today only
+    /// [`AddAccountOutput::Cancel`] is emitted — `AppModel`
+    /// responds by dropping the controller and removing the dialog
+    /// widget from the content tree. Submit / worker outputs land
+    /// in follow-up commits alongside the editable form widgets.
+    AddAccountAction(AddAccountOutput),
     /// Forwarded from the live [`UnlockDialogComponent`] when the
     /// user submits a non-empty passphrase. Today only
     /// [`UnlockDialogOutput::SubmitLock`] is emitted — the
@@ -398,14 +426,39 @@ impl SimpleComponent for AppModel {
             set_default_size: (640, 480),
 
             #[wrap(Some)]
-            set_content = &gtk::Box {
-                set_orientation: gtk::Orientation::Vertical,
+            set_content = &adw::ToolbarView {
+                add_top_bar = &adw::HeaderBar {
+                    #[name = "add_button"]
+                    pack_start = &gtk::Button {
+                        set_icon_name: "list-add-symbolic",
+                        set_tooltip_text: Some("Add account"),
+                        // Initial visibility tracks the resolved
+                        // startup state. Subsequent state changes
+                        // (Unlocked → UnlockedBusy → Unlocked,
+                        // auto-lock, etc.) toggle visibility via
+                        // `apply_add_button_visibility_inplace`
+                        // wired in the post-init dispatch
+                        // handlers. The `+` is hidden outside
+                        // `Unlocked` so users cannot trigger an
+                        // `OpenAddDialog` race against a missing /
+                        // locked / busy vault.
+                        set_visible: state.is_unlocked(),
+                        connect_clicked[sender] => move |_| {
+                            sender.input(AppMsg::OpenAddDialog);
+                        },
+                    },
+                },
 
-                #[name = "content"]
-                append = &gtk::Box {
+                #[wrap(Some)]
+                set_content = &gtk::Box {
                     set_orientation: gtk::Orientation::Vertical,
-                    set_hexpand: true,
-                    set_vexpand: true,
+
+                    #[name = "content"]
+                    append = &gtk::Box {
+                        set_orientation: gtk::Orientation::Vertical,
+                        set_hexpand: true,
+                        set_vexpand: true,
+                    },
                 },
             },
         }
@@ -506,6 +559,7 @@ impl SimpleComponent for AppModel {
             unlock_dialog,
             rename_dialog: None,
             remove_dialog: None,
+            add_dialog: None,
             content: widgets.content.clone(),
         };
 
@@ -638,6 +692,39 @@ impl SimpleComponent for AppModel {
                 // already `None` (controller swapped under us by a
                 // future race), this is a benign no-op.
                 if let Some(controller) = self.remove_dialog.take() {
+                    self.content.remove(controller.widget());
+                }
+            }
+            AppMsg::OpenAddDialog => {
+                // Header-bar `+` button activation. Mount a fresh
+                // `AddAccountComponent` seeded with the resolved
+                // vault path. The button visibility is `#[watch]`'d
+                // against `AppState::is_unlocked`, but a stray
+                // dispatch from a future keyboard shortcut could
+                // still arrive in a non-unlocked state — defend
+                // against that here so the dialog never mounts over
+                // a `Missing` / `Locked` / `StartupError` window.
+                if let Some(state) = self.state.as_ref() {
+                    if state.is_unlocked() {
+                        if let Some(path) = state.path() {
+                            let init = AddAccountInit {
+                                vault_path: path.to_path_buf(),
+                            };
+                            let controller = AddAccountComponent::builder()
+                                .launch(init)
+                                .forward(sender.input_sender(), AppMsg::AddAccountAction);
+                            self.content.append(controller.widget());
+                            self.add_dialog = Some(controller);
+                        }
+                    }
+                }
+            }
+            AppMsg::AddAccountAction(AddAccountOutput::Cancel) => {
+                // Detach the dialog widget from the content tree and
+                // drop the controller. Defensive: if the field is
+                // already `None` (controller swapped under us by a
+                // future race), this is a benign no-op.
+                if let Some(controller) = self.add_dialog.take() {
                     self.content.remove(controller.widget());
                 }
             }
