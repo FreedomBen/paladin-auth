@@ -4327,6 +4327,126 @@ fn apply_unlock_vault_install_inplace_mirrors_route_unlock_open_completion_pair_
 }
 
 // ---------------------------------------------------------------------------
+// apply_rename_vault_install_inplace — `AppModel::vault` mut-slot wrapper
+// ---------------------------------------------------------------------------
+//
+// Symmetric partner of `apply_unlock_vault_install_inplace` for the
+// rename path. `RenameWorkerCompletion` carries the live `(Vault,
+// Store)` pair *unconditionally* (every effect branch — `Success`,
+// `save_durability_unconfirmed`, `save_not_committed`, and the
+// defensive `validation_error` / `invalid_state` cases — comes back
+// with the same pair because `Vault::mutate_and_save` is the
+// authoritative rollback / durability source per DESIGN.md §4.3),
+// so this wrapper takes the pair by value rather than the
+// `Option<(Vault, Store)>` shape `apply_unlock_vault_install_inplace`
+// uses. The `AppMsg::RenameWorkerCompleted` handler that lands in a
+// follow-up commit will call it next to `apply_rename_dispatch_inplace`
+// the same way the unlock dispatch installs the pair next to
+// `apply_unlock_dispatch_inplace`.
+
+#[test]
+fn apply_rename_vault_install_inplace_writes_pair_into_empty_slot() {
+    // Defensive: the rename flow enters with `AppModel::vault =
+    // Some(_)` (the dispatch comes from `Unlocked`), but a stray
+    // dispatch from a non-`Unlocked` source state could leave the
+    // slot empty when the completion arrives. The wrapper must still
+    // install the pair — `Vault::mutate_and_save` returned an
+    // authoritative `(Vault, Store)` and silently dropping it on the
+    // floor would leak the unlocked state.
+    let (_tempdir, _path, pair) = fresh_plaintext_vault_pair();
+    let mut slot: Option<(paladin_core::Vault, paladin_core::Store)> = None;
+    paladin_gtk::app::state::apply_rename_vault_install_inplace(&mut slot, pair);
+    assert!(
+        slot.is_some(),
+        "apply_rename_vault_install_inplace must install the pair into an empty slot",
+    );
+}
+
+#[test]
+fn apply_rename_vault_install_inplace_replaces_existing_slot() {
+    // Happy path: rename dispatch enters with `AppModel::vault =
+    // Some(pair_a)` from the pre-`UnlockedBusy` snapshot. The worker
+    // takes the pair out, runs `mutate_and_save`, and returns a
+    // fresh `(Vault, Store)` pair (`pair_b`). The wrapper must
+    // overwrite `pair_a` with `pair_b` so the live slot reflects
+    // the post-save state — `Vault::mutate_and_save` is the
+    // authoritative rollback / durability source, so the returned
+    // pair is the only correct slot value regardless of the typed
+    // effect.
+    let (_tempdir_a, _path_a, pair_a) = fresh_plaintext_vault_pair();
+    let (_tempdir_b, _path_b, pair_b) = fresh_plaintext_vault_pair();
+    let mut slot = Some(pair_a);
+    paladin_gtk::app::state::apply_rename_vault_install_inplace(&mut slot, pair_b);
+    assert!(
+        slot.is_some(),
+        "apply_rename_vault_install_inplace must leave the slot filled after a replacement",
+    );
+}
+
+#[test]
+fn apply_rename_vault_install_inplace_consumes_run_rename_worker_completion_pair() {
+    // Cross-check: the wrapper must round-trip the unconditional
+    // `(Vault, Store)` pair carried by `RenameWorkerCompletion`
+    // regardless of the `RenameWorkerEffect` variant. The rename
+    // worker always returns the pair — `Success`, durability-
+    // unconfirmed warnings, and `save_not_committed` rollbacks all
+    // come back with the same shape — so the wrapper is contract-
+    // identical across every effect branch. Pinning this here means
+    // the wrapper can't drift away from `run_rename_worker`'s pair
+    // contract without breaking here first.
+    use paladin_core::{validate_manual, AccountInput, AccountKindInput, Algorithm, IconHintInput};
+    use secrecy::SecretString;
+
+    let (_tempdir, _vault_path, pair) = fresh_plaintext_vault_pair();
+    let (mut vault, store) = pair;
+    let input = AccountInput {
+        label: "label".to_string(),
+        issuer: Some("issuer".to_string()),
+        secret: SecretString::from("JBSWY3DPEHPK3PXP".to_string()),
+        algorithm: Algorithm::Sha1,
+        digits: 6,
+        kind: AccountKindInput::Totp,
+        period_secs: None,
+        counter: None,
+        icon_hint: IconHintInput::Default,
+    };
+    let validated =
+        validate_manual(input, SystemTime::UNIX_EPOCH).expect("totp account input validates");
+    let account_id = vault.add(validated.account);
+    vault.save(&store).expect("commit seeded account");
+
+    let worker_input = RenameWorkerInput {
+        vault,
+        store,
+        account_id,
+        label: "renamed-label".to_string(),
+        now: SystemTime::UNIX_EPOCH,
+    };
+    let completion = paladin_gtk::rename_dialog::run_rename_worker(worker_input);
+
+    let mut slot: Option<(paladin_core::Vault, paladin_core::Store)> = None;
+    paladin_gtk::app::state::apply_rename_vault_install_inplace(
+        &mut slot,
+        (completion.vault, completion.store),
+    );
+    assert!(
+        slot.is_some(),
+        "run_rename_worker completion pair must install (rename always returns the pair)",
+    );
+    let (installed_vault, _installed_store) = slot.expect("installed pair");
+    let renamed = installed_vault
+        .accounts()
+        .iter()
+        .find(|a| a.id() == account_id)
+        .expect("renamed account survives the install");
+    assert_eq!(
+        renamed.label(),
+        "renamed-label",
+        "post-install vault must reflect the renamed label (mirrors run_rename_worker output)",
+    );
+}
+
+// ---------------------------------------------------------------------------
 // run_unlock_worker — synchronous body of the spawn_blocking unlock worker
 // ---------------------------------------------------------------------------
 //

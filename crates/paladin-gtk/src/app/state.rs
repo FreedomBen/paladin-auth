@@ -1316,6 +1316,45 @@ pub fn apply_unlock_vault_install_inplace(
     }
 }
 
+/// Install the worker's `(Vault, Store)` pair from
+/// [`crate::rename_dialog::RenameWorkerCompletion`] into
+/// `AppModel::vault` in-place.
+///
+/// Symmetric partner of [`apply_unlock_vault_install_inplace`] for
+/// the rename path. The shape differs because the rename worker
+/// returns the pair on *every* effect branch — `Success`,
+/// `save_durability_unconfirmed`, `save_not_committed`, and the
+/// defensive `validation_error` / `invalid_state` projections all
+/// come back with the same `(Vault, Store)`, because
+/// `Vault::mutate_and_save` is the authoritative rollback /
+/// durability source per DESIGN.md §4.3. There is no `None` case to
+/// dispatch on, so the helper takes the pair by value and always
+/// installs.
+///
+/// `AppModel::update`'s `AppMsg::RenameWorkerCompleted` handler holds
+/// the live vault slot behind `&mut Option<(Vault, Store)>` next to
+/// the state machine; this wrapper unconditionally writes through
+/// `Some(pair)`. That keeps it idempotent against a stray double-fire
+/// — the same call against a filled slot replaces the contents — and
+/// safe against a stray completion arriving while the slot is empty
+/// (which would happen only if a non-`Unlocked` dispatch slipped past
+/// the [`compose_rename_worker_input`] gate; reinstalling the worker's
+/// pair is still the right behavior because it owns the authoritative
+/// post-`mutate_and_save` state).
+///
+/// `pair` is consumed by value because [`Vault`] and [`Store`] are
+/// non-`Clone`. The wrapper stays shape-only — it does not inspect
+/// the pair — so the side-effect decision in `AppModel::update`
+/// stays unit-testable in `tests/app_state_logic.rs` against real
+/// `(Vault, Store)` pairs constructed via `paladin_core::Store::create`
+/// over a tempfile vault.
+pub fn apply_rename_vault_install_inplace(
+    vault_slot: &mut Option<(Vault, Store)>,
+    pair: (Vault, Store),
+) {
+    *vault_slot = Some(pair);
+}
+
 /// Worker input bundled by `AppMsg::UnlockDialogAction(SubmitLock)`
 /// for the `gio::spawn_blocking paladin_core::open` worker.
 ///
