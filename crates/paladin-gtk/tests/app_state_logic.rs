@@ -5456,6 +5456,198 @@ fn apply_rename_dispatch_inplace_mirrors_compose_rename_dispatch_for_every_effec
 }
 
 // ---------------------------------------------------------------------------
+// Full rename pipeline composition order
+// ---------------------------------------------------------------------------
+//
+// `AppModel::update`'s `AppMsg::RenameDialogAction(SubmitLabel)` and
+// `AppMsg::RenameWorkerCompleted` handlers chain the rename helpers
+// in a fixed order:
+//
+//   1. `compose_rename_worker_input(state, pair, account_id, label, now)`
+//      over the `Unlocked` state takes the live `(Vault, Store)` pair
+//      out of `AppModel.vault` and bundles a `RenameWorkerInput`.
+//   2. `apply_submit_rename_inplace(state)` transitions `Unlocked →
+//      UnlockedBusy` so `is_busy()` / `allows_mutating_menu()` cover
+//      the worker's lifetime.
+//   3. `run_rename_worker(input)` calls
+//      `Vault::mutate_and_save(|v| v.rename(...))` and bundles the
+//      outcome into a `RenameWorkerCompletion`.
+//   4. `apply_rename_vault_install_inplace(&mut vault_slot, (vault,
+//      store))` reinstalls the worker-returned pair into
+//      `AppModel.vault` regardless of typed effect.
+//   5. `compose_rename_dispatch(state, &effect)` +
+//      `apply_rename_dispatch_inplace(state, &dispatch)` transition
+//      `UnlockedBusy → Unlocked` and project the dialog message /
+//      drop-decision the widget layer applies.
+//
+// Each helper has its own unit test. The tests below pin the
+// *composition order* so a future reorder cannot silently break the
+// dispatch sequence the widget layer relies on.
+
+#[test]
+fn rename_pipeline_success_returns_to_unlocked_with_renamed_vault_and_drops_dialog() {
+    use paladin_core::{validate_manual, AccountInput, AccountKindInput, Algorithm, IconHintInput};
+    use paladin_gtk::app::state::{
+        apply_rename_dispatch_inplace, apply_rename_vault_install_inplace, compose_rename_dispatch,
+    };
+    use paladin_gtk::rename_dialog::{
+        run_rename_worker, RenameWorkerCompletion, RenameWorkerEffect,
+    };
+    use secrecy::SecretString;
+
+    let (_tempdir, path, pair) = fresh_plaintext_vault_pair();
+    let (mut vault, store) = pair;
+    let input = AccountInput {
+        label: "old-label".to_string(),
+        issuer: Some("issuer".to_string()),
+        secret: SecretString::from("JBSWY3DPEHPK3PXP".to_string()),
+        algorithm: Algorithm::Sha1,
+        digits: 6,
+        kind: AccountKindInput::Totp,
+        period_secs: None,
+        counter: None,
+        icon_hint: IconHintInput::Default,
+    };
+    let validated =
+        validate_manual(input, SystemTime::UNIX_EPOCH).expect("totp account input validates");
+    let account_id = vault.add(validated.account);
+    vault.save(&store).expect("commit seeded account");
+
+    // 1. Compose worker input from `Unlocked` over the live pair.
+    let mut state = AppState::Unlocked { path: path.clone() };
+    let mut vault_slot: Option<(Vault, Store)> = Some((vault, store));
+    let worker_input = compose_rename_worker_input(
+        &state,
+        vault_slot.take().expect("vault slot is filled"),
+        account_id,
+        "new-label".to_string(),
+        SystemTime::UNIX_EPOCH,
+    )
+    .expect("compose returns Ok when state is Unlocked");
+
+    // 2. Busy-gate transition.
+    let transitioned = apply_submit_rename_inplace(&mut state);
+    assert!(
+        transitioned,
+        "apply_submit_rename_inplace must return true on Unlocked source"
+    );
+    assert!(
+        matches!(state, AppState::UnlockedBusy { .. }),
+        "state must be UnlockedBusy"
+    );
+
+    // 3. Worker body.
+    let completion = run_rename_worker(worker_input);
+    let RenameWorkerCompletion {
+        effect,
+        vault,
+        store,
+    } = completion;
+    assert!(
+        matches!(effect, RenameWorkerEffect::Success),
+        "rename worker must succeed for a valid account_id + non-empty label",
+    );
+
+    // 4. Reinstall pair.
+    apply_rename_vault_install_inplace(&mut vault_slot, (vault, store));
+    let (installed_vault, _) = vault_slot.as_ref().expect("pair reinstalled");
+    let renamed = installed_vault
+        .accounts()
+        .iter()
+        .find(|a| a.id() == account_id)
+        .expect("renamed account survives");
+    assert_eq!(renamed.label(), "new-label", "vault must reflect rename");
+
+    // 5. Dispatch over UnlockedBusy + Success.
+    let dispatch = compose_rename_dispatch(&state, &effect);
+    assert!(dispatch.drop_dialog, "drop_dialog == true on Success");
+    assert!(
+        dispatch.dialog_msg.is_none(),
+        "dialog_msg == None on Success (dropped dialog gets no message)",
+    );
+    let dispatched = apply_rename_dispatch_inplace(&mut state, &dispatch);
+    assert!(
+        dispatched,
+        "apply_rename_dispatch_inplace must return true on UnlockedBusy source"
+    );
+    assert!(
+        matches!(state, AppState::Unlocked { path: ref p } if *p == path),
+        "state must be Unlocked at path after Success dispatch",
+    );
+}
+
+#[test]
+fn rename_pipeline_failure_restore_prior_keeps_pair_installed_and_returns_to_unlocked() {
+    // Force a `save_not_committed` failure by giving the worker an
+    // `account_id` that no account in the vault carries. The
+    // worker's `mutate_and_save` invokes `Vault::rename` which
+    // returns `PaladinError::InvalidState { state: "account_not_found"
+    // }` — `classify_rename_error` routes that to
+    // `RenameErrorOutcome::InlineError`. The dispatch must still
+    // roll the busy-gate back to `Unlocked`, must NOT drop the
+    // dialog, and must forward a `WorkerFailed(outcome)` to the
+    // live dialog.
+    use paladin_core::AccountId;
+    use paladin_gtk::app::state::{
+        apply_rename_dispatch_inplace, apply_rename_vault_install_inplace, compose_rename_dispatch,
+    };
+    use paladin_gtk::rename_dialog::{
+        run_rename_worker, RenameDialogMsg, RenameErrorOutcome, RenameWorkerCompletion,
+        RenameWorkerEffect,
+    };
+
+    let (_tempdir, path, pair) = fresh_plaintext_vault_pair();
+    // Empty vault — any account_id lookup misses, triggering the
+    // defensive `account_not_found` path.
+    let bogus_account = AccountId::new();
+
+    let mut state = AppState::Unlocked { path: path.clone() };
+    let mut vault_slot: Option<(Vault, Store)> = Some(pair);
+    let worker_input = compose_rename_worker_input(
+        &state,
+        vault_slot.take().expect("vault slot is filled"),
+        bogus_account,
+        "new-label".to_string(),
+        SystemTime::UNIX_EPOCH,
+    )
+    .expect("compose returns Ok when state is Unlocked");
+
+    apply_submit_rename_inplace(&mut state);
+
+    let RenameWorkerCompletion {
+        effect,
+        vault,
+        store,
+    } = run_rename_worker(worker_input);
+    match &effect {
+        RenameWorkerEffect::Failure(RenameErrorOutcome::InlineError(_)) => {}
+        other => panic!("expected InlineError for account_not_found, got {other:?}"),
+    }
+
+    apply_rename_vault_install_inplace(&mut vault_slot, (vault, store));
+    assert!(
+        vault_slot.is_some(),
+        "pair must be reinstalled even on failure"
+    );
+
+    let dispatch = compose_rename_dispatch(&state, &effect);
+    assert!(!dispatch.drop_dialog, "drop_dialog == false on Failure");
+    match dispatch.dialog_msg.as_ref() {
+        Some(RenameDialogMsg::WorkerFailed(_)) => {}
+        other => panic!("dialog_msg must carry WorkerFailed on Failure, got {other:?}"),
+    }
+    let dispatched = apply_rename_dispatch_inplace(&mut state, &dispatch);
+    assert!(
+        dispatched,
+        "apply_rename_dispatch_inplace must transition on UnlockedBusy source"
+    );
+    assert!(
+        matches!(state, AppState::Unlocked { path: ref p } if *p == path),
+        "state must roll back to Unlocked on Failure (busy gate always releases)",
+    );
+}
+
+// ---------------------------------------------------------------------------
 // run_unlock_worker — synchronous body of the spawn_blocking unlock worker
 // ---------------------------------------------------------------------------
 //

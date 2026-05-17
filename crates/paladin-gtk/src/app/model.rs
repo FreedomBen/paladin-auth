@@ -63,6 +63,7 @@
 //! reached under `xvfb-run` without driving widgets.
 
 use std::path::PathBuf;
+use std::time::SystemTime;
 
 use libadwaita as adw;
 use libadwaita::prelude::*;
@@ -74,14 +75,18 @@ use crate::account_list::{
     AccountListComponent, AccountListInit, AccountListOutput, AccountRowModel,
 };
 use crate::app::state::{
-    apply_submit_rename_inplace, apply_submit_unlock_inplace, apply_unlock_dispatch_inplace,
-    apply_unlock_vault_install_inplace, compose_unlock_dispatch, compose_unlock_worker_input,
-    decide_state_from_inspect, decide_state_from_open_error, run_unlock_worker, AppState,
-    OpenErrorOutcome, UnlockWorkerCompletion,
+    apply_rename_dispatch_inplace, apply_rename_vault_install_inplace, apply_submit_rename_inplace,
+    apply_submit_unlock_inplace, apply_unlock_dispatch_inplace, apply_unlock_vault_install_inplace,
+    compose_rename_dispatch, compose_rename_worker_input, compose_unlock_dispatch,
+    compose_unlock_worker_input, decide_state_from_inspect, decide_state_from_open_error,
+    run_unlock_worker, AppState, OpenErrorOutcome, UnlockWorkerCompletion,
 };
 use crate::init_dialog::{format_init_dialog_marker, InitDialogComponent, InitDialogInit};
 use crate::remove_dialog::{decide_remove_target, RemoveDialogComponent, RemoveDialogOutput};
-use crate::rename_dialog::{decide_rename_target, RenameDialogComponent, RenameDialogOutput};
+use crate::rename_dialog::{
+    decide_rename_target, run_rename_worker, RenameDialogComponent, RenameDialogOutput,
+    RenameWorkerCompletion,
+};
 use crate::startup_error::{
     format_startup_error_marker, StartupError, StartupErrorComponent, StartupErrorInit,
 };
@@ -314,6 +319,38 @@ pub enum AppMsg {
     /// commit only wires the consumer so the full dispatch + vault
     /// install path is in place before the worker spawn.
     UnlockWorkerCompleted(UnlockWorkerCompletion),
+    /// Posted by the `gio::spawn_blocking
+    /// Vault::mutate_and_save(|v| v.rename(...))` worker after it
+    /// consumes a [`crate::rename_dialog::RenameWorkerInput`] and
+    /// reports its routed outcome as a
+    /// [`RenameWorkerCompletion`] — the typed
+    /// [`crate::rename_dialog::RenameWorkerEffect`] bundled with the
+    /// live `(Vault, Store)` pair returned by `mutate_and_save`
+    /// regardless of typed outcome (the rename worker always returns
+    /// the pair per `IMPLEMENTATION_PLAN_04_GTK.md` §"Vault
+    /// interaction").
+    ///
+    /// The handler bundles the worker effect over the cached
+    /// [`AppState`] through
+    /// [`crate::app::state::compose_rename_dispatch`] into a single
+    /// [`crate::app::state::RenameDispatch`]: a state replacement
+    /// (`UnlockedBusy → Unlocked` for every typed effect, since the
+    /// busy gate always releases), applied via
+    /// [`crate::app::state::apply_rename_dispatch_inplace`], an
+    /// optional [`crate::rename_dialog::RenameDialogMsg::WorkerFailed`]
+    /// forwarded to the live [`RenameDialogComponent`] on every
+    /// failure branch, and a `drop_dialog` flag that detaches the
+    /// dialog widget from the content tree on the
+    /// [`crate::rename_dialog::RenameWorkerEffect::Success`] branch.
+    ///
+    /// In parallel, the carried `(Vault, Store)` pair is reinstalled
+    /// into [`AppModel::vault`] via
+    /// [`crate::app::state::apply_rename_vault_install_inplace`]
+    /// unconditionally — `mutate_and_save` is authoritative for the
+    /// post-rename / rollback state, so reinstalling the pair is the
+    /// right behavior across `Success`, `save_durability_unconfirmed`
+    /// warnings, and `save_not_committed` rollbacks alike.
+    RenameWorkerCompleted(RenameWorkerCompletion),
 }
 
 // `relm4::component(pub)` generates a public `AppModelWidgets` struct so the
@@ -452,6 +489,11 @@ impl SimpleComponent for AppModel {
         ComponentParts { model, widgets }
     }
 
+    // `update` aggregates every `AppMsg` dispatch arm; splitting it
+    // would obscure the dispatch table without isolating reusable
+    // logic (each branch already delegates to a unit-tested helper
+    // in `crate::app::state`).
+    #[allow(clippy::too_many_lines)]
     fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>) {
         match msg {
             AppMsg::Quit => relm4::main_application().quit(),
@@ -496,27 +538,71 @@ impl SimpleComponent for AppModel {
                     self.content.remove(controller.widget());
                 }
             }
-            AppMsg::RenameDialogAction(RenameDialogOutput::SubmitLabel {
-                account_id: _,
-                label: _,
-            }) => {
+            AppMsg::RenameDialogAction(RenameDialogOutput::SubmitLabel { account_id, label }) => {
                 // Save-button entry side of the `gio::spawn_blocking
                 // Vault::mutate_and_save(|v| v.rename(account_id,
-                // label, now))` worker. The `compose_rename_worker_input`
-                // bundler, `gio::spawn_blocking` call, and
-                // `AppMsg::RenameWorkerCompleted` dispatch land in
-                // follow-up commits. For now the busy-gate
-                // transition itself is wired so the mutating-control
-                // gating in `AppState::allows_mutating_menu` /
-                // `AppState::is_busy` flips while the worker
-                // infrastructure catches up — matching the pinned
-                // `apply_submit_unlock_inplace` wiring in the
-                // `SubmitLock` handler. A `None` `self.state` or a
-                // non-`Unlocked` variant leaves the slot byte-for-
-                // byte intact via `apply_submit_rename_inplace`'s
-                // returning-false branch.
+                // label, now))` worker. Four steps run in order per
+                // `IMPLEMENTATION_PLAN_04_GTK.md` §"Vault interaction":
+                //
+                // 1. Take the live `(Vault, Store)` pair from
+                //    `self.vault` and bundle it with the dispatch
+                //    payload into a `RenameWorkerInput` via
+                //    `compose_rename_worker_input`. The composer
+                //    inspects the cached `AppState`: only `Unlocked`
+                //    returns `Ok(input)`; every other variant returns
+                //    `Err(pair)` so the wrapper can reinstall the
+                //    pair via `apply_rename_vault_install_inplace`.
+                //    A `None` state or a `None` vault slot is the
+                //    defensive no-op (a stray `SubmitLabel` from a
+                //    locked / missing / busy state).
+                // 2. Apply the `Unlocked → UnlockedBusy` busy-gate
+                //    transition via `apply_submit_rename_inplace` so
+                //    `is_busy()` / `allows_mutating_menu()` cover the
+                //    worker's lifetime. The dialog stays mounted —
+                //    `should_drop_rename_dialog_after` keeps it on
+                //    every failure branch and the worker's success
+                //    dispatch drops it once the worker returns.
+                // 3. Capture `SystemTime::now()` at the dispatch site
+                //    so the worker thread does not race against later
+                //    wall-clock drift; `Vault::rename` uses this for
+                //    the new `updated_at`.
+                // 4. Spawn `run_rename_worker` on
+                //    `gtk::gio::spawn_blocking` so the
+                //    `mutate_and_save` durability fsync hop does not
+                //    block the GTK main loop. The wrapping
+                //    `gtk::glib::spawn_future_local` awaits the
+                //    blocking handle and posts the bundled
+                //    `RenameWorkerCompletion` back to `AppModel` via
+                //    `AppMsg::RenameWorkerCompleted`, which is
+                //    consumed by the dispatch branch wired below.
+                let now = SystemTime::now();
+                let worker_input = match (self.state.as_ref(), self.vault.take()) {
+                    (Some(state), Some(pair)) => {
+                        match compose_rename_worker_input(state, pair, account_id, label, now) {
+                            Ok(input) => Some(input),
+                            Err(pair) => {
+                                apply_rename_vault_install_inplace(&mut self.vault, pair);
+                                None
+                            }
+                        }
+                    }
+                    (None, Some(pair)) => {
+                        apply_rename_vault_install_inplace(&mut self.vault, pair);
+                        None
+                    }
+                    (_, None) => None,
+                };
                 if let Some(state) = self.state.as_mut() {
                     apply_submit_rename_inplace(state);
+                }
+                if let Some(input) = worker_input {
+                    let sender = sender.clone();
+                    gtk::glib::spawn_future_local(async move {
+                        let completion = gtk::gio::spawn_blocking(move || run_rename_worker(input))
+                            .await
+                            .expect("Vault::mutate_and_save rename worker panicked");
+                        sender.input(AppMsg::RenameWorkerCompleted(completion));
+                    });
                 }
             }
             AppMsg::RemoveDialogAction(RemoveDialogOutput::Cancel) => {
@@ -638,6 +724,66 @@ impl SimpleComponent for AppModel {
                     }
                     if dispatch.drop_dialog {
                         if let Some(controller) = self.unlock_dialog.take() {
+                            self.content.remove(controller.widget());
+                        }
+                    }
+                }
+            }
+            AppMsg::RenameWorkerCompleted(completion) => {
+                // Worker-outcome dispatch. `compose_rename_dispatch`
+                // bundles the typed `RenameWorkerEffect` over the
+                // cached `AppState` into the three projections
+                // pinned in `IMPLEMENTATION_PLAN_04_GTK.md` §"Vault
+                // interaction":
+                //
+                // * `app_state` — `UnlockedBusy → Unlocked` rollback
+                //   regardless of typed effect (`mutate_and_save` is
+                //   authoritative for the rollback / durability-
+                //   unconfirmed semantics, so the busy gate always
+                //   releases). The `None` defensive case (worker
+                //   outcome arrived but the cached state was not
+                //   `UnlockedBusy` — a stray dispatch) leaves
+                //   `AppModel::state` byte-for-byte intact.
+                // * `dialog_msg` — `Some(WorkerFailed(outcome))` on
+                //   every failure branch, forwarded to the live
+                //   `RenameDialogComponent` so the typed `save_not_
+                //   committed` / `save_durability_unconfirmed` /
+                //   defensive error re-renders inline.
+                // * `drop_dialog` — `true` on the success branch
+                //   only, detaching the dialog widget from the
+                //   content tree and dropping the controller so the
+                //   `AccountListComponent` row re-renders with the
+                //   new label. The two side-effects are mutually
+                //   exclusive: success carries
+                //   `dialog_msg = None`, failure carries
+                //   `drop_dialog = false`.
+                //
+                // The carried `(vault, store)` pair is reinstalled
+                // into `AppModel::vault` via
+                // `apply_rename_vault_install_inplace`
+                // unconditionally — `mutate_and_save` is
+                // authoritative for the post-rename / rollback
+                // state, so reinstalling the pair is the right
+                // behavior across every effect branch.
+                let RenameWorkerCompletion {
+                    effect,
+                    vault,
+                    store,
+                } = completion;
+                apply_rename_vault_install_inplace(&mut self.vault, (vault, store));
+                let dispatch = self.state.as_mut().map(|state| {
+                    let dispatch = compose_rename_dispatch(state, &effect);
+                    apply_rename_dispatch_inplace(state, &dispatch);
+                    dispatch
+                });
+                if let Some(dispatch) = dispatch {
+                    if let Some(msg) = dispatch.dialog_msg {
+                        if let Some(controller) = self.rename_dialog.as_ref() {
+                            controller.emit(msg);
+                        }
+                    }
+                    if dispatch.drop_dialog {
+                        if let Some(controller) = self.rename_dialog.take() {
                             self.content.remove(controller.widget());
                         }
                     }
