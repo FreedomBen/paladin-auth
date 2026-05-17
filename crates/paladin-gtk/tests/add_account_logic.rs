@@ -1414,3 +1414,93 @@ fn apply_msg_switch_path_same_path_is_idempotent_noop() {
         "same-path SwitchPath leaves active_path on Manual",
     );
 }
+
+#[test]
+fn apply_msg_stage_pending_duplicate_parks_validated_account_in_secret_state() {
+    // After `classify_duplicate` returns `AwaitConfirmation`, the
+    // widget hands the validated account back to the dialog via
+    // `AddAccountMsg::StagePendingDuplicate` so it parks in
+    // `AddSecretState::pending` for the "add anyway?" confirmation
+    // round trip. The arm emits no output — the duplicate-confirm
+    // decision stays dialog-local; `AppModel` only sees the final
+    // `SubmitProceed` once the user confirms (or nothing, on cancel).
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    let validated = match classify_manual_submit(manual_totp_defaults(), now_for_tests()) {
+        ManualSubmitOutcome::Proceed(v) => v,
+        ManualSubmitOutcome::InlineError(err) => panic!("fixture failed: {err:?}"),
+    };
+    let DuplicateOutcome::AwaitConfirmation {
+        existing: _,
+        validated,
+    } = classify_duplicate(validated, Some(dummy_existing_summary()))
+    else {
+        panic!("expected AwaitConfirmation");
+    };
+
+    let output = apply_msg(
+        &mut state,
+        AddAccountMsg::StagePendingDuplicate {
+            account: validated.account,
+            warnings: validated.warnings,
+        },
+    );
+
+    assert!(
+        output.is_none(),
+        "StagePendingDuplicate stays dialog-local; no output flows to AppModel",
+    );
+    assert!(
+        state.secret_state().pending.is_some(),
+        "the validated account is parked in AddSecretState::pending",
+    );
+}
+
+#[test]
+fn apply_msg_stage_pending_duplicate_replaces_prior_pending() {
+    // A second `StagePendingDuplicate` must replace (not stack) the
+    // prior pending — the let-binding inside the arm drops the
+    // returned `Option<Box<ValidatedAccount>>` so the prior secret
+    // bytes zero out via `paladin_core::Secret`'s `ZeroizeOnDrop`
+    // impl. Pin the replacement semantics here so a future refactor
+    // cannot accidentally leak the prior pending into a stash.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    let first = match classify_manual_submit(manual_totp_defaults(), now_for_tests()) {
+        ManualSubmitOutcome::Proceed(v) => v,
+        ManualSubmitOutcome::InlineError(err) => panic!("fixture failed: {err:?}"),
+    };
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::StagePendingDuplicate {
+            account: first.account,
+            warnings: first.warnings,
+        },
+    );
+    let second = match classify_manual_submit(manual_hotp_defaults(), now_for_tests()) {
+        ManualSubmitOutcome::Proceed(v) => v,
+        ManualSubmitOutcome::InlineError(err) => panic!("fixture failed: {err:?}"),
+    };
+    let second_label = second.account.label().to_string();
+
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::StagePendingDuplicate {
+            account: second.account,
+            warnings: second.warnings,
+        },
+    );
+
+    let pending = state
+        .secret_state()
+        .pending
+        .as_ref()
+        .expect("pending is populated after second StagePendingDuplicate");
+    assert_eq!(
+        pending.account.label(),
+        second_label,
+        "second StagePendingDuplicate replaces the prior pending",
+    );
+}

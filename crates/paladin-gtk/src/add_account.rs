@@ -92,7 +92,8 @@ use secrecy::SecretString;
 
 use paladin_core::{
     parse_icon_hint_token, validate_manual, Account, AccountId, AccountInput, AccountKindInput,
-    AccountSummary, Algorithm, ErrorKind, PaladinError, Store, ValidatedAccount, Vault,
+    AccountSummary, Algorithm, ErrorKind, PaladinError, Store, ValidatedAccount, ValidationWarning,
+    Vault,
 };
 
 use crate::secret_fields::{AddPath, AddSecretState, ClearReason};
@@ -609,6 +610,38 @@ pub enum AddAccountMsg {
     /// `Zeroizing<String>`-in-the-canonical-home contract applies
     /// here as for [`Self::ManualSecretChanged`].
     UriTextChanged(String),
+    /// The widget pre-ran [`classify_duplicate`] and observed
+    /// [`DuplicateOutcome::AwaitConfirmation`]; the pending
+    /// [`ValidatedAccount`] is staged in
+    /// [`crate::secret_fields::AddSecretState::pending`] so the
+    /// "add anyway?" confirmation prompt can render. The
+    /// destructured `{ account, warnings }` shape sidesteps the
+    /// missing `Clone` impl on [`ValidatedAccount`] — both fields
+    /// are `Clone` individually so [`AddAccountMsg`]'s `Clone`
+    /// derive stays intact. [`apply_msg`] reconstructs a
+    /// [`ValidatedAccount`] from the carried fields before handing
+    /// it to
+    /// [`crate::secret_fields::AddSecretState::replace_pending`].
+    ///
+    /// Dialog-local — no [`AddAccountOutput`] is emitted. The
+    /// duplicate-confirm round trip stays inside the dialog until
+    /// the user confirms (which consumes the pending and dispatches
+    /// [`Self::SubmitProceed`]) or cancels (which drops the pending
+    /// via [`Self::Cancel`]).
+    StagePendingDuplicate {
+        /// Validated account ready for insertion via
+        /// `Vault::mutate_and_save(|v| v.add(account))` once the
+        /// user confirms "add anyway". Stored together with
+        /// `warnings` in a reconstructed [`ValidatedAccount`]
+        /// inside [`crate::secret_fields::AddSecretState::pending`].
+        account: Account,
+        /// Non-fatal warnings collected during validation (e.g.
+        /// [`ValidationWarning::ShortSecret`]). Threaded through
+        /// with `account` so the dialog can render them alongside
+        /// the duplicate-confirm prompt without re-running
+        /// [`validate_manual`].
+        warnings: Vec<ValidationWarning>,
+    },
 }
 
 /// Outbound messages emitted by [`AddAccountComponent`] back to
@@ -863,6 +896,21 @@ pub fn apply_msg(state: &mut AddDialogState, msg: AddAccountMsg) -> Option<AddAc
         }
         AddAccountMsg::UriTextChanged(text) => {
             state.secret_state.uri_text.set(&text);
+            None
+        }
+        AddAccountMsg::StagePendingDuplicate { account, warnings } => {
+            // Reconstruct the `ValidatedAccount` from its destructured
+            // fields — the variant carries `{ account, warnings }`
+            // rather than `(ValidatedAccount)` because
+            // `ValidatedAccount` is intentionally not `Clone` while
+            // `AddAccountMsg` derives `Clone`. The let-binding names
+            // the returned `Option<Box<ValidatedAccount>>` so any
+            // prior pending drops at the end of this arm — its
+            // secret bytes zero out via `paladin_core::Secret`'s
+            // `ZeroizeOnDrop` impl.
+            let _dropped_prior = state
+                .secret_state
+                .replace_pending(ValidatedAccount { account, warnings });
             None
         }
     }
