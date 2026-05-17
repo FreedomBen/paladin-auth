@@ -1899,15 +1899,23 @@ Layout / list views:
   stops applying the offset shifts the window back to
   `Acct01`..`Acct06` and drops the marker, surfacing as a diff.)*
 - [ ] `--no-color` variants of the list-view snapshots above.
-  (Deferred: `tests/view_snapshots.rs::buffer_to_text` already
-  serializes cell symbols only, dropping foreground / background /
-  modifier attributes — so a no-color snapshot is byte-identical to
-  its styled twin until either (a) a styled-grid harness lands that
-  preserves attributes in the body, or (b) the renderer starts
-  emitting different symbols in no-color mode. The harness's
-  module-level doc already notes this matrix lands "when the list
-  view's search highlighting needs it"; this task tracks that future
-  slice rather than locking in identical-snapshot duplicates today.)
+  (Deferred for the snapshot-variant form: `tests/view_snapshots.rs::buffer_to_text`
+  serializes cell symbols only and drops fg/bg/modifier attributes,
+  so a no-color *snapshot* is still byte-identical to its styled
+  twin even though the renderer now actually changes its emitted
+  styles under `no_color = true` — locking in
+  identical-snapshot duplicates would obscure rather than catch
+  regressions. The *contract* the snapshot variants would assert is
+  pinned today by `tests/no_color_tests.rs`, which renders through a
+  styled-buffer harness and inspects per-cell `fg` directly: the
+  list-view's bottom-line `StatusLine::Error` / `Confirmation`
+  cells lose their `Color::Red` / `Color::Green` foreground under
+  `no_color = true` and keep it under `no_color = false`, plus a
+  `build_render_closure` plumbing test pins the
+  `GlobalArgs::no_color` → `view::render` capture path. The snapshot-
+  variant matrix per se still tracks a future styled-grid serializer
+  in `view_snapshots.rs` once the matrix's signal-to-noise ratio
+  beats the per-cell tests' targeted assertions.)
 
 Modals and overlays:
 
@@ -3235,22 +3243,22 @@ is never expected to be scripted.
 
 ## Implementation checklist
 
-- [ ] Scaffold `paladin-tui` crate, workspace membership, binary entry, and
+- [x] Scaffold `paladin-tui` crate, workspace membership, binary entry, and
   SPDX headers.
-- [ ] Implement CLI args, vault path resolution, encrypted unlock,
+- [x] Implement CLI args, vault path resolution, encrypted unlock,
   plaintext direct-open, missing-vault, and startup-error flows
   (including `format_unsafe_permissions` rendering).
-- [ ] Implement terminal raw-mode / alternate-screen lifecycle with guarded
+- [x] Implement terminal raw-mode / alternate-screen lifecycle with guarded
   restoration on exit, error, `Ctrl-C`, and panic unwind.
-- [ ] Implement reducer, event producers, effect execution, clipboard
+- [x] Implement reducer, event producers, effect execution, clipboard
   timer tokens (issued by
   `paladin_core::policy::clipboard_clear::ClipboardClearPolicy::schedule`),
   and auto-lock idle deadlines (computed by
   `paladin_core::policy::auto_lock::IdlePolicy::next_deadline`).
-- [ ] Implement list layout from `AccountSummary` projections, search,
+- [x] Implement list layout from `AccountSummary` projections, search,
   TOTP gauges, HOTP reveal/copy behavior,
   HOTP `Code.counter_used` labels, and status-line errors.
-- [ ] Implement vim-style list navigation (`j` / `k`, `Ctrl-F` /
+- [x] Implement vim-style list navigation (`j` / `k`, `Ctrl-F` /
   `Ctrl-B`, `G`, plus `gg` and `zz` two-press chords) in the
   reducer. Hold pending-chord state with no timeout; clear it on any
   non-matching key, focus change to search, modal open, `Esc`, or
@@ -3258,7 +3266,7 @@ is never expected to be scripted.
   pass-through list alongside the existing `Ctrl-D` / `Ctrl-U` /
   `PgUp` / `PgDn` / `Home` / `End`. Add `Ctrl-N` / `Ctrl-P` as
   modal-local `Tab` / `Shift-Tab` aliases.
-- [ ] Implement add / remove / rename / import / export / passphrase / settings modals
+- [x] Implement add / remove / rename / import / export / passphrase / settings modals
   with persistence through `Vault::mutate_and_save` where the core owns
   rollback. Source the `passphrase remove` warning from
   `paladin_core::format_plaintext_storage_warning()` and the
@@ -3268,23 +3276,29 @@ is never expected to be scripted.
   sub-flows on `Vault::is_encrypted()` and feed the same getter into
   `paladin_core::policy::auto_lock::IdlePolicy::should_arm` to maintain
   or clear the auto-lock idle deadline.
-- [ ] Implement the read-only Help overlay (`?` from list focus,
+- [x] Implement the read-only Help overlay (`?` from list focus,
   `Esc` to close); render its content from the same keybindings table
   used to generate the man page so the two stay in sync; suppress
   `?` on the unlock, missing-vault, and startup-error screens.
-  *(Reducer slice done — `help_open: bool` on `AppState::Unlocked`,
-  `?` opener from list focus with `modal == None`, `Esc`-close
-  precedence above modal-close / search-clear, all other keys are
-  silent no-ops while open, `Ctrl-C` still quits, auto-lock
-  discards the slot. View-level rendering of the keybindings table
-  rides with the view slice.)*
-- [ ] Use `paladin_core::account_matches_search` for `search.rs` substring
+  *(Reducer slice + view slice both done. Reducer:
+  `help_open: bool` on `AppState::Unlocked`, `?` opener from list
+  focus with `modal == None`, `Esc`-close precedence above
+  modal-close / search-clear, all other keys are silent no-ops while
+  open, `Ctrl-C` still quits, auto-lock discards the slot. View:
+  `crates/paladin-tui/src/view/help.rs` paints a centered bordered
+  overlay whose body iterates the shared
+  `crates/paladin-tui/src/keybindings.rs::KEYBINDINGS` table — the
+  same `const` the future `cargo xtask man` target will read when
+  it appends the "Keybindings" section to `paladin-tui.1`, so the
+  overlay and the man page cannot drift. Locked by the
+  `snapshot_help_overlay` snapshot.)*
+- [x] Use `paladin_core::account_matches_search` for `search.rs` substring
   filtering so the TUI shares issuer/label matching semantics with the CLI
   and GUI.
-- [ ] Use `paladin_core::classify_paladin_import_precheck` before any
+- [x] Use `paladin_core::classify_paladin_import_precheck` before any
   encrypted-Paladin-bundle import prompt so the TUI does not duplicate the
   CLI / GUI Paladin header decision table.
-- [ ] Route export writes through `paladin_core::write_secret_file_atomic`.
+- [x] Route export writes through `paladin_core::write_secret_file_atomic`.
 - [x] Implement clipboard wrapper (arboard reads/writes), QR image
   import from clipboard bytes, and only-if-unchanged auto-clear via
   `paladin_core::policy::clipboard_clear::ClipboardClearPolicy::should_clear`.
@@ -3332,13 +3346,13 @@ is never expected to be scripted.
   lifecycle, sensitive-buffer, and snapshot coverage. Tracked at the
   bullet level in the Tests checklist; this top-level item only ticks
   once every Tests sub-bullet is checked.
-- [ ] Add a `paladin-tui/test-hooks` cargo feature that is **off by
+- [x] Add a `paladin-tui/test-hooks` cargo feature that is **off by
   default** in production builds and enabled only by the test build of
   the `paladin-tui` binary. `paladin-tui/test-hooks` transitively
   enables `paladin-core/test-fault-injection` so reducer / effect-layer
   integration tests can drive pre-commit and durability-unconfirmed
   save failures via the `PALADIN_FAULT_INJECT` env var.
-- [ ] Wire a test-build-only `PALADIN_CLIPBOARD_DRYRUN=1` short-circuit
+- [x] Wire a test-build-only `PALADIN_CLIPBOARD_DRYRUN=1` short-circuit
   in the TUI clipboard adapter that bypasses `arboard` and records the
   intended copy payload plus the auto-clear schedule, gated behind the
   same `paladin-tui/test-hooks` feature so production builds never link
