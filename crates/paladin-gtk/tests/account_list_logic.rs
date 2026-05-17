@@ -28,7 +28,7 @@ use paladin_core::{
 };
 use paladin_gtk::account_list::{
     dispatch_row_action, format_rendered_marker, format_widget_states_marker, hidden_row_display,
-    row_models_from_vault, AccountListOutput, AccountRowModel,
+    row_model_for_account, row_models_from_vault, AccountListOutput, AccountRowModel,
     ACCOUNT_LIST_WIDGET_STATES_MARKER_PREFIX, ROW_ACTION_GROUP_NAME, ROW_REMOVE_ACTION_NAME,
     ROW_RENAME_ACTION_NAME,
 };
@@ -167,6 +167,147 @@ fn row_models_drop_empty_issuer_in_display_label() {
     let rows = row_models_from_vault(&vault);
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].display_label, "alice");
+}
+
+// ---------------------------------------------------------------------------
+// `row_model_for_account`
+// ---------------------------------------------------------------------------
+//
+// Mirror of `row_models_from_vault` that targets a single account id
+// so `AppModel` can re-derive the updated `AccountRowModel` after a
+// successful rename / next / settings change without re-projecting
+// every row in the vault. Coverage parallels the bulk projection so
+// any drift between the two is caught here.
+
+#[test]
+fn row_model_for_account_missing_id_is_none() {
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+
+    let present = add_totp(&mut vault, &store, Some("GitHub"), "ben");
+    // Synthesise an id that is structurally valid but absent from the
+    // vault — `AccountId::default()` is the all-zero sentinel and
+    // does not collide with `Vault::add` issued ids.
+    let absent = AccountId::default();
+    assert_ne!(present, absent);
+
+    assert!(
+        row_model_for_account(&vault, absent).is_none(),
+        "missing id projects to None, not a stale row",
+    );
+}
+
+#[test]
+fn row_model_for_account_returns_matching_totp_row() {
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+
+    let id = add_totp(&mut vault, &store, Some("GitHub"), "ben");
+
+    let model = row_model_for_account(&vault, id).expect("present id projects");
+    assert_eq!(model.id, id);
+    assert_eq!(model.display_label, "GitHub:ben");
+    assert_eq!(model.kind, AccountKindSummary::Totp);
+    assert_eq!(model.counter, None);
+}
+
+#[test]
+fn row_model_for_account_returns_matching_hotp_row_with_counter() {
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+
+    let id = add_hotp(&mut vault, &store, None, "solo", 42);
+
+    let model = row_model_for_account(&vault, id).expect("present id projects");
+    assert_eq!(model.id, id);
+    assert_eq!(model.display_label, "solo");
+    assert_eq!(model.kind, AccountKindSummary::Hotp);
+    assert_eq!(model.counter, Some(42));
+}
+
+#[test]
+fn row_model_for_account_finds_id_in_any_position() {
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+
+    let first = add_totp(&mut vault, &store, Some("GitHub"), "ben");
+    let middle = add_totp(&mut vault, &store, Some("GitLab"), "alice");
+    let last = add_totp(&mut vault, &store, None, "solo");
+
+    for (id, expected) in [
+        (first, "GitHub:ben"),
+        (middle, "GitLab:alice"),
+        (last, "solo"),
+    ] {
+        let model = row_model_for_account(&vault, id).expect("present id projects");
+        assert_eq!(model.id, id);
+        assert_eq!(model.display_label, expected);
+    }
+}
+
+#[test]
+fn row_model_for_account_drops_empty_issuer_in_display_label() {
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+
+    let id = add_totp(&mut vault, &store, Some(""), "alice");
+
+    let model = row_model_for_account(&vault, id).expect("present id projects");
+    assert_eq!(
+        model.display_label, "alice",
+        "empty issuer collapses to bare label (parity with `row_models_from_vault`)",
+    );
+}
+
+#[test]
+fn row_model_for_account_reflects_post_rename_label() {
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+
+    let id = add_totp(&mut vault, &store, Some("GitHub"), "ben");
+
+    let before = row_model_for_account(&vault, id).expect("present id projects");
+    assert_eq!(before.display_label, "GitHub:ben");
+
+    vault
+        .mutate_and_save(&store, |v| v.rename(id, "newname", SystemTime::now()))
+        .expect("rename committed");
+
+    let after = row_model_for_account(&vault, id).expect("present id projects");
+    assert_eq!(
+        after.display_label, "GitHub:newname",
+        "post-rename projection reflects new `<issuer>:<label>` heading",
+    );
+    assert_eq!(after.id, id, "id remains stable across rename");
+}
+
+#[test]
+fn row_model_for_account_matches_bulk_projection_for_same_id() {
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+
+    let a = add_totp(&mut vault, &store, Some("GitHub"), "ben");
+    let b = add_hotp(&mut vault, &store, Some("GitLab"), "alice", 9);
+
+    let bulk = row_models_from_vault(&vault);
+    for id in [a, b] {
+        let single = row_model_for_account(&vault, id).expect("present id projects");
+        let bulk_row = bulk
+            .iter()
+            .find(|r| r.id == id)
+            .expect("bulk projection has same id");
+        assert_eq!(
+            &single, bulk_row,
+            "single-row projection must match bulk projection field-for-field",
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

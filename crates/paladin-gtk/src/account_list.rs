@@ -176,6 +176,32 @@ pub fn row_models_from_vault(vault: &Vault) -> Vec<AccountRowModel> {
         .collect()
 }
 
+/// Project a single account in `vault` into an [`AccountRowModel`].
+///
+/// Mirrors [`row_models_from_vault`] for one [`AccountId`] so
+/// `AppModel` can re-derive the updated [`AccountRowModel`] after a
+/// successful vault mutation (rename, HOTP advance, settings save)
+/// without re-projecting every row. Returns `None` when `id` is not
+/// present in `vault.summaries()` — the caller treats that as a
+/// no-op rather than a defensive failure since a stray dispatch
+/// against a freshly-removed id can race with the worker outcome.
+///
+/// Field shape matches [`row_models_from_vault`] verbatim so the
+/// single-row and bulk projections never drift. The projection is
+/// `AccountSummary`-driven, so no secret bytes leave `paladin_core`.
+#[must_use]
+pub fn row_model_for_account(vault: &Vault, id: AccountId) -> Option<AccountRowModel> {
+    vault
+        .summaries()
+        .find(|summary| summary.id == id)
+        .map(|summary| AccountRowModel {
+            id: summary.id,
+            display_label: display_label(&summary),
+            kind: summary.kind,
+            counter: summary.counter,
+        })
+}
+
 /// Project an [`AccountRowModel`] onto the no-visible-code
 /// [`RowDisplay`] the row factory binds at mount time.
 ///
