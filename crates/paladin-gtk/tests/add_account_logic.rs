@@ -864,3 +864,87 @@ fn run_add_worker_save_failure_routes_inline_and_returns_pair() {
     let _ = completion.vault;
     let _ = completion.store;
 }
+
+// ---------------------------------------------------------------------------
+// AddAccountComponent skeleton — marker + Cancel routing
+// ---------------------------------------------------------------------------
+//
+// Symmetric partner of `rename_dialog::format_rename_dialog_marker`
+// / `RENAME_DIALOG_MARKER_PREFIX`. The smoke test in
+// `tests/gtk_smoke.rs` will grep for the prefix to prove the dialog
+// mounted; locking the literal here keeps the pure-logic projection
+// and the smoke marker aligned.
+//
+// `apply_msg(AddAccountMsg::Cancel)` is the Component-side entry
+// point for the Cancel button — the only inbound message the
+// skeleton's view! handles in this commit. Submit / draft-changed /
+// duplicate-confirm variants land in follow-up commits alongside
+// the editable form widgets.
+
+#[test]
+fn add_dialog_marker_prefix_is_stable_grep_anchor() {
+    use paladin_gtk::add_account::ADD_DIALOG_MARKER_PREFIX;
+
+    assert_eq!(ADD_DIALOG_MARKER_PREFIX, "paladin-gtk: add_dialog_path=");
+}
+
+#[test]
+fn format_add_dialog_marker_renders_vault_path() {
+    use paladin_gtk::add_account::{format_add_dialog_marker, ADD_DIALOG_MARKER_PREFIX};
+
+    let path = PathBuf::from("/home/test/.local/share/paladin/vault.bin");
+    let marker = format_add_dialog_marker(&path);
+    assert!(
+        marker.starts_with(ADD_DIALOG_MARKER_PREFIX),
+        "marker `{marker}` should start with `{ADD_DIALOG_MARKER_PREFIX}`",
+    );
+    assert!(
+        marker.contains("/home/test/.local/share/paladin/vault.bin"),
+        "marker `{marker}` should contain the vault path",
+    );
+}
+
+#[test]
+fn add_account_init_clones_for_reactive_state() {
+    use paladin_gtk::add_account::AddAccountInit;
+
+    let init = AddAccountInit {
+        vault_path: PathBuf::from("/home/test/.local/share/paladin/vault.bin"),
+    };
+    let cloned = init.clone();
+    assert_eq!(cloned.vault_path, init.vault_path);
+}
+
+#[test]
+fn apply_msg_cancel_routes_to_cancel_output() {
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddAccountOutput};
+
+    let output = apply_msg(AddAccountMsg::Cancel);
+    assert!(
+        matches!(output, Some(AddAccountOutput::Cancel)),
+        "Cancel must route to AddAccountOutput::Cancel, got {output:?}",
+    );
+}
+
+#[test]
+fn apply_msg_worker_failed_emits_no_output() {
+    // `WorkerFailed` is consumed by the dialog to re-render the
+    // inline error / durability warning; it never bubbles back to
+    // `AppModel`. Pinned so a future `apply_msg` refactor cannot
+    // forward it past the Component boundary.
+    use paladin_gtk::add_account::{
+        apply_msg, classify_add_post_effect_error, AddAccountMsg, AddPostEffectOutcome,
+    };
+
+    let err = PaladinError::SaveNotCommitted {
+        committed: false,
+        backup_path: None,
+    };
+    let outcome = classify_add_post_effect_error(&err);
+    assert!(matches!(outcome, AddPostEffectOutcome::Inline(_)));
+    let output = apply_msg(AddAccountMsg::WorkerFailed(outcome));
+    assert!(
+        output.is_none(),
+        "WorkerFailed must not bubble back to AppModel, got {output:?}",
+    );
+}

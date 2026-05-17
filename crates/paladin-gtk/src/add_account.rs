@@ -81,8 +81,13 @@
 //!   rejection so the user can retry without losing the typed
 //!   buffer).
 
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use libadwaita as adw;
+use libadwaita::prelude::*;
+use relm4::gtk;
+use relm4::prelude::*;
 use secrecy::SecretString;
 
 use paladin_core::{
@@ -532,6 +537,11 @@ impl InlineWarning {
 /// staged rollout in commit `ae8fd44`).
 #[derive(Debug, Clone)]
 pub enum AddAccountMsg {
+    /// Cancel button activation. [`apply_msg`] forwards
+    /// [`AddAccountOutput::Cancel`] so `AppModel` can drop the
+    /// live [`AddAccountComponent`] controller and remove its
+    /// widget from the content tree.
+    Cancel,
     /// `AppModel` pushes the typed [`AddPostEffectOutcome`] back
     /// to the dialog after the
     /// `gio::spawn_blocking Vault::mutate_and_save(|v| v.add(...))`
@@ -545,4 +555,192 @@ pub enum AddAccountMsg {
     /// `KeepWithWarning` (attach the durability warning to the
     /// body) in one `apply_msg` arm.
     WorkerFailed(AddPostEffectOutcome),
+}
+
+/// Outbound messages emitted by [`AddAccountComponent`] back to
+/// `AppModel`.
+///
+/// Symmetric partner of [`crate::rename_dialog::RenameDialogOutput`]
+/// on the add path. Pinned as a typed enum so future Component
+/// scaffolding (manual / URI / QR submit variants) can land as
+/// additional variants without an `_` catch-all in the dispatch
+/// silently swallowing them.
+///
+/// Initial milestone defines only the [`AddAccountOutput::Cancel`]
+/// variant so the dialog skeleton can be dismissed end-to-end. The
+/// `Submit{Manual,Uri,Qr}` variants land alongside the editable
+/// form widgets in follow-up commits.
+#[derive(Debug, Clone)]
+pub enum AddAccountOutput {
+    /// User dismissed the dialog without saving. `AppModel` drops
+    /// the live [`AddAccountComponent`] controller and removes its
+    /// widget from the content tree.
+    Cancel,
+}
+
+/// Construction parameters for [`AddAccountComponent`].
+///
+/// Mirrors the shape of [`crate::rename_dialog::RenameDialogInit`]
+/// but carries the vault path rather than a target account — the
+/// add dialog creates a *new* account rather than mutating an
+/// existing one. The path is retained on `self` so the smoke test
+/// marker ([`format_add_dialog_marker`]) can render it for the
+/// `xvfb-run` integration test that will land alongside the
+/// header-bar `+` button wiring.
+#[derive(Debug, Clone)]
+pub struct AddAccountInit {
+    /// Vault path the dialog will commit a new account into. Cloned
+    /// from `AppModel::state` at mount time so a mid-flight
+    /// passphrase-transition or lock cannot retarget the dialog.
+    pub vault_path: PathBuf,
+}
+
+/// Stable stdout prefix the smoke test in `tests/gtk_smoke.rs`
+/// greps for to prove [`AddAccountComponent`] mounted under
+/// `xvfb-run`.
+///
+/// Symmetric partner of
+/// [`crate::rename_dialog::RENAME_DIALOG_MARKER_PREFIX`]; the
+/// literal is pinned by `tests/add_account_logic.rs` so the
+/// pure-logic projection and the smoke marker never drift.
+pub const ADD_DIALOG_MARKER_PREFIX: &str = "paladin-gtk: add_dialog_path=";
+
+/// Render the stdout marker the smoke test greps for after the
+/// header-bar `+` button mounts the [`AddAccountComponent`].
+///
+/// Symmetric partner of
+/// [`crate::rename_dialog::format_rename_dialog_marker`]. The marker
+/// carries the resolved vault path so a future
+/// `tests/gtk_smoke.rs` variant can assert that the dialog mounted
+/// against the same path the startup probes resolved.
+#[must_use]
+pub fn format_add_dialog_marker(path: &Path) -> String {
+    format!("{ADD_DIALOG_MARKER_PREFIX}{}", path.display())
+}
+
+/// Apply an inbound [`AddAccountMsg`] and return the optional
+/// [`AddAccountOutput`] the widget layer should forward to
+/// `AppModel`.
+///
+/// Symmetric partner of [`crate::rename_dialog::apply_msg`] on the
+/// add path. Pulled out of [`AddAccountComponent::update`] so the
+/// routing decision stays unit-testable in
+/// `tests/add_account_logic.rs` without spinning up GTK.
+///
+/// Initial milestone handles two variants:
+///
+/// * [`AddAccountMsg::Cancel`] → `Some(AddAccountOutput::Cancel)`.
+///   The dialog dismisses; `AppModel` drops the controller.
+/// * [`AddAccountMsg::WorkerFailed`] → `None`. The typed
+///   [`AddPostEffectOutcome`] is consumed by the dialog to re-
+///   render the inline error / durability warning; it never
+///   bubbles back to `AppModel`. The rendering side lands in a
+///   follow-up commit alongside the editable form widgets.
+///
+/// Submit / draft-changed / duplicate-confirm routing land in
+/// follow-up commits as additional variants are added to
+/// [`AddAccountMsg`] / [`AddAccountOutput`].
+#[must_use]
+pub fn apply_msg(msg: AddAccountMsg) -> Option<AddAccountOutput> {
+    match msg {
+        AddAccountMsg::Cancel => Some(AddAccountOutput::Cancel),
+        AddAccountMsg::WorkerFailed(_outcome) => None,
+    }
+}
+
+/// Widget-bearing dialog for the header-bar `+` button.
+///
+/// Mounts a vertical layout with a heading naming the add flow and
+/// a Cancel button that forwards [`AddAccountOutput::Cancel`] so
+/// `AppModel` can dismiss the dialog. The editable manual / URI /
+/// QR sub-paths, the Save button, and the `Vault::mutate_and_save(
+/// |v| v.add(...))` worker land in follow-up commits alongside the
+/// header-bar wiring per `IMPLEMENTATION_PLAN_04_GTK.md`
+/// §"Component tree" > `AddAccountComponent`.
+///
+/// Symmetric partner of [`crate::rename_dialog::RenameDialogComponent`]
+/// for the add path. The Component is `pub` so the future header-
+/// bar wiring commit can mount it from `AppModel::update`'s
+/// `AppMsg::OpenAddDialog` arm without re-declaring the widget
+/// shape.
+pub struct AddAccountComponent {
+    /// Construction parameters retained on `self` so future message
+    /// handlers can read the resolved vault path. Held by value so
+    /// the dialog never re-resolves the path mid-flight.
+    init: AddAccountInit,
+}
+
+#[allow(missing_docs)]
+#[relm4::component(pub)]
+impl SimpleComponent for AddAccountComponent {
+    type Init = AddAccountInit;
+    type Input = AddAccountMsg;
+    type Output = AddAccountOutput;
+
+    view! {
+        #[root]
+        gtk::Box {
+            set_orientation: gtk::Orientation::Vertical,
+            set_spacing: 12,
+            set_hexpand: true,
+            set_vexpand: true,
+
+            gtk::Label {
+                set_label: "Add account",
+                set_xalign: 0.0,
+                add_css_class: "title-2",
+            },
+
+            adw::PreferencesGroup {
+                set_title: "New account",
+                set_description: Some(
+                    "The editable manual / URI / QR sub-paths land in a follow-up commit.",
+                ),
+            },
+
+            gtk::Box {
+                set_orientation: gtk::Orientation::Horizontal,
+                set_spacing: 6,
+                set_halign: gtk::Align::End,
+
+                #[name = "cancel_button"]
+                gtk::Button {
+                    set_label: "Cancel",
+                    connect_clicked[sender] => move |_| {
+                        sender.input(AddAccountMsg::Cancel);
+                    },
+                },
+            },
+        }
+    }
+
+    fn init(
+        init: Self::Init,
+        root: Self::Root,
+        sender: ComponentSender<Self>,
+    ) -> ComponentParts<Self> {
+        let model = AddAccountComponent { init };
+        let widgets = view_output!();
+        ComponentParts { model, widgets }
+    }
+
+    fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>) {
+        if let Some(output) = apply_msg(msg) {
+            // Ignore send failures: if `AppModel` has already dropped
+            // the controller (e.g. window closed mid-click), there's
+            // nothing left to dismiss.
+            let _ = sender.output(output);
+        }
+    }
+}
+
+impl AddAccountComponent {
+    /// Resolved vault path the dialog was mounted against. Used by
+    /// the smoke-test marker ([`format_add_dialog_marker`]) and by
+    /// future submit handlers that need to thread the path into
+    /// the `Vault::mutate_and_save(|v| v.add(...))` worker.
+    #[must_use]
+    pub fn vault_path(&self) -> &Path {
+        &self.init.vault_path
+    }
 }

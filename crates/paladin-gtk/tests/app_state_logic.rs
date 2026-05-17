@@ -7376,7 +7376,9 @@ fn add_dialog_msg_after_failure_inline_forwards_worker_failed_with_outcome() {
     let effect = AddWorkerEffect::Failure(outcome);
     let msg = add_dialog_msg_after(&effect)
         .expect("Failure forwards a WorkerFailed message so the dialog stays mounted");
-    let AddAccountMsg::WorkerFailed(forwarded) = msg;
+    let AddAccountMsg::WorkerFailed(forwarded) = msg else {
+        panic!("expected AddAccountMsg::WorkerFailed for a Failure outcome");
+    };
     match forwarded {
         AddPostEffectOutcome::Inline(inline) => assert_eq!(
             inline.kind,
@@ -7405,7 +7407,9 @@ fn add_dialog_msg_after_failure_keep_with_warning_forwards_worker_failed_with_ou
     let effect = AddWorkerEffect::Failure(outcome);
     let msg = add_dialog_msg_after(&effect)
         .expect("Failure forwards a WorkerFailed message so the dialog stays mounted");
-    let AddAccountMsg::WorkerFailed(forwarded) = msg;
+    let AddAccountMsg::WorkerFailed(forwarded) = msg else {
+        panic!("expected AddAccountMsg::WorkerFailed for a Failure outcome");
+    };
     match forwarded {
         AddPostEffectOutcome::KeepWithWarning(warning) => assert_eq!(
             warning.kind,
@@ -7443,7 +7447,9 @@ fn add_dialog_msg_after_failure_defensive_inline_forwards_worker_failed_with_out
     let effect = AddWorkerEffect::Failure(outcome);
     let msg = add_dialog_msg_after(&effect)
         .expect("Failure forwards a WorkerFailed message so the dialog stays mounted");
-    let AddAccountMsg::WorkerFailed(forwarded) = msg;
+    let AddAccountMsg::WorkerFailed(forwarded) = msg else {
+        panic!("expected AddAccountMsg::WorkerFailed for a Failure outcome");
+    };
     match forwarded {
         AddPostEffectOutcome::Inline(inline) => assert_eq!(
             inline.kind,
