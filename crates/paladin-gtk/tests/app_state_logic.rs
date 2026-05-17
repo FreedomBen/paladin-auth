@@ -4447,6 +4447,222 @@ fn apply_rename_vault_install_inplace_consumes_run_rename_worker_completion_pair
 }
 
 // ---------------------------------------------------------------------------
+// rename_final_app_state — unified state-transition composer
+// ---------------------------------------------------------------------------
+//
+// Symmetric partner of `unlock_final_app_state` for the rename path.
+// Where `unlock_final_app_state` has to fan three effect branches
+// into two state transitions (success → `Unlocked`, startup-routed
+// failure → `StartupError`, inline failure → `Locked` rollback),
+// every `RenameWorkerEffect` variant — `Success` and all
+// `Failure(RenameErrorOutcome)` projections — lands on the same
+// `UnlockedBusy → Unlocked` transition via `AppState::leave_busy`.
+// The dialog drop / inline-message decisions split off the effect
+// in a sibling composer (`should_drop_rename_dialog_after`); this
+// composer owns only the state-machine roll-back.
+//
+// The `None` return is reserved for the defensive case where the
+// completion arrives but `current` is not `UnlockedBusy` — a stray
+// call from an unexpected source state that should not silently
+// install a phantom `Unlocked` over another idle state.
+
+#[test]
+fn rename_final_app_state_success_rolls_back_to_unlocked_preserving_path() {
+    use paladin_gtk::app::state::rename_final_app_state;
+    use paladin_gtk::rename_dialog::RenameWorkerEffect;
+
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let effect = RenameWorkerEffect::Success;
+    let next = rename_final_app_state(&busy, &effect)
+        .expect("success outcome rolls back UnlockedBusy → Unlocked");
+    assert!(matches!(next, AppState::Unlocked { .. }));
+    assert_path_eq(&next, &path);
+}
+
+#[test]
+fn rename_final_app_state_failure_restore_prior_rolls_back_to_unlocked_preserving_path() {
+    use paladin_gtk::app::state::rename_final_app_state;
+    use paladin_gtk::rename_dialog::{
+        classify_rename_error, RenameErrorOutcome, RenameWorkerEffect,
+    };
+
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let err = PaladinError::SaveNotCommitted {
+        committed: false,
+        backup_path: None,
+    };
+    let outcome = classify_rename_error(&err);
+    assert!(
+        matches!(outcome, RenameErrorOutcome::RestorePrior(_)),
+        "save_not_committed routes to RestorePrior (pinned in rename_dialog tests)",
+    );
+    let effect = RenameWorkerEffect::Failure(outcome);
+    let next = rename_final_app_state(&busy, &effect)
+        .expect("RestorePrior failure rolls back UnlockedBusy → Unlocked (dialog stays inline)");
+    assert!(matches!(next, AppState::Unlocked { .. }));
+    assert_path_eq(&next, &path);
+}
+
+#[test]
+fn rename_final_app_state_failure_keep_new_with_warning_rolls_back_to_unlocked_preserving_path() {
+    use paladin_gtk::app::state::rename_final_app_state;
+    use paladin_gtk::rename_dialog::{
+        classify_rename_error, RenameErrorOutcome, RenameWorkerEffect,
+    };
+
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let err = PaladinError::SaveDurabilityUnconfirmed;
+    let outcome = classify_rename_error(&err);
+    assert!(
+        matches!(outcome, RenameErrorOutcome::KeepNewWithWarning(_)),
+        "save_durability_unconfirmed routes to KeepNewWithWarning",
+    );
+    let effect = RenameWorkerEffect::Failure(outcome);
+    let next = rename_final_app_state(&busy, &effect).expect(
+        "KeepNewWithWarning failure rolls back UnlockedBusy → Unlocked (dialog keeps warning)",
+    );
+    assert!(matches!(next, AppState::Unlocked { .. }));
+    assert_path_eq(&next, &path);
+}
+
+#[test]
+fn rename_final_app_state_failure_inline_error_rolls_back_to_unlocked_preserving_path() {
+    use paladin_gtk::app::state::rename_final_app_state;
+    use paladin_gtk::rename_dialog::{
+        classify_rename_error, RenameErrorOutcome, RenameWorkerEffect,
+    };
+
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    // Defensive: an `invalid_state` would only fire if the targeted
+    // account is removed mid-flight; `classify_rename_error` routes
+    // it to `InlineError`. Pin the same `UnlockedBusy → Unlocked`
+    // rollback for the defensive branch.
+    let err = PaladinError::InvalidState {
+        operation: "rename",
+        state: "account_not_found",
+    };
+    let outcome = classify_rename_error(&err);
+    assert!(
+        matches!(outcome, RenameErrorOutcome::InlineError(_)),
+        "defensive invalid_state routes to InlineError",
+    );
+    let effect = RenameWorkerEffect::Failure(outcome);
+    let next = rename_final_app_state(&busy, &effect)
+        .expect("InlineError failure rolls back UnlockedBusy → Unlocked (dialog stays inline)");
+    assert!(matches!(next, AppState::Unlocked { .. }));
+    assert_path_eq(&next, &path);
+}
+
+#[test]
+fn rename_final_app_state_from_non_unlocked_busy_returns_none() {
+    // Defensive: a stray completion arriving while `current` is not
+    // `UnlockedBusy` must not silently install a phantom `Unlocked`
+    // transition over another idle state. The composer mirrors the
+    // `AppState::leave_busy` contract and returns `None` for every
+    // non-`UnlockedBusy` source. Pinned across every typed effect so
+    // the defensive arm cannot drift with the effect routing.
+    use paladin_gtk::app::state::rename_final_app_state;
+    use paladin_gtk::rename_dialog::{classify_rename_error, RenameWorkerEffect};
+
+    let path = vault_path();
+    let effects = [
+        RenameWorkerEffect::Success,
+        RenameWorkerEffect::Failure(classify_rename_error(&PaladinError::SaveNotCommitted {
+            committed: false,
+            backup_path: None,
+        })),
+        RenameWorkerEffect::Failure(classify_rename_error(
+            &PaladinError::SaveDurabilityUnconfirmed,
+        )),
+        RenameWorkerEffect::Failure(classify_rename_error(&PaladinError::InvalidState {
+            operation: "rename",
+            state: "account_not_found",
+        })),
+    ];
+    let sources = [
+        AppState::Missing { path: path.clone() },
+        AppState::Locked { path: path.clone() },
+        AppState::Unlocked { path: path.clone() },
+        decide_state_from_inspect(&path, Err(invalid_header_err()))
+            .expect("inspect Err yields StartupError state"),
+    ];
+    for effect in &effects {
+        for source in &sources {
+            assert!(
+                rename_final_app_state(source, effect).is_none(),
+                "rename_final_app_state must return None for non-UnlockedBusy source={source:?} effect={effect:?}",
+            );
+        }
+    }
+}
+
+#[test]
+fn rename_final_app_state_mirrors_leave_busy_for_every_variant() {
+    // Cross-check: the composer is a name-the-call-site wrapper over
+    // `AppState::leave_busy`, not a re-derivation. The `Some` /
+    // `None` partition across source states must mirror `leave_busy`
+    // byte-for-byte (and the result on `Some` must match
+    // `leave_busy`'s `Unlocked { path }` projection) so the wrapper
+    // can't drift away from the underlying method without breaking
+    // here first. Pinned across every typed effect because the
+    // composer ignores `effect` for the state decision.
+    use paladin_gtk::app::state::rename_final_app_state;
+    use paladin_gtk::rename_dialog::{classify_rename_error, RenameWorkerEffect};
+
+    let path = vault_path();
+    let effects = [
+        RenameWorkerEffect::Success,
+        RenameWorkerEffect::Failure(classify_rename_error(&PaladinError::SaveNotCommitted {
+            committed: true,
+            backup_path: None,
+        })),
+        RenameWorkerEffect::Failure(classify_rename_error(
+            &PaladinError::SaveDurabilityUnconfirmed,
+        )),
+        RenameWorkerEffect::Failure(classify_rename_error(&PaladinError::InvalidState {
+            operation: "rename",
+            state: "account_not_found",
+        })),
+    ];
+    let sources = [
+        AppState::Missing { path: path.clone() },
+        AppState::Locked { path: path.clone() },
+        AppState::Unlocked { path: path.clone() },
+        AppState::UnlockedBusy { path: path.clone() },
+        decide_state_from_inspect(&path, Err(invalid_header_err()))
+            .expect("inspect Err yields StartupError state"),
+    ];
+    for effect in &effects {
+        for source in &sources {
+            let composed = rename_final_app_state(source, effect);
+            let direct = source.clone().leave_busy();
+            match (&composed, &direct) {
+                (Some(a), Some(b)) => {
+                    assert_eq!(
+                        std::mem::discriminant::<AppState>(a),
+                        std::mem::discriminant::<AppState>(b),
+                        "wrapper variant must mirror leave_busy for source={source:?} effect={effect:?}",
+                    );
+                    assert_eq!(
+                        a.path().map(Path::to_path_buf),
+                        b.path().map(Path::to_path_buf),
+                        "wrapper path must mirror leave_busy for source={source:?} effect={effect:?}",
+                    );
+                }
+                (None, None) => {}
+                _ => panic!(
+                    "wrapper / leave_busy Some/None partition diverged for source={source:?} effect={effect:?}: composed={composed:?} direct={direct:?}",
+                ),
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // run_unlock_worker — synchronous body of the spawn_blocking unlock worker
 // ---------------------------------------------------------------------------
 //

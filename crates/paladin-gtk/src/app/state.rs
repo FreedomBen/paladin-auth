@@ -58,7 +58,7 @@ use std::time::SystemTime;
 
 use paladin_core::{AccountId, PaladinError, Store, Vault, VaultLock, VaultStatus};
 
-use crate::rename_dialog::RenameWorkerInput;
+use crate::rename_dialog::{RenameWorkerEffect, RenameWorkerInput};
 use crate::startup_error::{classify_open_error, OpenErrorRouting, StartupError};
 use crate::unlock_dialog::{
     route_unlock_open_error, InlineError, UnlockDialogMsg, UnlockOpenRouting,
@@ -1150,6 +1150,50 @@ pub fn unlock_final_app_state(current: &AppState, effect: &UnlockWorkerEffect) -
         Some(replacement) => Some(replacement.clone()),
         None => current.clone().leave_unlocking_busy(),
     }
+}
+
+/// Unified state-transition composer for the rename worker outcome.
+///
+/// Symmetric partner of [`unlock_final_app_state`] for the rename
+/// path. Where the unlock composer has to fan three effect branches
+/// into two state transitions (success → [`AppState::Unlocked`],
+/// startup-routed failure → [`AppState::StartupError`], inline
+/// failure → [`AppState::Locked`] rollback), every
+/// [`RenameWorkerEffect`] variant — `Success` and every
+/// `Failure(RenameErrorOutcome)` projection — lands on the same
+/// `UnlockedBusy → Unlocked` rollback via [`AppState::leave_busy`].
+/// The dialog-drop / inline-message decisions split off the typed
+/// effect in sibling composers; this composer owns only the state-
+/// machine rollback.
+///
+/// `effect` is accepted for signature symmetry with
+/// [`unlock_final_app_state`] (and so a future routing refinement
+/// can branch on it without changing call sites) but is not
+/// inspected: the rename worker's three failure projections all
+/// reinstall the live `(Vault, Store)` pair through
+/// [`apply_rename_vault_install_inplace`] regardless of effect, so
+/// the state machine returns to `Unlocked` uniformly. The dialog
+/// drop / inline-message routing handled elsewhere is what differs
+/// across effects.
+///
+/// Returns `Some(Unlocked { path })` iff `current` is
+/// [`AppState::UnlockedBusy`], and `None` from every other state.
+/// The `None` arm is the defensive case for a stray completion: a
+/// rename completion arriving while `current` is not `UnlockedBusy`
+/// must not silently install a phantom `Unlocked` over another
+/// idle state.
+///
+/// The composer is shape-only — it delegates to
+/// [`AppState::leave_busy`] without re-deriving the transition —
+/// so the side-effect decision in `AppModel::update` stays unit-
+/// testable in `tests/app_state_logic.rs` without spinning up GTK /
+/// libadwaita.
+#[must_use]
+pub fn rename_final_app_state(
+    current: &AppState,
+    _effect: &RenameWorkerEffect,
+) -> Option<AppState> {
+    current.clone().leave_busy()
 }
 
 /// Bundled `AppModel::update` instructions for an unlock-worker
