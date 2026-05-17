@@ -5265,6 +5265,197 @@ fn compose_rename_dispatch_from_non_unlocked_busy_returns_no_app_state() {
 }
 
 // ---------------------------------------------------------------------------
+// apply_rename_dispatch_inplace — `AppModel::update` mut-state wrapper
+// ---------------------------------------------------------------------------
+//
+// Symmetric partner of `apply_unlock_dispatch_inplace` for the rename
+// path. `compose_rename_dispatch(&AppState, &RenameWorkerEffect) ->
+// RenameDispatch` bundles the three worker-completion decisions; the
+// wrapper here lets `AppMsg::RenameWorkerCompleted` install the new
+// `dispatch.app_state` against the cached `AppState` in place,
+// mirroring `apply_submit_rename_inplace`'s contract for the entry
+// transition. The remaining `dialog_msg` / `drop_dialog` projections
+// drive widget-side work in the handler and are not the wrapper's
+// concern.
+
+#[test]
+fn apply_rename_dispatch_inplace_success_rolls_back_to_unlocked_and_returns_true() {
+    // Worker reported `Ok(())`: `compose_rename_dispatch` carries
+    // `Some(Unlocked(path))` in `app_state`. The wrapper installs the
+    // rollback against the cached `UnlockedBusy` state and returns
+    // `true` so `AppModel::update` can release the busy gate and drop
+    // the `RenameDialogComponent`.
+    use paladin_gtk::app::state::{apply_rename_dispatch_inplace, compose_rename_dispatch};
+    use paladin_gtk::rename_dialog::RenameWorkerEffect;
+
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let effect = RenameWorkerEffect::Success;
+    let dispatch = compose_rename_dispatch(&busy, &effect);
+    let mut state = busy.clone();
+    let transitioned = apply_rename_dispatch_inplace(&mut state, &dispatch);
+    assert!(
+        transitioned,
+        "apply_rename_dispatch_inplace must return true on the Success rollback",
+    );
+    assert!(
+        matches!(state, AppState::Unlocked { .. }),
+        "Success rollback target must be Unlocked, got {state:?}",
+    );
+    assert_path_eq(&state, &path);
+}
+
+#[test]
+fn apply_rename_dispatch_inplace_failure_rolls_back_to_unlocked_and_returns_true() {
+    // Worker reported a Failure (RestorePrior): the rename worker
+    // always rolls the busy gate back to `Unlocked` regardless of
+    // typed effect because `Vault::mutate_and_save` is authoritative
+    // for rollback / durability-unconfirmed semantics. The wrapper
+    // installs the rollback and returns `true`; widget-side work (the
+    // inline message and the still-mounted dialog) is driven by the
+    // remaining dispatch fields.
+    use paladin_gtk::app::state::{apply_rename_dispatch_inplace, compose_rename_dispatch};
+    use paladin_gtk::rename_dialog::{classify_rename_error, RenameWorkerEffect};
+
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let err = PaladinError::SaveNotCommitted {
+        committed: false,
+        backup_path: None,
+    };
+    let effect = RenameWorkerEffect::Failure(classify_rename_error(&err));
+    let dispatch = compose_rename_dispatch(&busy, &effect);
+    let mut state = busy.clone();
+    let transitioned = apply_rename_dispatch_inplace(&mut state, &dispatch);
+    assert!(
+        transitioned,
+        "apply_rename_dispatch_inplace must return true on the Failure rollback",
+    );
+    assert!(
+        matches!(state, AppState::Unlocked { .. }),
+        "Failure rollback target must be Unlocked, got {state:?}",
+    );
+    assert_path_eq(&state, &path);
+}
+
+#[test]
+fn apply_rename_dispatch_inplace_from_non_unlocked_busy_leaves_state_unchanged_and_returns_false() {
+    // Defensive: when the worker outcome arrives but the cached state
+    // is not `UnlockedBusy` (a stray dispatch from any other source),
+    // `compose_rename_dispatch` reports `app_state = None` to refuse a
+    // phantom `Unlocked` transition. The wrapper must leave the cached
+    // state untouched byte-for-byte and return `false` so
+    // `AppModel::update` does not clobber an idle state with a phantom
+    // rollback.
+    use paladin_gtk::app::state::{apply_rename_dispatch_inplace, compose_rename_dispatch};
+    use paladin_gtk::rename_dialog::{classify_rename_error, RenameWorkerEffect};
+
+    let path = vault_path();
+    let err = PaladinError::SaveNotCommitted {
+        committed: false,
+        backup_path: None,
+    };
+    let effect = RenameWorkerEffect::Failure(classify_rename_error(&err));
+    let invalid_sources = [
+        AppState::Missing { path: path.clone() },
+        AppState::Locked { path: path.clone() },
+        AppState::Unlocked { path: path.clone() },
+    ];
+    for source in invalid_sources {
+        let dispatch = compose_rename_dispatch(&source, &effect);
+        assert!(
+            dispatch.app_state.is_none(),
+            "fixture invariant: non-UnlockedBusy source must carry app_state=None",
+        );
+        let original_discriminant = std::mem::discriminant::<AppState>(&source);
+        let original_path = source.path().map(Path::to_path_buf);
+        let mut state = source.clone();
+        let transitioned = apply_rename_dispatch_inplace(&mut state, &dispatch);
+        assert!(
+            !transitioned,
+            "apply_rename_dispatch_inplace must return false when dispatch.app_state is None \
+             for source={source:?}",
+        );
+        assert_eq!(
+            std::mem::discriminant::<AppState>(&state),
+            original_discriminant,
+            "wrapper must leave variant unchanged when dispatch.app_state is None \
+             for source={source:?}",
+        );
+        assert_eq!(
+            state.path().map(Path::to_path_buf),
+            original_path,
+            "wrapper must leave path unchanged when dispatch.app_state is None \
+             for source={source:?}",
+        );
+    }
+}
+
+#[test]
+fn apply_rename_dispatch_inplace_mirrors_compose_rename_dispatch_for_every_effect() {
+    // Cross-check: the wrapper must mirror the
+    // `compose_rename_dispatch.app_state` Some/None partition exactly.
+    // The cached source is always `UnlockedBusy(path)` since that is
+    // the only state `AppModel::update` ever reaches when the worker
+    // returns.
+    use paladin_gtk::app::state::{apply_rename_dispatch_inplace, compose_rename_dispatch};
+    use paladin_gtk::rename_dialog::{classify_rename_error, RenameWorkerEffect};
+
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let effects = [
+        RenameWorkerEffect::Success,
+        RenameWorkerEffect::Failure(classify_rename_error(&PaladinError::SaveNotCommitted {
+            committed: false,
+            backup_path: None,
+        })),
+        RenameWorkerEffect::Failure(classify_rename_error(&PaladinError::SaveNotCommitted {
+            committed: true,
+            backup_path: None,
+        })),
+        RenameWorkerEffect::Failure(classify_rename_error(
+            &PaladinError::SaveDurabilityUnconfirmed,
+        )),
+        RenameWorkerEffect::Failure(classify_rename_error(&PaladinError::InvalidState {
+            operation: "rename",
+            state: "account_not_found",
+        })),
+    ];
+    for effect in &effects {
+        let dispatch = compose_rename_dispatch(&busy, effect);
+        let mut state = busy.clone();
+        let transitioned = apply_rename_dispatch_inplace(&mut state, &dispatch);
+        if let Some(expected) = dispatch.app_state.as_ref() {
+            assert!(
+                transitioned,
+                "wrapper must return true when dispatch.app_state is Some for effect={effect:?}",
+            );
+            assert_eq!(
+                std::mem::discriminant::<AppState>(&state),
+                std::mem::discriminant::<AppState>(expected),
+                "wrapper variant must mirror composer for effect={effect:?}",
+            );
+            assert_eq!(
+                state.path().map(Path::to_path_buf),
+                expected.path().map(Path::to_path_buf),
+                "wrapper path must mirror composer for effect={effect:?}",
+            );
+        } else {
+            assert!(
+                !transitioned,
+                "wrapper must return false when dispatch.app_state is None for effect={effect:?}",
+            );
+            assert_eq!(
+                std::mem::discriminant::<AppState>(&state),
+                std::mem::discriminant::<AppState>(&busy),
+                "wrapper must leave variant unchanged when dispatch.app_state is None \
+                 for effect={effect:?}",
+            );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // run_unlock_worker — synchronous body of the spawn_blocking unlock worker
 // ---------------------------------------------------------------------------
 //
