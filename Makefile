@@ -44,7 +44,7 @@ GTK_BIN := paladin-gtk
 .DEFAULT_GOAL := help
 
 .PHONY: help \
-        build build-all build-cli build-tui build-gtk \
+        build build-all build-cli build-tui build-gtk release \
         test test-all test-core test-cli test-tui test-gtk \
         fmt fmt-check clippy check \
         clean install
@@ -79,6 +79,9 @@ build-tui: ## Build only paladin-tui
 
 build-gtk: ## Build only paladin-gtk (requires gtk4>=4.16, libadwaita>=1.6)
 	${CARGO} build -p ${GTK_PKG} ${PROFILE_FLAG}
+
+release: ## Build the full workspace with the release profile
+	${CARGO} build --workspace --release
 
 # --- Test --------------------------------------------------------------------
 
