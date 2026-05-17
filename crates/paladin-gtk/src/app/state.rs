@@ -58,7 +58,7 @@ use std::time::SystemTime;
 
 use paladin_core::{AccountId, PaladinError, Store, Vault, VaultLock, VaultStatus};
 
-use crate::rename_dialog::{RenameWorkerEffect, RenameWorkerInput};
+use crate::rename_dialog::{RenameDialogMsg, RenameWorkerEffect, RenameWorkerInput};
 use crate::startup_error::{classify_open_error, OpenErrorRouting, StartupError};
 use crate::unlock_dialog::{
     route_unlock_open_error, InlineError, UnlockDialogMsg, UnlockOpenRouting,
@@ -1227,6 +1227,62 @@ pub fn should_drop_rename_dialog_after(effect: &RenameWorkerEffect) -> bool {
     match effect {
         RenameWorkerEffect::Success => true,
         RenameWorkerEffect::Failure(_) => false,
+    }
+}
+
+/// Inline-message projection for the live
+/// [`crate::rename_dialog::RenameDialogComponent`] after a rename
+/// worker outcome.
+///
+/// Symmetric partner of [`unlock_dialog_msg_after`] for the rename
+/// path. `AppMsg::RenameWorkerCompleted` consults this to decide
+/// what message (if any) to forward into the live dialog after
+/// applying the worker outcome:
+///
+/// * [`RenameWorkerEffect::Success`] → `None`. The dialog is being
+///   dropped (see [`should_drop_rename_dialog_after`]), so there
+///   is no live controller to forward to.
+/// * [`RenameWorkerEffect::Failure`] → `Some(RenameDialogMsg::
+///   WorkerFailed(outcome.clone()))`. The dialog stays mounted;
+///   the message carries the typed
+///   [`crate::rename_dialog::RenameErrorOutcome`] so the dialog
+///   can route `RestorePrior` (roll the visible label back and
+///   render the inline error), `KeepNewWithWarning` (keep the new
+///   label and attach the warning to the body), or the defensive
+///   `InlineError` (render the typed error without touching the
+///   label) without re-deriving the routing off the
+///   [`paladin_core::PaladinError`].
+///
+/// The projection returns an *owned* [`Option<RenameDialogMsg>`]
+/// rather than a borrow into the effect because
+/// [`RenameWorkerEffect`] carries the typed
+/// [`crate::rename_dialog::RenameErrorOutcome`] rather than a
+/// pre-built dialog message (the unlock effect carries its dialog
+/// message directly via `UnlockFailureEffect::SendUnlockDialogMsg`,
+/// so the unlock variant can borrow). The clone is cheap — the
+/// outcome only holds an [`crate::rename_dialog::InlineError`] /
+/// [`crate::rename_dialog::InlineWarning`] of a stable
+/// [`paladin_core::ErrorKind`] and a `String` body.
+///
+/// The projection inspects only the typed [`RenameWorkerEffect`]
+/// variant — it does not consult [`AppState`], the live
+/// `(Vault, Store)` pair, or the
+/// [`crate::rename_dialog::RenameDialogState`] — so the side-
+/// effect decision in `AppModel::update` stays unit-testable in
+/// `tests/app_state_logic.rs` without spinning up GTK / libadwaita.
+///
+/// The `Some` / `None` partition matches
+/// [`should_drop_rename_dialog_after`] exactly (a dropped dialog
+/// receives no message; a mounted dialog receives a message) and
+/// this contract is pinned in `tests/app_state_logic.rs` so the
+/// two projections cannot drift apart silently.
+#[must_use]
+pub fn rename_dialog_msg_after(effect: &RenameWorkerEffect) -> Option<RenameDialogMsg> {
+    match effect {
+        RenameWorkerEffect::Success => None,
+        RenameWorkerEffect::Failure(outcome) => {
+            Some(RenameDialogMsg::WorkerFailed(outcome.clone()))
+        }
     }
 }
 

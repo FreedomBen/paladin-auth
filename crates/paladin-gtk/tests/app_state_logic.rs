@@ -4809,6 +4809,183 @@ fn should_drop_rename_dialog_after_partitions_on_success_only() {
 }
 
 // ---------------------------------------------------------------------------
+// rename_dialog_msg_after — inline-message projection
+// ---------------------------------------------------------------------------
+//
+// Symmetric partner of `unlock_dialog_msg_after` for the rename
+// path. `AppMsg::RenameWorkerCompleted` consults this to decide
+// what message (if any) to forward into the live
+// `RenameDialogComponent` after applying the worker outcome:
+//
+// * `Success` → `None`. The dialog is being dropped — there is no
+//   live controller to forward to.
+// * `Failure(outcome)` → `Some(RenameDialogMsg::WorkerFailed(
+//   outcome.clone()))`. The dialog stays mounted; the message
+//   carries the typed `RenameErrorOutcome` so the dialog can route
+//   the visible label / inline error / inline warning without
+//   re-deriving the routing off the `PaladinError`.
+//
+// The projection returns an *owned* `Option<RenameDialogMsg>`
+// rather than a borrow into the effect because `RenameWorkerEffect`
+// carries the typed `RenameErrorOutcome` rather than a pre-built
+// dialog message (the unlock effect carries its dialog message
+// directly via `UnlockFailureEffect::SendUnlockDialogMsg`, so the
+// unlock variant can borrow). The clone is cheap — the outcome
+// only holds an `InlineError` / `InlineWarning` struct of an
+// `ErrorKind` and a `String` body.
+//
+// The projection inspects only the typed `RenameWorkerEffect`
+// variant — it does not consult `AppState`, the live `(Vault,
+// Store)` pair, or the `RenameDialogState` — so the side-effect
+// decision in `AppModel::update` stays unit-testable without
+// spinning up GTK / libadwaita.
+
+#[test]
+fn rename_dialog_msg_after_success_returns_none() {
+    use paladin_gtk::app::state::rename_dialog_msg_after;
+    use paladin_gtk::rename_dialog::RenameWorkerEffect;
+
+    let effect = RenameWorkerEffect::Success;
+    assert!(
+        rename_dialog_msg_after(&effect).is_none(),
+        "Success drops the dialog, so no inline message is forwarded",
+    );
+}
+
+#[test]
+fn rename_dialog_msg_after_failure_restore_prior_forwards_worker_failed_with_outcome() {
+    use paladin_gtk::app::state::rename_dialog_msg_after;
+    use paladin_gtk::rename_dialog::{
+        classify_rename_error, RenameDialogMsg, RenameErrorOutcome, RenameWorkerEffect,
+    };
+
+    let err = PaladinError::SaveNotCommitted {
+        committed: false,
+        backup_path: None,
+    };
+    let outcome = classify_rename_error(&err);
+    assert!(
+        matches!(outcome, RenameErrorOutcome::RestorePrior(_)),
+        "save_not_committed routes to RestorePrior",
+    );
+    let effect = RenameWorkerEffect::Failure(outcome);
+    let msg = rename_dialog_msg_after(&effect)
+        .expect("Failure forwards a WorkerFailed message so the dialog stays mounted");
+    match msg {
+        RenameDialogMsg::WorkerFailed(RenameErrorOutcome::RestorePrior(inline)) => {
+            assert_eq!(
+                inline.kind,
+                ErrorKind::SaveNotCommitted,
+                "RestorePrior must round-trip the SaveNotCommitted ErrorKind",
+            );
+        }
+        other => panic!("expected RenameDialogMsg::WorkerFailed(RestorePrior), got {other:?}"),
+    }
+}
+
+#[test]
+fn rename_dialog_msg_after_failure_keep_new_with_warning_forwards_worker_failed_with_outcome() {
+    use paladin_gtk::app::state::rename_dialog_msg_after;
+    use paladin_gtk::rename_dialog::{
+        classify_rename_error, RenameDialogMsg, RenameErrorOutcome, RenameWorkerEffect,
+    };
+
+    let err = PaladinError::SaveDurabilityUnconfirmed;
+    let outcome = classify_rename_error(&err);
+    assert!(
+        matches!(outcome, RenameErrorOutcome::KeepNewWithWarning(_)),
+        "save_durability_unconfirmed routes to KeepNewWithWarning",
+    );
+    let effect = RenameWorkerEffect::Failure(outcome);
+    let msg = rename_dialog_msg_after(&effect)
+        .expect("Failure forwards a WorkerFailed message so the dialog stays mounted");
+    match msg {
+        RenameDialogMsg::WorkerFailed(RenameErrorOutcome::KeepNewWithWarning(warning)) => {
+            assert_eq!(
+                warning.kind,
+                ErrorKind::SaveDurabilityUnconfirmed,
+                "KeepNewWithWarning must round-trip the SaveDurabilityUnconfirmed ErrorKind",
+            );
+        }
+        other => {
+            panic!("expected RenameDialogMsg::WorkerFailed(KeepNewWithWarning), got {other:?}")
+        }
+    }
+}
+
+#[test]
+fn rename_dialog_msg_after_failure_inline_error_forwards_worker_failed_with_outcome() {
+    use paladin_gtk::app::state::rename_dialog_msg_after;
+    use paladin_gtk::rename_dialog::{
+        classify_rename_error, RenameDialogMsg, RenameErrorOutcome, RenameWorkerEffect,
+    };
+
+    let err = PaladinError::InvalidState {
+        operation: "rename",
+        state: "account_not_found",
+    };
+    let outcome = classify_rename_error(&err);
+    assert!(
+        matches!(outcome, RenameErrorOutcome::InlineError(_)),
+        "invalid_state routes to defensive InlineError",
+    );
+    let effect = RenameWorkerEffect::Failure(outcome);
+    let msg = rename_dialog_msg_after(&effect)
+        .expect("Failure forwards a WorkerFailed message so the dialog stays mounted");
+    match msg {
+        RenameDialogMsg::WorkerFailed(RenameErrorOutcome::InlineError(inline)) => {
+            assert_eq!(
+                inline.kind,
+                ErrorKind::InvalidState,
+                "InlineError must round-trip the defensive InvalidState ErrorKind",
+            );
+        }
+        other => panic!("expected RenameDialogMsg::WorkerFailed(InlineError), got {other:?}"),
+    }
+}
+
+#[test]
+fn rename_dialog_msg_after_is_mutually_exclusive_with_should_drop() {
+    // Cross-check: the inline-message projection must report `Some`
+    // exactly when `should_drop_rename_dialog_after` reports
+    // `false` (dialog stays mounted), and `None` when the dispatch
+    // drops the dialog. Pinned across every typed effect so the two
+    // projections can't drift apart silently — a future routing
+    // refinement that puts a Failure variant on the drop side would
+    // need to update both helpers in lockstep, and this test
+    // catches the partial update.
+    use paladin_gtk::app::state::{rename_dialog_msg_after, should_drop_rename_dialog_after};
+    use paladin_gtk::rename_dialog::{classify_rename_error, RenameWorkerEffect};
+
+    let effects = [
+        RenameWorkerEffect::Success,
+        RenameWorkerEffect::Failure(classify_rename_error(&PaladinError::SaveNotCommitted {
+            committed: false,
+            backup_path: None,
+        })),
+        RenameWorkerEffect::Failure(classify_rename_error(&PaladinError::SaveNotCommitted {
+            committed: true,
+            backup_path: None,
+        })),
+        RenameWorkerEffect::Failure(classify_rename_error(
+            &PaladinError::SaveDurabilityUnconfirmed,
+        )),
+        RenameWorkerEffect::Failure(classify_rename_error(&PaladinError::InvalidState {
+            operation: "rename",
+            state: "account_not_found",
+        })),
+    ];
+    for effect in &effects {
+        let drops = should_drop_rename_dialog_after(effect);
+        let has_msg = rename_dialog_msg_after(effect).is_some();
+        assert_eq!(
+            drops, !has_msg,
+            "drops/has_msg must be mutually exclusive for effect={effect:?}: drops={drops}, has_msg={has_msg}",
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // run_unlock_worker — synchronous body of the spawn_blocking unlock worker
 // ---------------------------------------------------------------------------
 //

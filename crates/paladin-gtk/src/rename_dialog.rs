@@ -546,6 +546,28 @@ pub enum RenameDialogMsg {
     /// account id and trimmed label; a [`SubmitOutcome::InlineError`]
     /// keeps the dialog open with the cached inline error visible.
     SubmitClicked,
+    /// `AppModel` pushes the typed [`RenameErrorOutcome`] back to
+    /// the dialog after the `gio::spawn_blocking
+    /// Vault::mutate_and_save(|v| v.rename(...))` worker reports a
+    /// failure. Symmetric partner of
+    /// [`crate::unlock_dialog::UnlockDialogMsg::OpenFailedInline`]
+    /// on the rename path: where the unlock variant carries an
+    /// already-projected [`crate::unlock_dialog::InlineError`], the
+    /// rename variant carries the typed [`RenameErrorOutcome`] so
+    /// the dialog's handler can route `RestorePrior` (roll the
+    /// visible label back and render the inline error),
+    /// `KeepNewWithWarning` (keep the new label and attach the
+    /// warning to the body), or the defensive `InlineError`
+    /// (render the typed error without touching the label) in one
+    /// `apply_msg` arm.
+    ///
+    /// The state-side handler for this variant — the
+    /// [`RenameDialogState`] storage and the `apply_msg` routing —
+    /// is wired in a follow-up commit alongside the dialog body
+    /// re-render. For now [`apply_msg`] accepts the variant as a
+    /// no-op so the dispatch path can build cleanly while the
+    /// rendering side catches up.
+    WorkerFailed(RenameErrorOutcome),
 }
 
 /// Outputs forwarded from [`RenameDialogComponent`] up to
@@ -614,6 +636,16 @@ pub fn apply_msg(
             }),
             SubmitOutcome::InlineError(_) => None,
         },
+        RenameDialogMsg::WorkerFailed(_) => {
+            // Placeholder: the `RenameDialogState` storage for the
+            // worker outcome and the dialog-body re-render land in
+            // a follow-up commit. Accepting the variant here as a
+            // no-op lets `AppMsg::RenameWorkerCompleted` forward
+            // the message through `apply_rename_dispatch_inplace`
+            // / the controller sender without an `unreachable!`
+            // panic while the rendering side catches up.
+            None
+        }
     }
 }
 
