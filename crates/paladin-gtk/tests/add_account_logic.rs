@@ -2047,6 +2047,106 @@ fn apply_msg_manual_digits_changed_preserves_out_of_range_for_validate_manual() 
 }
 
 #[test]
+fn apply_msg_manual_kind_changed_shadows_into_manual_draft() {
+    // TOTP / HOTP switcher routes through
+    // `AddAccountMsg::ManualKindChanged(AccountKindInput)` and
+    // shadows into `ManualDraftState::kind` so the widget view's
+    // `#[watch]` projection can swap the period spinner for the
+    // counter spinner (and vice versa) and `classify_manual_submit`
+    // at Save time sees the live draft. The arm emits no output —
+    // kind changes are dialog-local until Save. Mirror of the
+    // existing
+    // `apply_msg_manual_algorithm_changed_shadows_into_manual_draft`
+    // contract on the sibling typed-enum field.
+    use paladin_core::AccountKindInput;
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    assert_eq!(state.manual_draft().kind, AccountKindInput::Totp);
+
+    let output = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualKindChanged(AccountKindInput::Hotp),
+    );
+
+    assert!(
+        output.is_none(),
+        "ManualKindChanged stays dialog-local; no output flows to AppModel",
+    );
+    assert_eq!(
+        state.manual_draft().kind,
+        AccountKindInput::Hotp,
+        "ManualKindChanged shadows the switcher choice into ManualDraftState::kind",
+    );
+}
+
+#[test]
+fn apply_msg_manual_kind_changed_round_trips_between_totp_and_hotp() {
+    // Toggling the switcher must reach the other variant on every
+    // dispatch — a stuck `Totp` after a `Hotp` round trip would
+    // freeze the form's visible period / counter row. Mirror of the
+    // existing
+    // `apply_msg_manual_algorithm_changed_replaces_prior_shadow`
+    // contract on the kind switcher, but framed as a round trip so
+    // both directions are exercised.
+    use paladin_core::AccountKindInput;
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualKindChanged(AccountKindInput::Hotp),
+    );
+    assert_eq!(state.manual_draft().kind, AccountKindInput::Hotp);
+
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualKindChanged(AccountKindInput::Totp),
+    );
+    assert_eq!(
+        state.manual_draft().kind,
+        AccountKindInput::Totp,
+        "second ManualKindChanged replaces the prior shadow",
+    );
+}
+
+#[test]
+fn apply_msg_manual_kind_changed_preserves_other_draft_fields_including_period_and_counter() {
+    // The kind switcher must not silently zero out the period or
+    // counter buffers — `classify_manual_submit` drops the irrelevant
+    // value at Save time based on `kind`, so the draft can keep both
+    // populated and the user's prior typing is preserved if they
+    // toggle the switcher and toggle back. Mirror of the existing
+    // `apply_msg_manual_algorithm_changed_preserves_other_draft_fields`
+    // contract on the kind switcher, with extra emphasis on the
+    // period_secs / counter pair.
+    use paladin_core::{AccountKindInput, Algorithm};
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualKindChanged(AccountKindInput::Hotp),
+    );
+
+    let draft = state.manual_draft();
+    assert_eq!(draft.label, "");
+    assert_eq!(draft.issuer, "");
+    assert_eq!(draft.algorithm, Algorithm::Sha1);
+    assert_eq!(draft.digits, 6);
+    assert_eq!(draft.kind, AccountKindInput::Hotp);
+    assert_eq!(
+        draft.period_secs, 30,
+        "kind switcher must not clear the TOTP period buffer",
+    );
+    assert_eq!(
+        draft.counter, 0,
+        "kind switcher must not clear the HOTP counter buffer",
+    );
+    assert_eq!(draft.icon_hint_text, "");
+}
+
+#[test]
 fn manual_draft_state_default_matches_cli_manual_add_defaults() {
     // The `AdwPreferencesGroup` body of `AddAccountComponent` opens
     // with the same defaults the CLI interactive prompts use (DESIGN

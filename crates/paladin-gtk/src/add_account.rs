@@ -722,6 +722,19 @@ pub enum AddAccountMsg {
     /// future misuse path slips an out-of-range value through.
     /// Dialog-local — no [`AddAccountOutput`] is emitted.
     ManualDigitsChanged(u8),
+    /// TOTP / HOTP switcher selection shadowed into
+    /// [`ManualDraftState::kind`].
+    ///
+    /// Sibling of [`Self::ManualAlgorithmChanged`] on the kind
+    /// switcher. The widget swaps the period spinner for the counter
+    /// spinner (and vice versa) on every `#[watch]` re-render keyed
+    /// off this field. [`apply_msg`] does **not** clear the sibling
+    /// `period_secs` / `counter` buffers — [`classify_manual_submit`]
+    /// at Save time already drops the irrelevant value based on
+    /// `kind`, so a toggle-and-toggle-back preserves the user's prior
+    /// typing in both fields. Dialog-local — no [`AddAccountOutput`]
+    /// is emitted.
+    ManualKindChanged(AccountKindInput),
     /// Per-keystroke shadow of the manual Base32 secret entry into
     /// the Paladin-owned [`crate::secret_fields::SecretEntry`] inside
     /// [`crate::secret_fields::AddSecretState::manual_secret`].
@@ -1085,6 +1098,10 @@ pub fn apply_msg(state: &mut AddDialogState, msg: AddAccountMsg) -> Option<AddAc
         }
         AddAccountMsg::ManualDigitsChanged(digits) => {
             state.manual_draft.digits = digits;
+            None
+        }
+        AddAccountMsg::ManualKindChanged(kind) => {
+            state.manual_draft.kind = kind;
             None
         }
         AddAccountMsg::ManualSecretChanged(text) => {
