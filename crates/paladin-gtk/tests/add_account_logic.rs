@@ -2245,6 +2245,102 @@ fn apply_msg_manual_period_changed_preserves_out_of_range_for_validate_manual() 
 }
 
 #[test]
+fn apply_msg_manual_counter_changed_shadows_into_manual_draft() {
+    // HOTP counter spinner value routes through
+    // `AddAccountMsg::ManualCounterChanged(u64)` and shadows into
+    // `ManualDraftState::counter` so the widget view's `#[watch]`
+    // projection and `classify_manual_submit` at Save time both see
+    // the live draft. The arm emits no output — counter changes are
+    // dialog-local until Save. Sibling of the existing
+    // `apply_msg_manual_period_changed_shadows_into_manual_draft`
+    // contract on the HOTP counter spinner.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    assert_eq!(state.manual_draft().counter, 0);
+
+    let output = apply_msg(&mut state, AddAccountMsg::ManualCounterChanged(42));
+
+    assert!(
+        output.is_none(),
+        "ManualCounterChanged stays dialog-local; no output flows to AppModel",
+    );
+    assert_eq!(
+        state.manual_draft().counter,
+        42,
+        "ManualCounterChanged shadows the spinner value into ManualDraftState::counter",
+    );
+}
+
+#[test]
+fn apply_msg_manual_counter_changed_replaces_prior_shadow() {
+    // A second spinner step replaces (does not accumulate) the prior
+    // counter shadow so the draft stays in lockstep with the
+    // spinner's current value. Sibling of the existing
+    // `apply_msg_manual_period_changed_replaces_prior_shadow` contract
+    // on the HOTP counter spinner.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(&mut state, AddAccountMsg::ManualCounterChanged(7));
+    let _ = apply_msg(&mut state, AddAccountMsg::ManualCounterChanged(13));
+
+    assert_eq!(
+        state.manual_draft().counter,
+        13,
+        "second ManualCounterChanged replaces the prior shadow",
+    );
+}
+
+#[test]
+fn apply_msg_manual_counter_changed_preserves_other_draft_fields_including_period() {
+    // The counter spinner step must not disturb the rest of the
+    // manual draft — and in particular must not clear the sibling
+    // TOTP period buffer so a `Kind::Totp -> Kind::Hotp -> tweak
+    // counter -> Kind::Totp` round trip preserves the user's prior
+    // period value.
+    use paladin_core::{AccountKindInput, Algorithm};
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(&mut state, AddAccountMsg::ManualCounterChanged(99));
+
+    let draft = state.manual_draft();
+    assert_eq!(draft.label, "");
+    assert_eq!(draft.issuer, "");
+    assert_eq!(draft.algorithm, Algorithm::Sha1);
+    assert_eq!(draft.digits, 6);
+    assert_eq!(draft.kind, AccountKindInput::Totp);
+    assert_eq!(
+        draft.period_secs, 30,
+        "counter spinner step must not clear the TOTP period buffer",
+    );
+    assert_eq!(draft.counter, 99);
+    assert_eq!(draft.icon_hint_text, "");
+}
+
+#[test]
+fn apply_msg_manual_counter_changed_accepts_u64_max() {
+    // The HOTP counter is `u64`; `apply_msg` must accept any value
+    // the spinner produces verbatim — the spinner's GTK widget
+    // configuration constrains the visible range, but a test driver
+    // or future misuse path could carry `u64::MAX` and the draft
+    // must preserve it for `validate_manual` at Save time. Mirrors
+    // the sibling defensive contract on the period / digits
+    // spinners.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(&mut state, AddAccountMsg::ManualCounterChanged(u64::MAX));
+
+    assert_eq!(
+        state.manual_draft().counter,
+        u64::MAX,
+        "apply_msg preserves the spinner value verbatim — clamping lives in the widget",
+    );
+}
+
+#[test]
 fn manual_draft_state_default_matches_cli_manual_add_defaults() {
     // The `AdwPreferencesGroup` body of `AddAccountComponent` opens
     // with the same defaults the CLI interactive prompts use (DESIGN

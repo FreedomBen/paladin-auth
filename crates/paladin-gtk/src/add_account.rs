@@ -749,6 +749,17 @@ pub enum AddAccountMsg {
     /// regardless so a kind round trip does not lose the user's
     /// typing. Dialog-local — no [`AddAccountOutput`] is emitted.
     ManualPeriodChanged(u32),
+    /// HOTP starting counter from the counter spinner shadowed into
+    /// [`ManualDraftState::counter`].
+    ///
+    /// Sibling of [`Self::ManualPeriodChanged`] on the counter
+    /// spinner. The full `u64` range is accepted verbatim —
+    /// [`validate_manual`] at Save time owns any range checks. The
+    /// field is consulted only when `kind == AccountKindInput::Hotp`
+    /// (see [`classify_manual_submit`]) but the draft preserves it
+    /// regardless so a kind round trip does not lose the user's
+    /// typing. Dialog-local — no [`AddAccountOutput`] is emitted.
+    ManualCounterChanged(u64),
     /// Per-keystroke shadow of the manual Base32 secret entry into
     /// the Paladin-owned [`crate::secret_fields::SecretEntry`] inside
     /// [`crate::secret_fields::AddSecretState::manual_secret`].
@@ -1120,6 +1131,10 @@ pub fn apply_msg(state: &mut AddDialogState, msg: AddAccountMsg) -> Option<AddAc
         }
         AddAccountMsg::ManualPeriodChanged(period_secs) => {
             state.manual_draft.period_secs = period_secs;
+            None
+        }
+        AddAccountMsg::ManualCounterChanged(counter) => {
+            state.manual_draft.counter = counter;
             None
         }
         AddAccountMsg::ManualSecretChanged(text) => {
