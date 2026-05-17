@@ -555,6 +555,25 @@ pub enum AddAccountMsg {
     /// `KeepWithWarning` (attach the durability warning to the
     /// body) in one `apply_msg` arm.
     WorkerFailed(AddPostEffectOutcome),
+    /// Internal Save-clicked routing produced by the widget once
+    /// [`classify_manual_submit`] / [`crate::otpauth_uri_paste::classify_uri_submit`]
+    /// returned `Proceed` and [`classify_duplicate`] either reported
+    /// `Proceed` or an "add anyway" confirmation consumed the
+    /// pending duplicate. Carries the validated [`Account`] so
+    /// [`apply_msg`] can forward [`AddAccountOutput::Submit`] to
+    /// `AppModel` without re-running the validation pipeline. The
+    /// [`Account`]'s secret is wrapped in [`paladin_core::Secret`]
+    /// (which is `ZeroizeOnDrop`) so the message stays compliant
+    /// with §"Secret entry handling" when it crosses the
+    /// Component boundary.
+    SubmitProceed {
+        /// Validated account ready for insertion via
+        /// `Vault::mutate_and_save(|v| v.add(account))`. The
+        /// stable id stamped at validation time is preserved
+        /// through [`Vault::add`] and surfaces on
+        /// [`AddWorkerEffect::Success`].
+        account: Account,
+    },
 }
 
 /// Outbound messages emitted by [`AddAccountComponent`] back to
@@ -566,16 +585,34 @@ pub enum AddAccountMsg {
 /// additional variants without an `_` catch-all in the dispatch
 /// silently swallowing them.
 ///
-/// Initial milestone defines only the [`AddAccountOutput::Cancel`]
-/// variant so the dialog skeleton can be dismissed end-to-end. The
-/// `Submit{Manual,Uri,Qr}` variants land alongside the editable
-/// form widgets in follow-up commits.
+/// `Cancel` dismisses the dialog; `Submit` ships the validated
+/// [`Account`] to `AppModel` so the `gio::spawn_blocking
+/// Vault::mutate_and_save(|v| v.add(account))` worker can run. The
+/// QR sub-path (`Vec<ValidatedAccount>`) lands as a separate variant
+/// alongside the QR widget body in a follow-up commit.
 #[derive(Debug, Clone)]
 pub enum AddAccountOutput {
     /// User dismissed the dialog without saving. `AppModel` drops
     /// the live [`AddAccountComponent`] controller and removes its
     /// widget from the content tree.
     Cancel,
+    /// Save button pressed with a validated account from either the
+    /// manual or URI sub-path. The widget pre-runs
+    /// [`classify_manual_submit`] / [`crate::otpauth_uri_paste::classify_uri_submit`]
+    /// and [`classify_duplicate`] on the main thread so this
+    /// variant only fires once a `Proceed` outcome (or a consumed
+    /// "add anyway" duplicate) is in hand. `AppModel` hands the
+    /// pair to the `gio::spawn_blocking
+    /// Vault::mutate_and_save(|v| v.add(account))` worker via
+    /// [`crate::app::state::compose_add_worker_input`].
+    Submit {
+        /// Validated account ready for insertion. The id stamped
+        /// at validation time is preserved through [`Vault::add`]
+        /// so the worker can surface it back to the dialog on
+        /// [`AddWorkerEffect::Success`] without scanning the
+        /// vault.
+        account: Account,
+    },
 }
 
 /// Construction parameters for [`AddAccountComponent`].
@@ -627,7 +664,7 @@ pub fn format_add_dialog_marker(path: &Path) -> String {
 /// routing decision stays unit-testable in
 /// `tests/add_account_logic.rs` without spinning up GTK.
 ///
-/// Initial milestone handles two variants:
+/// Initial milestone handles three variants:
 ///
 /// * [`AddAccountMsg::Cancel`] → `Some(AddAccountOutput::Cancel)`.
 ///   The dialog dismisses; `AppModel` drops the controller.
@@ -636,15 +673,25 @@ pub fn format_add_dialog_marker(path: &Path) -> String {
 ///   render the inline error / durability warning; it never
 ///   bubbles back to `AppModel`. The rendering side lands in a
 ///   follow-up commit alongside the editable form widgets.
+/// * [`AddAccountMsg::SubmitProceed`] →
+///   `Some(AddAccountOutput::Submit { account })`. The widget pre-
+///   runs [`classify_manual_submit`] /
+///   [`crate::otpauth_uri_paste::classify_uri_submit`] and
+///   [`classify_duplicate`] on the main thread; this arm only
+///   forwards the validated [`Account`] once a `Proceed` outcome
+///   (or a consumed "add anyway" duplicate) is in hand, so
+///   `AppModel::update`'s submit handler does not re-derive the
+///   validation pipeline.
 ///
-/// Submit / draft-changed / duplicate-confirm routing land in
-/// follow-up commits as additional variants are added to
-/// [`AddAccountMsg`] / [`AddAccountOutput`].
+/// Draft-changed / duplicate-confirm routing land in follow-up
+/// commits as additional variants are added to [`AddAccountMsg`] /
+/// [`AddAccountOutput`].
 #[must_use]
 pub fn apply_msg(msg: AddAccountMsg) -> Option<AddAccountOutput> {
     match msg {
         AddAccountMsg::Cancel => Some(AddAccountOutput::Cancel),
         AddAccountMsg::WorkerFailed(_outcome) => None,
+        AddAccountMsg::SubmitProceed { account } => Some(AddAccountOutput::Submit { account }),
     }
 }
 

@@ -75,17 +75,18 @@ use crate::account_list::{
     AccountListComponent, AccountListInit, AccountListOutput, AccountRowModel,
 };
 use crate::add_account::{
-    AddAccountComponent, AddAccountInit, AddAccountOutput, AddWorkerCompletion,
+    run_add_worker, AddAccountComponent, AddAccountInit, AddAccountOutput, AddWorkerCompletion,
 };
 use crate::app::state::{
     apply_add_dispatch_inplace, apply_add_vault_install_inplace, apply_remove_dispatch_inplace,
     apply_remove_vault_install_inplace, apply_rename_dispatch_inplace,
-    apply_rename_vault_install_inplace, apply_submit_remove_inplace, apply_submit_rename_inplace,
-    apply_submit_unlock_inplace, apply_unlock_dispatch_inplace, apply_unlock_vault_install_inplace,
-    compose_add_dispatch, compose_remove_dispatch, compose_remove_worker_input,
-    compose_rename_dispatch, compose_rename_worker_input, compose_unlock_dispatch,
-    compose_unlock_worker_input, decide_state_from_inspect, decide_state_from_open_error,
-    run_unlock_worker, AppState, OpenErrorOutcome, UnlockWorkerCompletion,
+    apply_rename_vault_install_inplace, apply_submit_add_inplace, apply_submit_remove_inplace,
+    apply_submit_rename_inplace, apply_submit_unlock_inplace, apply_unlock_dispatch_inplace,
+    apply_unlock_vault_install_inplace, compose_add_dispatch, compose_add_worker_input,
+    compose_remove_dispatch, compose_remove_worker_input, compose_rename_dispatch,
+    compose_rename_worker_input, compose_unlock_dispatch, compose_unlock_worker_input,
+    decide_state_from_inspect, decide_state_from_open_error, run_unlock_worker, AppState,
+    OpenErrorOutcome, UnlockWorkerCompletion,
 };
 use crate::init_dialog::{format_init_dialog_marker, InitDialogComponent, InitDialogInit};
 use crate::remove_dialog::{
@@ -751,6 +752,76 @@ impl SimpleComponent for AppModel {
                 // future race), this is a benign no-op.
                 if let Some(controller) = self.add_dialog.take() {
                     self.content.remove(controller.widget());
+                }
+            }
+            AppMsg::AddAccountAction(AddAccountOutput::Submit { account }) => {
+                // Save-button entry side of the `gio::spawn_blocking
+                // Vault::mutate_and_save(|v| v.add(account))` worker.
+                // Mirrors the `RenameDialogOutput::SubmitLabel` and
+                // `RemoveDialogOutput::SubmitConfirm` handlers step-
+                // for-step:
+                //
+                // 1. Take the live `(Vault, Store)` pair from
+                //    `self.vault` and bundle it with the validated
+                //    `Account` into an `AddWorkerInput` via
+                //    `compose_add_worker_input`. The composer
+                //    inspects the cached `AppState`: only `Unlocked`
+                //    returns `Ok(input)`; every other variant returns
+                //    `Err(pair)` so the wrapper can reinstall the
+                //    pair via `apply_add_vault_install_inplace`. A
+                //    `None` state or a `None` vault slot is the
+                //    defensive no-op (a stray `Submit` from a locked
+                //    / missing / busy state).
+                // 2. Apply the `Unlocked → UnlockedBusy` busy-gate
+                //    transition via `apply_submit_add_inplace` so
+                //    `is_busy()` / `allows_mutating_menu()` cover the
+                //    worker's lifetime. The dialog stays mounted —
+                //    `should_drop_add_dialog_after` keeps it on every
+                //    failure branch and the worker's success dispatch
+                //    drops it once the worker returns.
+                // 3. Spawn `run_add_worker` on
+                //    `gtk::gio::spawn_blocking` so the
+                //    `mutate_and_save` durability fsync hop does not
+                //    block the GTK main loop. The wrapping
+                //    `gtk::glib::spawn_future_local` awaits the
+                //    blocking handle and posts the bundled
+                //    `AddWorkerCompletion` back to `AppModel` via
+                //    `AppMsg::AddWorkerCompleted`, consumed by the
+                //    dispatch branch wired above.
+                //
+                // Unlike `RenameDialogOutput::SubmitLabel`, the add
+                // path does not need to capture `SystemTime::now()`
+                // at the dispatch site — the validated `Account`
+                // already carries the `created_at` / `updated_at`
+                // stamps from the widget's earlier
+                // `validate_manual` / `parse_otpauth` call.
+                let worker_input = match (self.state.as_ref(), self.vault.take()) {
+                    (Some(state), Some(pair)) => {
+                        match compose_add_worker_input(state, pair, account) {
+                            Ok(input) => Some(input),
+                            Err(pair) => {
+                                apply_add_vault_install_inplace(&mut self.vault, pair);
+                                None
+                            }
+                        }
+                    }
+                    (None, Some(pair)) => {
+                        apply_add_vault_install_inplace(&mut self.vault, pair);
+                        None
+                    }
+                    (_, None) => None,
+                };
+                if let Some(state) = self.state.as_mut() {
+                    apply_submit_add_inplace(state);
+                }
+                if let Some(input) = worker_input {
+                    let sender = sender.clone();
+                    gtk::glib::spawn_future_local(async move {
+                        let completion = gtk::gio::spawn_blocking(move || run_add_worker(input))
+                            .await
+                            .expect("Vault::mutate_and_save add worker panicked");
+                        sender.input(AppMsg::AddWorkerCompleted(completion));
+                    });
                 }
             }
             AppMsg::RemoveDialogAction(RemoveDialogOutput::SubmitConfirm { account_id }) => {

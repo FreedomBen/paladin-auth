@@ -948,3 +948,53 @@ fn apply_msg_worker_failed_emits_no_output() {
         "WorkerFailed must not bubble back to AppModel, got {output:?}",
     );
 }
+
+#[test]
+fn apply_msg_submit_proceed_routes_to_submit_output() {
+    // The widget runs `classify_manual_submit` /
+    // `classify_uri_submit` then `classify_duplicate` on the main
+    // thread and only emits `SubmitProceed { account }` once a
+    // non-collision `Proceed(ValidatedAccount)` is in hand (or after
+    // an "add anyway" confirmation consumes the pending duplicate).
+    // `apply_msg` forwards that as `AddAccountOutput::Submit { account }`
+    // so `AppModel::update` can take the live `(Vault, Store)` pair
+    // and spawn the `gio::spawn_blocking Vault::mutate_and_save(|v|
+    // v.add(account))` worker.
+    use paladin_core::{validate_manual, AccountInput, IconHintInput};
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddAccountOutput};
+
+    let input = AccountInput {
+        label: "test-label".to_string(),
+        issuer: Some("issuer".to_string()),
+        secret: SecretString::from("JBSWY3DPEHPK3PXP".to_string()),
+        algorithm: Algorithm::Sha1,
+        digits: 6,
+        kind: AccountKindInput::Totp,
+        period_secs: None,
+        counter: None,
+        icon_hint: IconHintInput::Default,
+    };
+    let validated =
+        validate_manual(input, SystemTime::UNIX_EPOCH).expect("totp account input validates");
+    let expected_id = validated.account.id();
+    let expected_label = validated.account.label().to_string();
+
+    let output = apply_msg(AddAccountMsg::SubmitProceed {
+        account: validated.account,
+    });
+    match output {
+        Some(AddAccountOutput::Submit { account }) => {
+            assert_eq!(
+                account.id(),
+                expected_id,
+                "Submit forwards the validated-time id without re-stamping"
+            );
+            assert_eq!(
+                account.label(),
+                expected_label,
+                "Submit forwards the validated label byte-for-byte"
+            );
+        }
+        other => panic!("expected Some(Submit), got {other:?}"),
+    }
+}
