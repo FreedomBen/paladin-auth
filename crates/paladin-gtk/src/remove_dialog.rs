@@ -52,7 +52,7 @@ use libadwaita::prelude::*;
 use relm4::gtk;
 use relm4::prelude::*;
 
-use paladin_core::{AccountId, AccountSummary, ErrorKind, PaladinError, Vault};
+use paladin_core::{AccountId, AccountSummary, ErrorKind, PaladinError, Store, Vault};
 
 /// Render the dialog's confirmation body label.
 ///
@@ -201,6 +201,138 @@ pub fn format_remove_dialog_marker(account_id: AccountId, display_label: &str) -
     format!("{REMOVE_DIALOG_MARKER_PREFIX}{account_id} label={display_label}")
 }
 
+/// Worker input bundled by
+/// `AppMsg::RemoveDialogAction(RemoveDialogOutput::SubmitConfirm)`
+/// for the `gio::spawn_blocking
+/// Vault::mutate_and_save(|v| v.remove(...))` worker.
+///
+/// Symmetric partner of [`crate::rename_dialog::RenameWorkerInput`] on
+/// the remove path. Carries the live `(Vault, Store)` pair plus the
+/// stable account id from the dialog so the worker thread can call
+/// `mutate_and_save` without re-fetching from `AppModel`. `Clone` /
+/// `PartialEq` are deliberately not derived — [`Vault`] and [`Store`]
+/// are non-`Clone` and `AppModel::update` consumes the input exactly
+/// once when it moves it into the worker closure.
+#[derive(Debug)]
+pub struct RemoveWorkerInput {
+    /// Live vault from the `Unlocked` `(Vault, Store)` pair. Moved
+    /// into the worker so `mutate_and_save` can borrow it mutably
+    /// without keeping `AppModel` in `Unlocked` for the duration of
+    /// the save call.
+    pub vault: Vault,
+    /// Live store from the `Unlocked` `(Vault, Store)` pair. Moved
+    /// alongside `vault` so the same `(Vault, Store)` pair returns
+    /// from the worker even on typed failure.
+    pub store: Store,
+    /// Stable account id from
+    /// [`RemoveDialogOutput::SubmitConfirm::account_id`]. Forwarded to
+    /// `Vault::remove` so the worker targets the same account the
+    /// dialog seeded.
+    pub account_id: AccountId,
+}
+
+/// Outcome of [`run_remove_worker`] for `AppModel::update` to apply.
+///
+/// `Success` indicates the remove committed and the row drops out of
+/// the visible account list. `Failure` wraps the
+/// [`RemoveErrorOutcome`] from [`classify_remove_error`] so the
+/// dialog can re-render the matching inline error / durability
+/// warning without re-deriving the routing decision off the
+/// [`PaladinError`].
+#[derive(Debug, Clone)]
+pub enum RemoveWorkerEffect {
+    /// `Vault::mutate_and_save(|v| v.remove(...))` returned `Ok(())`.
+    /// The dialog dismisses itself and the targeted row drops out of
+    /// the visible account list.
+    Success,
+    /// `Vault::mutate_and_save(|v| v.remove(...))` returned a typed
+    /// failure. The carried [`RemoveErrorOutcome`] tells the dialog
+    /// whether to restore the prior account (`save_not_committed`),
+    /// keep the removed state with a warning attached
+    /// (`save_durability_unconfirmed`), or stay inline with the typed
+    /// error (defensive `invalid_state { state: "account_not_found" }`
+    /// / `io_error` / `validation_error` / …).
+    Failure(RemoveErrorOutcome),
+}
+
+/// Bundle returned by [`run_remove_worker`].
+///
+/// Carries the live `(Vault, Store)` pair on every branch so
+/// `AppModel::update` can reinstall it before applying the UI
+/// outcome — `Vault::mutate_and_save` already restores the snapshot
+/// on `save_not_committed`, so the returned vault is the
+/// authoritative post-effect state regardless of the
+/// [`RemoveWorkerEffect`] variant. Per `IMPLEMENTATION_PLAN_04_GTK.md`
+/// §"Vault interaction" > "Every worker returns `(Vault, Store,
+/// EffectOutcome)`".
+///
+/// `Clone` / `PartialEq` are deliberately not derived for the same
+/// reason as on [`RemoveWorkerInput`].
+#[derive(Debug)]
+pub struct RemoveWorkerCompletion {
+    /// Routed effect for `AppModel::update` to apply to the dialog.
+    pub effect: RemoveWorkerEffect,
+    /// Live vault after the `mutate_and_save` call. On
+    /// [`RemoveWorkerEffect::Success`] the targeted account is gone;
+    /// on [`RemoveWorkerEffect::Failure`] the vault is whatever
+    /// `mutate_and_save` rolled back to (pre-commit snapshot for
+    /// `save_not_committed`; post-commit state with the account
+    /// removed for `save_durability_unconfirmed`; pre-call state for
+    /// defensive `invalid_state` / `io_error` / `validation_error`
+    /// cases).
+    pub vault: Vault,
+    /// Live store moved through unchanged so `AppModel::update` can
+    /// reinstall the `(Vault, Store)` pair after the worker returns.
+    pub store: Store,
+}
+
+/// Synchronous body of the `gio::spawn_blocking
+/// Vault::mutate_and_save(|v| v.remove(...))` remove worker fired by
+/// `AppModel::update` from
+/// `AppMsg::RemoveDialogAction(RemoveDialogOutput::SubmitConfirm)`.
+///
+/// Consumes the [`RemoveWorkerInput`] by value, runs
+/// `vault.mutate_and_save(&store, |v| v.remove(account_id))`, and
+/// bundles the outcome into a [`RemoveWorkerCompletion`] via
+/// [`classify_remove_error`]. The live `(Vault, Store)` pair is
+/// always returned so `AppModel` reinstalls it regardless of the
+/// typed effect — `mutate_and_save` is authoritative for the
+/// rollback / durability-unconfirmed semantics per DESIGN.md §4.3.
+///
+/// The closure inside `mutate_and_save` maps `Vault::remove`'s
+/// `Option<Account>` `None` (the targeted account was removed
+/// mid-flight) to [`account_not_found_error`] so the defensive shape
+/// matches the CLI / TUI verbatim.
+///
+/// Extracting the worker body as a pure function lets
+/// `AppModel::update`'s closure stay a thin
+/// `gio::spawn_blocking(move || run_remove_worker(input))` while the
+/// real `mutate_and_save` call stays unit-testable in
+/// `tests/remove_dialog_logic.rs` against tempfile-backed plaintext
+/// vaults — no GTK / libadwaita main loop required.
+#[must_use]
+pub fn run_remove_worker(input: RemoveWorkerInput) -> RemoveWorkerCompletion {
+    let RemoveWorkerInput {
+        mut vault,
+        store,
+        account_id,
+    } = input;
+    let effect = match vault.mutate_and_save(&store, |v| {
+        if v.remove(account_id).is_none() {
+            return Err(account_not_found_error());
+        }
+        Ok(())
+    }) {
+        Ok(()) => RemoveWorkerEffect::Success,
+        Err(err) => RemoveWorkerEffect::Failure(classify_remove_error(&err)),
+    };
+    RemoveWorkerCompletion {
+        effect,
+        vault,
+        store,
+    }
+}
+
 /// Construction parameters for [`RemoveDialogComponent`].
 ///
 /// `AppModel` builds this from the live vault when a kebab
@@ -241,22 +373,148 @@ pub fn decide_remove_target(vault: &Vault, id: AccountId) -> Option<RemoveDialog
         })
 }
 
+/// Pure-logic state machine the [`RemoveDialogComponent`] shadows.
+///
+/// `RemoveDialog` has no editable draft — it is a confirmation gate —
+/// so the state only needs to retain the construction parameters
+/// (account id + display label) for the lifetime of the widget plus
+/// the last typed [`RemoveErrorOutcome`] from the worker so the
+/// dialog body can re-render the inline error / warning across
+/// re-renders.
+///
+/// Symmetric partner of [`crate::rename_dialog::RenameDialogState`]
+/// on the remove path. Where the rename state carries a live draft,
+/// the remove state only carries the stable seeded values plus the
+/// worker outcome — `Confirm` does not mutate the state, it only
+/// fires the worker through `AppModel`.
+#[derive(Debug, Clone)]
+pub struct RemoveDialogState {
+    /// Stable construction parameters from [`decide_remove_target`].
+    /// Retained on `self` so [`RemoveDialogState::account_id`] and
+    /// [`RemoveDialogState::display_label`] stay stable across
+    /// re-renders even if `AppModel` mutates the underlying vault.
+    init: RemoveDialogInit,
+    /// Last typed worker outcome from the
+    /// `Vault::mutate_and_save(|v| v.remove(...))` worker, set by
+    /// [`apply_msg`] on the [`RemoveDialogMsg::WorkerFailed`] branch.
+    /// Lets the dialog body render the matching inline error /
+    /// warning across re-renders without re-routing the typed
+    /// [`PaladinError`]. Stays public to the crate so the dispatch
+    /// glue in `AppModel` can read it during a re-render after the
+    /// dialog mounts.
+    pub(crate) worker_outcome: Option<RemoveErrorOutcome>,
+}
+
+impl RemoveDialogState {
+    /// Build a fresh state from the dialog's construction
+    /// parameters. `worker_outcome` starts as `None` — the worker
+    /// has not been fired yet, so there is no post-effect routing
+    /// to render.
+    #[must_use]
+    pub fn new(init: &RemoveDialogInit) -> Self {
+        Self {
+            init: init.clone(),
+            worker_outcome: None,
+        }
+    }
+
+    /// Stable account id from the seeded [`RemoveDialogInit`].
+    /// Forwarded as [`RemoveDialogOutput::SubmitConfirm::account_id`]
+    /// when the user activates the Remove button.
+    #[must_use]
+    pub fn account_id(&self) -> AccountId {
+        self.init.account_id
+    }
+
+    /// Pre-formatted `<issuer>:<label>` heading the dialog body
+    /// renders so the user can confirm which row is being removed.
+    /// Stable for the lifetime of the dialog — the widget reads
+    /// straight off this accessor.
+    #[must_use]
+    pub fn display_label(&self) -> &str {
+        &self.init.display_label
+    }
+
+    /// Last typed worker outcome, if any. Returns `None` until the
+    /// worker has reported a `Failure` branch; `Success` drops the
+    /// dialog and never reaches this accessor.
+    #[must_use]
+    pub fn worker_outcome(&self) -> Option<&RemoveErrorOutcome> {
+        self.worker_outcome.as_ref()
+    }
+
+    /// Inline-error projection of [`Self::worker_outcome`]. Returns
+    /// `Some` for the `RestorePrior` and defensive `InlineError`
+    /// branches so the dialog body can render the typed message.
+    /// Returns `None` for `KeepRemovedWithWarning` (rendered via
+    /// [`Self::inline_warning`]) and for the pre-failure state.
+    #[must_use]
+    pub fn inline_error(&self) -> Option<&InlineError> {
+        match self.worker_outcome.as_ref()? {
+            RemoveErrorOutcome::RestorePrior(err) | RemoveErrorOutcome::InlineError(err) => {
+                Some(err)
+            }
+            RemoveErrorOutcome::KeepRemovedWithWarning(_) => None,
+        }
+    }
+
+    /// Durability-warning projection of [`Self::worker_outcome`].
+    /// Returns `Some` only for the `KeepRemovedWithWarning` branch
+    /// so the dialog body can render the parent-fsync warning
+    /// beneath the confirmation prompt.
+    #[must_use]
+    pub fn inline_warning(&self) -> Option<&InlineWarning> {
+        match self.worker_outcome.as_ref()? {
+            RemoveErrorOutcome::KeepRemovedWithWarning(warning) => Some(warning),
+            RemoveErrorOutcome::RestorePrior(_) | RemoveErrorOutcome::InlineError(_) => None,
+        }
+    }
+}
+
 /// Messages handled by [`RemoveDialogComponent`].
 ///
-/// `Cancel` arrives from the dialog's Cancel button and dismisses
-/// the dialog via [`RemoveDialogOutput::Cancel`] without touching
-/// the vault. The `Confirm` / Remove transition and the
-/// `Vault::mutate_and_save(|v| v.remove(...))` worker described in
-/// §"Component tree" > `RemoveDialog` and §"Effect errors" land in
-/// a follow-up commit alongside the `UnlockedBusy` worker
-/// infrastructure.
-#[derive(Debug)]
+/// `Cancel` and `Confirm` arrive from the dialog's Cancel / Remove
+/// buttons. `WorkerFailed` is pushed back from `AppModel` after the
+/// `gio::spawn_blocking Vault::mutate_and_save(|v| v.remove(...))`
+/// worker reports a failure so the dialog can re-render the matching
+/// inline error / durability warning.
+///
+/// `Clone` is derived so the bundled [`crate::app::state::RemoveDispatch`]
+/// (which carries an `Option<RemoveDialogMsg>` field) can be cloned
+/// in the dispatch trio aggregator. The `WorkerFailed` payload is
+/// already `Clone` because [`RemoveErrorOutcome`] only holds
+/// `String` / [`ErrorKind`] values.
+#[derive(Debug, Clone)]
 pub enum RemoveDialogMsg {
     /// Cancel button pressed. The handler forwards
     /// [`RemoveDialogOutput::Cancel`] so `AppModel` can drop the
     /// controller and remove the dialog widget from the content
     /// tree.
     Cancel,
+    /// Remove button pressed. The handler clears any prior worker
+    /// outcome (so a re-render after a defensive
+    /// `KeepRemovedWithWarning` does not show stale text alongside a
+    /// fresh attempt) and forwards
+    /// [`RemoveDialogOutput::SubmitConfirm`] with the stable
+    /// [`AccountId`] from the seeded init so `AppModel` can fire the
+    /// `Vault::mutate_and_save(|v| v.remove(...))` worker.
+    Confirm,
+    /// `AppModel` pushes the typed [`RemoveErrorOutcome`] back to
+    /// the dialog after the `gio::spawn_blocking
+    /// Vault::mutate_and_save(|v| v.remove(...))` worker reports a
+    /// failure. Symmetric partner of
+    /// [`crate::rename_dialog::RenameDialogMsg::WorkerFailed`] on
+    /// the remove path: the dialog stores the typed outcome on
+    /// [`RemoveDialogState::worker_outcome`] so the body can route
+    /// `RestorePrior` (render the inline error), `KeepRemovedWithWarning`
+    /// (render the warning beneath the confirmation), or the
+    /// defensive `InlineError` (render the typed error) without
+    /// re-deriving the routing off the [`PaladinError`].
+    ///
+    /// Unlike the rename variant, there is no draft to roll back —
+    /// the confirmation body is immutable, so `apply_msg` only
+    /// stores the outcome.
+    WorkerFailed(RemoveErrorOutcome),
 }
 
 /// Outputs forwarded from [`RemoveDialogComponent`] up to
@@ -272,27 +530,60 @@ pub enum RemoveDialogOutput {
     /// the live [`RemoveDialogComponent`] controller and removes its
     /// widget from the content tree.
     Cancel,
+    /// Remove button pressed. Carries the stable [`AccountId`] the
+    /// dialog was seeded with so the `AppModel` worker dispatch
+    /// targets the same account the kebab activation resolved.
+    /// `AppModel` hands the id to the `gio::spawn_blocking
+    /// Vault::mutate_and_save(|v| v.remove(account_id))` worker.
+    SubmitConfirm {
+        /// Stable identifier of the account being removed. Copied
+        /// off [`RemoveDialogState::account_id`] so a mid-flight
+        /// click never retargets the remove.
+        account_id: AccountId,
+    },
 }
 
-/// Apply an inbound [`RemoveDialogMsg`] and return the optional
-/// [`RemoveDialogOutput`] the widget layer should forward to
-/// `AppModel`.
+/// Apply an inbound [`RemoveDialogMsg`] to `state` and return the
+/// optional [`RemoveDialogOutput`] the widget layer should forward
+/// to `AppModel`.
 ///
 /// Pulled out of [`RemoveDialogComponent::update`] so the routing
-/// decision — [`RemoveDialogMsg::Cancel`] emits
-/// [`RemoveDialogOutput::Cancel`] — stays unit-testable in
-/// `tests/remove_dialog_logic.rs` without spinning up GTK. The
-/// helper takes the message by value (rather than `&mut state, msg`
-/// like the rename variant) because `RemoveDialog` carries no
-/// editable draft — every transition is a pure dismissal /
-/// confirmation today. The follow-up commits that add `Confirm` /
-/// worker-outcome variants will move owned payloads out of the
-/// message, so the by-value signature stays forward-compatible.
-#[must_use]
-#[allow(clippy::needless_pass_by_value)]
-pub fn apply_msg(msg: RemoveDialogMsg) -> Option<RemoveDialogOutput> {
+/// decisions — [`RemoveDialogMsg::Cancel`] emits
+/// [`RemoveDialogOutput::Cancel`] without touching state;
+/// [`RemoveDialogMsg::Confirm`] clears the cached worker outcome
+/// and forwards [`RemoveDialogOutput::SubmitConfirm`] with the
+/// state's stable account id; [`RemoveDialogMsg::WorkerFailed`]
+/// stores the typed [`RemoveErrorOutcome`] on
+/// [`RemoveDialogState::worker_outcome`] so the dialog body
+/// re-renders it on the next view pass — stay unit-testable in
+/// `tests/remove_dialog_logic.rs` without spinning up GTK.
+pub fn apply_msg(
+    state: &mut RemoveDialogState,
+    msg: RemoveDialogMsg,
+) -> Option<RemoveDialogOutput> {
     match msg {
         RemoveDialogMsg::Cancel => Some(RemoveDialogOutput::Cancel),
+        RemoveDialogMsg::Confirm => {
+            // Clear any prior worker outcome so the body does not
+            // render stale post-effect text alongside the live
+            // attempt — the worker will refresh `worker_outcome` on
+            // failure via `WorkerFailed`, and on success the dialog
+            // is dropped before the next view pass.
+            state.worker_outcome = None;
+            Some(RemoveDialogOutput::SubmitConfirm {
+                account_id: state.account_id(),
+            })
+        }
+        RemoveDialogMsg::WorkerFailed(outcome) => {
+            // `RemoveDialog` has no editable draft to roll back —
+            // `mutate_and_save` already restored the in-memory
+            // account on `save_not_committed`, so the dialog body
+            // only needs the typed outcome to re-render. Symmetric
+            // partner of `RenameDialogMsg::WorkerFailed` minus the
+            // `set_draft(prior_label)` rollback step.
+            state.worker_outcome = Some(outcome);
+            None
+        }
     }
 }
 
@@ -302,20 +593,14 @@ pub fn apply_msg(msg: RemoveDialogMsg) -> Option<RemoveDialogOutput> {
 ///
 /// Mounts a libadwaita [`adw::StatusPage`] that surfaces the
 /// targeted account's `<issuer>:<label>` heading so the user can
-/// confirm which row will be removed, plus a Cancel button that
-/// forwards [`RemoveDialogOutput::Cancel`] so `AppModel` can dismiss
-/// the dialog. The destructive `AdwAlertDialog` chrome, the
-/// Remove button, and the `Vault::mutate_and_save` worker land in
-/// follow-up commits alongside the `UnlockedBusy` worker
-/// infrastructure; the Cancel-only staging mirrors the
-/// [`crate::rename_dialog::RenameDialogComponent`] rollout pattern.
+/// confirm which row will be removed, plus Cancel / Remove buttons
+/// that drive the `Vault::mutate_and_save(|v| v.remove(...))` worker
+/// in `AppModel` via [`RemoveDialogOutput`]. Mirrors the
+/// [`crate::rename_dialog::RenameDialogComponent`] pattern.
 pub struct RemoveDialogComponent {
-    /// Construction parameters retained on `self` so a future
-    /// message handler can read the targeted account id and the
-    /// confirmation body without re-plumbing the values through every
-    /// signal.
-    #[allow(dead_code)]
-    init: RemoveDialogInit,
+    /// Pure-logic state machine. `apply_msg` mutates this in place;
+    /// the widget reads back through accessors for re-renders.
+    state: RemoveDialogState,
 }
 
 #[allow(missing_docs)]
@@ -342,7 +627,7 @@ impl SimpleComponent for RemoveDialogComponent {
                 set_title: "Remove account",
                 set_description: Some(&format!(
                     "Removing {display}.",
-                    display = model.init.display_label,
+                    display = model.state.display_label(),
                 )),
                 set_hexpand: true,
                 set_vexpand: true,
@@ -360,6 +645,18 @@ impl SimpleComponent for RemoveDialogComponent {
                         sender.input(RemoveDialogMsg::Cancel);
                     },
                 },
+
+                // `destructive-action` CSS class renders the button in the
+                // platform's destructive red so the irreversible operation
+                // is visually distinct from the Cancel affordance.
+                #[name = "remove_button"]
+                gtk::Button {
+                    set_label: "Remove",
+                    add_css_class: "destructive-action",
+                    connect_clicked[sender] => move |_| {
+                        sender.input(RemoveDialogMsg::Confirm);
+                    },
+                },
             },
         }
     }
@@ -369,13 +666,15 @@ impl SimpleComponent for RemoveDialogComponent {
         root: Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
-        let model = RemoveDialogComponent { init };
+        let model = RemoveDialogComponent {
+            state: RemoveDialogState::new(&init),
+        };
         let widgets = view_output!();
         ComponentParts { model, widgets }
     }
 
     fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>) {
-        if let Some(output) = apply_msg(msg) {
+        if let Some(output) = apply_msg(&mut self.state, msg) {
             // Ignore send failures: if `AppModel` has already dropped
             // the controller (e.g. window closed mid-click), there's
             // nothing left to dismiss.

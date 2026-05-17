@@ -44,8 +44,9 @@ use paladin_core::{
 
 use paladin_gtk::remove_dialog::{
     account_not_found_error, apply_msg, classify_remove_error, decide_remove_target,
-    format_remove_dialog_marker, summary_display_label, InlineError, InlineWarning,
-    RemoveDialogInit, RemoveDialogMsg, RemoveDialogOutput, RemoveErrorOutcome,
+    format_remove_dialog_marker, run_remove_worker, summary_display_label, InlineError,
+    InlineWarning, RemoveDialogInit, RemoveDialogMsg, RemoveDialogOutput, RemoveDialogState,
+    RemoveErrorOutcome, RemoveWorkerCompletion, RemoveWorkerEffect, RemoveWorkerInput,
     REMOVE_DIALOG_MARKER_PREFIX,
 };
 
@@ -81,6 +82,21 @@ fn save_not_committed_with_backup() -> PaladinError {
         committed: true,
         backup_path: Some(PathBuf::from("/tmp/vault.bin.bak")),
     }
+}
+
+fn save_durability_unconfirmed() -> PaladinError {
+    PaladinError::SaveDurabilityUnconfirmed
+}
+
+/// Seed `state.worker_outcome` by routing through the public
+/// `apply_msg(state, WorkerFailed(...))` entry point. The field is
+/// `pub(crate)` on the source type so it stays out of the
+/// integration-test API; this helper lets tests stage a "post-
+/// failure" state without bypassing the routing helper.
+fn seed_worker_outcome(state: &mut RemoveDialogState, err: &PaladinError) {
+    let outcome = classify_remove_error(err);
+    let out = apply_msg(state, RemoveDialogMsg::WorkerFailed(outcome));
+    assert!(out.is_none(), "WorkerFailed never forwards an output");
 }
 
 // ---------------------------------------------------------------------------
@@ -430,14 +446,36 @@ fn remove_dialog_init_clones_for_reactive_state() {
 // infrastructure.
 // ---------------------------------------------------------------------------
 
+fn dummy_init() -> RemoveDialogInit {
+    RemoveDialogInit {
+        account_id: AccountId::new(),
+        display_label: "GitHub:ben".to_string(),
+    }
+}
+
 #[test]
 fn apply_msg_cancel_emits_cancel_output() {
     // Cancel button must bubble back to `AppModel` as
     // `RemoveDialogOutput::Cancel` so the controller can be dropped
     // and the dialog widget removed from the content tree. Mirrors
     // the `RenameDialogComponent` Cancel staging.
-    let out = apply_msg(RemoveDialogMsg::Cancel);
+    let init = dummy_init();
+    let mut state = RemoveDialogState::new(&init);
+    let out = apply_msg(&mut state, RemoveDialogMsg::Cancel);
     assert_eq!(out, Some(RemoveDialogOutput::Cancel));
+}
+
+#[test]
+fn apply_msg_cancel_does_not_mutate_worker_outcome() {
+    // Cancel must not clobber `worker_outcome` — a user that opened
+    // the dialog after a `KeepRemovedWithWarning` warning, saw the
+    // warning, and then pressed Cancel should still see no surprise
+    // mutation of the state from the Cancel handler.
+    let init = dummy_init();
+    let mut state = RemoveDialogState::new(&init);
+    seed_worker_outcome(&mut state, &save_durability_unconfirmed());
+    let _ = apply_msg(&mut state, RemoveDialogMsg::Cancel);
+    assert!(state.worker_outcome().is_some());
 }
 
 #[test]
@@ -449,4 +487,279 @@ fn remove_dialog_output_cancel_is_distinct_variant() {
     let out = RemoveDialogOutput::Cancel;
     assert!(matches!(out, RemoveDialogOutput::Cancel));
     assert_eq!(out.clone(), RemoveDialogOutput::Cancel);
+}
+
+// ---------------------------------------------------------------------------
+// `RemoveDialogState` accessors
+// ---------------------------------------------------------------------------
+
+#[test]
+fn remove_dialog_state_new_seeds_account_id_from_init() {
+    let init = dummy_init();
+    let state = RemoveDialogState::new(&init);
+    assert_eq!(state.account_id(), init.account_id);
+}
+
+#[test]
+fn remove_dialog_state_new_seeds_display_label_from_init() {
+    let init = dummy_init();
+    let state = RemoveDialogState::new(&init);
+    assert_eq!(state.display_label(), "GitHub:ben");
+}
+
+#[test]
+fn remove_dialog_state_new_initializes_worker_outcome_to_none() {
+    let init = dummy_init();
+    let state = RemoveDialogState::new(&init);
+    assert!(state.worker_outcome().is_none());
+    assert!(state.inline_error().is_none());
+    assert!(state.inline_warning().is_none());
+}
+
+#[test]
+fn remove_dialog_state_clones_for_reactive_state() {
+    let init = dummy_init();
+    let mut state = RemoveDialogState::new(&init);
+    seed_worker_outcome(&mut state, &save_not_committed_no_backup());
+    let cloned = state.clone();
+    assert_eq!(cloned.account_id(), state.account_id());
+    assert_eq!(cloned.display_label(), state.display_label());
+    assert!(cloned.worker_outcome().is_some());
+}
+
+#[test]
+fn remove_dialog_state_inline_error_projects_restore_prior() {
+    let init = dummy_init();
+    let mut state = RemoveDialogState::new(&init);
+    seed_worker_outcome(&mut state, &save_not_committed_no_backup());
+    assert!(state.inline_error().is_some());
+    assert!(state.inline_warning().is_none());
+}
+
+#[test]
+fn remove_dialog_state_inline_warning_projects_keep_removed() {
+    let init = dummy_init();
+    let mut state = RemoveDialogState::new(&init);
+    seed_worker_outcome(&mut state, &save_durability_unconfirmed());
+    assert!(state.inline_error().is_none());
+    assert!(state.inline_warning().is_some());
+}
+
+#[test]
+fn remove_dialog_state_inline_error_projects_defensive_inline_error() {
+    // Defensive: `invalid_state { state: "account_not_found" }`
+    // (target removed mid-flight) routes through the
+    // `RemoveErrorOutcome::InlineError` arm. `inline_error` must
+    // surface it so the dialog body re-renders the typed message.
+    let init = dummy_init();
+    let mut state = RemoveDialogState::new(&init);
+    seed_worker_outcome(&mut state, &account_not_found_error());
+    assert!(state.inline_error().is_some());
+    assert!(state.inline_warning().is_none());
+}
+
+// ---------------------------------------------------------------------------
+// `apply_msg(Confirm)` and `RemoveDialogOutput::SubmitConfirm`
+// ---------------------------------------------------------------------------
+
+#[test]
+fn apply_msg_confirm_emits_submit_confirm_with_state_account_id() {
+    // Confirm must bubble back as `RemoveDialogOutput::SubmitConfirm`
+    // carrying the seeded account id so `AppModel`'s worker dispatch
+    // targets the same account the kebab activation resolved.
+    let init = dummy_init();
+    let expected_id = init.account_id;
+    let mut state = RemoveDialogState::new(&init);
+    let out = apply_msg(&mut state, RemoveDialogMsg::Confirm);
+    assert_eq!(
+        out,
+        Some(RemoveDialogOutput::SubmitConfirm {
+            account_id: expected_id,
+        }),
+    );
+}
+
+#[test]
+fn apply_msg_confirm_clears_prior_worker_outcome() {
+    // Confirm must clear the cached worker outcome so a re-render
+    // after a defensive `KeepRemovedWithWarning` does not show
+    // stale text alongside a fresh attempt.
+    let init = dummy_init();
+    let mut state = RemoveDialogState::new(&init);
+    seed_worker_outcome(&mut state, &save_durability_unconfirmed());
+    let _ = apply_msg(&mut state, RemoveDialogMsg::Confirm);
+    assert!(state.worker_outcome().is_none());
+}
+
+#[test]
+fn remove_dialog_output_submit_confirm_distinct_from_cancel() {
+    let id = AccountId::new();
+    let submit = RemoveDialogOutput::SubmitConfirm { account_id: id };
+    assert!(matches!(submit, RemoveDialogOutput::SubmitConfirm { .. }));
+    assert_ne!(submit, RemoveDialogOutput::Cancel);
+}
+
+#[test]
+fn remove_dialog_output_submit_confirm_clones_and_equals() {
+    let id = AccountId::new();
+    let submit = RemoveDialogOutput::SubmitConfirm { account_id: id };
+    let cloned = submit.clone();
+    assert_eq!(submit, cloned);
+}
+
+// ---------------------------------------------------------------------------
+// `apply_msg(WorkerFailed(...))`
+// ---------------------------------------------------------------------------
+
+#[test]
+fn apply_msg_worker_failed_restore_prior_stores_outcome() {
+    let init = dummy_init();
+    let mut state = RemoveDialogState::new(&init);
+    let outcome = classify_remove_error(&save_not_committed_no_backup());
+    let out = apply_msg(&mut state, RemoveDialogMsg::WorkerFailed(outcome));
+    assert!(out.is_none(), "WorkerFailed never forwards an output");
+    let stored = state.worker_outcome().expect("outcome stored on state");
+    assert!(matches!(stored, RemoveErrorOutcome::RestorePrior(_)));
+}
+
+#[test]
+fn apply_msg_worker_failed_keep_removed_with_warning_stores_outcome() {
+    let init = dummy_init();
+    let mut state = RemoveDialogState::new(&init);
+    let outcome = classify_remove_error(&save_durability_unconfirmed());
+    let out = apply_msg(&mut state, RemoveDialogMsg::WorkerFailed(outcome));
+    assert!(out.is_none());
+    let stored = state.worker_outcome().expect("outcome stored on state");
+    assert!(matches!(
+        stored,
+        RemoveErrorOutcome::KeepRemovedWithWarning(_)
+    ));
+}
+
+#[test]
+fn apply_msg_worker_failed_defensive_inline_error_stores_outcome() {
+    let init = dummy_init();
+    let mut state = RemoveDialogState::new(&init);
+    let outcome = classify_remove_error(&account_not_found_error());
+    let out = apply_msg(&mut state, RemoveDialogMsg::WorkerFailed(outcome));
+    assert!(out.is_none());
+    let stored = state.worker_outcome().expect("outcome stored on state");
+    assert!(matches!(stored, RemoveErrorOutcome::InlineError(_)));
+}
+
+#[test]
+fn apply_msg_worker_failed_does_not_change_account_id_or_display() {
+    // Defensive: the outcome stash must not retarget the dialog by
+    // mutating the seeded init.
+    let init = dummy_init();
+    let original_id = init.account_id;
+    let original_label = init.display_label.clone();
+    let mut state = RemoveDialogState::new(&init);
+    let outcome = classify_remove_error(&save_not_committed_no_backup());
+    let _ = apply_msg(&mut state, RemoveDialogMsg::WorkerFailed(outcome));
+    assert_eq!(state.account_id(), original_id);
+    assert_eq!(state.display_label(), original_label);
+}
+
+// ---------------------------------------------------------------------------
+// `run_remove_worker`
+//
+// Exercises the synchronous worker body that `AppModel::update` hands
+// to `gio::spawn_blocking` against tempfile-backed plaintext vaults so
+// the `Vault::mutate_and_save` save-pipeline routing stays unit-
+// testable without the GTK loop.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn run_remove_worker_plaintext_remove_succeeds_and_returns_live_pair() {
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+    let target = add_totp(&mut vault, &store, Some("Acme"), "alice");
+    let surviving = add_totp(&mut vault, &store, Some("Acme"), "bob");
+
+    let completion = run_remove_worker(RemoveWorkerInput {
+        vault,
+        store,
+        account_id: target,
+    });
+
+    let RemoveWorkerCompletion {
+        effect,
+        vault,
+        store: _,
+    } = completion;
+    assert!(
+        matches!(effect, RemoveWorkerEffect::Success),
+        "plaintext remove success must surface as RemoveWorkerEffect::Success, got {effect:?}",
+    );
+    assert!(
+        vault.summaries().all(|s| s.id != target),
+        "targeted account is gone from the returned vault",
+    );
+    assert!(
+        vault.summaries().any(|s| s.id == surviving),
+        "non-targeted account survives the remove",
+    );
+}
+
+#[test]
+fn run_remove_worker_unknown_account_routes_inline_error_and_returns_pair() {
+    // Defensive: a mid-flight removal between the kebab activation
+    // and the worker dispatch leaves the worker targeting an unknown
+    // id. The closure inside `mutate_and_save` maps the `None` to
+    // `account_not_found_error`, which `classify_remove_error`
+    // routes to `RemoveErrorOutcome::InlineError`. The vault is
+    // unchanged so `AppModel::update` reinstalls it without losing
+    // other accounts.
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+    let surviving = add_totp(&mut vault, &store, None, "alice");
+    let stray = AccountId::new();
+
+    let completion = run_remove_worker(RemoveWorkerInput {
+        vault,
+        store,
+        account_id: stray,
+    });
+
+    match completion.effect {
+        RemoveWorkerEffect::Failure(RemoveErrorOutcome::InlineError(inline)) => {
+            assert_eq!(inline.kind, ErrorKind::InvalidState);
+        }
+        other => panic!("expected Failure(InlineError) for unknown id, got {other:?}"),
+    }
+    let summary = completion
+        .vault
+        .summaries()
+        .find(|s| s.id == surviving)
+        .expect("surviving account stays in the returned vault");
+    assert_eq!(summary.label, "alice");
+}
+
+#[test]
+fn run_remove_worker_persists_removal_to_disk() {
+    // The worker must not just mutate the in-memory vault — it goes
+    // through `mutate_and_save` so the removal survives a reopen.
+    // This pins the round trip through the §4.3 atomic-write pipeline
+    // without exercising the GTK loop.
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+    let target = add_totp(&mut vault, &store, Some("Acme"), "alice");
+
+    let completion = run_remove_worker(RemoveWorkerInput {
+        vault,
+        store,
+        account_id: target,
+    });
+    assert!(matches!(completion.effect, RemoveWorkerEffect::Success));
+    drop(completion);
+
+    let (reopened, _store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    assert!(
+        reopened.summaries().all(|s| s.id != target),
+        "removed account stays gone after reopen",
+    );
 }

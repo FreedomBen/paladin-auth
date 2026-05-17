@@ -58,6 +58,7 @@ use std::time::SystemTime;
 
 use paladin_core::{AccountId, PaladinError, Store, Vault, VaultLock, VaultStatus};
 
+use crate::remove_dialog::{RemoveDialogMsg, RemoveWorkerEffect, RemoveWorkerInput};
 use crate::rename_dialog::{RenameDialogMsg, RenameWorkerEffect, RenameWorkerInput};
 use crate::startup_error::{classify_open_error, OpenErrorRouting, StartupError};
 use crate::unlock_dialog::{
@@ -1610,6 +1611,388 @@ pub fn apply_unlock_vault_install_inplace(
 /// `(Vault, Store)` pairs constructed via `paladin_core::Store::create`
 /// over a tempfile vault.
 pub fn apply_rename_vault_install_inplace(
+    vault_slot: &mut Option<(Vault, Store)>,
+    pair: (Vault, Store),
+) {
+    *vault_slot = Some(pair);
+}
+
+/// Compose the [`AppState`] transition for the
+/// [`crate::remove_dialog::RemoveDialogOutput::SubmitConfirm`] dispatch.
+///
+/// Symmetric partner of [`submit_rename_app_state`] for the remove
+/// path: both delegate to [`AppState::enter_busy`] so an `Unlocked →
+/// UnlockedBusy` transition gates the `gio::spawn_blocking
+/// Vault::mutate_and_save(|v| v.remove(...))` worker.
+///
+/// Returns `Some(UnlockedBusy { path })` iff `current` is
+/// [`AppState::Unlocked`], and `None` from every other state — the
+/// defensive no-op for a stray `SubmitConfirm` from any non-
+/// `Unlocked` source state (`Missing`, `Locked`, `UnlockedBusy`,
+/// `StartupError`).
+///
+/// The composer stays shape-only — it delegates the transition to
+/// [`AppState::enter_busy`] — so the side-effect decision in
+/// `AppModel::update` stays unit-testable in
+/// `tests/app_state_logic.rs` without spinning up GTK / libadwaita.
+#[must_use]
+pub fn submit_remove_app_state(current: &AppState) -> Option<AppState> {
+    current.clone().enter_busy()
+}
+
+/// Bundle the live `(Vault, Store)` pair and the
+/// [`crate::remove_dialog::RemoveDialogOutput::SubmitConfirm`] payload
+/// into a [`RemoveWorkerInput`] for the `gio::spawn_blocking
+/// Vault::mutate_and_save(|v| v.remove(...))` worker.
+///
+/// Symmetric partner of [`compose_rename_worker_input`] on the remove
+/// path: where the rename composer captures the account id plus the
+/// trimmed label and dispatch-site wall-clock, this composer only
+/// needs the account id — `Vault::remove` has no wall-clock dependency
+/// and no editable payload. The `(Vault, Store)` pair is otherwise
+/// captured the same way so the worker thread can run
+/// `mutate_and_save` without re-fetching from `AppModel`.
+///
+/// Returns `Ok(RemoveWorkerInput)` iff `current` is
+/// [`AppState::Unlocked`]. The `Err((vault, store))` branch is the
+/// defensive case for a stray dispatch from any other source state
+/// (`Missing` / `Locked` / `UnlockedBusy` / `StartupError`): the
+/// non-`Clone` live `(Vault, Store)` pair would be lost if the
+/// composer dropped it, so it is handed back so the caller can
+/// reinstall it into `AppModel.vault` rather than leaking the
+/// unlocked state. The contract mirrors the `Some` / `None`
+/// agreement with [`submit_remove_app_state`] — both helpers return
+/// success iff the source is `Unlocked`.
+///
+/// The composer stays shape-only — it inspects only the variant
+/// discriminant on `current` — so the side-effect decision in
+/// `AppModel::update` stays unit-testable in
+/// `tests/app_state_logic.rs` against real `(Vault, Store)` pairs
+/// constructed via `paladin_core::Store::create` over a tempfile
+/// vault.
+pub fn compose_remove_worker_input(
+    current: &AppState,
+    pair: (Vault, Store),
+    account_id: AccountId,
+) -> Result<RemoveWorkerInput, (Vault, Store)> {
+    match current {
+        AppState::Unlocked { .. } => {
+            let (vault, store) = pair;
+            Ok(RemoveWorkerInput {
+                vault,
+                store,
+                account_id,
+            })
+        }
+        AppState::Missing { .. }
+        | AppState::Locked { .. }
+        | AppState::UnlockedBusy { .. }
+        | AppState::StartupError { .. } => Err(pair),
+    }
+}
+
+/// Apply [`submit_remove_app_state`] in-place to `state`, leaving it
+/// unchanged when the composer returns `None`.
+///
+/// Symmetric partner of [`apply_submit_rename_inplace`] for the
+/// remove path. Both bridge the owned-`self` [`AppState::enter_busy`]
+/// contract to the mut-reference call site so `AppModel::update`'s
+/// [`crate::remove_dialog::RemoveDialogOutput::SubmitConfirm`] handler
+/// does not have to manage a take-and-restore dance around
+/// `submit_remove_app_state`'s `Option<AppState>` return.
+///
+/// Returns `true` when the state actually transitioned (source was
+/// `Unlocked` → destination is `UnlockedBusy`), `false` otherwise.
+/// `AppModel::update` uses the `true` return to gate the
+/// `gio::spawn_blocking Vault::mutate_and_save(|v| v.remove(...))`
+/// worker spawn — a `false` return is the defensive no-op for a
+/// stray `SubmitConfirm` from any non-`Unlocked` source state
+/// (`Missing`, `Locked`, `UnlockedBusy`, `StartupError`).
+///
+/// The wrapper stays shape-only — it delegates to
+/// `submit_remove_app_state` without re-deriving the transition —
+/// so the side-effect decision in `AppModel::update` stays unit-
+/// testable in `tests/app_state_logic.rs` without spinning up GTK /
+/// libadwaita.
+pub fn apply_submit_remove_inplace(state: &mut AppState) -> bool {
+    if let Some(new_state) = submit_remove_app_state(state) {
+        *state = new_state;
+        true
+    } else {
+        false
+    }
+}
+
+/// Unified state-transition composer for the remove worker outcome.
+///
+/// Symmetric partner of [`rename_final_app_state`] for the remove
+/// path: both delegate to [`AppState::leave_busy`] so every
+/// [`RemoveWorkerEffect`] variant — `Success` and every
+/// `Failure(RemoveErrorOutcome)` projection — lands on the same
+/// `UnlockedBusy → Unlocked` rollback. The dialog-drop / inline-
+/// message decisions split off the typed effect in sibling composers;
+/// this composer owns only the state-machine rollback.
+///
+/// `effect` is accepted for signature symmetry with
+/// [`rename_final_app_state`] (and so a future routing refinement
+/// can branch on it without changing call sites) but is not
+/// inspected: the remove worker's three failure projections all
+/// reinstall the live `(Vault, Store)` pair through
+/// [`apply_remove_vault_install_inplace`] regardless of effect, so
+/// the state machine returns to `Unlocked` uniformly. The dialog
+/// drop / inline-message routing handled elsewhere is what differs
+/// across effects.
+///
+/// Returns `Some(Unlocked { path })` iff `current` is
+/// [`AppState::UnlockedBusy`], and `None` from every other state.
+/// The `None` arm is the defensive case for a stray completion: a
+/// remove completion arriving while `current` is not `UnlockedBusy`
+/// must not silently install a phantom `Unlocked` over another
+/// idle state.
+///
+/// The composer is shape-only — it delegates to
+/// [`AppState::leave_busy`] without re-deriving the transition —
+/// so the side-effect decision in `AppModel::update` stays unit-
+/// testable in `tests/app_state_logic.rs` without spinning up GTK /
+/// libadwaita.
+#[must_use]
+pub fn remove_final_app_state(
+    current: &AppState,
+    _effect: &RemoveWorkerEffect,
+) -> Option<AppState> {
+    current.clone().leave_busy()
+}
+
+/// Drop-decision projection for the
+/// [`crate::remove_dialog::RemoveDialogComponent`] after a remove
+/// worker outcome.
+///
+/// Symmetric partner of [`should_drop_rename_dialog_after`] for the
+/// remove path. `AppMsg::RemoveWorkerCompleted` consults this to
+/// decide whether to detach the live `RemoveDialogComponent` from
+/// the content tree after applying the worker outcome:
+///
+/// * [`RemoveWorkerEffect::Success`] → `true`. The dialog dismisses
+///   itself and the targeted row drops out of the visible account
+///   list, in lockstep with the `AppState::UnlockedBusy → Unlocked`
+///   rollback that [`remove_final_app_state`] returns.
+/// * [`RemoveWorkerEffect::Failure`] (every
+///   [`crate::remove_dialog::RemoveErrorOutcome`] variant —
+///   `RestorePrior`, `KeepRemovedWithWarning`, defensive `InlineError`)
+///   → `false`. The dialog stays mounted so the inline error / body
+///   warning is visible and the user can retry, mirroring how the
+///   rename dialog stays mounted on every failure branch.
+///
+/// The projection inspects only the typed [`RemoveWorkerEffect`]
+/// variant — it does not consult [`AppState`], the live
+/// `(Vault, Store)` pair, or the
+/// [`crate::remove_dialog::RemoveDialogState`] — so the side-effect
+/// decision in `AppModel::update` stays unit-testable in
+/// `tests/app_state_logic.rs` without spinning up GTK / libadwaita.
+#[must_use]
+pub fn should_drop_remove_dialog_after(effect: &RemoveWorkerEffect) -> bool {
+    match effect {
+        RemoveWorkerEffect::Success => true,
+        RemoveWorkerEffect::Failure(_) => false,
+    }
+}
+
+/// Inline-message projection for the live
+/// [`crate::remove_dialog::RemoveDialogComponent`] after a remove
+/// worker outcome.
+///
+/// Symmetric partner of [`rename_dialog_msg_after`] for the remove
+/// path. `AppMsg::RemoveWorkerCompleted` consults this to decide
+/// what message (if any) to forward into the live dialog after
+/// applying the worker outcome:
+///
+/// * [`RemoveWorkerEffect::Success`] → `None`. The dialog is being
+///   dropped (see [`should_drop_remove_dialog_after`]), so there
+///   is no live controller to forward to.
+/// * [`RemoveWorkerEffect::Failure`] → `Some(RemoveDialogMsg::
+///   WorkerFailed(outcome.clone()))`. The dialog stays mounted; the
+///   message carries the typed
+///   [`crate::remove_dialog::RemoveErrorOutcome`] so the dialog can
+///   route `RestorePrior` (render the inline error),
+///   `KeepRemovedWithWarning` (render the warning beneath the
+///   confirmation), or the defensive `InlineError` (render the typed
+///   error) without re-deriving the routing off the
+///   [`paladin_core::PaladinError`].
+///
+/// The projection returns an *owned* [`Option<RemoveDialogMsg>`]
+/// rather than a borrow into the effect because
+/// [`RemoveWorkerEffect`] carries the typed
+/// [`crate::remove_dialog::RemoveErrorOutcome`] rather than a
+/// pre-built dialog message. The clone is cheap — the outcome only
+/// holds an [`crate::remove_dialog::InlineError`] /
+/// [`crate::remove_dialog::InlineWarning`] of a stable
+/// [`paladin_core::ErrorKind`] and a `String` body.
+///
+/// The `Some` / `None` partition matches
+/// [`should_drop_remove_dialog_after`] exactly (a dropped dialog
+/// receives no message; a mounted dialog receives a message) and
+/// this contract is pinned in `tests/app_state_logic.rs` so the
+/// two projections cannot drift apart silently.
+#[must_use]
+pub fn remove_dialog_msg_after(effect: &RemoveWorkerEffect) -> Option<RemoveDialogMsg> {
+    match effect {
+        RemoveWorkerEffect::Success => None,
+        RemoveWorkerEffect::Failure(outcome) => {
+            Some(RemoveDialogMsg::WorkerFailed(outcome.clone()))
+        }
+    }
+}
+
+/// Bundled `AppModel::update` instructions for a remove-worker
+/// completion. Carries the three decisions the existing trio
+/// projects ([`should_drop_remove_dialog_after`],
+/// [`remove_dialog_msg_after`], and [`remove_final_app_state`]) so
+/// the dispatch site can apply the worker outcome in a single shot
+/// without re-routing the [`RemoveWorkerEffect`].
+///
+/// Symmetric partner of [`RenameDispatch`] for the remove path. The
+/// shape mirrors the rename variant: an optional state replacement,
+/// an optional inline message, and a drop-dialog flag.
+#[derive(Debug, Clone)]
+pub struct RemoveDispatch {
+    /// New [`AppState`] to install on `AppModel.state`. `Some` for
+    /// the `UnlockedBusy → Unlocked` rollback that
+    /// [`remove_final_app_state`] returns regardless of typed effect
+    /// (the remove worker always rolls the busy gate back because
+    /// `Vault::mutate_and_save` is authoritative for the rollback /
+    /// durability-unconfirmed semantics per DESIGN.md §4.3). `None`
+    /// is the defensive case where the worker outcome arrives but
+    /// `current` is not [`AppState::UnlockedBusy`] — `AppModel::update`
+    /// leaves the state untouched rather than installing a phantom
+    /// `Unlocked` over another idle state.
+    pub app_state: Option<AppState>,
+    /// Inline message to forward to the live
+    /// [`crate::remove_dialog::RemoveDialogComponent`] controller.
+    /// `Some(RemoveDialogMsg::WorkerFailed(outcome))` for the failure
+    /// branches (the dialog stays mounted and re-renders the typed
+    /// outcome — `RestorePrior`, `KeepRemovedWithWarning`, or
+    /// defensive `InlineError`); `None` for the success branch that
+    /// drops the dialog.
+    pub dialog_msg: Option<RemoveDialogMsg>,
+    /// Whether `AppModel::update` should drop the live
+    /// [`crate::remove_dialog::RemoveDialogComponent`] controller
+    /// after applying [`Self::app_state`]. Drops on the success
+    /// branch; stays mounted on every failure branch so the inline
+    /// error / body warning is visible and the user can retry.
+    pub drop_dialog: bool,
+}
+
+/// Bundle the trio of remove-dispatch decisions into a single
+/// [`RemoveDispatch`] result so `AppModel::update` can apply the
+/// worker outcome in one shot.
+///
+/// The composer is a pure aggregator over the existing trio — it
+/// never re-derives the routing:
+///
+/// * `drop_dialog` mirrors [`should_drop_remove_dialog_after`].
+/// * `dialog_msg` mirrors [`remove_dialog_msg_after`], which returns
+///   an owned [`Option<RemoveDialogMsg>`] so the bundled message
+///   outlives the borrow on `effect`.
+/// * `app_state` mirrors [`remove_final_app_state`], which is the
+///   `UnlockedBusy → Unlocked` rollback for every typed effect.
+///
+/// The same invariants pinned at the trio level carry through:
+///
+/// * `drop_dialog == true` iff the worker outcome is
+///   [`RemoveWorkerEffect::Success`] — the dialog drops on success
+///   and stays mounted on every `Failure(RemoveErrorOutcome)`
+///   variant.
+/// * `dialog_msg.is_some() == !drop_dialog`: a dropped dialog gets no
+///   inline message; a mounted dialog gets a `WorkerFailed(outcome)`.
+/// * For the failure branches from a non-[`AppState::UnlockedBusy`]
+///   source state (a stray dispatch), `app_state` is `None` while
+///   `dialog_msg` and `drop_dialog` still mirror the trio.
+///   `AppModel::update` leaves the source state in place rather than
+///   installing a phantom rollback.
+///
+/// The composer stays shape-only — it delegates to the trio without
+/// inspecting the typed [`RemoveWorkerEffect`] variant itself — so
+/// `tests/app_state_logic.rs` exercises the dispatch contract
+/// without spinning up GTK / libadwaita.
+#[must_use]
+pub fn compose_remove_dispatch(current: &AppState, effect: &RemoveWorkerEffect) -> RemoveDispatch {
+    RemoveDispatch {
+        app_state: remove_final_app_state(current, effect),
+        dialog_msg: remove_dialog_msg_after(effect),
+        drop_dialog: should_drop_remove_dialog_after(effect),
+    }
+}
+
+/// Apply [`compose_remove_dispatch`]'s state field in-place to
+/// `state`, leaving it unchanged when the dispatch carries
+/// `app_state = None`.
+///
+/// Symmetric partner of [`apply_rename_dispatch_inplace`] for the
+/// remove path. `AppModel::update`'s `AppMsg::RemoveWorkerCompleted`
+/// handler holds the cached [`AppState`] behind `&mut AppState`; this
+/// wrapper bridges the `Option<AppState>` field of [`RemoveDispatch`]
+/// to that mut-reference call site so the handler does not have to
+/// manage a take-and-restore dance around `dispatch.app_state`. The
+/// remaining [`RemoveDispatch::dialog_msg`] and
+/// [`RemoveDispatch::drop_dialog`] projections drive widget-side work
+/// in the handler (forwarding the inline message to the live
+/// [`crate::remove_dialog::RemoveDialogComponent`] controller and
+/// dropping the controller on the success branch) and are not the
+/// wrapper's concern.
+///
+/// Returns `true` when the state actually transitioned
+/// (`dispatch.app_state` was `Some(_)` and `*state` now mirrors the
+/// composer's projection), `false` otherwise. `AppModel::update` can
+/// use the `true` return to gate any state-installation-only follow-
+/// up work — a `false` return is the defensive no-op for the case
+/// where the worker outcome arrived but the cached state was not
+/// [`AppState::UnlockedBusy`] (a stray dispatch).
+///
+/// The wrapper stays shape-only — it inspects only the
+/// `dispatch.app_state` field and clones the replacement out — so the
+/// side-effect decision in `AppModel::update` stays unit-testable in
+/// `tests/app_state_logic.rs` without spinning up GTK / libadwaita.
+pub fn apply_remove_dispatch_inplace(state: &mut AppState, dispatch: &RemoveDispatch) -> bool {
+    if let Some(new_state) = dispatch.app_state.as_ref() {
+        *state = new_state.clone();
+        true
+    } else {
+        false
+    }
+}
+
+/// Install the worker's `(Vault, Store)` pair from
+/// [`crate::remove_dialog::RemoveWorkerCompletion`] into
+/// `AppModel::vault` in-place.
+///
+/// Symmetric partner of [`apply_rename_vault_install_inplace`] for
+/// the remove path. The remove worker, like the rename worker,
+/// returns the pair on *every* effect branch — `Success`,
+/// `save_durability_unconfirmed`, `save_not_committed`, and the
+/// defensive `account_not_found` / `io_error` / `validation_error`
+/// projections all come back with the same `(Vault, Store)`, because
+/// `Vault::mutate_and_save` is the authoritative rollback /
+/// durability source per DESIGN.md §4.3. There is no `None` case to
+/// dispatch on, so the helper takes the pair by value and always
+/// installs.
+///
+/// `AppModel::update`'s `AppMsg::RemoveWorkerCompleted` handler
+/// holds the live vault slot behind `&mut Option<(Vault, Store)>`
+/// next to the state machine; this wrapper unconditionally writes
+/// through `Some(pair)`. That keeps it idempotent against a stray
+/// double-fire and safe against a stray completion arriving while
+/// the slot is empty (which would happen only if a non-`Unlocked`
+/// dispatch slipped past the [`compose_remove_worker_input`] gate;
+/// reinstalling the worker's pair is still the right behavior
+/// because it owns the authoritative post-`mutate_and_save` state).
+///
+/// `pair` is consumed by value because [`Vault`] and [`Store`] are
+/// non-`Clone`. The wrapper stays shape-only — it does not inspect
+/// the pair — so the side-effect decision in `AppModel::update`
+/// stays unit-testable in `tests/app_state_logic.rs` against real
+/// `(Vault, Store)` pairs constructed via `paladin_core::Store::create`
+/// over a tempfile vault.
+pub fn apply_remove_vault_install_inplace(
     vault_slot: &mut Option<(Vault, Store)>,
     pair: (Vault, Store),
 ) {

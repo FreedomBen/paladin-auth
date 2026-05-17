@@ -75,14 +75,19 @@ use crate::account_list::{
     AccountListComponent, AccountListInit, AccountListOutput, AccountRowModel,
 };
 use crate::app::state::{
-    apply_rename_dispatch_inplace, apply_rename_vault_install_inplace, apply_submit_rename_inplace,
-    apply_submit_unlock_inplace, apply_unlock_dispatch_inplace, apply_unlock_vault_install_inplace,
+    apply_remove_dispatch_inplace, apply_remove_vault_install_inplace,
+    apply_rename_dispatch_inplace, apply_rename_vault_install_inplace, apply_submit_remove_inplace,
+    apply_submit_rename_inplace, apply_submit_unlock_inplace, apply_unlock_dispatch_inplace,
+    apply_unlock_vault_install_inplace, compose_remove_dispatch, compose_remove_worker_input,
     compose_rename_dispatch, compose_rename_worker_input, compose_unlock_dispatch,
     compose_unlock_worker_input, decide_state_from_inspect, decide_state_from_open_error,
     run_unlock_worker, AppState, OpenErrorOutcome, UnlockWorkerCompletion,
 };
 use crate::init_dialog::{format_init_dialog_marker, InitDialogComponent, InitDialogInit};
-use crate::remove_dialog::{decide_remove_target, RemoveDialogComponent, RemoveDialogOutput};
+use crate::remove_dialog::{
+    decide_remove_target, run_remove_worker, RemoveDialogComponent, RemoveDialogOutput,
+    RemoveWorkerCompletion,
+};
 use crate::rename_dialog::{
     decide_rename_target, run_rename_worker, RenameDialogComponent, RenameDialogOutput,
     RenameWorkerCompletion,
@@ -351,6 +356,28 @@ pub enum AppMsg {
     /// right behavior across `Success`, `save_durability_unconfirmed`
     /// warnings, and `save_not_committed` rollbacks alike.
     RenameWorkerCompleted(RenameWorkerCompletion),
+    /// Posted by the `gio::spawn_blocking
+    /// Vault::mutate_and_save(|v| v.remove(...))` worker after it
+    /// consumes a [`crate::remove_dialog::RemoveWorkerInput`] and
+    /// reports its routed outcome as a
+    /// [`RemoveWorkerCompletion`] — the typed
+    /// [`crate::remove_dialog::RemoveWorkerEffect`] bundled with the
+    /// live `(Vault, Store)` pair returned by `mutate_and_save`
+    /// regardless of typed outcome (the remove worker always returns
+    /// the pair per `IMPLEMENTATION_PLAN_04_GTK.md` §"Vault
+    /// interaction").
+    ///
+    /// Mirrors the [`Self::RenameWorkerCompleted`] dispatch path
+    /// exactly — `compose_remove_dispatch` bundles the typed
+    /// [`crate::remove_dialog::RemoveWorkerEffect`] over the cached
+    /// [`AppState`] into a [`crate::app::state::RemoveDispatch`]
+    /// (state replacement `UnlockedBusy → Unlocked`, optional
+    /// [`crate::remove_dialog::RemoveDialogMsg::WorkerFailed`] on
+    /// every failure branch, drop-dialog flag on `Success`). The
+    /// carried pair is reinstalled into [`AppModel::vault`] via
+    /// [`crate::app::state::apply_remove_vault_install_inplace`]
+    /// unconditionally.
+    RemoveWorkerCompleted(RemoveWorkerCompletion),
 }
 
 // `relm4::component(pub)` generates a public `AppModelWidgets` struct so the
@@ -614,6 +641,67 @@ impl SimpleComponent for AppModel {
                     self.content.remove(controller.widget());
                 }
             }
+            AppMsg::RemoveDialogAction(RemoveDialogOutput::SubmitConfirm { account_id }) => {
+                // Entry side of the `gio::spawn_blocking
+                // Vault::mutate_and_save(|v| v.remove(account_id))`
+                // worker. Mirrors the rename `SubmitLabel` handler
+                // step-for-step:
+                //
+                // 1. Take the live `(Vault, Store)` pair from
+                //    `self.vault` and bundle it with the dispatch
+                //    payload into a `RemoveWorkerInput` via
+                //    `compose_remove_worker_input`. Only `Unlocked`
+                //    returns `Ok(input)`; every other variant returns
+                //    `Err(pair)` so the wrapper can reinstall the
+                //    pair via `apply_remove_vault_install_inplace`.
+                //    A `None` state or a `None` vault slot is the
+                //    defensive no-op (a stray `SubmitConfirm` from a
+                //    locked / missing / busy state).
+                // 2. Apply the `Unlocked → UnlockedBusy` busy-gate
+                //    transition via `apply_submit_remove_inplace` so
+                //    `is_busy()` / `allows_mutating_menu()` cover the
+                //    worker's lifetime. The dialog stays mounted —
+                //    `should_drop_remove_dialog_after` keeps it on
+                //    every failure branch and the worker's success
+                //    dispatch drops it once the worker returns.
+                // 3. Spawn `run_remove_worker` on
+                //    `gtk::gio::spawn_blocking` so the
+                //    `mutate_and_save` durability fsync hop does not
+                //    block the GTK main loop. The wrapping
+                //    `gtk::glib::spawn_future_local` awaits the
+                //    blocking handle and posts the bundled
+                //    `RemoveWorkerCompletion` back to `AppModel` via
+                //    `AppMsg::RemoveWorkerCompleted`, which is
+                //    consumed by the dispatch branch wired below.
+                let worker_input = match (self.state.as_ref(), self.vault.take()) {
+                    (Some(state), Some(pair)) => {
+                        match compose_remove_worker_input(state, pair, account_id) {
+                            Ok(input) => Some(input),
+                            Err(pair) => {
+                                apply_remove_vault_install_inplace(&mut self.vault, pair);
+                                None
+                            }
+                        }
+                    }
+                    (None, Some(pair)) => {
+                        apply_remove_vault_install_inplace(&mut self.vault, pair);
+                        None
+                    }
+                    (_, None) => None,
+                };
+                if let Some(state) = self.state.as_mut() {
+                    apply_submit_remove_inplace(state);
+                }
+                if let Some(input) = worker_input {
+                    let sender = sender.clone();
+                    gtk::glib::spawn_future_local(async move {
+                        let completion = gtk::gio::spawn_blocking(move || run_remove_worker(input))
+                            .await
+                            .expect("Vault::mutate_and_save remove worker panicked");
+                        sender.input(AppMsg::RemoveWorkerCompleted(completion));
+                    });
+                }
+            }
             AppMsg::UnlockDialogAction(UnlockDialogOutput::SubmitLock(lock)) => {
                 // Entry side of the `gio::spawn_blocking
                 // paladin_core::open` worker. Three steps run in
@@ -724,6 +812,59 @@ impl SimpleComponent for AppModel {
                     }
                     if dispatch.drop_dialog {
                         if let Some(controller) = self.unlock_dialog.take() {
+                            self.content.remove(controller.widget());
+                        }
+                    }
+                }
+            }
+            AppMsg::RemoveWorkerCompleted(completion) => {
+                // Worker-outcome dispatch. Mirrors
+                // `RenameWorkerCompleted` exactly: `compose_remove_dispatch`
+                // bundles the typed `RemoveWorkerEffect` over the
+                // cached `AppState` into a `RemoveDispatch`:
+                //
+                // * `app_state` — `UnlockedBusy → Unlocked` rollback
+                //   regardless of typed effect (`mutate_and_save` is
+                //   authoritative for the rollback / durability-
+                //   unconfirmed semantics, so the busy gate always
+                //   releases). The `None` defensive case (worker
+                //   outcome arrived but the cached state was not
+                //   `UnlockedBusy`) leaves `AppModel::state` intact.
+                // * `dialog_msg` — `Some(WorkerFailed(outcome))` on
+                //   every failure branch, forwarded to the live
+                //   `RemoveDialogComponent` so the typed
+                //   `save_not_committed` / `save_durability_unconfirmed`
+                //   / defensive error re-renders inline.
+                // * `drop_dialog` — `true` on the success branch
+                //   only, detaching the dialog widget so the
+                //   `AccountListComponent` re-renders with the
+                //   targeted row gone.
+                //
+                // The carried `(vault, store)` pair is reinstalled
+                // into `AppModel::vault` via
+                // `apply_remove_vault_install_inplace`
+                // unconditionally — `mutate_and_save` is authoritative
+                // for the post-remove / rollback state across every
+                // effect branch.
+                let RemoveWorkerCompletion {
+                    effect,
+                    vault,
+                    store,
+                } = completion;
+                apply_remove_vault_install_inplace(&mut self.vault, (vault, store));
+                let dispatch = self.state.as_mut().map(|state| {
+                    let dispatch = compose_remove_dispatch(state, &effect);
+                    apply_remove_dispatch_inplace(state, &dispatch);
+                    dispatch
+                });
+                if let Some(dispatch) = dispatch {
+                    if let Some(msg) = dispatch.dialog_msg {
+                        if let Some(controller) = self.remove_dialog.as_ref() {
+                            controller.emit(msg);
+                        }
+                    }
+                    if dispatch.drop_dialog {
+                        if let Some(controller) = self.remove_dialog.take() {
                             self.content.remove(controller.widget());
                         }
                     }

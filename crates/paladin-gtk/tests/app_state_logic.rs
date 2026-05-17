@@ -5909,3 +5909,355 @@ fn run_unlock_worker_success_attaches_caller_provided_path_to_completion_effect(
         other => panic!("expected Success(SetAppState(Unlocked)), got {other:?}"),
     }
 }
+
+// ---------------------------------------------------------------------------
+// Remove state transitions
+//
+// Mirrors the rename block above for the remove path. The remove
+// worker shares the busy-gate semantics (`Unlocked → UnlockedBusy →
+// Unlocked`) with the rename worker, so the tests verify the same
+// invariants against the remove-side helpers.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn submit_remove_app_state_from_unlocked_returns_unlocked_busy_preserving_path() {
+    use paladin_gtk::app::state::submit_remove_app_state;
+    let path = vault_path();
+    let unlocked = AppState::Unlocked { path: path.clone() };
+    let next = submit_remove_app_state(&unlocked)
+        .expect("Unlocked must transition to UnlockedBusy on submit");
+    assert!(matches!(next, AppState::UnlockedBusy { .. }));
+    assert_path_eq(&next, &path);
+}
+
+#[test]
+fn submit_remove_app_state_from_non_unlocked_returns_none() {
+    use paladin_gtk::app::state::submit_remove_app_state;
+    let path = vault_path();
+    assert!(submit_remove_app_state(&AppState::Missing { path: path.clone() }).is_none());
+    assert!(submit_remove_app_state(&AppState::Locked { path: path.clone() }).is_none());
+    assert!(submit_remove_app_state(&AppState::UnlockedBusy { path: path.clone() }).is_none());
+    let startup = decide_state_from_inspect(&path, Err(invalid_header_err()))
+        .expect("inspect Err yields StartupError state");
+    assert!(submit_remove_app_state(&startup).is_none());
+}
+
+#[test]
+fn compose_remove_worker_input_from_unlocked_bundles_pair_and_account_id() {
+    use paladin_gtk::app::state::compose_remove_worker_input;
+    use paladin_gtk::remove_dialog::RemoveWorkerInput;
+
+    let (_tempdir, path, vault, store) = fresh_plaintext_pair();
+    let unlocked = AppState::Unlocked { path: path.clone() };
+    let account_id = AccountId::new();
+
+    let input: RemoveWorkerInput =
+        compose_remove_worker_input(&unlocked, (vault, store), account_id)
+            .expect("Unlocked source must produce a RemoveWorkerInput");
+
+    assert_eq!(input.account_id, account_id);
+    assert_eq!(input.vault.summaries().count(), 0);
+}
+
+#[test]
+fn compose_remove_worker_input_from_non_unlocked_returns_pair_back() {
+    use paladin_gtk::app::state::compose_remove_worker_input;
+    let account_id = AccountId::new();
+    for variant in ["missing", "locked", "unlocked_busy", "startup_error"] {
+        let (_tempdir, path, vault, store) = fresh_plaintext_pair();
+        let source = match variant {
+            "missing" => AppState::Missing { path: path.clone() },
+            "locked" => AppState::Locked { path: path.clone() },
+            "unlocked_busy" => AppState::UnlockedBusy { path: path.clone() },
+            "startup_error" => decide_state_from_inspect(&path, Err(invalid_header_err()))
+                .expect("inspect Err yields StartupError state"),
+            _ => unreachable!(),
+        };
+        let result = compose_remove_worker_input(&source, (vault, store), account_id);
+        assert!(
+            result.is_err(),
+            "non-Unlocked source must return Err(pair), variant={variant}",
+        );
+        let (returned_vault, _returned_store) = result.err().unwrap();
+        assert_eq!(returned_vault.summaries().count(), 0);
+    }
+}
+
+#[test]
+fn apply_submit_remove_inplace_from_unlocked_mutates_to_unlocked_busy_and_returns_true() {
+    use paladin_gtk::app::state::apply_submit_remove_inplace;
+    let path = vault_path();
+    let mut state = AppState::Unlocked { path: path.clone() };
+    let mutated = apply_submit_remove_inplace(&mut state);
+    assert!(mutated);
+    assert!(matches!(state, AppState::UnlockedBusy { .. }));
+    assert_path_eq(&state, &path);
+}
+
+#[test]
+fn apply_submit_remove_inplace_from_non_unlocked_leaves_state_unchanged_and_returns_false() {
+    use paladin_gtk::app::state::apply_submit_remove_inplace;
+    let path = vault_path();
+    for variant in ["missing", "locked", "unlocked_busy"] {
+        let mut state = match variant {
+            "missing" => AppState::Missing { path: path.clone() },
+            "locked" => AppState::Locked { path: path.clone() },
+            "unlocked_busy" => AppState::UnlockedBusy { path: path.clone() },
+            _ => unreachable!(),
+        };
+        let before = state.clone();
+        let mutated = apply_submit_remove_inplace(&mut state);
+        assert!(!mutated, "variant={variant}");
+        assert_eq!(
+            std::mem::discriminant::<AppState>(&before),
+            std::mem::discriminant::<AppState>(&state),
+            "variant={variant}",
+        );
+    }
+}
+
+#[test]
+fn remove_final_app_state_success_rolls_back_to_unlocked_preserving_path() {
+    use paladin_gtk::app::state::remove_final_app_state;
+    use paladin_gtk::remove_dialog::RemoveWorkerEffect;
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let next = remove_final_app_state(&busy, &RemoveWorkerEffect::Success)
+        .expect("UnlockedBusy must roll back to Unlocked");
+    assert!(matches!(next, AppState::Unlocked { .. }));
+    assert_path_eq(&next, &path);
+}
+
+#[test]
+fn remove_final_app_state_failure_rolls_back_to_unlocked_for_every_outcome() {
+    use paladin_gtk::app::state::remove_final_app_state;
+    use paladin_gtk::remove_dialog::{
+        account_not_found_error, classify_remove_error, RemoveWorkerEffect,
+    };
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let effects = [
+        RemoveWorkerEffect::Failure(classify_remove_error(&PaladinError::SaveNotCommitted {
+            committed: false,
+            backup_path: None,
+        })),
+        RemoveWorkerEffect::Failure(classify_remove_error(
+            &PaladinError::SaveDurabilityUnconfirmed,
+        )),
+        RemoveWorkerEffect::Failure(classify_remove_error(&account_not_found_error())),
+    ];
+    for effect in &effects {
+        let next = remove_final_app_state(&busy, effect)
+            .expect("every failure still rolls UnlockedBusy back to Unlocked");
+        assert!(matches!(next, AppState::Unlocked { .. }));
+        assert_path_eq(&next, &path);
+    }
+}
+
+#[test]
+fn remove_final_app_state_from_non_unlocked_busy_returns_none() {
+    use paladin_gtk::app::state::remove_final_app_state;
+    use paladin_gtk::remove_dialog::RemoveWorkerEffect;
+    let path = vault_path();
+    let sources = [
+        AppState::Missing { path: path.clone() },
+        AppState::Locked { path: path.clone() },
+        AppState::Unlocked { path: path.clone() },
+    ];
+    for source in &sources {
+        assert!(
+            remove_final_app_state(source, &RemoveWorkerEffect::Success).is_none(),
+            "source={source:?}",
+        );
+    }
+}
+
+#[test]
+fn should_drop_remove_dialog_after_success_returns_true() {
+    use paladin_gtk::app::state::should_drop_remove_dialog_after;
+    use paladin_gtk::remove_dialog::RemoveWorkerEffect;
+    assert!(should_drop_remove_dialog_after(
+        &RemoveWorkerEffect::Success
+    ));
+}
+
+#[test]
+fn should_drop_remove_dialog_after_failure_returns_false_for_every_outcome() {
+    use paladin_gtk::app::state::should_drop_remove_dialog_after;
+    use paladin_gtk::remove_dialog::{
+        account_not_found_error, classify_remove_error, RemoveWorkerEffect,
+    };
+    let effects = [
+        RemoveWorkerEffect::Failure(classify_remove_error(&PaladinError::SaveNotCommitted {
+            committed: false,
+            backup_path: None,
+        })),
+        RemoveWorkerEffect::Failure(classify_remove_error(
+            &PaladinError::SaveDurabilityUnconfirmed,
+        )),
+        RemoveWorkerEffect::Failure(classify_remove_error(&account_not_found_error())),
+    ];
+    for effect in &effects {
+        assert!(!should_drop_remove_dialog_after(effect));
+    }
+}
+
+#[test]
+fn remove_dialog_msg_after_success_returns_none() {
+    use paladin_gtk::app::state::remove_dialog_msg_after;
+    use paladin_gtk::remove_dialog::RemoveWorkerEffect;
+    assert!(remove_dialog_msg_after(&RemoveWorkerEffect::Success).is_none());
+}
+
+#[test]
+fn remove_dialog_msg_after_failure_forwards_worker_failed() {
+    use paladin_gtk::app::state::remove_dialog_msg_after;
+    use paladin_gtk::remove_dialog::{
+        classify_remove_error, RemoveDialogMsg, RemoveErrorOutcome, RemoveWorkerEffect,
+    };
+    let outcome = classify_remove_error(&PaladinError::SaveNotCommitted {
+        committed: false,
+        backup_path: None,
+    });
+    assert!(matches!(outcome, RemoveErrorOutcome::RestorePrior(_)));
+    let effect = RemoveWorkerEffect::Failure(outcome);
+    let msg = remove_dialog_msg_after(&effect).expect("Failure forwards a WorkerFailed message");
+    assert!(matches!(
+        msg,
+        RemoveDialogMsg::WorkerFailed(RemoveErrorOutcome::RestorePrior(_))
+    ));
+}
+
+#[test]
+fn remove_dialog_msg_after_is_mutually_exclusive_with_should_drop() {
+    use paladin_gtk::app::state::{remove_dialog_msg_after, should_drop_remove_dialog_after};
+    use paladin_gtk::remove_dialog::{
+        account_not_found_error, classify_remove_error, RemoveWorkerEffect,
+    };
+    let effects = [
+        RemoveWorkerEffect::Success,
+        RemoveWorkerEffect::Failure(classify_remove_error(&PaladinError::SaveNotCommitted {
+            committed: false,
+            backup_path: None,
+        })),
+        RemoveWorkerEffect::Failure(classify_remove_error(
+            &PaladinError::SaveDurabilityUnconfirmed,
+        )),
+        RemoveWorkerEffect::Failure(classify_remove_error(&account_not_found_error())),
+    ];
+    for effect in &effects {
+        let drop = should_drop_remove_dialog_after(effect);
+        let msg = remove_dialog_msg_after(effect);
+        assert_eq!(
+            msg.is_none(),
+            drop,
+            "dialog_msg.is_none must equal drop_dialog (effect={effect:?})",
+        );
+    }
+}
+
+#[test]
+fn compose_remove_dispatch_success_bundles_drop_and_unlocked_rollback() {
+    use paladin_gtk::app::state::compose_remove_dispatch;
+    use paladin_gtk::remove_dialog::RemoveWorkerEffect;
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let dispatch = compose_remove_dispatch(&busy, &RemoveWorkerEffect::Success);
+    assert!(dispatch.drop_dialog);
+    assert!(dispatch.dialog_msg.is_none());
+    let next = dispatch.app_state.expect("Success rolls back to Unlocked");
+    assert!(matches!(next, AppState::Unlocked { .. }));
+    assert_path_eq(&next, &path);
+}
+
+#[test]
+fn compose_remove_dispatch_failure_keeps_dialog_with_msg_and_unlocked_rollback() {
+    use paladin_gtk::app::state::compose_remove_dispatch;
+    use paladin_gtk::remove_dialog::{
+        classify_remove_error, RemoveDialogMsg, RemoveErrorOutcome, RemoveWorkerEffect,
+    };
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let outcome = classify_remove_error(&PaladinError::SaveNotCommitted {
+        committed: false,
+        backup_path: None,
+    });
+    let effect = RemoveWorkerEffect::Failure(outcome);
+    let dispatch = compose_remove_dispatch(&busy, &effect);
+    assert!(!dispatch.drop_dialog);
+    let msg = dispatch.dialog_msg.as_ref().expect("forwards WorkerFailed");
+    assert!(matches!(
+        msg,
+        RemoveDialogMsg::WorkerFailed(RemoveErrorOutcome::RestorePrior(_))
+    ));
+    let next = dispatch
+        .app_state
+        .expect("Failure still rolls UnlockedBusy back to Unlocked");
+    assert!(matches!(next, AppState::Unlocked { .. }));
+    assert_path_eq(&next, &path);
+}
+
+#[test]
+fn compose_remove_dispatch_from_non_unlocked_busy_returns_no_app_state() {
+    use paladin_gtk::app::state::compose_remove_dispatch;
+    use paladin_gtk::remove_dialog::RemoveWorkerEffect;
+    let path = vault_path();
+    let sources = [
+        AppState::Missing { path: path.clone() },
+        AppState::Locked { path: path.clone() },
+        AppState::Unlocked { path: path.clone() },
+    ];
+    for source in &sources {
+        let dispatch = compose_remove_dispatch(source, &RemoveWorkerEffect::Success);
+        assert!(dispatch.app_state.is_none(), "source={source:?}");
+        assert!(
+            dispatch.drop_dialog,
+            "drop_dialog still mirrors should_drop_remove_dialog_after",
+        );
+    }
+}
+
+#[test]
+fn apply_remove_dispatch_inplace_success_rolls_back_to_unlocked_and_returns_true() {
+    use paladin_gtk::app::state::{apply_remove_dispatch_inplace, compose_remove_dispatch};
+    use paladin_gtk::remove_dialog::RemoveWorkerEffect;
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let dispatch = compose_remove_dispatch(&busy, &RemoveWorkerEffect::Success);
+    let mut state = busy.clone();
+    let mutated = apply_remove_dispatch_inplace(&mut state, &dispatch);
+    assert!(mutated);
+    assert!(matches!(state, AppState::Unlocked { .. }));
+    assert_path_eq(&state, &path);
+}
+
+#[test]
+fn apply_remove_dispatch_inplace_from_non_unlocked_busy_leaves_state_unchanged_and_returns_false() {
+    use paladin_gtk::app::state::{apply_remove_dispatch_inplace, compose_remove_dispatch};
+    use paladin_gtk::remove_dialog::RemoveWorkerEffect;
+    let path = vault_path();
+    let mut state = AppState::Unlocked { path: path.clone() };
+    let dispatch = compose_remove_dispatch(&state, &RemoveWorkerEffect::Success);
+    let mutated = apply_remove_dispatch_inplace(&mut state, &dispatch);
+    assert!(!mutated);
+    assert!(matches!(state, AppState::Unlocked { .. }));
+}
+
+#[test]
+fn apply_remove_vault_install_inplace_writes_pair_into_empty_slot() {
+    use paladin_gtk::app::state::apply_remove_vault_install_inplace;
+    let (_tempdir, _path, vault, store) = fresh_plaintext_pair();
+    let mut slot: Option<(Vault, Store)> = None;
+    apply_remove_vault_install_inplace(&mut slot, (vault, store));
+    assert!(slot.is_some());
+}
+
+#[test]
+fn apply_remove_vault_install_inplace_replaces_existing_slot() {
+    use paladin_gtk::app::state::apply_remove_vault_install_inplace;
+    let (_tempdir1, _p1, vault1, store1) = fresh_plaintext_pair();
+    let (_tempdir2, _p2, vault2, store2) = fresh_plaintext_pair();
+    let mut slot: Option<(Vault, Store)> = Some((vault1, store1));
+    apply_remove_vault_install_inplace(&mut slot, (vault2, store2));
+    assert!(slot.is_some());
+}
