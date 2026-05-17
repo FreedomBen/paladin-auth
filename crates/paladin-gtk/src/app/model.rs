@@ -74,10 +74,10 @@ use crate::account_list::{
     AccountListComponent, AccountListInit, AccountListOutput, AccountRowModel,
 };
 use crate::app::state::{
-    apply_submit_unlock_inplace, apply_unlock_dispatch_inplace, apply_unlock_vault_install_inplace,
-    compose_unlock_dispatch, compose_unlock_worker_input, decide_state_from_inspect,
-    decide_state_from_open_error, run_unlock_worker, AppState, OpenErrorOutcome,
-    UnlockWorkerCompletion,
+    apply_submit_rename_inplace, apply_submit_unlock_inplace, apply_unlock_dispatch_inplace,
+    apply_unlock_vault_install_inplace, compose_unlock_dispatch, compose_unlock_worker_input,
+    decide_state_from_inspect, decide_state_from_open_error, run_unlock_worker, AppState,
+    OpenErrorOutcome, UnlockWorkerCompletion,
 };
 use crate::init_dialog::{format_init_dialog_marker, InitDialogComponent, InitDialogInit};
 use crate::remove_dialog::{decide_remove_target, RemoveDialogComponent, RemoveDialogOutput};
@@ -500,16 +500,24 @@ impl SimpleComponent for AppModel {
                 account_id: _,
                 label: _,
             }) => {
-                // Save-button entry. The Save click handler in the
-                // dialog view and the `gio::spawn_blocking
+                // Save-button entry side of the `gio::spawn_blocking
                 // Vault::mutate_and_save(|v| v.rename(account_id,
-                // label, now))` worker that consumes the forwarded
-                // pair land in follow-up commits alongside the
-                // `UnlockedBusy` worker infrastructure. Pinned as an
-                // explicit no-op arm so the typed variant additions
-                // in `crate::rename_dialog` keep `AppModel::update`
-                // exhaustive without an `_` catch-all silently
-                // swallowing future variants.
+                // label, now))` worker. The `compose_rename_worker_input`
+                // bundler, `gio::spawn_blocking` call, and
+                // `AppMsg::RenameWorkerCompleted` dispatch land in
+                // follow-up commits. For now the busy-gate
+                // transition itself is wired so the mutating-control
+                // gating in `AppState::allows_mutating_menu` /
+                // `AppState::is_busy` flips while the worker
+                // infrastructure catches up — matching the pinned
+                // `apply_submit_unlock_inplace` wiring in the
+                // `SubmitLock` handler. A `None` `self.state` or a
+                // non-`Unlocked` variant leaves the slot byte-for-
+                // byte intact via `apply_submit_rename_inplace`'s
+                // returning-false branch.
+                if let Some(state) = self.state.as_mut() {
+                    apply_submit_rename_inplace(state);
+                }
             }
             AppMsg::RemoveDialogAction(RemoveDialogOutput::Cancel) => {
                 // Detach the dialog widget from the content tree and
