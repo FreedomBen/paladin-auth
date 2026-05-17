@@ -3091,3 +3091,264 @@ fn compose_submit_outcome_preserves_state_so_retry_keeps_typing() {
     assert_eq!(state.secret_state().manual_secret.text(), secret_before);
     assert_eq!(state.secret_state().active_path, active_path_before);
 }
+
+#[test]
+fn compose_save_click_outcome_manual_proceeds_when_no_duplicate() {
+    // The Save handler chains `compose_submit_outcome` and
+    // `classify_duplicate` against the live `(AddDialogState, Vault)`.
+    // With a valid manual draft and an *empty* vault (no
+    // collision), the unified composer must surface `Proceed` so
+    // the widget can dispatch `AddAccountMsg::SubmitProceed`.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_save_click_outcome, AddAccountMsg, AddDialogState, SaveClickOutcome,
+    };
+
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (vault, _store) = open_plaintext_pair(&path);
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualLabelChanged("alice".to_string()),
+    );
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualIssuerChanged("Acme".to_string()),
+    );
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualSecretChanged(SECRET_20_B32.to_string()),
+    );
+
+    let outcome = compose_save_click_outcome(&state, &vault, now_for_tests());
+
+    match outcome {
+        SaveClickOutcome::Proceed(validated) => {
+            assert_eq!(validated.account.label(), "alice");
+            assert_eq!(validated.account.issuer(), Some("Acme"));
+        }
+        other => panic!("expected Proceed against an empty vault, got {other:?}"),
+    }
+}
+
+#[test]
+fn compose_save_click_outcome_manual_await_confirmation_on_duplicate() {
+    // The Save handler chains `compose_submit_outcome` and
+    // `classify_duplicate` against the live `(AddDialogState, Vault)`.
+    // With a valid manual draft whose `(secret, issuer, label)`
+    // triple matches an existing account in the vault, the unified
+    // composer must surface `AwaitConfirmation` carrying the
+    // existing summary plus the pending validated account so the
+    // widget can dispatch `AddAccountMsg::StagePendingDuplicate`.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_save_click_outcome, AddAccountMsg, AddDialogState, SaveClickOutcome,
+    };
+
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+    let existing = validate_manual_totp("alice", Some("Acme"));
+    let existing_id = existing.account.id();
+    vault.add(existing.account);
+    vault.save(&store).expect("seed pre-existing duplicate");
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualLabelChanged("alice".to_string()),
+    );
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualIssuerChanged("Acme".to_string()),
+    );
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualSecretChanged(SECRET_20_B32.to_string()),
+    );
+
+    let outcome = compose_save_click_outcome(&state, &vault, now_for_tests());
+
+    match outcome {
+        SaveClickOutcome::AwaitConfirmation {
+            existing,
+            validated,
+        } => {
+            assert_eq!(
+                existing.id, existing_id,
+                "existing summary must point at the seeded duplicate",
+            );
+            assert_eq!(existing.label, "alice");
+            assert_eq!(existing.issuer.as_deref(), Some("Acme"));
+            assert_eq!(validated.account.label(), "alice");
+            assert_eq!(validated.account.issuer(), Some("Acme"));
+        }
+        other => panic!("expected AwaitConfirmation for a duplicate row, got {other:?}"),
+    }
+}
+
+#[test]
+fn compose_save_click_outcome_inline_error_short_circuits_before_duplicate_check() {
+    // The freshly-opened dialog has an empty label / empty secret
+    // and the default `active_path == Manual`. The unified Save-
+    // click composer must surface the typed inline error from
+    // `compose_submit_outcome` without ever consulting
+    // `Vault::find_duplicate` — a vault with a matching seeded
+    // account would still reject inline because the validation
+    // pipeline rejects first.
+    use paladin_gtk::add_account::{compose_save_click_outcome, AddDialogState, SaveClickOutcome};
+
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+    let seeded = validate_manual_totp("alice", Some("Acme"));
+    vault.add(seeded.account);
+    vault.save(&store).expect("seed vault");
+
+    let state = AddDialogState::new();
+
+    let outcome = compose_save_click_outcome(&state, &vault, now_for_tests());
+
+    assert!(
+        matches!(outcome, SaveClickOutcome::InlineError(_)),
+        "default state must reject inline before any duplicate check",
+    );
+}
+
+#[test]
+fn compose_save_click_outcome_uri_path_proceeds_when_no_duplicate() {
+    // Mirror of the manual `proceeds_when_no_duplicate` case on the
+    // URI sub-path. After `SwitchPath(Uri)` and a well-formed
+    // `otpauth://` URI, the unified composer must route through
+    // `compose_uri_submit_outcome` and surface `Proceed` against an
+    // empty vault.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_save_click_outcome, AddAccountMsg, AddDialogState, SaveClickOutcome,
+    };
+    use paladin_gtk::secret_fields::AddPath;
+
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (vault, _store) = open_plaintext_pair(&path);
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(&mut state, AddAccountMsg::SwitchPath(AddPath::Uri));
+    let uri = format!("otpauth://totp/Acme:alice?secret={SECRET_20_B32}&issuer=Acme");
+    let _ = apply_msg(&mut state, AddAccountMsg::UriTextChanged(uri));
+
+    let outcome = compose_save_click_outcome(&state, &vault, now_for_tests());
+
+    match outcome {
+        SaveClickOutcome::Proceed(validated) => {
+            assert_eq!(validated.account.label(), "alice");
+            assert_eq!(validated.account.issuer(), Some("Acme"));
+        }
+        other => panic!("expected URI-path Proceed against empty vault, got {other:?}"),
+    }
+}
+
+#[test]
+fn compose_save_click_outcome_uri_path_await_confirmation_on_duplicate() {
+    // Mirror of `manual_await_confirmation_on_duplicate` on the URI
+    // sub-path. The URI's parsed `(secret, issuer, label)` triple
+    // collides with the seeded account; the unified composer must
+    // route through `compose_uri_submit_outcome` and surface
+    // `AwaitConfirmation`.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_save_click_outcome, AddAccountMsg, AddDialogState, SaveClickOutcome,
+    };
+    use paladin_gtk::secret_fields::AddPath;
+
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+    let existing = validate_manual_totp("alice", Some("Acme"));
+    let existing_id = existing.account.id();
+    vault.add(existing.account);
+    vault.save(&store).expect("seed pre-existing duplicate");
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(&mut state, AddAccountMsg::SwitchPath(AddPath::Uri));
+    let uri = format!("otpauth://totp/Acme:alice?secret={SECRET_20_B32}&issuer=Acme");
+    let _ = apply_msg(&mut state, AddAccountMsg::UriTextChanged(uri));
+
+    let outcome = compose_save_click_outcome(&state, &vault, now_for_tests());
+
+    match outcome {
+        SaveClickOutcome::AwaitConfirmation {
+            existing,
+            validated,
+        } => {
+            assert_eq!(existing.id, existing_id);
+            assert_eq!(validated.account.label(), "alice");
+            assert_eq!(validated.account.issuer(), Some("Acme"));
+        }
+        other => panic!("expected URI-path AwaitConfirmation for a duplicate row, got {other:?}"),
+    }
+}
+
+#[test]
+fn compose_save_click_outcome_routes_by_active_path_not_by_buffer_contents() {
+    // Routing decision keys off `active_path`, not "which buffer
+    // happens to be populated". Seed the URI buffer with a valid
+    // otpauth URI but leave `active_path == Manual` (the default).
+    // The unified Save-click composer must still route through the
+    // manual composer — which rejects because the manual label is
+    // empty — rather than peeking at the URI buffer and proceeding.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_save_click_outcome, AddAccountMsg, AddDialogState, SaveClickOutcome,
+    };
+    use paladin_gtk::secret_fields::AddPath;
+
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (vault, _store) = open_plaintext_pair(&path);
+
+    let mut state = AddDialogState::new();
+    assert_eq!(state.secret_state().active_path, AddPath::Manual);
+    let uri = format!("otpauth://totp/Acme:alice?secret={SECRET_20_B32}&issuer=Acme");
+    let _ = apply_msg(&mut state, AddAccountMsg::UriTextChanged(uri));
+
+    let outcome = compose_save_click_outcome(&state, &vault, now_for_tests());
+
+    assert!(
+        matches!(outcome, SaveClickOutcome::InlineError(_)),
+        "active_path == Manual must drive routing; a populated URI buffer is irrelevant",
+    );
+}
+
+#[test]
+fn compose_save_click_outcome_preserves_state_so_retry_keeps_typing() {
+    // The helper borrows the state so the dialog can re-call it on
+    // every Save click after a typed-but-inline-rejected attempt —
+    // the user fixes the failing field, re-submits, and the prior
+    // typing is still live. Mirror of
+    // `compose_submit_outcome_preserves_state_so_retry_keeps_typing`
+    // extended to cover the chained duplicate-detection layer.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_save_click_outcome, AddAccountMsg, AddDialogState,
+    };
+
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (vault, _store) = open_plaintext_pair(&path);
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualLabelChanged("alice".to_string()),
+    );
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualSecretChanged(SECRET_20_B32.to_string()),
+    );
+    let draft_before = state.manual_draft().clone();
+    let secret_before = state.secret_state().manual_secret.text().to_string();
+    let active_path_before = state.secret_state().active_path;
+
+    let _outcome = compose_save_click_outcome(&state, &vault, now_for_tests());
+
+    assert_eq!(state.manual_draft(), &draft_before);
+    assert_eq!(state.secret_state().manual_secret.text(), secret_before);
+    assert_eq!(state.secret_state().active_path, active_path_before);
+}

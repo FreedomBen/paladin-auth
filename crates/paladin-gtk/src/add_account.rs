@@ -529,6 +529,112 @@ pub fn classify_duplicate(
     }
 }
 
+/// Save-click outcome from the path-aware submit composer chained
+/// through duplicate detection.
+///
+/// Collapses [`SubmitOutcome`] and [`DuplicateOutcome`] into a
+/// single shape so the widget Save handler has one downstream
+/// branch covering the full pre-mutation pipeline:
+///
+/// * [`SaveClickOutcome::Proceed`] — validated account ready for
+///   insertion via `Vault::mutate_and_save(|v| v.add(account))`.
+///   The widget dispatches [`AddAccountMsg::SubmitProceed`].
+/// * [`SaveClickOutcome::AwaitConfirmation`] — `(secret, issuer,
+///   label)` collision detected by [`Vault::find_duplicate`]. The
+///   widget renders the existing summary alongside the "add
+///   anyway?" prompt and dispatches
+///   [`AddAccountMsg::StagePendingDuplicate`] to park the pending
+///   in [`crate::secret_fields::AddSecretState::pending`].
+/// * [`SaveClickOutcome::InlineError`] — typed §5 inline error
+///   surfaced by [`compose_submit_outcome`] before the duplicate
+///   check runs. The widget renders the rejection against the
+///   active sub-path's failing field and leaves the form populated
+///   for retry.
+///
+/// Naming parallels [`SubmitOutcome`] / [`DuplicateOutcome`] on
+/// the per-stage layer; this enum is the unified projection the
+/// widget consults once per Save click.
+#[derive(Debug)]
+pub enum SaveClickOutcome {
+    /// Validated account ready for insertion via
+    /// `Vault::mutate_and_save(|v| v.add(account))`.
+    Proceed(ValidatedAccount),
+    /// `Vault::find_duplicate` returned a collision. Threads the
+    /// existing summary plus the pending validated account so the
+    /// widget can render the "add anyway?" prompt and park the
+    /// pending via
+    /// [`crate::secret_fields::AddSecretState::replace_pending`].
+    AwaitConfirmation {
+        /// Existing account that collided. The widget renders its
+        /// display label and metadata so the user can confirm the
+        /// collision before electing "add anyway".
+        existing: AccountSummary,
+        /// Pending validated account staged in the
+        /// [`crate::secret_fields::AddSecretState::pending`] slot.
+        validated: ValidatedAccount,
+    },
+    /// Typed §5 inline error; the widget renders the rejection
+    /// against the active sub-path's failing field. Surfaced
+    /// before the duplicate check runs so a typed-but-rejected
+    /// attempt never consults the vault.
+    InlineError(InlineError),
+}
+
+/// Path-aware Save-click composer chaining [`compose_submit_outcome`]
+/// with [`paladin_core::Vault::find_duplicate`] + [`classify_duplicate`].
+///
+/// The widget Save handler calls this once per click to drive the
+/// full pre-mutation pipeline as a single boundary — the unified
+/// [`SaveClickOutcome`] keeps the downstream dispatch
+/// (`SubmitProceed` vs `StagePendingDuplicate` vs inline render) a
+/// one-shot match without re-deriving the validation or
+/// duplicate-detection decision elsewhere.
+///
+/// Routing rules:
+///
+/// * Typed inline error from [`compose_submit_outcome`] →
+///   [`SaveClickOutcome::InlineError`]. The vault is **not**
+///   consulted, so a typed-but-rejected attempt never runs the
+///   duplicate check.
+/// * `Proceed(validated)` from [`compose_submit_outcome`] →
+///   [`paladin_core::Vault::find_duplicate`] is consulted; the
+///   `Option<&Account>` collapses to `Option<AccountSummary>` for
+///   [`classify_duplicate`], which routes to
+///   [`SaveClickOutcome::Proceed`] (no collision) or
+///   [`SaveClickOutcome::AwaitConfirmation`] (collision).
+///
+/// The borrow keeps the dialog state intact so a typed-but-
+/// rejected attempt can retry against the same buffers without
+/// losing the user's input on either sub-path. The vault is
+/// borrowed shared because
+/// [`paladin_core::Vault::find_duplicate`] is read-only — the
+/// mutation lives later in the
+/// `gio::spawn_blocking Vault::mutate_and_save(|v| v.add(account))`
+/// worker once the widget dispatches `SubmitProceed`.
+#[must_use]
+pub fn compose_save_click_outcome(
+    state: &AddDialogState,
+    vault: &Vault,
+    now: SystemTime,
+) -> SaveClickOutcome {
+    match compose_submit_outcome(state, now) {
+        SubmitOutcome::InlineError(err) => SaveClickOutcome::InlineError(err),
+        SubmitOutcome::Proceed(validated) => {
+            let existing = vault.find_duplicate(&validated).map(Account::summary);
+            match classify_duplicate(validated, existing) {
+                DuplicateOutcome::Proceed(validated) => SaveClickOutcome::Proceed(validated),
+                DuplicateOutcome::AwaitConfirmation {
+                    existing,
+                    validated,
+                } => SaveClickOutcome::AwaitConfirmation {
+                    existing,
+                    validated,
+                },
+            }
+        }
+    }
+}
+
 /// Post-effect routing decision for a failed
 /// `Vault::mutate_and_save(|v| { v.add(validated.account); … })`.
 ///
