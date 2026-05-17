@@ -2587,6 +2587,121 @@ fn add_dialog_state_default_manual_draft_matches_new() {
 }
 
 #[test]
+fn compose_manual_fields_maps_every_draft_field_and_secret_text_verbatim() {
+    // The widget builds `ManualFields` at submit time by combining
+    // the live non-secret `ManualDraftState` shadow with the
+    // Paladin-owned `crate::secret_fields::SecretEntry` text. The
+    // composed bundle must carry every draft field verbatim so
+    // `classify_manual_submit` sees the same values the user typed.
+    // The secret arrives as a borrowed `&str` (so the caller can
+    // pass `secret_state.manual_secret.text()` without an extra
+    // allocation) and lands inside a `SecretString` whose
+    // `ZeroizeOnDrop` impl wipes the bytes once the call returns.
+    use paladin_core::{AccountKindInput, Algorithm};
+    use paladin_gtk::add_account::{compose_manual_fields, ManualDraftState};
+    use secrecy::ExposeSecret;
+
+    let draft = ManualDraftState {
+        label: "GitHub".to_string(),
+        issuer: "github.com".to_string(),
+        algorithm: Algorithm::Sha256,
+        digits: 8,
+        kind: AccountKindInput::Hotp,
+        period_secs: 60,
+        counter: 42,
+        icon_hint_text: "github".to_string(),
+    };
+    let secret_text = "JBSWY3DPEHPK3PXP";
+
+    let fields = compose_manual_fields(&draft, secret_text);
+
+    assert_eq!(fields.label, "GitHub");
+    assert_eq!(fields.issuer, "github.com");
+    assert_eq!(fields.algorithm, Algorithm::Sha256);
+    assert_eq!(fields.digits, 8);
+    assert_eq!(fields.kind, AccountKindInput::Hotp);
+    assert_eq!(fields.period_secs, 60);
+    assert_eq!(fields.counter, 42);
+    assert_eq!(fields.icon_hint_text, "github");
+    assert_eq!(fields.secret.expose_secret(), secret_text);
+}
+
+#[test]
+fn compose_manual_fields_preserves_draft_so_retry_keeps_typing() {
+    // Borrowing the draft keeps the dialog state intact so a retry
+    // after a failed worker (e.g. `save_not_committed`) does not
+    // wipe the user's typing. Mirror of the `SubmitProceed` arm in
+    // `apply_msg`, which only clears the secret-bearing buffers —
+    // the non-secret manual draft persists until the controller
+    // itself is dropped.
+    use paladin_core::{AccountKindInput, Algorithm};
+    use paladin_gtk::add_account::{compose_manual_fields, ManualDraftState};
+
+    let draft = ManualDraftState {
+        label: "Acme".to_string(),
+        issuer: "issuer".to_string(),
+        algorithm: Algorithm::Sha512,
+        digits: 7,
+        kind: AccountKindInput::Totp,
+        period_secs: 45,
+        counter: 99,
+        icon_hint_text: "slack".to_string(),
+    };
+    let before = draft.clone();
+
+    let _fields = compose_manual_fields(&draft, "JBSWY3DPEHPK3PXP");
+
+    assert_eq!(
+        draft, before,
+        "compose_manual_fields must not mutate the draft"
+    );
+}
+
+#[test]
+fn compose_manual_fields_with_empty_secret_yields_empty_secret_string() {
+    // Empty secret text is the live state at the moment the dialog
+    // opens. `compose_manual_fields` must not synthesize any bytes
+    // — `validate_manual` at submit time owns the empty-secret
+    // rejection path, so the composer threads through the empty
+    // buffer untouched.
+    use paladin_gtk::add_account::{compose_manual_fields, ManualDraftState};
+    use secrecy::ExposeSecret;
+
+    let draft = ManualDraftState::default();
+
+    let fields = compose_manual_fields(&draft, "");
+
+    assert_eq!(fields.secret.expose_secret(), "");
+}
+
+#[test]
+fn compose_manual_fields_threads_through_classify_manual_submit_proceed() {
+    // End-to-end: the composed `ManualFields` from the dialog's
+    // default state plus a valid Base32 secret must drive
+    // `classify_manual_submit` to `Proceed`. Pins the contract
+    // that the composer's output is shape-compatible with the
+    // existing submit pipeline so the widget can chain
+    // `compose_manual_fields → classify_manual_submit` without
+    // an intermediate re-pack.
+    use paladin_gtk::add_account::{
+        classify_manual_submit, compose_manual_fields, ManualDraftState, ManualSubmitOutcome,
+    };
+
+    let draft = ManualDraftState {
+        label: "alice".to_string(),
+        ..ManualDraftState::default()
+    };
+
+    let fields = compose_manual_fields(&draft, SECRET_20_B32);
+    let outcome = classify_manual_submit(fields, now_for_tests());
+
+    assert!(
+        matches!(outcome, ManualSubmitOutcome::Proceed(_)),
+        "default draft + valid secret should classify as Proceed",
+    );
+}
+
+#[test]
 fn apply_msg_confirm_add_anyway_with_no_pending_is_defensive_noop() {
     // Defensive: the widget should only dispatch ConfirmAddAnyway
     // after a `StagePendingDuplicate` parks a value. A stray dispatch

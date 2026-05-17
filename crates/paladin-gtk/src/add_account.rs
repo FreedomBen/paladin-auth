@@ -215,6 +215,43 @@ pub struct ManualFields {
     pub icon_hint_text: String,
 }
 
+/// Build a [`ManualFields`] bundle from the live non-secret draft
+/// and the Paladin-owned manual secret text.
+///
+/// The widget calls this at submit time to combine the
+/// [`ManualDraftState`] shadow (label / issuer / algorithm / digits /
+/// kind / period / counter / icon-hint) with the
+/// [`crate::secret_fields::SecretEntry::text`] of
+/// [`crate::secret_fields::AddSecretState::manual_secret`]. The
+/// draft is borrowed so a worker retry after `save_not_committed`
+/// can re-compose against the same typed values without losing the
+/// user's input; the non-secret fields are `Clone`d into the
+/// returned bundle. The secret is borrowed too — the caller hands a
+/// `&str` from the `SecretEntry`, and `compose_manual_fields` wraps
+/// it in a [`SecretString`] whose `ZeroizeOnDrop` impl wipes the
+/// bytes once the returned [`ManualFields`] drops.
+///
+/// Chain `compose_manual_fields(...).into()` into
+/// [`classify_manual_submit`] so the widget keeps the submit
+/// pipeline as `draft + secret → ManualFields → ManualSubmitOutcome`
+/// without intermediate re-packing. Mirror of the URI sub-path,
+/// where the widget reads `secret_state.uri_text.text()` straight
+/// into [`crate::otpauth_uri_paste::classify_uri_submit`].
+#[must_use]
+pub fn compose_manual_fields(draft: &ManualDraftState, secret: &str) -> ManualFields {
+    ManualFields {
+        label: draft.label.clone(),
+        issuer: draft.issuer.clone(),
+        secret: SecretString::from(secret.to_string()),
+        algorithm: draft.algorithm,
+        digits: draft.digits,
+        kind: draft.kind,
+        period_secs: draft.period_secs,
+        counter: draft.counter,
+        icon_hint_text: draft.icon_hint_text.clone(),
+    }
+}
+
 /// Pre-add outcome of manual-field submission.
 ///
 /// See [`classify_manual_submit`]. The widget hands the validated
