@@ -600,6 +600,15 @@ pub enum AddAccountMsg {
     /// [`crate::unlock_dialog::UnlockDialogMsg::PassphraseChanged`]
     /// on the add path.
     ManualSecretChanged(String),
+    /// Per-keystroke shadow of the `otpauth://` URI entry into the
+    /// Paladin-owned [`crate::secret_fields::SecretEntry`] inside
+    /// [`crate::secret_fields::AddSecretState::uri_text`].
+    ///
+    /// Secret-bearing because the URI embeds the Base32 secret per
+    /// §"Secret entry handling": the same `String`-at-the-UI-boundary,
+    /// `Zeroizing<String>`-in-the-canonical-home contract applies
+    /// here as for [`Self::ManualSecretChanged`].
+    UriTextChanged(String),
 }
 
 /// Outbound messages emitted by [`AddAccountComponent`] back to
@@ -830,6 +839,10 @@ pub fn apply_msg(state: &mut AddDialogState, msg: AddAccountMsg) -> Option<AddAc
         }
         AddAccountMsg::ManualSecretChanged(text) => {
             state.secret_state.manual_secret.set(&text);
+            None
+        }
+        AddAccountMsg::UriTextChanged(text) => {
+            state.secret_state.uri_text.set(&text);
             None
         }
     }

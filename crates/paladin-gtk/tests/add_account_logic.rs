@@ -1214,6 +1214,57 @@ fn apply_msg_manual_secret_changed_shadows_into_secret_state() {
 }
 
 #[test]
+fn apply_msg_uri_text_changed_shadows_into_secret_state() {
+    // The `otpauth://` URI entry is secret-bearing (it embeds the
+    // Base32 secret) so the §8 rule that holds for the manual Base32
+    // secret holds here too: shadow the GTK keystrokes into the
+    // Paladin-owned `Zeroizing<String>` and emit no output until the
+    // user submits.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    let output = apply_msg(
+        &mut state,
+        AddAccountMsg::UriTextChanged(
+            "otpauth://totp/Issuer:label?secret=JBSWY3DPEHPK3PXP&issuer=Issuer".to_string(),
+        ),
+    );
+    assert!(
+        output.is_none(),
+        "UriTextChanged shadows the buffer; no output flows back to AppModel",
+    );
+    assert_eq!(
+        state.secret_state().uri_text.text(),
+        "otpauth://totp/Issuer:label?secret=JBSWY3DPEHPK3PXP&issuer=Issuer",
+        "URI keystrokes shadow into the Paladin-owned buffer",
+    );
+}
+
+#[test]
+fn apply_msg_uri_text_changed_replaces_prior_shadow() {
+    // Mirror of the manual-secret replacement contract: each keystroke
+    // yields a fresh `gtk::Editable::text` value so successive shadows
+    // must replace rather than append. Prior bytes zero out in place
+    // via `Zeroizing<String>`'s Drop.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::UriTextChanged("otpauth://totp/a?secret=A".to_string()),
+    );
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::UriTextChanged("otpauth://totp/b?secret=B".to_string()),
+    );
+    assert_eq!(
+        state.secret_state().uri_text.text(),
+        "otpauth://totp/b?secret=B",
+        "successive UriTextChanged messages replace the prior shadow",
+    );
+}
+
+#[test]
 fn apply_msg_manual_secret_changed_replaces_prior_shadow() {
     // Each keystroke produces a fresh `gtk::Editable::text` value,
     // not an append, so successive shadows must replace rather than
