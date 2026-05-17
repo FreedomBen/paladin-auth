@@ -710,6 +710,18 @@ pub enum AddAccountMsg {
     /// replaces the prior shadow on every selection. Dialog-local —
     /// no [`AddAccountOutput`] is emitted.
     ManualAlgorithmChanged(Algorithm),
+    /// OTP digit count from the digits spinner shadowed into
+    /// [`ManualDraftState::digits`].
+    ///
+    /// Sibling of [`Self::ManualAlgorithmChanged`] on the digits
+    /// spinner. The widget configures the `AdwSpinRow` adjustment to
+    /// `6..=8` so dispatch normally only carries valid values, but
+    /// [`apply_msg`] does **not** re-clamp — the draft preserves
+    /// whatever value arrives so [`validate_manual`] at Save time can
+    /// surface the typed `digits` inline error if a test driver or a
+    /// future misuse path slips an out-of-range value through.
+    /// Dialog-local — no [`AddAccountOutput`] is emitted.
+    ManualDigitsChanged(u8),
     /// Per-keystroke shadow of the manual Base32 secret entry into
     /// the Paladin-owned [`crate::secret_fields::SecretEntry`] inside
     /// [`crate::secret_fields::AddSecretState::manual_secret`].
@@ -1069,6 +1081,10 @@ pub fn apply_msg(state: &mut AddDialogState, msg: AddAccountMsg) -> Option<AddAc
         }
         AddAccountMsg::ManualAlgorithmChanged(algorithm) => {
             state.manual_draft.algorithm = algorithm;
+            None
+        }
+        AddAccountMsg::ManualDigitsChanged(digits) => {
+            state.manual_draft.digits = digits;
             None
         }
         AddAccountMsg::ManualSecretChanged(text) => {

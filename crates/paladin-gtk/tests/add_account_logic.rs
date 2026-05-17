@@ -1955,6 +1955,98 @@ fn apply_msg_manual_algorithm_changed_preserves_other_draft_fields() {
 }
 
 #[test]
+fn apply_msg_manual_digits_changed_shadows_into_manual_draft() {
+    // OTP digit spinner value routes through
+    // `AddAccountMsg::ManualDigitsChanged(u8)` and shadows into
+    // `ManualDraftState::digits` so the widget view's `#[watch]`
+    // projection and `classify_manual_submit` at Save time both see
+    // the live draft. The arm emits no output — digits changes are
+    // dialog-local until Save. Mirror of the existing
+    // `apply_msg_manual_algorithm_changed_shadows_into_manual_draft`
+    // contract on the sibling typed-value field.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    assert_eq!(state.manual_draft().digits, 6);
+
+    let output = apply_msg(&mut state, AddAccountMsg::ManualDigitsChanged(8));
+
+    assert!(
+        output.is_none(),
+        "ManualDigitsChanged stays dialog-local; no output flows to AppModel",
+    );
+    assert_eq!(
+        state.manual_draft().digits,
+        8,
+        "ManualDigitsChanged shadows the spinner value into ManualDraftState::digits",
+    );
+}
+
+#[test]
+fn apply_msg_manual_digits_changed_replaces_prior_shadow() {
+    // A second spinner step replaces (does not accumulate) the prior
+    // digits shadow so the draft stays in lockstep with the spinner's
+    // current value. Mirror of the existing
+    // `apply_msg_manual_algorithm_changed_replaces_prior_shadow`
+    // contract on the sibling typed-value field.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(&mut state, AddAccountMsg::ManualDigitsChanged(7));
+    let _ = apply_msg(&mut state, AddAccountMsg::ManualDigitsChanged(8));
+
+    assert_eq!(
+        state.manual_draft().digits,
+        8,
+        "second ManualDigitsChanged replaces the prior shadow",
+    );
+}
+
+#[test]
+fn apply_msg_manual_digits_changed_preserves_other_draft_fields() {
+    // The digits spinner step must not disturb the rest of the
+    // manual draft — label / issuer / algorithm / kind / period /
+    // counter / icon-hint stay on their CLI defaults so a stray
+    // digits change does not silently reset the form.
+    use paladin_core::{AccountKindInput, Algorithm};
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(&mut state, AddAccountMsg::ManualDigitsChanged(8));
+
+    let draft = state.manual_draft();
+    assert_eq!(draft.label, "");
+    assert_eq!(draft.issuer, "");
+    assert_eq!(draft.algorithm, Algorithm::Sha1);
+    assert_eq!(draft.digits, 8);
+    assert_eq!(draft.kind, AccountKindInput::Totp);
+    assert_eq!(draft.period_secs, 30);
+    assert_eq!(draft.counter, 0);
+    assert_eq!(draft.icon_hint_text, "");
+}
+
+#[test]
+fn apply_msg_manual_digits_changed_preserves_out_of_range_for_validate_manual() {
+    // The spinner's GTK widget clamps to 6..=8 by configuration, but
+    // `apply_msg` must not silently re-clamp — if the dispatch ever
+    // carries an out-of-range value (e.g. a test driver or a misuse
+    // path), the draft preserves it verbatim so `validate_manual` at
+    // Save time can surface the typed `digits` inline error against
+    // the spinner. Mirrors the §"Secret entry handling" contract that
+    // dispatch arms shadow live state and defer validation to submit.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(&mut state, AddAccountMsg::ManualDigitsChanged(9));
+
+    assert_eq!(
+        state.manual_draft().digits,
+        9,
+        "apply_msg preserves the spinner value verbatim — clamping lives in the widget",
+    );
+}
+
+#[test]
 fn manual_draft_state_default_matches_cli_manual_add_defaults() {
     // The `AdwPreferencesGroup` body of `AddAccountComponent` opens
     // with the same defaults the CLI interactive prompts use (DESIGN
