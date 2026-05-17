@@ -698,6 +698,18 @@ pub enum AddAccountMsg {
     /// replaces (does not append) the prior shadow. Dialog-local —
     /// no [`AddAccountOutput`] is emitted.
     ManualIssuerChanged(String),
+    /// Algorithm dropdown selection shadowed into
+    /// [`ManualDraftState::algorithm`].
+    ///
+    /// Sibling of [`Self::ManualLabelChanged`] on the algorithm
+    /// dropdown. Carries the typed [`Algorithm`] enum rather than a
+    /// raw string because the `AdwComboRow` model is built from the
+    /// fixed `{Sha1, Sha256, Sha512}` set; the widget maps the
+    /// selected index back to the enum before dispatching so
+    /// [`apply_msg`] never has to re-parse a label. [`apply_msg`]
+    /// replaces the prior shadow on every selection. Dialog-local —
+    /// no [`AddAccountOutput`] is emitted.
+    ManualAlgorithmChanged(Algorithm),
     /// Per-keystroke shadow of the manual Base32 secret entry into
     /// the Paladin-owned [`crate::secret_fields::SecretEntry`] inside
     /// [`crate::secret_fields::AddSecretState::manual_secret`].
@@ -1053,6 +1065,10 @@ pub fn apply_msg(state: &mut AddDialogState, msg: AddAccountMsg) -> Option<AddAc
         }
         AddAccountMsg::ManualIssuerChanged(text) => {
             state.manual_draft.issuer = text;
+            None
+        }
+        AddAccountMsg::ManualAlgorithmChanged(algorithm) => {
+            state.manual_draft.algorithm = algorithm;
             None
         }
         AddAccountMsg::ManualSecretChanged(text) => {

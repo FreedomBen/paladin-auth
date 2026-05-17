@@ -1870,6 +1870,91 @@ fn apply_msg_manual_issuer_changed_preserves_other_draft_fields() {
 }
 
 #[test]
+fn apply_msg_manual_algorithm_changed_shadows_into_manual_draft() {
+    // Algorithm dropdown selection routes through
+    // `AddAccountMsg::ManualAlgorithmChanged(Algorithm)` and shadows
+    // into `ManualDraftState::algorithm` so the widget view's
+    // `#[watch]` projection and `classify_manual_submit` at Save time
+    // both see the live draft. The arm emits no output — algorithm
+    // changes are dialog-local until Save. Mirror of the existing
+    // `apply_msg_manual_label_changed_shadows_into_manual_draft`
+    // contract on the sibling dropdown field.
+    use paladin_core::Algorithm;
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    assert_eq!(state.manual_draft().algorithm, Algorithm::Sha1);
+
+    let output = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualAlgorithmChanged(Algorithm::Sha256),
+    );
+
+    assert!(
+        output.is_none(),
+        "ManualAlgorithmChanged stays dialog-local; no output flows to AppModel",
+    );
+    assert_eq!(
+        state.manual_draft().algorithm,
+        Algorithm::Sha256,
+        "ManualAlgorithmChanged shadows the dropdown choice into ManualDraftState::algorithm",
+    );
+}
+
+#[test]
+fn apply_msg_manual_algorithm_changed_replaces_prior_shadow() {
+    // A second selection replaces (does not accumulate) the prior
+    // algorithm shadow so the draft stays in lockstep with the
+    // dropdown's current value. Mirror of the existing
+    // `apply_msg_manual_label_changed_replaces_prior_shadow` contract
+    // on the sibling dropdown field.
+    use paladin_core::Algorithm;
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualAlgorithmChanged(Algorithm::Sha256),
+    );
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualAlgorithmChanged(Algorithm::Sha512),
+    );
+
+    assert_eq!(
+        state.manual_draft().algorithm,
+        Algorithm::Sha512,
+        "second ManualAlgorithmChanged replaces the prior shadow",
+    );
+}
+
+#[test]
+fn apply_msg_manual_algorithm_changed_preserves_other_draft_fields() {
+    // The algorithm dropdown selection must not disturb the rest of
+    // the manual draft — label / issuer / digits / kind / period /
+    // counter / icon-hint stay on their CLI defaults so a stray
+    // algorithm change does not silently reset the form.
+    use paladin_core::{AccountKindInput, Algorithm};
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualAlgorithmChanged(Algorithm::Sha512),
+    );
+
+    let draft = state.manual_draft();
+    assert_eq!(draft.label, "");
+    assert_eq!(draft.issuer, "");
+    assert_eq!(draft.algorithm, Algorithm::Sha512);
+    assert_eq!(draft.digits, 6);
+    assert_eq!(draft.kind, AccountKindInput::Totp);
+    assert_eq!(draft.period_secs, 30);
+    assert_eq!(draft.counter, 0);
+    assert_eq!(draft.icon_hint_text, "");
+}
+
+#[test]
 fn manual_draft_state_default_matches_cli_manual_add_defaults() {
     // The `AdwPreferencesGroup` body of `AddAccountComponent` opens
     // with the same defaults the CLI interactive prompts use (DESIGN
