@@ -1110,3 +1110,47 @@ fn apply_msg_submit_proceed_clears_prior_worker_outcome() {
         "SubmitProceed must clear any prior worker outcome before the new attempt",
     );
 }
+
+#[test]
+fn add_dialog_state_new_initializes_secret_state_to_manual_path_with_empty_buffers() {
+    // The freshly-opened dialog defaults to the manual sub-path with
+    // empty secret buffers and no pending duplicate-add, matching
+    // `AddSecretState::new()`. Pinning this in the dialog-level state
+    // means a future view binding cannot accidentally surface a stale
+    // path / buffer / pending value at mount time.
+    use paladin_gtk::add_account::AddDialogState;
+    use paladin_gtk::secret_fields::AddPath;
+
+    let state = AddDialogState::new();
+    let secret = state.secret_state();
+    assert_eq!(
+        secret.active_path,
+        AddPath::Manual,
+        "fresh dialog opens on the manual sub-path",
+    );
+    assert!(
+        secret.manual_secret.is_empty(),
+        "manual Base32 buffer starts empty",
+    );
+    assert!(secret.uri_text.is_empty(), "URI buffer starts empty");
+    assert!(
+        secret.pending.is_none(),
+        "no pending duplicate before the user submits",
+    );
+}
+
+#[test]
+fn add_dialog_state_default_secret_state_matches_new() {
+    // `Default` derivations on dialog-state holders must agree with
+    // the explicit `::new` constructor so a `#[derive(Default)]`
+    // wrapper cannot drift from the audited construction path.
+    use paladin_gtk::add_account::AddDialogState;
+    use paladin_gtk::secret_fields::AddPath;
+
+    let state = AddDialogState::default();
+    let secret = state.secret_state();
+    assert_eq!(secret.active_path, AddPath::Manual);
+    assert!(secret.manual_secret.is_empty());
+    assert!(secret.uri_text.is_empty());
+    assert!(secret.pending.is_none());
+}

@@ -95,6 +95,8 @@ use paladin_core::{
     AccountSummary, Algorithm, ErrorKind, PaladinError, Store, ValidatedAccount, Vault,
 };
 
+use crate::secret_fields::AddSecretState;
+
 /// Widget-side bundle of typed manual-add fields.
 ///
 /// The widget shadows each entry into Paladin-owned zeroizing
@@ -701,7 +703,7 @@ pub fn format_add_dialog_marker(path: &Path) -> String {
 /// draft-text / manual-fields / URI / QR sub-path state lands as
 /// additional fields in follow-up commits alongside the editable
 /// form widgets.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct AddDialogState {
     /// Latest [`AddPostEffectOutcome`] from a completed
     /// `Vault::mutate_and_save` add worker.
@@ -711,6 +713,22 @@ pub struct AddDialogState {
     /// [`AddAccountMsg::SubmitProceed`] so a retry does not render
     /// stale text from a previous worker attempt.
     worker_outcome: Option<AddPostEffectOutcome>,
+    /// Paladin-owned secret-bearing state for the manual / URI sub-
+    /// paths plus the duplicate-collision pending slot.
+    ///
+    /// Embedded so the dialog's path selector, secret-buffer shadows,
+    /// and "add anyway" confirmation share a single state machine
+    /// with the rest of the component layer
+    /// ([`crate::secret_fields::AddSecretState`]). The default
+    /// construction opens on [`crate::secret_fields::AddPath::Manual`]
+    /// with empty buffers and no pending duplicate — see
+    /// [`crate::secret_fields::AddSecretState::new`].
+    ///
+    /// Not `Debug` because [`crate::secret_fields::SecretEntry`]
+    /// deliberately opts out of `Debug` so a stray `dbg!` cannot leak
+    /// the manual Base32 secret or the `otpauth://` URI text through
+    /// the error log.
+    secret_state: AddSecretState,
 }
 
 impl AddDialogState {
@@ -737,6 +755,19 @@ impl AddDialogState {
     #[must_use]
     pub fn worker_outcome(&self) -> Option<&AddPostEffectOutcome> {
         self.worker_outcome.as_ref()
+    }
+
+    /// Read-only view of the dialog's secret-bearing state.
+    ///
+    /// Exposes the active sub-path, the manual / URI secret-shadow
+    /// buffers, and the duplicate-collision pending slot so the
+    /// widget view and integration tests can observe the dialog's
+    /// secret state without owning a mutable handle. Mutation lands
+    /// through dedicated [`AddAccountMsg`] arms in follow-up
+    /// commits.
+    #[must_use]
+    pub fn secret_state(&self) -> &AddSecretState {
+        &self.secret_state
     }
 }
 
