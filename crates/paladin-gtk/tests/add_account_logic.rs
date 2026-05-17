@@ -1705,6 +1705,143 @@ fn apply_msg_confirm_add_anyway_clears_prior_worker_outcome() {
 }
 
 #[test]
+fn manual_draft_state_default_matches_cli_manual_add_defaults() {
+    // The `AdwPreferencesGroup` body of `AddAccountComponent` opens
+    // with the same defaults the CLI interactive prompts use (DESIGN
+    // §5 / `paladin-cli/src/commands/add.rs`): TOTP, SHA1, 6 digits,
+    // 30 s period, HOTP counter 0, and empty label / issuer /
+    // icon-hint text (which collapses to `IconHintInput::Default`
+    // through `paladin_core::parse_icon_hint_token`).
+    use paladin_core::{AccountKindInput, Algorithm};
+    use paladin_gtk::add_account::ManualDraftState;
+
+    let draft = ManualDraftState::default();
+    assert_eq!(draft.label, "");
+    assert_eq!(draft.issuer, "");
+    assert_eq!(draft.algorithm, Algorithm::Sha1);
+    assert_eq!(draft.digits, 6);
+    assert_eq!(draft.kind, AccountKindInput::Totp);
+    assert_eq!(draft.period_secs, 30);
+    assert_eq!(draft.counter, 0);
+    assert_eq!(draft.icon_hint_text, "");
+}
+
+#[test]
+fn manual_draft_state_new_matches_default() {
+    // Mirror of `AddDialogState::new()`'s parity with `default()`:
+    // `ManualDraftState::new()` is the named constructor the widget
+    // calls when the dialog opens, and it must match the `Default`
+    // impl so future construction sites do not drift.
+    use paladin_gtk::add_account::ManualDraftState;
+
+    let from_new = ManualDraftState::new();
+    let from_default = ManualDraftState::default();
+    assert_eq!(from_new.label, from_default.label);
+    assert_eq!(from_new.issuer, from_default.issuer);
+    assert_eq!(from_new.algorithm, from_default.algorithm);
+    assert_eq!(from_new.digits, from_default.digits);
+    assert_eq!(from_new.kind, from_default.kind);
+    assert_eq!(from_new.period_secs, from_default.period_secs);
+    assert_eq!(from_new.counter, from_default.counter);
+    assert_eq!(from_new.icon_hint_text, from_default.icon_hint_text);
+}
+
+#[test]
+fn manual_draft_state_clones_freely_for_reactive_state() {
+    // Reactive `#[watch]` projections in the relm4 view rely on
+    // `Clone` for the projected fields. The non-secret manual draft
+    // is plain data, so the struct as a whole must `Clone` cheaply
+    // for the widget binders.
+    use paladin_core::{AccountKindInput, Algorithm};
+    use paladin_gtk::add_account::ManualDraftState;
+
+    let draft = ManualDraftState {
+        label: "my-label".to_string(),
+        issuer: "my-issuer".to_string(),
+        algorithm: Algorithm::Sha256,
+        digits: 8,
+        kind: AccountKindInput::Hotp,
+        period_secs: 60,
+        counter: 42,
+        icon_hint_text: "slack".to_string(),
+    };
+    let cloned = draft.clone();
+    assert_eq!(cloned.label, draft.label);
+    assert_eq!(cloned.issuer, draft.issuer);
+    assert_eq!(cloned.algorithm, draft.algorithm);
+    assert_eq!(cloned.digits, draft.digits);
+    assert_eq!(cloned.kind, draft.kind);
+    assert_eq!(cloned.period_secs, draft.period_secs);
+    assert_eq!(cloned.counter, draft.counter);
+    assert_eq!(cloned.icon_hint_text, draft.icon_hint_text);
+}
+
+#[test]
+fn add_dialog_state_new_initializes_manual_draft_to_defaults() {
+    // The freshly-opened add dialog must start the manual form on
+    // the CLI defaults so the view's first frame already matches the
+    // documented behavior. Mirror of
+    // `add_dialog_state_new_initializes_secret_state_to_manual_path_with_empty_buffers`
+    // for the non-secret half of the manual sub-path.
+    use paladin_gtk::add_account::{AddDialogState, ManualDraftState};
+
+    let state = AddDialogState::new();
+    let expected = ManualDraftState::default();
+    let draft = state.manual_draft();
+    assert_eq!(draft.label, expected.label);
+    assert_eq!(draft.issuer, expected.issuer);
+    assert_eq!(draft.algorithm, expected.algorithm);
+    assert_eq!(draft.digits, expected.digits);
+    assert_eq!(draft.kind, expected.kind);
+    assert_eq!(draft.period_secs, expected.period_secs);
+    assert_eq!(draft.counter, expected.counter);
+    assert_eq!(draft.icon_hint_text, expected.icon_hint_text);
+}
+
+#[test]
+fn add_dialog_state_default_manual_draft_matches_new() {
+    // The implicit `Default` impl must construct the same manual
+    // draft the named `new()` constructor does. Mirror of
+    // `add_dialog_state_default_secret_state_matches_new`.
+    use paladin_gtk::add_account::AddDialogState;
+
+    let from_new = AddDialogState::new();
+    let from_default = AddDialogState::default();
+    assert_eq!(
+        from_new.manual_draft().label,
+        from_default.manual_draft().label
+    );
+    assert_eq!(
+        from_new.manual_draft().issuer,
+        from_default.manual_draft().issuer
+    );
+    assert_eq!(
+        from_new.manual_draft().algorithm,
+        from_default.manual_draft().algorithm
+    );
+    assert_eq!(
+        from_new.manual_draft().digits,
+        from_default.manual_draft().digits
+    );
+    assert_eq!(
+        from_new.manual_draft().kind,
+        from_default.manual_draft().kind
+    );
+    assert_eq!(
+        from_new.manual_draft().period_secs,
+        from_default.manual_draft().period_secs
+    );
+    assert_eq!(
+        from_new.manual_draft().counter,
+        from_default.manual_draft().counter
+    );
+    assert_eq!(
+        from_new.manual_draft().icon_hint_text,
+        from_default.manual_draft().icon_hint_text
+    );
+}
+
+#[test]
 fn apply_msg_confirm_add_anyway_with_no_pending_is_defensive_noop() {
     // Defensive: the widget should only dispatch ConfirmAddAnyway
     // after a `StagePendingDuplicate` parks a value. A stray dispatch

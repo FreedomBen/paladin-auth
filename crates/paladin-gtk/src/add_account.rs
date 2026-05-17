@@ -98,6 +98,84 @@ use paladin_core::{
 
 use crate::secret_fields::{AddPath, AddSecretState, ClearReason};
 
+/// Per-keystroke reactive state for the non-secret manual entries.
+///
+/// Holds the live label / issuer / algorithm / digits / kind / TOTP
+/// period / HOTP counter / icon-hint text shadowed from the widget
+/// `AdwEntryRow` and selector widgets. Defaults match the CLI
+/// interactive `add` prompts (DESIGN §5 / `paladin-cli/src/commands/add.rs`):
+/// TOTP, SHA1, 6 digits, 30 s period, HOTP counter 0, and empty
+/// label / issuer / icon-hint (the empty icon-hint text collapses to
+/// [`paladin_core::IconHintInput::Default`] through
+/// [`paladin_core::parse_icon_hint_token`]).
+///
+/// Separate from [`ManualFields`] — which the widget builds *at
+/// submit time* by combining this draft with the
+/// [`crate::secret_fields::AddSecretState::manual_secret`] buffer —
+/// so the secret stays inside the [`crate::secret_fields::SecretEntry`]
+/// boundary until the user commits. Per-keystroke message routing
+/// for each field lands as additional [`AddAccountMsg`] variants in
+/// follow-up commits alongside the editable form widgets.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManualDraftState {
+    /// Live label entry text. Trimmed and length-validated by
+    /// [`validate_manual`] at submit time; the draft preserves the
+    /// user's whitespace so the cursor position does not jump.
+    pub label: String,
+    /// Live issuer entry text. Empty maps to `None` before being
+    /// passed to [`validate_manual`].
+    pub issuer: String,
+    /// HMAC algorithm selected by the algorithm dropdown.
+    pub algorithm: Algorithm,
+    /// OTP digit count from the digits spinner (`6..=8`).
+    pub digits: u8,
+    /// TOTP / HOTP kind selected by the kind switcher.
+    pub kind: AccountKindInput,
+    /// TOTP period in seconds. Consulted only when
+    /// `kind == AccountKindInput::Totp`; dropped before
+    /// [`validate_manual`] runs on the HOTP path so the cross-check
+    /// never fires.
+    pub period_secs: u32,
+    /// HOTP starting counter. Consulted only when
+    /// `kind == AccountKindInput::Hotp`; dropped before
+    /// [`validate_manual`] runs on the TOTP path.
+    pub counter: u64,
+    /// Free-form icon-hint entry text. Empty / `"none"` (any case) /
+    /// explicit slug parsing happens through
+    /// [`paladin_core::parse_icon_hint_token`] at submit time so the
+    /// CLI / TUI add modals stay in parity.
+    pub icon_hint_text: String,
+}
+
+impl Default for ManualDraftState {
+    fn default() -> Self {
+        Self {
+            label: String::new(),
+            issuer: String::new(),
+            algorithm: Algorithm::Sha1,
+            digits: 6,
+            kind: AccountKindInput::Totp,
+            period_secs: 30,
+            counter: 0,
+            icon_hint_text: String::new(),
+        }
+    }
+}
+
+impl ManualDraftState {
+    /// Construct a fresh manual draft on the CLI defaults (TOTP,
+    /// SHA1, 6 digits, 30 s period, HOTP counter 0, empty label /
+    /// issuer / icon-hint).
+    ///
+    /// Named constructor for the widget mount path so the call site
+    /// reads as `ManualDraftState::new()` alongside
+    /// [`AddDialogState::new`].
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
 /// Widget-side bundle of typed manual-add fields.
 ///
 /// The widget shadows each entry into Paladin-owned zeroizing
@@ -825,6 +903,15 @@ pub struct AddDialogState {
     /// the manual Base32 secret or the `otpauth://` URI text through
     /// the error log.
     secret_state: AddSecretState,
+    /// Non-secret live state for the manual sub-path's editable
+    /// fields. Holds the label / issuer / algorithm / digits / kind /
+    /// TOTP period / HOTP counter / icon-hint text shadow that the
+    /// widget combines with
+    /// [`crate::secret_fields::AddSecretState::manual_secret`] to
+    /// build a [`ManualFields`] bundle at submit time. Defaults to
+    /// the CLI manual-add defaults (TOTP, SHA1, 6 digits, 30 s
+    /// period, HOTP counter 0).
+    manual_draft: ManualDraftState,
 }
 
 impl AddDialogState {
@@ -864,6 +951,19 @@ impl AddDialogState {
     #[must_use]
     pub fn secret_state(&self) -> &AddSecretState {
         &self.secret_state
+    }
+
+    /// Read-only view of the manual sub-path's live draft state.
+    ///
+    /// Exposes the non-secret label / issuer / algorithm / digits /
+    /// kind / period / counter / icon-hint shadow so the widget view
+    /// and integration tests can observe the live form values
+    /// without owning a mutable handle. Per-field mutation lands
+    /// through dedicated [`AddAccountMsg`] arms in follow-up
+    /// commits.
+    #[must_use]
+    pub fn manual_draft(&self) -> &ManualDraftState {
+        &self.manual_draft
     }
 }
 
