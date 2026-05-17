@@ -86,8 +86,8 @@ use std::time::SystemTime;
 use secrecy::SecretString;
 
 use paladin_core::{
-    parse_icon_hint_token, validate_manual, AccountInput, AccountKindInput, AccountSummary,
-    Algorithm, ErrorKind, PaladinError, ValidatedAccount,
+    parse_icon_hint_token, validate_manual, Account, AccountId, AccountInput, AccountKindInput,
+    AccountSummary, Algorithm, ErrorKind, PaladinError, Store, ValidatedAccount, Vault,
 };
 
 /// Widget-side bundle of typed manual-add fields.
@@ -294,6 +294,162 @@ pub fn classify_add_post_effect_error(err: &PaladinError) -> AddPostEffectOutcom
             AddPostEffectOutcome::KeepWithWarning(InlineWarning::from_error(err))
         }
         _ => AddPostEffectOutcome::Inline(InlineError::from_error(err)),
+    }
+}
+
+/// Bundle of inputs the GTK add worker consumes by value.
+///
+/// `AppModel::update` builds this from the live `Unlocked` `(Vault,
+/// Store)` pair plus the [`ValidatedAccount::account`] extracted from
+/// either [`classify_manual_submit`]'s `Proceed` arm or
+/// [`crate::otpauth_uri_paste::classify_uri_submit`]'s `Proceed` arm
+/// (the URI sub-path shares the same downstream commit path). The
+/// dialog retains the [`ValidatedAccount::warnings`] in its own
+/// reactive state so they can be rendered on the success path; the
+/// worker is concerned only with the commit itself.
+///
+/// Consumed by value so `gio::spawn_blocking(move || run_add_worker(
+/// input))` moves the live pair into the worker thread without
+/// keeping `AppModel` in `Unlocked` for the duration of the save
+/// call. The same pair returns from the worker on every branch so
+/// `AppModel::update` can reinstall it before applying the UI
+/// outcome.
+///
+/// `Clone` / `PartialEq` are deliberately not derived: [`Store`]
+/// holds non-`Clone` filesystem state, [`Account`] holds zeroizing
+/// secret bytes, and `AppModel::update` consumes the input exactly
+/// once when it moves it into the `gio::spawn_blocking` closure.
+#[derive(Debug)]
+pub struct AddWorkerInput {
+    /// Live vault from the `Unlocked` `(Vault, Store)` pair. Moved
+    /// into the worker so `mutate_and_save` can borrow it mutably
+    /// without keeping `AppModel` in `Unlocked` for the duration of
+    /// the save call.
+    pub vault: Vault,
+    /// Live store from the `Unlocked` `(Vault, Store)` pair. Moved
+    /// alongside `vault` so the same `(Vault, Store)` pair returns
+    /// from the worker even on typed failure.
+    pub store: Store,
+    /// Validated account extracted from
+    /// [`ValidatedAccount::account`]. The id stamped at validation
+    /// time is preserved through [`Vault::add`] so the worker can
+    /// surface it back to the dialog on
+    /// [`AddWorkerEffect::Success`] without scanning the vault.
+    pub account: Account,
+}
+
+/// Outcome of [`run_add_worker`] for `AppModel::update` to apply.
+///
+/// `Success` indicates the add committed and the row appears in the
+/// visible account list (the carried [`AccountId`] lets the dialog /
+/// list highlight or scroll to the new row without re-scanning the
+/// vault). `Failure` wraps the [`AddPostEffectOutcome`] from
+/// [`classify_add_post_effect_error`] so the dialog can re-render
+/// the inline error / durability warning without re-deriving the
+/// routing decision off the [`PaladinError`].
+#[derive(Debug, Clone)]
+pub enum AddWorkerEffect {
+    /// `Vault::mutate_and_save(|v| { v.add(account); … })` returned
+    /// `Ok(())`. The dialog dismisses itself and the new row appears
+    /// in the visible account list. The carried [`AccountId`] is the
+    /// id stamped on the [`Account`] at validation time (preserved
+    /// by [`Vault::add`]).
+    Success {
+        /// Stable id of the just-inserted account.
+        account_id: AccountId,
+    },
+    /// `Vault::mutate_and_save(|v| { v.add(account); … })` returned a
+    /// typed failure. The carried [`AddPostEffectOutcome`] tells the
+    /// dialog whether to stay open with an inline error
+    /// (`save_not_committed`, `io_error`, defensive
+    /// `validation_error` / `invalid_state` / …) or report success
+    /// with an attached durability warning
+    /// (`save_durability_unconfirmed`).
+    Failure(AddPostEffectOutcome),
+}
+
+/// Bundle returned by [`run_add_worker`].
+///
+/// Carries the live `(Vault, Store)` pair on every branch so
+/// `AppModel::update` can reinstall it before applying the UI
+/// outcome — `Vault::mutate_and_save` already restores the snapshot
+/// on `save_not_committed`, so the returned vault is the
+/// authoritative post-effect state regardless of the
+/// [`AddWorkerEffect`] variant. Per `IMPLEMENTATION_PLAN_04_GTK.md`
+/// §"Vault interaction" > "Every worker returns `(Vault, Store,
+/// EffectOutcome)`".
+///
+/// `Clone` / `PartialEq` are deliberately not derived for the same
+/// reason as on [`AddWorkerInput`].
+#[derive(Debug)]
+pub struct AddWorkerCompletion {
+    /// Routed effect for `AppModel::update` to apply to the dialog.
+    pub effect: AddWorkerEffect,
+    /// Live vault after the `mutate_and_save` call. On
+    /// [`AddWorkerEffect::Success`] the targeted account is present;
+    /// on [`AddWorkerEffect::Failure`] the vault is whatever
+    /// `mutate_and_save` rolled back to (pre-commit snapshot for
+    /// `save_not_committed`; post-commit state with the new account
+    /// for `save_durability_unconfirmed`; pre-call state for
+    /// defensive `validation_error` / `invalid_state` cases).
+    pub vault: Vault,
+    /// Live store moved through unchanged so `AppModel::update` can
+    /// reinstall the `(Vault, Store)` pair after the worker returns.
+    pub store: Store,
+}
+
+/// Synchronous body of the `gio::spawn_blocking
+/// Vault::mutate_and_save(|v| v.add(...))` add worker fired by
+/// `AppModel::update` from
+/// `AppMsg::AddAccountAction(AddAccountOutput::Submit{Manual,Uri})`.
+///
+/// Consumes the [`AddWorkerInput`] by value, captures the
+/// [`AccountId`] off the [`Account`] before it moves into the
+/// closure, runs `vault.mutate_and_save(&store, |v| { v.add(account);
+/// Ok(()) })`, and bundles the outcome into an
+/// [`AddWorkerCompletion`] via [`classify_add_post_effect_error`].
+/// The live `(Vault, Store)` pair is always returned so `AppModel`
+/// reinstalls it regardless of the typed effect — `mutate_and_save`
+/// is authoritative for the rollback / durability-unconfirmed
+/// semantics per DESIGN.md §4.3.
+///
+/// The duplicate-detection pre-flight ([`classify_duplicate`]) runs
+/// at the dialog layer before this worker is dispatched; an "add
+/// anyway" confirmation consumes the staged validated account from
+/// [`crate::secret_fields::AddSecretState::pending`] and the worker
+/// commits it without re-checking. The worker therefore makes no
+/// duplicate decisions — it commits whatever account the dialog
+/// hands it, in lockstep with the CLI's `--allow-duplicate` /
+/// "add anyway" semantics.
+///
+/// Extracting the worker body as a pure function lets
+/// `AppModel::update`'s closure stay a thin
+/// `gio::spawn_blocking(move || run_add_worker(input))` while the
+/// real `mutate_and_save` call stays unit-testable in
+/// `tests/add_account_logic.rs` against tempfile-backed plaintext
+/// vaults — no GTK / libadwaita main loop required. The
+/// `AppModel::update` wire-up and the `apply_add_*` reinstall
+/// helpers land in follow-up commits alongside the `UnlockedBusy`
+/// worker infrastructure.
+#[must_use]
+pub fn run_add_worker(input: AddWorkerInput) -> AddWorkerCompletion {
+    let AddWorkerInput {
+        mut vault,
+        store,
+        account,
+    } = input;
+    let account_id = account.id();
+    let effect = match vault.mutate_and_save(&store, |v| {
+        v.add(account);
+        Ok(())
+    }) {
+        Ok(()) => AddWorkerEffect::Success { account_id },
+        Err(err) => AddWorkerEffect::Failure(classify_add_post_effect_error(&err)),
+    };
+    AddWorkerCompletion {
+        effect,
+        vault,
+        store,
     }
 }
 

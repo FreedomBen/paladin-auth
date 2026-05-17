@@ -39,12 +39,12 @@
 //! result, then [`classify_add_post_effect_error`] on the post-save
 //! worker outcome.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use paladin_core::{
     AccountId, AccountKindInput, AccountKindSummary, AccountSummary, Algorithm, ErrorKind,
-    PaladinError, ValidationWarning,
+    PaladinError, Store, ValidationWarning, Vault, VaultInit, VaultLock,
 };
 use secrecy::SecretString;
 
@@ -60,9 +60,9 @@ fn validation_error(field: &'static str, reason: &str) -> PaladinError {
 }
 
 use paladin_gtk::add_account::{
-    classify_add_post_effect_error, classify_duplicate, classify_manual_submit,
-    AddPostEffectOutcome, DuplicateOutcome, InlineError, InlineWarning, ManualFields,
-    ManualSubmitOutcome,
+    classify_add_post_effect_error, classify_duplicate, classify_manual_submit, run_add_worker,
+    AddPostEffectOutcome, AddWorkerCompletion, AddWorkerEffect, AddWorkerInput, DuplicateOutcome,
+    InlineError, InlineWarning, ManualFields, ManualSubmitOutcome,
 };
 use paladin_gtk::secret_fields::AddSecretState;
 
@@ -650,4 +650,217 @@ fn inline_warning_clones_freely_for_reactive_state() {
     let cloned: InlineWarning = warning.clone();
     assert_eq!(cloned.kind, warning.kind);
     assert_eq!(cloned.rendered, warning.rendered);
+}
+
+// ---------------------------------------------------------------------------
+// run_add_worker — `gio::spawn_blocking Vault::mutate_and_save(|v| v.add(...))`
+//
+// The worker is the synchronous body of the add-account worker fired
+// by `AppModel::update` from
+// `AppMsg::AddAccountAction(AddAccountOutput::Submit{Manual,Uri})`.
+// It consumes the live `(Vault, Store)` pair by value so the busy
+// gate can reinstall whichever pair the worker returns — success,
+// `save_durability_unconfirmed`, or pre-commit rollback. Extracting
+// the worker body as a pure function lets `AppModel::update`'s
+// closure stay a thin `gio::spawn_blocking(move || run_add_worker(
+// input))` while the real `mutate_and_save` call stays unit-testable
+// here against tempfile-backed plaintext vaults — no GTK /
+// libadwaita main loop required.
+// ---------------------------------------------------------------------------
+
+fn secure_tempdir() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().expect("create tempdir for add-worker fixture");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700))
+            .expect("chmod tempdir to 0700");
+    }
+    dir
+}
+
+fn open_plaintext_pair(path: &Path) -> (Vault, Store) {
+    let (vault, store) =
+        Store::create(path, VaultInit::Plaintext).expect("create plaintext vault on disk");
+    vault.save(&store).expect("commit empty vault");
+    drop(vault);
+    drop(store);
+    Store::open(path, VaultLock::Plaintext).expect("reopen plaintext vault")
+}
+
+fn validate_manual_totp(label: &str, issuer: Option<&str>) -> paladin_core::ValidatedAccount {
+    let mut fields = manual_totp_defaults();
+    fields.label = label.to_string();
+    fields.issuer = issuer.unwrap_or_default().to_string();
+    match classify_manual_submit(fields, now_for_tests()) {
+        ManualSubmitOutcome::Proceed(validated) => validated,
+        ManualSubmitOutcome::InlineError(inline) => {
+            panic!("manual TOTP fixture must validate, got InlineError {inline:?}")
+        }
+    }
+}
+
+#[test]
+fn run_add_worker_plaintext_add_succeeds_and_returns_live_pair_with_account_id() {
+    // Happy path: insert a fresh TOTP account on a plaintext vault and
+    // verify the worker reports Success carrying the inserted
+    // `AccountId`, the new account is in the returned vault, and the
+    // `(Vault, Store)` pair survives the worker so `AppModel::update`
+    // can reinstall it.
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (vault, store) = open_plaintext_pair(&path);
+    let validated = validate_manual_totp("alice", Some("Acme"));
+    let expected_id = validated.account.id();
+
+    let completion = run_add_worker(AddWorkerInput {
+        vault,
+        store,
+        account: validated.account,
+    });
+
+    let AddWorkerCompletion {
+        effect,
+        vault,
+        store: _,
+    } = completion;
+    match effect {
+        AddWorkerEffect::Success { account_id } => {
+            assert_eq!(
+                account_id, expected_id,
+                "Success must surface the AccountId stamped on the Account before insertion",
+            );
+        }
+        other @ AddWorkerEffect::Failure(_) => {
+            panic!("plaintext add must surface AddWorkerEffect::Success, got {other:?}")
+        }
+    }
+    let summary = vault
+        .summaries()
+        .find(|s| s.id == expected_id)
+        .expect("added account is visible in the returned vault");
+    assert_eq!(summary.label, "alice");
+    assert_eq!(summary.issuer.as_deref(), Some("Acme"));
+}
+
+#[test]
+fn run_add_worker_persists_added_account_to_disk() {
+    // The worker must not just mutate the in-memory vault — it goes
+    // through `mutate_and_save` so the new account survives a reopen.
+    // This pins the round trip through the §4.3 atomic-write pipeline
+    // without exercising the GTK loop.
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (vault, store) = open_plaintext_pair(&path);
+    let validated = validate_manual_totp("bob", None);
+    let expected_id = validated.account.id();
+
+    let completion = run_add_worker(AddWorkerInput {
+        vault,
+        store,
+        account: validated.account,
+    });
+    assert!(matches!(completion.effect, AddWorkerEffect::Success { .. }));
+    drop(completion);
+
+    let (reopened, _store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let summary = reopened
+        .summaries()
+        .find(|s| s.id == expected_id)
+        .expect("added account survives reopen");
+    assert_eq!(summary.label, "bob");
+    assert!(summary.issuer.is_none());
+}
+
+#[test]
+fn run_add_worker_appends_after_existing_accounts() {
+    // Insertion order matters for §5 row ordering. The worker must
+    // append the new account after existing ones (`Vault::add` pushes
+    // onto the back) so the returned vault preserves insertion order
+    // for the visible row list.
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+    let first = validate_manual_totp("alice", Some("Acme"));
+    let first_id = first.account.id();
+    vault.add(first.account);
+    vault.save(&store).expect("commit pre-existing account");
+
+    let second = validate_manual_totp("bob", None);
+    let second_id = second.account.id();
+    let completion = run_add_worker(AddWorkerInput {
+        vault,
+        store,
+        account: second.account,
+    });
+
+    assert!(matches!(
+        completion.effect,
+        AddWorkerEffect::Success { account_id } if account_id == second_id,
+    ));
+    let ids: Vec<AccountId> = completion.vault.summaries().map(|s| s.id).collect();
+    assert_eq!(
+        ids,
+        vec![first_id, second_id],
+        "Vault::add must append; the second account follows the first",
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn run_add_worker_save_failure_routes_inline_and_returns_pair() {
+    // Defensive: when `Vault::mutate_and_save` returns a typed save
+    // failure that is not `save_durability_unconfirmed`, the worker
+    // routes through `classify_add_post_effect_error` to
+    // `AddPostEffectOutcome::Inline` and still returns the live
+    // `(Vault, Store)` pair so `AppModel::update` can reinstall it
+    // before applying the inline error.
+    //
+    // We force the failure by removing the parent dir between
+    // `Store::open` and the worker call — `Vault::save`'s atomic
+    // tempfile write then surfaces an `io_error`, which
+    // `mutate_and_save` rolls back snapshot-style and the worker
+    // routes inline. Unix-gated because the tempdir uses Unix
+    // permissions and the failure mode depends on POSIX semantics.
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (vault, store) = open_plaintext_pair(&path);
+    let validated = validate_manual_totp("alice", Some("Acme"));
+
+    // Drop the tempdir to delete the parent directory; the next save
+    // attempt fails because the atomic tempfile cannot be created.
+    drop(dir);
+
+    let completion = run_add_worker(AddWorkerInput {
+        vault,
+        store,
+        account: validated.account,
+    });
+
+    match completion.effect {
+        AddWorkerEffect::Failure(AddPostEffectOutcome::Inline(inline)) => {
+            // The exact ErrorKind depends on what `Vault::save` raises
+            // when the parent dir vanishes (`SaveNotCommitted` or
+            // `IoError` depending on which atomic-write step fails),
+            // but the routing must stay on the `Inline` arm — never
+            // on `KeepWithWarning`, which is reserved for
+            // `save_durability_unconfirmed`.
+            assert_ne!(
+                inline.kind,
+                ErrorKind::SaveDurabilityUnconfirmed,
+                "missing-parent save failure must not route to KeepWithWarning",
+            );
+        }
+        other => panic!("expected Failure(Inline) when save fails, got {other:?}"),
+    }
+    // The live (Vault, Store) pair returns regardless of the typed
+    // failure so the busy gate can reinstall it. The exact in-memory
+    // vault state after rollback depends on which `Vault::save` step
+    // failed (snapshot-restored for `save_not_committed`,
+    // post-mutation for any other error) — that contract is owned by
+    // `Vault::mutate_and_save` per DESIGN.md §4.3, so the worker test
+    // asserts only that the pair survives and the dispatch routes
+    // `Inline` rather than re-deriving rollback semantics here.
+    let _ = completion.vault;
+    let _ = completion.store;
 }
