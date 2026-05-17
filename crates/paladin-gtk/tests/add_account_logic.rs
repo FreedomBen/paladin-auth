@@ -1787,6 +1787,89 @@ fn apply_msg_manual_label_changed_preserves_other_draft_fields() {
 }
 
 #[test]
+fn apply_msg_manual_issuer_changed_shadows_into_manual_draft() {
+    // Per-keystroke issuer entry text routes through
+    // `AddAccountMsg::ManualIssuerChanged(String)` and shadows into
+    // `ManualDraftState::issuer` so the widget view's `#[watch]`
+    // projection and `classify_manual_submit` at Save time both see
+    // the live draft. The arm emits no output — issuer edits are
+    // dialog-local until Save. Mirror of the existing
+    // `apply_msg_manual_label_changed_shadows_into_manual_draft`
+    // contract on the sibling non-secret field.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    assert_eq!(state.manual_draft().issuer, "");
+
+    let output = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualIssuerChanged("Acme Co.".to_string()),
+    );
+
+    assert!(
+        output.is_none(),
+        "ManualIssuerChanged stays dialog-local; no output flows to AppModel",
+    );
+    assert_eq!(
+        state.manual_draft().issuer,
+        "Acme Co.",
+        "ManualIssuerChanged shadows the entry text into ManualDraftState::issuer",
+    );
+}
+
+#[test]
+fn apply_msg_manual_issuer_changed_replaces_prior_shadow() {
+    // A second keystroke replaces (does not append) the prior issuer
+    // shadow so the draft stays in lockstep with the visible entry
+    // text. Mirror of the existing
+    // `apply_msg_manual_label_changed_replaces_prior_shadow` contract
+    // on the sibling non-secret field.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualIssuerChanged("first".to_string()),
+    );
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualIssuerChanged("second".to_string()),
+    );
+
+    assert_eq!(
+        state.manual_draft().issuer,
+        "second",
+        "second ManualIssuerChanged replaces the prior shadow",
+    );
+}
+
+#[test]
+fn apply_msg_manual_issuer_changed_preserves_other_draft_fields() {
+    // The issuer keystroke must not disturb the rest of the manual
+    // draft — label / algorithm / digits / kind / period / counter /
+    // icon-hint stay on their CLI defaults so a stray issuer edit
+    // does not silently reset the form.
+    use paladin_core::{AccountKindInput, Algorithm};
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualIssuerChanged("only-issuer".to_string()),
+    );
+
+    let draft = state.manual_draft();
+    assert_eq!(draft.label, "");
+    assert_eq!(draft.issuer, "only-issuer");
+    assert_eq!(draft.algorithm, Algorithm::Sha1);
+    assert_eq!(draft.digits, 6);
+    assert_eq!(draft.kind, AccountKindInput::Totp);
+    assert_eq!(draft.period_secs, 30);
+    assert_eq!(draft.counter, 0);
+    assert_eq!(draft.icon_hint_text, "");
+}
+
+#[test]
 fn manual_draft_state_default_matches_cli_manual_add_defaults() {
     // The `AdwPreferencesGroup` body of `AddAccountComponent` opens
     // with the same defaults the CLI interactive prompts use (DESIGN

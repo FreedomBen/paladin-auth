@@ -683,6 +683,21 @@ pub enum AddAccountMsg {
     /// the visible entry text. Dialog-local — no [`AddAccountOutput`]
     /// is emitted.
     ManualLabelChanged(String),
+    /// Per-keystroke shadow of the non-secret issuer entry into
+    /// [`ManualDraftState::issuer`].
+    ///
+    /// Sibling of [`Self::ManualLabelChanged`] on the issuer field.
+    /// Carries a plain `String` from the GTK [`gtk::EntryBuffer`] at
+    /// the §8 UI boundary; the bytes are not secret-bearing — the
+    /// issuer is rendered alongside the row label once committed and
+    /// participates in the issuer / label match-key
+    /// [`paladin_core::account_matches_search`] uses. Empty issuer
+    /// maps to `None` at submit time inside
+    /// [`classify_manual_submit`]; the draft preserves the user's
+    /// whitespace so the cursor position does not jump. [`apply_msg`]
+    /// replaces (does not append) the prior shadow. Dialog-local —
+    /// no [`AddAccountOutput`] is emitted.
+    ManualIssuerChanged(String),
     /// Per-keystroke shadow of the manual Base32 secret entry into
     /// the Paladin-owned [`crate::secret_fields::SecretEntry`] inside
     /// [`crate::secret_fields::AddSecretState::manual_secret`].
@@ -1034,6 +1049,10 @@ pub fn apply_msg(state: &mut AddDialogState, msg: AddAccountMsg) -> Option<AddAc
         }
         AddAccountMsg::ManualLabelChanged(text) => {
             state.manual_draft.label = text;
+            None
+        }
+        AddAccountMsg::ManualIssuerChanged(text) => {
+            state.manual_draft.issuer = text;
             None
         }
         AddAccountMsg::ManualSecretChanged(text) => {
