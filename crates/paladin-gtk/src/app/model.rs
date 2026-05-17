@@ -74,12 +74,15 @@ use crate::account_list::{
     format_rendered_marker, format_widget_states_marker, hidden_row_display, row_models_from_vault,
     AccountListComponent, AccountListInit, AccountListOutput, AccountRowModel,
 };
-use crate::add_account::{AddAccountComponent, AddAccountInit, AddAccountOutput};
+use crate::add_account::{
+    AddAccountComponent, AddAccountInit, AddAccountOutput, AddWorkerCompletion,
+};
 use crate::app::state::{
-    apply_remove_dispatch_inplace, apply_remove_vault_install_inplace,
-    apply_rename_dispatch_inplace, apply_rename_vault_install_inplace, apply_submit_remove_inplace,
-    apply_submit_rename_inplace, apply_submit_unlock_inplace, apply_unlock_dispatch_inplace,
-    apply_unlock_vault_install_inplace, compose_remove_dispatch, compose_remove_worker_input,
+    apply_add_dispatch_inplace, apply_add_vault_install_inplace, apply_remove_dispatch_inplace,
+    apply_remove_vault_install_inplace, apply_rename_dispatch_inplace,
+    apply_rename_vault_install_inplace, apply_submit_remove_inplace, apply_submit_rename_inplace,
+    apply_submit_unlock_inplace, apply_unlock_dispatch_inplace, apply_unlock_vault_install_inplace,
+    compose_add_dispatch, compose_remove_dispatch, compose_remove_worker_input,
     compose_rename_dispatch, compose_rename_worker_input, compose_unlock_dispatch,
     compose_unlock_worker_input, decide_state_from_inspect, decide_state_from_open_error,
     run_unlock_worker, AppState, OpenErrorOutcome, UnlockWorkerCompletion,
@@ -406,6 +409,28 @@ pub enum AppMsg {
     /// [`crate::app::state::apply_remove_vault_install_inplace`]
     /// unconditionally.
     RemoveWorkerCompleted(RemoveWorkerCompletion),
+    /// Posted by the `gio::spawn_blocking
+    /// Vault::mutate_and_save(|v| v.add(account))` worker after it
+    /// consumes a [`crate::add_account::AddWorkerInput`] and reports
+    /// its routed outcome as an [`AddWorkerCompletion`] — the typed
+    /// [`crate::add_account::AddWorkerEffect`] bundled with the live
+    /// `(Vault, Store)` pair returned by `mutate_and_save`
+    /// regardless of typed outcome (the add worker always returns
+    /// the pair per `IMPLEMENTATION_PLAN_04_GTK.md` §"Vault
+    /// interaction").
+    ///
+    /// Mirrors the [`Self::RenameWorkerCompleted`] and
+    /// [`Self::RemoveWorkerCompleted`] dispatch paths exactly —
+    /// [`crate::app::state::compose_add_dispatch`] bundles the typed
+    /// [`crate::add_account::AddWorkerEffect`] over the cached
+    /// [`AppState`] into a [`crate::app::state::AddDispatch`] (state
+    /// replacement `UnlockedBusy → Unlocked`, optional
+    /// [`crate::add_account::AddAccountMsg::WorkerFailed`] on every
+    /// failure branch, drop-dialog flag on `Success`). The carried
+    /// pair is reinstalled into [`AppModel::vault`] via
+    /// [`crate::app::state::apply_add_vault_install_inplace`]
+    /// unconditionally.
+    AddWorkerCompleted(AddWorkerCompletion),
 }
 
 // `relm4::component(pub)` generates a public `AppModelWidgets` struct so the
@@ -1012,6 +1037,61 @@ impl SimpleComponent for AppModel {
                     }
                     if dispatch.drop_dialog {
                         if let Some(controller) = self.rename_dialog.take() {
+                            self.content.remove(controller.widget());
+                        }
+                    }
+                }
+            }
+            AppMsg::AddWorkerCompleted(completion) => {
+                // Worker-outcome dispatch. Mirrors
+                // `RenameWorkerCompleted` / `RemoveWorkerCompleted`
+                // exactly: `compose_add_dispatch` bundles the typed
+                // `AddWorkerEffect` over the cached `AppState` into
+                // an `AddDispatch`:
+                //
+                // * `app_state` — `UnlockedBusy → Unlocked` rollback
+                //   regardless of typed effect (`mutate_and_save` is
+                //   authoritative for the rollback / durability-
+                //   unconfirmed semantics, so the busy gate always
+                //   releases). The `None` defensive case (worker
+                //   outcome arrived but the cached state was not
+                //   `UnlockedBusy`) leaves `AppModel::state` intact.
+                // * `dialog_msg` — `Some(WorkerFailed(outcome))` on
+                //   every failure branch, forwarded to the live
+                //   `AddAccountComponent` so the typed
+                //   `save_not_committed` /
+                //   `save_durability_unconfirmed` / defensive error
+                //   re-renders inline.
+                // * `drop_dialog` — `true` on the success branch
+                //   only, detaching the dialog widget so the
+                //   `AccountListComponent` re-renders with the new
+                //   row.
+                //
+                // The carried `(vault, store)` pair is reinstalled
+                // into `AppModel::vault` via
+                // `apply_add_vault_install_inplace`
+                // unconditionally — `mutate_and_save` is
+                // authoritative for the post-add / rollback state
+                // across every effect branch.
+                let AddWorkerCompletion {
+                    effect,
+                    vault,
+                    store,
+                } = completion;
+                apply_add_vault_install_inplace(&mut self.vault, (vault, store));
+                let dispatch = self.state.as_mut().map(|state| {
+                    let dispatch = compose_add_dispatch(state, &effect);
+                    apply_add_dispatch_inplace(state, &dispatch);
+                    dispatch
+                });
+                if let Some(dispatch) = dispatch {
+                    if let Some(msg) = dispatch.dialog_msg {
+                        if let Some(controller) = self.add_dialog.as_ref() {
+                            controller.emit(msg);
+                        }
+                    }
+                    if dispatch.drop_dialog {
+                        if let Some(controller) = self.add_dialog.take() {
                             self.content.remove(controller.widget());
                         }
                     }

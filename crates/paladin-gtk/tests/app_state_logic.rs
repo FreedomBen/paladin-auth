@@ -7948,3 +7948,192 @@ fn apply_add_dispatch_inplace_from_non_unlocked_busy_leaves_state_unchanged_and_
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Add pipeline — full composition order `AppModel::update` walks for
+// `AppMsg::AddWorkerCompleted`. Pins the exact sequence
+// `compose_add_worker_input` → `apply_submit_add_inplace` →
+// `run_add_worker` → `apply_add_vault_install_inplace` →
+// `compose_add_dispatch` → `apply_add_dispatch_inplace`.
+//
+// Symmetric partner of `rename_pipeline_success_*` /
+// `rename_pipeline_failure_*` for the add path. The individual
+// projections are exhaustively tested above; these pipeline tests
+// guard against composition-order regressions in `AppModel::update`.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn add_pipeline_success_returns_to_unlocked_with_new_account_and_drops_dialog() {
+    // Happy path: the manual sub-path of `AddAccountComponent`
+    // submits a validated `Account`; `AppModel::update` composes
+    // the worker input over `Unlocked`, transitions to
+    // `UnlockedBusy`, runs the worker (which commits the account
+    // through `Vault::mutate_and_save`), reinstalls the post-save
+    // pair, and dispatches over `UnlockedBusy + Success` to roll
+    // back to `Unlocked` while dropping the dialog and forwarding
+    // no inline message.
+    use paladin_gtk::add_account::{run_add_worker, AddWorkerCompletion, AddWorkerEffect};
+    use paladin_gtk::app::state::{
+        apply_add_dispatch_inplace, apply_add_vault_install_inplace, compose_add_dispatch,
+    };
+
+    let (_tempdir, path, vault, store) = fresh_plaintext_pair();
+    let account = fresh_add_account();
+    let expected_id = account.id();
+    let expected_label = account.label().to_string();
+
+    // 1. Compose worker input from `Unlocked` over the live pair.
+    let mut state = AppState::Unlocked { path: path.clone() };
+    let mut vault_slot: Option<(Vault, Store)> = Some((vault, store));
+    let worker_input = compose_add_worker_input(
+        &state,
+        vault_slot.take().expect("vault slot is filled"),
+        account,
+    )
+    .expect("compose returns Ok when state is Unlocked");
+
+    // 2. Busy-gate transition.
+    let transitioned = apply_submit_add_inplace(&mut state);
+    assert!(
+        transitioned,
+        "apply_submit_add_inplace must return true on Unlocked source"
+    );
+    assert!(
+        matches!(state, AppState::UnlockedBusy { .. }),
+        "state must be UnlockedBusy after apply_submit_add_inplace"
+    );
+
+    // 3. Worker body.
+    let completion = run_add_worker(worker_input);
+    let AddWorkerCompletion {
+        effect,
+        vault,
+        store,
+    } = completion;
+    match &effect {
+        AddWorkerEffect::Success { account_id } => {
+            assert_eq!(
+                *account_id, expected_id,
+                "Success carries the validated-time id"
+            );
+        }
+        other @ AddWorkerEffect::Failure(_) => {
+            panic!("expected Success for a valid manual add, got {other:?}")
+        }
+    }
+
+    // 4. Reinstall pair into the live slot.
+    apply_add_vault_install_inplace(&mut vault_slot, (vault, store));
+    let (installed_vault, _) = vault_slot.as_ref().expect("pair reinstalled");
+    let added = installed_vault
+        .accounts()
+        .iter()
+        .find(|a| a.id() == expected_id)
+        .expect("added account survives mutate_and_save");
+    assert_eq!(
+        added.label(),
+        expected_label,
+        "vault must reflect the added account",
+    );
+
+    // 5. Dispatch over UnlockedBusy + Success.
+    let dispatch = compose_add_dispatch(&state, &effect);
+    assert!(dispatch.drop_dialog, "drop_dialog == true on Success");
+    assert!(
+        dispatch.dialog_msg.is_none(),
+        "dialog_msg == None on Success (dropped dialog gets no message)",
+    );
+    let dispatched = apply_add_dispatch_inplace(&mut state, &dispatch);
+    assert!(
+        dispatched,
+        "apply_add_dispatch_inplace must return true on UnlockedBusy source"
+    );
+    assert!(
+        matches!(state, AppState::Unlocked { path: ref p } if *p == path),
+        "state must be Unlocked at path after Success dispatch",
+    );
+}
+
+#[test]
+fn add_pipeline_failure_keeps_pair_installed_and_returns_to_unlocked() {
+    // Failure path: simulate a `save_not_committed` outcome (the
+    // worker returns the pre-commit `(Vault, Store)` snapshot
+    // because `mutate_and_save` rolled back). The dispatch must
+    // still roll the busy-gate back to `Unlocked`, must NOT drop
+    // the dialog, and must forward a
+    // `WorkerFailed(AddPostEffectOutcome::Inline(_))` to the live
+    // `AddAccountComponent` so the inline error renders.
+    //
+    // `Vault::add` is infallible so a real save failure cannot be
+    // forced from a happy-path fixture without mucking with disk
+    // permissions; the synthetic outcome exercises the same
+    // composition order the success test pins while the worker's
+    // typed-failure path is independently covered by the
+    // `apply_add_vault_install_inplace_consumes_run_add_worker_completion_pair`
+    // / `compose_add_dispatch_failure_*` tests above.
+    use paladin_gtk::add_account::{
+        classify_add_post_effect_error, AddAccountMsg, AddPostEffectOutcome, AddWorkerCompletion,
+        AddWorkerEffect,
+    };
+    use paladin_gtk::app::state::{
+        apply_add_dispatch_inplace, apply_add_vault_install_inplace, compose_add_dispatch,
+    };
+
+    let (_tempdir, path, vault, store) = fresh_plaintext_pair();
+
+    let mut state = AppState::Unlocked { path: path.clone() };
+    let mut vault_slot: Option<(Vault, Store)> = Some((vault, store));
+    let _worker_input = compose_add_worker_input(
+        &state,
+        vault_slot.take().expect("vault slot is filled"),
+        fresh_add_account(),
+    )
+    .expect("compose returns Ok when state is Unlocked");
+
+    apply_submit_add_inplace(&mut state);
+    assert!(matches!(state, AppState::UnlockedBusy { .. }));
+
+    // Synthesize a typed `save_not_committed` failure as if
+    // `mutate_and_save` had rolled back. The worker hands the pair
+    // back regardless of typed outcome, so the test reuses a fresh
+    // plaintext pair to stand in for the rolled-back snapshot.
+    let err = PaladinError::SaveNotCommitted {
+        committed: false,
+        backup_path: None,
+    };
+    let outcome = classify_add_post_effect_error(&err);
+    assert!(matches!(outcome, AddPostEffectOutcome::Inline(_)));
+    let (_tempdir2, _path2, vault, store) = fresh_plaintext_pair();
+    let completion = AddWorkerCompletion {
+        effect: AddWorkerEffect::Failure(outcome),
+        vault,
+        store,
+    };
+    let AddWorkerCompletion {
+        effect,
+        vault,
+        store,
+    } = completion;
+
+    apply_add_vault_install_inplace(&mut vault_slot, (vault, store));
+    assert!(
+        vault_slot.is_some(),
+        "pair must be reinstalled even on failure"
+    );
+
+    let dispatch = compose_add_dispatch(&state, &effect);
+    assert!(!dispatch.drop_dialog, "drop_dialog == false on Failure");
+    match dispatch.dialog_msg.as_ref() {
+        Some(AddAccountMsg::WorkerFailed(AddPostEffectOutcome::Inline(_))) => {}
+        other => panic!("dialog_msg must carry WorkerFailed(Inline) on Failure, got {other:?}"),
+    }
+    let dispatched = apply_add_dispatch_inplace(&mut state, &dispatch);
+    assert!(
+        dispatched,
+        "apply_add_dispatch_inplace must transition on UnlockedBusy source"
+    );
+    assert!(
+        matches!(state, AppState::Unlocked { path: ref p } if *p == path),
+        "state must roll back to Unlocked on Failure (busy gate always releases)",
+    );
+}
