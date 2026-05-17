@@ -58,7 +58,7 @@ use std::time::SystemTime;
 
 use paladin_core::{Account, AccountId, PaladinError, Store, Vault, VaultLock, VaultStatus};
 
-use crate::add_account::AddWorkerInput;
+use crate::add_account::{AddWorkerEffect, AddWorkerInput};
 use crate::remove_dialog::{RemoveDialogMsg, RemoveWorkerEffect, RemoveWorkerInput};
 use crate::rename_dialog::{RenameDialogMsg, RenameWorkerEffect, RenameWorkerInput};
 use crate::startup_error::{classify_open_error, OpenErrorRouting, StartupError};
@@ -1791,6 +1791,48 @@ pub fn apply_add_vault_install_inplace(
     pair: (Vault, Store),
 ) {
     *vault_slot = Some(pair);
+}
+
+/// Unified state-transition composer for the add worker outcome.
+///
+/// Symmetric partner of [`rename_final_app_state`] for the add path.
+/// Every [`AddWorkerEffect`] variant — `Success { account_id }` and
+/// every `Failure(AddPostEffectOutcome)` projection
+/// (`Inline(InlineError)` for `save_not_committed` / `io_error` /
+/// defensive `validation_error` / `invalid_state`, and
+/// `KeepWithWarning(InlineWarning)` for
+/// `save_durability_unconfirmed`) — lands on the same
+/// `UnlockedBusy → Unlocked` rollback via [`AppState::leave_busy`].
+/// The dialog-drop / inline-message decisions split off the typed
+/// effect in sibling composers (`should_drop_add_dialog_after`,
+/// `add_dialog_msg_after`) added in follow-up commits; this composer
+/// owns only the state-machine rollback.
+///
+/// `effect` is accepted for signature symmetry with
+/// [`rename_final_app_state`] (and so a future routing refinement
+/// can branch on it without changing call sites) but is not
+/// inspected: the add worker's two failure projections both
+/// reinstall the live `(Vault, Store)` pair through
+/// [`apply_add_vault_install_inplace`] regardless of effect, so the
+/// state machine returns to `Unlocked` uniformly. The dialog drop /
+/// inline-message routing handled elsewhere is what differs across
+/// effects.
+///
+/// Returns `Some(Unlocked { path })` iff `current` is
+/// [`AppState::UnlockedBusy`], and `None` from every other state.
+/// The `None` arm is the defensive case for a stray completion: an
+/// add completion arriving while `current` is not `UnlockedBusy`
+/// must not silently install a phantom `Unlocked` over another
+/// idle state.
+///
+/// The composer is shape-only — it delegates to
+/// [`AppState::leave_busy`] without re-deriving the transition — so
+/// the side-effect decision in `AppModel::update` stays unit-
+/// testable in `tests/app_state_logic.rs` without spinning up GTK /
+/// libadwaita.
+#[must_use]
+pub fn add_final_app_state(current: &AppState, _effect: &AddWorkerEffect) -> Option<AppState> {
+    current.clone().leave_busy()
 }
 
 /// Compose the [`AppState`] transition for the

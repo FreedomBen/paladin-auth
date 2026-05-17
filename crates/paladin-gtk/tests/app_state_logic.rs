@@ -4496,6 +4496,246 @@ fn apply_add_vault_install_inplace_consumes_run_add_worker_completion_pair() {
 }
 
 // ---------------------------------------------------------------------------
+// add_final_app_state — unified state-transition composer
+// ---------------------------------------------------------------------------
+//
+// Symmetric partner of `rename_final_app_state` for the add path.
+// Every `AddWorkerEffect` variant — `Success { account_id }` and
+// `Failure(AddPostEffectOutcome::{Inline, KeepWithWarning})` — lands
+// on the same `UnlockedBusy → Unlocked` transition via
+// `AppState::leave_busy`. The dialog drop / inline-message decisions
+// split off the effect in sibling composers in follow-up commits;
+// this composer owns only the state-machine roll-back.
+//
+// The `None` return is reserved for the defensive case where the
+// completion arrives but `current` is not `UnlockedBusy` — a stray
+// call from an unexpected source state that should not silently
+// install a phantom `Unlocked` over another idle state.
+//
+// `AddPostEffectOutcome` only has two variants
+// (`Inline(InlineError)` for `save_not_committed` / `io_error` /
+// defensive `validation_error` / `invalid_state`, and
+// `KeepWithWarning(InlineWarning)` for `save_durability_unconfirmed`)
+// — narrower than the rename outcome's three-way split because the
+// add path has no equivalent of `RestorePrior` / `KeepNewWithWarning`
+// since there is no pre-existing field to roll back to.
+
+#[test]
+fn add_final_app_state_success_rolls_back_to_unlocked_preserving_path() {
+    use paladin_core::AccountId;
+    use paladin_gtk::add_account::AddWorkerEffect;
+    use paladin_gtk::app::state::add_final_app_state;
+
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let effect = AddWorkerEffect::Success {
+        account_id: AccountId::new(),
+    };
+    let next = add_final_app_state(&busy, &effect)
+        .expect("success outcome rolls back UnlockedBusy → Unlocked");
+    assert!(matches!(next, AppState::Unlocked { .. }));
+    assert_path_eq(&next, &path);
+}
+
+#[test]
+fn add_final_app_state_failure_inline_rolls_back_to_unlocked_preserving_path() {
+    use paladin_gtk::add_account::{
+        classify_add_post_effect_error, AddPostEffectOutcome, AddWorkerEffect,
+    };
+    use paladin_gtk::app::state::add_final_app_state;
+
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let err = PaladinError::SaveNotCommitted {
+        committed: false,
+        backup_path: None,
+    };
+    let outcome = classify_add_post_effect_error(&err);
+    assert!(
+        matches!(outcome, AddPostEffectOutcome::Inline(_)),
+        "save_not_committed routes to Inline (pinned in add_account tests)",
+    );
+    let effect = AddWorkerEffect::Failure(outcome);
+    let next = add_final_app_state(&busy, &effect)
+        .expect("Inline failure rolls back UnlockedBusy → Unlocked (dialog stays inline)");
+    assert!(matches!(next, AppState::Unlocked { .. }));
+    assert_path_eq(&next, &path);
+}
+
+#[test]
+fn add_final_app_state_failure_keep_with_warning_rolls_back_to_unlocked_preserving_path() {
+    use paladin_gtk::add_account::{
+        classify_add_post_effect_error, AddPostEffectOutcome, AddWorkerEffect,
+    };
+    use paladin_gtk::app::state::add_final_app_state;
+
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let err = PaladinError::SaveDurabilityUnconfirmed;
+    let outcome = classify_add_post_effect_error(&err);
+    assert!(
+        matches!(outcome, AddPostEffectOutcome::KeepWithWarning(_)),
+        "save_durability_unconfirmed routes to KeepWithWarning",
+    );
+    let effect = AddWorkerEffect::Failure(outcome);
+    let next = add_final_app_state(&busy, &effect).expect(
+        "KeepWithWarning failure rolls back UnlockedBusy → Unlocked (dialog keeps warning)",
+    );
+    assert!(matches!(next, AppState::Unlocked { .. }));
+    assert_path_eq(&next, &path);
+}
+
+#[test]
+fn add_final_app_state_failure_defensive_inline_rolls_back_to_unlocked_preserving_path() {
+    // Defensive: an `invalid_state` would only fire if the
+    // `Vault::mutate_and_save` closure observed an unexpected
+    // post-condition (e.g. the just-added account disappeared mid-
+    // flight). `classify_add_post_effect_error` routes it to `Inline`.
+    // Pin the same `UnlockedBusy → Unlocked` rollback for the
+    // defensive branch.
+    use paladin_gtk::add_account::{
+        classify_add_post_effect_error, AddPostEffectOutcome, AddWorkerEffect,
+    };
+    use paladin_gtk::app::state::add_final_app_state;
+
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let err = PaladinError::InvalidState {
+        operation: "add",
+        state: "account_not_found",
+    };
+    let outcome = classify_add_post_effect_error(&err);
+    assert!(
+        matches!(outcome, AddPostEffectOutcome::Inline(_)),
+        "defensive invalid_state routes to Inline",
+    );
+    let effect = AddWorkerEffect::Failure(outcome);
+    let next = add_final_app_state(&busy, &effect)
+        .expect("defensive Inline failure rolls back UnlockedBusy → Unlocked");
+    assert!(matches!(next, AppState::Unlocked { .. }));
+    assert_path_eq(&next, &path);
+}
+
+#[test]
+fn add_final_app_state_from_non_unlocked_busy_returns_none() {
+    // Defensive: a stray completion arriving while `current` is not
+    // `UnlockedBusy` must not silently install a phantom `Unlocked`
+    // transition over another idle state. The composer mirrors the
+    // `AppState::leave_busy` contract and returns `None` for every
+    // non-`UnlockedBusy` source. Pinned across every typed effect so
+    // the defensive arm cannot drift with the effect routing.
+    use paladin_core::AccountId;
+    use paladin_gtk::add_account::{classify_add_post_effect_error, AddWorkerEffect};
+    use paladin_gtk::app::state::add_final_app_state;
+
+    let path = vault_path();
+    let effects = [
+        AddWorkerEffect::Success {
+            account_id: AccountId::new(),
+        },
+        AddWorkerEffect::Failure(classify_add_post_effect_error(
+            &PaladinError::SaveNotCommitted {
+                committed: false,
+                backup_path: None,
+            },
+        )),
+        AddWorkerEffect::Failure(classify_add_post_effect_error(
+            &PaladinError::SaveDurabilityUnconfirmed,
+        )),
+        AddWorkerEffect::Failure(classify_add_post_effect_error(
+            &PaladinError::InvalidState {
+                operation: "add",
+                state: "account_not_found",
+            },
+        )),
+    ];
+    let sources = [
+        AppState::Missing { path: path.clone() },
+        AppState::Locked { path: path.clone() },
+        AppState::Unlocked { path: path.clone() },
+        decide_state_from_inspect(&path, Err(invalid_header_err()))
+            .expect("inspect Err yields StartupError state"),
+    ];
+    for effect in &effects {
+        for source in &sources {
+            assert!(
+                add_final_app_state(source, effect).is_none(),
+                "add_final_app_state must return None for non-UnlockedBusy source={source:?} effect={effect:?}",
+            );
+        }
+    }
+}
+
+#[test]
+fn add_final_app_state_mirrors_leave_busy_for_every_variant() {
+    // Cross-check: the composer is a name-the-call-site wrapper over
+    // `AppState::leave_busy`, not a re-derivation. The `Some` /
+    // `None` partition across source states must mirror `leave_busy`
+    // byte-for-byte (and the result on `Some` must match
+    // `leave_busy`'s `Unlocked { path }` projection) so the wrapper
+    // can't drift away from the underlying method without breaking
+    // here first. Pinned across every typed effect because the
+    // composer ignores `effect` for the state decision.
+    use paladin_core::AccountId;
+    use paladin_gtk::add_account::{classify_add_post_effect_error, AddWorkerEffect};
+    use paladin_gtk::app::state::add_final_app_state;
+
+    let path = vault_path();
+    let effects = [
+        AddWorkerEffect::Success {
+            account_id: AccountId::new(),
+        },
+        AddWorkerEffect::Failure(classify_add_post_effect_error(
+            &PaladinError::SaveNotCommitted {
+                committed: true,
+                backup_path: None,
+            },
+        )),
+        AddWorkerEffect::Failure(classify_add_post_effect_error(
+            &PaladinError::SaveDurabilityUnconfirmed,
+        )),
+        AddWorkerEffect::Failure(classify_add_post_effect_error(
+            &PaladinError::InvalidState {
+                operation: "add",
+                state: "account_not_found",
+            },
+        )),
+    ];
+    let sources = [
+        AppState::Missing { path: path.clone() },
+        AppState::Locked { path: path.clone() },
+        AppState::Unlocked { path: path.clone() },
+        AppState::UnlockedBusy { path: path.clone() },
+        decide_state_from_inspect(&path, Err(invalid_header_err()))
+            .expect("inspect Err yields StartupError state"),
+    ];
+    for effect in &effects {
+        for source in &sources {
+            let composed = add_final_app_state(source, effect);
+            let direct = source.clone().leave_busy();
+            match (&composed, &direct) {
+                (Some(a), Some(b)) => {
+                    assert_eq!(
+                        std::mem::discriminant::<AppState>(a),
+                        std::mem::discriminant::<AppState>(b),
+                        "wrapper variant must mirror leave_busy for source={source:?} effect={effect:?}",
+                    );
+                    assert_eq!(
+                        a.path().map(Path::to_path_buf),
+                        b.path().map(Path::to_path_buf),
+                        "wrapper path must mirror leave_busy for source={source:?} effect={effect:?}",
+                    );
+                }
+                (None, None) => {}
+                _ => panic!(
+                    "wrapper / leave_busy Some/None partition diverged for source={source:?} effect={effect:?}: composed={composed:?} direct={direct:?}",
+                ),
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // apply_unlock_dispatch_inplace — `AppModel::update` mut-state wrapper
 // ---------------------------------------------------------------------------
 //
