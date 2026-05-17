@@ -45,16 +45,17 @@ use paladin_core::{
 
 use paladin_gtk::add_account::AddWorkerInput;
 use paladin_gtk::app::state::{
-    apply_submit_rename_inplace, apply_submit_unlock_inplace, apply_unlock_dispatch_inplace,
-    apply_unlock_failure_action, apply_unlock_vault_install_inplace, compose_add_worker_input,
-    compose_rename_worker_input, compose_unlock_dispatch, compose_unlock_worker_input,
-    decide_state_from_inspect, decide_state_from_open_error, decide_state_from_path_resolution,
-    decide_unlock_failure_action, decide_unlock_success_state, route_unlock_failure_effect,
-    route_unlock_success_effect, route_unlock_worker_outcome, run_unlock_worker,
-    should_drop_unlock_dialog_after, submit_add_app_state, submit_rename_app_state,
-    submit_unlock_app_state, unlock_app_state_after, unlock_dialog_msg_after,
-    unlock_final_app_state, AppState, OpenErrorOutcome, UnlockFailureAction, UnlockFailureEffect,
-    UnlockSuccessEffect, UnlockWorkerEffect, UnlockWorkerInput,
+    apply_submit_add_inplace, apply_submit_rename_inplace, apply_submit_unlock_inplace,
+    apply_unlock_dispatch_inplace, apply_unlock_failure_action, apply_unlock_vault_install_inplace,
+    compose_add_worker_input, compose_rename_worker_input, compose_unlock_dispatch,
+    compose_unlock_worker_input, decide_state_from_inspect, decide_state_from_open_error,
+    decide_state_from_path_resolution, decide_unlock_failure_action, decide_unlock_success_state,
+    route_unlock_failure_effect, route_unlock_success_effect, route_unlock_worker_outcome,
+    run_unlock_worker, should_drop_unlock_dialog_after, submit_add_app_state,
+    submit_rename_app_state, submit_unlock_app_state, unlock_app_state_after,
+    unlock_dialog_msg_after, unlock_final_app_state, AppState, OpenErrorOutcome,
+    UnlockFailureAction, UnlockFailureEffect, UnlockSuccessEffect, UnlockWorkerEffect,
+    UnlockWorkerInput,
 };
 use paladin_gtk::rename_dialog::RenameWorkerInput;
 use paladin_gtk::startup_error::StartupErrorSource;
@@ -4200,6 +4201,187 @@ fn apply_submit_rename_inplace_mirrors_submit_rename_app_state_for_every_variant
                 "wrapper must leave path unchanged when composer returns None for source={source:?}",
             );
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// apply_submit_add_inplace — `AppModel::update` mut-state wrapper
+// ---------------------------------------------------------------------------
+//
+// Symmetric partner of `apply_submit_rename_inplace` for the add
+// path: both cover `Unlocked → UnlockedBusy` (the worker takes the
+// already-decrypted `(Vault, Store)` pair through
+// `Vault::mutate_and_save`), but they bridge different dispatch
+// origins. `apply_submit_rename_inplace` fires from
+// `RenameDialogOutput::SubmitLabel`; `apply_submit_add_inplace`
+// fires from `AddAccountOutput::Submit{Manual,Uri}`. Both are thin
+// mut-reference wrappers over their matching `submit_*_app_state`
+// composer so `AppModel::update`'s submit handler does not have to
+// manage the take-and-restore dance around the composer's
+// `Option<AppState>` return — the wrapper keeps the side-effect
+// decision unit-testable here without spinning up GTK / libadwaita.
+
+#[test]
+fn apply_submit_add_inplace_from_unlocked_mutates_to_unlocked_busy_and_returns_true() {
+    // Happy path: `AppModel::update` mutates `self.state` in place
+    // via the helper when `AddAccountOutput::Submit{Manual,Uri}`
+    // arrives from `AppState::Unlocked`. The resolved path is
+    // preserved verbatim so the rest of `AppModel` (account list,
+    // header bar, dialog chrome) still names the same vault
+    // destination. The `true` return signals that the state actually
+    // transitioned so the caller can spawn the `gio::spawn_blocking
+    // Vault::mutate_and_save(|v| v.add(account))` worker — the
+    // `false` arm of the API is the defensive no-op for stray
+    // dispatches.
+    let path = vault_path();
+    let mut state = AppState::Unlocked { path: path.clone() };
+    let transitioned = apply_submit_add_inplace(&mut state);
+    assert!(
+        transitioned,
+        "apply_submit_add_inplace must return true on the Unlocked → UnlockedBusy transition",
+    );
+    assert!(matches!(state, AppState::UnlockedBusy { .. }));
+    assert_path_eq(&state, &path);
+}
+
+#[test]
+fn apply_submit_add_inplace_from_non_unlocked_leaves_state_unchanged_and_returns_false() {
+    // Defensive: a stray `Submit{Manual,Uri}` dispatch from any non-
+    // `Unlocked` source is a no-op. The wrapped state must survive
+    // the call byte-for-byte so `AppModel::update` cannot
+    // accidentally clobber an idle state (`Missing` / `Locked` /
+    // `UnlockedBusy` / `StartupError`) with a phantom
+    // `UnlockedBusy`. The `false` return tells the caller not to
+    // spawn the add worker.
+    let path = vault_path();
+    let sources = [
+        AppState::Missing { path: path.clone() },
+        AppState::Locked { path: path.clone() },
+        AppState::UnlockedBusy { path: path.clone() },
+        decide_state_from_inspect(&path, Err(invalid_header_err()))
+            .expect("inspect Err yields StartupError state"),
+    ];
+    for source in sources {
+        let original_discriminant = std::mem::discriminant::<AppState>(&source);
+        let original_path = source.path().map(Path::to_path_buf);
+        let mut state = source.clone();
+        let transitioned = apply_submit_add_inplace(&mut state);
+        assert!(
+            !transitioned,
+            "apply_submit_add_inplace must return false for non-Unlocked source={source:?}",
+        );
+        assert_eq!(
+            std::mem::discriminant::<AppState>(&state),
+            original_discriminant,
+            "apply_submit_add_inplace must leave variant unchanged for source={source:?}",
+        );
+        assert_eq!(
+            state.path().map(Path::to_path_buf),
+            original_path,
+            "apply_submit_add_inplace must leave path unchanged for source={source:?}",
+        );
+    }
+}
+
+#[test]
+fn apply_submit_add_inplace_mirrors_submit_add_app_state_for_every_variant() {
+    // Cross-check: the wrapper must mirror `submit_add_app_state`
+    // exactly. It is a name-the-call-site wrapper, not a
+    // re-derivation — the `true` / `false` partition matches the
+    // `Some` / `None` partition of the composer, and the resulting
+    // state on `true` matches the `Some(_)` variant + path the
+    // composer reports. This test pins that contract so the wrapper
+    // can't drift away from `submit_add_app_state` without breaking
+    // here first.
+    let path = vault_path();
+    let sources = [
+        AppState::Missing { path: path.clone() },
+        AppState::Locked { path: path.clone() },
+        AppState::Unlocked { path: path.clone() },
+        AppState::UnlockedBusy { path: path.clone() },
+        decide_state_from_inspect(&path, Err(invalid_header_err()))
+            .expect("inspect Err yields StartupError state"),
+    ];
+    for source in &sources {
+        let composed = submit_add_app_state(source);
+        let mut state = source.clone();
+        let transitioned = apply_submit_add_inplace(&mut state);
+        if let Some(expected) = composed {
+            assert!(
+                transitioned,
+                "wrapper must return true when composer returns Some for source={source:?}",
+            );
+            assert_eq!(
+                std::mem::discriminant::<AppState>(&state),
+                std::mem::discriminant::<AppState>(&expected),
+                "wrapper variant must mirror composer for source={source:?}",
+            );
+            assert_eq!(
+                state.path().map(Path::to_path_buf),
+                expected.path().map(Path::to_path_buf),
+                "wrapper path must mirror composer for source={source:?}",
+            );
+        } else {
+            assert!(
+                !transitioned,
+                "wrapper must return false when composer returns None for source={source:?}",
+            );
+            assert_eq!(
+                std::mem::discriminant::<AppState>(&state),
+                std::mem::discriminant::<AppState>(source),
+                "wrapper must leave variant unchanged when composer returns None for source={source:?}",
+            );
+            assert_eq!(
+                state.path().map(Path::to_path_buf),
+                source.path().map(Path::to_path_buf),
+                "wrapper must leave path unchanged when composer returns None for source={source:?}",
+            );
+        }
+    }
+}
+
+#[test]
+fn apply_submit_add_inplace_agrees_with_apply_submit_rename_inplace() {
+    // Both `apply_submit_add_inplace` and `apply_submit_rename_inplace`
+    // bridge `Unlocked → UnlockedBusy` via the same
+    // `AppState::enter_busy` contract — they only differ by the
+    // dispatch origin (manual/URI submit vs. label submit). For every
+    // possible `AppState` variant the `true`/`false` return and the
+    // resulting state's variant + path must match. Pinning the
+    // agreement here ensures the two helpers can't silently diverge
+    // on the busy-gate transition even though they live in
+    // independent call sites.
+    let path = vault_path();
+    let sources = [
+        AppState::Missing { path: path.clone() },
+        AppState::Locked { path: path.clone() },
+        AppState::Unlocked { path: path.clone() },
+        AppState::UnlockedBusy { path: path.clone() },
+        decide_state_from_inspect(&path, Err(invalid_header_err()))
+            .expect("inspect Err yields StartupError state"),
+    ];
+    for source in &sources {
+        let mut add_state = source.clone();
+        let mut rename_state = source.clone();
+        let add_transitioned = apply_submit_add_inplace(&mut add_state);
+        let rename_transitioned = apply_submit_rename_inplace(&mut rename_state);
+        assert_eq!(
+            add_transitioned, rename_transitioned,
+            "apply_submit_add_inplace and apply_submit_rename_inplace must agree on true/false \
+             for source={source:?}",
+        );
+        assert_eq!(
+            std::mem::discriminant::<AppState>(&add_state),
+            std::mem::discriminant::<AppState>(&rename_state),
+            "apply_submit_add_inplace and apply_submit_rename_inplace must produce the same \
+             variant for source={source:?}",
+        );
+        assert_eq!(
+            add_state.path().map(Path::to_path_buf),
+            rename_state.path().map(Path::to_path_buf),
+            "apply_submit_add_inplace and apply_submit_rename_inplace must produce the same \
+             path for source={source:?}",
+        );
     }
 }
 
