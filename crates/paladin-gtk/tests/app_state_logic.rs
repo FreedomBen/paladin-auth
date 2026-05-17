@@ -7790,3 +7790,155 @@ fn compose_add_dispatch_from_non_unlocked_busy_returns_no_app_state() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// apply_add_dispatch_inplace — `AppModel::update` mut-state wrapper
+// ---------------------------------------------------------------------------
+//
+// Symmetric partner of `apply_rename_dispatch_inplace` for the add
+// path. `compose_add_dispatch(&AppState, &AddWorkerEffect) ->
+// AddDispatch` bundles the three worker-completion decisions; the
+// wrapper here lets `AppMsg::AddWorkerCompleted` install the new
+// `dispatch.app_state` against the cached `AppState` in place,
+// mirroring `apply_submit_add_inplace`'s contract for the entry
+// transition. The remaining `dialog_msg` / `drop_dialog` projections
+// drive widget-side work in the handler and are not the wrapper's
+// concern.
+
+#[test]
+fn apply_add_dispatch_inplace_success_rolls_back_to_unlocked_and_returns_true() {
+    // Worker reported `Ok(())`: `compose_add_dispatch` carries
+    // `Some(Unlocked(path))` in `app_state`. The wrapper installs the
+    // rollback against the cached `UnlockedBusy` state and returns
+    // `true` so `AppModel::update` can release the busy gate and drop
+    // the `AddAccountComponent`.
+    use paladin_gtk::add_account::AddWorkerEffect;
+    use paladin_gtk::app::state::{apply_add_dispatch_inplace, compose_add_dispatch};
+
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let effect = AddWorkerEffect::Success {
+        account_id: AccountId::new(),
+    };
+    let dispatch = compose_add_dispatch(&busy, &effect);
+    let mut state = busy.clone();
+    let transitioned = apply_add_dispatch_inplace(&mut state, &dispatch);
+    assert!(
+        transitioned,
+        "apply_add_dispatch_inplace must return true on the Success rollback",
+    );
+    assert!(
+        matches!(state, AppState::Unlocked { .. }),
+        "Success rollback target must be Unlocked, got {state:?}",
+    );
+    assert_path_eq(&state, &path);
+}
+
+#[test]
+fn apply_add_dispatch_inplace_failure_rolls_back_to_unlocked_and_returns_true() {
+    // Worker reported a Failure: the add worker always rolls the busy
+    // gate back to `Unlocked` regardless of typed effect because
+    // `Vault::mutate_and_save` is authoritative for rollback /
+    // durability-unconfirmed semantics. The wrapper installs the
+    // rollback and returns `true`; widget-side work (the inline
+    // message and the still-mounted dialog) is driven by the
+    // remaining dispatch fields.
+    use paladin_gtk::add_account::{classify_add_post_effect_error, AddWorkerEffect};
+    use paladin_gtk::app::state::{apply_add_dispatch_inplace, compose_add_dispatch};
+
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let err = PaladinError::SaveNotCommitted {
+        committed: false,
+        backup_path: None,
+    };
+    let effect = AddWorkerEffect::Failure(classify_add_post_effect_error(&err));
+    let dispatch = compose_add_dispatch(&busy, &effect);
+    let mut state = busy.clone();
+    let transitioned = apply_add_dispatch_inplace(&mut state, &dispatch);
+    assert!(
+        transitioned,
+        "apply_add_dispatch_inplace must return true on the Failure rollback",
+    );
+    assert!(
+        matches!(state, AppState::Unlocked { .. }),
+        "Failure rollback target must be Unlocked, got {state:?}",
+    );
+    assert_path_eq(&state, &path);
+}
+
+#[test]
+fn apply_add_dispatch_inplace_failure_keep_with_warning_rolls_back_to_unlocked_and_returns_true() {
+    // The `save_durability_unconfirmed` branch also rolls
+    // `UnlockedBusy → Unlocked`; the durability warning is forwarded
+    // via `dispatch.dialog_msg` and not the wrapper's concern.
+    use paladin_gtk::add_account::{classify_add_post_effect_error, AddWorkerEffect};
+    use paladin_gtk::app::state::{apply_add_dispatch_inplace, compose_add_dispatch};
+
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let err = PaladinError::SaveDurabilityUnconfirmed;
+    let effect = AddWorkerEffect::Failure(classify_add_post_effect_error(&err));
+    let dispatch = compose_add_dispatch(&busy, &effect);
+    let mut state = busy.clone();
+    let transitioned = apply_add_dispatch_inplace(&mut state, &dispatch);
+    assert!(
+        transitioned,
+        "KeepWithWarning rollback must transition UnlockedBusy → Unlocked",
+    );
+    assert!(matches!(state, AppState::Unlocked { .. }));
+    assert_path_eq(&state, &path);
+}
+
+#[test]
+fn apply_add_dispatch_inplace_from_non_unlocked_busy_leaves_state_unchanged_and_returns_false() {
+    // Defensive: when the worker outcome arrives but the cached state
+    // is not `UnlockedBusy` (a stray dispatch from any other source),
+    // `compose_add_dispatch` reports `app_state = None` to refuse a
+    // phantom `Unlocked` transition. The wrapper must leave the cached
+    // state untouched byte-for-byte and return `false` so
+    // `AppModel::update` does not clobber an idle state with a phantom
+    // rollback.
+    use paladin_gtk::add_account::{classify_add_post_effect_error, AddWorkerEffect};
+    use paladin_gtk::app::state::{apply_add_dispatch_inplace, compose_add_dispatch};
+
+    let path = vault_path();
+    let err = PaladinError::SaveNotCommitted {
+        committed: false,
+        backup_path: None,
+    };
+    let effect = AddWorkerEffect::Failure(classify_add_post_effect_error(&err));
+    let invalid_sources = [
+        AppState::Missing { path: path.clone() },
+        AppState::Locked { path: path.clone() },
+        AppState::Unlocked { path: path.clone() },
+    ];
+    for source in invalid_sources {
+        let dispatch = compose_add_dispatch(&source, &effect);
+        assert!(
+            dispatch.app_state.is_none(),
+            "fixture invariant: non-UnlockedBusy source must carry app_state=None",
+        );
+        let original_discriminant = std::mem::discriminant::<AppState>(&source);
+        let original_path = source.path().map(Path::to_path_buf);
+        let mut state = source.clone();
+        let transitioned = apply_add_dispatch_inplace(&mut state, &dispatch);
+        assert!(
+            !transitioned,
+            "apply_add_dispatch_inplace must return false when dispatch.app_state is None \
+             for source={source:?}",
+        );
+        assert_eq!(
+            std::mem::discriminant::<AppState>(&state),
+            original_discriminant,
+            "wrapper must leave variant unchanged when dispatch.app_state is None \
+             for source={source:?}",
+        );
+        assert_eq!(
+            state.path().map(Path::to_path_buf),
+            original_path,
+            "wrapper must leave path unchanged when dispatch.app_state is None \
+             for source={source:?}",
+        );
+    }
+}

@@ -2014,6 +2014,44 @@ pub fn compose_add_dispatch(current: &AppState, effect: &AddWorkerEffect) -> Add
     }
 }
 
+/// Apply [`compose_add_dispatch`]'s state field in-place to `state`,
+/// leaving it unchanged when the dispatch carries `app_state = None`.
+///
+/// Symmetric partner of [`apply_rename_dispatch_inplace`] for the
+/// add path. `AppModel::update`'s `AppMsg::AddWorkerCompleted`
+/// handler holds the cached [`AppState`] behind `&mut AppState`;
+/// this wrapper bridges the `Option<AppState>` field of
+/// [`AddDispatch`] to that mut-reference call site so the handler
+/// does not have to manage a take-and-restore dance around
+/// `dispatch.app_state`. The remaining [`AddDispatch::dialog_msg`]
+/// and [`AddDispatch::drop_dialog`] projections drive widget-side
+/// work in the handler (forwarding the inline message to the live
+/// [`crate::add_account::AddAccountComponent`] controller and
+/// dropping the controller on the success branch) and are not the
+/// wrapper's concern.
+///
+/// Returns `true` when the state actually transitioned
+/// (`dispatch.app_state` was `Some(_)` and `*state` now mirrors the
+/// composer's projection), `false` otherwise. `AppModel::update`
+/// can use the `true` return to gate any state-installation-only
+/// follow-up work — a `false` return is the defensive no-op for the
+/// case where the worker outcome arrived but the cached state was
+/// not [`AppState::UnlockedBusy`] (a stray dispatch).
+///
+/// The wrapper stays shape-only — it inspects only the
+/// `dispatch.app_state` field and clones the replacement out — so
+/// the side-effect decision in `AppModel::update` stays unit-
+/// testable in `tests/app_state_logic.rs` without spinning up GTK /
+/// libadwaita.
+pub fn apply_add_dispatch_inplace(state: &mut AppState, dispatch: &AddDispatch) -> bool {
+    if let Some(new_state) = dispatch.app_state.as_ref() {
+        *state = new_state.clone();
+        true
+    } else {
+        false
+    }
+}
+
 /// Compose the [`AppState`] transition for the
 /// [`crate::remove_dialog::RemoveDialogOutput::SubmitConfirm`] dispatch.
 ///
