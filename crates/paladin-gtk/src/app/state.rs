@@ -56,8 +56,9 @@
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use paladin_core::{AccountId, PaladinError, Store, Vault, VaultLock, VaultStatus};
+use paladin_core::{Account, AccountId, PaladinError, Store, Vault, VaultLock, VaultStatus};
 
+use crate::add_account::AddWorkerInput;
 use crate::remove_dialog::{RemoveDialogMsg, RemoveWorkerEffect, RemoveWorkerInput};
 use crate::rename_dialog::{RenameDialogMsg, RenameWorkerEffect, RenameWorkerInput};
 use crate::startup_error::{classify_open_error, OpenErrorRouting, StartupError};
@@ -1058,6 +1059,69 @@ pub fn compose_rename_worker_input(
                 account_id,
                 label,
                 now,
+            })
+        }
+        AppState::Missing { .. }
+        | AppState::Locked { .. }
+        | AppState::UnlockedBusy { .. }
+        | AppState::StartupError { .. } => Err(pair),
+    }
+}
+
+/// Bundle the live `(Vault, Store)` pair and the validated
+/// [`paladin_core::Account`] payload from
+/// [`crate::add_account::classify_manual_submit`] /
+/// [`crate::otpauth_uri_paste::classify_uri_submit`] into an
+/// [`AddWorkerInput`] for the `gio::spawn_blocking
+/// Vault::mutate_and_save(|v| v.add(account))` worker.
+///
+/// Symmetric partner of [`compose_rename_worker_input`] on the add
+/// path: where the rename composer captures the live
+/// `(Vault, Store)` pair plus the
+/// [`crate::rename_dialog::RenameDialogOutput::SubmitLabel`] payload
+/// (account id, trimmed label, dispatch-site wall-clock) for the
+/// rename worker, this composer captures the live `(Vault, Store)`
+/// pair plus the validated `Account` extracted from the
+/// `AddAccountOutput::Submit{Manual,Uri}` dispatch for the add
+/// worker. Both composers inspect `current` before the busy-gate
+/// transition so the source state is verified before
+/// [`submit_add_app_state`] consumes the variant. Together they
+/// bracket every typed dispatch with a documented source-state
+/// contract per `IMPLEMENTATION_PLAN_04_GTK.md` §"Vault interaction".
+///
+/// Returns `Ok(AddWorkerInput)` iff `current` is
+/// [`AppState::Unlocked`]. The `Err((vault, store))` branch is the
+/// defensive case for a stray dispatch from any other source state
+/// (`Missing` / `Locked` / `UnlockedBusy` / `StartupError`): the
+/// non-`Clone` live `(Vault, Store)` pair would be lost if the
+/// composer dropped it, so it is handed back so the caller can
+/// reinstall it into `AppModel.vault` rather than leaking the
+/// unlocked state. The `Account` payload itself is dropped on the
+/// `Err` branch — it carries no filesystem state and the dialog
+/// still owns the reactive copy for re-rendering if the dispatch
+/// was unexpected. The contract mirrors the `Ok` / `Err` agreement
+/// with [`compose_rename_worker_input`] and the `Some` / `None`
+/// agreement with [`submit_add_app_state`] — all three helpers
+/// return success iff the source is `Unlocked`.
+///
+/// The composer stays shape-only — it inspects only the variant
+/// discriminant on `current` — so the side-effect decision in
+/// `AppModel::update` stays unit-testable in
+/// `tests/app_state_logic.rs` against real `(Vault, Store)` pairs
+/// constructed via `paladin_core::Store::create` over a tempfile
+/// vault.
+pub fn compose_add_worker_input(
+    current: &AppState,
+    pair: (Vault, Store),
+    account: Account,
+) -> Result<AddWorkerInput, (Vault, Store)> {
+    match current {
+        AppState::Unlocked { .. } => {
+            let (vault, store) = pair;
+            Ok(AddWorkerInput {
+                vault,
+                store,
+                account,
             })
         }
         AppState::Missing { .. }

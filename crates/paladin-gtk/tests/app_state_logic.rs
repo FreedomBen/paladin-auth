@@ -43,17 +43,18 @@ use paladin_core::{
     VaultLock, VaultMode, VaultStatus,
 };
 
+use paladin_gtk::add_account::AddWorkerInput;
 use paladin_gtk::app::state::{
     apply_submit_rename_inplace, apply_submit_unlock_inplace, apply_unlock_dispatch_inplace,
-    apply_unlock_failure_action, apply_unlock_vault_install_inplace, compose_rename_worker_input,
-    compose_unlock_dispatch, compose_unlock_worker_input, decide_state_from_inspect,
-    decide_state_from_open_error, decide_state_from_path_resolution, decide_unlock_failure_action,
-    decide_unlock_success_state, route_unlock_failure_effect, route_unlock_success_effect,
-    route_unlock_worker_outcome, run_unlock_worker, should_drop_unlock_dialog_after,
-    submit_add_app_state, submit_rename_app_state, submit_unlock_app_state, unlock_app_state_after,
-    unlock_dialog_msg_after, unlock_final_app_state, AppState, OpenErrorOutcome,
-    UnlockFailureAction, UnlockFailureEffect, UnlockSuccessEffect, UnlockWorkerEffect,
-    UnlockWorkerInput,
+    apply_unlock_failure_action, apply_unlock_vault_install_inplace, compose_add_worker_input,
+    compose_rename_worker_input, compose_unlock_dispatch, compose_unlock_worker_input,
+    decide_state_from_inspect, decide_state_from_open_error, decide_state_from_path_resolution,
+    decide_unlock_failure_action, decide_unlock_success_state, route_unlock_failure_effect,
+    route_unlock_success_effect, route_unlock_worker_outcome, run_unlock_worker,
+    should_drop_unlock_dialog_after, submit_add_app_state, submit_rename_app_state,
+    submit_unlock_app_state, unlock_app_state_after, unlock_dialog_msg_after,
+    unlock_final_app_state, AppState, OpenErrorOutcome, UnlockFailureAction, UnlockFailureEffect,
+    UnlockSuccessEffect, UnlockWorkerEffect, UnlockWorkerInput,
 };
 use paladin_gtk::rename_dialog::RenameWorkerInput;
 use paladin_gtk::startup_error::StartupErrorSource;
@@ -3723,6 +3724,219 @@ fn compose_rename_worker_input_mirrors_submit_rename_app_state_gating() {
             submit_ok, worker_ok,
             "submit_rename_app_state and compose_rename_worker_input must agree on Ok/Err \
              for variant={variant}: submit_ok={submit_ok}, worker_ok={worker_ok}",
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// compose_add_worker_input — pre-worker `(Vault, Store, Account)` bundler
+// ---------------------------------------------------------------------------
+//
+// Symmetric partner of `compose_rename_worker_input` on the add path:
+// where the rename composer captures the live `(Vault, Store)` pair
+// plus the `RenameDialogOutput::SubmitLabel` payload (account id,
+// trimmed label, dispatch-site wall-clock) for the
+// `gio::spawn_blocking Vault::mutate_and_save(|v| v.rename(...))`
+// worker, the add composer captures the live `(Vault, Store)` pair
+// plus the `ValidatedAccount::account` extracted from
+// `classify_manual_submit` / `classify_uri_submit` for the
+// `gio::spawn_blocking Vault::mutate_and_save(|v| v.add(account))`
+// worker. Both composers gate on the pre-transition source state
+// (`Unlocked` for both — the add and rename workers each consume the
+// already-decrypted live pair) so `AppModel::update` can call the
+// composer before `submit_add_app_state` consumes the variant.
+//
+// `compose_add_worker_input` returns `Result<AddWorkerInput,
+// (Vault, Store)>` rather than `Option` because the
+// `(Vault, Store)` pair is non-`Clone` and represents live unlocked
+// state — dropping it on a stray dispatch would lose the user's open
+// vault. The `Err((vault, store))` branch returns the pair so the
+// caller can put it back in `AppModel.vault`. The `Account` payload
+// itself does derive `Clone`, but the composer consumes it by value
+// so the worker bundle can move into `gio::spawn_blocking` without
+// borrowing from the dialog's reactive state.
+
+/// Build a validated TOTP `Account` for the
+/// `compose_add_worker_input` fixtures. Wraps the same
+/// `validate_manual(AccountInput { ... })` shape the
+/// `AddAccountComponent` manual sub-path drives so the test fixture
+/// matches the production path without re-deriving the validation
+/// pipeline.
+fn fresh_add_account() -> paladin_core::Account {
+    use paladin_core::{validate_manual, AccountInput, AccountKindInput, Algorithm, IconHintInput};
+    use secrecy::SecretString;
+
+    let input = AccountInput {
+        label: "added-label".to_string(),
+        issuer: Some("added-issuer".to_string()),
+        secret: SecretString::from("JBSWY3DPEHPK3PXP".to_string()),
+        algorithm: Algorithm::Sha1,
+        digits: 6,
+        kind: AccountKindInput::Totp,
+        period_secs: None,
+        counter: None,
+        icon_hint: IconHintInput::Default,
+    };
+    validate_manual(input, SystemTime::UNIX_EPOCH)
+        .expect("totp account input validates for compose_add_worker_input fixture")
+        .account
+}
+
+#[test]
+fn compose_add_worker_input_from_unlocked_bundles_pair_and_account() {
+    // Happy path: `AppModel::update` receives an
+    // `AddAccountOutput::Submit{Manual,Uri}` while the model is
+    // `AppState::Unlocked(path)` with the live `(Vault, Store)` pair
+    // available in the sibling `Option<(Vault, Store)>` slot. The
+    // composer must move the pair plus the validated `Account` into
+    // an `AddWorkerInput` so the `gio::spawn_blocking` closure can
+    // hand the bundle straight to `run_add_worker`.
+    let (_tempdir, path, vault, store) = fresh_plaintext_pair();
+    let unlocked = AppState::Unlocked { path: path.clone() };
+    let account = fresh_add_account();
+    let expected_id = account.id();
+    let expected_label = account.label().to_string();
+
+    let input: AddWorkerInput = compose_add_worker_input(&unlocked, (vault, store), account)
+        .expect("Unlocked source must produce an AddWorkerInput");
+
+    assert_eq!(
+        input.account.id(),
+        expected_id,
+        "composer must preserve the AccountId stamped at validation time",
+    );
+    assert_eq!(
+        input.account.label(),
+        expected_label,
+        "composer must preserve the validated label verbatim",
+    );
+    // The `(Vault, Store)` pair moved into the bundle; smoke-check
+    // the carried vault still names the same `Store` by exercising
+    // a no-op `mutate_and_save` on a fresh, empty account list.
+    assert_eq!(
+        input.vault.summaries().count(),
+        0,
+        "fresh plaintext vault should carry zero accounts into the worker bundle",
+    );
+}
+
+#[test]
+fn compose_add_worker_input_from_non_unlocked_returns_pair_back() {
+    // Defensive: a stray `AddAccountOutput::Submit{Manual,Uri}`
+    // dispatch from any source other than `Unlocked` is a no-op for
+    // the worker spawn. The composer must hand the `(Vault, Store)`
+    // pair back via `Err((vault, store))` so the caller can restore
+    // it into `AppModel.vault` instead of leaking the live unlocked
+    // state. The `Account` payload is dropped — it carries no
+    // filesystem state and the dialog still owns the reactive copy
+    // for re-rendering inline if the dispatch was unexpected.
+    for variant in ["missing", "locked", "unlocked_busy", "startup_error"] {
+        let (_tempdir, path, vault, store) = fresh_plaintext_pair();
+        let source = match variant {
+            "missing" => AppState::Missing { path: path.clone() },
+            "locked" => AppState::Locked { path: path.clone() },
+            "unlocked_busy" => AppState::UnlockedBusy { path: path.clone() },
+            "startup_error" => decide_state_from_inspect(&path, Err(invalid_header_err()))
+                .expect("inspect Err yields StartupError state"),
+            _ => unreachable!(),
+        };
+        let account = fresh_add_account();
+        let outcome = compose_add_worker_input(&source, (vault, store), account);
+        let Err((returned_vault, _returned_store)) = outcome else {
+            panic!(
+                "compose_add_worker_input must return the pair back via Err for variant={variant}",
+            );
+        };
+        assert_eq!(
+            returned_vault.summaries().count(),
+            0,
+            "returned vault must still be the same live pair for variant={variant}",
+        );
+    }
+}
+
+#[test]
+fn compose_add_worker_input_mirrors_submit_add_app_state_gating() {
+    // Cross-check: the two entry-side add composers — state
+    // transition (`submit_add_app_state`) and worker bundling
+    // (`compose_add_worker_input`) — must agree on the `Some`/`None`
+    // (resp. `Ok`/`Err`) gating decision so `AppModel::update` can
+    // call them in series without either one accepting a dispatch
+    // the other refuses. This mirrors the equivalent cross-check
+    // between `submit_rename_app_state` and
+    // `compose_rename_worker_input` for the rename path.
+    for variant in [
+        "missing",
+        "locked",
+        "unlocked",
+        "unlocked_busy",
+        "startup_error",
+    ] {
+        let (_tempdir, path, vault, store) = fresh_plaintext_pair();
+        let source = match variant {
+            "missing" => AppState::Missing { path: path.clone() },
+            "locked" => AppState::Locked { path: path.clone() },
+            "unlocked" => AppState::Unlocked { path: path.clone() },
+            "unlocked_busy" => AppState::UnlockedBusy { path: path.clone() },
+            "startup_error" => decide_state_from_inspect(&path, Err(invalid_header_err()))
+                .expect("inspect Err yields StartupError state"),
+            _ => unreachable!(),
+        };
+        let account = fresh_add_account();
+        let submit_ok = submit_add_app_state(&source).is_some();
+        let worker_ok = compose_add_worker_input(&source, (vault, store), account).is_ok();
+        assert_eq!(
+            submit_ok, worker_ok,
+            "submit_add_app_state and compose_add_worker_input must agree on Ok/Err \
+             for variant={variant}: submit_ok={submit_ok}, worker_ok={worker_ok}",
+        );
+    }
+}
+
+#[test]
+fn compose_add_worker_input_agrees_with_compose_rename_worker_input_gating() {
+    // Both `compose_add_worker_input` and `compose_rename_worker_input`
+    // bundle the live `(Vault, Store)` pair for a
+    // `Vault::mutate_and_save` worker that needs the already-decrypted
+    // pair. Pin that they agree on `Ok`/`Err` per source state so a
+    // future refactor of either composer can't silently diverge on
+    // the source-state contract.
+    let account_id = AccountId::new();
+    let label = "renamed".to_string();
+    let now = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(12_345);
+    for variant in [
+        "missing",
+        "locked",
+        "unlocked",
+        "unlocked_busy",
+        "startup_error",
+    ] {
+        let (_tempdir, path, vault_for_add, store_for_add) = fresh_plaintext_pair();
+        let (_tempdir2, _path2, vault_for_rename, store_for_rename) = fresh_plaintext_pair();
+        let source = match variant {
+            "missing" => AppState::Missing { path: path.clone() },
+            "locked" => AppState::Locked { path: path.clone() },
+            "unlocked" => AppState::Unlocked { path: path.clone() },
+            "unlocked_busy" => AppState::UnlockedBusy { path: path.clone() },
+            "startup_error" => decide_state_from_inspect(&path, Err(invalid_header_err()))
+                .expect("inspect Err yields StartupError state"),
+            _ => unreachable!(),
+        };
+        let account = fresh_add_account();
+        let add_ok =
+            compose_add_worker_input(&source, (vault_for_add, store_for_add), account).is_ok();
+        let rename_ok = compose_rename_worker_input(
+            &source,
+            (vault_for_rename, store_for_rename),
+            account_id,
+            label.clone(),
+            now,
+        )
+        .is_ok();
+        assert_eq!(
+            add_ok, rename_ok,
+            "compose_add_worker_input and compose_rename_worker_input must agree on Ok/Err for \
+             variant={variant}: add_ok={add_ok}, rename_ok={rename_ok}",
         );
     }
 }
