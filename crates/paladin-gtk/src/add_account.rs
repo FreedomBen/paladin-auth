@@ -363,6 +363,41 @@ pub fn compose_manual_submit_outcome(
     classify_manual_submit(fields, now)
 }
 
+/// Chained
+/// [`crate::otpauth_uri_paste::classify_uri_submit`] against the live
+/// [`AddDialogState`].
+///
+/// Parallel of [`compose_manual_submit_outcome`] on the URI sub-
+/// path. The widget Save handler calls this on every click to drive
+/// the URI validation pipeline as a single boundary, sourcing the
+/// URI text from
+/// [`crate::secret_fields::AddSecretState::uri_text`] via
+/// [`crate::secret_fields::SecretEntry::text`]. The borrow keeps
+/// the dialog state intact so a typed-but-rejected attempt can
+/// retry against the same buffer without losing the user's input.
+///
+/// The carried [`crate::otpauth_uri_paste::UriSubmitOutcome`] is
+/// the same shape
+/// [`crate::otpauth_uri_paste::classify_uri_submit`] produces on
+/// its own:
+///
+/// * [`crate::otpauth_uri_paste::UriSubmitOutcome::Proceed`] —
+///   validated account; the widget hands it to
+///   [`paladin_core::Vault::find_duplicate`] plus
+///   [`classify_duplicate`] next to decide
+///   [`AddAccountMsg::SubmitProceed`] vs
+///   [`AddAccountMsg::StagePendingDuplicate`].
+/// * [`crate::otpauth_uri_paste::UriSubmitOutcome::InlineError`] —
+///   typed §5 error body; the widget renders the rejection inline
+///   and leaves the URI field populated for retry.
+#[must_use]
+pub fn compose_uri_submit_outcome(
+    state: &AddDialogState,
+    now: SystemTime,
+) -> crate::otpauth_uri_paste::UriSubmitOutcome {
+    crate::otpauth_uri_paste::classify_uri_submit(state.secret_state().uri_text.text(), now)
+}
+
 /// Post-validate duplicate-detection routing decision.
 ///
 /// See [`classify_duplicate`]. The carried `ValidatedAccount` on

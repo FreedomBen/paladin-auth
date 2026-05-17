@@ -2820,6 +2820,95 @@ fn compose_manual_submit_outcome_preserves_state_so_retry_keeps_typing() {
 }
 
 #[test]
+fn compose_uri_submit_outcome_with_valid_uri_proceeds() {
+    // Parallel of `compose_manual_submit_outcome_with_valid_state_proceeds`
+    // on the URI sub-path. With a valid `otpauth://` URI shadowed
+    // into `secret_state.uri_text`, the chained call must classify
+    // as `Proceed` so the widget can hand the validated account to
+    // `Vault::find_duplicate` next.
+    use paladin_gtk::add_account::{apply_msg, compose_uri_submit_outcome, AddAccountMsg};
+    use paladin_gtk::otpauth_uri_paste::UriSubmitOutcome;
+
+    let mut state = paladin_gtk::add_account::AddDialogState::new();
+    let uri = format!("otpauth://totp/Acme:alice?secret={SECRET_20_B32}&issuer=Acme");
+    let _ = apply_msg(&mut state, AddAccountMsg::UriTextChanged(uri));
+
+    let outcome = compose_uri_submit_outcome(&state, now_for_tests());
+
+    assert!(
+        matches!(outcome, UriSubmitOutcome::Proceed(_)),
+        "valid otpauth URI in secret_state.uri_text should chain through to Proceed",
+    );
+}
+
+#[test]
+fn compose_uri_submit_outcome_with_default_state_rejects_inline() {
+    // The freshly-opened dialog has an empty `uri_text`. The
+    // chained call must surface the typed inline error rather than
+    // the `Proceed` path so the widget can render the rejection
+    // without mutating the vault.
+    use paladin_gtk::add_account::{compose_uri_submit_outcome, AddDialogState};
+    use paladin_gtk::otpauth_uri_paste::UriSubmitOutcome;
+
+    let state = AddDialogState::new();
+
+    let outcome = compose_uri_submit_outcome(&state, now_for_tests());
+
+    assert!(
+        matches!(outcome, UriSubmitOutcome::InlineError(_)),
+        "default state has no URI and must reject inline",
+    );
+}
+
+#[test]
+fn compose_uri_submit_outcome_reads_secret_state_uri_text() {
+    // The helper must source the URI from
+    // `secret_state.uri_text.text()` — *not* from a stray reuse of
+    // the manual-secret buffer — so the URI sub-path stays isolated
+    // from the manual sub-path's text. Drive `UriTextChanged`,
+    // leave the manual_secret buffer empty, and assert that the
+    // chained call still proceeds.
+    use paladin_gtk::add_account::{apply_msg, compose_uri_submit_outcome, AddAccountMsg};
+    use paladin_gtk::otpauth_uri_paste::UriSubmitOutcome;
+
+    let mut state = paladin_gtk::add_account::AddDialogState::new();
+    let uri = format!("otpauth://totp/Acme:alice?secret={SECRET_20_B32}&issuer=Acme");
+    let _ = apply_msg(&mut state, AddAccountMsg::UriTextChanged(uri));
+    assert!(
+        state.secret_state().manual_secret.is_empty(),
+        "manual_secret buffer must stay empty for this scenario",
+    );
+
+    let outcome = compose_uri_submit_outcome(&state, now_for_tests());
+
+    assert!(
+        matches!(outcome, UriSubmitOutcome::Proceed(_)),
+        "helper must source the URI from secret_state.uri_text, not manual_secret",
+    );
+}
+
+#[test]
+fn compose_uri_submit_outcome_preserves_state_so_retry_keeps_typing() {
+    // The helper borrows the state so the dialog can re-call it on
+    // every Save click after a typed-but-inline-rejected attempt —
+    // the user fixes the malformed URI, re-submits, and the prior
+    // typing is still live. Mirror of
+    // `compose_manual_submit_outcome_preserves_state_so_retry_keeps_typing`
+    // on the URI sub-path.
+    use paladin_gtk::add_account::{apply_msg, compose_uri_submit_outcome, AddAccountMsg};
+
+    let mut state = paladin_gtk::add_account::AddDialogState::new();
+    let uri = format!("otpauth://totp/Acme:alice?secret={SECRET_20_B32}&issuer=Acme");
+    let _ = apply_msg(&mut state, AddAccountMsg::UriTextChanged(uri.clone()));
+    let uri_before = state.secret_state().uri_text.text().to_string();
+
+    let _outcome = compose_uri_submit_outcome(&state, now_for_tests());
+
+    assert_eq!(state.secret_state().uri_text.text(), uri_before);
+    assert_eq!(uri_before, uri);
+}
+
+#[test]
 fn apply_msg_confirm_add_anyway_with_no_pending_is_defensive_noop() {
     // Defensive: the widget should only dispatch ConfirmAddAnyway
     // after a `StagePendingDuplicate` parks a value. A stray dispatch
