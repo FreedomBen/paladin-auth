@@ -67,13 +67,11 @@ fn ctrl_c() -> AppEvent {
     }
 }
 
-/// `MissingVault` is reducer-stable under `Ctrl-C` (it Quits without
+/// `CreateVault` is reducer-stable under `Ctrl-C` (it Quits without
 /// mutating state) so the final `AppState` returned by dispatch is
 /// trivially predictable for the "returns final state" assertion.
 fn missing(path: &str) -> AppState {
-    AppState::MissingVault {
-        path: PathBuf::from(path),
-    }
+    AppState::create_vault_initial(PathBuf::from(path))
 }
 
 /// Spawn a one-shot thread that delivers a single Ctrl-C through the
@@ -138,15 +136,15 @@ fn run_event_loop_threads_a_sender_clone_through_each_spawner() {
         SystemTime::UNIX_EPOCH,
     );
 
-    assert!(matches!(final_state, AppState::MissingVault { .. }));
+    assert!(matches!(final_state, AppState::CreateVault { .. }));
 }
 
 #[test]
 fn run_event_loop_returns_final_state_from_dispatch_on_quit() {
     // Pin: when an effect returns Quit, run_event_loop returns the
     // final state that dispatch returned. Ctrl-C is reducer-handled
-    // as a Quit without state mutation on MissingVault, so the
-    // returned state must still be MissingVault.
+    // as a Quit without state mutation on CreateVault, so the
+    // returned state must still be CreateVault.
     let final_state = run_event_loop(
         missing("/tmp/v.bin"),
         |_state, _wc| {},
@@ -156,10 +154,10 @@ fn run_event_loop_returns_final_state_from_dispatch_on_quit() {
     );
 
     match final_state {
-        AppState::MissingVault { path } => {
+        AppState::CreateVault { path, .. } => {
             assert_eq!(path, PathBuf::from("/tmp/v.bin"));
         }
-        other => panic!("expected MissingVault, got {other:?}"),
+        other => panic!("expected CreateVault, got {other:?}"),
     }
 }
 
@@ -176,7 +174,7 @@ fn run_event_loop_renders_initial_state_before_processing_events() {
         missing("/tmp/v.bin"),
         move |state, _wc| {
             renders_clone.borrow_mut().push(match state {
-                AppState::MissingVault { .. } => "MissingVault",
+                AppState::CreateVault { .. } => "CreateVault",
                 AppState::Unlock { .. } => "Unlock",
                 AppState::Locked { .. } => "Locked",
                 AppState::Unlocked { .. } => "Unlocked",
@@ -190,7 +188,7 @@ fn run_event_loop_renders_initial_state_before_processing_events() {
 
     let r = renders.borrow();
     assert!(!r.is_empty(), "at least one render expected");
-    assert_eq!(r[0], "MissingVault", "first render must be initial state");
+    assert_eq!(r[0], "CreateVault", "first render must be initial state");
 }
 
 #[test]
@@ -380,10 +378,10 @@ fn run_with_terminal_guard_returns_final_state_from_dispatch_on_quit() {
     .expect("setup succeeds");
 
     match final_state {
-        AppState::MissingVault { path } => {
+        AppState::CreateVault { path, .. } => {
             assert_eq!(path, PathBuf::from("/tmp/v.bin"));
         }
-        other => panic!("expected MissingVault, got {other:?}"),
+        other => panic!("expected CreateVault, got {other:?}"),
     }
 }
 
@@ -934,7 +932,7 @@ fn run_with_components_returns_success_after_dispatch_quits_cleanly() {
     // observable from this top layer.
     //
     // The vault path lives inside a `secure_test_tempdir()` so the
-    // path is guaranteed non-existent (→ `MissingVault` initial state,
+    // path is guaranteed non-existent (→ `CreateVault` initial state,
     // which is reducer-stable under Ctrl-C) and the parent dir's
     // `0700` mode keeps `paladin_core::inspect` from tripping
     // `unsafe_permissions`. The exact initial state does not matter

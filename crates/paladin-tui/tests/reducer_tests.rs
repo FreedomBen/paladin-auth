@@ -60,9 +60,7 @@ fn ctrl(code: KeyCode) -> AppEvent {
 }
 
 fn missing(path: &str) -> AppState {
-    AppState::MissingVault {
-        path: PathBuf::from(path),
-    }
+    AppState::create_vault_initial(PathBuf::from(path))
 }
 
 fn startup_err(path: Option<&str>) -> AppState {
@@ -181,12 +179,12 @@ fn no_color_unset_with_no_flag_keeps_color_enabled() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn missing_vault_inspect_yields_missing_vault_state() {
+fn create_vault_inspect_yields_create_vault_state() {
     let path = PathBuf::from("/tmp/paladin-test-nonexistent.bin");
     let state = decide_state_from_inspect(&path, Ok(VaultStatus::Missing));
     match state {
-        Some(AppState::MissingVault { path: p }) => assert_eq!(p, path),
-        other => panic!("expected MissingVault, got {other:?}"),
+        Some(AppState::CreateVault { path: p, .. }) => assert_eq!(p, path),
+        other => panic!("expected CreateVault, got {other:?}"),
     }
 }
 
@@ -221,9 +219,9 @@ fn plaintext_vault_inspect_returns_none_signaling_caller_to_open() {
 }
 
 #[test]
-fn missing_vault_inspect_does_not_create_or_mutate_files() {
-    // Bullet: "Missing vault opens the missing-vault screen and does
-    // not create or mutate files." `missing_vault_inspect_yields_…`
+fn create_vault_inspect_does_not_create_or_mutate_files() {
+    // Bullet: "Missing vault opens the create-vault screen and does
+    // not create or mutate files." `create_vault_inspect_yields_…`
     // above drives the state transition with a synthetic
     // `VaultStatus::Missing`; this test exercises the real
     // `paladin_core::inspect` path on a non-existent file inside a
@@ -245,17 +243,17 @@ fn missing_vault_inspect_does_not_create_or_mutate_files() {
 
     let state = decide_state_from_inspect(&path, inspect);
     match state {
-        Some(AppState::MissingVault { path: p }) => assert_eq!(p, path),
-        other => panic!("expected MissingVault, got {other:?}"),
+        Some(AppState::CreateVault { path: p, .. }) => assert_eq!(p, path),
+        other => panic!("expected CreateVault, got {other:?}"),
     }
 
     assert!(
         !path.exists(),
-        "missing-vault entry point must not create the vault file at {path:?}"
+        "create-vault entry point must not create the vault file at {path:?}"
     );
 
     // The parent directory was created by the tempdir; the
-    // missing-vault path must not leak any sibling artifacts
+    // create-vault path must not leak any sibling artifacts
     // (`.bak`, `.tmp`, partial writes) either.
     let leaked: Vec<_> = fs::read_dir(tmp.path())
         .unwrap()
@@ -264,7 +262,7 @@ fn missing_vault_inspect_does_not_create_or_mutate_files() {
         .collect();
     assert!(
         leaked.is_empty(),
-        "missing-vault entry point must not create sibling files, found {leaked:?}"
+        "create-vault entry point must not create sibling files, found {leaked:?}"
     );
 }
 
@@ -472,8 +470,8 @@ fn build_initial_state_resolver_skipped_when_vault_override_supplied() {
         panic!("resolver must not be consulted when vault override is supplied")
     });
     match state {
-        AppState::MissingVault { path: p } => assert_eq!(p, path),
-        other => panic!("expected MissingVault, got {other:?}"),
+        AppState::CreateVault { path: p, .. } => assert_eq!(p, path),
+        other => panic!("expected CreateVault, got {other:?}"),
     }
 }
 
@@ -484,8 +482,8 @@ fn build_initial_state_resolver_skipped_when_vault_override_supplied() {
 //
 // Keybinding rules covered here:
 //   * Ctrl-C quits on any screen.
-//   * Esc quits on unlock, missing-vault, startup-error screens.
-//   * `q` quits on missing-vault and startup-error screens; on the
+//   * Esc quits on unlock, create-vault, startup-error screens.
+//   * `q` quits on create-vault and startup-error screens; on the
 //     unlock screen it is text input (will route into the passphrase
 //     field in a follow-up slice — for now it is a no-op).
 //   * Tick events are passthrough (no effects) on terminal screens.
@@ -493,7 +491,7 @@ fn build_initial_state_resolver_skipped_when_vault_override_supplied() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn ctrl_c_on_missing_vault_quits() {
+fn ctrl_c_on_create_vault_quits() {
     let (_, effects) = reduce(missing("/tmp/v.bin"), ctrl(KeyCode::Char('c')));
     assert!(matches!(effects.as_slice(), [Effect::Quit]));
 }
@@ -553,7 +551,7 @@ fn ctrl_c_on_unlocked_quits() {
 }
 
 #[test]
-fn esc_on_missing_vault_quits() {
+fn esc_on_create_vault_quits() {
     let (_, effects) = reduce(missing("/tmp/v.bin"), key(KeyCode::Esc));
     assert!(matches!(effects.as_slice(), [Effect::Quit]));
 }
@@ -571,7 +569,7 @@ fn esc_on_unlock_quits() {
 }
 
 #[test]
-fn q_on_missing_vault_quits() {
+fn q_on_create_vault_quits() {
     let (_, effects) = reduce(missing("/tmp/v.bin"), key(KeyCode::Char('q')));
     assert!(matches!(effects.as_slice(), [Effect::Quit]));
 }
@@ -600,7 +598,7 @@ fn q_on_unlock_does_not_quit_and_is_appended_to_the_passphrase_buffer() {
 }
 
 #[test]
-fn tick_event_on_missing_vault_yields_no_effect() {
+fn tick_event_on_create_vault_yields_no_effect() {
     let tick = AppEvent::Tick {
         wall_clock: SystemTime::now(),
         monotonic: Instant::now(),
@@ -610,7 +608,7 @@ fn tick_event_on_missing_vault_yields_no_effect() {
 }
 
 #[test]
-fn unrecognized_key_on_missing_vault_yields_no_effect() {
+fn unrecognized_key_on_create_vault_yields_no_effect() {
     let (_, effects) = reduce(missing("/tmp/v.bin"), key(KeyCode::Char('a')));
     assert!(effects.is_empty());
 }
@@ -1089,7 +1087,7 @@ fn effect_result_unlock_decrypt_failed_off_unlock_screen_is_discarded() {
         unlock_result(Err(PaladinError::DecryptFailed)),
     );
     assert!(effects.is_empty());
-    assert!(matches!(state, AppState::MissingVault { .. }));
+    assert!(matches!(state, AppState::CreateVault { .. }));
 }
 
 // ---------------------------------------------------------------------------
@@ -7220,7 +7218,7 @@ fn effect_result_settings_on_non_settings_modal_is_discarded() {
 // Slice covered: pressing `Esc` on `AppState::Unlocked` with an open
 // modal clears the slot to `None` and emits no effects. With no open
 // modal, `Esc` is a passthrough no-op on `Unlocked` (it does **not**
-// emit `Effect::Quit`; only the unlock / missing-vault / startup-error
+// emit `Effect::Quit`; only the unlock / create-vault / startup-error
 // "no dismissable affordance" screens quit on `Esc`). Search-clear and
 // vim-chord clear land in their own slices.
 // ---------------------------------------------------------------------------
@@ -7323,7 +7321,7 @@ fn pressing_esc_on_unlocked_with_no_modal_open_is_passthrough_no_op() {
 // ---------------------------------------------------------------------------
 // `q` quits Unlocked when no modal is open
 // (IMPLEMENTATION_PLAN_03_TUI.md > Keybindings: "q — Quit from list,
-//  missing-vault, and startup-error screens; text input in text fields")
+//  create-vault, and startup-error screens; text input in text fields")
 //
 // Slice covered: pressing `q` on `AppState::Unlocked` with no open modal
 // emits `Effect::Quit`. With a modal open, `q` is passthrough so the
@@ -13120,7 +13118,7 @@ fn pressing_tab_after_z_clears_chord_and_moves_focus_to_search() {
 }
 
 #[test]
-fn pressing_tab_on_missing_vault_is_silent_no_op() {
+fn pressing_tab_on_create_vault_is_silent_no_op() {
     // Non-Unlocked screens have no focus model in v0.1 — `Tab` is a
     // silent no-op (no effects, state unchanged).
     let state = missing("/nonexistent/vault");
@@ -13130,8 +13128,8 @@ fn pressing_tab_on_missing_vault_is_silent_no_op() {
         "`Tab` outside Unlocked must not emit effects"
     );
     match state {
-        AppState::MissingVault { path } => assert_eq!(path, PathBuf::from("/nonexistent/vault")),
-        other => panic!("expected MissingVault, got {other:?}"),
+        AppState::CreateVault { path, .. } => assert_eq!(path, PathBuf::from("/nonexistent/vault")),
+        other => panic!("expected CreateVault, got {other:?}"),
     }
 }
 

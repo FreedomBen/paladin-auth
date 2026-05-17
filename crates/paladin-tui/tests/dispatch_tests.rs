@@ -42,7 +42,7 @@ fn ctrl_c() -> AppEvent {
 }
 
 /// Construct an `AppEvent::Tick` with the given wall-clock and a
-/// freshly sampled monotonic instant. Ticks on `MissingVault` are
+/// freshly sampled monotonic instant. Ticks on `CreateVault` are
 /// passthrough per the reducer's terminal-screen contract, so they
 /// drive the latest-`Tick`-wall-clock plumbing without state churn.
 fn tick(wall_clock: SystemTime) -> AppEvent {
@@ -53,16 +53,14 @@ fn tick(wall_clock: SystemTime) -> AppEvent {
 }
 
 fn missing(path: &str) -> AppState {
-    AppState::MissingVault {
-        path: PathBuf::from(path),
-    }
+    AppState::create_vault_initial(PathBuf::from(path))
 }
 
 /// Discriminant-only state tag — the test only cares whether the
 /// renderer sees the same variant it was passed, not the inner data.
 fn tag(state: &AppState) -> &'static str {
     match state {
-        AppState::MissingVault { .. } => "MissingVault",
+        AppState::CreateVault { .. } => "CreateVault",
         AppState::Unlock { .. } => "Unlock",
         AppState::Locked { .. } => "Locked",
         AppState::Unlocked { .. } => "Unlocked",
@@ -109,7 +107,7 @@ fn dispatch_renders_initial_state_before_processing_events() {
     );
     assert_eq!(
         r[0],
-        ("MissingVault", initial_wc),
+        ("CreateVault", initial_wc),
         "first render must be the initial state with the initial wall-clock",
     );
 }
@@ -251,8 +249,8 @@ fn dispatch_renders_once_per_non_quit_event_then_exits_without_post_quit_render(
 fn dispatch_renders_state_after_reducer_applies_event() {
     // The render after each event must observe the state the reducer
     // produced for *that* event, not the prior state. A Tick on
-    // `MissingVault` is a passthrough so the variant tag stays
-    // `MissingVault`, but the render must still be called after the
+    // `CreateVault` is a passthrough so the variant tag stays
+    // `CreateVault`, but the render must still be called after the
     // reducer ran — pin that by counting renders. (State-content
     // assertions live in the reducer tests; this slice asserts the
     // *cadence* of reduce → render.)
@@ -275,7 +273,7 @@ fn dispatch_renders_state_after_reducer_applies_event() {
 
     assert_eq!(
         *last_tag.borrow(),
-        Some("MissingVault"),
+        Some("CreateVault"),
         "render observes the reducer-produced state",
     );
 }

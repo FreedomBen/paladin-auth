@@ -126,11 +126,11 @@ pub const KEYBINDINGS: &[Keybinding] = &[
     },
     Keybinding {
         keys: "Esc",
-        action: "Close modal / overlay / search; quit dead-end screens",
+        action: "Close modal / overlay / search; step back in the create-vault wizard; quit on unlock / startup-error / create-vault ChooseMode",
     },
     Keybinding {
         keys: "q",
-        action: "Quit from list and dead-end screens",
+        action: "Quit from list, startup-error, and create-vault ChooseMode / ConfirmPlaintext (otherwise a typed passphrase character)",
     },
     Keybinding {
         keys: "Ctrl-C",

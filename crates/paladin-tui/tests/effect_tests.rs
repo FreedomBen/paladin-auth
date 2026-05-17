@@ -70,12 +70,10 @@ fn create_plaintext_vault(path: &Path) {
 }
 
 /// A throwaway state for effects that do not read it (`Quit`,
-/// `Unlock`, `ClearClipboard`). `MissingVault` is the cheapest
+/// `Unlock`, `ClearClipboard`). `CreateVault` is the cheapest
 /// variant to construct.
 fn dummy_state() -> AppState {
-    AppState::MissingVault {
-        path: PathBuf::from("/dev/null/dummy-vault.bin"),
-    }
+    AppState::create_vault_initial(PathBuf::from("/dev/null/dummy-vault.bin"))
 }
 
 /// Build an [`AppState::Unlocked`] backed by a real plaintext vault at
@@ -223,7 +221,7 @@ fn execute_unlock_with_wrong_passphrase_sends_decrypt_failed() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn execute_unlock_against_missing_vault_sends_vault_missing() {
+fn execute_unlock_against_create_vault_sends_vault_missing() {
     let tmp = secure_tempdir();
     let path = tmp.path().join("does-not-exist.bin");
 
@@ -477,14 +475,12 @@ fn execute_rename_with_unknown_account_id_sends_account_not_found_err() {
 }
 
 /// A stale `Effect::Rename` (emitted under an `Unlocked` state that
-/// has since transitioned to `Locked` / `MissingVault` / etc.) is
+/// has since transitioned to `Locked` / `CreateVault` / etc.) is
 /// dropped silently so the executor cannot synthesize a rename
 /// attempt against an unrelated vault.
 #[test]
 fn execute_rename_on_non_unlocked_state_is_silently_dropped() {
-    let mut state = AppState::MissingVault {
-        path: PathBuf::from("/tmp/dummy-vault.bin"),
-    };
+    let mut state = AppState::create_vault_initial(PathBuf::from("/tmp/dummy-vault.bin"));
     let (tx, rx) = mpsc::channel::<AppEvent>();
     let effect = Effect::Rename {
         path: PathBuf::from("/tmp/dummy-vault.bin"),
@@ -680,14 +676,12 @@ fn execute_remove_with_unknown_account_id_sends_account_not_found_err() {
 }
 
 /// A stale `Effect::Remove` (emitted under an `Unlocked` state that
-/// has since transitioned to `Locked` / `MissingVault` / etc.) is
+/// has since transitioned to `Locked` / `CreateVault` / etc.) is
 /// dropped silently so the executor cannot synthesize a remove
 /// attempt against an unrelated vault.
 #[test]
 fn execute_remove_on_non_unlocked_state_is_silently_dropped() {
-    let mut state = AppState::MissingVault {
-        path: PathBuf::from("/tmp/dummy-vault.bin"),
-    };
+    let mut state = AppState::create_vault_initial(PathBuf::from("/tmp/dummy-vault.bin"));
     let (tx, rx) = mpsc::channel::<AppEvent>();
     let effect = Effect::Remove {
         path: PathBuf::from("/tmp/dummy-vault.bin"),
@@ -981,9 +975,7 @@ fn execute_apply_settings_with_out_of_range_patch_returns_validation_error() {
 
 #[test]
 fn execute_apply_settings_on_non_unlocked_state_is_silently_dropped() {
-    let mut state = AppState::MissingVault {
-        path: PathBuf::from("/tmp/dummy-vault.bin"),
-    };
+    let mut state = AppState::create_vault_initial(PathBuf::from("/tmp/dummy-vault.bin"));
     let (tx, rx) = mpsc::channel::<AppEvent>();
     let effect = Effect::ApplySettings {
         path: PathBuf::from("/tmp/dummy-vault.bin"),

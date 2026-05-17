@@ -468,7 +468,7 @@ fn effect_result_copy_code_err_leaves_prior_pending_clear_unchanged() {
 // Non-Unlocked state: discard
 //
 // `EffectResult::CopyCode` results arriving on `Locked` (auto-lock
-// fired between the copy effect and its result), `MissingVault`, or
+// fired between the copy effect and its result), `CreateVault`, or
 // `StartupError` are dropped without mutating state. The carried
 // bytes are not stored anywhere — they drop with the `Vec<u8>`.
 // ---------------------------------------------------------------------------

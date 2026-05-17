@@ -43,10 +43,10 @@ use paladin_core::{
 use paladin_tui::app::event::QrImportFailure;
 use paladin_tui::app::state::{
     format_account_display_label, format_duplicate_account_message, format_qr_import_failure,
-    render_error_message, AddModal, AddMode, AppState, CountsPanel, ExportFormat, ExportModal,
-    Focus, HotpReveal, ImportModal, Modal, PassphraseModal, PassphraseSubFlow, PendingDuplicateAdd,
-    RemoveModal, RenameModal, SettingsModal, StatusLine, CLIPBOARD_WRITE_FAILED,
-    NO_ACCOUNT_SELECTED,
+    render_error_message, AddModal, AddMode, AppState, CountsPanel, CreateVaultMode,
+    CreateVaultStep, ExportFormat, ExportModal, Focus, HotpReveal, ImportModal, Modal,
+    PassphraseFieldFocus, PassphraseModal, PassphraseSubFlow, PendingDuplicateAdd, RemoveModal,
+    RenameModal, SettingsModal, StatusLine, CLIPBOARD_WRITE_FAILED, NO_ACCOUNT_SELECTED,
 };
 use paladin_tui::prompt::PassphraseBuffer;
 use paladin_tui::view::render;
@@ -364,11 +364,99 @@ mod styled_serializer_tests {
 }
 
 #[test]
-fn snapshot_missing_vault_screen() {
-    let state = AppState::MissingVault {
+fn snapshot_create_vault_screen() {
+    let state = AppState::create_vault_initial(PathBuf::from("/var/lib/paladin/vault.bin"));
+    insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 12));
+}
+
+#[test]
+fn snapshot_create_vault_choose_mode_plaintext_selected() {
+    let state = AppState::CreateVault {
         path: PathBuf::from("/var/lib/paladin/vault.bin"),
+        step: CreateVaultStep::ChooseMode {
+            selection: CreateVaultMode::Plaintext,
+        },
+        error: None,
     };
     insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 12));
+}
+
+#[test]
+fn snapshot_create_vault_confirm_plaintext() {
+    let state = AppState::CreateVault {
+        path: PathBuf::from("/var/lib/paladin/vault.bin"),
+        step: CreateVaultStep::ConfirmPlaintext,
+        error: None,
+    };
+    insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 16));
+}
+
+#[test]
+fn snapshot_create_vault_enter_passphrase_empty() {
+    let state = AppState::CreateVault {
+        path: PathBuf::from("/var/lib/paladin/vault.bin"),
+        step: CreateVaultStep::EnterPassphrase {
+            passphrase: PassphraseBuffer::new(),
+            confirmation: PassphraseBuffer::new(),
+            focus: PassphraseFieldFocus::Passphrase,
+        },
+        error: None,
+    };
+    insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 12));
+}
+
+#[test]
+fn snapshot_create_vault_enter_passphrase_typing() {
+    let mut passphrase = PassphraseBuffer::new();
+    for c in "hunter2".chars() {
+        passphrase.push(c);
+    }
+    let state = AppState::CreateVault {
+        path: PathBuf::from("/var/lib/paladin/vault.bin"),
+        step: CreateVaultStep::EnterPassphrase {
+            passphrase,
+            confirmation: PassphraseBuffer::new(),
+            focus: PassphraseFieldFocus::Confirmation,
+        },
+        error: None,
+    };
+    insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 12));
+}
+
+#[test]
+fn snapshot_create_vault_enter_passphrase_mismatch_error() {
+    let mut passphrase = PassphraseBuffer::new();
+    for c in "hunter2".chars() {
+        passphrase.push(c);
+    }
+    let state = AppState::CreateVault {
+        path: PathBuf::from("/var/lib/paladin/vault.bin"),
+        step: CreateVaultStep::EnterPassphrase {
+            passphrase,
+            confirmation: PassphraseBuffer::new(),
+            focus: PassphraseFieldFocus::Confirmation,
+        },
+        error: Some("passphrases do not match".to_string()),
+    };
+    insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 16));
+}
+
+#[test]
+fn snapshot_create_vault_create_error_unsafe_permissions() {
+    let err = PaladinError::UnsafePermissions {
+        path: PathBuf::from("/var/lib/paladin"),
+        subject: PermissionSubject::VaultDir,
+        actual_mode: "0755".to_string(),
+        expected_mode: "0700".to_string(),
+    };
+    let state = AppState::CreateVault {
+        path: PathBuf::from("/var/lib/paladin/vault.bin"),
+        step: CreateVaultStep::ChooseMode {
+            selection: CreateVaultMode::Encrypted,
+        },
+        error: Some(render_error_message(&err)),
+    };
+    insta::assert_snapshot!(render_to_text(&state, snapshot_now(), 80, 16));
 }
 
 #[test]

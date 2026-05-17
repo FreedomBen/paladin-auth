@@ -1,10 +1,8 @@
 ---
 source: crates/paladin-tui/tests/view_snapshots.rs
-assertion_line: 1016
 expression: "render_to_text(&state, snapshot_now(), 80, 30)"
 ---
-┌ Paladin ─────────────────────────────────────────────────────────────────────┐
-│┌ Help — keybindings ────────────────────────────────────────────────────────┐│
+┌┌ Help — keybindings ────────────────────────────────────────────────────────┐┐
 ││ Read-only — keys are listed for reference.                                 ││
 ││                                                                            ││
 ││ ↑ ↓ / j k                    Move selection up / down                      ││
@@ -25,11 +23,12 @@ expression: "render_to_text(&state, snapshot_now(), 80, 30)"
 ││ p                            Open Passphrase modal                         ││
 ││ s                            Open Settings modal                           ││
 ││ ?                            Open Help overlay                             ││
-││ Esc                          Close modal / overlay / search; quit dead-end ││
-││                              screens                                       ││
-││ q                            Quit from list and dead-end screens           ││
+││ Esc                          Close modal / overlay / search; step back in  ││
+││                              the create-vault wizard; quit on unlock /     ││
+││                              startup-error / create-vault ChooseMode       ││
+││ q                            Quit from list, startup-error, and            ││
+││                              create-vault ChooseMode / ConfirmPlaintext    ││
+││                              (otherwise a typed passphrase character)      ││
 ││ Ctrl-C                       Quit (any screen)                             ││
 ││                                 Esc closes                                 ││
-│└────────────────────────────────────────────────────────────────────────────┘│
-│ [↑↓] move  [enter] copy  [n] next-HOTP  [a] add  [/] find                    │
-└──────────────────────────────────────────────────────────────────────────────┘
+└└────────────────────────────────────────────────────────────────────────────┘┘

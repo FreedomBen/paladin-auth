@@ -1,17 +1,16 @@
 ---
 source: crates/paladin-tui/tests/view_snapshots.rs
-assertion_line: 70
-expression: "render_to_text(&state, 80, 12)"
+expression: "render_to_text(&state, snapshot_now(), 80, 12)"
 ---
-┌ Paladin ─────────────────────────────────────────────────────────────────────┐
+┌ Paladin — create vault ──────────────────────────────────────────────────────┐
 │                                                                              │
-│  No vault found at:                                                          │
-│  /var/lib/paladin/vault.bin                                                  │
+│  Vault: /var/lib/paladin/vault.bin                                           │
 │                                                                              │
-│  Run `paladin init` to create one.                                           │
+│  Choose vault protection:                                                    │
 │                                                                              │
-│  Press Esc, q, or Ctrl-C to quit.                                            │
+│    Encrypted (recommended) — protect this vault with a passphrase.           │
+│  ▶ Plaintext (insecure) — store secrets unencrypted on disk.                 │
 │                                                                              │
-│                                                                              │
+│  ↑/↓ or j/k to select; Enter to continue; q or Esc to quit.                  │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘

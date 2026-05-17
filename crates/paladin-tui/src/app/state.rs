@@ -1180,12 +1180,71 @@ pub enum Modal {
     Settings(SettingsModal),
 }
 
+/// Step within the in-app create-vault wizard (`DESIGN.md` §6 /
+/// `IMPLEMENTATION_PLAN_03_TUI.md` "Startup / vault modes").
+///
+/// The state machine is:
+///
+/// 1. [`CreateVaultStep::ChooseMode`] — user toggles between
+///    [`CreateVaultMode::Encrypted`] (default) and
+///    [`CreateVaultMode::Plaintext`].
+/// 2. Advancing on `Encrypted` moves to
+///    [`CreateVaultStep::EnterPassphrase`] with an initial
+///    [`PassphraseFieldFocus::Passphrase`] focus; advancing on
+///    `Plaintext` moves to [`CreateVaultStep::ConfirmPlaintext`].
+///
+/// `Esc` from any non-`ChooseMode` step returns to
+/// `ChooseMode` (zeroizing passphrase buffers). `Esc` from
+/// `ChooseMode` quits.
+#[derive(Debug)]
+pub enum CreateVaultStep {
+    /// Initial step: user selects between Encrypted and Plaintext.
+    ChooseMode {
+        /// Currently selected mode (toggled by `j` / `k` / arrows).
+        selection: CreateVaultMode,
+    },
+    /// Plaintext branch: user confirms the plaintext-storage
+    /// warning before any disk write.
+    ConfirmPlaintext,
+    /// Encrypted branch: user types the new vault passphrase and a
+    /// matching confirmation.
+    EnterPassphrase {
+        /// Typed passphrase characters; zeroized on cancel /
+        /// mismatch / submit / `Ctrl-C`.
+        passphrase: PassphraseBuffer,
+        /// Confirmation buffer; same zeroize rules.
+        confirmation: PassphraseBuffer,
+        /// Which field currently receives keystrokes.
+        focus: PassphraseFieldFocus,
+    },
+}
+
+/// Mode selected in [`CreateVaultStep::ChooseMode`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CreateVaultMode {
+    /// Encrypted vault (recommended; default selection).
+    Encrypted,
+    /// Plaintext vault (insecure; requires explicit confirmation).
+    Plaintext,
+}
+
+/// Focused field in [`CreateVaultStep::EnterPassphrase`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PassphraseFieldFocus {
+    /// The `passphrase` field receives keystrokes.
+    Passphrase,
+    /// The `confirmation` field receives keystrokes.
+    Confirmation,
+}
+
 /// Top-level UI state.
 ///
 /// Variants other than [`AppState::Unlocked`] are deliberately
 /// `Vault`/`Store`-free so the TUI cannot mutate vault data from
-/// non-unlocked screens (per the plan's "non-mutating missing-vault /
-/// startup-error" guarantee).
+/// non-unlocked screens (per the plan's "non-mutating
+/// startup-error" guarantee, plus the create-vault flow which only
+/// reaches a mutating call after the user confirms in the final
+/// step).
 ///
 /// The `Unlocked` variant intentionally owns the live `Vault`, `Store`,
 /// and per-screen UI slots (search, idle deadline, pending clipboard
@@ -1199,12 +1258,35 @@ pub enum Modal {
 #[derive(Debug)]
 #[allow(clippy::large_enum_variant)]
 pub enum AppState {
-    /// Vault file does not exist; the TUI shows a non-mutating
-    /// guidance screen telling the user to run `paladin init`.
-    /// v0.1 TUI does not create vaults.
-    MissingVault {
+    /// Vault file does not exist; the TUI walks the user through
+    /// creating one via the in-app create-vault wizard described in
+    /// `DESIGN.md` §6.
+    ///
+    /// The state carries the resolved vault `path`, the current
+    /// wizard `step` (defaults to
+    /// [`CreateVaultStep::ChooseMode`] with
+    /// [`CreateVaultMode::Encrypted`] selected on entry — the
+    /// recommended option), and an inline `error` populated when a
+    /// `Store::create` / `Vault::save` /
+    /// `EncryptionOptions::new` failure surfaces from
+    /// [`Effect::CreateVault`](crate::app::effect::Effect::CreateVault)
+    /// or when the reducer rejects an `EnterPassphrase` submit
+    /// (empty passphrase or confirmation mismatch). The flow never
+    /// writes to disk before the user confirms in the final step,
+    /// and on success transitions straight to [`AppState::Unlocked`]
+    /// with an empty account list — the same vault + store handles
+    /// a `paladin init` would produce.
+    CreateVault {
         /// The vault path that was inspected.
         path: PathBuf,
+        /// Current wizard step.
+        step: CreateVaultStep,
+        /// Inline error from a prior `Store::create` /
+        /// `Vault::save` / `EncryptionOptions::new` failure, or a
+        /// reducer-side rejection ("passphrase required" /
+        /// "passphrases do not match"). Cleared on every step
+        /// advance and on cancel.
+        error: Option<String>,
     },
 
     /// Encrypted vault: the unlock screen is shown and the user is
@@ -1410,6 +1492,26 @@ pub enum AppState {
     },
 }
 
+impl AppState {
+    /// Build the initial [`AppState::CreateVault`] for the given
+    /// missing-vault `path`: `step =
+    /// ChooseMode { selection: Encrypted }`, `error = None`.
+    ///
+    /// Used by [`decide_state_from_inspect`] on the
+    /// [`paladin_core::VaultStatus::Missing`] branch and by tests
+    /// that need a cheap initial create-vault state.
+    #[must_use]
+    pub fn create_vault_initial(path: PathBuf) -> Self {
+        AppState::CreateVault {
+            path,
+            step: CreateVaultStep::ChooseMode {
+                selection: CreateVaultMode::Encrypted,
+            },
+            error: None,
+        }
+    }
+}
+
 /// Map a `paladin_core::inspect` result onto the corresponding initial
 /// [`AppState`].
 ///
@@ -1424,9 +1526,7 @@ pub fn decide_state_from_inspect(
     inspect: Result<VaultStatus, PaladinError>,
 ) -> Option<AppState> {
     match inspect {
-        Ok(VaultStatus::Missing) => Some(AppState::MissingVault {
-            path: path.to_path_buf(),
-        }),
+        Ok(VaultStatus::Missing) => Some(AppState::create_vault_initial(path.to_path_buf())),
         Ok(VaultStatus::Encrypted) => Some(AppState::Unlock {
             path: path.to_path_buf(),
             error: None,
@@ -1591,7 +1691,8 @@ pub fn format_qr_import_failure(failure: &crate::app::event::QrImportFailure) ->
 /// 2. Call [`paladin_core::inspect`].
 /// 3. Branch on [`VaultStatus`]; plaintext vaults are opened
 ///    immediately, encrypted vaults defer to the unlock screen,
-///    missing vaults open the guidance screen, and any error from
+///    missing vaults open the in-app create-vault flow (see
+///    [`AppState::create_vault_initial`]), and any error from
 ///    path resolution / `inspect` / plaintext `open` lands on the
 ///    non-mutating startup-error screen.
 pub fn build_initial_state(vault: Option<PathBuf>) -> AppState {

@@ -5,6 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Agent Instructions
 
 - `DESIGN.md` is the source of truth for how the application and library should work.  If the user requests a change that conflicts, update DESIGN.md so it stays in sync.
+- When changing the CLI, TUI, or GTK, update the relevant `IMPLEMENTATION_PLAN_0X_*.md` with the new behavior and API details before implementing it.  This keeps design and implementation aligned.
 - Write exhaustive tests that cover base functionality and any edge cases, particularly for the core shared library.
 - Use a Test Driven Development (TDD) approach: write failing tests before implementing features, then implement the code to make the tests pass.
 - After changing code, format and lint it with `cargo fmt` and `cargo clippy`, ensuring no warnings remain.

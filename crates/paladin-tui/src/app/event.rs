@@ -104,6 +104,40 @@ pub enum EffectResult {
         opened_at: Instant,
     },
 
+    /// Outcome of an [`Effect::CreateVault`] attempt: either a fresh
+    /// `(Vault, Store)` pair to install in
+    /// [`crate::app::state::AppState::Unlocked`] (with an empty
+    /// account list — the same vault `paladin init` would produce),
+    /// or a [`PaladinError`] surfaced from
+    /// [`paladin_core::EncryptionOptions::new`],
+    /// [`paladin_core::Store::create`], or
+    /// [`paladin_core::Vault::save`].
+    ///
+    /// On error the reducer stays in
+    /// [`crate::app::state::AppState::CreateVault`] with
+    /// `error: Some(text)` populated (rendered via
+    /// [`crate::app::state::render_error_message`]) and zeroizes any
+    /// in-flight passphrase buffer. The wizard step is preserved so
+    /// the user can correct the issue (e.g. fix permissions, choose
+    /// a different mode) and retry.
+    ///
+    /// `opened_at` is the monotonic instant the executor sampled
+    /// immediately after `Vault::save` returned. On success the
+    /// reducer feeds it into
+    /// [`paladin_core::IdlePolicy::next_deadline`] to seed the new
+    /// `Unlocked` state's auto-lock `idle_deadline`; on error it is
+    /// unused. Results delivered while not on
+    /// [`crate::app::state::AppState::CreateVault`] are discarded so
+    /// the carried `(Vault, Store)` drops without mutating state.
+    CreateVault {
+        /// The `Store::create` + `Vault::save` outcome carried back
+        /// from the executor.
+        result: Result<(Vault, Store), PaladinError>,
+        /// Monotonic clock sampled immediately after `Vault::save`
+        /// returned.
+        opened_at: Instant,
+    },
+
     /// Outcome of an [`Effect::HotpAdvance`] attempt.
     ///
     /// On `Ok(code)` the reducer opens (or replaces) the
@@ -661,6 +695,27 @@ pub struct ImportSuccess {
 #[derive(Debug)]
 pub struct ImportFailure(pub PaladinError);
 
+/// Initialization mode for [`Effect::CreateVault`]: plaintext or
+/// encrypted (the latter carrying the validated passphrase).
+///
+/// Mirrors `paladin_core::VaultInit` but stays at the front-end
+/// boundary so the reducer can dispatch the effect without holding
+/// `paladin_core::EncryptionOptions` directly — the executor calls
+/// `EncryptionOptions::new` (defaults-only Argon2id) so KDF-validation
+/// errors surface through the same `EffectResult::CreateVault`
+/// channel as `Store::create` / `Vault::save` failures.
+///
+/// The `SecretString` carried by the `Encrypted` variant zeroizes on
+/// drop because `secrecy` owns the bytes.
+#[derive(Debug)]
+pub enum CreateVaultInit {
+    /// Initialize a plaintext-mode vault.
+    Plaintext,
+    /// Initialize an encrypted-mode vault with the supplied
+    /// passphrase (Argon2id defaults).
+    Encrypted(SecretString),
+}
+
 /// Side effects produced by the reducer.
 ///
 /// Effects are executed by the `run` boundary (the only site allowed
@@ -687,6 +742,29 @@ pub enum Effect {
         /// Typed passphrase, taken from the Unlock screen's zeroizing
         /// buffer.
         passphrase: SecretString,
+    },
+    /// Create a brand-new vault at `path` with the supplied `init`
+    /// mode. Emitted by the reducer when the user confirms the final
+    /// step of the in-app create-vault wizard (`ConfirmPlaintext`
+    /// `Enter` or `EnterPassphrase` `Enter` with matching
+    /// passphrase + confirmation). The executor builds
+    /// [`paladin_core::VaultInit`] from `init` (encrypted: derive
+    /// [`paladin_core::EncryptionOptions::new`] with defaults),
+    /// calls [`paladin_core::Store::create`], then
+    /// [`paladin_core::Vault::save`], and surfaces the outcome
+    /// through an `AppEvent::EffectResult(EffectResult::CreateVault
+    /// { result, opened_at })` so the reducer can transition to
+    /// [`crate::app::state::AppState::Unlocked`] on success or
+    /// surface the rendered error inline on failure.
+    ///
+    /// The passphrase (when `init` is
+    /// [`CreateVaultInit::Encrypted`]) zeroizes on drop because
+    /// [`SecretString`] owns its bytes through `secrecy`.
+    CreateVault {
+        /// The vault path to create.
+        path: PathBuf,
+        /// The vault initialization mode.
+        init: CreateVaultInit,
     },
     /// Wipe the OS clipboard if it still holds the bytes the front
     /// end captured at copy time.

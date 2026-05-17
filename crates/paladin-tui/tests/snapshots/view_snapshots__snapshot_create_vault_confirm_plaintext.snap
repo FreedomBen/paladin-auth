@@ -1,0 +1,20 @@
+---
+source: crates/paladin-tui/tests/view_snapshots.rs
+expression: "render_to_text(&state, snapshot_now(), 80, 16)"
+---
+┌ Paladin — create vault ──────────────────────────────────────────────────────┐
+│                                                                              │
+│  Vault: /var/lib/paladin/vault.bin                                           │
+│                                                                              │
+│  Plaintext vault confirmation                                                │
+│                                                                              │
+│  WARNING: Plaintext storage keeps account secrets unencrypted on disk. The   │
+│  vault file is restricted to your user account (mode 0600), but anyone with  │
+│  read access to that file or its backups can recover every secret. Use an    │
+│  encrypted vault unless you fully accept this risk.                          │
+│                                                                              │
+│  Press Enter to create a plaintext vault.                                    │
+│  Press Esc to go back; q or Ctrl-C to quit.                                  │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘

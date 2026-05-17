@@ -1534,9 +1534,47 @@ Layout (single-screen MVP):
   during the reveal window copies the visible code and does not advance
   the counter again.
 - Startup calls `inspect(path)`: plaintext vaults open directly to the
-  list; encrypted vaults show the unlock screen; missing vaults show a
-  non-mutating message telling the user to run `paladin init`. v0.1 TUI
-  does not create vaults.
+  list; encrypted vaults show the unlock screen; missing vaults open
+  the in-app **create-vault** flow described below. The CLI's
+  `paladin init` remains available as an out-of-band alternative
+  (and is the only way to set custom Argon2id `--kdf` cost
+  parameters), but a user can now create a vault entirely from
+  within the TUI without leaving the terminal.
+- **Create-vault flow** (shown on `VaultStatus::Missing`): a two-step
+  wizard built on the same `paladin_core::create(path, init)` call
+  the CLI uses. Defaults-only — Argon2id cost parameters are taken
+  from `Argon2Params::default()` (§4.4); KDF tuning remains a CLI
+  feature.
+  1. **Choose mode** — two options: *Encrypted* (recommended,
+     default selection) and *Plaintext* (insecure). `↑` / `↓` /
+     `j` / `k` move the selection; `Enter` advances; `Esc` or
+     `q` quits.
+  2a. *Encrypted* → **Enter passphrase** with a `passphrase` and
+     `confirmation` masked field (`•` per char, exactly like the
+     unlock screen). `Tab` / arrows switch focus; `Enter` on the
+     `passphrase` field moves focus to `confirmation`; `Enter` on
+     `confirmation` validates byte-for-byte equality and calls
+     `paladin_core::create(path, VaultInit::Encrypted(
+     EncryptionOptions::new(passphrase)))`. Empty passphrase or
+     mismatch surfaces an inline error and re-focuses the failing
+     field with the prior typed bytes zeroized. `Esc` returns to
+     Choose-mode (both buffers zeroized).
+  2b. *Plaintext* → **Confirm plaintext** screen rendering the
+     plaintext-storage warning from
+     `format_plaintext_storage_warning()`; `Enter` confirms and
+     calls `paladin_core::create(path, VaultInit::Plaintext)`,
+     `Esc` returns to Choose-mode.
+  On success the app transitions straight to `Unlocked` with an
+  empty account list — the user lands on the same screen they
+  would after `paladin init` + relaunch. On failure (any
+  `paladin_core::create` / `Vault::save` error, including
+  `unsafe_permissions` rendered via
+  `format_unsafe_permissions`) the user stays in the
+  create-vault flow with an inline error and the typed
+  passphrase bytes zeroized; `Ctrl-C` always quits and zeroizes.
+  The flow never writes to disk before the user confirms in the
+  final step, and never silently downgrades an encrypted choice
+  to plaintext.
 - Modal dialogs for add / remove / rename / import / export / passphrase /
   settings. Add supports manual entry, paste of an `otpauth://` URI
   (decoded via `paladin_core::parse_otpauth`), and QR scan from
@@ -1566,7 +1604,7 @@ Layout (single-screen MVP):
   user dismisses them.
 - `?` from list focus opens a read-only Help overlay listing every
   keybinding; `Esc` closes it. The overlay never mutates state and is
-  not bound on the unlock, missing-vault, or startup-error screens.
+  not bound on the unlock, create-vault, or startup-error screens.
 - **Auto-lock:** **off by default.** When `auto_lock.enabled = true`, the TUI
   clears the in-memory vault after `auto_lock.timeout_secs` of no input and
   shows the unlock screen for encrypted vaults. For plaintext vaults,
@@ -1594,8 +1632,9 @@ Library: **Relm4** on **GTK4**. Component tree:
   open `InitDialog` so the user can create a vault from inside the
   app. Default-path, inspect, or non-authentication open failures render
   a non-mutating startup-error view with retry and quit actions.
-- `InitDialog` — in-app vault initialization (v0.2 GUI only; TUI and
-  CLI keep their existing behavior). Two passphrase fields
+- `InitDialog` — in-app vault initialization for the GUI (v0.2). The
+  TUI ships its own §6 create-vault flow with the same defaults-only
+  contract; the CLI continues to use `paladin init`. Two passphrase fields
   (twice-confirmed; both fields empty select plaintext, with the same
   unencrypted-storage warning used by `passphrase remove`) plus an
   explicit "create vault" confirmation. Calls
@@ -1923,8 +1962,12 @@ permission fixtures. Binary crates additionally use `assert_cmd` and
   - TUI HOTP copy behavior: hidden rows do not copy, revealed rows copy
     without advancing again, and revealed rows display the counter that
     produced the visible code rather than the stored post-advance counter.
-  - TUI missing-vault state: shows `paladin init` guidance and does not
-    create or mutate files.
+  - TUI create-vault state: covers ChooseMode toggling, advancing to
+    `EnterPassphrase` on Encrypted vs `ConfirmPlaintext` on Plaintext,
+    passphrase + confirmation matching, plaintext-warning confirmation,
+    `Ctrl-C` / `Esc` cancellation with zeroized passphrase buffers, on-
+    success transition to `Unlocked` with an empty list, and inline
+    error retention on `Store::create` / `Vault::save` failures.
   - GUI missing-vault state: opens `InitDialog`; covers plaintext
     (both passphrase fields empty + unencrypted-storage warning) and encrypted
     (twice-confirm) creation, `vault_exists` triggering the in-dialog
@@ -2152,7 +2195,10 @@ artifacts side by side.
 - [ ] Search/filter input.
 - [ ] Add / remove / rename / import / export / passphrase / settings modals; Add covers manual fields, `otpauth://` URI paste, and QR scan from clipboard image.
 - [ ] Conditional unlock screen (only when vault is encrypted).
-- [ ] Missing-vault guidance screen (no implicit vault creation).
+- [ ] In-app create-vault flow on `VaultStatus::Missing` (two-step
+  wizard: choose Encrypted/Plaintext, then passphrase + confirmation
+  or plaintext confirmation; defaults-only Argon2id; success
+  transitions to `Unlocked`).
 - [ ] Opt-in auto-lock and clipboard-clear honoring vault settings, with plaintext auto-lock as a no-op.
 - [ ] HOTP reveal/copy behavior: hidden rows do not copy; revealed rows copy
   without advancing again and show the counter used.

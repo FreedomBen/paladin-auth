@@ -106,9 +106,43 @@ Startup mirrors the CLI's vault inspection path:
 
 1. Resolve vault path (`--vault` or `paladin_core::default_vault_path()`).
 2. Call `paladin_core::inspect(path)`.
-3. `VaultStatus::Missing` opens a non-mutating missing-vault screen with a
-   status message telling the user to run `paladin init`; v0.1 TUI does not
-   create vaults.
+3. `VaultStatus::Missing` opens the in-app **create-vault** flow
+   (`AppState::CreateVault { path, step, error }`). The flow is a two-
+   step wizard:
+   - `CreateVaultStep::ChooseMode { selection }` (default
+     `CreateVaultMode::Encrypted`): two radio-style options
+     (*Encrypted (recommended)* / *Plaintext (insecure)*). `↑` / `↓`
+     / `j` / `k` toggle the selection; `Enter` advances; `q` / `Esc`
+     quit (no disk writes).
+   - Advancing on *Encrypted* moves to
+     `CreateVaultStep::EnterPassphrase { passphrase, confirmation,
+     focus }` (both [`PassphraseBuffer`]s, `focus` initially
+     `Passphrase`). `Tab` and arrows switch focus; `Enter` on
+     `Passphrase` moves focus to `Confirmation`; `Enter` on
+     `Confirmation` dispatches `Effect::CreateVault { path,
+     init: CreateVaultInit::Encrypted(secret) }`. Empty passphrase
+     or byte-for-byte mismatch surfaces an inline error, zeroizes
+     the failing buffer, and re-focuses it. `Esc` returns to
+     ChooseMode (both buffers zeroized).
+   - Advancing on *Plaintext* moves to
+     `CreateVaultStep::ConfirmPlaintext`, rendering the body of
+     `paladin_core::format_plaintext_storage_warning()`. `Enter`
+     dispatches `Effect::CreateVault { path, init:
+     CreateVaultInit::Plaintext }`; `Esc` returns to ChooseMode.
+   - The executor calls `paladin_core::EncryptionOptions::new`
+     (defaults-only Argon2id; KDF tuning is a CLI feature), then
+     `paladin_core::Store::create(path, init)` and
+     `Vault::save(&store)`. On success the state transitions to
+     `Unlocked` with an empty account list (the user lands on the
+     same screen they would after `paladin init` + relaunch). On
+     failure (`unsafe_permissions`, `io_error`, post-write
+     `save_not_committed` / `save_durability_unconfirmed`, or an
+     `EncryptionOptions::new` validation error) the user stays in
+     `CreateVault` with `error: Some(text)` populated (rendered
+     using the same `format_unsafe_permissions` helper as
+     startup-error) and the typed passphrase buffer zeroized.
+   - `Ctrl-C` always quits and zeroizes any in-flight passphrase
+     buffers, mirroring the Unlock screen.
 4. `VaultStatus::Plaintext` calls `open(path, VaultLock::Plaintext)` and
    opens directly to the list view.
 5. `VaultStatus::Encrypted` opens the unlock screen and prompts inside the
@@ -233,12 +267,18 @@ the user must defocus the search (`Tab` to preserve the query or
 always quits. `Esc` clears the search query and returns focus to the list;
 on the list, `Esc` only clears pending vim chord state and is otherwise a
 no-op. Modal dialogs trap focus while open and intercept `Esc` to close
-themselves. The missing-vault and startup-error screens accept `Esc` / `q` /
-`Ctrl-C` to quit (the screens are read-only dead-ends with no input or state
-to discard, so all three keys behave identically). The unlock screen accepts
-character input (passphrase) and `Enter` (submit), and quits on `Esc` or
-`Ctrl-C` (`q` is a valid passphrase character, so it is not bound to quit
-there).
+themselves. The startup-error screen is a read-only dead-end and accepts
+`Esc` / `q` / `Ctrl-C` to quit (all three behave identically). The unlock
+screen accepts character input (passphrase) and `Enter` (submit), and quits
+on `Esc` or `Ctrl-C` (`q` is a valid passphrase character, so it is not
+bound to quit there). The create-vault flow is multi-step: `ChooseMode`
+accepts `Esc` / `q` / `Ctrl-C` to quit; `ConfirmPlaintext` accepts `Enter`
+(confirm + create), `Esc` (back to ChooseMode), `Ctrl-C` (quit), and `q`
+quits as well since the screen has no text input; `EnterPassphrase` accepts
+character input into the focused field, `Tab` / arrows for focus, `Enter`
+to advance or submit, `Esc` to return to ChooseMode (zeroizing both
+buffers), and `Ctrl-C` to quit (`q` is a valid passphrase character there
+and is not bound to quit).
 
 When the filter changes, the new selection is computed via
 `paladin_core::select_after_filter(prev, &filtered)` (preserve by `AccountId`
@@ -484,7 +524,7 @@ restores list focus. The overlay has no inputs and never mutates
 vault state. While the search bar is focused or any modal is open,
 `?` is consumed as character input by text fields (parity with the
 other action keys); the overlay is list-focus-only. The unlock,
-missing-vault, and startup-error screens do not bind `?`. The
+create-vault, and startup-error screens do not bind `?`. The
 overlay's content is generated from the same keybindings table that
 the workspace `cargo xtask man` target appends into the man page
 (after the clap-derived synopsis) so the two cannot drift.
@@ -614,8 +654,8 @@ reaches the primary-file commit point with durability still uncertain:
 | `p`                                | Open Passphrase modal                                                                                 |
 | `s`                                | Open Settings modal                                                                                   |
 | `?`                                | Open Help overlay (lists all keybindings); `Esc` closes                                               |
-| `Esc`                              | Close modal / clear search; close Help overlay; clear pending vim chord; quit on unlock, missing-vault, startup-error screens |
-| `q`                                | Quit from list, missing-vault, and startup-error screens; text input in text fields                   |
+| `Esc`                              | Close modal / clear search; close Help overlay; clear pending vim chord; quit on unlock, startup-error, and create-vault `ChooseMode`; return to `ChooseMode` from `ConfirmPlaintext` / `EnterPassphrase` (zeroizing buffers) |
+| `q`                                | Quit from list, startup-error, and create-vault `ChooseMode` / `ConfirmPlaintext`; text input in text fields (including the create-vault passphrase field)                   |
 | `Ctrl-C`                           | Quit (any screen)                                                                                     |
 
 ## Tests
@@ -1772,8 +1812,42 @@ end-to-end.
 - [x] Encrypted vault wrong passphrase shows inline `decrypt_failed`
   and stays on the unlock screen.
 - [x] Encrypted vault correct passphrase advances to the list.
-- [x] Missing vault opens the missing-vault screen and does not create
-  or mutate files.
+- [ ] Missing vault opens the in-app create-vault flow
+  (`AppState::CreateVault { path, step: ChooseMode { selection:
+  Encrypted }, error: None }`) and does not create or mutate files
+  until the user confirms in the final step. Reducer drives the
+  full state machine:
+  - ChooseMode selection toggles between `Encrypted` and `Plaintext`
+    via `↑` / `↓` / `j` / `k`, `Enter` advances to
+    `EnterPassphrase` on Encrypted or `ConfirmPlaintext` on
+    Plaintext, `q` / `Esc` quit, `Ctrl-C` quits.
+  - ConfirmPlaintext: `Enter` dispatches `Effect::CreateVault {
+    init: CreateVaultInit::Plaintext }`, `Esc` returns to
+    ChooseMode (selection preserved at Plaintext), `q` / `Ctrl-C`
+    quit.
+  - EnterPassphrase: typed chars append to the focused buffer,
+    `Tab` / arrows switch focus, `Backspace` deletes from the
+    focused buffer, `Enter` on `Passphrase` moves focus to
+    `Confirmation`, `Enter` on `Confirmation` validates that
+    `passphrase.as_str() == confirmation.as_str()` and dispatches
+    `Effect::CreateVault { init: CreateVaultInit::Encrypted(...) }`
+    on match. Empty passphrase or mismatch sets `error: Some(...)`
+    and zeroizes the failing buffer; `Esc` returns to ChooseMode
+    with both buffers zeroized; `Ctrl-C` quits and zeroizes.
+- [ ] `Effect::CreateVault` executor calls
+  `paladin_core::EncryptionOptions::new` (defaults-only Argon2id;
+  encrypted only), then `paladin_core::Store::create(path, init)`
+  followed by `Vault::save(&store)`. On success transitions to
+  `AppState::Unlocked` with an empty account list, the same
+  `Vault` + `Store` handles a `paladin init` would produce, and
+  the standard idle-deadline / clipboard / search / modal /
+  HOTP-reveal initial slots. On failure (`EncryptionOptions::new`
+  validation, `Store::create`, or `Vault::save`) the state stays
+  `CreateVault` with `error: Some(text)` populated and the typed
+  passphrase buffer zeroized.
+- [ ] `format_unsafe_permissions` is honored for `unsafe_permissions`
+  errors surfaced from `Vault::save` in the create-vault flow,
+  matching the startup-error screen's behavior.
 - [x] Vault-path resolution failures from `default_vault_path` open
   the non-mutating startup-error screen and do not create or mutate
   files.
@@ -2214,6 +2288,24 @@ Modals and overlays:
   The `view_snapshots.rs` harness (`render_to_text` /
   `buffer_to_text`) is shared by every subsequent view-rendering
   snapshot test.)*
+  *(Superseded by the create-vault snapshots below once the
+  in-app create-vault flow lands; the old `missing_vault.rs`
+  module and its snapshot file are retired in the same slice.)*
+- [ ] Create-vault Choose-mode screen (Encrypted selected — default).
+- [ ] Create-vault Choose-mode screen (Plaintext selected).
+- [ ] Create-vault Confirm-plaintext screen (plaintext-storage
+  warning rendered via `paladin_core::format_plaintext_storage_warning`).
+- [ ] Create-vault Enter-passphrase screen (both fields empty,
+  focus on Passphrase).
+- [ ] Create-vault Enter-passphrase screen (Passphrase has typed
+  characters, focus on Confirmation, mask renders one `•` per
+  char).
+- [ ] Create-vault Enter-passphrase mismatch error (inline
+  `passphrases do not match` style error, focused buffer
+  zeroized).
+- [ ] Create-vault inline create error (e.g.,
+  `unsafe_permissions` rendered via
+  `format_unsafe_permissions`, passphrase buffer zeroized).
 
 Inline `save_not_committed` / `save_durability_unconfirmed`:
 
@@ -3200,7 +3292,7 @@ is never expected to be scripted.
 
 - **Man page.** Generate the argument synopsis for `paladin-tui.1` from
   clap via `clap_mangen`, and append maintained sections for keybindings,
-  modal behavior, and the §6 missing-vault / startup-error screens, driven
+  modal behavior, and the §6 create-vault / startup-error screens, driven
   by the workspace `cargo xtask man` target. The packaging configs ship it
   gzipped at `/usr/share/man/man1/paladin-tui.1.gz` per §11.3.
 - **Cargo.toml metadata.** `crates/paladin-tui/Cargo.toml` inherits
@@ -3260,6 +3352,25 @@ is never expected to be scripted.
 - [x] Implement CLI args, vault path resolution, encrypted unlock,
   plaintext direct-open, missing-vault, and startup-error flows
   (including `format_unsafe_permissions` rendering).
+- [ ] Replace the read-only missing-vault guidance screen with the
+  in-app create-vault flow: rename `AppState::MissingVault` to
+  `AppState::CreateVault { path, step, error }`, add
+  `CreateVaultStep` / `CreateVaultMode` / `PassphraseFieldFocus`,
+  add `Effect::CreateVault` + `CreateVaultInit` plus its executor,
+  add `crates/paladin-tui/src/view/create_vault.rs`, retire
+  `crates/paladin-tui/src/view/missing_vault.rs`, update the view
+  dispatcher / KEYBINDINGS table / Help overlay text, and migrate
+  `build_initial_state_with_resolver` to land on `CreateVault` for
+  `VaultStatus::Missing`. Tests cover ChooseMode toggling,
+  per-step `Esc` / `q` / `Ctrl-C` semantics, passphrase entry
+  (mismatch handling, zeroize on cancel / quit), executor success
+  (Plaintext and Encrypted both land in `Unlocked` with an empty
+  list), executor failure (`unsafe_permissions`, generic `io_error`,
+  `EncryptionOptions::new` validation), and insta snapshots for
+  every step (`choose_mode_encrypted`, `choose_mode_plaintext`,
+  `confirm_plaintext`, `enter_passphrase_empty`,
+  `enter_passphrase_typing`, `enter_passphrase_mismatch_error`,
+  `create_error`).
 - [x] Implement terminal raw-mode / alternate-screen lifecycle with guarded
   restoration on exit, error, `Ctrl-C`, and panic unwind.
 - [x] Implement reducer, event producers, effect execution, clipboard
@@ -3291,7 +3402,7 @@ is never expected to be scripted.
 - [x] Implement the read-only Help overlay (`?` from list focus,
   `Esc` to close); render its content from the same keybindings table
   used to generate the man page so the two stay in sync; suppress
-  `?` on the unlock, missing-vault, and startup-error screens.
+  `?` on the unlock, create-vault, and startup-error screens.
   *(Reducer slice + view slice both done. Reducer:
   `help_open: bool` on `AppState::Unlocked`, `?` opener from list
   focus with `modal == None`, `Esc`-close precedence above
@@ -3414,7 +3525,13 @@ is never expected to be scripted.
 - Insta snapshots locked for every screen state.
 - `paladin tui` (CLI exec wrapper) launches this binary successfully in
   native/shared-`PATH` installs and has the documented Flatpak failure mode.
-- Missing vaults show the non-mutating `paladin init` guidance screen.
+- Missing vaults open the in-app create-vault flow; the flow walks
+  the user through mode choice and (for encrypted) passphrase entry
+  with confirmation, calls `paladin_core::create` + `Vault::save`,
+  lands on `Unlocked` with an empty list on success, and stays on
+  the create-vault screen with an inline error (and zeroized
+  passphrase buffer) on failure — without mutating files before the
+  final confirmation.
 - Vault-path resolution failures and non-`decrypt_failed` `inspect` /
   `open` errors surface on the non-mutating startup-error screen, with
   `unsafe_permissions` rendered via `format_unsafe_permissions`.

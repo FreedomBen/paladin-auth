@@ -5,7 +5,7 @@
 //! Tracks `IMPLEMENTATION_PLAN_03_TUI.md` "Help overlay" and the
 //! "Implementation checklist" item *"Implement the read-only Help
 //! overlay (`?` from list focus, `Esc` to close); … suppress `?` on
-//! the unlock, missing-vault, and startup-error screens."*
+//! the unlock, create-vault, and startup-error screens."*
 //!
 //! The overlay is a single boolean slot on
 //! [`paladin_tui::app::state::AppState::Unlocked`]; `?` opens it from
@@ -591,15 +591,13 @@ fn ctrl_c_still_quits_while_help_is_open() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn question_mark_on_missing_vault_is_silent_no_op() {
-    let state = AppState::MissingVault {
-        path: PathBuf::from("/tmp/missing.bin"),
-    };
+fn question_mark_on_create_vault_is_silent_no_op() {
+    let state = AppState::create_vault_initial(PathBuf::from("/tmp/missing.bin"));
     let (next, effects) = reduce(state, key(KeyCode::Char('?')));
-    assert!(effects.is_empty(), "`?` on MissingVault must emit nothing");
+    assert!(effects.is_empty(), "`?` on CreateVault must emit nothing");
     assert!(
-        matches!(next, AppState::MissingVault { .. }),
-        "`?` on MissingVault must leave the state unchanged, got {next:?}"
+        matches!(next, AppState::CreateVault { .. }),
+        "`?` on CreateVault must leave the state unchanged, got {next:?}"
     );
 }
 
@@ -619,7 +617,7 @@ fn question_mark_on_startup_error_is_silent_no_op() {
 
 #[test]
 fn question_mark_on_unlock_screen_is_consumed_as_passphrase_text() {
-    // Per the spec: "The unlock, missing-vault, and startup-error
+    // Per the spec: "The unlock, create-vault, and startup-error
     // screens do not bind `?`." On Unlock the screen is a
     // passphrase-input field — `?` falls through to that text-input
     // path (appended to the typed buffer). The overlay does not

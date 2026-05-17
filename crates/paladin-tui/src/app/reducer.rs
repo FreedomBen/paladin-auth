@@ -45,9 +45,14 @@ use crate::search::{filtered_account_ids, select_after_search};
 /// "Focus model", and "Startup / vault modes":
 ///
 /// * `Ctrl-C` quits on any screen.
-/// * `Esc` quits on `MissingVault`, `StartupError`, and `Unlock`.
-/// * `q` quits on `MissingVault` and `StartupError`; on `Unlock` it
-///   is a valid passphrase character and is appended to the buffer.
+/// * `Esc` quits on `StartupError`, `Unlock`, and `CreateVault` at
+///   `ChooseMode` (per-step Esc behavior on `CreateVault` lives in
+///   [`reduce_create_vault_input`]: `ConfirmPlaintext` /
+///   `EnterPassphrase` return to `ChooseMode` rather than quitting).
+/// * `q` quits on `StartupError`, and on `CreateVault` at
+///   `ChooseMode` / `ConfirmPlaintext`. On `Unlock` and on
+///   `CreateVault::EnterPassphrase` it is a valid passphrase
+///   character and is appended to the focused buffer.
 /// * On `Unlock`, printable characters (no Ctrl/Alt modifier) append
 ///   to the passphrase buffer, `Backspace` pops the last character,
 ///   and `Enter` with a non-empty buffer emits a single
@@ -250,6 +255,9 @@ fn reduce_effect_result(state: AppState, result: EffectResult) -> (AppState, Vec
     match result {
         EffectResult::Unlock { result, opened_at } => {
             reduce_unlock_result(state, result, opened_at)
+        }
+        EffectResult::CreateVault { result, opened_at } => {
+            reduce_create_vault_result(state, result, opened_at)
         }
         EffectResult::HotpAdvance {
             account_id,
@@ -999,6 +1007,78 @@ fn reduce_unlock_result(
     }
 }
 
+/// Apply an [`EffectResult::CreateVault`] outcome.
+///
+/// On `Ok((vault, store))` while [`AppState::CreateVault`] is still
+/// the current state, transitions to [`AppState::Unlocked`] with an
+/// empty account list — the same vault `paladin init` would produce.
+/// The auto-lock idle deadline is seeded from the executor's
+/// `opened_at` instant via [`compute_idle_deadline`].
+///
+/// On `Err(_)` the wizard stays open with the rendered error
+/// surfaced inline and any in-flight passphrase buffer zeroized so
+/// the user can correct the issue (e.g. fix permissions, choose a
+/// different mode) and retry. The wizard step is preserved.
+///
+/// Results delivered while not on `CreateVault` (e.g., the user
+/// navigated away or the app is tearing down between submit and
+/// result) are discarded — the carried `(Vault, Store)` drops,
+/// which zeroizes the derived AEAD key inside the `Store`.
+fn reduce_create_vault_result(
+    state: AppState,
+    result: Result<(Vault, Store), PaladinError>,
+    opened_at: Instant,
+) -> (AppState, Vec<Effect>) {
+    match state {
+        AppState::CreateVault { path, mut step, .. } => match result {
+            Ok((vault, store)) => {
+                let idle_deadline = compute_idle_deadline(opened_at, &vault);
+                let selected = initial_selection(&vault);
+                (
+                    AppState::Unlocked {
+                        path,
+                        vault,
+                        store,
+                        search_query: String::new(),
+                        idle_deadline,
+                        pending_clipboard_clear: None,
+                        hotp_reveal: None,
+                        modal: None,
+                        selected,
+                        pending_chord_leader: None,
+                        viewport_height: 0,
+                        viewport_offset: 0,
+                        focus: Focus::List,
+                        status_line: None,
+                        help_open: false,
+                    },
+                    Vec::new(),
+                )
+            }
+            Err(err) => {
+                if let crate::app::state::CreateVaultStep::EnterPassphrase {
+                    passphrase,
+                    confirmation,
+                    ..
+                } = &mut step
+                {
+                    passphrase.clear();
+                    confirmation.clear();
+                }
+                (
+                    AppState::CreateVault {
+                        path,
+                        step,
+                        error: Some(render_error_message(&err)),
+                    },
+                    Vec::new(),
+                )
+            }
+        },
+        other => (other, Vec::new()),
+    }
+}
+
 /// Apply a `crossterm` input event.
 fn reduce_input(state: AppState, event: &Event) -> (AppState, Vec<Effect>) {
     let Event::Key(key) = event else {
@@ -1009,11 +1089,11 @@ fn reduce_input(state: AppState, event: &Event) -> (AppState, Vec<Effect>) {
     };
 
     if is_ctrl_c(key) {
-        return (zeroize_unlock_passphrase(state), vec![Effect::Quit]);
+        return (zeroize_passphrase_buffers(state), vec![Effect::Quit]);
     }
 
     if matches!(key.code, KeyCode::Esc) && quits_on_esc(&state) {
-        return (zeroize_unlock_passphrase(state), vec![Effect::Quit]);
+        return (zeroize_passphrase_buffers(state), vec![Effect::Quit]);
     }
 
     if matches!(state, AppState::Unlock { .. }) {
@@ -1024,9 +1104,272 @@ fn reduce_input(state: AppState, event: &Event) -> (AppState, Vec<Effect>) {
         return reduce_unlocked_input(state, key);
     }
 
+    if matches!(state, AppState::CreateVault { .. }) {
+        return reduce_create_vault_input(state, key);
+    }
+
     match key.code {
         KeyCode::Char('q') if quits_on_q(&state) => (state, vec![Effect::Quit]),
         _ => (state, Vec::new()),
+    }
+}
+
+/// Per-step input handling for the in-app create-vault wizard.
+///
+/// Per `DESIGN.md` §6 / `IMPLEMENTATION_PLAN_03_TUI.md`
+/// "Startup / vault modes":
+///
+/// * **`ChooseMode`**: `↑` / `↓` / `j` / `k` toggle between
+///   [`CreateVaultMode::Encrypted`] (default) and
+///   [`CreateVaultMode::Plaintext`]. `Enter` advances to
+///   `EnterPassphrase` (encrypted) or `ConfirmPlaintext`
+///   (plaintext). `Esc` / `q` / `Ctrl-C` quit at the
+///   [`reduce_input`] layer via [`quits_on_esc`] / [`quits_on_q`] /
+///   [`is_ctrl_c`].
+/// * **`ConfirmPlaintext`**: `Enter` emits a single
+///   [`Effect::CreateVault`] carrying
+///   [`CreateVaultInit::Plaintext`]; state is unchanged until the
+///   executor's [`EffectResult::CreateVault`] arrives. `Esc`
+///   returns to `ChooseMode` with `selection = Plaintext` so the
+///   user's prior mode choice is preserved.
+/// * **`EnterPassphrase`**: characters append to the focused buffer
+///   (the inline error, if any, clears on the next typed
+///   character), `Backspace` pops, `Tab` / `↑` / `↓` toggle focus.
+///   `Enter` on the `Passphrase` field moves focus to
+///   `Confirmation`. `Enter` on the `Confirmation` field:
+///     - empty passphrase → inline error "passphrase required",
+///       confirmation cleared, focus moves to `Passphrase`;
+///     - non-empty but `passphrase != confirmation` → inline error
+///       "passphrases do not match", confirmation cleared, focus
+///       stays on `Confirmation` so the user can retry the typo;
+///     - matching → take the passphrase as a
+///       [`SecretString`](secrecy::SecretString) and emit
+///       [`Effect::CreateVault`] with
+///       [`CreateVaultInit::Encrypted`]; both buffers are drained.
+///
+///   `Esc` returns to `ChooseMode` with `selection = Encrypted`,
+///   dropping both `PassphraseBuffer`s (which zeroize on drop via
+///   `Zeroizing`). `Ctrl-C` is handled by the [`reduce_input`]
+///   wrapper, which calls [`zeroize_passphrase_buffers`] before
+///   emitting [`Effect::Quit`].
+#[allow(clippy::too_many_lines)]
+fn reduce_create_vault_input(state: AppState, key: &KeyEvent) -> (AppState, Vec<Effect>) {
+    use crate::app::event::CreateVaultInit;
+    use crate::app::state::{CreateVaultMode, CreateVaultStep, PassphraseFieldFocus};
+
+    let AppState::CreateVault {
+        path,
+        mut step,
+        mut error,
+    } = state
+    else {
+        // `reduce_input` only routes `AppState::CreateVault` here.
+        unreachable!("reduce_create_vault_input called with non-CreateVault state");
+    };
+
+    match &mut step {
+        CreateVaultStep::ChooseMode { selection } => {
+            match key.code {
+                KeyCode::Char('j' | 'J') | KeyCode::Down => {
+                    *selection = CreateVaultMode::Plaintext;
+                    error = None;
+                }
+                KeyCode::Char('k' | 'K') | KeyCode::Up => {
+                    *selection = CreateVaultMode::Encrypted;
+                    error = None;
+                }
+                KeyCode::Enter => {
+                    let next_step = match *selection {
+                        CreateVaultMode::Encrypted => CreateVaultStep::EnterPassphrase {
+                            passphrase: PassphraseBuffer::new(),
+                            confirmation: PassphraseBuffer::new(),
+                            focus: PassphraseFieldFocus::Passphrase,
+                        },
+                        CreateVaultMode::Plaintext => CreateVaultStep::ConfirmPlaintext,
+                    };
+                    return (
+                        AppState::CreateVault {
+                            path,
+                            step: next_step,
+                            error: None,
+                        },
+                        Vec::new(),
+                    );
+                }
+                KeyCode::Esc | KeyCode::Char('q' | 'Q') => {
+                    return (
+                        AppState::CreateVault { path, step, error },
+                        vec![Effect::Quit],
+                    );
+                }
+                _ => {}
+            }
+            (AppState::CreateVault { path, step, error }, Vec::new())
+        }
+        CreateVaultStep::ConfirmPlaintext => match key.code {
+            KeyCode::Enter => {
+                let effect = Effect::CreateVault {
+                    path: path.clone(),
+                    init: CreateVaultInit::Plaintext,
+                };
+                (
+                    AppState::CreateVault {
+                        path,
+                        step: CreateVaultStep::ConfirmPlaintext,
+                        error: None,
+                    },
+                    vec![effect],
+                )
+            }
+            KeyCode::Esc => (
+                AppState::CreateVault {
+                    path,
+                    step: CreateVaultStep::ChooseMode {
+                        selection: CreateVaultMode::Plaintext,
+                    },
+                    error: None,
+                },
+                Vec::new(),
+            ),
+            KeyCode::Char('q' | 'Q') => (
+                AppState::CreateVault { path, step, error },
+                vec![Effect::Quit],
+            ),
+            _ => (AppState::CreateVault { path, step, error }, Vec::new()),
+        },
+        CreateVaultStep::EnterPassphrase {
+            passphrase,
+            confirmation,
+            focus,
+        } => {
+            // Reject anything that explicitly carries a Ctrl modifier;
+            // typed printable characters arrive with no modifier (or
+            // Shift only for uppercase). Ctrl-C is intercepted by
+            // `reduce_input`'s `is_ctrl_c` check before this handler
+            // ever runs, so explicit Ctrl rejection here keeps other
+            // accidental Ctrl- chords (e.g. Ctrl-A) from polluting the
+            // passphrase buffer.
+            if key.modifiers.contains(KeyModifiers::CONTROL)
+                && !matches!(key.code, KeyCode::Char('c'))
+            {
+                return (AppState::CreateVault { path, step, error }, Vec::new());
+            }
+            match key.code {
+                KeyCode::Esc => (
+                    AppState::CreateVault {
+                        path,
+                        step: CreateVaultStep::ChooseMode {
+                            selection: CreateVaultMode::Encrypted,
+                        },
+                        error: None,
+                    },
+                    Vec::new(),
+                ),
+                KeyCode::Tab | KeyCode::BackTab | KeyCode::Up | KeyCode::Down => {
+                    *focus = match focus {
+                        PassphraseFieldFocus::Passphrase => PassphraseFieldFocus::Confirmation,
+                        PassphraseFieldFocus::Confirmation => PassphraseFieldFocus::Passphrase,
+                    };
+                    (AppState::CreateVault { path, step, error }, Vec::new())
+                }
+                KeyCode::Backspace => {
+                    match focus {
+                        PassphraseFieldFocus::Passphrase => {
+                            passphrase.pop();
+                        }
+                        PassphraseFieldFocus::Confirmation => {
+                            confirmation.pop();
+                        }
+                    }
+                    (
+                        AppState::CreateVault {
+                            path,
+                            step,
+                            error: None,
+                        },
+                        Vec::new(),
+                    )
+                }
+                KeyCode::Enter => match focus {
+                    PassphraseFieldFocus::Passphrase => {
+                        if passphrase.is_empty() {
+                            return (
+                                AppState::CreateVault {
+                                    path,
+                                    step,
+                                    error: Some("passphrase required".to_string()),
+                                },
+                                Vec::new(),
+                            );
+                        }
+                        *focus = PassphraseFieldFocus::Confirmation;
+                        (
+                            AppState::CreateVault {
+                                path,
+                                step,
+                                error: None,
+                            },
+                            Vec::new(),
+                        )
+                    }
+                    PassphraseFieldFocus::Confirmation => {
+                        if passphrase.is_empty() {
+                            confirmation.clear();
+                            *focus = PassphraseFieldFocus::Passphrase;
+                            return (
+                                AppState::CreateVault {
+                                    path,
+                                    step,
+                                    error: Some("passphrase required".to_string()),
+                                },
+                                Vec::new(),
+                            );
+                        }
+                        if passphrase.as_str() != confirmation.as_str() {
+                            confirmation.clear();
+                            *focus = PassphraseFieldFocus::Confirmation;
+                            return (
+                                AppState::CreateVault {
+                                    path,
+                                    step,
+                                    error: Some("passphrases do not match".to_string()),
+                                },
+                                Vec::new(),
+                            );
+                        }
+                        let secret = passphrase.take();
+                        confirmation.clear();
+                        let effect = Effect::CreateVault {
+                            path: path.clone(),
+                            init: CreateVaultInit::Encrypted(secret),
+                        };
+                        (
+                            AppState::CreateVault {
+                                path,
+                                step,
+                                error: None,
+                            },
+                            vec![effect],
+                        )
+                    }
+                },
+                KeyCode::Char(c) => {
+                    match focus {
+                        PassphraseFieldFocus::Passphrase => passphrase.push(c),
+                        PassphraseFieldFocus::Confirmation => confirmation.push(c),
+                    }
+                    (
+                        AppState::CreateVault {
+                            path,
+                            step,
+                            error: None,
+                        },
+                        Vec::new(),
+                    )
+                }
+                _ => (AppState::CreateVault { path, step, error }, Vec::new()),
+            }
+        }
     }
 }
 
@@ -2967,28 +3310,42 @@ fn is_ctrl_c(key: &KeyEvent) -> bool {
     matches!(key.code, KeyCode::Char('c')) && key.modifiers.contains(KeyModifiers::CONTROL)
 }
 
-/// `Esc` quits on `Unlock`, `MissingVault`, and `StartupError` screens.
+/// `Esc` quits on `Unlock`, `StartupError`, and the `ChooseMode`
+/// step of `CreateVault`.
 ///
-/// (Once modals / search / vim chords exist, `Esc` on `Unlocked` will
-/// close those first; the always-quit-on-`Esc` set never grows
-/// beyond these three "screen with no dismissable affordance"
-/// states.)
+/// `CreateVault::ConfirmPlaintext` and `CreateVault::EnterPassphrase`
+/// handle `Esc` in [`reduce_create_vault_input`] so it returns to
+/// `ChooseMode` (zeroizing passphrase buffers) rather than quitting.
+/// `Unlocked` is intentionally excluded — modals / search / vim
+/// chords own its `Esc` dismissal precedence, and the user must never
+/// be one stray `Esc` away from losing the unlocked session.
 fn quits_on_esc(state: &AppState) -> bool {
     matches!(
         state,
-        AppState::MissingVault { .. } | AppState::StartupError { .. } | AppState::Unlock { .. }
+        AppState::StartupError { .. }
+            | AppState::Unlock { .. }
+            | AppState::CreateVault {
+                step: crate::app::state::CreateVaultStep::ChooseMode { .. },
+                ..
+            }
     )
 }
 
-/// `q` quits on `MissingVault` and `StartupError`. On `Unlock` it is
-/// text input. On `Unlocked` the quit fires from
-/// [`reduce_unlocked_input`] under its modal / focus guards; this
-/// fallback predicate is only consulted for the remaining "no
-/// dedicated handler" states.
+/// `q` quits on `StartupError`, and on `CreateVault` at `ChooseMode`
+/// / `ConfirmPlaintext`. On `Unlock` and on
+/// `CreateVault::EnterPassphrase` it is text input. On `Unlocked`
+/// the quit fires from [`reduce_unlocked_input`] under its modal /
+/// focus guards; this fallback predicate is only consulted for the
+/// remaining "no dedicated handler" states.
 fn quits_on_q(state: &AppState) -> bool {
     matches!(
         state,
-        AppState::MissingVault { .. } | AppState::StartupError { .. }
+        AppState::StartupError { .. }
+            | AppState::CreateVault {
+                step: crate::app::state::CreateVaultStep::ChooseMode { .. }
+                    | crate::app::state::CreateVaultStep::ConfirmPlaintext,
+                ..
+            }
     )
 }
 
@@ -2996,20 +3353,41 @@ fn quits_on_q(state: &AppState) -> bool {
 ///
 /// Per `IMPLEMENTATION_PLAN_03_TUI.md` "Tests > Sensitive UI buffers":
 /// *"Unlock passphrase buffer zeroizes on submit, cancel, and
-/// auto-lock."* The submit path is covered by
+/// auto-lock."* The same guarantee covers
+/// [`CreateVaultStep::EnterPassphrase`] (per
+/// `IMPLEMENTATION_PLAN_03_TUI.md` "Startup / vault modes": *"Esc
+/// returns to `ChooseMode` (both buffers zeroized); Ctrl-C quits and
+/// zeroizes."*).
+///
+/// The submit path is covered by
 /// [`crate::prompt::PassphraseBuffer::take`]; this helper covers the
-/// cancel paths (`Esc` and `Ctrl-C` from the Unlock screen) so the
-/// typed bytes do not linger between [`Effect::Quit`] emission and
-/// process tear-down. Auto-lock does not apply on the Unlock screen
-/// — auto-lock fires from `Unlocked`, not `Unlock` — so no buffer
-/// exists to wipe at that boundary. States other than `Unlock` pass
-/// through unchanged.
-fn zeroize_unlock_passphrase(mut state: AppState) -> AppState {
-    if let AppState::Unlock {
-        ref mut passphrase, ..
-    } = state
-    {
-        passphrase.clear();
+/// cancel paths (`Esc` / `Ctrl-C` from the Unlock screen, `Ctrl-C`
+/// from `CreateVault::EnterPassphrase`) so the typed bytes do not
+/// linger between [`Effect::Quit`] emission and process tear-down.
+/// Auto-lock does not apply on either screen — it fires from
+/// `Unlocked` only — so no buffer exists to wipe at that boundary.
+/// States other than `Unlock` and `CreateVault::EnterPassphrase`
+/// pass through unchanged.
+fn zeroize_passphrase_buffers(mut state: AppState) -> AppState {
+    match state {
+        AppState::Unlock {
+            ref mut passphrase, ..
+        } => {
+            passphrase.clear();
+        }
+        AppState::CreateVault {
+            step:
+                crate::app::state::CreateVaultStep::EnterPassphrase {
+                    ref mut passphrase,
+                    ref mut confirmation,
+                    ..
+                },
+            ..
+        } => {
+            passphrase.clear();
+            confirmation.clear();
+        }
+        _ => {}
     }
     state
 }

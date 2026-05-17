@@ -11,17 +11,17 @@
 //!
 //! Screen renderers land slice-by-slice per
 //! `IMPLEMENTATION_PLAN_03_TUI.md` "Tests > Insta snapshots":
-//! missing-vault / startup-error / unlock first (read-only
-//! dead-end screens), list view next (with TOTP gauges,
-//! HOTP reveal labels, status-line states, and search highlighting),
-//! then modals and overlays.
+//! create-vault / startup-error / unlock first (the boundary
+//! screens), list view next (with TOTP gauges, HOTP reveal labels,
+//! status-line states, and search highlighting), then modals and
+//! overlays.
 
 pub mod add;
+pub mod create_vault;
 pub mod export;
 pub mod help;
 pub mod import;
 pub mod list;
-pub mod missing_vault;
 pub mod passphrase;
 pub mod remove;
 pub mod rename;
@@ -75,7 +75,9 @@ pub(super) fn centered_rect(outer: Rect, width: u16, height: u16) -> Rect {
 /// fan-out matches the plan's "Tests > Insta snapshots" ordering.
 pub fn render(frame: &mut Frame<'_>, state: &AppState, now: SystemTime, no_color: bool) {
     match state {
-        AppState::MissingVault { path } => missing_vault::render(frame, path),
+        AppState::CreateVault { path, step, error } => {
+            create_vault::render(frame, path, step, error.as_deref());
+        }
         AppState::StartupError { path, message } => {
             startup_error::render(frame, path.as_deref(), message);
         }

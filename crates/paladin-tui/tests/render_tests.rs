@@ -10,7 +10,7 @@
 //! cell for cell, the buffer produced by a direct
 //! `terminal.draw(|f| view::render(f, state, now))` call. Coverage:
 //!
-//! * `MissingVault` (dead-end screen).
+//! * `CreateVault` (dead-end screen).
 //! * `StartupError` (dead-end screen).
 //! * `Unlock` (dead-end screen, exercises the typed-passphrase branch).
 //! * `Unlocked` with a single TOTP account — pins the `now`
@@ -75,10 +75,8 @@ fn render_via_view(state: &AppState, now: SystemTime, width: u16, height: u16) -
 }
 
 #[test]
-fn draw_frame_missing_vault_matches_view_render_baseline() {
-    let state = AppState::MissingVault {
-        path: PathBuf::from("/var/lib/paladin/vault.bin"),
-    };
+fn draw_frame_create_vault_matches_view_render_baseline() {
+    let state = AppState::create_vault_initial(PathBuf::from("/var/lib/paladin/vault.bin"));
     let now = snapshot_now();
 
     let adapter = render_via_adapter(&state, now, 80, 12);

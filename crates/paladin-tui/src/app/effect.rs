@@ -17,7 +17,7 @@
 //! each [`Effect`] the reducer returned. Variants land here in lockstep
 //! with the corresponding [`Effect`] variants.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
 use std::time::{Instant, SystemTime};
 
@@ -25,12 +25,12 @@ use paladin_core::{
     export as core_export, import as core_import, parse_icon_hint_token, parse_otpauth,
     validate_manual, write_secret_file_atomic, Account, AccountInput, ClipboardClearPolicy,
     EncryptionOptions, ImportConflict, ImportFormat, ImportOptions, PaladinError, SettingPatch,
-    Store, ValidatedAccount, VaultLock,
+    Store, ValidatedAccount, Vault, VaultInit, VaultLock,
 };
 
 use crate::app::event::{
-    AddFailure, AddSuccess, AppEvent, Effect, EffectResult, ImportFailure, ImportSuccess,
-    QrImportFailure, QrImportSuccess,
+    AddFailure, AddSuccess, AppEvent, CreateVaultInit, Effect, EffectResult, ImportFailure,
+    ImportSuccess, QrImportFailure, QrImportSuccess,
 };
 use crate::app::state::{AppState, ExportFormat};
 
@@ -84,6 +84,19 @@ pub fn execute(effect: Effect, state: &mut AppState, sender: &Sender<AppEvent>) 
             // the app is already tearing down, so dropping the result
             // is correct.
             let _ = sender.send(AppEvent::EffectResult(EffectResult::Unlock {
+                result,
+                opened_at,
+            }));
+            EffectOutcome::Continue
+        }
+        Effect::CreateVault { path, init } => {
+            let result = execute_create_vault(&path, init);
+            // Sample `opened_at` immediately after the create + save
+            // returned so the reducer can seed the auto-lock idle
+            // deadline off the same monotonic clock the `Tick`
+            // thread uses (same shape as `Effect::Unlock`).
+            let opened_at = Instant::now();
+            let _ = sender.send(AppEvent::EffectResult(EffectResult::CreateVault {
                 result,
                 opened_at,
             }));
@@ -320,6 +333,35 @@ pub fn execute(effect: Effect, state: &mut AppState, sender: &Sender<AppEvent>) 
         } => execute_passphrase_change(&path, new_passphrase, state, sender),
         Effect::PassphraseRemove { path } => execute_passphrase_remove(&path, state, sender),
     }
+}
+
+/// Execute an [`Effect::CreateVault`] dispatch.
+///
+/// Builds the `paladin_core::VaultInit` from the front-end
+/// [`CreateVaultInit`] — encrypted variants derive
+/// [`EncryptionOptions::new`] with defaults — then calls
+/// [`Store::create`] followed by [`Vault::save`]. The save commits
+/// the empty vault to disk so the subsequent
+/// [`crate::app::state::AppState::Unlocked`] transition can call
+/// the standard save-bearing operations against a real on-disk
+/// `vault.bin`.
+///
+/// Any error from `EncryptionOptions::new`, `Store::create`, or
+/// `Vault::save` propagates to the caller, which surfaces it
+/// through [`EffectResult::CreateVault`].
+fn execute_create_vault(
+    path: &Path,
+    init: CreateVaultInit,
+) -> Result<(Vault, Store), PaladinError> {
+    let core_init = match init {
+        CreateVaultInit::Plaintext => VaultInit::Plaintext,
+        CreateVaultInit::Encrypted(passphrase) => {
+            VaultInit::Encrypted(EncryptionOptions::new(passphrase)?)
+        }
+    };
+    let (vault, store) = Store::create(path, core_init)?;
+    vault.save(&store)?;
+    Ok((vault, store))
 }
 
 /// Execute an [`Effect::Add`] for a Manual-mode submit.
