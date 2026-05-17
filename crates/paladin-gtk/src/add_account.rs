@@ -585,6 +585,21 @@ pub enum AddAccountMsg {
     /// no [`AddAccountOutput`] is emitted; `AppModel` only sees the
     /// path that was active when the user pressed Save.
     SwitchPath(AddPath),
+    /// Per-keystroke shadow of the manual Base32 secret entry into
+    /// the Paladin-owned [`crate::secret_fields::SecretEntry`] inside
+    /// [`crate::secret_fields::AddSecretState::manual_secret`].
+    ///
+    /// Carries a plain `String` rather than [`secrecy::SecretString`]
+    /// because the GTK [`gtk::EntryBuffer`] is the unavoidable §8 UI
+    /// boundary: the bytes arrive as a `GString` from
+    /// [`gtk::Editable::text`] and live transiently in the relm4
+    /// channel before [`apply_msg`] shadows them into the
+    /// [`crate::secret_fields::SecretEntry`]. Once the handler
+    /// returns, the `String` drops and only the `Zeroizing<String>`
+    /// copy in [`AddDialogState::secret_state`] survives. Mirror of
+    /// [`crate::unlock_dialog::UnlockDialogMsg::PassphraseChanged`]
+    /// on the add path.
+    ManualSecretChanged(String),
 }
 
 /// Outbound messages emitted by [`AddAccountComponent`] back to
@@ -811,6 +826,10 @@ pub fn apply_msg(state: &mut AddDialogState, msg: AddAccountMsg) -> Option<AddAc
             // `ValidatedAccount` zero out via
             // `paladin_core::Secret`'s `ZeroizeOnDrop` impl.
             let _dropped_pending = state.secret_state.switch_path(to);
+            None
+        }
+        AddAccountMsg::ManualSecretChanged(text) => {
+            state.secret_state.manual_secret.set(&text);
             None
         }
     }

@@ -1187,6 +1187,59 @@ fn apply_msg_switch_path_to_uri_flips_active_path_and_emits_no_output() {
 }
 
 #[test]
+fn apply_msg_manual_secret_changed_shadows_into_secret_state() {
+    // GTK `gtk::Editable::text` keystrokes on the manual Base32 entry
+    // arrive as `String`s; the dialog shadows them into the Paladin-
+    // owned `Zeroizing<String>` inside `secret_state.manual_secret`
+    // so the cleartext never lives in long-lived `AppModel` state.
+    // Mirror of `UnlockDialogMsg::PassphraseChanged` on the add path:
+    // the message arm shadows then emits no output (Submit is the
+    // first cross-component message that consumes the buffer).
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    let output = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualSecretChanged("JBSWY3DPEHPK3PXP".to_string()),
+    );
+    assert!(
+        output.is_none(),
+        "ManualSecretChanged shadows the buffer; no output flows back to AppModel",
+    );
+    assert_eq!(
+        state.secret_state().manual_secret.text(),
+        "JBSWY3DPEHPK3PXP",
+        "manual Base32 keystrokes shadow into the Paladin-owned buffer",
+    );
+}
+
+#[test]
+fn apply_msg_manual_secret_changed_replaces_prior_shadow() {
+    // Each keystroke produces a fresh `gtk::Editable::text` value,
+    // not an append, so successive shadows must replace rather than
+    // accumulate. The replaced bytes zero out in place via
+    // `Zeroizing<String>`'s Drop — pinning the replacement semantics
+    // here means a future refactor cannot accidentally append (which
+    // would leave the prior cleartext live in memory).
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualSecretChanged("first".to_string()),
+    );
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualSecretChanged("second".to_string()),
+    );
+    assert_eq!(
+        state.secret_state().manual_secret.text(),
+        "second",
+        "successive ManualSecretChanged messages replace the prior shadow",
+    );
+}
+
+#[test]
 fn apply_msg_switch_path_same_path_is_idempotent_noop() {
     // Idempotent re-entry on the active path must not erase buffers
     // or emit a stray output. Mirrors the
