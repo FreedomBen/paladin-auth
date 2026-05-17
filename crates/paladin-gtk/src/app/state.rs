@@ -54,9 +54,11 @@
 //! the caller pattern-matches against.
 
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
-use paladin_core::{PaladinError, Store, Vault, VaultLock, VaultStatus};
+use paladin_core::{AccountId, PaladinError, Store, Vault, VaultLock, VaultStatus};
 
+use crate::rename_dialog::RenameWorkerInput;
 use crate::startup_error::{classify_open_error, OpenErrorRouting, StartupError};
 use crate::unlock_dialog::{
     route_unlock_open_error, InlineError, UnlockDialogMsg, UnlockOpenRouting,
@@ -969,6 +971,65 @@ pub fn submit_unlock_app_state(current: &AppState) -> Option<AppState> {
 #[must_use]
 pub fn submit_rename_app_state(current: &AppState) -> Option<AppState> {
     current.clone().enter_busy()
+}
+
+/// Bundle the live `(Vault, Store)` pair and the
+/// [`crate::rename_dialog::RenameDialogOutput::SubmitLabel`] payload
+/// into a [`RenameWorkerInput`] for the `gio::spawn_blocking
+/// Vault::mutate_and_save(|v| v.rename(...))` worker.
+///
+/// Symmetric partner of [`compose_unlock_worker_input`] on the rename
+/// path: where the unlock composer captures the resolved path plus
+/// the typed [`VaultLock`] for the `gio::spawn_blocking
+/// paladin_core::open` worker, this composer captures the live
+/// `(Vault, Store)` pair plus the account id, trimmed label, and
+/// dispatch-site wall-clock for the rename worker. Both composers
+/// inspect `current` before the busy-gate transition so the source
+/// state is verified before [`submit_rename_app_state`] consumes the
+/// variant. Together they bracket every typed dispatch with a
+/// documented source-state contract per
+/// `IMPLEMENTATION_PLAN_04_GTK.md` §"Vault interaction".
+///
+/// Returns `Ok(RenameWorkerInput)` iff `current` is
+/// [`AppState::Unlocked`]. The `Err((vault, store))` branch is the
+/// defensive case for a stray dispatch from any other source state
+/// (`Missing` / `Locked` / `UnlockedBusy` / `StartupError`): the
+/// non-`Clone` live `(Vault, Store)` pair would be lost if the
+/// composer dropped it, so it is handed back so the caller can
+/// reinstall it into `AppModel.vault` rather than leaking the
+/// unlocked state. The contract mirrors the `Some` / `None`
+/// agreement with [`submit_rename_app_state`] — both helpers return
+/// success iff the source is `Unlocked`.
+///
+/// The composer stays shape-only — it inspects only the variant
+/// discriminant on `current` — so the side-effect decision in
+/// `AppModel::update` stays unit-testable in
+/// `tests/app_state_logic.rs` against real `(Vault, Store)` pairs
+/// constructed via `paladin_core::Store::create` over a tempfile
+/// vault.
+pub fn compose_rename_worker_input(
+    current: &AppState,
+    pair: (Vault, Store),
+    account_id: AccountId,
+    label: String,
+    now: SystemTime,
+) -> Result<RenameWorkerInput, (Vault, Store)> {
+    match current {
+        AppState::Unlocked { .. } => {
+            let (vault, store) = pair;
+            Ok(RenameWorkerInput {
+                vault,
+                store,
+                account_id,
+                label,
+                now,
+            })
+        }
+        AppState::Missing { .. }
+        | AppState::Locked { .. }
+        | AppState::UnlockedBusy { .. }
+        | AppState::StartupError { .. } => Err(pair),
+    }
 }
 
 /// Apply [`submit_unlock_app_state`] in-place to `state`, leaving
