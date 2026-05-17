@@ -760,6 +760,21 @@ pub enum AddAccountMsg {
     /// regardless so a kind round trip does not lose the user's
     /// typing. Dialog-local — no [`AddAccountOutput`] is emitted.
     ManualCounterChanged(u64),
+    /// Per-keystroke shadow of the non-secret icon-hint entry into
+    /// [`ManualDraftState::icon_hint_text`].
+    ///
+    /// Sibling of [`Self::ManualLabelChanged`] on the icon-hint
+    /// field. Carries a plain `String` from the GTK
+    /// [`gtk::EntryBuffer`] at the §8 UI boundary; the bytes are not
+    /// secret-bearing. Parsing of `"none"` (any case) / explicit
+    /// slugs lives in [`paladin_core::parse_icon_hint_token`] at
+    /// Save time inside [`classify_manual_submit`], so [`apply_msg`]
+    /// preserves the typed text verbatim — including whitespace and
+    /// arbitrary case — so the parse happens once at the boundary the
+    /// CLI / TUI also use. [`apply_msg`] replaces (does not append)
+    /// the prior shadow. Dialog-local — no [`AddAccountOutput`] is
+    /// emitted.
+    ManualIconHintChanged(String),
     /// Per-keystroke shadow of the manual Base32 secret entry into
     /// the Paladin-owned [`crate::secret_fields::SecretEntry`] inside
     /// [`crate::secret_fields::AddSecretState::manual_secret`].
@@ -1135,6 +1150,10 @@ pub fn apply_msg(state: &mut AddDialogState, msg: AddAccountMsg) -> Option<AddAc
         }
         AddAccountMsg::ManualCounterChanged(counter) => {
             state.manual_draft.counter = counter;
+            None
+        }
+        AddAccountMsg::ManualIconHintChanged(text) => {
+            state.manual_draft.icon_hint_text = text;
             None
         }
         AddAccountMsg::ManualSecretChanged(text) => {

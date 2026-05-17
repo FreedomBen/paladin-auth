@@ -2341,6 +2341,115 @@ fn apply_msg_manual_counter_changed_accepts_u64_max() {
 }
 
 #[test]
+fn apply_msg_manual_icon_hint_changed_shadows_into_manual_draft() {
+    // Per-keystroke icon-hint entry text routes through
+    // `AddAccountMsg::ManualIconHintChanged(String)` and shadows into
+    // `ManualDraftState::icon_hint_text` so the widget view's
+    // `#[watch]` projection and `classify_manual_submit` at Save time
+    // (which calls `parse_icon_hint_token`) both see the live draft.
+    // The arm emits no output — icon-hint edits are dialog-local
+    // until Save. Mirror of the existing
+    // `apply_msg_manual_label_changed_shadows_into_manual_draft`
+    // contract on the sibling non-secret free-form text field.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    assert_eq!(state.manual_draft().icon_hint_text, "");
+
+    let output = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualIconHintChanged("github".to_string()),
+    );
+
+    assert!(
+        output.is_none(),
+        "ManualIconHintChanged stays dialog-local; no output flows to AppModel",
+    );
+    assert_eq!(
+        state.manual_draft().icon_hint_text,
+        "github",
+        "ManualIconHintChanged shadows the entry text into ManualDraftState::icon_hint_text",
+    );
+}
+
+#[test]
+fn apply_msg_manual_icon_hint_changed_replaces_prior_shadow() {
+    // A second keystroke replaces (does not append) the prior icon-
+    // hint shadow so the draft stays in lockstep with the visible
+    // entry text. Mirror of the existing
+    // `apply_msg_manual_label_changed_replaces_prior_shadow` contract
+    // on the sibling free-form text field.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualIconHintChanged("github".to_string()),
+    );
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualIconHintChanged("gitlab".to_string()),
+    );
+
+    assert_eq!(
+        state.manual_draft().icon_hint_text,
+        "gitlab",
+        "second ManualIconHintChanged replaces the prior shadow",
+    );
+}
+
+#[test]
+fn apply_msg_manual_icon_hint_changed_preserves_other_draft_fields() {
+    // The icon-hint keystroke must not disturb the rest of the
+    // manual draft — label / issuer / algorithm / digits / kind /
+    // period / counter stay on their CLI defaults so a stray icon-
+    // hint edit does not silently reset the form.
+    use paladin_core::{AccountKindInput, Algorithm};
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualIconHintChanged("only-icon-hint".to_string()),
+    );
+
+    let draft = state.manual_draft();
+    assert_eq!(draft.label, "");
+    assert_eq!(draft.issuer, "");
+    assert_eq!(draft.algorithm, Algorithm::Sha1);
+    assert_eq!(draft.digits, 6);
+    assert_eq!(draft.kind, AccountKindInput::Totp);
+    assert_eq!(draft.period_secs, 30);
+    assert_eq!(draft.counter, 0);
+    assert_eq!(draft.icon_hint_text, "only-icon-hint");
+}
+
+#[test]
+fn apply_msg_manual_icon_hint_changed_preserves_verbatim_for_parse_icon_hint_token() {
+    // Parsing of `"none"` / explicit slugs lives in
+    // `parse_icon_hint_token` at submit time inside
+    // `classify_manual_submit`. `apply_msg` therefore preserves the
+    // typed text verbatim — including whitespace and arbitrary case
+    // of `"None"` / `"NONE"` — so the parse happens once, at the
+    // boundary the CLI / TUI also use. A premature normalization in
+    // the dispatch arm would silently shift the cursor and diverge
+    // from the CLI / TUI add modals.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualIconHintChanged("  NoNe  ".to_string()),
+    );
+
+    assert_eq!(
+        state.manual_draft().icon_hint_text,
+        "  NoNe  ",
+        "apply_msg preserves the entry text verbatim — parsing happens at Save time",
+    );
+}
+
+#[test]
 fn manual_draft_state_default_matches_cli_manual_add_defaults() {
     // The `AdwPreferencesGroup` body of `AddAccountComponent` opens
     // with the same defaults the CLI interactive prompts use (DESIGN
