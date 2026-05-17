@@ -26,6 +26,10 @@
 //! unit-testable; `run_with_terminal_guard` is the thin layer that
 //! ties the two together.
 
+mod common;
+
+use common::secure_test_tempdir;
+
 use std::cell::{Cell, RefCell};
 use std::io;
 use std::path::PathBuf;
@@ -901,5 +905,134 @@ fn merge_render_failure_into_run_result_prefers_setup_error_when_both_sources_fa
         err.to_string(),
         "simulated terminal setup failure",
         "the setup error must win when both sources report failure so the stderr advisory points at the real cause",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// run_with_components (IMPLEMENTATION_PLAN_03_TUI.md > Implementation
+// checklist) — top-level composer the `paladin_tui::run()` binary entry uses
+// to tie `build_initial_state`, the ratatui `Terminal` construction, the
+// lifecycle `TerminalGuard`, the render-error sink, and the exit-code mapper
+// into a single call. The fine-grained pieces are each pinned above; the
+// tests below pin the *integration* the binary's entry depends on without
+// exercising a real TTY: the success path returns `ExitCode::SUCCESS` after
+// dispatch quits cleanly, and a failed ratatui-Terminal construction short-
+// circuits to `ExitCode::FAILURE` BEFORE either spawner or the lifecycle
+// backend is touched, with the underlying error surfaced through the same
+// `paladin-tui: <err>` stderr advisory as a setup failure.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn run_with_components_returns_success_after_dispatch_quits_cleanly() {
+    // Pin: the binary's top-level composer ties `build_initial_state` +
+    // the supplied lifecycle backend + a successful `Terminal::new` into
+    // a clean `ExitCode::SUCCESS` exit when dispatch returns through
+    // `Effect::Quit` (here driven by the one-shot Ctrl-C spawner).
+    // Asserts no stderr advisory is written on the happy path and the
+    // lifecycle guard's setup pair was driven so the production
+    // "raw mode + alt screen active during dispatch" contract is
+    // observable from this top layer.
+    //
+    // The vault path lives inside a `secure_test_tempdir()` so the
+    // path is guaranteed non-existent (→ `MissingVault` initial state,
+    // which is reducer-stable under Ctrl-C) and the parent dir's
+    // `0700` mode keeps `paladin_core::inspect` from tripping
+    // `unsafe_permissions`. The exact initial state does not matter
+    // to the assertions — every `AppState` variant funnels Ctrl-C
+    // through `Effect::Quit` — but pinning the path-class keeps the
+    // test deterministic across machines whose `/tmp` permissions
+    // differ.
+    let tmp = secure_test_tempdir();
+    let vault_path = tmp
+        .path()
+        .join("paladin-tui-run-with-components-success.bin");
+    let args = paladin_tui::cli::GlobalArgs {
+        vault: Some(vault_path),
+        no_color: false,
+    };
+    let log: SharedRecorder = Rc::default();
+    let mut stderr = Vec::<u8>::new();
+
+    let exit_code = paladin_tui::run_with_components(
+        args,
+        RecordingBackend(log.clone()),
+        || Terminal::new(TestBackend::new(80, 24)),
+        one_shot_ctrl_c,
+        noop_thread,
+        SystemTime::UNIX_EPOCH,
+        &mut stderr,
+    );
+
+    assert_eq!(
+        debug_exit_code(exit_code),
+        debug_exit_code(ExitCode::SUCCESS),
+        "clean dispatch quit must map to ExitCode::SUCCESS",
+    );
+    assert!(
+        stderr.is_empty(),
+        "no stderr advisory should be written on success, got {:?}",
+        String::from_utf8_lossy(&stderr),
+    );
+    let calls = log.borrow().calls.clone();
+    assert!(
+        calls.starts_with(&["enable_raw_mode", "enter_alt_screen"]),
+        "guard must enable raw mode + alt screen before dispatch begins, got {calls:?}",
+    );
+    assert!(
+        calls
+            .iter()
+            .any(|c| *c == "leave_alt_screen" || *c == "disable_raw_mode"),
+        "guard must run teardown after dispatch returns, got {calls:?}",
+    );
+}
+
+#[test]
+fn run_with_components_returns_failure_with_stderr_advisory_on_terminal_construction_failure() {
+    // Pin: when the ratatui `Terminal` cannot be constructed, the
+    // composer short-circuits to `ExitCode::FAILURE` WITHOUT touching
+    // either the lifecycle backend or the input/ticker spawners. A
+    // regression that ever ordered `Terminal::new` after raw-mode
+    // setup could silently leak ratatui escape sequences onto the
+    // user's primary screen on the failure path; pinning "lifecycle
+    // backend untouched" + "spawners must not run" catches that
+    // class. The underlying `io::Error` surfaces through the same
+    // `paladin-tui: <err>` stderr advisory as a
+    // `TerminalGuard::setup` failure, so the user sees one
+    // consistent failure shape regardless of which side failed.
+    let tmp = secure_test_tempdir();
+    let vault_path = tmp
+        .path()
+        .join("paladin-tui-run-with-components-failure.bin");
+    let args = paladin_tui::cli::GlobalArgs {
+        vault: Some(vault_path),
+        no_color: false,
+    };
+    let log: SharedRecorder = Rc::default();
+    let mut stderr = Vec::<u8>::new();
+
+    let exit_code = paladin_tui::run_with_components::<TestBackend, _, _, _, _, _>(
+        args,
+        RecordingBackend(log.clone()),
+        || Err(io::Error::other("synthetic terminal construction failure")),
+        |_tx| panic!("input spawner must not be invoked when Terminal::new fails"),
+        |_tx| panic!("ticker spawner must not be invoked when Terminal::new fails"),
+        SystemTime::UNIX_EPOCH,
+        &mut stderr,
+    );
+
+    assert_eq!(
+        debug_exit_code(exit_code),
+        debug_exit_code(ExitCode::FAILURE),
+        "Terminal::new failure must map to ExitCode::FAILURE",
+    );
+    assert!(
+        log.borrow().calls.is_empty(),
+        "lifecycle backend must not be touched when Terminal::new fails, got {:?}",
+        log.borrow().calls,
+    );
+    let stderr_str = String::from_utf8(stderr).expect("stderr advisory is UTF-8");
+    assert_eq!(
+        stderr_str, "paladin-tui: synthetic terminal construction failure\n",
+        "stderr must carry the binary-prefixed advisory verbatim",
     );
 }
