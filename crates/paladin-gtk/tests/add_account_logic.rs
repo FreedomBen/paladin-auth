@@ -7224,3 +7224,115 @@ fn compose_manual_label_text_survives_kind_round_trip() {
         "kind round-trip preserves the prior label text in the projection",
     );
 }
+
+#[test]
+fn compose_manual_issuer_text_fresh_dialog_returns_empty() {
+    // `ManualDraftState::default` seeds the issuer buffer at the
+    // empty string (issuer is optional in the §4.1 domain model and
+    // CLI / TUI add forms default it to absent), so a freshly-opened
+    // dialog must expose an empty string through the projection — the
+    // widget binds a `#[watch]` over the projection to drive the
+    // issuer entry's `gtk::EditableLabel::set_text:` so the entry
+    // reflects state on initial render. Mirror of
+    // `compose_manual_label_text_fresh_dialog_returns_empty` on the
+    // issuer-buffer side; unlike the label buffer, an empty issuer is
+    // valid input (the manual submit pipeline interprets empty as
+    // `None`), so the Save-button gate ignores it.
+    use paladin_gtk::add_account::{compose_manual_issuer_text, AddDialogState};
+
+    let state = AddDialogState::new();
+
+    assert_eq!(
+        compose_manual_issuer_text(&state),
+        "",
+        "fresh dialog → composer surfaces the empty issuer buffer",
+    );
+}
+
+#[test]
+fn compose_manual_issuer_text_after_issuer_changed_reflects_new_value() {
+    // `AddAccountMsg::ManualIssuerChanged("Example Corp")` shadows
+    // the entry text into `ManualDraftState::issuer`; the projection
+    // must surface the new value as a borrowed `&str` so the
+    // widget's `#[watch]`-driven `set_text:` binding stays in
+    // lockstep with the underlying state on every dispatch. Mirror
+    // of `compose_manual_label_text_after_label_changed_reflects_new_value`
+    // on the issuer-buffer side.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_manual_issuer_text, AddAccountMsg, AddDialogState,
+    };
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualIssuerChanged("Example Corp".to_string()),
+    );
+
+    assert_eq!(
+        compose_manual_issuer_text(&state),
+        "Example Corp",
+        "ManualIssuerChanged → composer surfaces the new issuer text",
+    );
+}
+
+#[test]
+fn compose_manual_issuer_text_replaces_prior_shadow() {
+    // A second `ManualIssuerChanged` dispatch must overwrite the
+    // first — the projection must not latch on the first
+    // transition, so the widget's `#[watch]`-driven entry text
+    // stays bidirectional with the user's latest keystrokes. Mirror
+    // of `compose_manual_label_text_replaces_prior_shadow` on the
+    // issuer-buffer side.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_manual_issuer_text, AddAccountMsg, AddDialogState,
+    };
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualIssuerChanged("Acme".to_string()),
+    );
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualIssuerChanged("Globex".to_string()),
+    );
+
+    assert_eq!(
+        compose_manual_issuer_text(&state),
+        "Globex",
+        "second ManualIssuerChanged replaces the prior shadow in the projection",
+    );
+}
+
+#[test]
+fn compose_manual_issuer_text_survives_kind_round_trip() {
+    // The issuer buffer is shadowed into `ManualDraftState::issuer`
+    // independently of the kind dropdown — TOTP/HOTP toggles only
+    // affect the period / counter rows. Mirror of
+    // `compose_manual_label_text_survives_kind_round_trip` on the
+    // issuer-buffer side.
+    use paladin_core::AccountKindInput;
+    use paladin_gtk::add_account::{
+        apply_msg, compose_manual_issuer_text, AddAccountMsg, AddDialogState,
+    };
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualIssuerChanged("Example Corp".to_string()),
+    );
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualKindChanged(AccountKindInput::Hotp),
+    );
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualKindChanged(AccountKindInput::Totp),
+    );
+
+    assert_eq!(
+        compose_manual_issuer_text(&state),
+        "Example Corp",
+        "kind round-trip preserves the prior issuer text in the projection",
+    );
+}

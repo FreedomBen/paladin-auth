@@ -2115,6 +2115,34 @@ pub fn compose_manual_label_text(state: &AddDialogState) -> &str {
     &state.manual_draft().label
 }
 
+/// State-driven projection of the manual sub-path's issuer-entry
+/// buffer text, surfaced as the borrowed `&str` that
+/// `gtk::EditableLabel::set_text:` (or `gtk::Entry::set_text:`)
+/// expects.
+///
+/// Returns the live contents of
+/// [`ManualDraftState::issuer`] as a borrowed
+/// `&str` — `""` on a freshly-opened dialog (the §4.1 domain model
+/// treats issuer as optional, and the CLI / TUI add forms default it
+/// to absent), and the post-[`AddAccountMsg::ManualIssuerChanged`]
+/// value on every subsequent dispatch. The value persists across the
+/// kind dropdown's TOTP/HOTP toggles so the entry retains the user's
+/// in-progress typing across kind changes.
+///
+/// Lets the widget bind a single `#[watch]` over the projection to
+/// drive the issuer entry's `set_text:` instead of borrowing
+/// [`ManualDraftState::issuer`] inline against the live state.
+/// Sibling of [`compose_manual_label_text`] on the issuer-buffer
+/// side; unlike the label buffer, an empty issuer is valid input
+/// (the manual submit pipeline interprets empty as `None` per §4.1),
+/// so the [`compose_save_button_sensitive`] gate ignores it. Pure —
+/// borrows the state and returns a borrowed `&str` without
+/// allocating.
+#[must_use]
+pub fn compose_manual_issuer_text(state: &AddDialogState) -> &str {
+    &state.manual_draft().issuer
+}
+
 /// State-driven projection of whether the Save button's
 /// `set_sensitive:` is `true` — i.e. whether the active sub-path
 /// has the minimum required input for a click to reach the
