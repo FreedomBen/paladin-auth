@@ -480,6 +480,7 @@ impl SimpleComponent for AppModel {
                     #[name = "search_button"]
                     pack_end = &gtk::ToggleButton {
                         set_icon_name: format_app_search_button_icon_name(),
+                        set_tooltip_text: Some(format_app_search_button_tooltip()),
                     },
                 },
 
@@ -1407,4 +1408,31 @@ pub fn format_app_window_title() -> &'static str {
 #[must_use]
 pub fn format_app_search_button_icon_name() -> &'static str {
     "system-search-symbolic"
+}
+
+/// Fixed `tooltip_text` attribute the widget hands to the
+/// [`AppModel`]'s header-bar search-toggle
+/// `gtk::ToggleButton::set_tooltip_text`.
+///
+/// Returns the static tooltip string (`"Search accounts"`) the
+/// user sees when hovering or focusing the search-toggle
+/// header-bar affordance. The wording names the action the toggle
+/// dispatches (revealing the `gtk::SearchBar` in
+/// `AccountListComponent`) and matches the GNOME-HIG verb-led
+/// tooltip convention used by every other GNOME app's
+/// search-toggle header-bar affordance. The tooltip is the user-
+/// visible label for an icon-only button that otherwise shows
+/// only `system-search-symbolic`, so pinning the wording through
+/// a helper guards the accessibility surface (screen-readers read
+/// tooltips) against silent copy drift.
+///
+/// Pure — returns a `'static str` without allocating. Sibling of
+/// [`format_app_add_button_tooltip`] on the header-bar-tooltip
+/// side; together they pin both icon-only-button labels against
+/// a single source of truth. No TUI parity: the TUI is text-only
+/// and surfaces search through the `/` keybinding rather than
+/// tooltips.
+#[must_use]
+pub fn format_app_search_button_tooltip() -> &'static str {
+    "Search accounts"
 }

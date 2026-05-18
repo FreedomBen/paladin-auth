@@ -372,3 +372,51 @@ fn format_app_search_button_icon_name_ends_with_symbolic_suffix() {
         "header-bar search icon name must end with `-symbolic` for HIG-conformant theming; got {icon:?}",
     );
 }
+
+#[test]
+fn format_app_search_button_tooltip_returns_search_accounts() {
+    // The `AppModel`'s header-bar search-toggle
+    // `gtk::ToggleButton`'s `set_tooltip_text` attribute is
+    // populated from this helper. The wording (`"Search accounts"`)
+    // names the action the toggle dispatches (revealing the
+    // `gtk::SearchBar` in `AccountListComponent`) and matches the
+    // GNOME-HIG verb-led tooltip convention used by every other
+    // GNOME app's search-toggle header-bar affordance. The tooltip
+    // is the user-visible label for an icon-only button that
+    // otherwise shows only `system-search-symbolic`, so pinning
+    // the wording through a helper guards the accessibility
+    // surface (screen-readers read tooltips) against silent copy
+    // drift.
+    //
+    // Pure — returns a `'static str` without allocating. No TUI
+    // parity: the TUI is text-only and surfaces search through
+    // the `/` keybinding rather than tooltips. Sibling of
+    // `format_app_add_button_tooltip` on the header-bar-tooltip
+    // side; together they pin both icon-only-button labels
+    // against a single source of truth.
+    use paladin_gtk::app::model::format_app_search_button_tooltip;
+
+    assert_eq!(
+        format_app_search_button_tooltip(),
+        "Search accounts",
+        "header-bar search button tooltip uses the GNOME-HIG verb-led wording",
+    );
+}
+
+#[test]
+fn format_app_search_button_tooltip_is_non_empty() {
+    // Defense-in-depth against an accidental empty tooltip
+    // landing here: an icon-only button without a tooltip
+    // strips a screen-reader's only label for the affordance,
+    // breaking the accessibility contract that `set_tooltip_text`
+    // is meant to satisfy. Pinning a non-empty invariant alongside
+    // the full-string assertion guards against an accidental
+    // empty-string regression.
+    use paladin_gtk::app::model::format_app_search_button_tooltip;
+
+    let tooltip = format_app_search_button_tooltip();
+    assert!(
+        !tooltip.is_empty(),
+        "header-bar search button tooltip must be non-empty so the icon-only button retains a screen-reader label",
+    );
+}
