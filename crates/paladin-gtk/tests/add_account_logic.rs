@@ -4226,3 +4226,99 @@ fn apply_msg_render_inline_error_preserves_other_state() {
     assert_eq!(state.secret_state().manual_secret.text(), secret_before);
     assert_eq!(state.secret_state().active_path, active_path_before);
 }
+
+#[test]
+fn format_duplicate_confirm_body_renders_issuer_colon_label() {
+    // The widget binds the AdwAlertDialog body of the "Add anyway?"
+    // confirmation to this helper, fed by
+    // `AddDialogState::pending_duplicate_existing()`. Wording mirrors
+    // the CLI's `duplicate_account` text — `"account already exists
+    // with the same (secret, issuer, label): <label>"` — but omits
+    // the front-end-specific action hint (the AdwAlertDialog button
+    // label "Add anyway" supplies that). The carried `AccountSummary`
+    // routes through the `account_row::display_label` `<issuer>:<label>`
+    // projection so the colliding row's display name matches what the
+    // user already sees in the account list.
+    use paladin_gtk::add_account::format_duplicate_confirm_body;
+
+    let existing = dummy_existing_summary();
+
+    let body = format_duplicate_confirm_body(&existing);
+
+    assert_eq!(
+        body,
+        "account already exists with the same (secret, issuer, label): Acme:alice",
+    );
+}
+
+#[test]
+fn format_duplicate_confirm_body_collapses_empty_issuer_to_bare_label() {
+    // `Some("")` for the issuer collapses to the no-issuer form so
+    // the body never renders a dangling `: :alice` colon — mirror of
+    // the `account_row::display_label` rule pinned by
+    // `display_label_collapses_empty_issuer_to_bare_label` in
+    // `tests/account_row_logic.rs`. The helper must thread through
+    // the same projection so the duplicate-collision prompt does not
+    // diverge from the visible row label.
+    use paladin_gtk::add_account::format_duplicate_confirm_body;
+
+    let mut existing = dummy_existing_summary();
+    existing.issuer = Some(String::new());
+
+    let body = format_duplicate_confirm_body(&existing);
+
+    assert_eq!(
+        body,
+        "account already exists with the same (secret, issuer, label): alice",
+    );
+}
+
+#[test]
+fn format_duplicate_confirm_body_renders_bare_label_when_issuer_is_none() {
+    // `None` issuer renders the bare label without a leading colon —
+    // mirror of the `account_row::display_label` rule pinned by
+    // `display_label_renders_bare_label_when_issuer_is_none` in
+    // `tests/account_row_logic.rs`. Same rationale as the empty-string
+    // case above: the helper must thread through the
+    // `account_row::display_label` projection so the body cannot
+    // diverge from the visible row label.
+    use paladin_gtk::add_account::format_duplicate_confirm_body;
+
+    let mut existing = dummy_existing_summary();
+    existing.issuer = None;
+
+    let body = format_duplicate_confirm_body(&existing);
+
+    assert_eq!(
+        body,
+        "account already exists with the same (secret, issuer, label): alice",
+    );
+}
+
+#[test]
+fn format_duplicate_confirm_body_omits_action_hint() {
+    // The body must not embed a front-end-specific action hint —
+    // the CLI's `"(re-run with --allow-duplicate to add anyway)"`
+    // and the TUI's `"(press Enter to add anyway)"` are presentation
+    // text owned by each front end, not the colliding-summary
+    // projection. The GTK AdwAlertDialog button label "Add anyway"
+    // is what supplies the action on the GUI side, so the body
+    // stays neutral and can be reused regardless of which gesture
+    // a future GTK theme binds to the confirm action.
+    use paladin_gtk::add_account::format_duplicate_confirm_body;
+
+    let body = format_duplicate_confirm_body(&dummy_existing_summary());
+
+    assert!(
+        !body.contains("--allow-duplicate"),
+        "body must not echo the CLI's action hint: {body:?}",
+    );
+    assert!(
+        !body.contains("press Enter"),
+        "body must not echo the TUI's action hint: {body:?}",
+    );
+    assert!(
+        !body.contains("Add anyway"),
+        "body must not echo the GTK button label: {body:?}",
+    );
+}

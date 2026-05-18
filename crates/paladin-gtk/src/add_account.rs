@@ -96,6 +96,7 @@ use paladin_core::{
     Vault,
 };
 
+use crate::account_row::display_label;
 use crate::secret_fields::{AddPath, AddSecretState, ClearReason};
 
 /// Per-keystroke reactive state for the non-secret manual entries.
@@ -1240,6 +1241,35 @@ pub const ADD_DIALOG_MARKER_PREFIX: &str = "paladin-gtk: add_dialog_path=";
 #[must_use]
 pub fn format_add_dialog_marker(path: &Path) -> String {
     format!("{ADD_DIALOG_MARKER_PREFIX}{}", path.display())
+}
+
+/// Render the body shown in the "Add anyway?" `AdwAlertDialog` when
+/// [`paladin_core::Vault::find_duplicate`] matched an existing
+/// account on the `(secret, issuer, label)` triple.
+///
+/// The widget binds the `AdwAlertDialog` body to this helper, fed by
+/// [`AddDialogState::pending_duplicate_existing`]. Wording mirrors
+/// the CLI's `duplicate_account` text — `"account already exists
+/// with the same (secret, issuer, label): <label>"` — but omits the
+/// front-end-specific action hint: the CLI appends `"(re-run with
+/// --allow-duplicate to add anyway)"`, the TUI appends `"(press
+/// Enter to add anyway)"`, and the GTK side surfaces the action
+/// through the `AdwAlertDialog` button label (`"Add anyway"`) rather
+/// than the body text. Keeping the body neutral lets a future GTK
+/// theme rebind the confirm gesture without re-wording the prompt.
+///
+/// The carried [`AccountSummary`] routes through
+/// [`crate::account_row::display_label`] — the same projection the
+/// visible row label uses — so the colliding row's display name in
+/// the prompt matches what the user already sees in the account
+/// list. `Some("")` issuers collapse to the bare-label form for
+/// parity with [`crate::account_row::display_label`].
+#[must_use]
+pub fn format_duplicate_confirm_body(existing: &AccountSummary) -> String {
+    format!(
+        "account already exists with the same (secret, issuer, label): {}",
+        display_label(existing),
+    )
 }
 
 /// Apply an inbound [`AddAccountMsg`] and return the optional
