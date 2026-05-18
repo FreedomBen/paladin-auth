@@ -765,6 +765,41 @@ fn run_remove_worker_persists_removal_to_disk() {
 }
 
 #[test]
+fn format_remove_dialog_remove_label_returns_remove() {
+    // The RemoveDialog's footer destructive `gtk::Button`'s
+    // `set_label` attribute is populated from this helper. The
+    // wording (`"Remove"`) is the action-specific GNOME-HIG verb
+    // for the surface — matching the dialog's
+    // `format_remove_dialog_title` (`"Remove account"`) so the
+    // primary button reads as the noun-stripped imperative of
+    // the dialog's stated action. The button binds
+    // `add_css_class: "destructive-action"` so the libadwaita
+    // HIG paints the affordance in the platform's destructive
+    // red against the Cancel button. Pinning the wording through
+    // a helper keeps the string in one place shared by the
+    // widget binding and the pure-logic tests.
+    //
+    // No TUI parity: the TUI's `remove` command is CLI-shaped
+    // and prompts on stdin rather than rendering a dialog
+    // footer, so the wording is GTK-specific. Sibling of
+    // `format_remove_dialog_cancel_label` on the footer side and
+    // of
+    // `paladin_gtk::unlock_dialog::format_unlock_button_label`,
+    // `paladin_gtk::rename_dialog` /
+    // `paladin_gtk::add_account` primary-action labels on the
+    // imperative-verb side; together they pin every dialog
+    // footer's action affordances against a single source of
+    // truth.
+    use paladin_gtk::remove_dialog::format_remove_dialog_remove_label;
+
+    assert_eq!(
+        format_remove_dialog_remove_label(),
+        "Remove",
+        "remove button label uses the noun-stripped imperative of the dialog's stated action",
+    );
+}
+
+#[test]
 fn format_remove_dialog_cancel_label_returns_cancel() {
     // The RemoveDialog's footer Cancel `gtk::Button`'s
     // `set_label` attribute is populated from this helper. The

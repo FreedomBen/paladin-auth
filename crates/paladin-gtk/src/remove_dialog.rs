@@ -201,6 +201,32 @@ pub fn format_remove_dialog_marker(account_id: AccountId, display_label: &str) -
     format!("{REMOVE_DIALOG_MARKER_PREFIX}{account_id} label={display_label}")
 }
 
+/// Fixed `"Remove"` label the widget hands to the
+/// [`RemoveDialogComponent`]'s footer destructive
+/// `gtk::Button::set_label`.
+///
+/// The label is the action-specific GNOME-HIG verb for the
+/// surface — matching the dialog's
+/// [`format_remove_dialog_title`] (`"Remove account"`) so the
+/// primary button reads as the noun-stripped imperative of the
+/// dialog's stated action. The button binds `add_css_class:
+/// "destructive-action"` so libadwaita paints the affordance in
+/// the platform's destructive red against the Cancel button. No
+/// TUI parity: the TUI's `remove` command is CLI-shaped and
+/// prompts on stdin rather than rendering a dialog footer, so
+/// the wording is GTK-specific. Pinning the wording through a
+/// helper keeps the string in one place shared by the widget
+/// binding and the pure-logic tests.
+///
+/// Pure — returns a `'static str` without allocating. Sibling of
+/// [`format_remove_dialog_cancel_label`] on the dialog-footer
+/// side; together they pin both halves of the dialog's footer
+/// action affordances against a single source of truth.
+#[must_use]
+pub fn format_remove_dialog_remove_label() -> &'static str {
+    "Remove"
+}
+
 /// Fixed `"Cancel"` label the widget hands to the
 /// [`RemoveDialogComponent`]'s footer Cancel `gtk::Button::set_label`.
 ///
@@ -750,7 +776,7 @@ impl SimpleComponent for RemoveDialogComponent {
                 // is visually distinct from the Cancel affordance.
                 #[name = "remove_button"]
                 gtk::Button {
-                    set_label: "Remove",
+                    set_label: format_remove_dialog_remove_label(),
                     add_css_class: "destructive-action",
                     connect_clicked[sender] => move |_| {
                         sender.input(RemoveDialogMsg::Confirm);
