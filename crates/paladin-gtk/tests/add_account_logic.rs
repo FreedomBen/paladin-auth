@@ -6283,3 +6283,136 @@ fn compose_post_effect_warning_revealed_drains_after_submit_proceed() {
         "SubmitProceed drains the revealed projection alongside the worker_outcome slot",
     );
 }
+
+#[test]
+fn compose_post_effect_inline_error_revealed_with_no_outcome_is_false() {
+    // A freshly-opened dialog has not yet seen a worker completion,
+    // so the post-effect inline-error revealed projection must be
+    // `false` — the widget binds a `#[watch]` over the projection
+    // to drive the inline-error row's reveal so it stays hidden
+    // until an `Inline` outcome is parked. Sibling of
+    // `compose_post_effect_inline_error_body_with_no_outcome_returns_none`
+    // on the revealed-bool side and mirror of
+    // `compose_post_effect_warning_revealed_with_no_outcome_is_false`
+    // on the durability-warning side.
+    use paladin_gtk::add_account::{compose_post_effect_inline_error_revealed, AddDialogState};
+
+    let state = AddDialogState::new();
+
+    assert!(
+        !compose_post_effect_inline_error_revealed(&state),
+        "fresh dialog has no worker outcome → post-effect inline error is not revealed",
+    );
+}
+
+#[test]
+fn compose_post_effect_inline_error_revealed_with_keep_with_warning_is_false() {
+    // `KeepWithWarning(InlineWarning)` is the durability-warning
+    // variant — the add committed to disk but the parent fsync was
+    // not confirmed. The post-effect inline-error revealed
+    // projection must be `false` for this variant so the widget
+    // does not render the inline-error row alongside the
+    // success-with-warning panel. Pins the projection to the
+    // `Inline` variant only, matching the body projection's
+    // partitioning of [`AddPostEffectOutcome`] across the two
+    // dialog regions.
+    use paladin_gtk::add_account::{
+        apply_msg, classify_add_post_effect_error, compose_post_effect_inline_error_revealed,
+        AddAccountMsg, AddDialogState, AddPostEffectOutcome,
+    };
+
+    let outcome = classify_add_post_effect_error(&PaladinError::SaveDurabilityUnconfirmed);
+    assert!(
+        matches!(outcome, AddPostEffectOutcome::KeepWithWarning(_)),
+        "fixture precondition: save_durability_unconfirmed routes to KeepWithWarning",
+    );
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(&mut state, AddAccountMsg::WorkerFailed(outcome));
+
+    assert!(
+        !compose_post_effect_inline_error_revealed(&state),
+        "KeepWithWarning outcome → post-effect inline-error row stays hidden",
+    );
+}
+
+#[test]
+fn compose_post_effect_inline_error_revealed_with_inline_outcome_is_true() {
+    // `save_not_committed` (or any non-durability post-effect
+    // failure) routes to `Inline(InlineError)`, and the widget
+    // binds a `#[watch]` over the projection to attach the row
+    // beneath the form for retry. The revealed projection must
+    // return `true` for this variant in lockstep with
+    // `compose_post_effect_inline_error_body` returning `Some(_)`,
+    // so the two `#[watch]`-driven properties (revealed bool +
+    // body text) flip together on the same `WorkerFailed` dispatch.
+    use paladin_gtk::add_account::{
+        apply_msg, classify_add_post_effect_error, compose_post_effect_inline_error_revealed,
+        AddAccountMsg, AddDialogState, AddPostEffectOutcome,
+    };
+
+    let outcome = classify_add_post_effect_error(&save_not_committed_no_backup());
+    assert!(
+        matches!(outcome, AddPostEffectOutcome::Inline(_)),
+        "fixture precondition: save_not_committed routes to Inline",
+    );
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(&mut state, AddAccountMsg::WorkerFailed(outcome));
+
+    assert!(
+        compose_post_effect_inline_error_revealed(&state),
+        "Inline → composer reveals the post-effect inline-error row",
+    );
+}
+
+#[test]
+fn compose_post_effect_inline_error_revealed_drains_after_submit_proceed() {
+    // Retrying via `SubmitProceed` clears `AddDialogState::worker_outcome`
+    // before the new worker runs (see
+    // `apply_msg_submit_proceed_clears_prior_worker_outcome`), so the
+    // post-effect inline-error revealed projection must collapse back
+    // to `false` — the widget binds a `#[watch]` over the projection
+    // so the inline-error row animates back out the moment the user
+    // resubmits. Sibling lockstep with
+    // `compose_post_effect_inline_error_body`, which also collapses
+    // on the same `SubmitProceed` dispatch, and mirror of
+    // `compose_post_effect_warning_revealed_drains_after_submit_proceed`
+    // on the durability-warning side.
+    use paladin_core::{validate_manual, AccountInput, IconHintInput};
+    use paladin_gtk::add_account::{
+        apply_msg, classify_add_post_effect_error, compose_post_effect_inline_error_revealed,
+        AddAccountMsg, AddDialogState,
+    };
+
+    let outcome = classify_add_post_effect_error(&save_not_committed_no_backup());
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(&mut state, AddAccountMsg::WorkerFailed(outcome));
+    assert!(
+        compose_post_effect_inline_error_revealed(&state),
+        "precondition: Inline reveals the post-effect inline-error row",
+    );
+
+    let input = AccountInput {
+        label: "retry-label".to_string(),
+        issuer: None,
+        secret: SecretString::from("JBSWY3DPEHPK3PXP".to_string()),
+        algorithm: Algorithm::Sha1,
+        digits: 6,
+        kind: AccountKindInput::Totp,
+        period_secs: None,
+        counter: None,
+        icon_hint: IconHintInput::Default,
+    };
+    let validated =
+        validate_manual(input, SystemTime::UNIX_EPOCH).expect("totp account input validates");
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::SubmitProceed {
+            account: validated.account,
+        },
+    );
+
+    assert!(
+        !compose_post_effect_inline_error_revealed(&state),
+        "SubmitProceed drains the revealed projection alongside the worker_outcome slot",
+    );
+}

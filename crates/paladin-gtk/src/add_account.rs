@@ -1653,6 +1653,40 @@ pub fn compose_post_effect_inline_error_body(state: &AddDialogState) -> Option<&
     }
 }
 
+/// State-driven projection of whether the post-effect inline-error
+/// row the widget renders beneath the form for retry is revealed.
+///
+/// Returns `true` while [`AddDialogState::worker_outcome`] is
+/// [`AddPostEffectOutcome::Inline`] (the `save_not_committed` /
+/// `io_error` / post-effect `validation_error` retry path), and
+/// `false` for both the no-worker-yet state and the
+/// [`AddPostEffectOutcome::KeepWithWarning`] success-with-warning
+/// path (which the widget reveals through
+/// [`compose_post_effect_warning_revealed`] instead so the
+/// inline-error row never animates in alongside the durability
+/// banner).
+///
+/// Sibling of [`compose_post_effect_inline_error_body`] (the body
+/// text) so the widget can `#[watch]` both the revealed bool and
+/// the body string against the same [`AddDialogState::worker_outcome`]
+/// slot in lockstep — the row flips visible alongside the rendered
+/// body and animates back out the moment `SubmitProceed` drains the
+/// slot. Mirrors the durability-warning side's
+/// [`compose_post_effect_warning_revealed`] /
+/// [`compose_post_effect_warning_body`] pairing across the two
+/// [`AddPostEffectOutcome`] variants, and the pre-effect side's
+/// [`compose_inline_error_revealed`] / [`compose_inline_error_body`]
+/// pairing keyed off [`AddDialogState::inline_error`].
+///
+/// Pure — borrows the state and returns a `bool` without allocating.
+#[must_use]
+pub fn compose_post_effect_inline_error_revealed(state: &AddDialogState) -> bool {
+    matches!(
+        state.worker_outcome(),
+        Some(AddPostEffectOutcome::Inline(_))
+    )
+}
+
 /// State-driven projection of the pre-effect inline-error body the
 /// widget renders against the failing sub-path's row after a Save
 /// click that produced [`SaveClickOutcome::InlineError`], or `None`
