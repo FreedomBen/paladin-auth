@@ -6966,3 +6966,156 @@ fn compose_manual_kind_selected_round_trips_back_to_totp() {
         "round-trip back to TOTP → composer surfaces the TOTP selected index",
     );
 }
+
+#[test]
+fn format_manual_algorithm_selected_sha1_returns_zero() {
+    // The algorithm dropdown's `gtk::StringList` model is populated
+    // in enum declaration order (SHA-1 first, SHA-256 second,
+    // SHA-512 third), so the SHA-1 variant must map to selected
+    // index `0` — the RFC 6238 default. Mirror of
+    // `format_manual_kind_selected_totp_returns_zero` on the
+    // algorithm-dropdown side.
+    use paladin_core::Algorithm;
+    use paladin_gtk::add_account::format_manual_algorithm_selected;
+
+    assert_eq!(
+        format_manual_algorithm_selected(Algorithm::Sha1),
+        0,
+        "SHA-1 is the first item in the algorithm dropdown's model",
+    );
+}
+
+#[test]
+fn format_manual_algorithm_selected_sha256_returns_one() {
+    // SHA-256 maps to selected index `1` — the second item in the
+    // algorithm dropdown's `gtk::StringList` model after the RFC
+    // 6238 SHA-1 default.
+    use paladin_core::Algorithm;
+    use paladin_gtk::add_account::format_manual_algorithm_selected;
+
+    assert_eq!(
+        format_manual_algorithm_selected(Algorithm::Sha256),
+        1,
+        "SHA-256 is the second item in the algorithm dropdown's model",
+    );
+}
+
+#[test]
+fn format_manual_algorithm_selected_sha512_returns_two() {
+    // SHA-512 maps to selected index `2` — the third item in the
+    // algorithm dropdown's `gtk::StringList` model.
+    use paladin_core::Algorithm;
+    use paladin_gtk::add_account::format_manual_algorithm_selected;
+
+    assert_eq!(
+        format_manual_algorithm_selected(Algorithm::Sha512),
+        2,
+        "SHA-512 is the third item in the algorithm dropdown's model",
+    );
+}
+
+#[test]
+fn compose_manual_algorithm_selected_fresh_dialog_returns_sha1() {
+    // A freshly-opened dialog defaults to `Algorithm::Sha1` (RFC
+    // 6238 parity, see `ManualDraftState::default`), so the
+    // algorithm-selected projection must return `0` — the widget
+    // binds a `#[watch]` over the projection to drive the algorithm
+    // dropdown's `gtk::DropDown::set_selected:` so the dropdown
+    // stays in lockstep with `ManualDraftState::algorithm`.
+    use paladin_core::Algorithm;
+    use paladin_gtk::add_account::{
+        compose_manual_algorithm_selected, format_manual_algorithm_selected, AddDialogState,
+    };
+
+    let state = AddDialogState::new();
+
+    assert_eq!(
+        compose_manual_algorithm_selected(&state),
+        format_manual_algorithm_selected(Algorithm::Sha1),
+        "fresh dialog → composer surfaces the SHA-1 selected index verbatim",
+    );
+}
+
+#[test]
+fn compose_manual_algorithm_selected_after_sha256_returns_sha256() {
+    // `ManualAlgorithmChanged(Sha256)` drives the algorithm-selected
+    // projection to `1` in lockstep with
+    // `ManualDraftState::algorithm` flipping to `Algorithm::Sha256`.
+    // The widget's `#[watch]`-driven `set_selected:` follows the
+    // user's dropdown selection.
+    use paladin_core::Algorithm;
+    use paladin_gtk::add_account::{
+        apply_msg, compose_manual_algorithm_selected, format_manual_algorithm_selected,
+        AddAccountMsg, AddDialogState,
+    };
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualAlgorithmChanged(Algorithm::Sha256),
+    );
+
+    assert_eq!(
+        compose_manual_algorithm_selected(&state),
+        format_manual_algorithm_selected(Algorithm::Sha256),
+        "ManualAlgorithmChanged(Sha256) → composer surfaces the SHA-256 selected index",
+    );
+}
+
+#[test]
+fn compose_manual_algorithm_selected_after_sha512_returns_sha512() {
+    // `ManualAlgorithmChanged(Sha512)` drives the algorithm-selected
+    // projection to `2` in lockstep with
+    // `ManualDraftState::algorithm` flipping to `Algorithm::Sha512`.
+    // Walks the third item in the dropdown so the test covers the
+    // full §5 / §6 algorithm range exposed by the dropdown.
+    use paladin_core::Algorithm;
+    use paladin_gtk::add_account::{
+        apply_msg, compose_manual_algorithm_selected, format_manual_algorithm_selected,
+        AddAccountMsg, AddDialogState,
+    };
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualAlgorithmChanged(Algorithm::Sha512),
+    );
+
+    assert_eq!(
+        compose_manual_algorithm_selected(&state),
+        format_manual_algorithm_selected(Algorithm::Sha512),
+        "ManualAlgorithmChanged(Sha512) → composer surfaces the SHA-512 selected index",
+    );
+}
+
+#[test]
+fn compose_manual_algorithm_selected_round_trips_back_to_sha1() {
+    // Toggling the algorithm dropdown back to SHA-1 after SHA-256
+    // must drive the algorithm-selected projection back to `0` —
+    // the projection must not latch on the first transition, so the
+    // widget's `#[watch]`-driven `set_selected:` stays
+    // bidirectional. Mirror of
+    // `compose_manual_kind_selected_round_trips_back_to_totp` on
+    // the algorithm-dropdown side.
+    use paladin_core::Algorithm;
+    use paladin_gtk::add_account::{
+        apply_msg, compose_manual_algorithm_selected, format_manual_algorithm_selected,
+        AddAccountMsg, AddDialogState,
+    };
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualAlgorithmChanged(Algorithm::Sha256),
+    );
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualAlgorithmChanged(Algorithm::Sha1),
+    );
+
+    assert_eq!(
+        compose_manual_algorithm_selected(&state),
+        format_manual_algorithm_selected(Algorithm::Sha1),
+        "round-trip back to SHA-1 → composer surfaces the SHA-1 selected index",
+    );
+}
