@@ -7336,3 +7336,118 @@ fn compose_manual_issuer_text_survives_kind_round_trip() {
         "kind round-trip preserves the prior issuer text in the projection",
     );
 }
+
+#[test]
+fn compose_manual_icon_hint_text_fresh_dialog_returns_empty() {
+    // `ManualDraftState::default` seeds the icon-hint buffer at the
+    // empty string (icon hint is optional in §4.1 and the CLI / TUI
+    // add forms default it to absent), so a freshly-opened dialog
+    // must expose an empty string through the projection — the
+    // widget binds a `#[watch]` over the projection to drive the
+    // icon-hint entry's `gtk::EditableLabel::set_text:` so the entry
+    // reflects state on initial render. Mirror of
+    // `compose_manual_label_text_fresh_dialog_returns_empty` on the
+    // icon-hint-buffer side; unlike the label buffer, an empty hint
+    // is valid input (`paladin_core::parse_icon_hint_token` treats
+    // empty / `default` as "use the inferred icon" and `none` as
+    // "force the placeholder"), so the Save-button gate ignores it.
+    use paladin_gtk::add_account::{compose_manual_icon_hint_text, AddDialogState};
+
+    let state = AddDialogState::new();
+
+    assert_eq!(
+        compose_manual_icon_hint_text(&state),
+        "",
+        "fresh dialog → composer surfaces the empty icon-hint buffer",
+    );
+}
+
+#[test]
+fn compose_manual_icon_hint_text_after_icon_hint_changed_reflects_new_value() {
+    // `AddAccountMsg::ManualIconHintChanged("github")` shadows the
+    // entry text into `ManualDraftState::icon_hint_text`; the
+    // projection must surface the new value as a borrowed `&str` so
+    // the widget's `#[watch]`-driven `set_text:` binding stays in
+    // lockstep with the underlying state on every dispatch. Mirror
+    // of `compose_manual_label_text_after_label_changed_reflects_new_value`
+    // on the icon-hint-buffer side; the raw entry text (not the
+    // post-`parse_icon_hint_token` slug) is what the entry shows so
+    // the user can keep typing.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_manual_icon_hint_text, AddAccountMsg, AddDialogState,
+    };
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualIconHintChanged("github".to_string()),
+    );
+
+    assert_eq!(
+        compose_manual_icon_hint_text(&state),
+        "github",
+        "ManualIconHintChanged → composer surfaces the new icon-hint text",
+    );
+}
+
+#[test]
+fn compose_manual_icon_hint_text_replaces_prior_shadow() {
+    // A second `ManualIconHintChanged` dispatch must overwrite the
+    // first — the projection must not latch on the first
+    // transition, so the widget's `#[watch]`-driven entry text
+    // stays bidirectional with the user's latest keystrokes. Mirror
+    // of `compose_manual_label_text_replaces_prior_shadow` on the
+    // icon-hint-buffer side.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_manual_icon_hint_text, AddAccountMsg, AddDialogState,
+    };
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualIconHintChanged("github".to_string()),
+    );
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualIconHintChanged("gitlab".to_string()),
+    );
+
+    assert_eq!(
+        compose_manual_icon_hint_text(&state),
+        "gitlab",
+        "second ManualIconHintChanged replaces the prior shadow in the projection",
+    );
+}
+
+#[test]
+fn compose_manual_icon_hint_text_survives_kind_round_trip() {
+    // The icon-hint buffer is shadowed into
+    // `ManualDraftState::icon_hint_text` independently of the kind
+    // dropdown — TOTP/HOTP toggles only affect the period / counter
+    // rows. Mirror of `compose_manual_label_text_survives_kind_round_trip`
+    // on the icon-hint-buffer side.
+    use paladin_core::AccountKindInput;
+    use paladin_gtk::add_account::{
+        apply_msg, compose_manual_icon_hint_text, AddAccountMsg, AddDialogState,
+    };
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualIconHintChanged("github".to_string()),
+    );
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualKindChanged(AccountKindInput::Hotp),
+    );
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualKindChanged(AccountKindInput::Totp),
+    );
+
+    assert_eq!(
+        compose_manual_icon_hint_text(&state),
+        "github",
+        "kind round-trip preserves the prior icon-hint text in the projection",
+    );
+}

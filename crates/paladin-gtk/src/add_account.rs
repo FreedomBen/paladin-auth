@@ -2143,6 +2143,40 @@ pub fn compose_manual_issuer_text(state: &AddDialogState) -> &str {
     &state.manual_draft().issuer
 }
 
+/// State-driven projection of the manual sub-path's icon-hint-entry
+/// buffer text, surfaced as the borrowed `&str` that
+/// `gtk::EditableLabel::set_text:` (or `gtk::Entry::set_text:`)
+/// expects.
+///
+/// Returns the live contents of
+/// [`ManualDraftState::icon_hint_text`] as a borrowed `&str` — `""`
+/// on a freshly-opened dialog (the §4.1 domain model treats the icon
+/// hint as optional, and the CLI / TUI add forms default it to
+/// absent), and the post-[`AddAccountMsg::ManualIconHintChanged`]
+/// value on every subsequent dispatch. The value persists across the
+/// kind dropdown's TOTP/HOTP toggles so the entry retains the user's
+/// in-progress typing across kind changes.
+///
+/// Lets the widget bind a single `#[watch]` over the projection to
+/// drive the icon-hint entry's `set_text:` instead of borrowing
+/// [`ManualDraftState::icon_hint_text`] inline against the live
+/// state. The raw entry text (not the post-
+/// [`paladin_core::parse_icon_hint_token`] slug) is what the entry
+/// shows so the user can keep typing; the parse-and-classify step
+/// runs downstream inside [`compose_manual_fields`] /
+/// [`classify_manual_submit`]. Sibling of [`compose_manual_label_text`]
+/// and [`compose_manual_issuer_text`] on the icon-hint-buffer side;
+/// unlike the label buffer, an empty hint is valid input
+/// ([`paladin_core::parse_icon_hint_token`] treats empty / `default`
+/// as "use the inferred icon" and `none` as "force the placeholder"),
+/// so the [`compose_save_button_sensitive`] gate ignores it. Pure —
+/// borrows the state and returns a borrowed `&str` without
+/// allocating.
+#[must_use]
+pub fn compose_manual_icon_hint_text(state: &AddDialogState) -> &str {
+    &state.manual_draft().icon_hint_text
+}
+
 /// State-driven projection of whether the Save button's
 /// `set_sensitive:` is `true` — i.e. whether the active sub-path
 /// has the minimum required input for a click to reach the
