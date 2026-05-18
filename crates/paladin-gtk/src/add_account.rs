@@ -1896,6 +1896,30 @@ pub fn compose_manual_period_secs_visible(state: &AddDialogState) -> bool {
     matches!(state.manual_draft().kind, AccountKindInput::Totp)
 }
 
+/// State-driven projection of the manual sub-path's TOTP period
+/// spinbutton value, surfaced as the `f64` that `AdwSpinRow::set_value`
+/// expects.
+///
+/// Returns the current [`ManualDraftState::period_secs`] cast to
+/// `f64` — `30.0` on a freshly-opened dialog (CLI / TUI default
+/// period), and the post-`AddAccountMsg::ManualPeriodChanged` value
+/// on every subsequent dispatch. The value persists across the kind
+/// dropdown's TOTP/HOTP toggles so the period row, when re-revealed
+/// by [`compose_manual_period_secs_visible`], restores the user's
+/// prior selection instead of snapping back to the default.
+///
+/// Lets the widget bind a single `#[watch]` over the projection to
+/// drive the period row's `AdwSpinRow::set_value:` instead of casting
+/// [`ManualDraftState::period_secs`] inline against the live state.
+/// Sibling of [`compose_manual_period_secs_visible`] on the period-
+/// row value side: the visibility projection gates whether the row
+/// is rendered, while this projection drives the value it shows.
+/// Pure — borrows the state and returns an `f64` without allocating.
+#[must_use]
+pub fn compose_manual_period_secs_value(state: &AddDialogState) -> f64 {
+    f64::from(state.manual_draft().period_secs)
+}
+
 /// State-driven projection of whether the manual sub-path's HOTP
 /// counter spinbutton row is visible.
 ///

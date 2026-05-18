@@ -6546,3 +6546,104 @@ fn compose_active_path_name_round_trips_back_to_manual() {
         "SwitchPath back to Manual → composer surfaces the manual sub-path name",
     );
 }
+
+// Exact equality on values produced by `f64::from(u32)` is safe — the
+// `u32 → f64` cast is lossless for every period value the spinbutton
+// adjustment exposes, so `clippy::float_cmp` does not apply.
+#[test]
+#[allow(clippy::float_cmp)]
+fn compose_manual_period_secs_value_fresh_dialog_returns_default() {
+    // `ManualDraftState::default` seeds the TOTP period at 30 seconds
+    // for CLI / TUI parity, so a freshly-opened dialog must expose the
+    // default period value through the projection — the widget binds
+    // a `#[watch]` over the projection to drive the period spinbutton
+    // row's `AdwSpinRow::set_value:` so the row reflects state on
+    // initial render. Sibling of
+    // `compose_manual_period_secs_visible_default_state_is_true` on
+    // the period-row value side.
+    use paladin_gtk::add_account::{compose_manual_period_secs_value, AddDialogState};
+
+    let state = AddDialogState::new();
+
+    assert_eq!(
+        compose_manual_period_secs_value(&state),
+        30.0,
+        "fresh dialog → composer surfaces the default 30-second TOTP period",
+    );
+}
+
+#[test]
+#[allow(clippy::float_cmp)]
+fn compose_manual_period_secs_value_after_period_changed_reflects_new_value() {
+    // `AddAccountMsg::ManualPeriodChanged(60)` shadows the spinner
+    // value into `ManualDraftState::period_secs`; the projection must
+    // surface the new value as an `f64` so the widget's
+    // `#[watch]`-driven `AdwSpinRow::set_value:` binding stays in
+    // lockstep with the underlying state on every dispatch.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_manual_period_secs_value, AddAccountMsg, AddDialogState,
+    };
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(&mut state, AddAccountMsg::ManualPeriodChanged(60));
+
+    assert_eq!(
+        compose_manual_period_secs_value(&state),
+        60.0,
+        "ManualPeriodChanged(60) → composer surfaces the new period value",
+    );
+}
+
+#[test]
+#[allow(clippy::float_cmp)]
+fn compose_manual_period_secs_value_replaces_prior_shadow() {
+    // A second `ManualPeriodChanged` dispatch must overwrite the
+    // first — the projection must not latch on the first transition,
+    // so the widget's `#[watch]`-driven spinbutton value stays
+    // bidirectional with the user's last selection.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_manual_period_secs_value, AddAccountMsg, AddDialogState,
+    };
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(&mut state, AddAccountMsg::ManualPeriodChanged(45));
+    let _ = apply_msg(&mut state, AddAccountMsg::ManualPeriodChanged(15));
+
+    assert_eq!(
+        compose_manual_period_secs_value(&state),
+        15.0,
+        "second ManualPeriodChanged replaces the prior shadow in the projection",
+    );
+}
+
+#[test]
+#[allow(clippy::float_cmp)]
+fn compose_manual_period_secs_value_survives_kind_round_trip() {
+    // The period value is shadowed into `ManualDraftState::period_secs`
+    // independently of the kind dropdown — flipping to HOTP hides the
+    // period row through `compose_manual_period_secs_visible` but must
+    // not reset the underlying value, so flipping back to TOTP
+    // restores the user's prior period selection through this
+    // projection.
+    use paladin_core::AccountKindInput;
+    use paladin_gtk::add_account::{
+        apply_msg, compose_manual_period_secs_value, AddAccountMsg, AddDialogState,
+    };
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(&mut state, AddAccountMsg::ManualPeriodChanged(60));
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualKindChanged(AccountKindInput::Hotp),
+    );
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualKindChanged(AccountKindInput::Totp),
+    );
+
+    assert_eq!(
+        compose_manual_period_secs_value(&state),
+        60.0,
+        "kind round-trip preserves the prior period value in the projection",
+    );
+}
