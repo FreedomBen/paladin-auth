@@ -448,7 +448,7 @@ impl SimpleComponent for AppModel {
     view! {
         #[root]
         adw::ApplicationWindow {
-            set_title: Some("Paladin"),
+            set_title: Some(format_app_window_title()),
             set_default_size: (640, 480),
 
             #[wrap(Some)]
@@ -1259,4 +1259,37 @@ pub fn startup_state_marker(state: &AppState) -> String {
         None => "(unresolved)".to_string(),
     };
     format!("paladin-gtk: startup_state={variant} path={path_repr}")
+}
+
+/// Fixed `title` attribute the widget hands to the [`AppModel`]'s
+/// `adw::ApplicationWindow::set_title`.
+///
+/// Returns the static title string the window-list / chrome
+/// renders for the running binary. The wording (`"Paladin"`) names
+/// the application — surfaced verbatim through libadwaita's
+/// window chrome and (on Wayland / X11) by the desktop's window
+/// list, so the bare application name is the right wording (no
+/// state-specific suffixes like `" — Locked"` / `" — Unlocked"`,
+/// which would otherwise leak the live vault state into the
+/// window-list across application switches). Matches the GNOME
+/// app-id naming used by the `.desktop` / `AppStream` metadata
+/// referenced by `IMPLEMENTATION_PLAN_04_GTK.md` §"Linux desktop
+/// integration". No TUI parity: the TUI is a single-process
+/// terminal app and has no window-list entry to mirror. Pinning
+/// the title through a helper keeps the wording in one place
+/// shared by the widget binding and the pure-logic tests in
+/// `tests/startup_probes.rs`.
+///
+/// Pure — returns a `'static str` without allocating. Distinct
+/// from the in-window dialog titles
+/// ([`crate::unlock_dialog::format_unlock_dialog_title`],
+/// [`crate::init_dialog::format_init_dialog_title`],
+/// [`crate::rename_dialog::format_rename_dialog_title`],
+/// [`crate::add_account::format_add_dialog_title`],
+/// [`crate::startup_error::format_startup_error_title`],
+/// [`crate::remove_dialog::format_remove_dialog_title`]), which
+/// name surfaces inside the window rather than the window itself.
+#[must_use]
+pub fn format_app_window_title() -> &'static str {
+    "Paladin"
 }

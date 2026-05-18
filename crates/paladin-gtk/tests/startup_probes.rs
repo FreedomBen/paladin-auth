@@ -173,3 +173,35 @@ fn startup_state_marker_startup_error_renders_path_or_placeholder() {
         "paladin-gtk: startup_state=StartupError path=(unresolved)",
     );
 }
+
+#[test]
+fn format_app_window_title_returns_paladin() {
+    // The `AppModel`'s `adw::ApplicationWindow::set_title` attribute
+    // is populated from this helper. The wording (`"Paladin"`) names
+    // the application — surfaced verbatim through libadwaita's
+    // window chrome and (on Wayland / X11) by the desktop's window
+    // list, so the bare application name is the right wording (no
+    // state-specific suffixes like " — Locked" / " — Unlocked",
+    // which would otherwise leak the live vault state into the
+    // window-list across application switches). Matches the GNOME
+    // app-id naming used by the `.desktop` / AppStream metadata
+    // referenced by `IMPLEMENTATION_PLAN_04_GTK.md`
+    // §"Linux desktop integration". Pinning the title through a
+    // helper keeps the wording in one place shared by the widget
+    // binding and the pure-logic tests in `tests/startup_probes.rs`.
+    //
+    // No TUI parity: the TUI is a single-process terminal app and
+    // has no window-list entry to mirror. Distinct from the in-
+    // window dialog titles (`format_unlock_dialog_title`,
+    // `format_init_dialog_title`, `format_rename_dialog_title`,
+    // `format_add_dialog_title`, `format_startup_error_title`,
+    // `format_remove_dialog_title`), which name surfaces inside
+    // the window rather than the window itself.
+    use paladin_gtk::app::model::format_app_window_title;
+
+    assert_eq!(
+        format_app_window_title(),
+        "Paladin",
+        "ApplicationWindow title surfaces the bare application name",
+    );
+}
