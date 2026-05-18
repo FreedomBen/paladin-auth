@@ -1668,3 +1668,22 @@ pub fn format_app_menu_quit_label() -> &'static str {
 pub fn format_app_menu_import_action() -> &'static str {
     "app.import"
 }
+
+/// Fully-qualified `detailed_action_name` the widget hands to the
+/// primary `gio::Menu`'s "Export…" entry.
+///
+/// Returns the static action target `"app.export"` — the
+/// fully-qualified target the `gio::Menu` resolves against the
+/// `gio::ApplicationWindow`'s `app` action group. The matching
+/// `gio::SimpleAction` (`"export"`) is registered on the
+/// application's action group. The `"app."` prefix names the
+/// group; `"export"` names the action.
+///
+/// Pure — returns a `'static str` without allocating. Sibling
+/// of [`format_app_menu_export_label`] on the menu-entry-contract
+/// side; together they pin both halves (visible label + action
+/// target) against a single source of truth.
+#[must_use]
+pub fn format_app_menu_export_action() -> &'static str {
+    "app.export"
+}
