@@ -1948,6 +1948,35 @@ pub fn compose_manual_period_secs_value(state: &AddDialogState) -> f64 {
     f64::from(state.manual_draft().period_secs)
 }
 
+/// Fixed `(lower, upper, step_increment)` tuple the widget hands to
+/// `gtk::Adjustment::new` for the manual sub-path's TOTP period
+/// `AdwSpinRow`.
+///
+/// Returns
+/// `(f64::from(paladin_core::TOTP_PERIOD_MIN), f64::from(paladin_core::TOTP_PERIOD_MAX), 1.0)`
+/// — the §5 / §6 validated range for TOTP period seconds, with the
+/// `1.0` step pinned because the period-seconds domain is integer-
+/// only. The spinner cannot express a value outside this range, so a
+/// click on the Save button always carries a value
+/// [`paladin_core::validate_manual`] accepts on the period axis;
+/// out-of-range values can still arrive through a future test driver
+/// or misuse path, so [`validate_manual`] still owns the boundary
+/// rejection.
+///
+/// Pure — returns a `(f64, f64, f64)` tuple without allocating.
+/// Sibling of [`format_manual_digits_adjustment`] on the TOTP-period
+/// side; together with [`compose_manual_period_secs_value`] they
+/// cover both the dynamic value the spinner reads and the static
+/// bounds the spinner enforces.
+#[must_use]
+pub fn format_manual_period_adjustment() -> (f64, f64, f64) {
+    (
+        f64::from(paladin_core::TOTP_PERIOD_MIN),
+        f64::from(paladin_core::TOTP_PERIOD_MAX),
+        1.0,
+    )
+}
+
 /// State-driven projection of whether the manual sub-path's HOTP
 /// counter spinbutton row is visible.
 ///

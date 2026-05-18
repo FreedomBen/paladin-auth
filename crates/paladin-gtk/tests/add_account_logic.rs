@@ -7704,3 +7704,66 @@ fn format_manual_digits_adjustment_default_lies_inside_range() {
         "compose_manual_digits_value on a fresh dialog ({value}) lies inside [{lower}, {upper}]",
     );
 }
+
+// `format_manual_period_adjustment` returns an exact `(f64, f64,
+// f64)` tuple sourced from `paladin_core::{TOTP_PERIOD_MIN,
+// TOTP_PERIOD_MAX}` (both `u32`, lossless under the same cast that
+// `compose_manual_period_secs_value` uses) and the `1.0` integer
+// step, so `clippy::float_cmp` does not apply.
+#[test]
+#[allow(clippy::float_cmp)]
+fn format_manual_period_adjustment_returns_paladin_core_range() {
+    // The TOTP period AdwSpinRow's `gtk::Adjustment` (lower, upper,
+    // step_increment) tuple must mirror the
+    // `paladin_core::{TOTP_PERIOD_MIN, TOTP_PERIOD_MAX}` validated
+    // range so a value the spinner can express always survives
+    // `validate_manual`. The step is `1.0` because §5 / §6 only
+    // permit integer-second periods. Pinning the alignment here
+    // keeps the spinner's input domain and the validator's accepted
+    // range tied to the single source of truth in
+    // `paladin_core::domain::validation`. Sibling of
+    // `format_manual_digits_adjustment_returns_paladin_core_range`
+    // on the TOTP-period side.
+    use paladin_gtk::add_account::format_manual_period_adjustment;
+
+    let (lower, upper, step) = format_manual_period_adjustment();
+    assert_eq!(
+        lower,
+        f64::from(paladin_core::TOTP_PERIOD_MIN),
+        "lower bound mirrors paladin_core::TOTP_PERIOD_MIN",
+    );
+    assert_eq!(
+        upper,
+        f64::from(paladin_core::TOTP_PERIOD_MAX),
+        "upper bound mirrors paladin_core::TOTP_PERIOD_MAX",
+    );
+    assert_eq!(
+        step, 1.0,
+        "step is 1.0 because the period-seconds domain is integer-only",
+    );
+}
+
+#[test]
+fn format_manual_period_adjustment_default_lies_inside_range() {
+    // `compose_manual_period_secs_value` on a freshly-opened dialog
+    // must resolve to a value the AdwSpinRow's adjustment accepts —
+    // otherwise the spinner clamps the visible value and the form
+    // opens out of sync with the underlying
+    // `ManualDraftState::period_secs` default (CLI / TUI parity at
+    // 30 seconds). Pinning the invariant here guards against a
+    // future change to either side that introduces drift between
+    // the spinner's bounds and the dialog's default period value.
+    // Mirror of `format_manual_digits_adjustment_default_lies_inside_range`
+    // on the TOTP-period side.
+    use paladin_gtk::add_account::{
+        compose_manual_period_secs_value, format_manual_period_adjustment, AddDialogState,
+    };
+
+    let state = AddDialogState::new();
+    let value = compose_manual_period_secs_value(&state);
+    let (lower, upper, _step) = format_manual_period_adjustment();
+    assert!(
+        value >= lower && value <= upper,
+        "compose_manual_period_secs_value on a fresh dialog ({value}) lies inside [{lower}, {upper}]",
+    );
+}
