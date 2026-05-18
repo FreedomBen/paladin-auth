@@ -1728,3 +1728,24 @@ pub fn format_app_menu_passphrase_action() -> &'static str {
 pub fn format_app_menu_preferences_action() -> &'static str {
     "app.preferences"
 }
+
+/// Fully-qualified `detailed_action_name` the widget hands to the
+/// primary `gio::Menu`'s "About Paladin" entry.
+///
+/// Returns the static action target `"app.about"` — the
+/// fully-qualified target the `gio::Menu` resolves against the
+/// `gio::ApplicationWindow`'s `app` action group. The matching
+/// `gio::SimpleAction` (`"about"`) is registered on the
+/// application's action group. The `"app."` prefix names the
+/// group; `"about"` names the action — bare `"about"` rather
+/// than `"about_paladin"` so the action name does not need to
+/// track an application rename if one ever lands.
+///
+/// Pure — returns a `'static str` without allocating. Sibling
+/// of [`format_app_menu_about_label`] on the menu-entry-contract
+/// side; together they pin both halves (visible label + action
+/// target) against a single source of truth.
+#[must_use]
+pub fn format_app_menu_about_action() -> &'static str {
+    "app.about"
+}
