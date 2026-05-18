@@ -1364,6 +1364,36 @@ pub fn compose_pending_duplicate_alert_body(state: &AddDialogState) -> Option<St
     ))
 }
 
+/// State-driven projection of the durability-warning body the
+/// widget renders beneath the post-add counts panel after a
+/// `KeepWithWarning` worker completion, or `None` for any other
+/// state (no worker run yet, or the most recent failure was an
+/// `Inline` error rather than a durability warning).
+///
+/// Returns `Some(warning.rendered.as_str())` while
+/// [`AddDialogState::worker_outcome`] is
+/// [`AddPostEffectOutcome::KeepWithWarning`] (the
+/// `save_durability_unconfirmed` post-commit-but-fsync-failed
+/// case), and `None` for both the no-worker-yet state and the
+/// [`AddPostEffectOutcome::Inline`] retry path. The latter is
+/// rendered through a separate projection so the widget can attach
+/// the inline error to the failing field's row without the
+/// durability warning leaking in alongside it.
+///
+/// Lets the widget bind a single `#[watch]` over the projection to
+/// drive the warning row's visibility and body text instead of
+/// pattern-matching on [`AddDialogState::worker_outcome`] inline.
+/// Pure — borrows the state and returns a borrowed `&str` without
+/// allocating; the rendered body lives on the parked
+/// [`InlineWarning`] and stays alive as long as the state does.
+#[must_use]
+pub fn compose_post_effect_warning_body(state: &AddDialogState) -> Option<&str> {
+    match state.worker_outcome()? {
+        AddPostEffectOutcome::KeepWithWarning(warning) => Some(warning.rendered.as_str()),
+        AddPostEffectOutcome::Inline(_) => None,
+    }
+}
+
 /// Apply an inbound [`AddAccountMsg`] and return the optional
 /// [`AddAccountOutput`] the widget layer should forward to
 /// `AppModel`.

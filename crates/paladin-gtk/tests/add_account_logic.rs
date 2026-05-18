@@ -4754,3 +4754,82 @@ fn compose_pending_duplicate_alert_body_drains_after_confirm_add_anyway() {
         "ConfirmAddAnyway drains the alert-body projection alongside the pending slot",
     );
 }
+
+#[test]
+fn compose_post_effect_warning_body_with_no_outcome_returns_none() {
+    // A freshly-opened dialog has not yet seen a worker completion,
+    // so the durability-warning projection must collapse to `None`
+    // — the widget binds a `#[watch]` over the projection so the
+    // warning row stays hidden until a `KeepWithWarning` outcome
+    // is parked. Mirror of
+    // `compose_pending_duplicate_alert_body_with_no_pending_returns_none`
+    // on the post-effect-warning projection side.
+    use paladin_gtk::add_account::{compose_post_effect_warning_body, AddDialogState};
+
+    let state = AddDialogState::new();
+
+    assert!(
+        compose_post_effect_warning_body(&state).is_none(),
+        "fresh dialog has no worker outcome → no durability warning",
+    );
+}
+
+#[test]
+fn compose_post_effect_warning_body_with_inline_outcome_returns_none() {
+    // `Inline(InlineError)` is the typed §5 inline-error variant of
+    // the post-effect routing — a pre-commit `save_not_committed`
+    // (or any non-durability failure) keeps the dialog open with
+    // the form populated for retry. The durability-warning
+    // projection must collapse to `None` for this variant so the
+    // widget does not render the warning row alongside the inline
+    // error. Pins the projection to the `KeepWithWarning` variant
+    // only.
+    use paladin_gtk::add_account::{
+        apply_msg, classify_add_post_effect_error, compose_post_effect_warning_body, AddAccountMsg,
+        AddDialogState, AddPostEffectOutcome,
+    };
+
+    let outcome = classify_add_post_effect_error(&save_not_committed_no_backup());
+    assert!(
+        matches!(outcome, AddPostEffectOutcome::Inline(_)),
+        "fixture precondition: save_not_committed routes to Inline",
+    );
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(&mut state, AddAccountMsg::WorkerFailed(outcome));
+
+    assert!(
+        compose_post_effect_warning_body(&state).is_none(),
+        "Inline outcome → no durability warning to render",
+    );
+}
+
+#[test]
+fn compose_post_effect_warning_body_with_keep_with_warning_returns_rendered() {
+    // `save_durability_unconfirmed` routes to `KeepWithWarning`,
+    // and the widget binds a `#[watch]` over the projection to
+    // attach the rendered warning beneath the post-add counts
+    // panel. The composer must thread the carried
+    // `InlineWarning::rendered` string verbatim so the body wording
+    // stays in sync with the CLI / TUI `Display` impl on
+    // `PaladinError::SaveDurabilityUnconfirmed`.
+    use paladin_gtk::add_account::{
+        apply_msg, classify_add_post_effect_error, compose_post_effect_warning_body, AddAccountMsg,
+        AddDialogState, AddPostEffectOutcome,
+    };
+
+    let outcome = classify_add_post_effect_error(&PaladinError::SaveDurabilityUnconfirmed);
+    let expected = match &outcome {
+        AddPostEffectOutcome::KeepWithWarning(warning) => warning.rendered.clone(),
+        AddPostEffectOutcome::Inline(inline) => {
+            panic!("fixture precondition: KeepWithWarning, got Inline({inline:?})")
+        }
+    };
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(&mut state, AddAccountMsg::WorkerFailed(outcome));
+
+    assert_eq!(
+        compose_post_effect_warning_body(&state),
+        Some(expected.as_str()),
+        "KeepWithWarning → composer renders the carried warning body verbatim",
+    );
+}
