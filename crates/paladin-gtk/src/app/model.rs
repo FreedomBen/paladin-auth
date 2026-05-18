@@ -2182,6 +2182,30 @@ pub fn format_app_about_dialog_developer_name() -> &'static str {
     "The Paladin contributors"
 }
 
+/// Copyright notice the application menu's "About Paladin"
+/// entry's `AdwAboutDialog` renders in its footer slot.
+///
+/// Returns the canonical AGPL-3.0-or-later collective notice
+/// `"© The Paladin contributors"`. Pinning the literal keeps
+/// the dialog footer copyright row stable across releases — a
+/// year-derived value would silently drift on every release
+/// without a matching update to a year constant — and the `©`
+/// glyph (U+00A9) renders the proper legal mark rather than the
+/// ASCII `(C)` fallback.
+///
+/// The attribution string is the same one returned by
+/// [`format_app_about_dialog_developer_name`] so the dialog
+/// header attribution row and footer copyright row reference a
+/// single source of truth. Per DESIGN.md §14 the project ships
+/// under AGPL-3.0-or-later; the matching license-type spelling
+/// is provided as a companion helper.
+///
+/// Pure — returns a `'static str` without allocating.
+#[must_use]
+pub fn format_app_about_dialog_copyright() -> &'static str {
+    "\u{00A9} The Paladin contributors"
+}
+
 /// Bare `GLib` action-group name the primary `gio::Menu` resolves
 /// every entry target against.
 ///

@@ -2277,6 +2277,61 @@ fn format_app_about_dialog_developer_name_is_non_empty_and_distinct_from_program
 }
 
 #[test]
+fn format_app_about_dialog_copyright_returns_paladin_copyright_line() {
+    // Per §"libadwaita usage" and §"About / help": the
+    // `AdwAboutDialog` copyright slot displays the project's
+    // copyright notice. Paladin is AGPL-3.0-or-later (DESIGN.md
+    // §14) with an open contributor pool — the canonical notice
+    // attributes the same collective spelled by
+    // `format_app_about_dialog_developer_name` and carries the
+    // `©` glyph so the dialog renders the proper legal mark
+    // rather than the ASCII `(C)` fallback. Pinning the literal
+    // here keeps the dialog footer copyright row stable across
+    // releases without depending on a year-derived value (which
+    // would silently drift on a future release without a
+    // matching constant update).
+    use paladin_gtk::app::model::format_app_about_dialog_copyright;
+
+    assert_eq!(
+        format_app_about_dialog_copyright(),
+        "© The Paladin contributors",
+        "AdwAboutDialog copyright must be the canonical AGPL-3.0-or-later collective attribution line",
+    );
+}
+
+#[test]
+fn format_app_about_dialog_copyright_starts_with_copyright_glyph_and_contains_developer_name() {
+    // Defense-in-depth: the copyright slot must render the legal
+    // `©` mark (U+00A9) — not the ASCII `(C)` placeholder — and
+    // must spell out the same attribution string returned by
+    // `format_app_about_dialog_developer_name` so the dialog
+    // header attribution row and footer copyright row reference
+    // a single source of truth. Catches an accidental drift
+    // between the developer-name and copyright strings.
+    use paladin_gtk::app::model::{
+        format_app_about_dialog_copyright, format_app_about_dialog_developer_name,
+    };
+
+    let copyright = format_app_about_dialog_copyright();
+    assert!(
+        !copyright.is_empty(),
+        "AdwAboutDialog copyright must be non-empty; got {copyright:?}",
+    );
+    assert!(
+        copyright.starts_with('\u{00A9}'),
+        "AdwAboutDialog copyright must start with the legal `©` (U+00A9) glyph, not the ASCII `(C)` placeholder; got {copyright:?}",
+    );
+    assert!(
+        !copyright.contains("(C)") && !copyright.contains("(c)"),
+        "AdwAboutDialog copyright must not embed the ASCII `(C)` placeholder once the `©` glyph is in place; got {copyright:?}",
+    );
+    assert!(
+        copyright.contains(format_app_about_dialog_developer_name()),
+        "AdwAboutDialog copyright must spell out the same attribution as `format_app_about_dialog_developer_name`; got {copyright:?}",
+    );
+}
+
+#[test]
 fn format_app_action_group_name_is_prefix_of_every_primary_menu_action() {
     // Cross-check: every `format_app_menu_*_action` target must
     // begin with `format_app_action_group_name() + "."`. This
