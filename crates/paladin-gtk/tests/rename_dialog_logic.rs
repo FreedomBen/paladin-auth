@@ -1294,3 +1294,31 @@ fn format_rename_dialog_title_matches_tui_wording() {
         "dialog header mirrors the TUI rename view's \" Rename account \" block title",
     );
 }
+
+#[test]
+fn format_rename_dialog_label_title_returns_label() {
+    // The label `AdwEntryRow`'s `set_title` attribute is populated
+    // from this helper. The wording is the static `"Label"` —
+    // intentionally distinct from the TUI rename view's
+    // `"New label:"` row built by `text_field_line` in
+    // `crates/paladin-tui/src/view/rename.rs`, because the GTK
+    // dialog already renders a separate `"Renaming X."` sub-title
+    // above the row that names which account is being renamed,
+    // making `"New label"` redundant; the TUI omits that sub-title
+    // and uses `"New label:"` to disambiguate from the displayed
+    // current-label prompt. Pinning the title through a helper
+    // keeps the wording in one place shared by the widget binding
+    // and the pure-logic test, in lockstep with the partner
+    // `format_rename_dialog_title` helper on the dialog-chrome
+    // side. Sibling of `paladin_gtk::add_account::format_manual_label_title`
+    // on the row-title side: both return `"Label"` because the
+    // shared GNOME convention for an `AdwEntryRow` editing an
+    // account's `label` field is the bare field-name title.
+    use paladin_gtk::rename_dialog::format_rename_dialog_label_title;
+
+    assert_eq!(
+        format_rename_dialog_label_title(),
+        "Label",
+        "row title matches the GNOME convention for an AdwEntryRow editing the account label",
+    );
+}

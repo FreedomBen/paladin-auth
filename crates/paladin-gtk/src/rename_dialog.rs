@@ -368,6 +368,34 @@ pub fn format_rename_dialog_title() -> &'static str {
     "Rename account"
 }
 
+/// Fixed `title` attribute the widget hands to the rename dialog's
+/// label `AdwEntryRow::set_title`.
+///
+/// Returns the static title string `AdwEntryRow` renders as the
+/// floating label above the entry. The wording (`"Label"`) is the
+/// GNOME convention for an `AdwEntryRow` editing the account's
+/// `label` field — sibling of [`crate::add_account::format_manual_label_title`]
+/// on the row-title side; both return `"Label"` so the same field
+/// reads the same way across the Add and Rename surfaces.
+///
+/// Intentionally distinct from the TUI rename view's `"New label:"`
+/// row wording (see `crates/paladin-tui/src/view/rename.rs`): the
+/// GTK dialog renders a separate `"Renaming X."` sub-title above
+/// the row that names which account is being renamed, making
+/// `"New label"` redundant; the TUI omits that sub-title and uses
+/// `"New label:"` to disambiguate from the displayed current-label
+/// prompt. Pinning the title through a helper keeps the wording in
+/// one place shared by the widget binding and the pure-logic tests.
+///
+/// Pure — returns a `'static str` without allocating. Sibling of
+/// [`format_rename_dialog_title`] on the dialog-chrome side;
+/// together they pin every static label region of the rename
+/// dialog above the (currently still-literal) cancel button.
+#[must_use]
+pub fn format_rename_dialog_label_title() -> &'static str {
+    "Label"
+}
+
 /// Construction parameters for [`RenameDialogComponent`].
 ///
 /// `AppModel` builds this from the live vault when a kebab
@@ -775,7 +803,7 @@ impl SimpleComponent for RenameDialogComponent {
             adw::PreferencesGroup {
                 #[name = "label_row"]
                 add = &adw::EntryRow {
-                    set_title: "Label",
+                    set_title: format_rename_dialog_label_title(),
                     // `connect_changed` fires on every keystroke so
                     // the cached `RenameDialogState::last_validation`
                     // tracks the live draft.
