@@ -2535,6 +2535,32 @@ pub fn format_manual_digits_title() -> &'static str {
     "Digits"
 }
 
+/// Fixed `title` attribute the widget hands to the manual sub-path's
+/// TOTP period `AdwSpinRow::set_title`.
+///
+/// Returns the static title string `AdwSpinRow` renders as the
+/// floating label above the spinner. The wording (`"Period (s)"`)
+/// mirrors the TUI add view's `"Period (s):"` row built by
+/// `period_or_counter_field` (see
+/// `crates/paladin-tui/src/view/add.rs`) — the TUI's trailing colon
+/// is its field-name separator and drops out because `AdwSpinRow`
+/// renders its title as a floating label rather than as a prefix.
+/// The `(s)` unit hint stays — the TUI keeps it because the user is
+/// editing a duration in seconds, and the GTK row inherits the same
+/// disambiguation so a future copy change cannot diverge silently.
+/// The row is visible only on the TOTP kind (driven by
+/// [`compose_manual_period_secs_visible`]); the spinner's
+/// `(lower, upper, step)` adjustment comes from
+/// [`format_manual_period_adjustment`].
+///
+/// Pure — returns a `'static str` without allocating. Sibling of
+/// [`format_manual_digits_title`] and
+/// [`format_manual_period_adjustment`] on the period-row-title side.
+#[must_use]
+pub fn format_manual_period_title() -> &'static str {
+    "Period (s)"
+}
+
 /// Apply an inbound [`AddAccountMsg`] and return the optional
 /// [`AddAccountOutput`] the widget layer should forward to
 /// `AppModel`.

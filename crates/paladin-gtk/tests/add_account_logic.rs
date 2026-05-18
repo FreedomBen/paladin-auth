@@ -7988,3 +7988,29 @@ fn format_manual_digits_title_matches_tui_wording() {
         "digits row title mirrors the TUI add view's \"Digits:\" wording",
     );
 }
+
+#[test]
+fn format_manual_period_title_matches_tui_wording() {
+    // The TOTP period `AdwSpinRow`'s `title` attribute is populated
+    // from this helper, so the wording must match what the TUI's
+    // add view shows (the `"Period (s):"` row built by
+    // `period_or_counter_field` in
+    // `crates/paladin-tui/src/view/add.rs` — the colon is the TUI's
+    // field-name separator and drops out because AdwSpinRow renders
+    // its title as a floating label above the spinner rather than
+    // as a prefix). The `(s)` unit hint stays — the TUI keeps it
+    // because the user is editing a duration in seconds, and the
+    // GTK row inherits the same disambiguation so a future copy
+    // change cannot diverge silently. The row is visible only on
+    // the TOTP kind (driven by `compose_manual_period_secs_visible`);
+    // this helper covers only the row's static title wording.
+    // Sibling of `format_manual_digits_title_matches_tui_wording` on
+    // the period-row-title side.
+    use paladin_gtk::add_account::format_manual_period_title;
+
+    assert_eq!(
+        format_manual_period_title(),
+        "Period (s)",
+        "period row title mirrors the TUI add view's \"Period (s):\" wording",
+    );
+}
