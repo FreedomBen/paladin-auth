@@ -2606,6 +2606,63 @@ fn format_app_about_dialog_comments_is_non_empty_single_line_distinct_from_progr
 }
 
 #[test]
+fn format_app_about_dialog_developers_lists_benjamin_porter() {
+    // Per §"libadwaita usage" and §"About / help": the
+    // `AdwAboutDialog` developers slot populates the dialog's
+    // "Credits" page contributor list. The current contributor
+    // pool for the v0.2 release per `git log` is the single
+    // founding developer; pinning the literal here keeps the
+    // credits list stable across releases until a contributor
+    // is explicitly added. Distinct from
+    // `format_app_about_dialog_developer_name` (the single
+    // header attribution string) which uses the collective
+    // attribution because the workspace `Cargo.toml` deliberately
+    // omits the `authors` field.
+    use paladin_gtk::app::model::format_app_about_dialog_developers;
+
+    assert_eq!(
+        format_app_about_dialog_developers(),
+        ["Benjamin Porter"],
+        "AdwAboutDialog developers must be the pinned credits-page contributor list",
+    );
+}
+
+#[test]
+fn format_app_about_dialog_developers_is_non_empty_array_of_non_empty_single_line_names() {
+    // Defense-in-depth: every entry in the credits-page
+    // contributor list must be non-empty (a blank credit would
+    // render an empty row in the dialog) and a single line (the
+    // dialog renders one entry per row; embedded newlines would
+    // break the layout). Catches an accidental empty literal or
+    // a multi-line entry that drifted in.
+    use paladin_gtk::app::model::format_app_about_dialog_developers;
+
+    let developers = format_app_about_dialog_developers();
+    assert!(
+        !developers.is_empty(),
+        "AdwAboutDialog developers must be a non-empty contributor list",
+    );
+    for name in developers {
+        assert!(
+            !name.is_empty(),
+            "AdwAboutDialog developers entry must be non-empty; got {name:?}",
+        );
+        assert!(
+            !name.contains('\n'),
+            "AdwAboutDialog developers entry must be a single line (no embedded newlines); got {name:?}",
+        );
+        assert!(
+            !name.starts_with(char::is_whitespace),
+            "AdwAboutDialog developers entry must not start with whitespace; got {name:?}",
+        );
+        assert!(
+            !name.ends_with(char::is_whitespace),
+            "AdwAboutDialog developers entry must not end with whitespace; got {name:?}",
+        );
+    }
+}
+
+#[test]
 fn format_app_action_group_name_is_prefix_of_every_primary_menu_action() {
     // Cross-check: every `format_app_menu_*_action` target must
     // begin with `format_app_action_group_name() + "."`. This

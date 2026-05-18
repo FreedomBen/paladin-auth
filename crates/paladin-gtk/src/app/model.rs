@@ -2321,6 +2321,31 @@ pub fn format_app_about_dialog_comments() -> &'static str {
     env!("CARGO_PKG_DESCRIPTION")
 }
 
+/// Ordered contributor list the application menu's "About
+/// Paladin" entry's `AdwAboutDialog` hands to
+/// `set_developers` for its credits-page "Developers" section.
+///
+/// Returns the pinned credits-page contributor list. The
+/// current contributor pool for the v0.2 release per `git log`
+/// is the single founding developer; pinning the literal here
+/// keeps the credits list stable across releases until a
+/// contributor is explicitly added.
+///
+/// Distinct from [`format_app_about_dialog_developer_name`]
+/// which returns the single header-attribution collective
+/// string (`"The Paladin contributors"`) used in the dialog's
+/// program-name header — the credits-page list spells out
+/// individual contributors so attribution remains accurate
+/// even though the workspace `Cargo.toml` deliberately omits
+/// the `authors` field.
+///
+/// Pure — returns a fixed-size array of `'static` strings
+/// without allocating.
+#[must_use]
+pub fn format_app_about_dialog_developers() -> [&'static str; 1] {
+    ["Benjamin Porter"]
+}
+
 /// Bare `GLib` action-group name the primary `gio::Menu` resolves
 /// every entry target against.
 ///
