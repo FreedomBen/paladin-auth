@@ -8110,3 +8110,29 @@ fn format_add_dialog_save_label_returns_save() {
         "dialog save button label matches the IMPLEMENTATION_PLAN_04_GTK.md \"Save / Cancel\" wording",
     );
 }
+
+#[test]
+fn format_uri_text_title_returns_otpauth_uri() {
+    // The URI sub-path's single `AdwEntryRow`'s `title` attribute
+    // will be populated from this helper when the editable URI
+    // sub-page lands in the view alongside the already-extracted
+    // `compose_uri_submit_outcome` validation projection. Wording
+    // is the static `"otpauth:// URI"` so the row's floating label
+    // names the URL scheme the user is expected to paste, avoiding
+    // redundancy with the `AdwViewSwitcher` page tab (which is
+    // labeled `"URI"` via `format_add_path_label(AddPath::Uri)` —
+    // pinning the row title behind its own helper lets a future
+    // copy change land on the row without silently moving the tab
+    // label). No TUI parity test: the TUI add view renders the
+    // manual fields unconditionally regardless of `AddMode`, so
+    // there is no TUI URI-row wording to mirror; the `returns_*`
+    // form of this test pins the wording directly (mirroring the
+    // `format_duplicate_alert_*_label_returns_*` pattern).
+    use paladin_gtk::add_account::format_uri_text_title;
+
+    assert_eq!(
+        format_uri_text_title(),
+        "otpauth:// URI",
+        "URI row title names the URL scheme the user pastes",
+    );
+}

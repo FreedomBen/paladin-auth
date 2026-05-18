@@ -2666,6 +2666,37 @@ pub fn format_add_dialog_save_label() -> &'static str {
     "Save"
 }
 
+/// Fixed `title` attribute the widget will hand to the URI
+/// sub-path's `AdwEntryRow::set_title` once the editable URI
+/// sub-page lands in the view alongside the already-extracted
+/// [`compose_uri_submit_outcome`] validation projection.
+///
+/// Returns the static title string `AdwEntryRow` renders as the
+/// floating label above the entry. The wording (`"otpauth:// URI"`)
+/// names the URL scheme the user is expected to paste so the row
+/// reads distinctly from the `AdwViewSwitcher` page tab (which is
+/// labeled `"URI"` via [`format_add_path_label`] of
+/// [`crate::secret_fields::AddPath::Uri`]). Pinning the row title
+/// behind its own helper lets a future copy change land on the
+/// row without silently moving the tab label or the
+/// machine-readable slug returned by [`format_add_path_name`].
+///
+/// No TUI parity: the TUI add view renders the manual fields
+/// unconditionally regardless of `AddMode`, so there is no TUI
+/// URI-row wording to mirror — the `returns_*` form of the
+/// pure-logic test pins the wording directly in
+/// `tests/add_account_logic.rs` (mirroring the
+/// `format_duplicate_alert_*_label_returns_*` pattern).
+///
+/// Pure — returns a `'static str` without allocating. Sibling of
+/// the `format_manual_*_title` helpers on the URI-sub-path-title
+/// side; together they cover the per-row title attribute for
+/// every editable row in the dialog.
+#[must_use]
+pub fn format_uri_text_title() -> &'static str {
+    "otpauth:// URI"
+}
+
 /// Apply an inbound [`AddAccountMsg`] and return the optional
 /// [`AddAccountOutput`] the widget layer should forward to
 /// `AppModel`.
