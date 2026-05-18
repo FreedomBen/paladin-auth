@@ -6752,3 +6752,107 @@ fn compose_manual_counter_value_survives_kind_round_trip() {
         "kind round-trip preserves the prior counter value in the projection",
     );
 }
+
+// `u8 → f64` is lossless for every digits value the spinbutton
+// adjustment accepts (the §5 / §6 range is `6..=8`), so
+// `clippy::float_cmp` does not apply.
+#[test]
+#[allow(clippy::float_cmp)]
+fn compose_manual_digits_value_fresh_dialog_returns_default() {
+    // `ManualDraftState::default` seeds the OTP digit count at 6 for
+    // CLI / TUI parity, so a freshly-opened dialog must expose the
+    // default digits value through the projection — the widget binds
+    // a `#[watch]` over the projection to drive the digits spinbutton
+    // row's `AdwSpinRow::set_value:` so the row reflects state on
+    // initial render. The digits row is always visible (regardless
+    // of TOTP/HOTP kind), so this projection has no visibility
+    // sibling to pair with.
+    use paladin_gtk::add_account::{compose_manual_digits_value, AddDialogState};
+
+    let state = AddDialogState::new();
+
+    assert_eq!(
+        compose_manual_digits_value(&state),
+        6.0,
+        "fresh dialog → composer surfaces the default 6 OTP digit count",
+    );
+}
+
+#[test]
+#[allow(clippy::float_cmp)]
+fn compose_manual_digits_value_after_digits_changed_reflects_new_value() {
+    // `AddAccountMsg::ManualDigitsChanged(7)` shadows the spinner
+    // value into `ManualDraftState::digits`; the projection must
+    // surface the new value as an `f64` so the widget's
+    // `#[watch]`-driven `AdwSpinRow::set_value:` binding stays in
+    // lockstep with the underlying state on every dispatch.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_manual_digits_value, AddAccountMsg, AddDialogState,
+    };
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(&mut state, AddAccountMsg::ManualDigitsChanged(7));
+
+    assert_eq!(
+        compose_manual_digits_value(&state),
+        7.0,
+        "ManualDigitsChanged(7) → composer surfaces the new digits value",
+    );
+}
+
+#[test]
+#[allow(clippy::float_cmp)]
+fn compose_manual_digits_value_replaces_prior_shadow() {
+    // A second `ManualDigitsChanged` dispatch must overwrite the
+    // first — the projection must not latch on the first transition,
+    // so the widget's `#[watch]`-driven spinbutton value stays
+    // bidirectional with the user's last selection. Walks the full
+    // §5 / §6 range (6 → 7 → 8) so the test covers both upward
+    // transitions the spinbutton adjustment exposes.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_manual_digits_value, AddAccountMsg, AddDialogState,
+    };
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(&mut state, AddAccountMsg::ManualDigitsChanged(7));
+    let _ = apply_msg(&mut state, AddAccountMsg::ManualDigitsChanged(8));
+
+    assert_eq!(
+        compose_manual_digits_value(&state),
+        8.0,
+        "second ManualDigitsChanged replaces the prior shadow in the projection",
+    );
+}
+
+#[test]
+#[allow(clippy::float_cmp)]
+fn compose_manual_digits_value_survives_kind_round_trip() {
+    // The digits value is shadowed into `ManualDraftState::digits`
+    // independently of the kind dropdown — the digits row stays
+    // visible across TOTP/HOTP toggles, and the kind change must
+    // not reset the user's prior selection. Mirror of
+    // `compose_manual_period_secs_value_survives_kind_round_trip`
+    // and `compose_manual_counter_value_survives_kind_round_trip`
+    // on the digits-row side.
+    use paladin_core::AccountKindInput;
+    use paladin_gtk::add_account::{
+        apply_msg, compose_manual_digits_value, AddAccountMsg, AddDialogState,
+    };
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(&mut state, AddAccountMsg::ManualDigitsChanged(8));
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualKindChanged(AccountKindInput::Hotp),
+    );
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualKindChanged(AccountKindInput::Totp),
+    );
+
+    assert_eq!(
+        compose_manual_digits_value(&state),
+        8.0,
+        "kind round-trip preserves the prior digits value in the projection",
+    );
+}

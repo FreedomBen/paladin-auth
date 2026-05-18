@@ -1977,6 +1977,29 @@ pub fn compose_manual_counter_value(state: &AddDialogState) -> f64 {
     state.manual_draft().counter as f64
 }
 
+/// State-driven projection of the manual sub-path's OTP digits
+/// spinbutton value, surfaced as the `f64` that `AdwSpinRow::set_value`
+/// expects.
+///
+/// Returns the current [`ManualDraftState::digits`] cast to `f64` —
+/// `6.0` on a freshly-opened dialog (CLI / TUI default digits), and
+/// the post-`AddAccountMsg::ManualDigitsChanged` value on every
+/// subsequent dispatch. The §5 / §6 range is `6..=8`, lossless under
+/// `u8 → f64`, and the digits row is always visible (regardless of
+/// the TOTP/HOTP kind), so this projection has no visibility sibling
+/// to pair with.
+///
+/// Lets the widget bind a single `#[watch]` over the projection to
+/// drive the digits row's `AdwSpinRow::set_value:` instead of casting
+/// [`ManualDraftState::digits`] inline against the live state. Mirror
+/// of [`compose_manual_period_secs_value`] and
+/// [`compose_manual_counter_value`] on the always-visible digits row.
+/// Pure — borrows the state and returns an `f64` without allocating.
+#[must_use]
+pub fn compose_manual_digits_value(state: &AddDialogState) -> f64 {
+    f64::from(state.manual_draft().digits)
+}
+
 /// State-driven projection of whether the Save button's
 /// `set_sensitive:` is `true` — i.e. whether the active sub-path
 /// has the minimum required input for a click to reach the
