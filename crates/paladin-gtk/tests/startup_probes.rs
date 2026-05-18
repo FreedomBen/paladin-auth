@@ -614,3 +614,49 @@ fn format_app_menu_export_label_ends_with_ellipsis() {
         "Export menu label must not use three ASCII periods; the GNOME HIG requires U+2026 instead; got {label:?}",
     );
 }
+
+#[test]
+fn format_app_menu_passphrase_label_returns_passphrase_with_ellipsis() {
+    // The `AppModel`'s primary `gio::Menu` "Passphrase…" entry's
+    // label is populated from this helper. The wording
+    // (`"Passphrase…"`) names the surface the entry opens
+    // (`PassphraseDialog` with the sub-flow gated by
+    // `Vault::is_encrypted()`) and uses the GNOME-HIG horizontal-
+    // ellipsis character (U+2026) — not three ASCII periods — to
+    // indicate the action opens a sub-dialog requiring further
+    // input before committing.
+    //
+    // Pure — returns a `'static str` without allocating. The
+    // Passphrase entry is gated to `Unlocked` per §"libadwaita
+    // usage" but the label wording is identical across the
+    // set / change / remove sub-flows so the menu does not need
+    // to re-render when re-opened — `PassphraseDialog` does the
+    // sub-flow routing internally against `Vault::is_encrypted()`.
+    use paladin_gtk::app::model::format_app_menu_passphrase_label;
+
+    assert_eq!(
+        format_app_menu_passphrase_label(),
+        "Passphrase\u{2026}",
+        "primary menu Passphrase entry uses the HIG horizontal-ellipsis (U+2026) suffix",
+    );
+}
+
+#[test]
+fn format_app_menu_passphrase_label_ends_with_ellipsis() {
+    // The GNOME-HIG menu-entry contract is that an entry opening
+    // a dialog ends with the horizontal-ellipsis character
+    // (U+2026), not three ASCII periods. Pinning a suffix-and-
+    // not-`...` invariant alongside the full-string assertion
+    // guards against an accidental rename to ASCII periods.
+    use paladin_gtk::app::model::format_app_menu_passphrase_label;
+
+    let label = format_app_menu_passphrase_label();
+    assert!(
+        label.ends_with('\u{2026}'),
+        "Passphrase menu label must end with the horizontal-ellipsis character (U+2026); got {label:?}",
+    );
+    assert!(
+        !label.ends_with("..."),
+        "Passphrase menu label must not use three ASCII periods; the GNOME HIG requires U+2026 instead; got {label:?}",
+    );
+}

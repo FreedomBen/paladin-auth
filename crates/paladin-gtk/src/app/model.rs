@@ -1539,3 +1539,25 @@ pub fn format_app_menu_import_label() -> &'static str {
 pub fn format_app_menu_export_label() -> &'static str {
     "Export\u{2026}"
 }
+
+/// Fixed label the widget hands to the primary `gio::Menu`'s
+/// "Passphrase…" entry.
+///
+/// Returns the static label `"Passphrase\u{2026}"` — the wording
+/// for the menu entry that opens `PassphraseDialog` with the
+/// sub-flow gated by `Vault::is_encrypted()`. Uses the GNOME-HIG
+/// horizontal-ellipsis character (U+2026) — not three ASCII
+/// periods — to indicate the action opens a sub-dialog requiring
+/// further input before committing. The Passphrase entry is
+/// gated to `Unlocked` per §"libadwaita usage" but the label
+/// wording is identical across the set / change / remove sub-
+/// flows so the menu does not need to re-render when re-opened;
+/// `PassphraseDialog` does the sub-flow routing internally.
+///
+/// Pure — returns a `'static str` without allocating. Sibling of
+/// the other primary-menu entries
+/// ([`format_app_menu_import_label`], [`format_app_menu_export_label`]).
+#[must_use]
+pub fn format_app_menu_passphrase_label() -> &'static str {
+    "Passphrase\u{2026}"
+}
