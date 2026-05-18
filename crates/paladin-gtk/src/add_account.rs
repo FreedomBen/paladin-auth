@@ -2588,6 +2588,28 @@ pub fn format_manual_counter_title() -> &'static str {
     "Counter"
 }
 
+/// Fixed `set_label` attribute the widget hands to the dialog's
+/// header `gtk::Label`.
+///
+/// Returns the static title string the dialog renders at the top
+/// of its body. The wording (`"Add account"`) mirrors the TUI add
+/// view's `" Add account "` block title built by `render` (see
+/// `crates/paladin-tui/src/view/add.rs`) — the TUI's surrounding
+/// spaces are its block-padding convention and drop out because
+/// `gtk::Label` renders the bare text without padding. Pinning
+/// the title through a helper keeps the GTK / TUI wording aligned
+/// against a single source of truth so a future copy change cannot
+/// diverge silently.
+///
+/// Pure — returns a `'static str` without allocating. Sibling of
+/// the `format_manual_*_title` helpers on the dialog-header side;
+/// together they cover the dialog header label and the manual
+/// sub-path's per-row title attributes.
+#[must_use]
+pub fn format_add_dialog_title() -> &'static str {
+    "Add account"
+}
+
 /// Apply an inbound [`AddAccountMsg`] and return the optional
 /// [`AddAccountOutput`] the widget layer should forward to
 /// `AppModel`.
@@ -3152,7 +3174,7 @@ impl SimpleComponent for AddAccountComponent {
             set_vexpand: true,
 
             gtk::Label {
-                set_label: "Add account",
+                set_label: format_add_dialog_title(),
                 set_xalign: 0.0,
                 add_css_class: "title-2",
             },

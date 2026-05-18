@@ -8040,3 +8040,25 @@ fn format_manual_counter_title_matches_tui_wording() {
         "counter row title mirrors the TUI add view's \"Counter:\" wording",
     );
 }
+
+#[test]
+fn format_add_dialog_title_matches_tui_wording() {
+    // The dialog's header `gtk::Label` `set_label` attribute is
+    // populated from this helper, so the wording must match what
+    // the TUI's add view shows (the `" Add account "` block title
+    // built by `render` in `crates/paladin-tui/src/view/add.rs` —
+    // the surrounding spaces are the TUI block-padding convention
+    // and drop out because `gtk::Label` renders without them).
+    // Pinning the title through a helper keeps the GTK / TUI
+    // wording aligned against a single source of truth so a future
+    // copy change cannot diverge silently. Sibling of the
+    // `format_manual_*_title_matches_tui_wording` tests on the
+    // dialog-header-title side.
+    use paladin_gtk::add_account::format_add_dialog_title;
+
+    assert_eq!(
+        format_add_dialog_title(),
+        "Add account",
+        "dialog header mirrors the TUI add view's \" Add account \" block title",
+    );
+}
