@@ -1288,6 +1288,67 @@ fn format_app_menu_export_action_name_round_trips_with_group_and_target() {
 }
 
 #[test]
+fn format_app_menu_passphrase_action_name_returns_passphrase() {
+    // The `gio::SimpleAction::new("passphrase", None)` registration
+    // on the `AppModel`'s `app` action group reads its bare name
+    // from this helper. The single `passphrase` action dispatches
+    // the set / change / remove sub-flow gating internally per
+    // `Vault::is_encrypted()` rather than carrying three distinct
+    // menu entries (see §"Component tree"'s `PassphraseDialog`).
+    //
+    // Pure — returns a `'static str` without allocating. Sibling
+    // of `format_app_menu_passphrase_action` on the fully-qualified
+    // target side and `format_app_menu_passphrase_label` on the
+    // visible-label side; together they pin all three halves of
+    // the menu-entry contract against a single source of truth.
+    use paladin_gtk::app::model::format_app_menu_passphrase_action_name;
+
+    assert_eq!(
+        format_app_menu_passphrase_action_name(),
+        "passphrase",
+        "primary menu Passphrase entry registers the bare `passphrase` SimpleAction on the application action group",
+    );
+}
+
+#[test]
+fn format_app_menu_passphrase_action_name_has_no_separator_or_whitespace() {
+    use paladin_gtk::app::model::format_app_menu_passphrase_action_name;
+
+    let action = format_app_menu_passphrase_action_name();
+    assert!(
+        !action.contains('.'),
+        "bare action name must not embed the `<group>.<action>` separator; got {action:?}",
+    );
+    assert!(
+        !action.contains(' '),
+        "bare action name must not contain whitespace; got {action:?}",
+    );
+    assert!(
+        !action.is_empty(),
+        "bare action name must be non-empty; got {action:?}",
+    );
+}
+
+#[test]
+fn format_app_menu_passphrase_action_name_round_trips_with_group_and_target() {
+    use paladin_gtk::app::model::{
+        format_app_action_group_name, format_app_menu_passphrase_action,
+        format_app_menu_passphrase_action_name,
+    };
+
+    let joined = format!(
+        "{}.{}",
+        format_app_action_group_name(),
+        format_app_menu_passphrase_action_name(),
+    );
+    assert_eq!(
+        joined,
+        format_app_menu_passphrase_action(),
+        "`<group>.<action>` join must reproduce the fully-qualified Passphrase menu action target",
+    );
+}
+
+#[test]
 fn format_app_action_group_name_is_prefix_of_every_primary_menu_action() {
     // Cross-check: every `format_app_menu_*_action` target must
     // begin with `format_app_action_group_name() + "."`. This
