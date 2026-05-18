@@ -7831,3 +7831,25 @@ fn format_manual_counter_adjustment_default_lies_inside_range() {
         "compose_manual_counter_value on a fresh dialog ({value}) lies inside [{lower}, {upper}]",
     );
 }
+
+#[test]
+fn format_manual_label_title_matches_tui_wording() {
+    // The label `AdwEntryRow`'s `title` attribute is populated from
+    // this helper, so the wording must match what the TUI's add view
+    // shows (the `"Label:"` row in `crates/paladin-tui/src/view/add.rs`
+    // — the colon is the TUI's field-name separator and drops out
+    // because AdwEntryRow renders its title as a floating label above
+    // the entry rather than as a prefix). Pinning the title through a
+    // helper keeps the GTK / TUI wording aligned against a single
+    // source of truth so a future copy change cannot diverge silently.
+    // Sibling of `format_manual_kind_labels_matches_tui_wording` and
+    // `format_manual_algorithm_labels_matches_tui_wording` on the
+    // label-entry-title side.
+    use paladin_gtk::add_account::format_manual_label_title;
+
+    assert_eq!(
+        format_manual_label_title(),
+        "Label",
+        "label row title mirrors the TUI add view's \"Label:\" wording",
+    );
+}

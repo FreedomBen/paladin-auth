@@ -2373,6 +2373,29 @@ pub fn compose_save_button_sensitive(state: &AddDialogState) -> bool {
     }
 }
 
+/// Fixed `title` attribute the widget hands to the manual sub-path's
+/// label `AdwEntryRow::set_title`.
+///
+/// Returns the static title string `AdwEntryRow` renders as the
+/// floating label above the entry. The wording (`"Label"`) mirrors
+/// the TUI add view's `"Label:"` row (see
+/// `crates/paladin-tui/src/view/add.rs`) — the TUI's trailing colon
+/// is its field-name separator and drops out because `AdwEntryRow`
+/// renders its title as a floating label rather than as a prefix.
+/// Pinning the title through a helper keeps the
+/// GTK / TUI wording aligned against a single source of truth so a
+/// future copy change cannot diverge silently.
+///
+/// Pure — returns a `'static str` without allocating. Sibling of
+/// [`format_manual_kind_labels`] and [`format_manual_algorithm_labels`]
+/// on the label-entry-title side; the trio covers one half of the
+/// manual sub-path's static wording (entry titles and dropdown
+/// labels) and stays aligned against the TUI by construction.
+#[must_use]
+pub fn format_manual_label_title() -> &'static str {
+    "Label"
+}
+
 /// Apply an inbound [`AddAccountMsg`] and return the optional
 /// [`AddAccountOutput`] the widget layer should forward to
 /// `AppModel`.
