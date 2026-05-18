@@ -690,6 +690,33 @@ pub fn format_init_dialog_create_label() -> &'static str {
     "Create vault"
 }
 
+/// Destructive action-button label the [`InitDialogComponent`]'s
+/// `vault_exists` race gate renders on its in-dialog
+/// `AdwAlertDialog` with `destructive-action` styling.
+///
+/// Returns the bare verb `"Replace"`. The destructive gate
+/// opens when a vault appears between `inspect` and `create`
+/// (precheck reported `Clear` but the race resolved to
+/// `Existing`); confirming routes through `Store::create_force`,
+/// which rotates the existing vault to `vault.bin.bak` and
+/// writes the new one — i.e. **replaces** the existing file.
+/// The GNOME-HIG verb for that affordance is the bare
+/// `"Replace"` — not "Overwrite" (used by the file-overwrite
+/// gate in [`crate::export_dialog`] for a different surface),
+/// not "Create" (which would overlap the primary submit-button
+/// caption returned by [`format_init_dialog_create_label`]),
+/// and not "Confirm" (too generic for a destructive-action
+/// button caption).
+///
+/// Pure — returns a `'static str` without allocating. Distinct
+/// from [`format_init_dialog_create_label`] so the two action
+/// surfaces stay visually separable rather than collapsing onto
+/// the same word.
+#[must_use]
+pub fn format_init_dialog_force_confirm_label() -> &'static str {
+    "Replace"
+}
+
 /// Construction parameters for [`InitDialogComponent`].
 #[derive(Debug, Clone)]
 pub struct InitDialogInit {

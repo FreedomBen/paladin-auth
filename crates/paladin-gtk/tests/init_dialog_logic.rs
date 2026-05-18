@@ -955,3 +955,74 @@ fn format_init_dialog_create_label_starts_with_capital_letter_for_button_caption
         "InitDialog create button label must start with a capital ASCII letter per the GNOME HIG button-caption convention; got {label:?}",
     );
 }
+
+#[test]
+fn format_init_dialog_force_confirm_label_returns_replace() {
+    // Per §"Component tree" > `InitDialog`: when a vault appears
+    // between `inspect` and `create` (precheck reported `Clear`
+    // but the race resolved to `Existing`), the dialog opens an
+    // in-dialog `AdwAlertDialog` with `destructive-action`
+    // styling. The destructive confirm button calls
+    // `Store::create_force(path, init)` — replacing the existing
+    // vault. The GNOME-HIG verb for a "vault appears, confirm
+    // to replace" affordance is the bare `"Replace"` — not
+    // "Overwrite" (used by the file-overwrite gate in ExportDialog
+    // for a different surface), not "Create" (which would
+    // overlap with the primary submit-button caption returned by
+    // `format_init_dialog_create_label`), and not "Confirm" (too
+    // generic for a destructive-action button caption). Pinning
+    // the wording through a helper keeps the destructive button
+    // label in one place shared by the widget binding and the
+    // pure-logic tests in `tests/init_dialog_logic.rs`.
+    use paladin_gtk::init_dialog::format_init_dialog_force_confirm_label;
+
+    assert_eq!(
+        format_init_dialog_force_confirm_label(),
+        "Replace",
+        "InitDialog force-replace destructive confirm button label uses the HIG-aligned `Replace` verb",
+    );
+}
+
+#[test]
+fn format_init_dialog_force_confirm_label_is_distinct_from_create_label_and_non_empty() {
+    // Defense-in-depth: the destructive confirm label must be
+    // distinct from the primary create button label so the two
+    // captions read as different actions (`Create vault` for
+    // the normal path, `Replace` for the destructive force-
+    // replace path) rather than collapsing onto the same word.
+    // It must also be non-empty, single-line, and HIG-cased.
+    use paladin_gtk::init_dialog::{
+        format_init_dialog_create_label, format_init_dialog_force_confirm_label,
+    };
+
+    let label = format_init_dialog_force_confirm_label();
+    assert!(
+        !label.is_empty(),
+        "InitDialog force-replace destructive confirm label must be non-empty; got {label:?}",
+    );
+    assert!(
+        !label.contains('\n'),
+        "InitDialog force-replace destructive confirm label must be a single line; got {label:?}",
+    );
+    assert!(
+        !label.starts_with(char::is_whitespace),
+        "InitDialog force-replace destructive confirm label must not start with whitespace; got {label:?}",
+    );
+    assert!(
+        !label.ends_with(char::is_whitespace),
+        "InitDialog force-replace destructive confirm label must not end with whitespace; got {label:?}",
+    );
+    let first = label
+        .chars()
+        .next()
+        .expect("InitDialog force-replace destructive confirm label must be non-empty");
+    assert!(
+        first.is_ascii_uppercase(),
+        "InitDialog force-replace destructive confirm label must start with a capital ASCII letter per the GNOME HIG button-caption convention; got {label:?}",
+    );
+    assert_ne!(
+        label,
+        format_init_dialog_create_label(),
+        "InitDialog force-replace destructive confirm label must be distinct from the primary create button caption so the two action surfaces stay visually separable",
+    );
+}
