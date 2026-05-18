@@ -456,7 +456,7 @@ impl SimpleComponent for AppModel {
                 add_top_bar = &adw::HeaderBar {
                     #[name = "add_button"]
                     pack_start = &gtk::Button {
-                        set_icon_name: "list-add-symbolic",
+                        set_icon_name: format_app_add_button_icon_name(),
                         set_tooltip_text: Some(format_app_add_button_tooltip()),
                         // Initial visibility tracks the resolved
                         // startup state. Subsequent state changes
@@ -1259,6 +1259,36 @@ pub fn startup_state_marker(state: &AppState) -> String {
         None => "(unresolved)".to_string(),
     };
     format!("paladin-gtk: startup_state={variant} path={path_repr}")
+}
+
+/// Freedesktop icon name the widget hands to the [`AppModel`]'s
+/// header-bar add `gtk::Button::set_icon_name`.
+///
+/// Returns the static icon name `"list-add-symbolic"` — the
+/// freedesktop-standard glyph for "add to list" that resolves
+/// through the system icon theme so the wordless icon matches
+/// every other GNOME app's `+` header-bar affordance. The
+/// `-symbolic` suffix is required by the libadwaita HIG for
+/// header-bar icons so the glyph recolors with the theme. No TUI
+/// parity: the TUI is text-only and has no icon to mirror.
+/// Pinning the icon name through a helper keeps the string in
+/// one place shared by the widget binding and the pure-logic
+/// tests.
+///
+/// Pure — returns a `'static str` without allocating. Distinct
+/// from the dialog-status-icon siblings
+/// ([`crate::unlock_dialog::format_unlock_dialog_icon_name`],
+/// [`crate::init_dialog::format_init_dialog_icon_name`],
+/// [`crate::startup_error::format_startup_error_icon_name`],
+/// [`crate::remove_dialog::format_remove_dialog_icon_name`])
+/// which pin `AdwStatusPage` icons rather than header-bar button
+/// icons; pairing this helper with the existing app-level
+/// [`format_app_add_button_tooltip`] keeps both halves of the
+/// icon-only button's accessibility surface against a single
+/// source of truth.
+#[must_use]
+pub fn format_app_add_button_icon_name() -> &'static str {
+    "list-add-symbolic"
 }
 
 /// Fixed `tooltip_text` attribute the widget hands to the

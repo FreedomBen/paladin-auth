@@ -175,6 +175,55 @@ fn startup_state_marker_startup_error_renders_path_or_placeholder() {
 }
 
 #[test]
+fn format_app_add_button_icon_name_returns_list_add_symbolic() {
+    // The `AppModel`'s header-bar add `gtk::Button`'s
+    // `set_icon_name` attribute is populated from this helper.
+    // The icon (`"list-add-symbolic"`) is the freedesktop-
+    // standard glyph for "add to list" — resolving through the
+    // system icon theme so the wordless icon matches every other
+    // GNOME app's `+` header-bar affordance. The `-symbolic`
+    // suffix is required by the libadwaita HIG for header-bar
+    // icons so the glyph recolors with the theme. Pinning the
+    // icon name through a helper keeps the string in one place
+    // shared by the widget binding and the pure-logic tests.
+    //
+    // No TUI parity: the TUI is text-only and has no icon to
+    // mirror. Distinct from the dialog-status-icon siblings
+    // (`format_unlock_dialog_icon_name`,
+    // `format_init_dialog_icon_name`,
+    // `format_startup_error_icon_name`,
+    // `format_remove_dialog_icon_name`) which pin
+    // `AdwStatusPage` icons rather than header-bar button
+    // icons; pairing this helper with the existing app-level
+    // `format_app_add_button_tooltip` keeps both halves of the
+    // icon-only button's accessibility surface against a single
+    // source of truth.
+    use paladin_gtk::app::model::format_app_add_button_icon_name;
+
+    assert_eq!(
+        format_app_add_button_icon_name(),
+        "list-add-symbolic",
+        "header-bar add button icon uses the freedesktop-standard add-to-list glyph",
+    );
+}
+
+#[test]
+fn format_app_add_button_icon_name_ends_with_symbolic_suffix() {
+    // The libadwaita HIG requires header-bar icons to be
+    // symbolic so they recolor with the theme; the icon-name
+    // contract is to end with `-symbolic`. Pinning a suffix
+    // assertion alongside the full-string assertion guards
+    // against an accidental rename to a non-symbolic glyph.
+    use paladin_gtk::app::model::format_app_add_button_icon_name;
+
+    let icon = format_app_add_button_icon_name();
+    assert!(
+        icon.ends_with("-symbolic"),
+        "header-bar icon name must end with `-symbolic` for HIG-conformant theming; got {icon:?}",
+    );
+}
+
+#[test]
 fn format_app_add_button_tooltip_returns_add_account() {
     // The `AppModel`'s header-bar add `gtk::Button`'s
     // `set_tooltip_text` attribute is populated from this helper.
