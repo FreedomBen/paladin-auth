@@ -1613,3 +1613,31 @@ pub fn format_app_menu_preferences_label() -> &'static str {
 pub fn format_app_menu_about_label() -> &'static str {
     "About Paladin"
 }
+
+/// Fixed label the widget hands to the primary `gio::Menu`'s
+/// "Quit" entry.
+///
+/// Returns the static label `"Quit"` — the wording for the menu
+/// entry that dispatches the standard `Quit` action triggering
+/// application shutdown after any in-flight vault worker returns
+/// (per §"In-flight effect ownership"). Matches the GNOME-HIG
+/// convention used by every other GNOME app's primary-menu Quit
+/// entry. No trailing ellipsis: Quit is a commit-now action that
+/// does not collect further input (the destructive-confirmation-
+/// on-pending-work gate, if any, lives in the §"In-flight effect
+/// ownership" worker-deferral logic, not in this label). The
+/// Quit entry stays enabled in every `AppState` per §"libadwaita
+/// usage" — unlike Import / Export / Passphrase / Preferences
+/// which are gated to `Unlocked` — so the label wording does not
+/// need to change across state transitions.
+///
+/// Pure — returns a `'static str` without allocating. Final
+/// sibling of the primary-menu-label set
+/// ([`format_app_menu_import_label`], [`format_app_menu_export_label`],
+/// [`format_app_menu_passphrase_label`], [`format_app_menu_preferences_label`],
+/// [`format_app_menu_about_label`]); together they pin all six
+/// primary-menu entry labels against a single source of truth.
+#[must_use]
+pub fn format_app_menu_quit_label() -> &'static str {
+    "Quit"
+}

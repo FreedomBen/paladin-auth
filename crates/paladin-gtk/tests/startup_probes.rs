@@ -780,3 +780,53 @@ fn format_app_menu_about_label_does_not_carry_ellipsis() {
         "About menu label must not end with three ASCII periods either; got {label:?}",
     );
 }
+
+#[test]
+fn format_app_menu_quit_label_returns_quit() {
+    // The `AppModel`'s primary `gio::Menu` "Quit" entry's label
+    // is populated from this helper. The wording (`"Quit"`) names
+    // the action the entry dispatches (the `Quit` standard action
+    // that triggers application shutdown after any in-flight vault
+    // worker returns, per §"In-flight effect ownership") and
+    // matches the GNOME-HIG convention used by every other GNOME
+    // app's primary-menu Quit entry. No trailing ellipsis: Quit
+    // is a commit-now action that does not collect further input
+    // (the destructive-confirmation-on-pending-work gate, if any,
+    // lives in the §"In-flight effect ownership" worker-deferral
+    // logic, not in this label).
+    //
+    // Pure — returns a `'static str` without allocating. The Quit
+    // entry stays enabled in every `AppState` per §"libadwaita
+    // usage" — unlike Import / Export / Passphrase / Preferences
+    // which are gated to `Unlocked` — so the label wording does
+    // not need to change across state transitions.
+    use paladin_gtk::app::model::format_app_menu_quit_label;
+
+    assert_eq!(
+        format_app_menu_quit_label(),
+        "Quit",
+        "primary menu Quit entry uses the bare GNOME-HIG quit-action wording",
+    );
+}
+
+#[test]
+fn format_app_menu_quit_label_does_not_carry_ellipsis() {
+    // Quit is a commit-now action (deferred only by the in-flight
+    // vault worker per §"In-flight effect ownership"), not a
+    // dialog-opening surface, so the GNOME-HIG ellipsis convention
+    // does not apply. Pinning a no-ellipsis invariant alongside
+    // the full-string assertion guards against an accidental
+    // rename that would otherwise suggest the affordance opens a
+    // sub-dialog.
+    use paladin_gtk::app::model::format_app_menu_quit_label;
+
+    let label = format_app_menu_quit_label();
+    assert!(
+        !label.ends_with('\u{2026}'),
+        "Quit menu label must not end with the horizontal-ellipsis character (U+2026); Quit is a commit-now action, not a dialog-opening entry; got {label:?}",
+    );
+    assert!(
+        !label.ends_with("..."),
+        "Quit menu label must not end with three ASCII periods either; got {label:?}",
+    );
+}
