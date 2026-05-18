@@ -1965,6 +1965,50 @@ pub fn format_app_add_button_action_name() -> &'static str {
     "add"
 }
 
+/// Ordered `(label, detailed_action_name)` pairs the `AppModel`'s
+/// primary `gio::Menu` appends in the §"libadwaita usage"
+/// sequence (Import, Export, Passphrase, Preferences, About,
+/// Quit).
+///
+/// Returns the same six pairs the per-entry helpers
+/// ([`format_app_menu_import_label`] / [`format_app_menu_import_action`]
+/// through [`format_app_menu_quit_label`] / [`format_app_menu_quit_action`])
+/// already spell individually. The widget binding consumes this
+/// array via `gio::Menu::append(Some(label), Some(action))` so
+/// the menu construction stays a single `for`-loop over a
+/// pinned source of truth instead of six hand-spelled
+/// `menu.append(...)` calls that could silently drift in order
+/// or coverage.
+///
+/// Pure — returns a small fixed-size array of `'static` string
+/// pairs without allocating.
+#[must_use]
+pub fn format_app_primary_menu_entries() -> [(&'static str, &'static str); 6] {
+    [
+        (
+            format_app_menu_import_label(),
+            format_app_menu_import_action(),
+        ),
+        (
+            format_app_menu_export_label(),
+            format_app_menu_export_action(),
+        ),
+        (
+            format_app_menu_passphrase_label(),
+            format_app_menu_passphrase_action(),
+        ),
+        (
+            format_app_menu_preferences_label(),
+            format_app_menu_preferences_action(),
+        ),
+        (
+            format_app_menu_about_label(),
+            format_app_menu_about_action(),
+        ),
+        (format_app_menu_quit_label(), format_app_menu_quit_action()),
+    ]
+}
+
 /// Bare `GLib` action-group name the primary `gio::Menu` resolves
 /// every entry target against.
 ///

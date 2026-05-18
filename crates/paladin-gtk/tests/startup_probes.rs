@@ -1707,6 +1707,88 @@ fn format_app_add_button_action_name_round_trips_with_group_and_target() {
 }
 
 #[test]
+fn format_app_primary_menu_entries_returns_six_entries_in_pinned_order() {
+    // The `AppModel`'s primary `gio::Menu` is built by appending
+    // each entry's (label, detailed-action-name) pair in the
+    // §"libadwaita usage" sequence: Import, Export, Passphrase,
+    // Preferences, About Paladin, Quit. This helper returns the
+    // six pairs in order so the widget binding does not need to
+    // hand-spell each `menu.append(...)` call against the
+    // individual `format_app_menu_*_label` / `_action` helpers,
+    // keeping the menu structure pinned to a single source of
+    // truth.
+    use paladin_gtk::app::model::{
+        format_app_menu_about_action, format_app_menu_about_label, format_app_menu_export_action,
+        format_app_menu_export_label, format_app_menu_import_action, format_app_menu_import_label,
+        format_app_menu_passphrase_action, format_app_menu_passphrase_label,
+        format_app_menu_preferences_action, format_app_menu_preferences_label,
+        format_app_menu_quit_action, format_app_menu_quit_label, format_app_primary_menu_entries,
+    };
+
+    let entries = format_app_primary_menu_entries();
+    assert_eq!(
+        entries.len(),
+        6,
+        "primary menu must carry exactly six entries; got {}",
+        entries.len(),
+    );
+
+    let expected: [(&'static str, &'static str); 6] = [
+        (
+            format_app_menu_import_label(),
+            format_app_menu_import_action(),
+        ),
+        (
+            format_app_menu_export_label(),
+            format_app_menu_export_action(),
+        ),
+        (
+            format_app_menu_passphrase_label(),
+            format_app_menu_passphrase_action(),
+        ),
+        (
+            format_app_menu_preferences_label(),
+            format_app_menu_preferences_action(),
+        ),
+        (
+            format_app_menu_about_label(),
+            format_app_menu_about_action(),
+        ),
+        (format_app_menu_quit_label(), format_app_menu_quit_action()),
+    ];
+    assert_eq!(
+        entries, expected,
+        "primary menu entries must follow the pinned §\"libadwaita usage\" sequence (Import, Export, Passphrase, Preferences, About, Quit) and pair each label with its fully-qualified action target",
+    );
+}
+
+#[test]
+fn format_app_primary_menu_entries_uses_app_group_prefix_throughout() {
+    // Defense-in-depth: every action target returned by
+    // `format_app_primary_menu_entries` must start with the shared
+    // `app.` group prefix. Catches a future bundling change that
+    // accidentally swapped a `_label` and an `_action` argument so
+    // the wrong slot of the pair carries the action target.
+    use paladin_gtk::app::model::{format_app_action_group_name, format_app_primary_menu_entries};
+
+    let group_prefix = format!("{}.", format_app_action_group_name());
+    for (label, action) in format_app_primary_menu_entries() {
+        assert!(
+            action.starts_with(&group_prefix),
+            "primary menu action target {action:?} for entry {label:?} must start with the shared group prefix {group_prefix:?}",
+        );
+        assert!(
+            !label.is_empty(),
+            "primary menu entry label must be non-empty; got {label:?} paired with {action:?}",
+        );
+        assert!(
+            !label.starts_with(&group_prefix),
+            "primary menu entry label {label:?} must not look like an action target — check that the (label, action) tuple slots are not swapped",
+        );
+    }
+}
+
+#[test]
 fn format_app_action_group_name_is_prefix_of_every_primary_menu_action() {
     // Cross-check: every `format_app_menu_*_action` target must
     // begin with `format_app_action_group_name() + "."`. This
