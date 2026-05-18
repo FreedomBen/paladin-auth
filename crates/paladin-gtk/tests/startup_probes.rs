@@ -2117,6 +2117,52 @@ fn format_app_about_dialog_program_name_is_non_empty_and_not_app_id() {
 }
 
 #[test]
+fn format_app_about_dialog_version_matches_cargo_pkg_version() {
+    // Per §"libadwaita usage": the application menu's "About
+    // Paladin" entry's `AdwAboutDialog` pulls program metadata
+    // from Cargo package metadata embedded at compile time. This
+    // helper returns the version string the dialog displays,
+    // sourced from `env!("CARGO_PKG_VERSION")` so the dialog
+    // header version line and the release-tag version stay in
+    // lockstep without manual updates.
+    //
+    // Pure — returns a `'static str` resolved at compile time.
+    // Companion of `format_app_about_dialog_program_name` on
+    // the AdwAboutDialog metadata side.
+    use paladin_gtk::app::model::format_app_about_dialog_version;
+
+    assert_eq!(
+        format_app_about_dialog_version(),
+        env!("CARGO_PKG_VERSION"),
+        "AdwAboutDialog version must source from Cargo metadata via env!(\"CARGO_PKG_VERSION\")",
+    );
+}
+
+#[test]
+fn format_app_about_dialog_version_is_non_empty_and_looks_like_semver() {
+    // Defense-in-depth: the version must be non-empty (so
+    // `AdwAboutDialog` renders a version line) and must contain
+    // at least one `.` separator so it looks like a semver string
+    // rather than something accidentally swapped from a different
+    // metadata field.
+    use paladin_gtk::app::model::format_app_about_dialog_version;
+
+    let version = format_app_about_dialog_version();
+    assert!(
+        !version.is_empty(),
+        "AdwAboutDialog version must be non-empty; got {version:?}",
+    );
+    assert!(
+        version.contains('.'),
+        "AdwAboutDialog version must look like a semver string with at least one `.` separator; got {version:?}",
+    );
+    assert!(
+        !version.contains(' '),
+        "AdwAboutDialog version must not contain whitespace; got {version:?}",
+    );
+}
+
+#[test]
 fn format_app_action_group_name_is_prefix_of_every_primary_menu_action() {
     // Cross-check: every `format_app_menu_*_action` target must
     // begin with `format_app_action_group_name() + "."`. This

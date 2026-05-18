@@ -2118,6 +2118,26 @@ pub fn format_app_about_dialog_program_name() -> &'static str {
     "Paladin"
 }
 
+/// Version string the application menu's "About Paladin"
+/// entry's `AdwAboutDialog` displays.
+///
+/// Sources from `env!("CARGO_PKG_VERSION")` so the dialog
+/// header version line and the release-tag version stay in
+/// lockstep without manual updates — the `crates/paladin-gtk`
+/// package inherits its `version` from the workspace
+/// `[workspace.package]` table, so a workspace-wide version
+/// bump propagates here for free.
+///
+/// Pure — returns a `'static str` resolved at compile time.
+/// Companion of [`format_app_about_dialog_program_name`] on
+/// the `AdwAboutDialog` metadata side; together they pin the
+/// program-name and version slots against a single source of
+/// truth.
+#[must_use]
+pub fn format_app_about_dialog_version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
+}
+
 /// Bare `GLib` action-group name the primary `gio::Menu` resolves
 /// every entry target against.
 ///
