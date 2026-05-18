@@ -1474,6 +1474,52 @@ fn format_unlock_dialog_description_renders_relative_path_verbatim() {
 }
 
 #[test]
+fn format_unlock_dialog_icon_name_returns_dialog_password_symbolic() {
+    // The Unlock vault dialog's `adw::StatusPage::set_icon_name`
+    // attribute is populated from this helper. The icon
+    // (`"dialog-password-symbolic"`) is the freedesktop-standard
+    // glyph for "passphrase / unlock" — resolving through the
+    // system icon theme so the wordless icon matches every other
+    // GNOME app's unlock surface. Pinning the icon name through a
+    // helper keeps the string in one place shared by the widget
+    // binding and the pure-logic tests, and matches the projection
+    // pattern already in place for the dialog's title, passphrase
+    // row title, description body, and footer button label.
+    //
+    // No TUI parity: the TUI is text-only and has no icon to
+    // mirror. Sibling of `format_unlock_dialog_title`,
+    // `format_unlock_dialog_passphrase_title`,
+    // `format_unlock_dialog_description`, and
+    // `format_unlock_button_label` on the unlock-dialog-chrome
+    // side; together they pin every visible region of the unlock
+    // surface against a single source of truth.
+    use paladin_gtk::unlock_dialog::format_unlock_dialog_icon_name;
+
+    assert_eq!(
+        format_unlock_dialog_icon_name(),
+        "dialog-password-symbolic",
+        "AdwStatusPage icon uses the freedesktop-standard passphrase glyph",
+    );
+}
+
+#[test]
+fn format_unlock_dialog_icon_name_ends_with_symbolic_suffix() {
+    // The libadwaita HIG requires `AdwStatusPage` icons to be
+    // symbolic so they recolor with the theme; the icon-name
+    // contract is to end with `-symbolic`. Pinning a suffix
+    // assertion alongside the full-string assertion guards against
+    // an accidental rename to a non-symbolic glyph that would
+    // render the wrong color against a dark theme.
+    use paladin_gtk::unlock_dialog::format_unlock_dialog_icon_name;
+
+    let icon = format_unlock_dialog_icon_name();
+    assert!(
+        icon.ends_with("-symbolic"),
+        "AdwStatusPage icon name must end with `-symbolic` for HIG-conformant theming; got {icon:?}",
+    );
+}
+
+#[test]
 fn format_unlock_dialog_description_starts_with_enter_the_passphrase() {
     // The prefix `"Enter the passphrase for "` is the stable
     // wording the dialog leads with — pinning a prefix assertion

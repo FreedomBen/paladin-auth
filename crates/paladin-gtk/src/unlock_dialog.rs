@@ -209,6 +209,32 @@ pub fn format_unlock_dialog_passphrase_title() -> &'static str {
     "Passphrase"
 }
 
+/// Freedesktop icon name the widget hands to the Unlock vault
+/// dialog's `adw::StatusPage::set_icon_name` attribute.
+///
+/// Returns the static icon name `"dialog-password-symbolic"` —
+/// the freedesktop-standard glyph for "passphrase / unlock" that
+/// resolves through the system icon theme so the wordless icon
+/// matches every other GNOME app's unlock surface. The
+/// `-symbolic` suffix is required by the libadwaita HIG for
+/// `AdwStatusPage` icons so the glyph recolors with the theme.
+/// No TUI parity: the TUI is text-only and has no icon to mirror.
+/// Pinning the icon name through a helper keeps the string in
+/// one place shared by the widget binding and the pure-logic
+/// tests.
+///
+/// Pure — returns a `'static str` without allocating. Sibling of
+/// [`format_unlock_dialog_title`],
+/// [`format_unlock_dialog_passphrase_title`],
+/// [`format_unlock_dialog_description`], and
+/// [`format_unlock_button_label`] on the unlock-dialog-chrome
+/// side; together they pin every visible region of the unlock
+/// surface against a single source of truth.
+#[must_use]
+pub fn format_unlock_dialog_icon_name() -> &'static str {
+    "dialog-password-symbolic"
+}
+
 /// Body the widget hands to the Unlock vault dialog's
 /// `adw::StatusPage::set_description` attribute.
 ///
@@ -747,11 +773,7 @@ impl SimpleComponent for UnlockDialogComponent {
             set_vexpand: true,
 
             adw::StatusPage {
-                // `dialog-password-symbolic` is the freedesktop-standard
-                // glyph for "passphrase / unlock"; it resolves through
-                // the system icon theme so the wordless icon matches
-                // every other GNOME app's unlock surface.
-                set_icon_name: Some("dialog-password-symbolic"),
+                set_icon_name: Some(format_unlock_dialog_icon_name()),
                 set_title: format_unlock_dialog_title(),
                 set_description: Some(&format_unlock_dialog_description(&model.vault_path)),
                 set_hexpand: true,
