@@ -1686,6 +1686,36 @@ pub fn compose_inline_error_body(state: &AddDialogState) -> Option<&str> {
     state.inline_error().map(|err| err.rendered.as_str())
 }
 
+/// State-driven projection of whether the pre-effect inline-error
+/// row the widget renders against the failing sub-path is revealed.
+///
+/// Returns `true` when [`AddDialogState::inline_error`] is populated
+/// (typed §5 validation rejection from the most recent Save click,
+/// staged through [`AddAccountMsg::RenderInlineError`]) and `false`
+/// for the fresh-dialog state and after any successor message clears
+/// the slot ([`AddAccountMsg::SubmitProceed`],
+/// [`AddAccountMsg::ConfirmAddAnyway`],
+/// [`AddAccountMsg::StagePendingDuplicate`], the per-field
+/// [`AddAccountMsg::Manual*Changed`] / [`AddAccountMsg::UriTextChanged`]
+/// edits, and the sub-path [`AddAccountMsg::SwitchPath`] transition —
+/// matching the drain points pinned by `compose_inline_error_body`).
+///
+/// Sibling of [`compose_inline_error_body`] (the body text) so the
+/// widget can `#[watch]` both the revealed bool and the body string
+/// against the same slot in lockstep — the row flips visible
+/// alongside the rendered body and animates back out the moment the
+/// drain message lands. Mirrors the post-effect side's
+/// [`compose_post_effect_warning_revealed`] /
+/// [`compose_post_effect_warning_body`] pairing, except this slot is
+/// keyed off [`AddDialogState::inline_error`] rather than
+/// [`AddDialogState::worker_outcome`].
+///
+/// Pure — borrows the state and returns a `bool` without allocating.
+#[must_use]
+pub fn compose_inline_error_revealed(state: &AddDialogState) -> bool {
+    state.inline_error().is_some()
+}
+
 /// State-driven projection of the active sub-path the widget binds
 /// to drive its `AdwViewSwitcher` between the manual, URI, and
 /// (forthcoming) QR sub-stack pages.

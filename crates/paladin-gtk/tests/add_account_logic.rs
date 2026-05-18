@@ -4993,6 +4993,93 @@ fn compose_inline_error_body_drains_after_submit_proceed() {
 }
 
 #[test]
+fn compose_inline_error_revealed_with_no_inline_error_is_false() {
+    // A freshly-opened dialog has not yet seen a rejected Save
+    // click, so the pre-effect inline-error revealed projection
+    // must be `false` — the widget binds a `#[watch]` over the
+    // projection to drive the inline-error row's
+    // `AdwBanner::set_revealed:` (or equivalent reveal) so the row
+    // stays hidden until a `RenderInlineError` parks a typed §5
+    // rejection. Sibling of
+    // `compose_inline_error_body_with_no_inline_error_returns_none`
+    // on the revealed-bool side and of
+    // `compose_post_effect_warning_revealed_with_no_outcome_is_false`
+    // on the post-effect-revealed side.
+    use paladin_gtk::add_account::{compose_inline_error_revealed, AddDialogState};
+
+    let state = AddDialogState::new();
+
+    assert!(
+        !compose_inline_error_revealed(&state),
+        "fresh dialog has no inline_error → inline-error row is not revealed",
+    );
+}
+
+#[test]
+fn compose_inline_error_revealed_with_inline_error_is_true() {
+    // The widget dispatches `RenderInlineError` on every Save click
+    // that produced `SaveClickOutcome::InlineError`. The revealed
+    // projection must flip to `true` in lockstep with
+    // `compose_inline_error_body` returning `Some(_)`, so the two
+    // `#[watch]`-driven properties (revealed bool + body text) flip
+    // together on the same `RenderInlineError` dispatch. Mirror of
+    // `compose_post_effect_warning_revealed_with_keep_with_warning_is_true`
+    // on the post-effect side.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_inline_error_revealed, AddAccountMsg, AddDialogState,
+    };
+
+    let err = InlineError::from_error(&validation_error("label", "empty"));
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(&mut state, AddAccountMsg::RenderInlineError(err));
+
+    assert!(
+        compose_inline_error_revealed(&state),
+        "RenderInlineError → composer reveals the inline-error row",
+    );
+}
+
+#[test]
+fn compose_inline_error_revealed_drains_after_submit_proceed() {
+    // `SubmitProceed` clears the pre-effect `inline_error` slot so
+    // the dialog cannot keep the inline-error row revealed
+    // alongside a successful retry. The revealed projection must
+    // collapse back to `false` once the retry boundary is crossed
+    // — the widget binds a `#[watch]` over the projection so the
+    // inline-error row animates back out the moment the user's
+    // next valid Save click goes through. Sibling lockstep with
+    // `compose_inline_error_body_drains_after_submit_proceed`,
+    // which also collapses on the same `SubmitProceed` dispatch.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_inline_error_revealed, AddAccountMsg, AddDialogState,
+    };
+
+    let err = InlineError::from_error(&validation_error("label", "empty"));
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(&mut state, AddAccountMsg::RenderInlineError(err));
+    assert!(
+        compose_inline_error_revealed(&state),
+        "precondition: RenderInlineError reveals the inline-error row",
+    );
+
+    let validated = match classify_manual_submit(manual_totp_defaults(), now_for_tests()) {
+        ManualSubmitOutcome::Proceed(v) => v,
+        ManualSubmitOutcome::InlineError(e) => panic!("fixture failed: {e:?}"),
+    };
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::SubmitProceed {
+            account: validated.account,
+        },
+    );
+
+    assert!(
+        !compose_inline_error_revealed(&state),
+        "SubmitProceed drains the revealed projection alongside the inline_error slot",
+    );
+}
+
+#[test]
 fn compose_active_path_fresh_dialog_returns_manual() {
     // The `AdwViewSwitcher` between the manual / URI sub-paths binds
     // a `#[watch]` over the active-path projection to drive which
