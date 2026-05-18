@@ -2462,6 +2462,30 @@ pub fn format_manual_icon_hint_title() -> &'static str {
     "Icon hint"
 }
 
+/// Fixed `title` attribute the widget hands to the manual sub-path's
+/// kind `AdwComboRow::set_title`.
+///
+/// Returns the static title string `AdwComboRow` renders as the
+/// floating label above the dropdown. The wording (`"Kind"`) mirrors
+/// the TUI add view's `"Kind:"` row (see
+/// `crates/paladin-tui/src/view/add.rs`) — the TUI's trailing colon
+/// is its field-name separator and drops out because `AdwComboRow`
+/// renders its title as a floating label rather than as a prefix.
+/// The TOTP / HOTP dropdown items themselves come from
+/// [`format_manual_kind_labels`]; this helper covers only the row's
+/// static title wording so the model and the title stay aligned
+/// against a single source of truth.
+///
+/// Pure — returns a `'static str` without allocating. Sibling of
+/// [`format_manual_kind_labels`] and [`format_manual_kind_selected`]
+/// on the kind-row-title side; together they cover the row's title,
+/// dropdown items, and selected index against a single source of
+/// truth in one module.
+#[must_use]
+pub fn format_manual_kind_title() -> &'static str {
+    "Kind"
+}
+
 /// Apply an inbound [`AddAccountMsg`] and return the optional
 /// [`AddAccountOutput`] the widget layer should forward to
 /// `AppModel`.

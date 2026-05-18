@@ -7920,3 +7920,24 @@ fn format_manual_icon_hint_title_matches_tui_wording() {
         "icon-hint row title mirrors the TUI add view's \"Icon hint:\" wording",
     );
 }
+
+#[test]
+fn format_manual_kind_title_matches_tui_wording() {
+    // The kind `AdwComboRow`'s `title` attribute is populated from
+    // this helper, so the wording must match what the TUI's add view
+    // shows (the `"Kind:"` row in `crates/paladin-tui/src/view/add.rs`
+    // — the colon is the TUI's field-name separator and drops out
+    // because AdwComboRow renders its title as a floating label
+    // above the dropdown rather than as a prefix). The TOTP / HOTP
+    // dropdown items themselves come from
+    // `format_manual_kind_labels`; this helper covers only the row's
+    // static title wording so the model and the title stay aligned
+    // against a single source of truth.
+    use paladin_gtk::add_account::format_manual_kind_title;
+
+    assert_eq!(
+        format_manual_kind_title(),
+        "Kind",
+        "kind row title mirrors the TUI add view's \"Kind:\" wording",
+    );
+}
