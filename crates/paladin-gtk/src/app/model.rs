@@ -1687,3 +1687,25 @@ pub fn format_app_menu_import_action() -> &'static str {
 pub fn format_app_menu_export_action() -> &'static str {
     "app.export"
 }
+
+/// Fully-qualified `detailed_action_name` the widget hands to the
+/// primary `gio::Menu`'s "Passphrase…" entry.
+///
+/// Returns the static action target `"app.passphrase"` — the
+/// fully-qualified target the `gio::Menu` resolves against the
+/// `gio::ApplicationWindow`'s `app` action group. The matching
+/// `gio::SimpleAction` (`"passphrase"`) is registered on the
+/// application's action group. The `"app."` prefix names the
+/// group; `"passphrase"` names the action. The single
+/// `passphrase` action dispatches the set / change / remove
+/// sub-flow gating internally per `Vault::is_encrypted()` rather
+/// than carrying three distinct menu entries.
+///
+/// Pure — returns a `'static str` without allocating. Sibling
+/// of [`format_app_menu_passphrase_label`] on the menu-entry-
+/// contract side; together they pin both halves (visible label +
+/// action target) against a single source of truth.
+#[must_use]
+pub fn format_app_menu_passphrase_action() -> &'static str {
+    "app.passphrase"
+}

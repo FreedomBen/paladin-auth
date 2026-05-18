@@ -925,3 +925,46 @@ fn format_app_menu_export_action_uses_app_group_prefix() {
         "action targets must not contain whitespace; got {action:?}",
     );
 }
+
+#[test]
+fn format_app_menu_passphrase_action_returns_app_passphrase() {
+    // The `AppModel`'s primary `gio::Menu` "Passphrase…" entry's
+    // `detailed_action_name` is populated from this helper. The
+    // wording (`"app.passphrase"`) is the fully-qualified action
+    // target the `gio::Menu` resolves against the application's
+    // `app` action group. The `"app."` prefix names the group;
+    // `"passphrase"` names the action. The single `passphrase`
+    // action dispatches the set / change / remove sub-flow gating
+    // internally per `Vault::is_encrypted()` rather than carrying
+    // three distinct menu entries.
+    //
+    // Pure — returns a `'static str` without allocating. Sibling
+    // of `format_app_menu_passphrase_label` on the menu-entry-
+    // contract side; together they pin both halves (visible
+    // label + action target) against a single source of truth.
+    use paladin_gtk::app::model::format_app_menu_passphrase_action;
+
+    assert_eq!(
+        format_app_menu_passphrase_action(),
+        "app.passphrase",
+        "primary menu Passphrase entry targets the app.passphrase action on the application's action group",
+    );
+}
+
+#[test]
+fn format_app_menu_passphrase_action_uses_app_group_prefix() {
+    // Defense-in-depth against an accidental rename that would
+    // drop the `app.` group prefix or move the action onto a
+    // different group.
+    use paladin_gtk::app::model::format_app_menu_passphrase_action;
+
+    let action = format_app_menu_passphrase_action();
+    assert!(
+        action.starts_with("app."),
+        "primary menu Passphrase action target must start with the `app.` group prefix so `gio::Menu` resolves it against the application action group; got {action:?}",
+    );
+    assert!(
+        !action.contains(' '),
+        "action targets must not contain whitespace; got {action:?}",
+    );
+}
