@@ -4322,3 +4322,109 @@ fn format_duplicate_confirm_body_omits_action_hint() {
         "body must not echo the GTK button label: {body:?}",
     );
 }
+
+#[test]
+fn format_pending_warnings_body_returns_empty_string_when_no_warnings() {
+    // The widget concatenates this helper's output beneath
+    // `format_duplicate_confirm_body(existing)` in the "Add anyway?"
+    // AdwAlertDialog body. With no warnings parked in the pending
+    // `ValidatedAccount`, the helper must return an empty string so
+    // the widget's `if body.is_empty() { … }` guard can skip the
+    // extra body line entirely — the AdwAlertDialog body otherwise
+    // renders a stray trailing newline if a "warning:" prefix lands
+    // against an empty warnings slice.
+    use paladin_gtk::add_account::format_pending_warnings_body;
+
+    let body = format_pending_warnings_body(&[]);
+
+    assert!(
+        body.is_empty(),
+        "empty warnings slice must collapse to an empty body so the widget can skip the line: {body:?}",
+    );
+}
+
+#[test]
+fn format_pending_warnings_body_renders_single_short_secret_warning() {
+    // The widget binds the AdwAlertDialog body's secondary line to
+    // this helper, fed by `AddDialogState::secret_state().pending`'s
+    // `warnings` slice. Each `ValidationWarning` routes through
+    // `paladin_core::format_validation_warning` so the wording stays
+    // in sync with the CLI / TUI verbatim, then receives a
+    // `"warning: "` prefix so the dialog body labels the line as a
+    // warning rather than another statement of fact alongside the
+    // duplicate body. Mirror of the TUI's
+    // `format!("Added {display}. warning: {rendered}")` pattern in
+    // `paladin-tui/src/app/reducer.rs` — the "warning: " prefix
+    // tracks the same wording.
+    use paladin_core::{format_validation_warning, ValidationWarning};
+    use paladin_gtk::add_account::format_pending_warnings_body;
+
+    let warnings = vec![ValidationWarning::ShortSecret {
+        decoded_len: 10,
+        recommended_min: 16,
+    }];
+
+    let body = format_pending_warnings_body(&warnings);
+
+    let expected = format!("warning: {}", format_validation_warning(&warnings[0]));
+    assert_eq!(body, expected);
+}
+
+#[test]
+fn format_pending_warnings_body_renders_one_line_per_warning() {
+    // Multiple warnings land one-per-line so the AdwAlertDialog body
+    // stays readable in the multi-line modal context (in contrast
+    // with the TUI status-line `; ` join, which is forced single-
+    // line by the status-bar widget). Each line carries its own
+    // `"warning: "` prefix so a future scan / screenshot of the
+    // body cannot misread a continuation line as a fact statement.
+    use paladin_core::{format_validation_warning, ValidationWarning};
+    use paladin_gtk::add_account::format_pending_warnings_body;
+
+    let warnings = vec![
+        ValidationWarning::ShortSecret {
+            decoded_len: 10,
+            recommended_min: 16,
+        },
+        ValidationWarning::ShortSecret {
+            decoded_len: 8,
+            recommended_min: 16,
+        },
+    ];
+
+    let body = format_pending_warnings_body(&warnings);
+
+    let expected = format!(
+        "warning: {}\nwarning: {}",
+        format_validation_warning(&warnings[0]),
+        format_validation_warning(&warnings[1]),
+    );
+    assert_eq!(body, expected);
+}
+
+#[test]
+fn format_pending_warnings_body_threads_through_format_validation_warning() {
+    // The helper must not re-render the warning body — it routes
+    // through `paladin_core::format_validation_warning` so the
+    // wording, decoded-length, and recommended-minimum copy stay in
+    // sync with the CLI / TUI verbatim. Asserting that the rendered
+    // text contains the exact `format_validation_warning` output
+    // (rather than a hand-rolled substring) pins the helper to the
+    // shared text projection rather than a local re-implementation.
+    use paladin_core::{format_validation_warning, ValidationWarning};
+    use paladin_gtk::add_account::format_pending_warnings_body;
+
+    let warning = ValidationWarning::ShortSecret {
+        decoded_len: 7,
+        recommended_min: 16,
+    };
+    let rendered_shared = format_validation_warning(&warning);
+
+    let body = format_pending_warnings_body(std::slice::from_ref(&warning));
+
+    assert!(
+        body.contains(&rendered_shared),
+        "body must route through paladin_core::format_validation_warning verbatim: \
+         body={body:?} shared_text={rendered_shared:?}",
+    );
+}

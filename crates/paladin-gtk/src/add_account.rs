@@ -91,9 +91,9 @@ use relm4::prelude::*;
 use secrecy::SecretString;
 
 use paladin_core::{
-    parse_icon_hint_token, validate_manual, Account, AccountId, AccountInput, AccountKindInput,
-    AccountSummary, Algorithm, ErrorKind, PaladinError, Store, ValidatedAccount, ValidationWarning,
-    Vault,
+    format_validation_warning, parse_icon_hint_token, validate_manual, Account, AccountId,
+    AccountInput, AccountKindInput, AccountSummary, Algorithm, ErrorKind, PaladinError, Store,
+    ValidatedAccount, ValidationWarning, Vault,
 };
 
 use crate::account_row::display_label;
@@ -1270,6 +1270,35 @@ pub fn format_duplicate_confirm_body(existing: &AccountSummary) -> String {
         "account already exists with the same (secret, issuer, label): {}",
         display_label(existing),
     )
+}
+
+/// Render the non-fatal [`ValidationWarning`]s carried by the pending
+/// [`ValidatedAccount`] for display beneath
+/// [`format_duplicate_confirm_body`] in the "Add anyway?"
+/// `AdwAlertDialog` body.
+///
+/// Each warning routes through [`paladin_core::format_validation_warning`]
+/// so the wording stays in sync with the CLI / TUI verbatim, then
+/// receives a `"warning: "` prefix so the line is unambiguously a
+/// warning rather than a continuation of the duplicate-collision
+/// statement above it. Multiple warnings join with `\n` (one per line)
+/// because the `AdwAlertDialog` body has no single-line constraint —
+/// in contrast with the TUI's `; ` join in
+/// `paladin-tui/src/app/reducer.rs`, which is forced single-line by
+/// the status-bar widget.
+///
+/// An empty `warnings` slice returns the empty string so the widget
+/// can skip the secondary body line entirely without an `if !warnings.is_empty()`
+/// guard around the helper itself; the widget's downstream
+/// `if !body.is_empty()` check keeps the modal body free of a stray
+/// trailing newline when no warnings are pending.
+#[must_use]
+pub fn format_pending_warnings_body(warnings: &[ValidationWarning]) -> String {
+    warnings
+        .iter()
+        .map(|w| format!("warning: {}", format_validation_warning(w)))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Apply an inbound [`AddAccountMsg`] and return the optional
