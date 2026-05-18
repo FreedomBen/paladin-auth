@@ -4910,3 +4910,84 @@ fn compose_post_effect_inline_error_body_with_inline_returns_rendered() {
         "Inline → composer renders the carried inline-error body verbatim",
     );
 }
+
+#[test]
+fn compose_inline_error_body_with_no_inline_error_returns_none() {
+    // A freshly-opened dialog has not yet seen a rejected Save
+    // click, so the pre-effect inline-error projection must
+    // collapse to `None` — the widget binds a `#[watch]` over the
+    // projection so the inline-error row stays hidden until a
+    // `RenderInlineError` parks a typed §5 rejection. Mirror of
+    // `compose_post_effect_inline_error_body_with_no_outcome_returns_none`
+    // on the pre-effect side.
+    use paladin_gtk::add_account::{compose_inline_error_body, AddDialogState};
+
+    let state = AddDialogState::new();
+
+    assert!(
+        compose_inline_error_body(&state).is_none(),
+        "fresh dialog has no inline_error → no pre-effect inline error",
+    );
+}
+
+#[test]
+fn compose_inline_error_body_with_inline_error_returns_rendered() {
+    // The widget dispatches `RenderInlineError` on every Save click
+    // that produced `SaveClickOutcome::InlineError`. The composer
+    // must thread the carried `InlineError::rendered` string verbatim
+    // so the body wording stays in sync with the CLI / TUI `Display`
+    // impl on the underlying `PaladinError`. Symmetric partner of
+    // `compose_post_effect_inline_error_body_with_inline_returns_rendered`
+    // on the pre-effect side.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_inline_error_body, AddAccountMsg, AddDialogState,
+    };
+
+    let err = InlineError::from_error(&validation_error("label", "empty"));
+    let expected = err.rendered.clone();
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(&mut state, AddAccountMsg::RenderInlineError(err));
+
+    assert_eq!(
+        compose_inline_error_body(&state),
+        Some(expected.as_str()),
+        "RenderInlineError → composer exposes the carried rendered body verbatim",
+    );
+}
+
+#[test]
+fn compose_inline_error_body_drains_after_submit_proceed() {
+    // SubmitProceed clears the pre-effect inline_error so the
+    // dialog cannot render stale text alongside a successful
+    // retry. The composer must collapse back to `None` once the
+    // retry boundary is crossed — the widget binds a `#[watch]`
+    // over the projection so the inline-error row disappears the
+    // moment the user's next valid Save click goes through.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_inline_error_body, AddAccountMsg, AddDialogState,
+    };
+
+    let err = InlineError::from_error(&validation_error("label", "empty"));
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(&mut state, AddAccountMsg::RenderInlineError(err));
+    assert!(
+        compose_inline_error_body(&state).is_some(),
+        "precondition: RenderInlineError populated the projection",
+    );
+
+    let validated = match classify_manual_submit(manual_totp_defaults(), now_for_tests()) {
+        ManualSubmitOutcome::Proceed(v) => v,
+        ManualSubmitOutcome::InlineError(e) => panic!("fixture failed: {e:?}"),
+    };
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::SubmitProceed {
+            account: validated.account,
+        },
+    );
+
+    assert!(
+        compose_inline_error_body(&state).is_none(),
+        "SubmitProceed drains the inline-error projection alongside the worker_outcome slot",
+    );
+}

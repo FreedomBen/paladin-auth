@@ -1427,6 +1427,39 @@ pub fn compose_post_effect_inline_error_body(state: &AddDialogState) -> Option<&
     }
 }
 
+/// State-driven projection of the pre-effect inline-error body the
+/// widget renders against the failing sub-path's row after a Save
+/// click that produced [`SaveClickOutcome::InlineError`], or `None`
+/// when no rejection is parked.
+///
+/// Returns `Some(inline.rendered.as_str())` while
+/// [`AddDialogState::inline_error`] is populated (typed §5
+/// validation rejection from the most recent Save click), and
+/// `None` for the fresh-dialog state and after any successor
+/// message clears it (per-field [`AddAccountMsg::Manual*Changed`] /
+/// [`AddAccountMsg::UriTextChanged`] / sub-path
+/// [`AddAccountMsg::SwitchPath`] / [`AddAccountMsg::SubmitProceed`]
+/// / [`AddAccountMsg::ConfirmAddAnyway`] /
+/// [`AddAccountMsg::StagePendingDuplicate`] all drain in lockstep
+/// so the inline error disappears the moment the user retypes the
+/// failing field or moves past the rejection).
+///
+/// Sibling of [`compose_post_effect_inline_error_body`] on the
+/// pre-effect side: that projection drives the same widget region
+/// from [`AddDialogState::worker_outcome`]'s
+/// [`AddPostEffectOutcome::Inline`] variant after the
+/// `Vault::mutate_and_save` worker reports a failure. The two are
+/// rendered at the same dialog region but read from independent
+/// slots — `SubmitProceed` clears both before the worker runs, so
+/// they are never both populated against the same Save click.
+/// Pure — borrows the state and returns a borrowed `&str` without
+/// allocating; the rendered body lives on the parked
+/// [`InlineError`] and stays alive as long as the state does.
+#[must_use]
+pub fn compose_inline_error_body(state: &AddDialogState) -> Option<&str> {
+    state.inline_error().map(|err| err.rendered.as_str())
+}
+
 /// Apply an inbound [`AddAccountMsg`] and return the optional
 /// [`AddAccountOutput`] the widget layer should forward to
 /// `AppModel`.
