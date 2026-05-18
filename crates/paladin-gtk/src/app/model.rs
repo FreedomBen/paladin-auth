@@ -2160,6 +2160,28 @@ pub fn format_app_about_dialog_application_icon_name() -> &'static str {
     crate::APP_ID
 }
 
+/// Attribution string the application menu's "About Paladin"
+/// entry's `AdwAboutDialog` shows in its developer-name slot.
+///
+/// Returns the canonical collective attribution
+/// `"The Paladin contributors"`. The workspace `Cargo.toml`
+/// deliberately omits the `authors` field — Paladin is an
+/// AGPL-3.0-or-later project with an open contributor pool, so
+/// `env!("CARGO_PKG_AUTHORS")` would resolve to an empty string
+/// and leave the about-dialog attribution row blank. Pinning
+/// the literal here keeps the dialog header attribution row
+/// stable across releases and across native vs. Flatpak builds.
+///
+/// Pure — returns a `'static str` without allocating. Distinct
+/// from [`format_app_about_dialog_program_name`] (the bare
+/// `"Paladin"` display string) and from
+/// [`format_app_about_dialog_application_icon_name`] (the
+/// reverse-DNS `org.tamx.Paladin.Gui` icon-theme key).
+#[must_use]
+pub fn format_app_about_dialog_developer_name() -> &'static str {
+    "The Paladin contributors"
+}
+
 /// Bare `GLib` action-group name the primary `gio::Menu` resolves
 /// every entry target against.
 ///

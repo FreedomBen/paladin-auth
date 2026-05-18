@@ -2218,6 +2218,65 @@ fn format_app_about_dialog_application_icon_name_is_reverse_dns() {
 }
 
 #[test]
+fn format_app_about_dialog_developer_name_returns_the_paladin_contributors() {
+    // Per §"libadwaita usage" and §"About / help": the
+    // `AdwAboutDialog` developer-name slot attributes the
+    // application. The workspace `Cargo.toml` deliberately omits
+    // the `authors` field (AGPL-3.0-or-later project with an open
+    // contributor pool), so the helper returns the canonical
+    // collective attribution string rather than sourcing from
+    // `env!("CARGO_PKG_AUTHORS")` (which would resolve to an
+    // empty string). Pinning the literal here keeps the dialog
+    // header attribution row stable across releases and across
+    // native vs. Flatpak builds.
+    use paladin_gtk::app::model::format_app_about_dialog_developer_name;
+
+    assert_eq!(
+        format_app_about_dialog_developer_name(),
+        "The Paladin contributors",
+        "AdwAboutDialog developer-name must be the canonical collective attribution string so the dialog header attribution row stays stable across releases",
+    );
+}
+
+#[test]
+fn format_app_about_dialog_developer_name_is_non_empty_and_distinct_from_program_name() {
+    // Defense-in-depth: the developer name is the attribution
+    // string, not the program name. Catches an accidental swap
+    // with `format_app_about_dialog_program_name` (which returns
+    // the bare `Paladin` display string) or with
+    // `format_app_about_dialog_application_icon_name` (which
+    // returns the reverse-DNS `org.tamx.Paladin.Gui` icon key).
+    use paladin_gtk::app::model::{
+        format_app_about_dialog_application_icon_name, format_app_about_dialog_developer_name,
+        format_app_about_dialog_program_name,
+    };
+
+    let developer = format_app_about_dialog_developer_name();
+    assert!(
+        !developer.is_empty(),
+        "AdwAboutDialog developer-name must be non-empty; got {developer:?}",
+    );
+    assert!(
+        !developer.starts_with(char::is_whitespace),
+        "AdwAboutDialog developer-name must not start with whitespace; got {developer:?}",
+    );
+    assert!(
+        !developer.ends_with(char::is_whitespace),
+        "AdwAboutDialog developer-name must not end with whitespace; got {developer:?}",
+    );
+    assert_ne!(
+        developer,
+        format_app_about_dialog_program_name(),
+        "AdwAboutDialog developer-name must be distinct from the program-name display string",
+    );
+    assert_ne!(
+        developer,
+        format_app_about_dialog_application_icon_name(),
+        "AdwAboutDialog developer-name must be the attribution string, not the reverse-DNS application-icon key",
+    );
+}
+
+#[test]
 fn format_app_action_group_name_is_prefix_of_every_primary_menu_action() {
     // Cross-check: every `format_app_menu_*_action` target must
     // begin with `format_app_action_group_name() + "."`. This
