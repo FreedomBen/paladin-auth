@@ -2299,6 +2299,28 @@ pub fn format_app_about_dialog_support_url() -> &'static str {
     concat!(env!("CARGO_PKG_REPOSITORY"), "/discussions")
 }
 
+/// Short description the application menu's "About Paladin"
+/// entry's `AdwAboutDialog` renders directly under the
+/// program-name header in its comments slot.
+///
+/// Sources from `env!("CARGO_PKG_DESCRIPTION")` so the dialog
+/// comments row and the workspace
+/// `[workspace.package].description` field stay in lockstep —
+/// `crates/paladin-gtk` inherits its `description` from
+/// `description.workspace = true`, so a workspace-wide
+/// description bump propagates here for free without a manual
+/// duplicate constant in this crate.
+///
+/// Pure — returns a `'static str` resolved at compile time.
+/// Distinct from [`format_app_about_dialog_program_name`] (the
+/// bare `"Paladin"` display string) so the dialog header
+/// renders two separate rows rather than collapsing the
+/// comments slot into the title.
+#[must_use]
+pub fn format_app_about_dialog_comments() -> &'static str {
+    env!("CARGO_PKG_DESCRIPTION")
+}
+
 /// Bare `GLib` action-group name the primary `gio::Menu` resolves
 /// every entry target against.
 ///

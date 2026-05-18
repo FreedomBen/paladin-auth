@@ -2546,6 +2546,66 @@ fn format_app_about_dialog_support_url_is_non_empty_https_url_distinct_from_issu
 }
 
 #[test]
+fn format_app_about_dialog_comments_matches_cargo_pkg_description() {
+    // Per §"libadwaita usage" and §"About / help": the
+    // `AdwAboutDialog` comments slot renders the project's short
+    // description directly under the program-name header. The
+    // workspace `[workspace.package]` table sets
+    // `description = "Paladin: Rust OTP authenticator (TOTP +
+    // HOTP) with CLI, TUI, and GTK front-ends"` and
+    // `crates/paladin-gtk` inherits via `description.workspace =
+    // true`, so a workspace-wide description change propagates
+    // here for free. Pinning the helper to
+    // `env!("CARGO_PKG_DESCRIPTION")` keeps the dialog comments
+    // row and the §"package metadata" description field in
+    // lockstep without a manual duplicate.
+    use paladin_gtk::app::model::format_app_about_dialog_comments;
+
+    assert_eq!(
+        format_app_about_dialog_comments(),
+        env!("CARGO_PKG_DESCRIPTION"),
+        "AdwAboutDialog comments must source from `env!(\"CARGO_PKG_DESCRIPTION\")` so it tracks the workspace description field",
+    );
+}
+
+#[test]
+fn format_app_about_dialog_comments_is_non_empty_single_line_distinct_from_program_name() {
+    // Defense-in-depth: the comments slot must be non-empty (a
+    // blank comments row would degrade the dialog header). It
+    // must also be a single line (AdwAboutDialog renders
+    // comments inline under the program name; embedded newlines
+    // would break the header layout) and distinct from the
+    // program-name display string so the dialog renders two
+    // separate header rows rather than collapsing them.
+    use paladin_gtk::app::model::{
+        format_app_about_dialog_comments, format_app_about_dialog_program_name,
+    };
+
+    let comments = format_app_about_dialog_comments();
+    assert!(
+        !comments.is_empty(),
+        "AdwAboutDialog comments must be non-empty; got {comments:?}",
+    );
+    assert!(
+        !comments.contains('\n'),
+        "AdwAboutDialog comments must be a single line (no embedded newlines); got {comments:?}",
+    );
+    assert!(
+        !comments.starts_with(char::is_whitespace),
+        "AdwAboutDialog comments must not start with whitespace; got {comments:?}",
+    );
+    assert!(
+        !comments.ends_with(char::is_whitespace),
+        "AdwAboutDialog comments must not end with whitespace; got {comments:?}",
+    );
+    assert_ne!(
+        comments,
+        format_app_about_dialog_program_name(),
+        "AdwAboutDialog comments must be distinct from the program-name display string so the dialog header renders two separate rows",
+    );
+}
+
+#[test]
 fn format_app_action_group_name_is_prefix_of_every_primary_menu_action() {
     // Cross-check: every `format_app_menu_*_action` target must
     // begin with `format_app_action_group_name() + "."`. This
