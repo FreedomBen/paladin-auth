@@ -449,7 +449,10 @@ impl SimpleComponent for AppModel {
         #[root]
         adw::ApplicationWindow {
             set_title: Some(format_app_window_title()),
-            set_default_size: (640, 480),
+            set_default_size: (
+                format_app_window_default_size().0,
+                format_app_window_default_size().1,
+            ),
 
             #[wrap(Some)]
             set_content = &adw::ToolbarView {
@@ -1259,6 +1262,33 @@ pub fn startup_state_marker(state: &AppState) -> String {
         None => "(unresolved)".to_string(),
     };
     format!("paladin-gtk: startup_state={variant} path={path_repr}")
+}
+
+/// Initial `(width, height)` tuple the widget hands to the
+/// [`AppModel`]'s `adw::ApplicationWindow::set_default_size`.
+///
+/// Returns the static `(640, 480)` pair — the libadwaita HIG's
+/// narrow-window initial size: wide enough for the
+/// [`crate::account_list::AccountListComponent`]'s
+/// `<issuer>:<label>` lines without forcing an
+/// [`adw::Squeezer`], tall enough to expose the header bar and a
+/// useful run of accounts without dominating a smaller display.
+/// Per the libadwaita HIG, the `ApplicationWindow` then becomes
+/// user-resizable so the initial dimensions are a starting size,
+/// not a clamp. No TUI parity: the TUI inherits the terminal's
+/// dimensions and has no initial-size contract to mirror.
+/// Pinning the dimensions through a helper keeps the values in
+/// one place shared by the widget binding and the pure-logic
+/// tests.
+///
+/// Pure — returns an `(i32, i32)` tuple without allocating.
+/// Sibling of [`format_app_window_title`] on the
+/// `ApplicationWindow`-chrome side; together they pin the
+/// window's title and starting dimensions against a single
+/// source of truth.
+#[must_use]
+pub fn format_app_window_default_size() -> (i32, i32) {
+    (640, 480)
 }
 
 /// Freedesktop icon name the widget hands to the [`AppModel`]'s

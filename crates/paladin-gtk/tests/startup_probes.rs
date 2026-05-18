@@ -175,6 +175,49 @@ fn startup_state_marker_startup_error_renders_path_or_placeholder() {
 }
 
 #[test]
+fn format_app_window_default_size_returns_640_by_480() {
+    // The `AppModel`'s `adw::ApplicationWindow::set_default_size`
+    // tuple is populated from this helper. The (width, height)
+    // pair `(640, 480)` matches the libadwaita HIG's narrow-
+    // window initial size — wide enough for the
+    // `AccountListComponent`'s `<issuer>:<label>` lines without
+    // forcing an `AdwSqueezer`, tall enough to expose the header
+    // bar and a useful run of accounts without dominating a
+    // smaller display. Per the libadwaita HIG, the
+    // `ApplicationWindow` then becomes user-resizable so the
+    // initial dimensions are a starting size, not a clamp.
+    // Pinning the dimensions through a helper keeps the values
+    // in one place shared by the widget binding and the pure-
+    // logic tests in `tests/startup_probes.rs`.
+    //
+    // No TUI parity: the TUI inherits the terminal's dimensions
+    // and has no initial-size contract to mirror.
+    use paladin_gtk::app::model::format_app_window_default_size;
+
+    assert_eq!(
+        format_app_window_default_size(),
+        (640, 480),
+        "ApplicationWindow default size matches the libadwaita HIG narrow-window pair",
+    );
+}
+
+#[test]
+fn format_app_window_default_size_pair_is_positive() {
+    // Defense-in-depth against a zero / negative dimension
+    // accidentally landing here: `adw::ApplicationWindow` would
+    // accept the pair but render a degenerate window. Pinning a
+    // positivity assertion alongside the full-value assertion
+    // guards the invariant the helper is meant to encode.
+    use paladin_gtk::app::model::format_app_window_default_size;
+
+    let (width, height) = format_app_window_default_size();
+    assert!(
+        width > 0 && height > 0,
+        "ApplicationWindow default size must be a strictly positive (width, height) pair; got ({width}, {height})",
+    );
+}
+
+#[test]
 fn format_app_add_button_icon_name_returns_list_add_symbolic() {
     // The `AppModel`'s header-bar add `gtk::Button`'s
     // `set_icon_name` attribute is populated from this helper.
