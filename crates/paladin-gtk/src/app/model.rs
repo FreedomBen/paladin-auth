@@ -2009,6 +2009,35 @@ pub fn format_app_primary_menu_entries() -> [(&'static str, &'static str); 6] {
     ]
 }
 
+/// Ordered bare `gio::SimpleAction` names the application's `app`
+/// action group registers for the primary menu entries.
+///
+/// Returns the six bare action names in the §"libadwaita usage"
+/// sequence (Import, Export, Passphrase, Preferences, About,
+/// Quit) — parallel to [`format_app_primary_menu_entries`] —
+/// so the widget binding can iterate this array to call
+/// `gio::SimpleAction::new(name, None)` alongside the
+/// matching `gio::Menu::append` loop. Both arrays share a
+/// pinned source of truth, and the parallel coverage tests in
+/// `tests/startup_probes.rs` cross-check that joining each name
+/// with the shared [`format_app_action_group_name`] prefix
+/// reproduces the fully-qualified action target in the matching
+/// slot of [`format_app_primary_menu_entries`].
+///
+/// Pure — returns a small fixed-size array of `'static` strings
+/// without allocating.
+#[must_use]
+pub fn format_app_primary_menu_action_names() -> [&'static str; 6] {
+    [
+        format_app_menu_import_action_name(),
+        format_app_menu_export_action_name(),
+        format_app_menu_passphrase_action_name(),
+        format_app_menu_preferences_action_name(),
+        format_app_menu_about_action_name(),
+        format_app_menu_quit_action_name(),
+    ]
+}
+
 /// Bare `GLib` action-group name the primary `gio::Menu` resolves
 /// every entry target against.
 ///

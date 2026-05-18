@@ -1789,6 +1789,84 @@ fn format_app_primary_menu_entries_uses_app_group_prefix_throughout() {
 }
 
 #[test]
+fn format_app_primary_menu_action_names_returns_six_bare_names_in_pinned_order() {
+    // Companion to `format_app_primary_menu_entries`: the widget
+    // binding registers a `gio::SimpleAction` for each primary-
+    // menu entry on the application's `app` action group. This
+    // helper returns the six bare action names in the §"libadwaita
+    // usage" sequence (Import, Export, Passphrase, Preferences,
+    // About, Quit), parallel to `format_app_primary_menu_entries`,
+    // so the SimpleAction-registration loop and the
+    // `gio::Menu::append` loop iterate over a single pinned
+    // source of truth.
+    use paladin_gtk::app::model::{
+        format_app_menu_about_action_name, format_app_menu_export_action_name,
+        format_app_menu_import_action_name, format_app_menu_passphrase_action_name,
+        format_app_menu_preferences_action_name, format_app_menu_quit_action_name,
+        format_app_primary_menu_action_names,
+    };
+
+    let names = format_app_primary_menu_action_names();
+    assert_eq!(
+        names.len(),
+        6,
+        "primary menu must register exactly six SimpleActions; got {}",
+        names.len(),
+    );
+    assert_eq!(
+        names,
+        [
+            format_app_menu_import_action_name(),
+            format_app_menu_export_action_name(),
+            format_app_menu_passphrase_action_name(),
+            format_app_menu_preferences_action_name(),
+            format_app_menu_about_action_name(),
+            format_app_menu_quit_action_name(),
+        ],
+        "primary menu bare action names must follow the pinned §\"libadwaita usage\" sequence (Import, Export, Passphrase, Preferences, About, Quit)",
+    );
+}
+
+#[test]
+fn format_app_primary_menu_action_names_parallels_primary_menu_entries() {
+    // Cross-check: zipping `format_app_primary_menu_action_names`
+    // with the shared group prefix from
+    // `format_app_action_group_name` and the `<group>.<action>`
+    // separator must reproduce the fully-qualified action target
+    // in the matching slot of `format_app_primary_menu_entries`.
+    // Catches a future bundling change that drifted the action-
+    // name array out of order with the (label, action) pair array.
+    use paladin_gtk::app::model::{
+        format_app_action_group_name, format_app_primary_menu_action_names,
+        format_app_primary_menu_entries,
+    };
+
+    let group = format_app_action_group_name();
+    let names = format_app_primary_menu_action_names();
+    let entries = format_app_primary_menu_entries();
+    assert_eq!(
+        names.len(),
+        entries.len(),
+        "primary menu action-name array and entry-pair array must agree on length",
+    );
+    for (idx, (bare, (_label, full))) in names.iter().zip(entries.iter()).enumerate() {
+        let joined = format!("{group}.{bare}");
+        assert_eq!(
+            &joined, full,
+            "primary menu entry at index {idx}: `<group>.<action>` join must reproduce the fully-qualified action target paired with the visible label",
+        );
+        assert!(
+            !bare.contains('.'),
+            "bare action name {bare:?} at index {idx} must not embed the `<group>.<action>` separator",
+        );
+        assert!(
+            !bare.is_empty(),
+            "bare action name at index {idx} must be non-empty",
+        );
+    }
+}
+
+#[test]
 fn format_app_action_group_name_is_prefix_of_every_primary_menu_action() {
     // Cross-check: every `format_app_menu_*_action` target must
     // begin with `format_app_action_group_name() + "."`. This
