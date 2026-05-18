@@ -346,6 +346,28 @@ pub fn format_rename_dialog_marker(account_id: AccountId, display_label: &str) -
     format!("{RENAME_DIALOG_MARKER_PREFIX}{account_id} label={display_label}")
 }
 
+/// Fixed `set_label` attribute the widget hands to the Rename
+/// account dialog's header `gtk::Label`.
+///
+/// Returns the static title string the dialog renders at the top
+/// of its body. The wording (`"Rename account"`) mirrors the TUI
+/// rename view's `" Rename account "` block title built by `render`
+/// (see `crates/paladin-tui/src/view/rename.rs`) — the TUI's
+/// surrounding spaces are its block-padding convention and drop
+/// out because `gtk::Label` renders the bare text without padding.
+/// Pinning the title through a helper keeps the GTK / TUI wording
+/// aligned against a single source of truth so a future copy
+/// change cannot diverge silently.
+///
+/// Pure — returns a `'static str` without allocating. Sibling of
+/// [`crate::add_account::format_add_dialog_title`] on the
+/// dialog-header-title side; together they pin the dialog header
+/// label for both account-mutating dialogs.
+#[must_use]
+pub fn format_rename_dialog_title() -> &'static str {
+    "Rename account"
+}
+
 /// Construction parameters for [`RenameDialogComponent`].
 ///
 /// `AppModel` builds this from the live vault when a kebab
@@ -740,7 +762,7 @@ impl SimpleComponent for RenameDialogComponent {
             set_vexpand: true,
 
             gtk::Label {
-                set_label: "Rename account",
+                set_label: format_rename_dialog_title(),
                 set_xalign: 0.0,
                 add_css_class: "title-2",
             },

@@ -1271,3 +1271,26 @@ fn run_rename_worker_persists_label_to_disk() {
         .expect("renamed account survives reopen");
     assert_eq!(summary.label, "bob");
 }
+
+#[test]
+fn format_rename_dialog_title_matches_tui_wording() {
+    // The Rename account dialog's header `gtk::Label` `set_label`
+    // attribute is populated from this helper, so the wording must
+    // match what the TUI's rename view shows (the
+    // `" Rename account "` block title built by `render` in
+    // `crates/paladin-tui/src/view/rename.rs` — the surrounding
+    // spaces are the TUI block-padding convention and drop out
+    // because `gtk::Label` renders the bare text without them).
+    // Pinning the title through a helper keeps the GTK / TUI
+    // wording aligned against a single source of truth so a future
+    // copy change cannot diverge silently. Sibling of
+    // `paladin_gtk::add_account::format_add_dialog_title` on the
+    // dialog-header-title side.
+    use paladin_gtk::rename_dialog::format_rename_dialog_title;
+
+    assert_eq!(
+        format_rename_dialog_title(),
+        "Rename account",
+        "dialog header mirrors the TUI rename view's \" Rename account \" block title",
+    );
+}
