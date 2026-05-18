@@ -7941,3 +7941,26 @@ fn format_manual_kind_title_matches_tui_wording() {
         "kind row title mirrors the TUI add view's \"Kind:\" wording",
     );
 }
+
+#[test]
+fn format_manual_algorithm_title_matches_tui_wording() {
+    // The algorithm `AdwComboRow`'s `title` attribute is populated
+    // from this helper, so the wording must match what the TUI's
+    // add view shows (the `"Algorithm:"` row in
+    // `crates/paladin-tui/src/view/add.rs` — the colon is the TUI's
+    // field-name separator and drops out because AdwComboRow renders
+    // its title as a floating label above the dropdown rather than
+    // as a prefix). The SHA1 / SHA256 / SHA512 dropdown items
+    // themselves come from `format_manual_algorithm_labels`; this
+    // helper covers only the row's static title wording so the
+    // model and the title stay aligned against a single source of
+    // truth. Sibling of `format_manual_kind_title_matches_tui_wording`
+    // on the algorithm-row-title side.
+    use paladin_gtk::add_account::format_manual_algorithm_title;
+
+    assert_eq!(
+        format_manual_algorithm_title(),
+        "Algorithm",
+        "algorithm row title mirrors the TUI add view's \"Algorithm:\" wording",
+    );
+}

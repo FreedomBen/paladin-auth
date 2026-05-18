@@ -2486,6 +2486,30 @@ pub fn format_manual_kind_title() -> &'static str {
     "Kind"
 }
 
+/// Fixed `title` attribute the widget hands to the manual sub-path's
+/// algorithm `AdwComboRow::set_title`.
+///
+/// Returns the static title string `AdwComboRow` renders as the
+/// floating label above the dropdown. The wording (`"Algorithm"`)
+/// mirrors the TUI add view's `"Algorithm:"` row (see
+/// `crates/paladin-tui/src/view/add.rs`) — the TUI's trailing colon
+/// is its field-name separator and drops out because `AdwComboRow`
+/// renders its title as a floating label rather than as a prefix.
+/// The SHA1 / SHA256 / SHA512 dropdown items themselves come from
+/// [`format_manual_algorithm_labels`]; this helper covers only the
+/// row's static title wording so the model and the title stay
+/// aligned against a single source of truth.
+///
+/// Pure — returns a `'static str` without allocating. Sibling of
+/// [`format_manual_kind_title`], [`format_manual_algorithm_labels`],
+/// and [`format_manual_algorithm_selected`] on the algorithm-row-
+/// title side; together they cover the row's title, dropdown items,
+/// and selected index in one module.
+#[must_use]
+pub fn format_manual_algorithm_title() -> &'static str {
+    "Algorithm"
+}
+
 /// Apply an inbound [`AddAccountMsg`] and return the optional
 /// [`AddAccountOutput`] the widget layer should forward to
 /// `AppModel`.
