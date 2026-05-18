@@ -1100,3 +1100,92 @@ fn format_app_menu_quit_action_uses_app_group_prefix() {
         "action targets must not contain whitespace; got {action:?}",
     );
 }
+
+#[test]
+fn format_app_action_group_name_returns_app() {
+    // The `AppModel`'s primary `gio::Menu` resolves every entry
+    // target against the application's `app` action group. The
+    // six `format_app_menu_*_action` helpers each spell the
+    // fully-qualified `app.<action>` form; this helper names the
+    // shared group prefix on its own so the matching
+    // `gio::SimpleAction` registrations on
+    // `gio::ApplicationWindow::insert_action_group(...)` (and the
+    // future `app.<action>` accelerator wiring) read the prefix
+    // from a single source of truth.
+    //
+    // Pure — returns a `'static str` without allocating.
+    // Companion of the six primary-menu action-target helpers
+    // (`format_app_menu_import_action`, …,
+    // `format_app_menu_quit_action`); together they pin the
+    // group prefix and every entry's action target against a
+    // single source of truth.
+    use paladin_gtk::app::model::format_app_action_group_name;
+
+    assert_eq!(
+        format_app_action_group_name(),
+        "app",
+        "primary menu action group is the bare `app` group registered on the application window",
+    );
+}
+
+#[test]
+fn format_app_action_group_name_has_no_separator_or_whitespace() {
+    // Defense-in-depth: the group prefix must be a bare GLib
+    // action-group name. A stray `.` would conflict with the
+    // `<group>.<action>` separator used by the matching
+    // `format_app_menu_*_action` helpers, and a stray space
+    // would not survive `gio::ActionGroup`'s name validation.
+    use paladin_gtk::app::model::format_app_action_group_name;
+
+    let group = format_app_action_group_name();
+    assert!(
+        !group.contains('.'),
+        "action group name must not embed the `<group>.<action>` separator; got {group:?}",
+    );
+    assert!(
+        !group.contains(' '),
+        "action group name must not contain whitespace; got {group:?}",
+    );
+    assert!(
+        !group.is_empty(),
+        "action group name must be non-empty; got {group:?}",
+    );
+}
+
+#[test]
+fn format_app_action_group_name_is_prefix_of_every_primary_menu_action() {
+    // Cross-check: every `format_app_menu_*_action` target must
+    // begin with `format_app_action_group_name() + "."`. This
+    // catches a future rename that drifted one of the action
+    // targets off the shared `app` group.
+    use paladin_gtk::app::model::{
+        format_app_action_group_name, format_app_menu_about_action, format_app_menu_export_action,
+        format_app_menu_import_action, format_app_menu_passphrase_action,
+        format_app_menu_preferences_action, format_app_menu_quit_action,
+    };
+
+    let group = format_app_action_group_name();
+    let prefix = format!("{group}.");
+    for action in [
+        format_app_menu_import_action(),
+        format_app_menu_export_action(),
+        format_app_menu_passphrase_action(),
+        format_app_menu_preferences_action(),
+        format_app_menu_about_action(),
+        format_app_menu_quit_action(),
+    ] {
+        assert!(
+            action.starts_with(&prefix),
+            "primary menu action target {action:?} must start with the shared group prefix {prefix:?}",
+        );
+        let bare = &action[prefix.len()..];
+        assert!(
+            !bare.is_empty(),
+            "primary menu action target {action:?} must carry a non-empty bare action name after the {prefix:?} prefix",
+        );
+        assert!(
+            !bare.contains('.'),
+            "primary menu action target {action:?} must not embed a second `.` separator after the {prefix:?} group prefix",
+        );
+    }
+}

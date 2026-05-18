@@ -1773,3 +1773,28 @@ pub fn format_app_menu_about_action() -> &'static str {
 pub fn format_app_menu_quit_action() -> &'static str {
     "app.quit"
 }
+
+/// Bare `GLib` action-group name the primary `gio::Menu` resolves
+/// every entry target against.
+///
+/// Returns the static group name `"app"` — the name passed to
+/// `gio::ApplicationWindow::insert_action_group(...)` so the six
+/// `gio::SimpleAction`s registered for the primary menu (`import`
+/// / `export` / `passphrase` / `preferences` / `about` / `quit`)
+/// are reachable via the `app.<action>` `detailed_action_name`
+/// form spelled by [`format_app_menu_import_action`] and its
+/// siblings. The bare group name omits the `.` separator that
+/// joins the group prefix to each action's bare name; the
+/// fully-qualified target is `{format_app_action_group_name()}.{action}`.
+///
+/// Pure — returns a `'static str` without allocating. Companion
+/// of the six primary-menu action-target helpers
+/// ([`format_app_menu_import_action`], [`format_app_menu_export_action`],
+/// [`format_app_menu_passphrase_action`], [`format_app_menu_preferences_action`],
+/// [`format_app_menu_about_action`], [`format_app_menu_quit_action`]);
+/// together they pin the group prefix and every entry's action
+/// target against a single source of truth.
+#[must_use]
+pub fn format_app_action_group_name() -> &'static str {
+    "app"
+}
