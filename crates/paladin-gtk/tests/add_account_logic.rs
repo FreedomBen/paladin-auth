@@ -7451,3 +7451,46 @@ fn compose_manual_icon_hint_text_survives_kind_round_trip() {
         "kind round-trip preserves the prior icon-hint text in the projection",
     );
 }
+
+#[test]
+fn format_manual_kind_labels_matches_tui_wording() {
+    // The dropdown's `gtk::StringList` model is populated from this
+    // slice, so the wording must match what the TUI's add view shows
+    // (`AccountKindInput::Totp => "TOTP"`, `AccountKindInput::Hotp =>
+    // "HOTP"`) — see `crates/paladin-tui/src/view/add.rs`. Pinning
+    // the labels through a helper here keeps the GTK / TUI display
+    // wording aligned against a single source of truth so a future
+    // copy change cannot diverge silently.
+    use paladin_gtk::add_account::format_manual_kind_labels;
+
+    assert_eq!(
+        format_manual_kind_labels(),
+        ["TOTP", "HOTP"],
+        "dropdown labels mirror the TUI add view's TOTP/HOTP wording",
+    );
+}
+
+#[test]
+fn format_manual_kind_labels_index_aligns_with_format_manual_kind_selected() {
+    // The dropdown's `gtk::DropDown::set_selected` index is the same
+    // u32 `format_manual_kind_selected` returns, so the labels slice
+    // must be indexable by that u32 and resolve to the matching
+    // human-readable wording. Pinning the alignment in a test guards
+    // against a future enum addition / reorder that touches one half
+    // (the index mapping or the labels) and leaves the other half
+    // stale.
+    use paladin_core::AccountKindInput;
+    use paladin_gtk::add_account::{format_manual_kind_labels, format_manual_kind_selected};
+
+    let labels = format_manual_kind_labels();
+    assert_eq!(
+        labels[format_manual_kind_selected(AccountKindInput::Totp) as usize],
+        "TOTP",
+        "TOTP index resolves to the \"TOTP\" label",
+    );
+    assert_eq!(
+        labels[format_manual_kind_selected(AccountKindInput::Hotp) as usize],
+        "HOTP",
+        "HOTP index resolves to the \"HOTP\" label",
+    );
+}
