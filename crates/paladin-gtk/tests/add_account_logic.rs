@@ -4428,3 +4428,114 @@ fn format_pending_warnings_body_threads_through_format_validation_warning() {
          body={body:?} shared_text={rendered_shared:?}",
     );
 }
+
+#[test]
+fn format_duplicate_alert_body_returns_confirm_body_when_no_warnings() {
+    // The widget binds the AdwAlertDialog body of the "Add anyway?"
+    // confirmation to this composer, fed by both
+    // `AddDialogState::pending_duplicate_existing()` and
+    // `AddDialogState::secret_state().pending`'s `warnings`. With no
+    // warnings parked in the pending `ValidatedAccount`, the
+    // composer must produce exactly `format_duplicate_confirm_body`
+    // output so the modal body matches the no-warning case verbatim
+    // — adding a blank-line separator with no second line below it
+    // would leave a stray trailing newline in the AdwAlertDialog
+    // body. Mirror of the `format_pending_warnings_body` empty-
+    // slice collapse rule applied at the composer level.
+    use paladin_gtk::add_account::{format_duplicate_alert_body, format_duplicate_confirm_body};
+
+    let existing = dummy_existing_summary();
+
+    let body = format_duplicate_alert_body(&existing, &[]);
+
+    assert_eq!(body, format_duplicate_confirm_body(&existing));
+}
+
+#[test]
+fn format_duplicate_alert_body_joins_confirm_and_warnings_with_blank_line() {
+    // With warnings parked alongside the duplicate-collision pending
+    // value, the AdwAlertDialog body renders the duplicate-confirm
+    // statement above a blank line above the per-warning lines.
+    // The blank-line separator stops the warnings from running on
+    // visually as a continuation of the duplicate body, which would
+    // misread `"…label: Acme:alice\nwarning: …"` as one statement
+    // — the `AdwAlertDialog` body is multi-line, but the
+    // discrimination between the duplicate statement and the
+    // warning lines still matters for readability.
+    use paladin_core::ValidationWarning;
+    use paladin_gtk::add_account::{
+        format_duplicate_alert_body, format_duplicate_confirm_body, format_pending_warnings_body,
+    };
+
+    let existing = dummy_existing_summary();
+    let warnings = vec![ValidationWarning::ShortSecret {
+        decoded_len: 10,
+        recommended_min: 16,
+    }];
+
+    let body = format_duplicate_alert_body(&existing, &warnings);
+
+    let expected = format!(
+        "{}\n\n{}",
+        format_duplicate_confirm_body(&existing),
+        format_pending_warnings_body(&warnings),
+    );
+    assert_eq!(body, expected);
+}
+
+#[test]
+fn format_duplicate_alert_body_threads_through_existing_summary_projection() {
+    // The composer must thread the carried `AccountSummary` through
+    // `format_duplicate_confirm_body` (which itself routes through
+    // `account_row::display_label`) so the colliding row's display
+    // name matches what the user already sees in the account list.
+    // An `issuer = None` existing renders the bare label form
+    // without a leading colon — mirror of the
+    // `format_duplicate_confirm_body_renders_bare_label_when_issuer_is_none`
+    // rule applied at the composer level.
+    use paladin_gtk::add_account::format_duplicate_alert_body;
+
+    let mut existing = dummy_existing_summary();
+    existing.issuer = None;
+
+    let body = format_duplicate_alert_body(&existing, &[]);
+
+    assert_eq!(
+        body,
+        "account already exists with the same (secret, issuer, label): alice",
+    );
+}
+
+#[test]
+fn format_duplicate_alert_body_threads_through_pending_warnings_projection() {
+    // The composer must thread the carried warnings through
+    // `format_pending_warnings_body` so each line carries its own
+    // `"warning: "` prefix and the multi-warning case lays out one
+    // per line — mirror of the `format_pending_warnings_body_renders_one_line_per_warning`
+    // rule applied at the composer level. Asserting the full
+    // `\n\n`-joined render against the two underlying helpers pins
+    // the composer to the shared projections rather than a local
+    // re-implementation that could drift.
+    use paladin_core::ValidationWarning;
+    use paladin_gtk::add_account::{
+        format_duplicate_alert_body, format_duplicate_confirm_body, format_pending_warnings_body,
+    };
+
+    let existing = dummy_existing_summary();
+    let warnings = vec![
+        ValidationWarning::ShortSecret {
+            decoded_len: 10,
+            recommended_min: 16,
+        },
+        ValidationWarning::ShortSecret {
+            decoded_len: 8,
+            recommended_min: 16,
+        },
+    ];
+
+    let body = format_duplicate_alert_body(&existing, &warnings);
+
+    let expected_top = format_duplicate_confirm_body(&existing);
+    let expected_bottom = format_pending_warnings_body(&warnings);
+    assert_eq!(body, format!("{expected_top}\n\n{expected_bottom}"));
+}

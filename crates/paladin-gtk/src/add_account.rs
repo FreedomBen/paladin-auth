@@ -1301,6 +1301,38 @@ pub fn format_pending_warnings_body(warnings: &[ValidationWarning]) -> String {
         .join("\n")
 }
 
+/// Render the full "Add anyway?" `AdwAlertDialog` body by joining
+/// [`format_duplicate_confirm_body`] above
+/// [`format_pending_warnings_body`] with a blank-line separator.
+///
+/// The widget binds the modal body to this composer, fed by
+/// [`AddDialogState::pending_duplicate_existing`] (the colliding
+/// summary) and [`crate::secret_fields::AddSecretState::pending`]'s
+/// `warnings` (the non-fatal warnings collected during validation of
+/// the would-be insertion). The composer is a thin one-liner over
+/// the two underlying format helpers — no re-derivation — so the
+/// `\n\n` separator (blank line between the duplicate statement and
+/// the warning lines) is the only decision that lives at this layer.
+///
+/// An empty `warnings` slice collapses the trailing block entirely:
+/// the body is exactly [`format_duplicate_confirm_body`] verbatim
+/// so the `AdwAlertDialog` body does not render a stray trailing
+/// newline when no warnings are pending. The widget therefore does
+/// not need a `if !warnings.is_empty()` guard around the helper
+/// call — the composer absorbs that condition.
+#[must_use]
+pub fn format_duplicate_alert_body(
+    existing: &AccountSummary,
+    warnings: &[ValidationWarning],
+) -> String {
+    let confirm = format_duplicate_confirm_body(existing);
+    if warnings.is_empty() {
+        confirm
+    } else {
+        format!("{confirm}\n\n{}", format_pending_warnings_body(warnings))
+    }
+}
+
 /// Apply an inbound [`AddAccountMsg`] and return the optional
 /// [`AddAccountOutput`] the widget layer should forward to
 /// `AppModel`.
