@@ -1774,6 +1774,29 @@ pub fn format_app_menu_quit_action() -> &'static str {
     "app.quit"
 }
 
+/// Bare `GLib` action name the primary `gio::Menu`'s "Import…"
+/// entry binds via [`format_app_menu_import_action`].
+///
+/// Returns the static action name `"import"` — the name passed
+/// to `gio::SimpleAction::new(..., None)` when the matching
+/// action is registered on the application's `app` action group.
+/// The fully-qualified `detailed_action_name` `"app.import"`
+/// spelled by [`format_app_menu_import_action`] is the
+/// [`format_app_action_group_name`] group prefix joined to this
+/// bare name via the `<group>.<action>` separator, so the
+/// `gio::Menu` and the matching `gio::SimpleAction` stay in
+/// lockstep when wired separately.
+///
+/// Pure — returns a `'static str` without allocating. Sibling
+/// of [`format_app_menu_import_action`] on the fully-qualified
+/// target side and [`format_app_menu_import_label`] on the
+/// visible-label side; together they pin all three halves of
+/// the menu-entry contract against a single source of truth.
+#[must_use]
+pub fn format_app_menu_import_action_name() -> &'static str {
+    "import"
+}
+
 /// Bare `GLib` action-group name the primary `gio::Menu` resolves
 /// every entry target against.
 ///
