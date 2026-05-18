@@ -1444,6 +1444,7 @@ fn apply_msg_stage_pending_duplicate_parks_validated_account_in_secret_state() {
         AddAccountMsg::StagePendingDuplicate {
             account: validated.account,
             warnings: validated.warnings,
+            existing: dummy_existing_summary(),
         },
     );
 
@@ -1477,6 +1478,7 @@ fn apply_msg_stage_pending_duplicate_replaces_prior_pending() {
         AddAccountMsg::StagePendingDuplicate {
             account: first.account,
             warnings: first.warnings,
+            existing: dummy_existing_summary(),
         },
     );
     let second = match classify_manual_submit(manual_hotp_defaults(), now_for_tests()) {
@@ -1490,6 +1492,7 @@ fn apply_msg_stage_pending_duplicate_replaces_prior_pending() {
         AddAccountMsg::StagePendingDuplicate {
             account: second.account,
             warnings: second.warnings,
+            existing: dummy_existing_summary(),
         },
     );
 
@@ -1537,6 +1540,7 @@ fn apply_msg_confirm_add_anyway_routes_to_submit_with_pending_account() {
         AddAccountMsg::StagePendingDuplicate {
             account: validated.account,
             warnings: validated.warnings,
+            existing: dummy_existing_summary(),
         },
     );
 
@@ -1583,6 +1587,7 @@ fn apply_msg_confirm_add_anyway_clears_pending_slot() {
         AddAccountMsg::StagePendingDuplicate {
             account: validated.account,
             warnings: validated.warnings,
+            existing: dummy_existing_summary(),
         },
     );
     assert!(
@@ -1633,6 +1638,7 @@ fn apply_msg_confirm_add_anyway_wipes_secret_state_buffers() {
         AddAccountMsg::StagePendingDuplicate {
             account: validated.account,
             warnings: validated.warnings,
+            existing: dummy_existing_summary(),
         },
     );
     assert!(
@@ -1693,6 +1699,7 @@ fn apply_msg_confirm_add_anyway_clears_prior_worker_outcome() {
         AddAccountMsg::StagePendingDuplicate {
             account: validated.account,
             warnings: validated.warnings,
+            existing: dummy_existing_summary(),
         },
     );
 
@@ -3435,6 +3442,50 @@ fn apply_msg_render_inline_error_replaces_prior() {
 }
 
 #[test]
+fn apply_msg_stage_pending_duplicate_stores_existing_summary() {
+    // The widget dispatches `StagePendingDuplicate` after
+    // `SaveClickOutcome::AwaitConfirmation` returned the colliding
+    // existing summary alongside the pending validated account.
+    // Both halves must land in state so the "Add anyway?" prompt
+    // can render the colliding account's display label / issuer
+    // alongside the pending validated account in
+    // `secret_state.pending`. Mirror of
+    // `apply_msg_render_inline_error_stores_in_state` on the
+    // duplicate-collision slot.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    let validated = match classify_manual_submit(manual_totp_defaults(), now_for_tests()) {
+        ManualSubmitOutcome::Proceed(v) => v,
+        ManualSubmitOutcome::InlineError(e) => panic!("fixture failed: {e:?}"),
+    };
+    let existing = dummy_existing_summary();
+    let expected_existing_id = existing.id;
+    let expected_existing_label = existing.label.clone();
+    let expected_existing_issuer = existing.issuer.clone();
+
+    let output = apply_msg(
+        &mut state,
+        AddAccountMsg::StagePendingDuplicate {
+            account: validated.account,
+            warnings: validated.warnings,
+            existing,
+        },
+    );
+
+    assert!(
+        output.is_none(),
+        "StagePendingDuplicate is dialog-local; no output flows to AppModel",
+    );
+    let stored = state
+        .pending_duplicate_existing()
+        .expect("StagePendingDuplicate populates the colliding-summary slot");
+    assert_eq!(stored.id, expected_existing_id);
+    assert_eq!(stored.label, expected_existing_label);
+    assert_eq!(stored.issuer, expected_existing_issuer);
+}
+
+#[test]
 fn add_dialog_state_new_pending_duplicate_existing_is_none() {
     // A freshly-opened dialog has not yet seen a Save click that
     // observed a duplicate collision, so the
@@ -3529,6 +3580,7 @@ fn apply_msg_stage_pending_duplicate_clears_prior_inline_error() {
         AddAccountMsg::StagePendingDuplicate {
             account: validated.account,
             warnings: validated.warnings,
+            existing: dummy_existing_summary(),
         },
     );
 
@@ -3567,6 +3619,7 @@ fn apply_msg_confirm_add_anyway_clears_prior_inline_error() {
         AddAccountMsg::StagePendingDuplicate {
             account: validated.account,
             warnings: validated.warnings,
+            existing: dummy_existing_summary(),
         },
     );
     // Restage an inline error after StagePendingDuplicate (which

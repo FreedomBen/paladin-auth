@@ -1120,6 +1120,15 @@ pub enum AddAccountMsg {
         /// the duplicate-confirm prompt without re-running
         /// [`validate_manual`].
         warnings: Vec<ValidationWarning>,
+        /// Colliding existing account reported by
+        /// [`paladin_core::Vault::find_duplicate`]. Threaded through
+        /// so the "Add anyway?" prompt can render the existing
+        /// account's display label / issuer alongside the pending
+        /// validated account. [`apply_msg`] stores it in
+        /// [`AddDialogState::pending_duplicate_existing`] so the
+        /// widget view (a `#[watch]` over that slot) reads it
+        /// without re-querying the vault.
+        existing: AccountSummary,
     },
     /// "Add anyway" confirmation from the duplicate-collision modal.
     /// [`apply_msg`] consumes the pending [`ValidatedAccount`] out of
@@ -1583,7 +1592,11 @@ pub fn apply_msg(state: &mut AddDialogState, msg: AddAccountMsg) -> Option<AddAc
             state.inline_error = None;
             None
         }
-        AddAccountMsg::StagePendingDuplicate { account, warnings } => {
+        AddAccountMsg::StagePendingDuplicate {
+            account,
+            warnings,
+            existing,
+        } => {
             // Reconstruct the `ValidatedAccount` from its destructured
             // fields — the variant carries `{ account, warnings }`
             // rather than `(ValidatedAccount)` because
@@ -1596,6 +1609,11 @@ pub fn apply_msg(state: &mut AddDialogState, msg: AddAccountMsg) -> Option<AddAc
             let _dropped_prior = state
                 .secret_state
                 .replace_pending(ValidatedAccount { account, warnings });
+            // Store the colliding summary alongside the pending
+            // validated account so the "Add anyway?" prompt can
+            // render both halves of the collision without
+            // re-querying the vault.
+            state.pending_duplicate_existing = Some(existing);
             // The arm is reached only after validation succeeded
             // (the pending is a `ValidatedAccount`) and
             // `Vault::find_duplicate` reported a collision — drop
