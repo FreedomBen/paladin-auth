@@ -3435,6 +3435,59 @@ fn apply_msg_render_inline_error_replaces_prior() {
 }
 
 #[test]
+fn apply_msg_manual_secret_changed_clears_prior_inline_error() {
+    // Retyping the manual Base32 secret after a Save click rejected
+    // it (e.g. `field: "secret"`) means the prior rejection is no
+    // longer applicable to the live buffer — drop the inline error
+    // so the dialog body stops rendering the stale message. Mirror
+    // of `unlock_dialog_state_set_passphrase_clears_prior_inline_error`
+    // on the secret-bearing add path.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    let err = InlineError::from_error(&validation_error("secret", "bad base32"));
+    let _ = apply_msg(&mut state, AddAccountMsg::RenderInlineError(err));
+    assert!(
+        state.inline_error().is_some(),
+        "precondition: inline error is staged before retype",
+    );
+
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualSecretChanged(SECRET_20_B32.to_string()),
+    );
+
+    assert!(
+        state.inline_error().is_none(),
+        "ManualSecretChanged clears the stale inline_error",
+    );
+}
+
+#[test]
+fn apply_msg_uri_text_changed_clears_prior_inline_error() {
+    // Retyping the `otpauth://` URI after a Save click rejected it
+    // (e.g. malformed URI, unsupported scheme) means the prior
+    // rejection is no longer applicable — drop the inline error
+    // so the dialog body stops rendering the stale message. Mirror
+    // of `apply_msg_manual_secret_changed_clears_prior_inline_error`
+    // on the URI sub-path.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    let err = InlineError::from_error(&validation_error("uri", "malformed"));
+    let _ = apply_msg(&mut state, AddAccountMsg::RenderInlineError(err));
+    assert!(state.inline_error().is_some(), "precondition");
+
+    let uri = format!("otpauth://totp/Acme:alice?secret={SECRET_20_B32}&issuer=Acme");
+    let _ = apply_msg(&mut state, AddAccountMsg::UriTextChanged(uri));
+
+    assert!(
+        state.inline_error().is_none(),
+        "UriTextChanged clears the stale inline_error",
+    );
+}
+
+#[test]
 fn apply_msg_switch_path_clears_prior_inline_error() {
     // A typed §5 rejection from `SaveClickOutcome::InlineError` is
     // always specific to the sub-path that was active when the

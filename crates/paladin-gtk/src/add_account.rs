@@ -1508,10 +1508,23 @@ pub fn apply_msg(state: &mut AddDialogState, msg: AddAccountMsg) -> Option<AddAc
         }
         AddAccountMsg::ManualSecretChanged(text) => {
             state.secret_state.manual_secret.set(&text);
+            // Retyping the failing secret invalidates the prior
+            // Save-click rejection — drop the inline error so the
+            // dialog body stops rendering stale text against the
+            // live buffer. Mirror of
+            // `UnlockDialogState::set_passphrase` clearing
+            // `inline_error` on the encrypted-vault path.
+            state.inline_error = None;
             None
         }
         AddAccountMsg::UriTextChanged(text) => {
             state.secret_state.uri_text.set(&text);
+            // Retyping the failing URI invalidates the prior
+            // Save-click rejection — drop the inline error so the
+            // dialog body stops rendering stale text against the
+            // live buffer. Mirror of
+            // `Self::ManualSecretChanged` on the URI sub-path.
+            state.inline_error = None;
             None
         }
         AddAccountMsg::StagePendingDuplicate { account, warnings } => {
