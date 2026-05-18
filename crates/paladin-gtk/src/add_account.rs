@@ -1136,6 +1136,22 @@ pub enum AddAccountMsg {
     /// output, no state change) so a stray click cannot punch through
     /// to the worker without a validated account in hand.
     ConfirmAddAnyway,
+    /// Typed §5 inline-error projection produced by the widget when
+    /// [`compose_save_click_outcome`] returned
+    /// [`SaveClickOutcome::InlineError`] — the active sub-path's
+    /// pre-effect validation or duplicate-detection pipeline
+    /// rejected the Save click. [`apply_msg`] stores the carried
+    /// [`InlineError`] in [`AddDialogState::inline_error`] so the
+    /// dialog body's `#[watch]` over [`AddDialogState::inline_error`]
+    /// can render the typed body against the failing field.
+    /// Dialog-local — no [`AddAccountOutput`] is emitted; the
+    /// rejection stays inside the dialog until the user fixes the
+    /// failing field and re-submits. Mirror of
+    /// [`crate::unlock_dialog::UnlockDialogState::set_inline_error`]
+    /// on the add path; pairs with [`Self::WorkerFailed`] which
+    /// covers post-effect (`Vault::mutate_and_save`) failures
+    /// instead.
+    RenderInlineError(InlineError),
 }
 
 /// Outbound messages emitted by [`AddAccountComponent`] back to
@@ -1305,6 +1321,20 @@ pub struct AddDialogState {
     /// the CLI manual-add defaults (TOTP, SHA1, 6 digits, 30 s
     /// period, HOTP counter 0).
     manual_draft: ManualDraftState,
+    /// Typed §5 inline-error projection from the most recent Save
+    /// click that produced [`SaveClickOutcome::InlineError`].
+    ///
+    /// `None` between dialog open and the first rejected Save
+    /// click. Mutated through
+    /// [`AddAccountMsg::RenderInlineError`] so the widget view
+    /// (a `#[watch]` over [`Self::inline_error`]) can attach the
+    /// `error` CSS class to the failing sub-path's row and render
+    /// the typed body verbatim. Mirror of
+    /// [`crate::unlock_dialog::UnlockDialogState::inline_error`]
+    /// on the add path; pairs with the post-effect
+    /// [`Self::worker_outcome`] slot which handles `Vault::mutate_and_save`
+    /// failures instead of the pre-effect validation pipeline.
+    inline_error: Option<InlineError>,
 }
 
 impl AddDialogState {
@@ -1357,6 +1387,19 @@ impl AddDialogState {
     #[must_use]
     pub fn manual_draft(&self) -> &ManualDraftState {
         &self.manual_draft
+    }
+
+    /// Typed §5 inline-error projection from the most recent Save
+    /// click, or `None` if the dialog has not yet seen a rejected
+    /// Save click (or a successor message has cleared it).
+    ///
+    /// The widget binds a `#[watch]` over this so the dialog body
+    /// can render the typed error against the failing sub-path's
+    /// row. Returns the same projection
+    /// [`AddAccountMsg::RenderInlineError`] last stored.
+    #[must_use]
+    pub fn inline_error(&self) -> Option<&InlineError> {
+        self.inline_error.as_ref()
     }
 }
 
@@ -1483,6 +1526,15 @@ pub fn apply_msg(state: &mut AddDialogState, msg: AddAccountMsg) -> Option<AddAc
             Some(AddAccountOutput::Submit {
                 account: validated.account,
             })
+        }
+        AddAccountMsg::RenderInlineError(err) => {
+            // Replace any prior projection so the dialog never
+            // renders stale text from an earlier Save click. The
+            // widget computes [`compose_save_click_outcome`] on
+            // every click; the rejection stays inline so the user
+            // can retry without losing the in-flight buffers.
+            state.inline_error = Some(err);
+            None
         }
     }
 }

@@ -3352,3 +3352,114 @@ fn compose_save_click_outcome_preserves_state_so_retry_keeps_typing() {
     assert_eq!(state.secret_state().manual_secret.text(), secret_before);
     assert_eq!(state.secret_state().active_path, active_path_before);
 }
+
+#[test]
+fn add_dialog_state_new_inline_error_is_none() {
+    // A freshly-opened dialog has no Save-click outcome to render
+    // yet, so the inline-error slot starts empty. Mirror of
+    // `add_dialog_state_new_initializes_manual_draft_to_defaults`
+    // on the inline-error slot.
+    use paladin_gtk::add_account::AddDialogState;
+
+    let state = AddDialogState::new();
+    assert!(
+        state.inline_error().is_none(),
+        "fresh AddDialogState has no inline error to render",
+    );
+}
+
+#[test]
+fn add_dialog_state_default_inline_error_matches_new() {
+    // The implicit `Default` impl must construct the same inline-
+    // error slot the named `new()` constructor does. Mirror of
+    // `add_dialog_state_default_manual_draft_matches_new`.
+    use paladin_gtk::add_account::AddDialogState;
+
+    let from_new = AddDialogState::new();
+    let from_default = AddDialogState::default();
+    assert_eq!(
+        from_new.inline_error().is_none(),
+        from_default.inline_error().is_none(),
+    );
+}
+
+#[test]
+fn apply_msg_render_inline_error_stores_in_state() {
+    // The widget computes `compose_save_click_outcome` on every Save
+    // click; on `SaveClickOutcome::InlineError` it dispatches
+    // `AddAccountMsg::RenderInlineError` so the dialog body can
+    // render the typed §5 error against the failing field. The
+    // routing layer stays in `apply_msg` so the rendering side is
+    // exercisable without GTK.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let err = InlineError::from_error(&validation_error("label", "empty"));
+    let mut state = AddDialogState::new();
+
+    let output = apply_msg(&mut state, AddAccountMsg::RenderInlineError(err.clone()));
+
+    assert!(
+        output.is_none(),
+        "RenderInlineError stays dialog-local; no AddAccountOutput escapes",
+    );
+    let stored = state
+        .inline_error()
+        .expect("RenderInlineError stores the projection into AddDialogState");
+    assert_eq!(stored.kind, err.kind);
+    assert_eq!(stored.rendered, err.rendered);
+}
+
+#[test]
+fn apply_msg_render_inline_error_replaces_prior() {
+    // A second Save click after a typed-but-rejected attempt
+    // overwrites the prior projection so the dialog never shows
+    // stale text from a previous click. Mirror of the rename
+    // dialog's `last_validation`-replaces-prior semantics.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let first = InlineError::from_error(&validation_error("label", "empty"));
+    let second = InlineError::from_error(&validation_error("secret", "bad base32"));
+    let mut state = AddDialogState::new();
+
+    let _ = apply_msg(&mut state, AddAccountMsg::RenderInlineError(first));
+    let _ = apply_msg(&mut state, AddAccountMsg::RenderInlineError(second.clone()));
+
+    let stored = state
+        .inline_error()
+        .expect("second RenderInlineError still leaves a projection in state");
+    assert_eq!(
+        stored.kind, second.kind,
+        "later RenderInlineError replaces the prior projection",
+    );
+    assert_eq!(stored.rendered, second.rendered);
+}
+
+#[test]
+fn apply_msg_render_inline_error_preserves_other_state() {
+    // The inline-error slot is independent of the manual draft, the
+    // secret-bearing buffers, and the duplicate-collision pending
+    // slot — a Save-click rejection must not stomp on the user's
+    // typing or drop a parked pending. Mirror of the per-keystroke
+    // shadow tests that preserve sibling draft fields.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualLabelChanged("alice".to_string()),
+    );
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualSecretChanged(SECRET_20_B32.to_string()),
+    );
+    let draft_before = state.manual_draft().clone();
+    let secret_before = state.secret_state().manual_secret.text().to_string();
+    let active_path_before = state.secret_state().active_path;
+
+    let err = InlineError::from_error(&validation_error("label", "empty"));
+    let _ = apply_msg(&mut state, AddAccountMsg::RenderInlineError(err));
+
+    assert_eq!(state.manual_draft(), &draft_before);
+    assert_eq!(state.secret_state().manual_secret.text(), secret_before);
+    assert_eq!(state.secret_state().active_path, active_path_before);
+}
