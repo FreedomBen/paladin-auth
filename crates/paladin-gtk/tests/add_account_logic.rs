@@ -3435,6 +3435,60 @@ fn apply_msg_render_inline_error_replaces_prior() {
 }
 
 #[test]
+fn apply_msg_switch_path_clears_prior_inline_error() {
+    // A typed §5 rejection from `SaveClickOutcome::InlineError` is
+    // always specific to the sub-path that was active when the
+    // user pressed Save (manual label / secret / icon-hint, or
+    // URI text). Switching sub-paths is the user's signal that
+    // they're starting fresh on a different input surface — the
+    // rejection from the prior path is no longer applicable.
+    // Symmetric with the pending-duplicate drop already wired into
+    // `secret_state.switch_path`: cross-path state must not survive
+    // a switch.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+    use paladin_gtk::secret_fields::AddPath;
+
+    let mut state = AddDialogState::new();
+    let err = InlineError::from_error(&validation_error("label", "empty"));
+    let _ = apply_msg(&mut state, AddAccountMsg::RenderInlineError(err));
+    assert!(
+        state.inline_error().is_some(),
+        "precondition: inline error is staged before SwitchPath",
+    );
+
+    let _ = apply_msg(&mut state, AddAccountMsg::SwitchPath(AddPath::Uri));
+
+    assert!(
+        state.inline_error().is_none(),
+        "SwitchPath clears the prior inline_error so the new path starts fresh",
+    );
+}
+
+#[test]
+fn apply_msg_switch_path_same_path_does_not_clear_inline_error() {
+    // Same-path re-entry is idempotent — it must not erase the
+    // inline error any more than it erases the buffers. Mirror of
+    // `apply_msg_switch_path_same_path_is_idempotent_noop` on the
+    // inline-error slot. Guards against a regression where the
+    // arm naively clears `inline_error` before the early-return
+    // path checks `active_path == to`.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+    use paladin_gtk::secret_fields::AddPath;
+
+    let err = InlineError::from_error(&validation_error("label", "empty"));
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(&mut state, AddAccountMsg::RenderInlineError(err.clone()));
+
+    let _ = apply_msg(&mut state, AddAccountMsg::SwitchPath(AddPath::Manual));
+
+    let stored = state.inline_error().expect(
+        "same-path SwitchPath is idempotent; the inline_error survives because nothing changed",
+    );
+    assert_eq!(stored.kind, err.kind);
+    assert_eq!(stored.rendered, err.rendered);
+}
+
+#[test]
 fn apply_msg_render_inline_error_preserves_other_state() {
     // The inline-error slot is independent of the manual draft, the
     // secret-bearing buffers, and the duplicate-collision pending

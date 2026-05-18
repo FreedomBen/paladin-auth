@@ -1448,12 +1448,30 @@ pub fn apply_msg(state: &mut AddDialogState, msg: AddAccountMsg) -> Option<AddAc
             Some(AddAccountOutput::Submit { account })
         }
         AddAccountMsg::SwitchPath(to) => {
+            // Detect an actual sub-path transition (versus an
+            // idempotent same-path re-entry) before calling
+            // [`AddSecretState::switch_path`], which early-returns
+            // on same-path entry. Mirror the early-return guard
+            // here so the inline-error / pending-duplicate drop
+            // both key off the same condition the secret-state
+            // layer already uses.
+            let path_changed = state.secret_state.active_path != to;
             // Let-binding the returned `Option<Box<ValidatedAccount>>`
             // so the prior pending duplicate (if any) drops at the
             // end of this arm — the secret bytes inside the
             // `ValidatedAccount` zero out via
             // `paladin_core::Secret`'s `ZeroizeOnDrop` impl.
             let _dropped_pending = state.secret_state.switch_path(to);
+            if path_changed {
+                // A typed §5 rejection from
+                // [`SaveClickOutcome::InlineError`] is always
+                // specific to the leaving sub-path's failing field
+                // (manual label / secret / icon-hint, or URI text);
+                // it is not applicable to the entering path. Drop
+                // it so the new path starts fresh — symmetric with
+                // the pending-duplicate drop above.
+                state.inline_error = None;
+            }
             None
         }
         AddAccountMsg::ManualLabelChanged(text) => {
