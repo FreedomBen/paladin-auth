@@ -660,3 +660,57 @@ fn format_app_menu_passphrase_label_ends_with_ellipsis() {
         "Passphrase menu label must not use three ASCII periods; the GNOME HIG requires U+2026 instead; got {label:?}",
     );
 }
+
+#[test]
+fn format_app_menu_preferences_label_returns_preferences_without_ellipsis() {
+    // The `AppModel`'s primary `gio::Menu` "Preferences" entry's
+    // label is populated from this helper. The wording
+    // (`"Preferences"`) names the surface the entry opens
+    // (`SettingsComponent`'s `AdwPreferencesDialog`) and uses
+    // the bare label — no trailing horizontal-ellipsis — because
+    // the modern GNOME HIG drops the ellipsis from preferences
+    // entries: the dialog is live-apply (each toggle / spinner
+    // change drives a `Vault::mutate_and_save` per
+    // `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage") rather
+    // than collecting input behind an Apply / Cancel button, so
+    // the affordance is not a request for further input before
+    // committing. The dialog-opening entries (Import, Export,
+    // Passphrase) keep the ellipsis because they collect input
+    // before committing; Preferences does not.
+    //
+    // Pure — returns a `'static str` without allocating. Distinct
+    // from the dialog-opening primary-menu entries
+    // (`format_app_menu_import_label`,
+    // `format_app_menu_export_label`,
+    // `format_app_menu_passphrase_label`) which carry the
+    // ellipsis; matches the ellipsis-less convention used by
+    // every other modern GNOME app's Preferences entry.
+    use paladin_gtk::app::model::format_app_menu_preferences_label;
+
+    assert_eq!(
+        format_app_menu_preferences_label(),
+        "Preferences",
+        "primary menu Preferences entry uses the bare label (no ellipsis) per the modern GNOME HIG",
+    );
+}
+
+#[test]
+fn format_app_menu_preferences_label_does_not_carry_ellipsis() {
+    // The modern GNOME HIG drops the ellipsis from Preferences
+    // entries because live-apply preferences are not a request
+    // for further input before committing. Pinning a no-ellipsis
+    // invariant alongside the full-string assertion guards
+    // against an accidental rename that would otherwise drift
+    // back to the older HIG style.
+    use paladin_gtk::app::model::format_app_menu_preferences_label;
+
+    let label = format_app_menu_preferences_label();
+    assert!(
+        !label.ends_with('\u{2026}'),
+        "Preferences menu label must not end with the horizontal-ellipsis character (U+2026); the live-apply preferences contract does not require it; got {label:?}",
+    );
+    assert!(
+        !label.ends_with("..."),
+        "Preferences menu label must not end with three ASCII periods either; got {label:?}",
+    );
+}

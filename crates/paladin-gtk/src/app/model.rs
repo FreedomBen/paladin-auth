@@ -1561,3 +1561,30 @@ pub fn format_app_menu_export_label() -> &'static str {
 pub fn format_app_menu_passphrase_label() -> &'static str {
     "Passphrase\u{2026}"
 }
+
+/// Fixed label the widget hands to the primary `gio::Menu`'s
+/// "Preferences" entry.
+///
+/// Returns the static label `"Preferences"` — the wording for the
+/// menu entry that opens `SettingsComponent`'s
+/// `AdwPreferencesDialog`. Uses the bare label (no trailing
+/// horizontal-ellipsis) because the modern GNOME HIG drops the
+/// ellipsis from preferences entries: the dialog is live-apply
+/// (each toggle / spinner change drives a `Vault::mutate_and_save`
+/// per `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage") rather
+/// than collecting input behind an Apply / Cancel button, so the
+/// affordance is not a request for further input before
+/// committing. The dialog-opening entries (Import, Export,
+/// Passphrase) keep the ellipsis because they collect input before
+/// committing; Preferences does not.
+///
+/// Pure — returns a `'static str` without allocating. Distinct
+/// from the dialog-opening primary-menu entries
+/// ([`format_app_menu_import_label`], [`format_app_menu_export_label`],
+/// [`format_app_menu_passphrase_label`]) which carry the ellipsis;
+/// matches the ellipsis-less convention used by every other
+/// modern GNOME app's Preferences entry.
+#[must_use]
+pub fn format_app_menu_preferences_label() -> &'static str {
+    "Preferences"
+}
