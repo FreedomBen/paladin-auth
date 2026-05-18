@@ -396,6 +396,29 @@ pub fn format_rename_dialog_label_title() -> &'static str {
     "Label"
 }
 
+/// Fixed `"Cancel"` label the widget hands to the Rename account
+/// dialog's footer Cancel `gtk::Button::set_label`.
+///
+/// The label is the non-destructive affordance the user clicks to
+/// dismiss the dialog without committing a new label via
+/// `Vault::rename`. Wording is the fixed GNOME-convention
+/// `"Cancel"` — surfaced through a helper so the string lives in
+/// one place shared by the widget binding and the pure-logic
+/// tests in `tests/rename_dialog_logic.rs`. Sibling of
+/// [`crate::add_account::format_add_dialog_cancel_label`] on the
+/// dialog-footer-cancel side; both return the same
+/// GNOME-convention wording so a future copy change can land
+/// through whichever helper's surface it applies to without
+/// silently moving the other.
+///
+/// Pure — returns a `'static str` without allocating. Sibling of
+/// [`format_rename_dialog_title`] and
+/// [`format_rename_dialog_label_title`] on the dialog-chrome side.
+#[must_use]
+pub fn format_rename_dialog_cancel_label() -> &'static str {
+    "Cancel"
+}
+
 /// Construction parameters for [`RenameDialogComponent`].
 ///
 /// `AppModel` builds this from the live vault when a kebab
@@ -834,7 +857,7 @@ impl SimpleComponent for RenameDialogComponent {
 
                 #[name = "cancel_button"]
                 gtk::Button {
-                    set_label: "Cancel",
+                    set_label: format_rename_dialog_cancel_label(),
                     connect_clicked[sender] => move |_| {
                         sender.input(RenameDialogMsg::Cancel);
                     },

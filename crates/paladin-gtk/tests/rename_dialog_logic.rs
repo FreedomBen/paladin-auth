@@ -1322,3 +1322,24 @@ fn format_rename_dialog_label_title_returns_label() {
         "row title matches the GNOME convention for an AdwEntryRow editing the account label",
     );
 }
+
+#[test]
+fn format_rename_dialog_cancel_label_returns_cancel() {
+    // The Rename account dialog's footer Cancel `gtk::Button`'s
+    // `set_label` attribute is populated from this helper. The
+    // label wording is the fixed GNOME-convention `"Cancel"` —
+    // surfaced through a helper so the string lives in one place
+    // shared by the widget binding and the snapshot tests. Sibling
+    // of `paladin_gtk::add_account::format_add_dialog_cancel_label`
+    // on the dialog-footer-cancel side; both return the same
+    // GNOME-convention wording, so a future copy change can land
+    // through whichever helper's surface it applies to without
+    // silently moving the other.
+    use paladin_gtk::rename_dialog::format_rename_dialog_cancel_label;
+
+    assert_eq!(
+        format_rename_dialog_cancel_label(),
+        "Cancel",
+        "dialog cancel button label is the fixed GNOME-convention wording",
+    );
+}
