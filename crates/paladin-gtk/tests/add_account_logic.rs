@@ -5893,3 +5893,182 @@ fn compose_active_path_label_round_trips_back_to_manual() {
         "SwitchPath back to Manual → composer surfaces the manual sub-path label",
     );
 }
+
+#[test]
+fn compose_pending_duplicate_alert_visible_fresh_dialog_is_false() {
+    // A freshly-opened dialog has not yet seen a duplicate-collision
+    // Save click, so the alert-visibility projection must be `false`
+    // — the widget binds a `#[watch]` over the projection to drive
+    // the `AdwAlertDialog`'s `set_visible:` / `.present()` /
+    // `.close()` transition without reaching across
+    // `pending_duplicate_existing()` inline. Sibling of the four
+    // `compose_pending_duplicate_alert_*_label` / `_body` /
+    // `_heading` projections that already cover the alert content;
+    // this bool drives the dialog's existence on screen.
+    use paladin_gtk::add_account::{compose_pending_duplicate_alert_visible, AddDialogState};
+
+    let state = AddDialogState::new();
+
+    assert!(
+        !compose_pending_duplicate_alert_visible(&state),
+        "fresh dialog has no pending duplicate → alert is not visible",
+    );
+}
+
+#[test]
+fn compose_pending_duplicate_alert_visible_with_staged_pending_is_true() {
+    // After `StagePendingDuplicate` parks the colliding existing
+    // summary, the alert-visibility projection must return `true`
+    // so the widget can `#[watch]` it to drive the
+    // `AdwAlertDialog`'s presentation in lockstep with the four
+    // content projections (heading / body / confirm-label /
+    // cancel-label). Mirror of
+    // `compose_pending_duplicate_alert_cancel_label_with_staged_pending_returns_label`
+    // on the visibility side.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_pending_duplicate_alert_visible, AddAccountMsg, AddDialogState,
+    };
+
+    let mut state = AddDialogState::new();
+    let validated = match classify_manual_submit(manual_totp_defaults(), now_for_tests()) {
+        ManualSubmitOutcome::Proceed(v) => v,
+        ManualSubmitOutcome::InlineError(e) => panic!("fixture failed: {e:?}"),
+    };
+
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::StagePendingDuplicate {
+            account: validated.account,
+            warnings: validated.warnings,
+            existing: dummy_existing_summary(),
+        },
+    );
+
+    assert!(
+        compose_pending_duplicate_alert_visible(&state),
+        "staged pending → composer reports the alert as visible",
+    );
+}
+
+#[test]
+fn compose_pending_duplicate_alert_visible_drains_after_confirm_add_anyway() {
+    // `ConfirmAddAnyway` consumes the pending validated account and
+    // drains the colliding-summary slot in lockstep with every
+    // alert-content projection, so the visibility projection must
+    // collapse back to `false` — the widget binds a `#[watch]` over
+    // the projection so the `AdwAlertDialog` closes once the user
+    // confirms past the prompt. Mirror of
+    // `compose_pending_duplicate_alert_cancel_label_drains_after_confirm_add_anyway`
+    // on the visibility side.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_pending_duplicate_alert_visible, AddAccountMsg, AddDialogState,
+    };
+
+    let mut state = AddDialogState::new();
+    let validated = match classify_manual_submit(manual_totp_defaults(), now_for_tests()) {
+        ManualSubmitOutcome::Proceed(v) => v,
+        ManualSubmitOutcome::InlineError(e) => panic!("fixture failed: {e:?}"),
+    };
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::StagePendingDuplicate {
+            account: validated.account,
+            warnings: validated.warnings,
+            existing: dummy_existing_summary(),
+        },
+    );
+    assert!(
+        compose_pending_duplicate_alert_visible(&state),
+        "precondition: StagePendingDuplicate makes the alert visible",
+    );
+
+    let _ = apply_msg(&mut state, AddAccountMsg::ConfirmAddAnyway);
+
+    assert!(
+        !compose_pending_duplicate_alert_visible(&state),
+        "ConfirmAddAnyway drains the visibility projection alongside the pending slot",
+    );
+}
+
+#[test]
+fn compose_pending_duplicate_alert_visible_drains_after_cancel() {
+    // `Cancel` drains every half of the duplicate-collision
+    // projection in lockstep, so the visibility projection must
+    // collapse back to `false` even though the user dismissed via
+    // the dialog's outer Cancel rather than the modal — once the
+    // pending validated account drains, no `AdwAlertDialog` lives.
+    // Confirms the lockstep drain semantics carry across the
+    // second drainage trigger documented on
+    // `pending_duplicate_existing`.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_pending_duplicate_alert_visible, AddAccountMsg, AddDialogState,
+    };
+
+    let mut state = AddDialogState::new();
+    let validated = match classify_manual_submit(manual_totp_defaults(), now_for_tests()) {
+        ManualSubmitOutcome::Proceed(v) => v,
+        ManualSubmitOutcome::InlineError(e) => panic!("fixture failed: {e:?}"),
+    };
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::StagePendingDuplicate {
+            account: validated.account,
+            warnings: validated.warnings,
+            existing: dummy_existing_summary(),
+        },
+    );
+    assert!(
+        compose_pending_duplicate_alert_visible(&state),
+        "precondition: StagePendingDuplicate makes the alert visible",
+    );
+
+    let _ = apply_msg(&mut state, AddAccountMsg::Cancel);
+
+    assert!(
+        !compose_pending_duplicate_alert_visible(&state),
+        "Cancel drains the visibility projection alongside the pending slot",
+    );
+}
+
+#[test]
+fn compose_pending_duplicate_alert_visible_drains_after_switch_path() {
+    // `SwitchPath` drains the pending duplicate-collision state per
+    // `AddSecretState::switch_path` (the parked validated account
+    // and the colliding summary are tied to the path the user just
+    // left), so the visibility projection must collapse back to
+    // `false` whenever the user moves to a different sub-path. The
+    // widget binds a `#[watch]` over the projection so the
+    // `AdwAlertDialog` closes the moment the user picks the URI sub-
+    // path instead of dismissing through the modal itself. Same
+    // lockstep behavior the body / heading / label projections rely
+    // on.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_pending_duplicate_alert_visible, AddAccountMsg, AddDialogState,
+    };
+    use paladin_gtk::secret_fields::AddPath;
+
+    let mut state = AddDialogState::new();
+    let validated = match classify_manual_submit(manual_totp_defaults(), now_for_tests()) {
+        ManualSubmitOutcome::Proceed(v) => v,
+        ManualSubmitOutcome::InlineError(e) => panic!("fixture failed: {e:?}"),
+    };
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::StagePendingDuplicate {
+            account: validated.account,
+            warnings: validated.warnings,
+            existing: dummy_existing_summary(),
+        },
+    );
+    assert!(
+        compose_pending_duplicate_alert_visible(&state),
+        "precondition: StagePendingDuplicate makes the alert visible",
+    );
+
+    let _ = apply_msg(&mut state, AddAccountMsg::SwitchPath(AddPath::Uri));
+
+    assert!(
+        !compose_pending_duplicate_alert_visible(&state),
+        "SwitchPath drains the visibility projection alongside the pending slot",
+    );
+}

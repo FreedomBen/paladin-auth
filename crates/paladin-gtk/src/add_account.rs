@@ -1527,6 +1527,37 @@ pub fn compose_pending_duplicate_alert_cancel_label(
         .map(|_| format_duplicate_alert_cancel_label())
 }
 
+/// State-driven projection of whether the duplicate-collision
+/// `AdwAlertDialog` is currently shown.
+///
+/// Returns `true` while a [`SaveClickOutcome::AwaitConfirmation`]
+/// is parked (the colliding summary populates
+/// [`AddDialogState::pending_duplicate_existing`] via
+/// [`AddAccountMsg::StagePendingDuplicate`]), and `false` once the
+/// slot drains — [`AddAccountMsg::Cancel`],
+/// [`AddAccountMsg::SubmitProceed`],
+/// [`AddAccountMsg::ConfirmAddAnyway`], and sub-path
+/// [`AddAccountMsg::SwitchPath`] all drain in lockstep with the
+/// heading / body / confirm-label / cancel-label projections so
+/// the modal disappears the moment the user moves on.
+///
+/// Lets the widget bind a single `#[watch]` over the projection to
+/// drive the `AdwAlertDialog`'s `set_visible:` /
+/// `.present()` / `.close()` transition instead of inspecting the
+/// content projections' `Option`-ness inline alongside
+/// [`compose_pending_duplicate_alert_heading`] /
+/// [`compose_pending_duplicate_alert_body`] /
+/// [`compose_pending_duplicate_alert_confirm_label`] /
+/// [`compose_pending_duplicate_alert_cancel_label`]. Pure —
+/// borrows the state and returns a `bool` without allocating;
+/// sibling of those four `Option`-returning content projections so
+/// the widget can `#[watch]` every region of the
+/// `AdwAlertDialog` in lockstep.
+#[must_use]
+pub fn compose_pending_duplicate_alert_visible(state: &AddDialogState) -> bool {
+    state.pending_duplicate_existing().is_some()
+}
+
 /// State-driven projection of the durability-warning body the
 /// widget renders beneath the post-add counts panel after a
 /// `KeepWithWarning` worker completion, or `None` for any other
