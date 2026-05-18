@@ -1749,3 +1749,27 @@ pub fn format_app_menu_preferences_action() -> &'static str {
 pub fn format_app_menu_about_action() -> &'static str {
     "app.about"
 }
+
+/// Fully-qualified `detailed_action_name` the widget hands to the
+/// primary `gio::Menu`'s "Quit" entry.
+///
+/// Returns the static action target `"app.quit"` — the
+/// fully-qualified target the `gio::Menu` resolves against the
+/// `gio::ApplicationWindow`'s `app` action group. The matching
+/// `gio::SimpleAction` (`"quit"`) is registered on the
+/// application's action group and dispatches the standard
+/// `Quit` shutdown path, deferring the close until any in-flight
+/// vault worker returns per §"In-flight effect ownership". The
+/// `"app."` prefix names the group; `"quit"` names the action.
+///
+/// Pure — returns a `'static str` without allocating. Final
+/// sibling of the primary-menu action-target set
+/// ([`format_app_menu_import_action`], [`format_app_menu_export_action`],
+/// [`format_app_menu_passphrase_action`], [`format_app_menu_preferences_action`],
+/// [`format_app_menu_about_action`]); together they pin all six
+/// primary-menu entries' action targets against a single source
+/// of truth, paired with the matching `_label` helpers.
+#[must_use]
+pub fn format_app_menu_quit_action() -> &'static str {
+    "app.quit"
+}

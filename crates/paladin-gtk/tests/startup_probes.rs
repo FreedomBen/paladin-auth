@@ -1051,3 +1051,52 @@ fn format_app_menu_about_action_uses_app_group_prefix() {
         "action targets must not contain whitespace; got {action:?}",
     );
 }
+
+#[test]
+fn format_app_menu_quit_action_returns_app_quit() {
+    // The `AppModel`'s primary `gio::Menu` "Quit" entry's
+    // `detailed_action_name` is populated from this helper. The
+    // wording (`"app.quit"`) is the fully-qualified action target
+    // the `gio::Menu` resolves against the application's `app`
+    // action group. The `"app."` prefix names the group;
+    // `"quit"` names the action. The matching `gio::SimpleAction`
+    // dispatches the standard `Quit` shutdown path, deferring the
+    // close until any in-flight vault worker returns per §"In-
+    // flight effect ownership".
+    //
+    // Pure — returns a `'static str` without allocating. Final
+    // sibling of the primary-menu action-target set
+    // (`format_app_menu_import_action`,
+    // `format_app_menu_export_action`,
+    // `format_app_menu_passphrase_action`,
+    // `format_app_menu_preferences_action`,
+    // `format_app_menu_about_action`); together they pin all six
+    // primary-menu entries' action targets against a single
+    // source of truth, paired with the matching `_label`
+    // helpers.
+    use paladin_gtk::app::model::format_app_menu_quit_action;
+
+    assert_eq!(
+        format_app_menu_quit_action(),
+        "app.quit",
+        "primary menu Quit entry targets the app.quit action on the application's action group",
+    );
+}
+
+#[test]
+fn format_app_menu_quit_action_uses_app_group_prefix() {
+    // Defense-in-depth against an accidental rename that would
+    // drop the `app.` group prefix or move the action onto a
+    // different group.
+    use paladin_gtk::app::model::format_app_menu_quit_action;
+
+    let action = format_app_menu_quit_action();
+    assert!(
+        action.starts_with("app."),
+        "primary menu Quit action target must start with the `app.` group prefix so `gio::Menu` resolves it against the application action group; got {action:?}",
+    );
+    assert!(
+        !action.contains(' '),
+        "action targets must not contain whitespace; got {action:?}",
+    );
+}
