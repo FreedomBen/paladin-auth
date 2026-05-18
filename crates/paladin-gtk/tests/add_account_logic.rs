@@ -8014,3 +8014,29 @@ fn format_manual_period_title_matches_tui_wording() {
         "period row title mirrors the TUI add view's \"Period (s):\" wording",
     );
 }
+
+#[test]
+fn format_manual_counter_title_matches_tui_wording() {
+    // The HOTP counter `AdwSpinRow`'s `title` attribute is populated
+    // from this helper, so the wording must match what the TUI's
+    // add view shows (the `"Counter:"` row built by
+    // `period_or_counter_field` in
+    // `crates/paladin-tui/src/view/add.rs` — the colon is the TUI's
+    // field-name separator and drops out because AdwSpinRow renders
+    // its title as a floating label above the spinner rather than
+    // as a prefix). No unit hint — the HOTP counter is a dimensionless
+    // event count, same as the TUI's bare `"Counter:"` wording. The
+    // row is visible only on the HOTP kind (driven by
+    // `compose_manual_counter_visible`); this helper covers only the
+    // row's static title wording. Sibling of
+    // `format_manual_period_title_matches_tui_wording` on the
+    // counter-row-title side; the pair pins the kind-switched
+    // period-or-counter slot's title against the TUI wording.
+    use paladin_gtk::add_account::format_manual_counter_title;
+
+    assert_eq!(
+        format_manual_counter_title(),
+        "Counter",
+        "counter row title mirrors the TUI add view's \"Counter:\" wording",
+    );
+}

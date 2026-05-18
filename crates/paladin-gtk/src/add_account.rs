@@ -2561,6 +2561,33 @@ pub fn format_manual_period_title() -> &'static str {
     "Period (s)"
 }
 
+/// Fixed `title` attribute the widget hands to the manual sub-path's
+/// HOTP counter `AdwSpinRow::set_title`.
+///
+/// Returns the static title string `AdwSpinRow` renders as the
+/// floating label above the spinner. The wording (`"Counter"`)
+/// mirrors the TUI add view's `"Counter:"` row built by
+/// `period_or_counter_field` (see
+/// `crates/paladin-tui/src/view/add.rs`) — the TUI's trailing colon
+/// is its field-name separator and drops out because `AdwSpinRow`
+/// renders its title as a floating label rather than as a prefix.
+/// No unit hint — the HOTP counter is a dimensionless event count,
+/// same as the TUI's bare `"Counter:"` wording. The row is visible
+/// only on the HOTP kind (driven by
+/// [`compose_manual_counter_visible`]); the spinner's
+/// `(lower, upper, step)` adjustment comes from
+/// [`format_manual_counter_adjustment`].
+///
+/// Pure — returns a `'static str` without allocating. Sibling of
+/// [`format_manual_period_title`] and
+/// [`format_manual_counter_adjustment`] on the counter-row-title
+/// side; the pair pins the kind-switched period-or-counter slot's
+/// title against the TUI wording.
+#[must_use]
+pub fn format_manual_counter_title() -> &'static str {
+    "Counter"
+}
+
 /// Apply an inbound [`AddAccountMsg`] and return the optional
 /// [`AddAccountOutput`] the widget layer should forward to
 /// `AppModel`.
