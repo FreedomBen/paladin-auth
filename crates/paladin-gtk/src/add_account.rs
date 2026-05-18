@@ -2000,6 +2000,50 @@ pub fn compose_manual_digits_value(state: &AddDialogState) -> f64 {
     f64::from(state.manual_draft().digits)
 }
 
+/// Render the fixed `gtk::DropDown` selected index for an
+/// [`AccountKindInput`].
+///
+/// Returns `0` for [`AccountKindInput::Totp`] and `1` for
+/// [`AccountKindInput::Hotp`] — the kind dropdown's
+/// `gtk::StringList` model is populated in enum-declaration order
+/// (TOTP first, HOTP second). The indices feed
+/// `gtk::DropDown::set_selected` and the state-driven
+/// [`compose_manual_kind_selected`] projection. Surfacing the index
+/// through this helper keeps it in one place shared by the widget
+/// binding and the snapshot tests in `tests/add_account_logic.rs`,
+/// and pins the model ordering against a single source of truth so
+/// a future caller cannot accidentally introduce drift.
+///
+/// Pure — takes the enum value by `Copy` and returns a `u32`.
+/// Sibling of [`format_add_path_name`] on the dropdown-selection
+/// side; both functions pin a widget-property mapping for an enum.
+#[must_use]
+pub fn format_manual_kind_selected(kind: AccountKindInput) -> u32 {
+    match kind {
+        AccountKindInput::Totp => 0,
+        AccountKindInput::Hotp => 1,
+    }
+}
+
+/// State-driven projection of the manual sub-path's TOTP/HOTP kind
+/// dropdown's `gtk::DropDown::set_selected` index.
+///
+/// Returns [`format_manual_kind_selected`] of
+/// [`ManualDraftState::kind`], so the projection flips between `0`
+/// and `1` in lockstep with `AddAccountMsg::ManualKindChanged`
+/// dispatches. The widget binds a single `#[watch]` over the
+/// projection to drive `set_selected:` instead of pattern-matching
+/// on [`ManualDraftState::kind`] inline.
+///
+/// Mirror of [`compose_active_path_name`] on the kind-dropdown
+/// side: both projections route an enum through a sibling
+/// `format_*` helper to a widget-property u32 / slug. Pure —
+/// borrows the state and returns a `u32` without allocating.
+#[must_use]
+pub fn compose_manual_kind_selected(state: &AddDialogState) -> u32 {
+    format_manual_kind_selected(state.manual_draft().kind)
+}
+
 /// State-driven projection of whether the Save button's
 /// `set_sensitive:` is `true` — i.e. whether the active sub-path
 /// has the minimum required input for a click to reach the

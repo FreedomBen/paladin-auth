@@ -6856,3 +6856,113 @@ fn compose_manual_digits_value_survives_kind_round_trip() {
         "kind round-trip preserves the prior digits value in the projection",
     );
 }
+
+#[test]
+fn format_manual_kind_selected_totp_returns_zero() {
+    // The kind dropdown's `gtk::StringList` model is populated in
+    // enum declaration order (TOTP first, HOTP second), so the TOTP
+    // variant must map to selected index `0`. Mirror of
+    // `format_add_path_name_manual_returns_manual` on the kind-
+    // dropdown side.
+    use paladin_core::AccountKindInput;
+    use paladin_gtk::add_account::format_manual_kind_selected;
+
+    assert_eq!(
+        format_manual_kind_selected(AccountKindInput::Totp),
+        0,
+        "TOTP is the first item in the kind dropdown's model",
+    );
+}
+
+#[test]
+fn format_manual_kind_selected_hotp_returns_one() {
+    // The kind dropdown's `gtk::StringList` model is populated in
+    // enum declaration order (TOTP first, HOTP second), so the HOTP
+    // variant must map to selected index `1`.
+    use paladin_core::AccountKindInput;
+    use paladin_gtk::add_account::format_manual_kind_selected;
+
+    assert_eq!(
+        format_manual_kind_selected(AccountKindInput::Hotp),
+        1,
+        "HOTP is the second item in the kind dropdown's model",
+    );
+}
+
+#[test]
+fn compose_manual_kind_selected_fresh_dialog_returns_totp() {
+    // A freshly-opened dialog defaults to `AccountKindInput::Totp`
+    // (CLI / TUI parity, see `ManualDraftState::default`), so the
+    // kind-selected projection must return `0` — the widget binds a
+    // `#[watch]` over the projection to drive the kind dropdown's
+    // `gtk::DropDown::set_selected:` so the dropdown stays in
+    // lockstep with `ManualDraftState::kind`.
+    use paladin_core::AccountKindInput;
+    use paladin_gtk::add_account::{
+        compose_manual_kind_selected, format_manual_kind_selected, AddDialogState,
+    };
+
+    let state = AddDialogState::new();
+
+    assert_eq!(
+        compose_manual_kind_selected(&state),
+        format_manual_kind_selected(AccountKindInput::Totp),
+        "fresh dialog → composer surfaces the TOTP selected index verbatim",
+    );
+}
+
+#[test]
+fn compose_manual_kind_selected_after_kind_hotp_returns_hotp() {
+    // `ManualKindChanged(Hotp)` drives the kind-selected projection
+    // to `1` in lockstep with `ManualDraftState::kind` flipping to
+    // `AccountKindInput::Hotp`. The widget's `#[watch]`-driven
+    // `set_selected:` follows the user's dropdown selection.
+    use paladin_core::AccountKindInput;
+    use paladin_gtk::add_account::{
+        apply_msg, compose_manual_kind_selected, format_manual_kind_selected, AddAccountMsg,
+        AddDialogState,
+    };
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualKindChanged(AccountKindInput::Hotp),
+    );
+
+    assert_eq!(
+        compose_manual_kind_selected(&state),
+        format_manual_kind_selected(AccountKindInput::Hotp),
+        "ManualKindChanged(Hotp) → composer surfaces the HOTP selected index",
+    );
+}
+
+#[test]
+fn compose_manual_kind_selected_round_trips_back_to_totp() {
+    // Toggling the kind dropdown back to TOTP after HOTP must drive
+    // the kind-selected projection back to `0` — the projection must
+    // not latch on the first transition, so the widget's
+    // `#[watch]`-driven `set_selected:` stays bidirectional. Mirror
+    // of `compose_active_path_name_round_trips_back_to_manual` on
+    // the kind-dropdown side.
+    use paladin_core::AccountKindInput;
+    use paladin_gtk::add_account::{
+        apply_msg, compose_manual_kind_selected, format_manual_kind_selected, AddAccountMsg,
+        AddDialogState,
+    };
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualKindChanged(AccountKindInput::Hotp),
+    );
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualKindChanged(AccountKindInput::Totp),
+    );
+
+    assert_eq!(
+        compose_manual_kind_selected(&state),
+        format_manual_kind_selected(AccountKindInput::Totp),
+        "round-trip back to TOTP → composer surfaces the TOTP selected index",
+    );
+}
