@@ -1865,6 +1865,30 @@ pub fn format_app_menu_preferences_action_name() -> &'static str {
     "preferences"
 }
 
+/// Bare `GLib` action name the primary `gio::Menu`'s "About
+/// Paladin" entry binds via [`format_app_menu_about_action`].
+///
+/// Returns the static action name `"about"` — the name passed
+/// to `gio::SimpleAction::new(..., None)` when the matching
+/// action is registered on the application's `app` action group.
+/// The fully-qualified `detailed_action_name` `"app.about"`
+/// spelled by [`format_app_menu_about_action`] is the
+/// [`format_app_action_group_name`] group prefix joined to this
+/// bare name via the `<group>.<action>` separator. The bare
+/// name is `"about"` rather than `"about_paladin"` so the
+/// action does not need to track an application rename if one
+/// ever lands.
+///
+/// Pure — returns a `'static str` without allocating. Sibling
+/// of [`format_app_menu_about_action`] on the fully-qualified
+/// target side and [`format_app_menu_about_label`] on the
+/// visible-label side; together they pin all three halves of
+/// the menu-entry contract against a single source of truth.
+#[must_use]
+pub fn format_app_menu_about_action_name() -> &'static str {
+    "about"
+}
+
 /// Bare `GLib` action-group name the primary `gio::Menu` resolves
 /// every entry target against.
 ///
