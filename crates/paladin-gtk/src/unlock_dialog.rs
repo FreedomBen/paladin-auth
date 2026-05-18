@@ -209,6 +209,29 @@ pub fn format_unlock_dialog_passphrase_title() -> &'static str {
     "Passphrase"
 }
 
+/// Fixed `"Unlock"` label the widget hands to the Unlock vault
+/// dialog's footer primary `gtk::Button::set_label`.
+///
+/// The label is the action-specific GNOME-HIG verb for the
+/// surface — matching the dialog's
+/// [`format_unlock_dialog_title`] (`"Unlock vault"`) so the
+/// primary button reads as the noun-stripped imperative of the
+/// dialog's stated action. No TUI parity: the TUI submits the
+/// passphrase via `Enter` and has no button label to mirror.
+/// Pinning the wording through a helper keeps the string in one
+/// place shared by the widget binding and the pure-logic tests
+/// in `tests/unlock_dialog_logic.rs`.
+///
+/// Pure — returns a `'static str` without allocating. Sibling of
+/// [`format_unlock_dialog_title`] and
+/// [`format_unlock_dialog_passphrase_title`] on the unlock-
+/// dialog-chrome side; together they pin every visible label
+/// region of the unlock surface.
+#[must_use]
+pub fn format_unlock_button_label() -> &'static str {
+    "Unlock"
+}
+
 /// Construction parameters for [`UnlockDialogComponent`].
 #[derive(Debug, Clone)]
 pub struct UnlockDialogInit {
@@ -766,7 +789,7 @@ impl SimpleComponent for UnlockDialogComponent {
                 // worker infrastructure.
                 #[name = "unlock_button"]
                 gtk::Button {
-                    set_label: "Unlock",
+                    set_label: format_unlock_button_label(),
                     add_css_class: "suggested-action",
                     #[watch]
                     set_sensitive: model.state.submit_button_sensitive(),

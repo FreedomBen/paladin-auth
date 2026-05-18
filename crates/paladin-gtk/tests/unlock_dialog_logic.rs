@@ -1399,3 +1399,29 @@ fn format_unlock_dialog_passphrase_title_matches_tui_wording() {
         "passphrase row title mirrors the TUI unlock view's \"Passphrase:\" prompt",
     );
 }
+
+#[test]
+fn format_unlock_button_label_returns_unlock() {
+    // The Unlock vault dialog's footer primary `gtk::Button`'s
+    // `set_label` attribute is populated from this helper. The
+    // wording (`"Unlock"`) is the action-specific GNOME-HIG verb
+    // for the surface — matching the dialog's
+    // `format_unlock_dialog_title` (`"Unlock vault"`) so the
+    // primary button reads as the noun-stripped imperative of the
+    // dialog's stated action. No TUI parity: the TUI submits the
+    // passphrase via `Enter` and has no button label to mirror.
+    // Pinning the wording through a helper keeps the string in one
+    // place shared by the widget binding and the pure-logic tests.
+    //
+    // Sibling of `format_unlock_dialog_title` and
+    // `format_unlock_dialog_passphrase_title` on the unlock-dialog-
+    // chrome side; together they pin every visible label region of
+    // the unlock surface.
+    use paladin_gtk::unlock_dialog::format_unlock_button_label;
+
+    assert_eq!(
+        format_unlock_button_label(),
+        "Unlock",
+        "unlock button label uses the action-specific GNOME-HIG verb",
+    );
+}
