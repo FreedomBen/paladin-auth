@@ -7644,3 +7644,63 @@ fn format_add_path_order_names_align_with_format_add_path_name() {
         "page-add order through format_add_path_name renders manual / uri in order",
     );
 }
+
+// `format_manual_digits_adjustment` returns an exact `(f64, f64,
+// f64)` tuple sourced from `paladin_core::{DIGITS_MIN, DIGITS_MAX}`
+// (both `u8`, lossless under `f64::from`) and the `1.0` integer
+// step, so `clippy::float_cmp` does not apply.
+#[test]
+#[allow(clippy::float_cmp)]
+fn format_manual_digits_adjustment_returns_paladin_core_range() {
+    // The digits AdwSpinRow's `gtk::Adjustment` (lower, upper,
+    // step_increment) tuple must mirror the
+    // `paladin_core::{DIGITS_MIN, DIGITS_MAX}` validated range so a
+    // value the spinner can express always survives
+    // `validate_manual`. The step is `1.0` because §5 / §6 only
+    // permit integer digit counts. The value is the f64 the spinner
+    // displays, which `paladin_core::DIGITS_MIN` / `DIGITS_MAX` cast
+    // to losslessly (both `u8` values lie inside the f64 safe-integer
+    // range). Pinning the alignment here keeps the spinner's input
+    // domain and the validator's accepted range tied to the single
+    // source of truth in `paladin_core::domain::validation`.
+    use paladin_gtk::add_account::format_manual_digits_adjustment;
+
+    let (lower, upper, step) = format_manual_digits_adjustment();
+    assert_eq!(
+        lower,
+        f64::from(paladin_core::DIGITS_MIN),
+        "lower bound mirrors paladin_core::DIGITS_MIN",
+    );
+    assert_eq!(
+        upper,
+        f64::from(paladin_core::DIGITS_MAX),
+        "upper bound mirrors paladin_core::DIGITS_MAX",
+    );
+    assert_eq!(
+        step, 1.0,
+        "step is 1.0 because the digits domain is integer-only",
+    );
+}
+
+#[test]
+fn format_manual_digits_adjustment_default_lies_inside_range() {
+    // `compose_manual_digits_value` on a freshly-opened dialog must
+    // resolve to a value the AdwSpinRow's adjustment accepts —
+    // otherwise the spinner clamps the visible value and the form
+    // opens out of sync with the underlying
+    // `ManualDraftState::digits` default. Pinning the invariant here
+    // guards against a future change to either side that introduces
+    // drift between the spinner's bounds and the dialog's default
+    // digits value.
+    use paladin_gtk::add_account::{
+        compose_manual_digits_value, format_manual_digits_adjustment, AddDialogState,
+    };
+
+    let state = AddDialogState::new();
+    let value = compose_manual_digits_value(&state);
+    let (lower, upper, _step) = format_manual_digits_adjustment();
+    assert!(
+        value >= lower && value <= upper,
+        "compose_manual_digits_value on a fresh dialog ({value}) lies inside [{lower}, {upper}]",
+    );
+}

@@ -2028,6 +2028,34 @@ pub fn compose_manual_digits_value(state: &AddDialogState) -> f64 {
     f64::from(state.manual_draft().digits)
 }
 
+/// Fixed `(lower, upper, step_increment)` tuple the widget hands to
+/// `gtk::Adjustment::new` for the manual sub-path's digits
+/// `AdwSpinRow`.
+///
+/// Returns
+/// `(f64::from(paladin_core::DIGITS_MIN), f64::from(paladin_core::DIGITS_MAX), 1.0)`
+/// — the §5 / §6 validated range for OTP digit counts, with the
+/// `1.0` step pinned because the digits domain is integer-only. The
+/// spinner cannot express a value outside this range, so a click on
+/// the Save button always carries a value
+/// [`paladin_core::validate_manual`] accepts on the digits axis;
+/// out-of-range values can still arrive through a future test driver
+/// or misuse path, so [`validate_manual`] still owns the boundary
+/// rejection.
+///
+/// Pure — returns a `(f64, f64, f64)` tuple without allocating.
+/// Sibling of [`compose_manual_digits_value`] on the spinner-
+/// adjustment side; together they cover both the dynamic value the
+/// spinner reads and the static bounds the spinner enforces.
+#[must_use]
+pub fn format_manual_digits_adjustment() -> (f64, f64, f64) {
+    (
+        f64::from(paladin_core::DIGITS_MIN),
+        f64::from(paladin_core::DIGITS_MAX),
+        1.0,
+    )
+}
+
 /// Render the fixed `gtk::DropDown` selected index for an
 /// [`AccountKindInput`].
 ///
