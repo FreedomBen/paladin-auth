@@ -6647,3 +6647,108 @@ fn compose_manual_period_secs_value_survives_kind_round_trip() {
         "kind round-trip preserves the prior period value in the projection",
     );
 }
+
+// `u64 → f64` is lossless for every counter value the spinbutton
+// adjustment exposes inside the test suite (all small), so
+// `clippy::float_cmp` does not apply.
+#[test]
+#[allow(clippy::float_cmp)]
+fn compose_manual_counter_value_fresh_dialog_returns_default() {
+    // `ManualDraftState::default` seeds the HOTP counter at 0 for
+    // CLI / TUI parity, so a freshly-opened dialog must expose the
+    // default counter value through the projection — the widget
+    // binds a `#[watch]` over the projection to drive the counter
+    // spinbutton row's `AdwSpinRow::set_value:` so the row reflects
+    // state on initial render. Sibling of
+    // `compose_manual_counter_visible_default_state_is_false` on
+    // the counter-row value side.
+    use paladin_gtk::add_account::{compose_manual_counter_value, AddDialogState};
+
+    let state = AddDialogState::new();
+
+    assert_eq!(
+        compose_manual_counter_value(&state),
+        0.0,
+        "fresh dialog → composer surfaces the default 0 HOTP counter",
+    );
+}
+
+#[test]
+#[allow(clippy::float_cmp)]
+fn compose_manual_counter_value_after_counter_changed_reflects_new_value() {
+    // `AddAccountMsg::ManualCounterChanged(42)` shadows the spinner
+    // value into `ManualDraftState::counter`; the projection must
+    // surface the new value as an `f64` so the widget's
+    // `#[watch]`-driven `AdwSpinRow::set_value:` binding stays in
+    // lockstep with the underlying state on every dispatch.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_manual_counter_value, AddAccountMsg, AddDialogState,
+    };
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(&mut state, AddAccountMsg::ManualCounterChanged(42));
+
+    assert_eq!(
+        compose_manual_counter_value(&state),
+        42.0,
+        "ManualCounterChanged(42) → composer surfaces the new counter value",
+    );
+}
+
+#[test]
+#[allow(clippy::float_cmp)]
+fn compose_manual_counter_value_replaces_prior_shadow() {
+    // A second `ManualCounterChanged` dispatch must overwrite the
+    // first — the projection must not latch on the first transition,
+    // so the widget's `#[watch]`-driven spinbutton value stays
+    // bidirectional with the user's last selection.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_manual_counter_value, AddAccountMsg, AddDialogState,
+    };
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(&mut state, AddAccountMsg::ManualCounterChanged(7));
+    let _ = apply_msg(&mut state, AddAccountMsg::ManualCounterChanged(13));
+
+    assert_eq!(
+        compose_manual_counter_value(&state),
+        13.0,
+        "second ManualCounterChanged replaces the prior shadow in the projection",
+    );
+}
+
+#[test]
+#[allow(clippy::float_cmp)]
+fn compose_manual_counter_value_survives_kind_round_trip() {
+    // The counter value is shadowed into `ManualDraftState::counter`
+    // independently of the kind dropdown — flipping back to TOTP
+    // hides the counter row through `compose_manual_counter_visible`
+    // but must not reset the underlying value, so flipping back to
+    // HOTP restores the user's prior counter selection through this
+    // projection.
+    use paladin_core::AccountKindInput;
+    use paladin_gtk::add_account::{
+        apply_msg, compose_manual_counter_value, AddAccountMsg, AddDialogState,
+    };
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualKindChanged(AccountKindInput::Hotp),
+    );
+    let _ = apply_msg(&mut state, AddAccountMsg::ManualCounterChanged(99));
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualKindChanged(AccountKindInput::Totp),
+    );
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualKindChanged(AccountKindInput::Hotp),
+    );
+
+    assert_eq!(
+        compose_manual_counter_value(&state),
+        99.0,
+        "kind round-trip preserves the prior counter value in the projection",
+    );
+}

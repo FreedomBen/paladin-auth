@@ -1941,6 +1941,42 @@ pub fn compose_manual_counter_visible(state: &AddDialogState) -> bool {
     matches!(state.manual_draft().kind, AccountKindInput::Hotp)
 }
 
+/// State-driven projection of the manual sub-path's HOTP counter
+/// spinbutton value, surfaced as the `f64` that `AdwSpinRow::set_value`
+/// expects.
+///
+/// Returns the current [`ManualDraftState::counter`] cast to `f64` —
+/// `0.0` on a freshly-opened dialog (CLI / TUI default counter), and
+/// the post-`AddAccountMsg::ManualCounterChanged` value on every
+/// subsequent dispatch. The value persists across the kind dropdown's
+/// TOTP/HOTP toggles so the counter row, when re-revealed by
+/// [`compose_manual_counter_visible`], restores the user's prior
+/// selection instead of snapping back to the default.
+///
+/// The full `u64` range is accepted verbatim by the underlying
+/// [`AddAccountMsg::ManualCounterChanged`] dispatch; the cast to
+/// `f64` here matches `AdwSpinRow::set_value`'s signature and is
+/// lossless for every counter value below `2^53`. Spinning past
+/// that threshold is the user's prerogative — the projection
+/// reflects the stored counter without rejecting the cast — and the
+/// downstream Save-time [`validate_manual`] check still owns range
+/// rejection.
+///
+/// Lets the widget bind a single `#[watch]` over the projection to
+/// drive the counter row's `AdwSpinRow::set_value:` instead of
+/// casting [`ManualDraftState::counter`] inline against the live
+/// state. Sibling of [`compose_manual_counter_visible`] on the
+/// counter-row value side: the visibility projection gates whether
+/// the row is rendered, while this projection drives the value it
+/// shows. Mirror of [`compose_manual_period_secs_value`] on the
+/// HOTP-specific row. Pure — borrows the state and returns an `f64`
+/// without allocating.
+#[must_use]
+#[allow(clippy::cast_precision_loss)]
+pub fn compose_manual_counter_value(state: &AddDialogState) -> f64 {
+    state.manual_draft().counter as f64
+}
+
 /// State-driven projection of whether the Save button's
 /// `set_sensitive:` is `true` — i.e. whether the active sub-path
 /// has the minimum required input for a click to reach the
