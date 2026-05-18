@@ -1588,3 +1588,28 @@ pub fn format_app_menu_passphrase_label() -> &'static str {
 pub fn format_app_menu_preferences_label() -> &'static str {
     "Preferences"
 }
+
+/// Fixed label the widget hands to the primary `gio::Menu`'s
+/// "About Paladin" entry.
+///
+/// Returns the static label `"About Paladin"` — the wording for
+/// the menu entry that opens `AdwAboutDialog` (per §"libadwaita
+/// usage", populated from Cargo package metadata embedded at
+/// compile time). The application name is included verbatim so
+/// the user can confirm the running binary's identity before
+/// opening the dialog — same wording convention as every other
+/// GNOME app's primary-menu About entry. The trailing "Paladin"
+/// matches the bare application name pinned by
+/// [`format_app_window_title`]; if either renames in a future
+/// version, both should move together so the menu entry and
+/// window-list entry stay in lockstep.
+///
+/// Pure — returns a `'static str` without allocating. No
+/// trailing ellipsis: the About dialog is an informational
+/// surface (program metadata + license) rather than a request
+/// for input, so the GNOME-HIG ellipsis convention does not
+/// apply — same reasoning as [`format_app_menu_preferences_label`].
+#[must_use]
+pub fn format_app_menu_about_label() -> &'static str {
+    "About Paladin"
+}

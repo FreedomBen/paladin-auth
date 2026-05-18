@@ -714,3 +714,69 @@ fn format_app_menu_preferences_label_does_not_carry_ellipsis() {
         "Preferences menu label must not end with three ASCII periods either; got {label:?}",
     );
 }
+
+#[test]
+fn format_app_menu_about_label_returns_about_paladin() {
+    // The `AppModel`'s primary `gio::Menu` "About Paladin" entry's
+    // label is populated from this helper. The wording
+    // (`"About Paladin"`) names the surface the entry opens
+    // (`AdwAboutDialog` per §"libadwaita usage", populated from
+    // Cargo package metadata embedded at compile time) and matches
+    // the GNOME-HIG convention used by every other GNOME app's
+    // primary-menu About entry — the application name is included
+    // verbatim so the user can confirm the running binary's
+    // identity before opening the dialog. The trailing "Paladin"
+    // matches the bare application name pinned by
+    // `format_app_window_title`.
+    //
+    // Pure — returns a `'static str` without allocating. No
+    // trailing ellipsis: the About dialog is an informational
+    // surface (program metadata + license) rather than a request
+    // for input, so the GNOME-HIG ellipsis convention does not
+    // apply — same reasoning as `format_app_menu_preferences_label`.
+    use paladin_gtk::app::model::format_app_menu_about_label;
+
+    assert_eq!(
+        format_app_menu_about_label(),
+        "About Paladin",
+        "primary menu About entry includes the application name verbatim per the GNOME HIG",
+    );
+}
+
+#[test]
+fn format_app_menu_about_label_carries_application_name() {
+    // Defense-in-depth against an accidental rename to a generic
+    // `"About"` (which would drop the application-name
+    // disambiguation) or a rebranded application name. Pinning
+    // a "must contain the bare application name" invariant
+    // against `format_app_window_title()` keeps the About menu
+    // entry and the window-list entry from drifting apart.
+    use paladin_gtk::app::model::{format_app_menu_about_label, format_app_window_title};
+
+    let label = format_app_menu_about_label();
+    let app_name = format_app_window_title();
+    assert!(
+        label.contains(app_name),
+        "About menu label must contain the bare application name {app_name:?} per the GNOME HIG; got {label:?}",
+    );
+}
+
+#[test]
+fn format_app_menu_about_label_does_not_carry_ellipsis() {
+    // The About dialog is an informational surface (program
+    // metadata + license) rather than a request for input, so
+    // the GNOME-HIG ellipsis convention does not apply.
+    // Pinning a no-ellipsis invariant alongside the full-string
+    // assertion guards against an accidental drift.
+    use paladin_gtk::app::model::format_app_menu_about_label;
+
+    let label = format_app_menu_about_label();
+    assert!(
+        !label.ends_with('\u{2026}'),
+        "About menu label must not end with the horizontal-ellipsis character (U+2026); the informational dialog does not require input before committing; got {label:?}",
+    );
+    assert!(
+        !label.ends_with("..."),
+        "About menu label must not end with three ASCII periods either; got {label:?}",
+    );
+}
