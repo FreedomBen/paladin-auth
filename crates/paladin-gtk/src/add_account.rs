@@ -2396,6 +2396,25 @@ pub fn format_manual_label_title() -> &'static str {
     "Label"
 }
 
+/// Fixed `title` attribute the widget hands to the manual sub-path's
+/// issuer `AdwEntryRow::set_title`.
+///
+/// Returns the static title string `AdwEntryRow` renders as the
+/// floating label above the entry. The wording (`"Issuer"`) mirrors
+/// the TUI add view's `"Issuer:"` row (see
+/// `crates/paladin-tui/src/view/add.rs`) — the TUI's trailing colon
+/// is its field-name separator and drops out because `AdwEntryRow`
+/// renders its title as a floating label rather than as a prefix.
+///
+/// Pure — returns a `'static str` without allocating. Sibling of
+/// [`format_manual_label_title`] on the issuer-entry-title side; the
+/// pair pins the manual sub-path's plain-text entry titles against
+/// the TUI wording in one module.
+#[must_use]
+pub fn format_manual_issuer_title() -> &'static str {
+    "Issuer"
+}
+
 /// Apply an inbound [`AddAccountMsg`] and return the optional
 /// [`AddAccountOutput`] the widget layer should forward to
 /// `AppModel`.

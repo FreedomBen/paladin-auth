@@ -7853,3 +7853,22 @@ fn format_manual_label_title_matches_tui_wording() {
         "label row title mirrors the TUI add view's \"Label:\" wording",
     );
 }
+
+#[test]
+fn format_manual_issuer_title_matches_tui_wording() {
+    // The issuer `AdwEntryRow`'s `title` attribute is populated from
+    // this helper, so the wording must match what the TUI's add view
+    // shows (the `"Issuer:"` row in `crates/paladin-tui/src/view/add.rs`
+    // — the colon is the TUI's field-name separator and drops out
+    // because AdwEntryRow renders its title as a floating label above
+    // the entry rather than as a prefix). Sibling of
+    // `format_manual_label_title_matches_tui_wording` on the
+    // issuer-entry-title side.
+    use paladin_gtk::add_account::format_manual_issuer_title;
+
+    assert_eq!(
+        format_manual_issuer_title(),
+        "Issuer",
+        "issuer row title mirrors the TUI add view's \"Issuer:\" wording",
+    );
+}
