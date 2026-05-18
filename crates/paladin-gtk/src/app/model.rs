@@ -1918,6 +1918,28 @@ pub fn format_app_menu_quit_action_name() -> &'static str {
     "quit"
 }
 
+/// Fully-qualified `detailed_action_name` the header-bar `+`
+/// button binds via `gtk::Button::set_action_name`.
+///
+/// Returns the static action target `"app.add"` — the fully-
+/// qualified target the application's `app` action group resolves
+/// against. The matching `gio::SimpleAction` (`"add"`) is
+/// registered on the application's action group and dispatches
+/// `AddAccountComponent`. The `"app."` prefix names the group;
+/// `"add"` names the action. The `+` button shares the
+/// `Unlocked` / `UnlockedBusy` gating with the four mutating
+/// primary-menu entries per §"libadwaita usage".
+///
+/// Pure — returns a `'static str` without allocating. Companion
+/// of [`format_app_add_button_icon_name`] (header-bar glyph) and
+/// [`format_app_add_button_tooltip`] (header-bar tooltip);
+/// together they pin the visible button surface and its action
+/// wiring against a single source of truth.
+#[must_use]
+pub fn format_app_add_button_action() -> &'static str {
+    "app.add"
+}
+
 /// Bare `GLib` action-group name the primary `gio::Menu` resolves
 /// every entry target against.
 ///

@@ -1597,6 +1597,51 @@ fn every_primary_menu_action_name_round_trips_with_group_and_target() {
 }
 
 #[test]
+fn format_app_add_button_action_returns_app_add() {
+    // The header-bar `+` button's `detailed_action_name` is
+    // populated from this helper. The wording (`"app.add"`) is
+    // the fully-qualified action target the
+    // `gtk::Button::set_action_name` call resolves against the
+    // application's `app` action group. The `"app."` prefix names
+    // the group; `"add"` names the action. The matching
+    // `gio::SimpleAction` registered on the application's action
+    // group opens `AddAccountComponent`. The `+` button shares the
+    // `Unlocked` / `UnlockedBusy` gating with the four mutating
+    // primary-menu entries per §"libadwaita usage".
+    //
+    // Pure — returns a `'static str` without allocating. Companion
+    // of `format_app_add_button_icon_name` (header-bar glyph) and
+    // `format_app_add_button_tooltip` (header-bar tooltip); together
+    // they pin the visible button surface and its action wiring
+    // against a single source of truth.
+    use paladin_gtk::app::model::format_app_add_button_action;
+
+    assert_eq!(
+        format_app_add_button_action(),
+        "app.add",
+        "header-bar + button targets the app.add action on the application's action group",
+    );
+}
+
+#[test]
+fn format_app_add_button_action_uses_app_group_prefix() {
+    // Defense-in-depth against an accidental rename that would
+    // drop the `app.` group prefix or move the action onto a
+    // different group.
+    use paladin_gtk::app::model::format_app_add_button_action;
+
+    let action = format_app_add_button_action();
+    assert!(
+        action.starts_with("app."),
+        "header-bar + button action target must start with the `app.` group prefix so the application's action group resolves it; got {action:?}",
+    );
+    assert!(
+        !action.contains(' '),
+        "action targets must not contain whitespace; got {action:?}",
+    );
+}
+
+#[test]
 fn format_app_action_group_name_is_prefix_of_every_primary_menu_action() {
     // Cross-check: every `format_app_menu_*_action` target must
     // begin with `format_app_action_group_name() + "."`. This
