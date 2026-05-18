@@ -2138,6 +2138,28 @@ pub fn format_app_about_dialog_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
+/// Icon-theme key the application menu's "About Paladin" entry's
+/// `AdwAboutDialog` hands to `set_application_icon`.
+///
+/// Returns the reverse-DNS [`crate::APP_ID`]
+/// (`"org.tamx.Paladin.Gui"`) — the same key consumed by
+/// `RelmApp::new(APP_ID)`, the §11.3 desktop entry's
+/// `Icon=org.tamx.Paladin.Gui` field, and the §11 hicolor icon
+/// install layout (`/usr/share/icons/hicolor/<size>/apps/org.tamx.Paladin.Gui.*`).
+/// Sharing the key with `APP_ID` keeps the launcher icon, the
+/// desktop entry icon, the `AppStream` `<id>` icon, and the about
+/// dialog header glyph resolving identically across native and
+/// Flatpak builds.
+///
+/// Pure — returns a `'static str` without allocating.
+/// Distinct from [`format_app_about_dialog_program_name`] (the
+/// human "Paladin" display name); the icon key is the
+/// reverse-DNS identifier, not the bare display name.
+#[must_use]
+pub fn format_app_about_dialog_application_icon_name() -> &'static str {
+    crate::APP_ID
+}
+
 /// Bare `GLib` action-group name the primary `gio::Menu` resolves
 /// every entry target against.
 ///

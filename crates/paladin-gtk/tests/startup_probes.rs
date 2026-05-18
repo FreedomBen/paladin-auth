@@ -2163,6 +2163,61 @@ fn format_app_about_dialog_version_is_non_empty_and_looks_like_semver() {
 }
 
 #[test]
+fn format_app_about_dialog_application_icon_name_matches_app_id() {
+    // Per §"libadwaita usage" and §11.3: the `AdwAboutDialog`
+    // header glyph is the application icon, looked up in the
+    // system icon theme by name. The icon files install under
+    // `/usr/share/icons/hicolor/<size>/apps/org.tamx.Paladin.Gui.*`
+    // and the desktop entry sets `Icon=org.tamx.Paladin.Gui`, so
+    // the icon-theme key the about dialog hands to
+    // `AdwAboutDialog::set_application_icon` is the same
+    // reverse-DNS app ID. This helper returns that key from the
+    // same source of truth as the `RelmApp::new(APP_ID)`
+    // identifier so the launcher icon, the desktop entry icon,
+    // the AppStream icon, and the about dialog header glyph
+    // resolve identically.
+    use paladin_gtk::app::model::format_app_about_dialog_application_icon_name;
+    use paladin_gtk::APP_ID;
+
+    assert_eq!(
+        format_app_about_dialog_application_icon_name(),
+        APP_ID,
+        "AdwAboutDialog application-icon must match `APP_ID` so the dialog header glyph resolves against the §11.3 hicolor icon install layout",
+    );
+}
+
+#[test]
+fn format_app_about_dialog_application_icon_name_is_reverse_dns() {
+    // Defense-in-depth: the icon-theme key is the reverse-DNS
+    // app identifier (`org.tamx.Paladin.Gui`), not the human
+    // display name. Catches an accidental swap with
+    // `format_app_about_dialog_program_name` which returns the
+    // bare `Paladin` display string.
+    use paladin_gtk::app::model::{
+        format_app_about_dialog_application_icon_name, format_app_about_dialog_program_name,
+    };
+
+    let icon = format_app_about_dialog_application_icon_name();
+    assert!(
+        !icon.is_empty(),
+        "AdwAboutDialog application-icon must be non-empty; got {icon:?}",
+    );
+    assert!(
+        icon.contains('.'),
+        "AdwAboutDialog application-icon must be a reverse-DNS identifier with at least one `.` separator; got {icon:?}",
+    );
+    assert!(
+        !icon.contains(' '),
+        "AdwAboutDialog application-icon must not contain whitespace; got {icon:?}",
+    );
+    assert_ne!(
+        icon,
+        format_app_about_dialog_program_name(),
+        "AdwAboutDialog application-icon must be the reverse-DNS app identifier, not the human program-name display string",
+    );
+}
+
+#[test]
 fn format_app_action_group_name_is_prefix_of_every_primary_menu_action() {
     // Cross-check: every `format_app_menu_*_action` target must
     // begin with `format_app_action_group_name() + "."`. This
