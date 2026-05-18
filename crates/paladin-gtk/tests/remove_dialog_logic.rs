@@ -765,6 +765,35 @@ fn run_remove_worker_persists_removal_to_disk() {
 }
 
 #[test]
+fn format_remove_dialog_cancel_label_returns_cancel() {
+    // The RemoveDialog's footer Cancel `gtk::Button`'s
+    // `set_label` attribute is populated from this helper. The
+    // wording (`"Cancel"`) is the action-specific GNOME-HIG verb
+    // for the surface — matching the rename / add dialog cancel
+    // affordance so the dialog footer wording stays uniform
+    // across every per-account surface. Pinning the wording
+    // through a helper keeps the string in one place shared by
+    // the widget binding and the pure-logic tests.
+    //
+    // No TUI parity: the TUI's `remove` command is CLI-shaped
+    // and prompts on stdin rather than rendering a dialog
+    // footer, so the wording is GTK-specific. Sibling of
+    // `paladin_gtk::rename_dialog::format_rename_dialog_cancel_label`
+    // and
+    // `paladin_gtk::add_account::format_add_dialog_cancel_label`
+    // on the dialog-footer-cancel side; together they pin every
+    // dialog's cancel affordance against a single source of
+    // truth.
+    use paladin_gtk::remove_dialog::format_remove_dialog_cancel_label;
+
+    assert_eq!(
+        format_remove_dialog_cancel_label(),
+        "Cancel",
+        "cancel button label uses the action-specific GNOME-HIG verb",
+    );
+}
+
+#[test]
 fn format_remove_dialog_subtitle_renders_display_label() {
     // The RemoveDialog's `adw::StatusPage::set_description`
     // attribute is populated from this helper. The wording

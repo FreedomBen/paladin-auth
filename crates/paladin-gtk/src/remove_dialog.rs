@@ -201,6 +201,29 @@ pub fn format_remove_dialog_marker(account_id: AccountId, display_label: &str) -
     format!("{REMOVE_DIALOG_MARKER_PREFIX}{account_id} label={display_label}")
 }
 
+/// Fixed `"Cancel"` label the widget hands to the
+/// [`RemoveDialogComponent`]'s footer Cancel `gtk::Button::set_label`.
+///
+/// The label is the action-specific GNOME-HIG verb for the
+/// surface — matching the rename / add dialog cancel affordance
+/// so the dialog footer wording stays uniform across every per-
+/// account surface. No TUI parity: the TUI's `remove` command is
+/// CLI-shaped and prompts on stdin rather than rendering a
+/// dialog footer, so the wording is GTK-specific. Pinning the
+/// wording through a helper keeps the string in one place shared
+/// by the widget binding and the pure-logic tests in
+/// `tests/remove_dialog_logic.rs`.
+///
+/// Pure — returns a `'static str` without allocating. Sibling of
+/// [`crate::rename_dialog::format_rename_dialog_cancel_label`]
+/// and [`crate::add_account::format_add_dialog_cancel_label`] on
+/// the dialog-footer-cancel side; together they pin every
+/// dialog's cancel affordance against a single source of truth.
+#[must_use]
+pub fn format_remove_dialog_cancel_label() -> &'static str {
+    "Cancel"
+}
+
 /// Body the widget hands to the [`RemoveDialogComponent`]'s
 /// `adw::StatusPage::set_description` attribute.
 ///
@@ -716,7 +739,7 @@ impl SimpleComponent for RemoveDialogComponent {
 
                 #[name = "cancel_button"]
                 gtk::Button {
-                    set_label: "Cancel",
+                    set_label: format_remove_dialog_cancel_label(),
                     connect_clicked[sender] => move |_| {
                         sender.input(RemoveDialogMsg::Cancel);
                     },
