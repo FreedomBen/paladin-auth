@@ -2510,6 +2510,31 @@ pub fn format_manual_algorithm_title() -> &'static str {
     "Algorithm"
 }
 
+/// Fixed `title` attribute the widget hands to the manual sub-path's
+/// digits `AdwSpinRow::set_title`.
+///
+/// Returns the static title string `AdwSpinRow` renders as the
+/// floating label above the spinner. The wording (`"Digits"`)
+/// mirrors the TUI add view's `"Digits:"` row (see
+/// `crates/paladin-tui/src/view/add.rs`) — the TUI's trailing colon
+/// is its field-name separator and drops out because `AdwSpinRow`
+/// renders its title as a floating label rather than as a prefix.
+/// The spinner's `(lower, upper, step)` adjustment comes from
+/// [`format_manual_digits_adjustment`]; this helper covers only the
+/// row's static title wording so the adjustment and the title stay
+/// aligned against a single source of truth.
+///
+/// Pure — returns a `'static str` without allocating. Sibling of
+/// [`format_manual_kind_title`], [`format_manual_algorithm_title`],
+/// and [`format_manual_digits_adjustment`] on the digits-row-title
+/// side; together they cover the row's title, adjustment range, and
+/// reactive value (via [`compose_manual_digits_value`]) in one
+/// module.
+#[must_use]
+pub fn format_manual_digits_title() -> &'static str {
+    "Digits"
+}
+
 /// Apply an inbound [`AddAccountMsg`] and return the optional
 /// [`AddAccountOutput`] the widget layer should forward to
 /// `AppModel`.

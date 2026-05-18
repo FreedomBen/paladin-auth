@@ -7964,3 +7964,27 @@ fn format_manual_algorithm_title_matches_tui_wording() {
         "algorithm row title mirrors the TUI add view's \"Algorithm:\" wording",
     );
 }
+
+#[test]
+fn format_manual_digits_title_matches_tui_wording() {
+    // The digits `AdwSpinRow`'s `title` attribute is populated from
+    // this helper, so the wording must match what the TUI's add
+    // view shows (the `"Digits:"` row in
+    // `crates/paladin-tui/src/view/add.rs` — the colon is the TUI's
+    // field-name separator and drops out because AdwSpinRow renders
+    // its title as a floating label above the spinner rather than
+    // as a prefix). The spinner's `(lower, upper, step)` adjustment
+    // comes from `format_manual_digits_adjustment`; this helper
+    // covers only the row's static title wording so the adjustment
+    // and the title stay aligned against a single source of truth.
+    // Sibling of `format_manual_kind_title_matches_tui_wording` and
+    // `format_manual_algorithm_title_matches_tui_wording` on the
+    // digits-row-title side.
+    use paladin_gtk::add_account::format_manual_digits_title;
+
+    assert_eq!(
+        format_manual_digits_title(),
+        "Digits",
+        "digits row title mirrors the TUI add view's \"Digits:\" wording",
+    );
+}
