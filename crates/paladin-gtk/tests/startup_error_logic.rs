@@ -466,3 +466,35 @@ fn startup_error_carries_kind_for_consumers() {
         ErrorKind::InvalidHeader
     );
 }
+
+#[test]
+fn format_startup_error_title_returns_startup_error() {
+    // The `StartupErrorComponent`'s `adw::StatusPage::set_title`
+    // attribute is populated from this helper. The wording
+    // (`"Startup error"`) names the error class without
+    // restating the specific failure — the per-error rendered
+    // text lives in the StatusPage's description body, sourced
+    // from the typed `PaladinError::Display` impl through
+    // `StartupError::rendered`. Pinning the title through a
+    // helper keeps the wording in one place shared by the widget
+    // binding and the pure-logic tests in
+    // `tests/startup_error_logic.rs`.
+    //
+    // No TUI parity: the TUI renders the equivalent surface as
+    // its own block-titled view (`"Startup error"` is the GTK
+    // wording chosen to match the dialog-header convention used
+    // by every other dialog title in this crate). Sibling of
+    // `paladin_gtk::unlock_dialog::format_unlock_dialog_title`,
+    // `paladin_gtk::init_dialog::format_init_dialog_title`,
+    // `paladin_gtk::rename_dialog::format_rename_dialog_title`,
+    // and `paladin_gtk::add_account::format_add_dialog_title`
+    // on the dialog-header-title side; together they pin every
+    // dialog's titled surface against a single source of truth.
+    use paladin_gtk::startup_error::format_startup_error_title;
+
+    assert_eq!(
+        format_startup_error_title(),
+        "Startup error",
+        "AdwStatusPage title uses the dialog-header-style wording for the error class",
+    );
+}

@@ -178,6 +178,31 @@ pub fn format_startup_error_marker(error: &StartupError) -> String {
     format!("{STARTUP_ERROR_MARKER_PREFIX}{single_line}")
 }
 
+/// Fixed `title` attribute the widget hands to the
+/// [`StartupErrorComponent`]'s `adw::StatusPage::set_title`.
+///
+/// Returns the static title string the surface renders at the
+/// top of its body. The wording (`"Startup error"`) names the
+/// error class without restating the specific failure — the
+/// per-error rendered text lives in the `StatusPage`'s description
+/// body, sourced from the typed [`paladin_core::PaladinError`]
+/// `Display` impl through [`StartupError::rendered`]. Pinning
+/// the title through a helper keeps the wording in one place
+/// shared by the widget binding and the pure-logic tests in
+/// `tests/startup_error_logic.rs`.
+///
+/// Pure — returns a `'static str` without allocating. Sibling of
+/// [`crate::unlock_dialog::format_unlock_dialog_title`],
+/// [`crate::init_dialog::format_init_dialog_title`],
+/// [`crate::rename_dialog::format_rename_dialog_title`], and
+/// [`crate::add_account::format_add_dialog_title`] on the
+/// dialog-header-title side; together they pin every dialog's
+/// titled surface against a single source of truth.
+#[must_use]
+pub fn format_startup_error_title() -> &'static str {
+    "Startup error"
+}
+
 /// Construction parameters for [`StartupErrorComponent`].
 #[derive(Debug, Clone)]
 pub struct StartupErrorInit {
@@ -231,7 +256,7 @@ impl SimpleComponent for StartupErrorComponent {
             // resolved via the system icon theme so the wordless
             // glyph matches every other GNOME app's error surface.
             set_icon_name: Some("dialog-error-symbolic"),
-            set_title: "Startup error",
+            set_title: format_startup_error_title(),
             set_description: Some(model.error.rendered.as_str()),
             set_hexpand: true,
             set_vexpand: true,
