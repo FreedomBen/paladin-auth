@@ -3435,6 +3435,38 @@ fn apply_msg_render_inline_error_replaces_prior() {
 }
 
 #[test]
+fn add_dialog_state_new_pending_duplicate_existing_is_none() {
+    // A freshly-opened dialog has not yet seen a Save click that
+    // observed a duplicate collision, so the
+    // `pending_duplicate_existing` slot starts empty. Mirror of
+    // `add_dialog_state_new_inline_error_is_none` on the
+    // duplicate-collision slot.
+    use paladin_gtk::add_account::AddDialogState;
+
+    let state = AddDialogState::new();
+    assert!(
+        state.pending_duplicate_existing().is_none(),
+        "fresh AddDialogState has no colliding summary to render",
+    );
+}
+
+#[test]
+fn add_dialog_state_default_pending_duplicate_existing_matches_new() {
+    // The implicit `Default` impl must initialize the same empty
+    // slot the named `new()` constructor does. Mirror of
+    // `add_dialog_state_default_inline_error_matches_new` on the
+    // duplicate-collision slot.
+    use paladin_gtk::add_account::AddDialogState;
+
+    let from_new = AddDialogState::new();
+    let from_default = AddDialogState::default();
+    assert_eq!(
+        from_new.pending_duplicate_existing().is_none(),
+        from_default.pending_duplicate_existing().is_none(),
+    );
+}
+
+#[test]
 fn apply_msg_submit_proceed_clears_prior_inline_error() {
     // The widget only dispatches `SubmitProceed` once
     // `compose_save_click_outcome` returned a non-collision

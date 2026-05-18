@@ -1335,6 +1335,29 @@ pub struct AddDialogState {
     /// [`Self::worker_outcome`] slot which handles `Vault::mutate_and_save`
     /// failures instead of the pre-effect validation pipeline.
     inline_error: Option<InlineError>,
+    /// Colliding [`AccountSummary`] staged by the most recent Save
+    /// click that produced [`SaveClickOutcome::AwaitConfirmation`].
+    ///
+    /// `None` between dialog open and the first duplicate-collision
+    /// Save click, and re-cleared on dialog dismissal / path switch
+    /// / submit so the "Add anyway?" prompt only renders the
+    /// existing summary that is currently in flight. The widget
+    /// view (a `#[watch]` over [`Self::pending_duplicate_existing`])
+    /// reads `AccountSummary::label` / `AccountSummary::issuer` to
+    /// name the colliding account in the confirmation modal.
+    ///
+    /// Pairs with [`crate::secret_fields::AddSecretState::pending`]:
+    /// the pending [`paladin_core::ValidatedAccount`] is the
+    /// would-be insertion, and this slot is the existing account
+    /// it would collide with. Both slots are populated by the same
+    /// `StagePendingDuplicate` dispatch and drained together on
+    /// `ConfirmAddAnyway` / `Cancel` / `SwitchPath`.
+    ///
+    /// Populating wiring lands in a follow-up commit alongside an
+    /// extension to [`AddAccountMsg::StagePendingDuplicate`] that
+    /// carries the `existing: AccountSummary` field across the
+    /// Component boundary.
+    pending_duplicate_existing: Option<AccountSummary>,
 }
 
 impl AddDialogState {
@@ -1400,6 +1423,19 @@ impl AddDialogState {
     #[must_use]
     pub fn inline_error(&self) -> Option<&InlineError> {
         self.inline_error.as_ref()
+    }
+
+    /// Colliding [`AccountSummary`] staged by the most recent
+    /// `SaveClickOutcome::AwaitConfirmation`, or `None` if the
+    /// dialog has not yet seen a duplicate-collision Save click.
+    ///
+    /// The widget binds a `#[watch]` over this so the "Add anyway?"
+    /// modal can render the colliding account's display label and
+    /// issuer alongside the pending validated account staged in
+    /// [`crate::secret_fields::AddSecretState::pending`].
+    #[must_use]
+    pub fn pending_duplicate_existing(&self) -> Option<&AccountSummary> {
+        self.pending_duplicate_existing.as_ref()
     }
 }
 
