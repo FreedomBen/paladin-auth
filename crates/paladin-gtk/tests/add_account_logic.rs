@@ -5181,3 +5181,117 @@ fn compose_pending_duplicate_alert_heading_drains_after_confirm_add_anyway() {
         "ConfirmAddAnyway drains the alert-heading projection alongside the pending slot",
     );
 }
+
+#[test]
+fn format_duplicate_alert_confirm_label_returns_add_anyway() {
+    // The `AdwAlertDialog` confirm button is the destructive
+    // affordance that consumes the parked
+    // [`paladin_core::ValidatedAccount`] and forwards
+    // `AddAccountOutput::Submit` to the worker. The label wording is
+    // fixed at "Add anyway" — surfaced through this helper so the
+    // string lives in one place shared by the widget binding, the
+    // dialog body's docstrings (which reference the wording
+    // verbatim), and the snapshot tests.
+    use paladin_gtk::add_account::format_duplicate_alert_confirm_label;
+
+    assert_eq!(
+        format_duplicate_alert_confirm_label(),
+        "Add anyway",
+        "duplicate-alert confirm button label is the fixed CLI / TUI parity wording",
+    );
+}
+
+#[test]
+fn compose_pending_duplicate_alert_confirm_label_with_no_pending_returns_none() {
+    // A freshly-opened dialog has not yet seen a duplicate-collision
+    // Save click, so the confirm-button projection must collapse to
+    // `None` — the widget binds a `#[watch]` over the projection so
+    // the `AdwAlertDialog` "Add anyway" button only exists while a
+    // pending collision is staged. Mirror of
+    // `compose_pending_duplicate_alert_heading_with_no_pending_returns_none`
+    // on the confirm-label projection side.
+    use paladin_gtk::add_account::{compose_pending_duplicate_alert_confirm_label, AddDialogState};
+
+    let state = AddDialogState::new();
+
+    assert!(
+        compose_pending_duplicate_alert_confirm_label(&state).is_none(),
+        "fresh dialog has no pending duplicate → no confirm-button label",
+    );
+}
+
+#[test]
+fn compose_pending_duplicate_alert_confirm_label_with_staged_pending_returns_label() {
+    // After `StagePendingDuplicate` parks the colliding existing
+    // summary, the confirm-button projection must return
+    // `Some(format_duplicate_alert_confirm_label())` so the widget
+    // can bind a single `#[watch]` over the projection to drive both
+    // visibility and text of the `AdwAlertDialog` confirm button.
+    // Partner of `compose_pending_duplicate_alert_heading_with_staged_pending_returns_heading`
+    // on the confirm-button side.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_pending_duplicate_alert_confirm_label,
+        format_duplicate_alert_confirm_label, AddAccountMsg, AddDialogState,
+    };
+
+    let mut state = AddDialogState::new();
+    let validated = match classify_manual_submit(manual_totp_defaults(), now_for_tests()) {
+        ManualSubmitOutcome::Proceed(v) => v,
+        ManualSubmitOutcome::InlineError(e) => panic!("fixture failed: {e:?}"),
+    };
+
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::StagePendingDuplicate {
+            account: validated.account,
+            warnings: validated.warnings,
+            existing: dummy_existing_summary(),
+        },
+    );
+
+    assert_eq!(
+        compose_pending_duplicate_alert_confirm_label(&state),
+        Some(format_duplicate_alert_confirm_label()),
+        "staged pending → composer surfaces the confirm-button label verbatim",
+    );
+}
+
+#[test]
+fn compose_pending_duplicate_alert_confirm_label_drains_after_confirm_add_anyway() {
+    // `ConfirmAddAnyway` consumes the pending validated account and
+    // drains the colliding-summary slot in lockstep, so the
+    // confirm-button projection must collapse back to `None` — the
+    // widget binds a `#[watch]` over the projection so the
+    // `AdwAlertDialog` confirm button disappears once the user
+    // confirms past the prompt. Mirror of
+    // `compose_pending_duplicate_alert_heading_drains_after_confirm_add_anyway`
+    // on the confirm-button side.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_pending_duplicate_alert_confirm_label, AddAccountMsg, AddDialogState,
+    };
+
+    let mut state = AddDialogState::new();
+    let validated = match classify_manual_submit(manual_totp_defaults(), now_for_tests()) {
+        ManualSubmitOutcome::Proceed(v) => v,
+        ManualSubmitOutcome::InlineError(e) => panic!("fixture failed: {e:?}"),
+    };
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::StagePendingDuplicate {
+            account: validated.account,
+            warnings: validated.warnings,
+            existing: dummy_existing_summary(),
+        },
+    );
+    assert!(
+        compose_pending_duplicate_alert_confirm_label(&state).is_some(),
+        "precondition: StagePendingDuplicate populates the confirm-button label",
+    );
+
+    let _ = apply_msg(&mut state, AddAccountMsg::ConfirmAddAnyway);
+
+    assert!(
+        compose_pending_duplicate_alert_confirm_label(&state).is_none(),
+        "ConfirmAddAnyway drains the confirm-button projection alongside the pending slot",
+    );
+}

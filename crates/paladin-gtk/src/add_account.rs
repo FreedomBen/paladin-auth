@@ -1417,6 +1417,60 @@ pub fn compose_pending_duplicate_alert_heading(state: &AddDialogState) -> Option
         .map(|_| format_duplicate_alert_heading())
 }
 
+/// Render the fixed `"Add anyway"` label for the destructive
+/// affordance on the duplicate-collision `AdwAlertDialog`.
+///
+/// The label is the confirm response the user clicks to consume
+/// the parked [`paladin_core::ValidatedAccount`] and forward
+/// [`AddAccountOutput::Submit`] to the
+/// `Vault::mutate_and_save(|v| v.add(account))` worker. Surfacing
+/// it through a helper rather than a bare string literal keeps the
+/// wording in one place so the widget binding, the dialog body's
+/// docstrings (which reference "Add anyway" verbatim), and the
+/// snapshot tests in `tests/add_account_logic.rs` stay in sync.
+///
+/// Partner of [`format_duplicate_alert_heading`] (the modal's
+/// question heading) and [`format_duplicate_alert_body`] (the
+/// descriptive body between them); together they cover the three
+/// user-visible regions of the `AdwAlertDialog`.
+#[must_use]
+pub fn format_duplicate_alert_confirm_label() -> &'static str {
+    "Add anyway"
+}
+
+/// State-driven projection of the duplicate-collision
+/// `AdwAlertDialog` confirm-button label, or `None` when no
+/// duplicate-collision Save click is in flight.
+///
+/// Returns `Some(format_duplicate_alert_confirm_label())` while a
+/// [`SaveClickOutcome::AwaitConfirmation`] is parked (the colliding
+/// summary populates [`AddDialogState::pending_duplicate_existing`]
+/// via [`AddAccountMsg::StagePendingDuplicate`]), and `None` once
+/// the slot drains — [`AddAccountMsg::Cancel`],
+/// [`AddAccountMsg::SubmitProceed`],
+/// [`AddAccountMsg::ConfirmAddAnyway`], and sub-path
+/// [`AddAccountMsg::SwitchPath`] all drain in lockstep with the
+/// heading / body projections so the confirm button disappears the
+/// moment the user moves on.
+///
+/// Lets the widget bind a single `#[watch]` over the projection to
+/// drive the confirm button's text and visibility instead of
+/// reaching across `pending_duplicate_existing()` inline alongside
+/// [`compose_pending_duplicate_alert_heading`] /
+/// [`compose_pending_duplicate_alert_body`]. Pure — borrows the
+/// state and returns the `'static` label string without
+/// allocating; sibling projection of the heading / body composers
+/// so the widget can `#[watch]` every region of the
+/// `AdwAlertDialog` in lockstep.
+#[must_use]
+pub fn compose_pending_duplicate_alert_confirm_label(
+    state: &AddDialogState,
+) -> Option<&'static str> {
+    state
+        .pending_duplicate_existing()
+        .map(|_| format_duplicate_alert_confirm_label())
+}
+
 /// State-driven projection of the durability-warning body the
 /// widget renders beneath the post-add counts panel after a
 /// `KeepWithWarning` worker completion, or `None` for any other
