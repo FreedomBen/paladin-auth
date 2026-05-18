@@ -2438,6 +2438,30 @@ pub fn format_manual_secret_title() -> &'static str {
     "Secret"
 }
 
+/// Fixed `title` attribute the widget hands to the manual sub-path's
+/// icon-hint `AdwEntryRow::set_title`.
+///
+/// Returns the static title string `AdwEntryRow` renders as the
+/// floating label above the entry. The wording (`"Icon hint"`)
+/// mirrors the TUI add view's `"Icon hint:"` row (see
+/// `crates/paladin-tui/src/view/add.rs`) — the TUI's trailing colon
+/// is its field-name separator and drops out because `AdwEntryRow`
+/// renders its title as a floating label rather than as a prefix.
+/// The icon-hint slug parsing (empty / `"none"` (any case) / explicit
+/// slug) happens through [`paladin_core::parse_icon_hint_token`] at
+/// submit time; this helper covers only the row's static title
+/// wording.
+///
+/// Pure — returns a `'static str` without allocating. Sibling of
+/// [`format_manual_label_title`], [`format_manual_issuer_title`],
+/// and [`format_manual_secret_title`] on the icon-hint-entry-title
+/// side; the quartet pins the manual sub-path's text-entry row
+/// titles against the TUI wording in one module.
+#[must_use]
+pub fn format_manual_icon_hint_title() -> &'static str {
+    "Icon hint"
+}
+
 /// Apply an inbound [`AddAccountMsg`] and return the optional
 /// [`AddAccountOutput`] the widget layer should forward to
 /// `AppModel`.

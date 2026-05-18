@@ -7895,3 +7895,28 @@ fn format_manual_secret_title_matches_tui_wording() {
         "secret row title mirrors the TUI add view's \"Secret:\" wording",
     );
 }
+
+#[test]
+fn format_manual_icon_hint_title_matches_tui_wording() {
+    // The icon-hint `AdwEntryRow`'s `title` attribute is populated
+    // from this helper, so the wording must match what the TUI's
+    // add view shows (the `"Icon hint:"` row in
+    // `crates/paladin-tui/src/view/add.rs` — the colon is the TUI's
+    // field-name separator and drops out because AdwEntryRow renders
+    // its title as a floating label above the entry rather than as
+    // a prefix). The icon-hint slug parsing happens through
+    // `paladin_core::parse_icon_hint_token` at submit time; this
+    // helper covers only the row's static title wording. Sibling of
+    // `format_manual_label_title_matches_tui_wording`,
+    // `format_manual_issuer_title_matches_tui_wording`, and
+    // `format_manual_secret_title_matches_tui_wording` — the quartet
+    // pins the manual sub-path's text-entry row titles against the
+    // TUI wording in one module.
+    use paladin_gtk::add_account::format_manual_icon_hint_title;
+
+    assert_eq!(
+        format_manual_icon_hint_title(),
+        "Icon hint",
+        "icon-hint row title mirrors the TUI add view's \"Icon hint:\" wording",
+    );
+}
