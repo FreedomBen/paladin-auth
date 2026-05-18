@@ -2253,6 +2253,29 @@ pub fn format_app_about_dialog_website() -> &'static str {
     env!("CARGO_PKG_HOMEPAGE")
 }
 
+/// Issue-tracker URL the application menu's "About Paladin"
+/// entry's `AdwAboutDialog` links to from its footer
+/// "Report an issue" slot.
+///
+/// Returns `concat!(env!("CARGO_PKG_REPOSITORY"), "/issues")` so
+/// the dialog footer issue link and the workspace
+/// `[workspace.package].repository` field stay in lockstep —
+/// `crates/paladin-gtk` inherits its `repository` from
+/// `repository.workspace = true`, so a workspace-wide
+/// repository change propagates here for free. Appends the
+/// standard `/issues` suffix to follow the GitHub
+/// `<repo>/issues` URL convention without a duplicate constant
+/// in this crate.
+///
+/// Pure — returns a `'static str` resolved at compile time.
+/// Distinct from [`format_app_about_dialog_website`] (the
+/// project homepage) so the dialog renders two separate footer
+/// links rather than collapsing them.
+#[must_use]
+pub fn format_app_about_dialog_issue_url() -> &'static str {
+    concat!(env!("CARGO_PKG_REPOSITORY"), "/issues")
+}
+
 /// Bare `GLib` action-group name the primary `gio::Menu` resolves
 /// every entry target against.
 ///

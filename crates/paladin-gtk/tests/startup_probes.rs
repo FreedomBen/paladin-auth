@@ -2431,6 +2431,64 @@ fn format_app_about_dialog_website_is_non_empty_https_url() {
 }
 
 #[test]
+fn format_app_about_dialog_issue_url_appends_issues_to_cargo_pkg_repository() {
+    // Per §"libadwaita usage" and §"About / help": the
+    // `AdwAboutDialog` issue-url slot links to the project's
+    // public issue tracker. The workspace `[workspace.package]`
+    // table sets `repository = "https://github.com/FreedomBen/paladin"`
+    // and `crates/paladin-gtk` inherits via `repository.workspace
+    // = true`, so a workspace-wide repository change propagates
+    // here for free. Pinning the helper to
+    // `concat!(env!("CARGO_PKG_REPOSITORY"), "/issues")` keeps the
+    // dialog footer "Report an issue" link aligned with the
+    // GitHub `<repo>/issues` URL convention without a manual
+    // duplicate constant.
+    use paladin_gtk::app::model::format_app_about_dialog_issue_url;
+
+    assert_eq!(
+        format_app_about_dialog_issue_url(),
+        concat!(env!("CARGO_PKG_REPOSITORY"), "/issues"),
+        "AdwAboutDialog issue-url must source from `env!(\"CARGO_PKG_REPOSITORY\") + \"/issues\"` so it tracks the workspace repository field",
+    );
+}
+
+#[test]
+fn format_app_about_dialog_issue_url_is_non_empty_https_url_distinct_from_website() {
+    // Defense-in-depth: the issue-url must be a usable HTTPS URL
+    // (Paladin handles secrets — an HTTP issue tracker link would
+    // expose users to MITM downgrades on the canonical bug-
+    // reporting page) and must be distinct from the website URL
+    // so the dialog renders two separate footer links rather
+    // than collapsing them.
+    use paladin_gtk::app::model::{
+        format_app_about_dialog_issue_url, format_app_about_dialog_website,
+    };
+
+    let issue_url = format_app_about_dialog_issue_url();
+    assert!(
+        !issue_url.is_empty(),
+        "AdwAboutDialog issue-url must be non-empty; got {issue_url:?}",
+    );
+    assert!(
+        issue_url.starts_with("https://"),
+        "AdwAboutDialog issue-url must be an HTTPS URL (Paladin handles secrets — never link the about dialog to an http:// page); got {issue_url:?}",
+    );
+    assert!(
+        !issue_url.contains(' '),
+        "AdwAboutDialog issue-url must not contain whitespace; got {issue_url:?}",
+    );
+    assert!(
+        issue_url.ends_with("/issues"),
+        "AdwAboutDialog issue-url must follow the `<repo>/issues` GitHub convention; got {issue_url:?}",
+    );
+    assert_ne!(
+        issue_url,
+        format_app_about_dialog_website(),
+        "AdwAboutDialog issue-url must be distinct from the website URL so the dialog renders two separate footer links",
+    );
+}
+
+#[test]
 fn format_app_action_group_name_is_prefix_of_every_primary_menu_action() {
     // Cross-check: every `format_app_menu_*_action` target must
     // begin with `format_app_action_group_name() + "."`. This
