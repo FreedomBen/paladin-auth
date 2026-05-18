@@ -4655,3 +4655,102 @@ fn format_duplicate_alert_body_threads_through_pending_warnings_projection() {
     let expected_bottom = format_pending_warnings_body(&warnings);
     assert_eq!(body, format!("{expected_top}\n\n{expected_bottom}"));
 }
+
+#[test]
+fn compose_pending_duplicate_alert_body_with_no_pending_returns_none() {
+    // A freshly-opened dialog has not yet seen a duplicate-collision
+    // Save click, so the state-driven composer must collapse to
+    // `None` — the widget binds a `#[watch]` over the projection so
+    // an `AdwAlertDialog` body is only rendered while a pending
+    // collision is staged. Mirror of
+    // `add_dialog_state_new_pending_duplicate_existing_is_none` on
+    // the alert-body projection side.
+    use paladin_gtk::add_account::{compose_pending_duplicate_alert_body, AddDialogState};
+
+    let state = AddDialogState::new();
+
+    assert!(
+        compose_pending_duplicate_alert_body(&state).is_none(),
+        "fresh dialog has no pending duplicate → no alert body",
+    );
+}
+
+#[test]
+fn compose_pending_duplicate_alert_body_with_staged_pending_returns_formatted_body() {
+    // After `StagePendingDuplicate` parks the colliding existing
+    // summary and the pending validated account, the composer must
+    // return `Some(format_duplicate_alert_body(existing, warnings))`
+    // — the widget binds a `#[watch]` over the projection so the
+    // `AdwAlertDialog` body matches the dialog state without the
+    // widget reaching across both `pending_duplicate_existing()` and
+    // `pending_validation_warnings()` separately.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_pending_duplicate_alert_body, format_duplicate_alert_body,
+        AddAccountMsg, AddDialogState,
+    };
+
+    let mut state = AddDialogState::new();
+    let mut fields = manual_totp_defaults();
+    fields.secret = SecretString::from(SHORT_SECRET_B32.to_string());
+    let validated = match classify_manual_submit(fields, now_for_tests()) {
+        ManualSubmitOutcome::Proceed(v) => v,
+        ManualSubmitOutcome::InlineError(e) => panic!("fixture failed: {e:?}"),
+    };
+    let existing = dummy_existing_summary();
+    let expected_body = format_duplicate_alert_body(&existing, validated.warnings.as_slice());
+
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::StagePendingDuplicate {
+            account: validated.account,
+            warnings: validated.warnings,
+            existing,
+        },
+    );
+
+    assert_eq!(
+        compose_pending_duplicate_alert_body(&state).as_deref(),
+        Some(expected_body.as_str()),
+        "staged pending → composer renders the full alert body",
+    );
+}
+
+#[test]
+fn compose_pending_duplicate_alert_body_drains_after_confirm_add_anyway() {
+    // ConfirmAddAnyway consumes the pending validated account and
+    // drains the colliding-summary projection in lockstep, so the
+    // state-driven composer must collapse back to `None` — the
+    // widget binds a `#[watch]` over the projection so the
+    // `AdwAlertDialog` body disappears once the user confirms past
+    // the prompt. Mirror of
+    // `apply_msg_confirm_add_anyway_drains_pending_duplicate_existing`
+    // on the alert-body projection side.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_pending_duplicate_alert_body, AddAccountMsg, AddDialogState,
+    };
+
+    let mut state = AddDialogState::new();
+    let validated = match classify_manual_submit(manual_totp_defaults(), now_for_tests()) {
+        ManualSubmitOutcome::Proceed(v) => v,
+        ManualSubmitOutcome::InlineError(e) => panic!("fixture failed: {e:?}"),
+    };
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::StagePendingDuplicate {
+            account: validated.account,
+            warnings: validated.warnings,
+            existing: dummy_existing_summary(),
+        },
+    );
+    assert!(
+        compose_pending_duplicate_alert_body(&state).is_some(),
+        "precondition: StagePendingDuplicate populates the alert body",
+    );
+
+    let _ = apply_msg(&mut state, AddAccountMsg::ConfirmAddAnyway);
+
+    assert!(
+        compose_pending_duplicate_alert_body(&state).is_none(),
+        "ConfirmAddAnyway drains the alert-body projection alongside the pending slot",
+    );
+}

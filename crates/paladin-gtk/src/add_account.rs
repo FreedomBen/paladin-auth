@@ -1333,6 +1333,37 @@ pub fn format_duplicate_alert_body(
     }
 }
 
+/// State-driven projection that bundles
+/// [`AddDialogState::pending_duplicate_existing`] and
+/// [`AddDialogState::pending_validation_warnings`] into the
+/// rendered "Add anyway?" `AdwAlertDialog` body, or `None` when no
+/// duplicate-collision Save click is in flight.
+///
+/// Returns `Some(format_duplicate_alert_body(existing, warnings))`
+/// while a [`SaveClickOutcome::AwaitConfirmation`] is parked (both
+/// halves of the duplicate-collision projection populate together
+/// via [`AddAccountMsg::StagePendingDuplicate`]), and `None` once
+/// either half drains — [`AddAccountMsg::Cancel`],
+/// [`AddAccountMsg::SubmitProceed`],
+/// [`AddAccountMsg::ConfirmAddAnyway`], and sub-path
+/// [`AddAccountMsg::SwitchPath`] all drain in lockstep so the modal
+/// disappears the moment the user moves on.
+///
+/// Lets the widget bind a single `#[watch]` over the projection to
+/// drive the modal's visibility and body text instead of reaching
+/// across both accessors and re-running the
+/// [`format_duplicate_alert_body`] composer inline. Pure — borrows
+/// the state and constructs a fresh `String` per call without
+/// mutating any field.
+#[must_use]
+pub fn compose_pending_duplicate_alert_body(state: &AddDialogState) -> Option<String> {
+    let existing = state.pending_duplicate_existing()?;
+    Some(format_duplicate_alert_body(
+        existing,
+        state.pending_validation_warnings(),
+    ))
+}
+
 /// Apply an inbound [`AddAccountMsg`] and return the optional
 /// [`AddAccountOutput`] the widget layer should forward to
 /// `AppModel`.
