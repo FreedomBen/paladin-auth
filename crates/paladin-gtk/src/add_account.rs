@@ -1460,6 +1460,36 @@ pub fn compose_inline_error_body(state: &AddDialogState) -> Option<&str> {
     state.inline_error().map(|err| err.rendered.as_str())
 }
 
+/// State-driven projection of the active sub-path the widget binds
+/// to drive its `AdwViewSwitcher` between the manual, URI, and
+/// (forthcoming) QR sub-stack pages.
+///
+/// Returns [`crate::secret_fields::AddPath::Manual`] for a freshly
+/// opened dialog (matching the CLI / TUI `add` defaults) and
+/// follows every [`AddAccountMsg::SwitchPath`] dispatch in lockstep
+/// with [`crate::secret_fields::AddSecretState::switch_path`]'s
+/// buffer-clear semantics — the projection flips the visible page
+/// at the same moment the secret-bearing buffers for the path
+/// being left zero out.
+///
+/// Lets the widget bind a single `#[watch]` over the projection to
+/// drive the `AdwViewSwitcher`'s selected page instead of reaching
+/// across `state.secret_state().active_path` inline. Pure — borrows
+/// the state and returns the `Copy` enum value without allocating.
+///
+/// Sibling of the body / error / warning projections
+/// ([`compose_inline_error_body`],
+/// [`compose_post_effect_inline_error_body`],
+/// [`compose_post_effect_warning_body`],
+/// [`compose_pending_duplicate_alert_body`]): together they cover
+/// every `#[watch]`-driven region the dialog body needs to keep in
+/// sync with [`AddDialogState`] without the widget pattern-matching
+/// on raw state fields.
+#[must_use]
+pub fn compose_active_path(state: &AddDialogState) -> crate::secret_fields::AddPath {
+    state.secret_state().active_path
+}
+
 /// Apply an inbound [`AddAccountMsg`] and return the optional
 /// [`AddAccountOutput`] the widget layer should forward to
 /// `AppModel`.

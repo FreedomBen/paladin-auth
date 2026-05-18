@@ -4991,3 +4991,83 @@ fn compose_inline_error_body_drains_after_submit_proceed() {
         "SubmitProceed drains the inline-error projection alongside the worker_outcome slot",
     );
 }
+
+#[test]
+fn compose_active_path_fresh_dialog_returns_manual() {
+    // The `AdwViewSwitcher` between the manual / URI sub-paths binds
+    // a `#[watch]` over the active-path projection to drive which
+    // sub-stack page is visible. A fresh dialog opens on the manual
+    // sub-path per the CLI / TUI `add` defaults, so the projection
+    // must return `AddPath::Manual` before any `SwitchPath` dispatch
+    // lands. Mirror of `AddSecretState::new` returning
+    // `active_path == AddPath::Manual`, surfaced through the
+    // composer so the widget never reaches across `secret_state()`
+    // accessors inline.
+    use paladin_gtk::add_account::{compose_active_path, AddDialogState};
+    use paladin_gtk::secret_fields::AddPath;
+
+    let state = AddDialogState::new();
+
+    assert_eq!(
+        compose_active_path(&state),
+        AddPath::Manual,
+        "fresh dialog opens on Manual; composer surfaces it for the widget #[watch]",
+    );
+}
+
+#[test]
+fn compose_active_path_after_switch_to_uri_returns_uri() {
+    // `apply_msg(AddAccountMsg::SwitchPath(AddPath::Uri))` advances
+    // the active path through `AddSecretState::switch_path`. The
+    // composer must observe the post-switch value so the
+    // `AdwViewSwitcher` body flips to the URI sub-stack page in
+    // lockstep with the secret-buffer drain the path switch
+    // triggers. Sibling of
+    // `apply_msg_switch_path_to_uri_flips_active_path_and_emits_no_output`
+    // — that test pins the routing through the accessor; this one
+    // pins it through the projection the widget binds.
+    use paladin_gtk::add_account::{apply_msg, compose_active_path, AddAccountMsg, AddDialogState};
+    use paladin_gtk::secret_fields::AddPath;
+
+    let mut state = AddDialogState::new();
+    let output = apply_msg(&mut state, AddAccountMsg::SwitchPath(AddPath::Uri));
+
+    assert!(
+        output.is_none(),
+        "precondition: SwitchPath is dialog-local; no output flows back to AppModel",
+    );
+    assert_eq!(
+        compose_active_path(&state),
+        AddPath::Uri,
+        "SwitchPath(Uri) drives the projection to AddPath::Uri",
+    );
+}
+
+#[test]
+fn compose_active_path_round_trip_back_to_manual_returns_manual() {
+    // A user toggling the `AdwViewSwitcher` between sub-paths must
+    // see the projection follow each `SwitchPath`, not latch on the
+    // first transition. The drain semantics for the secret-bearing
+    // buffers are tested exhaustively in
+    // `tests/secret_fields_logic.rs`; here we pin only that the
+    // active-path projection round-trips so the widget's
+    // `#[watch]`-driven sub-stack switch stays bidirectional.
+    use paladin_gtk::add_account::{apply_msg, compose_active_path, AddAccountMsg, AddDialogState};
+    use paladin_gtk::secret_fields::AddPath;
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(&mut state, AddAccountMsg::SwitchPath(AddPath::Uri));
+    assert_eq!(
+        compose_active_path(&state),
+        AddPath::Uri,
+        "precondition: first SwitchPath(Uri) advanced the projection",
+    );
+
+    let _ = apply_msg(&mut state, AddAccountMsg::SwitchPath(AddPath::Manual));
+
+    assert_eq!(
+        compose_active_path(&state),
+        AddPath::Manual,
+        "SwitchPath back to Manual drives the projection back to AddPath::Manual",
+    );
+}
