@@ -1889,6 +1889,35 @@ pub fn format_app_menu_about_action_name() -> &'static str {
     "about"
 }
 
+/// Bare `GLib` action name the primary `gio::Menu`'s "Quit"
+/// entry binds via [`format_app_menu_quit_action`].
+///
+/// Returns the static action name `"quit"` — the name passed
+/// to `gio::SimpleAction::new(..., None)` when the matching
+/// action is registered on the application's `app` action group.
+/// The fully-qualified `detailed_action_name` `"app.quit"`
+/// spelled by [`format_app_menu_quit_action`] is the
+/// [`format_app_action_group_name`] group prefix joined to this
+/// bare name via the `<group>.<action>` separator. The matching
+/// action dispatches the standard `Quit` shutdown path,
+/// deferring the close until any in-flight vault worker returns
+/// per §"In-flight effect ownership".
+///
+/// Pure — returns a `'static str` without allocating. Final
+/// sibling of the bare-action-name set
+/// ([`format_app_menu_import_action_name`],
+/// [`format_app_menu_export_action_name`],
+/// [`format_app_menu_passphrase_action_name`],
+/// [`format_app_menu_preferences_action_name`],
+/// [`format_app_menu_about_action_name`]); together they pin
+/// all six primary-menu entries' bare `SimpleAction` names
+/// against a single source of truth, paired with the matching
+/// `_action` and `_label` helpers.
+#[must_use]
+pub fn format_app_menu_quit_action_name() -> &'static str {
+    "quit"
+}
+
 /// Bare `GLib` action-group name the primary `gio::Menu` resolves
 /// every entry target against.
 ///

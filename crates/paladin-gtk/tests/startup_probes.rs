@@ -1474,6 +1474,129 @@ fn format_app_menu_about_action_name_round_trips_with_group_and_target() {
 }
 
 #[test]
+fn format_app_menu_quit_action_name_returns_quit() {
+    // The `gio::SimpleAction::new("quit", None)` registration on
+    // the `AppModel`'s `app` action group reads its bare name from
+    // this helper. The matching action dispatches the standard
+    // `Quit` shutdown path, deferring the close until any in-
+    // flight vault worker returns per §"In-flight effect
+    // ownership".
+    //
+    // Pure — returns a `'static str` without allocating. Final
+    // sibling of the bare-action-name set
+    // (`format_app_menu_import_action_name`,
+    // `format_app_menu_export_action_name`,
+    // `format_app_menu_passphrase_action_name`,
+    // `format_app_menu_preferences_action_name`,
+    // `format_app_menu_about_action_name`); together they pin
+    // all six primary-menu entries' bare SimpleAction names
+    // against a single source of truth, paired with the matching
+    // `_action` and `_label` helpers.
+    use paladin_gtk::app::model::format_app_menu_quit_action_name;
+
+    assert_eq!(
+        format_app_menu_quit_action_name(),
+        "quit",
+        "primary menu Quit entry registers the bare `quit` SimpleAction on the application action group",
+    );
+}
+
+#[test]
+fn format_app_menu_quit_action_name_has_no_separator_or_whitespace() {
+    use paladin_gtk::app::model::format_app_menu_quit_action_name;
+
+    let action = format_app_menu_quit_action_name();
+    assert!(
+        !action.contains('.'),
+        "bare action name must not embed the `<group>.<action>` separator; got {action:?}",
+    );
+    assert!(
+        !action.contains(' '),
+        "bare action name must not contain whitespace; got {action:?}",
+    );
+    assert!(
+        !action.is_empty(),
+        "bare action name must be non-empty; got {action:?}",
+    );
+}
+
+#[test]
+fn format_app_menu_quit_action_name_round_trips_with_group_and_target() {
+    use paladin_gtk::app::model::{
+        format_app_action_group_name, format_app_menu_quit_action, format_app_menu_quit_action_name,
+    };
+
+    let joined = format!(
+        "{}.{}",
+        format_app_action_group_name(),
+        format_app_menu_quit_action_name(),
+    );
+    assert_eq!(
+        joined,
+        format_app_menu_quit_action(),
+        "`<group>.<action>` join must reproduce the fully-qualified Quit menu action target",
+    );
+}
+
+#[test]
+fn every_primary_menu_action_name_round_trips_with_group_and_target() {
+    // Final cross-check: for every primary-menu entry the
+    // `<group>.<action_name>` join from the two helpers must
+    // reproduce the fully-qualified `_action` target. Catches a
+    // future rename of any one of the eighteen helpers without
+    // updating its siblings.
+    use paladin_gtk::app::model::{
+        format_app_action_group_name, format_app_menu_about_action,
+        format_app_menu_about_action_name, format_app_menu_export_action,
+        format_app_menu_export_action_name, format_app_menu_import_action,
+        format_app_menu_import_action_name, format_app_menu_passphrase_action,
+        format_app_menu_passphrase_action_name, format_app_menu_preferences_action,
+        format_app_menu_preferences_action_name, format_app_menu_quit_action,
+        format_app_menu_quit_action_name,
+    };
+
+    let group = format_app_action_group_name();
+    for (label, bare, full) in [
+        (
+            "Import",
+            format_app_menu_import_action_name(),
+            format_app_menu_import_action(),
+        ),
+        (
+            "Export",
+            format_app_menu_export_action_name(),
+            format_app_menu_export_action(),
+        ),
+        (
+            "Passphrase",
+            format_app_menu_passphrase_action_name(),
+            format_app_menu_passphrase_action(),
+        ),
+        (
+            "Preferences",
+            format_app_menu_preferences_action_name(),
+            format_app_menu_preferences_action(),
+        ),
+        (
+            "About",
+            format_app_menu_about_action_name(),
+            format_app_menu_about_action(),
+        ),
+        (
+            "Quit",
+            format_app_menu_quit_action_name(),
+            format_app_menu_quit_action(),
+        ),
+    ] {
+        let joined = format!("{group}.{bare}");
+        assert_eq!(
+            joined, full,
+            "`<group>.<action>` join must reproduce the {label} menu action target",
+        );
+    }
+}
+
+#[test]
 fn format_app_action_group_name_is_prefix_of_every_primary_menu_action() {
     // Cross-check: every `format_app_menu_*_action` target must
     // begin with `format_app_action_group_name() + "."`. This
