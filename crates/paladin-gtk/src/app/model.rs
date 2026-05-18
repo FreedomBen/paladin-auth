@@ -2372,6 +2372,24 @@ pub fn format_app_about_dialog_translator_credits() -> &'static str {
     ""
 }
 
+/// Version string scoping the application menu's "About
+/// Paladin" entry's `AdwAboutDialog` release-notes-version slot
+/// (the "What's New" section surfaced after an update).
+///
+/// Sources from `env!("CARGO_PKG_VERSION")` so a workspace-wide
+/// version bump propagates here for free — the same source of
+/// truth as [`format_app_about_dialog_version`]. Pinning both
+/// labels to a single source keeps the dialog's release-notes
+/// header and the dialog's version label in lockstep; a
+/// mismatch would surface stale release notes to users who
+/// just upgraded.
+///
+/// Pure — returns a `'static str` resolved at compile time.
+#[must_use]
+pub fn format_app_about_dialog_release_notes_version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
+}
+
 /// Bare `GLib` action-group name the primary `gio::Menu` resolves
 /// every entry target against.
 ///

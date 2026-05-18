@@ -2706,6 +2706,48 @@ fn format_app_about_dialog_translator_credits_is_single_line_when_non_empty() {
 }
 
 #[test]
+fn format_app_about_dialog_release_notes_version_matches_about_dialog_version() {
+    // Per §"libadwaita usage" and §"About / help": the
+    // `AdwAboutDialog` release-notes-version slot scopes the
+    // "What's New" section that surfaces when the user opens
+    // the dialog after an update. It must match the version
+    // string returned by `format_app_about_dialog_version`
+    // (which sources from `env!("CARGO_PKG_VERSION")` so a
+    // workspace-wide version bump propagates here for free).
+    // Pinning the two values to a single source of truth keeps
+    // the dialog's release-notes header and the dialog's
+    // version label in lockstep — a mismatch would surface
+    // stale release notes to users who just upgraded.
+    use paladin_gtk::app::model::{
+        format_app_about_dialog_release_notes_version, format_app_about_dialog_version,
+    };
+
+    assert_eq!(
+        format_app_about_dialog_release_notes_version(),
+        format_app_about_dialog_version(),
+        "AdwAboutDialog release-notes-version must match the dialog version label so the What's New section is scoped to the running release",
+    );
+}
+
+#[test]
+fn format_app_about_dialog_release_notes_version_matches_cargo_pkg_version() {
+    // Defense-in-depth: the release-notes-version slot must
+    // source from `env!("CARGO_PKG_VERSION")` directly (not
+    // some derived or rounded value) so the workspace-wide
+    // version bump propagates here without a manual update.
+    // Catches an accidental hardcoded literal that drifted out
+    // of sync with the workspace `[workspace.package].version`
+    // field on a release.
+    use paladin_gtk::app::model::format_app_about_dialog_release_notes_version;
+
+    assert_eq!(
+        format_app_about_dialog_release_notes_version(),
+        env!("CARGO_PKG_VERSION"),
+        "AdwAboutDialog release-notes-version must source from `env!(\"CARGO_PKG_VERSION\")` so it tracks the workspace version field",
+    );
+}
+
+#[test]
 fn format_app_action_group_name_is_prefix_of_every_primary_menu_action() {
     // Cross-check: every `format_app_menu_*_action` target must
     // begin with `format_app_action_group_name() + "."`. This
