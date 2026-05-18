@@ -968,3 +968,43 @@ fn format_app_menu_passphrase_action_uses_app_group_prefix() {
         "action targets must not contain whitespace; got {action:?}",
     );
 }
+
+#[test]
+fn format_app_menu_preferences_action_returns_app_preferences() {
+    // The `AppModel`'s primary `gio::Menu` "Preferences" entry's
+    // `detailed_action_name` is populated from this helper. The
+    // wording (`"app.preferences"`) is the fully-qualified action
+    // target the `gio::Menu` resolves against the application's
+    // `app` action group. The `"app."` prefix names the group;
+    // `"preferences"` names the action.
+    //
+    // Pure — returns a `'static str` without allocating. Sibling
+    // of `format_app_menu_preferences_label` on the menu-entry-
+    // contract side; together they pin both halves (visible
+    // label + action target) against a single source of truth.
+    use paladin_gtk::app::model::format_app_menu_preferences_action;
+
+    assert_eq!(
+        format_app_menu_preferences_action(),
+        "app.preferences",
+        "primary menu Preferences entry targets the app.preferences action on the application's action group",
+    );
+}
+
+#[test]
+fn format_app_menu_preferences_action_uses_app_group_prefix() {
+    // Defense-in-depth against an accidental rename that would
+    // drop the `app.` group prefix or move the action onto a
+    // different group.
+    use paladin_gtk::app::model::format_app_menu_preferences_action;
+
+    let action = format_app_menu_preferences_action();
+    assert!(
+        action.starts_with("app."),
+        "primary menu Preferences action target must start with the `app.` group prefix so `gio::Menu` resolves it against the application action group; got {action:?}",
+    );
+    assert!(
+        !action.contains(' '),
+        "action targets must not contain whitespace; got {action:?}",
+    );
+}
