@@ -1364,6 +1364,59 @@ pub fn compose_pending_duplicate_alert_body(state: &AddDialogState) -> Option<St
     ))
 }
 
+/// Render the fixed `"Add anyway?"` heading shown atop the
+/// duplicate-collision `AdwAlertDialog`.
+///
+/// The heading takes no state arguments: it is the question the
+/// modal asks the user, and the descriptive details (the colliding
+/// account label and any pending validation warnings) are carried
+/// by [`format_duplicate_alert_body`] beneath it. Surfacing it
+/// through a helper rather than a bare string literal keeps the
+/// wording in one place so any future copy change (e.g. for i18n)
+/// has a single edit site shared by the widget binding and the
+/// snapshot tests in `tests/add_account_logic.rs`.
+///
+/// Partner of [`format_duplicate_alert_body`] (the modal body),
+/// [`format_duplicate_confirm_body`] (the collision statement
+/// inside the body), and [`format_pending_warnings_body`] (the
+/// warning lines beneath the statement); together they cover the
+/// full `AdwAlertDialog` content.
+#[must_use]
+pub fn format_duplicate_alert_heading() -> &'static str {
+    "Add anyway?"
+}
+
+/// State-driven projection of the duplicate-collision
+/// `AdwAlertDialog` heading, or `None` when no
+/// duplicate-collision Save click is in flight.
+///
+/// Returns `Some(format_duplicate_alert_heading())` while a
+/// [`SaveClickOutcome::AwaitConfirmation`] is parked (the colliding
+/// summary populates [`AddDialogState::pending_duplicate_existing`]
+/// via [`AddAccountMsg::StagePendingDuplicate`]), and `None` once
+/// the slot drains — [`AddAccountMsg::Cancel`],
+/// [`AddAccountMsg::SubmitProceed`],
+/// [`AddAccountMsg::ConfirmAddAnyway`], and sub-path
+/// [`AddAccountMsg::SwitchPath`] all drain in lockstep with the
+/// body projection so the modal disappears the moment the user
+/// moves on.
+///
+/// Lets the widget bind a single `#[watch]` over the projection to
+/// drive the modal's heading visibility and text instead of
+/// reaching across `pending_duplicate_existing()` inline alongside
+/// [`compose_pending_duplicate_alert_body`]. Pure — borrows the
+/// state and returns the `'static` heading string without
+/// allocating; sibling projection of
+/// [`compose_pending_duplicate_alert_body`] (the body) so the
+/// widget can `#[watch]` both halves of the modal content in
+/// lockstep.
+#[must_use]
+pub fn compose_pending_duplicate_alert_heading(state: &AddDialogState) -> Option<&'static str> {
+    state
+        .pending_duplicate_existing()
+        .map(|_| format_duplicate_alert_heading())
+}
+
 /// State-driven projection of the durability-warning body the
 /// widget renders beneath the post-add counts panel after a
 /// `KeepWithWarning` worker completion, or `None` for any other

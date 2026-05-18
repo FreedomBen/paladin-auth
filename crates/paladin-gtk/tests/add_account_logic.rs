@@ -5071,3 +5071,113 @@ fn compose_active_path_round_trip_back_to_manual_returns_manual() {
         "SwitchPath back to Manual drives the projection back to AddPath::Manual",
     );
 }
+
+#[test]
+fn format_duplicate_alert_heading_returns_add_anyway_question() {
+    // The `AdwAlertDialog` heading is the question the user is being
+    // asked: "Add anyway?". The wording is fixed (no state input) so
+    // the widget can bind it as a constant string when the modal is
+    // presented. Partner of `format_duplicate_alert_body`, which
+    // renders the descriptive body beneath the heading.
+    use paladin_gtk::add_account::format_duplicate_alert_heading;
+
+    assert_eq!(
+        format_duplicate_alert_heading(),
+        "Add anyway?",
+        "duplicate-alert heading is the fixed AdwAlertDialog question",
+    );
+}
+
+#[test]
+fn compose_pending_duplicate_alert_heading_with_no_pending_returns_none() {
+    // A freshly-opened dialog has not yet seen a duplicate-collision
+    // Save click, so the heading projection must collapse to `None`
+    // — the widget binds a `#[watch]` over the projection so the
+    // `AdwAlertDialog` heading region only renders while a pending
+    // collision is staged. Mirror of
+    // `compose_pending_duplicate_alert_body_with_no_pending_returns_none`
+    // on the heading projection side.
+    use paladin_gtk::add_account::{compose_pending_duplicate_alert_heading, AddDialogState};
+
+    let state = AddDialogState::new();
+
+    assert!(
+        compose_pending_duplicate_alert_heading(&state).is_none(),
+        "fresh dialog has no pending duplicate → no alert heading",
+    );
+}
+
+#[test]
+fn compose_pending_duplicate_alert_heading_with_staged_pending_returns_heading() {
+    // After `StagePendingDuplicate` parks the colliding existing
+    // summary, the heading projection must return
+    // `Some(format_duplicate_alert_heading())` so the widget can
+    // bind a single `#[watch]` over the projection to drive both
+    // visibility and text of the `AdwAlertDialog` heading. Partner
+    // of `compose_pending_duplicate_alert_body_with_staged_pending_returns_formatted_body`
+    // on the heading side.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_pending_duplicate_alert_heading, format_duplicate_alert_heading,
+        AddAccountMsg, AddDialogState,
+    };
+
+    let mut state = AddDialogState::new();
+    let validated = match classify_manual_submit(manual_totp_defaults(), now_for_tests()) {
+        ManualSubmitOutcome::Proceed(v) => v,
+        ManualSubmitOutcome::InlineError(e) => panic!("fixture failed: {e:?}"),
+    };
+
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::StagePendingDuplicate {
+            account: validated.account,
+            warnings: validated.warnings,
+            existing: dummy_existing_summary(),
+        },
+    );
+
+    assert_eq!(
+        compose_pending_duplicate_alert_heading(&state),
+        Some(format_duplicate_alert_heading()),
+        "staged pending → composer surfaces the heading verbatim",
+    );
+}
+
+#[test]
+fn compose_pending_duplicate_alert_heading_drains_after_confirm_add_anyway() {
+    // `ConfirmAddAnyway` consumes the pending validated account and
+    // drains the colliding-summary slot in lockstep, so the heading
+    // projection must collapse back to `None` — the widget binds a
+    // `#[watch]` over the projection so the `AdwAlertDialog` heading
+    // disappears once the user confirms past the prompt. Mirror of
+    // `compose_pending_duplicate_alert_body_drains_after_confirm_add_anyway`
+    // on the heading projection side.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_pending_duplicate_alert_heading, AddAccountMsg, AddDialogState,
+    };
+
+    let mut state = AddDialogState::new();
+    let validated = match classify_manual_submit(manual_totp_defaults(), now_for_tests()) {
+        ManualSubmitOutcome::Proceed(v) => v,
+        ManualSubmitOutcome::InlineError(e) => panic!("fixture failed: {e:?}"),
+    };
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::StagePendingDuplicate {
+            account: validated.account,
+            warnings: validated.warnings,
+            existing: dummy_existing_summary(),
+        },
+    );
+    assert!(
+        compose_pending_duplicate_alert_heading(&state).is_some(),
+        "precondition: StagePendingDuplicate populates the alert heading",
+    );
+
+    let _ = apply_msg(&mut state, AddAccountMsg::ConfirmAddAnyway);
+
+    assert!(
+        compose_pending_duplicate_alert_heading(&state).is_none(),
+        "ConfirmAddAnyway drains the alert-heading projection alongside the pending slot",
+    );
+}
