@@ -1642,6 +1642,71 @@ fn format_app_add_button_action_uses_app_group_prefix() {
 }
 
 #[test]
+fn format_app_add_button_action_name_returns_add() {
+    // The `gio::SimpleAction::new("add", None)` registration on
+    // the `AppModel`'s `app` action group reads its bare name from
+    // this helper. The fully-qualified target spelled by
+    // `format_app_add_button_action` is the
+    // `format_app_action_group_name` group prefix joined to this
+    // bare name via the `<group>.<action>` separator. The matching
+    // action dispatches `AddAccountComponent` and shares the
+    // `Unlocked` / `UnlockedBusy` gating with the four mutating
+    // primary-menu entries per §"libadwaita usage".
+    //
+    // Pure — returns a `'static str` without allocating. Sibling
+    // of `format_app_add_button_action` on the fully-qualified
+    // target side and `format_app_add_button_icon_name` /
+    // `format_app_add_button_tooltip` on the header-bar visible
+    // surface side; together they pin the bare action name and
+    // its action wiring against a single source of truth.
+    use paladin_gtk::app::model::format_app_add_button_action_name;
+
+    assert_eq!(
+        format_app_add_button_action_name(),
+        "add",
+        "header-bar + button registers the bare `add` SimpleAction on the application action group",
+    );
+}
+
+#[test]
+fn format_app_add_button_action_name_has_no_separator_or_whitespace() {
+    use paladin_gtk::app::model::format_app_add_button_action_name;
+
+    let action = format_app_add_button_action_name();
+    assert!(
+        !action.contains('.'),
+        "bare action name must not embed the `<group>.<action>` separator; got {action:?}",
+    );
+    assert!(
+        !action.contains(' '),
+        "bare action name must not contain whitespace; got {action:?}",
+    );
+    assert!(
+        !action.is_empty(),
+        "bare action name must be non-empty; got {action:?}",
+    );
+}
+
+#[test]
+fn format_app_add_button_action_name_round_trips_with_group_and_target() {
+    use paladin_gtk::app::model::{
+        format_app_action_group_name, format_app_add_button_action,
+        format_app_add_button_action_name,
+    };
+
+    let joined = format!(
+        "{}.{}",
+        format_app_action_group_name(),
+        format_app_add_button_action_name(),
+    );
+    assert_eq!(
+        joined,
+        format_app_add_button_action(),
+        "`<group>.<action>` join must reproduce the fully-qualified header-bar + button action target",
+    );
+}
+
+#[test]
 fn format_app_action_group_name_is_prefix_of_every_primary_menu_action() {
     // Cross-check: every `format_app_menu_*_action` target must
     // begin with `format_app_action_group_name() + "."`. This

@@ -1940,6 +1940,31 @@ pub fn format_app_add_button_action() -> &'static str {
     "app.add"
 }
 
+/// Bare `GLib` action name the header-bar `+` button binds via
+/// [`format_app_add_button_action`].
+///
+/// Returns the static action name `"add"` — the name passed
+/// to `gio::SimpleAction::new(..., None)` when the matching
+/// action is registered on the application's `app` action group.
+/// The fully-qualified `detailed_action_name` `"app.add"`
+/// spelled by [`format_app_add_button_action`] is the
+/// [`format_app_action_group_name`] group prefix joined to this
+/// bare name via the `<group>.<action>` separator. The matching
+/// action dispatches `AddAccountComponent` and shares the
+/// `Unlocked` / `UnlockedBusy` gating with the four mutating
+/// primary-menu entries per §"libadwaita usage".
+///
+/// Pure — returns a `'static str` without allocating. Sibling
+/// of [`format_app_add_button_action`] on the fully-qualified
+/// target side and [`format_app_add_button_icon_name`] /
+/// [`format_app_add_button_tooltip`] on the header-bar visible
+/// surface side; together they pin the bare action name and
+/// its action wiring against a single source of truth.
+#[must_use]
+pub fn format_app_add_button_action_name() -> &'static str {
+    "add"
+}
+
 /// Bare `GLib` action-group name the primary `gio::Menu` resolves
 /// every entry target against.
 ///
