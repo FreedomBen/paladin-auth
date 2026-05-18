@@ -586,6 +586,30 @@ pub fn format_init_dialog_marker(path: &Path) -> String {
     format!("{INIT_DIALOG_MARKER_PREFIX}{}", path.display())
 }
 
+/// Freedesktop icon name the widget hands to the
+/// [`InitDialogComponent`]'s `adw::StatusPage::set_icon_name`.
+///
+/// Returns the static icon name `"document-new-symbolic"` — the
+/// freedesktop-standard glyph for "create a new document" that
+/// resolves through the system icon theme so the wordless icon
+/// matches every other GNOME app's first-run / missing-resource
+/// surface. The `-symbolic` suffix is required by the libadwaita
+/// HIG for `AdwStatusPage` icons so the glyph recolors with the
+/// theme. No TUI parity: the TUI is text-only and has no icon to
+/// mirror. Pinning the icon name through a helper keeps the
+/// string in one place shared by the widget binding and the
+/// pure-logic tests.
+///
+/// Pure — returns a `'static str` without allocating. Sibling of
+/// [`crate::unlock_dialog::format_unlock_dialog_icon_name`] on
+/// the dialog-status-icon side; together they pin every first-
+/// mount dialog's freedesktop glyph against a single source of
+/// truth.
+#[must_use]
+pub fn format_init_dialog_icon_name() -> &'static str {
+    "document-new-symbolic"
+}
+
 /// Fixed `title` attribute the widget hands to the
 /// [`InitDialogComponent`]'s `adw::StatusPage::set_title`.
 ///
@@ -664,11 +688,7 @@ impl SimpleComponent for InitDialogComponent {
     view! {
         #[root]
         adw::StatusPage {
-            // `document-new-symbolic` is the freedesktop-standard
-            // glyph for "create a new document"; it resolves
-            // through the system icon theme so the wordless icon
-            // matches every other GNOME app's first-run surface.
-            set_icon_name: Some("document-new-symbolic"),
+            set_icon_name: Some(format_init_dialog_icon_name()),
             set_title: format_init_dialog_title(),
             set_description: Some(&format!(
                 "No vault found at {path}.\n\n{warning}",

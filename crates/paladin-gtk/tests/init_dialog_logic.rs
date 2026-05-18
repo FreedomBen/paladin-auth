@@ -740,6 +740,51 @@ fn run_init_worker_persists_plaintext_to_disk() {
 }
 
 #[test]
+fn format_init_dialog_icon_name_returns_document_new_symbolic() {
+    // The InitDialog's `adw::StatusPage::set_icon_name` attribute
+    // is populated from this helper. The icon
+    // (`"document-new-symbolic"`) is the freedesktop-standard
+    // glyph for "create a new document" — resolving through the
+    // system icon theme so the wordless icon matches every other
+    // GNOME app's first-run / missing-resource surface. The
+    // `-symbolic` suffix is required by the libadwaita HIG for
+    // `AdwStatusPage` icons so the glyph recolors with the theme.
+    // Pinning the icon name through a helper keeps the string in
+    // one place shared by the widget binding and the pure-logic
+    // tests.
+    //
+    // No TUI parity: the TUI is text-only and has no icon to
+    // mirror. Sibling of
+    // `paladin_gtk::unlock_dialog::format_unlock_dialog_icon_name`
+    // on the dialog-status-icon side; together they pin every
+    // first-mount dialog's freedesktop glyph against a single
+    // source of truth.
+    use paladin_gtk::init_dialog::format_init_dialog_icon_name;
+
+    assert_eq!(
+        format_init_dialog_icon_name(),
+        "document-new-symbolic",
+        "AdwStatusPage icon uses the freedesktop-standard new-document glyph",
+    );
+}
+
+#[test]
+fn format_init_dialog_icon_name_ends_with_symbolic_suffix() {
+    // The libadwaita HIG requires `AdwStatusPage` icons to be
+    // symbolic so they recolor with the theme; the icon-name
+    // contract is to end with `-symbolic`. Pinning a suffix
+    // assertion alongside the full-string assertion guards
+    // against an accidental rename to a non-symbolic glyph.
+    use paladin_gtk::init_dialog::format_init_dialog_icon_name;
+
+    let icon = format_init_dialog_icon_name();
+    assert!(
+        icon.ends_with("-symbolic"),
+        "AdwStatusPage icon name must end with `-symbolic` for HIG-conformant theming; got {icon:?}",
+    );
+}
+
+#[test]
 fn format_init_dialog_title_returns_create_a_new_vault() {
     // The InitDialog's `adw::StatusPage::set_title` attribute is
     // populated from this helper. The wording is the action-
