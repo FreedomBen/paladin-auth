@@ -603,3 +603,77 @@ fn format_startup_error_retry_label_is_non_empty_single_line_distinct_from_title
         "AdwStatusPage retry button label must be distinct from the surface title so the action button caption and the title are visually separable",
     );
 }
+
+#[test]
+fn format_startup_error_quit_label_returns_quit() {
+    // Per §"Vault interaction": the `StartupErrorComponent`
+    // surfaces a Quit action alongside Retry; pressing it tears
+    // the application down via the primary `app.quit` action so
+    // the user can exit without resolving the startup error.
+    // The HIG-aligned label for that secondary action button is
+    // the bare verb `"Quit"` — the same wording the primary
+    // menu's Quit entry uses (see
+    // `format_app_menu_quit_label`) so the application's
+    // quit-action vocabulary stays consistent across surfaces.
+    use paladin_gtk::startup_error::format_startup_error_quit_label;
+
+    assert_eq!(
+        format_startup_error_quit_label(),
+        "Quit",
+        "AdwStatusPage quit button label uses the HIG-aligned bare verb wording matching the primary menu Quit entry",
+    );
+}
+
+#[test]
+fn format_startup_error_quit_label_matches_primary_menu_quit_label() {
+    // Cross-check: the startup-error Quit button and the
+    // primary menu's Quit entry should render the exact same
+    // wording so the application's quit-action vocabulary stays
+    // consistent across surfaces. A drift between the two
+    // would surface as a confusing "Quit" vs "Exit" inconsistency
+    // when the same action is reached from two different
+    // surfaces.
+    use paladin_gtk::app::model::format_app_menu_quit_label;
+    use paladin_gtk::startup_error::format_startup_error_quit_label;
+
+    assert_eq!(
+        format_startup_error_quit_label(),
+        format_app_menu_quit_label(),
+        "AdwStatusPage quit button label must match the primary menu Quit entry so the application's quit-action vocabulary stays consistent",
+    );
+}
+
+#[test]
+fn format_startup_error_quit_label_is_non_empty_single_line_distinct_from_retry() {
+    // Defense-in-depth: the quit button label must be non-empty
+    // (an empty label would render a blank button), must be a
+    // single line, and must be distinct from the retry button
+    // label so the two action buttons read as separate options
+    // rather than rendering the same caption twice.
+    use paladin_gtk::startup_error::{
+        format_startup_error_quit_label, format_startup_error_retry_label,
+    };
+
+    let label = format_startup_error_quit_label();
+    assert!(
+        !label.is_empty(),
+        "AdwStatusPage quit button label must be non-empty; got {label:?}",
+    );
+    assert!(
+        !label.contains('\n'),
+        "AdwStatusPage quit button label must be a single line (no embedded newlines); got {label:?}",
+    );
+    assert!(
+        !label.starts_with(char::is_whitespace),
+        "AdwStatusPage quit button label must not start with whitespace; got {label:?}",
+    );
+    assert!(
+        !label.ends_with(char::is_whitespace),
+        "AdwStatusPage quit button label must not end with whitespace; got {label:?}",
+    );
+    assert_ne!(
+        label,
+        format_startup_error_retry_label(),
+        "AdwStatusPage quit button label must be distinct from the retry button label so the two action buttons read as separate options",
+    );
+}

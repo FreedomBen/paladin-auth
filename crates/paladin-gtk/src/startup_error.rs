@@ -250,6 +250,33 @@ pub fn format_startup_error_retry_label() -> &'static str {
     "Retry"
 }
 
+/// Action-button label the [`StartupErrorComponent`]'s
+/// `adw::StatusPage` renders for the Quit action described in
+/// §"Vault interaction".
+///
+/// Returns the bare verb `"Quit"`. Pressing the button tears
+/// the application down via the same primary `app.quit` action
+/// the primary menu's Quit entry routes through; pinning the
+/// wording to `"Quit"` keeps the startup-error secondary action
+/// and the primary menu's Quit entry rendering the same string
+/// so the application's quit-action vocabulary stays
+/// consistent across surfaces — a drift would surface as a
+/// confusing "Quit" vs "Exit" inconsistency when the same
+/// action is reached from two different surfaces.
+///
+/// Pure — returns a `'static str` without allocating. Distinct
+/// from [`format_startup_error_retry_label`] so the two action
+/// buttons read as separate options rather than rendering the
+/// same caption twice. Companion of
+/// [`crate::app::model::format_app_menu_quit_label`] on the
+/// quit-action-label side; the cross-check test in
+/// `tests/startup_error_logic.rs` asserts the two helpers
+/// resolve to the same wording.
+#[must_use]
+pub fn format_startup_error_quit_label() -> &'static str {
+    "Quit"
+}
+
 /// Construction parameters for [`StartupErrorComponent`].
 #[derive(Debug, Clone)]
 pub struct StartupErrorInit {
