@@ -175,6 +175,38 @@ fn startup_state_marker_startup_error_renders_path_or_placeholder() {
 }
 
 #[test]
+fn format_app_add_button_tooltip_returns_add_account() {
+    // The `AppModel`'s header-bar add `gtk::Button`'s
+    // `set_tooltip_text` attribute is populated from this helper.
+    // The wording (`"Add account"`) names the action the button
+    // dispatches (`AppMsg::OpenAddDialog`) and matches the
+    // GNOME-HIG verb-led tooltip convention used by every other
+    // GNOME app's header-bar `+` affordance. The tooltip is the
+    // user-visible label for an icon-only button that otherwise
+    // shows only `list-add-symbolic`, so pinning the wording
+    // through a helper guards the accessibility surface
+    // (screen-readers read tooltips) against silent copy drift.
+    //
+    // Distinct from `paladin_gtk::add_account::format_add_dialog_title`
+    // (`"Add account"`) which names the surface the tooltip
+    // opens: the two strings happen to match today but live on
+    // different surfaces — a future copy change should land on
+    // one without silently moving the other. No TUI parity: the
+    // TUI is text-only and surfaces actions through command
+    // names rather than tooltips. Pinning the wording through a
+    // helper keeps the string in one place shared by the widget
+    // binding and the pure-logic tests in
+    // `tests/startup_probes.rs`.
+    use paladin_gtk::app::model::format_app_add_button_tooltip;
+
+    assert_eq!(
+        format_app_add_button_tooltip(),
+        "Add account",
+        "header-bar add button tooltip uses the GNOME-HIG verb-led wording",
+    );
+}
+
+#[test]
 fn format_app_window_title_returns_paladin() {
     // The `AppModel`'s `adw::ApplicationWindow::set_title` attribute
     // is populated from this helper. The wording (`"Paladin"`) names

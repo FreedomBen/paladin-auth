@@ -457,7 +457,7 @@ impl SimpleComponent for AppModel {
                     #[name = "add_button"]
                     pack_start = &gtk::Button {
                         set_icon_name: "list-add-symbolic",
-                        set_tooltip_text: Some("Add account"),
+                        set_tooltip_text: Some(format_app_add_button_tooltip()),
                         // Initial visibility tracks the resolved
                         // startup state. Subsequent state changes
                         // (Unlocked → UnlockedBusy → Unlocked,
@@ -1259,6 +1259,33 @@ pub fn startup_state_marker(state: &AppState) -> String {
         None => "(unresolved)".to_string(),
     };
     format!("paladin-gtk: startup_state={variant} path={path_repr}")
+}
+
+/// Fixed `tooltip_text` attribute the widget hands to the
+/// [`AppModel`]'s header-bar add `gtk::Button::set_tooltip_text`.
+///
+/// Returns the static tooltip string (`"Add account"`) the user
+/// sees when hovering or focusing the `+` header-bar affordance.
+/// The wording names the action the button dispatches
+/// ([`AppMsg::OpenAddDialog`]) and matches the GNOME-HIG verb-led
+/// tooltip convention used by every other GNOME app's header-bar
+/// `+` button. The tooltip is the user-visible label for an icon-
+/// only button that otherwise shows only `list-add-symbolic`, so
+/// pinning the wording through a helper guards the accessibility
+/// surface (screen-readers read tooltips) against silent copy
+/// drift.
+///
+/// Pure — returns a `'static str` without allocating. Distinct
+/// from [`crate::add_account::format_add_dialog_title`]
+/// (`"Add account"`), which names the surface the tooltip opens:
+/// the two strings happen to match today but live on different
+/// surfaces — a future copy change should land on one without
+/// silently moving the other. No TUI parity: the TUI is text-
+/// only and surfaces actions through command names rather than
+/// tooltips.
+#[must_use]
+pub fn format_app_add_button_tooltip() -> &'static str {
+    "Add account"
 }
 
 /// Fixed `title` attribute the widget hands to the [`AppModel`]'s
