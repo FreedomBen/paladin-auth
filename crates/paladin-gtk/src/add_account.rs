@@ -2034,6 +2034,35 @@ pub fn compose_manual_counter_value(state: &AddDialogState) -> f64 {
     state.manual_draft().counter as f64
 }
 
+/// Fixed `(lower, upper, step_increment)` tuple the widget hands to
+/// `gtk::Adjustment::new` for the manual sub-path's HOTP counter
+/// `AdwSpinRow`.
+///
+/// Returns `(0.0, 9_007_199_254_740_992.0, 1.0)` — the §5 / §6
+/// non-negative counter minimum, the f64 safe-integer maximum
+/// (`2^53`, the largest value the spinner's `u64 → f64` cast in
+/// [`compose_manual_counter_value`] preserves losslessly), and the
+/// `1.0` integer step because the counter domain is integer-only.
+/// Spinning past `2^53` would lose precision in the cast, so the
+/// spinner caps there even though [`paladin_core::validate_manual`]
+/// accepts the full `u64` range verbatim — a direct dispatch through
+/// [`AddAccountMsg::ManualCounterChanged`] still permits any `u64`,
+/// matching the "user's prerogative" behavior
+/// [`compose_manual_counter_value`] documents on the post-`2^53`
+/// path. Out-of-range values arriving through a future test driver
+/// or misuse path are still owned by [`validate_manual`].
+///
+/// Pure — returns a `(f64, f64, f64)` tuple without allocating.
+/// Sibling of [`format_manual_digits_adjustment`] and
+/// [`format_manual_period_adjustment`] on the HOTP-counter side;
+/// together with [`compose_manual_counter_value`] they cover both
+/// the dynamic value the spinner reads and the static bounds the
+/// spinner enforces.
+#[must_use]
+pub fn format_manual_counter_adjustment() -> (f64, f64, f64) {
+    (0.0, 9_007_199_254_740_992.0, 1.0)
+}
+
 /// State-driven projection of the manual sub-path's OTP digits
 /// spinbutton value, surfaced as the `f64` that `AdwSpinRow::set_value`
 /// expects.

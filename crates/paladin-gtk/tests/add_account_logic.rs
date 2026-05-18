@@ -7767,3 +7767,67 @@ fn format_manual_period_adjustment_default_lies_inside_range() {
         "compose_manual_period_secs_value on a fresh dialog ({value}) lies inside [{lower}, {upper}]",
     );
 }
+
+// `format_manual_counter_adjustment` returns an exact `(f64, f64,
+// f64)` tuple — `0.0` lower, the f64 safe-integer maximum (`2^53`,
+// the largest value the spinner's `u64 → f64` cast preserves
+// losslessly) upper, and the `1.0` integer step — so
+// `clippy::float_cmp` does not apply.
+#[test]
+#[allow(clippy::float_cmp)]
+fn format_manual_counter_adjustment_returns_lossless_u64_range() {
+    // The HOTP counter AdwSpinRow's `gtk::Adjustment` (lower, upper,
+    // step_increment) tuple must cover the `u64` range that
+    // `compose_manual_counter_value`'s `u64 → f64` cast preserves
+    // losslessly. The lower bound is `0.0` (matching the
+    // `ManualDraftState::counter` default and the §5 / §6 contract
+    // that an HOTP counter is non-negative); the upper bound is
+    // `2^53` (the f64 safe-integer maximum), and the step is `1.0`
+    // because the counter domain is integer-only. Spinning past
+    // `2^53` would lose precision in the cast, so the spinner caps
+    // there even though `validate_manual` accepts the full `u64`
+    // range verbatim — direct dispatch through
+    // `AddAccountMsg::ManualCounterChanged` still permits any
+    // `u64`, and `compose_manual_counter_value` documents the
+    // post-`2^53` "user's prerogative" behavior. Sibling of
+    // `format_manual_digits_adjustment_returns_paladin_core_range`
+    // and `format_manual_period_adjustment_returns_paladin_core_range`
+    // on the HOTP-counter side.
+    use paladin_gtk::add_account::format_manual_counter_adjustment;
+
+    let (lower, upper, step) = format_manual_counter_adjustment();
+    assert_eq!(
+        lower, 0.0,
+        "lower bound matches the §5 / §6 minimum counter"
+    );
+    assert_eq!(
+        upper, 9_007_199_254_740_992.0,
+        "upper bound is 2^53 — the f64 safe-integer max so the u64 → f64 cast stays lossless",
+    );
+    assert_eq!(
+        step, 1.0,
+        "step is 1.0 because the counter domain is integer-only",
+    );
+}
+
+#[test]
+fn format_manual_counter_adjustment_default_lies_inside_range() {
+    // `compose_manual_counter_value` on a freshly-opened dialog must
+    // resolve to a value the AdwSpinRow's adjustment accepts —
+    // otherwise the spinner clamps the visible value and the form
+    // opens out of sync with the underlying
+    // `ManualDraftState::counter` default (CLI / TUI parity at `0`).
+    // Mirror of `format_manual_period_adjustment_default_lies_inside_range`
+    // on the HOTP-counter side.
+    use paladin_gtk::add_account::{
+        compose_manual_counter_value, format_manual_counter_adjustment, AddDialogState,
+    };
+
+    let state = AddDialogState::new();
+    let value = compose_manual_counter_value(&state);
+    let (lower, upper, _step) = format_manual_counter_adjustment();
+    assert!(
+        value >= lower && value <= upper,
+        "compose_manual_counter_value on a fresh dialog ({value}) lies inside [{lower}, {upper}]",
+    );
+}
