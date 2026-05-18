@@ -2068,6 +2068,55 @@ fn format_app_add_button_sensitive_mirrors_allows_mutating_menu() {
 }
 
 #[test]
+fn format_app_about_dialog_program_name_returns_paladin() {
+    // Per §"libadwaita usage": the application menu's "About
+    // Paladin" entry opens an `AdwAboutDialog` that pulls program
+    // metadata from a single source of truth. This helper returns
+    // the human-readable program name `"Paladin"` shown in the
+    // dialog header, matching the §11.3 desktop entry's
+    // `Name=Paladin` field so the launcher caption and the about
+    // dialog header stay in lockstep.
+    //
+    // Pure — returns a `'static str` without allocating. Not the
+    // same string as the §11.4 Flatpak / app-ID `APP_ID`
+    // (`"org.tamx.Paladin.Gui"`), which is the reverse-DNS
+    // identifier used by `RelmApp::new(...)`,
+    // `StartupWMClass`, the icon-theme key, and the AppStream
+    // `<id>`; the program name is for human display.
+    use paladin_gtk::app::model::format_app_about_dialog_program_name;
+
+    assert_eq!(
+        format_app_about_dialog_program_name(),
+        "Paladin",
+        "AdwAboutDialog program name must be the canonical display name `Paladin`, matching the §11.3 desktop entry `Name=Paladin`",
+    );
+}
+
+#[test]
+fn format_app_about_dialog_program_name_is_non_empty_and_not_app_id() {
+    // Defense-in-depth: the program name must be non-empty so
+    // `AdwAboutDialog` renders a header, and it must NOT be the
+    // reverse-DNS `APP_ID` (which is for system identifiers, not
+    // human display).
+    use paladin_gtk::app::model::format_app_about_dialog_program_name;
+    use paladin_gtk::APP_ID;
+
+    let name = format_app_about_dialog_program_name();
+    assert!(
+        !name.is_empty(),
+        "AdwAboutDialog program name must be non-empty; got {name:?}",
+    );
+    assert_ne!(
+        name, APP_ID,
+        "AdwAboutDialog program name must be the human display name, not the reverse-DNS APP_ID (`{APP_ID}`)",
+    );
+    assert!(
+        !name.contains('.'),
+        "AdwAboutDialog program name must be a bare display name, not a reverse-DNS identifier; got {name:?}",
+    );
+}
+
+#[test]
 fn format_app_action_group_name_is_prefix_of_every_primary_menu_action() {
     // Cross-check: every `format_app_menu_*_action` target must
     // begin with `format_app_action_group_name() + "."`. This

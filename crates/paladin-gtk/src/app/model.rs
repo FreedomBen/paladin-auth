@@ -2098,6 +2098,26 @@ pub fn format_app_add_button_sensitive(state: &AppState) -> bool {
     state.allows_mutating_menu()
 }
 
+/// Human-readable program name the application menu's "About
+/// Paladin" entry's `AdwAboutDialog` displays in its header.
+///
+/// Returns the static program name `"Paladin"` — the canonical
+/// display string that matches the §11.3 desktop entry's
+/// `Name=Paladin` field so the launcher caption and the about
+/// dialog header stay in lockstep.
+///
+/// Distinct from [`crate::APP_ID`] (`"org.tamx.Paladin.Gui"`),
+/// the reverse-DNS Flatpak / system identifier consumed by
+/// `RelmApp::new(...)`, `StartupWMClass`, the icon-theme key,
+/// and the `AppStream` `<id>`; this helper is for human display
+/// and never appears in those system-identifier slots.
+///
+/// Pure — returns a `'static str` without allocating.
+#[must_use]
+pub fn format_app_about_dialog_program_name() -> &'static str {
+    "Paladin"
+}
+
 /// Bare `GLib` action-group name the primary `gio::Menu` resolves
 /// every entry target against.
 ///
