@@ -763,3 +763,35 @@ fn run_remove_worker_persists_removal_to_disk() {
         "removed account stays gone after reopen",
     );
 }
+
+#[test]
+fn format_remove_dialog_title_returns_remove_account() {
+    // The RemoveDialog's `adw::StatusPage::set_title` attribute
+    // is populated from this helper. The wording (`"Remove
+    // account"`) names the destructive action without restating
+    // the specific account — the per-target display label lives
+    // in the StatusPage's description body (sourced from
+    // `model.state.display_label()`). Pinning the title through
+    // a helper keeps the wording in one place shared by the
+    // widget binding and the pure-logic tests in
+    // `tests/remove_dialog_logic.rs`.
+    //
+    // No TUI parity: the TUI's `remove` command is CLI-shaped
+    // and prompts on stdin (see `crates/paladin-tui/src/view`)
+    // rather than mounting a dialog header, so the wording is
+    // GTK-specific. Sibling of
+    // `paladin_gtk::unlock_dialog::format_unlock_dialog_title`,
+    // `paladin_gtk::init_dialog::format_init_dialog_title`,
+    // `paladin_gtk::rename_dialog::format_rename_dialog_title`,
+    // `paladin_gtk::add_account::format_add_dialog_title`, and
+    // `paladin_gtk::startup_error::format_startup_error_title`
+    // on the dialog-header-title side; together they pin every
+    // dialog's titled surface against a single source of truth.
+    use paladin_gtk::remove_dialog::format_remove_dialog_title;
+
+    assert_eq!(
+        format_remove_dialog_title(),
+        "Remove account",
+        "AdwStatusPage title uses the GNOME-HIG verb-led wording for the destructive action",
+    );
+}

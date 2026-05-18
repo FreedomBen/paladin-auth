@@ -201,6 +201,34 @@ pub fn format_remove_dialog_marker(account_id: AccountId, display_label: &str) -
     format!("{REMOVE_DIALOG_MARKER_PREFIX}{account_id} label={display_label}")
 }
 
+/// Fixed `title` attribute the widget hands to the
+/// [`RemoveDialogComponent`]'s `adw::StatusPage::set_title`.
+///
+/// Returns the static title string the dialog renders at the top
+/// of its body. The wording (`"Remove account"`) is the GNOME-HIG
+/// verb-led phrasing for the destructive action, naming the
+/// surface without restating the specific account — the per-
+/// target display label lives in the `StatusPage`'s description
+/// body. No TUI parity: the TUI's `remove` command is CLI-shaped
+/// and prompts on stdin rather than mounting a dialog header, so
+/// the wording is GTK-specific. Pinning the title through a
+/// helper keeps the wording in one place shared by the widget
+/// binding and the pure-logic tests in
+/// `tests/remove_dialog_logic.rs`.
+///
+/// Pure — returns a `'static str` without allocating. Sibling of
+/// [`crate::unlock_dialog::format_unlock_dialog_title`],
+/// [`crate::init_dialog::format_init_dialog_title`],
+/// [`crate::rename_dialog::format_rename_dialog_title`],
+/// [`crate::add_account::format_add_dialog_title`], and
+/// [`crate::startup_error::format_startup_error_title`] on the
+/// dialog-header-title side; together they pin every dialog's
+/// titled surface against a single source of truth.
+#[must_use]
+pub fn format_remove_dialog_title() -> &'static str {
+    "Remove account"
+}
+
 /// Worker input bundled by
 /// `AppMsg::RemoveDialogAction(RemoveDialogOutput::SubmitConfirm)`
 /// for the `gio::spawn_blocking
@@ -624,7 +652,7 @@ impl SimpleComponent for RemoveDialogComponent {
                 // icon theme so the wordless icon matches the platform's
                 // other delete surfaces.
                 set_icon_name: Some("user-trash-symbolic"),
-                set_title: "Remove account",
+                set_title: format_remove_dialog_title(),
                 set_description: Some(&format!(
                     "Removing {display}.",
                     display = model.state.display_label(),
