@@ -2489,6 +2489,63 @@ fn format_app_about_dialog_issue_url_is_non_empty_https_url_distinct_from_websit
 }
 
 #[test]
+fn format_app_about_dialog_support_url_appends_discussions_to_cargo_pkg_repository() {
+    // Per §"libadwaita usage" and §"About / help": the
+    // `AdwAboutDialog` support-url slot links to the project's
+    // "Where to find help" surface (community Q&A, not bug
+    // reports — the latter live on `issue_url`). For a GitHub-
+    // hosted project without an established Matrix/Discord
+    // channel the canonical surface is the repo's Discussions
+    // tab. Sourcing from `concat!(env!("CARGO_PKG_REPOSITORY"),
+    // "/discussions")` keeps the dialog footer "Get support"
+    // link aligned with the workspace repository field.
+    use paladin_gtk::app::model::format_app_about_dialog_support_url;
+
+    assert_eq!(
+        format_app_about_dialog_support_url(),
+        concat!(env!("CARGO_PKG_REPOSITORY"), "/discussions"),
+        "AdwAboutDialog support-url must source from `env!(\"CARGO_PKG_REPOSITORY\") + \"/discussions\"` so it tracks the workspace repository field",
+    );
+}
+
+#[test]
+fn format_app_about_dialog_support_url_is_non_empty_https_url_distinct_from_issue_and_website() {
+    // Defense-in-depth: the support-url must be HTTPS, non-empty,
+    // and distinct from both the website and the issue-tracker
+    // URLs — so the dialog footer renders three separate links
+    // ("Website", "Get support", "Report an issue") rather than
+    // collapsing the support entry into either neighbour.
+    use paladin_gtk::app::model::{
+        format_app_about_dialog_issue_url, format_app_about_dialog_support_url,
+        format_app_about_dialog_website,
+    };
+
+    let support_url = format_app_about_dialog_support_url();
+    assert!(
+        !support_url.is_empty(),
+        "AdwAboutDialog support-url must be non-empty; got {support_url:?}",
+    );
+    assert!(
+        support_url.starts_with("https://"),
+        "AdwAboutDialog support-url must be an HTTPS URL (Paladin handles secrets — never link the about dialog to an http:// page); got {support_url:?}",
+    );
+    assert!(
+        !support_url.contains(' '),
+        "AdwAboutDialog support-url must not contain whitespace; got {support_url:?}",
+    );
+    assert_ne!(
+        support_url,
+        format_app_about_dialog_issue_url(),
+        "AdwAboutDialog support-url must be distinct from the issue-tracker URL — community Q&A and bug reports are separate footer surfaces",
+    );
+    assert_ne!(
+        support_url,
+        format_app_about_dialog_website(),
+        "AdwAboutDialog support-url must be distinct from the website URL so the dialog renders two separate footer links",
+    );
+}
+
+#[test]
 fn format_app_action_group_name_is_prefix_of_every_primary_menu_action() {
     // Cross-check: every `format_app_menu_*_action` target must
     // begin with `format_app_action_group_name() + "."`. This

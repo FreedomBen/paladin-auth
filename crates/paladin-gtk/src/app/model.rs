@@ -2276,6 +2276,29 @@ pub fn format_app_about_dialog_issue_url() -> &'static str {
     concat!(env!("CARGO_PKG_REPOSITORY"), "/issues")
 }
 
+/// Support URL the application menu's "About Paladin" entry's
+/// `AdwAboutDialog` links to from its footer "Get support" slot.
+///
+/// Returns `concat!(env!("CARGO_PKG_REPOSITORY"),
+/// "/discussions")` — the GitHub Discussions tab is the
+/// canonical "Where to find help" surface for the project (the
+/// community Q&A side, distinct from the bug-reporting
+/// `issue_url` side and from the homepage `website` link).
+/// Sourcing from the workspace repository field keeps the
+/// dialog footer support link in lockstep with a workspace-wide
+/// repository move.
+///
+/// Pure — returns a `'static str` resolved at compile time.
+/// Distinct from [`format_app_about_dialog_issue_url`] (the
+/// bug-tracker URL) and [`format_app_about_dialog_website`]
+/// (the project homepage) so the dialog renders three separate
+/// footer links rather than collapsing the support entry into
+/// either neighbour.
+#[must_use]
+pub fn format_app_about_dialog_support_url() -> &'static str {
+    concat!(env!("CARGO_PKG_REPOSITORY"), "/discussions")
+}
+
 /// Bare `GLib` action-group name the primary `gio::Menu` resolves
 /// every entry target against.
 ///
