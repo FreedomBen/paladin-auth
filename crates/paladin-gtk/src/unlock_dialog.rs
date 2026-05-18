@@ -186,6 +186,29 @@ pub fn format_unlock_dialog_title() -> &'static str {
     "Unlock vault"
 }
 
+/// Fixed `title` attribute the widget hands to the passphrase
+/// `AdwPasswordEntryRow::set_title`.
+///
+/// Returns the static title string `AdwPasswordEntryRow` renders
+/// as the floating label above the entry. The wording
+/// (`"Passphrase"`) mirrors the TUI unlock view's `"Passphrase: "`
+/// prompt built by `passphrase_line` (see
+/// `crates/paladin-tui/src/view/unlock.rs`) — the TUI's trailing
+/// colon is its prompt-separator and drops out because
+/// `AdwPasswordEntryRow` renders its title as a floating label
+/// rather than as a prefix. Pinning the title through a helper
+/// keeps the GTK / TUI wording aligned against a single source of
+/// truth so a future copy change cannot diverge silently.
+///
+/// Pure — returns a `'static str` without allocating. Sibling of
+/// [`format_unlock_dialog_title`] on the unlock-dialog-chrome
+/// side; together they pin both the page title and the
+/// passphrase-row title against a single source of truth.
+#[must_use]
+pub fn format_unlock_dialog_passphrase_title() -> &'static str {
+    "Passphrase"
+}
+
 /// Construction parameters for [`UnlockDialogComponent`].
 #[derive(Debug, Clone)]
 pub struct UnlockDialogInit {
@@ -689,7 +712,7 @@ impl SimpleComponent for UnlockDialogComponent {
             adw::PreferencesGroup {
                 #[name = "passphrase_row"]
                 add = &adw::PasswordEntryRow {
-                    set_title: "Passphrase",
+                    set_title: format_unlock_dialog_passphrase_title(),
                     // `connect_changed` fires on every keystroke so the
                     // `SecretEntry` shadow buffer tracks the live entry
                     // and Paladin-owned `Zeroizing<String>` is the only

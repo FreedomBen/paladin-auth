@@ -1376,3 +1376,26 @@ fn format_unlock_dialog_title_returns_unlock_vault() {
         "AdwStatusPage title uses the action-oriented GNOME-HIG wording",
     );
 }
+
+#[test]
+fn format_unlock_dialog_passphrase_title_matches_tui_wording() {
+    // The passphrase `AdwPasswordEntryRow`'s `set_title` attribute
+    // is populated from this helper. The wording (`"Passphrase"`)
+    // mirrors the TUI unlock view's `"Passphrase: "` prompt built
+    // by `passphrase_line` in `crates/paladin-tui/src/view/unlock.rs`
+    // — the TUI's trailing colon is its prompt-separator and drops
+    // out because `AdwPasswordEntryRow` renders its title as a
+    // floating label above the entry rather than as a prefix.
+    // Pinning the title through a helper keeps the GTK / TUI
+    // wording aligned against a single source of truth so a
+    // future copy change cannot diverge silently. Sibling of
+    // `format_unlock_dialog_title` on the unlock-dialog-chrome
+    // side.
+    use paladin_gtk::unlock_dialog::format_unlock_dialog_passphrase_title;
+
+    assert_eq!(
+        format_unlock_dialog_passphrase_title(),
+        "Passphrase",
+        "passphrase row title mirrors the TUI unlock view's \"Passphrase:\" prompt",
+    );
+}
