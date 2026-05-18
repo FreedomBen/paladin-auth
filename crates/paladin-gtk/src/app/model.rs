@@ -2206,6 +2206,31 @@ pub fn format_app_about_dialog_copyright() -> &'static str {
     "\u{00A9} The Paladin contributors"
 }
 
+/// Typed GTK license enum the application menu's "About
+/// Paladin" entry's `AdwAboutDialog` hands to
+/// `set_license_type` so the dialog footer renders the
+/// canonical AGPL-3.0-or-later text shipped with the toolkit.
+///
+/// Returns [`gtk::License::Agpl30`] — the `GTK_LICENSE_AGPL_3_0`
+/// variant, i.e. the "or later" form per DESIGN.md §14 and the
+/// workspace-wide `license = "AGPL-3.0-or-later"` contract.
+/// Distinct from the strict [`gtk::License::Agpl30Only`] variant
+/// (which would mis-state the license boundary as "AGPL-3.0
+/// only"), and from the sibling `Gpl30` / `Lgpl30` variants
+/// (which would silently misrepresent the project license).
+///
+/// Returning the typed enum (rather than an SPDX `&'static str`)
+/// keeps the `AdwAboutDialog::set_license_type` call site free
+/// of string-to-enum translation logic and lets the toolkit
+/// drive both the footer license link and the human-readable
+/// license name from a single source of truth.
+///
+/// Pure — returns a `Copy` enum value without allocating.
+#[must_use]
+pub fn format_app_about_dialog_license_type() -> gtk::License {
+    gtk::License::Agpl30
+}
+
 /// Bare `GLib` action-group name the primary `gio::Menu` resolves
 /// every entry target against.
 ///

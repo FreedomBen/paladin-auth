@@ -2332,6 +2332,61 @@ fn format_app_about_dialog_copyright_starts_with_copyright_glyph_and_contains_de
 }
 
 #[test]
+fn format_app_about_dialog_license_type_returns_agpl30_or_later() {
+    // Per DESIGN.md §14 the project ships under AGPL-3.0-or-later
+    // and the §"CLAUDE.md / License hygiene" workspace contract
+    // pins every crate's `license = "AGPL-3.0-or-later"`. The
+    // matching GTK license-type enum variant is `License::Agpl30`
+    // (the `GTK_LICENSE_AGPL_3_0` value — the "or later" form,
+    // not the `Agpl30Only` strict variant). Pinning the typed
+    // enum value here keeps the `AdwAboutDialog::set_license_type`
+    // call site free of SPDX-string-to-enum translation logic
+    // and keeps the dialog footer license link rendering the
+    // canonical AGPL-3.0-or-later text shipped with the dialog.
+    use paladin_gtk::app::model::format_app_about_dialog_license_type;
+    use relm4::gtk;
+
+    assert_eq!(
+        format_app_about_dialog_license_type(),
+        gtk::License::Agpl30,
+        "AdwAboutDialog license-type must be `gtk::License::Agpl30` (the AGPL-3.0-or-later variant)",
+    );
+}
+
+#[test]
+fn format_app_about_dialog_license_type_is_not_strict_agpl30_only_or_other_gpl_family() {
+    // Defense-in-depth: catch an accidental swap with the strict
+    // `Agpl30Only` variant (which would mis-state the license
+    // boundary to users) or with the sibling `Gpl30` /
+    // `Gpl30Only` / `Lgpl30` variants. The DESIGN.md §14 contract
+    // is specifically AGPL-3.0-or-later, so anything other than
+    // `Agpl30` would silently misrepresent the project license in
+    // the dialog footer link.
+    use paladin_gtk::app::model::format_app_about_dialog_license_type;
+    use relm4::gtk;
+
+    let license = format_app_about_dialog_license_type();
+    assert_ne!(
+        license,
+        gtk::License::Agpl30Only,
+        "AdwAboutDialog license-type must be the `or later` form `Agpl30`, not the strict `Agpl30Only` variant",
+    );
+    for forbidden in [
+        gtk::License::Unknown,
+        gtk::License::Custom,
+        gtk::License::Gpl30,
+        gtk::License::Gpl30Only,
+        gtk::License::Lgpl30,
+        gtk::License::Lgpl30Only,
+    ] {
+        assert_ne!(
+            license, forbidden,
+            "AdwAboutDialog license-type must be `Agpl30` (AGPL-3.0-or-later), not {forbidden:?}",
+        );
+    }
+}
+
+#[test]
 fn format_app_action_group_name_is_prefix_of_every_primary_menu_action() {
     // Cross-check: every `format_app_menu_*_action` target must
     // begin with `format_app_action_group_name() + "."`. This
