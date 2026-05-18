@@ -1476,34 +1476,47 @@ pub fn apply_msg(state: &mut AddDialogState, msg: AddAccountMsg) -> Option<AddAc
         }
         AddAccountMsg::ManualLabelChanged(text) => {
             state.manual_draft.label = text;
+            // User-edit invalidates any prior Save-click rejection
+            // against the manual sub-path; the same clearing
+            // semantic as the secret-bearing arms applies to every
+            // non-secret manual draft field — see the doc on
+            // [`AddDialogState::inline_error`].
+            state.inline_error = None;
             None
         }
         AddAccountMsg::ManualIssuerChanged(text) => {
             state.manual_draft.issuer = text;
+            state.inline_error = None;
             None
         }
         AddAccountMsg::ManualAlgorithmChanged(algorithm) => {
             state.manual_draft.algorithm = algorithm;
+            state.inline_error = None;
             None
         }
         AddAccountMsg::ManualDigitsChanged(digits) => {
             state.manual_draft.digits = digits;
+            state.inline_error = None;
             None
         }
         AddAccountMsg::ManualKindChanged(kind) => {
             state.manual_draft.kind = kind;
+            state.inline_error = None;
             None
         }
         AddAccountMsg::ManualPeriodChanged(period_secs) => {
             state.manual_draft.period_secs = period_secs;
+            state.inline_error = None;
             None
         }
         AddAccountMsg::ManualCounterChanged(counter) => {
             state.manual_draft.counter = counter;
+            state.inline_error = None;
             None
         }
         AddAccountMsg::ManualIconHintChanged(text) => {
             state.manual_draft.icon_hint_text = text;
+            state.inline_error = None;
             None
         }
         AddAccountMsg::ManualSecretChanged(text) => {

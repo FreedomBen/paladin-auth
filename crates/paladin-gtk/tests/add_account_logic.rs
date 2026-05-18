@@ -3435,6 +3435,189 @@ fn apply_msg_render_inline_error_replaces_prior() {
 }
 
 #[test]
+fn apply_msg_manual_label_changed_clears_prior_inline_error() {
+    // Retyping the manual label after a Save click rejected it
+    // (e.g. `field: "label"` from validate_manual) means the prior
+    // rejection is no longer applicable to the live buffer — drop
+    // the inline error. Mirror of
+    // `apply_msg_manual_secret_changed_clears_prior_inline_error`
+    // on the non-secret label field.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    let err = InlineError::from_error(&validation_error("label", "empty"));
+    let _ = apply_msg(&mut state, AddAccountMsg::RenderInlineError(err));
+    assert!(state.inline_error().is_some(), "precondition");
+
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualLabelChanged("alice".to_string()),
+    );
+
+    assert!(
+        state.inline_error().is_none(),
+        "ManualLabelChanged clears the stale inline_error",
+    );
+}
+
+#[test]
+fn apply_msg_manual_issuer_changed_clears_prior_inline_error() {
+    // Retyping the issuer after a Save click rejected it (e.g. a
+    // `field: "issuer"` defensive rejection from
+    // `validate_manual`'s issuer-length cross-check) means the
+    // rejection is no longer applicable to the live buffer.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    let err = InlineError::from_error(&validation_error("issuer", "too long"));
+    let _ = apply_msg(&mut state, AddAccountMsg::RenderInlineError(err));
+    assert!(state.inline_error().is_some(), "precondition");
+
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualIssuerChanged("Acme".to_string()),
+    );
+
+    assert!(
+        state.inline_error().is_none(),
+        "ManualIssuerChanged clears the stale inline_error",
+    );
+}
+
+#[test]
+fn apply_msg_manual_algorithm_changed_clears_prior_inline_error() {
+    // Selecting a different algorithm after a Save click rejection
+    // means the user is editing the form — drop the stale inline
+    // error so the dialog body stops rendering it.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    let err = InlineError::from_error(&validation_error("label", "empty"));
+    let _ = apply_msg(&mut state, AddAccountMsg::RenderInlineError(err));
+    assert!(state.inline_error().is_some(), "precondition");
+
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualAlgorithmChanged(Algorithm::Sha256),
+    );
+
+    assert!(
+        state.inline_error().is_none(),
+        "ManualAlgorithmChanged clears the stale inline_error",
+    );
+}
+
+#[test]
+fn apply_msg_manual_digits_changed_clears_prior_inline_error() {
+    // Bumping the digit count after a Save click rejection (e.g.
+    // `field: "digits"` if a test driver slipped an out-of-range
+    // value through) means the user is editing — drop the stale
+    // inline error.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    let err = InlineError::from_error(&validation_error("digits", "out of range"));
+    let _ = apply_msg(&mut state, AddAccountMsg::RenderInlineError(err));
+    assert!(state.inline_error().is_some(), "precondition");
+
+    let _ = apply_msg(&mut state, AddAccountMsg::ManualDigitsChanged(8));
+
+    assert!(
+        state.inline_error().is_none(),
+        "ManualDigitsChanged clears the stale inline_error",
+    );
+}
+
+#[test]
+fn apply_msg_manual_kind_changed_clears_prior_inline_error() {
+    // Toggling TOTP / HOTP after a Save click rejection means the
+    // user is editing — drop the stale inline error. Kind-cross-
+    // check rejections (e.g. a HOTP-without-counter case slipped
+    // through) become especially stale when the kind itself
+    // changes.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    let err = InlineError::from_error(&validation_error("counter", "required for HOTP"));
+    let _ = apply_msg(&mut state, AddAccountMsg::RenderInlineError(err));
+    assert!(state.inline_error().is_some(), "precondition");
+
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualKindChanged(AccountKindInput::Hotp),
+    );
+
+    assert!(
+        state.inline_error().is_none(),
+        "ManualKindChanged clears the stale inline_error",
+    );
+}
+
+#[test]
+fn apply_msg_manual_period_changed_clears_prior_inline_error() {
+    // Tweaking the TOTP period after a Save click rejection (e.g.
+    // `field: "period_secs"` if a test driver slipped an
+    // out-of-range value through) means the user is editing — drop
+    // the stale inline error.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    let err = InlineError::from_error(&validation_error("period_secs", "out of range"));
+    let _ = apply_msg(&mut state, AddAccountMsg::RenderInlineError(err));
+    assert!(state.inline_error().is_some(), "precondition");
+
+    let _ = apply_msg(&mut state, AddAccountMsg::ManualPeriodChanged(60));
+
+    assert!(
+        state.inline_error().is_none(),
+        "ManualPeriodChanged clears the stale inline_error",
+    );
+}
+
+#[test]
+fn apply_msg_manual_counter_changed_clears_prior_inline_error() {
+    // Tweaking the HOTP counter after a Save click rejection means
+    // the user is editing — drop the stale inline error.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    let err = InlineError::from_error(&validation_error("counter", "invalid"));
+    let _ = apply_msg(&mut state, AddAccountMsg::RenderInlineError(err));
+    assert!(state.inline_error().is_some(), "precondition");
+
+    let _ = apply_msg(&mut state, AddAccountMsg::ManualCounterChanged(42));
+
+    assert!(
+        state.inline_error().is_none(),
+        "ManualCounterChanged clears the stale inline_error",
+    );
+}
+
+#[test]
+fn apply_msg_manual_icon_hint_changed_clears_prior_inline_error() {
+    // Retyping the icon-hint slug after a Save click rejected it
+    // (e.g. `field: "icon_hint"` from `parse_icon_hint_token`)
+    // means the prior rejection is no longer applicable to the
+    // live buffer — drop the inline error.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    let err = InlineError::from_error(&validation_error("icon_hint", "malformed slug"));
+    let _ = apply_msg(&mut state, AddAccountMsg::RenderInlineError(err));
+    assert!(state.inline_error().is_some(), "precondition");
+
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualIconHintChanged("github".to_string()),
+    );
+
+    assert!(
+        state.inline_error().is_none(),
+        "ManualIconHintChanged clears the stale inline_error",
+    );
+}
+
+#[test]
 fn apply_msg_manual_secret_changed_clears_prior_inline_error() {
     // Retyping the manual Base32 secret after a Save click rejected
     // it (e.g. `field: "secret"`) means the prior rejection is no
