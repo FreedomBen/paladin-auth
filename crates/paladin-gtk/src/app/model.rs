@@ -2231,6 +2231,28 @@ pub fn format_app_about_dialog_license_type() -> gtk::License {
     gtk::License::Agpl30
 }
 
+/// Website URL the application menu's "About Paladin" entry's
+/// `AdwAboutDialog` links to from its footer slot.
+///
+/// Sources from `env!("CARGO_PKG_HOMEPAGE")` so the dialog
+/// footer website link and the workspace
+/// `[workspace.package].homepage` field stay in lockstep —
+/// `crates/paladin-gtk` inherits its `homepage` from the
+/// workspace `homepage.workspace = true` declaration, so a
+/// workspace-wide homepage bump propagates here for free.
+///
+/// Pure — returns a `'static str` resolved at compile time.
+/// Companion of [`format_app_about_dialog_program_name`] /
+/// [`format_app_about_dialog_version`] /
+/// [`format_app_about_dialog_developer_name`] /
+/// [`format_app_about_dialog_copyright`] /
+/// [`format_app_about_dialog_license_type`] on the
+/// `AdwAboutDialog` metadata side.
+#[must_use]
+pub fn format_app_about_dialog_website() -> &'static str {
+    env!("CARGO_PKG_HOMEPAGE")
+}
+
 /// Bare `GLib` action-group name the primary `gio::Menu` resolves
 /// every entry target against.
 ///

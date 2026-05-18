@@ -2387,6 +2387,50 @@ fn format_app_about_dialog_license_type_is_not_strict_agpl30_only_or_other_gpl_f
 }
 
 #[test]
+fn format_app_about_dialog_website_matches_cargo_pkg_homepage() {
+    // Per §"libadwaita usage" and §"About / help": the
+    // `AdwAboutDialog` website slot links to the project
+    // homepage. The workspace `[workspace.package]` table sets
+    // `homepage = "https://paladin.tamx.org"` so a workspace-
+    // wide homepage change propagates here for free. Pinning the
+    // helper to `env!("CARGO_PKG_HOMEPAGE")` keeps the dialog
+    // footer website link and the §"License hygiene" /
+    // §"package metadata" homepage field in lockstep without a
+    // manual update.
+    use paladin_gtk::app::model::format_app_about_dialog_website;
+
+    assert_eq!(
+        format_app_about_dialog_website(),
+        env!("CARGO_PKG_HOMEPAGE"),
+        "AdwAboutDialog website must source from `env!(\"CARGO_PKG_HOMEPAGE\")` so it tracks the workspace homepage field",
+    );
+}
+
+#[test]
+fn format_app_about_dialog_website_is_non_empty_https_url() {
+    // Defense-in-depth: the dialog footer link must be a usable
+    // URL, not an empty placeholder. The homepage MUST be HTTPS
+    // (Paladin is a secrets-handling tool; an HTTP `about`
+    // website link would expose users to MITM downgrades on the
+    // canonical project page).
+    use paladin_gtk::app::model::format_app_about_dialog_website;
+
+    let website = format_app_about_dialog_website();
+    assert!(
+        !website.is_empty(),
+        "AdwAboutDialog website must be non-empty; got {website:?}",
+    );
+    assert!(
+        website.starts_with("https://"),
+        "AdwAboutDialog website must be an HTTPS URL (Paladin handles secrets — never link the about dialog to an http:// page); got {website:?}",
+    );
+    assert!(
+        !website.contains(' '),
+        "AdwAboutDialog website must not contain whitespace; got {website:?}",
+    );
+}
+
+#[test]
 fn format_app_action_group_name_is_prefix_of_every_primary_menu_action() {
     // Cross-check: every `format_app_menu_*_action` target must
     // begin with `format_app_action_group_name() + "."`. This
