@@ -738,3 +738,32 @@ fn run_init_worker_persists_plaintext_to_disk() {
         "freshly created vault stays empty after reopen",
     );
 }
+
+#[test]
+fn format_init_dialog_title_returns_create_a_new_vault() {
+    // The InitDialog's `adw::StatusPage::set_title` attribute is
+    // populated from this helper. The wording is the action-
+    // oriented `"Create a new vault"` — the GNOME-HIG verb-led
+    // phrasing for a first-run / missing-vault surface, matching
+    // the dialog's freedesktop icon (`document-new-symbolic`) and
+    // the §"Component tree" > `InitDialog` description
+    // ("first-run / missing-vault flow"). Pinning the title
+    // through a helper keeps the wording in one place shared by
+    // the widget binding and the pure-logic tests.
+    //
+    // No TUI parity: the TUI does not surface a first-run
+    // creation dialog (its `init` command is CLI-shaped only), so
+    // the wording is GTK-specific. Sibling of
+    // `paladin_gtk::unlock_dialog::format_unlock_dialog_title`,
+    // `paladin_gtk::rename_dialog::format_rename_dialog_title`,
+    // and `paladin_gtk::add_account::format_add_dialog_title` on
+    // the dialog-header-title side; together they pin every
+    // dialog's titled surface against a single source of truth.
+    use paladin_gtk::init_dialog::format_init_dialog_title;
+
+    assert_eq!(
+        format_init_dialog_title(),
+        "Create a new vault",
+        "AdwStatusPage title uses the action-oriented GNOME-HIG wording",
+    );
+}

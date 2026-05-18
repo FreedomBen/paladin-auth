@@ -586,6 +586,32 @@ pub fn format_init_dialog_marker(path: &Path) -> String {
     format!("{INIT_DIALOG_MARKER_PREFIX}{}", path.display())
 }
 
+/// Fixed `title` attribute the widget hands to the
+/// [`InitDialogComponent`]'s `adw::StatusPage::set_title`.
+///
+/// Returns the static title string the dialog renders at the top
+/// of its body. The wording (`"Create a new vault"`) is the
+/// action-oriented GNOME-HIG verb-led phrasing for a first-run /
+/// missing-vault surface, matching the dialog's freedesktop icon
+/// (`document-new-symbolic`) and the §"Component tree" >
+/// `InitDialog` description ("first-run / missing-vault flow").
+/// No TUI parity: the TUI does not surface a first-run creation
+/// dialog (its `init` command is CLI-shaped only), so the wording
+/// is GTK-specific. Pinning the title through a helper keeps the
+/// wording in one place shared by the widget binding and the
+/// pure-logic tests in `tests/init_dialog_logic.rs`.
+///
+/// Pure — returns a `'static str` without allocating. Sibling of
+/// [`crate::unlock_dialog::format_unlock_dialog_title`],
+/// [`crate::rename_dialog::format_rename_dialog_title`], and
+/// [`crate::add_account::format_add_dialog_title`] on the
+/// dialog-header-title side; together they pin every dialog's
+/// titled surface against a single source of truth.
+#[must_use]
+pub fn format_init_dialog_title() -> &'static str {
+    "Create a new vault"
+}
+
 /// Construction parameters for [`InitDialogComponent`].
 #[derive(Debug, Clone)]
 pub struct InitDialogInit {
@@ -643,7 +669,7 @@ impl SimpleComponent for InitDialogComponent {
             // through the system icon theme so the wordless icon
             // matches every other GNOME app's first-run surface.
             set_icon_name: Some("document-new-symbolic"),
-            set_title: "Create a new vault",
+            set_title: format_init_dialog_title(),
             set_description: Some(&format!(
                 "No vault found at {path}.\n\n{warning}",
                 path = model.vault_path.display(),
