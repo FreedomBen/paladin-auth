@@ -5449,3 +5449,80 @@ fn compose_pending_duplicate_alert_cancel_label_drains_after_cancel() {
         "Cancel drains the cancel-button projection alongside the pending slot",
     );
 }
+
+#[test]
+fn compose_manual_period_secs_visible_default_state_is_true() {
+    // The manual sub-path defaults to `AccountKindInput::Totp` (CLI
+    // parity, see `ManualDraftState::default`), so a freshly-opened
+    // dialog must expose the period spinbutton row — the widget
+    // binds a `#[watch]` over the projection to drive the row's
+    // `set_visible:` so the TOTP-specific row only renders when the
+    // user has selected TOTP. Mirror of `compose_active_path` on the
+    // kind-specific row-visibility side.
+    use paladin_gtk::add_account::{compose_manual_period_secs_visible, AddDialogState};
+
+    let state = AddDialogState::new();
+
+    assert!(
+        compose_manual_period_secs_visible(&state),
+        "fresh dialog defaults to TOTP, so the period row is visible",
+    );
+}
+
+#[test]
+fn compose_manual_period_secs_visible_after_kind_hotp_is_false() {
+    // Selecting HOTP from the kind dropdown drives the projection to
+    // `false` so the widget hides the period spinbutton row. The
+    // partner `compose_manual_counter_visible` projection (which
+    // lands in a follow-up commit) takes over for the HOTP-specific
+    // counter row.
+    use paladin_core::AccountKindInput;
+    use paladin_gtk::add_account::{
+        apply_msg, compose_manual_period_secs_visible, AddAccountMsg, AddDialogState,
+    };
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualKindChanged(AccountKindInput::Hotp),
+    );
+
+    assert!(
+        !compose_manual_period_secs_visible(&state),
+        "ManualKindChanged(Hotp) hides the TOTP period spinbutton row",
+    );
+}
+
+#[test]
+fn compose_manual_period_secs_visible_round_trips_back_to_totp() {
+    // Toggling the kind dropdown back to TOTP after HOTP must drive
+    // the projection back to `true` — the row must not latch on the
+    // first transition, so the widget's `#[watch]`-driven row
+    // visibility stays bidirectional. Mirror of
+    // `compose_active_path_round_trip_back_to_manual_returns_manual`
+    // on the kind-specific row-visibility side.
+    use paladin_core::AccountKindInput;
+    use paladin_gtk::add_account::{
+        apply_msg, compose_manual_period_secs_visible, AddAccountMsg, AddDialogState,
+    };
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualKindChanged(AccountKindInput::Hotp),
+    );
+    assert!(
+        !compose_manual_period_secs_visible(&state),
+        "precondition: HOTP hid the period row",
+    );
+
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualKindChanged(AccountKindInput::Totp),
+    );
+
+    assert!(
+        compose_manual_period_secs_visible(&state),
+        "ManualKindChanged(Totp) re-reveals the period spinbutton row",
+    );
+}

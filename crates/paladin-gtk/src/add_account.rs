@@ -1653,6 +1653,28 @@ pub fn compose_active_path(state: &AddDialogState) -> crate::secret_fields::AddP
     state.secret_state().active_path
 }
 
+/// State-driven projection of whether the manual sub-path's TOTP
+/// period spinbutton row is visible.
+///
+/// Returns `true` while [`ManualDraftState::kind`] is
+/// [`AccountKindInput::Totp`] (the default for a freshly opened
+/// dialog, matching CLI / TUI `add` parity) and `false` once the
+/// user selects HOTP via [`AddAccountMsg::ManualKindChanged`]. The
+/// partner [`compose_manual_counter_visible`] projection (which
+/// lands in a follow-up commit) flips in lockstep so exactly one
+/// of the two kind-specific rows is visible at any given moment.
+///
+/// Lets the widget bind a single `#[watch]` over the projection to
+/// drive the period row's `set_visible:` instead of pattern-
+/// matching on [`ManualDraftState::kind`] inline. Pure — borrows
+/// the state and returns a `bool` without allocating; sibling of
+/// the path / error / warning / alert composers so the widget can
+/// `#[watch]` every state-driven region of the dialog in lockstep.
+#[must_use]
+pub fn compose_manual_period_secs_visible(state: &AddDialogState) -> bool {
+    matches!(state.manual_draft().kind, AccountKindInput::Totp)
+}
+
 /// Apply an inbound [`AddAccountMsg`] and return the optional
 /// [`AddAccountOutput`] the widget layer should forward to
 /// `AppModel`.
