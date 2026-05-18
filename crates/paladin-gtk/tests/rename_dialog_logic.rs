@@ -1343,3 +1343,35 @@ fn format_rename_dialog_cancel_label_returns_cancel() {
         "dialog cancel button label is the fixed GNOME-convention wording",
     );
 }
+
+#[test]
+fn format_rename_dialog_subtitle_renders_renaming_display_label() {
+    // The Rename account dialog renders a second `gtk::Label`
+    // beneath the header whose `set_label` attribute is populated
+    // from this helper. The body names which account the user is
+    // editing in the form `"Renaming <display>."` where `<display>`
+    // is the pre-formatted `<issuer>:<label>` heading the rest of
+    // the dialog uses (see `format_rename_dialog_marker`). Pinning
+    // the format string through a helper keeps the GTK wording in
+    // one place shared by the widget binding and the pure-logic
+    // tests; the helper takes the display label by `&str` so the
+    // widget can pass `&model.init.display_label` without cloning.
+    //
+    // No TUI parity: the TUI renders a two-line prompt
+    // (`"Renaming the following account:"` followed by the
+    // current-label line) instead of the GTK's single-line
+    // `"Renaming X."` form — the GTK condenses the two TUI lines
+    // into a single sub-title so the dialog stays compact.
+    use paladin_gtk::rename_dialog::format_rename_dialog_subtitle;
+
+    assert_eq!(
+        format_rename_dialog_subtitle("GitHub:alice"),
+        "Renaming GitHub:alice.",
+        "subtitle names the account being renamed inline with the display heading",
+    );
+    assert_eq!(
+        format_rename_dialog_subtitle(""),
+        "Renaming .",
+        "empty display label degrades to the literal trailing period without panicking",
+    );
+}

@@ -419,6 +419,39 @@ pub fn format_rename_dialog_cancel_label() -> &'static str {
     "Cancel"
 }
 
+/// Render the rename dialog's display-label-bearing sub-title
+/// line — the `gtk::Label` beneath the
+/// [`format_rename_dialog_title`] header that names which account
+/// the user is renaming.
+///
+/// Returns `"Renaming <display>."` where `<display>` is the
+/// pre-formatted `<issuer>:<label>` heading the rest of the
+/// dialog uses (see [`format_rename_dialog_marker`]). The helper
+/// takes the display label by `&str` so the widget can pass
+/// `&model.init.display_label` without cloning, and uses
+/// [`format!`] (returning an owned `String`) because the
+/// `display` parameter is borrowed from
+/// [`RenameDialogInit::display_label`] which the dialog owns for
+/// the lifetime of the controller.
+///
+/// No TUI parity: the TUI renders a two-line prompt
+/// (`"Renaming the following account:"` followed by the
+/// current-label line) instead of the GTK's single-line
+/// `"Renaming X."` form — the GTK condenses the two TUI lines
+/// into a single sub-title so the dialog stays compact. Pinning
+/// the format string through a helper keeps the GTK wording in
+/// one place shared by the widget binding and the pure-logic
+/// tests in `tests/rename_dialog_logic.rs`.
+///
+/// Sibling of [`format_rename_dialog_title`] (the header label),
+/// [`format_rename_dialog_label_title`] (the `AdwEntryRow` title),
+/// and [`format_rename_dialog_cancel_label`] (the footer cancel
+/// button) on the rename-dialog-chrome side.
+#[must_use]
+pub fn format_rename_dialog_subtitle(display_label: &str) -> String {
+    format!("Renaming {display_label}.")
+}
+
 /// Construction parameters for [`RenameDialogComponent`].
 ///
 /// `AppModel` builds this from the live vault when a kebab
@@ -818,7 +851,7 @@ impl SimpleComponent for RenameDialogComponent {
                 add_css_class: "title-2",
             },
             gtk::Label {
-                set_label: &format!("Renaming {}.", model.init.display_label),
+                set_label: &format_rename_dialog_subtitle(&model.init.display_label),
                 set_xalign: 0.0,
                 set_wrap: true,
             },
