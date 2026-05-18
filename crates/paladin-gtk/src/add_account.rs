@@ -1394,6 +1394,39 @@ pub fn compose_post_effect_warning_body(state: &AddDialogState) -> Option<&str> 
     }
 }
 
+/// State-driven projection of the post-effect inline-error body the
+/// widget renders beneath the form for retry after an
+/// [`AddPostEffectOutcome::Inline`] worker completion, or `None` for
+/// any other state (no worker run yet, or the most recent failure
+/// was a durability warning rather than an inline error).
+///
+/// Returns `Some(inline.rendered.as_str())` while
+/// [`AddDialogState::worker_outcome`] is
+/// [`AddPostEffectOutcome::Inline`] (the `save_not_committed` /
+/// `io_error` / post-effect `validation_error` retry path), and
+/// `None` for both the no-worker-yet state and the
+/// [`AddPostEffectOutcome::KeepWithWarning`] success-with-warning
+/// path. The latter is rendered through
+/// [`compose_post_effect_warning_body`] so the widget can attach
+/// the durability warning beneath the post-add counts panel
+/// without the inline error leaking in alongside it.
+///
+/// Symmetric partner of [`compose_post_effect_warning_body`]: the
+/// two projections partition [`AddDialogState::worker_outcome`]
+/// across the [`AddPostEffectOutcome`] variants so the widget
+/// binds one `#[watch]` per dialog region (inline error beneath
+/// the form, durability warning beneath the post-add panel).
+/// Pure — borrows the state and returns a borrowed `&str` without
+/// allocating; the rendered body lives on the parked
+/// [`InlineError`] and stays alive as long as the state does.
+#[must_use]
+pub fn compose_post_effect_inline_error_body(state: &AddDialogState) -> Option<&str> {
+    match state.worker_outcome()? {
+        AddPostEffectOutcome::Inline(inline) => Some(inline.rendered.as_str()),
+        AddPostEffectOutcome::KeepWithWarning(_) => None,
+    }
+}
+
 /// Apply an inbound [`AddAccountMsg`] and return the optional
 /// [`AddAccountOutput`] the widget layer should forward to
 /// `AppModel`.
