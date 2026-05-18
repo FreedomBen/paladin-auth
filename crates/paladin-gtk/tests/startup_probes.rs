@@ -513,3 +513,54 @@ fn format_app_menu_button_tooltip_is_non_empty() {
         "header-bar menu button tooltip must be non-empty so the icon-only button retains a screen-reader label",
     );
 }
+
+#[test]
+fn format_app_menu_import_label_returns_import_with_ellipsis() {
+    // The `AppModel`'s primary `gio::Menu` "Import…" entry's
+    // label is populated from this helper. The wording
+    // (`"Import…"`) names the surface the entry opens
+    // (`ImportDialog`) and uses the GNOME-HIG horizontal-ellipsis
+    // character (U+2026) — not three ASCII periods — to indicate
+    // the action opens a sub-dialog requiring further input
+    // before committing. The trailing ellipsis is the GNOME-HIG
+    // convention for any menu entry that opens a dialog rather
+    // than completing the action immediately.
+    //
+    // Pure — returns a `'static str` without allocating. Sibling
+    // of the other primary-menu entries (Export…, Passphrase…,
+    // Preferences, About Paladin, Quit) which will land in
+    // follow-up commits with the same `format_app_menu_*_label`
+    // naming. The Import / Export / Passphrase / Preferences
+    // entries are gated to `Unlocked` per §"libadwaita usage";
+    // the label wording is identical across states so the
+    // tooltip does not need to change when the menu re-opens.
+    use paladin_gtk::app::model::format_app_menu_import_label;
+
+    assert_eq!(
+        format_app_menu_import_label(),
+        "Import\u{2026}",
+        "primary menu Import entry uses the HIG horizontal-ellipsis (U+2026) suffix",
+    );
+}
+
+#[test]
+fn format_app_menu_import_label_ends_with_ellipsis() {
+    // The GNOME-HIG menu-entry contract is that an entry opening
+    // a dialog ends with the horizontal-ellipsis character
+    // (U+2026), not three ASCII periods. Pinning a suffix-and-
+    // not-`...` invariant alongside the full-string assertion
+    // guards against an accidental rename to ASCII periods that
+    // would otherwise render slightly wider and break visual
+    // alignment with the rest of the GNOME app menus.
+    use paladin_gtk::app::model::format_app_menu_import_label;
+
+    let label = format_app_menu_import_label();
+    assert!(
+        label.ends_with('\u{2026}'),
+        "Import menu label must end with the horizontal-ellipsis character (U+2026); got {label:?}",
+    );
+    assert!(
+        !label.ends_with("..."),
+        "Import menu label must not use three ASCII periods; the GNOME HIG requires U+2026 instead; got {label:?}",
+    );
+}

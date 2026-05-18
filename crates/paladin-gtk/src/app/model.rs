@@ -1495,3 +1495,26 @@ pub fn format_app_menu_button_icon_name() -> &'static str {
 pub fn format_app_menu_button_tooltip() -> &'static str {
     "Main menu"
 }
+
+/// Fixed label the widget hands to the primary `gio::Menu`'s
+/// "Import…" entry.
+///
+/// Returns the static label `"Import\u{2026}"` — the wording for
+/// the menu entry that opens `ImportDialog`. Uses the GNOME-HIG
+/// horizontal-ellipsis character (U+2026) — not three ASCII
+/// periods — to indicate the action opens a sub-dialog requiring
+/// further input before committing. The trailing ellipsis is the
+/// GNOME-HIG convention for any menu entry that opens a dialog
+/// rather than completing the action immediately. The Import
+/// entry is gated to `Unlocked` per §"libadwaita usage" but the
+/// label wording is identical across states so the menu does not
+/// need to re-render when re-opened.
+///
+/// Pure — returns a `'static str` without allocating. Sibling of
+/// the other primary-menu entries (Export…, Passphrase…,
+/// Preferences, About Paladin, Quit) which will land in follow-up
+/// commits with the same `format_app_menu_*_label` naming.
+#[must_use]
+pub fn format_app_menu_import_label() -> &'static str {
+    "Import\u{2026}"
+}
