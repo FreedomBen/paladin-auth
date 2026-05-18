@@ -1983,6 +1983,91 @@ fn format_app_primary_menu_action_sensitivities_mirrors_allows_mutating_menu_for
 }
 
 #[test]
+fn format_app_add_button_sensitive_disabled_off_unlocked() {
+    // Per §"libadwaita usage": the header-bar `+` button is
+    // disabled when `AppModel` is not in `Unlocked` (so it is off
+    // in `Missing` / `Locked` / `StartupError`) and disabled
+    // while `UnlockedBusy` is active per §"In-flight effect
+    // ownership", matching the four mutating primary-menu entries.
+    use std::path::PathBuf;
+
+    use paladin_gtk::app::model::format_app_add_button_sensitive;
+    use paladin_gtk::app::state::AppState;
+    use paladin_gtk::startup_error::{StartupError, StartupErrorSource};
+
+    let path = PathBuf::from("/tmp/example/vault.bin");
+    for state in [
+        AppState::Missing { path: path.clone() },
+        AppState::Locked { path: path.clone() },
+        AppState::UnlockedBusy { path: path.clone() },
+        AppState::StartupError {
+            path: Some(path.clone()),
+            error: StartupError {
+                source: StartupErrorSource::Inspect,
+                kind: paladin_core::ErrorKind::InvalidHeader,
+                rendered: String::new(),
+            },
+        },
+    ] {
+        assert!(
+            !format_app_add_button_sensitive(&state),
+            "header-bar + button must be disabled for state={state:?} (allows_mutating_menu == false)",
+        );
+    }
+}
+
+#[test]
+fn format_app_add_button_sensitive_enabled_on_unlocked() {
+    use std::path::PathBuf;
+
+    use paladin_gtk::app::model::format_app_add_button_sensitive;
+    use paladin_gtk::app::state::AppState;
+
+    let state = AppState::Unlocked {
+        path: PathBuf::from("/tmp/example/vault.bin"),
+    };
+    assert!(
+        format_app_add_button_sensitive(&state),
+        "header-bar + button must be enabled when AppState is Unlocked",
+    );
+}
+
+#[test]
+fn format_app_add_button_sensitive_mirrors_allows_mutating_menu() {
+    // Defense-in-depth: the + button's sensitivity must read
+    // from `AppState::allows_mutating_menu` directly, not via
+    // a duplicated rule that could drift. Asserts the mirroring
+    // across all five `AppState` variants.
+    use std::path::PathBuf;
+
+    use paladin_gtk::app::model::format_app_add_button_sensitive;
+    use paladin_gtk::app::state::AppState;
+    use paladin_gtk::startup_error::{StartupError, StartupErrorSource};
+
+    let path = PathBuf::from("/tmp/example/vault.bin");
+    for state in [
+        AppState::Missing { path: path.clone() },
+        AppState::Locked { path: path.clone() },
+        AppState::Unlocked { path: path.clone() },
+        AppState::UnlockedBusy { path: path.clone() },
+        AppState::StartupError {
+            path: Some(path.clone()),
+            error: StartupError {
+                source: StartupErrorSource::Inspect,
+                kind: paladin_core::ErrorKind::InvalidHeader,
+                rendered: String::new(),
+            },
+        },
+    ] {
+        assert_eq!(
+            format_app_add_button_sensitive(&state),
+            state.allows_mutating_menu(),
+            "header-bar + button sensitivity for state={state:?} must match AppState::allows_mutating_menu",
+        );
+    }
+}
+
+#[test]
 fn format_app_action_group_name_is_prefix_of_every_primary_menu_action() {
     // Cross-check: every `format_app_menu_*_action` target must
     // begin with `format_app_action_group_name() + "."`. This

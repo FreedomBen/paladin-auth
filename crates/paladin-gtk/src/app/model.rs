@@ -2074,6 +2074,30 @@ pub fn format_app_primary_menu_action_sensitivities(state: &AppState) -> [bool; 
     ]
 }
 
+/// Sensitive (enabled) state for the header-bar `+` button bound
+/// via [`format_app_add_button_action`].
+///
+/// Returns the value of [`AppState::allows_mutating_menu`] —
+/// `true` only when `AppModel` is in [`AppState::Unlocked`],
+/// `false` everywhere else (`Missing` / `Locked` /
+/// `UnlockedBusy` / `StartupError`) — matching the four mutating
+/// primary-menu entries per §"libadwaita usage". Reading the
+/// rule from `allows_mutating_menu` directly keeps the + button
+/// and the menu entries on the same gate so a future change to
+/// the mutating-menu rule reverberates through every consumer
+/// instead of silently drifting per surface.
+///
+/// Companion of
+/// [`format_app_primary_menu_action_sensitivities`] on the
+/// per-entry sensitivity side; the four mutating slots of that
+/// array carry the same value this helper returns.
+///
+/// Pure — returns a `bool` without allocating.
+#[must_use]
+pub fn format_app_add_button_sensitive(state: &AppState) -> bool {
+    state.allows_mutating_menu()
+}
+
 /// Bare `GLib` action-group name the primary `gio::Menu` resolves
 /// every entry target against.
 ///
