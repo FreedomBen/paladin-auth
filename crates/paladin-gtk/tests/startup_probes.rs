@@ -830,3 +830,55 @@ fn format_app_menu_quit_label_does_not_carry_ellipsis() {
         "Quit menu label must not end with three ASCII periods either; got {label:?}",
     );
 }
+
+#[test]
+fn format_app_menu_import_action_returns_app_import() {
+    // The `AppModel`'s primary `gio::Menu` "Import…" entry's
+    // `detailed_action_name` is populated from this helper. The
+    // wording (`"app.import"`) is the fully-qualified action
+    // target the `gio::Menu` resolves against the
+    // `gio::ApplicationWindow`'s `app` action group — the same
+    // pattern `account_list.rs` uses with its `row.rename` /
+    // `row.remove` targets resolved against the per-row
+    // `gio::SimpleActionGroup`. The `"app."` prefix names the
+    // group; `"import"` names the action.
+    //
+    // Pure — returns a `'static str` without allocating. The
+    // matching `gio::SimpleAction` (`"import"`) is registered on
+    // the application's action group in a follow-up commit; the
+    // helper is pinned first so the menu wiring lands against a
+    // single source of truth shared by both halves of the
+    // contract (the `gio::Menu` reference and the action
+    // registration).
+    use paladin_gtk::app::model::format_app_menu_import_action;
+
+    assert_eq!(
+        format_app_menu_import_action(),
+        "app.import",
+        "primary menu Import entry targets the app.import action on the application's action group",
+    );
+}
+
+#[test]
+fn format_app_menu_import_action_uses_app_group_prefix() {
+    // Defense-in-depth against an accidental rename that would
+    // drop the `app.` group prefix or move the action onto a
+    // different group (e.g. `row.import` or bare `import`).
+    // `gio::Menu::append`'s `detailed_action_name` argument
+    // expects a fully-qualified `<group>.<action>` target; a
+    // bare action name silently no-ops at activation time. The
+    // matching `gio::SimpleAction` will be registered on the
+    // application's action group ("app") so the menu and the
+    // action registration must agree on the group prefix.
+    use paladin_gtk::app::model::format_app_menu_import_action;
+
+    let action = format_app_menu_import_action();
+    assert!(
+        action.starts_with("app."),
+        "primary menu Import action target must start with the `app.` group prefix so `gio::Menu` resolves it against the application action group; got {action:?}",
+    );
+    assert!(
+        !action.contains(' '),
+        "action targets must not contain whitespace; got {action:?}",
+    );
+}

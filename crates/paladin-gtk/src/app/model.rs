@@ -1641,3 +1641,30 @@ pub fn format_app_menu_about_label() -> &'static str {
 pub fn format_app_menu_quit_label() -> &'static str {
     "Quit"
 }
+
+/// Fully-qualified `detailed_action_name` the widget hands to the
+/// primary `gio::Menu`'s "Import…" entry.
+///
+/// Returns the static action target `"app.import"` — the
+/// fully-qualified target the `gio::Menu` resolves against the
+/// `gio::ApplicationWindow`'s `app` action group. The matching
+/// `gio::SimpleAction` (`"import"`) is registered on the
+/// application's action group; the menu's
+/// `detailed_action_name` argument expects a
+/// `<group>.<action>` target — a bare action name silently
+/// no-ops at activation time. The `"app."` prefix names the
+/// group; `"import"` names the action. Same pattern
+/// `account_list.rs` uses with its `row.rename` / `row.remove`
+/// targets resolved against the per-row
+/// `gio::SimpleActionGroup`.
+///
+/// Pure — returns a `'static str` without allocating. Sibling
+/// of the other primary-menu action-target helpers
+/// ([`format_app_menu_import_label`] names the visible label;
+/// this helper names the action target). Together they pin both
+/// halves of the menu-entry contract against a single source of
+/// truth.
+#[must_use]
+pub fn format_app_menu_import_action() -> &'static str {
+    "app.import"
+}
