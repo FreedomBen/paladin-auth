@@ -1425,3 +1425,66 @@ fn format_unlock_button_label_returns_unlock() {
         "unlock button label uses the action-specific GNOME-HIG verb",
     );
 }
+
+#[test]
+fn format_unlock_dialog_description_names_the_resolved_vault_path() {
+    // The Unlock vault dialog's `adw::StatusPage::set_description`
+    // attribute is populated from this helper. The wording
+    // (`"Enter the passphrase for {path}."`) names the resolved
+    // vault path so the user can confirm the destination before
+    // typing — the path is the `vault_path` `AppModel` resolved
+    // through `paladin_core::default_vault_path` (or the CLI
+    // `--vault` override) and passed in via `UnlockDialogInit`.
+    // Pinning the format string through a helper keeps the wording
+    // in one place shared by the widget binding and the pure-logic
+    // tests.
+    //
+    // Sibling of `format_unlock_dialog_title`,
+    // `format_unlock_dialog_passphrase_title`, and
+    // `format_unlock_button_label` on the unlock-dialog-chrome
+    // side; together they pin every visible label region of the
+    // unlock surface.
+    use paladin_gtk::unlock_dialog::format_unlock_dialog_description;
+
+    let path = Path::new("/tmp/example/vault.bin");
+    assert_eq!(
+        format_unlock_dialog_description(path),
+        "Enter the passphrase for /tmp/example/vault.bin.",
+        "description names the resolved vault path inline",
+    );
+}
+
+#[test]
+fn format_unlock_dialog_description_renders_relative_path_verbatim() {
+    // Defense-in-depth against accidental path normalization: the
+    // helper hands the caller's `Path::display()` rendering back
+    // verbatim regardless of whether the path is absolute or
+    // relative. `AppModel` always resolves the vault path before
+    // mounting the dialog, but pinning the helper against the
+    // `Path::display()` contract keeps a future home-relative-path
+    // edit a single-line change.
+    use paladin_gtk::unlock_dialog::format_unlock_dialog_description;
+
+    let path = Path::new("vault.bin");
+    assert_eq!(
+        format_unlock_dialog_description(path),
+        "Enter the passphrase for vault.bin.",
+        "description renders the caller's `Path::display()` output verbatim",
+    );
+}
+
+#[test]
+fn format_unlock_dialog_description_starts_with_enter_the_passphrase() {
+    // The prefix `"Enter the passphrase for "` is the stable
+    // wording the dialog leads with — pinning a prefix assertion
+    // alongside the full-string assertions guards against an
+    // accidental rewording that still happens to keep the path
+    // intact.
+    use paladin_gtk::unlock_dialog::format_unlock_dialog_description;
+
+    let rendered = format_unlock_dialog_description(Path::new("/x"));
+    assert!(
+        rendered.starts_with("Enter the passphrase for "),
+        "description begins with the stable `Enter the passphrase for ` prefix; got {rendered:?}",
+    );
+}

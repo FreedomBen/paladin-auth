@@ -209,6 +209,34 @@ pub fn format_unlock_dialog_passphrase_title() -> &'static str {
     "Passphrase"
 }
 
+/// Body the widget hands to the Unlock vault dialog's
+/// `adw::StatusPage::set_description` attribute.
+///
+/// Renders `"Enter the passphrase for <path>."` where `<path>` is
+/// the resolved vault path the dialog will hand to
+/// `paladin_core::open` on submit. The path is the `vault_path`
+/// `AppModel` resolved through `paladin_core::default_vault_path`
+/// (or the CLI `--vault` override) and passed in via
+/// [`UnlockDialogInit::vault_path`]. Surfacing the path inline so
+/// the user can confirm the destination before typing matches the
+/// Init dialog's `set_description`, which also leads with the
+/// resolved path.
+///
+/// Takes the path by `&Path` so the widget can pass
+/// `&model.vault_path` without cloning, and uses [`format!`]
+/// (returning an owned `String`) because the rendered text needs
+/// to outlive the borrowed [`std::path::Path`] argument once the
+/// view! macro hands it to `set_description`. Sibling of
+/// [`format_unlock_dialog_title`],
+/// [`format_unlock_dialog_passphrase_title`], and
+/// [`format_unlock_button_label`] on the unlock-dialog-chrome
+/// side; together they pin every visible label region of the
+/// unlock surface.
+#[must_use]
+pub fn format_unlock_dialog_description(path: &Path) -> String {
+    format!("Enter the passphrase for {path}.", path = path.display())
+}
+
 /// Fixed `"Unlock"` label the widget hands to the Unlock vault
 /// dialog's footer primary `gtk::Button::set_label`.
 ///
@@ -725,10 +753,7 @@ impl SimpleComponent for UnlockDialogComponent {
                 // every other GNOME app's unlock surface.
                 set_icon_name: Some("dialog-password-symbolic"),
                 set_title: format_unlock_dialog_title(),
-                set_description: Some(&format!(
-                    "Enter the passphrase for {path}.",
-                    path = model.vault_path.display(),
-                )),
+                set_description: Some(&format_unlock_dialog_description(&model.vault_path)),
                 set_hexpand: true,
             },
 
