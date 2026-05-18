@@ -765,6 +765,61 @@ fn run_remove_worker_persists_removal_to_disk() {
 }
 
 #[test]
+fn format_remove_dialog_subtitle_renders_display_label() {
+    // The RemoveDialog's `adw::StatusPage::set_description`
+    // attribute is populated from this helper. The wording
+    // (`"Removing {display}."`) names the destructive action
+    // verbatim against the row's pre-formatted display label, so
+    // the user can confirm the specific account before
+    // submitting. Pinning the format string through a helper
+    // keeps the wording in one place shared by the widget binding
+    // and the pure-logic tests in `tests/remove_dialog_logic.rs`.
+    //
+    // Sibling of
+    // `paladin_gtk::rename_dialog::format_rename_dialog_subtitle`
+    // on the dialog-sub-title side: the two surfaces use the same
+    // single-line "Verb-ing {display}." form so the rename and
+    // remove dialogs read in parallel against the same display
+    // label format. No TUI parity: the TUI's `remove` command is
+    // CLI-shaped and prompts on stdin rather than rendering a
+    // dialog sub-title, so the wording is GTK-specific.
+    use paladin_gtk::remove_dialog::format_remove_dialog_subtitle;
+
+    assert_eq!(
+        format_remove_dialog_subtitle("Acme:alice"),
+        "Removing Acme:alice.",
+        "subtitle names the destructive action against the display label verbatim",
+    );
+}
+
+#[test]
+fn format_remove_dialog_subtitle_starts_with_removing_prefix() {
+    // The prefix `"Removing "` is the stable wording the dialog
+    // leads with — pinning a prefix assertion alongside the full-
+    // string assertion guards against an accidental rewording
+    // that still happens to keep the label intact.
+    use paladin_gtk::remove_dialog::format_remove_dialog_subtitle;
+
+    let rendered = format_remove_dialog_subtitle("X");
+    assert!(
+        rendered.starts_with("Removing "),
+        "subtitle begins with the stable `Removing ` prefix; got {rendered:?}",
+    );
+}
+
+#[test]
+fn format_remove_dialog_subtitle_renders_empty_display_label() {
+    // Defense-in-depth against an empty display label: the helper
+    // should not panic or drop the trailing period, matching the
+    // `format_rename_dialog_subtitle` contract. `AppModel` should
+    // never hand an empty label in practice, but pinning the
+    // edge case keeps the formatter total.
+    use paladin_gtk::remove_dialog::format_remove_dialog_subtitle;
+
+    assert_eq!(format_remove_dialog_subtitle(""), "Removing .");
+}
+
+#[test]
 fn format_remove_dialog_icon_name_returns_user_trash_symbolic() {
     // The RemoveDialog's `adw::StatusPage::set_icon_name`
     // attribute is populated from this helper. The icon

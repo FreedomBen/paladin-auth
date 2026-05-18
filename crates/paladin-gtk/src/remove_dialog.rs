@@ -201,6 +201,33 @@ pub fn format_remove_dialog_marker(account_id: AccountId, display_label: &str) -
     format!("{REMOVE_DIALOG_MARKER_PREFIX}{account_id} label={display_label}")
 }
 
+/// Body the widget hands to the [`RemoveDialogComponent`]'s
+/// `adw::StatusPage::set_description` attribute.
+///
+/// Renders `"Removing <display>."` where `<display>` is the
+/// pre-formatted display label (`<issuer>:<label>` or `<label>`)
+/// surfaced by [`RemoveDialogState::display_label`]. Pinning the
+/// format string through a helper keeps the wording in one place
+/// shared by the widget binding and the pure-logic tests, and
+/// matches the parallel single-line "Verb-ing {display}." form
+/// used by
+/// [`crate::rename_dialog::format_rename_dialog_subtitle`] so the
+/// rename and remove dialogs read in parallel against the same
+/// display-label format.
+///
+/// Takes the display label by `&str` so the widget can pass
+/// `model.state.display_label()` without cloning, and uses
+/// [`format!`] (returning an owned `String`) because the rendered
+/// text needs to outlive the borrowed argument once the view!
+/// macro hands it to `set_description`. No TUI parity: the TUI's
+/// `remove` command is CLI-shaped and prompts on stdin rather
+/// than rendering a dialog sub-title, so the wording is GTK-
+/// specific.
+#[must_use]
+pub fn format_remove_dialog_subtitle(display_label: &str) -> String {
+    format!("Removing {display_label}.")
+}
+
 /// Freedesktop icon name the widget hands to the
 /// [`RemoveDialogComponent`]'s `adw::StatusPage::set_icon_name`.
 ///
@@ -675,9 +702,8 @@ impl SimpleComponent for RemoveDialogComponent {
             adw::StatusPage {
                 set_icon_name: Some(format_remove_dialog_icon_name()),
                 set_title: format_remove_dialog_title(),
-                set_description: Some(&format!(
-                    "Removing {display}.",
-                    display = model.state.display_label(),
+                set_description: Some(&format_remove_dialog_subtitle(
+                    model.state.display_label(),
                 )),
                 set_hexpand: true,
                 set_vexpand: true,
