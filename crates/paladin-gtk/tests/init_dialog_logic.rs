@@ -880,3 +880,78 @@ fn format_init_dialog_title_returns_create_a_new_vault() {
         "AdwStatusPage title uses the action-oriented GNOME-HIG wording",
     );
 }
+
+#[test]
+fn format_init_dialog_create_label_returns_create_vault() {
+    // Per §"Component tree" > `InitDialog`: the dialog's
+    // primary action button calls `Store::create` (plaintext
+    // path) or `Store::create` with `EncryptionOptions` (the
+    // encrypted path) — the user-visible verb is the same on
+    // both sub-flows, so the button label reads `"Create vault"`.
+    // The wording matches the dialog title verb (`"Create a new
+    // vault"`) while keeping the button caption short. Pinning
+    // the wording through a helper keeps the label in one place
+    // shared by the widget binding and the pure-logic tests in
+    // `tests/init_dialog_logic.rs`.
+    use paladin_gtk::init_dialog::format_init_dialog_create_label;
+
+    assert_eq!(
+        format_init_dialog_create_label(),
+        "Create vault",
+        "InitDialog create button label uses the short action-oriented wording matching the dialog title verb",
+    );
+}
+
+#[test]
+fn format_init_dialog_create_label_is_non_empty_single_line_distinct_from_title() {
+    // Defense-in-depth: the create button label must be
+    // non-empty (an empty label would render a blank button),
+    // must be a single line (the action button caption is
+    // rendered inline), and must be distinct from the dialog
+    // title so the action button caption and the title are
+    // visually separable rather than rendering the same string
+    // twice.
+    use paladin_gtk::init_dialog::{format_init_dialog_create_label, format_init_dialog_title};
+
+    let label = format_init_dialog_create_label();
+    assert!(
+        !label.is_empty(),
+        "InitDialog create button label must be non-empty; got {label:?}",
+    );
+    assert!(
+        !label.contains('\n'),
+        "InitDialog create button label must be a single line (no embedded newlines); got {label:?}",
+    );
+    assert!(
+        !label.starts_with(char::is_whitespace),
+        "InitDialog create button label must not start with whitespace; got {label:?}",
+    );
+    assert!(
+        !label.ends_with(char::is_whitespace),
+        "InitDialog create button label must not end with whitespace; got {label:?}",
+    );
+    assert_ne!(
+        label,
+        format_init_dialog_title(),
+        "InitDialog create button label must be distinct from the dialog title so the action button caption and the title are visually separable",
+    );
+}
+
+#[test]
+fn format_init_dialog_create_label_starts_with_capital_letter_for_button_caption() {
+    // Defense-in-depth: HIG-aligned button captions start with
+    // a capital letter ("Create vault", not "create vault" or
+    // "CREATE VAULT"). Catches an accidental lower-cased typo
+    // that would render a non-HIG button caption.
+    use paladin_gtk::init_dialog::format_init_dialog_create_label;
+
+    let label = format_init_dialog_create_label();
+    let first = label
+        .chars()
+        .next()
+        .expect("InitDialog create button label must be non-empty");
+    assert!(
+        first.is_ascii_uppercase(),
+        "InitDialog create button label must start with a capital ASCII letter per the GNOME HIG button-caption convention; got {label:?}",
+    );
+}

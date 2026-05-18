@@ -665,6 +665,31 @@ pub fn format_init_dialog_title() -> &'static str {
     "Create a new vault"
 }
 
+/// Action-button label the [`InitDialogComponent`]'s submit
+/// button renders when the user is ready to call `Store::create`
+/// (plaintext path) or `Store::create` with `EncryptionOptions`
+/// (encrypted path).
+///
+/// Returns the short action-oriented caption `"Create vault"`.
+/// The wording matches the verb in
+/// [`format_init_dialog_title`] (`"Create a new vault"`) while
+/// keeping the button caption short — the title sentence-case
+/// form for the surface header, the button bare verb-noun form
+/// for the action caption. Pinning the wording through a helper
+/// keeps the button label in one place shared by the widget
+/// binding and the pure-logic tests in
+/// `tests/init_dialog_logic.rs`.
+///
+/// Pure — returns a `'static str` without allocating. Sibling
+/// of [`crate::unlock_dialog::format_unlock_button_label`] on
+/// the dialog-submit-action side; together they pin the first-
+/// mount dialog action captions against a single source of
+/// truth.
+#[must_use]
+pub fn format_init_dialog_create_label() -> &'static str {
+    "Create vault"
+}
+
 /// Construction parameters for [`InitDialogComponent`].
 #[derive(Debug, Clone)]
 pub struct InitDialogInit {
