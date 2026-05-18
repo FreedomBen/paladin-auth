@@ -2748,6 +2748,66 @@ fn format_app_about_dialog_release_notes_version_matches_cargo_pkg_version() {
 }
 
 #[test]
+fn format_app_about_dialog_debug_info_carries_program_name_version_and_app_id() {
+    // Per §"libadwaita usage" and §"About / help": the
+    // `AdwAboutDialog` debug-info slot powers the dialog's
+    // "Copy debug info" button — the text users paste into bug
+    // reports. The minimum useful content is the program name,
+    // the running version, and the reverse-DNS app ID; pinning
+    // those three fields from the same single source of truth
+    // helpers used by the rest of the about dialog keeps the
+    // bug-report payload aligned with the dialog header / icon
+    // / version slots without a drift-prone duplicate constant.
+    use paladin_gtk::app::model::{
+        format_app_about_dialog_application_icon_name, format_app_about_dialog_debug_info,
+        format_app_about_dialog_program_name, format_app_about_dialog_version,
+    };
+
+    let debug = format_app_about_dialog_debug_info();
+    assert!(
+        debug.contains(format_app_about_dialog_program_name()),
+        "AdwAboutDialog debug-info must carry the program-name display string so bug reports identify the app; got {debug:?}",
+    );
+    assert!(
+        debug.contains(format_app_about_dialog_version()),
+        "AdwAboutDialog debug-info must carry the running version so bug reports identify the release; got {debug:?}",
+    );
+    assert!(
+        debug.contains(format_app_about_dialog_application_icon_name()),
+        "AdwAboutDialog debug-info must carry the reverse-DNS app ID so bug reports identify the Flatpak / install variant; got {debug:?}",
+    );
+}
+
+#[test]
+fn format_app_about_dialog_debug_info_is_non_empty_text_with_no_trailing_whitespace() {
+    // Defense-in-depth: the debug-info payload must be
+    // non-empty (an empty payload would copy an empty string to
+    // the clipboard on bug reports), must not have leading or
+    // trailing whitespace (so paste targets render cleanly),
+    // and must not embed carriage returns (LF-only newlines per
+    // the GNOME stack convention).
+    use paladin_gtk::app::model::format_app_about_dialog_debug_info;
+
+    let debug = format_app_about_dialog_debug_info();
+    assert!(
+        !debug.is_empty(),
+        "AdwAboutDialog debug-info must be non-empty so the Copy debug info button hands users a usable bug-report payload",
+    );
+    assert!(
+        !debug.starts_with(char::is_whitespace),
+        "AdwAboutDialog debug-info must not start with whitespace; got {debug:?}",
+    );
+    assert!(
+        !debug.ends_with(char::is_whitespace),
+        "AdwAboutDialog debug-info must not end with whitespace; got {debug:?}",
+    );
+    assert!(
+        !debug.contains('\r'),
+        "AdwAboutDialog debug-info must use LF-only line endings (no embedded CR); got {debug:?}",
+    );
+}
+
+#[test]
 fn format_app_action_group_name_is_prefix_of_every_primary_menu_action() {
     // Cross-check: every `format_app_menu_*_action` target must
     // begin with `format_app_action_group_name() + "."`. This

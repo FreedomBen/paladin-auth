@@ -2390,6 +2390,41 @@ pub fn format_app_about_dialog_release_notes_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
+/// Plain-text payload the application menu's "About Paladin"
+/// entry's `AdwAboutDialog` hands to `set_debug_info` for its
+/// "Copy debug info" button — the text users paste into bug
+/// reports.
+///
+/// Returns a three-line `\n`-separated payload built at compile
+/// time via `concat!`:
+///
+/// ```text
+/// Paladin <version>
+/// App ID: org.tamx.Paladin.Gui
+/// ```
+///
+/// The program name, version, and app-ID lines are the minimum
+/// fields that let a maintainer identify the running release
+/// and the install variant (native vs. Flatpak) from a pasted
+/// bug report. The `tests/startup_probes.rs` coverage cross-
+/// checks each line against the matching helper
+/// ([`format_app_about_dialog_program_name`],
+/// [`format_app_about_dialog_version`],
+/// [`format_app_about_dialog_application_icon_name`]) so the
+/// inlined literals stay in lockstep with the rest of the
+/// about-dialog metadata.
+///
+/// Pure — returns a `'static str` resolved at compile time.
+#[must_use]
+pub fn format_app_about_dialog_debug_info() -> &'static str {
+    concat!(
+        "Paladin ",
+        env!("CARGO_PKG_VERSION"),
+        "\nApp ID: ",
+        "org.tamx.Paladin.Gui",
+    )
+}
+
 /// Bare `GLib` action-group name the primary `gio::Menu` resolves
 /// every entry target against.
 ///
