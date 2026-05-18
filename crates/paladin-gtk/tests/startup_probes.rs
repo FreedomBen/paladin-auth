@@ -465,3 +465,51 @@ fn format_app_menu_button_icon_name_ends_with_symbolic_suffix() {
         "header-bar menu icon name must end with `-symbolic` for HIG-conformant theming; got {icon:?}",
     );
 }
+
+#[test]
+fn format_app_menu_button_tooltip_returns_main_menu() {
+    // The `AppModel`'s header-bar primary `gtk::MenuButton`'s
+    // `set_tooltip_text` attribute is populated from this helper.
+    // The wording (`"Main menu"`) names the surface the button
+    // opens (the primary `gio::Menu` with Import…, Export…,
+    // Passphrase…, Preferences, About Paladin, Quit) and matches
+    // the GNOME-HIG convention used by every other GNOME app's
+    // hamburger header-bar affordance. The tooltip is the user-
+    // visible label for an icon-only button that otherwise shows
+    // only `open-menu-symbolic`, so pinning the wording through
+    // a helper guards the accessibility surface (screen-readers
+    // read tooltips) against silent copy drift.
+    //
+    // Pure — returns a `'static str` without allocating. Third
+    // sibling of `format_app_add_button_tooltip` and
+    // `format_app_search_button_tooltip` on the header-bar-
+    // tooltip side; together they pin all three icon-only-button
+    // labels against a single source of truth. No TUI parity:
+    // the TUI exposes the same actions through `:` command-mode
+    // rather than tooltips.
+    use paladin_gtk::app::model::format_app_menu_button_tooltip;
+
+    assert_eq!(
+        format_app_menu_button_tooltip(),
+        "Main menu",
+        "header-bar primary menu button tooltip uses the GNOME-HIG primary-menu wording",
+    );
+}
+
+#[test]
+fn format_app_menu_button_tooltip_is_non_empty() {
+    // Defense-in-depth against an accidental empty tooltip
+    // landing here: an icon-only button without a tooltip strips
+    // a screen-reader's only label for the affordance, breaking
+    // the accessibility contract that `set_tooltip_text` is meant
+    // to satisfy. Pinning a non-empty invariant alongside the
+    // full-string assertion guards against an accidental empty-
+    // string regression.
+    use paladin_gtk::app::model::format_app_menu_button_tooltip;
+
+    let tooltip = format_app_menu_button_tooltip();
+    assert!(
+        !tooltip.is_empty(),
+        "header-bar menu button tooltip must be non-empty so the icon-only button retains a screen-reader label",
+    );
+}

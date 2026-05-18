@@ -480,6 +480,7 @@ impl SimpleComponent for AppModel {
                     #[name = "menu_button"]
                     pack_end = &gtk::MenuButton {
                         set_icon_name: format_app_menu_button_icon_name(),
+                        set_tooltip_text: Some(format_app_menu_button_tooltip()),
                     },
 
                     #[name = "search_button"]
@@ -1465,4 +1466,32 @@ pub fn format_app_search_button_tooltip() -> &'static str {
 #[must_use]
 pub fn format_app_menu_button_icon_name() -> &'static str {
     "open-menu-symbolic"
+}
+
+/// Fixed `tooltip_text` attribute the widget hands to the
+/// [`AppModel`]'s header-bar primary
+/// `gtk::MenuButton::set_tooltip_text`.
+///
+/// Returns the static tooltip string (`"Main menu"`) the user
+/// sees when hovering or focusing the primary-menu header-bar
+/// affordance. The wording names the surface the button opens
+/// (the primary `gio::Menu` with Import…, Export…, Passphrase…,
+/// Preferences, About Paladin, Quit) and matches the GNOME-HIG
+/// convention used by every other GNOME app's hamburger
+/// header-bar affordance. The tooltip is the user-visible label
+/// for an icon-only button that otherwise shows only
+/// `open-menu-symbolic`, so pinning the wording through a helper
+/// guards the accessibility surface (screen-readers read
+/// tooltips) against silent copy drift.
+///
+/// Pure — returns a `'static str` without allocating. Third
+/// sibling of [`format_app_add_button_tooltip`] and
+/// [`format_app_search_button_tooltip`] on the header-bar-
+/// tooltip side; together they pin all three icon-only-button
+/// labels against a single source of truth. No TUI parity: the
+/// TUI exposes the same actions through `:` command-mode rather
+/// than tooltips.
+#[must_use]
+pub fn format_app_menu_button_tooltip() -> &'static str {
+    "Main menu"
 }
