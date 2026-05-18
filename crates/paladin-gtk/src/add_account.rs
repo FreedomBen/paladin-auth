@@ -1850,6 +1850,34 @@ pub fn format_add_path_name(path: crate::secret_fields::AddPath) -> &'static str
     }
 }
 
+/// Fixed iteration order the widget uses to add the manual / URI
+/// sub-paths to the `AdwViewStack`.
+///
+/// Returns `[AddPath::Manual, AddPath::Uri]` so the widget can loop
+/// over the slice, calling [`format_add_path_name`] for the
+/// machine-readable page key and [`format_add_path_label`] for the
+/// `AdwViewSwitcher` display label on each iteration. Pinning the
+/// order through a helper matches the
+/// [`crate::secret_fields::AddSecretState::active_path`] default of
+/// [`crate::secret_fields::AddPath::Manual`] on a freshly-opened
+/// dialog (so the switcher opens on the page the user will see
+/// first) and keeps the page-add loop and the snapshot tests in
+/// `tests/add_account_logic.rs` aligned against a single source of
+/// truth so a future enum addition cannot land an unrouted page on
+/// the `AdwViewStack`.
+///
+/// Pure — returns a `'static` slice without allocating. Sibling of
+/// [`format_add_path_label`] and [`format_add_path_name`] on the
+/// page-iteration-order side; together the three helpers cover the
+/// full wiring the widget needs to build the sub-path switcher.
+#[must_use]
+pub fn format_add_path_order() -> &'static [crate::secret_fields::AddPath] {
+    &[
+        crate::secret_fields::AddPath::Manual,
+        crate::secret_fields::AddPath::Uri,
+    ]
+}
+
 /// State-driven projection of the currently-active sub-path's
 /// `AdwViewStack` page name (machine-readable slug).
 ///

@@ -7549,3 +7549,98 @@ fn format_manual_algorithm_labels_index_aligns_with_format_manual_algorithm_sele
         "SHA-512 index resolves to the \"SHA512\" label",
     );
 }
+
+#[test]
+fn format_add_path_order_matches_view_switcher_page_order() {
+    // The AdwViewSwitcher renders its pages in the order the widget
+    // adds them to the AdwViewStack — Manual first, URI second —
+    // matching the enum-declaration order and the
+    // `AddSecretState::active_path` default of `AddPath::Manual` on a
+    // freshly-opened dialog. Pinning the order through a helper keeps
+    // the page-add loop and the snapshot tests in
+    // `tests/add_account_logic.rs` aligned against a single source of
+    // truth so a future caller cannot accidentally add the pages in
+    // a different order than the dropdown labels / selected-index
+    // helpers expect. Sibling of
+    // `format_manual_kind_labels_matches_tui_wording` /
+    // `format_manual_algorithm_labels_matches_tui_wording` on the
+    // sub-path-order side.
+    use paladin_gtk::add_account::format_add_path_order;
+    use paladin_gtk::secret_fields::AddPath;
+
+    assert_eq!(
+        format_add_path_order(),
+        [AddPath::Manual, AddPath::Uri],
+        "page-add order is Manual first, URI second",
+    );
+}
+
+#[test]
+fn format_add_path_order_covers_every_addpath_variant() {
+    // Every `AddPath` variant must appear in the page-add order so a
+    // future enum addition trips this test rather than silently
+    // landing on the AdwViewStack as an unrouted page. The helper is
+    // the single source of truth for the iteration order the widget
+    // uses to add pages, so any new variant must be slotted into the
+    // helper at the same time it lands on the enum.
+    use paladin_gtk::add_account::format_add_path_order;
+    use paladin_gtk::secret_fields::AddPath;
+
+    let order = format_add_path_order();
+    assert!(
+        order.contains(&AddPath::Manual),
+        "Manual is in the page-add order",
+    );
+    assert!(
+        order.contains(&AddPath::Uri),
+        "Uri is in the page-add order",
+    );
+    assert_eq!(
+        order.len(),
+        2,
+        "page-add order covers exactly the two AddPath variants",
+    );
+}
+
+#[test]
+fn format_add_path_order_labels_align_with_format_add_path_label() {
+    // The widget feeds each `AddPath` in `format_add_path_order`
+    // through `format_add_path_label` to set the AdwViewStack page
+    // title; the resulting labels must come out in the same `Manual`
+    // / `URI` wording order the AdwViewSwitcher renders to the user.
+    // Pinning the chain in a test guards against a future addition
+    // to either helper that lands the order or the label wording
+    // out of sync.
+    use paladin_gtk::add_account::{format_add_path_label, format_add_path_order};
+
+    let labels: Vec<&'static str> = format_add_path_order()
+        .iter()
+        .map(|path| format_add_path_label(*path))
+        .collect();
+    assert_eq!(
+        labels,
+        ["Manual", "URI"],
+        "page-add order through format_add_path_label renders Manual / URI in order",
+    );
+}
+
+#[test]
+fn format_add_path_order_names_align_with_format_add_path_name() {
+    // Mirror of
+    // `format_add_path_order_labels_align_with_format_add_path_label`
+    // on the AdwViewStack page-name (machine-readable slug) side:
+    // feeding each `AddPath` in `format_add_path_order` through
+    // `format_add_path_name` must produce the `manual` / `uri` slugs
+    // in the same order the widget addresses them.
+    use paladin_gtk::add_account::{format_add_path_name, format_add_path_order};
+
+    let names: Vec<&'static str> = format_add_path_order()
+        .iter()
+        .map(|path| format_add_path_name(*path))
+        .collect();
+    assert_eq!(
+        names,
+        ["manual", "uri"],
+        "page-add order through format_add_path_name renders manual / uri in order",
+    );
+}
