@@ -201,6 +201,32 @@ pub fn format_remove_dialog_marker(account_id: AccountId, display_label: &str) -
     format!("{REMOVE_DIALOG_MARKER_PREFIX}{account_id} label={display_label}")
 }
 
+/// Freedesktop icon name the widget hands to the
+/// [`RemoveDialogComponent`]'s `adw::StatusPage::set_icon_name`.
+///
+/// Returns the static icon name `"user-trash-symbolic"` — the
+/// freedesktop-standard glyph for destructive removal that
+/// resolves through the system icon theme so the wordless icon
+/// matches every other GNOME app's delete surface. The
+/// `-symbolic` suffix is required by the libadwaita HIG for
+/// `AdwStatusPage` icons so the glyph recolors with the theme.
+/// No TUI parity: the TUI is text-only and has no icon to mirror.
+/// Pinning the icon name through a helper keeps the string in
+/// one place shared by the widget binding and the pure-logic
+/// tests.
+///
+/// Pure — returns a `'static str` without allocating. Sibling of
+/// [`crate::unlock_dialog::format_unlock_dialog_icon_name`],
+/// [`crate::init_dialog::format_init_dialog_icon_name`], and
+/// [`crate::startup_error::format_startup_error_icon_name`] on
+/// the dialog-status-icon side; together they pin every first-
+/// mount dialog's freedesktop glyph against a single source of
+/// truth.
+#[must_use]
+pub fn format_remove_dialog_icon_name() -> &'static str {
+    "user-trash-symbolic"
+}
+
 /// Fixed `title` attribute the widget hands to the
 /// [`RemoveDialogComponent`]'s `adw::StatusPage::set_title`.
 ///
@@ -647,11 +673,7 @@ impl SimpleComponent for RemoveDialogComponent {
             set_vexpand: true,
 
             adw::StatusPage {
-                // `user-trash-symbolic` is the freedesktop-standard glyph
-                // for destructive removal; resolves through the system
-                // icon theme so the wordless icon matches the platform's
-                // other delete surfaces.
-                set_icon_name: Some("user-trash-symbolic"),
+                set_icon_name: Some(format_remove_dialog_icon_name()),
                 set_title: format_remove_dialog_title(),
                 set_description: Some(&format!(
                     "Removing {display}.",
