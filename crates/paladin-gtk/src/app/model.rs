@@ -477,6 +477,11 @@ impl SimpleComponent for AppModel {
                         },
                     },
 
+                    #[name = "menu_button"]
+                    pack_end = &gtk::MenuButton {
+                        set_icon_name: format_app_menu_button_icon_name(),
+                    },
+
                     #[name = "search_button"]
                     pack_end = &gtk::ToggleButton {
                         set_icon_name: format_app_search_button_icon_name(),
@@ -1435,4 +1440,29 @@ pub fn format_app_search_button_icon_name() -> &'static str {
 #[must_use]
 pub fn format_app_search_button_tooltip() -> &'static str {
     "Search accounts"
+}
+
+/// Freedesktop icon name the widget hands to the [`AppModel`]'s
+/// header-bar primary `gtk::MenuButton::set_icon_name`.
+///
+/// Returns the static icon name `"open-menu-symbolic"` — the
+/// freedesktop-standard glyph for a hamburger / primary-menu
+/// button that resolves through the system icon theme so the
+/// wordless icon matches every other GNOME app's primary-menu
+/// header-bar affordance. The `-symbolic` suffix is required by
+/// the libadwaita HIG for header-bar icons so the glyph recolors
+/// with the theme. No TUI parity: the TUI is text-only and
+/// exposes the same actions through `:` command-mode rather than
+/// a menu icon. Pinning the icon name through a helper keeps the
+/// string in one place shared by the widget binding and the
+/// pure-logic tests.
+///
+/// Pure — returns a `'static str` without allocating. Third
+/// sibling of [`format_app_add_button_icon_name`] and
+/// [`format_app_search_button_icon_name`] on the header-bar-icon
+/// side; together they pin all three wordless header-bar
+/// affordances against a single source of truth.
+#[must_use]
+pub fn format_app_menu_button_icon_name() -> &'static str {
+    "open-menu-symbolic"
 }
