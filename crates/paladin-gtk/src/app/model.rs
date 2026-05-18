@@ -2038,6 +2038,42 @@ pub fn format_app_primary_menu_action_names() -> [&'static str; 6] {
     ]
 }
 
+/// Per-entry enabled state for the primary menu, parallel to
+/// [`format_app_primary_menu_entries`] and
+/// [`format_app_primary_menu_action_names`].
+///
+/// Returns a `[bool; 6]` array whose slots match the §"libadwaita
+/// usage" sequence (Import, Export, Passphrase, Preferences,
+/// About, Quit). The four mutating entries
+/// (Import / Export / Passphrase / Preferences) read their
+/// sensitivity from [`AppState::allows_mutating_menu`] so they
+/// are enabled only when `AppModel` is in
+/// [`AppState::Unlocked`] (disabled in `Missing` / `Locked` /
+/// `UnlockedBusy` / `StartupError`). About and Quit stay enabled
+/// in every state per §"libadwaita usage".
+///
+/// The widget binding consumes this array alongside
+/// [`format_app_primary_menu_action_names`] to keep each
+/// `gio::SimpleAction::set_enabled(...)` call against the same
+/// pinned source of truth, so a future change to the mutating-
+/// menu rule reverberates through every consumer instead of
+/// silently drifting per entry.
+///
+/// Pure — returns a small fixed-size array of `bool` without
+/// allocating.
+#[must_use]
+pub fn format_app_primary_menu_action_sensitivities(state: &AppState) -> [bool; 6] {
+    let mutating = state.allows_mutating_menu();
+    [
+        mutating, // Import
+        mutating, // Export
+        mutating, // Passphrase
+        mutating, // Preferences
+        true,     // About
+        true,     // Quit
+    ]
+}
+
 /// Bare `GLib` action-group name the primary `gio::Menu` resolves
 /// every entry target against.
 ///

@@ -1867,6 +1867,122 @@ fn format_app_primary_menu_action_names_parallels_primary_menu_entries() {
 }
 
 #[test]
+fn format_app_primary_menu_action_sensitivities_disables_mutating_entries_off_unlocked() {
+    // Per §"libadwaita usage": the Import / Export / Passphrase /
+    // Preferences entries are disabled when `AppModel` is not in
+    // `Unlocked` (so they are off in `Missing` / `Locked` /
+    // `StartupError`) and disabled while `UnlockedBusy` is active
+    // per §"In-flight effect ownership"; About and Quit stay
+    // enabled in every state.
+    use std::path::PathBuf;
+
+    use paladin_gtk::app::model::format_app_primary_menu_action_sensitivities;
+    use paladin_gtk::app::state::AppState;
+    use paladin_gtk::startup_error::{StartupError, StartupErrorSource};
+
+    let path = PathBuf::from("/tmp/example/vault.bin");
+    for state in [
+        AppState::Missing { path: path.clone() },
+        AppState::Locked { path: path.clone() },
+        AppState::UnlockedBusy { path: path.clone() },
+        AppState::StartupError {
+            path: Some(path.clone()),
+            error: StartupError {
+                source: StartupErrorSource::Inspect,
+                kind: paladin_core::ErrorKind::InvalidHeader,
+                rendered: String::new(),
+            },
+        },
+    ] {
+        let sens = format_app_primary_menu_action_sensitivities(&state);
+        assert_eq!(sens.len(), 6, "primary menu must carry exactly six entries");
+        assert!(
+            !sens[0],
+            "Import must be disabled for state={state:?} (allows_mutating_menu == false)",
+        );
+        assert!(
+            !sens[1],
+            "Export must be disabled for state={state:?} (allows_mutating_menu == false)",
+        );
+        assert!(
+            !sens[2],
+            "Passphrase must be disabled for state={state:?} (allows_mutating_menu == false)",
+        );
+        assert!(
+            !sens[3],
+            "Preferences must be disabled for state={state:?} (allows_mutating_menu == false)",
+        );
+        assert!(
+            sens[4],
+            "About must stay enabled for state={state:?} per §\"libadwaita usage\"",
+        );
+        assert!(
+            sens[5],
+            "Quit must stay enabled for state={state:?} per §\"libadwaita usage\"",
+        );
+    }
+}
+
+#[test]
+fn format_app_primary_menu_action_sensitivities_enables_mutating_entries_on_unlocked() {
+    use std::path::PathBuf;
+
+    use paladin_gtk::app::model::format_app_primary_menu_action_sensitivities;
+    use paladin_gtk::app::state::AppState;
+
+    let state = AppState::Unlocked {
+        path: PathBuf::from("/tmp/example/vault.bin"),
+    };
+    let sens = format_app_primary_menu_action_sensitivities(&state);
+    assert_eq!(
+        sens, [true; 6],
+        "every primary menu entry must be enabled when AppState is Unlocked",
+    );
+}
+
+#[test]
+fn format_app_primary_menu_action_sensitivities_mirrors_allows_mutating_menu_for_first_four_entries(
+) {
+    // Defense-in-depth: the four mutating entries (Import,
+    // Export, Passphrase, Preferences) must read their
+    // sensitivities from `AppState::allows_mutating_menu`
+    // directly, not via a duplicated rule that could drift.
+    use std::path::PathBuf;
+
+    use paladin_gtk::app::model::format_app_primary_menu_action_sensitivities;
+    use paladin_gtk::app::state::AppState;
+    use paladin_gtk::startup_error::{StartupError, StartupErrorSource};
+
+    let path = PathBuf::from("/tmp/example/vault.bin");
+    for state in [
+        AppState::Missing { path: path.clone() },
+        AppState::Locked { path: path.clone() },
+        AppState::Unlocked { path: path.clone() },
+        AppState::UnlockedBusy { path: path.clone() },
+        AppState::StartupError {
+            path: Some(path.clone()),
+            error: StartupError {
+                source: StartupErrorSource::Inspect,
+                kind: paladin_core::ErrorKind::InvalidHeader,
+                rendered: String::new(),
+            },
+        },
+    ] {
+        let sens = format_app_primary_menu_action_sensitivities(&state);
+        let expected = state.allows_mutating_menu();
+        for (idx, entry) in ["Import", "Export", "Passphrase", "Preferences"]
+            .iter()
+            .enumerate()
+        {
+            assert_eq!(
+                sens[idx], expected,
+                "{entry} sensitivity for state={state:?} must match AppState::allows_mutating_menu (got {sens:?})",
+            );
+        }
+    }
+}
+
+#[test]
 fn format_app_action_group_name_is_prefix_of_every_primary_menu_action() {
     // Cross-check: every `format_app_menu_*_action` target must
     // begin with `format_app_action_group_name() + "."`. This
