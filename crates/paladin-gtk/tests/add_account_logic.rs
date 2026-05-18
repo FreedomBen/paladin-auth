@@ -7494,3 +7494,58 @@ fn format_manual_kind_labels_index_aligns_with_format_manual_kind_selected() {
         "HOTP index resolves to the \"HOTP\" label",
     );
 }
+
+#[test]
+fn format_manual_algorithm_labels_matches_tui_wording() {
+    // The dropdown's `gtk::StringList` model is populated from this
+    // slice, so the wording must match what the TUI's add view shows
+    // (`Algorithm::Sha1 => "SHA1"`, `Algorithm::Sha256 => "SHA256"`,
+    // `Algorithm::Sha512 => "SHA512"`) — see
+    // `crates/paladin-tui/src/view/add.rs`. Pinning the labels
+    // through a helper here keeps the GTK / TUI display wording
+    // aligned against a single source of truth so a future copy
+    // change cannot diverge silently. Sibling of
+    // `format_manual_kind_labels_matches_tui_wording` on the
+    // algorithm-dropdown side.
+    use paladin_gtk::add_account::format_manual_algorithm_labels;
+
+    assert_eq!(
+        format_manual_algorithm_labels(),
+        ["SHA1", "SHA256", "SHA512"],
+        "dropdown labels mirror the TUI add view's SHA1/SHA256/SHA512 wording",
+    );
+}
+
+#[test]
+fn format_manual_algorithm_labels_index_aligns_with_format_manual_algorithm_selected() {
+    // The dropdown's `gtk::DropDown::set_selected` index is the same
+    // u32 `format_manual_algorithm_selected` returns, so the labels
+    // slice must be indexable by that u32 and resolve to the matching
+    // human-readable wording. Pinning the alignment in a test guards
+    // against a future enum addition / reorder that touches one half
+    // (the index mapping or the labels) and leaves the other half
+    // stale. Mirror of
+    // `format_manual_kind_labels_index_aligns_with_format_manual_kind_selected`
+    // on the algorithm-dropdown side.
+    use paladin_core::Algorithm;
+    use paladin_gtk::add_account::{
+        format_manual_algorithm_labels, format_manual_algorithm_selected,
+    };
+
+    let labels = format_manual_algorithm_labels();
+    assert_eq!(
+        labels[format_manual_algorithm_selected(Algorithm::Sha1) as usize],
+        "SHA1",
+        "SHA-1 index resolves to the \"SHA1\" label",
+    );
+    assert_eq!(
+        labels[format_manual_algorithm_selected(Algorithm::Sha256) as usize],
+        "SHA256",
+        "SHA-256 index resolves to the \"SHA256\" label",
+    );
+    assert_eq!(
+        labels[format_manual_algorithm_selected(Algorithm::Sha512) as usize],
+        "SHA512",
+        "SHA-512 index resolves to the \"SHA512\" label",
+    );
+}

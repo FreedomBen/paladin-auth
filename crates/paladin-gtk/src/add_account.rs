@@ -2094,6 +2094,30 @@ pub fn format_manual_algorithm_selected(algorithm: Algorithm) -> u32 {
     }
 }
 
+/// Fixed `gtk::StringList` model labels for the manual sub-path's
+/// algorithm dropdown, in the same enum-declaration order that
+/// [`format_manual_algorithm_selected`] indexes (SHA-1 first, SHA-256
+/// second, SHA-512 third).
+///
+/// Returns the slice the widget hands to `gtk::StringList::new` to
+/// populate the dropdown's model; the human-readable wording
+/// (`"SHA1"` / `"SHA256"` / `"SHA512"`) mirrors the TUI add view (see
+/// `crates/paladin-tui/src/view/add.rs`) so the algorithm dropdown
+/// looks the same across the two front-ends. Pairing the labels and
+/// the index-map helper in one module pins the model ordering
+/// against a single source of truth so a future enum addition /
+/// reorder cannot leave the dropdown's selected index pointing at the
+/// wrong row.
+///
+/// Pure — returns a `'static` slice without allocating. Sibling of
+/// [`format_manual_kind_labels`] on the algorithm-dropdown side;
+/// together they cover both dropdowns' label / selected-index wiring
+/// and stay aligned by construction.
+#[must_use]
+pub fn format_manual_algorithm_labels() -> &'static [&'static str] {
+    &["SHA1", "SHA256", "SHA512"]
+}
+
 /// State-driven projection of the manual sub-path's algorithm
 /// dropdown's `gtk::DropDown::set_selected` index.
 ///
