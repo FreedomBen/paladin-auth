@@ -2092,6 +2092,29 @@ pub fn compose_manual_algorithm_selected(state: &AddDialogState) -> u32 {
     format_manual_algorithm_selected(state.manual_draft().algorithm)
 }
 
+/// State-driven projection of the manual sub-path's label entry
+/// text, surfaced as the borrowed `&str` that `gtk::EditableLabel`'s
+/// or `gtk::Entry`'s `set_text:` expects.
+///
+/// Returns the current [`ManualDraftState::label`] as a borrowed
+/// `&str` — `""` on a freshly-opened dialog (CLI / TUI default), and
+/// the post-`AddAccountMsg::ManualLabelChanged` value on every
+/// subsequent dispatch. The value persists across the kind
+/// dropdown's TOTP/HOTP toggles so the entry retains the user's
+/// in-progress typing across kind changes.
+///
+/// Lets the widget bind a single `#[watch]` over the projection to
+/// drive the label entry's `set_text:` instead of borrowing
+/// [`ManualDraftState::label`] inline against the live state.
+/// Sibling of [`compose_save_button_sensitive`] on the label-buffer
+/// text side: an empty label is exactly the condition the Save-
+/// button gate rejects on the manual path. Pure — borrows the
+/// state and returns a borrowed `&str` without allocating.
+#[must_use]
+pub fn compose_manual_label_text(state: &AddDialogState) -> &str {
+    &state.manual_draft().label
+}
+
 /// State-driven projection of whether the Save button's
 /// `set_sensitive:` is `true` — i.e. whether the active sub-path
 /// has the minimum required input for a click to reach the

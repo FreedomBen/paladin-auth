@@ -7119,3 +7119,108 @@ fn compose_manual_algorithm_selected_round_trips_back_to_sha1() {
         "round-trip back to SHA-1 → composer surfaces the SHA-1 selected index",
     );
 }
+
+#[test]
+fn compose_manual_label_text_fresh_dialog_returns_empty() {
+    // `ManualDraftState::default` seeds the label buffer at the
+    // empty string, so a freshly-opened dialog must expose an empty
+    // string through the projection — the widget binds a
+    // `#[watch]` over the projection to drive the label entry's
+    // `gtk::EditableLabel::set_text:` so the entry reflects state
+    // on initial render. Sibling of `compose_save_button_sensitive`
+    // on the label-buffer text side: an empty label is exactly the
+    // condition the Save-button gate rejects on the manual path.
+    use paladin_gtk::add_account::{compose_manual_label_text, AddDialogState};
+
+    let state = AddDialogState::new();
+
+    assert_eq!(
+        compose_manual_label_text(&state),
+        "",
+        "fresh dialog → composer surfaces the empty label buffer",
+    );
+}
+
+#[test]
+fn compose_manual_label_text_after_label_changed_reflects_new_value() {
+    // `AddAccountMsg::ManualLabelChanged("alice@example.com")`
+    // shadows the entry text into `ManualDraftState::label`; the
+    // projection must surface the new value as a borrowed `&str` so
+    // the widget's `#[watch]`-driven `set_text:` binding stays in
+    // lockstep with the underlying state on every dispatch.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_manual_label_text, AddAccountMsg, AddDialogState,
+    };
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualLabelChanged("alice@example.com".to_string()),
+    );
+
+    assert_eq!(
+        compose_manual_label_text(&state),
+        "alice@example.com",
+        "ManualLabelChanged → composer surfaces the new label text",
+    );
+}
+
+#[test]
+fn compose_manual_label_text_replaces_prior_shadow() {
+    // A second `ManualLabelChanged` dispatch must overwrite the
+    // first — the projection must not latch on the first
+    // transition, so the widget's `#[watch]`-driven entry text
+    // stays bidirectional with the user's latest keystrokes.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_manual_label_text, AddAccountMsg, AddDialogState,
+    };
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualLabelChanged("alice".to_string()),
+    );
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualLabelChanged("bob".to_string()),
+    );
+
+    assert_eq!(
+        compose_manual_label_text(&state),
+        "bob",
+        "second ManualLabelChanged replaces the prior shadow in the projection",
+    );
+}
+
+#[test]
+fn compose_manual_label_text_survives_kind_round_trip() {
+    // The label buffer is shadowed into `ManualDraftState::label`
+    // independently of the kind dropdown — TOTP/HOTP toggles only
+    // affect the period / counter rows. Mirror of
+    // `compose_manual_period_secs_value_survives_kind_round_trip`
+    // on the label-buffer side.
+    use paladin_core::AccountKindInput;
+    use paladin_gtk::add_account::{
+        apply_msg, compose_manual_label_text, AddAccountMsg, AddDialogState,
+    };
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualLabelChanged("alice".to_string()),
+    );
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualKindChanged(AccountKindInput::Hotp),
+    );
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualKindChanged(AccountKindInput::Totp),
+    );
+
+    assert_eq!(
+        compose_manual_label_text(&state),
+        "alice",
+        "kind round-trip preserves the prior label text in the projection",
+    );
+}
