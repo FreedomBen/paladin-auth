@@ -1471,6 +1471,62 @@ pub fn compose_pending_duplicate_alert_confirm_label(
         .map(|_| format_duplicate_alert_confirm_label())
 }
 
+/// Render the fixed `"Cancel"` label for the non-destructive
+/// affordance on the duplicate-collision `AdwAlertDialog`.
+///
+/// The label is the cancel response the user clicks to back out
+/// of the duplicate-confirmation prompt without consuming the
+/// parked [`paladin_core::ValidatedAccount`] — the dialog stays
+/// open with the manual / URI fields populated so the user can
+/// edit and retry without losing the in-flight draft. Surfacing
+/// the wording through a helper rather than a bare string literal
+/// keeps it in one place shared by the widget binding and the
+/// snapshot tests in `tests/add_account_logic.rs`.
+///
+/// Partner of [`format_duplicate_alert_heading`] (the modal's
+/// question heading), [`format_duplicate_alert_body`] (the
+/// descriptive body), and [`format_duplicate_alert_confirm_label`]
+/// (the destructive affordance); together they cover the four
+/// user-visible regions of the `AdwAlertDialog`.
+#[must_use]
+pub fn format_duplicate_alert_cancel_label() -> &'static str {
+    "Cancel"
+}
+
+/// State-driven projection of the duplicate-collision
+/// `AdwAlertDialog` cancel-button label, or `None` when no
+/// duplicate-collision Save click is in flight.
+///
+/// Returns `Some(format_duplicate_alert_cancel_label())` while a
+/// [`SaveClickOutcome::AwaitConfirmation`] is parked (the colliding
+/// summary populates [`AddDialogState::pending_duplicate_existing`]
+/// via [`AddAccountMsg::StagePendingDuplicate`]), and `None` once
+/// the slot drains — [`AddAccountMsg::Cancel`],
+/// [`AddAccountMsg::SubmitProceed`],
+/// [`AddAccountMsg::ConfirmAddAnyway`], and sub-path
+/// [`AddAccountMsg::SwitchPath`] all drain in lockstep with the
+/// heading / body / confirm-label projections so the cancel button
+/// disappears the moment the user moves on.
+///
+/// Lets the widget bind a single `#[watch]` over the projection to
+/// drive the cancel button's text and visibility instead of
+/// reaching across `pending_duplicate_existing()` inline alongside
+/// [`compose_pending_duplicate_alert_heading`] /
+/// [`compose_pending_duplicate_alert_body`] /
+/// [`compose_pending_duplicate_alert_confirm_label`]. Pure —
+/// borrows the state and returns the `'static` label string
+/// without allocating; sibling projection of the other three
+/// composers so the widget can `#[watch]` every region of the
+/// `AdwAlertDialog` in lockstep.
+#[must_use]
+pub fn compose_pending_duplicate_alert_cancel_label(
+    state: &AddDialogState,
+) -> Option<&'static str> {
+    state
+        .pending_duplicate_existing()
+        .map(|_| format_duplicate_alert_cancel_label())
+}
+
 /// State-driven projection of the durability-warning body the
 /// widget renders beneath the post-add counts panel after a
 /// `KeepWithWarning` worker completion, or `None` for any other
