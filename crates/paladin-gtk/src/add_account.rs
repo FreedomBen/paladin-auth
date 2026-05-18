@@ -2633,6 +2633,39 @@ pub fn format_add_dialog_cancel_label() -> &'static str {
     "Cancel"
 }
 
+/// Fixed `"Save"` label the widget will hand to the Add account
+/// dialog's footer primary `gtk::Button::set_label` once the
+/// Save button lands in the view alongside the already-extracted
+/// [`compose_save_button_sensitive`] sensitivity projection.
+///
+/// The label is the destructive-on-success affordance the user
+/// clicks to commit a new account via `Vault::mutate_and_save`,
+/// gated by [`compose_save_button_sensitive`] so totally-empty
+/// forms cannot reach the validation pipeline through a click.
+/// Wording matches the `IMPLEMENTATION_PLAN_04_GTK.md` Add /
+/// Rename `Save / Cancel buttons` convention; the function name
+/// keeps the `save` role abstractly (mirroring
+/// [`compose_save_button_sensitive`] and
+/// [`compose_save_click_outcome`]) while the returned string is
+/// the user-visible wording. Pinning the wording behind a helper
+/// keeps it in one place shared by the widget binding and the
+/// pure-logic tests in `tests/add_account_logic.rs`.
+///
+/// Distinct from [`format_duplicate_alert_confirm_label`] (the
+/// duplicate-collision `AdwAlertDialog`'s destructive response,
+/// `"Add anyway"`): the two buttons live on different surfaces
+/// and a future copy change might diverge between the dialog
+/// footer and the alert-dialog response.
+///
+/// Pure — returns a `'static str` without allocating. Sibling of
+/// [`format_add_dialog_cancel_label`] on the footer-button side;
+/// the pair pins the dialog's two footer buttons against a single
+/// source of truth.
+#[must_use]
+pub fn format_add_dialog_save_label() -> &'static str {
+    "Save"
+}
+
 /// Apply an inbound [`AddAccountMsg`] and return the optional
 /// [`AddAccountOutput`] the widget layer should forward to
 /// `AppModel`.

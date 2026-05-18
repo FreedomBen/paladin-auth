@@ -8086,3 +8086,27 @@ fn format_add_dialog_cancel_label_returns_cancel() {
         "dialog cancel button label is the fixed GNOME-convention wording",
     );
 }
+
+#[test]
+fn format_add_dialog_save_label_returns_save() {
+    // The Add account dialog's footer primary `gtk::Button`'s
+    // `set_label` attribute will be populated from this helper
+    // when the Save button lands in the view alongside the
+    // already-extracted `compose_save_button_sensitive` sensitivity
+    // projection. Wording is the fixed `"Save"` verb mirroring the
+    // `IMPLEMENTATION_PLAN_04_GTK.md` Add / Rename "Save / Cancel
+    // buttons" convention, with the function name keeping the
+    // `save` role even though the visible label intentionally lives
+    // in one place behind this helper (see the same role-vs-label
+    // split in `format_duplicate_alert_confirm_label` returning
+    // `"Add anyway"`). Sibling of `format_add_dialog_cancel_label`
+    // on the footer-button side; the pair pins the dialog's two
+    // footer buttons against a single source of truth.
+    use paladin_gtk::add_account::format_add_dialog_save_label;
+
+    assert_eq!(
+        format_add_dialog_save_label(),
+        "Save",
+        "dialog save button label matches the IMPLEMENTATION_PLAN_04_GTK.md \"Save / Cancel\" wording",
+    );
+}
