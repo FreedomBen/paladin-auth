@@ -7872,3 +7872,26 @@ fn format_manual_issuer_title_matches_tui_wording() {
         "issuer row title mirrors the TUI add view's \"Issuer:\" wording",
     );
 }
+
+#[test]
+fn format_manual_secret_title_matches_tui_wording() {
+    // The secret `AdwPasswordEntryRow`'s `title` attribute is
+    // populated from this helper, so the wording must match what the
+    // TUI's add view shows (the `"Secret:"` row in
+    // `crates/paladin-tui/src/view/add.rs` — the colon is the TUI's
+    // field-name separator and drops out because the password entry
+    // row renders its title as a floating label above the entry
+    // rather than as a prefix). The Base32 secret text itself never
+    // routes through this helper; it stays inside the Paladin-owned
+    // `Zeroizing` buffer in `AddSecretState::manual_secret`. Sibling
+    // of `format_manual_label_title_matches_tui_wording` and
+    // `format_manual_issuer_title_matches_tui_wording` on the
+    // secret-entry-title side.
+    use paladin_gtk::add_account::format_manual_secret_title;
+
+    assert_eq!(
+        format_manual_secret_title(),
+        "Secret",
+        "secret row title mirrors the TUI add view's \"Secret:\" wording",
+    );
+}

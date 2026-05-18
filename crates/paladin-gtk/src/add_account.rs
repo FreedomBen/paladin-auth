@@ -2415,6 +2415,29 @@ pub fn format_manual_issuer_title() -> &'static str {
     "Issuer"
 }
 
+/// Fixed `title` attribute the widget hands to the manual sub-path's
+/// secret `AdwPasswordEntryRow::set_title`.
+///
+/// Returns the static title string `AdwPasswordEntryRow` renders as
+/// the floating label above the entry. The wording (`"Secret"`)
+/// mirrors the TUI add view's `"Secret:"` row (see
+/// `crates/paladin-tui/src/view/add.rs`) — the TUI's trailing colon
+/// is its field-name separator and drops out because the password
+/// entry row renders its title as a floating label rather than as a
+/// prefix. The Base32 secret text itself never routes through this
+/// helper; it stays inside the Paladin-owned `Zeroizing` buffer in
+/// [`crate::secret_fields::AddSecretState::manual_secret`].
+///
+/// Pure — returns a `'static str` without allocating. Sibling of
+/// [`format_manual_label_title`] and [`format_manual_issuer_title`]
+/// on the secret-entry-title side; the trio pins the manual sub-
+/// path's text-entry row titles against the TUI wording in one
+/// module.
+#[must_use]
+pub fn format_manual_secret_title() -> &'static str {
+    "Secret"
+}
+
 /// Apply an inbound [`AddAccountMsg`] and return the optional
 /// [`AddAccountOutput`] the widget layer should forward to
 /// `AppModel`.
