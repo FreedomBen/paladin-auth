@@ -1456,6 +1456,13 @@ impl AddDialogState {
 /// [`crate::rename_dialog::apply_msg`] on the add path: the per-
 /// message decisions stay co-located with the state struct so a
 /// future refactor cannot silently reorder them.
+//
+// `clippy::too_many_lines` is allowed for the same reason it's
+// allowed on `app::model::update`: this is a dispatch table whose
+// per-arm clarity matters more than function length, and each arm
+// already delegates to small, unit-tested helpers (`AddSecretState`
+// methods, `compose_*` composers) elsewhere.
+#[allow(clippy::too_many_lines)]
 #[must_use]
 pub fn apply_msg(state: &mut AddDialogState, msg: AddAccountMsg) -> Option<AddAccountOutput> {
     match msg {
@@ -1470,6 +1477,11 @@ pub fn apply_msg(state: &mut AddDialogState, msg: AddAccountMsg) -> Option<AddAc
             // this arm — `paladin_core::Secret`'s `ZeroizeOnDrop`
             // wipes the carried bytes.
             let _dropped_pending = state.secret_state.clear_for(ClearReason::Cancel);
+            // Paired with the pending-slot drop above: drain the
+            // colliding-summary projection so a follow-up open
+            // does not render a stale existing summary against a
+            // fresh empty pending.
+            state.pending_duplicate_existing = None;
             Some(AddAccountOutput::Cancel)
         }
         AddAccountMsg::WorkerFailed(outcome) => {
@@ -1497,6 +1509,10 @@ pub fn apply_msg(state: &mut AddDialogState, msg: AddAccountMsg) -> Option<AddAc
             // by the output — wipe them here so the buffers are
             // empty before the worker spawns.
             let _dropped_pending = state.secret_state.clear_for(ClearReason::Submit);
+            // Paired with the pending-slot drop above: drain the
+            // colliding-summary projection so a follow-up open
+            // does not render a stale existing summary.
+            state.pending_duplicate_existing = None;
             Some(AddAccountOutput::Submit { account })
         }
         AddAccountMsg::SwitchPath(to) => {
@@ -1523,6 +1539,11 @@ pub fn apply_msg(state: &mut AddDialogState, msg: AddAccountMsg) -> Option<AddAc
                 // it so the new path starts fresh — symmetric with
                 // the pending-duplicate drop above.
                 state.inline_error = None;
+                // Paired with the pending-slot drop above: drain
+                // the colliding-summary projection so the new path
+                // does not render a stale existing summary against
+                // a fresh empty pending.
+                state.pending_duplicate_existing = None;
             }
             None
         }
@@ -1640,6 +1661,11 @@ pub fn apply_msg(state: &mut AddDialogState, msg: AddAccountMsg) -> Option<AddAc
             // earlier Save attempt is no longer applicable.
             // Symmetric with the `SubmitProceed` arm.
             state.inline_error = None;
+            // Paired with the `consume_pending` drain above: drop
+            // the colliding-summary projection so the post-confirm
+            // state has neither half of the duplicate-collision
+            // projection.
+            state.pending_duplicate_existing = None;
             Some(AddAccountOutput::Submit {
                 account: validated.account,
             })

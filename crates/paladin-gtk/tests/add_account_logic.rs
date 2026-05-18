@@ -3442,6 +3442,177 @@ fn apply_msg_render_inline_error_replaces_prior() {
 }
 
 #[test]
+fn apply_msg_cancel_drains_pending_duplicate_existing() {
+    // Cancel drops the entire dialog state via
+    // `secret_state.clear_for(ClearReason::Cancel)` — that already
+    // drains `pending`. The paired colliding-summary slot must
+    // drop with it so a follow-up open does not render a stale
+    // existing summary against a fresh empty `pending`.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    let validated = match classify_manual_submit(manual_totp_defaults(), now_for_tests()) {
+        ManualSubmitOutcome::Proceed(v) => v,
+        ManualSubmitOutcome::InlineError(e) => panic!("fixture failed: {e:?}"),
+    };
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::StagePendingDuplicate {
+            account: validated.account,
+            warnings: validated.warnings,
+            existing: dummy_existing_summary(),
+        },
+    );
+    assert!(
+        state.pending_duplicate_existing().is_some(),
+        "precondition: colliding summary parked before Cancel",
+    );
+
+    let _ = apply_msg(&mut state, AddAccountMsg::Cancel);
+
+    assert!(
+        state.pending_duplicate_existing().is_none(),
+        "Cancel drains pending_duplicate_existing alongside the pending slot",
+    );
+}
+
+#[test]
+fn apply_msg_switch_path_drains_pending_duplicate_existing() {
+    // SwitchPath drops the pending duplicate via
+    // `secret_state.switch_path`. The paired colliding-summary
+    // slot must drop with it on every actual transition.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+    use paladin_gtk::secret_fields::AddPath;
+
+    let mut state = AddDialogState::new();
+    let validated = match classify_manual_submit(manual_totp_defaults(), now_for_tests()) {
+        ManualSubmitOutcome::Proceed(v) => v,
+        ManualSubmitOutcome::InlineError(e) => panic!("fixture failed: {e:?}"),
+    };
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::StagePendingDuplicate {
+            account: validated.account,
+            warnings: validated.warnings,
+            existing: dummy_existing_summary(),
+        },
+    );
+    assert!(state.pending_duplicate_existing().is_some(), "precondition");
+
+    let _ = apply_msg(&mut state, AddAccountMsg::SwitchPath(AddPath::Uri));
+
+    assert!(
+        state.pending_duplicate_existing().is_none(),
+        "SwitchPath drains pending_duplicate_existing alongside the pending slot",
+    );
+}
+
+#[test]
+fn apply_msg_switch_path_same_path_does_not_drain_pending_duplicate_existing() {
+    // Same-path SwitchPath is an idempotent no-op — the pending /
+    // colliding-summary state survives. Symmetric with
+    // `apply_msg_switch_path_same_path_does_not_clear_inline_error`
+    // on the colliding-summary slot.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+    use paladin_gtk::secret_fields::AddPath;
+
+    let mut state = AddDialogState::new();
+    let validated = match classify_manual_submit(manual_totp_defaults(), now_for_tests()) {
+        ManualSubmitOutcome::Proceed(v) => v,
+        ManualSubmitOutcome::InlineError(e) => panic!("fixture failed: {e:?}"),
+    };
+    let existing = dummy_existing_summary();
+    let expected_id = existing.id;
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::StagePendingDuplicate {
+            account: validated.account,
+            warnings: validated.warnings,
+            existing,
+        },
+    );
+
+    let _ = apply_msg(&mut state, AddAccountMsg::SwitchPath(AddPath::Manual));
+
+    let stored = state
+        .pending_duplicate_existing()
+        .expect("same-path SwitchPath is idempotent; pending_duplicate_existing survives");
+    assert_eq!(stored.id, expected_id);
+}
+
+#[test]
+fn apply_msg_submit_proceed_drains_pending_duplicate_existing() {
+    // SubmitProceed wipes the secret-bearing buffers and the pending
+    // slot via `secret_state.clear_for(ClearReason::Submit)`. The
+    // paired colliding-summary slot must drop with it so a
+    // follow-up open does not render a stale existing summary.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    let validated = match classify_manual_submit(manual_totp_defaults(), now_for_tests()) {
+        ManualSubmitOutcome::Proceed(v) => v,
+        ManualSubmitOutcome::InlineError(e) => panic!("fixture failed: {e:?}"),
+    };
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::StagePendingDuplicate {
+            account: validated.account,
+            warnings: validated.warnings,
+            existing: dummy_existing_summary(),
+        },
+    );
+    assert!(state.pending_duplicate_existing().is_some(), "precondition");
+
+    // SubmitProceed takes a fresh validated account (not the parked
+    // one) — the typical widget flow when the user fixed something
+    // and re-submitted without going through the "Add anyway"
+    // prompt.
+    let fresh = validate_manual_totp("alice", Some("Acme"));
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::SubmitProceed {
+            account: fresh.account,
+        },
+    );
+
+    assert!(
+        state.pending_duplicate_existing().is_none(),
+        "SubmitProceed drains pending_duplicate_existing alongside the pending slot",
+    );
+}
+
+#[test]
+fn apply_msg_confirm_add_anyway_drains_pending_duplicate_existing() {
+    // ConfirmAddAnyway consumes the pending via `consume_pending`
+    // and forwards `AddAccountOutput::Submit`. The paired
+    // colliding-summary slot must drop with it so the post-confirm
+    // state has neither half of the duplicate-collision projection.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    let validated = match classify_manual_submit(manual_totp_defaults(), now_for_tests()) {
+        ManualSubmitOutcome::Proceed(v) => v,
+        ManualSubmitOutcome::InlineError(e) => panic!("fixture failed: {e:?}"),
+    };
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::StagePendingDuplicate {
+            account: validated.account,
+            warnings: validated.warnings,
+            existing: dummy_existing_summary(),
+        },
+    );
+    assert!(state.pending_duplicate_existing().is_some(), "precondition");
+
+    let _ = apply_msg(&mut state, AddAccountMsg::ConfirmAddAnyway);
+
+    assert!(
+        state.pending_duplicate_existing().is_none(),
+        "ConfirmAddAnyway drains pending_duplicate_existing alongside the pending slot",
+    );
+}
+
+#[test]
 fn apply_msg_stage_pending_duplicate_stores_existing_summary() {
     // The widget dispatches `StagePendingDuplicate` after
     // `SaveClickOutcome::AwaitConfirmation` returned the colliding
