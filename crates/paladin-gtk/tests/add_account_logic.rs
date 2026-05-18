@@ -4507,6 +4507,122 @@ fn format_duplicate_alert_body_threads_through_existing_summary_projection() {
 }
 
 #[test]
+fn add_dialog_state_new_pending_validation_warnings_is_empty() {
+    // A freshly-opened dialog has not yet seen a `StagePendingDuplicate`
+    // dispatch, so `secret_state.pending` is `None` and the
+    // accessor must return an empty slice (not panic, not allocate).
+    // Mirror of `add_dialog_state_new_pending_duplicate_existing_is_none`
+    // on the warnings-projection side: the widget binds a
+    // `#[watch]` over the slice to feed `format_pending_warnings_body`,
+    // which collapses an empty slice to the empty string so the
+    // duplicate-confirm modal body does not render a stray
+    // `"warning:"` line out of the gate.
+    use paladin_gtk::add_account::AddDialogState;
+
+    let state = AddDialogState::new();
+
+    assert!(
+        state.pending_validation_warnings().is_empty(),
+        "fresh dialog has no pending → no warnings: {:?}",
+        state.pending_validation_warnings(),
+    );
+}
+
+#[test]
+fn apply_msg_stage_pending_duplicate_exposes_warnings_via_pending_validation_warnings() {
+    // After `StagePendingDuplicate` parks the validated account
+    // alongside its non-fatal `ValidationWarning`s, the accessor
+    // must return those same warnings so the widget can feed them
+    // into `format_pending_warnings_body` /
+    // `format_duplicate_alert_body` without reaching across the
+    // `secret_state` boundary. The fixture seeds a short-secret
+    // input so `validate_manual` emits a `ValidationWarning::ShortSecret`,
+    // which is the only non-fatal warning currently produced — the
+    // accessor must thread the slice verbatim.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    let mut fields = manual_totp_defaults();
+    fields.secret = SecretString::from(SHORT_SECRET_B32.to_string());
+    let validated = match classify_manual_submit(fields, now_for_tests()) {
+        ManualSubmitOutcome::Proceed(v) => v,
+        ManualSubmitOutcome::InlineError(e) => panic!("fixture failed: {e:?}"),
+    };
+    assert!(
+        !validated.warnings.is_empty(),
+        "fixture precondition: short-secret input emits ShortSecret warning",
+    );
+    let expected_warnings = validated.warnings.clone();
+
+    let output = apply_msg(
+        &mut state,
+        AddAccountMsg::StagePendingDuplicate {
+            account: validated.account,
+            warnings: validated.warnings,
+            existing: dummy_existing_summary(),
+        },
+    );
+
+    assert!(
+        output.is_none(),
+        "StagePendingDuplicate is dialog-local; no output flows to AppModel",
+    );
+    assert_eq!(
+        state.pending_validation_warnings(),
+        expected_warnings.as_slice(),
+        "pending_validation_warnings exposes the warnings staged alongside the pending validated account",
+    );
+}
+
+#[test]
+fn apply_msg_confirm_add_anyway_drains_pending_validation_warnings() {
+    // ConfirmAddAnyway consumes the pending validated account out
+    // of `secret_state.pending`, so the warnings-projection must
+    // drain to an empty slice in lockstep with the duplicate-
+    // confirm modal closing. Mirror of
+    // `apply_msg_confirm_add_anyway_drains_pending_duplicate_existing`
+    // on the warnings-projection side: both halves of the
+    // duplicate-confirm projection drain together once the user
+    // confirms past the prompt.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddAccountOutput, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    let mut fields = manual_totp_defaults();
+    fields.secret = SecretString::from(SHORT_SECRET_B32.to_string());
+    let validated = match classify_manual_submit(fields, now_for_tests()) {
+        ManualSubmitOutcome::Proceed(v) => v,
+        ManualSubmitOutcome::InlineError(e) => panic!("fixture failed: {e:?}"),
+    };
+    let staged = apply_msg(
+        &mut state,
+        AddAccountMsg::StagePendingDuplicate {
+            account: validated.account,
+            warnings: validated.warnings,
+            existing: dummy_existing_summary(),
+        },
+    );
+    assert!(
+        staged.is_none(),
+        "precondition: StagePendingDuplicate is dialog-local"
+    );
+    assert!(
+        !state.pending_validation_warnings().is_empty(),
+        "precondition: pending warnings staged",
+    );
+
+    let confirmed = apply_msg(&mut state, AddAccountMsg::ConfirmAddAnyway);
+
+    assert!(
+        matches!(confirmed, Some(AddAccountOutput::Submit { .. })),
+        "ConfirmAddAnyway forwards Submit when a pending is parked: {confirmed:?}",
+    );
+    assert!(
+        state.pending_validation_warnings().is_empty(),
+        "ConfirmAddAnyway drains pending_validation_warnings alongside the pending slot",
+    );
+}
+
+#[test]
 fn format_duplicate_alert_body_threads_through_pending_warnings_projection() {
     // The composer must thread the carried warnings through
     // `format_pending_warnings_body` so each line carries its own

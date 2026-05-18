@@ -1537,6 +1537,36 @@ impl AddDialogState {
     pub fn pending_duplicate_existing(&self) -> Option<&AccountSummary> {
         self.pending_duplicate_existing.as_ref()
     }
+
+    /// Non-fatal [`ValidationWarning`]s carried by the pending
+    /// [`ValidatedAccount`] staged in
+    /// [`crate::secret_fields::AddSecretState::pending`], or an
+    /// empty slice if no pending value is parked.
+    ///
+    /// Sibling of [`Self::pending_duplicate_existing`] on the
+    /// warnings-projection side: the existing summary names the
+    /// colliding account and these warnings describe the would-be
+    /// insertion. The widget binds a `#[watch]` over this slice to
+    /// feed [`format_pending_warnings_body`] /
+    /// [`format_duplicate_alert_body`] for the "Add anyway?" modal
+    /// body, so it never has to reach across the
+    /// [`crate::secret_fields::AddSecretState`] boundary to read
+    /// the warnings off the pending [`ValidatedAccount`].
+    ///
+    /// Drains to the empty slice in lockstep with
+    /// [`Self::pending_duplicate_existing`]: both halves populate
+    /// together (on [`AddAccountMsg::StagePendingDuplicate`]) and
+    /// drain together (on [`AddAccountMsg::Cancel`],
+    /// [`AddAccountMsg::SubmitProceed`],
+    /// [`AddAccountMsg::ConfirmAddAnyway`], and sub-path
+    /// [`AddAccountMsg::SwitchPath`]).
+    #[must_use]
+    pub fn pending_validation_warnings(&self) -> &[ValidationWarning] {
+        self.secret_state
+            .pending
+            .as_ref()
+            .map_or(&[], |p| p.warnings.as_slice())
+    }
 }
 
 /// Map a [`SaveClickOutcome`] from [`compose_save_click_outcome`]
