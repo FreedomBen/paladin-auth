@@ -1696,6 +1696,42 @@ pub fn compose_manual_counter_visible(state: &AddDialogState) -> bool {
     matches!(state.manual_draft().kind, AccountKindInput::Hotp)
 }
 
+/// State-driven projection of whether the Save button's
+/// `set_sensitive:` is `true` — i.e. whether the active sub-path
+/// has the minimum required input for a click to reach the
+/// validation pipeline.
+///
+/// Routing rule:
+///
+/// * [`crate::secret_fields::AddPath::Manual`] → both the manual
+///   draft label *and* the manual secret buffer must be non-empty.
+///   Either alone is not enough: validation cannot complete without
+///   both, and the duplicate / Base32 / length-cap rejections lie
+///   downstream once the click reaches [`compose_save_click_outcome`].
+/// * [`crate::secret_fields::AddPath::Uri`] → the URI text buffer
+///   must be non-empty. The manual draft fields are not consulted
+///   on this path, so a pre-existing manual label / secret cannot
+///   lift the URI path's gate.
+///
+/// Lets the widget bind a single `#[watch] set_sensitive:` over the
+/// projection so a totally-empty form cannot reach the validation
+/// pipeline through a click. Mirror of
+/// [`crate::unlock_dialog::UnlockDialogState::submit_button_sensitive`]
+/// on the add path; typed-but-invalid input (malformed Base32,
+/// malformed `otpauth://` URI, length-cap violations) still flows
+/// through [`compose_inline_error_body`] once the click is allowed
+/// through. Pure — borrows the state and returns a `bool` without
+/// allocating.
+#[must_use]
+pub fn compose_save_button_sensitive(state: &AddDialogState) -> bool {
+    match state.secret_state().active_path {
+        crate::secret_fields::AddPath::Manual => {
+            !state.manual_draft().label.is_empty() && !state.secret_state().manual_secret.is_empty()
+        }
+        crate::secret_fields::AddPath::Uri => !state.secret_state().uri_text.is_empty(),
+    }
+}
+
 /// Apply an inbound [`AddAccountMsg`] and return the optional
 /// [`AddAccountOutput`] the widget layer should forward to
 /// `AppModel`.

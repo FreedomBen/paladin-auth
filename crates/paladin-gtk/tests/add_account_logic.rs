@@ -5644,3 +5644,150 @@ fn compose_manual_period_and_counter_visibility_are_mutually_exclusive() {
         "after TOTP round-trip: exactly one of the kind-specific rows is visible",
     );
 }
+
+#[test]
+fn compose_save_button_sensitive_fresh_dialog_is_false() {
+    // A freshly-opened dialog defaults to the manual sub-path with
+    // empty label / secret buffers, so the Save button must be
+    // greyed out — the widget binds `#[watch] set_sensitive:` over
+    // the projection so a totally-empty form cannot reach the
+    // validation pipeline. Mirror of the `UnlockDialogState::
+    // submit_button_sensitive()` empty-passphrase short-circuit on
+    // the add path.
+    use paladin_gtk::add_account::{compose_save_button_sensitive, AddDialogState};
+
+    let state = AddDialogState::new();
+
+    assert!(
+        !compose_save_button_sensitive(&state),
+        "fresh dialog (manual path, empty buffers) → Save button is greyed out",
+    );
+}
+
+#[test]
+fn compose_save_button_sensitive_manual_label_only_is_false() {
+    // The manual sub-path requires *both* a non-empty label and a
+    // non-empty secret to be submittable: label alone is not enough,
+    // since the duplicate / validation pipeline cannot run without a
+    // secret. Pin the asymmetry so the projection cannot drift to a
+    // weaker "any field non-empty" check.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_save_button_sensitive, AddAccountMsg, AddDialogState,
+    };
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualLabelChanged("Work".to_string()),
+    );
+
+    assert!(
+        !compose_save_button_sensitive(&state),
+        "manual path with label but empty secret → Save button is greyed out",
+    );
+}
+
+#[test]
+fn compose_save_button_sensitive_manual_secret_only_is_false() {
+    // Symmetric partner of the label-only test: a non-empty secret
+    // alone without a label is also not submittable.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_save_button_sensitive, AddAccountMsg, AddDialogState,
+    };
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualSecretChanged("JBSWY3DPEHPK3PXP".to_string()),
+    );
+
+    assert!(
+        !compose_save_button_sensitive(&state),
+        "manual path with secret but empty label → Save button is greyed out",
+    );
+}
+
+#[test]
+fn compose_save_button_sensitive_manual_label_and_secret_is_true() {
+    // The minimum-submittable case on the manual sub-path: both
+    // label and secret are non-empty. The button enables and the
+    // user's click reaches the validation pipeline, which may still
+    // surface an inline error for typed-but-invalid Base32 or
+    // length-cap violations — those rejections render through
+    // `compose_inline_error_body`, not through gating.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_save_button_sensitive, AddAccountMsg, AddDialogState,
+    };
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualLabelChanged("Work".to_string()),
+    );
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualSecretChanged("JBSWY3DPEHPK3PXP".to_string()),
+    );
+
+    assert!(
+        compose_save_button_sensitive(&state),
+        "manual path with non-empty label and secret → Save button is sensitive",
+    );
+}
+
+#[test]
+fn compose_save_button_sensitive_uri_path_empty_is_false() {
+    // Switching to the URI sub-path with no URI text → the Save
+    // button is greyed out. The manual buffers are not consulted on
+    // the URI path, so any pre-existing manual label / secret
+    // populated before the path switch must not lift the URI path's
+    // gate.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_save_button_sensitive, AddAccountMsg, AddDialogState,
+    };
+    use paladin_gtk::secret_fields::AddPath;
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualLabelChanged("Work".to_string()),
+    );
+    // The label survives a path switch (only the leaving path's
+    // secret buffer wipes), but the URI path's gate looks at
+    // `uri_text` rather than the manual draft, so the button
+    // remains greyed out.
+    let _ = apply_msg(&mut state, AddAccountMsg::SwitchPath(AddPath::Uri));
+
+    assert!(
+        !compose_save_button_sensitive(&state),
+        "URI path with empty URI text → Save button is greyed out (manual label irrelevant)",
+    );
+}
+
+#[test]
+fn compose_save_button_sensitive_uri_path_with_text_is_true() {
+    // The URI sub-path's minimum-submittable case: non-empty URI
+    // text. The button enables and the user's click reaches
+    // `compose_uri_submit_outcome`, which may still surface
+    // `parse_otpauth` errors inline for malformed input — those
+    // rejections render through `compose_inline_error_body`, not
+    // through gating.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_save_button_sensitive, AddAccountMsg, AddDialogState,
+    };
+    use paladin_gtk::secret_fields::AddPath;
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(&mut state, AddAccountMsg::SwitchPath(AddPath::Uri));
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::UriTextChanged(
+            "otpauth://totp/Example:alice?secret=JBSWY3DPEHPK3PXP&issuer=Example".to_string(),
+        ),
+    );
+
+    assert!(
+        compose_save_button_sensitive(&state),
+        "URI path with non-empty URI text → Save button is sensitive",
+    );
+}
