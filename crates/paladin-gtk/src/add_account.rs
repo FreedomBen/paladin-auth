@@ -1824,6 +1824,56 @@ pub fn compose_active_path_label(state: &AddDialogState) -> &'static str {
     format_add_path_label(compose_active_path(state))
 }
 
+/// Render the fixed `AdwViewStack` page name (machine-readable
+/// slug) for an [`crate::secret_fields::AddPath`].
+///
+/// Returns `"manual"` for [`crate::secret_fields::AddPath::Manual`]
+/// and `"uri"` for [`crate::secret_fields::AddPath::Uri`]. The
+/// slugs feed `AdwViewStack::set_visible_child_name` (the
+/// machine-readable key the switcher uses to address each
+/// sub-stack page) and the state-driven [`compose_active_path_name`]
+/// projection. Surfacing the slug through this helper keeps it in
+/// one place shared by the widget binding and the snapshot tests
+/// in `tests/add_account_logic.rs`, and pins it as distinct from
+/// the display label so a future caller cannot accidentally pass
+/// the localized / capitalized label string as the stack key.
+///
+/// Pure — takes the enum value by `Copy` and returns a `'static`
+/// string. Sibling of [`format_add_path_label`] on the page-name
+/// side; together they cover both the display label and the
+/// machine-readable slug for every sub-path.
+#[must_use]
+pub fn format_add_path_name(path: crate::secret_fields::AddPath) -> &'static str {
+    match path {
+        crate::secret_fields::AddPath::Manual => "manual",
+        crate::secret_fields::AddPath::Uri => "uri",
+    }
+}
+
+/// State-driven projection of the currently-active sub-path's
+/// `AdwViewStack` page name (machine-readable slug).
+///
+/// Returns [`format_add_path_name`] of [`compose_active_path`], so
+/// the projection flips between `"manual"` and `"uri"` in lockstep
+/// with the `AdwViewSwitcher` page selection. Lets the widget bind
+/// a single `#[watch]` over the projection to drive
+/// `AdwViewStack::set_visible_child_name` instead of pattern-
+/// matching on the raw [`crate::secret_fields::AddPath`] enum inline.
+///
+/// Sibling of [`compose_active_path_label`] on the page-name side:
+/// the label is the human-readable wording (`"Manual"` / `"URI"`)
+/// and the name is the lowercased slug (`"manual"` / `"uri"`). Both
+/// projections flip together off [`compose_active_path`] so the
+/// widget's `#[watch]`-driven page title and visible-child binding
+/// stay in lockstep with the active sub-path.
+///
+/// Pure — borrows the state and returns a `'static` string without
+/// allocating.
+#[must_use]
+pub fn compose_active_path_name(state: &AddDialogState) -> &'static str {
+    format_add_path_name(compose_active_path(state))
+}
+
 /// State-driven projection of whether the manual sub-path's TOTP
 /// period spinbutton row is visible.
 ///

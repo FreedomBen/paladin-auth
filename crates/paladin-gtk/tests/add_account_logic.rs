@@ -6416,3 +6416,133 @@ fn compose_post_effect_inline_error_revealed_drains_after_submit_proceed() {
         "SubmitProceed drains the revealed projection alongside the worker_outcome slot",
     );
 }
+
+#[test]
+fn format_add_path_name_manual_returns_manual() {
+    // The `AdwViewStack` page name (machine-readable slug) for the
+    // manual sub-path is the fixed `"manual"`. Surfacing the slug
+    // through a helper rather than a bare string literal keeps it
+    // in one place shared by the widget binding
+    // (`AdwViewStack::set_visible_child_name`) and the snapshot
+    // tests in `tests/add_account_logic.rs`. Sibling of
+    // `format_add_path_label` on the page-name side: the label is
+    // the human-readable wording (`"Manual"`) and the name is the
+    // lowercased slug (`"manual"`) — both are surfaced through
+    // helpers so the widget binding and tests cannot drift apart.
+    use paladin_gtk::add_account::format_add_path_name;
+    use paladin_gtk::secret_fields::AddPath;
+
+    assert_eq!(
+        format_add_path_name(AddPath::Manual),
+        "manual",
+        "manual sub-path page name is the fixed lowercase slug",
+    );
+}
+
+#[test]
+fn format_add_path_name_uri_returns_uri() {
+    // The `AdwViewStack` page name for the URI sub-path is the
+    // fixed `"uri"`. Partner of `format_add_path_name(Manual)` on
+    // the URI sub-path side, and sibling of `format_add_path_label`
+    // on the page-name side.
+    use paladin_gtk::add_account::format_add_path_name;
+    use paladin_gtk::secret_fields::AddPath;
+
+    assert_eq!(
+        format_add_path_name(AddPath::Uri),
+        "uri",
+        "URI sub-path page name is the fixed lowercase slug",
+    );
+}
+
+#[test]
+fn format_add_path_name_is_distinct_from_label() {
+    // The page-name slug must stay distinct from the human-readable
+    // label so the `AdwViewStack::set_visible_child_name` binding
+    // cannot accidentally consume the display label (a localized
+    // / capitalized string) as a machine-readable key. Pinning
+    // both projections side-by-side in the same assertion catches
+    // a future drift that aliased them to the same constant.
+    use paladin_gtk::add_account::{format_add_path_label, format_add_path_name};
+    use paladin_gtk::secret_fields::AddPath;
+
+    assert_ne!(
+        format_add_path_name(AddPath::Manual),
+        format_add_path_label(AddPath::Manual),
+        "manual: page-name slug must differ from display label",
+    );
+    assert_ne!(
+        format_add_path_name(AddPath::Uri),
+        format_add_path_label(AddPath::Uri),
+        "URI: page-name slug must differ from display label",
+    );
+}
+
+#[test]
+fn compose_active_path_name_fresh_dialog_returns_manual() {
+    // A freshly-opened dialog defaults to the manual sub-path (CLI
+    // parity), so the active-path name projection must return
+    // `"manual"` — the widget binds a `#[watch]` over the
+    // projection to drive `AdwViewStack::set_visible_child_name`
+    // so the stack stays in lockstep with the switcher selection.
+    // Mirror of `compose_active_path_label_fresh_dialog_returns_manual`
+    // on the page-name side.
+    use paladin_gtk::add_account::{
+        compose_active_path_name, format_add_path_name, AddDialogState,
+    };
+    use paladin_gtk::secret_fields::AddPath;
+
+    let state = AddDialogState::new();
+
+    assert_eq!(
+        compose_active_path_name(&state),
+        format_add_path_name(AddPath::Manual),
+        "fresh dialog → composer surfaces the manual sub-path name verbatim",
+    );
+}
+
+#[test]
+fn compose_active_path_name_after_switch_to_uri_returns_uri() {
+    // `SwitchPath(Uri)` drives the active-path name projection to
+    // `"uri"` in lockstep with `compose_active_path` flipping to
+    // `AddPath::Uri`. The widget's `#[watch]`-driven
+    // `visible-child-name` follows the switcher selection.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_active_path_name, format_add_path_name, AddAccountMsg, AddDialogState,
+    };
+    use paladin_gtk::secret_fields::AddPath;
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(&mut state, AddAccountMsg::SwitchPath(AddPath::Uri));
+
+    assert_eq!(
+        compose_active_path_name(&state),
+        format_add_path_name(AddPath::Uri),
+        "SwitchPath(Uri) → composer surfaces the URI sub-path name",
+    );
+}
+
+#[test]
+fn compose_active_path_name_round_trips_back_to_manual() {
+    // Toggling the switcher back to the manual sub-path after the
+    // URI sub-path must drive the active-path name projection back
+    // to `"manual"` — the projection must not latch on the first
+    // transition, so the widget's `#[watch]`-driven page-name
+    // binding stays bidirectional. Mirror of
+    // `compose_active_path_label_round_trips_back_to_manual` on
+    // the page-name side.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_active_path_name, format_add_path_name, AddAccountMsg, AddDialogState,
+    };
+    use paladin_gtk::secret_fields::AddPath;
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(&mut state, AddAccountMsg::SwitchPath(AddPath::Uri));
+    let _ = apply_msg(&mut state, AddAccountMsg::SwitchPath(AddPath::Manual));
+
+    assert_eq!(
+        compose_active_path_name(&state),
+        format_add_path_name(AddPath::Manual),
+        "SwitchPath back to Manual → composer surfaces the manual sub-path name",
+    );
+}
