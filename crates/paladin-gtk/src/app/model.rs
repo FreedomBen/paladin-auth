@@ -1518,3 +1518,24 @@ pub fn format_app_menu_button_tooltip() -> &'static str {
 pub fn format_app_menu_import_label() -> &'static str {
     "Import\u{2026}"
 }
+
+/// Fixed label the widget hands to the primary `gio::Menu`'s
+/// "Export…" entry.
+///
+/// Returns the static label `"Export\u{2026}"` — the wording for
+/// the menu entry that opens `ExportDialog`. Uses the GNOME-HIG
+/// horizontal-ellipsis character (U+2026) — not three ASCII
+/// periods — to indicate the action opens a sub-dialog requiring
+/// further input before committing. The Export entry is gated to
+/// `Unlocked` per §"libadwaita usage" but the label wording is
+/// identical across states so the menu does not need to re-render
+/// when re-opened.
+///
+/// Pure — returns a `'static str` without allocating. Sibling of
+/// [`format_app_menu_import_label`] on the import/export menu-
+/// entry side; together they pin the two file-IO entries against
+/// a single source of truth.
+#[must_use]
+pub fn format_app_menu_export_label() -> &'static str {
+    "Export\u{2026}"
+}
