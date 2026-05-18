@@ -1653,6 +1653,50 @@ pub fn compose_active_path(state: &AddDialogState) -> crate::secret_fields::AddP
     state.secret_state().active_path
 }
 
+/// Render the fixed display label for an [`crate::secret_fields::AddPath`].
+///
+/// Returns `"Manual"` for [`crate::secret_fields::AddPath::Manual`]
+/// and `"URI"` for [`crate::secret_fields::AddPath::Uri`]. The
+/// labels feed both the `AdwViewSwitcher` page titles (each sub-
+/// stack page binds the matching label) and the state-driven
+/// [`compose_active_path_label`] projection. Surfacing the wording
+/// through this helper keeps it in one place shared by the widget
+/// binding and the snapshot tests in `tests/add_account_logic.rs`.
+///
+/// Pure — takes the enum value by `Copy` and returns a `'static`
+/// string. Sibling of [`format_duplicate_alert_heading`] /
+/// [`format_duplicate_alert_body`] /
+/// [`format_duplicate_alert_confirm_label`] /
+/// [`format_duplicate_alert_cancel_label`] on the sub-path-label
+/// side; together they cover every fixed display string the
+/// dialog renders.
+#[must_use]
+pub fn format_add_path_label(path: crate::secret_fields::AddPath) -> &'static str {
+    match path {
+        crate::secret_fields::AddPath::Manual => "Manual",
+        crate::secret_fields::AddPath::Uri => "URI",
+    }
+}
+
+/// State-driven projection of the currently-active sub-path's
+/// display label.
+///
+/// Returns [`format_add_path_label`] of [`compose_active_path`],
+/// so the projection flips between `"Manual"` and `"URI"` in
+/// lockstep with the `AdwViewSwitcher` page selection. Lets the
+/// widget bind a single `#[watch]` over the projection anywhere it
+/// names the current sub-path (e.g. a header subtitle or status
+/// line beside the switcher) instead of pattern-matching on the
+/// raw [`crate::secret_fields::AddPath`] enum inline.
+///
+/// Pure — borrows the state and returns a `'static` string without
+/// allocating; sibling of [`compose_active_path`] on the display-
+/// label projection side.
+#[must_use]
+pub fn compose_active_path_label(state: &AddDialogState) -> &'static str {
+    format_add_path_label(compose_active_path(state))
+}
+
 /// State-driven projection of whether the manual sub-path's TOTP
 /// period spinbutton row is visible.
 ///

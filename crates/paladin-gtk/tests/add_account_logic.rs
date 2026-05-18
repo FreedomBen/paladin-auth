@@ -5791,3 +5791,105 @@ fn compose_save_button_sensitive_uri_path_with_text_is_true() {
         "URI path with non-empty URI text → Save button is sensitive",
     );
 }
+
+#[test]
+fn format_add_path_label_manual_returns_manual() {
+    // The `AdwViewSwitcher` page title for the manual sub-path is
+    // the fixed label "Manual". Surfacing the wording through a
+    // helper rather than a bare string literal keeps it in one
+    // place shared by the widget binding (page title + active-path
+    // text projection) and the snapshot tests in
+    // `tests/add_account_logic.rs`.
+    use paladin_gtk::add_account::format_add_path_label;
+    use paladin_gtk::secret_fields::AddPath;
+
+    assert_eq!(
+        format_add_path_label(AddPath::Manual),
+        "Manual",
+        "manual sub-path page label is the fixed CLI / TUI parity wording",
+    );
+}
+
+#[test]
+fn format_add_path_label_uri_returns_uri() {
+    // The `AdwViewSwitcher` page title for the URI sub-path is the
+    // fixed label "URI". Partner of `format_add_path_label(Manual)`
+    // on the URI sub-path side.
+    use paladin_gtk::add_account::format_add_path_label;
+    use paladin_gtk::secret_fields::AddPath;
+
+    assert_eq!(
+        format_add_path_label(AddPath::Uri),
+        "URI",
+        "URI sub-path page label is the fixed CLI / TUI parity wording",
+    );
+}
+
+#[test]
+fn compose_active_path_label_fresh_dialog_returns_manual() {
+    // A freshly-opened dialog defaults to the manual sub-path (CLI
+    // parity), so the active-path label projection must return
+    // `"Manual"` — the widget binds a `#[watch]` over the projection
+    // anywhere it names the current sub-path (e.g. a header subtitle
+    // or page title beside the switcher). Mirror of
+    // `compose_active_path_fresh_dialog_returns_manual` on the
+    // display-label side.
+    use paladin_gtk::add_account::{
+        compose_active_path_label, format_add_path_label, AddDialogState,
+    };
+    use paladin_gtk::secret_fields::AddPath;
+
+    let state = AddDialogState::new();
+
+    assert_eq!(
+        compose_active_path_label(&state),
+        format_add_path_label(AddPath::Manual),
+        "fresh dialog → composer surfaces the manual sub-path label verbatim",
+    );
+}
+
+#[test]
+fn compose_active_path_label_after_switch_to_uri_returns_uri() {
+    // `SwitchPath(Uri)` drives the active-path label projection to
+    // `"URI"` in lockstep with `compose_active_path` flipping to
+    // `AddPath::Uri`. The widget's `#[watch]`-driven display label
+    // follows the switcher selection.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_active_path_label, format_add_path_label, AddAccountMsg, AddDialogState,
+    };
+    use paladin_gtk::secret_fields::AddPath;
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(&mut state, AddAccountMsg::SwitchPath(AddPath::Uri));
+
+    assert_eq!(
+        compose_active_path_label(&state),
+        format_add_path_label(AddPath::Uri),
+        "SwitchPath(Uri) → composer surfaces the URI sub-path label",
+    );
+}
+
+#[test]
+fn compose_active_path_label_round_trips_back_to_manual() {
+    // Toggling the switcher back to the manual sub-path after the
+    // URI sub-path must drive the active-path label projection back
+    // to `"Manual"` — the projection must not latch on the first
+    // transition, so the widget's `#[watch]`-driven display label
+    // stays bidirectional. Mirror of
+    // `compose_active_path_round_trip_back_to_manual_returns_manual`
+    // on the display-label side.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_active_path_label, format_add_path_label, AddAccountMsg, AddDialogState,
+    };
+    use paladin_gtk::secret_fields::AddPath;
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(&mut state, AddAccountMsg::SwitchPath(AddPath::Uri));
+    let _ = apply_msg(&mut state, AddAccountMsg::SwitchPath(AddPath::Manual));
+
+    assert_eq!(
+        compose_active_path_label(&state),
+        format_add_path_label(AddPath::Manual),
+        "SwitchPath back to Manual → composer surfaces the manual sub-path label",
+    );
+}
