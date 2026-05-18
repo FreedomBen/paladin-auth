@@ -1026,3 +1026,84 @@ fn format_init_dialog_force_confirm_label_is_distinct_from_create_label_and_non_
         "InitDialog force-replace destructive confirm label must be distinct from the primary create button caption so the two action surfaces stay visually separable",
     );
 }
+
+#[test]
+fn format_init_dialog_force_cancel_label_returns_cancel() {
+    // Per §"Component tree" > `InitDialog`: when the destructive
+    // `vault_exists` gate opens, the user can either confirm
+    // (routes through `create_force`) or cancel (closes the
+    // alert dialog and leaves the existing vault untouched —
+    // explicitly required by the §10 routing test "Cancelling
+    // the destructive gate leaves the existing vault"). The
+    // GNOME-HIG verb for that affordance is the bare `"Cancel"`
+    // — the same wording every other dialog footer cancel
+    // affordance in this crate uses. Pinning the wording
+    // through a helper keeps the destructive-gate cancel label
+    // in one place shared by the widget binding and the pure-
+    // logic tests in `tests/init_dialog_logic.rs`.
+    use paladin_gtk::init_dialog::format_init_dialog_force_cancel_label;
+
+    assert_eq!(
+        format_init_dialog_force_cancel_label(),
+        "Cancel",
+        "InitDialog force-replace destructive cancel button label uses the standard `Cancel` HIG verb",
+    );
+}
+
+#[test]
+fn format_init_dialog_force_cancel_label_matches_other_dialog_cancel_labels() {
+    // Cross-check: every dialog cancel affordance across the
+    // crate should render the exact same `"Cancel"` wording so
+    // the application's cancel-action vocabulary stays uniform.
+    // A drift between any two would surface as a confusing
+    // "Cancel" vs "Dismiss" vs "Close" inconsistency when the
+    // user reaches the same cancel action from two different
+    // dialogs.
+    use paladin_gtk::add_account::format_add_dialog_cancel_label;
+    use paladin_gtk::init_dialog::format_init_dialog_force_cancel_label;
+    use paladin_gtk::remove_dialog::format_remove_dialog_cancel_label;
+    use paladin_gtk::rename_dialog::format_rename_dialog_cancel_label;
+
+    let cancel = format_init_dialog_force_cancel_label();
+    assert_eq!(
+        cancel,
+        format_remove_dialog_cancel_label(),
+        "InitDialog destructive cancel label must match the remove dialog cancel label so the cancel-action vocabulary stays uniform",
+    );
+    assert_eq!(
+        cancel,
+        format_rename_dialog_cancel_label(),
+        "InitDialog destructive cancel label must match the rename dialog cancel label so the cancel-action vocabulary stays uniform",
+    );
+    assert_eq!(
+        cancel,
+        format_add_dialog_cancel_label(),
+        "InitDialog destructive cancel label must match the add dialog cancel label so the cancel-action vocabulary stays uniform",
+    );
+}
+
+#[test]
+fn format_init_dialog_force_cancel_label_is_distinct_from_force_confirm() {
+    // Defense-in-depth: the destructive-gate cancel and confirm
+    // buttons must render distinct captions so the two
+    // affordances read as different actions rather than
+    // collapsing onto the same word.
+    use paladin_gtk::init_dialog::{
+        format_init_dialog_force_cancel_label, format_init_dialog_force_confirm_label,
+    };
+
+    let cancel = format_init_dialog_force_cancel_label();
+    assert!(
+        !cancel.is_empty(),
+        "InitDialog destructive cancel label must be non-empty; got {cancel:?}",
+    );
+    assert!(
+        !cancel.contains('\n'),
+        "InitDialog destructive cancel label must be a single line; got {cancel:?}",
+    );
+    assert_ne!(
+        cancel,
+        format_init_dialog_force_confirm_label(),
+        "InitDialog destructive cancel label must be distinct from the destructive confirm label so the two affordances read as different actions",
+    );
+}

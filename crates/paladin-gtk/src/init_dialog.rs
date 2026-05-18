@@ -717,6 +717,36 @@ pub fn format_init_dialog_force_confirm_label() -> &'static str {
     "Replace"
 }
 
+/// Cancel-button label the [`InitDialogComponent`]'s
+/// `vault_exists` race gate renders on its in-dialog
+/// `AdwAlertDialog` with `destructive-action` styling.
+///
+/// Returns the bare verb `"Cancel"`. Pressing the button closes
+/// the destructive gate and leaves the existing vault
+/// untouched — explicitly required by the §10 routing test
+/// "Cancelling the destructive gate leaves the existing vault".
+/// Pinning the wording to `"Cancel"` keeps the destructive-gate
+/// cancel affordance and every other dialog footer cancel
+/// affordance in this crate rendering the same string so the
+/// application's cancel-action vocabulary stays uniform — a
+/// drift would surface as a confusing "Cancel" vs "Dismiss" vs
+/// "Close" inconsistency when the user reaches the same cancel
+/// action from two different dialogs.
+///
+/// Pure — returns a `'static str` without allocating. Distinct
+/// from [`format_init_dialog_force_confirm_label`] so the two
+/// affordances read as different actions. Companion of
+/// [`crate::remove_dialog::format_remove_dialog_cancel_label`],
+/// [`crate::rename_dialog::format_rename_dialog_cancel_label`],
+/// and [`crate::add_account::format_add_dialog_cancel_label`]
+/// on the dialog-footer-cancel side; the cross-check test in
+/// `tests/init_dialog_logic.rs` asserts every cancel helper
+/// resolves to the same wording.
+#[must_use]
+pub fn format_init_dialog_force_cancel_label() -> &'static str {
+    "Cancel"
+}
+
 /// Construction parameters for [`InitDialogComponent`].
 #[derive(Debug, Clone)]
 pub struct InitDialogInit {
