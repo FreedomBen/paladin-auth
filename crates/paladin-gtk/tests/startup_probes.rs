@@ -329,3 +329,46 @@ fn format_app_window_title_returns_paladin() {
         "ApplicationWindow title surfaces the bare application name",
     );
 }
+
+#[test]
+fn format_app_search_button_icon_name_returns_system_search_symbolic() {
+    // The `AppModel`'s header-bar search-toggle `gtk::ToggleButton`'s
+    // `set_icon_name` attribute is populated from this helper. The
+    // icon (`"system-search-symbolic"`) is the freedesktop-standard
+    // glyph for "search" — resolving through the system icon theme
+    // so the wordless icon matches every other GNOME app's
+    // search-toggle header-bar affordance. The `-symbolic` suffix is
+    // required by the libadwaita HIG for header-bar icons so the
+    // glyph recolors with the theme. Pinning the icon name through
+    // a helper keeps the string in one place shared by the widget
+    // binding and the pure-logic tests.
+    //
+    // No TUI parity: the TUI is text-only and exposes search
+    // through the existing `/` keybinding rather than an icon.
+    // Sibling of `format_app_add_button_icon_name` on the
+    // header-bar-icon side; together they pin the wordless
+    // affordances against a single source of truth.
+    use paladin_gtk::app::model::format_app_search_button_icon_name;
+
+    assert_eq!(
+        format_app_search_button_icon_name(),
+        "system-search-symbolic",
+        "header-bar search button icon uses the freedesktop-standard search glyph",
+    );
+}
+
+#[test]
+fn format_app_search_button_icon_name_ends_with_symbolic_suffix() {
+    // The libadwaita HIG requires header-bar icons to be symbolic
+    // so they recolor with the theme; the icon-name contract is to
+    // end with `-symbolic`. Pinning a suffix assertion alongside
+    // the full-string assertion guards against an accidental
+    // rename to a non-symbolic glyph.
+    use paladin_gtk::app::model::format_app_search_button_icon_name;
+
+    let icon = format_app_search_button_icon_name();
+    assert!(
+        icon.ends_with("-symbolic"),
+        "header-bar search icon name must end with `-symbolic` for HIG-conformant theming; got {icon:?}",
+    );
+}

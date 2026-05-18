@@ -476,6 +476,11 @@ impl SimpleComponent for AppModel {
                             sender.input(AppMsg::OpenAddDialog);
                         },
                     },
+
+                    #[name = "search_button"]
+                    pack_end = &gtk::ToggleButton {
+                        set_icon_name: format_app_search_button_icon_name(),
+                    },
                 },
 
                 #[wrap(Some)]
@@ -1379,4 +1384,27 @@ pub fn format_app_add_button_tooltip() -> &'static str {
 #[must_use]
 pub fn format_app_window_title() -> &'static str {
     "Paladin"
+}
+
+/// Freedesktop icon name the widget hands to the [`AppModel`]'s
+/// header-bar search-toggle `gtk::ToggleButton::set_icon_name`.
+///
+/// Returns the static icon name `"system-search-symbolic"` — the
+/// freedesktop-standard glyph for "search" that resolves through
+/// the system icon theme so the wordless icon matches every other
+/// GNOME app's search-toggle header-bar affordance. The
+/// `-symbolic` suffix is required by the libadwaita HIG for
+/// header-bar icons so the glyph recolors with the theme. No TUI
+/// parity: the TUI is text-only and exposes search through the
+/// existing `/` keybinding rather than an icon. Pinning the icon
+/// name through a helper keeps the string in one place shared by
+/// the widget binding and the pure-logic tests.
+///
+/// Pure — returns a `'static str` without allocating. Sibling of
+/// [`format_app_add_button_icon_name`] on the header-bar-icon
+/// side; together they pin the wordless affordances against a
+/// single source of truth.
+#[must_use]
+pub fn format_app_search_button_icon_name() -> &'static str {
+    "system-search-symbolic"
 }
