@@ -1349,3 +1349,30 @@ fn format_unlock_dialog_marker_starts_with_prefix() {
     let marker = paladin_gtk::unlock_dialog::format_unlock_dialog_marker(Path::new("/x"));
     assert!(marker.starts_with(paladin_gtk::unlock_dialog::UNLOCK_DIALOG_MARKER_PREFIX));
 }
+
+#[test]
+fn format_unlock_dialog_title_returns_unlock_vault() {
+    // The Unlock vault dialog's `adw::StatusPage::set_title`
+    // attribute is populated from this helper. The wording is the
+    // action-oriented `"Unlock vault"` — intentionally distinct
+    // from the TUI unlock view's `" Paladin — unlock "` block
+    // title (see `crates/paladin-tui/src/view/unlock.rs`), which
+    // names the application instead of the action because the TUI
+    // has no other window-chrome to identify the app, while the
+    // GTK dialog inherits the `org.tamx.Paladin.Gui` window title
+    // and only needs to name the surface's action. Pinning the
+    // title through a helper keeps the wording in one place shared
+    // by the widget binding and the pure-logic tests.
+    //
+    // Sibling of `paladin_gtk::add_account::format_add_dialog_title`
+    // and `paladin_gtk::rename_dialog::format_rename_dialog_title`
+    // on the dialog-header-title side; together they pin every
+    // dialog's titled surface against a single source of truth.
+    use paladin_gtk::unlock_dialog::format_unlock_dialog_title;
+
+    assert_eq!(
+        format_unlock_dialog_title(),
+        "Unlock vault",
+        "AdwStatusPage title uses the action-oriented GNOME-HIG wording",
+    );
+}

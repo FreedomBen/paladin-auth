@@ -160,6 +160,32 @@ pub fn format_unlock_dialog_marker(path: &Path) -> String {
     format!("{UNLOCK_DIALOG_MARKER_PREFIX}{}", path.display())
 }
 
+/// Fixed `title` attribute the widget hands to the Unlock vault
+/// dialog's `adw::StatusPage::set_title`.
+///
+/// Returns the static title string the dialog renders at the top
+/// of its body. The wording (`"Unlock vault"`) is the action-
+/// oriented GNOME-HIG phrasing — intentionally distinct from the
+/// TUI unlock view's `" Paladin — unlock "` block title (see
+/// `crates/paladin-tui/src/view/unlock.rs`), which names the
+/// application instead of the action because the TUI has no other
+/// window-chrome to identify the app, while the GTK dialog
+/// inherits the `org.tamx.Paladin.Gui` window title and only needs
+/// to name the surface's action. Pinning the title through a
+/// helper keeps the wording in one place shared by the widget
+/// binding and the pure-logic tests in
+/// `tests/unlock_dialog_logic.rs`.
+///
+/// Pure — returns a `'static str` without allocating. Sibling of
+/// [`crate::add_account::format_add_dialog_title`] and
+/// [`crate::rename_dialog::format_rename_dialog_title`] on the
+/// dialog-header-title side; together they pin every dialog's
+/// titled surface against a single source of truth.
+#[must_use]
+pub fn format_unlock_dialog_title() -> &'static str {
+    "Unlock vault"
+}
+
 /// Construction parameters for [`UnlockDialogComponent`].
 #[derive(Debug, Clone)]
 pub struct UnlockDialogInit {
@@ -652,7 +678,7 @@ impl SimpleComponent for UnlockDialogComponent {
                 // the system icon theme so the wordless icon matches
                 // every other GNOME app's unlock surface.
                 set_icon_name: Some("dialog-password-symbolic"),
-                set_title: "Unlock vault",
+                set_title: format_unlock_dialog_title(),
                 set_description: Some(&format!(
                     "Enter the passphrase for {path}.",
                     path = model.vault_path.display(),
