@@ -227,6 +227,29 @@ pub fn format_startup_error_title() -> &'static str {
     "Startup error"
 }
 
+/// Action-button label the [`StartupErrorComponent`]'s
+/// `adw::StatusPage` renders for the Retry action described
+/// in §"Vault interaction".
+///
+/// Returns the bare verb `"Retry"`. Pressing the button re-runs
+/// the path-resolution-then-inspect probe (the [`retry`] helper
+/// in this module), and the HIG-aligned wording for that kind
+/// of probe re-run on `AdwStatusPage` surfaces is the bare verb
+/// form — not "Try again" or "Reload". Pinning the wording
+/// through a helper keeps the button label in one place shared
+/// by the widget binding and the pure-logic tests in
+/// `tests/startup_error_logic.rs`.
+///
+/// Pure — returns a `'static str` without allocating. Distinct
+/// from [`format_startup_error_title`] (the
+/// `adw::StatusPage::set_title` wording) so the action button
+/// caption and the surface title are visually separable rather
+/// than rendering the same string twice.
+#[must_use]
+pub fn format_startup_error_retry_label() -> &'static str {
+    "Retry"
+}
+
 /// Construction parameters for [`StartupErrorComponent`].
 #[derive(Debug, Clone)]
 pub struct StartupErrorInit {

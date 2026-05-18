@@ -545,3 +545,61 @@ fn format_startup_error_title_returns_startup_error() {
         "AdwStatusPage title uses the dialog-header-style wording for the error class",
     );
 }
+
+#[test]
+fn format_startup_error_retry_label_returns_retry() {
+    // Per §"Vault interaction": the `StartupErrorComponent`
+    // surfaces a Retry action that re-runs the
+    // path-resolution-then-inspect probe (the `retry` helper in
+    // the same module). The HIG-aligned label for the action
+    // button is the bare `"Retry"` verb — the same wording the
+    // GNOME stack uses for analogous probe re-runs on
+    // `AdwStatusPage` surfaces. Pinning the wording through a
+    // helper keeps the button label in one place shared by the
+    // widget binding and the pure-logic tests in
+    // `tests/startup_error_logic.rs`.
+    use paladin_gtk::startup_error::format_startup_error_retry_label;
+
+    assert_eq!(
+        format_startup_error_retry_label(),
+        "Retry",
+        "AdwStatusPage retry button label uses the HIG-aligned bare verb wording",
+    );
+}
+
+#[test]
+fn format_startup_error_retry_label_is_non_empty_single_line_distinct_from_title() {
+    // Defense-in-depth: the retry button label must be non-empty
+    // (an empty label would render a blank button), must be a
+    // single line (the action button caption is rendered
+    // inline), and must be distinct from the status-page title
+    // so the action button caption and the surface title are
+    // visually separable rather than rendering the same string
+    // twice.
+    use paladin_gtk::startup_error::{
+        format_startup_error_retry_label, format_startup_error_title,
+    };
+
+    let label = format_startup_error_retry_label();
+    assert!(
+        !label.is_empty(),
+        "AdwStatusPage retry button label must be non-empty; got {label:?}",
+    );
+    assert!(
+        !label.contains('\n'),
+        "AdwStatusPage retry button label must be a single line (no embedded newlines); got {label:?}",
+    );
+    assert!(
+        !label.starts_with(char::is_whitespace),
+        "AdwStatusPage retry button label must not start with whitespace; got {label:?}",
+    );
+    assert!(
+        !label.ends_with(char::is_whitespace),
+        "AdwStatusPage retry button label must not end with whitespace; got {label:?}",
+    );
+    assert_ne!(
+        label,
+        format_startup_error_title(),
+        "AdwStatusPage retry button label must be distinct from the surface title so the action button caption and the title are visually separable",
+    );
+}
