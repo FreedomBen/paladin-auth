@@ -586,6 +586,35 @@ pub fn format_init_dialog_marker(path: &Path) -> String {
     format!("{INIT_DIALOG_MARKER_PREFIX}{}", path.display())
 }
 
+/// Body the widget hands to the [`InitDialogComponent`]'s
+/// `adw::StatusPage::set_description` attribute.
+///
+/// Renders `"No vault found at <path>.\n\n<plaintext warning>"`
+/// where `<path>` is the resolved vault path the dialog will hand
+/// to `Store::create` on submit and `<plaintext warning>` is the
+/// `paladin_core::format_plaintext_storage_warning()` body.
+/// Leading with the resolved path lets the user confirm the
+/// destination before submitting; the warning is surfaced verbatim
+/// so the GUI cannot drift from the CLI / TUI copy — see
+/// [`plaintext_warning_body`].
+///
+/// Takes the path by `&Path` so the widget can pass
+/// `&model.vault_path` without cloning, and uses [`format!`]
+/// (returning an owned `String`) because the rendered text needs
+/// to outlive the borrowed [`std::path::Path`] argument once the
+/// view! macro hands it to `set_description`. Sibling of
+/// [`crate::unlock_dialog::format_unlock_dialog_description`] on
+/// the dialog-status-description side; together they pin every
+/// first-mount dialog's body against a single source of truth.
+#[must_use]
+pub fn format_init_dialog_description(path: &Path) -> String {
+    format!(
+        "No vault found at {path}.\n\n{warning}",
+        path = path.display(),
+        warning = plaintext_warning_body(),
+    )
+}
+
 /// Freedesktop icon name the widget hands to the
 /// [`InitDialogComponent`]'s `adw::StatusPage::set_icon_name`.
 ///
@@ -690,11 +719,7 @@ impl SimpleComponent for InitDialogComponent {
         adw::StatusPage {
             set_icon_name: Some(format_init_dialog_icon_name()),
             set_title: format_init_dialog_title(),
-            set_description: Some(&format!(
-                "No vault found at {path}.\n\n{warning}",
-                path = model.vault_path.display(),
-                warning = plaintext_warning_body(),
-            )),
+            set_description: Some(&format_init_dialog_description(&model.vault_path)),
             set_hexpand: true,
             set_vexpand: true,
         }

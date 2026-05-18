@@ -740,6 +740,74 @@ fn run_init_worker_persists_plaintext_to_disk() {
 }
 
 #[test]
+fn format_init_dialog_description_renders_resolved_path_then_plaintext_warning() {
+    // The InitDialog's `adw::StatusPage::set_description` attribute
+    // is populated from this helper. The rendered body leads with
+    // the resolved vault path (`"No vault found at {path}."`) so
+    // the user can confirm the destination before submitting, then
+    // surfaces the standard plaintext-storage warning verbatim
+    // through `paladin_core::format_plaintext_storage_warning()`.
+    // The two sections are separated by a blank line (`\n\n`) so
+    // the warning reads as its own paragraph. Pinning the format
+    // string through a helper keeps the wording in one place
+    // shared by the widget binding and the pure-logic tests, and
+    // routes the warning text through the shared paladin-core
+    // projection so the GUI cannot drift from the CLI / TUI copy.
+    //
+    // Sibling of
+    // `paladin_gtk::unlock_dialog::format_unlock_dialog_description`
+    // on the dialog-status-description side; together they pin
+    // every first-mount dialog's body against a single source of
+    // truth.
+    use paladin_core::format_plaintext_storage_warning;
+    use paladin_gtk::init_dialog::format_init_dialog_description;
+
+    let path = Path::new("/tmp/example/vault.bin");
+    let rendered = format_init_dialog_description(path);
+    assert_eq!(
+        rendered,
+        format!(
+            "No vault found at /tmp/example/vault.bin.\n\n{warning}",
+            warning = format_plaintext_storage_warning(),
+        ),
+        "description leads with the resolved path and routes the warning through paladin-core",
+    );
+}
+
+#[test]
+fn format_init_dialog_description_starts_with_no_vault_found_at() {
+    // The prefix `"No vault found at "` is the stable wording the
+    // dialog leads with — pinning a prefix assertion alongside the
+    // full-string assertion guards against an accidental rewording
+    // that still happens to keep the path intact.
+    use paladin_gtk::init_dialog::format_init_dialog_description;
+
+    let rendered = format_init_dialog_description(Path::new("/x"));
+    assert!(
+        rendered.starts_with("No vault found at "),
+        "description begins with the stable `No vault found at ` prefix; got {rendered:?}",
+    );
+}
+
+#[test]
+fn format_init_dialog_description_contains_paladin_core_plaintext_warning_verbatim() {
+    // The plaintext-storage warning body is sourced through
+    // `paladin_core::format_plaintext_storage_warning()` so the
+    // GUI cannot drift from the CLI / TUI copy. Pinning a
+    // `contains` assertion alongside the full-string assertion
+    // guards against an accidental refactor that re-renders the
+    // warning locally.
+    use paladin_core::format_plaintext_storage_warning;
+    use paladin_gtk::init_dialog::format_init_dialog_description;
+
+    let rendered = format_init_dialog_description(Path::new("/x"));
+    assert!(
+        rendered.contains(&format_plaintext_storage_warning()),
+        "description must embed the paladin-core plaintext warning verbatim; got {rendered:?}",
+    );
+}
+
+#[test]
 fn format_init_dialog_icon_name_returns_document_new_symbolic() {
     // The InitDialog's `adw::StatusPage::set_icon_name` attribute
     // is populated from this helper. The icon
