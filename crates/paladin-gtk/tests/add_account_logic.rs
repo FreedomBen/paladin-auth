@@ -3442,6 +3442,105 @@ fn apply_msg_render_inline_error_replaces_prior() {
 }
 
 #[test]
+fn save_click_outcome_to_msg_proceed_returns_submit_proceed() {
+    // The widget computes `compose_save_click_outcome` on every
+    // Save click and routes the result through this dispatch
+    // helper to keep the per-variant `AddAccountMsg` construction
+    // a one-shot match rather than scattered through the widget
+    // body. `SaveClickOutcome::Proceed(validated)` must map to
+    // `AddAccountMsg::SubmitProceed { account: validated.account }`
+    // — the `warnings` are dropped on this arm because the dialog
+    // dismisses on success and the post-save toast renders the
+    // validation warnings via
+    // `paladin_core::format_validation_warning` off the
+    // `AddAccountOutput::Submit` boundary instead.
+    use paladin_gtk::add_account::{save_click_outcome_to_msg, AddAccountMsg, SaveClickOutcome};
+
+    let validated = validate_manual_totp("alice", Some("Acme"));
+    let expected_id = validated.account.id();
+    let expected_label = validated.account.label().to_string();
+
+    let msg = save_click_outcome_to_msg(SaveClickOutcome::Proceed(validated));
+
+    match msg {
+        AddAccountMsg::SubmitProceed { account } => {
+            assert_eq!(
+                account.id(),
+                expected_id,
+                "dispatch helper threads the validated id without re-stamping",
+            );
+            assert_eq!(
+                account.label(),
+                expected_label,
+                "dispatch helper threads the validated label byte-for-byte",
+            );
+        }
+        other => panic!("expected SubmitProceed, got {other:?}"),
+    }
+}
+
+#[test]
+fn save_click_outcome_to_msg_await_confirmation_returns_stage_pending_duplicate() {
+    // `SaveClickOutcome::AwaitConfirmation { existing, validated }`
+    // must map to `AddAccountMsg::StagePendingDuplicate { account,
+    // warnings, existing }` so both halves of the duplicate-
+    // collision projection (`pending` + `pending_duplicate_existing`)
+    // land in state via the existing apply_msg arm.
+    use paladin_gtk::add_account::{save_click_outcome_to_msg, AddAccountMsg, SaveClickOutcome};
+
+    let validated = validate_manual_totp("alice", Some("Acme"));
+    let warnings_clone = validated.warnings.clone();
+    let expected_account_id = validated.account.id();
+    let expected_account_label = validated.account.label().to_string();
+    let existing = dummy_existing_summary();
+    let expected_existing_id = existing.id;
+    let expected_existing_label = existing.label.clone();
+
+    let msg = save_click_outcome_to_msg(SaveClickOutcome::AwaitConfirmation {
+        existing,
+        validated,
+    });
+
+    match msg {
+        AddAccountMsg::StagePendingDuplicate {
+            account,
+            warnings,
+            existing,
+        } => {
+            assert_eq!(account.id(), expected_account_id);
+            assert_eq!(account.label(), expected_account_label);
+            assert_eq!(warnings, warnings_clone);
+            assert_eq!(existing.id, expected_existing_id);
+            assert_eq!(existing.label, expected_existing_label);
+        }
+        other => panic!("expected StagePendingDuplicate, got {other:?}"),
+    }
+}
+
+#[test]
+fn save_click_outcome_to_msg_inline_error_returns_render_inline_error() {
+    // `SaveClickOutcome::InlineError(err)` must map to
+    // `AddAccountMsg::RenderInlineError(err)` so the typed §5
+    // body lands in `AddDialogState::inline_error` via the existing
+    // apply_msg arm.
+    use paladin_gtk::add_account::{save_click_outcome_to_msg, AddAccountMsg, SaveClickOutcome};
+
+    let err = InlineError::from_error(&validation_error("label", "empty"));
+    let expected_kind = err.kind;
+    let expected_rendered = err.rendered.clone();
+
+    let msg = save_click_outcome_to_msg(SaveClickOutcome::InlineError(err));
+
+    match msg {
+        AddAccountMsg::RenderInlineError(stored) => {
+            assert_eq!(stored.kind, expected_kind);
+            assert_eq!(stored.rendered, expected_rendered);
+        }
+        other => panic!("expected RenderInlineError, got {other:?}"),
+    }
+}
+
+#[test]
 fn apply_msg_cancel_drains_pending_duplicate_existing() {
     // Cancel drops the entire dialog state via
     // `secret_state.clear_for(ClearReason::Cancel)` — that already

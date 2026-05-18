@@ -1448,6 +1448,55 @@ impl AddDialogState {
     }
 }
 
+/// Map a [`SaveClickOutcome`] from [`compose_save_click_outcome`]
+/// to the corresponding [`AddAccountMsg`] the widget should
+/// dispatch through `relm4::ComponentSender::input`.
+///
+/// Lets the widget Save handler stay a one-shot routing block —
+/// `sender.input(save_click_outcome_to_msg(compose_save_click_outcome(...)))`
+/// — without re-deriving the per-variant `AddAccountMsg` shape
+/// inline. The mapping is:
+///
+/// * [`SaveClickOutcome::Proceed`] →
+///   [`AddAccountMsg::SubmitProceed`] carrying the validated
+///   [`Account`]. The `warnings` are dropped here because the
+///   dialog dismisses on success; warnings render alongside the
+///   post-save toast off the [`AddAccountOutput::Submit`]
+///   boundary via [`paladin_core::format_validation_warning`].
+/// * [`SaveClickOutcome::AwaitConfirmation`] →
+///   [`AddAccountMsg::StagePendingDuplicate`] carrying the
+///   validated [`Account`], [`ValidationWarning`]s, and the
+///   colliding [`AccountSummary`]. Both halves of the collision
+///   projection thread through so [`apply_msg`] can park them in
+///   [`crate::secret_fields::AddSecretState::pending`] +
+///   [`AddDialogState::pending_duplicate_existing`].
+/// * [`SaveClickOutcome::InlineError`] →
+///   [`AddAccountMsg::RenderInlineError`]. The typed §5 body
+///   lands in [`AddDialogState::inline_error`] for the widget
+///   `#[watch]` binding to render.
+///
+/// Pure — moves the [`SaveClickOutcome`] by value and constructs
+/// the matching [`AddAccountMsg`] without consulting external
+/// state. The composer / dispatch pair stays unit-testable in
+/// `tests/add_account_logic.rs` without GTK.
+#[must_use]
+pub fn save_click_outcome_to_msg(outcome: SaveClickOutcome) -> AddAccountMsg {
+    match outcome {
+        SaveClickOutcome::Proceed(validated) => AddAccountMsg::SubmitProceed {
+            account: validated.account,
+        },
+        SaveClickOutcome::AwaitConfirmation {
+            existing,
+            validated,
+        } => AddAccountMsg::StagePendingDuplicate {
+            account: validated.account,
+            warnings: validated.warnings,
+            existing,
+        },
+        SaveClickOutcome::InlineError(err) => AddAccountMsg::RenderInlineError(err),
+    }
+}
+
 /// Per-message routing decisions for [`AddAccountComponent`].
 ///
 /// Draft-changed / duplicate-confirm routing land in follow-up
