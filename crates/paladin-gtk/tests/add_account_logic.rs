@@ -6072,3 +6072,127 @@ fn compose_pending_duplicate_alert_visible_drains_after_switch_path() {
         "SwitchPath drains the visibility projection alongside the pending slot",
     );
 }
+
+#[test]
+fn compose_post_effect_warning_revealed_with_no_outcome_is_false() {
+    // A freshly-opened dialog has not yet seen a worker completion,
+    // so the durability-warning revealed projection must be `false`
+    // — the widget binds a `#[watch]` over the projection to drive
+    // the `AdwBanner::set_revealed:` transition so the banner stays
+    // hidden until a `KeepWithWarning` outcome is parked. Sibling
+    // of `compose_post_effect_warning_body_with_no_outcome_returns_none`
+    // on the revealed-bool side.
+    use paladin_gtk::add_account::{compose_post_effect_warning_revealed, AddDialogState};
+
+    let state = AddDialogState::new();
+
+    assert!(
+        !compose_post_effect_warning_revealed(&state),
+        "fresh dialog has no worker outcome → durability warning is not revealed",
+    );
+}
+
+#[test]
+fn compose_post_effect_warning_revealed_with_inline_outcome_is_false() {
+    // `Inline(InlineError)` is the typed §5 inline-error variant of
+    // the post-effect routing — a pre-commit `save_not_committed`
+    // (or any non-durability failure) keeps the dialog open with
+    // the form populated for retry. The durability-warning revealed
+    // projection must be `false` for this variant so the
+    // `AdwBanner` does not animate in alongside the inline error.
+    // Pins the projection to the `KeepWithWarning` variant only,
+    // matching the body projection's partitioning of
+    // [`AddPostEffectOutcome`] across the two dialog regions.
+    use paladin_gtk::add_account::{
+        apply_msg, classify_add_post_effect_error, compose_post_effect_warning_revealed,
+        AddAccountMsg, AddDialogState, AddPostEffectOutcome,
+    };
+
+    let outcome = classify_add_post_effect_error(&save_not_committed_no_backup());
+    assert!(
+        matches!(outcome, AddPostEffectOutcome::Inline(_)),
+        "fixture precondition: save_not_committed routes to Inline",
+    );
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(&mut state, AddAccountMsg::WorkerFailed(outcome));
+
+    assert!(
+        !compose_post_effect_warning_revealed(&state),
+        "Inline outcome → durability warning stays hidden",
+    );
+}
+
+#[test]
+fn compose_post_effect_warning_revealed_with_keep_with_warning_is_true() {
+    // `save_durability_unconfirmed` routes to `KeepWithWarning`,
+    // and the widget binds a `#[watch]` over the projection to
+    // animate the `AdwBanner` in alongside the rendered warning
+    // body. The revealed projection must return `true` for this
+    // variant in lockstep with `compose_post_effect_warning_body`
+    // returning `Some(_)`, so the two `#[watch]`-driven properties
+    // (revealed bool + body text) flip together on the same
+    // `WorkerFailed` dispatch.
+    use paladin_gtk::add_account::{
+        apply_msg, classify_add_post_effect_error, compose_post_effect_warning_revealed,
+        AddAccountMsg, AddDialogState,
+    };
+
+    let outcome = classify_add_post_effect_error(&PaladinError::SaveDurabilityUnconfirmed);
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(&mut state, AddAccountMsg::WorkerFailed(outcome));
+
+    assert!(
+        compose_post_effect_warning_revealed(&state),
+        "KeepWithWarning → composer reveals the durability warning banner",
+    );
+}
+
+#[test]
+fn compose_post_effect_warning_revealed_drains_after_submit_proceed() {
+    // Retrying via `SubmitProceed` clears `AddDialogState::worker_outcome`
+    // before the new worker runs (see
+    // `apply_msg_submit_proceed_clears_prior_worker_outcome`), so the
+    // durability-warning revealed projection must collapse back to
+    // `false` — the widget binds a `#[watch]` over the projection so
+    // the `AdwBanner` animates back out the moment the user resubmits.
+    // Sibling lockstep with `compose_post_effect_warning_body`, which
+    // also collapses on the same `SubmitProceed` dispatch.
+    use paladin_core::{validate_manual, AccountInput, IconHintInput};
+    use paladin_gtk::add_account::{
+        apply_msg, classify_add_post_effect_error, compose_post_effect_warning_revealed,
+        AddAccountMsg, AddDialogState,
+    };
+
+    let outcome = classify_add_post_effect_error(&PaladinError::SaveDurabilityUnconfirmed);
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(&mut state, AddAccountMsg::WorkerFailed(outcome));
+    assert!(
+        compose_post_effect_warning_revealed(&state),
+        "precondition: KeepWithWarning reveals the banner",
+    );
+
+    let input = AccountInput {
+        label: "retry-label".to_string(),
+        issuer: None,
+        secret: SecretString::from("JBSWY3DPEHPK3PXP".to_string()),
+        algorithm: Algorithm::Sha1,
+        digits: 6,
+        kind: AccountKindInput::Totp,
+        period_secs: None,
+        counter: None,
+        icon_hint: IconHintInput::Default,
+    };
+    let validated =
+        validate_manual(input, SystemTime::UNIX_EPOCH).expect("totp account input validates");
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::SubmitProceed {
+            account: validated.account,
+        },
+    );
+
+    assert!(
+        !compose_post_effect_warning_revealed(&state),
+        "SubmitProceed drains the revealed projection alongside the worker_outcome slot",
+    );
+}

@@ -1588,6 +1588,38 @@ pub fn compose_post_effect_warning_body(state: &AddDialogState) -> Option<&str> 
     }
 }
 
+/// State-driven projection of whether the durability-warning
+/// `AdwBanner` (or equivalent revealed-row) is currently animated
+/// in beneath the post-add counts panel.
+///
+/// Returns `true` while [`AddDialogState::worker_outcome`] is
+/// [`AddPostEffectOutcome::KeepWithWarning`] (the
+/// `save_durability_unconfirmed` post-commit-but-fsync-failed
+/// case), and `false` for both the no-worker-yet state and the
+/// [`AddPostEffectOutcome::Inline`] retry path. Mirrors the
+/// partitioning of [`AddPostEffectOutcome`] applied by
+/// [`compose_post_effect_warning_body`] so the two projections flip
+/// together on the same `WorkerFailed` / `SubmitProceed` dispatches
+/// — `set_revealed: true` paired with the `Some(body)` body, and
+/// `set_revealed: false` paired with `None` when retry clears
+/// [`AddDialogState::worker_outcome`].
+///
+/// Lets the widget bind a single `#[watch]` over the projection to
+/// drive the `AdwBanner::set_revealed:` animation instead of
+/// re-deriving the routing decision against
+/// [`AddDialogState::worker_outcome`] inline. Pure — borrows the
+/// state and returns a `bool` without allocating; sibling of
+/// [`compose_post_effect_warning_body`] (the body text) so the
+/// widget can `#[watch]` every region of the durability-warning
+/// row in lockstep.
+#[must_use]
+pub fn compose_post_effect_warning_revealed(state: &AddDialogState) -> bool {
+    matches!(
+        state.worker_outcome(),
+        Some(AddPostEffectOutcome::KeepWithWarning(_))
+    )
+}
+
 /// State-driven projection of the post-effect inline-error body the
 /// widget renders beneath the form for retry after an
 /// [`AddPostEffectOutcome::Inline`] worker completion, or `None` for
