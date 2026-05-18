@@ -1437,6 +1437,13 @@ pub fn apply_msg(state: &mut AddDialogState, msg: AddAccountMsg) -> Option<AddAc
             // retry. The fresh worker run is authoritative for the
             // next routing decision.
             state.worker_outcome = None;
+            // SubmitProceed only arrives after a successful
+            // validation pipeline (`compose_save_click_outcome`
+            // returned `Proceed`), so any prior inline_error from
+            // an earlier rejected Save click is stale — drop it
+            // defensively so the dialog body cannot render stale
+            // pre-effect text alongside the live worker attempt.
+            state.inline_error = None;
             // DESIGN §8: secret fields clear on submit. The
             // validated `Account` already carries its `Secret` in
             // `ZeroizeOnDrop` form across the Component boundary,
@@ -1553,6 +1560,12 @@ pub fn apply_msg(state: &mut AddDialogState, msg: AddAccountMsg) -> Option<AddAc
             let _dropped_prior = state
                 .secret_state
                 .replace_pending(ValidatedAccount { account, warnings });
+            // The arm is reached only after validation succeeded
+            // (the pending is a `ValidatedAccount`) and
+            // `Vault::find_duplicate` reported a collision — drop
+            // any prior validation inline_error so the "Add anyway?"
+            // prompt renders cleanly.
+            state.inline_error = None;
             None
         }
         AddAccountMsg::ConfirmAddAnyway => {
@@ -1567,6 +1580,12 @@ pub fn apply_msg(state: &mut AddDialogState, msg: AddAccountMsg) -> Option<AddAc
             // arm — both enter the worker through the same
             // `AddAccountOutput::Submit` boundary.
             state.worker_outcome = None;
+            // Drop any stale inline_error before the submit
+            // boundary; the user confirmed past the duplicate
+            // prompt, so a pre-effect validation rejection from an
+            // earlier Save attempt is no longer applicable.
+            // Symmetric with the `SubmitProceed` arm.
+            state.inline_error = None;
             Some(AddAccountOutput::Submit {
                 account: validated.account,
             })

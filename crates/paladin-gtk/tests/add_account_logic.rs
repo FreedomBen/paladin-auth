@@ -3435,6 +3435,124 @@ fn apply_msg_render_inline_error_replaces_prior() {
 }
 
 #[test]
+fn apply_msg_submit_proceed_clears_prior_inline_error() {
+    // The widget only dispatches `SubmitProceed` once
+    // `compose_save_click_outcome` returned a non-collision
+    // `Proceed(ValidatedAccount)` — by definition the validation
+    // pipeline succeeded, so any prior inline_error from an earlier
+    // rejected Save click is stale. Defensive clearing keeps the
+    // dialog body from rendering stale text alongside the live
+    // worker attempt. Symmetric with the prior-worker-outcome
+    // clearing already wired into this arm.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    let err = InlineError::from_error(&validation_error("label", "empty"));
+    let _ = apply_msg(&mut state, AddAccountMsg::RenderInlineError(err));
+    assert!(state.inline_error().is_some(), "precondition");
+
+    let validated = validate_manual_totp("alice", Some("Acme"));
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::SubmitProceed {
+            account: validated.account,
+        },
+    );
+
+    assert!(
+        state.inline_error().is_none(),
+        "SubmitProceed clears the stale inline_error before the worker spawns",
+    );
+}
+
+#[test]
+fn apply_msg_stage_pending_duplicate_clears_prior_inline_error() {
+    // `StagePendingDuplicate` arrives after `classify_duplicate`
+    // returned `AwaitConfirmation` — meaning validation already
+    // succeeded (the pending account is validated) and the
+    // duplicate-detection pipeline ran. Any prior inline_error
+    // staged by an earlier validation failure is therefore stale —
+    // drop it so the "Add anyway?" prompt renders cleanly without
+    // a stale validation rejection bleeding through.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    let err = InlineError::from_error(&validation_error("label", "empty"));
+    let _ = apply_msg(&mut state, AddAccountMsg::RenderInlineError(err));
+    assert!(state.inline_error().is_some(), "precondition");
+
+    let validated = match classify_manual_submit(manual_totp_defaults(), now_for_tests()) {
+        ManualSubmitOutcome::Proceed(v) => v,
+        ManualSubmitOutcome::InlineError(e) => panic!("fixture failed: {e:?}"),
+    };
+    let DuplicateOutcome::AwaitConfirmation {
+        existing: _,
+        validated,
+    } = classify_duplicate(validated, Some(dummy_existing_summary()))
+    else {
+        panic!("fixture: expected AwaitConfirmation");
+    };
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::StagePendingDuplicate {
+            account: validated.account,
+            warnings: validated.warnings,
+        },
+    );
+
+    assert!(
+        state.inline_error().is_none(),
+        "StagePendingDuplicate clears the stale inline_error so the duplicate prompt renders cleanly",
+    );
+}
+
+#[test]
+fn apply_msg_confirm_add_anyway_clears_prior_inline_error() {
+    // `ConfirmAddAnyway` consumes the parked pending duplicate and
+    // forwards `AddAccountOutput::Submit`. By construction the
+    // pending was staged after a validation pass, so any prior
+    // inline_error is stale — drop it defensively before the
+    // submit boundary. Symmetric with the worker-outcome clearing
+    // already wired into this arm.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    // Stage a pending duplicate first so ConfirmAddAnyway has
+    // something to consume; otherwise the arm is a defensive no-op.
+    let validated = match classify_manual_submit(manual_totp_defaults(), now_for_tests()) {
+        ManualSubmitOutcome::Proceed(v) => v,
+        ManualSubmitOutcome::InlineError(e) => panic!("fixture failed: {e:?}"),
+    };
+    let DuplicateOutcome::AwaitConfirmation {
+        existing: _,
+        validated,
+    } = classify_duplicate(validated, Some(dummy_existing_summary()))
+    else {
+        panic!("fixture: expected AwaitConfirmation");
+    };
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::StagePendingDuplicate {
+            account: validated.account,
+            warnings: validated.warnings,
+        },
+    );
+    // Restage an inline error after StagePendingDuplicate (which
+    // would itself clear inline_error) to set the precondition for
+    // this test cleanly.
+    let err = InlineError::from_error(&validation_error("label", "empty"));
+    let _ = apply_msg(&mut state, AddAccountMsg::RenderInlineError(err));
+    assert!(state.inline_error().is_some(), "precondition");
+
+    let _ = apply_msg(&mut state, AddAccountMsg::ConfirmAddAnyway);
+
+    assert!(
+        state.inline_error().is_none(),
+        "ConfirmAddAnyway clears the stale inline_error before the worker spawns",
+    );
+}
+
+#[test]
 fn apply_msg_manual_label_changed_clears_prior_inline_error() {
     // Retyping the manual label after a Save click rejected it
     // (e.g. `field: "label"` from validate_manual) means the prior
