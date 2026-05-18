@@ -2346,6 +2346,32 @@ pub fn format_app_about_dialog_developers() -> [&'static str; 1] {
     ["Benjamin Porter"]
 }
 
+/// Translator-credits string the application menu's "About
+/// Paladin" entry's `AdwAboutDialog` hands to
+/// `set_translator_credits` for its credits-page "Translators"
+/// section.
+///
+/// Returns the empty string for the v0.2 English-only release.
+/// Paladin does not yet ship a gettext catalog (no `LINGUAS` /
+/// `.po` files), and `AdwAboutDialog` follows the libadwaita
+/// convention of skipping the credits-page Translators row when
+/// this value is empty — which is the correct rendering for an
+/// app with no translations.
+///
+/// Once a gettext catalog lands the body should call
+/// `gettext("translator-credits")` so translators populate the
+/// row via `.po` entries (the conventional message key for this
+/// slot across the GNOME stack); the test-suite assertion in
+/// `tests/startup_probes.rs` is wired to flag that swap so the
+/// helper is not silently re-routed without updating the
+/// translation pipeline.
+///
+/// Pure — returns a `'static str` without allocating.
+#[must_use]
+pub fn format_app_about_dialog_translator_credits() -> &'static str {
+    ""
+}
+
 /// Bare `GLib` action-group name the primary `gio::Menu` resolves
 /// every entry target against.
 ///

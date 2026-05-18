@@ -2663,6 +2663,49 @@ fn format_app_about_dialog_developers_is_non_empty_array_of_non_empty_single_lin
 }
 
 #[test]
+fn format_app_about_dialog_translator_credits_is_empty_until_translations_land() {
+    // Per §"libadwaita usage" and §"About / help": the
+    // `AdwAboutDialog` translator-credits slot is gated by the
+    // libadwaita convention — when the value is empty,
+    // `AdwAboutDialog` does NOT render the credits-page
+    // "Translators" row, which is the correct rendering for an
+    // app that has no translations yet. Paladin v0.2 ships
+    // English-only without a gettext catalog (no `LINGUAS` /
+    // `.po` files), so this helper returns the empty literal
+    // until a translation lands. Once gettext is wired up, the
+    // body should call `gettext("translator-credits")` so
+    // translators populate the row via `.po` files; the
+    // assertion here will be the canary that flags the swap.
+    use paladin_gtk::app::model::format_app_about_dialog_translator_credits;
+
+    assert_eq!(
+        format_app_about_dialog_translator_credits(),
+        "",
+        "AdwAboutDialog translator-credits must be empty until a gettext catalog lands so the credits-page Translators row is suppressed",
+    );
+}
+
+#[test]
+fn format_app_about_dialog_translator_credits_is_single_line_when_non_empty() {
+    // Defense-in-depth: once translations land and this helper
+    // is wired to `gettext("translator-credits")`, a translator
+    // could conceivably submit a `.po` entry with embedded
+    // newlines. The dialog renders the credits row inline; an
+    // embedded newline would break the layout. Asserting the
+    // invariant unconditionally keeps the layout safe now and
+    // when the gettext swap happens later.
+    use paladin_gtk::app::model::format_app_about_dialog_translator_credits;
+
+    let credits = format_app_about_dialog_translator_credits();
+    if !credits.is_empty() {
+        assert!(
+            !credits.contains('\n'),
+            "AdwAboutDialog translator-credits must be a single line (no embedded newlines) so the credits row layout stays intact; got {credits:?}",
+        );
+    }
+}
+
+#[test]
 fn format_app_action_group_name_is_prefix_of_every_primary_menu_action() {
     // Cross-check: every `format_app_menu_*_action` target must
     // begin with `format_app_action_group_name() + "."`. This
