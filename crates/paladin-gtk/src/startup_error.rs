@@ -178,6 +178,30 @@ pub fn format_startup_error_marker(error: &StartupError) -> String {
     format!("{STARTUP_ERROR_MARKER_PREFIX}{single_line}")
 }
 
+/// Freedesktop icon name the widget hands to the
+/// [`StartupErrorComponent`]'s `adw::StatusPage::set_icon_name`.
+///
+/// Returns the static icon name `"dialog-error-symbolic"` — the
+/// freedesktop-standard glyph for an error surface shipped by
+/// `adwaita-icon-theme` that resolves through the system icon
+/// theme so the wordless glyph matches every other GNOME app's
+/// error surface. The `-symbolic` suffix is required by the
+/// libadwaita HIG for `AdwStatusPage` icons so the glyph
+/// recolors with the theme. No TUI parity: the TUI is text-only
+/// and has no icon to mirror. Pinning the icon name through a
+/// helper keeps the string in one place shared by the widget
+/// binding and the pure-logic tests.
+///
+/// Pure — returns a `'static str` without allocating. Sibling of
+/// [`crate::unlock_dialog::format_unlock_dialog_icon_name`] and
+/// [`crate::init_dialog::format_init_dialog_icon_name`] on the
+/// dialog-status-icon side; together they pin every first-mount
+/// dialog's freedesktop glyph against a single source of truth.
+#[must_use]
+pub fn format_startup_error_icon_name() -> &'static str {
+    "dialog-error-symbolic"
+}
+
 /// Fixed `title` attribute the widget hands to the
 /// [`StartupErrorComponent`]'s `adw::StatusPage::set_title`.
 ///
@@ -251,11 +275,7 @@ impl SimpleComponent for StartupErrorComponent {
     view! {
         #[root]
         adw::StatusPage {
-            // `dialog-error-symbolic` is the freedesktop-standard
-            // error icon shipped by `adwaita-icon-theme`; it is
-            // resolved via the system icon theme so the wordless
-            // glyph matches every other GNOME app's error surface.
-            set_icon_name: Some("dialog-error-symbolic"),
+            set_icon_name: Some(format_startup_error_icon_name()),
             set_title: format_startup_error_title(),
             set_description: Some(model.error.rendered.as_str()),
             set_hexpand: true,

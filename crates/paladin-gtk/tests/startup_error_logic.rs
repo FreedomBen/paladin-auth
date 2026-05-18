@@ -468,6 +468,53 @@ fn startup_error_carries_kind_for_consumers() {
 }
 
 #[test]
+fn format_startup_error_icon_name_returns_dialog_error_symbolic() {
+    // The `StartupErrorComponent`'s `adw::StatusPage::set_icon_name`
+    // attribute is populated from this helper. The icon
+    // (`"dialog-error-symbolic"`) is the freedesktop-standard
+    // glyph for an error surface shipped by `adwaita-icon-theme`
+    // — resolving through the system icon theme so the wordless
+    // glyph matches every other GNOME app's error surface. The
+    // `-symbolic` suffix is required by the libadwaita HIG for
+    // `AdwStatusPage` icons so the glyph recolors with the theme.
+    // Pinning the icon name through a helper keeps the string in
+    // one place shared by the widget binding and the pure-logic
+    // tests.
+    //
+    // No TUI parity: the TUI is text-only and has no icon to
+    // mirror. Sibling of
+    // `paladin_gtk::unlock_dialog::format_unlock_dialog_icon_name`
+    // and
+    // `paladin_gtk::init_dialog::format_init_dialog_icon_name`
+    // on the dialog-status-icon side; together they pin every
+    // first-mount dialog's freedesktop glyph against a single
+    // source of truth.
+    use paladin_gtk::startup_error::format_startup_error_icon_name;
+
+    assert_eq!(
+        format_startup_error_icon_name(),
+        "dialog-error-symbolic",
+        "AdwStatusPage icon uses the freedesktop-standard error glyph",
+    );
+}
+
+#[test]
+fn format_startup_error_icon_name_ends_with_symbolic_suffix() {
+    // The libadwaita HIG requires `AdwStatusPage` icons to be
+    // symbolic so they recolor with the theme; the icon-name
+    // contract is to end with `-symbolic`. Pinning a suffix
+    // assertion alongside the full-string assertion guards
+    // against an accidental rename to a non-symbolic glyph.
+    use paladin_gtk::startup_error::format_startup_error_icon_name;
+
+    let icon = format_startup_error_icon_name();
+    assert!(
+        icon.ends_with("-symbolic"),
+        "AdwStatusPage icon name must end with `-symbolic` for HIG-conformant theming; got {icon:?}",
+    );
+}
+
+#[test]
 fn format_startup_error_title_returns_startup_error() {
     // The `StartupErrorComponent`'s `adw::StatusPage::set_title`
     // attribute is populated from this helper. The wording
