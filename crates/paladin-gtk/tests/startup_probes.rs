@@ -1349,6 +1349,67 @@ fn format_app_menu_passphrase_action_name_round_trips_with_group_and_target() {
 }
 
 #[test]
+fn format_app_menu_preferences_action_name_returns_preferences() {
+    // The `gio::SimpleAction::new("preferences", None)` registration
+    // on the `AppModel`'s `app` action group reads its bare name
+    // from this helper. The fully-qualified target spelled by
+    // `format_app_menu_preferences_action` is the
+    // `format_app_action_group_name` group prefix joined to this
+    // bare name via the `<group>.<action>` separator.
+    //
+    // Pure — returns a `'static str` without allocating. Sibling
+    // of `format_app_menu_preferences_action` on the fully-
+    // qualified target side and `format_app_menu_preferences_label`
+    // on the visible-label side; together they pin all three halves
+    // of the menu-entry contract against a single source of truth.
+    use paladin_gtk::app::model::format_app_menu_preferences_action_name;
+
+    assert_eq!(
+        format_app_menu_preferences_action_name(),
+        "preferences",
+        "primary menu Preferences entry registers the bare `preferences` SimpleAction on the application action group",
+    );
+}
+
+#[test]
+fn format_app_menu_preferences_action_name_has_no_separator_or_whitespace() {
+    use paladin_gtk::app::model::format_app_menu_preferences_action_name;
+
+    let action = format_app_menu_preferences_action_name();
+    assert!(
+        !action.contains('.'),
+        "bare action name must not embed the `<group>.<action>` separator; got {action:?}",
+    );
+    assert!(
+        !action.contains(' '),
+        "bare action name must not contain whitespace; got {action:?}",
+    );
+    assert!(
+        !action.is_empty(),
+        "bare action name must be non-empty; got {action:?}",
+    );
+}
+
+#[test]
+fn format_app_menu_preferences_action_name_round_trips_with_group_and_target() {
+    use paladin_gtk::app::model::{
+        format_app_action_group_name, format_app_menu_preferences_action,
+        format_app_menu_preferences_action_name,
+    };
+
+    let joined = format!(
+        "{}.{}",
+        format_app_action_group_name(),
+        format_app_menu_preferences_action_name(),
+    );
+    assert_eq!(
+        joined,
+        format_app_menu_preferences_action(),
+        "`<group>.<action>` join must reproduce the fully-qualified Preferences menu action target",
+    );
+}
+
+#[test]
 fn format_app_action_group_name_is_prefix_of_every_primary_menu_action() {
     // Cross-check: every `format_app_menu_*_action` target must
     // begin with `format_app_action_group_name() + "."`. This

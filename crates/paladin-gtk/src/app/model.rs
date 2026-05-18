@@ -1842,6 +1842,29 @@ pub fn format_app_menu_passphrase_action_name() -> &'static str {
     "passphrase"
 }
 
+/// Bare `GLib` action name the primary `gio::Menu`'s
+/// "Preferences" entry binds via
+/// [`format_app_menu_preferences_action`].
+///
+/// Returns the static action name `"preferences"` — the name
+/// passed to `gio::SimpleAction::new(..., None)` when the
+/// matching action is registered on the application's `app`
+/// action group. The fully-qualified `detailed_action_name`
+/// `"app.preferences"` spelled by
+/// [`format_app_menu_preferences_action`] is the
+/// [`format_app_action_group_name`] group prefix joined to this
+/// bare name via the `<group>.<action>` separator.
+///
+/// Pure — returns a `'static str` without allocating. Sibling
+/// of [`format_app_menu_preferences_action`] on the fully-
+/// qualified target side and [`format_app_menu_preferences_label`]
+/// on the visible-label side; together they pin all three halves
+/// of the menu-entry contract against a single source of truth.
+#[must_use]
+pub fn format_app_menu_preferences_action_name() -> &'static str {
+    "preferences"
+}
+
 /// Bare `GLib` action-group name the primary `gio::Menu` resolves
 /// every entry target against.
 ///
