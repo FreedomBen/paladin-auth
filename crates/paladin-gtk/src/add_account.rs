@@ -1675,6 +1675,27 @@ pub fn compose_manual_period_secs_visible(state: &AddDialogState) -> bool {
     matches!(state.manual_draft().kind, AccountKindInput::Totp)
 }
 
+/// State-driven projection of whether the manual sub-path's HOTP
+/// counter spinbutton row is visible.
+///
+/// Returns `true` while [`ManualDraftState::kind`] is
+/// [`AccountKindInput::Hotp`] and `false` otherwise (including the
+/// fresh-dialog default, which is TOTP per CLI / TUI `add` parity).
+/// Sibling of [`compose_manual_period_secs_visible`]: the two
+/// projections flip in lockstep so exactly one of the kind-specific
+/// rows is visible at any given moment, which the widget relies on
+/// to lay out the form without an empty gap or two rows competing
+/// for the same slot.
+///
+/// Lets the widget bind a single `#[watch]` over the projection to
+/// drive the counter row's `set_visible:` instead of pattern-
+/// matching on [`ManualDraftState::kind`] inline. Pure — borrows
+/// the state and returns a `bool` without allocating.
+#[must_use]
+pub fn compose_manual_counter_visible(state: &AddDialogState) -> bool {
+    matches!(state.manual_draft().kind, AccountKindInput::Hotp)
+}
+
 /// Apply an inbound [`AddAccountMsg`] and return the optional
 /// [`AddAccountOutput`] the widget layer should forward to
 /// `AppModel`.

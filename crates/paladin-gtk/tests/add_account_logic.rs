@@ -5526,3 +5526,121 @@ fn compose_manual_period_secs_visible_round_trips_back_to_totp() {
         "ManualKindChanged(Totp) re-reveals the period spinbutton row",
     );
 }
+
+#[test]
+fn compose_manual_counter_visible_default_state_is_false() {
+    // The manual sub-path defaults to `AccountKindInput::Totp` (CLI
+    // parity, see `ManualDraftState::default`), so a freshly-opened
+    // dialog must hide the HOTP counter spinbutton row — the widget
+    // binds a `#[watch]` over the projection to drive the row's
+    // `set_visible:` so the HOTP-specific row only renders when the
+    // user has selected HOTP. Sibling of
+    // `compose_manual_period_secs_visible_default_state_is_true` on
+    // the counter-row side.
+    use paladin_gtk::add_account::{compose_manual_counter_visible, AddDialogState};
+
+    let state = AddDialogState::new();
+
+    assert!(
+        !compose_manual_counter_visible(&state),
+        "fresh dialog defaults to TOTP, so the counter row is hidden",
+    );
+}
+
+#[test]
+fn compose_manual_counter_visible_after_kind_hotp_is_true() {
+    // Selecting HOTP from the kind dropdown drives the projection to
+    // `true` so the widget reveals the HOTP counter spinbutton row.
+    // The partner `compose_manual_period_secs_visible` projection
+    // flips to `false` in lockstep so the user only sees the kind-
+    // specific row that matches their dropdown selection.
+    use paladin_core::AccountKindInput;
+    use paladin_gtk::add_account::{
+        apply_msg, compose_manual_counter_visible, AddAccountMsg, AddDialogState,
+    };
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualKindChanged(AccountKindInput::Hotp),
+    );
+
+    assert!(
+        compose_manual_counter_visible(&state),
+        "ManualKindChanged(Hotp) reveals the HOTP counter spinbutton row",
+    );
+}
+
+#[test]
+fn compose_manual_counter_visible_round_trips_back_to_totp() {
+    // Toggling the kind dropdown back to TOTP after HOTP must drive
+    // the counter projection back to `false` — the row must not
+    // latch on the first transition, so the widget's
+    // `#[watch]`-driven row visibility stays bidirectional. Mirror
+    // of `compose_manual_period_secs_visible_round_trips_back_to_totp`
+    // on the counter-row side.
+    use paladin_core::AccountKindInput;
+    use paladin_gtk::add_account::{
+        apply_msg, compose_manual_counter_visible, AddAccountMsg, AddDialogState,
+    };
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualKindChanged(AccountKindInput::Hotp),
+    );
+    assert!(
+        compose_manual_counter_visible(&state),
+        "precondition: HOTP revealed the counter row",
+    );
+
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualKindChanged(AccountKindInput::Totp),
+    );
+
+    assert!(
+        !compose_manual_counter_visible(&state),
+        "ManualKindChanged(Totp) re-hides the counter spinbutton row",
+    );
+}
+
+#[test]
+fn compose_manual_period_and_counter_visibility_are_mutually_exclusive() {
+    // Exactly one of the two kind-specific rows is visible at any
+    // given moment: TOTP shows the period row and hides the counter
+    // row; HOTP shows the counter row and hides the period row. The
+    // widget relies on this invariant to lay out the form without an
+    // empty gap or two rows competing for the same slot. Pin both
+    // states explicitly so a future refactor of either projection
+    // cannot drift them out of lockstep.
+    use paladin_core::AccountKindInput;
+    use paladin_gtk::add_account::{
+        apply_msg, compose_manual_counter_visible, compose_manual_period_secs_visible,
+        AddAccountMsg, AddDialogState,
+    };
+
+    let mut state = AddDialogState::new();
+    assert!(
+        compose_manual_period_secs_visible(&state) ^ compose_manual_counter_visible(&state),
+        "fresh dialog (TOTP default): exactly one of the kind-specific rows is visible",
+    );
+
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualKindChanged(AccountKindInput::Hotp),
+    );
+    assert!(
+        compose_manual_period_secs_visible(&state) ^ compose_manual_counter_visible(&state),
+        "after HOTP: exactly one of the kind-specific rows is visible",
+    );
+
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualKindChanged(AccountKindInput::Totp),
+    );
+    assert!(
+        compose_manual_period_secs_visible(&state) ^ compose_manual_counter_visible(&state),
+        "after TOTP round-trip: exactly one of the kind-specific rows is visible",
+    );
+}
