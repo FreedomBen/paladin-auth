@@ -2610,6 +2610,29 @@ pub fn format_add_dialog_title() -> &'static str {
     "Add account"
 }
 
+/// Fixed `"Cancel"` label the widget hands to the Add account
+/// dialog's footer Cancel `gtk::Button::set_label`.
+///
+/// The label is the non-destructive affordance the user clicks to
+/// dismiss the dialog without committing a new account. Wording is
+/// the fixed GNOME-convention `"Cancel"` — surfaced through a
+/// helper so the string lives in one place shared by the widget
+/// binding and the pure-logic tests in `tests/add_account_logic.rs`.
+/// Distinct from [`format_duplicate_alert_cancel_label`] (the
+/// duplicate-collision `AdwAlertDialog`'s cancel response): the two
+/// buttons live on different surfaces and pinning each behind its
+/// own helper lets a future copy change land on one without
+/// silently moving the other.
+///
+/// Pure — returns a `'static str` without allocating. Sibling of
+/// [`format_add_dialog_title`] on the dialog-chrome side; together
+/// they cover the dialog's header label and its footer cancel
+/// button.
+#[must_use]
+pub fn format_add_dialog_cancel_label() -> &'static str {
+    "Cancel"
+}
+
 /// Apply an inbound [`AddAccountMsg`] and return the optional
 /// [`AddAccountOutput`] the widget layer should forward to
 /// `AppModel`.
@@ -3193,7 +3216,7 @@ impl SimpleComponent for AddAccountComponent {
 
                 #[name = "cancel_button"]
                 gtk::Button {
-                    set_label: "Cancel",
+                    set_label: format_add_dialog_cancel_label(),
                     connect_clicked[sender] => move |_| {
                         sender.input(AddAccountMsg::Cancel);
                     },

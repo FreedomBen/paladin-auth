@@ -8062,3 +8062,27 @@ fn format_add_dialog_title_matches_tui_wording() {
         "dialog header mirrors the TUI add view's \" Add account \" block title",
     );
 }
+
+#[test]
+fn format_add_dialog_cancel_label_returns_cancel() {
+    // The Add account dialog's footer Cancel `gtk::Button`'s
+    // `set_label` attribute is populated from this helper. The
+    // label wording is the fixed GNOME-convention `"Cancel"` —
+    // surfaced through this helper so the string lives in one
+    // place shared by the widget binding and the snapshot tests.
+    // Distinct from `format_duplicate_alert_cancel_label` (the
+    // duplicate-collision `AdwAlertDialog`'s cancel response),
+    // because the two buttons live on different surfaces and a
+    // future copy change might diverge between the dialog footer
+    // and the alert-dialog response. Sibling of
+    // `format_add_dialog_title` on the dialog-chrome side; together
+    // they cover the dialog's header label and its footer cancel
+    // button.
+    use paladin_gtk::add_account::format_add_dialog_cancel_label;
+
+    assert_eq!(
+        format_add_dialog_cancel_label(),
+        "Cancel",
+        "dialog cancel button label is the fixed GNOME-convention wording",
+    );
+}
