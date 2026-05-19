@@ -11291,3 +11291,78 @@ fn format_app_about_dialog_empty_credits_section_entries_do_not_contain_a_null_b
         }
     }
 }
+
+#[test]
+fn format_app_about_dialog_translator_credits_does_not_contain_a_carriage_return_byte() {
+    // Defense-in-depth mirror of the just-added
+    // `_debug_info_does_not_contain_a_carriage_return_byte`
+    // companion on the translator-credits side. The
+    // libadwaita translator-credits convention permits
+    // embedded `\n` line breaks between translator entries
+    // (the `_is_single_line_when_non_empty` companion only
+    // asserts the empty-string case, so it does not gate
+    // embedded newlines once a translation lands), so the
+    // helper is one of only three about-dialog helpers
+    // (alongside `format_app_about_dialog_debug_info` and
+    // `format_app_about_dialog_release_notes`) where
+    // embedded line breaks are legitimately expected. That
+    // makes `\r` (0x0D CARRIAGE RETURN) a distinct
+    // regression surface: it is NOT covered by
+    // `_has_no_surrounding_whitespace_when_non_empty` (`\r`
+    // mid-string is non-surrounding), it is NOT covered by
+    // any per-entry single-line check (the helper itself is
+    // explicitly multi-line per libadwaita convention), and
+    // it would route through `g_strdup` without truncation
+    // (since `\r` is not the null byte the `g_strdup`
+    // null-terminator triggers on).
+    //
+    // A regression that landed `"name1 <email1>\r\nname2 <email2>"`
+    // (CRLF line endings from a Windows-edited translation
+    // file, a `xgettext` export from a CRLF-converting tool,
+    // or a hand-edited helper using `\r\n` literals) would
+    // mis-render in multiple downstream surfaces: (1)
+    // libadwaita's credits-page parser splits the
+    // translator-credits string on `\n` (LF) per the
+    // documented convention, leaving a stray `\r` byte
+    // at the end of each parsed entry; the GLib `g_utf8_*`
+    // family treats `\r` as a stray control character so the
+    // entry renders with a visible "?" or empty box on some
+    // fontconfig setups; (2) any localization tooling that
+    // round-trips the translator-credits string back through
+    // `xgettext` would either silently dedupe the `\r\n`
+    // pair to `\n` (data loss) or preserve the CRLF and
+    // propagate the same rendering bug across every
+    // downstream consumer of the .po / .mo file; (3) screen
+    // readers that announce the credits-page contents read
+    // the `\r` as a literal control character, breaking the
+    // accessibility-tree announcement.
+    //
+    // Mirror of the existing
+    // `_debug_info_does_not_contain_a_carriage_return_byte`
+    // sibling on the debug-info side; together they pin the
+    // no-`\r` invariant across every about-dialog helper
+    // that legitimately ships embedded `\n` newlines,
+    // leaving only `format_app_about_dialog_release_notes`
+    // as a future candidate for the same gate (once that
+    // helper gains a non-empty Pango-markup body).
+    //
+    // Pinning the no-CR invariant directly here surfaces
+    // the regression with a message naming the offending
+    // byte at build time rather than as a downstream credits-
+    // page rendering bug, a stray `\r` byte in the .po
+    // round trip, or a screen-reader announcement break.
+    // Current helper returns the empty literal `""` (no
+    // `\r` byte), so this test passes today and serves as a
+    // forcing function so any future override of the helper
+    // — including the eventual landing of an actual
+    // translator-credits string — stays free of carriage
+    // returns even when embedded `\n` line breaks are
+    // intentionally present.
+    use paladin_gtk::app::model::format_app_about_dialog_translator_credits;
+
+    let translator_credits = format_app_about_dialog_translator_credits();
+    assert!(
+        !translator_credits.contains('\r'),
+        "AdwAboutDialog translator_credits must not contain the `\\r` carriage-return byte (0x0D); the libadwaita translator-credits convention splits on `\\n` (LF) only, so a stray `\\r` byte would leave each parsed entry trailing a control byte that fontconfig setups render as a visible `?` or empty box, would survive `xgettext` round trips as either silent data loss or CRLF preservation, and would break screen-reader credits-page announcements; got {translator_credits:?}",
+    );
+}
