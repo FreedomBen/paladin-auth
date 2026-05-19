@@ -6349,6 +6349,52 @@ fn format_app_window_accelerator_bindings_accelerators_contain_no_whitespace() {
 }
 
 #[test]
+fn format_app_about_dialog_url_helpers_contain_no_embedded_whitespace() {
+    // Cross-helper defense-in-depth sibling looping over the
+    // three `AdwAboutDialog` footer URL helpers
+    // (`format_app_about_dialog_website`,
+    // `format_app_about_dialog_issue_url`,
+    // `format_app_about_dialog_support_url`) and pinning each
+    // value as free of *any* `char::is_whitespace` byte — not
+    // just the bare ASCII space byte the per-URL
+    // `_is_non_empty_https_url[*_distinct*]` companions already
+    // check.
+    //
+    // The existing per-URL companions assert `!url.contains(' ')`
+    // but leave embedded `\n`, `\t`, `\r`, and other Unicode
+    // whitespace characters ungated. A regression like
+    // `"https://paladin.tamx.org\n"` (trailing newline), an
+    // accidental `"\thttps://github.com/.../issues"` (leading
+    // tab), or `"https://github.com/.../discussions "`
+    // (trailing space — caught by the existing check but
+    // restated here so the rule is documented in one place)
+    // would slip past the per-URL companions while still being
+    // an invalid URL spelling that Adwaita would render as a
+    // broken footer link.
+    //
+    // Sibling of `format_app_about_dialog_issue_url_and_support_url_share_cargo_pkg_repository_prefix`
+    // (cross-URL prefix consistency) and the per-URL
+    // `_is_non_empty_https_url[*_distinct*]` companions; together
+    // they pin the full URL-shape contract across all three
+    // footer link surfaces against a single source of truth.
+    use paladin_gtk::app::model::{
+        format_app_about_dialog_issue_url, format_app_about_dialog_support_url,
+        format_app_about_dialog_website,
+    };
+
+    for (label, url) in [
+        ("website", format_app_about_dialog_website()),
+        ("issue_url", format_app_about_dialog_issue_url()),
+        ("support_url", format_app_about_dialog_support_url()),
+    ] {
+        assert!(
+            !url.chars().any(char::is_whitespace),
+            "AdwAboutDialog {label} must contain no whitespace so Adwaita renders a valid footer link rather than a broken URL with an embedded `\\n`, `\\t`, or stray space; got {url:?}",
+        );
+    }
+}
+
+#[test]
 fn format_app_about_dialog_copyright_is_a_single_line_without_embedded_newlines() {
     // Defense-in-depth sibling of
     // `format_app_about_dialog_copyright_returns_paladin_copyright_line`
