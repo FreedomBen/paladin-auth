@@ -2155,6 +2155,47 @@ fn apply_app_add_action_sensitivity_updates_existing_action_for_a_new_state() {
 }
 
 #[test]
+fn format_app_window_action_names_lists_the_six_primary_menu_entries_then_add() {
+    // Per §"libadwaita usage" and §"Component tree": the
+    // application's `app` action group bundles the six
+    // primary-menu bare action names (Import, Export,
+    // Passphrase, Preferences, About, Quit) with the
+    // header-bar `+` button's bare Add action name. This
+    // helper returns all seven names in a fixed-size array so
+    // the widget binding can iterate without allocating a
+    // `Vec` per `init` call. The pinned order keeps the menu
+    // entries first (matching the §"libadwaita usage" sequence)
+    // and appends Add at the end so callers walking the array
+    // can stop at index 5 for menu-only loops and the full
+    // length for action-group loops.
+    use paladin_gtk::app::model::{
+        format_app_add_button_action_name, format_app_primary_menu_action_names,
+        format_app_window_action_names,
+    };
+
+    let combined = format_app_window_action_names();
+    let menu = format_app_primary_menu_action_names();
+    let add = format_app_add_button_action_name();
+
+    assert_eq!(
+        combined.len(),
+        menu.len() + 1,
+        "format_app_window_action_names must return exactly one entry per primary menu action plus the Add action",
+    );
+    for (idx, name) in menu.iter().enumerate() {
+        assert_eq!(
+            combined[idx], *name,
+            "format_app_window_action_names[{idx}] must match format_app_primary_menu_action_names[{idx}] in pinned order",
+        );
+    }
+    assert_eq!(
+        combined[menu.len()],
+        add,
+        "format_app_window_action_names must end with format_app_add_button_action_name",
+    );
+}
+
+#[test]
 fn dispatch_app_window_action_routes_add_to_open_add_dialog() {
     // Per §"libadwaita usage" and §"Component tree": the
     // header-bar `+` button's `"app.add"` activation

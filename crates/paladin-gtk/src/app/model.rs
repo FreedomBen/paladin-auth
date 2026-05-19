@@ -591,9 +591,7 @@ impl SimpleComponent for AppModel {
         // and the header-bar `+` button's `"app.add"` target
         // all resolve through one `gio::SimpleActionGroup`.
         let action_group = build_app_window_action_group(&state);
-        let mut action_names: Vec<&'static str> = format_app_primary_menu_action_names().to_vec();
-        action_names.push(format_app_add_button_action_name());
-        for name in action_names {
+        for name in format_app_window_action_names() {
             if let Some(simple) = action_group
                 .lookup_action(name)
                 .and_then(|a| a.downcast::<gtk::gio::SimpleAction>().ok())
@@ -2569,6 +2567,42 @@ pub fn wire_app_window_action_group(
     window.insert_action_group(format_app_action_group_name(), Some(group));
 }
 
+/// Return every bare action name registered on the
+/// application's `app` action group built by
+/// [`build_app_window_action_group`].
+///
+/// Bundles the six primary-menu bare action names returned by
+/// [`format_app_primary_menu_action_names`] (Import, Export,
+/// Passphrase, Preferences, About, Quit) with the header-bar
+/// `+` button's bare action name returned by
+/// [`format_app_add_button_action_name`] into a fixed-size
+/// array so the widget binding can iterate every action on
+/// the bundled group without allocating a `Vec` per `init`
+/// call.
+///
+/// The pinned order keeps the menu entries first (matching
+/// the §"libadwaita usage" sequence) and appends Add at the
+/// end so callers that only care about the menu can take
+/// `&names[..6]` while the full array covers the entire
+/// action surface for `connect_activate` wiring and runtime
+/// sensitivity updates.
+///
+/// Pure — returns an owned array of `&'static str` without
+/// allocating.
+#[must_use]
+pub fn format_app_window_action_names() -> [&'static str; 7] {
+    let menu = format_app_primary_menu_action_names();
+    [
+        menu[0],
+        menu[1],
+        menu[2],
+        menu[3],
+        menu[4],
+        menu[5],
+        format_app_add_button_action_name(),
+    ]
+}
+
 /// Map a bare application action name to the matching
 /// [`AppMsg`] dispatch variant.
 ///
@@ -2579,8 +2613,9 @@ pub fn wire_app_window_action_group(
 /// [`AppMsg`] variants so the widget binding's
 /// `connect_activate` handlers share one source of truth.
 ///
-/// The mapping today covers the always-enabled entries (About,
-/// Quit); the mutating entries (Import, Export, Passphrase,
+/// The mapping today covers the header-bar `+` button's Add
+/// action and the always-enabled menu entries (About, Quit);
+/// the mutating menu entries (Import, Export, Passphrase,
 /// Preferences) land in follow-up commits alongside their
 /// widget-bearing dialog components. Returns `None` for any
 /// unknown action name so a stray activation from a future
