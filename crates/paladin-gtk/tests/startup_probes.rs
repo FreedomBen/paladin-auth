@@ -5107,6 +5107,42 @@ fn app_msg_carries_quit_variant() {
 }
 
 #[test]
+fn format_app_window_title_is_non_empty_single_line_without_state_suffix() {
+    // Defense-in-depth companion to
+    // `format_app_window_title_returns_paladin`: the exact-value
+    // assertion catches a wholesale rename, but a sibling
+    // defensive test catches the more nuanced regression where
+    // someone appends a state-leaking suffix like
+    // `" — Locked"` / `" — Unlocked"` to the
+    // `AdwApplicationWindow` title. The
+    // `format_app_window_title` docstring explicitly calls this
+    // out: "no state-specific suffixes … which would otherwise
+    // leak the live vault state into the window-list across
+    // application switches". A title that embedded a newline
+    // would also break the desktop's window-list rendering, so
+    // the single-line invariant is pinned here too. Mirrors the
+    // `_is_non_empty_single_line_*` sibling tests on the
+    // `format_app_about_dialog_*` helpers.
+    use paladin_gtk::app::model::format_app_window_title;
+
+    let title = format_app_window_title();
+    assert!(
+        !title.is_empty(),
+        "ApplicationWindow title must be non-empty; got {title:?}",
+    );
+    assert!(
+        !title.contains('\n'),
+        "ApplicationWindow title must be a single line so the desktop's window-list renders one entry per window; got {title:?}",
+    );
+    for forbidden in ["Locked", "Unlocked", "Missing", "UnlockedBusy", "StartupError"] {
+        assert!(
+            !title.contains(forbidden),
+            "ApplicationWindow title must not embed vault-state name {forbidden:?}; the per-state UI surfaces inside the window already convey the state, and leaking it into the window-list would advertise the live vault status across application switches; got {title:?}",
+        );
+    }
+}
+
+#[test]
 fn format_app_about_dialog_program_name_matches_format_app_window_title() {
     // Cross-consistency: `format_app_window_title` populates the
     // `AdwApplicationWindow::set_title` slot (the window-list
