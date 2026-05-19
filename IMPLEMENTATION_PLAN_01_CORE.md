@@ -1383,7 +1383,7 @@ and committed in any order.
   the existing `_out_of_range_*` tests don't cover (those only
   exercise in-range-shape values).
 
-- [ ] **`proptest` depth bump + OTP idempotency property.** Update
+- [x] **`proptest` depth bump + OTP idempotency property.** Update
   the two integration `proptest!` blocks in
   `tests/proptest_uri_base32.rs` from
   `ProptestConfig::with_cases(64)` to

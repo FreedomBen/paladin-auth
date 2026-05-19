@@ -738,7 +738,7 @@ mod proptests {
     }
 
     proptest! {
-        #![proptest_config(ProptestConfig::with_cases(64))]
+        #![proptest_config(ProptestConfig::with_cases(256))]
 
         /// `bytes → base32 encode → validate_manual → Secret` recovers the
         /// original bytes exactly. Length spans the §4.1 inclusive range
