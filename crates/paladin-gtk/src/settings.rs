@@ -490,6 +490,39 @@ pub fn format_settings_dialog_clipboard_clear_secs_row_title() -> &'static str {
     "Clear delay (seconds)"
 }
 
+/// Fixed `(lower, upper, step_increment)` tuple the widget hands
+/// to `gtk::Adjustment::new` for the auto-lock seconds
+/// `AdwSpinRow` per `IMPLEMENTATION_PLAN_04_GTK.md`
+/// §"libadwaita usage" > "Preferences" and §"Component tree" >
+/// `SettingsComponent`.
+///
+/// Returns
+/// `(f64::from(paladin_core::AUTO_LOCK_SECS_MIN), f64::from(paladin_core::AUTO_LOCK_SECS_MAX), 1.0)`
+/// — the §4.7 auto-lock bounds (the same range
+/// [`clamp_auto_lock_secs`] and
+/// [`SettingsState::stage_auto_lock_secs`] enforce) plus a
+/// `1.0` step because the seconds domain is integer-only.
+/// Pinning the adjustment through this helper keeps the spinner
+/// bounds in one place shared by the widget binding and the
+/// pure-logic tests in `tests/settings_logic.rs`; the widget
+/// layer never duplicates the integer literals.
+///
+/// Pure — returns a `(f64, f64, f64)` tuple without allocating.
+/// Sibling of
+/// [`crate::add_account::format_manual_period_adjustment`],
+/// [`crate::add_account::format_manual_counter_adjustment`], and
+/// [`crate::add_account::format_manual_digits_adjustment`] on
+/// the spinner-adjustment side; together they cover every
+/// `AdwSpinRow` the GTK front end mounts.
+#[must_use]
+pub fn format_settings_dialog_auto_lock_secs_adjustment() -> (f64, f64, f64) {
+    (
+        f64::from(paladin_core::AUTO_LOCK_SECS_MIN),
+        f64::from(paladin_core::AUTO_LOCK_SECS_MAX),
+        1.0,
+    )
+}
+
 /// Buffered spinner pending the 500 ms debounce.
 #[derive(Debug, Clone, Copy)]
 enum PendingSpinner {
