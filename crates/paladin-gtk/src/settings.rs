@@ -646,6 +646,29 @@ pub fn compose_settings_dialog_clipboard_clear_enabled_active(state: &SettingsSt
     state.committed().clipboard_clear_enabled()
 }
 
+/// State-driven projection of the auto-lock seconds
+/// `AdwSpinRow`'s sensitivity, surfaced as the `bool` that
+/// `AdwSpinRow::set_sensitive` expects, per
+/// `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+/// `SettingsComponent`.
+///
+/// Returns `state.committed().auto_lock_enabled()` — the seconds
+/// spinner has no effect when the toggle is off, so disabling
+/// the row follows the GNOME HIG ("disable controls whose effect
+/// is conditional on a sibling") and visually signals the
+/// dependency. Threading the bool through this composer keeps
+/// the widget binding minimal: the widget's
+/// `#[watch] set_sensitive:` reads a single `bool` instead of
+/// reaching into [`CommittedSettings`] inline.
+///
+/// Pure — borrows the state and returns a `bool` without allocating.
+/// Sibling of [`compose_settings_dialog_auto_lock_enabled_active`]
+/// (the gating toggle) on the auto-lock side.
+#[must_use]
+pub fn compose_settings_dialog_auto_lock_secs_sensitive(state: &SettingsState) -> bool {
+    state.committed().auto_lock_enabled()
+}
+
 /// Buffered spinner pending the 500 ms debounce.
 #[derive(Debug, Clone, Copy)]
 enum PendingSpinner {

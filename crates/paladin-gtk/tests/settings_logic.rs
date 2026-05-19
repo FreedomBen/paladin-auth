@@ -674,6 +674,41 @@ fn format_settings_dialog_clipboard_clear_group_title_returns_clipboard() {
 }
 
 #[test]
+fn compose_settings_dialog_auto_lock_secs_sensitive_follows_auto_lock_enabled() {
+    // The auto-lock seconds `AdwSpinRow` binds its
+    // `set_sensitive:` attribute to this composer per
+    // `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+    // `SettingsComponent`. When the auto-lock toggle is off, the
+    // seconds spinner has no effect — disabling it follows the
+    // GNOME HIG ("disable controls whose effect is conditional on
+    // a sibling") and visually signals the dependency. Threading
+    // the bool through this composer keeps the widget binding
+    // minimal: the widget's `#[watch] set_sensitive:` reads a
+    // single `bool` instead of reaching into [`CommittedSettings`]
+    // inline.
+    //
+    // Sibling of `compose_settings_dialog_auto_lock_enabled_active`
+    // (the gating toggle) and of the clipboard-clear sensitivity
+    // composer (added in a follow-up commit) on the spinner-row
+    // sensitivity side.
+    use paladin_gtk::settings::{
+        compose_settings_dialog_auto_lock_secs_sensitive, CommittedSettings, SettingsState,
+    };
+
+    let state_on = SettingsState::new(CommittedSettings::new(true, 600, false, 30));
+    assert!(
+        compose_settings_dialog_auto_lock_secs_sensitive(&state_on),
+        "spinner row is sensitive when the toggle is on",
+    );
+
+    let state_off = SettingsState::new(CommittedSettings::new(false, 600, false, 30));
+    assert!(
+        !compose_settings_dialog_auto_lock_secs_sensitive(&state_off),
+        "spinner row is insensitive when the toggle is off",
+    );
+}
+
+#[test]
 fn compose_settings_dialog_clipboard_clear_enabled_active_mirrors_committed_clipboard_clear_enabled(
 ) {
     // The clipboard-clear `AdwSwitchRow` binds its `set_active:`
