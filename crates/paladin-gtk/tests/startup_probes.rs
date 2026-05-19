@@ -23228,3 +23228,106 @@ fn format_app_about_dialog_translator_credits_does_not_contain_an_enquiry_byte()
         "AdwAboutDialog translator_credits must not contain the `\\x05` enquiry byte (0x05); the libadwaita translator-credits convention splits on `\\n` (LF) only and leaves embedded `\\x05` bytes inside each parsed entry untouched, `\\x05` is NOT classified as whitespace under any permissive whitespace mode (strictly as dangerous as acknowledge, backspace, and bell, neither caught by `char::is_whitespace()`) so Pango renders it as a literal control glyph; a stray `\\x05` would render as a hollow box or tofu-like placeholder in the credits-page attribution column, would survive `xgettext` round trips and propagate into every consumer of the .po / .mo file, would confuse serial-protocol-bridging tooling that treats `\\x05` as an ENQ-frame inquiry when the po-file is dumped through a serial-bridged TTY (eliciting an unsolicited ACK response from the receiving end), and would break screen-reader announcements at every attribution-row column boundary; got {translator_credits:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_program_name_does_not_contain_an_enquiry_byte() {
+    // Defense-in-depth per-byte sibling extending the program-
+    // name byte coverage past the just-completed `{null /
+    // horizontal-tab / carriage-return / vertical-tab / form-
+    // feed / backspace / line-feed / bell / acknowledge}`
+    // nonuple to the enquiry byte `\x05` (0x05), continuing the
+    // non-whitespace-classified C0 control-byte cycle past ACK
+    // (0x06) for this helper. Like ACK and BEL, ENQ is NOT
+    // matched by `char::is_whitespace()` (Unicode treats ENQ
+    // as a control byte, not whitespace), so the existing
+    // `_program_name_has_no_embedded_whitespace` companion
+    // does NOT catch `\x05` — making enquiry strictly as
+    // dangerous as acknowledge, backspace, and bell for this
+    // helper, since the transitive protection collapses
+    // entirely rather than being merely brittle.
+    //
+    // None of the existing companions name the `\x05` byte
+    // directly on this helper:
+    //   - `_is_ascii_only` pins each byte as ASCII — `\x05` is
+    //     ASCII so it slips past;
+    //   - `_program_name_has_no_embedded_whitespace` uses
+    //     `char::is_whitespace()`, which returns *false* for
+    //     U+0005 ENQ — strictly weaker coverage than the form-
+    //     feed case;
+    //   - `_is_non_empty_and_not_app_id` only checks non-empty
+    //     + distinct-from-app-id;
+    //   - `_matches_format_app_window_title` only enforces
+    //     equality with the window title;
+    //   - `_is_segment_of_application_icon_name` only checks
+    //     segment containment;
+    //   - `_does_not_end_with_a_period` only constrains the
+    //     suffix;
+    //   - `_does_not_contain_a_null_byte` /
+    //     `_does_not_contain_a_horizontal_tab_byte` /
+    //     `_does_not_contain_a_carriage_return_byte` /
+    //     `_does_not_contain_a_vertical_tab_byte` /
+    //     `_does_not_contain_a_form_feed_byte` /
+    //     `_does_not_contain_a_backspace_byte` /
+    //     `_does_not_contain_a_line_feed_byte` /
+    //     `_does_not_contain_a_bell_byte` /
+    //     `_does_not_contain_an_acknowledge_byte` each name a
+    //     different byte specifically.
+    //
+    // A regression that landed `"Pala\x05din"` (enquiry byte
+    // lifted from a `script(1)` typescript capturing raw `\x05`
+    // ENQ-frame bytes from a CI build that bridged a serial
+    // console mid-token, a `concat!(_, "\x05", _)` form, or a
+    // hand-edited helper override that pasted from a terminal
+    // session interfacing with a protocol bridge preserving
+    // ENQ framing bytes) would mis-render in three downstream
+    // surfaces: (1) the GLib-backed
+    // `AdwAboutDialog::set_application_name` setter routes the
+    // value into Pango for inline rendering as the bold
+    // program-name row at the dialog header — Pango's default
+    // rendering of a bare `\x05` byte is implementation-
+    // defined and typically renders as a literal control glyph
+    // (a hollow box or tofu-like placeholder), breaking the
+    // tidy bold-header layout; (2) the matching
+    // `gtk::Window::set_title` setter (the program name is
+    // mirrored to the window title per
+    // `_matches_format_app_window_title`) renders the `\x05`
+    // in the window manager's taskbar / dock display label,
+    // surfacing the control byte to every shell that lists
+    // open windows — and a serial-bridged TTY-rendered
+    // `wmctrl -l` or `swaymsg -t get_tree` dump (CI logs over
+    // a serial console, an out-of-band debugging session) may
+    // have the `\x05` byte intercepted by the receiving end as
+    // an ENQ-frame indicator and elicit an unsolicited ACK
+    // response from the receiving end, confusing protocol-
+    // bridging tooling that treats ENQ as an "are you there?"
+    // inquiry; (3) the GTK accessibility tree's
+    // `accessible-name` property routes through the same Pango
+    // layer, breaking screen-reader announcements of the
+    // application name at the byte boundary.
+    //
+    // Pinning the no-`\x05` invariant directly on this helper
+    // surfaces the regression with a message naming the
+    // offending byte at build time rather than via a future
+    // whitespace-relaxation refactor (which would not have
+    // protected `\x05` anyway), a window-list serial-protocol
+    // ENQ-frame inquiry collision, or a screen-reader
+    // announcement break. Current helper returns the literal
+    // `"Paladin"` (no `\x05` byte), so this test passes today
+    // and serves as a forcing function so any future override
+    // of the helper — including the eventual landing of a
+    // localized multi-word program name — stays free of
+    // enquiry bytes. Continues the non-whitespace-classified
+    // C0 control-byte cycle past the just-completed `{null /
+    // horizontal-tab / carriage-return / vertical-tab / form-
+    // feed / backspace / line-feed / bell / acknowledge}`
+    // nonuple so the helper's byte-composition contract pins
+    // each forbidden control byte against a single source of
+    // truth.
+    use paladin_gtk::app::model::format_app_about_dialog_program_name;
+
+    let program_name = format_app_about_dialog_program_name();
+    assert!(
+        !program_name.contains('\x05'),
+        "AdwAboutDialog program_name must not contain the `\\x05` enquiry byte (0x05); like ACK and BEL, ENQ is NOT matched by `char::is_whitespace()` (Unicode returns false for U+0005 ENQ), so `_has_no_embedded_whitespace` does NOT catch `\\x05` — strictly as dangerous as acknowledge, backspace, and bell here, neither caught by the whitespace companion; a stray `\\x05` slips past `_is_ascii_only` / `_is_non_empty_and_not_app_id` / `_matches_format_app_window_title` / `_is_segment_of_application_icon_name` / `_does_not_end_with_a_period` and the prior per-byte siblings, would render as a literal control glyph in the bold dialog-header program-name row, surface in the window manager's taskbar / dock display label via `_matches_format_app_window_title`, confuse serial-protocol-bridging tooling that treats `\\x05` as an ENQ-frame inquiry on `wmctrl -l` / `swaymsg -t get_tree` window-list dumps through a serial-bridged TTY (eliciting an unsolicited ACK response from the receiving end), and break screen-reader application-name announcements at the byte boundary; got {program_name:?}",
+    );
+}
