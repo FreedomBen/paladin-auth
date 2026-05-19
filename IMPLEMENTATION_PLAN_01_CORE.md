@@ -1362,7 +1362,7 @@ and committed in any order.
   hidden state (e.g. a `last_patched_at` timestamp) that breaks
   bincode determinism downstream.
 
-- [ ] **`parse_setting_patch` malformed-value rejection matrix.**
+- [x] **`parse_setting_patch` malformed-value rejection matrix.**
   Add `parse_setting_patch_rejects_type_mismatched_values` to
   `tests/settings_grammar.rs`. For each numeric key
   (`auto_lock.timeout_secs`, `clipboard.clear_secs`) call

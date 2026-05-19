@@ -261,6 +261,43 @@ fn apply_setting_patch_matches_direct_setters_for_clipboard_clear_secs() {
 }
 
 #[test]
+fn parse_setting_patch_rejects_type_mismatched_values() {
+    // §5 malformed-value contract for the dotted-key parser. Distinct
+    // from the existing `_out_of_range_*` tests, which only exercise
+    // in-range-shape numeric values that fall outside the §5 inclusive
+    // bounds. This pins the current single-discriminating-reason shape
+    // (`expected_u32` / `expected_bool`) that the parser collapses
+    // every type-shape mismatch into.
+    for key in ["auto_lock.timeout_secs", "clipboard.clear_secs"] {
+        for value in ["", "abc", "300x", "-1", "30.0", "9999999999999999999999"] {
+            let err = parse_setting_patch(key, value)
+                .expect_err(&format!("expected reject {key}={value:?}"));
+            assert_eq!(err.kind(), ErrorKind::ValidationError);
+            let s = format!("{err}");
+            assert!(s.contains(key), "want field {key:?} in {s}");
+            assert!(
+                s.contains("expected_u32"),
+                "want reason 'expected_u32' for {key}={value:?}, got {s}",
+            );
+        }
+    }
+
+    for key in ["auto_lock.enabled", "clipboard.clear_enabled"] {
+        for value in ["", "True", "TRUE", "yes", "1", "false ", "0"] {
+            let err = parse_setting_patch(key, value)
+                .expect_err(&format!("expected reject {key}={value:?}"));
+            assert_eq!(err.kind(), ErrorKind::ValidationError);
+            let s = format!("{err}");
+            assert!(s.contains(key), "want field {key:?} in {s}");
+            assert!(
+                s.contains("expected_bool"),
+                "want reason 'expected_bool' for {key}={value:?}, got {s}",
+            );
+        }
+    }
+}
+
+#[test]
 fn apply_setting_patch_repeat_same_value_writes_byte_identical_payload() {
     // §5 "same input → same output" determinism for the settings
     // setters. Plaintext vault so the on-disk bytes compare directly
