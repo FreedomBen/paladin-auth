@@ -8829,3 +8829,76 @@ fn format_app_about_dialog_url_helpers_do_not_end_with_a_trailing_slash() {
         );
     }
 }
+
+#[test]
+fn format_app_primary_menu_entries_labels_start_with_an_uppercase_letter() {
+    // Cross-entry defense-in-depth sibling of the per-entry
+    // `format_app_menu_X_label_returns_X` exact-value pins
+    // (`_returns_import_with_ellipsis`, `_returns_export_with_ellipsis`,
+    // `_returns_passphrase_with_ellipsis`,
+    // `_returns_preferences_without_ellipsis`,
+    // `_returns_about_paladin`, `_returns_quit`), the per-entry
+    // `_ends_with_ellipsis` / `_does_not_carry_ellipsis` HIG
+    // suffix invariants, the cross-entry
+    // `_labels_are_distinct` pairwise-distinctness pin, and the
+    // cross-entry
+    // `_labels_are_single_line_without_surrounding_whitespace`
+    // shape pin. Those companions catch the wrong-value /
+    // wrong-suffix / collided / multi-line / surrounding-
+    // whitespace regressions but leave the *leading-character
+    // case* ungated.
+    //
+    // The GNOME Human Interface Guidelines (HIG) §"Menu items"
+    // pin menu-entry labels as "header-style capitalization"
+    // (title case in American English, sentence case in British
+    // English; both conventions agree that the first letter of
+    // the first word is uppercase). A regression that landed a
+    // lowercase-leading label — e.g. `"import…"` (typo from a
+    // sentence-case shadow refactor) or `" import…"` (which
+    // would also fail the surrounding-whitespace companion but
+    // restates the rule here for the case where someone fixed
+    // the leading-space regression but left the lowercase
+    // letter) — would slip past the existing
+    // `_labels_are_distinct` companion (`"import…"` is still
+    // distinct from the other five labels), the
+    // `_labels_are_single_line_without_surrounding_whitespace`
+    // companion (no embedded newlines, no surrounding spaces),
+    // and the `_ends_with_ellipsis` companion (the trailing `…`
+    // glyph is preserved). The libadwaita `gio::Menu::item_attribute_value(..., "label", ...)`
+    // slot consumes the label verbatim and renders it in the
+    // header-bar `gtk::MenuButton` popover, so a lowercase-leading
+    // label would render as a visually-inconsistent entry against
+    // its title-cased neighbours in the same popover (and against
+    // the GNOME stack's `gtk::MenuButton` default labels like
+    // "Preferences", "About …", "Quit" elsewhere in the same
+    // session).
+    //
+    // The assertion walks every (label, action) pair returned
+    // by `format_app_primary_menu_entries` and pins the first
+    // character of each label as an ASCII uppercase letter. The
+    // current six labels — `"Import\u{2026}"`, `"Export\u{2026}"`,
+    // `"Passphrase\u{2026}"`, `"Preferences"`, `"About Paladin"`,
+    // `"Quit"` — all start with an uppercase ASCII letter so
+    // this test passes today and serves as a forcing function
+    // so any future menu-label refactor stays aligned with the
+    // GNOME HIG header-style capitalization convention. Mirror
+    // of the `_labels_are_single_line_without_surrounding_whitespace`
+    // and `_labels_are_distinct` cross-entry siblings; together
+    // they pin the leading-character case, the single-line
+    // shape, and the pairwise distinctness of every primary
+    // menu entry label against a single source of truth.
+    use paladin_gtk::app::model::format_app_primary_menu_entries;
+
+    for (label, action) in format_app_primary_menu_entries() {
+        let first = label.chars().next().unwrap_or_else(|| {
+            panic!(
+                "primary menu entry label for action target {action:?} must be non-empty (the `_labels_are_single_line_without_surrounding_whitespace` companion already pins this; restated here so the upper-case assertion has a non-empty char to inspect); got {label:?}"
+            )
+        });
+        assert!(
+            first.is_ascii_uppercase(),
+            "primary menu entry label for action target {action:?} must start with an uppercase ASCII letter to match the GNOME HIG §\"Menu items\" header-style capitalization convention (a lowercase-leading label like `\"import…\"` would render as a visually-inconsistent entry against its title-cased neighbours in the same `gtk::MenuButton` popover and against the GNOME stack's default `gtk::MenuButton` labels); got first character {first:?} (U+{:04X}) in label {label:?}",
+            first as u32,
+        );
+    }
+}
