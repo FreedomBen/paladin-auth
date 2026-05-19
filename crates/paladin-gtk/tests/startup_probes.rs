@@ -14541,3 +14541,90 @@ fn format_app_about_dialog_empty_credits_section_entries_do_not_contain_a_vertic
         }
     }
 }
+
+#[test]
+fn format_app_about_dialog_release_notes_version_does_not_contain_a_vertical_tab_byte() {
+    // Defense-in-depth per-byte sibling extending the
+    // release_notes_version byte-cleanliness contract past the
+    // just-completed `{null / horizontal-tab / carriage-return}`
+    // triplet to the next C0 control byte. The vertical-tab byte
+    // `\x0B` (0x0B) sits one step above HT (0x09) and one step
+    // below CR (0x0D) in the ASCII C0 block; like its siblings
+    // it is a non-printable control byte with no legitimate use
+    // inside a semver-shaped version string.
+    //
+    // The two existing `_matches_about_dialog_version` and
+    // `_matches_cargo_pkg_version` cross-source pins transitively
+    // guarantee `release_notes_version` shares its bytes with
+    // the `version` helper (which in turn equals
+    // `CARGO_PKG_VERSION`). The `version` helper is byte-pinned
+    // by `_version_has_no_embedded_whitespace` (a
+    // `char::is_whitespace()` check that catches `\x0B` under
+    // Rust's Unicode definition, since U+000B VT is whitespace),
+    // so a `\x0B` byte in the active `release_notes_version`
+    // value is currently protected *transitively* — through
+    // equality with `version`, which is itself directly pinned
+    // against embedded whitespace.
+    //
+    // But the transitive protection is brittle: a future refactor
+    // that decoupled the two helpers (a separate override
+    // constant for the "What's New" scope, a workspace-vendoring
+    // split that lifted `release_notes_version` out of the
+    // equality chain, or a CHANGELOG.md-derived release-notes
+    // version that intentionally lagged the binary version on a
+    // hotfix cut) would silently drop the `\x0B` guard the
+    // moment the `_matches_*` companions started skipping cases.
+    // The `_does_not_contain_a_null_byte` /
+    // `_does_not_contain_a_horizontal_tab_byte` /
+    // `_does_not_contain_a_carriage_return_byte` siblings each
+    // name a different byte specifically. None of the existing
+    // companions name the `\x0B` byte directly on this helper.
+    //
+    // A regression that landed `"0.0.1\x0B"` or
+    // `"0\x0B.0\x0B.1"` (a vertical-tab byte lifted from a
+    // legacy CHANGELOG file authored on a line-printer terminal
+    // that used `\x0B` as a column separator, a `concat!(_,
+    // "\x0B", _)` form, or a hand-edited helper override that
+    // lifted the version string from an EBCDIC-to-ASCII
+    // translation preserving the original VT byte) would mis-
+    // render in multiple downstream surfaces, identically to the
+    // analysis on the `version` helper: (1) the GLib-backed
+    // `AdwAboutDialog::set_release_notes_version` setter routes
+    // the value into Pango for inline rendering as the "What's
+    // New in v<release_notes_version>" header — Pango's default
+    // rendering of a bare `\x0B` byte is implementation-defined
+    // and typically renders as a literal control glyph (a hollow
+    // box or tofu-like placeholder), breaking the tidy section-
+    // header layout; (2) the value scopes the "What's New" body
+    // region inside the dialog — a mismatched / mis-rendered
+    // scope key could prevent the body from rendering at all on
+    // libadwaita versions that strip whitespace when computing
+    // the body-region lookup key; (3) screen readers that
+    // announce the "What's New" section header read the `\x0B`
+    // as a literal control character, breaking the section-
+    // header accessibility-tree announcement at the byte
+    // boundary.
+    //
+    // Pinning the no-`\x0B` invariant directly on this helper
+    // surfaces the regression with a message naming the
+    // offending byte at build time rather than via a future
+    // decoupling that silently dropped the transitive `version`
+    // guard. Current helper returns the value sourced from
+    // `CARGO_PKG_VERSION` (no `\x0B` byte), so this test passes
+    // today and serves as a forcing function so any future
+    // decoupling override of the helper — including the
+    // eventual landing of a separately-scoped release-notes
+    // version derived from CHANGELOG.md headings — stays free of
+    // vertical-tab bytes. Continues the release-notes-version C0
+    // control-byte cycle past the just-completed `{null /
+    // horizontal-tab / carriage-return}` triplet so the helper's
+    // byte-composition contract pins each forbidden control byte
+    // against a single source of truth.
+    use paladin_gtk::app::model::format_app_about_dialog_release_notes_version;
+
+    let release_notes_version = format_app_about_dialog_release_notes_version();
+    assert!(
+        !release_notes_version.contains('\x0B'),
+        "AdwAboutDialog release_notes_version must not contain the `\\x0B` vertical-tab byte (0x0B); the current value's `\\x0B`-cleanliness is only protected transitively via `_matches_about_dialog_version` and `_matches_cargo_pkg_version` and the `version` helper's `_has_no_embedded_whitespace` check (which uses `char::is_whitespace()` and catches U+000B VT), so a future decoupling override would silently drop the `\\x0B` guard; a stray `\\x0B` would render as a literal control glyph in the dialog's \"What's New in v<release_notes_version>\" section header, could prevent the What's New body from rendering on libadwaita versions that strip whitespace when computing the body-region lookup key, and break screen-reader section-header announcements at the byte boundary; got {release_notes_version:?}",
+    );
+}
