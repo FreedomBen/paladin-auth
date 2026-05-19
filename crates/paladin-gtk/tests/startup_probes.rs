@@ -21539,3 +21539,115 @@ fn format_app_about_dialog_developers_entries_do_not_contain_an_acknowledge_byte
         );
     }
 }
+
+#[test]
+fn format_app_about_dialog_empty_credits_section_entries_do_not_contain_an_acknowledge_byte() {
+    // Cross-helper defense-in-depth sibling looping over the
+    // three currently-empty `AdwAboutDialog` credits-section
+    // array helpers (`format_app_about_dialog_designers`,
+    // `format_app_about_dialog_artists`,
+    // `format_app_about_dialog_documenters`) and pinning each
+    // entry as free of the acknowledge byte `\x06` (0x06).
+    // Mirror of the just-added
+    // `_developers_entries_do_not_contain_an_acknowledge_byte`
+    // sibling on the populated-developers side, structured as a
+    // single cross-helper loop matching the existing
+    // `_empty_credits_section_entries_do_not_contain_a_bell_byte`
+    // / `_backspace_byte` / `_line_feed_byte` companions, and
+    // continuing the non-whitespace-classified C0 control-byte
+    // cycle past BEL (0x07) for each entry across every empty
+    // credits section.
+    //
+    // Like BEL and BS, ACK is NOT matched by
+    // `char::is_whitespace()` (Unicode treats ACK as a control
+    // byte, not whitespace), so any future surrounding-
+    // whitespace boundary guards on the empty credits-section
+    // helpers would NOT reject a leading or trailing `\x06` per
+    // entry — making the acknowledge byte strictly as dangerous
+    // as backspace and bell for each entry, and necessitating
+    // an independent per-byte pin that names `\x06` directly.
+    //
+    // The three helpers currently return the empty array `[]`
+    // because Paladin does not yet have a separately-credited
+    // designer / artist / documenter for the v0.2 release. The
+    // empty-array return trivially contains no entries (let
+    // alone `\x06`-bearing entries), so this test passes today
+    // as the loop body is never entered. However, once any of
+    // the three credits sections gains a contributor, the
+    // helper return type will switch from `[&'static str; 0]`
+    // to `[&'static str; N]` with non-empty entries — at that
+    // point a `\x06` injection from a `script(1)` typescript
+    // capturing raw `\x06` ACK-frame bytes from a CI build
+    // that bridged a serial console mid-contributor-name edit,
+    // a `concat!(_, "\x06", _)` form, or a hand-edited helper
+    // that pasted from a terminal session interfacing with a
+    // protocol bridge preserving ACK framing bytes would slip
+    // past any byte-cleanliness companion the way the
+    // `_developers_entries_do_not_contain_an_acknowledge_byte`
+    // sibling already documents for the developers helper.
+    //
+    // Acknowledge bytes in the credits-section entries would
+    // mis-render in multiple downstream surfaces, identically
+    // to the `set_developers` analysis in the
+    // `_developers_entries_do_not_contain_an_acknowledge_byte`
+    // companion: (1) the GLib-backed `set_designers` /
+    // `set_artists` / `set_documenters` setters route through
+    // GTK and Pango renders each entry as a credits-page row —
+    // a stray `\x06` byte in the middle of a contributor name
+    // would render as a literal control glyph (a hollow box or
+    // tofu-like placeholder), breaking the credits-page
+    // contributor-name layout for the affected section; (2)
+    // when the credits-page is dumped through a serial-bridged
+    // TTY (CI logs over a serial console, an out-of-band
+    // debugging session), the `\x06` byte may be intercepted
+    // by the receiving end as an ACK-frame indicator and
+    // confuse protocol-bridging tooling that treats ACK as a
+    // transmission acknowledgement; (3) any tooling that
+    // scrapes the credits-page contributor list (GNOME
+    // `gnome-software` credit aggregators, release-note
+    // generators) would propagate the stray `\x06` byte into
+    // the consumer's stream and trigger the same control-glyph
+    // / protocol-confusion bug across every downstream surface;
+    // (4) screen readers that announce the credits-page
+    // contributor names render the byte as a literal control
+    // character announcement, breaking the contributor-name
+    // accessibility-tree announcement at the byte boundary.
+    //
+    // Pinning the no-`\x06` invariant across all three
+    // currently-empty credits-section helpers in a single
+    // cross-helper loop surfaces the regression with a message
+    // naming the affected helper, the offending byte, and the
+    // entry index at build time rather than as a downstream
+    // rendering artifact of the credits-page sections, a
+    // serial-protocol ACK-frame collision through TTY dumps,
+    // or a screen-reader announcement break. Current helpers
+    // return the empty array `[]` (zero entries, no `\x06` byte
+    // to find), so this test passes today and serves as a
+    // forcing function so any future override of the helpers —
+    // including the eventual landing of separately-credited
+    // designer / artist / documenter strings — stays free of
+    // acknowledge bytes.
+    use paladin_gtk::app::model::{
+        format_app_about_dialog_artists, format_app_about_dialog_designers,
+        format_app_about_dialog_documenters,
+    };
+
+    let designers = format_app_about_dialog_designers();
+    let artists = format_app_about_dialog_artists();
+    let documenters = format_app_about_dialog_documenters();
+
+    let sections: [(&str, &[&str]); 3] = [
+        ("designers", &designers),
+        ("artists", &artists),
+        ("documenters", &documenters),
+    ];
+
+    for (label, entries) in sections {
+        for (idx, entry) in entries.iter().enumerate() {
+            assert!(
+                !entry.contains('\x06'),
+                "AdwAboutDialog {label} entry at index {idx} must not contain the `\\x06` acknowledge byte (0x06); like BEL and BS, ACK is NOT matched by `char::is_whitespace()` (Unicode returns false for U+0006 ACK), so a mid-string `\\x06` slips past any future surrounding-whitespace boundary guards on the {label} helper and past the prior `_empty_credits_section_entries_do_not_contain_a_null_byte` / `_empty_credits_section_entries_do_not_contain_a_horizontal_tab_byte` / `_empty_credits_section_entries_do_not_contain_a_carriage_return_byte` / `_empty_credits_section_entries_do_not_contain_a_vertical_tab_byte` / `_empty_credits_section_entries_do_not_contain_a_form_feed_byte` / `_empty_credits_section_entries_do_not_contain_a_backspace_byte` / `_empty_credits_section_entries_do_not_contain_a_line_feed_byte` / `_empty_credits_section_entries_do_not_contain_a_bell_byte` siblings (which each name a different byte specifically); it would render as a literal control glyph in the credits-page \"{label}\" row via `set_{label}`, confuse serial-protocol-bridging tooling that treats `\\x06` as an ACK-frame indicator when the credits are dumped through a serial-bridged TTY, propagate into downstream attribution scrapers and `gnome-software` credit aggregators, and break screen-reader contributor-name announcements at the byte boundary; got {entry:?}",
+            );
+        }
+    }
+}
