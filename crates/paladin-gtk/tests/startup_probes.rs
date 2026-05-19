@@ -12406,3 +12406,84 @@ fn format_app_about_dialog_url_helpers_do_not_contain_a_userinfo_at_sign() {
         );
     }
 }
+
+#[test]
+fn format_app_about_dialog_url_helpers_do_not_contain_a_backslash() {
+    // Cross-helper defense-in-depth sibling looping over the
+    // three `AdwAboutDialog` footer URL helpers
+    // (`format_app_about_dialog_website`,
+    // `format_app_about_dialog_issue_url`,
+    // `format_app_about_dialog_support_url`) and pinning each
+    // value as free of the `\` backslash byte. Per RFC 3986,
+    // the canonical path-segment separator inside a URL is the
+    // forward slash `/`; the backslash `\` is *not* a reserved
+    // URI byte. But path-confusion attacks exploit the fact
+    // that *some* downstream parsers (older Windows-derived
+    // URL parsers, some embedded HTTP libraries, some CDN
+    // edge-rewriting middleware, Pango's label-rendering when
+    // a label is interpreted as Markdown via a future
+    // libadwaita refactor that swapped to a Markdown-aware
+    // label engine) silently rewrite `\` to `/` during
+    // canonicalisation. A regression that landed a URL like
+    // `"https://github.com\FreedomBen\paladin\issues"` (a
+    // hand-edited Windows-path-style literal, a `concat!(_,
+    // "\\", _)` form, or a literal lifted from a Windows
+    // file-explorer breadcrumb) would render in the
+    // about-dialog footer with the bare `\`-separated bytes
+    // visible in the label, but the underlying click-through
+    // routing depends on the browser's URL-parser leniency:
+    // (a) on parsers that strictly per RFC 3986 treat `\` as
+    // an unreserved byte, the click would route to a non-
+    // existent path with literal `\` characters, surfacing as
+    // a confusing 404; (b) on parsers that auto-rewrite `\`
+    // to `/` (a documented behavior of WHATWG URL §4.5
+    // implementations to align with browser real-world
+    // behaviour), the click would route correctly but the
+    // dialog label would mis-render with a `\`-segmented path
+    // visible to the user, eroding the trusted-application
+    // surface contract.
+    //
+    // A regression would slip past every existing companion:
+    // the `_is_non_empty_https_url[_distinct_*]` per-URL
+    // companion (which only checks non-empty + `https://`
+    // prefix + no space byte), the `_contain_no_embedded_whitespace`
+    // / `_are_ascii_only` cross-URL companions (`\` is both
+    // non-whitespace and ASCII (0x5C), so it slips past
+    // both), and every other byte-specific companion which
+    // names different bytes specifically. None of the
+    // existing companions name the `\` byte directly.
+    //
+    // Pinning the no-backslash invariant directly here
+    // surfaces the regression with a message naming the
+    // offending URL helper at build time rather than as a
+    // downstream user-visible mis-rendered path label, a
+    // confusing 404, or an inconsistent click-through-routing
+    // surface across parser implementations. Mirror of the
+    // `_url_helpers_do_not_end_with_a_trailing_slash`,
+    // `_url_helpers_do_not_contain_a_query_string`,
+    // `_url_helpers_do_not_contain_a_fragment_anchor`,
+    // `_url_helpers_do_not_contain_a_userinfo_at_sign`,
+    // `_url_helpers_contain_no_embedded_whitespace`,
+    // `_url_helpers_are_ascii_only`, and
+    // `_url_helpers_do_not_contain_a_null_byte` cross-URL
+    // siblings; together they pin the URL byte-composition
+    // contract (no whitespace, ASCII-only, no terminal `/`,
+    // no `\0`, no `?` query, no `#` anchor, no `@` userinfo,
+    // no `\` path-confusion byte) across all three footer
+    // link surfaces against a single source of truth.
+    use paladin_gtk::app::model::{
+        format_app_about_dialog_issue_url, format_app_about_dialog_support_url,
+        format_app_about_dialog_website,
+    };
+
+    for (label, url) in [
+        ("website", format_app_about_dialog_website()),
+        ("issue_url", format_app_about_dialog_issue_url()),
+        ("support_url", format_app_about_dialog_support_url()),
+    ] {
+        assert!(
+            !url.contains('\\'),
+            "AdwAboutDialog {label} must not contain the `\\\\` backslash byte (0x5C) — the canonical URL path-segment separator is `/` per RFC 3986; some downstream parsers (WHATWG URL §4.5 implementations, older Windows-derived URL parsers, embedded HTTP libraries) auto-rewrite `\\\\` to `/` during canonicalisation, but the bare-bytes rendering in the about-dialog footer label would still show the offending `\\\\`-segmented path to the user, eroding the trusted-application surface contract; got {url:?}",
+        );
+    }
+}
