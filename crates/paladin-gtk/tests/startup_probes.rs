@@ -7034,3 +7034,58 @@ fn format_app_about_dialog_developer_name_has_no_surrounding_whitespace() {
         "AdwAboutDialog developer_name must not end with whitespace so the attribution row does not leave a hanging gap on the right edge below the program-name header; got {developer_name:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_program_name_is_ascii_only() {
+    // Defense-in-depth sibling of
+    // `format_app_about_dialog_program_name_returns_paladin`
+    // (exact-value pin),
+    // `format_app_about_dialog_program_name_is_non_empty_and_not_app_id`
+    // (positive shape pin on non-empty + distinct),
+    // `format_app_about_dialog_program_name_matches_format_app_window_title`
+    // (cross-consistency with the window title), and
+    // `format_app_about_dialog_program_name_is_segment_of_application_icon_name`
+    // (cross-consistency with the reverse-DNS icon name). Those
+    // companions catch the wrong-value, empty, name-equals-app-id,
+    // wrong-title, and not-a-segment regressions but leave the
+    // Unicode-lookalike edge case ungated.
+    //
+    // The `AdwAboutDialog::program_name` slot renders as the
+    // bold header text at the top of the dialog. A regression
+    // that swapped a Latin character for a visually-similar
+    // Unicode lookalike — e.g. `"Pаladin"` where the second `a`
+    // is Cyrillic U+0430 (CYRILLIC SMALL LETTER A) — would
+    // render identically in most fonts but fail any byte-level
+    // comparison with the slug used by the CLI / executable
+    // name (`paladin`) and the icon name's `Paladin` segment.
+    // The existing `_is_segment_of_application_icon_name`
+    // companion would catch this transitively (because the icon
+    // name's `Paladin` segment is pure ASCII), but pinning the
+    // ASCII-only invariant directly on the program-name side
+    // surfaces the regression with a message that names the
+    // offending non-ASCII byte rather than as a confusing
+    // segment-membership failure.
+    //
+    // Pinning the ASCII-only invariant here also keeps the
+    // header rendering stable on systems with limited Unicode
+    // font fallback (a missing glyph for a non-ASCII character
+    // would render as the tofu-box placeholder, degrading the
+    // dialog's first impression). Mirror of the
+    // `_window_action_names_use_ascii_lowercase_only` and the
+    // `_header_bar_button_icon_names_use_lowercase_kebab_case`
+    // companions which already pin ASCII-only invariants on
+    // the GLib SimpleAction-names and icon-theme-keys sides;
+    // together they pin the ASCII-shape contract across the
+    // program-name header, the window action targets, and the
+    // header-bar icon lookups against a single source of truth.
+    use paladin_gtk::app::model::format_app_about_dialog_program_name;
+
+    let program_name = format_app_about_dialog_program_name();
+    for (idx, ch) in program_name.char_indices() {
+        assert!(
+            ch.is_ascii(),
+            "AdwAboutDialog program_name must use ASCII characters only so the bold dialog header renders stably on systems with limited Unicode font fallback (a missing glyph would render as a tofu-box) and is byte-identical to the lowercased `paladin` slug used by the CLI / executable name; got non-ASCII char {ch:?} (U+{:04X}) at byte offset {idx} in {program_name:?}",
+            ch as u32,
+        );
+    }
+}
