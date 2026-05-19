@@ -7856,3 +7856,90 @@ fn format_app_about_dialog_url_helpers_are_ascii_only() {
         }
     }
 }
+
+#[test]
+fn format_app_about_dialog_comments_is_ascii_only() {
+    // Defense-in-depth sibling of
+    // `format_app_about_dialog_comments_matches_cargo_pkg_description`
+    // (exact-value pin sourcing from `env!("CARGO_PKG_DESCRIPTION")`),
+    // `format_app_about_dialog_comments_is_non_empty_single_line_distinct_from_program_name`
+    // (positive shape pin on non-empty + single-line + distinct
+    // from the program-name slug), and
+    // `format_app_about_dialog_comments_does_not_end_with_a_period_per_libadwaita_convention`
+    // (HIG-convention pin against a sentence-terminating period).
+    // Those companions catch the wrong-source, empty,
+    // multi-line, comments-equals-program-name, and
+    // trailing-period regressions but leave the
+    // Unicode-lookalike / mojibake-byte edge case ungated.
+    //
+    // The `AdwAboutDialog::comments` slot renders as the short
+    // caption directly under the bold program-name header,
+    // immediately above the version row. The canonical Paladin
+    // description sourced from the workspace
+    // `[workspace.package].description` Cargo.toml field is
+    // `"Paladin: Rust OTP authenticator (TOTP + HOTP) with CLI, TUI, and GTK front-ends"`
+    // — pure ASCII (Latin letters, digits, parentheses, hyphens,
+    // commas, spaces, and the `:` separator), matching the
+    // program-name slug (`Paladin`) used by the CLI executable
+    // name byte-for-byte. A regression that hand-edited the
+    // workspace description to include a Unicode lookalike —
+    // e.g. swapping the canonical ASCII `a` in `Paladin` for
+    // Cyrillic U+0430 — would propagate verbatim through the
+    // `description.workspace = true` inheritance chain into
+    // `env!("CARGO_PKG_DESCRIPTION")` and into the AdwAboutDialog
+    // comments row, slipping past:
+    //
+    // * `_matches_cargo_pkg_description` because the env value
+    //   already carries the corrupted bytes (the pin tracks the
+    //   value, not its composition).
+    // * `_is_non_empty_single_line_distinct_from_program_name`
+    //   because the corrupted string would still be non-empty,
+    //   still single-line, and still distinct from the bare
+    //   ASCII `Paladin` slug returned by
+    //   `format_app_about_dialog_program_name`.
+    // * `_does_not_end_with_a_period_per_libadwaita_convention`
+    //   because the corruption inside the body has nothing to
+    //   do with the trailing-punctuation invariant.
+    //
+    // The corrupted comments value would render with the
+    // lookalike char in the dialog caption row, breaking
+    // byte-equality against the ASCII `Paladin` token at the
+    // top of the caption — the very token an automated
+    // bug-report tooling pass might match against to confirm
+    // the dialog metadata is consistent with the application
+    // binary it is reporting on. Pinning the ASCII-only
+    // invariant directly here surfaces the regression with a
+    // message that names the offending non-ASCII byte at the
+    // byte offset rather than as a confusing
+    // byte-equality-with-program-name failure elsewhere or as
+    // a quiet visual misrender at the caption-row layer.
+    //
+    // The current `env!("CARGO_PKG_DESCRIPTION")` value is
+    // pure ASCII per the workspace `description` field, so
+    // this test passes today and serves as a forcing function
+    // so any future workspace-description field change stays
+    // ASCII-compatible. Mirror of the
+    // `_program_name_is_ascii_only`,
+    // `_application_icon_name_is_ascii_only`,
+    // `_version_is_ascii_only`,
+    // `_developer_name_is_ascii_only`,
+    // `_debug_info_filename_is_ascii_only`,
+    // `_debug_info_is_ascii_only`, and the new
+    // `_url_helpers_are_ascii_only` siblings on the dialog
+    // header / debug-info / footer-URL sides; together they
+    // pin the ASCII-shape contract across every dialog-routed
+    // identifier-shaped / identifier-routed / human-readable
+    // helper that ships to the user against a single source
+    // of truth, closing the Unicode-lookalike regression
+    // surface across the full AdwAboutDialog text surface.
+    use paladin_gtk::app::model::format_app_about_dialog_comments;
+
+    let comments = format_app_about_dialog_comments();
+    for (idx, ch) in comments.char_indices() {
+        assert!(
+            ch.is_ascii(),
+            "AdwAboutDialog comments must use ASCII characters only so the dialog caption row stays byte-stable against the ASCII `Paladin` token at the top of the caption (the token any automated bug-report tooling pass might match against to confirm the dialog metadata is consistent with the binary), renders stably on systems with limited Unicode font fallback, and propagates byte-for-byte through the `description.workspace = true` inheritance chain from the workspace Cargo.toml `[workspace.package].description` field; got non-ASCII char {ch:?} (U+{:04X}) at byte offset {idx} in {comments:?}",
+            ch as u32,
+        );
+    }
+}
