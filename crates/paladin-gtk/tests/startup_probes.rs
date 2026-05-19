@@ -20768,3 +20768,105 @@ fn format_app_about_dialog_version_does_not_contain_a_bell_byte() {
         "AdwAboutDialog version must not contain the `\\x07` bell byte (0x07); like BS, BEL is NOT matched by `char::is_whitespace()` (Unicode returns false for U+0007 BEL), so `_has_no_embedded_whitespace` does NOT catch `\\x07` — strictly as dangerous as backspace here, neither caught by the whitespace companion; a stray `\\x07` slips past `_is_ascii_only` / `_is_non_empty_and_looks_like_semver` / `_starts_with_a_digit` / `_does_not_start_with_a_dot` / `_does_not_end_with_a_dot` / `_has_at_least_three_dot_separated_segments` / `_segments_are_non_empty` / `_matches_cargo_pkg_version` and the prior per-byte siblings, would render as a literal control glyph in the version caption beneath the program name, propagate into the \"What's New in v<version>\" release-notes header that reuses this string, ring the terminal bell on update-check or release-tracker dumps piped to `less` (an audible-alert injection / covert side-channel primitive in shared CI environments), and break screen-reader version-caption announcements at the byte boundary; got {version:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_application_icon_name_does_not_contain_a_bell_byte() {
+    // Defense-in-depth per-byte sibling extending the
+    // application-icon-name byte coverage past the just-
+    // completed `{null / horizontal-tab / carriage-return /
+    // vertical-tab / form-feed / backspace / line-feed}` septuple
+    // to the bell byte `\x07` (0x07), opening the next non-
+    // whitespace-classified C0 control-byte cycle for this
+    // helper. Like BS, BEL is NOT matched by
+    // `char::is_whitespace()` (Unicode treats BEL as a control
+    // byte, not whitespace), so the existing
+    // `_application_icon_name_has_no_embedded_whitespace`
+    // companion does NOT catch `\x07` even though it catches
+    // `\x0C`. The bell byte therefore has NO transitive
+    // protection on this helper today — strictly as dangerous as
+    // backspace, neither caught by the whitespace companion.
+    //
+    // None of the existing companions name the `\x07` byte
+    // directly on this helper:
+    //   - `_is_ascii_only` pins each byte as ASCII — `\x07` is
+    //     ASCII so it slips past;
+    //   - `_application_icon_name_has_no_embedded_whitespace` uses
+    //     `char::is_whitespace()`, which returns *false* for
+    //     U+0007 BEL — strictly weaker coverage than the form-
+    //     feed case;
+    //   - `_is_reverse_dns` / `_has_exactly_four_segments` /
+    //     `_starts_with_a_lowercase_ascii_letter` only constrain
+    //     segment-count and leading byte;
+    //   - `_ends_with_gui_segment` / `_does_not_end_with_a_dot`
+    //     / `_does_not_start_with_a_dot` only constrain the
+    //     suffix and dot-boundaries;
+    //   - `_segments_are_non_empty` only checks segment non-
+    //     emptiness;
+    //   - `_matches_app_id` / `_program_name_is_segment_of_application_icon_name`
+    //     only enforce equality with the app-id and segment
+    //     containment with the program name;
+    //   - `_does_not_contain_a_null_byte` /
+    //     `_does_not_contain_a_horizontal_tab_byte` /
+    //     `_does_not_contain_a_carriage_return_byte` /
+    //     `_does_not_contain_a_vertical_tab_byte` /
+    //     `_does_not_contain_a_form_feed_byte` /
+    //     `_does_not_contain_a_backspace_byte` /
+    //     `_does_not_contain_a_line_feed_byte` each name a
+    //     different byte specifically.
+    //
+    // A regression that landed `"org.tamx.Paladin\x07.Gui"`
+    // (bell byte lifted from a `script(1)` typescript capturing
+    // raw `\x07` audible-alert bytes between reverse-DNS segments
+    // of an interactively-edited icon-spec registry, a
+    // `concat!(_, "\x07", _)` form, or a hand-edited helper
+    // override that pasted from a terminal session recording
+    // preserving audible-alert bytes) would mis-render in
+    // multiple downstream surfaces: (1) the `gtk::IconTheme`
+    // lookup machinery treats the icon name as a key into the
+    // icon cache — a `\x07`-bearing key would silently miss the
+    // cache and fall through to the placeholder fallback icon,
+    // masking the bug as a missing-icon surface rather than a
+    // malformed-icon-name surface; (2) the matching
+    // `gtk::Window::set_icon_name` setter (the icon name is
+    // mirrored onto the toplevel window's icon property) routes
+    // through GLib's GVariant string-marshalling layer and may
+    // surface as a malformed window-icon-name property in the
+    // X11 / Wayland protocol exchange, where some compositors
+    // silently drop the icon and others render a broken-icon
+    // placeholder; (3) the same icon name is mirrored to the
+    // AppStream metainfo file's `<id>` field per the §11.4
+    // app-id convention — a `\x07`-bearing icon name would
+    // propagate into the metainfo file and fail Flathub's strict
+    // reverse-DNS-validating metainfo linter on the next package
+    // submission, and a TTY-rendered Flathub linter diagnostic
+    // dump would ring the terminal bell on the user's session —
+    // an audible-alert injection / covert side-channel primitive
+    // where an attacker who controlled the upstream icon-spec
+    // source could trigger CI-runner bell notifications
+    // repeatedly or weaponize the bell as a covert side-channel
+    // in a shared CI environment on the submission workflow.
+    //
+    // Pinning the no-`\x07` invariant directly on this helper
+    // surfaces the regression with a message naming the
+    // offending byte at build time rather than as a downstream
+    // icon-cache miss, a malformed-window-icon protocol
+    // exchange, a Flathub metainfo linter failure, or a
+    // terminal-bell injection on linter diagnostics. Current
+    // helper returns the literal `"org.tamx.Paladin.Gui"` (no
+    // `\x07` byte), so this test passes today and serves as a
+    // forcing function so any future override of the helper —
+    // including the eventual landing of a Flatpak app-id rename
+    // — stays free of bell bytes. Opens the next non-whitespace-
+    // classified C0 control-byte cycle past the just-completed
+    // `{null / horizontal-tab / carriage-return / vertical-tab /
+    // form-feed / backspace / line-feed}` septuple so the
+    // helper's byte-composition contract pins each forbidden
+    // control byte against a single source of truth.
+    use paladin_gtk::app::model::format_app_about_dialog_application_icon_name;
+
+    let application_icon_name = format_app_about_dialog_application_icon_name();
+    assert!(
+        !application_icon_name.contains('\x07'),
+        "AdwAboutDialog application_icon_name must not contain the `\\x07` bell byte (0x07); like BS, BEL is NOT matched by `char::is_whitespace()` (Unicode returns false for U+0007 BEL), so `_has_no_embedded_whitespace` does NOT catch `\\x07` — strictly as dangerous as backspace here, neither caught by the whitespace companion; a stray `\\x07` slips past `_is_ascii_only` / `_is_reverse_dns` / `_has_exactly_four_segments` / `_starts_with_a_lowercase_ascii_letter` / `_ends_with_gui_segment` / `_does_not_end_with_a_dot` / `_does_not_start_with_a_dot` / `_segments_are_non_empty` / `_matches_app_id` / `_program_name_is_segment_of_application_icon_name` and the prior per-byte siblings, would silently miss the `gtk::IconTheme` cache lookup (masking the bug as a placeholder-icon fallback), surface as a malformed window-icon-name property in the X11 / Wayland protocol exchange via `set_icon_name`, propagate into the AppStream metainfo `<id>` field where Flathub's strict reverse-DNS linter would fail the next package submission, and ring the terminal bell when Flathub linter diagnostics are dumped through a TTY (an audible-alert injection / covert side-channel primitive in shared CI environments); got {application_icon_name:?}",
+    );
+}
