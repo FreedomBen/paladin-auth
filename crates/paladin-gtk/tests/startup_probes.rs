@@ -8988,3 +8988,65 @@ fn format_app_header_bar_button_tooltips_start_with_an_uppercase_letter() {
         );
     }
 }
+
+#[test]
+fn format_app_about_dialog_developer_name_starts_with_the_definite_article() {
+    // Defense-in-depth sibling of
+    // `format_app_about_dialog_developer_name_returns_the_paladin_contributors`
+    // (exact-value pin to `"The Paladin contributors"`),
+    // `_is_non_empty_and_distinct_from_program_name` (positive
+    // shape pin + cross-helper distinctness against bare
+    // `"Paladin"`), `_is_a_single_line_without_embedded_newlines`
+    // (single-line shape pin),
+    // `_has_no_surrounding_whitespace` (no-padding shape pin),
+    // and `_is_ascii_only` (byte-composition pin). Those
+    // companions catch the wrong-value / wrong-shape / multi-line
+    // / surrounding-whitespace / non-ASCII regressions but
+    // leave the *definite-article prefix* convention ungated.
+    //
+    // The GNOME Human Interface Guidelines (HIG) §"About
+    // dialog" and the broader GNOME / freedesktop convention
+    // for collective project attributions prefix the
+    // contributor-collective name with the definite article
+    // "The " — examples across the GNOME stack include "The
+    // GNOME Project", "The GTK Team", "The Files contributors",
+    // "The Settings contributors". The article is deliberately
+    // included in the attribution voicing so the
+    // `AdwAboutDialog::developer-name` header row reads as a
+    // *named collective* ("The Paladin contributors are…")
+    // rather than as an inventory ("Paladin contributors are
+    // [list]…"). A regression that dropped the article — e.g.
+    // `"Paladin contributors"` — would slip past the existing
+    // companions (the string is still distinct from the bare
+    // program name `"Paladin"`, still single-line, still
+    // surrounded by no whitespace, still pure ASCII) while
+    // diverging from the GNOME convention voicing pinned at
+    // the GNOME / freedesktop attribution-style level.
+    //
+    // The Cargo.toml workspace deliberately omits the `authors`
+    // field (per §"AGPL-3.0-or-later open contributor pool" so
+    // the dialog does not name a single owner) and routes the
+    // attribution through this helper instead, so the
+    // definite-article-prefixed voicing is the contract that
+    // distinguishes the collective-attribution slot from the
+    // bare program-name slot. Pinning the article prefix
+    // directly here surfaces the regression with a message
+    // naming the offending byte sequence rather than as a
+    // quiet attribution-row voicing drift at dialog render
+    // time. Mirror of the `_lists_benjamin_porter` positive
+    // content pin on the credits-list side and the
+    // `_starts_with_copyright_glyph_and_contains_developer_name`
+    // companion on the footer-copyright row side; together
+    // they pin the leading-character contract across the
+    // dialog-header attribution row, the credits-list
+    // contributor names, and the footer copyright row against
+    // a single source of truth on the GNOME / freedesktop
+    // attribution-style convention.
+    use paladin_gtk::app::model::format_app_about_dialog_developer_name;
+
+    let developer_name = format_app_about_dialog_developer_name();
+    assert!(
+        developer_name.starts_with("The "),
+        "AdwAboutDialog developer-name must start with the definite article `\"The \"` so the collective attribution voicing matches the GNOME / freedesktop convention for project attributions (examples: \"The GNOME Project\", \"The GTK Team\", \"The Files contributors\"); a regression that dropped the article would render the dialog-header attribution row as an inventory rather than as a named collective; got {developer_name:?}",
+    );
+}
