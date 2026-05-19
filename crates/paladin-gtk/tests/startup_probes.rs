@@ -18703,3 +18703,117 @@ fn format_app_about_dialog_copyright_does_not_contain_a_line_feed_byte() {
         "AdwAboutDialog copyright must not contain the `\\n` line-feed byte (0x0A); the current `\\n`-cleanliness is only protected by the `_is_a_single_line_without_embedded_newlines` companion's coupled `\\n`/`\\r` check, so a future refactor that intentionally allowed embedded line breaks in the copyright slot (a multi-line attribution including a separate copyright-glyph row and contributor row, or a libadwaita upgrade that taught the footer copyright row to wrap across two lines) would naturally relax that companion to drop the `\\n` check entirely; a stray `\\n` would cause Pango to interpret the byte as a hard line break and wrap the copyright onto two lines (pushing the dialog footer taller than its baseline layout and visually misaligning the website / issue-link rows beneath), erode the trusted-application legal-attribution surface contract, break screen-reader copyright announcements at the byte boundary, and propagate into downstream license-attribution aggregators that might split input on `\\n` and interpret the second line as a separate copyright entry; got {copyright:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_comments_does_not_contain_a_line_feed_byte() {
+    // Defense-in-depth per-byte sibling extending the comments
+    // byte-cleanliness contract past the just-completed
+    // `{null / horizontal-tab / carriage-return / vertical-tab /
+    // form-feed / backspace}` sextuple to the line-feed byte
+    // `\n` (0x0A), completing the inner C0 control-byte cycle
+    // from BS (0x08) through CR (0x0D) for this helper. The
+    // existing `_comments_is_non_empty_single_line_distinct_from_program_name`
+    // companion does explicitly assert `!comments.contains('\n')`
+    // as one of its three sub-assertions — so the comments
+    // helper's `\n`-cleanliness is currently protected *directly*
+    // by that one specific companion.
+    //
+    // But that direct coverage is *coupled* to a multi-part
+    // single-line-and-distinct invariant: a future refactor that
+    // intentionally allowed embedded `\n` line breaks in the
+    // comments slot (a libadwaita upgrade that taught the
+    // comments row to wrap across two lines, a multi-paragraph
+    // package-description that lifted `comments` out of the
+    // single-line constraint, or a workspace-vendoring split that
+    // decoupled `comments` from the `env!("CARGO_PKG_DESCRIPTION")`
+    // single-line source) would naturally relax the multi-part
+    // companion to drop the `\n` check entirely — at which point
+    // the no-`\n` invariant would silently regress to "allowed"
+    // without any independent byte-cleanliness pin keeping the
+    // byte forbidden for the cases where the byte still mis-
+    // renders. Mirror of the
+    // `_comments_does_not_contain_a_carriage_return_byte`
+    // companion's same decoupling rationale on the CR side — but
+    // crucially `\r` is NOT checked by the multi-part single-line
+    // companion (which only names `\n`), so the CR pin protected
+    // a strict gap; the LF pin here pins the *coupled* byte to
+    // surface a future refactor that drops the `\n` check.
+    //
+    // None of the remaining comments companions name the `\n`
+    // byte directly:
+    //   - `_comments_is_ascii_only` pins each byte as ASCII —
+    //     `\n` is ASCII (0x0A) so it slips past;
+    //   - `_does_not_end_with_a_period_per_libadwaita_convention`
+    //     only constrains the trailing byte;
+    //   - `_matches_cargo_pkg_description` is an exact-value pin
+    //     coupled to `env!("CARGO_PKG_DESCRIPTION")` — a future
+    //     workspace refactor that introduced an `\n` byte into
+    //     the package description string (the multi-line TOML
+    //     `description = """\n  Paladin: ... front-ends\n"""`
+    //     syntax) would propagate the `\n` into the helper, and
+    //     this exact-value companion would still pass (the
+    //     comments value still equals the cargo description);
+    //   - `_does_not_contain_a_null_byte` /
+    //     `_does_not_contain_a_horizontal_tab_byte` /
+    //     `_does_not_contain_a_carriage_return_byte` /
+    //     `_does_not_contain_a_vertical_tab_byte` /
+    //     `_does_not_contain_a_form_feed_byte` /
+    //     `_does_not_contain_a_backspace_byte`
+    //     each name a different byte specifically.
+    //
+    // A regression that landed an `\n`-bearing comments string
+    // (LF byte from a multi-paragraph package description in the
+    // workspace `Cargo.toml`, a `description = """..."""`
+    // multi-line TOML literal that introduced a leading-line-
+    // break, or a hand-edited helper override that lifted the
+    // description from a `pandoc`-generated text dump preserving
+    // line breaks between document sections) would mis-render in
+    // multiple downstream surfaces: (1) the GLib-backed
+    // `AdwAboutDialog::set_comments` setter hands the string to
+    // Pango for inline rendering beneath the program-name /
+    // version cluster in the dialog header — Pango would
+    // interpret the `\n` byte as a hard line break and wrap the
+    // comments onto two lines, pushing the dialog header taller
+    // than its baseline layout and visually misaligning the
+    // header / footer column-flow that libadwaita uses; (2) the
+    // dialog comments slot is the elevator-pitch surface for the
+    // application — a multi-line comments row erodes the tidy
+    // single-line summary that GNOME HIG calls for in the
+    // `AdwAboutDialog` header; (3) when the comments string is
+    // dumped through a TTY (CI logs, `paladin-gtk --about` debug
+    // output piped to `less` or `cat`), the `\n` byte breaks the
+    // description across two log lines so log-grep queries
+    // searching for the description string by a single token
+    // would capture only one line; (4) screen readers that
+    // announce the dialog comments row treat the `\n` as a
+    // paragraph break and pause mid-description, breaking the
+    // single-summary accessibility-tree announcement at the byte
+    // boundary; (5) downstream tooling that scrapes the package
+    // description (changelog aggregators, package-listing
+    // generators, AppStream `<summary>` extractors) would
+    // propagate the stray `\n` byte into the consumer's stream
+    // and trigger the same line-break rendering bug across every
+    // downstream surface, with the additional risk that
+    // AppStream `<summary>` validation rejects embedded line
+    // breaks at packaging time.
+    //
+    // Pinning the no-`\n` invariant directly here surfaces the
+    // regression with a message naming the offending byte at
+    // build time rather than via a future single-line decoupling
+    // that silently dropped the `\n` guard. Current helper
+    // returns the literal `env!("CARGO_PKG_DESCRIPTION")` which
+    // resolves to the single-line workspace description
+    // (`"Paladin: Rust OTP authenticator (TOTP + HOTP) with CLI,
+    // TUI, and GTK front-ends"`, no `\n` byte), so this test
+    // passes today and serves as a forcing function so any
+    // future workspace-description refactor stays free of line-
+    // feed bytes even when the multi-part single-line companion
+    // is intentionally relaxed.
+    use paladin_gtk::app::model::format_app_about_dialog_comments;
+
+    let comments = format_app_about_dialog_comments();
+    assert!(
+        !comments.contains('\n'),
+        "AdwAboutDialog comments must not contain the `\\n` line-feed byte (0x0A); the current `\\n`-cleanliness is only protected by the `_comments_is_non_empty_single_line_distinct_from_program_name` companion's coupled multi-part single-line check, so a future refactor that intentionally allowed embedded line breaks in the comments slot (a libadwaita upgrade that taught the comments row to wrap across two lines, a multi-paragraph package-description that lifted comments out of the single-line constraint, or a workspace-vendoring split that decoupled comments from the `env!(\"CARGO_PKG_DESCRIPTION\")` single-line source) would naturally relax that companion to drop the `\\n` check entirely; a stray `\\n` would cause Pango to interpret the byte as a hard line break and wrap the comments onto two lines (pushing the dialog header taller than its baseline layout), erode the tidy single-line elevator-pitch summary GNOME HIG calls for, break log-grep queries that search for the description by a single token, break screen-reader comments announcements at the byte boundary, propagate into downstream changelog aggregators and AppStream `<summary>` extractors, and trigger AppStream `<summary>` validation rejection at packaging time; got {comments:?}",
+    );
+}
