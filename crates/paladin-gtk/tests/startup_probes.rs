@@ -10326,3 +10326,54 @@ fn format_app_about_dialog_debug_info_filename_contains_exactly_one_period() {
         "AdwAboutDialog debug_info_filename must contain exactly one `.` byte (separating the canonical `<slug>` and `<extension>` per the libadwaita / GTK file-chooser dialog's last-`.`-split-into-base-and-extension convention — multi-period filenames render in the file-chooser save dialog with an ambiguous editable base name that doesn't match the canonical slug); got {period_count} periods in {filename:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_debug_info_does_not_contain_a_null_byte() {
+    // Defense-in-depth sibling of
+    // `_debug_info_is_ascii_only` (byte-composition pin) and
+    // the just-added
+    // `_debug_info_does_not_contain_a_carriage_return_byte`
+    // (no-`\r` pin). The `_is_ascii_only` companion pins each
+    // byte as ASCII (`0x00`-`0x7F`) — the null byte `\0`
+    // (0x00) is ASCII, so a regression that landed `"Paladin
+    // 0.0.1\0\nApp ID: org.tamx.Paladin.Gui"` (null-byte
+    // injection from a C-string-style `concat!(_, "\0", _)`
+    // form, possibly from an FFI shim that round-tripped a
+    // `CString` payload incorrectly) would slip past the
+    // `_is_ascii_only` companion.
+    //
+    // Null bytes in the debug-info payload would mis-render
+    // in multiple downstream surfaces: (1) when the payload
+    // is copied to the clipboard via the
+    // `AdwAboutDialog::set_debug_info` `Copy debug info`
+    // button, the GDK clipboard backend may truncate at the
+    // first `\0` byte (GDK's `gdk::Clipboard::set_text`
+    // routes through GLib `g_strdup` which is null-
+    // terminated), so the pasted payload to a bug report
+    // would be incomplete; (2) when the payload is saved to
+    // a `.txt` file via `set_debug_info_filename`, the
+    // resulting file contains a null byte mid-stream, which
+    // most text editors render as a control glyph or refuse
+    // to open as text (treating the file as binary); (3)
+    // when the payload is rendered to the about-dialog's
+    // debug-info widget itself, GTK's `Pango` text engine
+    // treats `\0` as a string terminator and may truncate
+    // the displayed text.
+    //
+    // Pinning the no-null-byte invariant directly here
+    // surfaces the regression with a message naming the
+    // offending byte at build time rather than as a
+    // downstream clipboard truncation, file-save corruption,
+    // or Pango rendering truncation. Current helper builds
+    // the payload at compile time via `concat!` over `&'static
+    // str` literals (none containing `\0`), so this test
+    // passes today and serves as a forcing function so any
+    // future override stays free of null bytes.
+    use paladin_gtk::app::model::format_app_about_dialog_debug_info;
+
+    let debug_info = format_app_about_dialog_debug_info();
+    assert!(
+        !debug_info.contains('\0'),
+        "AdwAboutDialog debug_info must not contain the `\\0` null byte (which would route through GDK's null-terminated `g_strdup`-backed clipboard, truncate downstream pastes; render as a control glyph or trigger binary-file fallback when saved to disk; and truncate Pango text-engine rendering of the in-dialog debug-info widget); got {debug_info:?}",
+    );
+}
