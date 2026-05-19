@@ -462,16 +462,18 @@ impl SimpleComponent for AppModel {
                         set_icon_name: format_app_add_button_icon_name(),
                         set_tooltip_text: Some(format_app_add_button_tooltip()),
                         // Initial visibility tracks the resolved
-                        // startup state. Subsequent state changes
-                        // (Unlocked → UnlockedBusy → Unlocked,
-                        // auto-lock, etc.) toggle visibility via
-                        // `apply_add_button_visibility_inplace`
-                        // wired in the post-init dispatch
-                        // handlers. The `+` is hidden outside
-                        // `Unlocked` so users cannot trigger an
+                        // startup state through the pinned
+                        // `format_app_add_button_visible` helper.
+                        // Subsequent state changes (Unlocked →
+                        // UnlockedBusy → Unlocked, auto-lock,
+                        // etc.) toggle visibility via
+                        // `apply_app_add_button_visibility` wired
+                        // in the post-init dispatch handlers. The
+                        // `+` is hidden outside the vault-open
+                        // states so users cannot trigger an
                         // `OpenAddDialog` race against a missing /
-                        // locked / busy vault.
-                        set_visible: state.is_unlocked(),
+                        // locked / errored vault.
+                        set_visible: format_app_add_button_visible(&state),
                         connect_clicked[sender] => move |_| {
                             sender.input(AppMsg::OpenAddDialog);
                         },
@@ -2352,6 +2354,39 @@ pub fn build_app_add_action(state: &AppState) -> gtk::gio::SimpleAction {
 /// Pure side-effect helper (no return value).
 pub fn apply_app_add_action_sensitivity(action: &gtk::gio::SimpleAction, state: &AppState) {
     action.set_enabled(format_app_add_button_sensitive(state));
+}
+
+/// Apply the per-state visibility returned by
+/// [`format_app_add_button_visible`] to an existing
+/// header-bar `+` button [`gtk::Button`].
+///
+/// Calls [`gtk::prelude::WidgetExt::set_visible`] on `button`
+/// with [`format_app_add_button_visible`]'s value for the
+/// supplied `state`. The widget binding calls this helper from
+/// [`AppMsg`] state-transition arms ([`AppState::Missing`] /
+/// [`AppState::Locked`] / [`AppState::Unlocked`] /
+/// [`AppState::UnlockedBusy`] / [`AppState::StartupError`]) so
+/// the `+` button is hidden entirely whenever `AppModel`
+/// leaves a vault-open state and re-appears when a vault is
+/// open again — mirrors [`apply_app_add_action_sensitivity`]
+/// on the sensitivity-update side and
+/// [`apply_app_primary_menu_sensitivities`] on the
+/// runtime-update side for the primary menu's mutating
+/// entries.
+///
+/// Centralizing the runtime visibility application in one
+/// helper means the `+` button's `set_visible` call site stays
+/// sourced exclusively from [`format_app_add_button_visible`]
+/// — the widget binding never hand-spells a bare
+/// `state.is_unlocked()` read inline. Sibling of
+/// [`apply_app_add_action_sensitivity`] on the runtime-
+/// transition side; together they pin every state-change
+/// visibility and sensitivity update for the `+` button
+/// against the pinned format helpers.
+///
+/// Pure side-effect helper (no return value).
+pub fn apply_app_add_button_visibility(button: &gtk::Button, state: &AppState) {
+    button.set_visible(format_app_add_button_visible(state));
 }
 
 /// Build the application menu's "About Paladin" entry's

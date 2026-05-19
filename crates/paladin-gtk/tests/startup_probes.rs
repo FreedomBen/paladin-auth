@@ -2155,6 +2155,114 @@ fn apply_app_add_action_sensitivity_updates_existing_action_for_a_new_state() {
 }
 
 #[test]
+fn apply_app_add_button_visibility_updates_existing_button_for_a_new_state() {
+    // Per §"libadwaita usage" and §"Component tree": when
+    // `AppModel` transitions between states (e.g. Unlocked →
+    // Locked on auto-lock, or Locked → Unlocked after a
+    // successful unlock), the header-bar `+` button's
+    // visibility must toggle accordingly — visible when a
+    // vault is open (`Unlocked` / `UnlockedBusy`) and hidden
+    // otherwise (`Missing` / `Locked` / `StartupError`). This
+    // helper applies the new state's visibility to an existing
+    // `gtk::Button` so the widget binding can transition the
+    // affordance without re-creating the button — mirrors
+    // `apply_app_add_action_sensitivity` on the
+    // sensitivity-update side and
+    // `apply_app_primary_menu_sensitivities` for the primary
+    // menu's mutating entries.
+    use libadwaita::prelude::*;
+    use paladin_core::ErrorKind;
+    use paladin_gtk::app::model::{apply_app_add_button_visibility, format_app_add_button_visible};
+    use paladin_gtk::app::state::AppState;
+    use paladin_gtk::startup_error::{StartupError, StartupErrorSource};
+
+    // `gtk::init` must run before `gtk::Button::new` will
+    // construct successfully. On dev environments without a
+    // display server we skip rather than fail — CI runs under
+    // `xvfb-run` per the Milestone 7 checklist.
+    if gtk4::init().is_err() {
+        println!("skipping: gtk::init failed (no display server); CI covers this under xvfb-run");
+        return;
+    }
+
+    let button = gtk4::Button::new();
+    // Pre-set the button to the opposite of the starting
+    // expectation so the assertion proves the helper applies
+    // the rule rather than reading whatever the constructor
+    // happened to default to.
+    button.set_visible(false);
+
+    let unlocked = AppState::Unlocked {
+        path: std::path::PathBuf::from("/dev/null"),
+    };
+    apply_app_add_button_visibility(&button, &unlocked);
+    assert_eq!(
+        button.is_visible(),
+        format_app_add_button_visible(&unlocked),
+        "apply_app_add_button_visibility must apply format_app_add_button_visible for the Unlocked state",
+    );
+    assert!(
+        button.is_visible(),
+        "Unlocked state must show the + button per §\"libadwaita usage\"",
+    );
+
+    // Transitioning to Locked (auto-lock) must hide the
+    // affordance so users cannot trigger an OpenAddDialog race
+    // against a locked vault.
+    let locked = AppState::Locked {
+        path: std::path::PathBuf::from("/dev/null"),
+    };
+    apply_app_add_button_visibility(&button, &locked);
+    assert_eq!(
+        button.is_visible(),
+        format_app_add_button_visible(&locked),
+        "apply_app_add_button_visibility must apply format_app_add_button_visible for the Locked state",
+    );
+    assert!(
+        !button.is_visible(),
+        "Locked state must hide the + button per §\"libadwaita usage\"",
+    );
+
+    // UnlockedBusy keeps the affordance visible (but disabled
+    // — see apply_app_add_action_sensitivity) so the surface
+    // does not re-flow when a vault worker spawns.
+    let busy = AppState::UnlockedBusy {
+        path: std::path::PathBuf::from("/dev/null"),
+    };
+    apply_app_add_button_visibility(&button, &busy);
+    assert_eq!(
+        button.is_visible(),
+        format_app_add_button_visible(&busy),
+        "apply_app_add_button_visibility must apply format_app_add_button_visible for the UnlockedBusy state",
+    );
+    assert!(
+        button.is_visible(),
+        "UnlockedBusy state must keep the + button visible per §\"libadwaita usage\"",
+    );
+
+    // StartupError must hide the affordance — there is no
+    // vault path open to add an account into.
+    let errored = AppState::StartupError {
+        path: None,
+        error: StartupError {
+            source: StartupErrorSource::PathResolution,
+            kind: ErrorKind::IoError,
+            rendered: String::from("resolve_failed"),
+        },
+    };
+    apply_app_add_button_visibility(&button, &errored);
+    assert_eq!(
+        button.is_visible(),
+        format_app_add_button_visible(&errored),
+        "apply_app_add_button_visibility must apply format_app_add_button_visible for the StartupError state",
+    );
+    assert!(
+        !button.is_visible(),
+        "StartupError state must hide the + button per §\"libadwaita usage\"",
+    );
+}
+
+#[test]
 fn build_app_add_action_registers_add_with_pinned_sensitivity() {
     // Per §"libadwaita usage" and §"Component tree": the
     // header-bar `+` button's
