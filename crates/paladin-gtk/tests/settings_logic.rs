@@ -1000,6 +1000,37 @@ fn format_settings_dialog_clipboard_clear_secs_row_title_returns_clear_delay() {
 }
 
 #[test]
+fn format_settings_dialog_saved_toast_returns_settings_saved() {
+    // Per `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
+    // "Toast surface", `SettingsComponent` confirms an accepted
+    // change with an `AdwToast` carrying the "settings-saved
+    // confirmation" body. Pinning the wording through a helper
+    // keeps the text in one place shared by the widget binding
+    // (`AdwToast::new(format_settings_dialog_saved_toast())`) and
+    // the pure-logic tests in `tests/settings_logic.rs`.
+    //
+    // The wording (`"Settings saved"`) names the affirmative
+    // outcome without restating which setting changed — the
+    // dialog body still shows the visible value the user picked
+    // — and reads identically whether the change came from a
+    // switch click or a debounced spinner edit. Verb-led, HIG-
+    // conformant, and brief enough for an `AdwToast` to fit the
+    // default timeout.
+    //
+    // No TUI parity: the TUI's `settings` command is CLI-shaped
+    // and emits a stdout confirmation instead of a transient
+    // toast (see `crates/paladin-tui/src/view`), so the wording
+    // is GTK-specific.
+    use paladin_gtk::settings::format_settings_dialog_saved_toast;
+
+    assert_eq!(
+        format_settings_dialog_saved_toast(),
+        "Settings saved",
+        "AdwToast body confirms the accepted change",
+    );
+}
+
+#[test]
 fn format_settings_dialog_title_returns_preferences() {
     // The SettingsComponent's `adw::PreferencesDialog::set_title`
     // attribute is populated from this helper. The wording

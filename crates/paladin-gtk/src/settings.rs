@@ -691,6 +691,36 @@ pub fn compose_settings_dialog_clipboard_clear_secs_sensitive(state: &SettingsSt
     state.committed().clipboard_clear_enabled()
 }
 
+/// Toast body rendered by `SettingsComponent` on an accepted
+/// change per `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage"
+/// > "Toast surface".
+///
+/// On a `SaveOutcome::Success` from [`SettingsState::apply_save_result`]
+/// the widget layer threads this helper into
+/// `AdwToast::new(format_settings_dialog_saved_toast())` and
+/// dispatches it through the application's `AdwToastOverlay` so the
+/// confirmation surfaces without blocking further interaction.
+/// Pinning the wording through this helper keeps the text in one
+/// place shared by the widget binding and the pure-logic tests in
+/// `tests/settings_logic.rs`.
+///
+/// The wording (`"Settings saved"`) names the affirmative outcome
+/// without restating which setting changed — the dialog body still
+/// shows the visible value the user picked — and reads identically
+/// whether the change came from a switch click or a debounced
+/// spinner edit. Verb-led, HIG-conformant, and brief enough for an
+/// `AdwToast` to fit the default timeout.
+///
+/// No TUI parity: the TUI's `settings` command is CLI-shaped and
+/// emits a stdout confirmation rather than a transient toast (see
+/// `crates/paladin-tui/src/view`), so the wording is GTK-specific.
+///
+/// Pure — returns a `'static str` without allocating.
+#[must_use]
+pub fn format_settings_dialog_saved_toast() -> &'static str {
+    "Settings saved"
+}
+
 /// Buffered spinner pending the 500 ms debounce.
 #[derive(Debug, Clone, Copy)]
 enum PendingSpinner {
