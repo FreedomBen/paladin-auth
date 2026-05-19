@@ -60,6 +60,28 @@ fn rename_updates_label_and_advances_updated_at() {
 }
 
 #[test]
+fn rename_to_identical_post_trim_label_still_advances_updated_at() {
+    // §4.7 contract: `Vault::rename` validates label + timestamp and
+    // bumps `updated_at` unconditionally on success — there is no
+    // "label unchanged → skip mutation" fast path. The trimmed input
+    // form is what gets compared and stored; an input that trims to
+    // the existing label is therefore observationally a no-op on
+    // `label()` but must still advance `updated_at`. Pins the
+    // always-bump rule so a future "skip if unchanged" optimization
+    // cannot be added without surfacing as a failing test.
+    let mut vault = empty_plaintext_vault();
+    let id = vault.add(make_account("alice"));
+    let original_updated = vault.get(id).unwrap().updated_at();
+
+    vault.rename(id, "  alice\t", later_now()).unwrap();
+
+    let renamed = vault.get(id).unwrap();
+    assert_eq!(renamed.label(), "alice");
+    assert_eq!(renamed.updated_at(), 1_700_001_000);
+    assert!(renamed.updated_at() > original_updated);
+}
+
+#[test]
 fn rename_trims_unicode_whitespace_around_label() {
     let mut vault = empty_plaintext_vault();
     let id = vault.add(make_account("alice"));
