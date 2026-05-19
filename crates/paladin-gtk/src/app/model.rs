@@ -2559,6 +2559,36 @@ pub fn format_app_about_dialog_debug_info() -> &'static str {
     )
 }
 
+/// Suggested filename the application menu's "About Paladin"
+/// entry's `AdwAboutDialog` hands to `set_debug_info_filename`
+/// for the "Save debug info" file-save dialog.
+///
+/// Returns the static filename `"paladin-debug-info.txt"` —
+/// `<app-slug>-debug-info.txt` matches the GNOME convention for
+/// the debug-info save target (the libadwaita default is
+/// `<application-name>-debug-info.txt`; pinning the slug here
+/// keeps the suggested filename stable even if a future
+/// `application-name` change drifts away from the `paladin`
+/// slug used by the CLI / executable name). The `.txt`
+/// extension matches the debug-info payload built by
+/// [`format_app_about_dialog_debug_info`] which is plain text,
+/// not Markdown or JSON.
+///
+/// Pinning the filename through a helper keeps the call site
+/// free of bare string literals shared between the widget
+/// binding and the pure-logic tests in
+/// `tests/startup_probes.rs`. Sibling of
+/// [`format_app_about_dialog_debug_info`] on the debug-info
+/// surface; together they pin both the payload and its file-
+/// save dialog's suggested name against a single source of
+/// truth.
+///
+/// Pure — returns a `'static str` without allocating.
+#[must_use]
+pub fn format_app_about_dialog_debug_info_filename() -> &'static str {
+    "paladin-debug-info.txt"
+}
+
 /// Bare `GLib` action-group name the primary `gio::Menu` resolves
 /// every entry target against.
 ///

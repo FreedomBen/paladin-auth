@@ -2980,6 +2980,59 @@ fn format_app_about_dialog_debug_info_carries_program_name_version_and_app_id() 
 }
 
 #[test]
+fn format_app_about_dialog_debug_info_filename_returns_paladin_debug_info_txt() {
+    // Per §"libadwaita usage" and §"About / help": the
+    // `AdwAboutDialog::set_debug_info_filename` slot pins the
+    // suggested filename `AdwAboutDialog` proposes in the
+    // "Save debug info" file-save dialog. The libadwaita default
+    // would be `<application-name>-debug-info.txt`; pinning the
+    // slug `paladin` here keeps the suggested filename stable
+    // even if a future `application-name` change drifts away
+    // from the `paladin` slug used by the CLI / executable name.
+    // The `.txt` extension matches the plain-text debug-info
+    // payload built by `format_app_about_dialog_debug_info`.
+    use paladin_gtk::app::model::format_app_about_dialog_debug_info_filename;
+
+    assert_eq!(
+        format_app_about_dialog_debug_info_filename(),
+        "paladin-debug-info.txt",
+        "AdwAboutDialog debug-info filename pins the paladin slug + .txt extension matching the plain-text payload",
+    );
+}
+
+#[test]
+fn format_app_about_dialog_debug_info_filename_is_non_empty_single_line_with_txt_extension() {
+    // Defense-in-depth: the suggested filename must be a non-
+    // empty single-line value with the `.txt` extension that
+    // matches the plain-text payload built by
+    // `format_app_about_dialog_debug_info`. A drift to e.g.
+    // `.md` or `.json` would surface as a confusing file-save
+    // dialog suggestion that does not match the actual payload
+    // contents.
+    use paladin_gtk::app::model::format_app_about_dialog_debug_info_filename;
+
+    let name = format_app_about_dialog_debug_info_filename();
+    assert!(
+        !name.is_empty(),
+        "AdwAboutDialog debug-info filename must be non-empty; got {name:?}",
+    );
+    assert!(
+        !name.contains('\n'),
+        "AdwAboutDialog debug-info filename must be a single line; got {name:?}",
+    );
+    assert!(
+        std::path::Path::new(name)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("txt")),
+        "AdwAboutDialog debug-info filename must end with `.txt` matching the plain-text payload; got {name:?}",
+    );
+    assert!(
+        !name.contains('/') && !name.contains('\\'),
+        "AdwAboutDialog debug-info filename must be a bare filename without path separators; got {name:?}",
+    );
+}
+
+#[test]
 fn format_app_about_dialog_debug_info_is_non_empty_text_with_no_trailing_whitespace() {
     // Defense-in-depth: the debug-info payload must be
     // non-empty (an empty payload would copy an empty string to
