@@ -784,6 +784,36 @@ pub fn format_init_dialog_plaintext_warning_label() -> &'static str {
     "I accept this risk"
 }
 
+/// Heading the widget hands to the
+/// [`InitDialogComponent`]'s destructive `vault_exists` race
+/// gate `AdwAlertDialog::set_heading`.
+///
+/// Returns the static heading string `"Replace existing vault?"`
+/// — the question-form GNOME-HIG heading for the destructive
+/// gate. The destructive gate opens when a vault appears between
+/// `inspect` and `create` (precheck reported `Clear` but the
+/// race resolved to `Existing`); the heading reads as the
+/// question, paired with [`format_init_dialog_force_confirm_label`]
+/// (`"Replace"`) so the affirmative button reads as the matched
+/// answer. The body of the `AlertDialog` comes from
+/// [`destructive_gate_body`] (which routes through
+/// [`paladin_core::format_init_force_warning`]); this helper
+/// only covers the short heading rendered above it.
+///
+/// Pinning the heading through a helper keeps the wording in one
+/// place shared by the widget binding and the pure-logic tests
+/// in `tests/init_dialog_logic.rs`. Sibling of
+/// [`crate::add_account::format_duplicate_alert_heading`]
+/// (`"Add anyway?"`) on the destructive-AlertDialog-heading side;
+/// together they pin every `AdwAlertDialog` heading in this
+/// crate as a question caption against a single source of truth.
+///
+/// Pure — returns a `'static str` without allocating.
+#[must_use]
+pub fn format_init_dialog_force_heading() -> &'static str {
+    "Replace existing vault?"
+}
+
 /// Destructive action-button label the [`InitDialogComponent`]'s
 /// `vault_exists` race gate renders on its in-dialog
 /// `AdwAlertDialog` with `destructive-action` styling.

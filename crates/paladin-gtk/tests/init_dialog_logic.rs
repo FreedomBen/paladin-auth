@@ -1151,6 +1151,74 @@ fn format_init_dialog_passphrase_title_matches_unlock_dialog_passphrase_title() 
 }
 
 #[test]
+fn format_init_dialog_force_heading_returns_replace_existing_vault_question() {
+    // Per §"Component tree" > `InitDialog`: when the precheck
+    // reports `Clear` but `Store::create` returns `vault_exists`
+    // (a vault appeared between `inspect` and `create`), the
+    // dialog opens an `AdwAlertDialog` whose heading is populated
+    // from this helper. The wording (`"Replace existing vault?"`)
+    // is the question-form GNOME-HIG heading for the destructive
+    // gate — pairing with the `format_init_dialog_force_confirm_label`
+    // (`"Replace"`) button caption so the heading reads as the
+    // question and the button reads as the affirmative answer.
+    // Pinning the heading through a helper keeps the wording in
+    // one place shared by the widget binding and the pure-logic
+    // tests.
+    use paladin_gtk::init_dialog::format_init_dialog_force_heading;
+
+    assert_eq!(
+        format_init_dialog_force_heading(),
+        "Replace existing vault?",
+        "InitDialog force-replace destructive gate heading reads as the question paired with the `Replace` confirm button",
+    );
+}
+
+#[test]
+fn format_init_dialog_force_heading_is_non_empty_single_line_question() {
+    // Defense-in-depth: the AlertDialog heading must be a non-
+    // empty single-line question caption so `AdwAlertDialog::set_heading`
+    // can render it as the dialog header without wrapping or
+    // truncation artifacts, and the trailing `?` keeps the
+    // heading framed as a question (matching the destructive
+    // `format_duplicate_alert_heading` "Add anyway?" convention).
+    use paladin_gtk::init_dialog::format_init_dialog_force_heading;
+
+    let heading = format_init_dialog_force_heading();
+    assert!(
+        !heading.is_empty(),
+        "InitDialog destructive gate heading must be non-empty; got {heading:?}",
+    );
+    assert!(
+        !heading.contains('\n'),
+        "InitDialog destructive gate heading must be a single line; got {heading:?}",
+    );
+    assert!(
+        heading.ends_with('?'),
+        "InitDialog destructive gate heading must end with `?` so it reads as a question; got {heading:?}",
+    );
+}
+
+#[test]
+fn format_init_dialog_force_heading_pairs_with_force_confirm_label() {
+    // Cross-check: the heading must mention the destructive verb
+    // (`"Replace"`) so the heading-question and the
+    // confirm-button label read as a matched question/answer
+    // pair. A drift where the heading said `"Overwrite"` but the
+    // button said `"Replace"` would surface as a confusing
+    // mismatch in the destructive affordance copy.
+    use paladin_gtk::init_dialog::{
+        format_init_dialog_force_confirm_label, format_init_dialog_force_heading,
+    };
+
+    let heading = format_init_dialog_force_heading();
+    let confirm = format_init_dialog_force_confirm_label();
+    assert!(
+        heading.contains(confirm),
+        "InitDialog destructive gate heading {heading:?} must contain the confirm-button verb {confirm:?} so the two surfaces read as a matched question/answer pair",
+    );
+}
+
+#[test]
 fn format_init_dialog_plaintext_warning_label_returns_accept_risk() {
     // Per §"Component tree" > `InitDialog`: when the user submits
     // the plaintext path (both passphrase fields empty), the
