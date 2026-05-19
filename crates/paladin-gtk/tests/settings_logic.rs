@@ -551,6 +551,31 @@ fn apply_save_io_error_routes_to_inline_and_rolls_back_visible_value() {
 // ---------------------------------------------------------------------------
 
 #[test]
+fn format_settings_dialog_auto_lock_group_title_returns_auto_lock() {
+    // The SettingsComponent organizes the dialog into two
+    // `AdwPreferencesGroup`s per `IMPLEMENTATION_PLAN_04_GTK.md`
+    // §"libadwaita usage" > "Preferences": one for auto-lock,
+    // one for clipboard-clear. This helper pins the title for
+    // the auto-lock group so the wording appears in one place
+    // shared by the widget binding and the pure-logic tests in
+    // `tests/settings_logic.rs`.
+    //
+    // The wording (`"Auto-lock"`) names the concept the §4.7
+    // `paladin_core::VaultSettings::auto_lock_enabled` /
+    // `paladin_core::VaultSettings::auto_lock_secs` fields
+    // control without restating what the toggle does — the
+    // `AdwSwitchRow` / `AdwSpinRow` row labels (added in
+    // follow-up commits) carry the per-control wording.
+    use paladin_gtk::settings::format_settings_dialog_auto_lock_group_title;
+
+    assert_eq!(
+        format_settings_dialog_auto_lock_group_title(),
+        "Auto-lock",
+        "AdwPreferencesGroup title names the auto-lock concept",
+    );
+}
+
+#[test]
 fn format_settings_dialog_title_returns_preferences() {
     // The SettingsComponent's `adw::PreferencesDialog::set_title`
     // attribute is populated from this helper. The wording

@@ -341,6 +341,30 @@ pub fn format_settings_dialog_title() -> &'static str {
     "Preferences"
 }
 
+/// Title rendered on the `AdwPreferencesGroup` that hosts the
+/// auto-lock toggle + spinner per `IMPLEMENTATION_PLAN_04_GTK.md`
+/// §"libadwaita usage" > "Preferences".
+///
+/// The `SettingsComponent` organizes the
+/// [`adw::PreferencesDialog`] into two `AdwPreferencesGroup`s:
+/// one for auto-lock and one for clipboard-clear. This helper
+/// pins the auto-lock group's title so the wording lives in one
+/// place shared by the widget binding and the pure-logic tests
+/// in `tests/settings_logic.rs`.
+///
+/// The wording (`"Auto-lock"`) names the concept the §4.7
+/// [`paladin_core::VaultSettings::auto_lock_enabled`] /
+/// [`paladin_core::VaultSettings::auto_lock_secs`] fields
+/// control without restating what each individual control does
+/// — the per-row labels (added in follow-up commits) carry the
+/// `AdwSwitchRow` / `AdwSpinRow` wording.
+///
+/// Pure — returns a `'static str` without allocating.
+#[must_use]
+pub fn format_settings_dialog_auto_lock_group_title() -> &'static str {
+    "Auto-lock"
+}
+
 /// Buffered spinner pending the 500 ms debounce.
 #[derive(Debug, Clone, Copy)]
 enum PendingSpinner {
