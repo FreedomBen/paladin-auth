@@ -21985,3 +21985,108 @@ fn format_app_about_dialog_program_name_does_not_contain_an_acknowledge_byte() {
         "AdwAboutDialog program_name must not contain the `\\x06` acknowledge byte (0x06); like BEL and BS, ACK is NOT matched by `char::is_whitespace()` (Unicode returns false for U+0006 ACK), so `_has_no_embedded_whitespace` does NOT catch `\\x06` — strictly as dangerous as backspace and bell here, neither caught by the whitespace companion; a stray `\\x06` slips past `_is_ascii_only` / `_is_non_empty_and_not_app_id` / `_matches_format_app_window_title` / `_is_segment_of_application_icon_name` / `_does_not_end_with_a_period` and the prior per-byte siblings, would render as a literal control glyph in the bold dialog-header program-name row, surface in the window manager's taskbar / dock display label via `_matches_format_app_window_title`, confuse serial-protocol-bridging tooling that treats `\\x06` as an ACK-frame indicator on `wmctrl -l` / `swaymsg -t get_tree` window-list dumps through a serial-bridged TTY, and break screen-reader application-name announcements at the byte boundary; got {program_name:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_version_does_not_contain_an_acknowledge_byte() {
+    // Defense-in-depth per-byte sibling extending the version-
+    // helper byte coverage past the just-completed `{null /
+    // horizontal-tab / carriage-return / vertical-tab / form-
+    // feed / backspace / line-feed / bell}` octuple to the
+    // acknowledge byte `\x06` (0x06), continuing the non-
+    // whitespace-classified C0 control-byte cycle past BEL
+    // (0x07) for this helper. Like BEL and BS, ACK is NOT
+    // matched by `char::is_whitespace()` (Unicode treats ACK as
+    // a control byte, not whitespace), so the existing
+    // `_version_has_no_embedded_whitespace` companion does NOT
+    // catch `\x06` — making acknowledge strictly as dangerous as
+    // backspace and bell for this helper, since the transitive
+    // protection collapses entirely rather than being merely
+    // brittle.
+    //
+    // None of the existing companions name the `\x06` byte
+    // directly on this helper:
+    //   - `_is_ascii_only` pins each byte as ASCII — `\x06` is
+    //     ASCII so it slips past;
+    //   - `_version_has_no_embedded_whitespace` uses
+    //     `char::is_whitespace()`, which returns *false* for
+    //     U+0006 ACK — strictly weaker coverage than the form-
+    //     feed case;
+    //   - `_is_non_empty_and_looks_like_semver` only enforces
+    //     non-empty + semver shape;
+    //   - `_starts_with_a_digit` / `_does_not_start_with_a_dot` /
+    //     `_does_not_end_with_a_dot` only constrain the boundary
+    //     bytes;
+    //   - `_has_at_least_three_dot_separated_segments` /
+    //     `_segments_are_non_empty` only check segment count and
+    //     non-emptiness;
+    //   - `_matches_cargo_pkg_version` only enforces equality
+    //     with `CARGO_PKG_VERSION` (a `\x06`-bearing value would
+    //     still match if `CARGO_PKG_VERSION` carried the same
+    //     bytes — and Cargo does not byte-screen `version`);
+    //   - `_does_not_contain_a_null_byte` /
+    //     `_does_not_contain_a_horizontal_tab_byte` /
+    //     `_does_not_contain_a_carriage_return_byte` /
+    //     `_does_not_contain_a_vertical_tab_byte` /
+    //     `_does_not_contain_a_form_feed_byte` /
+    //     `_does_not_contain_a_backspace_byte` /
+    //     `_does_not_contain_a_line_feed_byte` /
+    //     `_does_not_contain_a_bell_byte` each name a different
+    //     byte specifically.
+    //
+    // A regression that landed `"0.0.1\x06"` or `"0\x06.0\x06.1"`
+    // (acknowledge byte lifted from a `script(1)` typescript
+    // capturing raw `\x06` ACK-frame bytes from a CI build that
+    // bridged a serial console mid-version edit inside an
+    // interactively-edited workspace `Cargo.toml` `version`
+    // field, a `concat!(_, "\x06", _)` form, or a hand-edited
+    // helper override that pasted from a terminal session
+    // interfacing with a protocol bridge preserving ACK framing
+    // bytes) would mis-render in multiple downstream surfaces:
+    // (1) the GLib-backed `AdwAboutDialog::set_version` setter
+    // routes the value into Pango for inline rendering as the
+    // version caption beneath the program name — Pango's default
+    // rendering of a bare `\x06` byte is implementation-defined
+    // and typically renders as a literal control glyph (a hollow
+    // box or tofu-like placeholder), breaking the tidy version-
+    // caption layout; (2) the same version string is reused by
+    // `_release_notes_version_matches_about_dialog_version` for
+    // the "What's New in v<version>" header — a `\x06` byte in
+    // the version would propagate into the release-notes header
+    // and mis-render there too; (3) any downstream tooling that
+    // scrapes the version slot (release-tracker bots, update-
+    // check pings, crash-report assemblers, `cargo metadata`
+    // pipes) would propagate the stray `\x06` byte; a serial-
+    // bridged TTY-streamed update-check or release-tracker dump
+    // may have the `\x06` byte intercepted by the receiving end
+    // as an ACK-frame indicator and confuse protocol-bridging
+    // tooling that treats ACK as a transmission acknowledgement;
+    // (4) screen readers that announce the version caption may
+    // render the byte as a literal control character
+    // announcement, breaking the version-caption accessibility-
+    // tree announcement at the byte boundary.
+    //
+    // Pinning the no-`\x06` invariant directly on this helper
+    // surfaces the regression with a message naming the
+    // offending byte at build time rather than via a future
+    // whitespace-relaxation refactor (which would not have
+    // protected `\x06` anyway), a serial-protocol ACK-frame
+    // collision, or a screen-reader announcement break. Current
+    // helper returns the value sourced from `CARGO_PKG_VERSION`
+    // (no `\x06` byte), so this test passes today and serves as
+    // a forcing function so any future override of the helper —
+    // including the eventual landing of a build-metadata-
+    // suffixed version string — stays free of acknowledge bytes.
+    // Continues the non-whitespace-classified C0 control-byte
+    // cycle past the just-completed `{null / horizontal-tab /
+    // carriage-return / vertical-tab / form-feed / backspace /
+    // line-feed / bell}` octuple so the helper's byte-
+    // composition contract pins each forbidden control byte
+    // against a single source of truth.
+    use paladin_gtk::app::model::format_app_about_dialog_version;
+
+    let version = format_app_about_dialog_version();
+    assert!(
+        !version.contains('\x06'),
+        "AdwAboutDialog version must not contain the `\\x06` acknowledge byte (0x06); like BEL and BS, ACK is NOT matched by `char::is_whitespace()` (Unicode returns false for U+0006 ACK), so `_has_no_embedded_whitespace` does NOT catch `\\x06` — strictly as dangerous as backspace and bell here, neither caught by the whitespace companion; a stray `\\x06` slips past `_is_ascii_only` / `_is_non_empty_and_looks_like_semver` / `_starts_with_a_digit` / `_does_not_start_with_a_dot` / `_does_not_end_with_a_dot` / `_has_at_least_three_dot_separated_segments` / `_segments_are_non_empty` / `_matches_cargo_pkg_version` and the prior per-byte siblings, would render as a literal control glyph in the version caption beneath the program name, propagate into the \"What's New in v<version>\" release-notes header that reuses this string, confuse serial-protocol-bridging tooling that treats `\\x06` as an ACK-frame indicator on update-check or release-tracker dumps piped through a serial-bridged TTY, and break screen-reader version-caption announcements at the byte boundary; got {version:?}",
+    );
+}
