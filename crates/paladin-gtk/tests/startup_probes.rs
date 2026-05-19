@@ -6349,6 +6349,51 @@ fn format_app_window_accelerator_bindings_accelerators_contain_no_whitespace() {
 }
 
 #[test]
+fn format_app_primary_menu_action_names_are_distinct() {
+    // Cross-name defense-in-depth sibling of the per-name
+    // `format_app_menu_<X>_action_name_returns_<X>` exact-value
+    // pins and the per-name `_has_no_separator_or_whitespace` /
+    // `_round_trips_with_group_and_target` companions, plus the
+    // cross-entry `format_app_primary_menu_entries_actions_are_distinct`
+    // (fully-qualified target side) and `_entries_labels_are_distinct`
+    // (visible label side) companions on the entry-pair array.
+    //
+    // The bundled `format_app_primary_menu_action_names` array
+    // returns the six bare action names the widget binding hands
+    // to `gio::SimpleAction::new(name, None)` per
+    // §"libadwaita usage". Two bare names collapsing onto the same
+    // string — e.g. a rename that left both `"import"` and
+    // `"export"` pointing at `"import"` — would let the second
+    // `SimpleAction::new` silently overwrite the first inside the
+    // `gio::SimpleActionGroup` (it accepts duplicate inserts
+    // without raising) and route both menu entries' activations
+    // to the same `connect_activate` closure. Pinning the six
+    // bare names as pairwise distinct here catches that drift at
+    // the test layer with a message that names both colliding
+    // entries instead of only surfacing when a user clicked the
+    // second-registered entry and saw the first-registered
+    // dialog open.
+    //
+    // The per-name exact-value pins (`_returns_<X>`) catch the
+    // single-name wrong-value regression, and the cross-entry
+    // distinctness pins on the entry-pair array catch the label
+    // / target side; this assertion completes the bracket by
+    // pinning the bare-name array on the same distinctness
+    // invariant.
+    use paladin_gtk::app::model::format_app_primary_menu_action_names;
+
+    let names = format_app_primary_menu_action_names();
+    for (i, name_i) in names.iter().enumerate() {
+        for (j, name_j) in names.iter().enumerate().skip(i + 1) {
+            assert_ne!(
+                name_i, name_j,
+                "format_app_primary_menu_action_names entries at indices {i} and {j} must be distinct so the bundled SimpleActionGroup does not silently overwrite one entry with another (gio::SimpleActionGroup::add_action accepts duplicate bare names without raising); got duplicate {name_i:?}",
+            );
+        }
+    }
+}
+
+#[test]
 fn format_app_about_dialog_debug_info_program_name_line_ends_with_the_version() {
     // Defense-in-depth sibling of
     // `format_app_about_dialog_debug_info_app_id_line_ends_with_the_reverse_dns_app_id`
