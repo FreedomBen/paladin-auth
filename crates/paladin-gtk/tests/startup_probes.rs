@@ -7089,3 +7089,66 @@ fn format_app_about_dialog_program_name_is_ascii_only() {
         );
     }
 }
+
+#[test]
+fn format_app_about_dialog_application_icon_name_is_ascii_only() {
+    // Defense-in-depth sibling of
+    // `format_app_about_dialog_application_icon_name_matches_app_id`
+    // (exact-value pin against `APP_ID`),
+    // `format_app_about_dialog_application_icon_name_is_reverse_dns`
+    // (positive shape pin on `.`-separated reverse-DNS form),
+    // `format_app_about_dialog_application_icon_name_segments_are_non_empty`
+    // (positive pin on each segment being non-empty), and
+    // `format_app_about_dialog_application_icon_name_ends_with_gui_segment`
+    // (cross-segment pin against the `.Gui` front-end suffix).
+    // Those companions catch the wrong-value, wrong-shape,
+    // empty-segment, and wrong-suffix regressions but leave the
+    // non-ASCII-byte edge case ungated.
+    //
+    // The `AdwAboutDialog::application_icon_name` slot pins the
+    // same reverse-DNS value used by
+    // `gtk::Application::set_application_id` and the
+    // freedesktop icon-theme lookup keyed at
+    // `<icon-cache>/org.tamx.Paladin.Gui.svg` (per the §11
+    // packaging plan). The GLib `g_application_id_is_valid` check
+    // requires every byte of the application-id to be ASCII —
+    // a non-ASCII byte would either fail the runtime validation
+    // (preventing `gtk::Application::activate` from firing) or
+    // mis-route the icon-theme lookup against a filename the
+    // freedesktop spec doesn't honor (a non-ASCII byte in the
+    // icon-cache key would render the broken-image placeholder
+    // at runtime).
+    //
+    // A regression that swapped a Latin character for a visually-
+    // similar Unicode lookalike on the `Paladin` segment of the
+    // icon name — e.g. `"org.tamx.Pаladin.Gui"` where the second
+    // `a` is Cyrillic U+0430 — would slip past the
+    // `_matches_app_id` companion only if the `APP_ID` constant
+    // were similarly corrupted (lookalike-in-lookalike), and
+    // slip past the `_is_reverse_dns` / `_segments_are_non_empty`
+    // / `_ends_with_gui_segment` companions which check shape
+    // not byte composition. Pinning the ASCII-only invariant
+    // directly here surfaces the regression with a message
+    // naming the offending non-ASCII byte rather than as a
+    // confusing runtime icon-lookup miss.
+    //
+    // Mirror of the
+    // `_program_name_is_ascii_only`,
+    // `_window_action_names_use_ascii_lowercase_only`, and
+    // `_header_bar_button_icon_names_use_lowercase_kebab_case`
+    // companions; together they pin the ASCII-shape contract
+    // across the dialog program-name header, the dialog
+    // application-icon-name + the matching `gtk::Application`
+    // application_id, the window action targets, and the
+    // header-bar icon lookups against a single source of truth.
+    use paladin_gtk::app::model::format_app_about_dialog_application_icon_name;
+
+    let icon_name = format_app_about_dialog_application_icon_name();
+    for (idx, ch) in icon_name.char_indices() {
+        assert!(
+            ch.is_ascii(),
+            "AdwAboutDialog application_icon_name must use ASCII characters only so the value stays byte-identical to the gtk::Application::set_application_id input (which `g_application_id_is_valid` rejects on any non-ASCII byte) and resolves cleanly against the freedesktop icon-theme lookup at `<icon-cache>/{icon_name}.svg`; got non-ASCII char {ch:?} (U+{:04X}) at byte offset {idx} in {icon_name:?}",
+            ch as u32,
+        );
+    }
+}
