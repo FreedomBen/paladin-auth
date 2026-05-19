@@ -13516,3 +13516,112 @@ fn format_app_about_dialog_application_icon_name_does_not_contain_a_carriage_ret
         "AdwAboutDialog application_icon_name must not contain the `\\r` carriage-return byte (0x0D); the current `\\r`-cleanliness is only protected transitively by `_has_no_embedded_whitespace`'s broad `char::is_whitespace()` check, so a future refactor that relaxed the no-whitespace invariant might silently drop the `\\r` guard; a stray `\\r` would silently miss the `gtk::IconTheme` cache lookup (masking the bug as a placeholder-icon fallback), surface as a malformed window-icon-name property in the X11 / Wayland protocol exchange, and propagate into the AppStream metainfo `<id>` field where Flathub's strict reverse-DNS linter would fail the next package submission; got {application_icon_name:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_application_icon_name_does_not_contain_a_horizontal_tab_byte() {
+    // Defense-in-depth per-byte sibling completing the
+    // application-icon-name byte triplet (null / carriage-
+    // return / horizontal-tab) alongside the existing
+    // `_application_icon_name_does_not_contain_a_null_byte`
+    // and just-added
+    // `_application_icon_name_does_not_contain_a_carriage_return_byte`
+    // companions. The existing
+    // `_application_icon_name_has_no_embedded_whitespace`
+    // companion uses `char::is_whitespace()`, which returns
+    // true for `\t` — so the application-icon-name helper's
+    // `\t`-cleanliness is currently protected *transitively*
+    // by that one specific companion's broad whitespace
+    // check.
+    //
+    // But that transitive protection is *bundled* with the
+    // no-whitespace invariant as a whole: a future refactor
+    // that intentionally allowed an embedded space in the
+    // icon-name slot (a non-trivial scenario per
+    // freedesktop.org icon-naming convention, which forbids
+    // spaces in icon names — but a workspace-vendoring
+    // refactor or a CI codegen step could relax the
+    // `_has_no_embedded_whitespace` companion incorrectly)
+    // would naturally drop the `\t` check at the same time
+    // on the assumption that "ASCII whitespace is now
+    // allowed". That assumption is wrong: `\t` is a column-
+    // aligning control byte, not a layout-friendly space,
+    // and a `gtk::IconTheme::lookup_by_gicon` call with a
+    // `\t`-bearing icon name lands in undefined territory
+    // across GIO icon-loader implementations.
+    //
+    // The `_is_ascii_only` companion does not catch `\t`
+    // (since `\t` is ASCII, 0x09), the
+    // `_is_reverse_dns` / `_has_exactly_four_segments` /
+    // `_starts_with_a_lowercase_ascii_letter` companions
+    // only constrain the segment-count and leading byte, the
+    // `_ends_with_gui_segment` / `_does_not_end_with_a_dot`
+    // / `_does_not_start_with_a_dot` companions only
+    // constrain the suffix and dot-boundaries, the
+    // `_segments_are_non_empty` companion only checks
+    // segment non-emptiness (a `\t`-only segment is still
+    // non-empty as a byte sequence), the `_matches_app_id` /
+    // `_program_name_is_segment_of_application_icon_name`
+    // cross-helper companions only enforce equality with the
+    // app-id and segment containment with the program name,
+    // the `_does_not_contain_a_null_byte` companion only
+    // names `\0` specifically, and the
+    // `_does_not_contain_a_carriage_return_byte` companion
+    // only names `\r` specifically. None of those names `\t`
+    // directly on this helper — only the
+    // `_has_no_embedded_whitespace` companion catches it
+    // transitively, and that coupling is fragile.
+    //
+    // A regression that landed `"org\t.tamx.Paladin.Gui"`
+    // or `"org.tamx.Paladin.Gui\t"` (tab-aligned column from
+    // a `printf "%s\t%s"`-style app-id formatter, a
+    // `concat!(_, "\t", _)` form mirroring a TSV-style
+    // icon-table cell, or a hand-edited helper override that
+    // lifted the icon name from a tab-indented YAML /
+    // Markdown table row) would mis-render in multiple
+    // downstream surfaces: (1) the `gtk::IconTheme` lookup
+    // machinery treats the icon name as a key into the icon
+    // cache — a `\t`-bearing key would silently miss the
+    // cache and fall through to the placeholder fallback
+    // icon, masking the bug as a missing-icon surface
+    // rather than a malformed-icon-name surface; (2) the
+    // matching `gtk::Window::set_icon_name` setter (the
+    // icon name is mirrored onto the toplevel window's icon
+    // property) routes through GLib's GVariant string-
+    // marshalling layer and may surface as a malformed
+    // window-icon-name property in the X11 / Wayland
+    // protocol exchange, where some compositors silently
+    // drop the icon and others render a broken-icon
+    // placeholder; (3) the same icon name is mirrored to
+    // the AppStream metainfo file's `<id>` field per the
+    // §11.4 app-id convention — a `\t`-bearing icon name
+    // would propagate into the metainfo file and fail
+    // Flathub's strict reverse-DNS-validating metainfo
+    // linter on the next package submission; (4) the same
+    // icon name is the reverse-DNS app-id key for D-Bus
+    // service registration via `gio::Application::set_application_id`
+    // — a `\t`-bearing key fails the D-Bus well-known-name
+    // validation regex (`[A-Za-z_][A-Za-z0-9_-]*` per
+    // segment) and the GApplication instance fails to
+    // register on the session bus, breaking single-instance
+    // semantics.
+    //
+    // Pinning the no-`\t` invariant directly on this helper
+    // surfaces the regression with a message naming the
+    // offending byte at build time rather than as a
+    // downstream icon-cache miss, a malformed-window-icon
+    // protocol exchange, a Flathub metainfo linter failure,
+    // or a D-Bus single-instance registration failure.
+    // Current helper returns the literal
+    // `"org.tamx.Paladin.Gui"` (no `\t` byte), so this test
+    // passes today and serves as a forcing function so any
+    // future override of the helper — including the
+    // eventual landing of a Flatpak app-id rename — stays
+    // free of horizontal tabs.
+    use paladin_gtk::app::model::format_app_about_dialog_application_icon_name;
+
+    let application_icon_name = format_app_about_dialog_application_icon_name();
+    assert!(
+        !application_icon_name.contains('\t'),
+        "AdwAboutDialog application_icon_name must not contain the `\\t` horizontal-tab byte (0x09); the current `\\t`-cleanliness is only protected transitively by `_has_no_embedded_whitespace`'s broad `char::is_whitespace()` check, so a future refactor that relaxed the no-whitespace invariant might silently drop the `\\t` guard; a stray `\\t` would silently miss the `gtk::IconTheme` cache lookup, surface as a malformed window-icon-name property in the X11 / Wayland protocol exchange, propagate into the AppStream metainfo `<id>` field where Flathub's strict reverse-DNS linter would fail the next package submission, and fail D-Bus well-known-name validation when `gio::Application::set_application_id` tries to register the single-instance bus name; got {application_icon_name:?}",
+    );
+}
