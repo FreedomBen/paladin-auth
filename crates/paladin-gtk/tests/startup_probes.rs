@@ -9890,3 +9890,78 @@ fn format_app_about_dialog_developer_name_does_not_end_with_a_period() {
         "AdwAboutDialog developer_name must not end with a `.` byte (per the libadwaita convention for the `AdwAboutDialog` developer-name slot — the bold dialog-header attribution row renders the attribution as a phrase, not a sentence, so terminal punctuation visually clashes with the program name and version that share the same bold header row); got {developer_name:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_copyright_does_not_end_with_a_period() {
+    // Defense-in-depth sibling of
+    // `format_app_about_dialog_copyright_returns_paladin_copyright_line`
+    // (exact-value pin),
+    // `_starts_with_copyright_glyph_and_contains_developer_name`
+    // (leading-byte / shape pin),
+    // `_does_not_contain_a_year_token_so_it_does_not_drift_across_releases`
+    // (no-year pin),
+    // `_separates_glyph_and_attribution_with_a_single_space`
+    // (separator pin),
+    // `_is_a_single_line_without_embedded_newlines`
+    // (single-line pin), and `_ends_with_developer_name`
+    // (trailing-attribution pin). Those companions catch the
+    // wrong-value / wrong-shape / contains-year / wrong-
+    // separator / multi-line / wrong-trailing-attribution
+    // regressions but a regression that landed
+    // `"\u{00A9} The Paladin contributors."` (trailing period
+    // from a sentence-form override or from a `concat!(_, ".")`
+    // injection) would slip past most companions and only fail
+    // `_ends_with_developer_name` (because the string no longer
+    // literally ends with the developer-name substring) — but
+    // that companion's failure message names the trailing
+    // attribution rather than the offending trailing `.` byte.
+    //
+    // Mirror of the just-added
+    // `format_app_about_dialog_developer_name_does_not_end_with_a_period`
+    // companion on the dialog-footer copyright-row side. The
+    // libadwaita convention for the `AdwAboutDialog` copyright
+    // slot (which renders in the dialog footer below the
+    // license link) pins the copyright string as a notice, not
+    // a sentence — the libadwaita reference implementation
+    // deliberately omits terminal punctuation so the footer
+    // copyright row reads as a label rather than as a
+    // declarative sentence (matching the format used by
+    // GNOME's reference applications like GNOME Calculator,
+    // GNOME Text Editor, and GNOME Files, all of which render
+    // their copyright lines as `"© <year> <contributors>"`
+    // without a trailing period).
+    //
+    // A trailing period would mis-render the footer copyright
+    // row as a sentence fragment and would visually clash with
+    // the matching no-terminal-punctuation contract on the
+    // dialog-header attribution row (which the
+    // `_developer_name_does_not_end_with_a_period` companion
+    // pins) and the dialog-comments row (which the
+    // `_comments_does_not_end_with_a_period_per_libadwaita_convention`
+    // companion pins).
+    //
+    // Pinning the no-trailing-period invariant directly here
+    // surfaces the regression with a message naming the
+    // offending trailing byte at build time and keeps the
+    // dialog-footer copyright-row no-terminal-punctuation
+    // contract aligned with the libadwaita reference
+    // implementation across all three rendered text rows in
+    // the about dialog (header attribution row, header
+    // comments row, and footer copyright row).
+    //
+    // The current `format_app_about_dialog_copyright` returns
+    // `"\u{00A9} The Paladin contributors"` which ends with
+    // the `s` letter of the trailing `"contributors"` collective
+    // noun (sourced from `format_app_about_dialog_developer_name`),
+    // so this test passes today and serves as a forcing
+    // function so any future override of the copyright helper
+    // stays aligned with the libadwaita no-terminal-punctuation
+    // convention for the dialog-footer copyright row.
+    use paladin_gtk::app::model::format_app_about_dialog_copyright;
+
+    let copyright = format_app_about_dialog_copyright();
+    assert!(
+        !copyright.ends_with('.'),
+        "AdwAboutDialog copyright must not end with a `.` byte (per the libadwaita convention for the `AdwAboutDialog` copyright slot — the dialog-footer copyright row renders the copyright as a notice, not a sentence, matching the format used by GNOME reference applications like GNOME Calculator, GNOME Text Editor, and GNOME Files which all render their copyright lines without a trailing period); got {copyright:?}",
+    );
+}
