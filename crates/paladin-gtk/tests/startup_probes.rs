@@ -18077,6 +18077,109 @@ fn format_app_about_dialog_debug_info_filename_does_not_contain_a_form_feed_byte
 }
 
 #[test]
+fn format_app_about_dialog_debug_info_filename_does_not_contain_a_backspace_byte() {
+    // Defense-in-depth per-byte sibling extending the debug-
+    // info-filename byte coverage past the just-completed
+    // `{null / horizontal-tab / carriage-return / vertical-tab /
+    // form-feed}` quintuple to the backspace byte `\x08` (0x08),
+    // which sits one step below HT (0x09) in the ASCII C0 block
+    // and is the first non-whitespace-classified C0 byte in the
+    // cycle: unlike FF / HT / CR / LF / VT, `\x08` is NOT
+    // matched by `char::is_whitespace()` (Unicode treats BS as a
+    // control byte, not whitespace), so the existing
+    // `_debug_info_filename_has_no_embedded_whitespace` companion
+    // does NOT catch `\x08` even though it catches `\x0C`. The
+    // backspace byte therefore has NO transitive protection on
+    // this helper today — strictly more dangerous than form-
+    // feed.
+    //
+    // None of the existing companions name the `\x08` byte
+    // directly on this helper:
+    //   - `_is_ascii_only` pins each byte as ASCII — `\x08` is
+    //     ASCII so it slips past;
+    //   - `_debug_info_filename_has_no_embedded_whitespace` uses
+    //     `char::is_whitespace()`, which returns *false* for
+    //     U+0008 BS — strictly weaker coverage than the form-
+    //     feed case;
+    //   - `_returns_paladin_debug_info_txt` exact-value pin only
+    //     holds while the literal is unchanged;
+    //   - `_does_not_contain_path_separators` /
+    //     `_does_not_start_with_a_dot` only constrain the path-
+    //     safety and leading-byte boundaries;
+    //   - `_contains_exactly_one_period` /
+    //     `_extension_is_lowercase_txt` only check dot-count and
+    //     suffix;
+    //   - `_is_non_empty_single_line_with_txt_extension` only
+    //     checks non-empty + single-line + `.txt` suffix shape
+    //     (the single-line check uses `str::lines().count() == 1`
+    //     which does not split on `\x08`, so a `\x08`-bearing
+    //     filename like `"pala\x08din-debug-info.txt"` slips
+    //     past this companion entirely);
+    //   - `_does_not_contain_a_null_byte` /
+    //     `_does_not_contain_a_horizontal_tab_byte` /
+    //     `_does_not_contain_a_carriage_return_byte` /
+    //     `_does_not_contain_a_vertical_tab_byte` /
+    //     `_does_not_contain_a_form_feed_byte` each name a
+    //     different byte specifically.
+    //
+    // A regression that landed `"pala\x08din-debug-info.txt"`
+    // (backspace byte lifted from a `script(1)` typescript
+    // capturing raw `\x08` edit-stream bytes mid-token of an
+    // interactively-edited filename registry, a `concat!(_,
+    // "\x08", _)` form, or a hand-edited helper override that
+    // pasted from a terminal session recording) would mis-render
+    // in multiple downstream surfaces, identically to the form-
+    // feed analysis but with the additional terminal-erase
+    // semantic: (1) the GLib-backed
+    // `AdwAboutDialog::set_debug_info_filename` setter routes
+    // the value into the dialog's "Save Debug Information…"
+    // file-chooser pre-fill — a `\x08`-bearing filename mis-
+    // renders in the GtkFileDialog's filename entry as a literal
+    // control glyph (a hollow box or tofu-like placeholder), and
+    // a TTY-rendered GtkFileDialog screen-cast or `xdotool`
+    // dump would terminal-erase the preceding glyph — letting
+    // the rendered filename diverge from the bytes a maintainer
+    // pastes into a reply; (2) when the user saves the debug-
+    // info payload to disk, the filesystem `open(2)` call routes
+    // the `\x08`-bearing filename through the kernel VFS layer —
+    // most POSIX-conformant kernels (Linux, macOS, BSDs) accept
+    // `\x08` in filenames but `ls`, `find`, and `tar` output
+    // piped to a terminal would terminal-erase the preceding
+    // glyph in the rendered listing, making the file appear with
+    // a different name in directory listings than its actual
+    // bytes — a classic display-spoofing primitive that has
+    // historically been used to hide malicious files behind
+    // visually-similar legitimate filenames; (3) the saved
+    // file's filename surfaces in any bug-tracker attachment URL
+    // or chat-attachment column where the `\x08` byte mis-
+    // renders or terminal-erases the preceding glyph, confusing
+    // the maintainer's triage workflow.
+    //
+    // Pinning the no-`\x08` invariant directly on this helper
+    // surfaces the regression with a message naming the
+    // offending byte at build time rather than as a downstream
+    // file-chooser mis-render, a terminal-erase display-spoof
+    // hiding the actual filename, or a chat-attachment column-
+    // render artifact. Current helper returns the literal
+    // `"paladin-debug-info.txt"` (no `\x08` byte), so this test
+    // passes today and serves as a forcing function so any
+    // future override of the helper — including the eventual
+    // landing of a localized filename — stays free of backspace
+    // bytes. Continues the debug-info-filename C0 control-byte
+    // cycle past the just-completed `{null / horizontal-tab /
+    // carriage-return / vertical-tab / form-feed}` quintuple so
+    // the helper's byte-composition contract pins each forbidden
+    // control byte against a single source of truth.
+    use paladin_gtk::app::model::format_app_about_dialog_debug_info_filename;
+
+    let debug_info_filename = format_app_about_dialog_debug_info_filename();
+    assert!(
+        !debug_info_filename.contains('\x08'),
+        "AdwAboutDialog debug_info_filename must not contain the `\\x08` backspace byte (0x08); unlike form-feed, `_has_no_embedded_whitespace` does NOT catch `\\x08` because `char::is_whitespace()` returns false for U+0008 BS (strictly weaker coverage than form-feed which the whitespace companion does catch transitively); a stray `\\x08` slips past `_is_ascii_only` / `_returns_paladin_debug_info_txt` / `_does_not_contain_path_separators` / `_does_not_start_with_a_dot` / `_contains_exactly_one_period` / `_extension_is_lowercase_txt` / `_is_non_empty_single_line_with_txt_extension` (`str::lines().count() == 1` does not split on `\\x08`) and the per-byte siblings, would mis-render as a literal control glyph in the GtkFileDialog filename entry pre-fill, enable terminal-erase display-spoofing in `ls` / `find` / `tar` output piped to a terminal (the rendered listing diverges from the on-disk filename because `\\x08` erases the preceding glyph — a historical primitive for hiding malicious files behind visually-similar legitimate filenames), and confuse maintainer triage with control-glyph artifacts in chat-attachment column renders; got {debug_info_filename:?}",
+    );
+}
+
+#[test]
 fn format_app_about_dialog_url_helpers_do_not_contain_a_form_feed_byte() {
     // Cross-helper defense-in-depth sibling looping over the
     // three `AdwAboutDialog` footer URL helpers
