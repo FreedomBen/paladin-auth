@@ -13625,3 +13625,105 @@ fn format_app_about_dialog_application_icon_name_does_not_contain_a_horizontal_t
         "AdwAboutDialog application_icon_name must not contain the `\\t` horizontal-tab byte (0x09); the current `\\t`-cleanliness is only protected transitively by `_has_no_embedded_whitespace`'s broad `char::is_whitespace()` check, so a future refactor that relaxed the no-whitespace invariant might silently drop the `\\t` guard; a stray `\\t` would silently miss the `gtk::IconTheme` cache lookup, surface as a malformed window-icon-name property in the X11 / Wayland protocol exchange, propagate into the AppStream metainfo `<id>` field where Flathub's strict reverse-DNS linter would fail the next package submission, and fail D-Bus well-known-name validation when `gio::Application::set_application_id` tries to register the single-instance bus name; got {application_icon_name:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_debug_info_filename_does_not_contain_a_carriage_return_byte() {
+    // Defense-in-depth per-byte sibling extending the
+    // debug-info-filename byte coverage from the existing
+    // `_debug_info_filename_does_not_contain_a_null_byte`
+    // companion to the carriage-return byte. The existing
+    // `_debug_info_filename_has_no_embedded_whitespace`
+    // companion uses `char::is_whitespace()`, which returns
+    // true for `\r` — so the debug-info-filename helper's
+    // `\r`-cleanliness is currently protected *transitively*
+    // by that one specific companion's broad whitespace
+    // check.
+    //
+    // But that transitive protection is *bundled* with the
+    // no-whitespace invariant as a whole: a future refactor
+    // that intentionally allowed a localized filename with
+    // a single embedded space (a non-trivial scenario per
+    // freedesktop.org file-naming convention but feasible
+    // if a localized "Debug information.txt" filename were
+    // ever rendered to non-ASCII locales) would naturally
+    // relax the `_has_no_embedded_whitespace` companion —
+    // and the human author of that refactor might
+    // reasonably restructure the check to only reject
+    // specific control bytes (newline, tab) without
+    // separately calling out `\r` on the assumption that
+    // "ASCII whitespace is now allowed". That assumption is
+    // wrong: `\r` is a control byte, not a layout-friendly
+    // whitespace character, and a save-to-disk filename
+    // with `\r` lands in undefined territory across POSIX
+    // filesystem implementations (some kernel ports of
+    // `open(2)` reject `\r` outright, some accept it but
+    // render the file name un-listable via `ls` / `find`
+    // tools that strip non-printable bytes).
+    //
+    // The `_is_ascii_only` companion does not catch `\r`
+    // (since `\r` is ASCII, 0x0D), the
+    // `_returns_paladin_debug_info_txt` exact-value pin only
+    // holds while the literal is unchanged, the
+    // `_does_not_contain_path_separators` /
+    // `_does_not_start_with_a_dot` companions only constrain
+    // the path-safety and leading-byte boundaries, the
+    // `_contains_exactly_one_period` /
+    // `_extension_is_lowercase_txt` companions only check
+    // the dot-count and suffix, the
+    // `_is_non_empty_single_line_with_txt_extension`
+    // companion only checks non-empty + single-line + `.txt`
+    // suffix shape (the single-line check uses
+    // `str::lines().count() == 1` which transparently
+    // collapses `\r\n` or `\r` line endings into a single
+    // line by `str::lines()` semantics), and the
+    // `_does_not_contain_a_null_byte` companion only names
+    // `\0` specifically. None of those names `\r` directly
+    // on this helper — only the
+    // `_has_no_embedded_whitespace` companion catches it
+    // transitively, and that coupling is fragile.
+    //
+    // A regression that landed `"paladin-debug-info.txt\r"`
+    // (CRLF copy-paste from a Windows-edited filename
+    // literal with the `\n` stripped during a manual line-
+    // ending fix-up, a `concat!(_, "\r", _)` form, or a
+    // hand-edited helper override that lifted the filename
+    // from a CR-only Mac Classic-style text file) would
+    // mis-render in three downstream surfaces: (1) the
+    // GLib-backed `AdwAboutDialog::set_debug_info_filename`
+    // setter routes the value into the dialog's "Save
+    // Debug Information…" file-chooser pre-fill — a `\r`-
+    // bearing filename mis-renders in the GtkFileDialog's
+    // filename entry as a literal control glyph and may
+    // also surface in the suggested-filename display in the
+    // file chooser's title bar; (2) when the user saves the
+    // debug-info payload to disk, the filesystem `open(2)`
+    // call routes the `\r`-bearing filename through the
+    // kernel VFS layer — some POSIX-conformant kernels
+    // (Linux, macOS, BSDs) accept `\r` in filenames but
+    // many shell-tooling pipelines (`ls`, `find`, `tar`)
+    // assume printable-only filenames and either silently
+    // strip the `\r` or display the file as an un-readable
+    // entry; (3) the saved file's filename surfaces in any
+    // bug-tracker attachment URL or chat-attachment column
+    // where the `\r` byte mis-renders as `^M` artifacts,
+    // confusing the maintainer's triage workflow.
+    //
+    // Pinning the no-`\r` invariant directly on this helper
+    // surfaces the regression with a message naming the
+    // offending byte at build time rather than as a
+    // downstream file-chooser mis-render, a shell-tooling
+    // visibility break, or a chat-attachment column-render
+    // artifact. Current helper returns the literal
+    // `"paladin-debug-info.txt"` (no `\r` byte), so this
+    // test passes today and serves as a forcing function so
+    // any future override of the helper — including the
+    // eventual landing of a localized filename — stays free
+    // of carriage returns.
+    use paladin_gtk::app::model::format_app_about_dialog_debug_info_filename;
+
+    let debug_info_filename = format_app_about_dialog_debug_info_filename();
+    assert!(
+        !debug_info_filename.contains('\r'),
+        "AdwAboutDialog debug_info_filename must not contain the `\\r` carriage-return byte (0x0D); the current `\\r`-cleanliness is only protected transitively by `_has_no_embedded_whitespace`'s broad `char::is_whitespace()` check, so a future refactor that relaxed the no-whitespace invariant to allow a localized filename like `\"Debug information.txt\"` might silently drop the `\\r` guard alongside the space relaxation; a stray `\\r` would mis-render as a control glyph in the GtkFileDialog filename entry pre-fill, surface as an un-listable file under shell-tooling pipelines (`ls`, `find`, `tar`) that strip non-printable bytes, and confuse maintainer triage with `^M` artifacts in chat-attachment column renders; got {debug_info_filename:?}",
+    );
+}
