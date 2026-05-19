@@ -20662,3 +20662,109 @@ fn format_app_about_dialog_program_name_does_not_contain_a_bell_byte() {
         "AdwAboutDialog program_name must not contain the `\\x07` bell byte (0x07); like BS, BEL is NOT matched by `char::is_whitespace()` (Unicode returns false for U+0007 BEL), so `_has_no_embedded_whitespace` does NOT catch `\\x07` — strictly as dangerous as backspace here, neither caught by the whitespace companion; a stray `\\x07` slips past `_is_ascii_only` / `_is_non_empty_and_not_app_id` / `_matches_format_app_window_title` / `_is_segment_of_application_icon_name` / `_does_not_end_with_a_period` and the prior per-byte siblings, would render as a literal control glyph in the bold dialog-header program-name row, surface in the window manager's taskbar / dock display label via `_matches_format_app_window_title`, ring the terminal bell on `wmctrl -l` / `swaymsg -t get_tree` window-list dumps (an audible-alert injection / covert side-channel primitive in shared CI environments), and break screen-reader application-name announcements at the byte boundary; got {program_name:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_version_does_not_contain_a_bell_byte() {
+    // Defense-in-depth per-byte sibling extending the version-
+    // helper byte coverage past the just-completed `{null /
+    // horizontal-tab / carriage-return / vertical-tab / form-
+    // feed / backspace / line-feed}` septuple to the bell byte
+    // `\x07` (0x07), opening the next non-whitespace-classified
+    // C0 control-byte cycle for this helper. Like BS, BEL is NOT
+    // matched by `char::is_whitespace()` (Unicode treats BEL as
+    // a control byte, not whitespace), so the existing
+    // `_version_has_no_embedded_whitespace` companion does NOT
+    // catch `\x07` even though it catches `\x0C`. The bell byte
+    // therefore has NO transitive protection on this helper
+    // today — strictly as dangerous as backspace, neither caught
+    // by the whitespace companion.
+    //
+    // None of the existing companions name the `\x07` byte
+    // directly on this helper:
+    //   - `_is_ascii_only` pins each byte as ASCII — `\x07` is
+    //     ASCII so it slips past;
+    //   - `_version_has_no_embedded_whitespace` uses
+    //     `char::is_whitespace()`, which returns *false* for
+    //     U+0007 BEL — strictly weaker coverage than the form-
+    //     feed case;
+    //   - `_is_non_empty_and_looks_like_semver` only enforces
+    //     non-empty + semver shape;
+    //   - `_starts_with_a_digit` / `_does_not_start_with_a_dot` /
+    //     `_does_not_end_with_a_dot` only constrain the boundary
+    //     bytes;
+    //   - `_has_at_least_three_dot_separated_segments` /
+    //     `_segments_are_non_empty` only check segment count and
+    //     non-emptiness;
+    //   - `_matches_cargo_pkg_version` only enforces equality
+    //     with `CARGO_PKG_VERSION` (a `\x07`-bearing value would
+    //     still match if `CARGO_PKG_VERSION` carried the same
+    //     bytes — and Cargo does not byte-screen `version`);
+    //   - `_does_not_contain_a_null_byte` /
+    //     `_does_not_contain_a_horizontal_tab_byte` /
+    //     `_does_not_contain_a_carriage_return_byte` /
+    //     `_does_not_contain_a_vertical_tab_byte` /
+    //     `_does_not_contain_a_form_feed_byte` /
+    //     `_does_not_contain_a_backspace_byte` /
+    //     `_does_not_contain_a_line_feed_byte` each name a
+    //     different byte specifically.
+    //
+    // A regression that landed `"0.0.1\x07"` or `"0\x07.0\x07.1"`
+    // (bell byte lifted from a `script(1)` typescript capturing
+    // raw `\x07` audible-alert bytes from a CI build that
+    // triggered the terminal bell mid-version edit inside an
+    // interactively-edited workspace `Cargo.toml` `version`
+    // field, a `concat!(_, "\x07", _)` form, or a hand-edited
+    // helper override that pasted from a terminal session
+    // recording preserving audible-alert bytes) would mis-render
+    // in multiple downstream surfaces: (1) the GLib-backed
+    // `AdwAboutDialog::set_version` setter routes the value into
+    // Pango for inline rendering as the version caption beneath
+    // the program name — Pango's default rendering of a bare
+    // `\x07` byte is implementation-defined and typically renders
+    // as a literal control glyph (a hollow box or tofu-like
+    // placeholder), breaking the tidy version-caption layout;
+    // (2) the same version string is reused by
+    // `_release_notes_version_matches_about_dialog_version` for
+    // the "What's New in v<version>" header — a `\x07` byte in
+    // the version would propagate into the release-notes header
+    // and mis-render there too; (3) any downstream tooling that
+    // scrapes the version slot (release-tracker bots, update-
+    // check pings, crash-report assemblers, `cargo metadata`
+    // pipes) would propagate the stray `\x07` byte; a TTY-
+    // streamed update-check or release-tracker dump piped to
+    // `less` would ring the terminal bell on the user's session
+    // — an audible-alert injection / covert side-channel
+    // primitive where an attacker who controlled the upstream
+    // `Cargo.toml` could trigger CI-runner bell notifications
+    // repeatedly or weaponize the bell as a covert side-channel
+    // in a shared CI environment; (4) screen readers that
+    // announce the version caption may emit an audible alert
+    // tone or render the byte as a literal control character
+    // announcement, breaking the version-caption accessibility-
+    // tree announcement at the byte boundary.
+    //
+    // Pinning the no-`\x07` invariant directly on this helper
+    // surfaces the regression with a message naming the
+    // offending byte at build time rather than via a future
+    // whitespace-relaxation refactor (which would not have
+    // protected `\x07` anyway), a terminal-bell injection, or a
+    // screen-reader announcement break. Current helper returns
+    // the value sourced from `CARGO_PKG_VERSION` (no `\x07`
+    // byte), so this test passes today and serves as a forcing
+    // function so any future override of the helper — including
+    // the eventual landing of a build-metadata-suffixed version
+    // string — stays free of bell bytes. Opens the next non-
+    // whitespace-classified C0 control-byte cycle past the just-
+    // completed `{null / horizontal-tab / carriage-return /
+    // vertical-tab / form-feed / backspace / line-feed}`
+    // septuple so the helper's byte-composition contract pins
+    // each forbidden control byte against a single source of
+    // truth.
+    use paladin_gtk::app::model::format_app_about_dialog_version;
+
+    let version = format_app_about_dialog_version();
+    assert!(
+        !version.contains('\x07'),
+        "AdwAboutDialog version must not contain the `\\x07` bell byte (0x07); like BS, BEL is NOT matched by `char::is_whitespace()` (Unicode returns false for U+0007 BEL), so `_has_no_embedded_whitespace` does NOT catch `\\x07` — strictly as dangerous as backspace here, neither caught by the whitespace companion; a stray `\\x07` slips past `_is_ascii_only` / `_is_non_empty_and_looks_like_semver` / `_starts_with_a_digit` / `_does_not_start_with_a_dot` / `_does_not_end_with_a_dot` / `_has_at_least_three_dot_separated_segments` / `_segments_are_non_empty` / `_matches_cargo_pkg_version` and the prior per-byte siblings, would render as a literal control glyph in the version caption beneath the program name, propagate into the \"What's New in v<version>\" release-notes header that reuses this string, ring the terminal bell on update-check or release-tracker dumps piped to `less` (an audible-alert injection / covert side-channel primitive in shared CI environments), and break screen-reader version-caption announcements at the byte boundary; got {version:?}",
+    );
+}
