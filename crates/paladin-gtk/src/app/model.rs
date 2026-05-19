@@ -2239,6 +2239,90 @@ pub fn build_app_add_action(state: &AppState) -> gtk::gio::SimpleAction {
     action
 }
 
+/// Build the application menu's "About Paladin" entry's
+/// [`adw::AboutDialog`] from the pinned `format_app_about_dialog_*`
+/// helpers.
+///
+/// Walks every `format_app_about_dialog_*` helper and threads
+/// the returned value through the matching setter on the
+/// [`adw::AboutDialog`]:
+///
+/// * [`format_app_about_dialog_program_name`] →
+///   `set_application_name`
+/// * [`format_app_about_dialog_version`] → `set_version`
+/// * [`format_app_about_dialog_application_icon_name`] →
+///   `set_application_icon`
+/// * [`format_app_about_dialog_developer_name`] →
+///   `set_developer_name`
+/// * [`format_app_about_dialog_copyright`] → `set_copyright`
+/// * [`format_app_about_dialog_license_type`] →
+///   `set_license_type`
+/// * [`format_app_about_dialog_website`] → `set_website`
+/// * [`format_app_about_dialog_issue_url`] → `set_issue_url`
+/// * [`format_app_about_dialog_support_url`] →
+///   `set_support_url`
+/// * [`format_app_about_dialog_comments`] → `set_comments`
+/// * [`format_app_about_dialog_developers`] →
+///   `set_developers`
+/// * [`format_app_about_dialog_designers`] →
+///   `set_designers`
+/// * [`format_app_about_dialog_artists`] →
+///   `set_artists`
+/// * [`format_app_about_dialog_documenters`] →
+///   `set_documenters`
+/// * [`format_app_about_dialog_translator_credits`] →
+///   `set_translator_credits`
+/// * [`format_app_about_dialog_release_notes_version`] →
+///   `set_release_notes_version`
+/// * [`format_app_about_dialog_release_notes`] →
+///   `set_release_notes`
+/// * [`format_app_about_dialog_debug_info`] →
+///   `set_debug_info`
+/// * [`format_app_about_dialog_debug_info_filename`] →
+///   `set_debug_info_filename`
+///
+/// Centralizing the construction in one helper means every
+/// `AdwAboutDialog` property is sourced exclusively from a
+/// pinned `format_app_about_dialog_*` helper — a drift between
+/// the widget binding and the format helpers cannot survive
+/// because the widget reads the dialog through this single
+/// entry point. The widget binding calls
+/// `build_app_about_dialog().present(Some(parent))` on the
+/// `"about"` action's `connect_activate` handler so the dialog
+/// pops up rooted at the active `adw::ApplicationWindow`.
+///
+/// Mirrors [`build_app_primary_menu_model`] and
+/// [`build_app_primary_action_group`] on the construction side;
+/// together they pin the menu's model, action group, and the
+/// "About Paladin" dialog content against a single source of
+/// truth.
+///
+/// Returns an owned [`adw::AboutDialog`].
+#[must_use]
+pub fn build_app_about_dialog() -> adw::AboutDialog {
+    let dialog = adw::AboutDialog::new();
+    dialog.set_application_name(format_app_about_dialog_program_name());
+    dialog.set_version(format_app_about_dialog_version());
+    dialog.set_application_icon(format_app_about_dialog_application_icon_name());
+    dialog.set_developer_name(format_app_about_dialog_developer_name());
+    dialog.set_copyright(format_app_about_dialog_copyright());
+    dialog.set_license_type(format_app_about_dialog_license_type());
+    dialog.set_website(format_app_about_dialog_website());
+    dialog.set_issue_url(format_app_about_dialog_issue_url());
+    dialog.set_support_url(format_app_about_dialog_support_url());
+    dialog.set_comments(format_app_about_dialog_comments());
+    dialog.set_developers(&format_app_about_dialog_developers());
+    dialog.set_designers(&format_app_about_dialog_designers());
+    dialog.set_artists(&format_app_about_dialog_artists());
+    dialog.set_documenters(&format_app_about_dialog_documenters());
+    dialog.set_translator_credits(format_app_about_dialog_translator_credits());
+    dialog.set_release_notes_version(format_app_about_dialog_release_notes_version());
+    dialog.set_release_notes(format_app_about_dialog_release_notes());
+    dialog.set_debug_info(format_app_about_dialog_debug_info());
+    dialog.set_debug_info_filename(format_app_about_dialog_debug_info_filename());
+    dialog
+}
+
 /// Human-readable program name the application menu's "About
 /// Paladin" entry's `AdwAboutDialog` displays in its header.
 ///

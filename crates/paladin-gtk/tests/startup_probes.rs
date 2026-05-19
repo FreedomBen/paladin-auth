@@ -1840,6 +1840,171 @@ fn build_app_primary_menu_model_appends_every_format_app_primary_menu_entries_pa
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
+fn build_app_about_dialog_threads_every_format_app_about_dialog_helper_through_a_setter() {
+    // Per §"libadwaita usage" and §"About / help": the
+    // application menu's "About Paladin" entry presents an
+    // `adw::AboutDialog` whose every visible property is
+    // sourced exclusively from a pinned
+    // `format_app_about_dialog_*` helper. This helper builds
+    // the dialog in one place so the widget binding cannot
+    // accidentally bypass a format helper or hand-spell a
+    // duplicate literal. The cross-check below reads each
+    // property back off the dialog and asserts the value
+    // matches the corresponding helper — a drift between the
+    // builder and the helpers (or between the helpers and the
+    // setters' actual property names) would surface here as a
+    // failing assertion.
+    use paladin_gtk::app::model::{
+        build_app_about_dialog, format_app_about_dialog_application_icon_name,
+        format_app_about_dialog_artists, format_app_about_dialog_comments,
+        format_app_about_dialog_copyright, format_app_about_dialog_debug_info,
+        format_app_about_dialog_debug_info_filename, format_app_about_dialog_designers,
+        format_app_about_dialog_developer_name, format_app_about_dialog_developers,
+        format_app_about_dialog_documenters, format_app_about_dialog_issue_url,
+        format_app_about_dialog_license_type, format_app_about_dialog_program_name,
+        format_app_about_dialog_release_notes, format_app_about_dialog_release_notes_version,
+        format_app_about_dialog_support_url, format_app_about_dialog_translator_credits,
+        format_app_about_dialog_version, format_app_about_dialog_website,
+    };
+
+    // `gtk::init` (and the libadwaita type registration it
+    // performs) must run before `adw::AboutDialog::new()` will
+    // construct successfully. CI installs `xvfb` (per the
+    // §"Smoke test" entry of the Milestone 7 checklist) so this
+    // init succeeds in CI; on a dev environment without a
+    // display server we skip the assertions rather than fail —
+    // the `xvfb-run`-driven `tests/gtk_smoke.rs` still covers
+    // the end-to-end dialog mount.
+    if gtk4::init().is_err() {
+        println!("skipping: gtk::init failed (no display server); CI covers this under xvfb-run");
+        return;
+    }
+
+    let dialog = build_app_about_dialog();
+    assert_eq!(
+        dialog.application_name(),
+        format_app_about_dialog_program_name(),
+        "AdwAboutDialog application_name must be sourced from format_app_about_dialog_program_name",
+    );
+    assert_eq!(
+        dialog.version(),
+        format_app_about_dialog_version(),
+        "AdwAboutDialog version must be sourced from format_app_about_dialog_version",
+    );
+    assert_eq!(
+        dialog.application_icon(),
+        format_app_about_dialog_application_icon_name(),
+        "AdwAboutDialog application_icon must be sourced from format_app_about_dialog_application_icon_name",
+    );
+    assert_eq!(
+        dialog.developer_name(),
+        format_app_about_dialog_developer_name(),
+        "AdwAboutDialog developer_name must be sourced from format_app_about_dialog_developer_name",
+    );
+    assert_eq!(
+        dialog.copyright(),
+        format_app_about_dialog_copyright(),
+        "AdwAboutDialog copyright must be sourced from format_app_about_dialog_copyright",
+    );
+    assert_eq!(
+        dialog.license_type(),
+        format_app_about_dialog_license_type(),
+        "AdwAboutDialog license_type must be sourced from format_app_about_dialog_license_type",
+    );
+    assert_eq!(
+        dialog.website(),
+        format_app_about_dialog_website(),
+        "AdwAboutDialog website must be sourced from format_app_about_dialog_website",
+    );
+    assert_eq!(
+        dialog.issue_url(),
+        format_app_about_dialog_issue_url(),
+        "AdwAboutDialog issue_url must be sourced from format_app_about_dialog_issue_url",
+    );
+    assert_eq!(
+        dialog.support_url(),
+        format_app_about_dialog_support_url(),
+        "AdwAboutDialog support_url must be sourced from format_app_about_dialog_support_url",
+    );
+    assert_eq!(
+        dialog.comments(),
+        format_app_about_dialog_comments(),
+        "AdwAboutDialog comments must be sourced from format_app_about_dialog_comments",
+    );
+    let developers_actual: Vec<String> = dialog
+        .developers()
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    let developers_expected: Vec<String> = format_app_about_dialog_developers()
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect();
+    assert_eq!(
+        developers_actual, developers_expected,
+        "AdwAboutDialog developers must be sourced from format_app_about_dialog_developers",
+    );
+    let designers_actual: Vec<String> =
+        dialog.designers().iter().map(ToString::to_string).collect();
+    let designers_expected: Vec<String> = format_app_about_dialog_designers()
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect();
+    assert_eq!(
+        designers_actual, designers_expected,
+        "AdwAboutDialog designers must be sourced from format_app_about_dialog_designers",
+    );
+    let artists_actual: Vec<String> = dialog.artists().iter().map(ToString::to_string).collect();
+    let artists_expected: Vec<String> = format_app_about_dialog_artists()
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect();
+    assert_eq!(
+        artists_actual, artists_expected,
+        "AdwAboutDialog artists must be sourced from format_app_about_dialog_artists",
+    );
+    let documenters_actual: Vec<String> = dialog
+        .documenters()
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    let documenters_expected: Vec<String> = format_app_about_dialog_documenters()
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect();
+    assert_eq!(
+        documenters_actual, documenters_expected,
+        "AdwAboutDialog documenters must be sourced from format_app_about_dialog_documenters",
+    );
+    assert_eq!(
+        dialog.translator_credits(),
+        format_app_about_dialog_translator_credits(),
+        "AdwAboutDialog translator_credits must be sourced from format_app_about_dialog_translator_credits",
+    );
+    assert_eq!(
+        dialog.release_notes_version(),
+        format_app_about_dialog_release_notes_version(),
+        "AdwAboutDialog release_notes_version must be sourced from format_app_about_dialog_release_notes_version",
+    );
+    assert_eq!(
+        dialog.release_notes(),
+        format_app_about_dialog_release_notes(),
+        "AdwAboutDialog release_notes must be sourced from format_app_about_dialog_release_notes",
+    );
+    assert_eq!(
+        dialog.debug_info(),
+        format_app_about_dialog_debug_info(),
+        "AdwAboutDialog debug_info must be sourced from format_app_about_dialog_debug_info",
+    );
+    assert_eq!(
+        dialog.debug_info_filename(),
+        format_app_about_dialog_debug_info_filename(),
+        "AdwAboutDialog debug_info_filename must be sourced from format_app_about_dialog_debug_info_filename",
+    );
+}
+
+#[test]
 fn build_app_add_action_registers_add_with_pinned_sensitivity() {
     // Per §"libadwaita usage" and §"Component tree": the
     // header-bar `+` button's
