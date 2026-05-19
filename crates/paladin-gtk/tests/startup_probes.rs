@@ -9802,3 +9802,91 @@ fn format_app_about_dialog_application_icon_name_starts_with_a_lowercase_ascii_l
         "AdwAboutDialog application_icon_name must start with a lowercase ASCII letter (the canonical leading byte for a reverse-DNS application-ID per the freedesktop / GNOME / D-Bus naming convention codified in `gio::ApplicationId::is_valid` — segments may not start with a digit or `.` and the on-disk directory layout pins lowercase-ASCII-letter leading bytes for `/app/share/`, `~/.local/share/applications/`, hicolor icon theme resource keys, and GSettings schema base paths) so the application-startup / packaging / Flatpak build-finish pipeline routes through the canonical lowercase-ASCII-letter leading byte rather than as a downstream rejection; got leading_byte={leading_byte:?} for icon_name={icon_name:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_developer_name_does_not_end_with_a_period() {
+    // Defense-in-depth sibling of
+    // `format_app_about_dialog_developer_name_returns_the_paladin_contributors`
+    // (exact-value pin),
+    // `_is_non_empty_and_distinct_from_program_name` (shape pin),
+    // `_is_a_single_line_without_embedded_newlines`
+    // (single-line pin), `_has_no_surrounding_whitespace`
+    // (no-leading/trailing-whitespace pin), `_is_ascii_only`
+    // (byte-composition pin),
+    // `_starts_with_the_definite_article` (leading-word pin),
+    // and `_ends_with_the_contributors_collective_noun`
+    // (trailing-word pin). Those companions catch the wrong-
+    // value / wrong-shape / multi-line / surrounding-whitespace
+    // / non-ASCII / wrong-leading-word / wrong-trailing-word
+    // regressions but a regression that landed
+    // `"The Paladin contributors."` (trailing period from a
+    // sentence-form override) would slip past the
+    // `_ends_with_the_contributors_collective_noun` companion
+    // only if that companion's `ends_with` substring check were
+    // weakened — currently it pins the trailing substring as
+    // `"contributors"` which a `"contributors."` form would
+    // *not* end with, so the existing companion does catch this
+    // specific regression, but only as a "wrong trailing word"
+    // failure rather than naming the trailing `.` byte directly.
+    //
+    // Mirror of
+    // `format_app_about_dialog_comments_does_not_end_with_a_period_per_libadwaita_convention`
+    // on the dialog-header attribution-row side. The libadwaita
+    // convention for the `AdwAboutDialog` developer-name slot
+    // (which renders in the bold dialog-header attribution row
+    // next to the program name and version) pins the
+    // attribution string as a phrase, not a sentence — the
+    // bold-header layout in the libadwaita reference
+    // implementation deliberately omits terminal punctuation
+    // so the attribution row reads as a label rather than as a
+    // declarative sentence. A trailing period would mis-render
+    // the attribution row as a sentence fragment and would
+    // visually clash with the program name and version that
+    // share the same bold header row (neither of which carries
+    // a trailing period).
+    //
+    // A regression that landed `"The Paladin contributors."`
+    // (trailing period from a sentence-form override or from a
+    // `concat!("The Paladin contributors", ".")` injection)
+    // would slip past the `_is_non_empty_and_distinct_from_program_name`
+    // companion (the string is still non-empty and distinct
+    // from `"Paladin"`), the
+    // `_is_a_single_line_without_embedded_newlines` companion
+    // (the `.` byte is not a newline), the
+    // `_has_no_surrounding_whitespace` companion (the `.` is
+    // not whitespace), the `_is_ascii_only` companion (the `.`
+    // byte is ASCII), and the
+    // `_starts_with_the_definite_article` companion (the
+    // leading substring is still `"The "`). The
+    // `_ends_with_the_contributors_collective_noun` companion
+    // would catch the `"contributors."` form because the
+    // string no longer ends with `"contributors"`, but its
+    // failure message would name the trailing collective noun
+    // rather than the offending trailing `.` byte.
+    //
+    // Pinning the no-trailing-period invariant directly here
+    // surfaces the regression with a message naming the
+    // offending trailing byte at build time and keeps the
+    // dialog-header attribution-row no-terminal-punctuation
+    // contract aligned with the libadwaita reference
+    // implementation across both the dialog-header attribution
+    // row and the dialog-comments row (which already has its
+    // own `_comments_does_not_end_with_a_period_per_libadwaita_convention`
+    // companion).
+    //
+    // The current `format_app_about_dialog_developer_name`
+    // returns `"The Paladin contributors"` which ends with the
+    // `s` letter of the trailing `"contributors"` collective
+    // noun, so this test passes today and serves as a forcing
+    // function so any future override of the developer-name
+    // helper stays aligned with the libadwaita no-terminal-
+    // punctuation convention for the dialog-header attribution
+    // row.
+    use paladin_gtk::app::model::format_app_about_dialog_developer_name;
+
+    let developer_name = format_app_about_dialog_developer_name();
+    assert!(
+        !developer_name.ends_with('.'),
+        "AdwAboutDialog developer_name must not end with a `.` byte (per the libadwaita convention for the `AdwAboutDialog` developer-name slot — the bold dialog-header attribution row renders the attribution as a phrase, not a sentence, so terminal punctuation visually clashes with the program name and version that share the same bold header row); got {developer_name:?}",
+    );
+}
