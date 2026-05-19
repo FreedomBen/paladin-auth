@@ -5489,3 +5489,44 @@ fn format_app_window_accelerator_bindings_accelerators_carry_modifier_prefix() {
         );
     }
 }
+
+#[test]
+fn format_app_about_dialog_program_name_is_segment_of_application_icon_name() {
+    // Cross-consistency: the human-display program-name
+    // `"Paladin"` (`AdwAboutDialog::set_program_name`) and the
+    // reverse-DNS application-icon-name `"org.tamx.Paladin.Gui"`
+    // (`AdwAboutDialog::set_application_icon` and the
+    // `RelmApp::new(APP_ID)` identifier) are two views of the
+    // same product identity. The
+    // `format_app_about_dialog_program_name_is_non_empty_and_not_app_id`
+    // test pins they are not equal (program-name must not be the
+    // reverse-DNS form), and the
+    // `format_app_about_dialog_application_icon_name_is_reverse_dns`
+    // test pins the icon-name *is* reverse-DNS, but neither
+    // assertion ties the two together — a rename of the program-
+    // name to e.g. `"Vault"` without a matching `APP_ID` rename
+    // to `"org.tamx.Vault.Gui"` would leave the desktop bar's
+    // identity (`format_app_window_title` /
+    // `format_app_about_dialog_program_name`) drifting from the
+    // icon-theme lookup key on the launcher / about-dialog
+    // header. Mirroring the
+    // `format_app_about_dialog_program_name_matches_format_app_window_title`
+    // and the `format_app_about_dialog_application_icon_name_matches_app_id`
+    // cross-consistency pairs, this assertion ties the two views
+    // together by requiring the bare program-name to appear
+    // verbatim as a `.`-separated segment of the reverse-DNS
+    // identifier so a unilateral rename on either side fails the
+    // test rather than only surfacing when a user notices the
+    // launcher icon does not match the about-dialog header.
+    use paladin_gtk::app::model::{
+        format_app_about_dialog_application_icon_name, format_app_about_dialog_program_name,
+    };
+
+    let program = format_app_about_dialog_program_name();
+    let icon = format_app_about_dialog_application_icon_name();
+    let segments: Vec<&str> = icon.split('.').collect();
+    assert!(
+        segments.contains(&program),
+        "AdwAboutDialog program-name {program:?} must appear verbatim as a `.`-separated segment of the application-icon-name {icon:?} so the human display name and the reverse-DNS APP_ID identifier stay tied to the same brand string; if a future rename moves one, both must move together",
+    );
+}
