@@ -600,6 +600,29 @@ pub fn compose_settings_dialog_clipboard_clear_secs_value(state: &SettingsState)
     f64::from(state.visible_clipboard_clear_secs())
 }
 
+/// State-driven projection of the auto-lock `AdwSwitchRow`'s
+/// active state, surfaced as the `bool` that `AdwSwitchRow::set_active`
+/// expects, per `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree"
+/// > `SettingsComponent`.
+///
+/// Returns `state.committed().auto_lock_enabled()` — toggle
+/// clicks bypass the spinner debounce buffer because they reflect
+/// a discrete user intent (per
+/// [`SettingsState::toggle_auto_lock_enabled`]), so the committed
+/// snapshot is the single source of truth for the switch's
+/// active state. Threading the bool through this composer keeps
+/// the widget binding minimal: the widget's `#[watch] set_active:`
+/// reads a single `bool` instead of reaching into
+/// [`CommittedSettings`] inline.
+///
+/// Pure — borrows the state and returns a `bool` without allocating.
+/// Sibling of [`compose_settings_dialog_auto_lock_secs_value`]
+/// on the auto-lock side.
+#[must_use]
+pub fn compose_settings_dialog_auto_lock_enabled_active(state: &SettingsState) -> bool {
+    state.committed().auto_lock_enabled()
+}
+
 /// Buffered spinner pending the 500 ms debounce.
 #[derive(Debug, Clone, Copy)]
 enum PendingSpinner {

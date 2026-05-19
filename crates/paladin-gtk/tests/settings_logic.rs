@@ -674,6 +674,39 @@ fn format_settings_dialog_clipboard_clear_group_title_returns_clipboard() {
 }
 
 #[test]
+fn compose_settings_dialog_auto_lock_enabled_active_mirrors_committed_auto_lock_enabled() {
+    // The auto-lock `AdwSwitchRow` binds its `set_active:`
+    // attribute to this composer per
+    // `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+    // `SettingsComponent`. Toggle clicks bypass the spinner
+    // debounce buffer because they reflect a discrete user
+    // intent — the committed `CommittedSettings::auto_lock_enabled`
+    // is therefore the single source of truth for the switch's
+    // active state.
+    //
+    // Sibling of `compose_settings_dialog_auto_lock_secs_value`
+    // on the auto-lock side and of the clipboard-clear toggle
+    // composer (added in a follow-up commit) on the switch-row
+    // side; together they cover every state-driven row binding
+    // the `SettingsComponent` mounts.
+    use paladin_gtk::settings::{
+        compose_settings_dialog_auto_lock_enabled_active, CommittedSettings, SettingsState,
+    };
+
+    let state_on = SettingsState::new(CommittedSettings::new(true, 600, false, 30));
+    assert!(
+        compose_settings_dialog_auto_lock_enabled_active(&state_on),
+        "composer is `true` when committed.auto_lock_enabled is true",
+    );
+
+    let state_off = SettingsState::new(CommittedSettings::new(false, 600, false, 30));
+    assert!(
+        !compose_settings_dialog_auto_lock_enabled_active(&state_off),
+        "composer is `false` when committed.auto_lock_enabled is false",
+    );
+}
+
+#[test]
 fn compose_settings_dialog_auto_lock_secs_value_casts_visible_auto_lock_secs_to_f64() {
     // The auto-lock `AdwSpinRow` binds its `set_value:` attribute
     // to this composer per `IMPLEMENTATION_PLAN_04_GTK.md`
