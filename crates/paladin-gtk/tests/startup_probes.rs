@@ -1410,6 +1410,63 @@ fn format_app_menu_preferences_action_name_round_trips_with_group_and_target() {
 }
 
 #[test]
+fn format_app_menu_preferences_accelerator_returns_control_comma() {
+    // The primary menu's "Preferences" `gio::SimpleAction` is wired
+    // to the `<Control>comma` keyboard accelerator per
+    // `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
+    // "Primary menu" — the canonical Preferences shortcut GNOME
+    // applications register via
+    // `gio::Application::set_accels_for_action("app.preferences",
+    //  &["<Control>comma"])`. The widget binding hands this
+    // accelerator string to that registration so the menu and any
+    // future keyboard activation paths share one shortcut surface
+    // against a single source of truth.
+    //
+    // Pairs with `format_app_menu_quit_accelerator` /
+    // `format_app_add_button_accelerator` on the other pinned-
+    // accelerator surfaces; together the trio is what a future
+    // `wire_app_window_accelerators` helper iterates against
+    // `[(<Control>n, app.add), (<Control>q, app.quit),
+    //  (<Control>comma, app.preferences)]`.
+    use paladin_gtk::app::model::format_app_menu_preferences_accelerator;
+
+    assert_eq!(
+        format_app_menu_preferences_accelerator(),
+        "<Control>comma",
+        "primary menu Preferences accelerator must be the gtk-rs `<Control>comma` form for `set_accels_for_action`",
+    );
+}
+
+#[test]
+fn format_app_menu_preferences_accelerator_is_non_empty_and_well_formed() {
+    // Defensive: the accelerator string is consumed by
+    // `gio::Application::set_accels_for_action`, which accepts
+    // any non-empty gtk-rs accelerator spelling. An accidental
+    // empty string or whitespace-leading entry would silently
+    // unbind the shortcut at runtime without surfacing a
+    // compile-time error — guard against that drift here so the
+    // Preferences menu entry's `<Ctrl>,` shortcut stays wired.
+    // Mirrors the structural assertions on
+    // `format_app_add_button_accelerator_is_non_empty_and_well_formed`
+    // / `format_app_menu_quit_accelerator_is_non_empty_and_well_formed`.
+    use paladin_gtk::app::model::format_app_menu_preferences_accelerator;
+
+    let accel = format_app_menu_preferences_accelerator();
+    assert!(
+        !accel.is_empty(),
+        "accelerator must be non-empty; got {accel:?}",
+    );
+    assert!(
+        !accel.starts_with(' ') && !accel.ends_with(' '),
+        "accelerator must not have leading or trailing whitespace; got {accel:?}",
+    );
+    assert!(
+        accel.contains('<') && accel.contains('>'),
+        "accelerator must use the `<Modifier>key` form; got {accel:?}",
+    );
+}
+
+#[test]
 fn format_app_menu_about_action_name_returns_about() {
     // The `gio::SimpleAction::new("about", None)` registration on
     // the `AppModel`'s `app` action group reads its bare name from

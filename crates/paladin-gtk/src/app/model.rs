@@ -2060,6 +2060,39 @@ pub fn format_app_menu_preferences_action_name() -> &'static str {
     "preferences"
 }
 
+/// Keyboard accelerator the primary menu's "Preferences" entry
+/// is wired to per `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita
+/// usage" > "Primary menu" and the GNOME HIG keyboard
+/// conventions.
+///
+/// Returns the gtk-rs accelerator spelling `"<Control>comma"` —
+/// the canonical Preferences shortcut GNOME applications register
+/// via `gio::Application::set_accels_for_action("app.preferences",
+/// &["<Control>comma"])`. The widget binding hands this
+/// accelerator string to that registration so the menu and any
+/// future keyboard activation paths share one shortcut surface
+/// against a single source of truth.
+///
+/// The `comma` keysym (lowercase, gtk's bare key name for `,`)
+/// matches gtk-rs `accels_for_action`'s recognised spelling;
+/// `<Control>,` (with the literal `,`) is also accepted by
+/// `gtk::accelerator_parse` but `comma` is the canonical key-name
+/// form so the helper stays grounded in the gtk key-symbol table.
+/// Mirrors the [`format_app_add_button_accelerator`] /
+/// [`format_app_menu_quit_accelerator`] siblings on the other
+/// pinned-accelerator surfaces.
+///
+/// Pure — returns a `'static str` without allocating. Sibling of
+/// [`format_app_menu_preferences_action`] (fully-qualified action
+/// target) and [`format_app_menu_preferences_action_name`] (bare
+/// action name); together they pin the action target, its bare
+/// name, and its keyboard accelerator against a single source of
+/// truth.
+#[must_use]
+pub fn format_app_menu_preferences_accelerator() -> &'static str {
+    "<Control>comma"
+}
+
 /// Bare `GLib` action name the primary `gio::Menu`'s "About
 /// Paladin" entry binds via [`format_app_menu_about_action`].
 ///
