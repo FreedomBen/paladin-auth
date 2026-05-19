@@ -5845,3 +5845,43 @@ fn format_app_about_dialog_developer_name_is_a_single_line_without_embedded_newl
         "AdwAboutDialog developer-name must use LF-only conventions (no embedded CR), matching the GNOME stack's text expectation for a single-line attribution caption; got {developer:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_copyright_does_not_contain_a_year_token_so_it_does_not_drift_across_releases(
+) {
+    // Cross-consistency with the `format_app_about_dialog_copyright`
+    // docstring which explicitly calls out: "Pinning the literal
+    // here keeps the dialog footer copyright row stable across
+    // releases without depending on a year-derived value (which
+    // would silently drift on a future release without a matching
+    // constant update)."
+    //
+    // The existing `_starts_with_copyright_glyph_and_contains_developer_name`
+    // companion pins the `©` glyph and the attribution string but
+    // leaves the year invariant ungated, so a future refactor
+    // that copy-pasted a year token into the copyright literal —
+    // e.g. `"© 2026 The Paladin contributors"` — would slip past
+    // the existing assertions while quietly turning the footer
+    // into a value that needs a manual bump every January.
+    // Pinning the no-year invariant here catches that drift at
+    // the pinned layer rather than only being noticed when the
+    // year ticks over and a user files a bug that the copyright
+    // is out of date.
+    //
+    // The assertion scans for any four-consecutive-ASCII-digit
+    // substring inside the copyright payload. The legal `©`
+    // glyph is U+00A9 (non-ASCII) so it cannot match this
+    // pattern, and the canonical attribution string
+    // `"The Paladin contributors"` contains no digit runs.
+    use paladin_gtk::app::model::format_app_about_dialog_copyright;
+
+    let copyright = format_app_about_dialog_copyright();
+    let bytes = copyright.as_bytes();
+    let has_four_digit_run = bytes
+        .windows(4)
+        .any(|window| window.iter().all(u8::is_ascii_digit));
+    assert!(
+        !has_four_digit_run,
+        "AdwAboutDialog copyright must not contain a four-digit year token so the footer copyright row stays stable across releases without depending on a year-derived value that would silently drift on a future release without a matching constant update; got {copyright:?}",
+    );
+}
