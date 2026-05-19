@@ -31,6 +31,8 @@ const SHORT_SECRET_B32: &str = "JBSWY3DPEHPK3PXP";
 // no ShortSecret warning. The default for the merge-policy fixtures.
 const LONG_SECRET_A: &str = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP";
 const LONG_SECRET_B: &str = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+const LONG_SECRET_C: &str = "MFRGGZDFMZTWQ2LKMFRGGZDFMZTWQ2LK";
+const LONG_SECRET_D: &str = "NBSWY3DPO5XXE3DENBSWY3DPO5XXE3DE";
 
 const FIXTURE_NOW_SECS: u64 = 1_700_000_000;
 const IMPORT_NOW_SECS: u64 = 1_700_001_000;
@@ -384,4 +386,51 @@ fn import_accounts_warnings_collected_before_merge_policy_with_source_index() {
         },
         "warning from a SKIPPED row must still be reported"
     );
+}
+
+// ---- Skip with multiple collisions in one batch -------------------
+
+#[test]
+fn import_accounts_skip_collects_all_collisions_in_skipped_count() {
+    // Pre-populate three TOTP accounts, each with a distinct secret.
+    let mut vault = empty_plaintext_vault();
+    let a_id = vault.add(validated_totp("a", Some("X"), LONG_SECRET_A).account);
+    let b_id = vault.add(validated_totp("b", Some("X"), LONG_SECRET_B).account);
+    let c_id = vault.add(validated_totp("c", Some("X"), LONG_SECRET_C).account);
+    let a_updated_pre = vault.get(a_id).unwrap().updated_at();
+    let b_updated_pre = vault.get(b_id).unwrap().updated_at();
+    let c_updated_pre = vault.get(c_id).unwrap().updated_at();
+
+    // Batch: three exact `(secret, issuer, label)` duplicates in mixed
+    // source order plus one fresh row.
+    let batch = vec![
+        validated_totp("c", Some("X"), LONG_SECRET_C),
+        validated_totp("a", Some("X"), LONG_SECRET_A),
+        validated_totp("d", Some("X"), LONG_SECRET_D),
+        validated_totp("b", Some("X"), LONG_SECRET_B),
+    ];
+
+    let report = vault
+        .import_accounts(batch, ImportConflict::Skip, import_now())
+        .expect("import");
+
+    assert_eq!(report.skipped, 3);
+    assert_eq!(report.imported, 1);
+    assert_eq!(report.replaced, 0);
+    assert_eq!(report.appended, 0);
+    assert_eq!(report.accounts.len(), 1);
+
+    // Vault now has 4 accounts: original 3 + the fresh `d`.
+    assert_eq!(vault.iter().count(), 4);
+
+    // The single ID in `report.accounts` must point to the fresh row.
+    let fresh_id = report.accounts[0];
+    let fresh = vault.get(fresh_id).expect("fresh row stored");
+    assert_eq!(fresh.label(), "d");
+    assert_eq!(fresh.issuer(), Some("X"));
+
+    // Originals: IDs and updated_at timestamps unchanged.
+    assert_eq!(vault.get(a_id).unwrap().updated_at(), a_updated_pre);
+    assert_eq!(vault.get(b_id).unwrap().updated_at(), b_updated_pre);
+    assert_eq!(vault.get(c_id).unwrap().updated_at(), c_updated_pre);
 }

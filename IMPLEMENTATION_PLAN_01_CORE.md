@@ -1246,7 +1246,7 @@ and committed in any order.
   acceptable but the choice must be user-visible — flag it to
   the user before landing.
 
-- [ ] **`ImportConflict::Skip` with multiple collisions in one
+- [x] **`ImportConflict::Skip` with multiple collisions in one
   batch.** Add
   `import_accounts_skip_collects_all_collisions_in_skipped_count`
   to `tests/vault_import_accounts.rs`. Pre-populate a vault with
