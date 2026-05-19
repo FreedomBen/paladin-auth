@@ -7943,3 +7943,79 @@ fn format_app_about_dialog_comments_is_ascii_only() {
         );
     }
 }
+
+#[test]
+fn format_app_action_group_name_is_ascii_lowercase_only() {
+    // Defense-in-depth sibling of
+    // `format_app_action_group_name_returns_app` (exact-value
+    // pin to the static literal `"app"`) and
+    // `format_app_action_group_name_has_no_separator_or_whitespace`
+    // (positive shape pin on non-empty + no `.` separator + no
+    // ASCII-space byte). Those companions catch the
+    // wrong-value, empty, embedded-`.`, and embedded-ASCII-space
+    // regressions but leave the casing-drift, embedded-tab /
+    // embedded-newline / embedded-other-ASCII-whitespace, and
+    // non-ASCII-byte edge cases ungated:
+    //
+    // * `_returns_app` only catches the case where the canonical
+    //   literal is similarly corrupted in a lookalike-in-lookalike
+    //   refactor.
+    // * `_has_no_separator_or_whitespace` uses
+    //   `!group.contains(' ')` which only matches the literal
+    //   ASCII-space byte (U+0020) and would accept embedded tab
+    //   (U+0009), newline (U+000A), carriage return (U+000D),
+    //   or any non-ASCII whitespace untouched.
+    // * Neither companion constrains the byte composition
+    //   beyond the absence of `.` and `' '`, so an upper-case
+    //   regression like `"App"` (capital `A`) or a Unicode
+    //   lookalike like `"аpp"` (Cyrillic `а` U+0430 followed
+    //   by ASCII `pp`) would slip past both.
+    //
+    // The libadwaita / GLib convention for `gio::ActionGroup`
+    // names — the prefix consumed by
+    // `gio::ApplicationWindow::insert_action_group(name, group)`
+    // and joined to per-action bare names via the `<group>.<action>`
+    // separator — is lowercase ASCII matching the action-name
+    // convention pinned on the
+    // `format_app_window_action_names_use_ascii_lowercase_only`
+    // sibling. Action targets are spelled
+    // `<group>.<action>` (e.g. `"app.import"`,
+    // `"app.add"`), so the group prefix and every action name
+    // must share the same lowercase-ASCII byte composition for
+    // the `dispatch_app_window_action` case-sensitive lookup
+    // (`dispatch_app_window_action_is_case_sensitive`) to
+    // resolve. A regression that introduced an upper-case
+    // letter on the group-prefix side — e.g. renaming `"app"`
+    // to `"App"` while leaving every per-action helper at the
+    // lowercase form — would slip past both existing
+    // companions while mis-routing every primary-menu
+    // SimpleAction activation through the case-sensitive
+    // dispatch helper at runtime, surfacing as a no-op menu
+    // press rather than as a build-time identifier mismatch.
+    //
+    // The current `"app"` literal is lowercase-ASCII, so this
+    // test passes today and serves as a forcing function so
+    // any future override of the group-prefix helper stays
+    // aligned with the action-name convention and the
+    // `_window_action_names_use_ascii_lowercase_only`
+    // companion already pinned on the per-action-name side.
+    // Mirror of that companion plus the
+    // `_header_bar_button_icon_names_use_lowercase_kebab_case`
+    // sibling on the icon-theme-keys side; together they pin
+    // the lowercase-ASCII shape contract across the GLib
+    // action-group prefix, the GLib SimpleAction bare names,
+    // and the freedesktop icon-theme keys against a single
+    // source of truth, closing the casing-drift regression
+    // surface across every GLib / freedesktop identifier the
+    // `AppModel` registers at runtime.
+    use paladin_gtk::app::model::format_app_action_group_name;
+
+    let group = format_app_action_group_name();
+    for (idx, ch) in group.char_indices() {
+        assert!(
+            ch.is_ascii_lowercase(),
+            "format_app_action_group_name = {group:?} must use lowercase ASCII letters only so the gio::ActionGroup prefix shares the same case-folded byte composition as the per-action SimpleAction names pinned by `_window_action_names_use_ascii_lowercase_only` and the case-sensitive `dispatch_app_window_action` lookup resolves at runtime (an upper-case regression like `\"App\"` would mis-route every primary-menu SimpleAction activation as a no-op menu press rather than as a build-time identifier mismatch); got disallowed character {ch:?} (U+{:04X}) at byte offset {idx}",
+            ch as u32,
+        );
+    }
+}
