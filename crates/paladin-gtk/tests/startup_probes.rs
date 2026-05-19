@@ -5233,3 +5233,40 @@ fn format_app_action_group_name_is_prefix_of_format_app_add_button_action() {
         "header-bar + button action target {action:?} must not embed a second `.` separator after the {prefix:?} group prefix",
     );
 }
+
+#[test]
+fn format_app_header_bar_button_icon_names_are_distinct() {
+    // Defense-in-depth: the three header-bar buttons (`+` Add,
+    // search-toggle, primary menu) each carry a freedesktop icon
+    // name resolved through the system icon theme. The per-helper
+    // `_returns_*` tests pin each icon to its expected wording
+    // individually, but a future refactor that accidentally
+    // copy-pasted the wrong sibling helper into one of the three
+    // setters would leave the per-helper assertions intact while
+    // rendering two identical glyphs on the header bar — visually
+    // obvious during interactive testing but easy to miss in a
+    // diff. Mirroring the
+    // `format_app_window_accelerator_bindings_accelerators_are_distinct`
+    // pattern, this assertion enforces the disjointness at the
+    // pinned-helper layer so a drift surfaces as a failing test
+    // rather than as a duplicated glyph the smoke test does not
+    // inspect.
+    use paladin_gtk::app::model::{
+        format_app_add_button_icon_name, format_app_menu_button_icon_name,
+        format_app_search_button_icon_name,
+    };
+
+    let add = format_app_add_button_icon_name();
+    let search = format_app_search_button_icon_name();
+    let menu = format_app_menu_button_icon_name();
+    let mut icons = [add, search, menu];
+    icons.sort_unstable();
+    let before_dedup = icons.len();
+    let mut deduped: Vec<&str> = icons.to_vec();
+    deduped.dedup();
+    assert_eq!(
+        before_dedup,
+        deduped.len(),
+        "the three header-bar button icon names must be distinct (Add: {add:?}, search: {search:?}, menu: {menu:?}); a duplicate would render two identical glyphs on the header bar",
+    );
+}
