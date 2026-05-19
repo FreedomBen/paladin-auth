@@ -1859,6 +1859,114 @@ fn format_app_add_button_accelerator_returns_control_n() {
 }
 
 #[test]
+fn format_app_window_accelerator_bindings_returns_three_pinned_pairs_in_order() {
+    // The application-window wiring iterates this array against
+    // `gio::Application::set_accels_for_action(target, &[accel])`
+    // for every pinned keyboard surface (Add, Quit, Preferences).
+    // The order matches the pinned-accelerator helper sequence
+    // (`format_app_add_button_accelerator`,
+    //  `format_app_menu_quit_accelerator`,
+    //  `format_app_menu_preferences_accelerator`) and each pair
+    // sources its two slots from the matching `_accelerator` and
+    // `_action` helpers so a future rename of any one helper
+    // propagates through the bindings instead of drifting per-
+    // entry.
+    //
+    // The widget binding consumes this array via a single
+    // `for (accel, target) in
+    //  format_app_window_accelerator_bindings()` loop, so the
+    // wiring stays a single iteration over the pinned source of
+    // truth instead of three hand-spelled
+    // `set_accels_for_action` calls that could silently drift in
+    // order or coverage.
+    use paladin_gtk::app::model::{
+        format_app_add_button_accelerator, format_app_add_button_action,
+        format_app_menu_preferences_accelerator, format_app_menu_preferences_action,
+        format_app_menu_quit_accelerator, format_app_menu_quit_action,
+        format_app_window_accelerator_bindings,
+    };
+
+    let bindings = format_app_window_accelerator_bindings();
+    assert_eq!(
+        bindings.len(),
+        3,
+        "the three pinned keyboard surfaces (Add, Quit, Preferences) form the entire accelerator surface today",
+    );
+    assert_eq!(
+        bindings[0],
+        (
+            format_app_add_button_accelerator(),
+            format_app_add_button_action()
+        ),
+        "first binding must be the header-bar + button's `<Control>n` -> `app.add`",
+    );
+    assert_eq!(
+        bindings[1],
+        (
+            format_app_menu_quit_accelerator(),
+            format_app_menu_quit_action()
+        ),
+        "second binding must be the Quit menu entry's `<Control>q` -> `app.quit`",
+    );
+    assert_eq!(
+        bindings[2],
+        (
+            format_app_menu_preferences_accelerator(),
+            format_app_menu_preferences_action()
+        ),
+        "third binding must be the Preferences menu entry's `<Control>comma` -> `app.preferences`",
+    );
+}
+
+#[test]
+fn format_app_window_accelerator_bindings_targets_are_distinct() {
+    // Defensive: `set_accels_for_action` overrides any prior
+    // binding for the same target, so a duplicated target slot
+    // in the bindings array would silently lose the earlier
+    // accelerator without surfacing a compile-time error. Guard
+    // against that drift here so the three pinned accelerator
+    // surfaces (Add, Quit, Preferences) stay disjoint.
+    use paladin_gtk::app::model::format_app_window_accelerator_bindings;
+
+    let bindings = format_app_window_accelerator_bindings();
+    let mut targets: Vec<&str> = bindings.iter().map(|(_, t)| *t).collect();
+    targets.sort_unstable();
+    let before_dedup = targets.len();
+    targets.dedup();
+    assert_eq!(
+        before_dedup,
+        targets.len(),
+        "every action target in `format_app_window_accelerator_bindings` must be unique; got duplicates after dedup",
+    );
+}
+
+#[test]
+fn format_app_window_accelerator_bindings_accelerators_are_distinct() {
+    // Defensive companion to
+    // `format_app_window_accelerator_bindings_targets_are_distinct`
+    // on the accelerator side: two pinned surfaces sharing the
+    // same accelerator (e.g. an accidental `<Control>n` on both
+    // Add and Preferences) would create a runtime collision where
+    // the keyboard shortcut fires whichever action gtk-rs
+    // resolves second, masking the intent of the spec. The
+    // assertion below catches that drift even when both
+    // accelerator helpers exist and pass their individual return-
+    // value checks.
+    use paladin_gtk::app::model::format_app_window_accelerator_bindings;
+
+    let bindings = format_app_window_accelerator_bindings();
+    let mut accels: Vec<&str> = bindings.iter().map(|(a, _)| *a).collect();
+    accels.sort_unstable();
+    let before_dedup = accels.len();
+    accels.dedup();
+    assert_eq!(
+        before_dedup,
+        accels.len(),
+        "every accelerator in `format_app_window_accelerator_bindings` must be unique; got duplicates after dedup",
+    );
+}
+
+#[test]
 fn format_app_add_button_accelerator_is_non_empty_and_well_formed() {
     // Defensive: the accelerator string is consumed by
     // `gio::Application::set_accels_for_action`, which accepts

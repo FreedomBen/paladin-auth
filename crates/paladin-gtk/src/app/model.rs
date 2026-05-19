@@ -2256,6 +2256,50 @@ pub fn format_app_add_button_accelerator() -> &'static str {
     "<Control>n"
 }
 
+/// Ordered `(accelerator, fully-qualified action target)` pairs
+/// the application-window wiring hands to
+/// `gio::Application::set_accels_for_action(target, &[accel])`
+/// per `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
+/// "Primary menu" / "Header bar > Add".
+///
+/// Returns the three pinned accelerator surfaces in pinned
+/// order: Add (`<Control>n` → `app.add`), Quit (`<Control>q` →
+/// `app.quit`), and Preferences (`<Control>comma` →
+/// `app.preferences`). Each pair sources its accelerator from
+/// the matching `format_app_*_accelerator` helper and its action
+/// target from the matching `format_app_*_action` helper so the
+/// table cannot drift away from either source of truth on a
+/// future rename. The widget binding consumes this array via
+/// `for (accel, target) in format_app_window_accelerator_bindings()
+/// { app.set_accels_for_action(target, &[accel]); }` so the
+/// accelerator wiring stays a single iteration over the pinned
+/// source of truth instead of three hand-spelled calls that
+/// could silently drift in order or coverage.
+///
+/// Pure — returns a small fixed-size array of `'static` string
+/// pairs without allocating. Sibling of
+/// [`format_app_primary_menu_entries`] on the menu-model side;
+/// together they pin the (label / target / accelerator) triple
+/// for every keyboard-reachable surface in the application
+/// window against a single source of truth.
+#[must_use]
+pub fn format_app_window_accelerator_bindings() -> [(&'static str, &'static str); 3] {
+    [
+        (
+            format_app_add_button_accelerator(),
+            format_app_add_button_action(),
+        ),
+        (
+            format_app_menu_quit_accelerator(),
+            format_app_menu_quit_action(),
+        ),
+        (
+            format_app_menu_preferences_accelerator(),
+            format_app_menu_preferences_action(),
+        ),
+    ]
+}
+
 /// Ordered `(label, detailed_action_name)` pairs the `AppModel`'s
 /// primary `gio::Menu` appends in the §"libadwaita usage"
 /// sequence (Import, Export, Passphrase, Preferences, About,
