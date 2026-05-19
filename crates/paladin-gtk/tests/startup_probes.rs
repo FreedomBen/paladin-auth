@@ -16453,3 +16453,116 @@ fn format_app_about_dialog_program_name_does_not_contain_a_form_feed_byte() {
         "AdwAboutDialog program_name must not contain the `\\x0C` form-feed byte (0x0C); the current `\\x0C`-cleanliness is only protected transitively by `_has_no_embedded_whitespace`'s broad `char::is_whitespace()` check (which matches U+000C FF), so a future refactor that relaxed the no-whitespace invariant to allow a localized multi-word program name might silently drop the `\\x0C` guard alongside the space relaxation; a stray `\\x0C` would render as a literal control glyph in the bold dialog-header program-name row, surface in the window manager's taskbar / dock display label via `_matches_format_app_window_title` (with text-paginator pipelines treating it as a hard page break), and break screen-reader application-name announcements at the byte boundary; got {program_name:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_version_does_not_contain_a_form_feed_byte() {
+    // Defense-in-depth per-byte sibling extending the version-
+    // helper byte coverage past the just-completed `{null /
+    // horizontal-tab / carriage-return / vertical-tab}` quadruple
+    // to the next C0 control byte. The form-feed byte `\x0C`
+    // (0x0C) sits one step above VT (0x0B) and one step below CR
+    // (0x0D) in the ASCII C0 block; like its siblings it is a
+    // non-printable control byte with no legitimate use inside a
+    // semver-shaped version string.
+    //
+    // The existing `_version_has_no_embedded_whitespace`
+    // companion uses `char::is_whitespace()`, which returns true
+    // for U+000C FF — so the version helper's `\x0C`-cleanliness
+    // is currently protected *transitively* by that one specific
+    // companion's broad whitespace check.
+    //
+    // But that transitive protection is *bundled* with the
+    // no-whitespace invariant as a whole: a future refactor that
+    // intentionally allowed a version-suffix separator space
+    // (e.g. `"0.0.1 pre-release"` or `"0.0.1 +build"`) would
+    // naturally relax the `_has_no_embedded_whitespace` companion
+    // — and the human author of that refactor might reasonably
+    // restructure the check to only reject specific control
+    // bytes (newline, tab) without separately calling out `\x0C`
+    // on the assumption that "ASCII whitespace is now allowed".
+    // That assumption is wrong: `\x0C` is a control byte without
+    // tab-stop semantics, not a layout-friendly whitespace
+    // character, and the version slot is rendered as a single-
+    // line caption beneath the program name in the dialog header
+    // that has no page-break semantics — so dropping the `\x0C`
+    // check alongside the space-relaxation would silently regress
+    // the no-`\x0C` invariant.
+    //
+    // None of the existing companions name the `\x0C` byte
+    // directly on this helper:
+    //   - `_is_ascii_only` pins each byte as ASCII — `\x0C` is
+    //     ASCII so it slips past;
+    //   - `_is_non_empty_and_looks_like_semver` only enforces
+    //     non-empty + semver shape;
+    //   - `_starts_with_a_digit` / `_does_not_start_with_a_dot` /
+    //     `_does_not_end_with_a_dot` only constrain the boundary
+    //     bytes;
+    //   - `_has_at_least_three_dot_separated_segments` /
+    //     `_segments_are_non_empty` only check segment count and
+    //     non-emptiness;
+    //   - `_matches_cargo_pkg_version` only enforces equality
+    //     with `CARGO_PKG_VERSION` (so any `\x0C`-bearing override
+    //     would slip past as long as Cargo's pinned version had
+    //     matching bytes);
+    //   - `_does_not_contain_a_null_byte` /
+    //     `_does_not_contain_a_horizontal_tab_byte` /
+    //     `_does_not_contain_a_carriage_return_byte` /
+    //     `_does_not_contain_a_vertical_tab_byte` each name a
+    //     different byte specifically.
+    //
+    // A regression that landed `"0.0.1\x0C"` (form-feed byte
+    // lifted from a legacy Cargo.toml-derived version registry
+    // authored on a line-printer terminal that used `\x0C` to
+    // advance to the next page between version and build-
+    // metadata suffix, a `concat!(_, "\x0C", _)` form, a
+    // `pandoc`-generated text dump that preserved `\x0C` page-
+    // break markers between CHANGELOG version entries, or a
+    // hand-edited helper override that lifted the version
+    // literal from a page-broken text file) would mis-render in
+    // multiple downstream surfaces: (1) the GLib-backed
+    // `AdwAboutDialog::set_version` setter routes the value into
+    // Pango for inline rendering as the version caption beneath
+    // the program name — Pango's default rendering of a bare
+    // `\x0C` byte is implementation-defined and typically
+    // renders as a literal control glyph (a hollow box or tofu-
+    // like placeholder), breaking the tidy version-caption
+    // layout; (2) the same version string is reused by
+    // `_release_notes_version_matches_about_dialog_version` for
+    // the "What's New in v<version>" header — a `\x0C` byte in
+    // the version would propagate into the release-notes header
+    // and mis-render there too; (3) any downstream tooling that
+    // scrapes the version slot (release-tracker bots, update-
+    // check pings, crash-report assemblers) would propagate the
+    // stray `\x0C` byte and trigger the same rendering bug
+    // across every downstream surface, with the additional risk
+    // that text-paginator pipelines treat the `\x0C` as a hard
+    // page break and split the version caption mid-string in
+    // printed reports; (4) screen readers that announce the
+    // version caption read the `\x0C` as a literal control
+    // character or — on some implementations — as a section-
+    // break announcement, breaking the version-caption
+    // accessibility-tree announcement at the byte boundary.
+    //
+    // Pinning the no-`\x0C` invariant directly on this helper
+    // surfaces the regression with a message naming the
+    // offending byte at build time rather than via a future
+    // whitespace-relaxation refactor that silently dropped the
+    // `\x0C` guard. Current helper returns the value sourced
+    // from `CARGO_PKG_VERSION` (no `\x0C` byte), so this test
+    // passes today and serves as a forcing function so any
+    // future override of the helper — including the eventual
+    // landing of a build-metadata-suffixed version string —
+    // stays free of form-feed bytes. Continues the version C0
+    // control-byte cycle past the just-completed `{null /
+    // horizontal-tab / carriage-return / vertical-tab}`
+    // quadruple so the helper's byte-composition contract pins
+    // each forbidden control byte against a single source of
+    // truth.
+    use paladin_gtk::app::model::format_app_about_dialog_version;
+
+    let version = format_app_about_dialog_version();
+    assert!(
+        !version.contains('\x0C'),
+        "AdwAboutDialog version must not contain the `\\x0C` form-feed byte (0x0C); the current `\\x0C`-cleanliness is only protected transitively by `_has_no_embedded_whitespace`'s broad `char::is_whitespace()` check (which matches U+000C FF), so a future refactor that relaxed the no-whitespace invariant to allow a build-metadata-suffixed version like `\"0.0.1 +build\"` might silently drop the `\\x0C` guard alongside the space relaxation; a stray `\\x0C` would render as a literal control glyph in the version caption beneath the program name, propagate into the \"What's New in v<version>\" release-notes header that reuses this string (with text-paginator pipelines treating it as a hard page break), and break screen-reader version-caption announcements at the byte boundary; got {version:?}",
+    );
+}
