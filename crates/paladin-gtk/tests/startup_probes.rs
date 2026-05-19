@@ -14628,3 +14628,94 @@ fn format_app_about_dialog_release_notes_version_does_not_contain_a_vertical_tab
         "AdwAboutDialog release_notes_version must not contain the `\\x0B` vertical-tab byte (0x0B); the current value's `\\x0B`-cleanliness is only protected transitively via `_matches_about_dialog_version` and `_matches_cargo_pkg_version` and the `version` helper's `_has_no_embedded_whitespace` check (which uses `char::is_whitespace()` and catches U+000B VT), so a future decoupling override would silently drop the `\\x0B` guard; a stray `\\x0B` would render as a literal control glyph in the dialog's \"What's New in v<release_notes_version>\" section header, could prevent the What's New body from rendering on libadwaita versions that strip whitespace when computing the body-region lookup key, and break screen-reader section-header announcements at the byte boundary; got {release_notes_version:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_release_notes_does_not_contain_a_vertical_tab_byte() {
+    // Defense-in-depth mirror of the just-added
+    // `_release_notes_version_does_not_contain_a_vertical_tab_byte`
+    // companion on the release-notes-body side, extending the
+    // release_notes byte-cleanliness contract past the just-
+    // completed `{null / horizontal-tab / carriage-return}`
+    // triplet to the next C0 control byte. The vertical-tab byte
+    // `\x0B` (0x0B) sits one step above HT (0x09) and one step
+    // below CR (0x0D) in the ASCII C0 block; like its siblings
+    // it is a non-printable control byte with no legitimate use
+    // inside a Pango-markup release-notes body.
+    //
+    // The libadwaita release-notes convention permits embedded
+    // `\n` line breaks between Pango markup elements (`<li>`
+    // entries inside the wrapping `<ul>`, paragraph breaks,
+    // etc.), so the helper is one of only three about-dialog
+    // helpers (alongside `format_app_about_dialog_debug_info`
+    // and `format_app_about_dialog_translator_credits`) where
+    // embedded line breaks are legitimately expected. That makes
+    // `\x0B` (0x0B VERTICAL TAB) a distinct regression surface:
+    // it is NOT covered by `_has_no_surrounding_whitespace_when_non_empty`
+    // (`\x0B` mid-string is non-surrounding), it is NOT covered
+    // by `_starts_and_ends_with_a_markup_element_when_non_empty`
+    // (the opening `<` and closing `>` markup boundaries are
+    // independent of mid-body `\x0B` bytes), it slips past
+    // `_does_not_contain_a_null_byte` (`\x0B` is not `\0`), it
+    // slips past `_does_not_contain_a_horizontal_tab_byte`
+    // (`\x0B` is not `\t`), and it slips past
+    // `_does_not_contain_a_carriage_return_byte` (`\x0B` is not
+    // `\r`). None of the existing companions name the `\x0B`
+    // byte directly on this helper.
+    //
+    // A regression that landed
+    // `"<ul>\n\x0B<li>foo</li>\n\x0B<li>bar</li>\n</ul>"`
+    // (vertical-tab-indented pretty-printed Pango markup lifted
+    // from a legacy pre-formatter that used `\x0B` as a "soft
+    // indent" character on line-printer terminals, a `concat!(_,
+    // "\x0B", _)` form mirroring a CHANGELOG.md VT-indented
+    // bullet block, or a hand-edited helper that pasted from an
+    // EBCDIC-to-ASCII translation preserving the original VT
+    // byte) would mis-render in multiple downstream surfaces:
+    // (1) Pango's markup parser permits ASCII whitespace between
+    // elements but renders `\x0B` as a literal control glyph (a
+    // hollow box or tofu-like placeholder) since `\x0B` is
+    // technically whitespace but has no tab-stop semantics; in
+    // the about-dialog "What's New" body this would surface as
+    // visible boxes or placeholder glyphs between the wrapping
+    // `<ul>` and each `<li>` bullet element; (2) any in-app
+    // changelog display that reuses the release-notes string
+    // outside the dialog (release-tracker bots, copy-to-
+    // clipboard handlers) would propagate the stray `\x0B` into
+    // the consumer's stream and trigger the same rendering bug
+    // across every downstream surface; (3) screen readers that
+    // announce the release-notes content read the `\x0B` as a
+    // literal control character, breaking the accessibility-tree
+    // announcement at every bullet-boundary indent.
+    //
+    // Mirror of the just-added
+    // `_developer_name_does_not_contain_a_vertical_tab_byte`,
+    // `_copyright_does_not_contain_a_vertical_tab_byte`,
+    // `_comments_does_not_contain_a_vertical_tab_byte`,
+    // `_developers_entries_do_not_contain_a_vertical_tab_byte`,
+    // `_empty_credits_section_entries_do_not_contain_a_vertical_tab_byte`,
+    // and `_release_notes_version_does_not_contain_a_vertical_tab_byte`
+    // siblings; together they extend the about-dialog byte-
+    // composition contract from the just-completed `{null /
+    // horizontal-tab / carriage-return}` triplet to the
+    // vertical-tab regression surface as well.
+    //
+    // Pinning the no-`\x0B` invariant directly here surfaces the
+    // regression with a message naming the offending byte at
+    // build time rather than as a downstream "What's New" body
+    // rendering bug, a stray `\x0B` byte in an external
+    // changelog reuse, or a screen-reader announcement break.
+    // Current helper returns the empty literal `""` (no `\x0B`
+    // byte), so this test passes today and serves as a forcing
+    // function so any future override of the helper — including
+    // the eventual landing of an actual v0.2 release-notes Pango
+    // markup body sourced from CHANGELOG.md — stays free of
+    // vertical tabs even when embedded `\n` line breaks are
+    // intentionally present.
+    use paladin_gtk::app::model::format_app_about_dialog_release_notes;
+
+    let release_notes = format_app_about_dialog_release_notes();
+    assert!(
+        !release_notes.contains('\x0B'),
+        "AdwAboutDialog release_notes must not contain the `\\x0B` vertical-tab byte (0x0B); the Pango markup parser permits ASCII whitespace between elements but renders `\\x0B` as a literal control glyph (a hollow box or tofu-like placeholder) since `\\x0B` is technically whitespace under `char::is_whitespace()` but has no tab-stop semantics, so a stray `\\x0B` between the wrapping `<ul>` and each `<li>` bullet would surface as visible boxes in the dialog's What's New body, propagate the same rendering bug into any external changelog reuse, and break screen-reader bullet-boundary announcements at every indent; got {release_notes:?}",
+    );
+}
