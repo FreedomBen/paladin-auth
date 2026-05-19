@@ -14905,3 +14905,105 @@ fn format_app_about_dialog_debug_info_does_not_contain_a_vertical_tab_byte() {
         "AdwAboutDialog debug_info must not contain the `\\x0B` vertical-tab byte (0x0B); a `\\x0B` byte slips past `_is_ascii_only` (since `\\x0B` is ASCII), past `_does_not_contain_a_null_byte` / `_does_not_contain_a_horizontal_tab_byte` / `_does_not_contain_a_carriage_return_byte` (which each name a different byte), past `_has_exactly_two_lines` / `_program_name_line_ends_with_the_version` / `_app_id_line_ends_with_the_reverse_dns_app_id` (which split on `\\n` and only check trailing substrings), and past `_is_non_empty_text_with_no_trailing_whitespace` (which rejects boundary `\\x0B` via `char::is_whitespace()` but not mid-payload occurrences), and would render as a literal control glyph in the Troubleshooting dialog body, drift across browsers and font stacks in pasted bug reports, and propagate a stray VT byte into POSIX text-processing tools (`grep`, `awk`, `cut`) when the payload is saved to disk via `set_debug_info_filename`; got {debug_info:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_program_name_does_not_contain_a_vertical_tab_byte() {
+    // Defense-in-depth per-byte sibling extending the
+    // program-name byte coverage past the just-completed `{null /
+    // horizontal-tab / carriage-return}` triplet to the next C0
+    // control byte. The vertical-tab byte `\x0B` (0x0B) sits one
+    // step above HT (0x09) and one step below CR (0x0D) in the
+    // ASCII C0 block; like its siblings it is a non-printable
+    // control byte with no legitimate use inside a GNOME
+    // application program-name string.
+    //
+    // The existing `_program_name_has_no_embedded_whitespace`
+    // companion uses `char::is_whitespace()`, which returns true
+    // for U+000B VT — so the program-name helper's `\x0B`-
+    // cleanliness is currently protected *transitively* by that
+    // one specific companion's broad whitespace check.
+    //
+    // But that transitive protection is *bundled* with the
+    // no-whitespace invariant as a whole: a future refactor that
+    // intentionally allowed a single embedded space in the
+    // program-name slot (a localized program-name string like
+    // `"Paladin Auth"`, a workspace-vendoring split that lifted
+    // program-name out of the no-whitespace constraint, or a
+    // libadwaita HIG update that explicitly permitted a single
+    // space in the bold-header program-name row) would naturally
+    // relax the `_has_no_embedded_whitespace` companion — and
+    // the human author of that refactor might reasonably
+    // restructure the check to only reject specific control
+    // bytes (newline, tab) without separately calling out `\x0B`
+    // on the assumption that "ASCII whitespace is now allowed".
+    // That assumption is wrong: `\x0B` is a control byte without
+    // tab-stop semantics, not a layout-friendly whitespace
+    // character, and the program-name slot is rendered as a
+    // single bold header row with no vertical-spacing semantics
+    // — so dropping the `\x0B` check alongside the space-
+    // relaxation would silently regress the no-`\x0B` invariant.
+    //
+    // None of the existing companions name the `\x0B` byte
+    // directly on this helper:
+    //   - `_is_ascii_only` pins each byte as ASCII — `\x0B` is
+    //     ASCII so it slips past;
+    //   - `_is_non_empty_and_not_app_id` only checks non-empty
+    //     + distinct-from-app-id;
+    //   - `_matches_format_app_window_title` only enforces
+    //     equality with the window title (so any `\x0B`-bearing
+    //     override would slip past as long as the window title
+    //     helper had matching bytes);
+    //   - `_is_segment_of_application_icon_name` only checks
+    //     segment containment;
+    //   - `_does_not_end_with_a_period` only constrains the
+    //     suffix;
+    //   - `_does_not_contain_a_null_byte` /
+    //     `_does_not_contain_a_horizontal_tab_byte` /
+    //     `_does_not_contain_a_carriage_return_byte` each name a
+    //     different byte specifically.
+    //
+    // A regression that landed `"Pala\x0Bdin"` (vertical-tab
+    // byte lifted from a legacy program-name registry authored
+    // on a line-printer terminal that used `\x0B` as a vertical-
+    // spacing separator inside a single-token name, a `concat!(_,
+    // "\x0B", _)` form, or a hand-edited helper override that
+    // lifted the program name from an EBCDIC-to-ASCII translation
+    // preserving the original VT byte) would mis-render in three
+    // downstream surfaces: (1) the GLib-backed
+    // `AdwAboutDialog::set_application_name` setter routes the
+    // value into Pango for inline rendering as the bold program-
+    // name row at the dialog header — Pango's default rendering
+    // of a bare `\x0B` byte is implementation-defined and
+    // typically renders as a literal control glyph (a hollow box
+    // or tofu-like placeholder), breaking the tidy bold-header
+    // layout; (2) the matching `gtk::Window::set_title` setter
+    // (the program name is mirrored to the window title per
+    // `_matches_format_app_window_title`) renders the `\x0B` in
+    // the window manager's taskbar / dock display label,
+    // surfacing the control byte to every shell that lists open
+    // windows; (3) the GTK accessibility tree's `accessible-name`
+    // property routes through the same Pango layer, breaking
+    // screen-reader announcements of the application name at the
+    // byte boundary.
+    //
+    // Pinning the no-`\x0B` invariant directly on this helper
+    // surfaces the regression with a message naming the
+    // offending byte at build time rather than via a future
+    // whitespace-relaxation refactor that silently dropped the
+    // `\x0B` guard. Current helper returns the literal `"Paladin"`
+    // (no `\x0B` byte), so this test passes today and serves as
+    // a forcing function so any future override of the helper —
+    // including the eventual landing of a localized multi-word
+    // program name — stays free of vertical tabs. Continues the
+    // program-name C0 control-byte cycle past the just-completed
+    // `{null / horizontal-tab / carriage-return}` triplet so the
+    // helper's byte-composition contract pins each forbidden
+    // control byte against a single source of truth.
+    use paladin_gtk::app::model::format_app_about_dialog_program_name;
+
+    let program_name = format_app_about_dialog_program_name();
+    assert!(
+        !program_name.contains('\x0B'),
+        "AdwAboutDialog program_name must not contain the `\\x0B` vertical-tab byte (0x0B); the current `\\x0B`-cleanliness is only protected transitively by `_has_no_embedded_whitespace`'s broad `char::is_whitespace()` check (which matches U+000B VT), so a future refactor that relaxed the no-whitespace invariant to allow a localized multi-word program name might silently drop the `\\x0B` guard alongside the space relaxation; a stray `\\x0B` would render as a literal control glyph in the bold dialog-header program-name row, surface in the window manager's taskbar / dock display label via `_matches_format_app_window_title`, and break screen-reader application-name announcements at the byte boundary; got {program_name:?}",
+    );
+}
