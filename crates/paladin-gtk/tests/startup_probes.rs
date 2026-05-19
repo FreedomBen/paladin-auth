@@ -10124,3 +10124,75 @@ fn format_app_about_dialog_debug_info_filename_does_not_contain_path_separators(
         "AdwAboutDialog debug_info_filename must not contain the `\\` Windows path separator (some GTK backends on Linux surface `\\` through CIFS / Samba mounts as a path separator, so a `\\`-separated suggested filename would route through the file-chooser dialog as a path-separated form on those backends, exposing the same path-traversal hazard as the POSIX `/` case); got {filename:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_debug_info_does_not_contain_a_carriage_return_byte() {
+    // Defense-in-depth sibling of
+    // `format_app_about_dialog_debug_info_carries_program_name_version_and_app_id`
+    // (content-shape pin),
+    // `_is_non_empty_text_with_no_trailing_whitespace`
+    // (non-empty + no-trailing-whitespace pin),
+    // `_starts_with_program_name` (leading-substring pin),
+    // `_app_id_appears_on_a_distinct_line_from_program_name`
+    // (multi-line pin),
+    // `_has_exactly_two_lines` (line-count pin),
+    // `_program_name_line_ends_with_the_version` (line-1
+    // trailing-substring pin),
+    // `_app_id_line_ends_with_the_reverse_dns_app_id` (line-2
+    // trailing-substring pin), and `_is_ascii_only` (byte-
+    // composition pin). Those companions catch the wrong-shape
+    // / wrong-content / empty / multi-line-count / wrong-
+    // trailing-substring / non-ASCII regressions but the
+    // `_is_ascii_only` companion only pins each byte as ASCII
+    // (`0x00`-`0x7F`) — the `\r` carriage-return byte (0x0D)
+    // is ASCII, so a regression that landed `"Paladin
+    // 0.0.1\r\nApp ID: org.tamx.Paladin.Gui"` (CRLF line
+    // endings from a Windows-source copy-paste or from a
+    // `concat!(_, "\r\n", _)` injection) would slip past
+    // `_is_ascii_only` (the `\r` byte is ASCII).
+    //
+    // The two-line `\n`-separated payload pin (the
+    // `_has_exactly_two_lines` companion uses `str::lines()`
+    // which transparently strips `\r\n` *or* `\n` line endings
+    // when counting lines, so a CRLF-separated payload would
+    // still split into 2 lines and trivially pass the
+    // `>= 2` count check). The `_program_name_line_ends_with_the_version`
+    // companion uses `str::lines().next()` which strips the
+    // trailing `\r\n` or `\n`, so the test would still see
+    // the first line ending with the version. None of the
+    // existing companions name the `\r` byte directly.
+    //
+    // A regression that landed `\r` in the payload would
+    // mis-render the debug-info content in two ways: (1) when
+    // the user pastes the payload into a bug-report form on
+    // GitHub, the `\r` characters surface as `^M` artifacts
+    // in `git diff` / `git apply` outputs and clutter the
+    // maintainer's view of the report, and (2) when the user
+    // saves the payload to a `.txt` file via the
+    // `AdwAboutDialog::set_debug_info_filename` slot, the
+    // GTK file-writer writes the raw bytes so the resulting
+    // file has mixed CRLF / LF line endings, breaking POSIX
+    // text-processing tools (`grep`, `awk`, `sed`) that
+    // expect bare `\n` separators.
+    //
+    // Pinning the no-CR invariant directly here surfaces the
+    // regression with a message naming the offending `\r`
+    // byte at build time rather than as a downstream pasted-
+    // bug-report rendering artifact or a saved-file POSIX-
+    // text-processing breakage.
+    //
+    // The current `format_app_about_dialog_debug_info`
+    // returns `"Paladin 0.0.1\nApp ID: org.tamx.Paladin.Gui"`
+    // (built at compile time via `concat!` with a single
+    // `"\n"` separator), so this test passes today and serves
+    // as a forcing function so any future override of the
+    // debug-info helper stays on bare-`\n` line endings rather
+    // than `\r\n` Windows line endings.
+    use paladin_gtk::app::model::format_app_about_dialog_debug_info;
+
+    let debug_info = format_app_about_dialog_debug_info();
+    assert!(
+        !debug_info.contains('\r'),
+        "AdwAboutDialog debug_info must not contain the `\\r` carriage-return byte (which would surface as `\\r\\n` Windows line endings in a CRLF-separated payload, mis-rendering as `^M` artifacts in pasted bug reports and breaking POSIX text-processing tools when the payload is saved to disk via `set_debug_info_filename`); got {debug_info:?}",
+    );
+}
