@@ -18590,3 +18590,116 @@ fn format_app_about_dialog_developer_name_does_not_contain_a_line_feed_byte() {
         "AdwAboutDialog developer-name must not contain the `\\n` line-feed byte (0x0A); the current `\\n`-cleanliness is only protected by the `_is_a_single_line_without_embedded_newlines` companion's coupled `\\n`/`\\r` check, so a future refactor that intentionally allowed embedded line breaks (a multi-contributor attribution column layout or a libadwaita upgrade that taught the attribution row to wrap across two lines) would naturally relax that companion to drop the `\\n` check entirely; a stray `\\n` would cause Pango to interpret the byte as a hard line break and wrap the attribution onto two lines (pushing the dialog header taller than its baseline layout and visually misaligning the icon / application-name / version cluster below), propagate into the footer copyright row that reuses this string and break the single-line footer copyright layout there too, break log-grep queries that search for the prefix `\"The Paladin\"` and miss the trailing `\"contributors\"` token, break screen-reader attribution announcements at the byte boundary, and propagate into downstream contributor-attribution scrapers; the `_has_no_surrounding_whitespace` companion does reject a leading or trailing `\\n` (since `char::is_whitespace()` returns true for U+000A LF) but the more dangerous mid-string `\\n` slips past; got {developer:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_copyright_does_not_contain_a_line_feed_byte() {
+    // Defense-in-depth per-byte sibling extending the copyright
+    // byte-cleanliness contract past the just-completed
+    // `{null / horizontal-tab / carriage-return / vertical-tab /
+    // form-feed / backspace}` sextuple to the line-feed byte
+    // `\n` (0x0A), completing the inner C0 control-byte cycle
+    // from BS (0x08) through CR (0x0D) for this helper. The
+    // existing `_copyright_is_a_single_line_without_embedded_newlines`
+    // companion does explicitly assert `!copyright.contains('\n')`
+    // alongside its `\r` check — so the copyright helper's
+    // `\n`-cleanliness is currently protected *directly* by that
+    // one specific companion.
+    //
+    // But that direct coverage is *coupled* to the single-line-
+    // attribution invariant: a future refactor that intentionally
+    // allowed embedded `\n` line breaks in the copyright slot
+    // (a multi-line attribution including a separate copyright-
+    // glyph row and contributor row, a libadwaita upgrade that
+    // taught the footer copyright row to wrap across two lines,
+    // or a workspace-vendoring split that lifted copyright out of
+    // the single-line constraint) would naturally relax the
+    // `_is_a_single_line_without_embedded_newlines` companion to
+    // drop the `\n` check entirely — at which point the no-`\n`
+    // invariant would silently regress to "allowed" without any
+    // independent byte-cleanliness pin keeping the byte forbidden
+    // for the cases where the byte still mis-renders. Mirror of
+    // the `_copyright_does_not_contain_a_carriage_return_byte`
+    // companion's same decoupling rationale on the CR side, which
+    // pins `\r` independently of the `_is_a_single_line` check
+    // for exactly the same future-refactor scenario.
+    //
+    // None of the remaining copyright companions name the `\n`
+    // byte directly:
+    //   - `_copyright_starts_with_copyright_glyph_and_contains_developer_name`
+    //     and `_copyright_ends_with_developer_name` only
+    //     constrain the literal `©` glyph prefix and the
+    //     `"The Paladin contributors"` suffix, so a mid-string
+    //     `\n` between them satisfies both;
+    //   - `_separates_glyph_and_attribution_with_a_single_space`
+    //     only constrains the single byte immediately after the
+    //     `©` glyph — a `\n` later in the string slips past;
+    //   - `_does_not_end_with_a_period` only constrains the
+    //     trailing byte;
+    //   - `_does_not_contain_a_year_token_so_it_does_not_drift_across_releases`
+    //     scans for four-digit runs — `\n` is not a digit;
+    //   - `_does_not_contain_a_null_byte` /
+    //     `_does_not_contain_a_horizontal_tab_byte` /
+    //     `_does_not_contain_a_carriage_return_byte` /
+    //     `_does_not_contain_a_vertical_tab_byte` /
+    //     `_does_not_contain_a_form_feed_byte` /
+    //     `_does_not_contain_a_backspace_byte`
+    //     each name a different byte specifically.
+    //
+    // The `_returns_paladin_copyright_line` exact-value pin
+    // catches every byte today, but its protection collapses the
+    // moment a multi-line copyright-attribution refactor or a
+    // workspace-vendoring split decouples the helper from the
+    // pinned literal — at that point a `\n`-bearing override
+    // would slip past every byte-level companion above and rely
+    // only on the coupled `_is_a_single_line` check.
+    //
+    // A regression that landed `"\u{00A9} The Paladin\ncontributors"`
+    // (LF byte from a multi-line attribution mockup that placed
+    // the contributor list on its own line beneath the copyright
+    // glyph and attribution lead, a `concat!("\u{00A9} The
+    // Paladin", "\n", "contributors")` form, or a hand-edited
+    // helper that pasted from a `pandoc`-generated text dump
+    // preserving line breaks between document sections) would
+    // mis-render in multiple downstream surfaces: (1) the GLib-
+    // backed `AdwAboutDialog::set_copyright` setter hands the
+    // string to Pango for inline rendering in the dialog footer
+    // — Pango would interpret the `\n` byte as a hard line break
+    // and wrap the copyright onto two lines, pushing the dialog
+    // footer taller than its baseline layout and visually
+    // misaligning the website / issue-link rows beneath; (2) the
+    // copyright string is the legal attribution surface for the
+    // dialog — a multi-line copyright row erodes the trusted-
+    // application surface contract by breaking the tidy single-
+    // line legal-attribution layout; (3) screen readers that
+    // announce the dialog copyright row treat the `\n` as a
+    // paragraph break and pause between the copyright glyph
+    // attribution and the contributors token, breaking the
+    // accessibility-tree announcement of the legal attribution
+    // at the byte boundary; (4) downstream tooling that scrapes
+    // the copyright string (license-attribution aggregators,
+    // AGPL-3.0-or-later compliance crawlers, text-paginator
+    // pipelines) would propagate the stray `\n` byte into the
+    // consumer's stream and trigger the same line-break
+    // rendering bug across every downstream surface, with the
+    // additional risk that the second line could be interpreted
+    // as a separate copyright entry by a naive aggregator
+    // splitting input on `\n`.
+    //
+    // Pinning the no-`\n` invariant directly here surfaces the
+    // regression with a message naming the offending byte at
+    // build time rather than via a future single-line decoupling
+    // that silently dropped the `\n` guard. Current helper
+    // returns the literal `"\u{00A9} The Paladin contributors"`
+    // (no `\n` byte), so this test passes today and serves as a
+    // forcing function so any future override of the helper
+    // stays free of line-feed bytes even when the
+    // `_is_a_single_line_without_embedded_newlines` companion is
+    // intentionally relaxed.
+    use paladin_gtk::app::model::format_app_about_dialog_copyright;
+
+    let copyright = format_app_about_dialog_copyright();
+    assert!(
+        !copyright.contains('\n'),
+        "AdwAboutDialog copyright must not contain the `\\n` line-feed byte (0x0A); the current `\\n`-cleanliness is only protected by the `_is_a_single_line_without_embedded_newlines` companion's coupled `\\n`/`\\r` check, so a future refactor that intentionally allowed embedded line breaks in the copyright slot (a multi-line attribution including a separate copyright-glyph row and contributor row, or a libadwaita upgrade that taught the footer copyright row to wrap across two lines) would naturally relax that companion to drop the `\\n` check entirely; a stray `\\n` would cause Pango to interpret the byte as a hard line break and wrap the copyright onto two lines (pushing the dialog footer taller than its baseline layout and visually misaligning the website / issue-link rows beneath), erode the trusted-application legal-attribution surface contract, break screen-reader copyright announcements at the byte boundary, and propagate into downstream license-attribution aggregators that might split input on `\\n` and interpret the second line as a separate copyright entry; got {copyright:?}",
+    );
+}
