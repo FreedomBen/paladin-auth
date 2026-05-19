@@ -1323,7 +1323,7 @@ and committed in any order.
   test. The fixtures live in the test tree (not the crate root)
   and are byte-compared verbatim.
 
-- [ ] **Encrypted AEAD empty-payload length boundary.** Add
+- [x] **Encrypted AEAD empty-payload length boundary.** Add
   `encrypted_save_empty_vault_ciphertext_is_exactly_tag_length`
   to `tests/encrypted_save_format.rs`. Create an encrypted vault
   via `Store::create(.., VaultInit::Encrypted(cheap_opts))`

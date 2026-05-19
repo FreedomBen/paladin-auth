@@ -29,7 +29,8 @@ use std::os::unix::fs::PermissionsExt;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use paladin_core::{
-    parse_otpauth, Account, Argon2Params, EncryptionOptions, Store, VaultInit, VaultLock,
+    inspect, parse_otpauth, Account, Argon2Params, EncryptionOptions, Store, VaultInit, VaultLock,
+    VaultStatus,
 };
 use secrecy::SecretString;
 use tempfile::TempDir;
@@ -670,5 +671,79 @@ fn encrypted_open_rejects_file_above_on_disk_size_cap_before_kdf_and_aead() {
         err_at_cap.kind(),
         ErrorKind::InvalidPayload,
         "at-cap file must clear the on-disk size guard; failure should come from AEAD or decode, not invalid_payload (got {err_at_cap:?})"
+    );
+}
+
+// AEAD `ciphertext.len() == plaintext.len() + 16` invariant at the
+// smallest possible plaintext: a vault with zero accounts and the
+// default `VaultSettings`. Independent of any account-bearing test:
+// pins the boundary case the `AEAD output shape` test in
+// `src/crypto/aead.rs` only covers via property tests, and pins that
+// the pre-AEAD plaintext-payload buffer is still wiped when the
+// payload is the minimum bincode-encoded `VaultPayload`.
+#[test]
+fn encrypted_save_empty_vault_ciphertext_is_exactly_tag_length() {
+    // bincode v2 layout for an empty `VaultPayload` (fixed-int LE):
+    //   accounts: Vec<Account> empty  → u64 LE len = 0       (8 bytes)
+    //   settings: VaultSettings::default()
+    //     auto_lock_enabled = false   → u8 = 0               (1 byte)
+    //     auto_lock_timeout_secs = 300 → u32 LE              (4 bytes)
+    //     clipboard_clear_enabled = false → u8 = 0           (1 byte)
+    //     clipboard_clear_secs = 20   → u32 LE               (4 bytes)
+    // Sum: 18 bytes plaintext, followed by the 16-byte Poly1305 tag,
+    // preceded by the 64-byte §4.3 encrypted header.
+    const EMPTY_PAYLOAD_LEN: usize = 8 + 1 + 4 + 1 + 4;
+    const AEAD_TAG_LEN: usize = 16;
+
+    let dir = vault_test_dir();
+    let path = dir.path().join("vault.bin");
+
+    #[cfg(feature = "test-zeroize-witness")]
+    paladin_core::zeroize_witness::clear_observations();
+
+    let (vault, store) = Store::create(&path, VaultInit::Encrypted(cheap_options("hunter2")))
+        .expect("create empty encrypted vault");
+    vault.save(&store).expect("save empty encrypted vault");
+
+    let bytes = fs::read(&path).expect("read encrypted vault");
+    assert_eq!(
+        bytes.len(),
+        ENCRYPTED_HEADER_LEN + EMPTY_PAYLOAD_LEN + AEAD_TAG_LEN,
+        "empty-payload AEAD file size must equal 64 (header) + {EMPTY_PAYLOAD_LEN} (bincode payload) + 16 (Poly1305 tag); got {bytes_len}",
+        bytes_len = bytes.len(),
+    );
+
+    #[cfg(feature = "test-zeroize-witness")]
+    {
+        use paladin_core::zeroize_witness::{take_observations, WitnessSite};
+        let obs = take_observations();
+        let pre_aead: Vec<_> = obs
+            .iter()
+            .filter(|o| o.site == WitnessSite::EncryptPreAead)
+            .collect();
+        assert!(
+            !pre_aead.is_empty(),
+            "expected at least one EncryptPreAead witness on the empty-payload write path"
+        );
+        assert!(
+            pre_aead.iter().any(|o| o.all_zero),
+            "EncryptPreAead observation must report all_zero == true even for an empty-payload bincode encoding"
+        );
+    }
+
+    drop(vault);
+    drop(store);
+
+    let (reopened, _store) =
+        Store::open(&path, VaultLock::Encrypted(pp("hunter2"))).expect("reopen");
+    assert_eq!(
+        reopened.iter().count(),
+        0,
+        "reopened vault has zero accounts"
+    );
+    assert_eq!(
+        inspect(&path).expect("inspect"),
+        VaultStatus::Encrypted,
+        "inspect reports Encrypted for the round-tripped empty vault"
     );
 }
