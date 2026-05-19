@@ -40,7 +40,8 @@ use paladin_core::{
 
 use paladin_gtk::settings::{
     clamp_auto_lock_secs, clamp_clipboard_clear_secs, AcceptedChange, CommittedSettings,
-    DebounceOutcome, SaveOutcome, SettingsField, SettingsState, ToggleOutcome,
+    DebounceOutcome, InlineError, InlineWarning, SaveOutcome, SettingsField, SettingsState,
+    ToggleOutcome,
 };
 
 // ---------------------------------------------------------------------------
@@ -1060,4 +1061,190 @@ fn format_settings_dialog_title_returns_preferences() {
         "Preferences",
         "AdwPreferencesDialog title matches the menu entry label",
     );
+}
+
+#[test]
+fn compose_settings_dialog_inline_subtitle_for_field_returns_none_without_outcome() {
+    // Before the first save attempt the widget has no
+    // `SaveOutcome` to render — the per-row inline subtitle slot
+    // (a sibling `gtk::Label` beneath each `AdwSwitchRow` /
+    // `AdwSpinRow` carrying the `error` CSS class, mirroring the
+    // `crate::rename_dialog::RenameDialogComponent` pattern) stays
+    // hidden in that idle state. Pinning the `None` reply through
+    // the same helper that handles the populated cases lets the
+    // widget bind a single `#[watch] set_label:` /
+    // `#[watch] set_visible:` pair against
+    // `compose_settings_dialog_inline_subtitle_for_field(...)`
+    // instead of pattern-matching against an `Option<SaveOutcome>`
+    // inline.
+    use paladin_gtk::settings::compose_settings_dialog_inline_subtitle_for_field;
+
+    for field in [
+        SettingsField::AutoLockEnabled,
+        SettingsField::AutoLockSecs,
+        SettingsField::ClipboardClearEnabled,
+        SettingsField::ClipboardClearSecs,
+    ] {
+        assert_eq!(
+            compose_settings_dialog_inline_subtitle_for_field(None, field),
+            None,
+            "no outcome yet → row {field:?} has no inline subtitle text",
+        );
+    }
+}
+
+#[test]
+fn compose_settings_dialog_inline_subtitle_for_field_returns_none_on_success_for_every_field() {
+    // `SaveOutcome::Success` does not carry a field discriminator
+    // because the affirmative path is reported through the global
+    // `AdwToast` (body returned by `format_settings_dialog_saved_toast`)
+    // rather than a per-row subtitle. Every row's subtitle helper
+    // therefore reports `None` while the last outcome is `Success`,
+    // even though the outcome itself is `Some`.
+    use paladin_gtk::settings::compose_settings_dialog_inline_subtitle_for_field;
+
+    let outcome = SaveOutcome::Success;
+    for field in [
+        SettingsField::AutoLockEnabled,
+        SettingsField::AutoLockSecs,
+        SettingsField::ClipboardClearEnabled,
+        SettingsField::ClipboardClearSecs,
+    ] {
+        assert_eq!(
+            compose_settings_dialog_inline_subtitle_for_field(Some(&outcome), field),
+            None,
+            "SaveOutcome::Success → row {field:?} has no inline subtitle text",
+        );
+    }
+}
+
+#[test]
+fn compose_settings_dialog_inline_subtitle_for_field_returns_inline_error_text_for_matching_field()
+{
+    // `SaveOutcome::Inline { error, field }` carries the rendered
+    // `InlineError::rendered` (the §5 `Display` body shared verbatim
+    // with the CLI / TUI) so the dialog can render the failure text
+    // beneath the row that triggered the save without re-formatting
+    // the error. Per the implementation plan §"libadwaita usage" >
+    // "Preferences": status-line errors stay inline in the affected
+    // dialog rather than firing a global toast, so each
+    // `SettingsField` variant must address the matching row's
+    // subtitle slot and only that one.
+    use paladin_gtk::settings::compose_settings_dialog_inline_subtitle_for_field;
+
+    let err = PaladinError::IoError {
+        operation: "write",
+        source: std::io::Error::other("disk full"),
+    };
+    let outcome = SaveOutcome::Inline {
+        error: InlineError::from_error(&err),
+        field: SettingsField::ClipboardClearSecs,
+    };
+    let rendered = err.to_string();
+
+    // Matching row carries the rendered error body.
+    assert_eq!(
+        compose_settings_dialog_inline_subtitle_for_field(
+            Some(&outcome),
+            SettingsField::ClipboardClearSecs,
+        ),
+        Some(rendered.as_str()),
+        "inline error attaches to the row whose save failed",
+    );
+
+    // Non-matching rows stay clear.
+    for other in [
+        SettingsField::AutoLockEnabled,
+        SettingsField::AutoLockSecs,
+        SettingsField::ClipboardClearEnabled,
+    ] {
+        assert_eq!(
+            compose_settings_dialog_inline_subtitle_for_field(Some(&outcome), other),
+            None,
+            "row {other:?} stays clear when the inline error targets ClipboardClearSecs",
+        );
+    }
+}
+
+#[test]
+fn compose_settings_dialog_inline_subtitle_for_field_returns_inline_error_text_for_rollback_target_only(
+) {
+    // `SaveOutcome::Rollback` is the `save_not_committed` branch:
+    // the on-disk file did not change, the visible widget value
+    // reverts to the last committed state, and the rendered error
+    // attaches to the row that attempted the save. Same per-field
+    // routing as the `Inline` arm.
+    use paladin_gtk::settings::compose_settings_dialog_inline_subtitle_for_field;
+
+    let err = PaladinError::SaveNotCommitted {
+        committed: false,
+        backup_path: Some(PathBuf::from("/tmp/vault.bak")),
+    };
+    let outcome = SaveOutcome::Rollback {
+        error: InlineError::from_error(&err),
+        field: SettingsField::AutoLockEnabled,
+    };
+    let rendered = err.to_string();
+
+    assert_eq!(
+        compose_settings_dialog_inline_subtitle_for_field(
+            Some(&outcome),
+            SettingsField::AutoLockEnabled,
+        ),
+        Some(rendered.as_str()),
+        "rollback error attaches to the row whose save was reverted",
+    );
+
+    for other in [
+        SettingsField::AutoLockSecs,
+        SettingsField::ClipboardClearEnabled,
+        SettingsField::ClipboardClearSecs,
+    ] {
+        assert_eq!(
+            compose_settings_dialog_inline_subtitle_for_field(Some(&outcome), other),
+            None,
+            "row {other:?} stays clear when the rollback error targets AutoLockEnabled",
+        );
+    }
+}
+
+#[test]
+fn compose_settings_dialog_inline_subtitle_for_field_returns_durability_warning_text_for_matching_field(
+) {
+    // `SaveOutcome::DurabilityWarning` is the
+    // `save_durability_unconfirmed` branch: the primary rename
+    // succeeded so the visible value sticks, but the parent
+    // directory `fsync` failed so the rendered warning attaches
+    // to the changed row. Same per-field routing as the error arms,
+    // sourced from `InlineWarning::rendered` instead of
+    // `InlineError::rendered`.
+    use paladin_gtk::settings::compose_settings_dialog_inline_subtitle_for_field;
+
+    let err = PaladinError::SaveDurabilityUnconfirmed;
+    let outcome = SaveOutcome::DurabilityWarning {
+        warning: InlineWarning::from_error(&err),
+        field: SettingsField::AutoLockSecs,
+    };
+    let rendered = err.to_string();
+
+    assert_eq!(
+        compose_settings_dialog_inline_subtitle_for_field(
+            Some(&outcome),
+            SettingsField::AutoLockSecs,
+        ),
+        Some(rendered.as_str()),
+        "durability warning attaches to the row whose save raised it",
+    );
+
+    for other in [
+        SettingsField::AutoLockEnabled,
+        SettingsField::ClipboardClearEnabled,
+        SettingsField::ClipboardClearSecs,
+    ] {
+        assert_eq!(
+            compose_settings_dialog_inline_subtitle_for_field(Some(&outcome), other),
+            None,
+            "row {other:?} stays clear when the durability warning targets AutoLockSecs",
+        );
+    }
 }

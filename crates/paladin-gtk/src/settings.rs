@@ -721,6 +721,67 @@ pub fn format_settings_dialog_saved_toast() -> &'static str {
     "Settings saved"
 }
 
+/// State-driven projection of the inline subtitle text the
+/// `SettingsComponent` renders beneath the `AdwSwitchRow` /
+/// `AdwSpinRow` identified by `field` per
+/// `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
+/// "Preferences" and §"Tests > Pure-logic unit tests >
+/// `tests/settings_logic.rs`".
+///
+/// Routes a [`SaveOutcome`] (the typed reply from
+/// [`SettingsState::apply_save_result`]) into a per-row subtitle
+/// projection so the widget can bind a single
+/// `#[watch] set_label:` / `#[watch] set_visible:` pair against
+/// the helper instead of pattern-matching against an
+/// `Option<SaveOutcome>` inline. The projection covers every
+/// failure / warning arm:
+///
+/// * [`SaveOutcome::Inline`] and [`SaveOutcome::Rollback`] → the
+///   matching row carries the rendered [`InlineError::rendered`]
+///   body verbatim (the §5 `Display` body shared with the CLI /
+///   TUI). Other rows stay clear.
+/// * [`SaveOutcome::DurabilityWarning`] → the matching row
+///   carries the rendered [`InlineWarning::rendered`] body
+///   verbatim. Other rows stay clear.
+/// * [`SaveOutcome::Success`] → no per-row subtitle; the
+///   affirmative outcome surfaces through
+///   [`format_settings_dialog_saved_toast`] on the
+///   `AdwToastOverlay` instead, per
+///   `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
+///   "Toast surface".
+/// * `None` (no save attempted yet) → no subtitle for any row.
+///
+/// Pure — borrows the outcome and returns an `Option<&str>`
+/// without allocating; the returned slice borrows from the
+/// outcome's [`InlineError::rendered`] / [`InlineWarning::rendered`]
+/// `String` so the widget can re-render the row subtitle in
+/// lockstep with the `#[watch]` dispatch without re-deriving
+/// the routing decision against [`SaveOutcome`] inline.
+#[must_use]
+pub fn compose_settings_dialog_inline_subtitle_for_field(
+    outcome: Option<&SaveOutcome>,
+    field: SettingsField,
+) -> Option<&str> {
+    match outcome? {
+        SaveOutcome::Inline {
+            error,
+            field: target,
+        }
+        | SaveOutcome::Rollback {
+            error,
+            field: target,
+        } if *target == field => Some(error.rendered.as_str()),
+        SaveOutcome::DurabilityWarning {
+            warning,
+            field: target,
+        } if *target == field => Some(warning.rendered.as_str()),
+        SaveOutcome::Success
+        | SaveOutcome::Inline { .. }
+        | SaveOutcome::Rollback { .. }
+        | SaveOutcome::DurabilityWarning { .. } => None,
+    }
+}
+
 /// Buffered spinner pending the 500 ms debounce.
 #[derive(Debug, Clone, Copy)]
 enum PendingSpinner {
