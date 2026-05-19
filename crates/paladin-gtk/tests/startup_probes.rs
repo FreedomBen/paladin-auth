@@ -16050,3 +16050,102 @@ fn format_app_about_dialog_release_notes_version_does_not_contain_a_form_feed_by
         "AdwAboutDialog release_notes_version must not contain the `\\x0C` form-feed byte (0x0C); the current value's `\\x0C`-cleanliness is only protected transitively via `_matches_about_dialog_version` and `_matches_cargo_pkg_version` and the `version` helper's `_has_no_embedded_whitespace` check (which uses `char::is_whitespace()` and catches U+000C FF), so a future decoupling override would silently drop the `\\x0C` guard; a stray `\\x0C` would render as a literal control glyph in the dialog's \"What's New in v<release_notes_version>\" section header, could prevent the What's New body from rendering on libadwaita versions that strip whitespace when computing the body-region lookup key (with text-paginator pipelines treating it as a hard page break), and break screen-reader section-header announcements at the byte boundary; got {release_notes_version:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_release_notes_does_not_contain_a_form_feed_byte() {
+    // Defense-in-depth mirror of the just-added
+    // `_release_notes_version_does_not_contain_a_form_feed_byte`
+    // companion on the release-notes-body side, extending the
+    // release_notes byte-cleanliness contract past the just-
+    // completed `{null / horizontal-tab / carriage-return /
+    // vertical-tab}` quadruple to the next C0 control byte. The
+    // form-feed byte `\x0C` (0x0C) sits one step above VT (0x0B)
+    // and one step below CR (0x0D) in the ASCII C0 block; like
+    // its siblings it is a non-printable control byte with no
+    // legitimate use inside a Pango-markup release-notes body.
+    //
+    // The libadwaita release-notes convention permits embedded
+    // `\n` line breaks between Pango markup elements (`<li>`
+    // entries inside the wrapping `<ul>`, paragraph breaks,
+    // etc.), so the helper is one of only three about-dialog
+    // helpers (alongside `format_app_about_dialog_debug_info`
+    // and `format_app_about_dialog_translator_credits`) where
+    // embedded line breaks are legitimately expected. That makes
+    // `\x0C` (0x0C FORM FEED) a distinct regression surface:
+    // it is NOT covered by `_has_no_surrounding_whitespace_when_non_empty`
+    // (`\x0C` mid-string is non-surrounding), it is NOT covered
+    // by `_starts_and_ends_with_a_markup_element_when_non_empty`
+    // (the opening `<` and closing `>` markup boundaries are
+    // independent of mid-body `\x0C` bytes), it slips past
+    // `_does_not_contain_a_null_byte` (`\x0C` is not `\0`), it
+    // slips past `_does_not_contain_a_horizontal_tab_byte`
+    // (`\x0C` is not `\t`), it slips past
+    // `_does_not_contain_a_carriage_return_byte` (`\x0C` is not
+    // `\r`), and it slips past
+    // `_does_not_contain_a_vertical_tab_byte` (`\x0C` is not
+    // `\x0B`). None of the existing companions name the `\x0C`
+    // byte directly on this helper.
+    //
+    // A regression that landed
+    // `"<ul>\n\x0C<li>foo</li>\n\x0C<li>bar</li>\n</ul>"`
+    // (form-feed-indented pretty-printed Pango markup lifted from
+    // a legacy pre-formatter that used `\x0C` to advance to the
+    // next page between bullet entries on a line-printer
+    // terminal, a `concat!(_, "\x0C", _)` form mirroring a
+    // CHANGELOG.md FF-paginated bullet block, a `pandoc`-
+    // generated text dump that preserved `\x0C` page-break
+    // markers between document sections, or a hand-edited helper
+    // that pasted from a page-broken text file) would mis-
+    // render in multiple downstream surfaces: (1) Pango's markup
+    // parser permits ASCII whitespace between elements but
+    // renders `\x0C` as a literal control glyph (a hollow box or
+    // tofu-like placeholder) since `\x0C` is technically
+    // whitespace but has no tab-stop semantics; in the about-
+    // dialog "What's New" body this would surface as visible
+    // boxes or placeholder glyphs between the wrapping `<ul>`
+    // and each `<li>` bullet element; (2) any in-app changelog
+    // display that reuses the release-notes string outside the
+    // dialog (release-tracker bots, copy-to-clipboard handlers)
+    // would propagate the stray `\x0C` into the consumer's
+    // stream and trigger the same rendering bug across every
+    // downstream surface, with the additional risk that text-
+    // paginator pipelines treat the `\x0C` as a hard page break
+    // and split the bullet block mid-stream in printed reports;
+    // (3) screen readers that announce the release-notes content
+    // read the `\x0C` as a literal control character or — on
+    // some implementations — as a section-break announcement,
+    // breaking the accessibility-tree announcement at every
+    // bullet-boundary indent.
+    //
+    // Mirror of the just-added
+    // `_developer_name_does_not_contain_a_form_feed_byte`,
+    // `_copyright_does_not_contain_a_form_feed_byte`,
+    // `_comments_does_not_contain_a_form_feed_byte`,
+    // `_developers_entries_do_not_contain_a_form_feed_byte`,
+    // `_empty_credits_section_entries_do_not_contain_a_form_feed_byte`,
+    // and `_release_notes_version_does_not_contain_a_form_feed_byte`
+    // siblings; together they extend the about-dialog byte-
+    // composition contract from the just-completed `{null /
+    // horizontal-tab / carriage-return / vertical-tab}`
+    // quadruple to the form-feed regression surface as well.
+    //
+    // Pinning the no-`\x0C` invariant directly here surfaces the
+    // regression with a message naming the offending byte at
+    // build time rather than as a downstream "What's New" body
+    // rendering bug, a stray `\x0C` byte in an external
+    // changelog reuse, or a screen-reader announcement break.
+    // Current helper returns the empty literal `""` (no `\x0C`
+    // byte), so this test passes today and serves as a forcing
+    // function so any future override of the helper — including
+    // the eventual landing of an actual v0.2 release-notes Pango
+    // markup body sourced from CHANGELOG.md — stays free of
+    // form-feed bytes even when embedded `\n` line breaks are
+    // intentionally present.
+    use paladin_gtk::app::model::format_app_about_dialog_release_notes;
+
+    let release_notes = format_app_about_dialog_release_notes();
+    assert!(
+        !release_notes.contains('\x0C'),
+        "AdwAboutDialog release_notes must not contain the `\\x0C` form-feed byte (0x0C); the Pango markup parser permits ASCII whitespace between elements but renders `\\x0C` as a literal control glyph (a hollow box or tofu-like placeholder) since `\\x0C` is technically whitespace under `char::is_whitespace()` but has no tab-stop semantics, so a stray `\\x0C` between the wrapping `<ul>` and each `<li>` bullet would surface as visible boxes in the dialog's What's New body, propagate the same rendering bug into any external changelog reuse (with text-paginator pipelines treating it as a hard page break), and break screen-reader bullet-boundary announcements at every indent; got {release_notes:?}",
+    );
+}
