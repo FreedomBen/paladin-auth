@@ -24695,3 +24695,123 @@ fn format_app_about_dialog_translator_credits_does_not_contain_an_end_of_transmi
         "AdwAboutDialog translator_credits must not contain the `\\x04` end-of-transmission byte (0x04); the libadwaita translator-credits convention splits on `\\n` (LF) only and leaves embedded `\\x04` bytes inside each parsed entry untouched, `\\x04` is NOT classified as whitespace under any permissive whitespace mode (strictly as dangerous as enquiry, acknowledge, backspace, and bell, neither caught by `char::is_whitespace()`) so Pango renders it as a literal control glyph; a stray `\\x04` would render as a hollow box or tofu-like placeholder in the credits-page attribution column, would survive `xgettext` round trips and propagate into every consumer of the .po / .mo file, would prematurely terminate in-flight transmissions if dumped through a serial-bridged TTY treating `\\x04` as an EOT framing byte (truncating the attribution mid-string), would trigger pty-cooked-mode EOF-truncation surprises in tooling capturing the po-file through a canonical-mode terminal, and would break screen-reader announcements at every attribution-row column boundary; got {translator_credits:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_program_name_does_not_contain_an_end_of_transmission_byte() {
+    // Defense-in-depth per-byte sibling extending the
+    // program-name byte coverage past the just-completed
+    // `{null / horizontal-tab / carriage-return / vertical-
+    // tab / form-feed / backspace / line-feed / bell /
+    // acknowledge / enquiry}` decuple to the end-of-
+    // transmission byte `\x04` (0x04), continuing the non-
+    // whitespace-classified C0 control-byte cycle past ENQ
+    // (0x05) for this helper. Like ENQ, ACK, and BEL, EOT
+    // is NOT matched by `char::is_whitespace()` (Unicode
+    // treats EOT as a control byte, not whitespace), so the
+    // existing `_program_name_has_no_embedded_whitespace`
+    // companion does NOT catch `\x04` — making end-of-
+    // transmission strictly as dangerous as enquiry,
+    // acknowledge, backspace, and bell for this helper,
+    // since the transitive protection collapses entirely
+    // rather than being merely brittle.
+    //
+    // None of the existing companions name the `\x04` byte
+    // directly on this helper:
+    //   - `_is_ascii_only` pins each byte as ASCII — `\x04`
+    //     is ASCII so it slips past;
+    //   - `_program_name_has_no_embedded_whitespace` uses
+    //     `char::is_whitespace()`, which returns *false*
+    //     for U+0004 EOT — strictly weaker coverage than
+    //     the form-feed case;
+    //   - `_is_non_empty_and_not_app_id` only checks non-
+    //     empty + distinct-from-app-id;
+    //   - `_matches_format_app_window_title` only enforces
+    //     equality with the window title;
+    //   - `_is_segment_of_application_icon_name` only
+    //     checks segment containment;
+    //   - `_does_not_end_with_a_period` only constrains
+    //     the suffix;
+    //   - `_does_not_contain_a_null_byte` /
+    //     `_does_not_contain_a_horizontal_tab_byte` /
+    //     `_does_not_contain_a_carriage_return_byte` /
+    //     `_does_not_contain_a_vertical_tab_byte` /
+    //     `_does_not_contain_a_form_feed_byte` /
+    //     `_does_not_contain_a_backspace_byte` /
+    //     `_does_not_contain_a_line_feed_byte` /
+    //     `_does_not_contain_a_bell_byte` /
+    //     `_does_not_contain_an_acknowledge_byte` /
+    //     `_does_not_contain_an_enquiry_byte` each name a
+    //     different byte specifically.
+    //
+    // A regression that landed `"Pala\x04din"` (end-of-
+    // transmission byte lifted from a `script(1)`
+    // typescript capturing raw `\x04` EOT framing bytes
+    // from a CI build that bridged a serial console mid-
+    // token during an Xmodem-style transfer, a
+    // `concat!(_, "\x04", _)` form mirroring a stream-
+    // segment-delimited program-name edit, or a hand-
+    // edited helper override that pasted from a terminal
+    // session interfacing with a protocol bridge preserving
+    // EOT framing bytes) would mis-render in three
+    // downstream surfaces: (1) the GLib-backed
+    // `AdwAboutDialog::set_application_name` setter routes
+    // the value into Pango for inline rendering as the
+    // bold program-name row at the dialog header — Pango's
+    // default rendering of a bare `\x04` byte is
+    // implementation-defined and typically renders as a
+    // literal control glyph (a hollow box or tofu-like
+    // placeholder), breaking the tidy bold-header layout;
+    // (2) the matching `gtk::Window::set_title` setter (the
+    // program name is mirrored to the window title per
+    // `_matches_format_app_window_title`) renders the
+    // `\x04` in the window manager's taskbar / dock display
+    // label, surfacing the control byte to every shell
+    // that lists open windows — and a serial-bridged TTY-
+    // rendered `wmctrl -l` or `swaymsg -t get_tree` dump
+    // (CI logs over a serial console, an out-of-band
+    // debugging session) may have the `\x04` byte
+    // intercepted by the receiving end as an end-of-
+    // transmission framing indicator and prematurely
+    // terminate the in-flight transmission at the byte
+    // boundary, truncating the window-list dump mid-entry
+    // and confusing protocol-bridging tooling that treats
+    // EOT as a session-terminator; on POSIX terminals
+    // operating in canonical (cooked) mode where `VEOF`
+    // defaults to `^D` / `\x04`, the byte is the EOF
+    // marker that closes the upstream read — surfacing as
+    // a truncated window-list dump in any tooling that
+    // captures `wmctrl` / `swaymsg` output through a pty
+    // in cooked mode; (3) the GTK accessibility tree's
+    // `accessible-name` property routes through the same
+    // Pango layer, breaking screen-reader announcements of
+    // the application name at the byte boundary.
+    //
+    // Pinning the no-`\x04` invariant directly on this
+    // helper surfaces the regression with a message naming
+    // the offending byte at build time rather than via a
+    // future whitespace-relaxation refactor (which would
+    // not have protected `\x04` anyway), a window-list
+    // serial-protocol EOT-frame session-terminator
+    // collision, a pty-cooked-mode EOF-truncation surprise,
+    // or a screen-reader announcement break. Current
+    // helper returns the literal `"Paladin"` (no `\x04`
+    // byte), so this test passes today and serves as a
+    // forcing function so any future override of the
+    // helper — including the eventual landing of a
+    // localized multi-word program name — stays free of
+    // end-of-transmission bytes. Continues the non-
+    // whitespace-classified C0 control-byte cycle past the
+    // just-completed `{null / horizontal-tab / carriage-
+    // return / vertical-tab / form-feed / backspace /
+    // line-feed / bell / acknowledge / enquiry}` decuple
+    // so the helper's byte-composition contract pins each
+    // forbidden control byte against a single source of
+    // truth.
+    use paladin_gtk::app::model::format_app_about_dialog_program_name;
+
+    let program_name = format_app_about_dialog_program_name();
+    assert!(
+        !program_name.contains('\x04'),
+        "AdwAboutDialog program_name must not contain the `\\x04` end-of-transmission byte (0x04); like ENQ, ACK, and BEL, EOT is NOT matched by `char::is_whitespace()` (Unicode returns false for U+0004 EOT), so `_has_no_embedded_whitespace` does NOT catch `\\x04` — strictly as dangerous as enquiry, acknowledge, backspace, and bell here, neither caught by the whitespace companion; a stray `\\x04` slips past `_is_ascii_only` / `_is_non_empty_and_not_app_id` / `_matches_format_app_window_title` / `_is_segment_of_application_icon_name` / `_does_not_end_with_a_period` and the prior per-byte siblings, would render as a literal control glyph in the bold dialog-header program-name row, surface in the window manager's taskbar / dock display label via `_matches_format_app_window_title`, prematurely terminate in-flight transmissions if dumped through a serial-bridged TTY treating `\\x04` as an EOT framing byte on `wmctrl -l` / `swaymsg -t get_tree` window-list dumps (truncating the dump mid-entry), trigger pty-cooked-mode EOF-truncation surprises in tooling capturing window-list output through a canonical-mode terminal, and break screen-reader application-name announcements at the byte boundary; got {program_name:?}",
+    );
+}
