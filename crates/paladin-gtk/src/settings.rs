@@ -1029,6 +1029,40 @@ pub fn format_settings_dialog_spinner_digits() -> u32 {
     0
 }
 
+/// Fixed `bool` the widget passes to
+/// `AdwPreferencesDialog::set_search_enabled` per
+/// `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
+/// "Preferences" and §"Component tree" > `SettingsComponent`.
+///
+/// Returns `false` — libadwaita defaults this property to `TRUE`
+/// (the dialog grows a search bar that scans every
+/// `AdwPreferencesGroup` row title / description, built for large
+/// dialogs hosting many `AdwPreferencesPage`s like GNOME Settings).
+/// Our `SettingsComponent` hosts exactly two
+/// `AdwPreferencesGroup`s — the auto-lock and clipboard panels
+/// pinned by [`format_settings_dialog_auto_lock_group_title`] /
+/// [`format_settings_dialog_clipboard_clear_group_title`] — with
+/// four rows total. The search bar would visually crowd the chrome
+/// above the groups without surfacing any rows the user could not
+/// already see at a glance, so the `SettingsComponent` calls
+/// `set_search_enabled(format_settings_dialog_search_enabled())`
+/// once after construction to suppress it.
+///
+/// Pinning the literal through this helper keeps the
+/// search-enabled flag in one place shared by the widget binding
+/// and the pure-logic tests in `tests/settings_logic.rs`; the
+/// widget layer never duplicates the literal. Sibling of
+/// [`format_settings_dialog_title`] on the `AdwPreferencesDialog`
+/// property side; together they pin the dialog-level chrome above
+/// the `AdwPreferencesGroup`s that the group-title / row-title
+/// helpers cover.
+///
+/// Pure — returns a `bool` without allocating.
+#[must_use]
+pub fn format_settings_dialog_search_enabled() -> bool {
+    false
+}
+
 /// Fixed `u32` count of seconds the
 /// [`format_settings_dialog_saved_toast`] body stays visible on the
 /// `AdwToastOverlay` per `IMPLEMENTATION_PLAN_04_GTK.md`

@@ -1787,6 +1787,40 @@ fn format_settings_dialog_spinner_debounce_returns_500_ms() {
 }
 
 #[test]
+fn format_settings_dialog_search_enabled_returns_false() {
+    // `AdwPreferencesDialog::search-enabled` defaults to `TRUE` in
+    // libadwaita: the dialog grows a search bar that scans every
+    // `AdwPreferencesGroup` row title / description. That affordance
+    // is built for large dialogs hosting many `AdwPreferencesPage`s
+    // (GNOME Settings, GNOME Tweaks); ours hosts exactly two groups
+    // (auto-lock and clipboard, pinned by
+    // `format_settings_dialog_auto_lock_group_title` /
+    // `format_settings_dialog_clipboard_clear_group_title`) with
+    // four rows total. The search bar would visually crowd the
+    // chrome above the groups without surfacing any rows the user
+    // could not already see at a glance.
+    //
+    // Pinning the literal through this helper keeps the
+    // search-enabled flag in one place shared by the widget binding
+    // (`AdwPreferencesDialog::set_search_enabled(
+    // format_settings_dialog_search_enabled())`) and the pure-logic
+    // tests; the widget layer never duplicates the literal.
+    //
+    // Sibling of `format_settings_dialog_title` (the header text)
+    // on the `AdwPreferencesDialog` property side; together they
+    // pin the dialog-level chrome above the `AdwPreferencesGroup`s
+    // that the group-title / row-title helpers cover.
+    //
+    // Pure — returns a `bool` without allocating.
+    use paladin_gtk::settings::format_settings_dialog_search_enabled;
+
+    assert!(
+        !format_settings_dialog_search_enabled(),
+        "search bar is overkill for a two-group dialog and is suppressed",
+    );
+}
+
+#[test]
 fn format_settings_dialog_saved_toast_timeout_returns_five_seconds() {
     // `adw::Toast::set_timeout` takes a `u32` count of seconds the
     // toast remains visible (0 means the toast never auto-dismisses,
