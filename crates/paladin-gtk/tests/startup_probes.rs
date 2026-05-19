@@ -17648,6 +17648,110 @@ fn format_app_about_dialog_version_does_not_contain_a_form_feed_byte() {
 }
 
 #[test]
+fn format_app_about_dialog_version_does_not_contain_a_backspace_byte() {
+    // Defense-in-depth per-byte sibling extending the version-
+    // helper byte coverage past the just-completed `{null /
+    // horizontal-tab / carriage-return / vertical-tab / form-
+    // feed}` quintuple to the backspace byte `\x08` (0x08), which
+    // sits one step below HT (0x09) in the ASCII C0 block and is
+    // the first non-whitespace-classified C0 byte in the cycle:
+    // unlike FF / HT / CR / LF / VT, `\x08` is NOT matched by
+    // `char::is_whitespace()` (Unicode treats BS as a control
+    // byte, not whitespace), so the existing
+    // `_version_has_no_embedded_whitespace` companion does NOT
+    // catch `\x08` even though it catches `\x0C`. The backspace
+    // byte therefore has NO transitive protection on this helper
+    // today — strictly more dangerous than form-feed.
+    //
+    // None of the existing companions name the `\x08` byte
+    // directly on this helper:
+    //   - `_is_ascii_only` pins each byte as ASCII — `\x08` is
+    //     ASCII so it slips past;
+    //   - `_version_has_no_embedded_whitespace` uses
+    //     `char::is_whitespace()`, which returns *false* for
+    //     U+0008 BS — strictly weaker coverage than the form-
+    //     feed case;
+    //   - `_is_non_empty_and_looks_like_semver` only enforces
+    //     non-empty + semver shape;
+    //   - `_starts_with_a_digit` / `_does_not_start_with_a_dot` /
+    //     `_does_not_end_with_a_dot` only constrain the boundary
+    //     bytes;
+    //   - `_has_at_least_three_dot_separated_segments` /
+    //     `_segments_are_non_empty` only check segment count and
+    //     non-emptiness;
+    //   - `_matches_cargo_pkg_version` only enforces equality
+    //     with `CARGO_PKG_VERSION` (a `\x08`-bearing value would
+    //     still match if `CARGO_PKG_VERSION` carried the same
+    //     bytes — and Cargo does not byte-screen `version`);
+    //   - `_does_not_contain_a_null_byte` /
+    //     `_does_not_contain_a_horizontal_tab_byte` /
+    //     `_does_not_contain_a_carriage_return_byte` /
+    //     `_does_not_contain_a_vertical_tab_byte` /
+    //     `_does_not_contain_a_form_feed_byte` each name a
+    //     different byte specifically.
+    //
+    // A regression that landed `"0.0.1\x08"` or `"0\x08.0\x08.1"`
+    // (backspace byte lifted from a `script(1)` typescript
+    // capturing raw `\x08` edit-stream bytes inside an
+    // interactively-edited workspace `Cargo.toml` `version`
+    // field, a `concat!(_, "\x08", _)` form, or a hand-edited
+    // helper override that pasted from a terminal session
+    // recording) would mis-render in multiple downstream
+    // surfaces, identically to the form-feed analysis but with
+    // the additional terminal-erase semantic: (1) the GLib-
+    // backed `AdwAboutDialog::set_version` setter routes the
+    // value into Pango for inline rendering as the version
+    // caption beneath the program name — Pango's default
+    // rendering of a bare `\x08` byte is implementation-defined
+    // and typically renders as a literal control glyph (a hollow
+    // box or tofu-like placeholder), breaking the tidy version-
+    // caption layout; (2) the same version string is reused by
+    // `_release_notes_version_matches_about_dialog_version` for
+    // the "What's New in v<version>" header — a `\x08` byte in
+    // the version would propagate into the release-notes header
+    // and mis-render there too; (3) any downstream tooling that
+    // scrapes the version slot (release-tracker bots, update-
+    // check pings, crash-report assemblers, `cargo metadata`
+    // pipes) would propagate the stray `\x08` byte; a TTY-
+    // streamed update-check or release-tracker dump piped to
+    // `less` would terminal-erase the preceding glyph and let
+    // the rendered version diverge from the bytes on disk — a
+    // log-injection / display-spoofing primitive where an
+    // attacker who controlled the upstream `Cargo.toml` could
+    // craft a payload whose terminal-rendered form omits or
+    // substitutes version characters without altering the file
+    // bytes; (4) screen readers that announce the version
+    // caption read the `\x08` as a literal control character or
+    // — on some implementations — as a delete-previous
+    // announcement, breaking the version-caption accessibility-
+    // tree announcement at the byte boundary.
+    //
+    // Pinning the no-`\x08` invariant directly on this helper
+    // surfaces the regression with a message naming the
+    // offending byte at build time rather than via a future
+    // whitespace-relaxation refactor (which would not have
+    // protected `\x08` anyway), a terminal-erase display-spoof,
+    // or a screen-reader announcement break. Current helper
+    // returns the value sourced from `CARGO_PKG_VERSION` (no
+    // `\x08` byte), so this test passes today and serves as a
+    // forcing function so any future override of the helper —
+    // including the eventual landing of a build-metadata-
+    // suffixed version string — stays free of backspace bytes.
+    // Continues the version C0 control-byte cycle past the
+    // just-completed `{null / horizontal-tab / carriage-return /
+    // vertical-tab / form-feed}` quintuple so the helper's byte-
+    // composition contract pins each forbidden control byte
+    // against a single source of truth.
+    use paladin_gtk::app::model::format_app_about_dialog_version;
+
+    let version = format_app_about_dialog_version();
+    assert!(
+        !version.contains('\x08'),
+        "AdwAboutDialog version must not contain the `\\x08` backspace byte (0x08); unlike form-feed, `_has_no_embedded_whitespace` does NOT catch `\\x08` because `char::is_whitespace()` returns false for U+0008 BS (strictly weaker coverage than form-feed which the whitespace companion does catch transitively); a stray `\\x08` slips past `_is_ascii_only` / `_is_non_empty_and_looks_like_semver` / `_starts_with_a_digit` / `_does_not_start_with_a_dot` / `_does_not_end_with_a_dot` / `_has_at_least_three_dot_separated_segments` / `_segments_are_non_empty` / `_matches_cargo_pkg_version` and the per-byte siblings, would render as a literal control glyph in the version caption beneath the program name, propagate into the \"What's New in v<version>\" release-notes header that reuses this string, enable terminal-erase display-spoofing on update-check or release-tracker dumps piped to `less` (the rendered version diverges from the bytes on disk because `\\x08` erases the preceding glyph), and break screen-reader version-caption announcements at the byte boundary; got {version:?}",
+    );
+}
+
+#[test]
 fn format_app_about_dialog_application_icon_name_does_not_contain_a_form_feed_byte() {
     // Defense-in-depth per-byte sibling extending the
     // application-icon-name byte coverage past the just-
