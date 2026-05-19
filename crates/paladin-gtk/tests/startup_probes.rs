@@ -6921,3 +6921,62 @@ fn format_app_about_dialog_translator_credits_has_no_surrounding_whitespace_when
         );
     }
 }
+
+#[test]
+fn format_app_about_dialog_release_notes_has_no_surrounding_whitespace_when_non_empty() {
+    // Defense-in-depth sibling of
+    // `format_app_about_dialog_release_notes_is_empty_until_v0_2_ships`
+    // (exact-value pin to the empty literal),
+    // `format_app_about_dialog_release_notes_must_be_paired_with_a_non_empty_version_when_non_empty`
+    // (cross-helper version-pairing pin), and the matching
+    // `_release_notes_version_matches_*` companions. Those
+    // companions catch the wrong-value, missing-version, and
+    // wrong-version regressions but leave the
+    // surrounding-whitespace edge case ungated.
+    //
+    // Once v0.2 ships and this helper swaps from the empty
+    // literal to a non-empty Pango / AdwAbout markup body, a
+    // contributor could accidentally embed leading or trailing
+    // whitespace — e.g. a copy-paste from a draft `RELEASE_NOTES.md`
+    // that brought along a leading blank line (`"\n<p>…</p>"`)
+    // or a trailing newline before the closing literal
+    // (`"<p>…</p>\n"`). `AdwAboutDialog` renders the "What's New"
+    // body verbatim, so a leading newline pushes the first
+    // paragraph off the top baseline (creating a visual gap
+    // between the version header and the first bullet) and a
+    // trailing newline pads the bottom of the section against
+    // the dialog's next row.
+    //
+    // The libadwaita convention is that the body starts and
+    // ends with a markup element (e.g. `<p>` / `</p>` or
+    // `<ul>` / `</ul>`) with no surrounding whitespace — the
+    // section's vertical rhythm is then driven by Adwaita's
+    // baseline grid, not by accidental newlines in the literal.
+    // Pinning the no-surrounding-whitespace invariant here is a
+    // forcing function so the v0.2 release-notes copy lands
+    // properly trimmed rather than as a visually misaligned
+    // "What's New" section. The current empty-literal state
+    // trivially passes (no whitespace to strip), so the test
+    // stays green now and serves as a canary on the v0.2 swap.
+    //
+    // Mirror of the
+    // `_translator_credits_has_no_surrounding_whitespace_when_non_empty`
+    // sibling pinned on the credits-page Translators row;
+    // together they pin the no-padding shape across the two
+    // "empty until contributor lands content" `AdwAboutDialog`
+    // sections (What's New and Translators) against a single
+    // source of truth.
+    use paladin_gtk::app::model::format_app_about_dialog_release_notes;
+
+    let release_notes = format_app_about_dialog_release_notes();
+    if !release_notes.is_empty() {
+        assert!(
+            !release_notes.starts_with(char::is_whitespace),
+            "AdwAboutDialog release-notes must not start with whitespace so the What's New section's first paragraph renders flush against the version-header baseline rather than with a leading vertical gap; got {release_notes:?}",
+        );
+        assert!(
+            !release_notes.ends_with(char::is_whitespace),
+            "AdwAboutDialog release-notes must not end with whitespace so the What's New section's final paragraph closes flush against the next dialog row rather than with trailing padding; got {release_notes:?}",
+        );
+    }
+}
