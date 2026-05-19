@@ -17861,6 +17861,106 @@ fn format_app_about_dialog_application_icon_name_does_not_contain_a_form_feed_by
 }
 
 #[test]
+fn format_app_about_dialog_application_icon_name_does_not_contain_a_backspace_byte() {
+    // Defense-in-depth per-byte sibling extending the
+    // application-icon-name byte coverage past the just-
+    // completed `{null / horizontal-tab / carriage-return /
+    // vertical-tab / form-feed}` quintuple to the backspace byte
+    // `\x08` (0x08), which sits one step below HT (0x09) in the
+    // ASCII C0 block and is the first non-whitespace-classified
+    // C0 byte in the cycle: unlike FF / HT / CR / LF / VT,
+    // `\x08` is NOT matched by `char::is_whitespace()` (Unicode
+    // treats BS as a control byte, not whitespace), so the
+    // existing `_application_icon_name_has_no_embedded_whitespace`
+    // companion does NOT catch `\x08` even though it catches
+    // `\x0C`. The backspace byte therefore has NO transitive
+    // protection on this helper today — strictly more dangerous
+    // than form-feed.
+    //
+    // None of the existing companions name the `\x08` byte
+    // directly on this helper:
+    //   - `_is_ascii_only` pins each byte as ASCII — `\x08` is
+    //     ASCII so it slips past;
+    //   - `_application_icon_name_has_no_embedded_whitespace` uses
+    //     `char::is_whitespace()`, which returns *false* for
+    //     U+0008 BS — strictly weaker coverage than the form-
+    //     feed case;
+    //   - `_is_reverse_dns` / `_has_exactly_four_segments` /
+    //     `_starts_with_a_lowercase_ascii_letter` only constrain
+    //     segment-count and leading byte;
+    //   - `_ends_with_gui_segment` / `_does_not_end_with_a_dot`
+    //     / `_does_not_start_with_a_dot` only constrain the
+    //     suffix and dot-boundaries;
+    //   - `_segments_are_non_empty` only checks segment non-
+    //     emptiness;
+    //   - `_matches_app_id` / `_program_name_is_segment_of_application_icon_name`
+    //     only enforce equality with the app-id and segment
+    //     containment with the program name;
+    //   - `_does_not_contain_a_null_byte` /
+    //     `_does_not_contain_a_horizontal_tab_byte` /
+    //     `_does_not_contain_a_carriage_return_byte` /
+    //     `_does_not_contain_a_vertical_tab_byte` /
+    //     `_does_not_contain_a_form_feed_byte` each name a
+    //     different byte specifically.
+    //
+    // A regression that landed `"org.tamx.Paladin\x08.Gui"`
+    // (backspace byte lifted from a `script(1)` typescript
+    // capturing raw `\x08` edit-stream bytes between reverse-
+    // DNS segments of an interactively-edited icon-spec
+    // registry, a `concat!(_, "\x08", _)` form, or a hand-edited
+    // helper override that pasted from a terminal session
+    // recording) would mis-render in multiple downstream
+    // surfaces, identically to the form-feed analysis but with
+    // the additional terminal-erase semantic: (1) the
+    // `gtk::IconTheme` lookup machinery treats the icon name as
+    // a key into the icon cache — a `\x08`-bearing key would
+    // silently miss the cache and fall through to the
+    // placeholder fallback icon, masking the bug as a missing-
+    // icon surface rather than a malformed-icon-name surface;
+    // (2) the matching `gtk::Window::set_icon_name` setter (the
+    // icon name is mirrored onto the toplevel window's icon
+    // property) routes through GLib's GVariant string-
+    // marshalling layer and may surface as a malformed window-
+    // icon-name property in the X11 / Wayland protocol exchange,
+    // where some compositors silently drop the icon and others
+    // render a broken-icon placeholder; (3) the same icon name
+    // is mirrored to the AppStream metainfo file's `<id>` field
+    // per the §11.4 app-id convention — a `\x08`-bearing icon
+    // name would propagate into the metainfo file and fail
+    // Flathub's strict reverse-DNS-validating metainfo linter on
+    // the next package submission, and a TTY-rendered Flathub
+    // linter diagnostic dump would terminal-erase the preceding
+    // glyph, letting the rendered linter error message diverge
+    // from the bytes a maintainer pastes into a reply — a log-
+    // injection / display-spoofing primitive on the submission
+    // workflow.
+    //
+    // Pinning the no-`\x08` invariant directly on this helper
+    // surfaces the regression with a message naming the
+    // offending byte at build time rather than as a downstream
+    // icon-cache miss, a malformed-window-icon protocol
+    // exchange, a Flathub metainfo linter failure, or a
+    // terminal-erase display-spoof on linter diagnostics.
+    // Current helper returns the literal `"org.tamx.Paladin.Gui"`
+    // (no `\x08` byte), so this test passes today and serves as
+    // a forcing function so any future override of the helper —
+    // including the eventual landing of a Flatpak app-id rename
+    // — stays free of backspace bytes. Continues the
+    // application-icon-name C0 control-byte cycle past the just-
+    // completed `{null / horizontal-tab / carriage-return /
+    // vertical-tab / form-feed}` quintuple so the helper's byte-
+    // composition contract pins each forbidden control byte
+    // against a single source of truth.
+    use paladin_gtk::app::model::format_app_about_dialog_application_icon_name;
+
+    let application_icon_name = format_app_about_dialog_application_icon_name();
+    assert!(
+        !application_icon_name.contains('\x08'),
+        "AdwAboutDialog application_icon_name must not contain the `\\x08` backspace byte (0x08); unlike form-feed, `_has_no_embedded_whitespace` does NOT catch `\\x08` because `char::is_whitespace()` returns false for U+0008 BS (strictly weaker coverage than form-feed which the whitespace companion does catch transitively); a stray `\\x08` slips past `_is_ascii_only` / `_is_reverse_dns` / `_has_exactly_four_segments` / `_starts_with_a_lowercase_ascii_letter` / `_ends_with_gui_segment` / `_does_not_end_with_a_dot` / `_does_not_start_with_a_dot` / `_segments_are_non_empty` / `_matches_app_id` / `_program_name_is_segment_of_application_icon_name` and the per-byte siblings, would silently miss the `gtk::IconTheme` cache lookup (masking the bug as a placeholder-icon fallback), surface as a malformed window-icon-name property in the X11 / Wayland protocol exchange via `set_icon_name`, propagate into the AppStream metainfo `<id>` field where Flathub's strict reverse-DNS linter would fail the next package submission, and enable terminal-erase display-spoofing when Flathub linter diagnostics are dumped through a TTY (the rendered linter error diverges from the bytes on disk because `\\x08` erases the preceding glyph); got {application_icon_name:?}",
+    );
+}
+
+#[test]
 fn format_app_about_dialog_debug_info_filename_does_not_contain_a_form_feed_byte() {
     // Defense-in-depth per-byte sibling extending the debug-
     // info-filename byte coverage past the just-completed
