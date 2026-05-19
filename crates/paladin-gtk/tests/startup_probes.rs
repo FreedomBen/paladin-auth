@@ -10418,3 +10418,55 @@ fn format_app_about_dialog_debug_info_filename_does_not_contain_a_null_byte() {
         "AdwAboutDialog debug_info_filename must not contain the `\\0` null byte (which is rejected by POSIX `open(2)` with `EINVAL` and by GIO `g_file_new_for_path` with `NULL`, surfacing as a GTK file-chooser crash on GTK 4.0-4.10 or a silently-disabled Save button on GTK 4.12+); got {filename:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_program_name_does_not_contain_a_null_byte() {
+    // Defense-in-depth mirror of the just-added
+    // `_debug_info_does_not_contain_a_null_byte` /
+    // `_debug_info_filename_does_not_contain_a_null_byte`
+    // companions on the program-name side. The `_is_ascii_only`
+    // companion pins each byte as ASCII — the `\0` byte (0x00)
+    // is ASCII, so a regression that landed `"Pal\0adin"`
+    // (null-byte injection from a `CString::new` round-trip
+    // that didn't strip the trailing null, or a
+    // `concat!(_, "\0", _)` form) would slip past
+    // `_is_ascii_only`, `_has_no_embedded_whitespace` (`\0`
+    // is not whitespace),
+    // `_is_non_empty_and_not_app_id` (the string remains
+    // non-empty), `_matches_format_app_window_title` (only
+    // valid when the cross-helper consistency holds — a
+    // future refactor that intercepted both helpers with
+    // matching null-byte injections would slip past), or
+    // `_returns_paladin` (only valid when no manual override
+    // is in place).
+    //
+    // Null bytes in the program-name string would mis-render
+    // in three downstream surfaces: (1) the GLib-backed
+    // `AdwAboutDialog::set_application_name` setter routes
+    // through `g_strdup` (null-terminated) and may truncate
+    // the bold dialog-header program-name row at the first
+    // `\0` byte (rendering `"Pal\0adin"` as `"Pal"`); (2) the
+    // matching `gtk::Window::set_title` setter (the program
+    // name is mirrored to the window title per
+    // `_matches_format_app_window_title`) truncates the
+    // window manager's taskbar / dock display label
+    // similarly; (3) the GTK accessibility tree's
+    // `accessible-name` property routes through the same
+    // GLib null-terminated layer, breaking screen-reader
+    // announcements of the application name.
+    //
+    // Pinning the no-null-byte invariant directly here
+    // surfaces the regression with a message naming the
+    // offending byte at build time rather than as a
+    // downstream truncation of the dialog header, window
+    // title, or accessibility tree. Current helper returns
+    // the literal `"Paladin"` (no `\0` byte), so this test
+    // passes today and serves as a forcing function.
+    use paladin_gtk::app::model::format_app_about_dialog_program_name;
+
+    let program_name = format_app_about_dialog_program_name();
+    assert!(
+        !program_name.contains('\0'),
+        "AdwAboutDialog program_name must not contain the `\\0` null byte (which would route through GLib's null-terminated `g_strdup` layer in `set_application_name` / `set_title` / `accessible-name` setters and truncate the bold dialog-header program-name row, the window manager's taskbar / dock display label, and screen-reader announcements at the first `\\0`); got {program_name:?}",
+    );
+}
