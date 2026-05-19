@@ -579,6 +579,27 @@ pub fn compose_settings_dialog_auto_lock_secs_value(state: &SettingsState) -> f6
     f64::from(state.visible_auto_lock_secs())
 }
 
+/// State-driven projection of the clipboard-clear seconds
+/// `AdwSpinRow`'s visible value, surfaced as the `f64` that
+/// `AdwSpinRow::set_value` expects, per
+/// `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+/// `SettingsComponent`.
+///
+/// Returns [`SettingsState::visible_clipboard_clear_secs`] cast
+/// to `f64` — the buffered (pending) spinner value while a
+/// 500 ms debounce is in flight, and the committed value
+/// otherwise. Sibling of
+/// [`compose_settings_dialog_auto_lock_secs_value`] on the
+/// clipboard side; together they cover both
+/// `AdwSpinRow::set_value:` bindings the `SettingsComponent`
+/// mounts.
+///
+/// Pure — borrows the state and returns an `f64` without allocating.
+#[must_use]
+pub fn compose_settings_dialog_clipboard_clear_secs_value(state: &SettingsState) -> f64 {
+    f64::from(state.visible_clipboard_clear_secs())
+}
+
 /// Buffered spinner pending the 500 ms debounce.
 #[derive(Debug, Clone, Copy)]
 enum PendingSpinner {

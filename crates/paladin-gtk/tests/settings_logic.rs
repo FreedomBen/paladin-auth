@@ -728,6 +728,53 @@ fn compose_settings_dialog_auto_lock_secs_value_reflects_pending_spinner_buffer(
 }
 
 #[test]
+fn compose_settings_dialog_clipboard_clear_secs_value_casts_visible_clipboard_clear_secs_to_f64() {
+    // The clipboard-clear `AdwSpinRow` binds its `set_value:`
+    // attribute to this composer per
+    // `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+    // `SettingsComponent`. Sibling of
+    // `compose_settings_dialog_auto_lock_secs_value` on the
+    // clipboard side; together they cover both
+    // `AdwSpinRow::set_value:` bindings the `SettingsComponent`
+    // mounts.
+    use paladin_gtk::settings::{
+        compose_settings_dialog_clipboard_clear_secs_value, CommittedSettings, SettingsState,
+    };
+
+    let committed = CommittedSettings::new(false, 60, true, 20);
+    let state = SettingsState::new(committed);
+
+    let value = compose_settings_dialog_clipboard_clear_secs_value(&state);
+    assert!(
+        (value - 20.0).abs() < f64::EPSILON,
+        "composer surfaces the committed value as `f64` when no debounce is pending",
+    );
+}
+
+#[test]
+fn compose_settings_dialog_clipboard_clear_secs_value_reflects_pending_spinner_buffer() {
+    // While a 500 ms debounce is in flight,
+    // `SettingsState::visible_clipboard_clear_secs` returns the
+    // pending (buffered) value rather than the committed one —
+    // this composer mirrors that contract on the widget side so
+    // the spinner shows the user's most recent typed value during
+    // the debounce window.
+    use paladin_gtk::settings::{
+        compose_settings_dialog_clipboard_clear_secs_value, CommittedSettings, SettingsState,
+    };
+
+    let committed = CommittedSettings::new(false, 60, true, 20);
+    let mut state = SettingsState::new(committed);
+    state.stage_clipboard_clear_secs(45);
+
+    let value = compose_settings_dialog_clipboard_clear_secs_value(&state);
+    assert!(
+        (value - 45.0).abs() < f64::EPSILON,
+        "composer surfaces the pending buffered value during the debounce window",
+    );
+}
+
+#[test]
 fn format_settings_dialog_auto_lock_secs_adjustment_returns_paladin_core_bounds() {
     // The auto-lock `AdwSpinRow` consumes a `gtk::Adjustment`
     // built from this helper per `IMPLEMENTATION_PLAN_04_GTK.md`
