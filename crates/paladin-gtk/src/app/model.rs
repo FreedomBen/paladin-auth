@@ -560,16 +560,20 @@ impl SimpleComponent for AppModel {
         // `set_menu_model` call site.
         wire_app_menu_button_menu_model(&widgets.menu_button);
 
-        // Insert the bundled application action group on the
-        // root `adw::ApplicationWindow` so the menu targets
-        // spelled by `format_app_primary_menu_entries`
-        // (`"app.import"`, `"app.export"`, …, `"app.quit"`) and
-        // the header-bar `+` button's `"app.add"` target all
-        // resolve through one `gio::SimpleActionGroup`.
-        // Per-action `connect_activate` wiring lands in
-        // follow-up commits alongside the matching `AppMsg`
-        // variants.
-        wire_app_window_action_group(&root, &state);
+        // Build the bundled application action group and
+        // insert it on the root `adw::ApplicationWindow` so
+        // the menu targets spelled by
+        // `format_app_primary_menu_entries` (`"app.import"`,
+        // `"app.export"`, …, `"app.quit"`) and the header-bar
+        // `+` button's `"app.add"` target all resolve through
+        // one `gio::SimpleActionGroup`. The split into a
+        // separate `build_app_window_action_group` call lets
+        // follow-up commits wire each action's
+        // `connect_activate` handler on the same group
+        // reference before `wire_app_window_action_group`
+        // inserts it on the window.
+        let action_group = build_app_window_action_group(&state);
+        wire_app_window_action_group(&root, &action_group);
 
         let account_list = if state.is_unlocked() {
             let controller = AccountListComponent::builder()
@@ -2480,49 +2484,45 @@ pub fn wire_app_menu_button_menu_model(menu_button: &gtk::MenuButton) {
     menu_button.set_menu_model(Some(&build_app_primary_menu_model()));
 }
 
-/// Insert the bundled application action group on the root
+/// Insert a prebuilt application action group on the root
 /// [`adw::ApplicationWindow`] with the pinned
 /// [`format_app_action_group_name`] prefix.
 ///
 /// Calls
 /// [`gtk::prelude::WidgetExt::insert_action_group`] on
-/// `window` with the [`gtk::gio::SimpleActionGroup`] built by
-/// [`build_app_window_action_group`] for the supplied `state`
-/// and the bare group name returned by
-/// [`format_app_action_group_name`]. The widget binding calls
-/// this helper from `init` after `view_output!()` so the
-/// `"app.<bare>"` action targets spelled by
+/// `window` with `group` and the bare group name returned by
+/// [`format_app_action_group_name`] so the `"app.<bare>"`
+/// action targets spelled by
 /// [`format_app_primary_menu_entries`] (`"app.import"`,
 /// `"app.export"`, …, `"app.quit"`) and the header-bar `+`
 /// button's `"app.add"` target all resolve through the single
-/// group inserted on the window.
+/// group inserted on the window. The caller is responsible
+/// for constructing `group` via
+/// [`build_app_window_action_group`] and wiring each action's
+/// `connect_activate` handler against the
+/// [`relm4::ComponentSender`] for `AppModel` before insert —
+/// splitting build / wire-activate / insert into three steps
+/// lets the widget binding attach the activation closures on
+/// the same [`gtk::gio::SimpleActionGroup`] reference without
+/// re-walking the group after the insert.
 ///
 /// Centralizing the wiring in one helper means the widget
 /// binding never hand-spells the
 /// `window.insert_action_group(format_app_action_group_name(),
-/// Some(&build_app_window_action_group(state)))` call site —
-/// the group name and the bundled action group both stay
-/// sourced exclusively from the pinned helpers. Sibling of
+/// Some(&group))` call site — the group name stays sourced
+/// exclusively from the pinned helper. Sibling of
 /// [`wire_app_menu_button_menu_model`] on the menu-button
 /// surface side; together they pin both halves of the primary-
 /// menu wiring (the `gio::Menu` model attached to the
 /// `MenuButton` and the `gio::SimpleActionGroup` inserted on
 /// the window) against a single source of truth.
 ///
-/// The per-action `connect_activate` handler that forwards
-/// each activation to the matching [`AppMsg`] is wired by the
-/// widget binding (the closure needs the
-/// [`relm4::ComponentSender`] that lives on the widget side);
-/// this helper only registers the group surface so the test
-/// suite can prove the group prefix and the bundled actions
-/// are pinned.
-///
 /// Pure side-effect helper (no return value).
-pub fn wire_app_window_action_group(window: &adw::ApplicationWindow, state: &AppState) {
-    window.insert_action_group(
-        format_app_action_group_name(),
-        Some(&build_app_window_action_group(state)),
-    );
+pub fn wire_app_window_action_group(
+    window: &adw::ApplicationWindow,
+    group: &gtk::gio::SimpleActionGroup,
+) {
+    window.insert_action_group(format_app_action_group_name(), Some(group));
 }
 
 /// Build the single application-window

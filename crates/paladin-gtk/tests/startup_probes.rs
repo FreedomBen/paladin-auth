@@ -2155,7 +2155,7 @@ fn apply_app_add_action_sensitivity_updates_existing_action_for_a_new_state() {
 }
 
 #[test]
-fn wire_app_window_action_group_signature_takes_application_window_and_state() {
+fn wire_app_window_action_group_signature_takes_application_window_and_action_group() {
     // Per §"libadwaita usage" and §"Component tree": the
     // `app` action group built by
     // `build_app_window_action_group` is inserted on the root
@@ -2167,18 +2167,15 @@ fn wire_app_window_action_group_signature_takes_application_window_and_state() {
     // `+` button's `"app.add"` target all resolve through one
     // group inserted on the window. The compile-only signature
     // check here pins the helper's shape —
-    // `fn(&adw::ApplicationWindow, &AppState)` — without
-    // instantiating a real `adw::ApplicationWindow` widget in
-    // the test process (creating multiple GTK widgets across
-    // sibling tests in this binary destabilizes the GTK type
-    // registration). The `gtk_smoke.rs` `xvfb-run` smoke test
-    // covers the end-to-end action-group insertion by mounting
-    // the full `AppModel`, while the per-action wiring is
-    // pinned by
+    // `fn(&adw::ApplicationWindow, &gio::SimpleActionGroup)` —
+    // so the caller can wire each action's `connect_activate`
+    // handler against the group reference before insert
+    // without re-walking the inserted group. The `gtk_smoke.rs`
+    // `xvfb-run` smoke test covers the end-to-end action-group
+    // insertion by mounting the full `AppModel`, while the
+    // per-action wiring is pinned by
     // `build_app_window_action_group_bundles_primary_actions_and_add_action`.
-    use paladin_gtk::app::state::AppState;
-
-    let _: fn(&libadwaita::ApplicationWindow, &AppState) =
+    let _: fn(&libadwaita::ApplicationWindow, &libadwaita::gio::SimpleActionGroup) =
         paladin_gtk::app::model::wire_app_window_action_group;
 }
 
