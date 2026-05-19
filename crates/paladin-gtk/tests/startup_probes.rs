@@ -17239,6 +17239,103 @@ fn format_app_about_dialog_debug_info_does_not_contain_a_form_feed_byte() {
 }
 
 #[test]
+fn format_app_about_dialog_debug_info_does_not_contain_a_backspace_byte() {
+    // Defense-in-depth per-byte sibling extending the debug_info
+    // byte-cleanliness contract past the just-completed `{null /
+    // horizontal-tab / carriage-return / vertical-tab / form-
+    // feed}` quintuple to the backspace byte `\x08` (0x08), which
+    // sits one step below HT (0x09) in the ASCII C0 block and is
+    // the first non-whitespace-classified C0 byte in the cycle:
+    // unlike FF / HT / CR / LF / VT, `\x08` is NOT matched by
+    // `char::is_whitespace()` (Unicode treats BS as a control
+    // byte, not whitespace), so the existing
+    // `_is_non_empty_text_with_no_trailing_whitespace` companion
+    // — which previously caught a *trailing* `\x0C` via
+    // `char::is_whitespace()` — does NOT reject a trailing
+    // `\x08`. The backspace byte is therefore strictly more
+    // dangerous than form-feed for this helper, because not even
+    // the boundary-only `\x0C` protection survives for `\x08`.
+    //
+    // The existing `_carries_program_name_version_and_app_id`,
+    // `_starts_with_program_name`,
+    // `_app_id_appears_on_a_distinct_line_from_program_name`,
+    // `_has_exactly_two_lines`,
+    // `_program_name_line_ends_with_the_version`,
+    // `_app_id_line_ends_with_the_reverse_dns_app_id`,
+    // `_is_ascii_only` (byte-composition pin — `\x08` is ASCII so
+    // it slips past), `_does_not_contain_a_null_byte`,
+    // `_does_not_contain_a_horizontal_tab_byte`,
+    // `_does_not_contain_a_carriage_return_byte`,
+    // `_does_not_contain_a_vertical_tab_byte`, and
+    // `_does_not_contain_a_form_feed_byte` companions each name a
+    // different byte specifically. None of them name `\x08`. The
+    // `_is_non_empty_text_with_no_trailing_whitespace` companion
+    // does NOT reject a trailing `\x08` either, because
+    // `char::is_whitespace()` returns *false* for U+0008 BS —
+    // strictly weaker coverage than the form-feed case.
+    //
+    // A regression that landed `"Paladin\x080.0.1\nApp ID:
+    // org.tamx.Paladin.Gui"` (backspace byte lifted from a
+    // `script(1)` typescript capturing raw `\x08` edit-stream
+    // bytes between the program-name and version columns of the
+    // debug-info payload, a `concat!(_, "\x08", _)` form
+    // mirroring a backspace-paginated diagnostic-info cell, or a
+    // hand-edited helper that pasted from a terminal session
+    // recording) would mis-render in multiple downstream
+    // surfaces, identically to the analysis on form-feed: (1)
+    // the GLib-backed `AdwAboutDialog::set_debug_info` setter
+    // routes the value into Pango for rendering inside the
+    // dialog's "Troubleshooting → Debugging Information" body —
+    // Pango's default rendering of a bare `\x08` byte is
+    // implementation-defined and typically renders as a literal
+    // control glyph (a hollow box or tofu-like placeholder),
+    // breaking the tidy single-column layout; (2) when the user
+    // pastes the payload into a bug-report form on GitHub, the
+    // `\x08` byte renders inconsistently across browsers and
+    // font stacks (some show a hollow box, some silently drop
+    // the byte) AND when the bug-report form is rendered into a
+    // terminal preview, the `\x08` byte erases the preceding
+    // glyph from the terminal surface — a log-injection /
+    // display-spoofing primitive where the rendered debug-info
+    // diverges from the bytes a maintainer pastes into a reply;
+    // (3) when the user saves the payload to a `.txt` file via
+    // the `AdwAboutDialog::set_debug_info_filename` slot, the
+    // GTK file-writer writes the raw bytes so the resulting
+    // file contains a stray BS byte that breaks POSIX text-
+    // processing tools (`grep`, `awk`, `cut`) and — when the
+    // file is `cat`-ted or `less`-paged in a terminal —
+    // terminal-erases the preceding glyph, so the maintainer's
+    // view of the saved file diverges from the bytes on disk.
+    //
+    // Pinning the no-`\x08` invariant directly here surfaces
+    // the regression with a message naming the offending byte at
+    // build time rather than as a downstream dialog rendering
+    // bug, a pasted-bug-report cross-browser drift artifact, a
+    // terminal-erase display-spoof, or a saved-file POSIX-text-
+    // processing breakage. The current
+    // `format_app_about_dialog_debug_info` returns `"Paladin
+    // 0.0.1\nApp ID: org.tamx.Paladin.Gui"` (built at compile
+    // time via `concat!` with single-space separators between
+    // every column), so this test passes today and serves as a
+    // forcing function so any future override of the debug-info
+    // helper — including the eventual landing of additional
+    // diagnostic fields (locale, Wayland vs X11 session type,
+    // Flatpak vs native) — stays free of backspace bytes.
+    // Continues the debug-info C0 control-byte cycle past the
+    // just-completed `{null / horizontal-tab / carriage-return /
+    // vertical-tab / form-feed}` quintuple so the helper's byte-
+    // composition contract pins each forbidden control byte
+    // against a single source of truth.
+    use paladin_gtk::app::model::format_app_about_dialog_debug_info;
+
+    let debug_info = format_app_about_dialog_debug_info();
+    assert!(
+        !debug_info.contains('\x08'),
+        "AdwAboutDialog debug_info must not contain the `\\x08` backspace byte (0x08); a `\\x08` byte slips past `_is_ascii_only` (since `\\x08` is ASCII), past `_does_not_contain_a_null_byte` / `_does_not_contain_a_horizontal_tab_byte` / `_does_not_contain_a_carriage_return_byte` / `_does_not_contain_a_vertical_tab_byte` / `_does_not_contain_a_form_feed_byte` (which each name a different byte), past `_has_exactly_two_lines` / `_program_name_line_ends_with_the_version` / `_app_id_line_ends_with_the_reverse_dns_app_id` (which split on `\\n` and only check trailing substrings), and past `_is_non_empty_text_with_no_trailing_whitespace` (which uses `char::is_whitespace()` — Unicode returns false for U+0008 BS so this companion does NOT reject `\\x08` even at the trailing byte, strictly weaker coverage than form-feed), and would render as a literal control glyph in the Troubleshooting dialog body, drift across browsers and font stacks in pasted bug reports, enable terminal-erase display-spoofing when the payload is pasted into a terminal-rendered bug-report preview or `cat`-ted from the saved `.txt` file (the rendered debug-info diverges from the bytes on disk because `\\x08` erases the preceding glyph), and propagate a stray BS byte into POSIX text-processing tools (`grep`, `awk`, `cut`) when the payload is saved to disk via `set_debug_info_filename`; got {debug_info:?}",
+    );
+}
+
+#[test]
 fn format_app_about_dialog_program_name_does_not_contain_a_form_feed_byte() {
     // Defense-in-depth per-byte sibling extending the
     // program-name byte coverage past the just-completed `{null /
