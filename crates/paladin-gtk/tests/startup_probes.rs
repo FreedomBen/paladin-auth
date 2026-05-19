@@ -5349,3 +5349,42 @@ fn format_app_primary_menu_entries_labels_are_distinct() {
         "the six primary-menu entry labels must be distinct (entries: {entries:?}); a duplicate would render two identical rows in the primary menu and collapse one of the six action slots into an unreachable duplicate",
     );
 }
+
+#[test]
+fn format_app_primary_menu_entries_actions_are_distinct() {
+    // Defense-in-depth sibling of
+    // `format_app_primary_menu_entries_labels_are_distinct`: the
+    // labels-side test guards against two rows rendering with the
+    // same visible text, while this action-side companion guards
+    // against the dual failure mode where two rows render with
+    // distinct labels but route their `gio::Action::activate`
+    // signal to the same `app.*` target — collapsing two
+    // separate menu entries into a single dispatched
+    // `AppMsg`. The per-helper
+    // `format_app_menu_*_action_returns_app_*` tests pin each
+    // action target to its expected wording individually, but a
+    // future refactor that accidentally copy-pasted the wrong
+    // sibling helper into one of the six slots of
+    // `format_app_primary_menu_entries` would leave the per-helper
+    // assertions intact while wiring two visible menu rows to the
+    // same `gio::SimpleAction` — a regression that surfaces only
+    // when the user activates the wrong-looking entry and sees
+    // the wrong dialog open. Mirroring the
+    // `format_app_window_accelerator_bindings_targets_are_distinct`
+    // pattern, this assertion enforces the disjointness at the
+    // pinned-helper layer so a drift surfaces as a failing test
+    // rather than as a menu row that silently shares dispatch
+    // with another row.
+    use paladin_gtk::app::model::format_app_primary_menu_entries;
+
+    let entries = format_app_primary_menu_entries();
+    let mut actions: Vec<&str> = entries.iter().map(|(_, action)| *action).collect();
+    let before_dedup = actions.len();
+    actions.sort_unstable();
+    actions.dedup();
+    assert_eq!(
+        before_dedup,
+        actions.len(),
+        "the six primary-menu entry action targets must be distinct (entries: {entries:?}); a duplicate would route two visible menu rows to the same gio::SimpleAction and dispatch the same AppMsg from both, collapsing one of the six menu actions into an unreachable duplicate",
+    );
+}
