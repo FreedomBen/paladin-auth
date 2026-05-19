@@ -15326,3 +15326,132 @@ fn format_app_about_dialog_debug_info_filename_does_not_contain_a_vertical_tab_b
         "AdwAboutDialog debug_info_filename must not contain the `\\x0B` vertical-tab byte (0x0B); the current `\\x0B`-cleanliness is only protected transitively by `_has_no_embedded_whitespace`'s broad `char::is_whitespace()` check (which matches U+000B VT), so a future refactor that relaxed the no-whitespace invariant to allow a localized filename like `\"Debug information.txt\"` might silently drop the `\\x0B` guard alongside the space relaxation; a stray `\\x0B` would mis-render as a literal control glyph in the GtkFileDialog filename entry pre-fill, surface as an un-listable file under shell-tooling pipelines (`ls`, `find`, `tar`) that strip non-printable bytes, and confuse maintainer triage with control-glyph artifacts in chat-attachment column renders; got {debug_info_filename:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_url_helpers_do_not_contain_a_vertical_tab_byte() {
+    // Cross-helper defense-in-depth sibling looping over the
+    // three `AdwAboutDialog` footer URL helpers
+    // (`format_app_about_dialog_website`,
+    // `format_app_about_dialog_issue_url`,
+    // `format_app_about_dialog_support_url`) and pinning each
+    // value as free of the `\x0B` vertical-tab byte (0x0B).
+    // Closes the about-dialog vertical-tab cycle started by the
+    // `_developer_name_does_not_contain_a_vertical_tab_byte`
+    // sibling and continued across every byte-pinned helper,
+    // completing the URL-helpers' byte-composition contract past
+    // the just-finished `{null / horizontal-tab / carriage-
+    // return}` cross-URL triplet.
+    //
+    // The existing `url_helpers_contain_no_embedded_whitespace`
+    // companion uses `char::is_whitespace()`, which returns true
+    // for U+000B VT — so the URL-helpers' `\x0B`-cleanliness is
+    // currently protected *transitively* by that one specific
+    // companion's broad whitespace check.
+    //
+    // But that transitive protection is *bundled* with the
+    // no-whitespace invariant as a whole: a future refactor that
+    // intentionally allowed a URL with a single percent-encoded
+    // space (a non-trivial scenario per RFC 3986, which forbids
+    // unencoded spaces in URLs but permits `%20` percent-encoding
+    // for them — but a workspace-vendoring refactor or a CI
+    // codegen step could relax the
+    // `_contain_no_embedded_whitespace` companion incorrectly
+    // when handling decoded percent-encoded strings) would
+    // naturally drop the `\x0B` check at the same time on the
+    // assumption that "ASCII whitespace is now allowed". That
+    // assumption is wrong: `\x0B` is never a valid byte inside a
+    // URL per RFC 3986 (the vertical-tab byte is not in any of
+    // the URL grammar's production rules), so dropping the
+    // `\x0B` check alongside the percent-encoded-space
+    // relaxation would silently regress the no-`\x0B` invariant.
+    //
+    // A regression would slip past every existing companion: the
+    // `_is_non_empty_https_url[_distinct_*]` per-URL companion
+    // (which only checks non-empty + `https://` prefix + no
+    // space byte — a `\x0B` byte mid-URL satisfies all three
+    // since `\x0B` is not the literal U+0020 SPACE), the
+    // `_are_ascii_only` cross-URL companion (`\x0B` is ASCII so
+    // it slips past), the `_do_not_end_with_a_trailing_slash`
+    // companion (which only constrains the final byte), the
+    // `_do_not_contain_a_null_byte` /
+    // `_do_not_contain_a_horizontal_tab_byte` /
+    // `_do_not_contain_a_carriage_return_byte` siblings (which
+    // each name a different byte specifically), the
+    // `_do_not_contain_a_query_string` /
+    // `_do_not_contain_a_fragment_anchor` /
+    // `_do_not_contain_a_userinfo_at_sign` /
+    // `_do_not_contain_a_backslash` siblings (which each name a
+    // different byte specifically). None of the existing
+    // companions name the `\x0B` byte directly.
+    //
+    // A regression that landed
+    // `"https://github.com\x0BFreedomBen/paladin"` (vertical-tab
+    // byte lifted from a legacy URL registry authored on a line-
+    // printer terminal that used `\x0B` as a column separator
+    // between the host and path, a `concat!(_, "\x0B", _)` form
+    // mirroring a VT-separated URL-table cell, or a hand-edited
+    // helper override that lifted the URL from an EBCDIC-to-
+    // ASCII translation preserving the original VT byte) would
+    // mis-render in multiple downstream surfaces: (1) the GLib-
+    // backed `AdwAboutDialog::set_website` / `set_issue_url` /
+    // `set_support_url` setters route the value into Pango for
+    // inline rendering as the underlined link label in the
+    // dialog footer — Pango's default rendering of a bare
+    // `\x0B` byte is implementation-defined and typically
+    // renders as a literal control glyph (a hollow box or tofu-
+    // like placeholder) since `\x0B` has no tab-stop semantics,
+    // breaking the trusted-application surface contract of the
+    // link label; (2) when the user clicks the URL, GIO's
+    // `gtk_show_uri_full` routes the value through the session's
+    // `xdg-open` / portal layer where some URL parsers (WHATWG
+    // URL §4.5 implementations) reject `\x0B` outright with
+    // `InvalidUrl`, breaking the click-through routing entirely,
+    // while others percent-encode the `\x0B` as `%0B` and route
+    // to a non-existent URL with a `Bad Request` response
+    // surfacing as a confusing browser-level error; (3) screen
+    // readers that announce the URL label read the `\x0B` as a
+    // literal control character, breaking the link-label
+    // accessibility-tree announcement at the byte boundary; (4)
+    // any downstream tooling that scrapes the URL labels (link-
+    // checker bots, broken-link auditors) would propagate the
+    // stray `\x0B` byte into the consumer's stream and trigger
+    // the same routing failure across every downstream surface.
+    //
+    // Pinning the no-`\x0B` invariant directly here surfaces the
+    // regression with a message naming the offending URL helper
+    // at build time rather than as a downstream user-visible
+    // mis-rendered link label, a confusing browser-level error
+    // on click-through, an inconsistent URL-parser-implementation
+    // routing surface, or a link-checker tooling failure. Mirror
+    // of the `_url_helpers_do_not_end_with_a_trailing_slash`,
+    // `_url_helpers_do_not_contain_a_query_string`,
+    // `_url_helpers_do_not_contain_a_fragment_anchor`,
+    // `_url_helpers_do_not_contain_a_userinfo_at_sign`,
+    // `_url_helpers_do_not_contain_a_backslash`,
+    // `_url_helpers_contain_no_embedded_whitespace`,
+    // `_url_helpers_are_ascii_only`,
+    // `_url_helpers_do_not_contain_a_null_byte`,
+    // `_url_helpers_do_not_contain_a_carriage_return_byte`, and
+    // `_url_helpers_do_not_contain_a_horizontal_tab_byte` cross-
+    // URL siblings; together they pin the URL byte-composition
+    // contract (no whitespace, ASCII-only, no terminal `/`, no
+    // `\0`, no `\r`, no `\t`, no `\x0B`, no `?` query, no `#`
+    // anchor, no `@` userinfo, no `\` path-confusion byte)
+    // across all three footer link surfaces against a single
+    // source of truth.
+    use paladin_gtk::app::model::{
+        format_app_about_dialog_issue_url, format_app_about_dialog_support_url,
+        format_app_about_dialog_website,
+    };
+
+    for (label, url) in [
+        ("website", format_app_about_dialog_website()),
+        ("issue_url", format_app_about_dialog_issue_url()),
+        ("support_url", format_app_about_dialog_support_url()),
+    ] {
+        assert!(
+            !url.contains('\x0B'),
+            "AdwAboutDialog {label} must not contain the `\\x0B` vertical-tab byte (0x0B) — `\\x0B` is never a valid byte inside a URL per RFC 3986 (the vertical-tab byte is not in any of the URL grammar's production rules); the current `\\x0B`-cleanliness is only protected transitively by `_url_helpers_contain_no_embedded_whitespace`'s broad `char::is_whitespace()` check (which matches U+000B VT), so a future percent-encoded-space relaxation would silently drop the `\\x0B` guard; a stray `\\x0B` would mis-render as a literal control glyph in the dialog footer link label, fail or mis-route the click-through routing across WHATWG URL §4.5 implementations vs `%0B`-encoding implementations, break screen-reader link-label announcements at the byte boundary, and propagate into downstream link-checker tooling; got {url:?}",
+        );
+    }
+}
