@@ -18923,3 +18923,108 @@ fn format_app_about_dialog_developers_entries_do_not_contain_a_line_feed_byte() 
         );
     }
 }
+
+#[test]
+fn format_app_about_dialog_empty_credits_section_entries_do_not_contain_a_line_feed_byte() {
+    // Cross-helper defense-in-depth sibling looping over the
+    // three currently-empty `AdwAboutDialog` credits-section
+    // array helpers
+    // (`format_app_about_dialog_designers`,
+    // `format_app_about_dialog_artists`,
+    // `format_app_about_dialog_documenters`) and pinning each
+    // entry as free of the line-feed byte `\n` (0x0A). Mirror of
+    // the just-added
+    // `_developers_entries_do_not_contain_a_line_feed_byte`
+    // sibling on the populated-developers side, and of the
+    // `_empty_credits_section_entries_do_not_contain_a_null_byte`
+    // / `_empty_credits_section_entries_do_not_contain_a_carriage_return_byte`
+    // / `_empty_credits_section_entries_do_not_contain_a_horizontal_tab_byte`
+    // / `_empty_credits_section_entries_do_not_contain_a_vertical_tab_byte`
+    // / `_empty_credits_section_entries_do_not_contain_a_form_feed_byte`
+    // / `_empty_credits_section_entries_do_not_contain_a_backspace_byte`
+    // siblings on the prior C0 control-byte cycle, structured as
+    // a single cross-helper loop matching those existing
+    // companions and completing the inner C0 control-byte cycle
+    // from BS (0x08) through CR (0x0D) for each entry across
+    // every empty credits section.
+    //
+    // The three helpers currently return the empty array `[]`
+    // because Paladin does not yet have a separately-credited
+    // designer / artist / documenter for the v0.2 release. The
+    // empty-array return trivially contains no entries (let
+    // alone `\n`-bearing entries), so this test passes today as
+    // the loop body is never entered. However, once any of the
+    // three credits sections gains a contributor, the helper
+    // return type will switch from `[&'static str; 0]` to
+    // `[&'static str; N]` with non-empty entries — at that point
+    // a `\n` injection from a `pandoc`-generated CONTRIBUTORS
+    // dump that preserved hard line breaks between contributor
+    // tokens, a `concat!(_, "\n", _)` form mirroring a multi-
+    // line contributor cell, a hand-edited helper that pasted
+    // from a multi-line markdown contributor list, or a tooling
+    // export pipeline that preserved LF-bearing values inside a
+    // single-name entry would slip past any byte-cleanliness
+    // companion the way the
+    // `_developers_entries_do_not_contain_a_line_feed_byte`
+    // sibling already documents for the developers helper.
+    //
+    // Line-feed bytes in the credits-section entries would mis-
+    // render in multiple downstream surfaces, identically to the
+    // `set_developers` analysis in the
+    // `_developers_entries_do_not_contain_a_line_feed_byte`
+    // companion: (1) the GLib-backed `set_designers` /
+    // `set_artists` / `set_documenters` setters route through
+    // GTK and Pango renders each entry as a credits-page row —
+    // a stray `\n` byte in the middle of a contributor name
+    // would cause Pango to interpret the byte as a hard line
+    // break and wrap the contributor name onto two lines,
+    // pushing the credits row taller than its baseline layout
+    // and visually misaligning the credits-page column; (2) any
+    // tooling that scrapes the credits-page contributor list
+    // (GNOME `gnome-software` credit aggregators, release-note
+    // generators) would propagate the stray `\n` byte into the
+    // consumer's stream and trigger the same rendering bug
+    // across every downstream surface, with the additional risk
+    // that a naive aggregator splitting input on `\n` would
+    // interpret the contributor as two separate entries; (3)
+    // screen readers that announce the credits-page contributor
+    // names treat the `\n` as a paragraph break and pause mid-
+    // name, breaking the contributor-name accessibility-tree
+    // announcement at the byte boundary.
+    //
+    // Pinning the no-`\n` invariant across all three currently-
+    // empty credits-section helpers in a single cross-helper
+    // loop surfaces the regression with a message naming the
+    // affected helper, the offending byte, and the entry index
+    // at build time rather than as a downstream rendering
+    // artifact of the credits-page sections. Current helpers
+    // return the empty array `[]` (zero entries, no `\n` byte to
+    // find), so this test passes today and serves as a forcing
+    // function so any future override of the helpers — including
+    // the eventual landing of separately-credited designer /
+    // artist / documenter strings — stays free of line-feed
+    // bytes.
+    use paladin_gtk::app::model::{
+        format_app_about_dialog_artists, format_app_about_dialog_designers,
+        format_app_about_dialog_documenters,
+    };
+
+    let designers = format_app_about_dialog_designers();
+    let artists = format_app_about_dialog_artists();
+    let documenters = format_app_about_dialog_documenters();
+
+    let sections: [(&str, &[&str]); 3] = [
+        ("designers", &designers),
+        ("artists", &artists),
+        ("documenters", &documenters),
+    ];
+
+    for (label, entries) in sections {
+        for (idx, entry) in entries.iter().enumerate() {
+            assert!(
+                !entry.contains('\n'),
+                "AdwAboutDialog {label} entry at index {idx} must not contain the `\\n` line-feed byte (0x0A); a mid-string `\\n` would cause Pango to interpret the byte as a hard line break and wrap the contributor name onto two lines in the credits-page \"{label}\" row via `set_{label}`, propagate into downstream attribution scrapers and `gnome-software` credit aggregators (with naive aggregators splitting input on `\\n` and treating the contributor as two separate entries), and break screen-reader contributor-name announcements at the byte boundary; got {entry:?}",
+            );
+        }
+    }
+}
