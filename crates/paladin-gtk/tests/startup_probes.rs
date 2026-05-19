@@ -1840,6 +1840,87 @@ fn build_app_primary_menu_model_appends_every_format_app_primary_menu_entries_pa
 }
 
 #[test]
+fn build_app_add_action_registers_add_with_pinned_sensitivity() {
+    // Per §"libadwaita usage" and §"Component tree": the
+    // header-bar `+` button's
+    // [`gtk::Button::set_action_name`] target `"app.add"`
+    // resolves through a parameter-less `gio::SimpleAction`
+    // registered on the `app` action group. This helper
+    // constructs that action from the pinned
+    // `format_app_add_button_action_name` (the bare name
+    // `"add"`) with the sensitivity returned by
+    // `format_app_add_button_sensitive` for the supplied state.
+    // Centralizing the construction in one helper means the
+    // bare action name, its parameter shape, and its
+    // sensitivity rule stay sourced exclusively from the
+    // pinned helpers — a drift between the widget binding and
+    // the format helpers cannot survive because the widget
+    // reads the action through this single entry point.
+    use libadwaita::prelude::*;
+    use paladin_gtk::app::model::{
+        build_app_add_action, format_app_add_button_action_name, format_app_add_button_sensitive,
+    };
+    use paladin_gtk::app::state::AppState;
+
+    let state = AppState::Unlocked {
+        path: std::path::PathBuf::from("/dev/null"),
+    };
+    let action = build_app_add_action(&state);
+    assert_eq!(
+        action.name().as_str(),
+        format_app_add_button_action_name(),
+        "build_app_add_action must register the bare action name returned by format_app_add_button_action_name",
+    );
+    assert!(
+        action.parameter_type().is_none(),
+        "Add action must take no parameter so the `app.add` menu / button target resolves through gio::SimpleAction::new(name, None)",
+    );
+    assert_eq!(
+        action.is_enabled(),
+        format_app_add_button_sensitive(&state),
+        "build_app_add_action must apply format_app_add_button_sensitive to the constructed SimpleAction",
+    );
+}
+
+#[test]
+fn build_app_add_action_disables_in_non_unlocked_states() {
+    // Defense-in-depth: the `+` Add affordance must be disabled
+    // in every state except `Unlocked` per §"libadwaita usage"
+    // — mirrors the four mutating primary-menu entries
+    // (Import, Export, Passphrase, Preferences). Catches a
+    // future bundling change that accidentally inverted the
+    // sensitivity rule for the Add action.
+    use libadwaita::prelude::*;
+    use paladin_core::ErrorKind;
+    use paladin_gtk::app::model::build_app_add_action;
+    use paladin_gtk::app::state::AppState;
+    use paladin_gtk::startup_error::{StartupError, StartupErrorSource};
+
+    for non_unlocked in [
+        AppState::Missing {
+            path: std::path::PathBuf::from("/dev/null"),
+        },
+        AppState::Locked {
+            path: std::path::PathBuf::from("/dev/null"),
+        },
+        AppState::StartupError {
+            path: None,
+            error: StartupError {
+                source: StartupErrorSource::PathResolution,
+                kind: ErrorKind::IoError,
+                rendered: String::from("resolve_failed"),
+            },
+        },
+    ] {
+        let action = build_app_add_action(&non_unlocked);
+        assert!(
+            !action.is_enabled(),
+            "build_app_add_action must disable the Add affordance outside Unlocked state; got enabled for {non_unlocked:?}",
+        );
+    }
+}
+
+#[test]
 fn build_app_primary_action_group_registers_every_action_name_with_pinned_sensitivity() {
     // Per §"libadwaita usage" and §"Component tree": the
     // application's `app` action group is constructed from the

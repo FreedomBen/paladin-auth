@@ -2191,6 +2191,54 @@ pub fn format_app_add_button_sensitive(state: &AppState) -> bool {
     state.allows_mutating_menu()
 }
 
+/// Build the header-bar `+` button's
+/// [`gtk::gio::SimpleAction`] from the pinned
+/// [`format_app_add_button_action_name`] (the bare action name
+/// `"add"`) with the sensitivity returned by
+/// [`format_app_add_button_sensitive`] for the supplied
+/// `state`.
+///
+/// Registers a parameter-less [`gtk::gio::SimpleAction`] named
+/// `"add"` so the `+` button's
+/// [`gtk::Button::set_action_name`] target `"app.add"` resolves
+/// through the `app` action group registered on the
+/// [`adw::ApplicationWindow`]. The widget binding adds the
+/// returned action to the same group built by
+/// [`build_app_primary_action_group`] (or registers a separate
+/// extension group, depending on how the binding chooses to
+/// scope action ownership); either path keeps the `+` button's
+/// affordance and the primary menu's affordances on the same
+/// `app` group prefix so the `<Ctrl>N` accelerator wired via
+/// `gio::Application::set_accels_for_action("app.add",
+/// &["<Control>n"])` resolves through this action.
+///
+/// Centralizing the construction in one helper means the bare
+/// action name (`"add"`), its parameter shape (no parameter),
+/// and its sensitivity rule stay sourced exclusively from the
+/// pinned helpers — a drift between the widget binding and the
+/// `format_app_add_button_action_name` /
+/// `format_app_add_button_sensitive` helpers cannot survive
+/// because the widget reads the action through this single
+/// entry point. Sibling of [`build_app_primary_action_group`]
+/// on the action-construction side; together they pin both the
+/// header-bar `+` button and the primary menu against a single
+/// source of truth.
+///
+/// The `connect_activate` handler that forwards activation to
+/// [`AppMsg::OpenAddDialog`] is wired by the widget binding
+/// (the closure needs the [`relm4::ComponentSender`] that lives
+/// on the widget side); this helper only registers the action
+/// surface so the test suite can prove the name and
+/// sensitivity are pinned.
+///
+/// Returns an owned [`gtk::gio::SimpleAction`].
+#[must_use]
+pub fn build_app_add_action(state: &AppState) -> gtk::gio::SimpleAction {
+    let action = gtk::gio::SimpleAction::new(format_app_add_button_action_name(), None);
+    action.set_enabled(format_app_add_button_sensitive(state));
+    action
+}
+
 /// Human-readable program name the application menu's "About
 /// Paladin" entry's `AdwAboutDialog` displays in its header.
 ///
