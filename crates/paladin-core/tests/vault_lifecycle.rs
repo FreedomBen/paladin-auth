@@ -123,6 +123,30 @@ fn inspect_does_not_enforce_permissions() {
 }
 
 #[test]
+fn inspect_empty_file_is_invalid_header() {
+    // §4.3 contract: `inspect` distinguishes Missing (file absent)
+    // from InvalidHeader (file present but shape is wrong). A
+    // zero-byte file is present, so it falls into the latter bucket
+    // — pin the discriminator so a future change to "treat empty as
+    // missing" cannot slip in silently.
+    let dir = vault_test_dir();
+    let path = write(&dir, "vault.bin", b"");
+    assert_eq!(inspect(&path).unwrap_err().kind(), ErrorKind::InvalidHeader);
+}
+
+#[test]
+fn inspect_file_shorter_than_magic_is_invalid_header() {
+    // A primary file shorter than the 8-byte `PALADIN\0` magic must
+    // never satisfy the magic check, regardless of whether the
+    // prefix bytes happen to match `PALADIN` partially. Pins the
+    // short-input handling against a regression that uses
+    // unbounded indexing or a `starts_with` over a too-short slice.
+    let dir = vault_test_dir();
+    let path = write(&dir, "vault.bin", b"PALADIN");
+    assert_eq!(inspect(&path).unwrap_err().kind(), ErrorKind::InvalidHeader);
+}
+
+#[test]
 fn inspect_unrecognized_magic_is_invalid_header() {
     let dir = vault_test_dir();
     let path = write(&dir, "vault.bin", b"NOTPALADIN\0\x01\x00");
