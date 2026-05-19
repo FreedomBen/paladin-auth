@@ -2113,6 +2113,36 @@ pub fn format_app_menu_quit_action_name() -> &'static str {
     "quit"
 }
 
+/// Keyboard accelerator the primary menu's "Quit" entry is wired
+/// to per `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
+/// "Primary menu".
+///
+/// Returns the gtk-rs accelerator spelling `"<Control>q"` — the
+/// canonical Quit shortcut GNOME applications register via
+/// `gio::Application::set_accels_for_action("app.quit",
+/// &["<Control>q"])`. Pinning the accelerator here keeps the
+/// widget-side wiring helper aligned with the documented Quit
+/// shortcut against a single source of truth, mirroring
+/// [`format_app_add_button_accelerator`] on the header-bar `+`
+/// button side so both primary keyboard surfaces share the same
+/// helper shape.
+///
+/// The `<Control>q` form (uppercase modifier in angle brackets,
+/// lowercase key letter) matches gtk-rs `accels_for_action`'s
+/// recognised spelling; `<Primary>` would also resolve on Linux
+/// but `<Control>` keeps the helper consistent with the existing
+/// [`format_app_add_button_accelerator`] sibling.
+///
+/// Pure — returns a `'static str` without allocating. Sibling of
+/// [`format_app_menu_quit_action`] (fully-qualified action target)
+/// and [`format_app_menu_quit_action_name`] (bare action name);
+/// together they pin the action target, its bare name, and its
+/// keyboard accelerator against a single source of truth.
+#[must_use]
+pub fn format_app_menu_quit_accelerator() -> &'static str {
+    "<Control>q"
+}
+
 /// Fully-qualified `detailed_action_name` the header-bar `+`
 /// button binds via `gtk::Button::set_action_name`.
 ///

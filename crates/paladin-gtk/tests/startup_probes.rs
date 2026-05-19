@@ -1539,6 +1539,62 @@ fn format_app_menu_quit_action_name_round_trips_with_group_and_target() {
 }
 
 #[test]
+fn format_app_menu_quit_accelerator_returns_control_q() {
+    // The primary menu's "Quit" `gio::SimpleAction` is wired to
+    // the `<Control>q` keyboard accelerator per
+    // `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
+    // "Primary menu" — the canonical Quit shortcut GNOME
+    // applications register via
+    // `gio::Application::set_accels_for_action("app.quit",
+    //  &["<Control>q"])`. The widget binding hands this
+    // accelerator string to that registration so the menu and
+    // any future keyboard activation paths share one shortcut
+    // surface against a single source of truth.
+    //
+    // Mirrors `format_app_add_button_accelerator` on the header-
+    // bar `+` button side; together they pin the two primary
+    // keyboard surfaces (Add and Quit) against the same helper
+    // shape, so a future `wire_app_window_accelerators` helper
+    // can iterate `[(<Control>n, app.add), (<Control>q, app.quit), …]`
+    // against a single source of truth.
+    use paladin_gtk::app::model::format_app_menu_quit_accelerator;
+
+    assert_eq!(
+        format_app_menu_quit_accelerator(),
+        "<Control>q",
+        "primary menu Quit accelerator must be the gtk-rs `<Control>q` form for `set_accels_for_action`",
+    );
+}
+
+#[test]
+fn format_app_menu_quit_accelerator_is_non_empty_and_well_formed() {
+    // Defensive: the accelerator string is consumed by
+    // `gio::Application::set_accels_for_action`, which accepts
+    // any non-empty gtk-rs accelerator spelling. An accidental
+    // empty string or whitespace-leading entry would silently
+    // unbind the shortcut at runtime without surfacing a
+    // compile-time error — guard against that drift here so the
+    // Quit menu entry's `<Ctrl>Q` shortcut stays wired. Mirrors
+    // the structural assertions on
+    // `format_app_add_button_accelerator_is_non_empty_and_well_formed`.
+    use paladin_gtk::app::model::format_app_menu_quit_accelerator;
+
+    let accel = format_app_menu_quit_accelerator();
+    assert!(
+        !accel.is_empty(),
+        "accelerator must be non-empty; got {accel:?}",
+    );
+    assert!(
+        !accel.starts_with(' ') && !accel.ends_with(' '),
+        "accelerator must not have leading or trailing whitespace; got {accel:?}",
+    );
+    assert!(
+        accel.contains('<') && accel.contains('>'),
+        "accelerator must use the `<Modifier>key` form; got {accel:?}",
+    );
+}
+
+#[test]
 fn every_primary_menu_action_name_round_trips_with_group_and_target() {
     // Final cross-check: for every primary-menu entry the
     // `<group>.<action_name>` join from the two helpers must
