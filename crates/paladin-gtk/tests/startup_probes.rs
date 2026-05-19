@@ -16181,6 +16181,107 @@ fn format_app_about_dialog_developers_entries_do_not_contain_a_form_feed_byte() 
 }
 
 #[test]
+fn format_app_about_dialog_developers_entries_do_not_contain_a_backspace_byte() {
+    // Defense-in-depth per-entry-loop sibling extending the
+    // developers-array byte-cleanliness contract past the just-
+    // completed `{null / horizontal-tab / carriage-return /
+    // vertical-tab / form-feed}` entry-quintuple to the backspace
+    // byte `\x08` (0x08), which sits one step below HT (0x09) in
+    // the ASCII C0 block. Unlike FF / HT / CR / LF / VT, `\x08`
+    // is NOT matched by `char::is_whitespace()` (Unicode treats
+    // BS as a control byte, not whitespace), so the
+    // `_is_non_empty_array_of_non_empty_single_line_names`
+    // surrounding-whitespace boundary guards
+    // (`!name.starts_with(char::is_whitespace)` and
+    // `!name.ends_with(char::is_whitespace)`) do NOT reject a
+    // leading or trailing `\x08` — making backspace strictly more
+    // dangerous than form-feed for this helper, since `\x0C` was
+    // at least caught at the entry boundaries by the surrounding-
+    // whitespace guards.
+    //
+    // None of the existing developers companions name the `\x08`
+    // byte directly per entry:
+    //   - `_is_non_empty_array_of_non_empty_single_line_names`
+    //     pins each entry as non-empty and single-line via
+    //     `!name.contains('\n')` — `\x08` is not `\n`. The
+    //     surrounding-whitespace boundary guards use
+    //     `char::is_whitespace()`, which returns *false* for
+    //     U+0008 BS, so neither guard rejects `\x08` even at the
+    //     boundary — strictly weaker coverage than the form-feed
+    //     case;
+    //   - `_entries_are_distinct` / `_does_not_contain_developer_name`
+    //     / `_does_not_contain_app_id` /
+    //     `_does_not_contain_program_name` / `_lists_benjamin_porter`
+    //     companions guard against content-shape regressions but
+    //     say nothing about the `\x08` byte;
+    //   - `_entries_do_not_contain_a_null_byte` /
+    //     `_entries_do_not_contain_a_horizontal_tab_byte` /
+    //     `_entries_do_not_contain_a_carriage_return_byte` /
+    //     `_entries_do_not_contain_a_vertical_tab_byte` /
+    //     `_entries_do_not_contain_a_form_feed_byte` siblings
+    //     each name a different byte specifically.
+    //
+    // A regression that landed `["Benjamin\x08Porter"]` (a
+    // backspace byte lifted from a `script(1)` typescript
+    // capturing raw `\x08` edit-stream bytes between contributor
+    // names, a `concat!("Benjamin", "\x08", "Porter")` form
+    // mirroring a backspace-paginated CONTRIBUTORS cell, or a
+    // hand-edited helper that pasted from a terminal session
+    // recording) would mis-render in multiple downstream
+    // surfaces: (1) the GLib-backed
+    // `AdwAboutDialog::set_developers` setter hands the array to
+    // GTK and Pango renders each entry as a credits-page row — a
+    // stray `\x08` byte in the middle of a contributor name
+    // would render as a literal control glyph (a hollow box or
+    // tofu-like placeholder), breaking the credits-page
+    // contributor-name layout; (2) any tooling that scrapes the
+    // credits-page contributor list (release-note generators,
+    // contributor-attribution crawlers, GNOME `gnome-software`
+    // credit aggregators) would propagate the stray `\x08` byte
+    // into the consumer's stream, and a TTY-streamed attribution
+    // dump (CI release-note generation piped to `less`, an
+    // `xdotool` clipboard-grab of the credits page rendered into
+    // a terminal logger) would terminal-erase the preceding
+    // glyph and let the rendered contributor name diverge from
+    // the bytes on disk — a log-injection / display-spoofing
+    // primitive where an attacker who controlled the upstream
+    // contributor source could craft a payload whose terminal-
+    // rendered form omits or substitutes contributor characters
+    // without altering the underlying file bytes; (3) screen
+    // readers that announce the credits-page contributor names
+    // read the `\x08` as a literal control character or — on
+    // some implementations — as a delete-previous announcement,
+    // breaking the contributor-name accessibility-tree
+    // announcement at the byte boundary.
+    //
+    // Pinning the no-`\x08` invariant across every contributor
+    // entry in a single per-entry loop surfaces the regression
+    // with a message naming both the offending byte and the
+    // affected entry index at build time rather than as a
+    // downstream credits-page rendering artifact, a terminal-
+    // erase display-spoof, or a screen-reader announcement
+    // break. Current helper returns the literal `["Benjamin
+    // Porter"]` (no `\x08` byte), so this test passes today and
+    // serves as a forcing function so any future override of
+    // the helper — or any future contributor addition — stays
+    // free of backspace bytes. Continues the developers-array
+    // C0 control-byte cycle past the just-completed `{null /
+    // horizontal-tab / carriage-return / vertical-tab / form-
+    // feed}` quintuple so each entry's byte-composition
+    // contract pins each forbidden control byte against a
+    // single source of truth.
+    use paladin_gtk::app::model::format_app_about_dialog_developers;
+
+    let developers = format_app_about_dialog_developers();
+    for (idx, entry) in developers.iter().enumerate() {
+        assert!(
+            !entry.contains('\x08'),
+            "AdwAboutDialog developers entry at index {idx} must not contain the `\\x08` backspace byte (0x08); a mid-string `\\x08` slips past `_is_non_empty_array_of_non_empty_single_line_names` (which only checks `\\n` and uses `char::is_whitespace()` for boundary checks — `char::is_whitespace()` returns false for U+0008 BS, so the boundary guards do NOT reject `\\x08` even at the leading or trailing byte, strictly weaker coverage than form-feed), past `_entries_are_distinct` / `_does_not_contain_developer_name` / `_does_not_contain_app_id` / `_does_not_contain_program_name` / `_lists_benjamin_porter` (which only constrain content shape), and past `_entries_do_not_contain_a_null_byte` / `_entries_do_not_contain_a_horizontal_tab_byte` / `_entries_do_not_contain_a_carriage_return_byte` / `_entries_do_not_contain_a_vertical_tab_byte` / `_entries_do_not_contain_a_form_feed_byte` (which each name a different byte specifically); it would render as a literal control glyph in the credits-page \"Developers\" row, enable terminal-erase display-spoofing when the credits are dumped through a TTY (the rendered contributor name diverges from the bytes on disk because `\\x08` erases the preceding glyph), propagate into downstream attribution scrapers and `gnome-software` credit aggregators, and break screen-reader contributor-name announcements at the byte boundary; got {entry:?}",
+        );
+    }
+}
+
+#[test]
 fn format_app_about_dialog_empty_credits_section_entries_do_not_contain_a_form_feed_byte() {
     // Cross-helper defense-in-depth sibling looping over the
     // three currently-empty `AdwAboutDialog` credits-section
