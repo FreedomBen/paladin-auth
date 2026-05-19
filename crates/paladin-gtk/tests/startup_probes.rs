@@ -20567,3 +20567,98 @@ fn format_app_about_dialog_translator_credits_does_not_contain_a_bell_byte() {
         "AdwAboutDialog translator_credits must not contain the `\\x07` bell byte (0x07); the libadwaita translator-credits convention splits on `\\n` (LF) only and leaves embedded `\\x07` bytes inside each parsed entry untouched, `\\x07` is NOT classified as whitespace under any permissive whitespace mode (strictly as dangerous as backspace, neither caught by `char::is_whitespace()`) so Pango renders it as a literal control glyph; a stray `\\x07` would render as a hollow box or tofu-like placeholder in the credits-page attribution column, would survive `xgettext` round trips and propagate into every consumer of the .po / .mo file, would ring the terminal bell when the po-file is dumped through a TTY (an audible-alert injection / covert side-channel primitive in shared CI environments), and would break screen-reader announcements at every attribution-row column boundary; got {translator_credits:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_program_name_does_not_contain_a_bell_byte() {
+    // Defense-in-depth per-byte sibling extending the program-
+    // name byte coverage past the just-completed `{null /
+    // horizontal-tab / carriage-return / vertical-tab / form-
+    // feed / backspace / line-feed}` septuple to the bell byte
+    // `\x07` (0x07), opening the next non-whitespace-classified
+    // C0 control-byte cycle for this helper. Like BS, BEL is NOT
+    // matched by `char::is_whitespace()` (Unicode treats BEL as
+    // a control byte, not whitespace), so the existing
+    // `_program_name_has_no_embedded_whitespace` companion does
+    // NOT catch `\x07` — making bell strictly as dangerous as
+    // backspace for this helper, since the transitive protection
+    // collapses entirely rather than being merely brittle.
+    //
+    // None of the existing companions name the `\x07` byte
+    // directly on this helper:
+    //   - `_is_ascii_only` pins each byte as ASCII — `\x07` is
+    //     ASCII so it slips past;
+    //   - `_program_name_has_no_embedded_whitespace` uses
+    //     `char::is_whitespace()`, which returns *false* for
+    //     U+0007 BEL — strictly weaker coverage than the form-
+    //     feed case;
+    //   - `_is_non_empty_and_not_app_id` only checks non-empty
+    //     + distinct-from-app-id;
+    //   - `_matches_format_app_window_title` only enforces
+    //     equality with the window title;
+    //   - `_is_segment_of_application_icon_name` only checks
+    //     segment containment;
+    //   - `_does_not_end_with_a_period` only constrains the
+    //     suffix;
+    //   - `_does_not_contain_a_null_byte` /
+    //     `_does_not_contain_a_horizontal_tab_byte` /
+    //     `_does_not_contain_a_carriage_return_byte` /
+    //     `_does_not_contain_a_vertical_tab_byte` /
+    //     `_does_not_contain_a_form_feed_byte` /
+    //     `_does_not_contain_a_backspace_byte` /
+    //     `_does_not_contain_a_line_feed_byte` each name a
+    //     different byte specifically.
+    //
+    // A regression that landed `"Pala\x07din"` (bell byte lifted
+    // from a `script(1)` typescript capturing raw `\x07` audible-
+    // alert bytes from a CI build that triggered the terminal
+    // bell mid-token, a `concat!(_, "\x07", _)` form, or a hand-
+    // edited helper override that pasted from a terminal session
+    // recording preserving audible-alert bytes) would mis-render
+    // in three downstream surfaces: (1) the GLib-backed
+    // `AdwAboutDialog::set_application_name` setter routes the
+    // value into Pango for inline rendering as the bold program-
+    // name row at the dialog header — Pango's default rendering
+    // of a bare `\x07` byte is implementation-defined and
+    // typically renders as a literal control glyph (a hollow box
+    // or tofu-like placeholder), breaking the tidy bold-header
+    // layout; (2) the matching `gtk::Window::set_title` setter
+    // (the program name is mirrored to the window title per
+    // `_matches_format_app_window_title`) renders the `\x07` in
+    // the window manager's taskbar / dock display label,
+    // surfacing the control byte to every shell that lists open
+    // windows — and a TTY-rendered `wmctrl -l` or `swaymsg -t
+    // get_tree` dump would ring the terminal bell on the user's
+    // session (an audible-alert injection / covert side-channel
+    // primitive where an attacker who controlled the upstream
+    // program-name source could trigger CI-runner bell
+    // notifications repeatedly or weaponize the bell as a covert
+    // side-channel in a shared CI environment); (3) the GTK
+    // accessibility tree's `accessible-name` property routes
+    // through the same Pango layer, breaking screen-reader
+    // announcements of the application name at the byte
+    // boundary.
+    //
+    // Pinning the no-`\x07` invariant directly on this helper
+    // surfaces the regression with a message naming the
+    // offending byte at build time rather than via a future
+    // whitespace-relaxation refactor (which would not have
+    // protected `\x07` anyway), a window-list bell-injection, or
+    // a screen-reader announcement break. Current helper returns
+    // the literal `"Paladin"` (no `\x07` byte), so this test
+    // passes today and serves as a forcing function so any
+    // future override of the helper — including the eventual
+    // landing of a localized multi-word program name — stays
+    // free of bell bytes. Opens the next non-whitespace-
+    // classified C0 control-byte cycle past the just-completed
+    // `{null / horizontal-tab / carriage-return / vertical-tab /
+    // form-feed / backspace / line-feed}` septuple so the
+    // helper's byte-composition contract pins each forbidden
+    // control byte against a single source of truth.
+    use paladin_gtk::app::model::format_app_about_dialog_program_name;
+
+    let program_name = format_app_about_dialog_program_name();
+    assert!(
+        !program_name.contains('\x07'),
+        "AdwAboutDialog program_name must not contain the `\\x07` bell byte (0x07); like BS, BEL is NOT matched by `char::is_whitespace()` (Unicode returns false for U+0007 BEL), so `_has_no_embedded_whitespace` does NOT catch `\\x07` — strictly as dangerous as backspace here, neither caught by the whitespace companion; a stray `\\x07` slips past `_is_ascii_only` / `_is_non_empty_and_not_app_id` / `_matches_format_app_window_title` / `_is_segment_of_application_icon_name` / `_does_not_end_with_a_period` and the prior per-byte siblings, would render as a literal control glyph in the bold dialog-header program-name row, surface in the window manager's taskbar / dock display label via `_matches_format_app_window_title`, ring the terminal bell on `wmctrl -l` / `swaymsg -t get_tree` window-list dumps (an audible-alert injection / covert side-channel primitive in shared CI environments), and break screen-reader application-name announcements at the byte boundary; got {program_name:?}",
+    );
+}
