@@ -1840,6 +1840,107 @@ fn build_app_primary_menu_model_appends_every_format_app_primary_menu_entries_pa
 }
 
 #[test]
+fn build_app_primary_action_group_registers_every_action_name_with_pinned_sensitivity() {
+    // Per §"libadwaita usage" and §"Component tree": the
+    // application's `app` action group is constructed from the
+    // pinned `format_app_primary_menu_action_names` array (the
+    // bare action names) and applies the per-entry sensitivity
+    // returned by `format_app_primary_menu_action_sensitivities`
+    // for the supplied `state`. Centralizing the action-group
+    // construction in one helper means the bare action names,
+    // their parameter shape (no parameter), and their
+    // sensitivity rule stay sourced exclusively from the pinned
+    // helpers — a drift between the widget binding and the
+    // `format_app_menu_*_action_name` /
+    // `format_app_primary_menu_action_sensitivities` helpers
+    // cannot survive because the widget reads the group through
+    // this single entry point.
+    use libadwaita::prelude::*;
+    use paladin_gtk::app::model::{
+        build_app_primary_action_group, format_app_primary_menu_action_names,
+        format_app_primary_menu_action_sensitivities,
+    };
+    use paladin_gtk::app::state::AppState;
+
+    let state = AppState::Unlocked {
+        path: std::path::PathBuf::from("/dev/null"),
+    };
+    let group = build_app_primary_action_group(&state);
+    let names = format_app_primary_menu_action_names();
+    let expected_sensitivities = format_app_primary_menu_action_sensitivities(&state);
+    for (idx, name) in names.iter().enumerate() {
+        assert!(
+            group.lookup_action(name).is_some(),
+            "build_app_primary_action_group must register a SimpleAction named {name:?}; missing at slot {idx}",
+        );
+        let action = group.lookup_action(name).expect("action just verified");
+        let simple = action
+            .downcast::<libadwaita::gio::SimpleAction>()
+            .expect("primary menu actions must be SimpleActions so set_enabled works");
+        assert_eq!(
+            simple.is_enabled(),
+            expected_sensitivities[idx],
+            "build_app_primary_action_group must apply format_app_primary_menu_action_sensitivities[{idx}] to action {name:?}",
+        );
+        assert!(
+            simple.parameter_type().is_none(),
+            "primary menu action {name:?} must take no parameter so the menu target `app.{name}` resolves through gio::SimpleAction::new(name, None)",
+        );
+    }
+}
+
+#[test]
+fn build_app_primary_action_group_disables_mutating_actions_in_non_unlocked_states() {
+    // Defense-in-depth: the four mutating actions (Import,
+    // Export, Passphrase, Preferences) must be disabled in every
+    // state except `Unlocked` per §"libadwaita usage". About and
+    // Quit stay enabled everywhere. Catches a future bundling
+    // change that accidentally inverted the sensitivity rule for
+    // any of the six actions.
+    use libadwaita::prelude::*;
+    use paladin_gtk::app::model::{
+        build_app_primary_action_group, format_app_menu_about_action_name,
+        format_app_menu_export_action_name, format_app_menu_import_action_name,
+        format_app_menu_passphrase_action_name, format_app_menu_preferences_action_name,
+        format_app_menu_quit_action_name,
+    };
+    use paladin_gtk::app::state::AppState;
+
+    let state = AppState::Locked {
+        path: std::path::PathBuf::from("/dev/null"),
+    };
+    let group = build_app_primary_action_group(&state);
+    for mutating_name in [
+        format_app_menu_import_action_name(),
+        format_app_menu_export_action_name(),
+        format_app_menu_passphrase_action_name(),
+        format_app_menu_preferences_action_name(),
+    ] {
+        let action = group
+            .lookup_action(mutating_name)
+            .and_then(|a| a.downcast::<libadwaita::gio::SimpleAction>().ok())
+            .expect("mutating action registered");
+        assert!(
+            !action.is_enabled(),
+            "build_app_primary_action_group must disable mutating action {mutating_name:?} outside Unlocked state",
+        );
+    }
+    for always_enabled in [
+        format_app_menu_about_action_name(),
+        format_app_menu_quit_action_name(),
+    ] {
+        let action = group
+            .lookup_action(always_enabled)
+            .and_then(|a| a.downcast::<libadwaita::gio::SimpleAction>().ok())
+            .expect("always-enabled action registered");
+        assert!(
+            action.is_enabled(),
+            "build_app_primary_action_group must keep action {always_enabled:?} enabled in every state per §\"libadwaita usage\"",
+        );
+    }
+}
+
+#[test]
 fn format_app_primary_menu_action_names_returns_six_bare_names_in_pinned_order() {
     // Companion to `format_app_primary_menu_entries`: the widget
     // binding registers a `gio::SimpleAction` for each primary-

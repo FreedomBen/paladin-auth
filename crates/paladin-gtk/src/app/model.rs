@@ -2110,6 +2110,63 @@ pub fn format_app_primary_menu_action_sensitivities(state: &AppState) -> [bool; 
     ]
 }
 
+/// Build the application's primary
+/// [`gtk::gio::SimpleActionGroup`] from the pinned
+/// [`format_app_primary_menu_action_names`] data, applying the
+/// per-entry sensitivity returned by
+/// [`format_app_primary_menu_action_sensitivities`] for the
+/// supplied `state`.
+///
+/// Walks the six bare action names in the §"libadwaita usage"
+/// sequence (Import, Export, Passphrase, Preferences, About,
+/// Quit) and registers one parameter-less
+/// [`gtk::gio::SimpleAction`] per name with the matching
+/// `set_enabled` flag. The widget binding inserts the returned
+/// group into the [`adw::ApplicationWindow`] via
+/// `insert_action_group(format_app_action_group_name(), Some(&group))`
+/// so the menu targets spelled by
+/// [`format_app_primary_menu_entries`] (`"app.import"`,
+/// `"app.export"`, …, `"app.quit"`) resolve through the group's
+/// actions.
+///
+/// Centralizing the action-group construction in one helper
+/// means the bare action names, their parameter shape (no
+/// parameter), and their sensitivity rule stay sourced
+/// exclusively from the pinned helpers — a drift between the
+/// widget binding and the `format_app_menu_*_action_name` /
+/// `format_app_primary_menu_action_sensitivities` helpers cannot
+/// survive because the widget reads the group through this
+/// single entry point. Mirrors
+/// [`build_app_primary_menu_model`] on the menu side; together
+/// they pin both halves of the primary-menu wiring (the
+/// `gio::Menu` model and its companion `gio::SimpleActionGroup`)
+/// against a single source of truth.
+///
+/// The per-action `connect_activate` handler that forwards each
+/// activation to the matching [`AppMsg`] is wired by the widget
+/// binding (the closure needs the [`relm4::ComponentSender`]
+/// that lives on the widget side); this helper only registers
+/// the action surface so the test suite can prove the names and
+/// sensitivities are pinned.
+///
+/// Returns an owned [`gtk::gio::SimpleActionGroup`].
+/// Construction allocates the underlying `GSimpleActionGroup`
+/// and each `GSimpleAction`; the caller is expected to hand the
+/// group to `insert_action_group` and let the widget take
+/// ownership of the group's `GObject` reference.
+#[must_use]
+pub fn build_app_primary_action_group(state: &AppState) -> gtk::gio::SimpleActionGroup {
+    let group = gtk::gio::SimpleActionGroup::new();
+    let names = format_app_primary_menu_action_names();
+    let enabled = format_app_primary_menu_action_sensitivities(state);
+    for (name, sensitive) in names.iter().zip(enabled.iter()) {
+        let action = gtk::gio::SimpleAction::new(name, None);
+        action.set_enabled(*sensitive);
+        group.add_action(&action);
+    }
+    group
+}
+
 /// Sensitive (enabled) state for the header-bar `+` button bound
 /// via [`format_app_add_button_action`].
 ///
