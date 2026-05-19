@@ -12665,3 +12665,92 @@ fn format_app_about_dialog_release_notes_does_not_contain_a_horizontal_tab_byte(
         "AdwAboutDialog release_notes must not contain the `\\t` horizontal-tab byte (0x09); the Pango markup parser permits ASCII whitespace between elements but renders `\\t` as a wide horizontal gap or empty box when no following character forces a tab-stop reset, so a stray `\\t` between the wrapping `<ul>` and each `<li>` bullet would surface as visible gaps or boxes in the dialog's What's New body, propagate the same rendering bug into any external changelog reuse, and break screen-reader bullet-boundary announcements at every indent; got {release_notes:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_translator_credits_does_not_contain_a_horizontal_tab_byte() {
+    // Defense-in-depth mirror of the just-added
+    // `_release_notes_does_not_contain_a_horizontal_tab_byte`
+    // companion on the translator-credits side, and a
+    // per-helper sibling of the existing
+    // `_translator_credits_does_not_contain_a_null_byte` and
+    // `_translator_credits_does_not_contain_a_carriage_return_byte`
+    // companions. The libadwaita translator-credits convention
+    // permits embedded `\n` line breaks between translator
+    // entries (the `_is_single_line_when_non_empty` companion
+    // only asserts the empty-string case, so it does not gate
+    // embedded newlines once a translation lands), so the
+    // helper is one of only three about-dialog helpers
+    // (alongside `format_app_about_dialog_debug_info` and
+    // `format_app_about_dialog_release_notes`) where embedded
+    // line breaks are legitimately expected. That makes `\t`
+    // (0x09 HORIZONTAL TAB) a distinct regression surface:
+    // it is NOT covered by
+    // `_has_no_surrounding_whitespace_when_non_empty` (`\t`
+    // mid-string is non-surrounding), it is NOT covered by
+    // any per-entry single-line check (the helper itself is
+    // explicitly multi-line per libadwaita convention), it
+    // slips past `_does_not_contain_a_null_byte` (`\t` is not
+    // `\0`), and it slips past
+    // `_does_not_contain_a_carriage_return_byte` (`\t` is not
+    // `\r`). None of the existing companions name the `\t`
+    // byte directly on this helper.
+    //
+    // A regression that landed
+    // `"name1\t<email1>\nname2\t<email2>"` (tab-separated
+    // `<name>\t<email>` rows lifted from a TSV-style
+    // contributors export, an `xgettext` export pipeline that
+    // preserved tab-separated column values, a `concat!(_,
+    // "\t", _)` form mirroring a tab-aligned attribution
+    // block, or a hand-edited helper that pasted from a tab-
+    // indented YAML translator-credits source list) would
+    // mis-render in multiple downstream surfaces: (1)
+    // libadwaita's credits-page parser splits the translator-
+    // credits string on `\n` (LF) per the documented
+    // convention, leaving the embedded `\t` bytes inside each
+    // parsed entry untouched; the GLib-backed Pango render
+    // path treats `\t` as an implementation-defined wide
+    // horizontal gap or an empty box, breaking the tidy two-
+    // column `<name> <email>` attribution layout; (2) any
+    // localization tooling that round-trips the translator-
+    // credits string back through `xgettext` would either
+    // silently dedupe the `\t` to a single space (data loss)
+    // or preserve the `\t` and propagate the same rendering
+    // bug across every downstream consumer of the .po / .mo
+    // file; (3) screen readers that announce the credits-page
+    // contents read the `\t` as a literal control character,
+    // breaking the accessibility-tree announcement at every
+    // attribution-row column boundary.
+    //
+    // Mirror of the existing
+    // `_developer_name_does_not_contain_a_horizontal_tab_byte`,
+    // `_copyright_does_not_contain_a_horizontal_tab_byte`,
+    // `_comments_does_not_contain_a_horizontal_tab_byte`,
+    // `_developers_entries_do_not_contain_a_horizontal_tab_byte`,
+    // `_empty_credits_section_entries_do_not_contain_a_horizontal_tab_byte`,
+    // and just-added
+    // `_release_notes_version_does_not_contain_a_horizontal_tab_byte`
+    // and `_release_notes_does_not_contain_a_horizontal_tab_byte`
+    // siblings; together they pin the no-`\t` invariant
+    // across every about-dialog string helper, extending the
+    // existing `\0`-byte and `\r`-byte coverage to the
+    // horizontal-tab regression surface as well.
+    //
+    // Pinning the no-tab invariant directly here surfaces the
+    // regression with a message naming the offending byte at
+    // build time rather than as a downstream credits-page
+    // rendering bug, a stray `\t` byte in the .po round trip,
+    // or a screen-reader announcement break. Current helper
+    // returns the empty literal `""` (no `\t` byte), so this
+    // test passes today and serves as a forcing function so
+    // any future override of the helper — including the
+    // eventual landing of an actual translator-credits string
+    // — stays free of horizontal tabs even when embedded `\n`
+    // line breaks are intentionally present.
+    use paladin_gtk::app::model::format_app_about_dialog_translator_credits;
+
+    let translator_credits = format_app_about_dialog_translator_credits();
+    assert!(
+        !translator_credits.contains('\t'),
+        "AdwAboutDialog translator_credits must not contain the `\\t` horizontal-tab byte (0x09); the libadwaita translator-credits convention splits on `\\n` (LF) only and leaves embedded `\\t` bytes inside each parsed entry untouched, so a stray `\\t` would render as a wide horizontal gap or empty box in the credits-page attribution column, would survive `xgettext` round trips as either silent dedupe to a single space or `\\t` preservation, and would break screen-reader announcements at every attribution-row column boundary; got {translator_credits:?}",
+    );
+}
