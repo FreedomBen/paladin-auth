@@ -8185,3 +8185,88 @@ fn format_app_window_title_is_ascii_only() {
         );
     }
 }
+
+#[test]
+fn format_app_window_title_has_no_embedded_whitespace() {
+    // Defense-in-depth sibling of
+    // `format_app_window_title_returns_paladin` (exact-value pin
+    // to the static literal `"Paladin"`),
+    // `format_app_window_title_is_non_empty_single_line_without_state_suffix`
+    // (positive shape pin on non-empty + single-line + no
+    // vault-state suffix), the just-added
+    // `format_app_window_title_is_ascii_only` (byte-composition
+    // pin against Unicode lookalikes), and
+    // `format_app_about_dialog_program_name_matches_format_app_window_title`
+    // (cross-consistency with the AdwAboutDialog program-name
+    // slot which already has its own no-embedded-whitespace pin).
+    // Those companions catch the wrong-value, empty,
+    // embedded-newline (via the single-line check),
+    // state-leaking-suffix, non-ASCII-byte, and
+    // drift-from-program-name regressions but leave the
+    // embedded-ASCII-space, embedded-ASCII-tab,
+    // embedded-ASCII-carriage-return, and other ASCII whitespace
+    // (vertical tab, form feed) edge cases ungated:
+    //
+    // * `_is_non_empty_single_line_without_state_suffix` uses
+    //   `!title.contains('\n')` which only matches the literal
+    //   ASCII-newline byte (U+000A) and would accept
+    //   `"Pal adin"` (embedded space) or `"Pal\tadin"`
+    //   (embedded tab) untouched.
+    // * `_is_ascii_only` only constrains the byte composition
+    //   to the ASCII subset; ASCII space (U+0020), ASCII tab
+    //   (U+0009), ASCII carriage return (U+000D), and other
+    //   ASCII whitespace bytes are all ASCII-valid and would
+    //   slip past it.
+    //
+    // The canonical `"Paladin"` literal is a single word with
+    // no internal whitespace. A regression that hand-spelled
+    // the helper as `"Pal adin"` (stray space) or
+    // `"Pal\tadin"` (stray tab) would render in the desktop
+    // window-list across application switches as a two-token
+    // title — the window manager / Wayland session-label
+    // protocol does not interpret embedded whitespace as a
+    // word break, but downstream tooling that splits the
+    // title on whitespace (window-switcher overlays,
+    // screenshot taskbar exporters, automation scripts) would
+    // see two distinct tokens and either fail to match the
+    // Paladin window or mis-route the match against the
+    // canonical `"Paladin"` slug used by the CLI executable
+    // name. Likewise an embedded carriage return or vertical
+    // tab inside the title could disrupt some xdg-toplevel
+    // title parsers that key off control-byte boundaries.
+    //
+    // The window-title byte composition also flows into the
+    // `AdwAboutDialog::set_application_name` slot via the
+    // cross-consistency pin with `format_app_about_dialog_program_name`,
+    // so a stray whitespace in the window title would
+    // propagate to the bold dialog header text (already
+    // pinned no-whitespace on the program-name side by
+    // `format_app_about_dialog_program_name_has_no_embedded_whitespace`)
+    // and surface as a paired regression rather than as a
+    // single source of truth pin.
+    //
+    // Pinning the no-embedded-whitespace invariant directly
+    // here surfaces a regression with a message that names
+    // the offending whitespace character at the byte offset
+    // rather than as a downstream window-list mis-match or
+    // a paired dialog-program-name failure. Mirror of the
+    // `format_app_about_dialog_program_name_has_no_embedded_whitespace`,
+    // `_application_icon_name_has_no_embedded_whitespace`,
+    // `_version_has_no_embedded_whitespace`, and
+    // `_debug_info_filename_has_no_embedded_whitespace`
+    // siblings on the AdwAboutDialog identifier-shaped helper
+    // sides; together they pin the no-whitespace invariant
+    // across every dialog-routed identifier-shaped helper
+    // and the ApplicationWindow title against a single source
+    // of truth.
+    use paladin_gtk::app::model::format_app_window_title;
+
+    let title = format_app_window_title();
+    for (idx, ch) in title.char_indices() {
+        assert!(
+            !ch.is_whitespace(),
+            "ApplicationWindow title must contain no embedded whitespace so the desktop window-list renders the title as a single tightly-set word matching the canonical `Paladin` slug used by the CLI executable name byte-for-byte (downstream tooling that splits the title on whitespace — window-switcher overlays, screenshot taskbar exporters, automation scripts — would see two distinct tokens and either fail to match the Paladin window or mis-route the match against the canonical slug), and so the byte composition stays consistent with the `format_app_about_dialog_program_name` slot pinned by `_program_name_has_no_embedded_whitespace` on the AdwAboutDialog side; got whitespace char {ch:?} (U+{:04X}) at byte offset {idx} in {title:?}",
+            ch as u32,
+        );
+    }
+}
