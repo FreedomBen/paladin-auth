@@ -300,6 +300,20 @@ pub enum AppMsg {
     /// stray dispatch from a future keyboard shortcut would still
     /// land here) is a benign no-op.
     OpenAddDialog,
+    /// Posted by the application menu's "About Paladin" entry's
+    /// `connect_activate` handler. Mounts the
+    /// [`adw::AboutDialog`] built by [`build_app_about_dialog`]
+    /// parented at the active [`adw::ApplicationWindow`] so the
+    /// dialog overlays the main window per §"libadwaita usage".
+    ///
+    /// About is always enabled — `format_app_menu_about_action`'s
+    /// sensitivity rule is `true` in every state — so this
+    /// dispatch can arrive in `Missing` / `Locked` /
+    /// `Unlocked` / `UnlockedBusy` / `StartupError`. The
+    /// handler is non-mutating: it does not touch the vault,
+    /// the cached `AppState`, or any dialog controller, so the
+    /// dispatch is benign in every state.
+    OpenAboutDialog,
     /// Forwarded from the live [`AddAccountComponent`] when the
     /// user interacts with the dialog. Today only
     /// [`AddAccountOutput::Cancel`] is emitted — `AppModel`
@@ -561,18 +575,23 @@ impl SimpleComponent for AppModel {
         wire_app_menu_button_menu_model(&widgets.menu_button);
 
         // Build the bundled application action group and
-        // insert it on the root `adw::ApplicationWindow` so
-        // the menu targets spelled by
-        // `format_app_primary_menu_entries` (`"app.import"`,
-        // `"app.export"`, …, `"app.quit"`) and the header-bar
-        // `+` button's `"app.add"` target all resolve through
-        // one `gio::SimpleActionGroup`. The split into a
-        // separate `build_app_window_action_group` call lets
-        // follow-up commits wire each action's
-        // `connect_activate` handler on the same group
-        // reference before `wire_app_window_action_group`
-        // inserts it on the window.
+        // wire per-action `connect_activate` handlers before
+        // inserting the group on the root
+        // `adw::ApplicationWindow` so the menu targets
+        // spelled by `format_app_primary_menu_entries`
+        // (`"app.import"`, `"app.export"`, …, `"app.quit"`)
+        // and the header-bar `+` button's `"app.add"` target
+        // all resolve through one `gio::SimpleActionGroup`.
         let action_group = build_app_window_action_group(&state);
+        if let Some(about_action) = action_group
+            .lookup_action(format_app_menu_about_action_name())
+            .and_then(|a| a.downcast::<gtk::gio::SimpleAction>().ok())
+        {
+            let about_sender = sender.clone();
+            about_action.connect_activate(move |_, _| {
+                about_sender.input(AppMsg::OpenAboutDialog);
+            });
+        }
         wire_app_window_action_group(&root, &action_group);
 
         let account_list = if state.is_unlocked() {
@@ -766,6 +785,16 @@ impl SimpleComponent for AppModel {
                 if let Some(controller) = self.remove_dialog.take() {
                     self.content.remove(controller.widget());
                 }
+            }
+            AppMsg::OpenAboutDialog => {
+                // Application menu "About Paladin" activation.
+                // Build a fresh `adw::AboutDialog` via the
+                // pinned `build_app_about_dialog` helper and
+                // present it parented at the content tree's
+                // toplevel. `AdwDialog::present` walks up to
+                // the active `adw::ApplicationWindow`
+                // automatically when given any descendant.
+                build_app_about_dialog().present(Some(&self.content));
             }
             AppMsg::OpenAddDialog => {
                 // Header-bar `+` button activation. Mount a fresh

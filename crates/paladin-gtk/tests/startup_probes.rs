@@ -2155,6 +2155,24 @@ fn apply_app_add_action_sensitivity_updates_existing_action_for_a_new_state() {
 }
 
 #[test]
+fn app_msg_carries_open_about_dialog_variant() {
+    // Per §"libadwaita usage" and §"Component tree": the
+    // application menu's "About Paladin" entry mounts an
+    // `adw::AboutDialog` built by `build_app_about_dialog`.
+    // The activation flows through `AppMsg::OpenAboutDialog`
+    // so the widget binding wires `connect_activate` on the
+    // `"about"` SimpleAction to `sender.input(AppMsg::OpenAboutDialog)`
+    // and `update` handles the variant by presenting the
+    // dialog parented at the active `adw::ApplicationWindow`.
+    // The compile-only check below pins the variant exists
+    // and carries no payload so the action wiring can post it
+    // without constructor arguments.
+    use paladin_gtk::app::model::AppMsg;
+
+    let _: AppMsg = AppMsg::OpenAboutDialog;
+}
+
+#[test]
 fn wire_app_window_action_group_signature_takes_application_window_and_action_group() {
     // Per §"libadwaita usage" and §"Component tree": the
     // `app` action group built by
