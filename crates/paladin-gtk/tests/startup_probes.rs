@@ -6349,6 +6349,48 @@ fn format_app_window_accelerator_bindings_accelerators_contain_no_whitespace() {
 }
 
 #[test]
+fn format_app_window_action_names_use_ascii_lowercase_only() {
+    // Defense-in-depth sibling of
+    // `format_app_window_action_names_are_distinct` (which pins
+    // pairwise distinctness of the seven bare action names) and
+    // `format_app_window_action_names_lists_the_six_primary_menu_entries_then_add`
+    // (which pins the slot layout). Those companions catch the
+    // duplicate-name and wrong-order regressions but leave the
+    // case-folding edge case ungated.
+    //
+    // The libadwaita / GLib convention for `gio::SimpleAction`
+    // names is lowercase ASCII, and the existing per-name
+    // exact-value pins (`_returns_import` through `_returns_quit`,
+    // plus `_add_button_action_name_returns_add`) lock each name
+    // to a lowercase literal. The `dispatch_app_window_action`
+    // helper is also case-sensitive on the bare name (per
+    // `dispatch_app_window_action_is_case_sensitive`). A regression
+    // that introduced an upper-case letter on the bundled-array
+    // side — e.g. renaming `"add"` to `"Add"` while leaving the
+    // per-name helper at `"add"` — would slip past the
+    // distinctness / ordering companions while mis-routing the
+    // `gio::SimpleAction` activation through the case-sensitive
+    // dispatch helper at runtime.
+    //
+    // Pinning the cross-array all-lowercase invariant here closes
+    // that gap so the casing regression surfaces as a failing
+    // test with a message that names the offending bundled
+    // index, not as a no-op SimpleAction activation. Mirrors the
+    // recent `format_app_header_bar_button_icon_names_use_lowercase_kebab_case`
+    // sibling on the icon-name side.
+    use paladin_gtk::app::model::format_app_window_action_names;
+
+    for (idx, name) in format_app_window_action_names().iter().enumerate() {
+        for ch in name.chars() {
+            assert!(
+                ch.is_ascii_lowercase(),
+                "format_app_window_action_names[{idx}] = {name:?} must use lowercase ASCII letters only so the dispatch_app_window_action case-sensitive lookup resolves; got disallowed character {ch:?} (libadwaita / GLib convention for SimpleAction names is lowercase, and the per-name exact-value pins lock each helper to a lowercase literal)",
+            );
+        }
+    }
+}
+
+#[test]
 fn format_app_about_dialog_copyright_separates_glyph_and_attribution_with_a_single_space() {
     // Defense-in-depth sibling of
     // `format_app_about_dialog_copyright_starts_with_copyright_glyph_and_contains_developer_name`
