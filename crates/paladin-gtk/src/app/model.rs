@@ -2286,6 +2286,39 @@ pub fn build_app_add_action(state: &AppState) -> gtk::gio::SimpleAction {
     action
 }
 
+/// Apply the per-state sensitivity returned by
+/// [`format_app_add_button_sensitive`] to an existing
+/// header-bar `+` button
+/// [`gtk::gio::SimpleAction`].
+///
+/// Calls [`gtk::gio::SimpleAction::set_enabled`] on `action`
+/// with [`format_app_add_button_sensitive`]'s value for the
+/// supplied `state`. The widget binding calls this helper from
+/// [`AppMsg`] state-transition arms ([`AppState::Missing`] /
+/// [`AppState::Locked`] / [`AppState::Unlocked`] /
+/// [`AppState::UnlockedBusy`] / [`AppState::StartupError`]) so
+/// the Add affordance toggles disabled whenever `AppModel`
+/// leaves [`AppState::Unlocked`] without re-creating the
+/// action — mirrors
+/// [`apply_app_primary_menu_sensitivities`] on the runtime-
+/// update side for the primary menu's mutating entries.
+///
+/// Centralizing the runtime sensitivity application in one
+/// helper means the Add button and the primary menu share one
+/// rule sourced exclusively from
+/// [`format_app_add_button_sensitive`] /
+/// [`format_app_primary_menu_action_sensitivities`] — a future
+/// change to the mutating-affordance rule reverberates through
+/// both consumers without per-call drift. Sibling of
+/// [`apply_app_primary_menu_sensitivities`] on the runtime-
+/// transition side; together they pin every state-change
+/// sensitivity update against the pinned format helpers.
+///
+/// Pure side-effect helper (no return value).
+pub fn apply_app_add_action_sensitivity(action: &gtk::gio::SimpleAction, state: &AppState) {
+    action.set_enabled(format_app_add_button_sensitive(state));
+}
+
 /// Build the application menu's "About Paladin" entry's
 /// [`adw::AboutDialog`] from the pinned `format_app_about_dialog_*`
 /// helpers.

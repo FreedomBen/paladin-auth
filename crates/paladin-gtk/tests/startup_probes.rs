@@ -2005,6 +2005,55 @@ fn build_app_about_dialog_threads_every_format_app_about_dialog_helper_through_a
 }
 
 #[test]
+fn apply_app_add_action_sensitivity_updates_existing_action_for_a_new_state() {
+    // Per §"libadwaita usage" and §"Component tree": when
+    // `AppModel` transitions between states (e.g. Unlocked →
+    // Locked on auto-lock), the header-bar `+` button's
+    // SimpleAction must toggle disabled. This helper applies
+    // the new state's sensitivity to an existing action built
+    // by `build_app_add_action` so the widget binding can
+    // transition the affordance without re-creating the
+    // action — mirrors `apply_app_primary_menu_sensitivities`
+    // for the primary menu's mutating entries.
+    use libadwaita::prelude::*;
+    use paladin_gtk::app::model::{
+        apply_app_add_action_sensitivity, build_app_add_action, format_app_add_button_sensitive,
+    };
+    use paladin_gtk::app::state::AppState;
+
+    let initial = AppState::Unlocked {
+        path: std::path::PathBuf::from("/dev/null"),
+    };
+    let action = build_app_add_action(&initial);
+    assert!(
+        action.is_enabled(),
+        "initial Unlocked state must construct the Add action enabled per format_app_add_button_sensitive",
+    );
+
+    let next = AppState::Locked {
+        path: std::path::PathBuf::from("/dev/null"),
+    };
+    apply_app_add_action_sensitivity(&action, &next);
+    assert_eq!(
+        action.is_enabled(),
+        format_app_add_button_sensitive(&next),
+        "apply_app_add_action_sensitivity must apply format_app_add_button_sensitive for the new state",
+    );
+    assert!(
+        !action.is_enabled(),
+        "Locked state must disable the Add affordance per §\"libadwaita usage\"",
+    );
+
+    // Re-applying for Unlocked must re-enable the action so
+    // the helper round-trips cleanly across state transitions.
+    apply_app_add_action_sensitivity(&action, &initial);
+    assert!(
+        action.is_enabled(),
+        "re-applying Unlocked state must re-enable the Add affordance via apply_app_add_action_sensitivity",
+    );
+}
+
+#[test]
 fn build_app_add_action_registers_add_with_pinned_sensitivity() {
     // Per §"libadwaita usage" and §"Component tree": the
     // header-bar `+` button's
