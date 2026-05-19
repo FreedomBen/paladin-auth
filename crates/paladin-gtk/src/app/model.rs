@@ -486,18 +486,20 @@ impl SimpleComponent for AppModel {
                         // `+` is hidden outside the vault-open
                         // states so users cannot trigger an
                         // `OpenAddDialog` race against a missing /
-                        // locked / errored vault. Sensitivity is
-                        // pinned through
-                        // `format_app_add_button_sensitive` so the
-                        // button stays visible-but-disabled during
-                        // `UnlockedBusy` — a relaxation of the
-                        // visibility rule that mirrors the four
-                        // mutating primary-menu entries.
+                        // locked / errored vault. Sensitivity and
+                        // click dispatch are both inherited from
+                        // the `"app.add"` SimpleAction registered
+                        // on the bundled action group via
+                        // `build_app_window_action_group`: the
+                        // action's enabled state (pinned through
+                        // `format_app_add_button_sensitive`)
+                        // propagates to the button automatically
+                        // through `set_action_name`, and clicking
+                        // the button activates the action — which
+                        // routes through `dispatch_app_window_action`
+                        // to `AppMsg::OpenAddDialog`.
                         set_visible: format_app_add_button_visible(&state),
-                        set_sensitive: format_app_add_button_sensitive(&state),
-                        connect_clicked[sender] => move |_| {
-                            sender.input(AppMsg::OpenAddDialog);
-                        },
+                        set_action_name: Some(format_app_add_button_action()),
                     },
 
                     #[name = "menu_button"]
