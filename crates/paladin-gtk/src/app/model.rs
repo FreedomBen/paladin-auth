@@ -370,6 +370,34 @@ pub enum AppMsg {
     /// follow-up commits; this commit only wires the dispatch
     /// edge so the menu activation reaches `AppModel`.
     OpenImportDialog,
+    /// Posted by the application menu's Export entry's
+    /// `connect_activate` handler. Mounts the
+    /// [`ExportDialogComponent`](crate::export_dialog) — a
+    /// libadwaita file picker + format selector + overwrite
+    /// gate + encrypted-passphrase row — parented at the
+    /// active [`adw::ApplicationWindow`] so the dialog overlays
+    /// the main window per §"libadwaita usage".
+    ///
+    /// Export is gated by
+    /// [`format_app_primary_menu_action_sensitivities`]'s
+    /// mutating-menu rule
+    /// ([`crate::app::state::AppState::allows_mutating_menu`])
+    /// so the action is disabled outside
+    /// [`AppState::Unlocked`]. A stray dispatch in any other
+    /// state (the action is disabled, but a stray dispatch from
+    /// a future keyboard accelerator would still land here) is
+    /// defensively guarded in the handler so the dialog never
+    /// mounts over a `Missing` / `Locked` / `UnlockedBusy` /
+    /// `StartupError` window.
+    ///
+    /// The fully wired
+    /// [`ExportDialogComponent`](crate::export_dialog) (the
+    /// editable form widgets, the
+    /// [`paladin_core::Vault::export`] worker, and the inline
+    /// error / warning surfaces) lands in follow-up commits;
+    /// this commit only wires the dispatch edge so the menu
+    /// activation reaches `AppModel`.
+    OpenExportDialog,
     /// Forwarded from the live [`AddAccountComponent`] when the
     /// user interacts with the dialog. Today only
     /// [`AddAccountOutput::Cancel`] is emitted — `AppModel`
@@ -852,14 +880,15 @@ impl SimpleComponent for AppModel {
                 // automatically when given any descendant.
                 build_app_about_dialog().present(Some(&self.content));
             }
-            AppMsg::OpenPreferencesDialog | AppMsg::OpenImportDialog => {
+            AppMsg::OpenPreferencesDialog | AppMsg::OpenImportDialog | AppMsg::OpenExportDialog => {
                 // Mutating menu activations whose dispatch
                 // edges (action → AppMsg) have landed but
                 // whose widget-bearing dialog components have
                 // not yet. Each variant becomes its own arm
                 // with a distinct handler when the matching
                 // `SettingsComponent` / `ImportDialogComponent`
-                // mount lands in follow-up commits.
+                // / `ExportDialogComponent` mount lands in
+                // follow-up commits.
                 //
                 // Defense in depth: every variant in the
                 // combined arm is gated by
@@ -2752,6 +2781,9 @@ pub fn dispatch_app_window_action(name: &str) -> Option<AppMsg> {
     }
     if name == format_app_menu_about_action_name() {
         return Some(AppMsg::OpenAboutDialog);
+    }
+    if name == format_app_menu_export_action_name() {
+        return Some(AppMsg::OpenExportDialog);
     }
     if name == format_app_menu_import_action_name() {
         return Some(AppMsg::OpenImportDialog);

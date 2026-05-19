@@ -2303,28 +2303,47 @@ fn dispatch_app_window_action_routes_import_to_open_import_dialog() {
 }
 
 #[test]
+fn dispatch_app_window_action_routes_export_to_open_export_dialog() {
+    // Per §"libadwaita usage" and §"Component tree": the
+    // application menu's Export entry mounts the
+    // `ExportDialogComponent` (file picker + format +
+    // overwrite + encrypted passphrase). The activation flows
+    // through `AppMsg::OpenExportDialog` so the widget binding
+    // wires `connect_activate` on the `"export"` SimpleAction
+    // to `sender.input(AppMsg::OpenExportDialog)` and `update`
+    // handles the variant by mounting the dialog parented at
+    // the active `adw::ApplicationWindow`.
+    use paladin_gtk::app::model::{
+        dispatch_app_window_action, format_app_menu_export_action_name, AppMsg,
+    };
+
+    let msg = dispatch_app_window_action(format_app_menu_export_action_name());
+    assert!(
+        matches!(msg, Some(AppMsg::OpenExportDialog)),
+        "dispatch_app_window_action must route the export bare action name to AppMsg::OpenExportDialog; got {msg:?}",
+    );
+}
+
+#[test]
 fn dispatch_app_window_action_covers_every_bundled_action_name() {
     // Defense-in-depth: every bare action name registered on
     // the application's `app` action group (via
     // `build_app_window_action_group`) must either dispatch
     // to a concrete `AppMsg` variant or be explicitly
     // documented as "not yet wired" — the remaining mutating
-    // menu entries (Export, Passphrase) land in follow-up
-    // commits alongside their widget-bearing dialog
-    // components. Catches drift between the bundled action
-    // group and the dispatch table: a future commit that adds
-    // a new action to `format_app_window_action_names` without
-    // updating `dispatch_app_window_action` (or this
-    // pending-set) will surface here as a failing assertion.
+    // menu entry (Passphrase) lands in a follow-up commit
+    // alongside its widget-bearing dialog component. Catches
+    // drift between the bundled action group and the dispatch
+    // table: a future commit that adds a new action to
+    // `format_app_window_action_names` without updating
+    // `dispatch_app_window_action` (or this pending-set) will
+    // surface here as a failing assertion.
     use paladin_gtk::app::model::{
-        dispatch_app_window_action, format_app_menu_export_action_name,
-        format_app_menu_passphrase_action_name, format_app_window_action_names,
+        dispatch_app_window_action, format_app_menu_passphrase_action_name,
+        format_app_window_action_names,
     };
 
-    let pending_mutating: [&str; 2] = [
-        format_app_menu_export_action_name(),
-        format_app_menu_passphrase_action_name(),
-    ];
+    let pending_mutating: [&str; 1] = [format_app_menu_passphrase_action_name()];
 
     for name in format_app_window_action_names() {
         let dispatched = dispatch_app_window_action(name);
@@ -2416,6 +2435,25 @@ fn app_msg_carries_open_import_dialog_variant() {
     use paladin_gtk::app::model::AppMsg;
 
     let _: AppMsg = AppMsg::OpenImportDialog;
+}
+
+#[test]
+fn app_msg_carries_open_export_dialog_variant() {
+    // Per §"libadwaita usage" and §"Component tree": the
+    // application menu's Export entry mounts the
+    // `ExportDialogComponent` (file picker + format +
+    // overwrite + encrypted passphrase). The activation flows
+    // through `AppMsg::OpenExportDialog` so the widget binding
+    // wires `connect_activate` on the `"export"` SimpleAction
+    // to `sender.input(AppMsg::OpenExportDialog)` and `update`
+    // handles the variant by mounting the dialog parented at
+    // the active `adw::ApplicationWindow`. The compile-only
+    // check below pins the variant exists and carries no
+    // payload so the action wiring can post it without
+    // constructor arguments.
+    use paladin_gtk::app::model::AppMsg;
+
+    let _: AppMsg = AppMsg::OpenExportDialog;
 }
 
 #[test]
