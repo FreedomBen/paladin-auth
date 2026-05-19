@@ -15007,3 +15007,108 @@ fn format_app_about_dialog_program_name_does_not_contain_a_vertical_tab_byte() {
         "AdwAboutDialog program_name must not contain the `\\x0B` vertical-tab byte (0x0B); the current `\\x0B`-cleanliness is only protected transitively by `_has_no_embedded_whitespace`'s broad `char::is_whitespace()` check (which matches U+000B VT), so a future refactor that relaxed the no-whitespace invariant to allow a localized multi-word program name might silently drop the `\\x0B` guard alongside the space relaxation; a stray `\\x0B` would render as a literal control glyph in the bold dialog-header program-name row, surface in the window manager's taskbar / dock display label via `_matches_format_app_window_title`, and break screen-reader application-name announcements at the byte boundary; got {program_name:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_version_does_not_contain_a_vertical_tab_byte() {
+    // Defense-in-depth per-byte sibling extending the version-
+    // helper byte coverage past the just-completed `{null /
+    // horizontal-tab / carriage-return}` triplet to the next C0
+    // control byte. The vertical-tab byte `\x0B` (0x0B) sits one
+    // step above HT (0x09) and one step below CR (0x0D) in the
+    // ASCII C0 block; like its siblings it is a non-printable
+    // control byte with no legitimate use inside a semver-shaped
+    // version string.
+    //
+    // The existing `_version_has_no_embedded_whitespace`
+    // companion uses `char::is_whitespace()`, which returns true
+    // for U+000B VT — so the version helper's `\x0B`-cleanliness
+    // is currently protected *transitively* by that one specific
+    // companion's broad whitespace check.
+    //
+    // But that transitive protection is *bundled* with the
+    // no-whitespace invariant as a whole: a future refactor that
+    // intentionally allowed a version-suffix separator space
+    // (e.g. `"0.0.1 pre-release"` or `"0.0.1 +build"`) would
+    // naturally relax the `_has_no_embedded_whitespace` companion
+    // — and the human author of that refactor might reasonably
+    // restructure the check to only reject specific control
+    // bytes (newline, tab) without separately calling out `\x0B`
+    // on the assumption that "ASCII whitespace is now allowed".
+    // That assumption is wrong: `\x0B` is a control byte without
+    // tab-stop semantics, not a layout-friendly whitespace
+    // character, and the version slot is rendered as a single-
+    // line caption beneath the program name in the dialog header
+    // that has no vertical-spacing semantics — so dropping the
+    // `\x0B` check alongside the space-relaxation would silently
+    // regress the no-`\x0B` invariant.
+    //
+    // None of the existing companions name the `\x0B` byte
+    // directly on this helper:
+    //   - `_is_ascii_only` pins each byte as ASCII — `\x0B` is
+    //     ASCII so it slips past;
+    //   - `_is_non_empty_and_looks_like_semver` only enforces
+    //     non-empty + semver shape;
+    //   - `_starts_with_a_digit` / `_does_not_start_with_a_dot` /
+    //     `_does_not_end_with_a_dot` only constrain the boundary
+    //     bytes;
+    //   - `_has_at_least_three_dot_separated_segments` /
+    //     `_segments_are_non_empty` only check segment count and
+    //     non-emptiness;
+    //   - `_matches_cargo_pkg_version` only enforces equality
+    //     with `CARGO_PKG_VERSION` (so any `\x0B`-bearing override
+    //     would slip past as long as Cargo's pinned version had
+    //     matching bytes);
+    //   - `_does_not_contain_a_null_byte` /
+    //     `_does_not_contain_a_horizontal_tab_byte` /
+    //     `_does_not_contain_a_carriage_return_byte` each name a
+    //     different byte specifically.
+    //
+    // A regression that landed `"0.0.1\x0B"` (vertical-tab byte
+    // lifted from a legacy Cargo.toml-derived version registry
+    // authored on a line-printer terminal that used `\x0B` as a
+    // column separator between version and build-metadata
+    // suffix, a `concat!(_, "\x0B", _)` form, or a hand-edited
+    // helper override that lifted the version literal from an
+    // EBCDIC-to-ASCII translation preserving the original VT
+    // byte) would mis-render in multiple downstream surfaces:
+    // (1) the GLib-backed `AdwAboutDialog::set_version` setter
+    // routes the value into Pango for inline rendering as the
+    // version caption beneath the program name — Pango's default
+    // rendering of a bare `\x0B` byte is implementation-defined
+    // and typically renders as a literal control glyph (a hollow
+    // box or tofu-like placeholder), breaking the tidy version-
+    // caption layout; (2) the same version string is reused by
+    // `_release_notes_version_matches_about_dialog_version` for
+    // the "What's New in v<version>" header — a `\x0B` byte in
+    // the version would propagate into the release-notes header
+    // and mis-render there too; (3) any downstream tooling that
+    // scrapes the version slot (release-tracker bots, update-
+    // check pings, crash-report assemblers) would propagate the
+    // stray `\x0B` byte and trigger the same rendering bug
+    // across every downstream surface; (4) screen readers that
+    // announce the version caption read the `\x0B` as a literal
+    // control character, breaking the version-caption
+    // accessibility-tree announcement at the byte boundary.
+    //
+    // Pinning the no-`\x0B` invariant directly on this helper
+    // surfaces the regression with a message naming the
+    // offending byte at build time rather than via a future
+    // whitespace-relaxation refactor that silently dropped the
+    // `\x0B` guard. Current helper returns the value sourced from
+    // `CARGO_PKG_VERSION` (no `\x0B` byte), so this test passes
+    // today and serves as a forcing function so any future
+    // override of the helper — including the eventual landing of
+    // a build-metadata-suffixed version string — stays free of
+    // vertical tabs. Continues the version C0 control-byte cycle
+    // past the just-completed `{null / horizontal-tab /
+    // carriage-return}` triplet so the helper's byte-composition
+    // contract pins each forbidden control byte against a single
+    // source of truth.
+    use paladin_gtk::app::model::format_app_about_dialog_version;
+
+    let version = format_app_about_dialog_version();
+    assert!(
+        !version.contains('\x0B'),
+        "AdwAboutDialog version must not contain the `\\x0B` vertical-tab byte (0x0B); the current `\\x0B`-cleanliness is only protected transitively by `_has_no_embedded_whitespace`'s broad `char::is_whitespace()` check (which matches U+000B VT), so a future refactor that relaxed the no-whitespace invariant to allow a build-metadata-suffixed version like `\"0.0.1 +build\"` might silently drop the `\\x0B` guard alongside the space relaxation; a stray `\\x0B` would render as a literal control glyph in the version caption beneath the program name, propagate into the \"What's New in v<version>\" release-notes header that reuses this string, and break screen-reader version-caption announcements at the byte boundary; got {version:?}",
+    );
+}
