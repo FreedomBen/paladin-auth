@@ -8103,3 +8103,85 @@ fn format_app_header_bar_button_tooltips_are_ascii_only() {
         }
     }
 }
+
+#[test]
+fn format_app_window_title_is_ascii_only() {
+    // Defense-in-depth sibling of
+    // `format_app_window_title_returns_paladin` (exact-value
+    // pin against the static literal `"Paladin"`),
+    // `format_app_window_title_is_non_empty_single_line_without_state_suffix`
+    // (positive shape pin on non-empty + single-line + no
+    // vault-state suffix), and
+    // `format_app_about_dialog_program_name_matches_format_app_window_title`
+    // (cross-consistency pin with the AdwAboutDialog program-name
+    // slot). Those companions catch the wrong-value, empty,
+    // multi-line, state-leaking-suffix, and drift-from-program-name
+    // regressions but leave the Unicode-lookalike edge case
+    // ungated.
+    //
+    // The `format_app_window_title` value populates the
+    // `AdwApplicationWindow::set_title` slot — the window-list
+    // entry on Wayland's `xdg-toplevel` `app_id` / `title`
+    // protocol slot and on X11's `_NET_WM_NAME` property — and
+    // is read aloud by AT-SPI screen readers when the user
+    // tabs into the window (Orca reads the window title as the
+    // window-focus announcement). A regression that swapped a
+    // Latin character for a visually-similar Unicode lookalike
+    // — e.g. `"Pаladin"` where the second `a` is Cyrillic
+    // U+0430 (CYRILLIC SMALL LETTER A) — would slip past:
+    //
+    // * `_returns_paladin` only if the canonical literal is
+    //   similarly corrupted in a lookalike-in-lookalike refactor
+    //   (the exact-value pin would catch a stand-alone swap but
+    //   not a paired drift across the test and the helper).
+    // * `_is_non_empty_single_line_without_state_suffix` because
+    //   the corrupted string is still non-empty, still single-line,
+    //   and does not match any of the literal vault-state strings
+    //   (`"Locked"`, `"Unlocked"`, `"Missing"`, etc.) the
+    //   companion enforces against.
+    // * `_program_name_matches_format_app_window_title` only if
+    //   the matching `format_app_about_dialog_program_name` helper
+    //   stays at the canonical ASCII `"Paladin"` literal; if both
+    //   helpers drift together (a paired regression), the
+    //   cross-consistency companion would pass on a misleading
+    //   match — though the `_program_name_is_ascii_only` companion
+    //   already pinned on the program-name side would catch that
+    //   drift on the dialog-program-name half of the pair, and
+    //   the new pin here catches it on the window-title half.
+    //
+    // The window-title value also propagates into the desktop
+    // window-list across application switches (the user picks
+    // the running Paladin instance from a window-list popover by
+    // matching the bare title against the visible label), so a
+    // Unicode-lookalike title would render visually identical to
+    // the canonical title but fail byte-equality against any
+    // window-list tooling (window managers, screenshot
+    // taskbar overlays, accessibility tools) that match-keys off
+    // the title string. Pinning the ASCII-only invariant here
+    // surfaces the regression with a message that names the
+    // offending non-ASCII byte at the byte offset rather than
+    // as a confusing window-list mis-match or AT-SPI
+    // mispronunciation at runtime.
+    //
+    // Mirror of the `_program_name_is_ascii_only` companion on
+    // the AdwAboutDialog program-name side, the
+    // `_url_helpers_are_ascii_only` companion on the dialog
+    // footer URLs, and the
+    // `_header_bar_button_tooltips_are_ascii_only` companion on
+    // the icon-only header-bar tooltips; together they pin the
+    // ASCII-shape contract across every visible /
+    // screen-reader-routed user-surface string in the
+    // `AppModel` UI (window title, dialog header cluster,
+    // header-bar tooltip captions, footer URL links) against a
+    // single source of truth.
+    use paladin_gtk::app::model::format_app_window_title;
+
+    let title = format_app_window_title();
+    for (idx, ch) in title.char_indices() {
+        assert!(
+            ch.is_ascii(),
+            "ApplicationWindow title must use ASCII characters only so the desktop's window-list label stays byte-stable across application switches (a Unicode lookalike like Cyrillic `а` U+0430 in `\"Pаladin\"` would render visually identical to the canonical title but fail byte-equality against any window-list tooling that match-keys off the title string), and so AT-SPI screen-reader window-focus announcements pronounce the title from a stable byte sequence rather than a lookalike; got non-ASCII char {ch:?} (U+{:04X}) at byte offset {idx} in {title:?}",
+            ch as u32,
+        );
+    }
+}
