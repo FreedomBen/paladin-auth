@@ -12327,3 +12327,82 @@ fn format_app_about_dialog_url_helpers_do_not_contain_a_fragment_anchor() {
         );
     }
 }
+
+#[test]
+fn format_app_about_dialog_url_helpers_do_not_contain_a_userinfo_at_sign() {
+    // Cross-helper defense-in-depth sibling looping over the
+    // three `AdwAboutDialog` footer URL helpers
+    // (`format_app_about_dialog_website`,
+    // `format_app_about_dialog_issue_url`,
+    // `format_app_about_dialog_support_url`) and pinning each
+    // value as free of the `@` userinfo-separator byte. Per
+    // RFC 3986 §3.2.1 the URI generic syntax permits a
+    // userinfo component between the `https://` scheme and
+    // the host (`scheme://userinfo@host/path`); a regression
+    // that landed a URL like
+    // `"https://github.com@malicious.example/FreedomBen/paladin/issues"`
+    // (a phishing-style URL where the `github.com` prefix is
+    // actually the userinfo and the real destination is
+    // `malicious.example`), `"https://attacker@paladin.tamx.org"`
+    // (a redirector exploit where the dialog renders the bare
+    // bytes including the `@`-prefix), or a hand-edited helper
+    // that swapped the literal for a userinfo-bearing URL
+    // would slip past the
+    // `_is_non_empty_https_url[_distinct_*]` per-URL companion
+    // (which only checks non-empty + `https://` prefix + no
+    // space byte), the `_contain_no_embedded_whitespace` /
+    // `_are_ascii_only` cross-URL companions (no whitespace
+    // bytes, only ASCII bytes — `@` is both non-whitespace
+    // and ASCII, so it slips past both), and every other
+    // existing companion. None of the existing companions
+    // name the `@` byte directly.
+    //
+    // The libadwaita `AdwAboutDialog::website` / `issue-url` /
+    // `support-url` slots consume the URL verbatim and Pango
+    // renders it as a clickable footer link with the bare URL
+    // bytes as the visible label. A user reading the rendered
+    // label `"https://github.com@malicious.example/FreedomBen/paladin/issues"`
+    // would scan the leading `github.com` and reasonably
+    // expect the click-through to land on the canonical
+    // GitHub issue tracker — but the browser would instead
+    // route to `malicious.example` (`github.com` is parsed as
+    // userinfo, not as the host) where the user could be
+    // phished, fingerprinted, served drive-by exploits, or
+    // mis-routed for credential theft. This is a security
+    // concern: the about dialog is a trusted-application
+    // surface for surfacing project links, and a userinfo-
+    // bearing URL would silently turn it into an attacker-
+    // controlled redirector.
+    //
+    // Pinning the no-userinfo invariant directly here surfaces
+    // the regression with a message naming the offending URL
+    // helper at build time rather than as a downstream
+    // phishing surface or a user-visible mis-routed click-
+    // through. Mirror of the
+    // `_url_helpers_do_not_end_with_a_trailing_slash`,
+    // `_url_helpers_do_not_contain_a_query_string`,
+    // `_url_helpers_do_not_contain_a_fragment_anchor`,
+    // `_url_helpers_contain_no_embedded_whitespace`,
+    // `_url_helpers_are_ascii_only`, and
+    // `_url_helpers_do_not_contain_a_null_byte` cross-URL
+    // siblings; together they pin the URL byte-composition
+    // contract (no whitespace, ASCII-only, no terminal `/`,
+    // no `\0`, no `?` query, no `#` anchor, no `@` userinfo)
+    // across all three footer link surfaces against a single
+    // source of truth.
+    use paladin_gtk::app::model::{
+        format_app_about_dialog_issue_url, format_app_about_dialog_support_url,
+        format_app_about_dialog_website,
+    };
+
+    for (label, url) in [
+        ("website", format_app_about_dialog_website()),
+        ("issue_url", format_app_about_dialog_issue_url()),
+        ("support_url", format_app_about_dialog_support_url()),
+    ] {
+        assert!(
+            !url.contains('@'),
+            "AdwAboutDialog {label} must not contain the `@` userinfo-separator byte (a security-relevant invariant: per RFC 3986 §3.2.1, `scheme://userinfo@host/path` parses everything before the `@` as userinfo and the bytes after as the real host — so a URL like `https://github.com@malicious.example/...` would render with the misleading `github.com` prefix in the dialog footer label but route click-throughs to `malicious.example`, turning the trusted about-dialog footer into an attacker-controlled redirector for phishing, fingerprinting, drive-by exploits, or credential theft); got {url:?}",
+        );
+    }
+}
