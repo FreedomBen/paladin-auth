@@ -8351,3 +8351,76 @@ fn format_app_add_button_action_name_is_ascii_lowercase_only() {
         );
     }
 }
+
+#[test]
+fn format_app_about_dialog_release_notes_starts_and_ends_with_a_markup_element_when_non_empty() {
+    // Defense-in-depth sibling of
+    // `format_app_about_dialog_release_notes_is_empty_until_v0_2_ships`
+    // (exact-value pin to the empty literal),
+    // `format_app_about_dialog_release_notes_must_be_paired_with_a_non_empty_version_when_non_empty`
+    // (cross-helper version-pairing pin), and
+    // `format_app_about_dialog_release_notes_has_no_surrounding_whitespace_when_non_empty`
+    // (no-surrounding-whitespace pin). Those companions catch
+    // the wrong-value, missing-version-pairing, and leading /
+    // trailing-whitespace regressions but leave the actual
+    // markup-element-bracket invariant ungated — once the
+    // helper swaps to a non-empty body the existing companions
+    // do not force the body to actually be valid Pango / AdwAbout
+    // markup as opposed to (e.g.) raw paragraph text without any
+    // wrapping markup elements.
+    //
+    // The libadwaita convention for the
+    // `AdwAboutDialog::set_release_notes` slot is that the body
+    // is a restricted subset of Pango / AdwAbout markup
+    // (typically `<p>…</p>` or `<ul><li>…</li></ul>` blocks). A
+    // raw paragraph body without wrapping markup — e.g.
+    // `"Added support for X."` — would render verbatim through
+    // the markup parser as a flat run of text without the
+    // baseline-aligned spacing libadwaita applies to wrapped
+    // paragraph elements, surfacing as a visually-jammed
+    // "What's New" section that does not match the surrounding
+    // dialog rows' baseline grid. Worse, the markup parser
+    // would silently accept raw text without raising any
+    // build-time validation, leaving the visual misalignment to
+    // surface only at first run when the section is opened.
+    //
+    // Pinning the markup-element-bracket invariant here is a
+    // forcing function so the v0.2 release-notes copy lands as
+    // properly-wrapped markup elements rather than as raw
+    // paragraph text. The assertion checks the first byte is
+    // `<` (opening a markup element) and the last byte is `>`
+    // (closing a markup element) — this is a coarse-grained
+    // shape pin that does not validate the full Pango grammar
+    // (a `<p>raw text` body would still pass the leading-`<`
+    // check but fail the trailing-`>` check; a fully-formed
+    // `<p>…</p>` body passes both) but suffices to catch the
+    // bare-paragraph regression at the test layer rather than
+    // at first-render time.
+    //
+    // The current empty-literal state trivially passes (the
+    // `if !release_notes.is_empty()` guard skips the
+    // assertions), so this test stays green now and serves as
+    // a canary on the v0.2 swap.
+    //
+    // Mirror of the
+    // `_release_notes_has_no_surrounding_whitespace_when_non_empty`,
+    // `_release_notes_must_be_paired_with_a_non_empty_version_when_non_empty`,
+    // and `_release_notes_is_empty_until_v0_2_ships` siblings;
+    // together they pin the "What's New" section's body shape
+    // (empty until v0.2 ships, then version-paired,
+    // whitespace-trimmed, and properly-bracketed markup
+    // elements) against a single source of truth.
+    use paladin_gtk::app::model::format_app_about_dialog_release_notes;
+
+    let release_notes = format_app_about_dialog_release_notes();
+    if !release_notes.is_empty() {
+        assert!(
+            release_notes.starts_with('<'),
+            "AdwAboutDialog release-notes must start with a markup element bracket `<` so the What's New section renders through the libadwaita Pango / AdwAbout markup parser as a properly-wrapped paragraph or list block rather than as a flat run of raw text without the baseline-aligned spacing libadwaita applies to wrapped elements; got {release_notes:?}",
+        );
+        assert!(
+            release_notes.ends_with('>'),
+            "AdwAboutDialog release-notes must end with a markup element closing bracket `>` so the What's New section's final element closes properly through the libadwaita Pango / AdwAbout markup parser rather than dangling raw text after the last wrapped element; got {release_notes:?}",
+        );
+    }
+}
