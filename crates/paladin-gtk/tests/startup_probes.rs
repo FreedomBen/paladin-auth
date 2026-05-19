@@ -14262,3 +14262,90 @@ fn format_app_about_dialog_copyright_does_not_contain_a_vertical_tab_byte() {
         "AdwAboutDialog copyright must not contain the `\\x0B` vertical-tab byte (0x0B); a mid-string `\\x0B` slips past `_is_a_single_line_without_embedded_newlines` (which only checks `\\n` and `\\r`), past `_starts_with_copyright_glyph_and_contains_developer_name` / `_ends_with_developer_name` (which only constrain the literal prefix and suffix), past `_separates_glyph_and_attribution_with_a_single_space` (which only constrains the single byte after the `©` glyph), past `_does_not_end_with_a_period` (which only constrains the trailing byte), past the no-year-token four-digit-run scan (`\\x0B` is not a digit), and past `_does_not_contain_a_null_byte` / `_does_not_contain_a_horizontal_tab_byte` / `_does_not_contain_a_carriage_return_byte` (which each name a different byte specifically); it would render as a literal control glyph in the dialog-footer copyright row, erode the legal-attribution trusted-surface contract by surfacing a control-byte glyph in the legal row, break screen-reader copyright-row announcements at the byte boundary, and propagate into downstream license-attribution scrapers; got {copyright:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_comments_does_not_contain_a_vertical_tab_byte() {
+    // Defense-in-depth per-byte sibling extending the comments
+    // byte-cleanliness contract past the just-completed `{null /
+    // horizontal-tab / carriage-return}` triplet to the next C0
+    // control byte. The vertical-tab byte `\x0B` (0x0B) sits one
+    // step above HT (0x09) and one step below CR (0x0D) in the
+    // ASCII C0 block; like its siblings it is a non-printable
+    // control byte with no legitimate use inside a human-readable
+    // GNOME dialog description string.
+    //
+    // None of the existing comments companions name the `\x0B`
+    // byte directly:
+    //   - `_comments_is_non_empty_single_line_distinct_from_program_name`
+    //     uses `comments.contains('\n')` to reject embedded
+    //     newlines and a surrounding-whitespace `trim()` check —
+    //     `\x0B` is not `\n` and, although `char::is_whitespace()`
+    //     returns true for U+000B VT (so a *leading* or
+    //     *trailing* `\x0B` would be trimmed out by the
+    //     surrounding-whitespace guard), a mid-string `\x0B`
+    //     (`"OTP authent\x0Bicator for the command line"`) sits
+    //     between the boundaries and slips past;
+    //   - `_comments_does_not_end_with_a_period_per_libadwaita_convention`
+    //     only constrains the trailing byte;
+    //   - `_comments_is_ascii_only` pins each byte as ASCII —
+    //     `\x0B` is ASCII so it slips past;
+    //   - `_comments_does_not_contain_a_null_byte` /
+    //     `_comments_does_not_contain_a_horizontal_tab_byte` /
+    //     `_comments_does_not_contain_a_carriage_return_byte`
+    //     each name a different byte specifically;
+    //   - `_comments_matches_cargo_pkg_description` transitively
+    //     guards the value via the cross-source pin to
+    //     `CARGO_PKG_DESCRIPTION`, but that protection is brittle:
+    //     a future refactor that decoupled the helper from the
+    //     workspace `Cargo.toml` `description` field (a hand-
+    //     edited override for a libadwaita HIG-mandated single-
+    //     line summary phrasing, or a workspace-vendoring split)
+    //     would silently drop the transitive guard.
+    //
+    // A regression that landed `"OTP authent\x0Bicator for the
+    // command line"` (a vertical-tab byte lifted from a legacy
+    // plain-text DESCRIPTION file authored on a line-printer
+    // terminal that used `\x0B` as a column-spacing separator, a
+    // `concat!(_, "\x0B", _)` form, or a hand-edited helper that
+    // pasted from an EBCDIC-to-ASCII translation preserving the
+    // original VT byte) would mis-render in multiple downstream
+    // surfaces: (1) the GLib-backed `AdwAboutDialog::set_comments`
+    // setter hands the string to Pango for inline rendering as
+    // the dialog header description beneath the program name —
+    // Pango's default rendering of a bare `\x0B` byte is
+    // implementation-defined and typically renders as a literal
+    // control glyph (a hollow box or a tofu-like placeholder),
+    // breaking the tidy single-line description layout against
+    // the program-name row above it; (2) the comments value is
+    // sourced from `CARGO_PKG_DESCRIPTION` which propagates into
+    // Cargo's `description` field — tooling that scrapes this
+    // metadata (`cargo metadata`, crates.io registry indexing,
+    // GNOME `gnome-software` descriptions) would propagate the
+    // stray `\x0B` byte into every consumer's stream; (3) screen
+    // readers that announce the dialog description read the
+    // `\x0B` as a literal control character, breaking the
+    // description accessibility-tree announcement at the byte
+    // boundary.
+    //
+    // Pinning the no-`\x0B` invariant directly here surfaces the
+    // regression with a message naming the offending byte at
+    // build time rather than as a downstream dialog-header
+    // rendering bug, a Cargo-metadata-scrape miss, or a screen-
+    // reader announcement break. Current helper returns the
+    // value sourced from `CARGO_PKG_DESCRIPTION` (no `\x0B`
+    // byte), so this test passes today and serves as a forcing
+    // function so any future override of the helper — or any
+    // future edit of the workspace `Cargo.toml` `description`
+    // field — stays free of vertical-tab bytes. Continues the
+    // comments C0 control-byte cycle past the just-completed
+    // `{null / horizontal-tab / carriage-return}` triplet so the
+    // helper's byte-composition contract pins each forbidden
+    // control byte against a single source of truth.
+    use paladin_gtk::app::model::format_app_about_dialog_comments;
+
+    let comments = format_app_about_dialog_comments();
+    assert!(
+        !comments.contains('\x0B'),
+        "AdwAboutDialog comments must not contain the `\\x0B` vertical-tab byte (0x0B); a mid-string `\\x0B` slips past `_is_non_empty_single_line_distinct_from_program_name` (which only checks `\\n` and surrounding whitespace, and although `char::is_whitespace()` matches U+000B VT it only rejects boundary occurrences), past `_does_not_end_with_a_period_per_libadwaita_convention` (which only constrains the trailing byte), past `_is_ascii_only` (because `\\x0B` is ASCII), and past `_does_not_contain_a_null_byte` / `_does_not_contain_a_horizontal_tab_byte` / `_does_not_contain_a_carriage_return_byte` (which each name a different byte specifically); it would render as a literal control glyph in the dialog-header description row, propagate via `CARGO_PKG_DESCRIPTION` into Cargo metadata scrapers and `gnome-software` description rows, and break screen-reader description announcements at the byte boundary; got {comments:?}",
+    );
+}
