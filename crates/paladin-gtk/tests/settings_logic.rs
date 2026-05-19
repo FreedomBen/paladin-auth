@@ -1438,3 +1438,60 @@ fn compose_settings_dialog_inline_subtitle_css_class_for_field_routes_error_and_
         );
     }
 }
+
+#[test]
+fn accepted_change_from_setting_patch_mirrors_setting_patch_enum_field_for_field() {
+    // Bridge between the two parallel enums the dialog round trip
+    // touches: `paladin_core::SettingPatch` (returned in
+    // `ToggleOutcome::Save` / `DebounceOutcome::Save` and consumed
+    // by `Vault::apply_setting_patch` inside
+    // `Vault::mutate_and_save`) and `AcceptedChange` (handed to
+    // `SettingsState::apply_save_result` so the state machine
+    // promotes / rolls back the right field after the worker
+    // returns). The widget layer keeps the patch and the change
+    // side-by-side across the async hop so a fresh pending spinner
+    // arriving during the save does not derail the rollback.
+    //
+    // Without this helper the widget has to re-match the four
+    // variants by hand in two different call sites, drifting them
+    // apart on every enum extension; with it the conversion lives
+    // in one place that the test pins enum-variant-for-enum-variant.
+    use paladin_gtk::settings::accepted_change_from_setting_patch;
+
+    assert_eq!(
+        accepted_change_from_setting_patch(&SettingPatch::AutoLockEnabled(true)),
+        AcceptedChange::AutoLockEnabled(true),
+    );
+    assert_eq!(
+        accepted_change_from_setting_patch(&SettingPatch::AutoLockEnabled(false)),
+        AcceptedChange::AutoLockEnabled(false),
+    );
+    assert_eq!(
+        accepted_change_from_setting_patch(&SettingPatch::AutoLockTimeoutSecs(AUTO_LOCK_SECS_MIN)),
+        AcceptedChange::AutoLockSecs(AUTO_LOCK_SECS_MIN),
+    );
+    assert_eq!(
+        accepted_change_from_setting_patch(&SettingPatch::AutoLockTimeoutSecs(AUTO_LOCK_SECS_MAX)),
+        AcceptedChange::AutoLockSecs(AUTO_LOCK_SECS_MAX),
+    );
+    assert_eq!(
+        accepted_change_from_setting_patch(&SettingPatch::ClipboardClearEnabled(true)),
+        AcceptedChange::ClipboardClearEnabled(true),
+    );
+    assert_eq!(
+        accepted_change_from_setting_patch(&SettingPatch::ClipboardClearEnabled(false)),
+        AcceptedChange::ClipboardClearEnabled(false),
+    );
+    assert_eq!(
+        accepted_change_from_setting_patch(&SettingPatch::ClipboardClearSecs(
+            CLIPBOARD_CLEAR_SECS_MIN
+        )),
+        AcceptedChange::ClipboardClearSecs(CLIPBOARD_CLEAR_SECS_MIN),
+    );
+    assert_eq!(
+        accepted_change_from_setting_patch(&SettingPatch::ClipboardClearSecs(
+            CLIPBOARD_CLEAR_SECS_MAX
+        )),
+        AcceptedChange::ClipboardClearSecs(CLIPBOARD_CLEAR_SECS_MAX),
+    );
+}
