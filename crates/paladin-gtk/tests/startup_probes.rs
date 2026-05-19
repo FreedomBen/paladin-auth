@@ -15560,6 +15560,116 @@ fn format_app_about_dialog_developer_name_does_not_contain_a_form_feed_byte() {
 }
 
 #[test]
+fn format_app_about_dialog_developer_name_does_not_contain_a_backspace_byte() {
+    // Defense-in-depth per-byte sibling extending the developer-
+    // name byte-cleanliness contract past the just-completed
+    // `{null / horizontal-tab / carriage-return / vertical-tab /
+    // form-feed}` quintuple to the backspace byte `\x08` (0x08),
+    // which sits one step below HT (0x09) in the ASCII C0 block
+    // and is the first non-whitespace-classified C0 byte in the
+    // cycle: unlike VT / FF / HT / CR / LF, `\x08` is NOT matched
+    // by `char::is_whitespace()` (Unicode treats BS as a control
+    // byte, not whitespace), so the `_has_no_surrounding_whitespace`
+    // boundary guard does NOT reject a leading or trailing `\x08`
+    // — making backspace strictly more dangerous than form-feed
+    // for this helper, since `\x0C` was at least caught at the
+    // string boundaries by the existing surrounding-whitespace
+    // companion.
+    //
+    // None of the existing developer-name companions name the
+    // `\x08` byte directly:
+    //   - `_developer_name_is_a_single_line_without_embedded_newlines`
+    //     only checks `\n` and `\r` — `\x08` is neither;
+    //   - `_developer_name_is_ascii_only` pins each byte as
+    //     ASCII — `\x08` is ASCII so it slips past;
+    //   - `_developer_name_has_no_surrounding_whitespace` uses
+    //     `char::is_whitespace()`, which under Rust's Unicode
+    //     definition returns *false* for U+0008 BS, so this
+    //     companion does NOT reject `\x08` even at the
+    //     boundaries — strictly weaker coverage than the form-
+    //     feed case;
+    //   - `_developer_name_starts_with_the_definite_article` and
+    //     `_ends_with_the_contributors_collective_noun` only
+    //     constrain the literal prefix `"The "` and suffix
+    //     `"contributors"`, so a mid-string `\x08` between them
+    //     satisfies both;
+    //   - `_does_not_contain_a_null_byte` /
+    //     `_does_not_contain_a_horizontal_tab_byte` /
+    //     `_does_not_contain_a_carriage_return_byte` /
+    //     `_does_not_contain_a_vertical_tab_byte` /
+    //     `_does_not_contain_a_form_feed_byte`
+    //     each name a different byte specifically.
+    //
+    // The current `_returns_the_paladin_contributors` exact-
+    // value pin catches every byte today, but its protection
+    // collapses the moment a contributor-list addition or a
+    // workspace-vendoring split decouples the helper from the
+    // pinned literal — at that point a `\x08`-bearing override
+    // would slip past every byte-level companion above.
+    //
+    // A regression that landed `"The Paladin\x08contributors"`
+    // (backspace byte lifted from a terminal session recording
+    // that captured raw edit-stream bytes between sections of a
+    // contributors list, a `concat!(_, "\x08", _)` form mirroring
+    // a backspace-paginated CONTRIBUTORS cell, or a hand-edited
+    // helper that pasted from a `script(1)` typescript preserving
+    // raw `\x08` bytes) would mis-render in multiple downstream
+    // surfaces: (1) the GLib-backed
+    // `AdwAboutDialog::set_developer_name` setter hands the
+    // string to Pango for inline rendering beneath the program
+    // name in the dialog header — Pango's default rendering of a
+    // bare `\x08` byte is implementation-defined and typically
+    // renders as a literal control glyph (a hollow box or tofu-
+    // like placeholder), breaking the tidy single-line
+    // attribution layout; (2) the same developer-name string is
+    // reused by `_copyright_ends_with_developer_name` to
+    // construct the footer copyright row, so a `\x08` byte in
+    // the developer name would propagate into the copyright slot
+    // and mis-render there too; (3) when the developer-name is
+    // dumped through a TTY (CI logs, `paladin-gtk --about` debug
+    // output piped to `less` or `cat`), the `\x08` byte erases
+    // the preceding glyph, so the rendered attribution diverges
+    // from the bytes on disk and an attacker who controlled the
+    // upstream developer-name source could craft a payload whose
+    // terminal-rendered form omits or substitutes attribution
+    // text without altering the underlying file bytes (a
+    // classic log-injection / display-spoofing primitive); (4)
+    // screen readers that announce the dialog attribution read
+    // the `\x08` as a literal control character or — on some
+    // implementations — as a delete-previous announcement,
+    // breaking the attribution accessibility-tree announcement
+    // at the byte boundary; (5) downstream tooling that scrapes
+    // the developer-name attribution (release-note generators,
+    // contributor-attribution crawlers) would propagate the
+    // stray `\x08` byte into the consumer's stream and trigger
+    // the same rendering bug and display-spoof across every
+    // downstream surface.
+    //
+    // Pinning the no-`\x08` invariant directly here surfaces the
+    // regression with a message naming the offending byte at
+    // build time rather than as a downstream dialog-header
+    // rendering bug, a terminal-erase display-spoof, or a
+    // screen-reader announcement break. Current helper returns
+    // the literal `"The Paladin contributors"` (no `\x08` byte),
+    // so this test passes today and serves as a forcing function
+    // so any future override of the helper — including the
+    // eventual landing of a multi-contributor attribution
+    // string — stays free of backspace bytes. Continues the
+    // developer-name C0 control-byte cycle past the just-
+    // completed `{null / horizontal-tab / carriage-return /
+    // vertical-tab / form-feed}` quintuple so the helper's byte-
+    // composition contract pins each forbidden control byte
+    // against a single source of truth.
+    use paladin_gtk::app::model::format_app_about_dialog_developer_name;
+
+    let developer = format_app_about_dialog_developer_name();
+    assert!(
+        !developer.contains('\x08'),
+        "AdwAboutDialog developer-name must not contain the `\\x08` backspace byte (0x08); a mid-string `\\x08` slips past `_is_a_single_line_without_embedded_newlines` (which only checks `\\n` and `\\r`), past `_is_ascii_only` (because `\\x08` is ASCII), past `_has_no_surrounding_whitespace` (which uses `char::is_whitespace()` — Unicode returns false for U+0008 BS so this companion does NOT reject `\\x08` even at the boundaries, strictly weaker coverage than form-feed), past `_starts_with_the_definite_article` / `_ends_with_the_contributors_collective_noun` (which only constrain the literal prefix and suffix), and past `_does_not_contain_a_null_byte` / `_does_not_contain_a_horizontal_tab_byte` / `_does_not_contain_a_carriage_return_byte` / `_does_not_contain_a_vertical_tab_byte` / `_does_not_contain_a_form_feed_byte` (which each name a different byte specifically); it would render as a literal control glyph in the dialog-header attribution row, propagate into the footer copyright row that reuses this string, enable terminal-erase display-spoofing when the developer-name is dumped through a TTY (the rendered attribution diverges from the bytes on disk because `\\x08` erases the preceding glyph), break screen-reader attribution announcements at the byte boundary, and propagate into downstream contributor-attribution scrapers; got {developer:?}",
+    );
+}
+
+#[test]
 fn format_app_about_dialog_copyright_does_not_contain_a_form_feed_byte() {
     // Defense-in-depth per-byte sibling extending the copyright
     // byte-cleanliness contract past the just-completed `{null /
