@@ -11445,3 +11445,83 @@ fn format_app_about_dialog_release_notes_does_not_contain_a_carriage_return_byte
         "AdwAboutDialog release_notes must not contain the `\\r` carriage-return byte (0x0D); the Pango markup parser permits ASCII whitespace between elements but renders `\\r` as a control byte, so a stray `\\r` would surface as visible whitespace glyphs or empty boxes between bullets on fontconfig setups lacking a U+000D glyph, propagate the same rendering bug into any external changelog reuse, and break screen-reader bullet-boundary announcements; got {release_notes:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_developers_entries_do_not_contain_a_carriage_return_byte() {
+    // Defense-in-depth mirror of the just-added
+    // `_translator_credits_does_not_contain_a_carriage_return_byte` /
+    // `_release_notes_does_not_contain_a_carriage_return_byte` /
+    // `_debug_info_does_not_contain_a_carriage_return_byte`
+    // companions on the credits-page contributor-list side,
+    // and a per-entry-loop sibling of the
+    // `_developers_entries_do_not_contain_a_null_byte`
+    // companion on the same helper.
+    //
+    // The `_is_non_empty_array_of_non_empty_single_line_names`
+    // companion already pins each entry as non-empty and
+    // single-line — but its single-line check is implemented
+    // as `!name.contains('\n')`, which says nothing about the
+    // sibling `\r` carriage-return byte (0x0D). The
+    // surrounding-whitespace guards (`!name.starts_with(char::is_whitespace)`
+    // / `!name.ends_with(char::is_whitespace)`) reject a `\r`
+    // only when it sits at the very first or last byte of the
+    // entry — a mid-string `\r` (e.g. the second byte of a
+    // hand-edited literal accidentally pasted from a Windows
+    // CRLF source) is non-surrounding and slips past both
+    // ends-with-whitespace guards. The
+    // `_entries_do_not_contain_a_null_byte` sibling names the
+    // `\0` byte specifically — `\r` is not `\0`. The
+    // `_entries_are_distinct` /
+    // `_does_not_contain_developer_name` /
+    // `_does_not_contain_app_id` /
+    // `_does_not_contain_program_name` /
+    // `_lists_benjamin_porter` companions guard against
+    // content-shape regressions but say nothing about the
+    // `\r` byte. None of the existing companions name the
+    // `\r` byte directly.
+    //
+    // A regression that landed `["Benjamin\r Porter"]` (a
+    // CRLF-source copy-paste, a `concat!(_, "\r", _)` form,
+    // a hand-edited helper that swapped the literal for a
+    // string lifted from a Windows-edited CONTRIBUTORS file,
+    // or a tooling export pipeline that preserved CRLF line
+    // endings inside a single-name entry) would mis-render in
+    // multiple downstream surfaces: (1) the GLib-backed
+    // `AdwAboutDialog::set_developers` setter hands the array
+    // to GTK as a `&[&str]` which Pango renders one entry per
+    // credits-page row — a stray `\r` byte in the middle of a
+    // contributor name would render as a literal control
+    // glyph or as a visible whitespace box on fontconfig
+    // setups lacking a U+000D glyph, breaking the credits-
+    // page contributor name layout; (2) any tooling that
+    // scrapes the credits-page contributor list (release-note
+    // generators, contributor-attribution crawlers, GNOME
+    // `gnome-software` credit aggregators) would propagate
+    // the stray `\r` byte into the consumer's stream and
+    // trigger the same rendering bug across every downstream
+    // surface; (3) screen readers that announce the credits-
+    // page contributor names read the `\r` as a literal
+    // control character, breaking the contributor-name
+    // accessibility-tree announcement at the offending byte.
+    //
+    // Pinning the no-CR invariant across every contributor
+    // entry in a single per-entry loop surfaces the
+    // regression with a message naming both the offending
+    // byte and the affected entry index at build time rather
+    // than as a downstream credits-page rendering artifact,
+    // attribution-scraper miss, or screen-reader
+    // announcement break. Current helper returns the literal
+    // `["Benjamin Porter"]` (no `\r` byte), so this test
+    // passes today and serves as a forcing function so any
+    // future override of the helper — or any future
+    // contributor addition — stays free of carriage returns.
+    use paladin_gtk::app::model::format_app_about_dialog_developers;
+
+    let developers = format_app_about_dialog_developers();
+    for (idx, entry) in developers.iter().enumerate() {
+        assert!(
+            !entry.contains('\r'),
+            "AdwAboutDialog developers entry at index {idx} must not contain the `\\r` carriage-return byte (0x0D); a mid-string `\\r` slips past the `_is_non_empty_array_of_non_empty_single_line_names` `\\n`-only single-line check and past the starts/ends-with-whitespace guards (which only reject `\\r` at the boundaries), and would render as a literal control glyph in the credits-page \"Developers\" row, propagate into downstream attribution scrapers, and break screen-reader contributor-name announcements; got {entry:?}",
+        );
+    }
+}
