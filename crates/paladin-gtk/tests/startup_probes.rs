@@ -8902,3 +8902,89 @@ fn format_app_primary_menu_entries_labels_start_with_an_uppercase_letter() {
         );
     }
 }
+
+#[test]
+fn format_app_header_bar_button_tooltips_start_with_an_uppercase_letter() {
+    // Cross-button defense-in-depth sibling of the per-button
+    // `_returns_X` exact-value pins
+    // (`format_app_add_button_tooltip_returns_add_account`,
+    // `format_app_search_button_tooltip_returns_search_accounts`,
+    // `format_app_menu_button_tooltip_returns_main_menu`), the
+    // per-button `_is_non_empty` shape pins, the cross-button
+    // `format_app_header_bar_button_tooltips_are_distinct`
+    // (pairwise-distinctness pin),
+    // `_are_single_line_without_surrounding_whitespace`
+    // (cross-button shape pin on single-line + no padding), and
+    // `_are_ascii_only` (cross-button byte-composition pin).
+    // Those companions catch the wrong-value, empty,
+    // duplicate-tooltip, multi-line, surrounding-whitespace,
+    // and non-ASCII regressions but leave the *leading-character
+    // case* ungated.
+    //
+    // The GNOME Human Interface Guidelines (HIG) §"Tooltips"
+    // pin tooltip strings as "sentence case" (first word
+    // capitalized, the rest lowercase unless they're proper
+    // nouns). The `gtk::Button::set_tooltip_text` slot is the
+    // screen-reader-readable label for the icon-only header-bar
+    // buttons (Add / search / menu), since the button has no
+    // visible text label. A regression that landed a
+    // lowercase-leading tooltip — e.g. `"add account"` (typo
+    // from a sentence-case shadow refactor) or `" add account"`
+    // (which would also fail the surrounding-whitespace
+    // companion but restates the rule for the case where
+    // someone fixed the leading-space regression but left the
+    // lowercase letter) — would slip past the existing
+    // `_are_distinct` companion (`"add account"` is still
+    // distinct from the other two tooltips), the
+    // `_are_single_line_without_surrounding_whitespace`
+    // companion (no embedded newlines, no surrounding spaces),
+    // and the `_are_ascii_only` companion (the lowercase letter
+    // is still ASCII), while rendering as a visually-inconsistent
+    // tooltip popover against the title-cased / sentence-cased
+    // tooltips elsewhere in the GNOME stack (and against the
+    // primary menu entry labels pinned by
+    // `_primary_menu_entries_labels_start_with_an_uppercase_letter`
+    // on the popover-row side, which together with this
+    // sibling enforce the leading-character case across both
+    // tooltip and menu-entry surfaces of the same
+    // `gtk::HeaderBar`).
+    //
+    // The assertion walks each (label, tooltip) pair and pins
+    // the first character of each tooltip as an ASCII uppercase
+    // letter. The current three tooltips — `"Add account"`,
+    // `"Search accounts"`, `"Main menu"` — all start with an
+    // uppercase ASCII letter so this test passes today and
+    // serves as a forcing function so any future tooltip
+    // refactor stays aligned with the GNOME HIG sentence-case
+    // convention. Mirror of the
+    // `_primary_menu_entries_labels_start_with_an_uppercase_letter`
+    // sibling on the popover-row side and the
+    // `_are_single_line_without_surrounding_whitespace` /
+    // `_are_distinct` / `_are_ascii_only` cross-button
+    // companions on the tooltip-shape side; together they pin
+    // the leading-character case, the single-line shape, the
+    // pairwise distinctness, and the byte composition of every
+    // header-bar button tooltip against a single source of
+    // truth.
+    use paladin_gtk::app::model::{
+        format_app_add_button_tooltip, format_app_menu_button_tooltip,
+        format_app_search_button_tooltip,
+    };
+
+    for (label, tooltip) in [
+        ("Add", format_app_add_button_tooltip()),
+        ("search", format_app_search_button_tooltip()),
+        ("menu", format_app_menu_button_tooltip()),
+    ] {
+        let first = tooltip.chars().next().unwrap_or_else(|| {
+            panic!(
+                "header-bar {label} button tooltip must be non-empty (the per-button `_is_non_empty` companion already pins this; restated here so the upper-case assertion has a non-empty char to inspect); got {tooltip:?}"
+            )
+        });
+        assert!(
+            first.is_ascii_uppercase(),
+            "header-bar {label} button tooltip must start with an uppercase ASCII letter to match the GNOME HIG §\"Tooltips\" sentence-case convention (a lowercase-leading tooltip like `\"add account\"` would render as a visually-inconsistent popover against the title-cased / sentence-cased tooltips elsewhere in the GNOME stack and against the primary menu entry labels pinned by `_primary_menu_entries_labels_start_with_an_uppercase_letter` on the popover-row side of the same `gtk::HeaderBar`); got first character {first:?} (U+{:04X}) in tooltip {tooltip:?}",
+            first as u32,
+        );
+    }
+}
