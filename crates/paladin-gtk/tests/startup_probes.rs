@@ -5063,3 +5063,22 @@ fn format_app_primary_menu_entries_targets_dispatch_to_app_msg() {
         );
     }
 }
+
+#[test]
+fn app_msg_carries_open_add_dialog_variant() {
+    // Per §"libadwaita usage" and §"Component tree": the
+    // header-bar `+` button (and the `<Control>n` accelerator
+    // bound to the same `"app.add"` `SimpleAction`) routes its
+    // activation through `dispatch_app_window_action` to
+    // `AppMsg::OpenAddDialog`, whose handler mounts a fresh
+    // `AddAccountComponent` seeded with the resolved vault path.
+    // The compile-only check below pins the variant exists and
+    // carries no payload so the `connect_activate` closure can
+    // post it without constructor arguments, mirroring the five
+    // sibling `app_msg_carries_open_*_dialog_variant` pins for
+    // the primary-menu entries (About / Preferences / Import /
+    // Export / Passphrase).
+    use paladin_gtk::app::model::AppMsg;
+
+    let _: AppMsg = AppMsg::OpenAddDialog;
+}
