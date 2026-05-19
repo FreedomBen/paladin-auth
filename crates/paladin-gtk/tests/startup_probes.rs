@@ -15956,3 +15956,97 @@ fn format_app_about_dialog_empty_credits_section_entries_do_not_contain_a_form_f
         }
     }
 }
+
+#[test]
+fn format_app_about_dialog_release_notes_version_does_not_contain_a_form_feed_byte() {
+    // Defense-in-depth per-byte sibling extending the
+    // release_notes_version byte-cleanliness contract past the
+    // just-completed `{null / horizontal-tab / carriage-return /
+    // vertical-tab}` quadruple to the next C0 control byte. The
+    // form-feed byte `\x0C` (0x0C) sits one step above VT (0x0B)
+    // and one step below CR (0x0D) in the ASCII C0 block; like
+    // its siblings it is a non-printable control byte with no
+    // legitimate use inside a semver-shaped version string.
+    //
+    // The two existing `_matches_about_dialog_version` and
+    // `_matches_cargo_pkg_version` cross-source pins transitively
+    // guarantee `release_notes_version` shares its bytes with
+    // the `version` helper (which in turn equals
+    // `CARGO_PKG_VERSION`). The `version` helper is byte-pinned
+    // by `_version_has_no_embedded_whitespace` (a
+    // `char::is_whitespace()` check that catches `\x0C` under
+    // Rust's Unicode definition, since U+000C FF is whitespace),
+    // so a `\x0C` byte in the active `release_notes_version`
+    // value is currently protected *transitively* — through
+    // equality with `version`, which is itself directly pinned
+    // against embedded whitespace.
+    //
+    // But the transitive protection is brittle: a future refactor
+    // that decoupled the two helpers (a separate override
+    // constant for the "What's New" scope, a workspace-vendoring
+    // split that lifted `release_notes_version` out of the
+    // equality chain, or a CHANGELOG.md-derived release-notes
+    // version that intentionally lagged the binary version on a
+    // hotfix cut) would silently drop the `\x0C` guard the
+    // moment the `_matches_*` companions started skipping cases.
+    // The `_does_not_contain_a_null_byte` /
+    // `_does_not_contain_a_horizontal_tab_byte` /
+    // `_does_not_contain_a_carriage_return_byte` /
+    // `_does_not_contain_a_vertical_tab_byte` siblings each name
+    // a different byte specifically. None of the existing
+    // companions name the `\x0C` byte directly on this helper.
+    //
+    // A regression that landed `"0.0.1\x0C"` or
+    // `"0\x0C.0\x0C.1"` (a form-feed byte lifted from a legacy
+    // CHANGELOG file authored on a line-printer terminal that
+    // used `\x0C` to advance the printer to the next page
+    // between sections of a printed changelog, a `concat!(_,
+    // "\x0C", _)` form, a `pandoc`-generated text dump that
+    // preserved `\x0C` page-break markers between CHANGELOG
+    // entries, or a hand-edited helper override that lifted the
+    // version string from a page-broken text file) would mis-
+    // render in multiple downstream surfaces, identically to the
+    // analysis on the `version` helper: (1) the GLib-backed
+    // `AdwAboutDialog::set_release_notes_version` setter routes
+    // the value into Pango for inline rendering as the "What's
+    // New in v<release_notes_version>" header — Pango's default
+    // rendering of a bare `\x0C` byte is implementation-defined
+    // and typically renders as a literal control glyph (a hollow
+    // box or tofu-like placeholder), breaking the tidy section-
+    // header layout; (2) the value scopes the "What's New" body
+    // region inside the dialog — a mismatched / mis-rendered
+    // scope key could prevent the body from rendering at all on
+    // libadwaita versions that strip whitespace when computing
+    // the body-region lookup key, with the additional risk that
+    // text-paginator pipelines treat the `\x0C` as a hard page
+    // break and split the version header mid-string in printed
+    // reports; (3) screen readers that announce the "What's New"
+    // section header read the `\x0C` as a literal control
+    // character or — on some implementations — as a section-
+    // break announcement, breaking the section-header
+    // accessibility-tree announcement at the byte boundary.
+    //
+    // Pinning the no-`\x0C` invariant directly on this helper
+    // surfaces the regression with a message naming the
+    // offending byte at build time rather than via a future
+    // decoupling that silently dropped the transitive `version`
+    // guard. Current helper returns the value sourced from
+    // `CARGO_PKG_VERSION` (no `\x0C` byte), so this test passes
+    // today and serves as a forcing function so any future
+    // decoupling override of the helper — including the
+    // eventual landing of a separately-scoped release-notes
+    // version derived from CHANGELOG.md headings — stays free of
+    // form-feed bytes. Continues the release-notes-version C0
+    // control-byte cycle past the just-completed `{null /
+    // horizontal-tab / carriage-return / vertical-tab}`
+    // quadruple so the helper's byte-composition contract pins
+    // each forbidden control byte against a single source of
+    // truth.
+    use paladin_gtk::app::model::format_app_about_dialog_release_notes_version;
+
+    let release_notes_version = format_app_about_dialog_release_notes_version();
+    assert!(
+        !release_notes_version.contains('\x0C'),
+        "AdwAboutDialog release_notes_version must not contain the `\\x0C` form-feed byte (0x0C); the current value's `\\x0C`-cleanliness is only protected transitively via `_matches_about_dialog_version` and `_matches_cargo_pkg_version` and the `version` helper's `_has_no_embedded_whitespace` check (which uses `char::is_whitespace()` and catches U+000C FF), so a future decoupling override would silently drop the `\\x0C` guard; a stray `\\x0C` would render as a literal control glyph in the dialog's \"What's New in v<release_notes_version>\" section header, could prevent the What's New body from rendering on libadwaita versions that strip whitespace when computing the body-region lookup key (with text-paginator pipelines treating it as a hard page break), and break screen-reader section-header announcements at the byte boundary; got {release_notes_version:?}",
+    );
+}
