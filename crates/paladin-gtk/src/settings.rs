@@ -970,6 +970,34 @@ pub fn format_settings_dialog_spinner_page_size() -> f64 {
     0.0
 }
 
+/// Fixed `climb_rate` value the widget hands to
+/// [`adw::SpinRow::new`] for both `AdwSpinRow` constructors per
+/// `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
+/// "Preferences" and §"Component tree" > `SettingsComponent`.
+///
+/// Returns `1.0` — a flat (non-accelerated) climb rate suited to
+/// the §4.7 seconds ranges. Auto-lock spans `30..=86_400` and
+/// clipboard-clear spans `5..=600` (both at the `1.0` step from
+/// the matching `_secs_adjustment` tuple), so an accelerated
+/// climb rate would skip past intended values faster than the eye
+/// can track — especially on the short clipboard range. Pinning
+/// the literal through this helper keeps the climb rate in one
+/// place shared by both `adw::SpinRow::new` calls; the widget
+/// layer never duplicates the literal.
+///
+/// Pure — returns an `f64` without allocating. Sibling of
+/// [`format_settings_dialog_spinner_page_increment`] and
+/// [`format_settings_dialog_spinner_page_size`] on the
+/// [`adw::SpinRow::new`] argument side; together they pin every
+/// numeric the constructor receives beyond the
+/// [`gtk::Adjustment`] (which the value compose helpers, the
+/// bounds adjustment tuple, `page_increment`, and `page_size`
+/// already cover).
+#[must_use]
+pub fn format_settings_dialog_spinner_climb_rate() -> f64 {
+    1.0
+}
+
 /// Buffered spinner pending the 500 ms debounce.
 #[derive(Debug, Clone, Copy)]
 enum PendingSpinner {

@@ -1687,3 +1687,34 @@ fn format_settings_dialog_spinner_page_size_returns_zero() {
         "page size is 0.0 because AdwSpinRow has no slider area",
     );
 }
+
+#[test]
+fn format_settings_dialog_spinner_climb_rate_returns_one() {
+    // `adw::SpinRow::new` takes a `climb_rate` argument that
+    // governs how fast the value accelerates when the user holds
+    // the `+` / `-` button down. The §4.7 ranges are short enough
+    // (auto-lock 30..=86400 seconds at 1.0 per step, clipboard
+    // 5..=600 seconds at 1.0 per step) that a flat `1.0` climb
+    // rate already feels responsive — additional acceleration
+    // would skip past intended values faster than the eye can
+    // track, especially on the clipboard-clear range. Pinning the
+    // literal through this helper keeps the climb rate in one
+    // place shared by both `adw::SpinRow::new` calls the
+    // `SettingsComponent` makes; the widget layer never
+    // duplicates the literal.
+    //
+    // Pure — returns an `f64` without allocating. Sibling of
+    // `format_settings_dialog_spinner_page_increment` and
+    // `format_settings_dialog_spinner_page_size` on the
+    // `adw::SpinRow::new` argument side; together they pin every
+    // numeric the constructor receives beyond the
+    // `gtk::Adjustment` (which the value compose helpers, the
+    // bounds adjustment tuple, page_increment, and page_size
+    // already cover).
+    use paladin_gtk::settings::format_settings_dialog_spinner_climb_rate;
+
+    assert!(
+        (format_settings_dialog_spinner_climb_rate() - 1.0).abs() < f64::EPSILON,
+        "climb rate is the flat 1.0 acceleration the seconds ranges call for",
+    );
+}
