@@ -9331,3 +9331,77 @@ fn format_app_about_dialog_version_has_at_least_three_dot_separated_segments() {
         len = segments.len(),
     );
 }
+
+#[test]
+fn format_app_about_dialog_version_does_not_end_with_a_dot() {
+    // Defense-in-depth sibling of
+    // `format_app_about_dialog_version_matches_cargo_pkg_version`
+    // (exact-value pin),
+    // `_is_non_empty_and_looks_like_semver` (non-empty +
+    // `contains('.')` shape pin + no-space byte pin),
+    // `_is_ascii_only` (byte-composition pin),
+    // `_has_no_embedded_whitespace` (no-whitespace pin),
+    // `_starts_with_a_digit` (leading-character pin), and
+    // `_has_at_least_three_dot_separated_segments` (segment-count
+    // pin). Those companions catch the wrong-value /
+    // wrong-shape / non-ASCII / embedded-whitespace /
+    // wrong-leading-byte / wrong-segment-count regressions but
+    // leave the *trailing-`.` byte* edge case ungated.
+    //
+    // The Semantic Versioning 2.0 specification (semver.org)
+    // pins a valid version's trailing character as either a
+    // digit (the final character of the PATCH numeric
+    // identifier when no pre-release / build-metadata suffix
+    // is present), an alphanumeric (the final character of
+    // the pre-release identifier when `-<pre-release>` is
+    // present), or an alphanumeric / digit (the final
+    // character of the build-metadata identifier when
+    // `+<build-metadata>` is present). A trailing `.` byte is
+    // not a valid terminal in any of the three semver
+    // grammar productions; a regression that landed
+    // `"0.0.1."` (trailing dot from a manual override typo)
+    // or `"0.0.1.0."` (trailing dot from a four-segment
+    // attempted-conversion to a mockup `MAJOR.MINOR.PATCH.BUILD`
+    // form) would slip past the `_contains_dot` companion
+    // (the trailing dot still satisfies `contains('.')`), the
+    // `_starts_with_a_digit` companion (the leading character
+    // is still a digit), the `_is_ascii_only` companion (the
+    // `.` byte is ASCII), the `_has_no_embedded_whitespace`
+    // companion (the `.` is not whitespace), the
+    // `_has_at_least_three_dot_separated_segments` companion
+    // (a trailing dot adds an empty trailing segment, so the
+    // segment count is still ≥ 3 — the `"0.0.1."` form splits
+    // into `["0", "0", "1", ""]` which has 4 segments,
+    // trivially passing the `>= 3` count check), and the
+    // `_matches_cargo_pkg_version` exact-value pin (only valid
+    // when no manual override is in place — a future refactor
+    // that intercepted the helper with a manual override
+    // would slip past), diverging from the strict semver shape
+    // AppStream / Flatpak release-notes tooling expects in
+    // the `<release version="0.0.1">` XML schema (which the
+    // strict semver-validation pass at `flatpak-builder` /
+    // `appstreamcli validate` time would reject as a
+    // malformed schema entry, surfacing as a packaging-time
+    // rejection rather than as a build-time failing test).
+    //
+    // Pinning the no-trailing-dot invariant directly here
+    // surfaces the regression with a message naming the
+    // offending version string at build time rather than as a
+    // downstream AppStream / Flatpak release-notes schema
+    // rejection at packaging time. Mirror of the
+    // `_is_non_empty_and_looks_like_semver` companion on the
+    // `.`-separator side and the `_starts_with_a_digit` /
+    // `_has_at_least_three_dot_separated_segments` siblings
+    // on the leading-character / segment-count side; together
+    // they pin the leading-character, segment-count, and
+    // trailing-byte contract across the dialog-header version
+    // row against a single source of truth on the SemVer /
+    // GNOME / AppStream / Flatpak packaging convention.
+    use paladin_gtk::app::model::format_app_about_dialog_version;
+
+    let version = format_app_about_dialog_version();
+    assert!(
+        !version.ends_with('.'),
+        "AdwAboutDialog version must not end with a `.` byte (which is not a valid terminal in any of the three Semantic Versioning 2.0 grammar productions for MAJOR.MINOR.PATCH, `-<pre-release>`, or `+<build-metadata>`) so the AppStream / Flatpak release-notes `<release version=\"...\">` XML schema entry resolves at packaging time rather than as a malformed-schema rejection; got {version:?}",
+    );
+}
