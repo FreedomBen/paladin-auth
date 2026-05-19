@@ -2258,30 +2258,52 @@ fn dispatch_app_window_action_routes_quit_to_quit() {
 }
 
 #[test]
+fn dispatch_app_window_action_routes_preferences_to_open_preferences_dialog() {
+    // Per §"libadwaita usage" and §"Component tree": the
+    // application menu's Preferences entry mounts the
+    // `SettingsComponent` (an `AdwPreferencesDialog` exposing
+    // the §4.7 auto-lock / clipboard-clear toggles + spinners).
+    // The activation flows through `AppMsg::OpenPreferencesDialog`
+    // so the widget binding wires `connect_activate` on the
+    // `"preferences"` SimpleAction to
+    // `sender.input(AppMsg::OpenPreferencesDialog)` and `update`
+    // handles the variant by presenting the dialog parented at
+    // the active `adw::ApplicationWindow`.
+    use paladin_gtk::app::model::{
+        dispatch_app_window_action, format_app_menu_preferences_action_name, AppMsg,
+    };
+
+    let msg = dispatch_app_window_action(format_app_menu_preferences_action_name());
+    assert!(
+        matches!(msg, Some(AppMsg::OpenPreferencesDialog)),
+        "dispatch_app_window_action must route the preferences bare action name to AppMsg::OpenPreferencesDialog; got {msg:?}",
+    );
+}
+
+#[test]
 fn dispatch_app_window_action_covers_every_bundled_action_name() {
     // Defense-in-depth: every bare action name registered on
     // the application's `app` action group (via
     // `build_app_window_action_group`) must either dispatch
     // to a concrete `AppMsg` variant or be explicitly
-    // documented as "not yet wired" — the mutating menu
-    // entries (Import, Export, Passphrase, Preferences) land
-    // in follow-up commits alongside their widget-bearing
-    // dialog components. Catches drift between the bundled
-    // action group and the dispatch table: a future commit
-    // that adds a new action to `format_app_window_action_names`
-    // without updating `dispatch_app_window_action` (or this
+    // documented as "not yet wired" — the remaining mutating
+    // menu entries (Import, Export, Passphrase) land in
+    // follow-up commits alongside their widget-bearing dialog
+    // components. Catches drift between the bundled action
+    // group and the dispatch table: a future commit that adds
+    // a new action to `format_app_window_action_names` without
+    // updating `dispatch_app_window_action` (or this
     // pending-set) will surface here as a failing assertion.
     use paladin_gtk::app::model::{
         dispatch_app_window_action, format_app_menu_export_action_name,
         format_app_menu_import_action_name, format_app_menu_passphrase_action_name,
-        format_app_menu_preferences_action_name, format_app_window_action_names,
+        format_app_window_action_names,
     };
 
-    let pending_mutating: [&str; 4] = [
+    let pending_mutating: [&str; 3] = [
         format_app_menu_import_action_name(),
         format_app_menu_export_action_name(),
         format_app_menu_passphrase_action_name(),
-        format_app_menu_preferences_action_name(),
     ];
 
     for name in format_app_window_action_names() {
@@ -2335,6 +2357,26 @@ fn app_msg_carries_open_about_dialog_variant() {
     use paladin_gtk::app::model::AppMsg;
 
     let _: AppMsg = AppMsg::OpenAboutDialog;
+}
+
+#[test]
+fn app_msg_carries_open_preferences_dialog_variant() {
+    // Per §"libadwaita usage" and §"Component tree": the
+    // application menu's Preferences entry mounts the
+    // `SettingsComponent` (an `AdwPreferencesDialog` exposing
+    // the §4.7 auto-lock / clipboard-clear toggles + spinners).
+    // The activation flows through `AppMsg::OpenPreferencesDialog`
+    // so the widget binding wires `connect_activate` on the
+    // `"preferences"` SimpleAction to
+    // `sender.input(AppMsg::OpenPreferencesDialog)` and `update`
+    // handles the variant by presenting the dialog parented at
+    // the active `adw::ApplicationWindow`. The compile-only
+    // check below pins the variant exists and carries no
+    // payload so the action wiring can post it without
+    // constructor arguments.
+    use paladin_gtk::app::model::AppMsg;
+
+    let _: AppMsg = AppMsg::OpenPreferencesDialog;
 }
 
 #[test]
