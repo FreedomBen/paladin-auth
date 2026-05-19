@@ -5270,3 +5270,44 @@ fn format_app_header_bar_button_icon_names_are_distinct() {
         "the three header-bar button icon names must be distinct (Add: {add:?}, search: {search:?}, menu: {menu:?}); a duplicate would render two identical glyphs on the header bar",
     );
 }
+
+#[test]
+fn format_app_header_bar_button_tooltips_are_distinct() {
+    // Defense-in-depth sibling of
+    // `format_app_header_bar_button_icon_names_are_distinct`: the
+    // three header-bar buttons (`+` Add, search-toggle, primary
+    // menu) are icon-only, so the per-button tooltip is the only
+    // textual cue an Orca / hover user gets for what each glyph
+    // does. The per-helper `_returns_*` tests pin each tooltip to
+    // its expected wording individually, but a future refactor
+    // that accidentally copy-pasted the wrong sibling helper into
+    // one of the three `set_tooltip_text:` slots would leave the
+    // per-helper assertions intact while rendering two identical
+    // tooltip strings on the header bar — collapsing the
+    // accessibility hint for two of the three buttons. Mirroring
+    // the `format_app_header_bar_button_icon_names_are_distinct`
+    // pattern (which in turn mirrors
+    // `format_app_window_accelerator_bindings_accelerators_are_distinct`),
+    // this assertion enforces the disjointness at the pinned-
+    // helper layer so a drift surfaces as a failing test rather
+    // than as a duplicated tooltip the smoke test does not
+    // inspect.
+    use paladin_gtk::app::model::{
+        format_app_add_button_tooltip, format_app_menu_button_tooltip,
+        format_app_search_button_tooltip,
+    };
+
+    let add = format_app_add_button_tooltip();
+    let search = format_app_search_button_tooltip();
+    let menu = format_app_menu_button_tooltip();
+    let mut tooltips = [add, search, menu];
+    tooltips.sort_unstable();
+    let before_dedup = tooltips.len();
+    let mut deduped: Vec<&str> = tooltips.to_vec();
+    deduped.dedup();
+    assert_eq!(
+        before_dedup,
+        deduped.len(),
+        "the three header-bar button tooltips must be distinct (Add: {add:?}, search: {search:?}, menu: {menu:?}); a duplicate would render two identical tooltip strings on the header bar and collapse the accessibility hint for the duplicated buttons",
+    );
+}
