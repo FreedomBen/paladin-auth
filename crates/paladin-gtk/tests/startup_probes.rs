@@ -7603,3 +7603,84 @@ fn format_app_about_dialog_program_name_has_no_embedded_whitespace() {
         );
     }
 }
+
+#[test]
+fn format_app_about_dialog_version_has_no_embedded_whitespace() {
+    // Defense-in-depth sibling of
+    // `format_app_about_dialog_version_matches_cargo_pkg_version`
+    // (exact-value pin sourcing from `env!("CARGO_PKG_VERSION")`),
+    // `format_app_about_dialog_version_is_non_empty_and_looks_like_semver`
+    // (positive shape pin on non-empty + contains `.` + no
+    // ASCII-space character `' '`), and
+    // `format_app_about_dialog_version_is_ascii_only`
+    // (byte-composition pin against Unicode lookalikes).
+    // Those companions catch the wrong-source, empty,
+    // missing-`.`, embedded-ASCII-space, and non-ASCII-byte
+    // regressions but leave the embedded-ASCII-tab,
+    // embedded-ASCII-newline, embedded-ASCII-carriage-return,
+    // and other ASCII whitespace (vertical tab, form feed)
+    // edge cases ungated:
+    //
+    // * `_is_non_empty_and_looks_like_semver` uses
+    //   `!version.contains(' ')` which only matches the literal
+    //   ASCII-space byte (U+0020) and would accept
+    //   `"0.0\t1"` (embedded tab) or `"0.0\n1"` (embedded
+    //   newline) untouched.
+    // * `_is_ascii_only` only constrains the byte composition
+    //   to the ASCII subset; ASCII tab (U+0009), ASCII newline
+    //   (U+000A), ASCII carriage return (U+000D), ASCII
+    //   vertical tab (U+000B), and ASCII form feed (U+000C)
+    //   are all ASCII-valid and would slip past it.
+    //
+    // The canonical semver shape that Cargo enforces on the
+    // `[workspace.package].version` value is whitespace-free
+    // (digits, `.`, optional pre-release / build metadata with
+    // hyphens, plus signs, and `.`), so the
+    // `env!("CARGO_PKG_VERSION")` value is whitespace-free at
+    // compile time. A hand-edit that overrode the helper to
+    // return a literal containing stray whitespace — e.g.
+    // `"0.0 .1"` (stray space, also caught by the existing
+    // `_is_non_empty_and_looks_like_semver` companion) or
+    // `"0.0\t1"` / `"0.0\n1"` (stray tab / newline, NOT
+    // caught by either existing companion) — would slip
+    // through and produce a dialog version label that
+    // either wraps to two lines (newline) or renders with a
+    // visible gap (tab) inside the version row, breaking the
+    // visual alignment with the program-name header above
+    // and the developer-name attribution row below. The same
+    // value also propagates into the
+    // `format_app_about_dialog_debug_info` two-line payload
+    // (the program-name line ends with the version per
+    // `_program_name_line_ends_with_the_version`); a stray
+    // newline inside the version would inject a third line
+    // into the debug-info payload, breaking the
+    // `_has_exactly_two_lines` invariant and surfacing as a
+    // confusing line-count mismatch rather than as a clear
+    // whitespace-named regression.
+    //
+    // Pinning the no-embedded-whitespace invariant here
+    // surfaces the regression with a message that names the
+    // offending whitespace character at the byte offset
+    // rather than as a cascade through the debug-info
+    // line-count pin or as a quiet visual misrender at the
+    // dialog version-row layer. Mirror of the
+    // `_program_name_has_no_embedded_whitespace` and
+    // `_application_icon_name_has_no_embedded_whitespace`
+    // siblings on the dialog program-name and
+    // application-icon-name sides plus the
+    // `_url_helpers_contain_no_embedded_whitespace` companion
+    // on the three AdwAboutDialog footer URL helpers;
+    // together they pin the no-whitespace invariant across
+    // every dialog-routed identifier-shaped helper against a
+    // single source of truth.
+    use paladin_gtk::app::model::format_app_about_dialog_version;
+
+    let version = format_app_about_dialog_version();
+    for (idx, ch) in version.char_indices() {
+        assert!(
+            !ch.is_whitespace(),
+            "AdwAboutDialog version must contain no embedded whitespace so the dialog version row renders as a single tightly-set semver token matching the whitespace-free shape Cargo enforces on `[workspace.package].version`, stays byte-identical to `env!(\"CARGO_PKG_VERSION\")`, and does not inject a stray newline into the two-line `format_app_about_dialog_debug_info` payload (breaking the `_has_exactly_two_lines` invariant); got whitespace char {ch:?} (U+{:04X}) at byte offset {idx} in {version:?}",
+            ch as u32,
+        );
+    }
+}
