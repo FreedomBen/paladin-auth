@@ -301,3 +301,59 @@ fn mutate_and_save_closure_sees_prior_mutations_inside_the_call() {
     assert_eq!(observed, 2);
     assert_eq!(vault.iter().count(), 2);
 }
+
+// ---- closure-panic safety -----------------------------------------
+
+#[test]
+fn mutate_and_save_panic_in_closure_does_not_leave_partial_state() {
+    // A panic inside the closure must restore the pre-call snapshot
+    // (accounts + settings) before the unwind resumes, and the save
+    // path must not be entered. Captured via `catch_unwind` so the
+    // test process does not abort.
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+
+    let (mut vault, store, dir) = vault_with_path();
+    // Pre-populate so the rollback is non-trivial.
+    vault.add(make_totp_account("alice"));
+    vault
+        .apply_setting_patch(
+            paladin_core::parse_setting_patch("auto_lock.timeout_secs", "300").unwrap(),
+        )
+        .expect("baseline settings patch");
+    vault.save(&store).expect("baseline save");
+
+    let pre_count = vault.iter().count();
+    let pre_settings = *vault.settings();
+    let path = dir.path().join("vault.bin");
+    let primary_before = std::fs::read(&path).unwrap();
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let _: PaladinError = vault
+            .mutate_and_save(&store, |v| -> Result<PaladinError, PaladinError> {
+                v.add(make_totp_account("dave"));
+                v.apply_setting_patch(
+                    paladin_core::parse_setting_patch("auto_lock.timeout_secs", "600").unwrap(),
+                )
+                .expect("settings patch inside closure");
+                panic!("synthetic");
+            })
+            .expect("unreachable: closure panics");
+    }));
+    assert!(result.is_err(), "panic must propagate through catch_unwind");
+
+    assert_eq!(
+        vault.iter().count(),
+        pre_count,
+        "accounts must be rolled back to the pre-call snapshot",
+    );
+    let post_settings = *vault.settings();
+    assert_eq!(
+        post_settings, pre_settings,
+        "settings must be rolled back to the pre-call snapshot",
+    );
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        primary_before,
+        "save must not be entered when the closure panics",
+    );
+}

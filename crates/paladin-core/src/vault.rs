@@ -14,6 +14,7 @@
 // in Phase G / H.
 
 use std::fmt;
+use std::panic::{catch_unwind, resume_unwind, AssertUnwindSafe};
 use std::time::SystemTime;
 
 use secrecy::{ExposeSecret, SecretString};
@@ -726,16 +727,28 @@ impl Vault {
     /// Front ends (CLI, TUI, GUI) drive add / remove / settings /
     /// import-merge flows through this single helper so each crate
     /// does not duplicate snapshot machinery.
+    ///
+    /// Closure panic safety: the mutator runs inside
+    /// `std::panic::catch_unwind(AssertUnwindSafe(...))`. If the
+    /// closure unwinds, the rollback snapshot is restored before the
+    /// panic is resumed, so callers that catch the unwind further up
+    /// observe the pre-mutation state. The `Store::save` path is not
+    /// entered on a closure panic.
     pub fn mutate_and_save<F, R>(&mut self, store: &Store, mutator: F) -> Result<R>
     where
         F: FnOnce(&mut Vault) -> Result<R>,
     {
         let snapshot = VaultSnapshot::capture(self);
-        let value = match mutator(self) {
-            Ok(v) => v,
-            Err(err) => {
+        let mutator_result = catch_unwind(AssertUnwindSafe(|| mutator(self)));
+        let value = match mutator_result {
+            Ok(Ok(v)) => v,
+            Ok(Err(err)) => {
                 snapshot.restore_into(self);
                 return Err(err);
+            }
+            Err(panic_payload) => {
+                snapshot.restore_into(self);
+                resume_unwind(panic_payload);
             }
         };
         match self.save(store) {

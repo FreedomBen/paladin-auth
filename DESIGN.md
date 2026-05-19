@@ -848,7 +848,7 @@ impl Vault {
     pub fn save(&self, store: &Store) -> Result<()>;
     pub fn mutate_and_save<T, F>(&mut self, store: &Store, f: F) -> Result<T>
     where
-        F: FnOnce(&mut Vault) -> Result<T>;  // captures a zeroized internal rollback snapshot, applies `f`, saves, restores on closure errors and `save_not_committed`, leaves mutated state on `save_durability_unconfirmed`
+        F: FnOnce(&mut Vault) -> Result<T>;  // captures a zeroized internal rollback snapshot, applies `f` under `catch_unwind(AssertUnwindSafe)`, saves, restores on closure errors / panics / `save_not_committed`, resumes the unwind after a closure panic, leaves mutated state on `save_durability_unconfirmed`
 }
 
 pub fn write_secret_file_atomic(path: &Path, bytes: &[u8]) -> Result<()>;  // shared export writer: same-directory tempfile, 0600, file fsync, rename, parent fsync; no .bak; save_not_committed before rename, save_durability_unconfirmed after rename; caller handles overwrite policy
@@ -943,11 +943,14 @@ mutators reuse the same validation path as account construction, update
 caller unless the method explicitly says it saves. Presentation crates
 that need "mutate then save" semantics without hand-written rollback use
 `Vault::mutate_and_save`: core captures the pre-mutation state, runs the
-caller closure, saves, restores the snapshot when the closure fails or
-the save returns `save_not_committed`, and leaves the mutated in-memory
-state in place when the save returns `save_durability_unconfirmed` because
-the primary-file commit point may have been reached. The rollback snapshot
-is secret-bearing and is zeroized when dropped.
+caller closure under `catch_unwind(AssertUnwindSafe(...))`, saves, restores
+the snapshot when the closure fails, panics, or the save returns
+`save_not_committed`, and leaves the mutated in-memory state in place when
+the save returns `save_durability_unconfirmed` because the primary-file
+commit point may have been reached. On a closure panic the unwind is
+resumed after the snapshot is restored, so callers that catch the unwind
+further up observe the pre-mutation state. The rollback snapshot is
+secret-bearing and is zeroized when dropped.
 
 Account selection and settings edits are split so core owns reusable
 semantics while front ends own presentation policy. `parse_account_query`,

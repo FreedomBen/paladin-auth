@@ -1221,7 +1221,7 @@ and committed in any order.
   refactor that pulls the overflow check into `compute` is
   caught.
 
-- [ ] **`mutate_and_save` closure panic safety.** Add
+- [x] **`mutate_and_save` closure panic safety.** Add
   `mutate_and_save_panic_in_closure_does_not_leave_partial_state`
   to `tests/vault_mutate_and_save.rs`. Use
   `std::panic::catch_unwind` with `AssertUnwindSafe` to wrap a
