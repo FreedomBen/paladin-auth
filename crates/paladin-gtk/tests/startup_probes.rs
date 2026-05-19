@@ -25751,3 +25751,128 @@ fn format_app_about_dialog_comments_does_not_contain_an_end_of_text_byte() {
         "AdwAboutDialog comments must not contain the `\\x03` end-of-text byte (0x03); like EOT, ENQ, ACK, and BEL, ETX is NOT matched by `char::is_whitespace()` (Unicode returns false for U+0003 ETX), so the comments helper's transitive whitespace-boundary / single-line protections do NOT cover ETX; a mid-string `\\x03` slips past `_is_non_empty_single_line_distinct_from_program_name` (which only checks `\\n` and uses `char::is_whitespace()` for boundary checks — neither catches `\\x03`), past `_is_ascii_only` (because `\\x03` is ASCII), past `_does_not_end_with_a_period_per_libadwaita_convention` (which only constrains the trailing byte), past `_matches_cargo_pkg_description` (a future workspace description that introduced `\\x03` would propagate the byte and this equality pin would still pass), and past `_does_not_contain_a_null_byte` / `_does_not_contain_a_horizontal_tab_byte` / `_does_not_contain_a_carriage_return_byte` / `_does_not_contain_a_vertical_tab_byte` / `_does_not_contain_a_form_feed_byte` / `_does_not_contain_a_backspace_byte` / `_does_not_contain_a_line_feed_byte` / `_does_not_contain_a_bell_byte` / `_does_not_contain_an_acknowledge_byte` / `_does_not_contain_an_enquiry_byte` / `_does_not_contain_an_end_of_transmission_byte` (which each name a different byte specifically); it would render as a literal control glyph in the dialog header comments row, confuse serial-protocol-bridging tooling that treats `\\x03` as an ETX text-segment terminator if dumped through a serial-bridged TTY (truncating the comments at the byte boundary), trigger SIGINT-byte (`^C`) tty surprises in tooling capturing the elevator-pitch through a pty in raw mode, break screen-reader comments announcements at the byte boundary, propagate into downstream changelog aggregators and AppStream `<summary>` extractors, and trigger AppStream `<summary>` validation rejection at packaging time; got {comments:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_developers_entries_do_not_contain_an_end_of_text_byte() {
+    // Defense-in-depth per-entry-loop sibling extending the
+    // developers-array byte-cleanliness contract past the
+    // just-completed `{null / horizontal-tab / carriage-
+    // return / vertical-tab / form-feed / backspace / line-
+    // feed / bell / acknowledge / enquiry / end-of-
+    // transmission}` entry-undecuple to the end-of-text
+    // byte `\x03` (0x03), continuing the non-whitespace-
+    // classified C0 control-byte cycle past EOT (0x04) for
+    // each entry. Like EOT, ENQ, ACK, and BEL, ETX is NOT
+    // matched by `char::is_whitespace()` (Unicode treats
+    // ETX as a control byte, not whitespace), so the
+    // `_is_non_empty_array_of_non_empty_single_line_names`
+    // surrounding-whitespace boundary guards
+    // (`!name.starts_with(char::is_whitespace)` and
+    // `!name.ends_with(char::is_whitespace)`) do NOT
+    // reject a leading or trailing `\x03` per entry —
+    // making the end-of-text byte strictly as dangerous as
+    // end-of-transmission, enquiry, acknowledge, backspace,
+    // and bell for each entry.
+    //
+    // None of the existing developers companions name the
+    // `\x03` byte directly per entry:
+    //   - `_is_non_empty_array_of_non_empty_single_line_names`
+    //     pins each entry as non-empty and single-line via
+    //     `!name.contains('\n')` — `\x03` is not `\n`. The
+    //     surrounding-whitespace boundary guards use
+    //     `char::is_whitespace()`, which returns *false*
+    //     for U+0003 ETX, so neither guard rejects `\x03`
+    //     even at the boundary;
+    //   - `_entries_are_distinct` / `_does_not_contain_developer_name`
+    //     / `_does_not_contain_app_id` /
+    //     `_does_not_contain_program_name` /
+    //     `_lists_benjamin_porter` guard against content-
+    //     shape regressions but say nothing about embedded
+    //     `\x03` bytes;
+    //   - `_entries_do_not_contain_a_null_byte` /
+    //     `_entries_do_not_contain_a_horizontal_tab_byte` /
+    //     `_entries_do_not_contain_a_carriage_return_byte` /
+    //     `_entries_do_not_contain_a_vertical_tab_byte` /
+    //     `_entries_do_not_contain_a_form_feed_byte` /
+    //     `_entries_do_not_contain_a_backspace_byte` /
+    //     `_entries_do_not_contain_a_line_feed_byte` /
+    //     `_entries_do_not_contain_a_bell_byte` /
+    //     `_entries_do_not_contain_an_acknowledge_byte` /
+    //     `_entries_do_not_contain_an_enquiry_byte` /
+    //     `_entries_do_not_contain_an_end_of_transmission_byte`
+    //     siblings each name a different byte specifically.
+    //
+    // A regression that landed `["Benjamin\x03Porter"]`
+    // (an end-of-text byte lifted from a `script(1)`
+    // typescript capturing raw `\x03` ETX framing bytes
+    // from a CI build that bridged a serial console mid-
+    // contributor-name edit during a Bisync-style text-
+    // block transfer, a `concat!("Benjamin", "\x03",
+    // "Porter")` form mirroring a text-segment-delimited
+    // contributor edit, or a hand-edited helper that
+    // pasted from a terminal session interfacing with a
+    // protocol bridge preserving ETX framing bytes) would
+    // mis-render in multiple downstream surfaces: (1) the
+    // GLib-backed `AdwAboutDialog::set_developers` setter
+    // hands the array to GTK and Pango renders each entry
+    // as a credits-page row — a stray `\x03` byte in the
+    // middle of a contributor name would render as a
+    // literal control glyph (a hollow box or tofu-like
+    // placeholder), breaking the credits-page contributor-
+    // name layout; (2) when the credits-page is dumped
+    // through a serial-bridged TTY (CI logs over a serial
+    // console, an out-of-band debugging session), the
+    // `\x03` byte may be intercepted by the receiving end
+    // as an end-of-text framing indicator and signal the
+    // end of the current text block, confusing protocol-
+    // bridging tooling that treats ETX as a text-segment
+    // terminator and truncating the contributor name at
+    // the byte boundary; on many terminals, `\x03` is the
+    // SIGINT-generating byte (`^C`) when typed at a
+    // foreground process — surfacing as an unexpected
+    // process interruption in any tooling that captures
+    // the credits-page through a pty in raw mode that
+    // signals on the literal byte; (3) any tooling that
+    // scrapes the credits-page contributor list (release-
+    // note generators, contributor-attribution crawlers,
+    // GNOME `gnome-software` credit aggregators) would
+    // propagate the stray `\x03` byte into the consumer's
+    // stream and trigger the same control-glyph / SIGINT /
+    // protocol-confusion bug across every downstream
+    // surface; (4) screen readers that announce the
+    // credits-page contributor names render the byte as a
+    // literal control character announcement, breaking
+    // the contributor-name accessibility-tree announcement
+    // at the byte boundary.
+    //
+    // Pinning the no-`\x03` invariant across every
+    // contributor entry in a single per-entry loop
+    // surfaces the regression with a message naming both
+    // the offending byte and the affected entry index at
+    // build time rather than as a downstream credits-page
+    // rendering artifact, a serial-protocol ETX-frame
+    // text-segment-terminator collision through TTY dumps,
+    // a SIGINT-byte tty surprise, or a screen-reader
+    // announcement break. Current helper returns the
+    // literal `["Benjamin Porter"]` (no `\x03` byte), so
+    // this test passes today and serves as a forcing
+    // function so any future override of the helper — or
+    // any future contributor addition — stays free of end-
+    // of-text bytes. Continues the non-whitespace-
+    // classified C0 control-byte cycle past the just-
+    // completed `{null / horizontal-tab / carriage-return
+    // / vertical-tab / form-feed / backspace / line-feed /
+    // bell / acknowledge / enquiry / end-of-transmission}`
+    // undecuple so each entry's byte-composition contract
+    // pins each forbidden control byte against a single
+    // source of truth.
+    use paladin_gtk::app::model::format_app_about_dialog_developers;
+
+    let developers = format_app_about_dialog_developers();
+    for (idx, entry) in developers.iter().enumerate() {
+        assert!(
+            !entry.contains('\x03'),
+            "AdwAboutDialog developers entry at index {idx} must not contain the `\\x03` end-of-text byte (0x03); like EOT, ENQ, ACK, and BEL, ETX is NOT matched by `char::is_whitespace()` (Unicode returns false for U+0003 ETX), so a mid-string `\\x03` slips past `_is_non_empty_array_of_non_empty_single_line_names` (which only checks `\\n` per entry and uses `char::is_whitespace()` for boundary checks — neither catches `\\x03`), past `_entries_are_distinct` / `_does_not_contain_developer_name` / `_does_not_contain_app_id` / `_does_not_contain_program_name` / `_lists_benjamin_porter` (which only constrain content shape), and past `_entries_do_not_contain_a_null_byte` / `_entries_do_not_contain_a_horizontal_tab_byte` / `_entries_do_not_contain_a_carriage_return_byte` / `_entries_do_not_contain_a_vertical_tab_byte` / `_entries_do_not_contain_a_form_feed_byte` / `_entries_do_not_contain_a_backspace_byte` / `_entries_do_not_contain_a_line_feed_byte` / `_entries_do_not_contain_a_bell_byte` / `_entries_do_not_contain_an_acknowledge_byte` / `_entries_do_not_contain_an_enquiry_byte` / `_entries_do_not_contain_an_end_of_transmission_byte` (which each name a different byte specifically); it would render as a literal control glyph in the credits-page \"Developers\" row, confuse serial-protocol-bridging tooling that treats `\\x03` as an ETX text-segment terminator if dumped through a serial-bridged TTY (truncating the contributor name at the byte boundary), trigger SIGINT-byte (`^C`) tty surprises in tooling capturing the credits-page through a pty in raw mode, propagate into downstream attribution scrapers and `gnome-software` credit aggregators, and break screen-reader contributor-name announcements at the byte boundary; got {entry:?}",
+        );
+    }
+}
