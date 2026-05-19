@@ -10377,3 +10377,44 @@ fn format_app_about_dialog_debug_info_does_not_contain_a_null_byte() {
         "AdwAboutDialog debug_info must not contain the `\\0` null byte (which would route through GDK's null-terminated `g_strdup`-backed clipboard, truncate downstream pastes; render as a control glyph or trigger binary-file fallback when saved to disk; and truncate Pango text-engine rendering of the in-dialog debug-info widget); got {debug_info:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_debug_info_filename_does_not_contain_a_null_byte() {
+    // Defense-in-depth mirror of the just-added
+    // `_debug_info_does_not_contain_a_null_byte` companion on
+    // the filename side. The `_is_ascii_only` companion pins
+    // each byte as ASCII — the `\0` byte (0x00) is ASCII, so
+    // a regression that landed `"paladin-debug-info\0.txt"`
+    // (null-byte injection from a `CString::new` round-trip
+    // that didn't strip the trailing null, or a
+    // `concat!(_, "\0", _)` form) would slip past
+    // `_is_ascii_only`, `_has_no_embedded_whitespace` (`\0`
+    // is not whitespace), `_extension_is_lowercase_txt` (the
+    // suffix `.txt` is still lowercase),
+    // `_does_not_contain_path_separators` (the `\0` is not a
+    // path separator), and `_does_not_start_with_a_dot`.
+    //
+    // Filenames containing null bytes are rejected by both
+    // POSIX (`open(2)` returns `EINVAL` on a `\0` in the
+    // path) and the GIO layer GTK file-chooser routes through
+    // (`g_file_new_for_path` returns `NULL` on null bytes,
+    // surfacing as a NULL-deref crash in some GTK versions or
+    // as a silent failure in others). A `set_debug_info_filename`
+    // slot suggesting a null-byte filename would either crash
+    // the file-chooser dialog on open (GTK 4.0-4.10 bare
+    // backend) or silently disable the Save button (GTK 4.12+
+    // with the path-validation patch). Pinning the no-null-byte
+    // invariant directly here surfaces the regression with a
+    // message naming the offending byte at build time rather
+    // than as a downstream GTK file-chooser crash or silent
+    // disable. Current helper returns the literal `"paladin-
+    // debug-info.txt"` (no `\0` byte), so this test passes
+    // today and serves as a forcing function.
+    use paladin_gtk::app::model::format_app_about_dialog_debug_info_filename;
+
+    let filename = format_app_about_dialog_debug_info_filename();
+    assert!(
+        !filename.contains('\0'),
+        "AdwAboutDialog debug_info_filename must not contain the `\\0` null byte (which is rejected by POSIX `open(2)` with `EINVAL` and by GIO `g_file_new_for_path` with `NULL`, surfacing as a GTK file-chooser crash on GTK 4.0-4.10 or a silently-disabled Save button on GTK 4.12+); got {filename:?}",
+    );
+}
