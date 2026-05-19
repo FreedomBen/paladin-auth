@@ -10196,3 +10196,77 @@ fn format_app_about_dialog_debug_info_does_not_contain_a_carriage_return_byte() 
         "AdwAboutDialog debug_info must not contain the `\\r` carriage-return byte (which would surface as `\\r\\n` Windows line endings in a CRLF-separated payload, mis-rendering as `^M` artifacts in pasted bug reports and breaking POSIX text-processing tools when the payload is saved to disk via `set_debug_info_filename`); got {debug_info:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_debug_info_filename_does_not_start_with_a_dot() {
+    // Defense-in-depth sibling of
+    // `format_app_about_dialog_debug_info_filename_returns_paladin_debug_info_txt`
+    // (exact-value pin),
+    // `_is_non_empty_single_line_with_txt_extension`
+    // (single-line + extension pin),
+    // `_is_ascii_only` (byte-composition pin),
+    // `_extension_is_lowercase_txt` (extension-case pin),
+    // `_has_no_embedded_whitespace` (no-whitespace pin), and
+    // the just-added `_does_not_contain_path_separators`
+    // (no-`/`-or-`\\` pin). Those companions catch the wrong-
+    // value / multi-line / non-ASCII / wrong-extension-case /
+    // embedded-whitespace / path-separator regressions but a
+    // regression that landed `".paladin-debug-info.txt"`
+    // (leading dot from a sibling-hidden-file-form override
+    // or a `concat!(".", original_filename)` injection) would
+    // slip past every existing companion: the leading `.` byte
+    // is ASCII, is non-whitespace, is not a path separator,
+    // and the suffix `.txt` is still lowercase. The
+    // `_is_non_empty_single_line_with_txt_extension` companion
+    // would still pass (the string remains a non-empty single
+    // line ending in `.txt`), and the
+    // `_extension_is_lowercase_txt` companion would also pass.
+    // The `_returns_paladin_debug_info_txt` exact-value pin
+    // would catch the regression only when no manual override
+    // is in place; a future refactor that intercepted the
+    // helper with a manual override built around a hidden-file
+    // form would slip past.
+    //
+    // On Unix-family filesystems (Linux native, macOS, the
+    // host filesystems Flatpak / Snap sandboxes mount through
+    // their portal proxies), files whose name starts with a
+    // `.` byte are treated as "hidden" — they're omitted from
+    // `ls` listings without the `-a` flag, from GNOME Files
+    // (Nautilus) listings without the "Show hidden files"
+    // toggle, and from the GTK file-chooser dialog's default
+    // view without the "Show hidden files" menu item. A
+    // `set_debug_info_filename` slot suggesting a leading-dot
+    // filename would route the debug-info file into the
+    // user's selected directory but render it invisible by
+    // default — defeating the purpose of the "Save debug
+    // info" button (which is to surface a copy-pasteable
+    // artifact users can attach to a bug report).
+    //
+    // Pinning the no-leading-dot invariant directly here
+    // surfaces the regression with a message naming the
+    // offending leading byte at build time rather than as a
+    // downstream invisible-file UX regression at save time.
+    // Mirror of the security-relevant
+    // `_does_not_contain_path_separators` companion (which
+    // pins the file-chooser dialog can't route the suggested
+    // filename through a path-traversal vector) on the
+    // visibility-relevant side: together they pin the file-
+    // chooser dialog suggests a saveable, visible,
+    // non-path-segmented filename rather than an invisible or
+    // path-traversal-vector form.
+    //
+    // The current `format_app_about_dialog_debug_info_filename`
+    // returns `"paladin-debug-info.txt"` which starts with
+    // the lowercase `p` letter (not a `.`), so this test
+    // passes today and serves as a forcing function so any
+    // future override of the debug-info-filename helper stays
+    // a visible-by-default filename rather than a hidden-file
+    // form.
+    use paladin_gtk::app::model::format_app_about_dialog_debug_info_filename;
+
+    let filename = format_app_about_dialog_debug_info_filename();
+    assert!(
+        !filename.starts_with('.'),
+        "AdwAboutDialog debug_info_filename must not start with a `.` byte (which would make the saved debug-info file a Unix-hidden file omitted from default `ls`, GNOME Files (Nautilus), and GTK file-chooser views — defeating the purpose of the `set_debug_info_filename` slot, which is to surface a copy-pasteable artifact users can attach to bug reports); got {filename:?}",
+    );
+}
