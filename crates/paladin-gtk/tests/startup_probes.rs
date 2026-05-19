@@ -11772,3 +11772,67 @@ fn format_app_about_dialog_release_notes_version_does_not_contain_a_carriage_ret
         "AdwAboutDialog release_notes_version must not contain the `\\r` carriage-return byte (0x0D); the current value's `\\r`-cleanliness is only protected transitively via `_matches_about_dialog_version` and `_matches_cargo_pkg_version`, so a future decoupling override would silently drop the `\\r` guard — a stray `\\r` would render as a literal control glyph in the dialog's \"What's New in v<release_notes_version>\" section header, could prevent the What's New body from rendering on libadwaita versions that expect a clean LF-only header key, and break screen-reader section-header announcements; got {release_notes_version:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_developer_name_does_not_contain_a_horizontal_tab_byte() {
+    // Defense-in-depth sibling of the existing
+    // `format_app_about_dialog_developer_name_is_a_single_line_without_embedded_newlines`
+    // (which checks `\n` AND `\r` but not `\t`),
+    // `_developer_name_has_no_surrounding_whitespace` (which
+    // only rejects whitespace at the boundaries),
+    // `_developer_name_is_ascii_only` (which pins each byte as
+    // ASCII — `\t` is ASCII (0x09) so it slips past),
+    // `_developer_name_starts_with_the_definite_article`
+    // (which checks `starts_with("The ")` — a literal `\t`
+    // inserted *after* "The " satisfies this), and
+    // `_developer_name_does_not_contain_a_null_byte` (which
+    // names `\0` specifically — `\t` is not `\0`).
+    //
+    // None of the existing companions name the `\t` byte
+    // directly. The current `_returns_the_paladin_contributors`
+    // exact-value pin catches everything, but its protection
+    // collapses the moment a contributor addition or a
+    // workspace-vendoring split decouples the helper from the
+    // pinned literal — at that point a `\t`-bearing override
+    // would slip past every byte-level companion.
+    //
+    // A regression that landed `"The\tPaladin\tcontributors"`
+    // or `"The Paladin\tcontributors"` (a tab-separated
+    // attribution lifted from a TSV-style CONTRIBUTORS export,
+    // a `concat!(_, "\t", _)` form, a hand-edited helper that
+    // pasted from a markdown-table cell, or a tooling export
+    // pipeline that preserved tab-separated column values)
+    // would mis-render in multiple downstream surfaces: (1)
+    // the GLib-backed `AdwAboutDialog::set_developer_name`
+    // setter hands the string to Pango for inline rendering
+    // beneath the program name in the dialog header — Pango's
+    // default rendering of `\t` is implementation-defined and
+    // typically renders as a wide horizontal gap or an empty
+    // box, breaking the tidy single-line attribution layout;
+    // (2) screen readers that announce the dialog attribution
+    // read the `\t` as a literal control character, breaking
+    // the attribution accessibility-tree announcement at the
+    // tab boundary; (3) any downstream tooling that scrapes
+    // the developer-name attribution (release-note generators,
+    // contributor-attribution crawlers) would propagate the
+    // stray `\t` byte into the consumer's stream and trigger
+    // the same rendering bug across every downstream surface.
+    //
+    // Pinning the no-`\t` invariant directly here surfaces the
+    // regression with a message naming the offending byte at
+    // build time rather than as a downstream dialog-header
+    // rendering bug or a screen-reader announcement break.
+    // Current helper returns the literal `"The Paladin
+    // contributors"` (no `\t` byte), so this test passes today
+    // and serves as a forcing function so any future override
+    // of the helper — including the eventual landing of a
+    // multi-contributor attribution string — stays free of
+    // horizontal-tab bytes.
+    use paladin_gtk::app::model::format_app_about_dialog_developer_name;
+
+    let developer = format_app_about_dialog_developer_name();
+    assert!(
+        !developer.contains('\t'),
+        "AdwAboutDialog developer-name must not contain the `\\t` horizontal-tab byte (0x09); a mid-string `\\t` slips past `_is_a_single_line_without_embedded_newlines` (which only checks `\\n` and `\\r`), past the starts/ends-with-whitespace guards (which only reject `\\t` at the boundaries), past `_is_ascii_only` (because `\\t` is ASCII), and past `_starts_with_the_definite_article` / `_ends_with_the_contributors_collective_noun` (which only constrain the prefix and suffix); it would render as a wide horizontal gap in the dialog-header attribution row, break screen-reader announcements at the tab boundary, and propagate into downstream attribution scrapers; got {developer:?}",
+    );
+}
