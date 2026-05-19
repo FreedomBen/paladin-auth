@@ -5311,3 +5311,41 @@ fn format_app_header_bar_button_tooltips_are_distinct() {
         "the three header-bar button tooltips must be distinct (Add: {add:?}, search: {search:?}, menu: {menu:?}); a duplicate would render two identical tooltip strings on the header bar and collapse the accessibility hint for the duplicated buttons",
     );
 }
+
+#[test]
+fn format_app_primary_menu_entries_labels_are_distinct() {
+    // Defense-in-depth sibling of
+    // `format_app_header_bar_button_tooltips_are_distinct` and
+    // `format_app_header_bar_button_icon_names_are_distinct`: the
+    // six primary-menu entries returned by
+    // `format_app_primary_menu_entries` (Import…, Export…,
+    // Passphrase…, Preferences, About Paladin, Quit) each carry a
+    // visible label that the libadwaita primary `gio::Menu`
+    // renders as a row in the dropdown. The per-helper
+    // `format_app_menu_*_label_returns_*` tests pin each label to
+    // its expected wording individually, but a future refactor
+    // that accidentally copy-pasted the wrong sibling helper into
+    // one of the six slots of `format_app_primary_menu_entries`
+    // would leave the per-helper assertions intact while
+    // rendering two identical rows in the primary menu — a
+    // regression that surfaces as a duplicated entry on hover but
+    // is easy to miss in a diff. Mirroring the
+    // `format_app_header_bar_button_icon_names_are_distinct` /
+    // `_tooltips_are_distinct` / `_targets_are_distinct` /
+    // `_accelerators_are_distinct` pattern, this assertion
+    // enforces the disjointness at the pinned-helper layer so a
+    // drift surfaces as a failing test rather than as a
+    // duplicated menu row the smoke test does not inspect.
+    use paladin_gtk::app::model::format_app_primary_menu_entries;
+
+    let entries = format_app_primary_menu_entries();
+    let mut labels: Vec<&str> = entries.iter().map(|(label, _)| *label).collect();
+    let before_dedup = labels.len();
+    labels.sort_unstable();
+    labels.dedup();
+    assert_eq!(
+        before_dedup,
+        labels.len(),
+        "the six primary-menu entry labels must be distinct (entries: {entries:?}); a duplicate would render two identical rows in the primary menu and collapse one of the six action slots into an unreachable duplicate",
+    );
+}
