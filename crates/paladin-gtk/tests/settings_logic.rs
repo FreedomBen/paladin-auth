@@ -674,6 +674,37 @@ fn format_settings_dialog_clipboard_clear_group_title_returns_clipboard() {
 }
 
 #[test]
+fn format_settings_dialog_clipboard_clear_secs_row_title_returns_clear_delay() {
+    // The clipboard-clear `AdwSpinRow` carries the spinner that
+    // controls `paladin_core::VaultSettings::clipboard_clear_secs`.
+    // Per `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
+    // "Preferences" and §"Component tree" > `SettingsComponent`,
+    // the spinner clamps to
+    // `paladin_core::CLIPBOARD_CLEAR_SECS_MIN..=paladin_core::CLIPBOARD_CLEAR_SECS_MAX`
+    // and is debounced 500 ms so holding the +/- buttons does
+    // not fire one `Vault::mutate_and_save` per click. Sibling
+    // of `format_settings_dialog_auto_lock_secs_row_title` on
+    // the clipboard side; together they pin both `AdwSpinRow`
+    // titles the `SettingsComponent` hosts.
+    //
+    // The wording (`"Clear delay (seconds)"`) names the
+    // dimension the spinner adjusts (the delay before the
+    // clipboard is cleared) and the units the value uses,
+    // threading naturally with the sibling `AdwSwitchRow`
+    // title returned by
+    // `format_settings_dialog_clipboard_clear_enabled_row_title`
+    // (`"Clear clipboard after copy"`). Units inline
+    // parenthesized per the GNOME HIG.
+    use paladin_gtk::settings::format_settings_dialog_clipboard_clear_secs_row_title;
+
+    assert_eq!(
+        format_settings_dialog_clipboard_clear_secs_row_title(),
+        "Clear delay (seconds)",
+        "AdwSpinRow title names the dimension and units",
+    );
+}
+
+#[test]
 fn format_settings_dialog_title_returns_preferences() {
     // The SettingsComponent's `adw::PreferencesDialog::set_title`
     // attribute is populated from this helper. The wording
