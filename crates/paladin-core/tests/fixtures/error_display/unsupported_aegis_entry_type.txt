@@ -1,0 +1,1 @@
+Aegis entry type "steam" is not supported (only totp/hotp)

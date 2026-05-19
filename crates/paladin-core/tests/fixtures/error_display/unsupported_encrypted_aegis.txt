@@ -1,0 +1,1 @@
+Aegis encrypted backups are not supported in v0.1

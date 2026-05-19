@@ -1,0 +1,1 @@
+unsafe permissions on /tmp/x: vault_file mode 0644, expected 0600

@@ -1305,7 +1305,7 @@ and committed in any order.
   fallback that the existing `_returns_eight_chars_*` tests
   don't reach.
 
-- [ ] **`PaladinError` `Display` snapshot.** Add
+- [x] **`PaladinError` `Display` snapshot.** Add
   `tests/error_display.rs` that iterates the same variant set
   used by `tests/error_serde.rs`'s `one_per_variant()` helper
   (re-export the helper to a shared `tests/common/` module or

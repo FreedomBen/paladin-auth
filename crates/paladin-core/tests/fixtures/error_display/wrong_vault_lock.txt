@@ -1,0 +1,1 @@
+wrong vault lock: expected encrypted, supplied plaintext
