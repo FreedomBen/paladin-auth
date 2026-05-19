@@ -12061,3 +12061,99 @@ fn format_app_about_dialog_developers_entries_do_not_contain_a_horizontal_tab_by
         );
     }
 }
+
+#[test]
+fn format_app_about_dialog_empty_credits_section_entries_do_not_contain_a_horizontal_tab_byte() {
+    // Cross-helper defense-in-depth sibling looping over the
+    // three currently-empty `AdwAboutDialog` credits-section
+    // array helpers
+    // (`format_app_about_dialog_designers`,
+    // `format_app_about_dialog_artists`,
+    // `format_app_about_dialog_documenters`) and pinning each
+    // entry as free of the `\t` horizontal-tab byte. Mirror
+    // of the just-added
+    // `_developers_entries_do_not_contain_a_horizontal_tab_byte`
+    // sibling on the populated-developers side and of the
+    // `_empty_credits_section_entries_do_not_contain_a_null_byte`
+    // /
+    // `_empty_credits_section_entries_do_not_contain_a_carriage_return_byte`
+    // siblings on the null-byte / CR-byte sides, structured
+    // as a single cross-helper loop similar to those existing
+    // companions.
+    //
+    // The three helpers currently return the empty array
+    // `[]` because Paladin does not yet have a separately-
+    // credited designer / artist / documenter for the v0.2
+    // release. The empty-array return trivially contains no
+    // entries (let alone `\t`-bearing entries), so this test
+    // passes today as the loop body is never entered.
+    // However, once any of the three credits sections gains
+    // a contributor, the helper return type will switch from
+    // `[&'static str; 0]` to `[&'static str; N]` with
+    // non-empty entries — at that point a `\t` injection
+    // from a tab-separated CONTRIBUTORS export, a `concat!(_,
+    // "\t", _)` form, a hand-edited helper that pasted from
+    // a markdown-table cell, or a tooling export pipeline
+    // that preserved tab-separated column values inside a
+    // single-name entry would slip past every other companion
+    // the way the
+    // `_developers_entries_do_not_contain_a_horizontal_tab_byte`
+    // sibling already documents for the developers helper.
+    //
+    // Horizontal-tab bytes in the credits-section entries
+    // would mis-render in multiple downstream surfaces,
+    // identically to the `set_developers` analysis in the
+    // `_developers_entries_do_not_contain_a_horizontal_tab_byte`
+    // companion: (1) the GLib-backed `set_designers` /
+    // `set_artists` / `set_documenters` setters route through
+    // GTK and Pango renders each entry as a credits-page row
+    // — a stray `\t` byte in the middle of a contributor name
+    // would render as a wide horizontal gap or an empty box,
+    // visually breaking the credits-page contributor-name
+    // layout; (2) any tooling that scrapes the credits-page
+    // contributor list (GNOME `gnome-software` credit
+    // aggregators) would propagate the stray `\t` byte into
+    // the consumer's stream and trigger the same rendering
+    // bug across every downstream surface; (3) screen readers
+    // that announce the credits-page contributor names read
+    // the `\t` as a literal control character, breaking the
+    // contributor-name accessibility-tree announcement at the
+    // tab boundary.
+    //
+    // Pinning the no-`\t` invariant across all three
+    // currently-empty credits-section helpers in a single
+    // cross-helper loop surfaces the regression with a
+    // message naming the affected helper, the offending byte,
+    // and the entry index at build time rather than as a
+    // downstream rendering artifact of the credits-page
+    // sections. Current helpers return the empty array `[]`
+    // (zero entries, no `\t` byte to find), so this test
+    // passes today and serves as a forcing function so any
+    // future override of the helpers — including the
+    // eventual landing of separately-credited designer /
+    // artist / documenter strings — stays free of horizontal-
+    // tab bytes.
+    use paladin_gtk::app::model::{
+        format_app_about_dialog_artists, format_app_about_dialog_designers,
+        format_app_about_dialog_documenters,
+    };
+
+    let designers = format_app_about_dialog_designers();
+    let artists = format_app_about_dialog_artists();
+    let documenters = format_app_about_dialog_documenters();
+
+    let sections: [(&str, &[&str]); 3] = [
+        ("designers", &designers),
+        ("artists", &artists),
+        ("documenters", &documenters),
+    ];
+
+    for (label, entries) in sections {
+        for (idx, entry) in entries.iter().enumerate() {
+            assert!(
+                !entry.contains('\t'),
+                "AdwAboutDialog {label} entry at index {idx} must not contain the `\\t` horizontal-tab byte (0x09); a mid-string `\\t` would render as a wide horizontal gap in the credits-page \"{label}\" row via `set_{label}`, propagate into downstream attribution scrapers, and break screen-reader contributor-name announcements at the tab boundary; got {entry:?}",
+            );
+        }
+    }
+}
