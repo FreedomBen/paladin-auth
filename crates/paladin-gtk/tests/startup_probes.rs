@@ -10903,3 +10903,68 @@ fn format_app_about_dialog_url_helpers_do_not_contain_a_null_byte() {
         );
     }
 }
+
+#[test]
+fn format_app_about_dialog_release_notes_version_does_not_contain_a_null_byte() {
+    // Defense-in-depth mirror of the just-added
+    // `_program_name_does_not_contain_a_null_byte` /
+    // `_version_does_not_contain_a_null_byte` /
+    // `_application_icon_name_does_not_contain_a_null_byte` /
+    // `_developer_name_does_not_contain_a_null_byte` /
+    // `_copyright_does_not_contain_a_null_byte` /
+    // `_comments_does_not_contain_a_null_byte` /
+    // `_url_helpers_do_not_contain_a_null_byte` /
+    // `_debug_info_does_not_contain_a_null_byte` /
+    // `_debug_info_filename_does_not_contain_a_null_byte`
+    // companions on the release-notes-version side. The
+    // `_matches_about_dialog_version` and
+    // `_matches_cargo_pkg_version` companions assert byte
+    // equality against the sibling `format_app_about_dialog_version`
+    // and `env!("CARGO_PKG_VERSION")` respectively — so a
+    // null-byte regression on the version helper alone would
+    // also fail one of those matching tests, but a hand-edit
+    // that re-implemented `format_app_about_dialog_release_notes_version`
+    // independently (swapping the `env!` source for a string-
+    // literal with a null byte) would defeat the matching
+    // tests in lockstep and slip past unnoticed.
+    //
+    // Null bytes in the release-notes-version string would
+    // mis-render in multiple downstream surfaces: (1) the
+    // GLib-backed `AdwAboutDialog::set_release_notes_version`
+    // setter routes through `g_strdup` (null-terminated) and
+    // may truncate the "What's New" header section at the
+    // first `\0` byte, rendering a stale or partial release
+    // version next to the release-notes body and giving the
+    // user a misleading view of which release they just
+    // upgraded to; (2) any automation that pairs the
+    // release-notes-version label with the corresponding
+    // release-notes body for changelog-scraping purposes
+    // would silently use a truncated version key and skip
+    // matching release notes; (3) the matching `_matches_*`
+    // companions would only detect this regression on the
+    // happy path where both sides share an underlying source —
+    // a directly-edited helper with a null byte could re-
+    // implement equality with the version helper by carrying
+    // the same null byte on both sides, defeating both
+    // matching tests in tandem.
+    //
+    // Pinning the no-null-byte invariant directly here
+    // surfaces the regression with a message naming the
+    // offending byte at build time rather than as a
+    // downstream truncation of the dialog's "What's New"
+    // header or as a silent miss in changelog-aggregator
+    // tooling. Current helper returns the literal
+    // `env!("CARGO_PKG_VERSION")` value (Cargo enforces the
+    // semver shape upstream, which is null-byte-free), so
+    // this test passes today and serves as a forcing function
+    // so any future override of the helper stays free of
+    // null bytes — independent of the matching tests against
+    // the version helper.
+    use paladin_gtk::app::model::format_app_about_dialog_release_notes_version;
+
+    let release_notes_version = format_app_about_dialog_release_notes_version();
+    assert!(
+        !release_notes_version.contains('\0'),
+        "AdwAboutDialog release_notes_version must not contain the `\\0` null byte (which would route through GLib's null-terminated `g_strdup` layer in `set_release_notes_version`, truncate the dialog's \"What's New\" header section at the first `\\0`, mislead the user about which release they just upgraded to, and silently mis-key changelog-aggregator scraping output); got {release_notes_version:?}",
+    );
+}
