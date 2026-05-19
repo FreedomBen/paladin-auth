@@ -19559,3 +19559,102 @@ fn format_app_about_dialog_application_icon_name_does_not_contain_a_line_feed_by
         "AdwAboutDialog application_icon_name must not contain the `\\n` line-feed byte (0x0A); the current `\\n`-cleanliness is only protected transitively via the `_application_icon_name_has_no_embedded_whitespace` companion (which uses `char::is_whitespace()` and returns true for U+000A LF), so a future refactor that relaxed the no-embedded-whitespace invariant (a workspace-vendoring split or a `concat!` injection between reverse-DNS segments) would naturally drop the `\\n` guard; a stray `\\n` would fail the `gtk::IconTheme` lookup for the dialog header icon (no installed icon is keyed by a `\\n`-bearing name) and fall through to the placeholder, propagate into the desktop file's `Icon=` key / AppStream `<id>` / Flatpak `app-id` / `StartupWMClass` surfaces and trigger desktop-file / AppStream / Flatpak validation rejection at packaging time (each surface requires a single-line reverse-DNS value), break window-class detection for the running process, and break screen-reader icon-name announcements at the byte boundary; got {icon_name:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_debug_info_filename_does_not_contain_a_line_feed_byte() {
+    // Defense-in-depth per-byte sibling extending the
+    // debug_info_filename byte-cleanliness contract past the
+    // just-completed `{null / horizontal-tab / carriage-return /
+    // vertical-tab / form-feed / backspace}` sextuple to the
+    // line-feed byte `\n` (0x0A), completing the inner C0
+    // control-byte cycle from BS (0x08) through CR (0x0D) for
+    // this helper. Two existing companions provide direct
+    // line-feed protection: (1)
+    // `_debug_info_filename_is_non_empty_single_line_with_txt_extension`
+    // explicitly asserts `!name.contains('\n')`, and (2)
+    // `_debug_info_filename_has_no_embedded_whitespace` uses
+    // `char::is_whitespace()`, which returns *true* for U+000A
+    // LF.
+    //
+    // But that double-layered protection is *coupled* to two
+    // separate invariants: (1) the explicit single-line check
+    // inside `_is_non_empty_single_line_with_txt_extension`, and
+    // (2) the no-embedded-whitespace invariant. A future refactor
+    // that relaxed either (a multi-line filename heuristic that
+    // would never happen in practice but plausible under a
+    // workspace-vendoring split that lifted filename out of the
+    // strict single-line constraint, or a `concat!` injection
+    // between filename segments) would naturally drop one or
+    // both `\n` guards — at which point the no-`\n` invariant
+    // could silently regress if both decouplings happened
+    // together. Mirror of the
+    // `_debug_info_filename_does_not_contain_a_carriage_return_byte`
+    // sibling's same decoupling rationale on the CR side, which
+    // pins `\r` independently even though the same two coupled
+    // companions also catch `\r` via `\char::is_whitespace()`.
+    //
+    // None of the remaining debug_info_filename companions name
+    // the `\n` byte directly:
+    //   - `_debug_info_filename_returns_paladin_debug_info_txt`
+    //     is an exact-value pin against the literal — a future
+    //     override would fail this exact-value pin but ONLY if
+    //     the pin is not updated alongside;
+    //   - `_debug_info_filename_is_ascii_only` pins each byte
+    //     as ASCII — `\n` is ASCII (0x0A) so it slips past;
+    //   - `_debug_info_filename_extension_is_lowercase_txt`
+    //     only constrains the trailing `.txt` substring;
+    //   - `_debug_info_filename_does_not_contain_path_separators`
+    //     names `/` and `\` specifically — `\n` is neither;
+    //   - `_does_not_contain_a_null_byte` /
+    //     `_does_not_contain_a_horizontal_tab_byte` /
+    //     `_does_not_contain_a_carriage_return_byte` /
+    //     `_does_not_contain_a_vertical_tab_byte` /
+    //     `_does_not_contain_a_form_feed_byte` /
+    //     `_does_not_contain_a_backspace_byte`
+    //     each name a different byte specifically.
+    //
+    // A regression that landed `"paladin-debug\n-info.txt"` (LF
+    // byte from a `concat!("paladin-debug", "\n", "-info.txt")`
+    // injection mirroring a multi-line filename composition, a
+    // hand-edited helper override that pasted from a text dump
+    // preserving line breaks, or a workspace-vendoring split
+    // that introduced a line break between filename segments)
+    // would mis-render in multiple downstream surfaces: (1) the
+    // GLib-backed `AdwAboutDialog::set_debug_info_filename`
+    // setter routes the value into the "Save debug info" file-
+    // chooser's default filename slot — a `\n` byte would
+    // either be rejected by the underlying file-chooser (most
+    // file systems reject `\n` in filenames at the operating-
+    // system layer) or saved with a literal newline embedded in
+    // the filename, breaking the saved-file resolution for
+    // subsequent users; (2) the filename appears in the file-
+    // chooser dialog title and the saved-file URL — a `\n` byte
+    // would break the dialog-title layout and render as a
+    // literal control glyph; (3) screen readers that announce
+    // the file-chooser default filename treat the `\n` as a
+    // paragraph break and pause mid-filename, breaking the
+    // file-chooser accessibility-tree announcement at the byte
+    // boundary; (4) downstream tooling that consumes the
+    // generated debug-info file (bug-report parsers, telemetry
+    // collectors that expect a single-line filename token)
+    // would propagate the stray `\n` byte into the consumer's
+    // stream and trigger filename-resolution failure across
+    // every downstream surface.
+    //
+    // Pinning the no-`\n` invariant directly here surfaces the
+    // regression with a message naming the offending byte at
+    // build time rather than via a future double-decoupling
+    // that silently dropped both coupled `\n` guards. Current
+    // helper returns the literal `"paladin-debug-info.txt"`
+    // (no `\n` byte), so this test passes today and serves as
+    // a forcing function so any future override of the helper
+    // stays free of line-feed bytes even when both coupled
+    // companions are intentionally relaxed.
+    use paladin_gtk::app::model::format_app_about_dialog_debug_info_filename;
+
+    let filename = format_app_about_dialog_debug_info_filename();
+    assert!(
+        !filename.contains('\n'),
+        "AdwAboutDialog debug_info_filename must not contain the `\\n` line-feed byte (0x0A); the current `\\n`-cleanliness is protected by two coupled companions (`_is_non_empty_single_line_with_txt_extension` which explicitly checks `\\n`, and `_has_no_embedded_whitespace` which transitively catches `\\n` via `char::is_whitespace()`), so a future refactor that relaxed both invariants together (a workspace-vendoring split that lifted the filename out of the strict single-line constraint, or a `concat!` injection that introduced a line break between filename segments) would naturally drop both `\\n` guards; a stray `\\n` would either be rejected by the file-chooser at the operating-system layer (most file systems reject `\\n` in filenames) or saved with an embedded line break in the filename, break the file-chooser dialog-title layout, break screen-reader file-chooser announcements at the byte boundary, and propagate into downstream bug-report parsers and telemetry collectors that expect a single-line filename token; got {filename:?}",
+    );
+}
