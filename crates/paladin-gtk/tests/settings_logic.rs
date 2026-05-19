@@ -2010,6 +2010,71 @@ fn settings_state_toggle_clears_last_outcome_for_prior_durability_warning() {
 }
 
 #[test]
+fn settings_state_stage_clears_last_outcome_for_prior_inline_io_error() {
+    // Sibling of `settings_state_stage_clears_last_outcome_for_prior_durability_warning`
+    // on the `Inline` arm. The existing `_for_prior_durability_warning`
+    // pair pins the clear contract for the amber-subtitle path; this
+    // pair pins the same contract for the red-subtitle inline-error
+    // path that `apply_save_io_error_routes_to_inline_and_rolls_back_visible_value`
+    // produces. Without an explicit assertion for the `Inline` variant a
+    // regression that special-cased the clear ("leave errors so the user
+    // notices") would land undetected — the red subtitle would then
+    // linger under a spinner row the user is actively retyping, which
+    // would visually contradict the §"Tests > Pure-logic unit tests >
+    // `tests/settings_logic.rs`" checklist intent that the subtitle
+    // disappears the moment the user acts again.
+    let mut state = SettingsState::new(defaults());
+    state.stage_auto_lock_secs(60);
+    let _ = state.resolve_debounce();
+    let _ = state.apply_save_result(
+        AcceptedChange::AutoLockSecs(60),
+        Err(PaladinError::IoError {
+            operation: "vault_save",
+            source: std::io::Error::other("disk full"),
+        }),
+    );
+    assert!(matches!(
+        state.last_outcome(),
+        Some(SaveOutcome::Inline { .. })
+    ));
+
+    state.stage_auto_lock_secs(120);
+    assert!(
+        state.last_outcome().is_none(),
+        "new spinner stage clears the prior inline io_error so the red subtitle does not linger",
+    );
+}
+
+#[test]
+fn settings_state_toggle_clears_last_outcome_for_prior_inline_io_error() {
+    // Mirrors `settings_state_stage_clears_last_outcome_for_prior_inline_io_error`
+    // on the toggle side. The original sibling pair covers the
+    // `DurabilityWarning` variant for both stage and toggle; this
+    // pair extends that to the `Inline` variant so the toggle clear
+    // contract is asserted for all three terminal save outcomes the
+    // dialog can show (`Rollback`, `DurabilityWarning`, `Inline`).
+    let mut state = SettingsState::new(defaults());
+    let _ = state.toggle_auto_lock_enabled(true);
+    let _ = state.apply_save_result(
+        AcceptedChange::AutoLockEnabled(true),
+        Err(PaladinError::IoError {
+            operation: "vault_save",
+            source: std::io::Error::other("disk full"),
+        }),
+    );
+    assert!(matches!(
+        state.last_outcome(),
+        Some(SaveOutcome::Inline { .. })
+    ));
+
+    let _ = state.toggle_auto_lock_enabled(false);
+    assert!(
+        state.last_outcome().is_none(),
+        "new toggle clears the prior inline io_error so the red subtitle does not linger",
+    );
+}
+
+#[test]
 fn format_settings_dialog_spinner_wrap_returns_false() {
     // `gtk::SpinButton::wrap` (surfaced through `adw::SpinRow`)
     // defaults to `FALSE` — once the value reaches `upper` (or
