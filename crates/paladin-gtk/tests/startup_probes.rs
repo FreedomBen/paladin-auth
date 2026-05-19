@@ -7764,3 +7764,95 @@ fn format_app_about_dialog_debug_info_filename_has_no_embedded_whitespace() {
         );
     }
 }
+
+#[test]
+fn format_app_about_dialog_url_helpers_are_ascii_only() {
+    // Cross-helper defense-in-depth sibling looping over the
+    // three `AdwAboutDialog` footer URL helpers
+    // (`format_app_about_dialog_website`,
+    // `format_app_about_dialog_issue_url`,
+    // `format_app_about_dialog_support_url`) and pinning each
+    // value as ASCII characters only.
+    //
+    // Sibling of `format_app_about_dialog_url_helpers_contain_no_embedded_whitespace`
+    // (cross-URL pin against any whitespace byte) and the per-URL
+    // `_matches_cargo_pkg_*` (exact-value pin sourcing from
+    // `env!(CARGO_PKG_*)`) and
+    // `_is_non_empty_https_url[*_distinct*]` (positive shape pin
+    // on non-empty + HTTPS + no ASCII space + distinct from
+    // siblings) companions. Those companions catch the
+    // wrong-source, empty, plain-`http://`, embedded-whitespace,
+    // and same-as-sibling regressions but leave the
+    // non-ASCII-byte edge case ungated.
+    //
+    // RFC 3986 §2.1 reserves the URI character set to a subset
+    // of ASCII; non-ASCII characters in a URL must be
+    // percent-encoded into their UTF-8 byte representation
+    // before transport (e.g. the literal `é` is `%C3%A9`).
+    // Likewise an internationalized-domain-name (IDN) label
+    // must be encoded via Punycode (RFC 3492) into its
+    // ASCII-compatible form (`xn--…`) before the DNS resolver
+    // can route the request. A regression that hand-spelled a
+    // URL helper with a raw non-ASCII byte — e.g.
+    // `"https://раладин.example"` where the host label uses
+    // Cyrillic-lookalike letters — would slip past the
+    // `_is_non_empty_https_url[*_distinct*]` companions
+    // (still non-empty, still starts with `https://`, still
+    // distinct from siblings) and the
+    // `_url_helpers_contain_no_embedded_whitespace` companion
+    // (the lookalike bytes are non-whitespace) while either:
+    //
+    // * Failing DNS resolution at the click site because the
+    //   resolver receives a non-ASCII hostname it can't route
+    //   (modern browsers Punycode-encode IDN labels at the
+    //   address-bar layer, but Adwaita's `AdwAboutDialog` hands
+    //   the URL verbatim to `gtk_show_uri` / `xdg-open` which
+    //   may or may not perform the encoding depending on the
+    //   downstream URL-handler), surfacing as a confusing
+    //   "page can't be found" rather than as a clear URL-shape
+    //   regression at build time.
+    // * Or — far worse — routing to a homograph-attack domain
+    //   that visually mimics the canonical host but resolves to
+    //   a different IP. Pinning ASCII-only here is a forcing
+    //   function against this entire class of regression: any
+    //   future maintainer who wants to use an IDN host must
+    //   pre-encode the label to its Punycode form so the test
+    //   continues to pass.
+    //
+    // The current `env!("CARGO_PKG_HOMEPAGE")` /
+    // `env!("CARGO_PKG_REPOSITORY")` values are pure ASCII
+    // (Cargo accepts non-ASCII characters in those fields but
+    // the canonical Paladin workspace values are ASCII), so this
+    // test passes today and serves as a forcing function so any
+    // future hand-edit of the helpers — or any future workspace
+    // homepage / repository field change — stays ASCII-compatible
+    // for HTTP transport and DNS resolution. Mirror of the
+    // `_program_name_is_ascii_only`, `_application_icon_name_is_ascii_only`,
+    // `_version_is_ascii_only`, `_developer_name_is_ascii_only`,
+    // `_debug_info_filename_is_ascii_only`, and
+    // `_debug_info_is_ascii_only` siblings on the dialog header
+    // / debug-info sides; together they pin the ASCII-shape
+    // contract across every dialog-routed identifier-shaped /
+    // identifier-routed helper against a single source of truth,
+    // closing the Unicode-lookalike + homograph regression
+    // surface for every dialog-routed string the user can
+    // either read, click, or paste into a third-party tool.
+    use paladin_gtk::app::model::{
+        format_app_about_dialog_issue_url, format_app_about_dialog_support_url,
+        format_app_about_dialog_website,
+    };
+
+    for (label, url) in [
+        ("website", format_app_about_dialog_website()),
+        ("issue_url", format_app_about_dialog_issue_url()),
+        ("support_url", format_app_about_dialog_support_url()),
+    ] {
+        for (idx, ch) in url.char_indices() {
+            assert!(
+                ch.is_ascii(),
+                "AdwAboutDialog {label} must use ASCII characters only so the URL stays valid per RFC 3986 §2.1 without any raw non-ASCII bytes that some downstream URL-handlers (gtk_show_uri / xdg-open) may not Punycode-encode at the click site — and so the canonical Paladin host cannot drift into a Unicode-lookalike homograph that resolves to a different domain than the user expects to visit; got non-ASCII char {ch:?} (U+{:04X}) at byte offset {idx} in {url:?}",
+                ch as u32,
+            );
+        }
+    }
+}
