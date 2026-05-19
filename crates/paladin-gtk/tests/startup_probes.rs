@@ -15750,3 +15750,96 @@ fn format_app_about_dialog_comments_does_not_contain_a_form_feed_byte() {
         "AdwAboutDialog comments must not contain the `\\x0C` form-feed byte (0x0C); a mid-string `\\x0C` slips past `_is_non_empty_single_line_distinct_from_program_name` (which only checks `\\n` and surrounding whitespace, and although `char::is_whitespace()` matches U+000C FF it only rejects boundary occurrences), past `_does_not_end_with_a_period_per_libadwaita_convention` (which only constrains the trailing byte), past `_is_ascii_only` (because `\\x0C` is ASCII), and past `_does_not_contain_a_null_byte` / `_does_not_contain_a_horizontal_tab_byte` / `_does_not_contain_a_carriage_return_byte` / `_does_not_contain_a_vertical_tab_byte` (which each name a different byte specifically); it would render as a literal control glyph in the dialog-header description row, propagate via `CARGO_PKG_DESCRIPTION` into Cargo metadata scrapers and `gnome-software` description rows (with text-paginator pipelines treating it as a hard page break), and break screen-reader description announcements at the byte boundary; got {comments:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_developers_entries_do_not_contain_a_form_feed_byte() {
+    // Defense-in-depth per-entry-loop sibling of the just-added
+    // `_developer_name_does_not_contain_a_form_feed_byte`,
+    // `_copyright_does_not_contain_a_form_feed_byte`, and
+    // `_comments_does_not_contain_a_form_feed_byte` companions on
+    // the same C0 control-byte cycle, extending the developers-
+    // array byte-cleanliness contract past the just-completed
+    // `{null / horizontal-tab / carriage-return / vertical-tab}`
+    // entry-quadruple to the next C0 control byte. The form-feed
+    // byte `\x0C` (0x0C) sits one step above VT (0x0B) and one
+    // step below CR (0x0D) in the ASCII C0 block; like its
+    // siblings it is a non-printable control byte with no
+    // legitimate use inside a human-readable GNOME credits-page
+    // contributor-name entry.
+    //
+    // None of the existing developers companions name the `\x0C`
+    // byte directly per entry:
+    //   - `_is_non_empty_array_of_non_empty_single_line_names`
+    //     pins each entry as non-empty and single-line via
+    //     `!name.contains('\n')` — `\x0C` is not `\n`. The
+    //     surrounding-whitespace guards
+    //     (`!name.starts_with(char::is_whitespace)` and
+    //     `!name.ends_with(char::is_whitespace)`) reject `\x0C`
+    //     *only* at the boundary bytes (since
+    //     `char::is_whitespace()` under Rust's Unicode definition
+    //     matches U+000C FF) — but a mid-string `\x0C`
+    //     (`"Benjamin\x0CPorter"`) sits between the boundaries
+    //     and slips past both guards;
+    //   - `_entries_are_distinct` / `_does_not_contain_developer_name`
+    //     / `_does_not_contain_app_id` /
+    //     `_does_not_contain_program_name` / `_lists_benjamin_porter`
+    //     companions guard against content-shape regressions but
+    //     say nothing about the `\x0C` byte;
+    //   - `_entries_do_not_contain_a_null_byte` /
+    //     `_entries_do_not_contain_a_horizontal_tab_byte` /
+    //     `_entries_do_not_contain_a_carriage_return_byte` /
+    //     `_entries_do_not_contain_a_vertical_tab_byte` siblings
+    //     each name a different byte specifically.
+    //
+    // A regression that landed `["Benjamin\x0CPorter"]` (a form-
+    // feed byte lifted from a legacy CONTRIBUTORS file authored
+    // on a line-printer terminal that used `\x0C` to advance to
+    // the next page between sections of a printed contributors
+    // list, a `concat!("Benjamin", "\x0C", "Porter")` form, a
+    // `pandoc`-generated text dump that preserved `\x0C` page-
+    // break markers, or a hand-edited helper that pasted from a
+    // page-broken text file) would mis-render in multiple
+    // downstream surfaces: (1) the GLib-backed
+    // `AdwAboutDialog::set_developers` setter hands the array to
+    // GTK and Pango renders each entry as a credits-page row — a
+    // stray `\x0C` byte in the middle of a contributor name
+    // would render as a literal control glyph (a hollow box or
+    // tofu-like placeholder), breaking the credits-page
+    // contributor-name layout; (2) any tooling that scrapes the
+    // credits-page contributor list (release-note generators,
+    // contributor-attribution crawlers, GNOME `gnome-software`
+    // credit aggregators) would propagate the stray `\x0C` byte
+    // into the consumer's stream, with the additional risk that
+    // text-paginator pipelines treat the `\x0C` as a hard page
+    // break and split the contributor name mid-string in printed
+    // reports; (3) screen readers that announce the credits-page
+    // contributor names read the `\x0C` as a literal control
+    // character or — on some implementations — as a section-break
+    // announcement, breaking the contributor-name accessibility-
+    // tree announcement at the byte boundary.
+    //
+    // Pinning the no-`\x0C` invariant across every contributor
+    // entry in a single per-entry loop surfaces the regression
+    // with a message naming both the offending byte and the
+    // affected entry index at build time rather than as a
+    // downstream credits-page rendering artifact, attribution-
+    // scraper miss, or screen-reader announcement break.
+    // Current helper returns the literal `["Benjamin Porter"]`
+    // (no `\x0C` byte), so this test passes today and serves as
+    // a forcing function so any future override of the helper —
+    // or any future contributor addition — stays free of form-
+    // feed bytes. Continues the developers-array C0 control-byte
+    // cycle past the just-completed `{null / horizontal-tab /
+    // carriage-return / vertical-tab}` quadruple so each entry's
+    // byte-composition contract pins each forbidden control byte
+    // against a single source of truth.
+    use paladin_gtk::app::model::format_app_about_dialog_developers;
+
+    let developers = format_app_about_dialog_developers();
+    for (idx, entry) in developers.iter().enumerate() {
+        assert!(
+            !entry.contains('\x0C'),
+            "AdwAboutDialog developers entry at index {idx} must not contain the `\\x0C` form-feed byte (0x0C); a mid-string `\\x0C` slips past `_is_non_empty_array_of_non_empty_single_line_names` (which only checks `\\n` and rejects boundary whitespace via `char::is_whitespace()` — boundary-only, not mid-string), past `_entries_are_distinct` / `_does_not_contain_developer_name` / `_does_not_contain_app_id` / `_does_not_contain_program_name` / `_lists_benjamin_porter` (which only constrain content shape), and past `_entries_do_not_contain_a_null_byte` / `_entries_do_not_contain_a_horizontal_tab_byte` / `_entries_do_not_contain_a_carriage_return_byte` / `_entries_do_not_contain_a_vertical_tab_byte` (which name `\\0`, `\\t`, `\\r`, and `\\x0B` specifically); it would render as a literal control glyph in the credits-page \"Developers\" row, propagate into downstream attribution scrapers and `gnome-software` credit aggregators (with text-paginator pipelines treating it as a hard page break), and break screen-reader contributor-name announcements at the byte boundary; got {entry:?}",
+        );
+    }
+}
