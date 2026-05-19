@@ -553,6 +553,15 @@ impl SimpleComponent for AppModel {
 
         let widgets = view_output!();
 
+        // Attach the primary menu model to the header-bar
+        // `gtk::MenuButton` after `view_output!()` so the
+        // model is built once via `build_app_primary_menu_model`
+        // and the widget binding never hand-spells the
+        // `set_menu_model` call site. The matching `app.<bare>`
+        // action targets are wired through
+        // `build_app_window_action_group` in a follow-up commit.
+        wire_app_menu_button_menu_model(&widgets.menu_button);
+
         let account_list = if state.is_unlocked() {
             let controller = AccountListComponent::builder()
                 .launch(AccountListInit { rows })
@@ -2431,6 +2440,35 @@ pub fn apply_app_add_button_visibility(button: &gtk::Button, state: &AppState) {
 /// Pure side-effect helper (no return value).
 pub fn apply_app_add_button_sensitive(button: &gtk::Button, state: &AppState) {
     button.set_sensitive(format_app_add_button_sensitive(state));
+}
+
+/// Wire the primary-menu [`gtk::gio::Menu`] model returned by
+/// [`build_app_primary_menu_model`] onto an existing
+/// header-bar [`gtk::MenuButton`].
+///
+/// Calls [`gtk::MenuButton::set_menu_model`] on `menu_button`
+/// with the [`gtk::gio::Menu`] built by
+/// [`build_app_primary_menu_model`] (the six pinned entries
+/// Import, Export, Passphrase, Preferences, About, Quit). The
+/// widget binding calls this helper from `init` after
+/// `view_output!()` so the primary menu surface is attached
+/// once, alongside the [`build_app_window_action_group`]
+/// insert that wires the matching `app.<bare>` action targets.
+///
+/// Centralizing the wiring in one helper means the widget
+/// binding never hand-spells the
+/// `menu_button.set_menu_model(Some(&build_app_primary_menu_model()))`
+/// call site — a future change to the menu construction (e.g.
+/// adding a separator or a sub-section) reverberates through
+/// [`build_app_primary_menu_model`] alone. Sibling of
+/// [`build_app_window_action_group`] on the action-group
+/// wiring side; together they pin both halves of the primary-
+/// menu surface (the `gio::Menu` model and its companion
+/// `gio::SimpleActionGroup`) against a single source of truth.
+///
+/// Pure side-effect helper (no return value).
+pub fn wire_app_menu_button_menu_model(menu_button: &gtk::MenuButton) {
+    menu_button.set_menu_model(Some(&build_app_primary_menu_model()));
 }
 
 /// Build the single application-window

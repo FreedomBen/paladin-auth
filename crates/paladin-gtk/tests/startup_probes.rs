@@ -2155,6 +2155,29 @@ fn apply_app_add_action_sensitivity_updates_existing_action_for_a_new_state() {
 }
 
 #[test]
+fn wire_app_menu_button_menu_model_signature_takes_menu_button_reference() {
+    // Per §"libadwaita usage" and §"Component tree": the
+    // header-bar primary menu (`gtk::MenuButton` driven by
+    // `gio::Menu`) carries the six pinned entries (Import,
+    // Export, Passphrase, Preferences, About Paladin, Quit).
+    // This helper attaches the menu model returned by
+    // `build_app_primary_menu_model` to a
+    // [`gtk::MenuButton::set_menu_model`] target so the widget
+    // binding does not hand-spell a duplicate construction of
+    // the menu in `init`. The compile-only signature check
+    // here pins the helper's shape — `fn(&gtk::MenuButton)` —
+    // without instantiating a second `gtk::MenuButton` widget
+    // in the test process (creating multiple GTK widgets
+    // across sibling tests in this binary destabilizes the
+    // GTK type registration). The `gtk_smoke.rs` `xvfb-run`
+    // smoke test covers the end-to-end menu model attachment
+    // by mounting the full `AppModel`, while the per-item
+    // wiring is pinned by
+    // `build_app_primary_menu_model_appends_every_format_app_primary_menu_entries_pair`.
+    let _: fn(&gtk4::MenuButton) = paladin_gtk::app::model::wire_app_menu_button_menu_model;
+}
+
+#[test]
 fn apply_app_add_button_sensitive_updates_existing_button_for_a_new_state() {
     // Per §"libadwaita usage" and §"Component tree": when
     // `AppModel` transitions between states (e.g. Unlocked →
