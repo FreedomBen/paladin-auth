@@ -10968,3 +10968,80 @@ fn format_app_about_dialog_release_notes_version_does_not_contain_a_null_byte() 
         "AdwAboutDialog release_notes_version must not contain the `\\0` null byte (which would route through GLib's null-terminated `g_strdup` layer in `set_release_notes_version`, truncate the dialog's \"What's New\" header section at the first `\\0`, mislead the user about which release they just upgraded to, and silently mis-key changelog-aggregator scraping output); got {release_notes_version:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_developers_entries_do_not_contain_a_null_byte() {
+    // Defense-in-depth mirror of the just-added
+    // `_program_name_does_not_contain_a_null_byte` /
+    // `_version_does_not_contain_a_null_byte` /
+    // `_application_icon_name_does_not_contain_a_null_byte` /
+    // `_developer_name_does_not_contain_a_null_byte` /
+    // `_copyright_does_not_contain_a_null_byte` /
+    // `_comments_does_not_contain_a_null_byte` /
+    // `_url_helpers_do_not_contain_a_null_byte` /
+    // `_release_notes_version_does_not_contain_a_null_byte` /
+    // `_debug_info_does_not_contain_a_null_byte` /
+    // `_debug_info_filename_does_not_contain_a_null_byte`
+    // companions on the credits-page contributor-list side.
+    // The `_is_non_empty_array_of_non_empty_single_line_names`
+    // companion pins each entry as non-empty and single-line
+    // — the `\0` byte (0x00) is neither empty nor `\n` / `\r`,
+    // so a regression that landed `["Benjamin\0 Porter"]`
+    // (null-byte injection from a `CString::new` round-trip
+    // that didn't strip the trailing null, or a
+    // `concat!(_, "\0", _)` form) would slip past
+    // `_is_non_empty_array_of_non_empty_single_line_names`,
+    // `_does_not_contain_developer_name` (the
+    // `"The Paladin contributors"` collective string is not a
+    // substring of any plausible per-developer entry, with or
+    // without a null byte), `_entries_are_distinct` (single-
+    // entry list is trivially distinct), `_does_not_contain_app_id`
+    // (the reverse-DNS `org.tamx.Paladin.Gui` is not a
+    // substring of any plausible per-developer entry),
+    // `_does_not_contain_program_name` (an `"Paladin"`-only
+    // substring guard, which a `"Benjamin\0 Porter"` payload
+    // satisfies), or `_lists_benjamin_porter` (only valid
+    // when no manual override is in place — a hand-edited
+    // helper that swapped the literal for a string with a
+    // null byte would defeat the matching test).
+    //
+    // Null bytes in the credits-page contributor entries
+    // would mis-render in multiple downstream surfaces: (1)
+    // the GLib-backed `AdwAboutDialog::set_developers` setter
+    // hands the array to GTK as a `&[&str]` which is
+    // internally bridged to GLib's null-terminated strv via
+    // `g_strdupv` — each entry's `g_strdup` may truncate at
+    // the first `\0` byte, rendering `"Benjamin\0 Porter"`
+    // as `"Benjamin"` in the credits-page "Developers"
+    // section, misattributing the contributor as a single-
+    // name developer rather than the full credited name; (2)
+    // any tooling that scrapes the credits-page contributor
+    // list (release-note generators, contributor-attribution
+    // crawlers, GNOME `gnome-software` credit aggregators)
+    // would silently lose the surname portion of each
+    // truncated entry; (3) future scrolling-credits widgets
+    // that depend on per-entry text-width calculations would
+    // measure the truncated entry width and render layout
+    // bugs.
+    //
+    // Pinning the no-null-byte invariant across every
+    // contributor entry in a single per-entry loop surfaces
+    // the regression with a message naming both the offending
+    // byte and the affected entry index at build time rather
+    // than as a downstream truncation of the credits-page
+    // section, downstream attribution-scraper miss, or layout
+    // bug. Current helper returns the literal
+    // `["Benjamin Porter"]` (no `\0` byte), so this test
+    // passes today and serves as a forcing function so any
+    // future override of the helper — or any future
+    // contributor addition — stays free of null bytes.
+    use paladin_gtk::app::model::format_app_about_dialog_developers;
+
+    let developers = format_app_about_dialog_developers();
+    for (idx, entry) in developers.iter().enumerate() {
+        assert!(
+            !entry.contains('\0'),
+            "AdwAboutDialog developers entry at index {idx} must not contain the `\\0` null byte (which would route through GLib's null-terminated `g_strdupv` / `g_strdup` layer in `set_developers`, truncate the credits-page \"Developers\" entry at the first `\\0`, misattribute the contributor as a single-name developer, and silently lose the surname in downstream attribution scrapers); got {entry:?}",
+        );
+    }
+}
