@@ -10807,3 +10807,99 @@ fn format_app_about_dialog_comments_does_not_contain_a_null_byte() {
         "AdwAboutDialog comments must not contain the `\\0` null byte (which would route through GLib's null-terminated `g_strdup` layer in `set_comments`, truncate the dialog-header tagline row at the first `\\0`, truncate the `.deb` / `.rpm` `Description:` field that mirrors `CARGO_PKG_DESCRIPTION`, and fail the `appstreamcli validate` pass on `<summary>` control bytes); got {comments:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_url_helpers_do_not_contain_a_null_byte() {
+    // Cross-helper defense-in-depth sibling looping over the
+    // three `AdwAboutDialog` footer URL helpers
+    // (`format_app_about_dialog_website`,
+    // `format_app_about_dialog_issue_url`,
+    // `format_app_about_dialog_support_url`) and pinning each
+    // value as free of the `\0` null byte.
+    //
+    // Mirror of the just-added per-helper
+    // `_program_name_does_not_contain_a_null_byte` /
+    // `_version_does_not_contain_a_null_byte` /
+    // `_application_icon_name_does_not_contain_a_null_byte` /
+    // `_developer_name_does_not_contain_a_null_byte` /
+    // `_copyright_does_not_contain_a_null_byte` /
+    // `_comments_does_not_contain_a_null_byte` /
+    // `_debug_info_does_not_contain_a_null_byte` /
+    // `_debug_info_filename_does_not_contain_a_null_byte`
+    // companions, structured as a single cross-helper loop to
+    // mirror the existing
+    // `_url_helpers_are_ascii_only` /
+    // `_url_helpers_contain_no_embedded_whitespace` /
+    // `_url_helpers_do_not_end_with_a_trailing_slash`
+    // cross-helper companions on the URL side. The
+    // `_url_helpers_are_ascii_only` companion pins each byte
+    // as ASCII (`0x00`-`0x7F`) — the null byte `\0` (0x00) is
+    // ASCII, so a regression that landed `"https://example.\0com"`
+    // (null-byte injection from a `CString::new` round-trip
+    // that didn't strip the trailing null, or a
+    // `concat!(env!("CARGO_PKG_REPOSITORY"), "\0/issues")`
+    // form fed through a build-time override of Cargo
+    // metadata) would slip past the
+    // `_url_helpers_are_ascii_only` companion,
+    // `_url_helpers_contain_no_embedded_whitespace` (`\0` is
+    // not whitespace),
+    // `_url_helpers_do_not_end_with_a_trailing_slash` (`\0` is
+    // not `/`), or the per-URL
+    // `_is_non_empty_https_url[*_distinct*]` and
+    // `_matches_cargo_pkg_*` companions (only valid when no
+    // manual override is in place — a hand-edited helper that
+    // swapped the `env!` source for a string-literal with a
+    // null byte would defeat the matching tests).
+    //
+    // Null bytes in the URL helpers would mis-render in
+    // multiple downstream surfaces: (1) the GLib-backed
+    // `AdwAboutDialog::set_website` /
+    // `AdwAboutDialog::set_issue_url` /
+    // `AdwAboutDialog::set_support_url` setters route through
+    // `g_strdup` (null-terminated) and may truncate the
+    // displayed link target at the first `\0` byte (rendering
+    // `"https://example.\0com/issues"` as
+    // `"https://example."`) — silently breaking the link;
+    // (2) the matching `gtk_show_uri` / `xdg-open` click-site
+    // routing receives the truncated URL and either fails to
+    // resolve or worse routes the click to a different
+    // host than the user expects (`"https://example."` is
+    // not a valid hostname so the resolver fails open with a
+    // browser-default fallback page, the actual destination
+    // depends on the configured handler); (3) any tooling
+    // that scrapes the about dialog's URL slots
+    // (release-tracker bots, license-attribution aggregators)
+    // would silently lose the path / query portion of the
+    // URL.
+    //
+    // Pinning the no-null-byte invariant across all three URL
+    // helpers in a single cross-helper loop surfaces the
+    // regression with a message naming the offending byte and
+    // the affected slot at build time rather than as a
+    // downstream broken link, an unexpected click-site host,
+    // or as silently truncated URL scraper output. Current
+    // helpers return the literal `env!("CARGO_PKG_HOMEPAGE")`
+    // / `concat!(env!("CARGO_PKG_REPOSITORY"), "/issues")` /
+    // `concat!(env!("CARGO_PKG_REPOSITORY"), "/discussions")`
+    // values (Cargo accepts non-control characters in those
+    // fields and the canonical Paladin workspace values are
+    // null-byte-free), so this test passes today and serves
+    // as a forcing function so any future hand-edit of the
+    // helpers — or any future workspace homepage / repository
+    // field change — stays free of null bytes.
+    use paladin_gtk::app::model::{
+        format_app_about_dialog_issue_url, format_app_about_dialog_support_url,
+        format_app_about_dialog_website,
+    };
+
+    for (label, url) in [
+        ("website", format_app_about_dialog_website()),
+        ("issue_url", format_app_about_dialog_issue_url()),
+        ("support_url", format_app_about_dialog_support_url()),
+    ] {
+        assert!(
+            !url.contains('\0'),
+            "AdwAboutDialog {label} must not contain the `\\0` null byte (which would route through GLib's null-terminated `g_strdup` layer in `set_website` / `set_issue_url` / `set_support_url`, truncate the displayed link target at the first `\\0`, mis-route `gtk_show_uri` / `xdg-open` click-site resolution to either a broken or unexpected host, and silently lose path / query portions in downstream URL scrapers); got {url:?}",
+        );
+    }
+}
