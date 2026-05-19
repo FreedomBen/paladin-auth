@@ -24170,3 +24170,122 @@ fn format_app_about_dialog_comments_does_not_contain_an_end_of_transmission_byte
         "AdwAboutDialog comments must not contain the `\\x04` end-of-transmission byte (0x04); like ENQ, ACK, and BEL, EOT is NOT matched by `char::is_whitespace()` (Unicode returns false for U+0004 EOT), so the comments helper's transitive whitespace-boundary / single-line protections do NOT cover EOT; a mid-string `\\x04` slips past `_is_non_empty_single_line_distinct_from_program_name` (which only checks `\\n` and uses `char::is_whitespace()` for boundary checks — neither catches `\\x04`), past `_is_ascii_only` (because `\\x04` is ASCII), past `_does_not_end_with_a_period_per_libadwaita_convention` (which only constrains the trailing byte), past `_matches_cargo_pkg_description` (a future workspace description that introduced `\\x04` would propagate the byte and this equality pin would still pass), and past `_does_not_contain_a_null_byte` / `_does_not_contain_a_horizontal_tab_byte` / `_does_not_contain_a_carriage_return_byte` / `_does_not_contain_a_vertical_tab_byte` / `_does_not_contain_a_form_feed_byte` / `_does_not_contain_a_backspace_byte` / `_does_not_contain_a_line_feed_byte` / `_does_not_contain_a_bell_byte` / `_does_not_contain_an_acknowledge_byte` / `_does_not_contain_an_enquiry_byte` (which each name a different byte specifically); it would render as a literal control glyph in the dialog header comments row, prematurely terminate in-flight transmissions if dumped through a serial-bridged TTY treating `\\x04` as an EOT framing byte (truncating the comments mid-string), trigger pty-cooked-mode EOF-truncation surprises in tooling capturing the elevator-pitch through a canonical-mode terminal, break screen-reader comments announcements at the byte boundary, propagate into downstream changelog aggregators and AppStream `<summary>` extractors, and trigger AppStream `<summary>` validation rejection at packaging time; got {comments:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_developers_entries_do_not_contain_an_end_of_transmission_byte() {
+    // Defense-in-depth per-entry-loop sibling extending the
+    // developers-array byte-cleanliness contract past the just-
+    // completed `{null / horizontal-tab / carriage-return /
+    // vertical-tab / form-feed / backspace / line-feed / bell /
+    // acknowledge / enquiry}` entry-decuple to the end-of-
+    // transmission byte `\x04` (0x04), continuing the non-
+    // whitespace-classified C0 control-byte cycle past ENQ
+    // (0x05) for each entry. Like ENQ, ACK, and BEL, EOT is
+    // NOT matched by `char::is_whitespace()` (Unicode treats
+    // EOT as a control byte, not whitespace), so the
+    // `_is_non_empty_array_of_non_empty_single_line_names`
+    // surrounding-whitespace boundary guards
+    // (`!name.starts_with(char::is_whitespace)` and
+    // `!name.ends_with(char::is_whitespace)`) do NOT reject a
+    // leading or trailing `\x04` per entry — making the end-
+    // of-transmission byte strictly as dangerous as enquiry,
+    // acknowledge, backspace, and bell for each entry.
+    //
+    // None of the existing developers companions name the
+    // `\x04` byte directly per entry:
+    //   - `_is_non_empty_array_of_non_empty_single_line_names`
+    //     pins each entry as non-empty and single-line via
+    //     `!name.contains('\n')` — `\x04` is not `\n`. The
+    //     surrounding-whitespace boundary guards use
+    //     `char::is_whitespace()`, which returns *false* for
+    //     U+0004 EOT, so neither guard rejects `\x04` even at
+    //     the boundary;
+    //   - `_entries_are_distinct` / `_does_not_contain_developer_name`
+    //     / `_does_not_contain_app_id` /
+    //     `_does_not_contain_program_name` / `_lists_benjamin_porter`
+    //     guard against content-shape regressions but say
+    //     nothing about embedded `\x04` bytes;
+    //   - `_entries_do_not_contain_a_null_byte` /
+    //     `_entries_do_not_contain_a_horizontal_tab_byte` /
+    //     `_entries_do_not_contain_a_carriage_return_byte` /
+    //     `_entries_do_not_contain_a_vertical_tab_byte` /
+    //     `_entries_do_not_contain_a_form_feed_byte` /
+    //     `_entries_do_not_contain_a_backspace_byte` /
+    //     `_entries_do_not_contain_a_line_feed_byte` /
+    //     `_entries_do_not_contain_a_bell_byte` /
+    //     `_entries_do_not_contain_an_acknowledge_byte` /
+    //     `_entries_do_not_contain_an_enquiry_byte` siblings
+    //     each name a different byte specifically.
+    //
+    // A regression that landed `["Benjamin\x04Porter"]` (an
+    // end-of-transmission byte lifted from a `script(1)`
+    // typescript capturing raw `\x04` EOT framing bytes from a
+    // CI build that bridged a serial console mid-contributor-
+    // name edit during an Xmodem-style transfer, a
+    // `concat!("Benjamin", "\x04", "Porter")` form mirroring a
+    // stream-segment-delimited contributor edit, or a hand-
+    // edited helper that pasted from a terminal session
+    // interfacing with a protocol bridge preserving EOT
+    // framing bytes) would mis-render in multiple downstream
+    // surfaces: (1) the GLib-backed
+    // `AdwAboutDialog::set_developers` setter hands the array
+    // to GTK and Pango renders each entry as a credits-page
+    // row — a stray `\x04` byte in the middle of a
+    // contributor name would render as a literal control
+    // glyph (a hollow box or tofu-like placeholder), breaking
+    // the credits-page contributor-name layout; (2) when the
+    // credits-page is dumped through a serial-bridged TTY (CI
+    // logs over a serial console, an out-of-band debugging
+    // session), the `\x04` byte may be intercepted by the
+    // receiving end as an end-of-transmission framing
+    // indicator and prematurely terminate the in-flight
+    // transmission at the byte boundary, truncating the
+    // contributor name mid-string and confusing protocol-
+    // bridging tooling that treats EOT as a session-
+    // terminator; on POSIX terminals operating in canonical
+    // (cooked) mode where `VEOF` defaults to `^D` / `\x04`,
+    // the byte is the EOF marker that closes the upstream
+    // read — surfacing as a truncated contributor name in any
+    // tooling that captures the credits-page through a pty in
+    // cooked mode; (3) any tooling that scrapes the credits-
+    // page contributor list (release-note generators,
+    // contributor-attribution crawlers, GNOME
+    // `gnome-software` credit aggregators) would propagate
+    // the stray `\x04` byte into the consumer's stream and
+    // trigger the same control-glyph / EOF-truncation /
+    // protocol-confusion bug across every downstream surface;
+    // (4) screen readers that announce the credits-page
+    // contributor names render the byte as a literal control
+    // character announcement, breaking the contributor-name
+    // accessibility-tree announcement at the byte boundary.
+    //
+    // Pinning the no-`\x04` invariant across every
+    // contributor entry in a single per-entry loop surfaces
+    // the regression with a message naming both the offending
+    // byte and the affected entry index at build time rather
+    // than as a downstream credits-page rendering artifact, a
+    // serial-protocol EOT-frame session-terminator collision
+    // through TTY dumps, a pty-cooked-mode EOF-truncation
+    // surprise, or a screen-reader announcement break.
+    // Current helper returns the literal
+    // `["Benjamin Porter"]` (no `\x04` byte), so this test
+    // passes today and serves as a forcing function so any
+    // future override of the helper — or any future
+    // contributor addition — stays free of end-of-
+    // transmission bytes. Continues the non-whitespace-
+    // classified C0 control-byte cycle past the just-
+    // completed `{null / horizontal-tab / carriage-return /
+    // vertical-tab / form-feed / backspace / line-feed / bell
+    // / acknowledge / enquiry}` decuple so each entry's byte-
+    // composition contract pins each forbidden control byte
+    // against a single source of truth.
+    use paladin_gtk::app::model::format_app_about_dialog_developers;
+
+    let developers = format_app_about_dialog_developers();
+    for (idx, entry) in developers.iter().enumerate() {
+        assert!(
+            !entry.contains('\x04'),
+            "AdwAboutDialog developers entry at index {idx} must not contain the `\\x04` end-of-transmission byte (0x04); like ENQ, ACK, and BEL, EOT is NOT matched by `char::is_whitespace()` (Unicode returns false for U+0004 EOT), so a mid-string `\\x04` slips past `_is_non_empty_array_of_non_empty_single_line_names` (which only checks `\\n` per entry and uses `char::is_whitespace()` for boundary checks — neither catches `\\x04`), past `_entries_are_distinct` / `_does_not_contain_developer_name` / `_does_not_contain_app_id` / `_does_not_contain_program_name` / `_lists_benjamin_porter` (which only constrain content shape), and past `_entries_do_not_contain_a_null_byte` / `_entries_do_not_contain_a_horizontal_tab_byte` / `_entries_do_not_contain_a_carriage_return_byte` / `_entries_do_not_contain_a_vertical_tab_byte` / `_entries_do_not_contain_a_form_feed_byte` / `_entries_do_not_contain_a_backspace_byte` / `_entries_do_not_contain_a_line_feed_byte` / `_entries_do_not_contain_a_bell_byte` / `_entries_do_not_contain_an_acknowledge_byte` / `_entries_do_not_contain_an_enquiry_byte` (which each name a different byte specifically); it would render as a literal control glyph in the credits-page \"Developers\" row, prematurely terminate in-flight transmissions if dumped through a serial-bridged TTY treating `\\x04` as an EOT framing byte (truncating the contributor name mid-string), trigger pty-cooked-mode EOF-truncation surprises in tooling capturing the credits-page through a canonical-mode terminal, propagate into downstream attribution scrapers and `gnome-software` credit aggregators, and break screen-reader contributor-name announcements at the byte boundary; got {entry:?}",
+        );
+    }
+}
