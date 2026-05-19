@@ -1941,6 +1941,52 @@ fn format_app_window_accelerator_bindings_targets_are_distinct() {
 }
 
 #[test]
+fn format_app_window_accelerator_bindings_parse_via_gtk_accelerator_parse() {
+    // Every accelerator spelling returned by
+    // `format_app_window_accelerator_bindings` is handed verbatim
+    // to `gio::Application::set_accels_for_action`. A typo in
+    // the helper — `"<Control>nn"`, `"<Ctrll>n"`, an unknown
+    // keysym — would silently unbind the shortcut at runtime
+    // rather than failing at compile time. Round-tripping each
+    // string through `gtk4::accelerator_parse` here surfaces
+    // any such drift with a concrete failure message naming
+    // both the offending accelerator and the action target it
+    // was paired with, so a future typo lands as a failed test
+    // instead of as a silently-missing keyboard shortcut.
+    //
+    // `gtk4::accelerator_parse` returns `(keyval, modifiers)`
+    // and produces a non-`None` result for valid spellings;
+    // we treat any parse failure or `(0, _)` keyval as a typo.
+    // `gtk4::init` is invoked defensively before parsing so the
+    // GDK key-symbol table is loaded; CI runs under `xvfb-run`
+    // and a dev environment without a display server skips the
+    // assertions rather than failing (the `xvfb-run`-driven
+    // `tests/gtk_smoke.rs` still covers the end-to-end
+    // registration).
+    use gtk4::glib::translate::IntoGlib;
+    use paladin_gtk::app::model::format_app_window_accelerator_bindings;
+
+    if gtk4::init().is_err() {
+        println!("skipping: gtk::init failed (no display server); CI covers this under xvfb-run");
+        return;
+    }
+
+    for (accel, target) in format_app_window_accelerator_bindings() {
+        let parsed = gtk4::accelerator_parse(accel);
+        assert!(
+            parsed.is_some(),
+            "accelerator {accel:?} for target {target:?} must parse via gtk::accelerator_parse",
+        );
+        let (keyval, _mods) = parsed.unwrap();
+        assert_ne!(
+            keyval.into_glib(),
+            0,
+            "accelerator {accel:?} for target {target:?} parsed but its keyval is 0 (unknown keysym); gtk::accelerator_parse treats unknown keysyms as a silent zero",
+        );
+    }
+}
+
+#[test]
 fn format_app_window_accelerator_bindings_accelerators_are_distinct() {
     // Defensive companion to
     // `format_app_window_accelerator_bindings_targets_are_distinct`
