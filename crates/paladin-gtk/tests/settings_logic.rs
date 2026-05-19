@@ -1834,6 +1834,66 @@ fn format_settings_dialog_spinner_digits_returns_zero() {
 }
 
 #[test]
+fn settings_state_stage_clears_last_outcome_for_prior_durability_warning() {
+    // Sibling of `settings_state_stage_clears_last_outcome_so_prior_inline_does_not_linger`
+    // (which exercises the `Rollback` arm) on the
+    // `DurabilityWarning` path. `stage_*` clears `last_outcome`
+    // unconditionally, but without a test exercising the warning
+    // variant a regression that special-cased the clear (e.g.
+    // "leave warnings since the file is on disk anyway") would
+    // land undetected — the amber subtitle would then linger under
+    // a spinner row the user is actively editing, which violates
+    // the §"Tests > Pure-logic unit tests >
+    // `tests/settings_logic.rs`" checklist intent that the
+    // subtitle disappears the moment the user acts again.
+    let mut state = SettingsState::new(defaults());
+    state.stage_auto_lock_secs(60);
+    let _ = state.resolve_debounce();
+    let _ = state.apply_save_result(
+        AcceptedChange::AutoLockSecs(60),
+        Err(PaladinError::SaveDurabilityUnconfirmed),
+    );
+    assert!(matches!(
+        state.last_outcome(),
+        Some(SaveOutcome::DurabilityWarning { .. })
+    ));
+
+    state.stage_auto_lock_secs(120);
+    assert!(
+        state.last_outcome().is_none(),
+        "new spinner stage clears the prior durability warning so the amber subtitle does not linger",
+    );
+}
+
+#[test]
+fn settings_state_toggle_clears_last_outcome_for_prior_durability_warning() {
+    // Mirrors `settings_state_stage_clears_last_outcome_for_prior_durability_warning`
+    // on the toggle side. `toggle_*` also clears `last_outcome`
+    // unconditionally; the test covers a regression where the
+    // toggle path special-cased warnings the same way a hypothetical
+    // stage-side bug would. Pairs with
+    // `settings_state_toggle_clears_last_outcome_so_prior_inline_does_not_linger`
+    // (the `Rollback` arm) so the toggle clear contract is asserted
+    // for both the error and warning variants the dialog can show.
+    let mut state = SettingsState::new(defaults());
+    let _ = state.toggle_auto_lock_enabled(true);
+    let _ = state.apply_save_result(
+        AcceptedChange::AutoLockEnabled(true),
+        Err(PaladinError::SaveDurabilityUnconfirmed),
+    );
+    assert!(matches!(
+        state.last_outcome(),
+        Some(SaveOutcome::DurabilityWarning { .. })
+    ));
+
+    let _ = state.toggle_auto_lock_enabled(false);
+    assert!(
+        state.last_outcome().is_none(),
+        "new toggle clears the prior durability warning so the amber subtitle does not linger",
+    );
+}
+
+#[test]
 fn format_settings_dialog_spinner_wrap_returns_false() {
     // `gtk::SpinButton::wrap` (surfaced through `adw::SpinRow`)
     // defaults to `FALSE` — once the value reaches `upper` (or
