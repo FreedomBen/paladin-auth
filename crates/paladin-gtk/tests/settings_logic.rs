@@ -668,6 +668,81 @@ fn apply_save_io_error_for_toggle_routes_to_inline_and_keeps_committed_unchanged
     assert!(!state.committed().auto_lock_enabled());
 }
 
+#[test]
+fn apply_save_io_error_for_clipboard_clear_secs_routes_to_inline_and_rolls_back_visible_value() {
+    // Mirrors `apply_save_io_error_routes_to_inline_and_rolls_back_visible_value`
+    // for the `ClipboardClearSecs` spinner. The original test
+    // pinned the spinner-path rollback for `AutoLockSecs`; this
+    // test pins the same behavior for the clipboard-clear-secs
+    // spinner so every `SettingsField` spinner variant has an
+    // io-error-path assertion that the visible value (driven by
+    // the pending buffer) snaps back to `committed` once the save
+    // fails inline.
+    //
+    // Without this companion test a regression that special-cased
+    // `commit_attempted` for `ClipboardClearSecs` on the `Inline`
+    // arm could land undetected on the clipboard-clear spinner
+    // even though the auto-lock spinner stayed correct.
+    let mut state = SettingsState::new(defaults());
+    state.stage_clipboard_clear_secs(45);
+    let _ = state.resolve_debounce();
+
+    let err = PaladinError::IoError {
+        operation: "vault_save",
+        source: std::io::Error::other("disk full"),
+    };
+    let outcome = state.apply_save_result(AcceptedChange::ClipboardClearSecs(45), Err(err));
+
+    let SaveOutcome::Inline { error, field } = outcome else {
+        panic!("expected Inline, got {outcome:?}");
+    };
+    assert_eq!(error.kind, ErrorKind::IoError);
+    assert_eq!(field, SettingsField::ClipboardClearSecs);
+
+    // Inline errors are non-mutating from the dialog's perspective —
+    // the on-disk file did not change, so the committed value
+    // stays at the pre-stage default (`clipboard_clear_secs = 30`).
+    assert_eq!(state.committed().clipboard_clear_secs(), 30);
+}
+
+#[test]
+fn apply_save_io_error_for_clipboard_clear_enabled_routes_to_inline_and_keeps_committed_unchanged()
+{
+    // Mirrors `apply_save_io_error_for_toggle_routes_to_inline_and_keeps_committed_unchanged`
+    // for the `ClipboardClearEnabled` toggle. The original test
+    // pinned the toggle-path inline rollback for `AutoLockEnabled`;
+    // this test pins the same behavior for the clipboard-clear
+    // toggle so every `SettingsField` toggle variant has an
+    // io-error-path assertion that `commit_attempted` does **not**
+    // promote on the `Inline` arm, so the visible toggle (which
+    // mirrors `committed.clipboard_clear_enabled` because toggles
+    // have no pending buffer) reverts to its pre-toggle state.
+    //
+    // Without this companion test a regression that special-cased
+    // `commit_attempted` for `ClipboardClearEnabled` could land
+    // undetected on the clipboard-clear toggle even though the
+    // auto-lock toggle stayed correct.
+    let mut state = SettingsState::new(defaults());
+    let _ = state.toggle_clipboard_clear_enabled(true);
+
+    let err = PaladinError::IoError {
+        operation: "vault_save",
+        source: std::io::Error::other("disk full"),
+    };
+    let outcome = state.apply_save_result(AcceptedChange::ClipboardClearEnabled(true), Err(err));
+
+    let SaveOutcome::Inline { error, field } = outcome else {
+        panic!("expected Inline, got {outcome:?}");
+    };
+    assert_eq!(error.kind, ErrorKind::IoError);
+    assert_eq!(field, SettingsField::ClipboardClearEnabled);
+
+    // The on-disk file did not change, so the committed toggle
+    // reverts to its pre-toggle state. `defaults()` returns
+    // `clipboard_clear_enabled = false`.
+    assert!(!state.committed().clipboard_clear_enabled());
+}
+
 // ---------------------------------------------------------------------------
 // SettingsComponent format helpers — `AdwPreferencesDialog` chrome
 // ---------------------------------------------------------------------------
