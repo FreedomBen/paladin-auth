@@ -6349,6 +6349,54 @@ fn format_app_window_accelerator_bindings_accelerators_contain_no_whitespace() {
 }
 
 #[test]
+fn format_app_header_bar_button_icon_names_use_lowercase_kebab_case() {
+    // Defense-in-depth sibling of the recent
+    // `format_app_header_bar_button_icon_names_are_valid_icon_theme_keys`
+    // (which pins non-empty, no-whitespace, no path separators, no
+    // dotfile prefix) and the per-button `_ends_with_symbolic_suffix`
+    // (HIG-conformant theming) / `_returns_X` (exact-value pin)
+    // companions. Those existing checks catch the obviously-broken
+    // icon-theme-key shapes but leave the casing / separator
+    // convention ungated.
+    //
+    // The freedesktop icon-theme spec requires icon names to use
+    // lowercase ASCII letters, digits, and hyphens — the GNOME
+    // stack's `gtk::IconTheme::lookup_icon` is case-sensitive on
+    // the bare slug, so a regression like `"List-Add-Symbolic"`
+    // (PascalCase) or `"list_add_symbolic"` (underscores instead
+    // of hyphens) would silently fail the icon-theme lookup at
+    // runtime and fall back to the broken-image placeholder rather
+    // than failing at compile or pinned-test time, because the
+    // existing companions only check for whitespace / path
+    // separators / dotfile prefixes — none of which fire for an
+    // upper-case or underscore-separated key.
+    //
+    // The assertion loops over the three header-bar button
+    // icon-name helpers (Add / search / menu) and pins each
+    // character as either an ASCII lowercase letter, an ASCII
+    // digit, or a `-` byte so a regression in any of the three
+    // fails with a message that names both the offending button
+    // and the offending character.
+    use paladin_gtk::app::model::{
+        format_app_add_button_icon_name, format_app_menu_button_icon_name,
+        format_app_search_button_icon_name,
+    };
+
+    for (label, icon) in [
+        ("Add", format_app_add_button_icon_name()),
+        ("search", format_app_search_button_icon_name()),
+        ("menu", format_app_menu_button_icon_name()),
+    ] {
+        for ch in icon.chars() {
+            assert!(
+                ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-',
+                "header-bar {label} button icon-name must use lowercase ASCII letters, digits, and `-` only (freedesktop icon-theme convention); got disallowed character {ch:?} in {icon:?}",
+            );
+        }
+    }
+}
+
+#[test]
 fn dispatch_app_window_action_is_case_sensitive() {
     // Defense-in-depth sibling of
     // `dispatch_app_window_action_returns_none_for_unknown_action_names`
