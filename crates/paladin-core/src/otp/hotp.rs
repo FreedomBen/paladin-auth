@@ -56,4 +56,53 @@ mod tests {
             assert!(code.seconds_remaining.is_none());
         }
     }
+
+    /// Cross-product: algorithm ∈ {SHA1, SHA256, SHA512} × digits ∈
+    /// {6, 7, 8} at counter = 1, using the matching RFC 6238 Appendix B
+    /// keys. The 8-digit values match the published Appendix B T=59
+    /// vectors (T=59 with period=30 → counter=1); the 6/7-digit forms
+    /// are the `mod 10^digits` truncation with zero-padding. Mirrors
+    /// `totp_digits_cross_product` to give the pure HOTP primitive the
+    /// same per-algorithm × per-digits coverage TOTP already has.
+    #[test]
+    fn rfc6238_hotp_primitive_algorithm_digits_cross_product() {
+        let table: &[(Algorithm, &[u8], [&str; 3])] = &[
+            (
+                Algorithm::Sha1,
+                b"12345678901234567890",
+                ["287082", "4287082", "94287082"],
+            ),
+            (
+                Algorithm::Sha256,
+                b"12345678901234567890123456789012",
+                ["119246", "6119246", "46119246"],
+            ),
+            (
+                Algorithm::Sha512,
+                b"1234567890123456789012345678901234567890123456789012345678901234",
+                ["693936", "0693936", "90693936"],
+            ),
+        ];
+        for &(alg, key_bytes, expected) in table {
+            let key = make_secret(key_bytes);
+            let eight = expected[2];
+            let eight_num: u64 = eight.parse().expect("8-digit fixture parses");
+            for (digits, want) in [6u8, 7, 8].into_iter().zip(expected.iter()) {
+                let code = compute(&key, alg, digits, 1);
+                assert_eq!(code.code, *want, "alg={alg:?} digits={digits}");
+                assert_eq!(code.code.len(), digits as usize);
+                let modulus = 10u64.pow(u32::from(digits));
+                let want_num = eight_num % modulus;
+                let got_num: u64 = code.code.parse().expect("digit string parses");
+                assert_eq!(
+                    got_num, want_num,
+                    "alg={alg:?} digits={digits} truncation of 8-digit form"
+                );
+                assert_eq!(code.counter_used, Some(1));
+                assert!(code.valid_from.is_none());
+                assert!(code.valid_until.is_none());
+                assert!(code.seconds_remaining.is_none());
+            }
+        }
+    }
 }

@@ -1192,7 +1192,7 @@ assertions the test must make so the implementer can land it without
 re-deriving the gap. Items are independent — they can be implemented
 and committed in any order.
 
-- [ ] **HOTP primitive algorithm × digits cross-product.** Add
+- [x] **HOTP primitive algorithm × digits cross-product.** Add
   `rfc6238_hotp_primitive_algorithm_digits_cross_product` to
   `src/otp/hotp.rs#tests`, mirroring the existing
   `totp_digits_cross_product` in `src/otp/totp.rs`. For each
