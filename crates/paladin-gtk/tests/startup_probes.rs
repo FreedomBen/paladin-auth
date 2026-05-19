@@ -12754,3 +12754,92 @@ fn format_app_about_dialog_translator_credits_does_not_contain_a_horizontal_tab_
         "AdwAboutDialog translator_credits must not contain the `\\t` horizontal-tab byte (0x09); the libadwaita translator-credits convention splits on `\\n` (LF) only and leaves embedded `\\t` bytes inside each parsed entry untouched, so a stray `\\t` would render as a wide horizontal gap or empty box in the credits-page attribution column, would survive `xgettext` round trips as either silent dedupe to a single space or `\\t` preservation, and would break screen-reader announcements at every attribution-row column boundary; got {translator_credits:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_debug_info_does_not_contain_a_horizontal_tab_byte() {
+    // Defense-in-depth sibling of
+    // `format_app_about_dialog_debug_info_carries_program_name_version_and_app_id`
+    // (content-shape pin),
+    // `_is_non_empty_text_with_no_trailing_whitespace`
+    // (non-empty + no-trailing-whitespace pin),
+    // `_starts_with_program_name` (leading-substring pin),
+    // `_app_id_appears_on_a_distinct_line_from_program_name`
+    // (multi-line pin), `_has_exactly_two_lines` (line-count
+    // pin), `_program_name_line_ends_with_the_version`
+    // (line-1 trailing-substring pin),
+    // `_app_id_line_ends_with_the_reverse_dns_app_id`
+    // (line-2 trailing-substring pin), `_is_ascii_only`
+    // (byte-composition pin),
+    // `_does_not_contain_a_null_byte` (null-byte pin), and
+    // `_does_not_contain_a_carriage_return_byte` (CR pin).
+    // Those companions catch the wrong-shape / wrong-content
+    // / empty / multi-line-count / wrong-trailing-substring
+    // / non-ASCII / null-byte / CR-byte regressions but the
+    // `_is_ascii_only` companion only pins each byte as
+    // ASCII (`0x00`-`0x7F`) — the `\t` horizontal-tab byte
+    // (0x09) is ASCII, so a regression that landed
+    // `"Paladin\t0.0.1\nApp ID:\torg.tamx.Paladin.Gui"`
+    // (tab-aligned columns from a `printf "%s\t%s"`-style
+    // payload formatter, a `concat!(_, "\t", _)` injection,
+    // or a hand-edited helper that lifted the payload from a
+    // TSV-formatted debug dump) would slip past
+    // `_is_ascii_only`, `_does_not_contain_a_null_byte`
+    // (since `\t` is not `\0`), and
+    // `_does_not_contain_a_carriage_return_byte` (since `\t`
+    // is not `\r`).
+    //
+    // The line-count and trailing-substring companions would
+    // also miss the regression: `_has_exactly_two_lines` uses
+    // `str::lines()` which splits on `\n` only and is
+    // indifferent to `\t` bytes inside any individual line,
+    // `_program_name_line_ends_with_the_version` checks the
+    // first line via `str::lines().next()` and only enforces
+    // `.ends_with(version)` so a `\t` mid-line is invisible
+    // to it, and `_app_id_line_ends_with_the_reverse_dns_app_id`
+    // applies the same `.ends_with(app_id)` shape check to
+    // line 2 with the same indifference. None of the
+    // existing companions name the `\t` byte directly.
+    //
+    // A regression that landed `\t` in the payload would
+    // mis-render the debug-info content in three ways: (1)
+    // the GLib-backed `AdwAboutDialog::set_debug_info` setter
+    // routes the value into Pango for rendering inside the
+    // dialog's "Troubleshooting → Debugging Information" body
+    // — Pango's default rendering of `\t` is implementation-
+    // defined and typically renders as a wide horizontal gap
+    // or an empty box, breaking the tidy single-column layout
+    // expected by the AdwAboutDialog template; (2) when the
+    // user pastes the payload into a bug-report form on
+    // GitHub, the `\t` characters expand to inconsistent
+    // widths depending on the receiver's tab-stop settings,
+    // cluttering the maintainer's view of the report; (3)
+    // when the user saves the payload to a `.txt` file via
+    // the `AdwAboutDialog::set_debug_info_filename` slot, the
+    // GTK file-writer writes the raw bytes so the resulting
+    // file has tab-aligned columns that break POSIX text-
+    // processing tools (`grep`, `awk`, `cut`) whose default
+    // delimiter behaviour assumes single-space-separated
+    // fields rather than tab-separated columns.
+    //
+    // Pinning the no-`\t` invariant directly here surfaces
+    // the regression with a message naming the offending
+    // `\t` byte at build time rather than as a downstream
+    // dialog rendering bug, a pasted-bug-report column-width
+    // drift artifact, or a saved-file POSIX-text-processing
+    // breakage.
+    //
+    // The current `format_app_about_dialog_debug_info`
+    // returns `"Paladin 0.0.1\nApp ID: org.tamx.Paladin.Gui"`
+    // (built at compile time via `concat!` with single-space
+    // separators between every column), so this test passes
+    // today and serves as a forcing function so any future
+    // override of the debug-info helper stays on bare-space
+    // column separators rather than tab-aligned columns.
+    use paladin_gtk::app::model::format_app_about_dialog_debug_info;
+
+    let debug_info = format_app_about_dialog_debug_info();
+    assert!(
+        !debug_info.contains('\t'),
+        "AdwAboutDialog debug_info must not contain the `\\t` horizontal-tab byte (0x09); a `\\t` byte slips past `_is_ascii_only` (since `\\t` is ASCII), past `_does_not_contain_a_null_byte` (since `\\t` is not `\\0`), past `_does_not_contain_a_carriage_return_byte` (since `\\t` is not `\\r`), past `_has_exactly_two_lines` / `_program_name_line_ends_with_the_version` / `_app_id_line_ends_with_the_reverse_dns_app_id` (which split on `\\n` and only check trailing substrings), and would render as a wide horizontal gap in the Troubleshooting dialog body, drift column widths in pasted bug reports, and break POSIX text-processing tools (`grep`, `awk`, `cut`) when the payload is saved to disk via `set_debug_info_filename`; got {debug_info:?}",
+    );
+}
