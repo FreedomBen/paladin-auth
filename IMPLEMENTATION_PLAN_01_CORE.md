@@ -1209,7 +1209,7 @@ and committed in any order.
   D coverage; the cross-product currently exists only on the
   TOTP side.
 
-- [ ] **HOTP primitive at counter boundary values.** Add
+- [x] **HOTP primitive at counter boundary values.** Add
   `hotp_compute_at_counter_zero_and_u64_max_does_not_panic` to
   `src/otp/hotp.rs#tests`. Compute the code at `counter = 0`
   (sanity, re-pins RFC 4226 Appendix D row 0 at the primitive)

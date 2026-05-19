@@ -105,4 +105,33 @@ mod tests {
             }
         }
     }
+
+    /// `compute` at the two endpoints of the `u64` counter range
+    /// must not panic. `counter = 0` re-pins RFC 4226 Appendix D
+    /// row 0 at the primitive layer. `counter = u64::MAX` returns
+    /// a digit string of the requested length with `counter_used
+    /// == Some(u64::MAX)` — overflow-on-advance is a `Vault`-level
+    /// concern enforced by `Vault::hotp_advance`, not a primitive
+    /// concern. Pins the layering so a future refactor that pulls
+    /// the overflow check into `compute` is caught.
+    #[test]
+    fn hotp_compute_at_counter_zero_and_u64_max_does_not_panic() {
+        let key = make_secret(b"12345678901234567890");
+
+        let zero = compute(&key, Algorithm::Sha1, 6, 0);
+        assert_eq!(zero.code, "755224");
+        assert_eq!(zero.code.len(), 6);
+        assert_eq!(zero.counter_used, Some(0));
+        assert!(zero.valid_from.is_none());
+        assert!(zero.valid_until.is_none());
+        assert!(zero.seconds_remaining.is_none());
+
+        let max = compute(&key, Algorithm::Sha1, 6, u64::MAX);
+        assert_eq!(max.code.len(), 6);
+        assert!(max.code.chars().all(|c| c.is_ascii_digit()));
+        assert_eq!(max.counter_used, Some(u64::MAX));
+        assert!(max.valid_from.is_none());
+        assert!(max.valid_until.is_none());
+        assert!(max.seconds_remaining.is_none());
+    }
 }
