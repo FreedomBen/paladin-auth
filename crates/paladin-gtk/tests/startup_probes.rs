@@ -14171,3 +14171,94 @@ fn format_app_about_dialog_developer_name_does_not_contain_a_vertical_tab_byte()
         "AdwAboutDialog developer-name must not contain the `\\x0B` vertical-tab byte (0x0B); a mid-string `\\x0B` slips past `_is_a_single_line_without_embedded_newlines` (which only checks `\\n` and `\\r`), past `_is_ascii_only` (because `\\x0B` is ASCII), past `_has_no_surrounding_whitespace` (which only rejects `\\x0B` at the boundaries via `char::is_whitespace()`), past `_starts_with_the_definite_article` / `_ends_with_the_contributors_collective_noun` (which only constrain the literal prefix and suffix), and past `_does_not_contain_a_null_byte` / `_does_not_contain_a_horizontal_tab_byte` / `_does_not_contain_a_carriage_return_byte` (which each name a different byte specifically); it would render as a literal control glyph in the dialog-header attribution row, propagate into the footer copyright row that reuses this string, break screen-reader attribution announcements at the byte boundary, and propagate into downstream contributor-attribution scrapers; got {developer:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_copyright_does_not_contain_a_vertical_tab_byte() {
+    // Defense-in-depth per-byte sibling extending the copyright
+    // byte-cleanliness contract past the just-completed `{null /
+    // horizontal-tab / carriage-return}` triplet to the next C0
+    // control byte. The vertical-tab byte `\x0B` (0x0B) sits one
+    // step above HT (0x09) and one step below CR (0x0D) in the
+    // ASCII C0 block; like its siblings it is a non-printable
+    // control byte with no legitimate use inside a human-readable
+    // GNOME dialog copyright string.
+    //
+    // None of the existing copyright companions name the `\x0B`
+    // byte directly:
+    //   - `_copyright_is_a_single_line_without_embedded_newlines`
+    //     only checks `\n` and `\r` — `\x0B` is neither;
+    //   - `_copyright_starts_with_copyright_glyph_and_contains_developer_name`
+    //     and `_copyright_ends_with_developer_name` only constrain
+    //     the literal prefix (the `©` glyph + space) and the
+    //     `"The Paladin contributors"` suffix, so a mid-string
+    //     `\x0B` between them (`"© The Pa\x0Bladin contributors"`)
+    //     satisfies both;
+    //   - `_separates_glyph_and_attribution_with_a_single_space`
+    //     only constrains the single byte immediately after the
+    //     `©` glyph — a `\x0B` later in the string slips past;
+    //   - `_does_not_end_with_a_period` only constrains the
+    //     trailing byte;
+    //   - `_does_not_contain_a_year_token_so_it_does_not_drift_across_releases`
+    //     scans for four-digit runs — `\x0B` is not a digit;
+    //   - `_does_not_contain_a_null_byte` /
+    //     `_does_not_contain_a_horizontal_tab_byte` /
+    //     `_does_not_contain_a_carriage_return_byte` each name a
+    //     different byte specifically.
+    //
+    // The `_returns_paladin_copyright_line` exact-value pin
+    // catches every byte today, but its protection collapses the
+    // moment a multi-line copyright-attribution refactor or a
+    // workspace-vendoring split decouples the helper from the
+    // pinned literal — at that point a `\x0B`-bearing override
+    // would slip past every byte-level companion above.
+    //
+    // A regression that landed `"© The Paladin\x0Bcontributors"`
+    // (vertical-tab byte lifted from a legacy COPYRIGHT file
+    // authored on a line-printer terminal that used `\x0B` as a
+    // vertical-spacing separator between the copyright glyph and
+    // the attribution, a `concat!("© The Paladin", "\x0B",
+    // "contributors")` form, or a hand-edited helper that pasted
+    // from an EBCDIC-to-ASCII translation preserving the original
+    // VT byte) would mis-render in multiple downstream surfaces:
+    // (1) the GLib-backed `AdwAboutDialog::set_copyright` setter
+    // hands the string to Pango for inline rendering in the
+    // dialog footer — Pango's default rendering of a bare `\x0B`
+    // byte is implementation-defined and typically renders as a
+    // literal control glyph (a hollow box or a tofu-like
+    // placeholder), breaking the tidy single-line copyright
+    // layout against the website / issue-link rows beneath it;
+    // (2) the copyright string is the legal attribution surface
+    // for the dialog — a `\x0B`-mis-rendered footer erodes the
+    // trusted-application surface contract by surfacing a control-
+    // byte glyph in the legal-attribution row; (3) screen readers
+    // that announce the dialog copyright row read the `\x0B` as a
+    // literal control character, breaking the accessibility-tree
+    // announcement of the legal attribution at the byte boundary;
+    // (4) downstream tooling that scrapes the copyright string
+    // (license-attribution aggregators, AGPL-3.0-or-later
+    // compliance crawlers) would propagate the stray `\x0B` byte
+    // into the consumer's stream and trigger the same rendering
+    // bug across every downstream surface.
+    //
+    // Pinning the no-`\x0B` invariant directly here surfaces the
+    // regression with a message naming the offending byte at
+    // build time rather than as a downstream dialog-footer
+    // rendering bug or a screen-reader announcement break.
+    // Current helper returns the literal `"© The Paladin
+    // contributors"` (no `\x0B` byte), so this test passes today
+    // and serves as a forcing function so any future override of
+    // the helper — including the eventual landing of a multi-
+    // line copyright attribution — stays free of vertical-tab
+    // bytes. Continues the copyright C0 control-byte cycle past
+    // the just-completed `{null / horizontal-tab / carriage-
+    // return}` triplet so the helper's byte-composition contract
+    // pins each forbidden control byte against a single source
+    // of truth.
+    use paladin_gtk::app::model::format_app_about_dialog_copyright;
+
+    let copyright = format_app_about_dialog_copyright();
+    assert!(
+        !copyright.contains('\x0B'),
+        "AdwAboutDialog copyright must not contain the `\\x0B` vertical-tab byte (0x0B); a mid-string `\\x0B` slips past `_is_a_single_line_without_embedded_newlines` (which only checks `\\n` and `\\r`), past `_starts_with_copyright_glyph_and_contains_developer_name` / `_ends_with_developer_name` (which only constrain the literal prefix and suffix), past `_separates_glyph_and_attribution_with_a_single_space` (which only constrains the single byte after the `©` glyph), past `_does_not_end_with_a_period` (which only constrains the trailing byte), past the no-year-token four-digit-run scan (`\\x0B` is not a digit), and past `_does_not_contain_a_null_byte` / `_does_not_contain_a_horizontal_tab_byte` / `_does_not_contain_a_carriage_return_byte` (which each name a different byte specifically); it would render as a literal control glyph in the dialog-footer copyright row, erode the legal-attribution trusted-surface contract by surfacing a control-byte glyph in the legal row, break screen-reader copyright-row announcements at the byte boundary, and propagate into downstream license-attribution scrapers; got {copyright:?}",
+    );
+}
