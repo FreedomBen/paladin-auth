@@ -20870,3 +20870,108 @@ fn format_app_about_dialog_application_icon_name_does_not_contain_a_bell_byte() 
         "AdwAboutDialog application_icon_name must not contain the `\\x07` bell byte (0x07); like BS, BEL is NOT matched by `char::is_whitespace()` (Unicode returns false for U+0007 BEL), so `_has_no_embedded_whitespace` does NOT catch `\\x07` — strictly as dangerous as backspace here, neither caught by the whitespace companion; a stray `\\x07` slips past `_is_ascii_only` / `_is_reverse_dns` / `_has_exactly_four_segments` / `_starts_with_a_lowercase_ascii_letter` / `_ends_with_gui_segment` / `_does_not_end_with_a_dot` / `_does_not_start_with_a_dot` / `_segments_are_non_empty` / `_matches_app_id` / `_program_name_is_segment_of_application_icon_name` and the prior per-byte siblings, would silently miss the `gtk::IconTheme` cache lookup (masking the bug as a placeholder-icon fallback), surface as a malformed window-icon-name property in the X11 / Wayland protocol exchange via `set_icon_name`, propagate into the AppStream metainfo `<id>` field where Flathub's strict reverse-DNS linter would fail the next package submission, and ring the terminal bell when Flathub linter diagnostics are dumped through a TTY (an audible-alert injection / covert side-channel primitive in shared CI environments); got {application_icon_name:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_debug_info_filename_does_not_contain_a_bell_byte() {
+    // Defense-in-depth per-byte sibling extending the debug-
+    // info-filename byte coverage past the just-completed `{null
+    // / horizontal-tab / carriage-return / vertical-tab / form-
+    // feed / backspace / line-feed}` septuple to the bell byte
+    // `\x07` (0x07), opening the next non-whitespace-classified
+    // C0 control-byte cycle for this helper. Like BS, BEL is NOT
+    // matched by `char::is_whitespace()` (Unicode treats BEL as
+    // a control byte, not whitespace), so the existing
+    // `_debug_info_filename_has_no_embedded_whitespace` companion
+    // does NOT catch `\x07` even though it catches `\x0C`. The
+    // bell byte therefore has NO transitive protection on this
+    // helper today — strictly as dangerous as backspace, neither
+    // caught by the whitespace companion.
+    //
+    // None of the existing companions name the `\x07` byte
+    // directly on this helper:
+    //   - `_is_ascii_only` pins each byte as ASCII — `\x07` is
+    //     ASCII so it slips past;
+    //   - `_debug_info_filename_has_no_embedded_whitespace` uses
+    //     `char::is_whitespace()`, which returns *false* for
+    //     U+0007 BEL — strictly weaker coverage than the form-
+    //     feed case;
+    //   - `_returns_paladin_debug_info_txt` exact-value pin only
+    //     holds while the literal is unchanged;
+    //   - `_does_not_contain_path_separators` /
+    //     `_does_not_start_with_a_dot` only constrain the path-
+    //     safety and leading-byte boundaries;
+    //   - `_contains_exactly_one_period` /
+    //     `_extension_is_lowercase_txt` only check dot-count and
+    //     suffix;
+    //   - `_is_non_empty_single_line_with_txt_extension` only
+    //     checks non-empty + single-line + `.txt` suffix shape
+    //     (the single-line check uses `str::lines().count() == 1`
+    //     which does not split on `\x07`, so a `\x07`-bearing
+    //     filename like `"pala\x07din-debug-info.txt"` slips
+    //     past this companion entirely);
+    //   - `_does_not_contain_a_null_byte` /
+    //     `_does_not_contain_a_horizontal_tab_byte` /
+    //     `_does_not_contain_a_carriage_return_byte` /
+    //     `_does_not_contain_a_vertical_tab_byte` /
+    //     `_does_not_contain_a_form_feed_byte` /
+    //     `_does_not_contain_a_backspace_byte` /
+    //     `_does_not_contain_a_line_feed_byte` each name a
+    //     different byte specifically.
+    //
+    // A regression that landed `"pala\x07din-debug-info.txt"`
+    // (bell byte lifted from a `script(1)` typescript capturing
+    // raw `\x07` audible-alert bytes from a CI build that
+    // triggered the terminal bell mid-token of an interactively-
+    // edited filename registry, a `concat!(_, "\x07", _)` form,
+    // or a hand-edited helper override that pasted from a
+    // terminal session recording preserving audible-alert bytes)
+    // would mis-render in multiple downstream surfaces: (1) the
+    // GLib-backed `AdwAboutDialog::set_debug_info_filename`
+    // setter routes the value into the dialog's "Save Debug
+    // Information…" file-chooser pre-fill — a `\x07`-bearing
+    // filename mis-renders in the GtkFileDialog's filename entry
+    // as a literal control glyph (a hollow box or tofu-like
+    // placeholder), and a TTY-rendered GtkFileDialog screen-cast
+    // or `xdotool` dump would ring the terminal bell on the
+    // user's session; (2) when the user saves the debug-info
+    // payload to disk, the filesystem `open(2)` call routes the
+    // `\x07`-bearing filename through the kernel VFS layer —
+    // most POSIX-conformant kernels (Linux, macOS, BSDs) accept
+    // `\x07` in filenames but `ls`, `find`, and `tar` output
+    // piped to a terminal would ring the terminal bell on the
+    // rendering of the directory listing — an audible-alert
+    // injection / covert side-channel primitive where an
+    // attacker who controlled the upstream filename source
+    // could trigger CI-runner bell notifications repeatedly or
+    // weaponize the bell as a covert side-channel in a shared
+    // CI environment that processes the saved debug-info
+    // payload; (3) the saved file's filename surfaces in any
+    // bug-tracker attachment URL or chat-attachment column where
+    // the `\x07` byte mis-renders as a control glyph or rings
+    // the terminal bell on a TTY-rendered triage workflow,
+    // confusing the maintainer's triage workflow.
+    //
+    // Pinning the no-`\x07` invariant directly on this helper
+    // surfaces the regression with a message naming the
+    // offending byte at build time rather than as a downstream
+    // file-chooser mis-render, a terminal-bell injection on
+    // directory listings, or a chat-attachment column-render
+    // artifact. Current helper returns the literal
+    // `"paladin-debug-info.txt"` (no `\x07` byte), so this test
+    // passes today and serves as a forcing function so any
+    // future override of the helper — including the eventual
+    // landing of a localized filename — stays free of bell
+    // bytes. Opens the next non-whitespace-classified C0 control-
+    // byte cycle past the just-completed `{null / horizontal-
+    // tab / carriage-return / vertical-tab / form-feed /
+    // backspace / line-feed}` septuple so the helper's byte-
+    // composition contract pins each forbidden control byte
+    // against a single source of truth.
+    use paladin_gtk::app::model::format_app_about_dialog_debug_info_filename;
+
+    let debug_info_filename = format_app_about_dialog_debug_info_filename();
+    assert!(
+        !debug_info_filename.contains('\x07'),
+        "AdwAboutDialog debug_info_filename must not contain the `\\x07` bell byte (0x07); like BS, BEL is NOT matched by `char::is_whitespace()` (Unicode returns false for U+0007 BEL), so `_has_no_embedded_whitespace` does NOT catch `\\x07` — strictly as dangerous as backspace here, neither caught by the whitespace companion; a stray `\\x07` slips past `_is_ascii_only` / `_returns_paladin_debug_info_txt` / `_does_not_contain_path_separators` / `_does_not_start_with_a_dot` / `_contains_exactly_one_period` / `_extension_is_lowercase_txt` / `_is_non_empty_single_line_with_txt_extension` (`str::lines().count() == 1` does not split on `\\x07`) and the prior per-byte siblings, would mis-render as a literal control glyph in the GtkFileDialog filename entry pre-fill, ring the terminal bell on `ls` / `find` / `tar` output piped to a terminal (an audible-alert injection / covert side-channel primitive in shared CI environments that process the saved debug-info payload), and confuse maintainer triage with control-glyph / bell artifacts in chat-attachment column renders; got {debug_info_filename:?}",
+    );
+}
