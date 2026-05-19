@@ -5720,3 +5720,61 @@ fn format_app_about_dialog_debug_info_starts_with_program_name() {
         "AdwAboutDialog debug-info must start with the program-name display string {program_name:?} so the bug-report payload's first content is the human-readable app identification before the reverse-DNS app ID line; got {debug:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_debug_info_app_id_appears_on_a_distinct_line_from_program_name() {
+    // Cross-consistency sibling of
+    // `format_app_about_dialog_debug_info_starts_with_program_name`
+    // (which pins the leading content) and
+    // `format_app_about_dialog_debug_info_carries_program_name_version_and_app_id`
+    // (which only requires `.contains()` matches). Together those
+    // two companions still allow a single-line debug-info layout
+    // where the program-name, version, and reverse-DNS app ID
+    // collapse onto one wrapping line — e.g.
+    // `"Paladin 0.1.0 App ID: org.tamx.Paladin.Gui"` — which would
+    // be harder for a bug-report reader to scan than the pinned
+    // two-line layout where the human-readable program-name +
+    // version sit on one line and the machine-oriented app ID
+    // sits on a separate labeled line below it.
+    //
+    // The assertion here is the line-shape invariant: the
+    // program-name segment and the reverse-DNS app ID segment
+    // must land on distinct line indices of the debug-info
+    // payload so the bug-report paste renders as a tidy
+    // multi-line block rather than as one ambiguous wrapping
+    // run. Pins the `\nApp ID: ` separator inside
+    // `format_app_about_dialog_debug_info` at the test layer
+    // without hardcoding the literal `"App ID:"` label so a
+    // future re-labeling (e.g. localized prefix) still exercises
+    // the line-shape contract.
+    use paladin_gtk::app::model::{
+        format_app_about_dialog_application_icon_name, format_app_about_dialog_debug_info,
+        format_app_about_dialog_program_name,
+    };
+
+    let debug = format_app_about_dialog_debug_info();
+    let program_name = format_app_about_dialog_program_name();
+    let app_id = format_app_about_dialog_application_icon_name();
+
+    let lines: Vec<&str> = debug.lines().collect();
+    let program_name_line_idx = lines
+        .iter()
+        .position(|line| line.contains(program_name))
+        .unwrap_or_else(|| {
+            panic!(
+                "AdwAboutDialog debug-info must have at least one line containing the program-name display string {program_name:?}; got {debug:?}"
+            )
+        });
+    let app_id_line_idx = lines
+        .iter()
+        .position(|line| line.contains(app_id))
+        .unwrap_or_else(|| {
+            panic!(
+                "AdwAboutDialog debug-info must have at least one line containing the reverse-DNS app ID {app_id:?}; got {debug:?}"
+            )
+        });
+    assert_ne!(
+        program_name_line_idx, app_id_line_idx,
+        "AdwAboutDialog debug-info program-name and reverse-DNS app ID must land on distinct line indices so the bug-report paste renders as a tidy multi-line block rather than as one ambiguous wrapping run; both landed on line index {program_name_line_idx} of {debug:?}",
+    );
+}
