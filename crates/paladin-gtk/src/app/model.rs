@@ -398,6 +398,34 @@ pub enum AppMsg {
     /// this commit only wires the dispatch edge so the menu
     /// activation reaches `AppModel`.
     OpenExportDialog,
+    /// Posted by the application menu's Passphrase entry's
+    /// `connect_activate` handler. Mounts the
+    /// [`PassphraseDialogComponent`](crate::passphrase_dialog)
+    /// — a libadwaita-styled set / change / remove passphrase
+    /// dialog — parented at the active
+    /// [`adw::ApplicationWindow`] so the dialog overlays the
+    /// main window per §"libadwaita usage".
+    ///
+    /// Passphrase is gated by
+    /// [`format_app_primary_menu_action_sensitivities`]'s
+    /// mutating-menu rule
+    /// ([`crate::app::state::AppState::allows_mutating_menu`])
+    /// so the action is disabled outside
+    /// [`AppState::Unlocked`]. A stray dispatch in any other
+    /// state (the action is disabled, but a stray dispatch from
+    /// a future keyboard accelerator would still land here) is
+    /// defensively guarded in the handler so the dialog never
+    /// mounts over a `Missing` / `Locked` / `UnlockedBusy` /
+    /// `StartupError` window.
+    ///
+    /// The fully wired
+    /// [`PassphraseDialogComponent`](crate::passphrase_dialog)
+    /// (the sub-flow router, the editable passphrase entries,
+    /// the [`paladin_core::Vault::change_passphrase`] worker,
+    /// and the inline error / warning surfaces) lands in
+    /// follow-up commits; this commit only wires the dispatch
+    /// edge so the menu activation reaches `AppModel`.
+    OpenPassphraseDialog,
     /// Forwarded from the live [`AddAccountComponent`] when the
     /// user interacts with the dialog. Today only
     /// [`AddAccountOutput::Cancel`] is emitted — `AppModel`
@@ -880,14 +908,18 @@ impl SimpleComponent for AppModel {
                 // automatically when given any descendant.
                 build_app_about_dialog().present(Some(&self.content));
             }
-            AppMsg::OpenPreferencesDialog | AppMsg::OpenImportDialog | AppMsg::OpenExportDialog => {
+            AppMsg::OpenPreferencesDialog
+            | AppMsg::OpenImportDialog
+            | AppMsg::OpenExportDialog
+            | AppMsg::OpenPassphraseDialog => {
                 // Mutating menu activations whose dispatch
                 // edges (action → AppMsg) have landed but
                 // whose widget-bearing dialog components have
                 // not yet. Each variant becomes its own arm
                 // with a distinct handler when the matching
                 // `SettingsComponent` / `ImportDialogComponent`
-                // / `ExportDialogComponent` mount lands in
+                // / `ExportDialogComponent` /
+                // `PassphraseDialogComponent` mount lands in
                 // follow-up commits.
                 //
                 // Defense in depth: every variant in the
@@ -2787,6 +2819,9 @@ pub fn dispatch_app_window_action(name: &str) -> Option<AppMsg> {
     }
     if name == format_app_menu_import_action_name() {
         return Some(AppMsg::OpenImportDialog);
+    }
+    if name == format_app_menu_passphrase_action_name() {
+        return Some(AppMsg::OpenPassphraseDialog);
     }
     if name == format_app_menu_preferences_action_name() {
         return Some(AppMsg::OpenPreferencesDialog);
