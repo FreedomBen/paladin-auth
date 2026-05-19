@@ -13839,3 +13839,117 @@ fn format_app_about_dialog_debug_info_filename_does_not_contain_a_horizontal_tab
         "AdwAboutDialog debug_info_filename must not contain the `\\t` horizontal-tab byte (0x09); the current `\\t`-cleanliness is only protected transitively by `_has_no_embedded_whitespace`'s broad `char::is_whitespace()` check, so a future refactor that relaxed the no-whitespace invariant to allow a localized filename like `\"Debug information.txt\"` might silently drop the `\\t` guard alongside the space relaxation; a stray `\\t` would mis-render as a wide horizontal gap in the GtkFileDialog filename entry pre-fill, mis-align every following column in `ls -l` output by expanding to the next tab-stop, and confuse maintainer triage with inconsistent tab-stop renders in chat-attachment column renders; got {debug_info_filename:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_url_helpers_do_not_contain_a_carriage_return_byte() {
+    // Cross-helper defense-in-depth sibling looping over the
+    // three `AdwAboutDialog` footer URL helpers
+    // (`format_app_about_dialog_website`,
+    // `format_app_about_dialog_issue_url`,
+    // `format_app_about_dialog_support_url`) and pinning each
+    // value as free of the `\r` carriage-return byte (0x0D).
+    // The existing `url_helpers_contain_no_embedded_whitespace`
+    // companion uses `char::is_whitespace()`, which returns
+    // true for `\r` — so the URL-helpers' `\r`-cleanliness is
+    // currently protected *transitively* by that one specific
+    // companion's broad whitespace check.
+    //
+    // But that transitive protection is *bundled* with the
+    // no-whitespace invariant as a whole: a future refactor
+    // that intentionally allowed a URL with a single
+    // percent-encoded space (a non-trivial scenario per RFC
+    // 3986, which forbids unencoded spaces in URLs but
+    // permits `%20` percent-encoding for them — but a
+    // workspace-vendoring refactor or a CI codegen step could
+    // relax the `_contain_no_embedded_whitespace` companion
+    // incorrectly when handling decoded percent-encoded
+    // strings) would naturally drop the `\r` check at the
+    // same time on the assumption that "ASCII whitespace is
+    // now allowed". That assumption is wrong: `\r` is never
+    // a valid byte inside a URL per RFC 3986 (the carriage-
+    // return byte is not in any of the URL grammar's
+    // production rules), so dropping the `\r` check alongside
+    // the percent-encoded-space relaxation would silently
+    // regress the no-`\r` invariant.
+    //
+    // A regression would slip past every existing companion:
+    // the `_is_non_empty_https_url[_distinct_*]` per-URL
+    // companion (which only checks non-empty + `https://`
+    // prefix + no space byte — a `\r` byte mid-URL satisfies
+    // all three), the `_are_ascii_only` cross-URL companion
+    // (`\r` is ASCII 0x0D so it slips past), the
+    // `_do_not_end_with_a_trailing_slash` companion (which
+    // only constrains the final byte), the
+    // `_do_not_contain_a_null_byte` companion (which only
+    // names `\0` specifically), the
+    // `_do_not_contain_a_query_string` /
+    // `_do_not_contain_a_fragment_anchor` /
+    // `_do_not_contain_a_userinfo_at_sign` /
+    // `_do_not_contain_a_backslash` siblings (which each
+    // name a different byte specifically). None of the
+    // existing companions name the `\r` byte directly.
+    //
+    // A regression that landed
+    // `"https://github.com\rFreedomBen/paladin"` (CRLF
+    // copy-paste from a Windows-edited URL constant with the
+    // `\n` stripped during a manual line-ending fix-up, a
+    // `concat!(_, "\r", _)` form, or a hand-edited helper
+    // override that lifted the URL from a CR-only Mac
+    // Classic-style text file or a `\r`-line-ending API
+    // response body) would mis-render in multiple downstream
+    // surfaces: (1) the GLib-backed
+    // `AdwAboutDialog::set_website` / `set_issue_url` /
+    // `set_support_url` setters route the value into Pango
+    // for inline rendering as the underlined link label in
+    // the dialog footer — Pango's default rendering of a
+    // bare `\r` byte is implementation-defined and typically
+    // renders as a literal control glyph or an empty box,
+    // breaking the trusted-application surface contract of
+    // the link label; (2) when the user clicks the URL, GIO's
+    // `gtk_show_uri_full` routes the value through the
+    // session's `xdg-open` / portal layer where some URL
+    // parsers (WHATWG URL §4.5 implementations) reject `\r`
+    // outright with `InvalidUrl`, breaking the click-through
+    // routing entirely, while others percent-encode the `\r`
+    // as `%0D` and route to a non-existent URL with a
+    // `Bad Request` response surfacing as a confusing
+    // browser-level error; (3) screen readers that announce
+    // the URL label read the `\r` as a literal control
+    // character, breaking the link-label accessibility-tree
+    // announcement.
+    //
+    // Pinning the no-CR invariant directly here surfaces the
+    // regression with a message naming the offending URL
+    // helper at build time rather than as a downstream user-
+    // visible mis-rendered link label, a confusing browser-
+    // level error on click-through, or an inconsistent URL-
+    // parser-implementation routing surface. Mirror of the
+    // `_url_helpers_do_not_end_with_a_trailing_slash`,
+    // `_url_helpers_do_not_contain_a_query_string`,
+    // `_url_helpers_do_not_contain_a_fragment_anchor`,
+    // `_url_helpers_do_not_contain_a_userinfo_at_sign`,
+    // `_url_helpers_do_not_contain_a_backslash`,
+    // `_url_helpers_contain_no_embedded_whitespace`,
+    // `_url_helpers_are_ascii_only`, and
+    // `_url_helpers_do_not_contain_a_null_byte` cross-URL
+    // siblings; together they pin the URL byte-composition
+    // contract (no whitespace, ASCII-only, no terminal `/`,
+    // no `\0`, no `\r`, no `?` query, no `#` anchor, no `@`
+    // userinfo, no `\` path-confusion byte) across all three
+    // footer link surfaces against a single source of truth.
+    use paladin_gtk::app::model::{
+        format_app_about_dialog_issue_url, format_app_about_dialog_support_url,
+        format_app_about_dialog_website,
+    };
+
+    for (label, url) in [
+        ("website", format_app_about_dialog_website()),
+        ("issue_url", format_app_about_dialog_issue_url()),
+        ("support_url", format_app_about_dialog_support_url()),
+    ] {
+        assert!(
+            !url.contains('\r'),
+            "AdwAboutDialog {label} must not contain the `\\r` carriage-return byte (0x0D) — `\\r` is never a valid byte inside a URL per RFC 3986 (the carriage-return byte is not in any of the URL grammar's production rules); the current `\\r`-cleanliness is only protected transitively by `_url_helpers_contain_no_embedded_whitespace`'s broad `char::is_whitespace()` check, so a future percent-encoded-space relaxation would silently drop the `\\r` guard; a stray `\\r` would mis-render as a control glyph in the dialog footer link label, fail or mis-route the click-through routing across WHATWG URL §4.5 implementations vs `%0D`-encoding implementations, and break screen-reader link-label announcements; got {url:?}",
+        );
+    }
+}
