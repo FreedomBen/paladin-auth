@@ -576,6 +576,31 @@ fn format_settings_dialog_auto_lock_group_title_returns_auto_lock() {
 }
 
 #[test]
+fn format_settings_dialog_auto_lock_secs_row_title_returns_inactivity_timeout() {
+    // The auto-lock `AdwSpinRow` carries the spinner that
+    // controls `paladin_core::VaultSettings::auto_lock_secs`.
+    // Per `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
+    // "Preferences" and §"Component tree" > `SettingsComponent`,
+    // the spinner clamps to
+    // `paladin_core::AUTO_LOCK_SECS_MIN..=paladin_core::AUTO_LOCK_SECS_MAX`
+    // and is debounced 500 ms so holding the +/- buttons does
+    // not fire one `Vault::mutate_and_save` per click.
+    //
+    // The wording (`"Inactivity timeout (seconds)"`) names the
+    // dimension the spinner adjusts and units the value uses
+    // without restating "auto-lock" (the group title already
+    // names that concept) or "lock" (the sibling
+    // `AdwSwitchRow` title already names that).
+    use paladin_gtk::settings::format_settings_dialog_auto_lock_secs_row_title;
+
+    assert_eq!(
+        format_settings_dialog_auto_lock_secs_row_title(),
+        "Inactivity timeout (seconds)",
+        "AdwSpinRow title names the dimension and units",
+    );
+}
+
+#[test]
 fn format_settings_dialog_auto_lock_enabled_row_title_returns_lock_after_inactivity() {
     // The auto-lock `AdwSwitchRow` carries the toggle that
     // controls `paladin_core::VaultSettings::auto_lock_enabled`.

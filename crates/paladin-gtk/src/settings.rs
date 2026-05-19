@@ -413,6 +413,33 @@ pub fn format_settings_dialog_auto_lock_enabled_row_title() -> &'static str {
     "Lock after inactivity"
 }
 
+/// Title rendered on the auto-lock `AdwSpinRow` per
+/// `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
+/// "Preferences" and §"Component tree" > `SettingsComponent`.
+/// The spinner controls
+/// [`paladin_core::VaultSettings::auto_lock_secs`], clamps to
+/// [`paladin_core::AUTO_LOCK_SECS_MIN`]
+/// ..= [`paladin_core::AUTO_LOCK_SECS_MAX`] via
+/// [`clamp_auto_lock_secs`], and is debounced 500 ms so holding
+/// the +/- buttons does not fire one `Vault::mutate_and_save`
+/// per click.
+///
+/// The wording (`"Inactivity timeout (seconds)"`) names the
+/// dimension the spinner adjusts and the units the value uses
+/// without restating `"auto-lock"` (the group title returned
+/// by [`format_settings_dialog_auto_lock_group_title`] already
+/// names that concept) or `"lock"` (the sibling
+/// `AdwSwitchRow` title returned by
+/// [`format_settings_dialog_auto_lock_enabled_row_title`]
+/// already names that). Units inline parenthesized per the
+/// GNOME HIG.
+///
+/// Pure — returns a `'static str` without allocating.
+#[must_use]
+pub fn format_settings_dialog_auto_lock_secs_row_title() -> &'static str {
+    "Inactivity timeout (seconds)"
+}
+
 /// Buffered spinner pending the 500 ms debounce.
 #[derive(Debug, Clone, Copy)]
 enum PendingSpinner {
