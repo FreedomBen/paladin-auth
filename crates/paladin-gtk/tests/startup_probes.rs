@@ -9116,3 +9116,72 @@ fn format_app_about_dialog_developer_name_ends_with_the_contributors_collective_
         "AdwAboutDialog developer-name must end with the lowercase `\" contributors\"` collective noun (with the leading space so the noun is a separate word from the brand) so the collective-attribution voicing matches the AGPL-3.0-or-later open-contributor-pool model (an inclusive `\"contributors\"` voicing distinct from the named-org `\"Project\"` or named-team `\"Team\"` alternatives the GNOME stack uses for org-boundaried projects); a regression that swapped the noun — e.g. `\"The Paladin Project\"` / `\"The Paladin Team\"` / `\"The Paladin Developers\"` — would mis-route the governance signal of the collective attribution; got {developer_name:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_copyright_ends_with_developer_name() {
+    // Cross-helper defense-in-depth sibling of
+    // `format_app_about_dialog_copyright_starts_with_copyright_glyph_and_contains_developer_name`
+    // (which pins the leading `©` glyph and the *substring*
+    // presence of the developer-name in the copyright body) and
+    // the `_developer_name_ends_with_the_contributors_collective_noun`
+    // / `_developer_name_starts_with_the_definite_article`
+    // companions on the developer-name side. Those companions
+    // catch the wrong-glyph / missing-attribution / wrong-prefix /
+    // wrong-suffix regressions on a per-helper basis but leave
+    // the *cross-helper ends-with* relationship between the
+    // copyright footer row and the dialog-header attribution
+    // row ungated.
+    //
+    // The libadwaita `AdwAboutDialog::copyright` slot is the
+    // footer attribution row (one line below the license-type
+    // chip and above the website / issue links) and consumes
+    // the string verbatim. The canonical form is the leading
+    // `©` glyph followed by a single ASCII space followed by
+    // the *same* attribution string the dialog-header
+    // `AdwAboutDialog::developer-name` row carries. A regression
+    // that landed `"© The Paladin contributors (all rights
+    // reserved)"` — appending the "(all rights reserved)" tail
+    // — would still pass the `_starts_with_copyright_glyph_and_contains_developer_name`
+    // companion (the developer-name is still a substring of the
+    // copyright body) and the `_separates_glyph_and_attribution_with_a_single_space`
+    // companion (the leading two-char sequence `"© "` is still
+    // intact) and the `_does_not_contain_a_year_token` companion
+    // (no year was added) and the `_is_a_single_line_without_embedded_newlines`
+    // companion (still single-line), while diverging the
+    // copyright row's trailing byte sequence from the
+    // dialog-header attribution row's trailing byte sequence —
+    // surfacing as a visual mismatch between the bold header
+    // row "The Paladin contributors" and the footer copyright
+    // row "© The Paladin contributors (all rights reserved)"
+    // at dialog render time. The AGPL-3.0-or-later license
+    // explicitly forbids the "all rights reserved" tail
+    // (AGPL grants share-alike rights so the tail would be a
+    // false license claim), so the cross-helper ends-with
+    // relationship is both an aesthetic-consistency pin and a
+    // license-compliance forcing function.
+    //
+    // Pinning the cross-helper ends-with relationship directly
+    // here surfaces the regression with a message naming both
+    // the copyright and the developer-name byte sequences,
+    // rather than as a quiet visual misalignment at dialog
+    // render time or as an unnoticed false-license-claim
+    // regression. Mirror of the
+    // `_starts_with_copyright_glyph_and_contains_developer_name`
+    // companion on the substring side and the
+    // `_developer_name_ends_with_the_contributors_collective_noun`
+    // sibling on the developer-name suffix side; together they
+    // pin the full copyright-to-developer-name byte-relationship
+    // contract (leading glyph + space, substring containment,
+    // trailing-byte equality) across both attribution surfaces
+    // against a single source of truth.
+    use paladin_gtk::app::model::{
+        format_app_about_dialog_copyright, format_app_about_dialog_developer_name,
+    };
+
+    let copyright = format_app_about_dialog_copyright();
+    let developer_name = format_app_about_dialog_developer_name();
+    assert!(
+        copyright.ends_with(developer_name),
+        "AdwAboutDialog copyright {copyright:?} must end with the developer-name byte sequence {developer_name:?} so the footer-copyright row and the dialog-header attribution row carry the same trailing byte sequence (a regression that appended a tail like `\" (all rights reserved)\"` would diverge the two rows and would also be a false license claim against the AGPL-3.0-or-later share-alike grant)",
+    );
+}
