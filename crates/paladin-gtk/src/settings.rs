@@ -782,6 +782,35 @@ pub fn compose_settings_dialog_inline_subtitle_for_field(
     }
 }
 
+/// State-driven projection of whether the inline-subtitle
+/// `gtk::Label` beneath the `AdwSwitchRow` / `AdwSpinRow`
+/// identified by `field` is currently revealed per
+/// `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
+/// "Preferences" and §"Tests > Pure-logic unit tests >
+/// `tests/settings_logic.rs`".
+///
+/// Sibling of
+/// [`compose_settings_dialog_inline_subtitle_for_field`] on the
+/// `set_visible:` side: returns `true` iff the text projection
+/// returns `Some`, so the widget can bind a single
+/// `#[watch] set_visible:` against the helper instead of
+/// re-deriving the routing decision against [`SaveOutcome`] or
+/// calling `.is_some()` on the text projection inline. Lets the
+/// row chrome — body text and visibility — flip together on the
+/// same `SaveOutcome` dispatch.
+///
+/// Pure — borrows the outcome and returns a `bool` without
+/// allocating; mirrors the partitioning of [`SaveOutcome`] applied
+/// by [`compose_settings_dialog_inline_subtitle_for_field`] so the
+/// two projections stay in lockstep across every dispatch.
+#[must_use]
+pub fn compose_settings_dialog_inline_subtitle_revealed_for_field(
+    outcome: Option<&SaveOutcome>,
+    field: SettingsField,
+) -> bool {
+    compose_settings_dialog_inline_subtitle_for_field(outcome, field).is_some()
+}
+
 /// Buffered spinner pending the 500 ms debounce.
 #[derive(Debug, Clone, Copy)]
 enum PendingSpinner {

@@ -1248,3 +1248,72 @@ fn compose_settings_dialog_inline_subtitle_for_field_returns_durability_warning_
         );
     }
 }
+
+#[test]
+fn compose_settings_dialog_inline_subtitle_revealed_for_field_mirrors_subtitle_text_for_field() {
+    // Sibling of `compose_settings_dialog_inline_subtitle_for_field`
+    // on the `set_visible:` side: the inline subtitle gtk::Label
+    // (carrying the rendered `InlineError` / `InlineWarning` body)
+    // must reveal exactly when the text helper returns `Some`, so
+    // the widget can bind a single `#[watch] set_visible:` against
+    // the helper instead of `.is_some()` on the text projection
+    // inline.
+    //
+    // Per the implementation plan §"libadwaita usage" >
+    // "Preferences", the inline-error / durability-warning surface
+    // attaches to the matching `AdwPreferencesGroup` row; the two
+    // projections (text + revealed) flip together on the same
+    // `SaveOutcome` dispatch so the row chrome stays consistent.
+    use paladin_gtk::settings::{
+        compose_settings_dialog_inline_subtitle_for_field,
+        compose_settings_dialog_inline_subtitle_revealed_for_field,
+    };
+
+    let io_err = PaladinError::IoError {
+        operation: "write",
+        source: std::io::Error::other("disk full"),
+    };
+    let scenarios: [(Option<SaveOutcome>, &'static str); 5] = [
+        (None, "idle: no save attempted"),
+        (Some(SaveOutcome::Success), "success: row stays clear"),
+        (
+            Some(SaveOutcome::Inline {
+                error: InlineError::from_error(&io_err),
+                field: SettingsField::ClipboardClearSecs,
+            }),
+            "inline error targets ClipboardClearSecs",
+        ),
+        (
+            Some(SaveOutcome::Rollback {
+                error: InlineError::from_error(&save_not_committed_with_backup()),
+                field: SettingsField::AutoLockEnabled,
+            }),
+            "rollback targets AutoLockEnabled",
+        ),
+        (
+            Some(SaveOutcome::DurabilityWarning {
+                warning: InlineWarning::from_error(&PaladinError::SaveDurabilityUnconfirmed),
+                field: SettingsField::AutoLockSecs,
+            }),
+            "durability warning targets AutoLockSecs",
+        ),
+    ];
+
+    for (outcome, label) in &scenarios {
+        for field in [
+            SettingsField::AutoLockEnabled,
+            SettingsField::AutoLockSecs,
+            SettingsField::ClipboardClearEnabled,
+            SettingsField::ClipboardClearSecs,
+        ] {
+            let text = compose_settings_dialog_inline_subtitle_for_field(outcome.as_ref(), field);
+            let revealed =
+                compose_settings_dialog_inline_subtitle_revealed_for_field(outcome.as_ref(), field);
+            assert_eq!(
+                revealed,
+                text.is_some(),
+                "{label}: row {field:?} revealed flag must mirror text helper's Some/None",
+            );
+        }
+    }
+}
