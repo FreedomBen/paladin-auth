@@ -11690,3 +11690,85 @@ fn format_app_about_dialog_comments_does_not_contain_a_carriage_return_byte() {
         "AdwAboutDialog comments must not contain the `\\r` carriage-return byte (0x0D); a mid-string `\\r` slips past the `_is_non_empty_single_line_distinct_from_program_name` `\\n`-only single-line check, past the starts/ends-with-whitespace guards (which only reject `\\r` at the boundaries), and past `_is_ascii_only` (because `\\r` is ASCII), and would render as a literal control glyph in the dialog-header description, propagate via `CARGO_PKG_DESCRIPTION` into Cargo metadata scrapers, and break screen-reader description announcements; got {comments:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_release_notes_version_does_not_contain_a_carriage_return_byte() {
+    // Defense-in-depth direct sibling of the existing
+    // `format_app_about_dialog_release_notes_version_matches_about_dialog_version`
+    // and
+    // `format_app_about_dialog_release_notes_version_matches_cargo_pkg_version`
+    // cross-source pins, and a per-helper sibling of the
+    // `_release_notes_version_does_not_contain_a_null_byte`
+    // null-byte companion.
+    //
+    // The two `_matches_*` companions transitively guarantee
+    // `release_notes_version` shares its bytes with the
+    // `version` helper (which in turn equals
+    // `CARGO_PKG_VERSION`). The `version` helper is byte-
+    // pinned by `_version_is_ascii_only`,
+    // `_version_has_no_embedded_whitespace` (a
+    // `char::is_whitespace()` check that catches `\r`),
+    // `_version_starts_with_a_digit`,
+    // `_version_has_at_least_three_dot_separated_segments`,
+    // `_version_does_not_end_with_a_dot`,
+    // `_version_segments_are_non_empty`,
+    // `_version_does_not_start_with_a_dot`, and
+    // `_version_does_not_contain_a_null_byte`. So a `\r` byte
+    // in the active `release_notes_version` value is currently
+    // protected *transitively* — through equality with
+    // `version`, which is itself directly pinned against
+    // embedded whitespace.
+    //
+    // But the transitive protection is brittle: a future
+    // refactor that decoupled the two helpers (a separate
+    // override constant for the "What's New" scope, a
+    // workspace-vendoring split that lifted
+    // `release_notes_version` out of the equality chain, or a
+    // CHANGELOG.md-derived release-notes version that
+    // intentionally lagged the binary version on a hotfix
+    // cut) would silently drop the `\r` guard the moment the
+    // `_matches_*` companions started skipping cases. The
+    // `_does_not_contain_a_null_byte` sibling names `\0`
+    // specifically — `\r` is not `\0`. None of the existing
+    // companions name the `\r` byte directly on the
+    // `release_notes_version` helper.
+    //
+    // A regression that landed `"0.0.1\r"` (a CRLF-source
+    // copy-paste from a Windows-edited release-notes scope
+    // constant, a `concat!(_, "\r", _)` form, or a hand-
+    // edited helper override that lifted the version string
+    // from a Windows-edited CHANGELOG.md heading) would mis-
+    // render in multiple downstream surfaces, identically to
+    // the analysis on the `version` helper: (1) the GLib-
+    // backed `AdwAboutDialog::set_release_notes_version`
+    // setter routes the value into Pango for inline rendering
+    // as the "What's New in v<release_notes_version>" header
+    // — a stray `\r` byte would render as a literal control
+    // glyph in the section header; (2) the value scopes the
+    // "What's New" body region inside the dialog — a
+    // mismatched / mis-rendered scope key could prevent the
+    // body from rendering at all on libadwaita versions that
+    // expect a clean LF-only header key; (3) screen readers
+    // that announce the "What's New" section header read the
+    // `\r` as a literal control character, breaking the
+    // section-header accessibility-tree announcement.
+    //
+    // Pinning the no-CR invariant directly on this helper
+    // surfaces the regression with a message naming the
+    // offending byte at build time rather than via a future
+    // decoupling that silently dropped the transitive
+    // `version` guard. Current helper returns the value
+    // sourced from `CARGO_PKG_VERSION` (no `\r` byte), so
+    // this test passes today and serves as a forcing function
+    // so any future decoupling override of the helper —
+    // including the eventual landing of a separately-scoped
+    // release-notes version derived from CHANGELOG.md
+    // headings — stays free of carriage returns.
+    use paladin_gtk::app::model::format_app_about_dialog_release_notes_version;
+
+    let release_notes_version = format_app_about_dialog_release_notes_version();
+    assert!(
+        !release_notes_version.contains('\r'),
+        "AdwAboutDialog release_notes_version must not contain the `\\r` carriage-return byte (0x0D); the current value's `\\r`-cleanliness is only protected transitively via `_matches_about_dialog_version` and `_matches_cargo_pkg_version`, so a future decoupling override would silently drop the `\\r` guard — a stray `\\r` would render as a literal control glyph in the dialog's \"What's New in v<release_notes_version>\" section header, could prevent the What's New body from rendering on libadwaita versions that expect a clean LF-only header key, and break screen-reader section-header announcements; got {release_notes_version:?}",
+    );
+}
