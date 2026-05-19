@@ -1754,6 +1754,54 @@ fn format_settings_dialog_spinner_digits_returns_zero() {
 }
 
 #[test]
+fn format_settings_dialog_spinner_numeric_returns_true() {
+    // `adw::SpinRow::numeric` (the libadwaita-side override of the
+    // `gtk::SpinButton` property of the same name) defaults to
+    // `TRUE` — typed input is restricted to digits, the decimal
+    // point, and the minus sign — while the underlying
+    // `gtk::SpinButton::numeric` defaults to `FALSE`. Toggling it
+    // back to `FALSE` would let a user paste arbitrary text into
+    // the spinner entry (e.g. `"thirty seconds"`); the entry's
+    // value parser then silently snaps the unparseable input to
+    // the prior committed value without firing a `changed` signal,
+    // leaving the visible text out of sync with the value the
+    // `SettingsState` debounce eventually saves. Pinning the flag
+    // to `true` makes the input restriction explicit so future
+    // contributors do not regress the property to the
+    // `gtk::SpinButton` default by mistake.
+    //
+    // Pairs with `format_settings_dialog_spinner_digits` returning
+    // `0` (the entry shows no fractional places) and
+    // `format_settings_dialog_spinner_snap_to_ticks` returning
+    // `true` (off-grid values snap to whole seconds) so the
+    // integer-seconds invariant is enforced at every entry point:
+    // typed input (`numeric`), displayed digits (`digits`), and
+    // programmatic / external setters (`snap_to_ticks`).
+    //
+    // Pinning the literal through this helper keeps the numeric
+    // flag in one place shared by both `adw::SpinRow::set_numeric(
+    // format_settings_dialog_spinner_numeric())` calls the
+    // `SettingsComponent` makes; the widget layer never duplicates
+    // the literal. Sibling of
+    // `format_settings_dialog_spinner_climb_rate`,
+    // `format_settings_dialog_spinner_digits`,
+    // `format_settings_dialog_spinner_page_increment`,
+    // `format_settings_dialog_spinner_page_size`, and
+    // `format_settings_dialog_spinner_snap_to_ticks` on the
+    // `adw::SpinRow` property side; together they pin every
+    // spinner-property literal the `SettingsComponent` sets beyond
+    // the `gtk::Adjustment` bounds.
+    //
+    // Pure — returns a `bool` without allocating.
+    use paladin_gtk::settings::format_settings_dialog_spinner_numeric;
+
+    assert!(
+        format_settings_dialog_spinner_numeric(),
+        "numeric input restriction is the AdwSpinRow default and is pinned defensively",
+    );
+}
+
+#[test]
 fn format_settings_dialog_spinner_snap_to_ticks_returns_true() {
     // `adw::SpinRow::snap-to-ticks` defaults to `FALSE` in
     // libadwaita: invalid intermediate values (typed entries that
