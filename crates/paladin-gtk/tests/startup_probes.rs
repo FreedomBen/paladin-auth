@@ -7269,3 +7269,58 @@ fn format_app_about_dialog_developer_name_is_ascii_only() {
         );
     }
 }
+
+#[test]
+fn format_app_about_dialog_debug_info_filename_is_ascii_only() {
+    // Defense-in-depth sibling of
+    // `format_app_about_dialog_debug_info_filename_returns_paladin_debug_info_txt`
+    // (exact-value pin to the static literal
+    // `"paladin-debug-info.txt"`) and
+    // `format_app_about_dialog_debug_info_filename_is_non_empty_single_line_with_txt_extension`
+    // (positive shape pin on non-empty + no embedded newline +
+    // `.txt` extension + no path separators). Those companions
+    // catch the wrong-value, empty, embedded-newline, wrong-
+    // extension, and path-traversal regressions but leave the
+    // non-ASCII-byte edge case ungated.
+    //
+    // The `AdwAboutDialog::debug_info_filename` slot pins the
+    // suggested filename `AdwAboutDialog` hands to the
+    // "Save debug info" `gtk::FileDialog`. The filename round-
+    // trips through the user's locale-configured filesystem
+    // and gets persisted into the destination directory once
+    // the save action commits. A non-ASCII byte in the
+    // filename — e.g. a Unicode-lookalike `paladin-debug-infо.txt`
+    // where the `o` before `.txt` is Cyrillic U+043E — would
+    // render identically in most fonts but produce a filename
+    // that is silently *not* what the user expected. The user
+    // would then later search their downloads folder for
+    // `paladin-debug-info.txt` (ASCII) and miss the saved file
+    // because the on-disk filename uses a Unicode lookalike
+    // they cannot easily type or paste.
+    //
+    // Pinning the ASCII-only invariant here surfaces the
+    // regression at the helper-source layer with a message
+    // naming the offending non-ASCII byte rather than as a
+    // confusing "I saved my bug report but can't find it"
+    // user-support thread. Mirror of the new
+    // `_program_name_is_ascii_only`,
+    // `_application_icon_name_is_ascii_only`,
+    // `_version_is_ascii_only`, and
+    // `_developer_name_is_ascii_only` companions on the dialog
+    // header-cluster sides; together they pin the ASCII-shape
+    // contract across the four dialog header slots and the
+    // debug-info file-save suggested name against a single
+    // source of truth, closing the Unicode-lookalike regression
+    // surface across the dialog header + debug-info save dialog
+    // user surfaces.
+    use paladin_gtk::app::model::format_app_about_dialog_debug_info_filename;
+
+    let filename = format_app_about_dialog_debug_info_filename();
+    for (idx, ch) in filename.char_indices() {
+        assert!(
+            ch.is_ascii(),
+            "AdwAboutDialog debug_info_filename must use ASCII characters only so the file-save dialog's suggested filename round-trips through the user's filesystem byte-identically — a Unicode lookalike like `paladin-debug-infо.txt` (Cyrillic `о` U+043E) would render identically but produce a silently-different on-disk filename the user cannot easily find later; got non-ASCII char {ch:?} (U+{:04X}) at byte offset {idx} in {filename:?}",
+            ch as u32,
+        );
+    }
+}
