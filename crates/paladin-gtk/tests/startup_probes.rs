@@ -18316,3 +18316,152 @@ fn format_app_about_dialog_url_helpers_do_not_contain_a_form_feed_byte() {
         );
     }
 }
+
+#[test]
+fn format_app_about_dialog_url_helpers_do_not_contain_a_backspace_byte() {
+    // Cross-helper defense-in-depth sibling looping over the
+    // three `AdwAboutDialog` footer URL helpers
+    // (`format_app_about_dialog_website`,
+    // `format_app_about_dialog_issue_url`,
+    // `format_app_about_dialog_support_url`) and pinning each
+    // value as free of the backspace byte `\x08` (0x08). Closes
+    // the about-dialog backspace cycle started by the
+    // `_developer_name_does_not_contain_a_backspace_byte`
+    // sibling and continued across every byte-pinned helper,
+    // completing the URL-helpers' byte-composition contract
+    // past the just-finished `{null / horizontal-tab / carriage-
+    // return / vertical-tab / form-feed}` cross-URL quintuple.
+    //
+    // The backspace byte sits one step below HT (0x09) in the
+    // ASCII C0 block and is the first non-whitespace-classified
+    // C0 byte in the cycle: unlike FF / HT / CR / LF / VT,
+    // `\x08` is NOT matched by `char::is_whitespace()` (Unicode
+    // treats BS as a control byte, not whitespace), so the
+    // existing `url_helpers_contain_no_embedded_whitespace`
+    // companion does NOT catch `\x08` even though it catches
+    // `\x0C`. The backspace byte therefore has NO transitive
+    // protection on the URL helpers today — strictly more
+    // dangerous than form-feed, where the transitive `\x0C`
+    // guard at least *currently* fires before any future
+    // relaxation.
+    //
+    // A regression would slip past every existing companion:
+    //   - `_is_non_empty_https_url[_distinct_*]` per-URL
+    //     companion (which only checks non-empty + `https://`
+    //     prefix + no space byte — a `\x08` byte mid-URL
+    //     satisfies all three since `\x08` is not the literal
+    //     U+0020 SPACE);
+    //   - `_are_ascii_only` cross-URL companion (`\x08` is
+    //     ASCII so it slips past);
+    //   - `_url_helpers_contain_no_embedded_whitespace` uses
+    //     `char::is_whitespace()`, which returns *false* for
+    //     U+0008 BS — strictly weaker coverage than the form-
+    //     feed case;
+    //   - `_do_not_end_with_a_trailing_slash` (which only
+    //     constrains the final byte);
+    //   - `_do_not_contain_a_null_byte` /
+    //     `_do_not_contain_a_horizontal_tab_byte` /
+    //     `_do_not_contain_a_carriage_return_byte` /
+    //     `_do_not_contain_a_vertical_tab_byte` /
+    //     `_do_not_contain_a_form_feed_byte` siblings (which
+    //     each name a different byte specifically);
+    //   - `_do_not_contain_a_query_string` /
+    //     `_do_not_contain_a_fragment_anchor` /
+    //     `_do_not_contain_a_userinfo_at_sign` /
+    //     `_do_not_contain_a_backslash` siblings (which each
+    //     name a different byte specifically).
+    // None of the existing companions name the `\x08` byte
+    // directly.
+    //
+    // `\x08` is never a valid byte inside a URL per RFC 3986
+    // (the backspace byte is not in any of the URL grammar's
+    // production rules), so the no-`\x08` invariant is
+    // unconditional regardless of any future percent-encoded-
+    // space relaxation.
+    //
+    // A regression that landed
+    // `"https://github.com\x08FreedomBen/paladin"` (backspace
+    // byte lifted from a `script(1)` typescript capturing raw
+    // `\x08` edit-stream bytes between the host and path of an
+    // interactively-edited URL registry, a `concat!(_, "\x08",
+    // _)` form mirroring an edit-stream-paginated URL-table
+    // cell, or a hand-edited helper override that pasted from a
+    // terminal session recording preserving raw `\x08` bytes)
+    // would mis-render in multiple downstream surfaces: (1) the
+    // GLib-backed `AdwAboutDialog::set_website` /
+    // `set_issue_url` / `set_support_url` setters route the
+    // value into Pango for inline rendering as the underlined
+    // link label in the dialog footer — Pango's default
+    // rendering of a bare `\x08` byte is implementation-defined
+    // and typically renders as a literal control glyph (a
+    // hollow box or tofu-like placeholder), breaking the
+    // trusted-application surface contract of the link label;
+    // (2) when the user clicks the URL, GIO's
+    // `gtk_show_uri_full` routes the value through the
+    // session's `xdg-open` / portal layer where some URL
+    // parsers (WHATWG URL §4.5 implementations) reject `\x08`
+    // outright with `InvalidUrl`, breaking the click-through
+    // routing entirely, while others percent-encode the `\x08`
+    // as `%08` and route to a non-existent URL with a `Bad
+    // Request` response surfacing as a confusing browser-level
+    // error; (3) when the URL labels are dumped through a TTY
+    // (link-checker tooling output piped to `less`, a
+    // `gtk-launch` dry-run rendered into a terminal logger),
+    // the `\x08` byte erases the preceding glyph and lets the
+    // rendered URL diverge from the bytes on disk — a log-
+    // injection / display-spoofing primitive where an attacker
+    // who controlled the upstream URL source could craft a
+    // payload whose terminal-rendered form points to a
+    // legitimate-looking URL while the actual click-target
+    // bytes go to a malicious host (a classic phishing
+    // primitive); (4) screen readers that announce the URL
+    // label read the `\x08` as a literal control character or —
+    // on some implementations — as a delete-previous
+    // announcement, breaking the link-label accessibility-tree
+    // announcement at the byte boundary; (5) any downstream
+    // tooling that scrapes the URL labels (link-checker bots,
+    // broken-link auditors) would propagate the stray `\x08`
+    // byte into the consumer's stream and trigger the same
+    // routing failure across every downstream surface.
+    //
+    // Pinning the no-`\x08` invariant directly here surfaces
+    // the regression with a message naming the offending URL
+    // helper at build time rather than as a downstream user-
+    // visible mis-rendered link label, a confusing browser-
+    // level error on click-through, a terminal-erase phishing
+    // primitive on URL-label dumps, or a link-checker tooling
+    // failure. Mirror of the
+    // `_url_helpers_do_not_end_with_a_trailing_slash`,
+    // `_url_helpers_do_not_contain_a_query_string`,
+    // `_url_helpers_do_not_contain_a_fragment_anchor`,
+    // `_url_helpers_do_not_contain_a_userinfo_at_sign`,
+    // `_url_helpers_do_not_contain_a_backslash`,
+    // `_url_helpers_contain_no_embedded_whitespace`,
+    // `_url_helpers_are_ascii_only`,
+    // `_url_helpers_do_not_contain_a_null_byte`,
+    // `_url_helpers_do_not_contain_a_carriage_return_byte`,
+    // `_url_helpers_do_not_contain_a_horizontal_tab_byte`,
+    // `_url_helpers_do_not_contain_a_vertical_tab_byte`, and
+    // `_url_helpers_do_not_contain_a_form_feed_byte` cross-URL
+    // siblings; together they pin the URL byte-composition
+    // contract (no whitespace, ASCII-only, no terminal `/`, no
+    // `\0`, no `\r`, no `\t`, no `\x0B`, no `\x0C`, no `\x08`,
+    // no `?` query, no `#` anchor, no `@` userinfo, no `\`
+    // path-confusion byte) across all three footer link
+    // surfaces against a single source of truth.
+    use paladin_gtk::app::model::{
+        format_app_about_dialog_issue_url, format_app_about_dialog_support_url,
+        format_app_about_dialog_website,
+    };
+
+    for (label, url) in [
+        ("website", format_app_about_dialog_website()),
+        ("issue_url", format_app_about_dialog_issue_url()),
+        ("support_url", format_app_about_dialog_support_url()),
+    ] {
+        assert!(
+            !url.contains('\x08'),
+            "AdwAboutDialog {label} must not contain the `\\x08` backspace byte (0x08) — `\\x08` is never a valid byte inside a URL per RFC 3986 (the backspace byte is not in any of the URL grammar's production rules); unlike form-feed, `_url_helpers_contain_no_embedded_whitespace` does NOT catch `\\x08` because `char::is_whitespace()` returns false for U+0008 BS (strictly weaker coverage than form-feed which the whitespace companion does catch transitively); a stray `\\x08` would mis-render as a literal control glyph in the dialog footer link label, fail or mis-route the click-through routing across WHATWG URL §4.5 implementations vs `%08`-encoding implementations, enable a terminal-erase phishing primitive on URL-label dumps piped through a TTY (the rendered URL points to a legitimate-looking host while the actual click-target bytes go to a malicious host because `\\x08` erases the preceding glyph), break screen-reader link-label announcements at the byte boundary, and propagate into downstream link-checker tooling; got {url:?}",
+        );
+    }
+}
