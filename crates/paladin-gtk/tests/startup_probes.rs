@@ -14435,3 +14435,109 @@ fn format_app_about_dialog_developers_entries_do_not_contain_a_vertical_tab_byte
         );
     }
 }
+
+#[test]
+fn format_app_about_dialog_empty_credits_section_entries_do_not_contain_a_vertical_tab_byte() {
+    // Cross-helper defense-in-depth sibling looping over the
+    // three currently-empty `AdwAboutDialog` credits-section
+    // array helpers
+    // (`format_app_about_dialog_designers`,
+    // `format_app_about_dialog_artists`,
+    // `format_app_about_dialog_documenters`) and pinning each
+    // entry as free of the vertical-tab byte `\x0B` (0x0B).
+    // Mirror of the just-added
+    // `_developers_entries_do_not_contain_a_vertical_tab_byte`
+    // sibling on the populated-developers side and of the
+    // `_empty_credits_section_entries_do_not_contain_a_null_byte`
+    // / `_empty_credits_section_entries_do_not_contain_a_carriage_return_byte`
+    // / `_empty_credits_section_entries_do_not_contain_a_horizontal_tab_byte`
+    // siblings on the prior C0 control-byte cycle, structured as
+    // a single cross-helper loop matching those existing
+    // companions.
+    //
+    // The vertical-tab byte sits one step above HT (0x09) and
+    // one step below CR (0x0D) in the ASCII C0 block; like its
+    // siblings it is a non-printable control byte with no
+    // legitimate use inside a human-readable GNOME credits-page
+    // contributor-name entry.
+    //
+    // The three helpers currently return the empty array `[]`
+    // because Paladin does not yet have a separately-credited
+    // designer / artist / documenter for the v0.2 release. The
+    // empty-array return trivially contains no entries (let
+    // alone `\x0B`-bearing entries), so this test passes today
+    // as the loop body is never entered. However, once any of
+    // the three credits sections gains a contributor, the helper
+    // return type will switch from `[&'static str; 0]` to
+    // `[&'static str; N]` with non-empty entries — at that point
+    // a `\x0B` injection from a legacy CONTRIBUTORS file authored
+    // on a line-printer terminal that used `\x0B` as a vertical-
+    // spacing separator, a `concat!(_, "\x0B", _)` form, a hand-
+    // edited helper that pasted from an EBCDIC-to-ASCII
+    // translation preserving the original VT byte, or a tooling
+    // export pipeline that preserved VT-separated column values
+    // inside a single-name entry would slip past every other
+    // companion the way the
+    // `_developers_entries_do_not_contain_a_vertical_tab_byte`
+    // sibling already documents for the developers helper.
+    //
+    // Vertical-tab bytes in the credits-section entries would
+    // mis-render in multiple downstream surfaces, identically to
+    // the `set_developers` analysis in the
+    // `_developers_entries_do_not_contain_a_vertical_tab_byte`
+    // companion: (1) the GLib-backed `set_designers` /
+    // `set_artists` / `set_documenters` setters route through
+    // GTK and Pango renders each entry as a credits-page row —
+    // a stray `\x0B` byte in the middle of a contributor name
+    // would render as a literal control glyph (a hollow box or
+    // tofu-like placeholder), visually breaking the credits-
+    // page contributor-name layout; (2) any tooling that scrapes
+    // the credits-page contributor list (GNOME `gnome-software`
+    // credit aggregators) would propagate the stray `\x0B` byte
+    // into the consumer's stream and trigger the same rendering
+    // bug across every downstream surface; (3) screen readers
+    // that announce the credits-page contributor names read the
+    // `\x0B` as a literal control character, breaking the
+    // contributor-name accessibility-tree announcement at the
+    // byte boundary.
+    //
+    // Pinning the no-`\x0B` invariant across all three currently-
+    // empty credits-section helpers in a single cross-helper
+    // loop surfaces the regression with a message naming the
+    // affected helper, the offending byte, and the entry index
+    // at build time rather than as a downstream rendering
+    // artifact of the credits-page sections. Current helpers
+    // return the empty array `[]` (zero entries, no `\x0B` byte
+    // to find), so this test passes today and serves as a
+    // forcing function so any future override of the helpers —
+    // including the eventual landing of separately-credited
+    // designer / artist / documenter strings — stays free of
+    // vertical-tab bytes. Continues the empty-credits-section C0
+    // control-byte cycle past the just-completed `{null /
+    // horizontal-tab / carriage-return}` entry-triplet so each
+    // entry's byte-composition contract pins each forbidden
+    // control byte against a single source of truth.
+    use paladin_gtk::app::model::{
+        format_app_about_dialog_artists, format_app_about_dialog_designers,
+        format_app_about_dialog_documenters,
+    };
+
+    let designers = format_app_about_dialog_designers();
+    let artists = format_app_about_dialog_artists();
+    let documenters = format_app_about_dialog_documenters();
+
+    let sections: [(&str, &[&str]); 3] = [
+        ("designers", &designers),
+        ("artists", &artists),
+        ("documenters", &documenters),
+    ];
+
+    for (label, entries) in sections {
+        for (idx, entry) in entries.iter().enumerate() {
+            assert!(
+                !entry.contains('\x0B'),
+                "AdwAboutDialog {label} entry at index {idx} must not contain the `\\x0B` vertical-tab byte (0x0B); a mid-string `\\x0B` would render as a literal control glyph in the credits-page \"{label}\" row via `set_{label}`, propagate into downstream attribution scrapers and `gnome-software` credit aggregators, and break screen-reader contributor-name announcements at the byte boundary; got {entry:?}",
+            );
+        }
+    }
+}
