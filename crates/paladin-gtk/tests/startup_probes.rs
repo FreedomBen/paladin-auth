@@ -4977,3 +4977,46 @@ fn format_app_window_accelerator_bindings_targets_are_bundled_action_names() {
         );
     }
 }
+
+#[test]
+fn format_app_window_accelerator_bindings_targets_dispatch_to_app_msg() {
+    // Companion to
+    // `format_app_window_accelerator_bindings_targets_are_bundled_action_names`:
+    // that test asserts every accelerator target maps to a bare
+    // action name registered on the bundled action group via
+    // `format_app_window_action_names`; this test extends the
+    // chain one step further so every accelerator target also
+    // resolves through `dispatch_app_window_action` to a concrete
+    // `AppMsg` variant. A future refactor that added an action
+    // name to the bundled group + accelerator surface without
+    // wiring a `dispatch_app_window_action` match arm would
+    // otherwise activate a no-op at runtime — the accelerator
+    // would fire its `SimpleAction`, the action's
+    // `connect_activate` handler would route through
+    // `dispatch_app_window_action`, the lookup would return
+    // `None`, and the handler would silently exit. The
+    // `dispatch_app_window_action_covers_every_bundled_action_name`
+    // sibling already pins coverage of the full action group;
+    // this assertion focuses the guarantee on the three
+    // accelerator-bound targets so a drift specific to the
+    // keyboard surface stays a failing test rather than a missing
+    // shortcut.
+    use paladin_gtk::app::model::{
+        dispatch_app_window_action, format_app_action_group_name,
+        format_app_window_accelerator_bindings,
+    };
+
+    let bindings = format_app_window_accelerator_bindings();
+    let prefix = format!("{}.", format_app_action_group_name());
+    for (accel, target) in bindings {
+        assert!(
+            target.starts_with(&prefix),
+            "accelerator binding target {target:?} (paired with {accel:?}) must start with the shared group prefix {prefix:?}",
+        );
+        let bare = &target[prefix.len()..];
+        assert!(
+            dispatch_app_window_action(bare).is_some(),
+            "accelerator binding target {target:?} (paired with {accel:?}) strips to bare action name {bare:?}, which must route through dispatch_app_window_action to a concrete AppMsg variant; got None, so a keyboard activation of this accelerator would silently no-op at runtime",
+        );
+    }
+}
