@@ -5601,3 +5601,40 @@ fn format_app_window_default_size_is_landscape_or_square_orientation() {
         "ApplicationWindow default size must be landscape or square (width >= height) so the AccountListComponent's `<issuer>:<label>` rows render with horizontal room before AdwSqueezer ellipsizes the label; got ({width}, {height}) which is portrait-oriented",
     );
 }
+
+#[test]
+fn format_app_about_dialog_developers_does_not_contain_developer_name() {
+    // Defense-in-depth cross-consistency: the AdwAboutDialog
+    // header attribution row (`developer-name`) carries the
+    // canonical collective attribution string
+    // ("The Paladin contributors") because the workspace
+    // `Cargo.toml` deliberately omits the `authors` field per
+    // §"AGPL-3.0-or-later open contributor pool" so the dialog
+    // does not name a single owner. The credits-page contributor
+    // list (`developers`) carries individual contributors who
+    // have committed against the project. A refactor that
+    // accidentally seeded the collective attribution string into
+    // the credits list (e.g. copy-pasted
+    // `format_app_about_dialog_developer_name()` into the
+    // `developers` literal) would render a credits row that
+    // duplicates the header attribution row — confusing because
+    // the credits page would now list a "contributor" with the
+    // same name as the collective attribution. Mirroring the
+    // `format_app_about_dialog_copyright_starts_with_copyright_glyph_and_contains_developer_name`
+    // pattern (which positively ties developer_name into a
+    // related field), this assertion negatively ties the two
+    // sides apart so the credits list and the header attribution
+    // row carry semantically distinct strings.
+    use paladin_gtk::app::model::{
+        format_app_about_dialog_developer_name, format_app_about_dialog_developers,
+    };
+
+    let developer_name = format_app_about_dialog_developer_name();
+    let developers = format_app_about_dialog_developers();
+    for entry in developers {
+        assert_ne!(
+            entry, developer_name,
+            "AdwAboutDialog developers credits-list entry {entry:?} must not duplicate the dialog-header collective attribution string {developer_name:?}; the credits list names individual contributors, while the header attribution names the collective",
+        );
+    }
+}
