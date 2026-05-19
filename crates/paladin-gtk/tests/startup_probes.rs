@@ -19460,3 +19460,102 @@ fn format_app_about_dialog_version_does_not_contain_a_line_feed_byte() {
         "AdwAboutDialog version must not contain the `\\n` line-feed byte (0x0A); the current `\\n`-cleanliness is only protected transitively via the `_version_has_no_embedded_whitespace` companion (which uses `char::is_whitespace()` and returns true for U+000A LF), so a future refactor that relaxed the no-embedded-whitespace invariant (a multi-line SemVer build-meta suffix, a `concat!` injection, or a workspace-vendoring split that lifted version out of the strict SemVer grammar) would naturally drop the `\\n` guard; a stray `\\n` would cause Pango to interpret the byte as a hard line break and wrap the version onto two lines (pushing the dialog header taller than its baseline layout), propagate into `release_notes_version` via the equality pin and break the \"What's New\" caption layout, propagate into `debug_info` via the `concat!` composition and break the `_debug_info_has_exactly_two_lines` invariant, trigger AppStream `appstreamcli validate` rejection at packaging time (the strict SemVer grammar has no `\\n` production), break screen-reader version announcements at the byte boundary, and propagate into downstream changelog aggregators; got {version:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_application_icon_name_does_not_contain_a_line_feed_byte() {
+    // Defense-in-depth per-byte sibling extending the
+    // application_icon_name byte-cleanliness contract past the
+    // just-completed `{null / horizontal-tab / carriage-return /
+    // vertical-tab / form-feed / backspace}` sextuple to the
+    // line-feed byte `\n` (0x0A), completing the inner C0
+    // control-byte cycle from BS (0x08) through CR (0x0D) for
+    // this helper. The existing
+    // `_application_icon_name_has_no_embedded_whitespace`
+    // companion uses `char::is_whitespace()`, which under Rust's
+    // Unicode definition returns *true* for U+000A LF, so that
+    // companion DOES catch a stray `\n` byte in the icon-name
+    // string.
+    //
+    // But that protection is *coupled* to the no-embedded-
+    // whitespace invariant: a future refactor that relaxed the
+    // single-line icon-name constraint (a workspace-vendoring
+    // split that lifted icon-name out of the strict reverse-DNS
+    // grammar, or a `concat!` injection between reverse-DNS
+    // segments) would naturally relax the
+    // `_has_no_embedded_whitespace` companion to drop the `\n`
+    // check — at which point the no-`\n` invariant would
+    // silently regress to "allowed" without any independent
+    // byte-cleanliness pin keeping the byte forbidden. Mirror of
+    // the `_application_icon_name_does_not_contain_a_carriage_return_byte`
+    // sibling's same decoupling rationale on the CR side.
+    //
+    // None of the remaining application_icon_name companions
+    // name the `\n` byte directly:
+    //   - `_application_icon_name_matches_app_id` is an
+    //     equality pin against the `APP_ID` constant — a future
+    //     refactor that introduced `\n` into `APP_ID` would
+    //     propagate `\n` into this helper and the equality pin
+    //     would still pass;
+    //   - `_application_icon_name_is_reverse_dns` /
+    //     `_application_icon_name_segments_are_non_empty` /
+    //     `_application_icon_name_ends_with_gui_segment` scan
+    //     the reverse-DNS `.`-segment structure — `\n` is not
+    //     `.`, and `"org.tamx.Paladin\n.Gui"` still has four
+    //     non-empty `.`-segments ending with `"Gui"` (the inner
+    //     `\n` slips past the reverse-DNS structural checks);
+    //   - `_application_icon_name_is_ascii_only` pins each byte
+    //     as ASCII — `\n` is ASCII (0x0A) so it slips past;
+    //   - `_does_not_contain_a_null_byte` /
+    //     `_does_not_contain_a_horizontal_tab_byte` /
+    //     `_does_not_contain_a_carriage_return_byte` /
+    //     `_does_not_contain_a_vertical_tab_byte` /
+    //     `_does_not_contain_a_form_feed_byte` /
+    //     `_does_not_contain_a_backspace_byte`
+    //     each name a different byte specifically.
+    //
+    // A regression that landed `"org.tamx.Paladin\n.Gui"` (LF
+    // byte from a `concat!("org.tamx.Paladin", "\n", ".Gui")`
+    // injection mirroring a multi-line reverse-DNS rebrand, a
+    // hand-edited helper override that pasted from a multi-line
+    // package-id text dump, or a workspace-vendoring split that
+    // introduced a line break between reverse-DNS segments)
+    // would mis-render in multiple downstream surfaces: (1) the
+    // GLib-backed `AdwAboutDialog::set_application_icon` setter
+    // hands the string to the `gtk::IconTheme` lookup to resolve
+    // the named icon for the dialog header — a `\n`-bearing
+    // icon name would fail the theme lookup (no installed icon
+    // is keyed by a `\n`-bearing name) and fall through to the
+    // placeholder icon, breaking the dialog-header icon row;
+    // (2) the icon name is the reverse-DNS app identifier and
+    // is reused by the desktop file's `Icon=` key, the
+    // AppStream `<id>` slot, the Flatpak `app-id`, and the
+    // `StartupWMClass` — a `\n` byte would propagate into each
+    // of those packaging surfaces and trigger desktop-file
+    // validation rejection (`desktop-file-validate` enforces
+    // single-line `Icon=` values), AppStream `appstreamcli
+    // validate` rejection (the `<id>` is constrained to the
+    // reverse-DNS grammar with no `\n`), Flatpak manifest
+    // rejection at build time, and window-class detection
+    // failure for the running process; (3) screen readers that
+    // announce the dialog header icon read the `\n` as a
+    // paragraph break and pause mid-name, breaking the icon-
+    // name accessibility-tree announcement at the byte boundary.
+    //
+    // Pinning the no-`\n` invariant directly here surfaces the
+    // regression with a message naming the offending byte at
+    // build time rather than via a future no-embedded-whitespace
+    // decoupling that silently dropped the `\n` guard. Current
+    // helper returns `crate::APP_ID` which resolves to
+    // `"org.tamx.Paladin.Gui"` (no `\n` byte), so this test
+    // passes today and serves as a forcing function so any
+    // future `APP_ID` refactor stays free of line-feed bytes
+    // even when the `_has_no_embedded_whitespace` companion is
+    // intentionally relaxed.
+    use paladin_gtk::app::model::format_app_about_dialog_application_icon_name;
+
+    let icon_name = format_app_about_dialog_application_icon_name();
+    assert!(
+        !icon_name.contains('\n'),
+        "AdwAboutDialog application_icon_name must not contain the `\\n` line-feed byte (0x0A); the current `\\n`-cleanliness is only protected transitively via the `_application_icon_name_has_no_embedded_whitespace` companion (which uses `char::is_whitespace()` and returns true for U+000A LF), so a future refactor that relaxed the no-embedded-whitespace invariant (a workspace-vendoring split or a `concat!` injection between reverse-DNS segments) would naturally drop the `\\n` guard; a stray `\\n` would fail the `gtk::IconTheme` lookup for the dialog header icon (no installed icon is keyed by a `\\n`-bearing name) and fall through to the placeholder, propagate into the desktop file's `Icon=` key / AppStream `<id>` / Flatpak `app-id` / `StartupWMClass` surfaces and trigger desktop-file / AppStream / Flatpak validation rejection at packaging time (each surface requires a single-line reverse-DNS value), break window-class detection for the running process, and break screen-reader icon-name announcements at the byte boundary; got {icon_name:?}",
+    );
+}
