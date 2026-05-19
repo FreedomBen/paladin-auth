@@ -15984,6 +15984,110 @@ fn format_app_about_dialog_comments_does_not_contain_a_form_feed_byte() {
 }
 
 #[test]
+fn format_app_about_dialog_comments_does_not_contain_a_backspace_byte() {
+    // Defense-in-depth per-byte sibling extending the comments
+    // byte-cleanliness contract past the just-completed `{null /
+    // horizontal-tab / carriage-return / vertical-tab / form-
+    // feed}` quintuple to the backspace byte `\x08` (0x08), which
+    // sits one step below HT (0x09) in the ASCII C0 block and is
+    // the first non-whitespace-classified C0 byte in the cycle:
+    // unlike FF / HT / CR / LF / VT, `\x08` is NOT matched by
+    // `char::is_whitespace()` (Unicode treats BS as a control
+    // byte, not whitespace), so the surrounding-whitespace
+    // `trim()` check inside
+    // `_comments_is_non_empty_single_line_distinct_from_program_name`
+    // does NOT reject a leading or trailing `\x08` — making
+    // backspace strictly more dangerous than form-feed here,
+    // since `\x0C` was at least caught at the string boundaries
+    // by the existing surrounding-whitespace guard.
+    //
+    // None of the existing comments companions name the `\x08`
+    // byte directly:
+    //   - `_comments_is_non_empty_single_line_distinct_from_program_name`
+    //     uses `comments.contains('\n')` and a surrounding-
+    //     whitespace `trim()` check — `\x08` is not `\n` and
+    //     `char::is_whitespace()` returns *false* for U+0008 BS,
+    //     so neither the embedded-newline check nor the
+    //     surrounding-whitespace guard rejects `\x08` even at
+    //     the boundary, strictly weaker coverage than the form-
+    //     feed case;
+    //   - `_comments_does_not_end_with_a_period_per_libadwaita_convention`
+    //     only constrains the trailing byte (and even if the
+    //     last byte were `\x08`, the period-check predicate
+    //     would not fire because `\x08` is not `.`);
+    //   - `_comments_is_ascii_only` pins each byte as ASCII —
+    //     `\x08` is ASCII so it slips past;
+    //   - `_comments_does_not_contain_a_null_byte` /
+    //     `_comments_does_not_contain_a_horizontal_tab_byte` /
+    //     `_comments_does_not_contain_a_carriage_return_byte` /
+    //     `_comments_does_not_contain_a_vertical_tab_byte` /
+    //     `_comments_does_not_contain_a_form_feed_byte` each
+    //     name a different byte specifically;
+    //   - `_comments_matches_cargo_pkg_description` transitively
+    //     guards the value via the cross-source pin to
+    //     `CARGO_PKG_DESCRIPTION`, but that protection is brittle:
+    //     a future refactor that decoupled the helper from the
+    //     workspace `Cargo.toml` `description` field would
+    //     silently drop the transitive guard, and the
+    //     `description` field of `Cargo.toml` is not itself
+    //     byte-screened by Cargo or by any CI gate.
+    //
+    // A regression that landed `"OTP authent\x08icator for the
+    // command line"` (a backspace byte lifted from a `script(1)`
+    // typescript capturing raw `\x08` edit-stream bytes between
+    // sections of a hand-edited description, a `concat!(_,
+    // "\x08", _)` form mirroring a backspace-paginated cell, or
+    // a hand-edited workspace `Cargo.toml` that pasted from a
+    // terminal session recording) would mis-render in multiple
+    // downstream surfaces: (1) the GLib-backed
+    // `AdwAboutDialog::set_comments` setter hands the string to
+    // Pango for inline rendering as the dialog header description
+    // beneath the program name — Pango's default rendering of a
+    // bare `\x08` byte is implementation-defined and typically
+    // renders as a literal control glyph (a hollow box or a
+    // tofu-like placeholder), breaking the tidy single-line
+    // description layout against the program-name row above it;
+    // (2) the comments value is sourced from
+    // `CARGO_PKG_DESCRIPTION` which propagates into Cargo's
+    // `description` field — tooling that scrapes this metadata
+    // (`cargo metadata`, crates.io registry indexing, GNOME
+    // `gnome-software` descriptions) would propagate the stray
+    // `\x08` byte into every consumer's stream, and a TTY-streamed
+    // `cargo metadata` JSON dump piped to `less` or `jq -r` would
+    // see the `\x08` byte erase the preceding character from the
+    // terminal surface — a log-injection / display-spoofing
+    // primitive where the rendered description diverges from the
+    // bytes on disk; (3) screen readers that announce the dialog
+    // description read the `\x08` as a literal control character
+    // or — on some implementations — as a delete-previous
+    // announcement, breaking the description accessibility-tree
+    // announcement at the byte boundary.
+    //
+    // Pinning the no-`\x08` invariant directly here surfaces the
+    // regression with a message naming the offending byte at
+    // build time rather than as a downstream dialog-header
+    // rendering bug, a terminal-erase display-spoof on Cargo
+    // metadata scrapes, or a screen-reader announcement break.
+    // Current helper returns the value sourced from
+    // `CARGO_PKG_DESCRIPTION` (no `\x08` byte), so this test
+    // passes today and serves as a forcing function so any
+    // future override of the helper — or any future edit of the
+    // workspace `Cargo.toml` `description` field — stays free of
+    // backspace bytes. Continues the comments C0 control-byte
+    // cycle past the just-completed `{null / horizontal-tab /
+    // carriage-return / vertical-tab / form-feed}` quintuple so
+    // the helper's byte-composition contract pins each forbidden
+    // control byte against a single source of truth.
+    use paladin_gtk::app::model::format_app_about_dialog_comments;
+
+    let comments = format_app_about_dialog_comments();
+    assert!(
+        !comments.contains('\x08'),
+        "AdwAboutDialog comments must not contain the `\\x08` backspace byte (0x08); a mid-string `\\x08` slips past `_is_non_empty_single_line_distinct_from_program_name` (which only checks `\\n` and surrounding whitespace — `char::is_whitespace()` returns false for U+0008 BS so the surrounding-whitespace guard does NOT reject `\\x08` even at the boundaries, strictly weaker coverage than form-feed), past `_does_not_end_with_a_period_per_libadwaita_convention` (which only constrains the trailing byte), past `_is_ascii_only` (because `\\x08` is ASCII), and past `_does_not_contain_a_null_byte` / `_does_not_contain_a_horizontal_tab_byte` / `_does_not_contain_a_carriage_return_byte` / `_does_not_contain_a_vertical_tab_byte` / `_does_not_contain_a_form_feed_byte` (which each name a different byte specifically); it would render as a literal control glyph in the dialog-header description row, propagate via `CARGO_PKG_DESCRIPTION` into Cargo metadata scrapers and `gnome-software` description rows, enable terminal-erase display-spoofing when `cargo metadata` is piped through a TTY (the rendered description diverges from the bytes on disk because `\\x08` erases the preceding glyph), and break screen-reader description announcements at the byte boundary; got {comments:?}",
+    );
+}
+
+#[test]
 fn format_app_about_dialog_developers_entries_do_not_contain_a_form_feed_byte() {
     // Defense-in-depth per-entry-loop sibling of the just-added
     // `_developer_name_does_not_contain_a_form_feed_byte`,
