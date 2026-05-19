@@ -21335,3 +21335,105 @@ fn format_app_about_dialog_copyright_does_not_contain_an_acknowledge_byte() {
         "AdwAboutDialog copyright must not contain the `\\x06` acknowledge byte (0x06); like BEL and BS, ACK is NOT matched by `char::is_whitespace()` (Unicode returns false for U+0006 ACK), so the copyright helper's transitive whitespace-boundary / single-line protections from the cluster bytes do NOT cover ACK — making the acknowledge byte strictly more dangerous than the cluster bytes for this helper; a mid-string `\\x06` slips past `_is_a_single_line_without_embedded_newlines` (which only checks `\\n` and `\\r`), past `_starts_with_copyright_glyph_and_contains_developer_name` / `_ends_with_developer_name` / `_separates_glyph_and_attribution_with_a_single_space` (which only constrain the literal prefix, suffix, and the single byte after the © glyph), past `_does_not_end_with_a_period` / `_does_not_contain_a_year_token_so_it_does_not_drift_across_releases` (which only constrain the trailing byte or scan for digits), and past `_does_not_contain_a_null_byte` / `_does_not_contain_a_horizontal_tab_byte` / `_does_not_contain_a_carriage_return_byte` / `_does_not_contain_a_vertical_tab_byte` / `_does_not_contain_a_form_feed_byte` / `_does_not_contain_a_backspace_byte` / `_does_not_contain_a_line_feed_byte` / `_does_not_contain_a_bell_byte` (which each name a different byte specifically); it would render as a literal control glyph in the dialog footer copyright row, erode the trusted-application legal-attribution surface contract, confuse serial-protocol-bridging tooling that treats `\\x06` as an ACK-frame indicator when the copyright is dumped through a serial-bridged TTY, break screen-reader copyright announcements at the byte boundary, and propagate into downstream license-attribution aggregators and AGPL-3.0-or-later compliance crawlers; got {copyright:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_comments_does_not_contain_an_acknowledge_byte() {
+    // Defense-in-depth per-byte sibling extending the comments
+    // byte-cleanliness contract past the just-completed
+    // `{null / horizontal-tab / carriage-return / vertical-tab /
+    // form-feed / backspace / line-feed / bell}` octuple to the
+    // acknowledge byte `\x06` (0x06), continuing the non-
+    // whitespace-classified C0 control-byte cycle past BEL
+    // (0x07).
+    //
+    // Like BEL and BS, ACK is NOT matched by
+    // `char::is_whitespace()` (Unicode treats ACK as a control
+    // byte, not whitespace), so the comments helper's
+    // transitive single-line / whitespace-boundary protections
+    // from `_comments_is_non_empty_single_line_distinct_from_program_name`
+    // (which uses both `!contains('\n')` and
+    // `!comments.starts_with(char::is_whitespace)` /
+    // `!comments.ends_with(char::is_whitespace)`) do NOT cover
+    // ACK — the boundary `char::is_whitespace()` guards return
+    // false for U+0006 ACK and the explicit `\n` check is
+    // byte-specific.
+    //
+    // None of the existing comments companions name the `\x06`
+    // byte directly:
+    //   - `_comments_is_non_empty_single_line_distinct_from_program_name`
+    //     only checks `\n` and uses `char::is_whitespace()` for
+    //     boundary checks — `\x06` is neither;
+    //   - `_comments_is_ascii_only` pins each byte as ASCII —
+    //     `\x06` is ASCII (0x06) so it slips past;
+    //   - `_does_not_end_with_a_period_per_libadwaita_convention`
+    //     only constrains the trailing byte;
+    //   - `_matches_cargo_pkg_description` is an exact-value
+    //     pin coupled to `env!("CARGO_PKG_DESCRIPTION")` — a
+    //     future workspace refactor that introduced a `\x06`
+    //     byte into the package description (a hand-edited
+    //     `description = """..."""` literal that pasted from a
+    //     terminal session interfacing with a serial-protocol
+    //     bridge) would propagate the byte into the helper, and
+    //     this companion would still pass (the helper still
+    //     equals the cargo description);
+    //   - `_does_not_contain_a_null_byte` /
+    //     `_does_not_contain_a_horizontal_tab_byte` /
+    //     `_does_not_contain_a_carriage_return_byte` /
+    //     `_does_not_contain_a_vertical_tab_byte` /
+    //     `_does_not_contain_a_form_feed_byte` /
+    //     `_does_not_contain_a_backspace_byte` /
+    //     `_does_not_contain_a_line_feed_byte` /
+    //     `_does_not_contain_a_bell_byte` each name a different
+    //     byte specifically.
+    //
+    // A regression that landed a `\x06`-bearing comments string
+    // (acknowledge byte from a workspace `Cargo.toml`
+    // description that pasted from a terminal session
+    // interfacing with a serial-protocol bridge preserving
+    // ACK-frame bytes, a `concat!(_, "\x06", _)` form, or a
+    // hand-edited helper override that lifted the description
+    // from a `script(1)` typescript that captured raw `\x06`
+    // ACK-frame bytes) would mis-render in multiple downstream
+    // surfaces: (1) the GLib-backed
+    // `AdwAboutDialog::set_comments` setter hands the string to
+    // Pango for inline rendering beneath the program-name /
+    // version cluster in the dialog header — Pango's default
+    // rendering of a bare `\x06` byte is implementation-defined
+    // and typically renders as a literal control glyph, breaking
+    // the elevator-pitch comments-row layout; (2) when the
+    // comments string is dumped through a serial-bridged TTY
+    // (CI logs over a serial console, an out-of-band debugging
+    // session), the `\x06` byte may be intercepted by the
+    // receiving end as an ACK-frame indicator and confuse
+    // protocol-bridging tooling that treats ACK as a
+    // transmission acknowledgement; (3) screen readers that
+    // announce the dialog comments row render the byte as a
+    // literal control character announcement, breaking the
+    // elevator-pitch accessibility-tree announcement at the
+    // byte boundary; (4) downstream tooling that scrapes the
+    // package description (changelog aggregators, package-
+    // listing generators, AppStream `<summary>` extractors)
+    // would propagate the stray `\x06` byte into the consumer's
+    // stream and trigger the same control-glyph rendering /
+    // protocol-confusion bug, with the additional risk that
+    // AppStream `<summary>` validation rejects control bytes at
+    // packaging time.
+    //
+    // Pinning the no-`\x06` invariant directly here surfaces
+    // the regression with a message naming the offending byte
+    // at build time rather than via a downstream dialog
+    // rendering bug or serial-protocol ACK-frame collision.
+    // Current helper returns the literal
+    // `env!("CARGO_PKG_DESCRIPTION")` which resolves to the
+    // single-line workspace description with no `\x06` byte, so
+    // this test passes today and serves as a forcing function
+    // so any future workspace-description refactor stays free
+    // of acknowledge bytes.
+    use paladin_gtk::app::model::format_app_about_dialog_comments;
+
+    let comments = format_app_about_dialog_comments();
+    assert!(
+        !comments.contains('\x06'),
+        "AdwAboutDialog comments must not contain the `\\x06` acknowledge byte (0x06); like BEL and BS, ACK is NOT matched by `char::is_whitespace()` (Unicode returns false for U+0006 ACK), so the comments helper's transitive whitespace-boundary / single-line protections do NOT cover ACK; a mid-string `\\x06` slips past `_is_non_empty_single_line_distinct_from_program_name` (which only checks `\\n` and uses `char::is_whitespace()` for boundary checks — neither catches `\\x06`), past `_is_ascii_only` (because `\\x06` is ASCII), past `_does_not_end_with_a_period_per_libadwaita_convention` (which only constrains the trailing byte), past `_matches_cargo_pkg_description` (a future workspace description that introduced `\\x06` would propagate the byte and this equality pin would still pass), and past `_does_not_contain_a_null_byte` / `_does_not_contain_a_horizontal_tab_byte` / `_does_not_contain_a_carriage_return_byte` / `_does_not_contain_a_vertical_tab_byte` / `_does_not_contain_a_form_feed_byte` / `_does_not_contain_a_backspace_byte` / `_does_not_contain_a_line_feed_byte` / `_does_not_contain_a_bell_byte` (which each name a different byte specifically); it would render as a literal control glyph in the dialog header comments row, confuse serial-protocol-bridging tooling that treats `\\x06` as an ACK-frame indicator when the comments are dumped through a serial-bridged TTY, break screen-reader comments announcements at the byte boundary, propagate into downstream changelog aggregators and AppStream `<summary>` extractors, and trigger AppStream `<summary>` validation rejection at packaging time; got {comments:?}",
+    );
+}
