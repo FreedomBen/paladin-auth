@@ -2346,6 +2346,37 @@ pub fn format_app_about_dialog_developers() -> [&'static str; 1] {
     ["Benjamin Porter"]
 }
 
+/// Ordered designer-credit list the application menu's "About
+/// Paladin" entry's `AdwAboutDialog` hands to
+/// `set_designers` for its credits-page "Designers" section.
+///
+/// Returns the empty array for the v0.2 release. Paladin does
+/// not yet have a separately-credited designer — the founding
+/// contributor in [`format_app_about_dialog_developers`] also
+/// owns the GTK / HIG layout choices — so the designers slot
+/// stays empty until a credited designer joins. `AdwAboutDialog`
+/// follows the libadwaita convention of suppressing the
+/// credits-page "Designers" row when the slice is empty, which
+/// is the correct rendering for an app with no credited
+/// designer.
+///
+/// Pinning the empty slice through a helper rather than passing
+/// `&[]` inline at the call site keeps the credits-page wiring
+/// uniform: every credits-page list is sourced from a
+/// `format_app_about_dialog_<role>` helper so a future
+/// contributor change updates one helper without touching the
+/// widget binding. Sibling of
+/// [`format_app_about_dialog_developers`] on the credits-page-
+/// contributor side; together they pin the dialog's "Developers"
+/// and "Designers" rows against a single source of truth.
+///
+/// Pure — returns a fixed-size empty array of `'static` strings
+/// without allocating.
+#[must_use]
+pub fn format_app_about_dialog_designers() -> [&'static str; 0] {
+    []
+}
+
 /// Translator-credits string the application menu's "About
 /// Paladin" entry's `AdwAboutDialog` hands to
 /// `set_translator_credits` for its credits-page "Translators"
