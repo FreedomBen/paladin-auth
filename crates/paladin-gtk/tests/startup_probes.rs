@@ -1789,6 +1789,57 @@ fn format_app_primary_menu_entries_uses_app_group_prefix_throughout() {
 }
 
 #[test]
+fn build_app_primary_menu_model_appends_every_format_app_primary_menu_entries_pair() {
+    // Per §"libadwaita usage" and §"Component tree": the header-bar
+    // `gtk::MenuButton`'s `set_menu_model` slot is populated from
+    // the `gio::Menu` returned by `build_app_primary_menu_model`,
+    // which walks `format_app_primary_menu_entries` and appends one
+    // entry per (label, action) pair in the §"libadwaita usage"
+    // sequence (Import, Export, Passphrase, Preferences, About,
+    // Quit). Centralizing the menu construction in one helper
+    // means the labels and action targets stay sourced exclusively
+    // from the pinned helpers — a drift between the widget binding
+    // and the `format_app_menu_*` helpers cannot survive because
+    // the widget reads the model through this single entry point
+    // and the model walks the pinned array.
+    use libadwaita::prelude::*;
+    use paladin_gtk::app::model::{build_app_primary_menu_model, format_app_primary_menu_entries};
+
+    let menu = build_app_primary_menu_model();
+    let entries = format_app_primary_menu_entries();
+    let n_items = usize::try_from(menu.n_items()).expect("n_items fits in usize");
+    assert_eq!(
+        n_items,
+        entries.len(),
+        "build_app_primary_menu_model must append exactly one entry per format_app_primary_menu_entries pair; got {n_items} items vs {} pairs",
+        entries.len(),
+    );
+    for (idx, (label, action)) in entries.iter().enumerate() {
+        let position = i32::try_from(idx).expect("entry index fits in i32");
+        let actual_label = menu
+            .item_attribute_value(position, "label", None)
+            .expect("primary menu entry has a label attribute")
+            .str()
+            .map(String::from)
+            .expect("label attribute is a string variant");
+        assert_eq!(
+            &actual_label, label,
+            "primary menu entry {idx}'s rendered label must match format_app_primary_menu_entries[{idx}].0",
+        );
+        let actual_action = menu
+            .item_attribute_value(position, "action", None)
+            .expect("primary menu entry has an action attribute")
+            .str()
+            .map(String::from)
+            .expect("action attribute is a string variant");
+        assert_eq!(
+            &actual_action, action,
+            "primary menu entry {idx}'s action target must match format_app_primary_menu_entries[{idx}].1",
+        );
+    }
+}
+
+#[test]
 fn format_app_primary_menu_action_names_returns_six_bare_names_in_pinned_order() {
     // Companion to `format_app_primary_menu_entries`: the widget
     // binding registers a `gio::SimpleAction` for each primary-

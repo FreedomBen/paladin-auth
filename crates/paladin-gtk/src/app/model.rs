@@ -2009,6 +2009,42 @@ pub fn format_app_primary_menu_entries() -> [(&'static str, &'static str); 6] {
     ]
 }
 
+/// Build the application's primary `gio::Menu` model from the
+/// pinned [`format_app_primary_menu_entries`] data.
+///
+/// Walks the six (label, detailed-action-name) pairs in the
+/// §"libadwaita usage" sequence (Import…, Export…, Passphrase…,
+/// Preferences, About Paladin, Quit) and `menu.append(...)`s
+/// each one. The widget binding hands the returned model to the
+/// header-bar `gtk::MenuButton::set_menu_model` so the kebab
+/// popover renders the entries in the documented order, and the
+/// action targets resolve against the `app` group registered on
+/// the [`adw::ApplicationWindow`].
+///
+/// Centralizing the menu construction in one helper means the
+/// labels and action targets stay sourced exclusively from the
+/// pinned helpers — a drift between the widget binding and the
+/// `format_app_menu_*` helpers cannot survive because the
+/// widget reads the model through this single entry point and
+/// the model walks the pinned array. Mirrors the
+/// [`crate::account_list`]'s `build_kebab_menu_model` pattern for
+/// the per-row kebab `gio::Menu`; both surfaces share the same
+/// "iterate a pinned entry array and `menu.append`" shape so the
+/// menu wiring is uniform across the crate.
+///
+/// Returns an owned [`gtk::gio::Menu`]. Construction allocates
+/// the underlying `GMenu`; the caller is expected to hand the
+/// model to `set_menu_model` and let the widget take ownership
+/// of the model's `GObject` reference.
+#[must_use]
+pub fn build_app_primary_menu_model() -> gtk::gio::Menu {
+    let menu = gtk::gio::Menu::new();
+    for (label, action) in format_app_primary_menu_entries() {
+        menu.append(Some(label), Some(action));
+    }
+    menu
+}
+
 /// Ordered bare `gio::SimpleAction` names the application's `app`
 /// action group registers for the primary menu entries.
 ///
