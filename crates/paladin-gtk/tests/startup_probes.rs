@@ -9713,3 +9713,92 @@ fn format_app_about_dialog_application_icon_name_does_not_start_with_a_dot() {
         "AdwAboutDialog application_icon_name must not start with a `.` byte (which is not a valid leading character in the reverse-DNS application-ID grammar that GNOME's D-Bus naming convention and the AppStream / Flatpak `<id>...</id>` schema validate against — each `.`-separated segment must be a non-empty alphanumeric/underscore identifier and the leading segment must therefore begin with an alphanumeric/underscore character) so `gio::ApplicationId::is_valid` resolves at application startup, the AppStream validator resolves at packaging time, and the Flatpak `--build-finish` step resolves the `<id>` against the directory name in the build sandbox rather than as a downstream rejection; got {icon_name:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_application_icon_name_starts_with_a_lowercase_ascii_letter() {
+    // Defense-in-depth sibling of the just-added
+    // `_does_not_start_with_a_dot` companion (which pins the
+    // leading byte against the `.` byte) on the leading-
+    // *character* side, and mirror of the
+    // `format_app_about_dialog_version_starts_with_a_digit`
+    // sibling on the version-side leading-character rule.
+    //
+    // The freedesktop / GNOME / D-Bus reverse-DNS application-ID
+    // convention (codified in `gio::ApplicationId::is_valid`)
+    // pins the leading byte of each `.`-separated segment as an
+    // ASCII letter (`A-Z` or `a-z`) or underscore, since
+    // segments may not start with a digit. The canonical form
+    // used in practice (and required by the Flatpak `<id>` /
+    // AppStream `<id>` schema validators which match-key the
+    // reverse-DNS identifier against the build directory name)
+    // is a lowercase ASCII letter — e.g. `"org.gnome.Foo"`,
+    // `"com.example.Bar"`, `"net.example.Baz"` — so the file-
+    // system-on-disk directory name under `/app/share/`,
+    // `~/.local/share/applications/`, the hicolor icon theme
+    // resource keys, and the GSettings schema base paths all
+    // route through a lowercase-ASCII-letter leading byte.
+    //
+    // A regression that landed `"Org.tamx.Paladin.Gui"`
+    // (uppercase O from a manual override typo or from a
+    // `concat!(env!("UPPERCASE_PREFIX"), ".tamx.Paladin.Gui")`
+    // injection where `UPPERCASE_PREFIX` was set to `"Org"`) or
+    // `"5org.tamx.Paladin.Gui"` (leading digit from a
+    // `concat!("5", crate::APP_ID)` injection) would slip past
+    // the `_is_reverse_dns` companion (since the string still
+    // satisfies `contains('.')`), the `_segments_are_non_empty`
+    // companion (the leading segment is still non-empty), the
+    // `_has_exactly_four_segments` companion (the split count
+    // is still exactly 4), the `_ends_with_gui_segment`
+    // companion (the string still ends with `"Gui"`), the
+    // `_is_ascii_only` companion (uppercase letters and digits
+    // are ASCII), the `_has_no_embedded_whitespace` companion,
+    // and the just-added `_does_not_start_with_a_dot` companion
+    // (the leading byte is not `.`). The `_matches_app_id`
+    // exact-value pin would catch the regression only when
+    // `crate::APP_ID` is the canonical string; a future refactor
+    // that intercepted the helper with a manual override or a
+    // `concat!` injection would slip past.
+    //
+    // An uppercase-leading or digit-leading reverse-DNS string
+    // would be rejected at the same downstream layers as the
+    // dot-leading regression: by `gio::ApplicationId::is_valid`
+    // at application startup (the GIO validator pins each
+    // segment to start with a non-digit alphanumeric character
+    // or underscore), by the AppStream validator at packaging
+    // time, and by the Flatpak `--build-finish` step that
+    // validates the `<id>` against the directory name in the
+    // build sandbox (Flatpak's filesystem layout pins
+    // directories to lowercase). Pinning the lowercase-ASCII-
+    // letter leading-byte invariant directly here surfaces the
+    // regression with a message naming the offending leading
+    // byte at build time rather than as a downstream GIO
+    // startup rejection, AppStream packaging rejection, or
+    // Flatpak build-finish rejection.
+    //
+    // The current `crate::APP_ID` resolves to
+    // `"org.tamx.Paladin.Gui"` which starts with the lowercase
+    // `o` of the leading `org` segment, so this test passes
+    // today and serves as a forcing function so any future
+    // override of the application-icon-name helper stays
+    // aligned with the strict reverse-DNS / GNOME / D-Bus /
+    // AppStream / Flatpak naming convention. Mirror of the
+    // `_version_starts_with_a_digit` sibling on the version-
+    // side leading-character rule, and companion of the
+    // `_does_not_start_with_a_dot` / `_does_not_end_with_a_dot`
+    // / `_segments_are_non_empty` / `_has_exactly_four_segments`
+    // / `_ends_with_gui_segment` siblings on the reverse-DNS
+    // shape side; together they pin the leading-character /
+    // no-leading-dot / no-trailing-dot / no-empty-segment /
+    // exact-four-segment / known-trailing-segment contract
+    // across the application-icon reverse-DNS identifier
+    // against a single source of truth on the GNOME / D-Bus /
+    // AppStream / Flatpak packaging convention.
+    use paladin_gtk::app::model::format_app_about_dialog_application_icon_name;
+
+    let icon_name = format_app_about_dialog_application_icon_name();
+    let leading_byte = icon_name.chars().next();
+    assert!(
+        leading_byte.is_some_and(|c| c.is_ascii_lowercase()),
+        "AdwAboutDialog application_icon_name must start with a lowercase ASCII letter (the canonical leading byte for a reverse-DNS application-ID per the freedesktop / GNOME / D-Bus naming convention codified in `gio::ApplicationId::is_valid` — segments may not start with a digit or `.` and the on-disk directory layout pins lowercase-ASCII-letter leading bytes for `/app/share/`, `~/.local/share/applications/`, hicolor icon theme resource keys, and GSettings schema base paths) so the application-startup / packaging / Flatpak build-finish pipeline routes through the canonical lowercase-ASCII-letter leading byte rather than as a downstream rejection; got leading_byte={leading_byte:?} for icon_name={icon_name:?}",
+    );
+}
