@@ -2338,6 +2338,28 @@ fn app_msg_carries_open_about_dialog_variant() {
 }
 
 #[test]
+fn wire_app_window_action_activations_signature_takes_group_and_input_sender() {
+    // Per §"libadwaita usage" and §"Component tree": every
+    // SimpleAction on the bundled action group routes its
+    // activation through `dispatch_app_window_action` to a
+    // concrete `AppMsg` variant. This helper installs the
+    // `connect_activate` closures for every action returned
+    // by `format_app_window_action_names`, sharing one
+    // dispatch path across the seven actions so the widget
+    // binding does not hand-spell the per-action closures in
+    // `init`. The compile-only signature check below pins the
+    // helper's shape — `fn(&gio::SimpleActionGroup,
+    // relm4::Sender<AppMsg>)` — without instantiating a real
+    // action group + relm4 sender in the test process; the
+    // dispatch table coverage is pinned by
+    // `dispatch_app_window_action_covers_every_bundled_action_name`.
+    use paladin_gtk::app::model::{wire_app_window_action_activations, AppMsg};
+
+    let _: fn(&libadwaita::gio::SimpleActionGroup, &relm4::Sender<AppMsg>) =
+        wire_app_window_action_activations;
+}
+
+#[test]
 fn wire_app_window_action_group_signature_takes_application_window_and_action_group() {
     // Per §"libadwaita usage" and §"Component tree": the
     // `app` action group built by

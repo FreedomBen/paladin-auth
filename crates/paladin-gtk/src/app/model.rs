@@ -591,20 +591,7 @@ impl SimpleComponent for AppModel {
         // and the header-bar `+` button's `"app.add"` target
         // all resolve through one `gio::SimpleActionGroup`.
         let action_group = build_app_window_action_group(&state);
-        for name in format_app_window_action_names() {
-            if let Some(simple) = action_group
-                .lookup_action(name)
-                .and_then(|a| a.downcast::<gtk::gio::SimpleAction>().ok())
-            {
-                let action_sender = sender.clone();
-                let action_name = name;
-                simple.connect_activate(move |_, _| {
-                    if let Some(msg) = dispatch_app_window_action(action_name) {
-                        action_sender.input(msg);
-                    }
-                });
-            }
-        }
+        wire_app_window_action_activations(&action_group, sender.input_sender());
         wire_app_window_action_group(&root, &action_group);
 
         let account_list = if state.is_unlocked() {
@@ -2565,6 +2552,62 @@ pub fn wire_app_window_action_group(
     group: &gtk::gio::SimpleActionGroup,
 ) {
     window.insert_action_group(format_app_action_group_name(), Some(group));
+}
+
+/// Install `connect_activate` closures on every
+/// [`gtk::gio::SimpleAction`] registered on the bundled
+/// application action group built by
+/// [`build_app_window_action_group`].
+///
+/// Walks the seven bare action names returned by
+/// [`format_app_window_action_names`] (the six primary-menu
+/// entries plus the header-bar `+` Add action), looks each
+/// one up on `group`, and wires a `connect_activate` closure
+/// that posts the [`AppMsg`] variant returned by
+/// [`dispatch_app_window_action`] through `input_sender`. The
+/// widget binding calls this helper from `init` between the
+/// [`build_app_window_action_group`] construction and the
+/// [`wire_app_window_action_group`] insertion so every
+/// action's activation flows through one shared dispatch
+/// path.
+///
+/// Centralizing the wiring in one helper means the widget
+/// binding never hand-spells per-action `connect_activate`
+/// closures — a future addition to
+/// [`format_app_window_action_names`] (e.g. a new menu entry)
+/// automatically picks up its `connect_activate` closure
+/// here, and the dispatch table coverage test
+/// (`dispatch_app_window_action_covers_every_bundled_action_name`)
+/// keeps the two helpers in lockstep. Mirrors
+/// [`crate::account_list::install_row_action_group`] on the
+/// per-row kebab menu side.
+///
+/// If an action name is missing from `group` (e.g. a future
+/// refactor that split the actions across two groups) the
+/// corresponding closure is silently skipped — the assertion
+/// that the bundled group has every action lives on
+/// [`build_app_window_action_group`]'s test surface so this
+/// helper stays a no-op-on-missing-action runtime path.
+///
+/// Pure side-effect helper (no return value).
+pub fn wire_app_window_action_activations(
+    group: &gtk::gio::SimpleActionGroup,
+    input_sender: &relm4::Sender<AppMsg>,
+) {
+    for name in format_app_window_action_names() {
+        if let Some(simple) = group
+            .lookup_action(name)
+            .and_then(|a| a.downcast::<gtk::gio::SimpleAction>().ok())
+        {
+            let action_sender = input_sender.clone();
+            let action_name = name;
+            simple.connect_activate(move |_, _| {
+                if let Some(msg) = dispatch_app_window_action(action_name) {
+                    let _ = action_sender.send(msg);
+                }
+            });
+        }
+    }
 }
 
 /// Return every bare action name registered on the
