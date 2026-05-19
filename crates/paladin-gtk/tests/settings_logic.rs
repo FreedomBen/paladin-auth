@@ -674,6 +674,34 @@ fn format_settings_dialog_clipboard_clear_group_title_returns_clipboard() {
 }
 
 #[test]
+fn compose_settings_dialog_clipboard_clear_enabled_active_mirrors_committed_clipboard_clear_enabled(
+) {
+    // The clipboard-clear `AdwSwitchRow` binds its `set_active:`
+    // attribute to this composer per
+    // `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+    // `SettingsComponent`. Sibling of
+    // `compose_settings_dialog_auto_lock_enabled_active` on the
+    // clipboard side; together they cover both
+    // `AdwSwitchRow::set_active:` bindings the
+    // `SettingsComponent` mounts.
+    use paladin_gtk::settings::{
+        compose_settings_dialog_clipboard_clear_enabled_active, CommittedSettings, SettingsState,
+    };
+
+    let state_on = SettingsState::new(CommittedSettings::new(false, 60, true, 20));
+    assert!(
+        compose_settings_dialog_clipboard_clear_enabled_active(&state_on),
+        "composer is `true` when committed.clipboard_clear_enabled is true",
+    );
+
+    let state_off = SettingsState::new(CommittedSettings::new(false, 60, false, 20));
+    assert!(
+        !compose_settings_dialog_clipboard_clear_enabled_active(&state_off),
+        "composer is `false` when committed.clipboard_clear_enabled is false",
+    );
+}
+
+#[test]
 fn compose_settings_dialog_auto_lock_enabled_active_mirrors_committed_auto_lock_enabled() {
     // The auto-lock `AdwSwitchRow` binds its `set_active:`
     // attribute to this composer per

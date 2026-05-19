@@ -623,6 +623,29 @@ pub fn compose_settings_dialog_auto_lock_enabled_active(state: &SettingsState) -
     state.committed().auto_lock_enabled()
 }
 
+/// State-driven projection of the clipboard-clear
+/// `AdwSwitchRow`'s active state, surfaced as the `bool` that
+/// `AdwSwitchRow::set_active` expects, per
+/// `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+/// `SettingsComponent`.
+///
+/// Returns `state.committed().clipboard_clear_enabled()` —
+/// toggle clicks bypass the spinner debounce buffer because they
+/// reflect a discrete user intent (per
+/// [`SettingsState::toggle_clipboard_clear_enabled`]), so the
+/// committed snapshot is the single source of truth for the
+/// switch's active state. Sibling of
+/// [`compose_settings_dialog_auto_lock_enabled_active`] on the
+/// clipboard side; together they cover both
+/// `AdwSwitchRow::set_active:` bindings the `SettingsComponent`
+/// mounts.
+///
+/// Pure — borrows the state and returns a `bool` without allocating.
+#[must_use]
+pub fn compose_settings_dialog_clipboard_clear_enabled_active(state: &SettingsState) -> bool {
+    state.committed().clipboard_clear_enabled()
+}
+
 /// Buffered spinner pending the 500 ms debounce.
 #[derive(Debug, Clone, Copy)]
 enum PendingSpinner {
