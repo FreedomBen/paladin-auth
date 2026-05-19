@@ -13119,3 +13119,101 @@ fn format_app_about_dialog_program_name_does_not_contain_a_carriage_return_byte(
         "AdwAboutDialog program_name must not contain the `\\r` carriage-return byte (0x0D); the current `\\r`-cleanliness is only protected transitively by `_has_no_embedded_whitespace`'s broad `char::is_whitespace()` check, so a future refactor that relaxed the no-whitespace invariant to allow a localized multi-word program name might silently drop the `\\r` guard alongside the space relaxation; a stray `\\r` would render as a control glyph in the bold dialog-header program-name row, surface in the window manager's taskbar / dock display label, and break screen-reader application-name announcements; got {program_name:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_program_name_does_not_contain_a_horizontal_tab_byte() {
+    // Defense-in-depth per-byte sibling completing the
+    // program-name byte triplet (null / carriage-return /
+    // horizontal-tab) alongside the existing
+    // `_program_name_does_not_contain_a_null_byte` and
+    // just-added
+    // `_program_name_does_not_contain_a_carriage_return_byte`
+    // companions. The existing
+    // `_program_name_has_no_embedded_whitespace` companion
+    // uses `char::is_whitespace()`, which returns true for
+    // `\t` — so the program-name helper's `\t`-cleanliness
+    // is currently protected *transitively* by that one
+    // specific companion's broad whitespace check.
+    //
+    // But that transitive protection is *bundled* with the
+    // no-whitespace invariant as a whole: a future refactor
+    // that intentionally allowed a single embedded space in
+    // the program-name slot (a localized program-name string
+    // like `"Paladin Auth"` or a workspace-vendoring split
+    // that lifted program-name out of the no-whitespace
+    // constraint) would naturally relax the
+    // `_has_no_embedded_whitespace` companion — and the
+    // human author of that refactor might reasonably
+    // restructure the check to only reject specific control
+    // bytes (newline, carriage-return) without separately
+    // calling out `\t` on the assumption that "ASCII
+    // whitespace is now allowed". That assumption is wrong:
+    // `\t` is a column-aligning control byte, not a layout-
+    // friendly space, and the program-name slot is rendered
+    // in a single-column bold-header row that has no tab-
+    // stop semantics — so dropping the `\t` check alongside
+    // the space-relaxation would silently regress the
+    // no-`\t` invariant.
+    //
+    // The `_is_ascii_only` companion does not catch `\t`
+    // (since `\t` is ASCII, 0x09), the
+    // `_is_non_empty_and_not_app_id` companion only checks
+    // non-empty + distinct-from-app-id, the
+    // `_matches_format_app_window_title` cross-helper
+    // companion only enforces equality with the window title
+    // (so any `\t`-bearing override would slip past as long
+    // as the window title helper had matching bytes), the
+    // `_is_segment_of_application_icon_name` cross-helper
+    // companion only checks segment containment, the
+    // `_does_not_end_with_a_period` companion only constrains
+    // the suffix, the `_does_not_contain_a_null_byte`
+    // companion only names `\0` specifically, and the
+    // `_does_not_contain_a_carriage_return_byte` companion
+    // only names `\r` specifically. None of those names `\t`
+    // directly on this helper — only the
+    // `_has_no_embedded_whitespace` companion catches it
+    // transitively, and that coupling is fragile.
+    //
+    // A regression that landed `"Paladin\t"` or `"Pal\tadin"`
+    // (tab-aligned column from a `printf "%s\t%s"`-style
+    // localized resource-bundle formatter, a `concat!(_,
+    // "\t", _)` form mirroring a TSV-style localization
+    // table, or a hand-edited helper override that lifted
+    // the program name from a tab-indented YAML / Markdown
+    // table cell) would mis-render in three downstream
+    // surfaces: (1) the GLib-backed
+    // `AdwAboutDialog::set_application_name` setter routes
+    // the value into Pango for inline rendering as the bold
+    // program-name row at the dialog header — Pango's
+    // default rendering of `\t` is implementation-defined
+    // and typically renders as a wide horizontal gap or an
+    // empty box, breaking the tidy bold-header layout; (2)
+    // the matching `gtk::Window::set_title` setter (the
+    // program name is mirrored to the window title per
+    // `_matches_format_app_window_title`) renders the `\t`
+    // in the window manager's taskbar / dock display label,
+    // where tab-stop semantics are shell-dependent and may
+    // truncate or mis-align the label; (3) the GTK
+    // accessibility tree's `accessible-name` property routes
+    // through the same Pango layer, breaking screen-reader
+    // announcements of the application name at the tab
+    // boundary.
+    //
+    // Pinning the no-`\t` invariant directly on this helper
+    // surfaces the regression with a message naming the
+    // offending byte at build time rather than via a future
+    // whitespace-relaxation refactor that silently dropped
+    // the `\t` guard. Current helper returns the literal
+    // `"Paladin"` (no `\t` byte), so this test passes today
+    // and serves as a forcing function so any future
+    // override of the helper — including the eventual
+    // landing of a localized multi-word program name —
+    // stays free of horizontal tabs.
+    use paladin_gtk::app::model::format_app_about_dialog_program_name;
+
+    let program_name = format_app_about_dialog_program_name();
+    assert!(
+        !program_name.contains('\t'),
+        "AdwAboutDialog program_name must not contain the `\\t` horizontal-tab byte (0x09); the current `\\t`-cleanliness is only protected transitively by `_has_no_embedded_whitespace`'s broad `char::is_whitespace()` check, so a future refactor that relaxed the no-whitespace invariant to allow a localized multi-word program name might silently drop the `\\t` guard alongside the space relaxation; a stray `\\t` would render as a wide horizontal gap in the bold dialog-header program-name row, mis-align the window manager's taskbar / dock display label under shell-dependent tab-stop semantics, and break screen-reader application-name announcements at the tab boundary; got {program_name:?}",
+    );
+}
