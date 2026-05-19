@@ -5530,3 +5530,44 @@ fn format_app_about_dialog_program_name_is_segment_of_application_icon_name() {
         "AdwAboutDialog program-name {program:?} must appear verbatim as a `.`-separated segment of the application-icon-name {icon:?} so the human display name and the reverse-DNS APP_ID identifier stay tied to the same brand string; if a future rename moves one, both must move together",
     );
 }
+
+#[test]
+fn format_app_window_default_size_meets_gnome_hig_narrow_threshold() {
+    // Defense-in-depth sibling of
+    // `format_app_window_default_size_returns_640_by_480` (exact
+    // pinned value) and `format_app_window_default_size_pair_is_positive`
+    // (defensive positivity floor). Those two assertions catch
+    // a wholesale rewrite and a zero / negative-dimension
+    // regression, but a more nuanced regression that shrunk the
+    // default to e.g. `(320, 240)` would still pass both — and
+    // would collapse the `AccountListComponent`'s
+    // `<issuer>:<label>` rows into an `AdwSqueezer` before
+    // libadwaita has any chance to lay them out, and clip the
+    // header bar's `+` button / search button / primary menu
+    // glyphs against each other.
+    //
+    // The GNOME HIG's narrow-window adaptive floor for
+    // libadwaita applications is 360px wide (the minimum width
+    // a modern adaptive `AdwApplicationWindow` must remain
+    // usable at), with 294px tall as the matching narrow-height
+    // floor for the chrome-plus-content layout libadwaita ships.
+    // The pinned (640, 480) default sits comfortably above both
+    // floors; pinning the threshold here ensures a future
+    // dimension regression that fell below either floor surfaces
+    // as a failing test rather than as an initial window that
+    // user-resizable libadwaita chrome cannot lay out cleanly.
+    use paladin_gtk::app::model::format_app_window_default_size;
+
+    const NARROW_WIDTH_FLOOR: i32 = 360;
+    const NARROW_HEIGHT_FLOOR: i32 = 294;
+
+    let (width, height) = format_app_window_default_size();
+    assert!(
+        width >= NARROW_WIDTH_FLOOR,
+        "ApplicationWindow default width {width} must meet the GNOME HIG narrow-window adaptive floor ({NARROW_WIDTH_FLOOR}px) so the AccountListComponent rows lay out without an AdwSqueezer collapse and the header-bar buttons render side-by-side",
+    );
+    assert!(
+        height >= NARROW_HEIGHT_FLOOR,
+        "ApplicationWindow default height {height} must meet the GNOME HIG narrow-window adaptive floor ({NARROW_HEIGHT_FLOOR}px) so the chrome-plus-content layout (header bar + a useful run of account rows) renders without clipping the bottom of the list",
+    );
+}
