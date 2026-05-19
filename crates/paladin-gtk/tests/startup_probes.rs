@@ -5885,3 +5885,40 @@ fn format_app_about_dialog_copyright_does_not_contain_a_year_token_so_it_does_no
         "AdwAboutDialog copyright must not contain a four-digit year token so the footer copyright row stays stable across releases without depending on a year-derived value that would silently drift on a future release without a matching constant update; got {copyright:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_developers_entries_are_distinct() {
+    // Defense-in-depth sibling of
+    // `format_app_about_dialog_developers_is_non_empty_array_of_non_empty_single_line_names`
+    // (which pins per-entry shape — non-empty, single-line, no
+    // surrounding whitespace) and
+    // `format_app_about_dialog_developers_lists_benjamin_porter`
+    // (which positively pins the v0.2 founding-contributor entry).
+    // Both companions leave the cross-entry distinctness invariant
+    // ungated, so a future copy-paste regression that listed the
+    // same name twice — e.g. `["Benjamin Porter", "Benjamin Porter"]`
+    // when adding a second contributor row was meant — would slip
+    // past the existing per-entry assertions while rendering a
+    // duplicate row in the `AdwAboutDialog` credits page.
+    //
+    // Mirrors the established `_labels_are_distinct` /
+    // `_actions_are_distinct` / `_icon_names_are_distinct` /
+    // `_tooltips_are_distinct` sibling pattern used elsewhere in
+    // the `format_app_*` suite where multi-entry pinned arrays
+    // exposed the same duplicate-entry failure mode. Pinning the
+    // invariant here even though the v0.2 array carries a single
+    // entry today is a forcing function: the next contributor
+    // added has to land alongside a distinct credit string
+    // rather than slip in as a silent duplicate.
+    use paladin_gtk::app::model::format_app_about_dialog_developers;
+
+    let developers = format_app_about_dialog_developers();
+    let mut seen: Vec<&str> = Vec::with_capacity(developers.len());
+    for entry in developers {
+        assert!(
+            !seen.contains(&entry),
+            "AdwAboutDialog developers must list each contributor at most once so the credits-page renders one row per contributor rather than a duplicated row; entry {entry:?} appears more than once in {developers:?}",
+        );
+        seen.push(entry);
+    }
+}
