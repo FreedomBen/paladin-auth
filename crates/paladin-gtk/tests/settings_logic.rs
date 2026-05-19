@@ -576,6 +576,30 @@ fn format_settings_dialog_auto_lock_group_title_returns_auto_lock() {
 }
 
 #[test]
+fn format_settings_dialog_clipboard_clear_enabled_row_title_returns_clear_after_copy() {
+    // The clipboard-clear `AdwSwitchRow` carries the toggle
+    // that controls
+    // `paladin_core::VaultSettings::clipboard_clear_enabled`.
+    // Sibling of `format_settings_dialog_auto_lock_enabled_row_title`
+    // on the clipboard side per `IMPLEMENTATION_PLAN_04_GTK.md`
+    // §"libadwaita usage" > "Preferences".
+    //
+    // The wording (`"Clear clipboard after copy"`) names the
+    // behavior the user is enabling — the clipboard contents
+    // are zeroed after the matching timeout elapses — without
+    // restating `"enabled"` or `"clipboard"` (the group title
+    // already names that concept). Verb-led wording per the
+    // GNOME HIG.
+    use paladin_gtk::settings::format_settings_dialog_clipboard_clear_enabled_row_title;
+
+    assert_eq!(
+        format_settings_dialog_clipboard_clear_enabled_row_title(),
+        "Clear clipboard after copy",
+        "AdwSwitchRow title is verb-led and HIG-conformant",
+    );
+}
+
+#[test]
 fn format_settings_dialog_auto_lock_secs_row_title_returns_inactivity_timeout() {
     // The auto-lock `AdwSpinRow` carries the spinner that
     // controls `paladin_core::VaultSettings::auto_lock_secs`.

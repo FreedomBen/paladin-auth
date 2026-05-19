@@ -440,6 +440,28 @@ pub fn format_settings_dialog_auto_lock_secs_row_title() -> &'static str {
     "Inactivity timeout (seconds)"
 }
 
+/// Title rendered on the clipboard-clear `AdwSwitchRow` per
+/// `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
+/// "Preferences". Sibling of
+/// [`format_settings_dialog_auto_lock_enabled_row_title`] on
+/// the clipboard side; together they pin both `AdwSwitchRow`
+/// titles the `SettingsComponent` hosts.
+///
+/// The wording (`"Clear clipboard after copy"`) names the
+/// behavior the user is enabling — the clipboard contents are
+/// zeroed after the matching timeout elapses — without
+/// restating `"enabled"` or `"clipboard"` (the group title
+/// returned by
+/// [`format_settings_dialog_clipboard_clear_group_title`]
+/// already names that concept). Verb-led wording per the GNOME
+/// HIG.
+///
+/// Pure — returns a `'static str` without allocating.
+#[must_use]
+pub fn format_settings_dialog_clipboard_clear_enabled_row_title() -> &'static str {
+    "Clear clipboard after copy"
+}
+
 /// Buffered spinner pending the 500 ms debounce.
 #[derive(Debug, Clone, Copy)]
 enum PendingSpinner {
