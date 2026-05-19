@@ -19235,3 +19235,113 @@ fn format_app_about_dialog_translator_credits_does_not_contain_a_line_feed_byte(
         "AdwAboutDialog translator_credits must not contain the `\\n` line-feed byte (0x0A); the current `\\n`-cleanliness is only protected conditionally by the `_translator_credits_is_single_line_when_non_empty` companion's `if !credits.is_empty()` gate plus its inner `!credits.contains('\\n')` assertion, so a future refactor that landed a non-empty `gettext(\"translator-credits\")` value with embedded line breaks (the GTK historical convention of `\\n`-separated translator pairs) and either flipped the `is_empty` gate or relaxed the inner single-line check would naturally drop the `\\n` guard; a stray `\\n` would cause Pango to interpret the byte as a hard line break and wrap the credits row taller than its baseline layout, erode the libadwaita single-line credits-row contract per Paladin's explicit `_is_single_line_when_non_empty` invariant, break screen-reader credits-row announcements at the byte boundary, and propagate into downstream localization-attribution aggregators; the `_has_no_surrounding_whitespace_when_non_empty` companion does reject a leading or trailing `\\n` (since `char::is_whitespace()` returns true for U+000A LF) but the more dangerous mid-string `\\n` slips past; got {credits:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_program_name_does_not_contain_a_line_feed_byte() {
+    // Defense-in-depth per-byte sibling extending the program_name
+    // byte-cleanliness contract past the just-completed
+    // `{null / horizontal-tab / carriage-return / vertical-tab /
+    // form-feed / backspace}` sextuple to the line-feed byte
+    // `\n` (0x0A), completing the inner C0 control-byte cycle
+    // from BS (0x08) through CR (0x0D) for this helper. The
+    // existing `_program_name_has_no_embedded_whitespace`
+    // companion uses `char::is_whitespace()`, which under Rust's
+    // Unicode definition returns *true* for U+000A LF, so that
+    // companion DOES catch a stray `\n` byte in the program-name
+    // string.
+    //
+    // But that protection is *coupled* to the no-embedded-
+    // whitespace invariant: a future refactor that intentionally
+    // allowed embedded `\n` line breaks in the program-name slot
+    // (a multi-line program name unlikely on its face but
+    // plausible under a workspace-vendoring split that lifted
+    // program-name out of the single-line constraint, or a
+    // libadwaita upgrade that taught the dialog header program-
+    // name row to wrap across two lines) would naturally relax
+    // the `_has_no_embedded_whitespace` companion to drop the
+    // `\n` check — at which point the no-`\n` invariant would
+    // silently regress to "allowed" without any independent
+    // byte-cleanliness pin keeping the byte forbidden. Mirror of
+    // the `_program_name_does_not_contain_a_carriage_return_byte`
+    // sibling's same decoupling rationale on the CR side, which
+    // pins `\r` independently of the no-embedded-whitespace
+    // check.
+    //
+    // None of the remaining program_name companions name the
+    // `\n` byte directly:
+    //   - `_program_name_returns_paladin` is an exact-value pin
+    //     against the literal `"Paladin"` — a future override
+    //     that introduced `\n` would fail this exact-value pin
+    //     but ONLY if the pin is not updated alongside; a future
+    //     refactor that landed a multi-line program-name display
+    //     string would relax both pins together;
+    //   - `_program_name_is_non_empty_and_not_app_id` only pins
+    //     non-emptiness and inequality against the app-id — `\n`
+    //     in a non-empty value that is not the app-id slips past;
+    //   - `_program_name_is_ascii_only` pins each byte as ASCII
+    //     — `\n` is ASCII (0x0A) so it slips past;
+    //   - `_program_name_matches_format_app_window_title` /
+    //     `_program_name_is_segment_of_application_icon_name`
+    //     guard relations against neighboring helpers but say
+    //     nothing about embedded `\n` bytes specifically;
+    //   - `_does_not_contain_a_null_byte` /
+    //     `_does_not_contain_a_horizontal_tab_byte` /
+    //     `_does_not_contain_a_carriage_return_byte` /
+    //     `_does_not_contain_a_vertical_tab_byte` /
+    //     `_does_not_contain_a_form_feed_byte` /
+    //     `_does_not_contain_a_backspace_byte`
+    //     each name a different byte specifically.
+    //
+    // A regression that landed `"Pala\ndin"` (an `\n` byte from
+    // a multi-line program-name display string injected via a
+    // `concat!("Pala", "\n", "din")` form, a hand-edited helper
+    // that pasted from a multi-line text dump preserving line
+    // breaks, or a workspace-vendoring split that lifted
+    // program-name from a `pandoc`-generated source preserving
+    // hard line breaks) would mis-render in multiple downstream
+    // surfaces: (1) the GLib-backed
+    // `AdwAboutDialog::set_program_name` setter hands the
+    // string to Pango for inline rendering as the bold header-
+    // row caption at the top of the dialog — Pango would
+    // interpret the `\n` byte as a hard line break and wrap the
+    // program name onto two lines, pushing the dialog header
+    // taller than its baseline layout and visually misaligning
+    // the icon / version cluster below; (2) the same program-
+    // name string is reused by `_program_name_matches_format_app_window_title`
+    // to construct the application window title, so an `\n`
+    // byte in the program name would propagate into the window-
+    // title slot and break the desktop window-list /
+    // `gnome-shell` overview attribution there too; (3) when the
+    // program-name is dumped through a TTY (CI logs,
+    // `paladin-gtk --about` debug output piped to `less` or
+    // `cat`), the `\n` byte breaks the program name across two
+    // log lines so log-grep queries searching for `"Paladin"`
+    // would still match but log-line counts would be skewed;
+    // (4) screen readers that announce the dialog header treat
+    // the `\n` as a paragraph break and pause mid-name,
+    // breaking the program-name accessibility-tree announcement
+    // at the byte boundary; (5) downstream tooling that scrapes
+    // the program name (desktop-file readers, AppStream
+    // `<name>` extractors) would propagate the stray `\n` byte
+    // into the consumer's stream and trigger the same line-
+    // break rendering bug, with the additional risk that
+    // AppStream `<name>` validation rejects embedded line
+    // breaks at packaging time.
+    //
+    // Pinning the no-`\n` invariant directly here surfaces the
+    // regression with a message naming the offending byte at
+    // build time rather than via a future no-embedded-whitespace
+    // decoupling that silently dropped the `\n` guard. Current
+    // helper returns the literal `"Paladin"` (no `\n` byte), so
+    // this test passes today and serves as a forcing function
+    // so any future override of the helper stays free of line-
+    // feed bytes even when the `_has_no_embedded_whitespace`
+    // companion is intentionally relaxed.
+    use paladin_gtk::app::model::format_app_about_dialog_program_name;
+
+    let program_name = format_app_about_dialog_program_name();
+    assert!(
+        !program_name.contains('\n'),
+        "AdwAboutDialog program_name must not contain the `\\n` line-feed byte (0x0A); the current `\\n`-cleanliness is only protected transitively via the `_program_name_has_no_embedded_whitespace` companion (which uses `char::is_whitespace()` and returns true for U+000A LF), so a future refactor that relaxed the no-embedded-whitespace invariant (a libadwaita upgrade that taught the dialog header program-name row to wrap across two lines, or a workspace-vendoring split that lifted program-name out of the single-line constraint) would naturally drop the `\\n` guard; a stray `\\n` would cause Pango to interpret the byte as a hard line break and wrap the program name onto two lines (pushing the dialog header taller than its baseline layout), propagate into the application window title that reuses this string, break screen-reader program-name announcements at the byte boundary, propagate into downstream desktop-file readers and AppStream `<name>` extractors, and trigger AppStream `<name>` validation rejection at packaging time; got {program_name:?}",
+    );
+}
