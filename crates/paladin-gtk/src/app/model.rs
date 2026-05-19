@@ -706,6 +706,16 @@ impl SimpleComponent for AppModel {
         wire_app_window_action_activations(&action_group, sender.input_sender());
         wire_app_window_action_group(&root, &action_group);
 
+        // Register the pinned `<Control>n` / `<Control>q` /
+        // `<Control>comma` accelerators on the shared application
+        // so the Add, Quit, and Preferences `gio::SimpleAction`s
+        // inserted on the bundled action group resolve through
+        // their keyboard shortcuts in addition to the visible
+        // menu / button click paths. Sourced from
+        // `format_app_window_accelerator_bindings` so the wiring
+        // stays a single iteration over the pinned source of truth.
+        wire_app_window_accelerators(&relm4::main_application());
+
         let account_list = if state.is_unlocked() {
             let controller = AccountListComponent::builder()
                 .launch(AccountListInit { rows })
@@ -2315,9 +2325,13 @@ pub fn format_app_window_accelerator_bindings() -> [(&'static str, &'static str)
 ///
 /// The widget binding calls this helper inside `init` once the
 /// shared application reference is available
-/// (`relm4::main_application()`); the registrations stay live
-/// for the lifetime of the application. Sibling of
-/// [`wire_app_window_action_group`] (action-group insertion) and
+/// (`relm4::main_application()`, which returns a
+/// [`gtk::Application`] — `adw::Application` inherits from it
+/// and would also resolve via `.upcast_ref()` if the project
+/// ever migrates to an explicit `adw::Application::new` path);
+/// the registrations stay live for the lifetime of the
+/// application. Sibling of [`wire_app_window_action_group`]
+/// (action-group insertion) and
 /// [`wire_app_window_action_activations`] (per-action
 /// `connect_activate` wiring); together the three helpers cover
 /// the full keyboard-and-menu wiring for the application window
@@ -2328,7 +2342,7 @@ pub fn format_app_window_accelerator_bindings() -> [(&'static str, &'static str)
 /// the same target, so a repeat invocation is idempotent and
 /// safe under hot-reload scenarios where the application
 /// already has a partial accelerator surface.
-pub fn wire_app_window_accelerators(app: &adw::Application) {
+pub fn wire_app_window_accelerators(app: &gtk::Application) {
     for (accel, target) in format_app_window_accelerator_bindings() {
         app.set_accels_for_action(target, &[accel]);
     }

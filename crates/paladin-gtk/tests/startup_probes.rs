@@ -1970,20 +1970,26 @@ fn format_app_window_accelerator_bindings_accelerators_are_distinct() {
 fn wire_app_window_accelerators_signature_takes_application_reference() {
     // Per §"libadwaita usage" and §"Component tree": the
     // application-window wiring registers every pinned
-    // keyboard accelerator on the shared `adw::Application`
-    // via `gio::Application::set_accels_for_action(target, &[accel])`
+    // keyboard accelerator on the shared application via
+    // `gio::Application::set_accels_for_action(target, &[accel])`
     // per `(accel, target)` pair returned by
     // `format_app_window_accelerator_bindings`. This helper
     // performs that registration in one place so the widget
     // binding does not hand-spell three `set_accels_for_action`
     // calls. The compile-only signature check below pins the
-    // helper's shape — `fn(&adw::Application)` — without
-    // instantiating a second `adw::Application` in the test
+    // helper's shape — `fn(&gtk::Application)` — without
+    // instantiating a second `gtk::Application` in the test
     // process (only one application instance per process is
-    // permitted by glib). The end-to-end accelerator registration
-    // is covered by the `xvfb-run`-driven `tests/gtk_smoke.rs`
-    // mount.
-    let _: fn(&libadwaita::Application) = paladin_gtk::app::model::wire_app_window_accelerators;
+    // permitted by glib). The `gtk::Application` parameter type
+    // matches `relm4::main_application()`'s return type so the
+    // widget binding can pass the shared application reference
+    // directly without an explicit upcast; `adw::Application`
+    // inherits from `gtk::Application` and would resolve through
+    // `.upcast_ref()` if the project later switches to an
+    // explicit adw application path. The end-to-end accelerator
+    // registration is covered by the `xvfb-run`-driven
+    // `tests/gtk_smoke.rs` mount.
+    let _: fn(&gtk4::Application) = paladin_gtk::app::model::wire_app_window_accelerators;
 }
 
 #[test]
