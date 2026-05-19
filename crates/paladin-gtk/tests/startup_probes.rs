@@ -5082,3 +5082,26 @@ fn app_msg_carries_open_add_dialog_variant() {
 
     let _: AppMsg = AppMsg::OpenAddDialog;
 }
+
+#[test]
+fn app_msg_carries_quit_variant() {
+    // Per §"libadwaita usage" and §"Component tree": the
+    // application menu's Quit entry (and the `<Control>q`
+    // accelerator bound to the same `"app.quit"` `SimpleAction`)
+    // routes its activation through `dispatch_app_window_action`
+    // to `AppMsg::Quit`, whose handler calls
+    // `relm4::main_application().quit()` so any pending `GLib`
+    // sources unwind before the process exits. The same variant
+    // is also posted by the headless smoke-test
+    // `exit_after_startup` path so `tests/gtk_smoke.rs` can run
+    // the app under `xvfb-run` and observe the startup state
+    // markers before the application terminates. The compile-
+    // only check below pins the variant exists and carries no
+    // payload so the `connect_activate` closure and the smoke
+    // path can post it without constructor arguments, rounding
+    // out the dispatchable AppMsg surface alongside the six
+    // sibling `app_msg_carries_open_*_dialog_variant` pins.
+    use paladin_gtk::app::model::AppMsg;
+
+    let _: AppMsg = AppMsg::Quit;
+}
