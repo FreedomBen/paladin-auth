@@ -11366,3 +11366,82 @@ fn format_app_about_dialog_translator_credits_does_not_contain_a_carriage_return
         "AdwAboutDialog translator_credits must not contain the `\\r` carriage-return byte (0x0D); the libadwaita translator-credits convention splits on `\\n` (LF) only, so a stray `\\r` byte would leave each parsed entry trailing a control byte that fontconfig setups render as a visible `?` or empty box, would survive `xgettext` round trips as either silent data loss or CRLF preservation, and would break screen-reader credits-page announcements; got {translator_credits:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_release_notes_does_not_contain_a_carriage_return_byte() {
+    // Defense-in-depth mirror of the just-added
+    // `_translator_credits_does_not_contain_a_carriage_return_byte` /
+    // `_debug_info_does_not_contain_a_carriage_return_byte`
+    // companions on the release-notes-body side. The
+    // libadwaita release-notes convention permits embedded
+    // `\n` line breaks between Pango markup elements
+    // (`<li>` entries inside the wrapping `<ul>`, paragraph
+    // breaks, etc.), so the helper is one of only three
+    // about-dialog helpers (alongside
+    // `format_app_about_dialog_debug_info` and
+    // `format_app_about_dialog_translator_credits`) where
+    // embedded line breaks are legitimately expected. That
+    // makes `\r` (0x0D CARRIAGE RETURN) a distinct
+    // regression surface: it is NOT covered by
+    // `_has_no_surrounding_whitespace_when_non_empty` (`\r`
+    // mid-string is non-surrounding), it is NOT covered by
+    // `_starts_and_ends_with_a_markup_element_when_non_empty`
+    // (the opening `<` and closing `>` markup boundaries are
+    // independent of mid-body `\r` bytes), and it would
+    // route through `g_strdup` without truncation (since
+    // `\r` is not the null byte the `g_strdup` null-
+    // terminator triggers on).
+    //
+    // A regression that landed `"<ul><li>foo</li>\r\n<li>bar</li></ul>"`
+    // (CRLF line endings from a Windows-edited CHANGELOG.md,
+    // a `pandoc` Markdown-to-HTML transform that preserved
+    // CRLF source line endings, or a hand-edited helper
+    // using `\r\n` literals between bullets) would mis-
+    // render in multiple downstream surfaces: (1) Pango's
+    // markup parser permits ASCII whitespace between
+    // elements but renders `\r` as a literal control byte
+    // unless explicitly suppressed; in the about-dialog
+    // "What's New" body this would surface as visible
+    // whitespace glyphs or empty boxes between bullets on
+    // fontconfig setups that lack a glyph for U+000D; (2)
+    // any in-app changelog display that reuses the release-
+    // notes string outside the dialog (release-tracker bots,
+    // copy-to-clipboard handlers) would propagate the stray
+    // `\r` into the consumer's stream and trigger the same
+    // rendering bug across every downstream surface; (3)
+    // screen readers that announce the release-notes content
+    // read the `\r` as a literal control character, breaking
+    // the accessibility-tree announcement at every bullet
+    // boundary.
+    //
+    // Mirror of the existing
+    // `_debug_info_does_not_contain_a_carriage_return_byte`
+    // and just-added
+    // `_translator_credits_does_not_contain_a_carriage_return_byte`
+    // siblings on the debug-info and translator-credits
+    // sides; together they pin the no-`\r` invariant across
+    // every about-dialog helper that legitimately ships
+    // embedded `\n` newlines, closing the CRLF regression
+    // surface for the entire multi-line helper cluster.
+    //
+    // Pinning the no-CR invariant directly here surfaces the
+    // regression with a message naming the offending byte at
+    // build time rather than as a downstream "What's New"
+    // body rendering bug, a stray `\r` byte in an external
+    // changelog reuse, or a screen-reader announcement
+    // break. Current helper returns the empty literal `""`
+    // (no `\r` byte), so this test passes today and serves
+    // as a forcing function so any future override of the
+    // helper — including the eventual landing of an actual
+    // v0.2 release-notes Pango markup body sourced from
+    // CHANGELOG.md — stays free of carriage returns even
+    // when embedded `\n` line breaks are intentionally
+    // present.
+    use paladin_gtk::app::model::format_app_about_dialog_release_notes;
+
+    let release_notes = format_app_about_dialog_release_notes();
+    assert!(
+        !release_notes.contains('\r'),
+        "AdwAboutDialog release_notes must not contain the `\\r` carriage-return byte (0x0D); the Pango markup parser permits ASCII whitespace between elements but renders `\\r` as a control byte, so a stray `\\r` would surface as visible whitespace glyphs or empty boxes between bullets on fontconfig setups lacking a U+000D glyph, propagate the same rendering bug into any external changelog reuse, and break screen-reader bullet-boundary announcements; got {release_notes:?}",
+    );
+}
