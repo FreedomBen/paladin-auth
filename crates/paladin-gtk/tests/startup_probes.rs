@@ -12242,3 +12242,88 @@ fn format_app_about_dialog_url_helpers_do_not_contain_a_query_string() {
         );
     }
 }
+
+#[test]
+fn format_app_about_dialog_url_helpers_do_not_contain_a_fragment_anchor() {
+    // Cross-helper defense-in-depth sibling looping over the
+    // three `AdwAboutDialog` footer URL helpers
+    // (`format_app_about_dialog_website`,
+    // `format_app_about_dialog_issue_url`,
+    // `format_app_about_dialog_support_url`) and pinning each
+    // value as free of a `#` fragment-anchor-introducer byte
+    // so a regression that landed an anchor-tagged URL — e.g.
+    // `"https://paladin.tamx.org#features"` (an in-page anchor
+    // dragged from a section-link refactor), or
+    // `"https://github.com/FreedomBen/paladin/issues#issuecomment-12345"`
+    // (a deep-link to a specific issue comment from a paste
+    // with the browser address-bar anchor retained), or
+    // `"https://github.com/FreedomBen/paladin/discussions#discussion-67890"`
+    // (similar deep-link to a specific discussion thread) —
+    // would fail at the pinned layer rather than slip past
+    // the `_is_non_empty_https_url[_distinct_*]` per-URL
+    // companion (which only checks non-empty + `https://`
+    // prefix + no space byte), the
+    // `_contain_no_embedded_whitespace` /
+    // `_are_ascii_only` cross-URL companions (no whitespace
+    // bytes, only ASCII bytes — `#` is both non-whitespace
+    // and ASCII, so it slips past both), the
+    // `_appends_issues_to_cargo_pkg_repository` /
+    // `_appends_discussions_to_cargo_pkg_repository`
+    // companions (which use `concat!(env!("CARGO_PKG_REPOSITORY"),
+    // "/issues")` — if `CARGO_PKG_REPOSITORY` itself drifted to
+    // include a fragment suffix, the concatenation would yield
+    // a `#`-bearing prefix), the
+    // `_issue_url_and_support_url_share_cargo_pkg_repository_prefix`
+    // companion (still holds since both URLs share the same
+    // `#`-bearing prefix), or the
+    // `_url_helpers_do_not_end_with_a_trailing_slash` /
+    // `_url_helpers_do_not_contain_a_query_string` companions
+    // (a `#`-terminated URL doesn't end with a slash and a
+    // fragment-anchor URL doesn't necessarily contain a `?`).
+    //
+    // The libadwaita `AdwAboutDialog::website` / `issue-url` /
+    // `support-url` slots consume the URL verbatim and render
+    // it as a clickable footer link; a `#`-anchor on a URL
+    // like `"https://github.com/FreedomBen/paladin/issues#issuecomment-12345"`
+    // would route through HTTP and GitHub's web stack to a
+    // *scrolled-into-a-specific-thread* destination view
+    // rather than to the bare issue-tracker landing page,
+    // surfacing as a confusing first-impression UX where the
+    // page scrolls past the user's expected landing position
+    // straight to an arbitrary historical comment. A `#`-
+    // anchor on the homepage URL
+    // (`"https://paladin.tamx.org#features"`) would similarly
+    // route the user to an in-page section rather than the
+    // page's natural landing position.
+    //
+    // Pinning the no-fragment-anchor invariant directly here
+    // surfaces the regression with a message naming the
+    // offending URL helper at build time rather than as a
+    // downstream scrolled-to-arbitrary-position click-through
+    // landing. Mirror of the
+    // `_url_helpers_do_not_end_with_a_trailing_slash`,
+    // `_url_helpers_do_not_contain_a_query_string`,
+    // `_url_helpers_contain_no_embedded_whitespace`,
+    // `_url_helpers_are_ascii_only`, and
+    // `_url_helpers_do_not_contain_a_null_byte` cross-URL
+    // siblings; together they pin the URL byte-composition
+    // contract (no whitespace, ASCII-only, no terminal `/`,
+    // no `\0`, no `?` query introducer, no `#` fragment
+    // anchor) across all three footer link surfaces against a
+    // single source of truth.
+    use paladin_gtk::app::model::{
+        format_app_about_dialog_issue_url, format_app_about_dialog_support_url,
+        format_app_about_dialog_website,
+    };
+
+    for (label, url) in [
+        ("website", format_app_about_dialog_website()),
+        ("issue_url", format_app_about_dialog_issue_url()),
+        ("support_url", format_app_about_dialog_support_url()),
+    ] {
+        assert!(
+            !url.contains('#'),
+            "AdwAboutDialog {label} must not contain the `#` fragment-anchor-introducer byte so the URL byte sequence resolves to the bare canonical destination landing position (the about-dialog footer is intended to surface the home / issue / support landing page, not a deep-link into an in-page section or a specific historical thread); got {url:?}",
+        );
+    }
+}
