@@ -6306,3 +6306,44 @@ fn format_app_window_accelerator_bindings_accelerators_have_a_non_empty_keysym_a
         );
     }
 }
+
+#[test]
+fn format_app_window_accelerator_bindings_accelerators_contain_no_whitespace() {
+    // Defense-in-depth sibling of
+    // `format_app_window_accelerator_bindings_accelerators_have_a_non_empty_keysym_after_the_modifier_block`
+    // (which pins a non-empty keysym suffix) and
+    // `format_app_window_accelerator_bindings_accelerators_carry_exactly_one_modifier_block`
+    // (which pins exactly one `<…>` block) and
+    // `format_app_window_accelerator_bindings_parse_via_gtk_accelerator_parse`
+    // (which round-trips each spelling through gtk::accelerator_parse
+    // but skips without a display server).
+    //
+    // Both shape companions pin the modifier-block boundaries and
+    // a non-empty trailing keysym but leave the embedded-whitespace
+    // case ungated. A regression like `"<Control> n"` (a stray
+    // space between the modifier and the keysym), `"<Control>n "`
+    // (a trailing space), or `"<Control>\nn"` (an embedded
+    // newline) would slip past the per-shape companions: the
+    // outer block count and the non-empty keysym suffix both still
+    // hold, while `gtk::accelerator_parse` would reject the
+    // spelling at runtime — but the parse-side companion skips on
+    // CI environments that lack a display server, so the pure
+    // string-shape rule needs to hold independently.
+    //
+    // Scoped to a pure string-shape check rather than a second
+    // `gtk::accelerator_parse` call so it stays parallel-safe
+    // with the gtk::init-using parse sibling without an Once-gated
+    // init helper. Pins the no-whitespace invariant against a
+    // single source of truth so a future drift fails at the
+    // pinned layer with a message naming the offending action
+    // target rather than only surfacing on a display-equipped CI
+    // run.
+    use paladin_gtk::app::model::format_app_window_accelerator_bindings;
+
+    for (accel, target) in format_app_window_accelerator_bindings() {
+        assert!(
+            !accel.chars().any(char::is_whitespace),
+            "format_app_window_accelerator_bindings accelerator for target {target:?} must contain no whitespace so gtk::accelerator_parse accepts the spelling on every platform; an embedded space like `<Control> n`, a trailing space like `<Control>n `, or an embedded newline like `<Control>\\nn` would parse as a different keysym or fail to parse and silently unbind the documented shortcut surface; got {accel:?}",
+        );
+    }
+}
