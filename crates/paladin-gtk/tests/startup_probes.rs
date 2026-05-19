@@ -19133,3 +19133,105 @@ fn format_app_about_dialog_release_notes_version_does_not_contain_a_line_feed_by
         "AdwAboutDialog release_notes_version must not contain the `\\n` line-feed byte (0x0A); the current `\\n`-cleanliness is only protected transitively via the `_matches_about_dialog_version` equality pin against the version helper's `_has_no_embedded_whitespace` companion (which uses `char::is_whitespace()` and returns true for U+000A LF), so a future refactor that decoupled `release_notes_version` from `version` (a multi-release release-notes header that landed a distinct release-notes version) or that relaxed the version helper's no-embedded-whitespace guard (a multi-line SemVer build-meta suffix) would naturally drop the transitive `\\n` guard; a stray `\\n` would cause Pango to interpret the byte as a hard line break in the \"What's New\" section header, break the tidy single-line caption layout, trigger AppStream `appstreamcli validate` rejection at packaging time (the strict SemVer grammar has no `\\n` production), trigger Flatpak `appstream-builder` rejection when generating the release-notes index, break screen-reader section-header announcements at the byte boundary, and propagate into downstream changelog aggregators; got {release_notes_version:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_translator_credits_does_not_contain_a_line_feed_byte() {
+    // Defense-in-depth per-byte sibling extending the
+    // translator_credits byte-cleanliness contract past the just-
+    // completed `{null / horizontal-tab / carriage-return /
+    // vertical-tab / form-feed / backspace}` sextuple to the
+    // line-feed byte `\n` (0x0A), completing the inner C0
+    // control-byte cycle from BS (0x08) through CR (0x0D) for
+    // this helper. The existing
+    // `_translator_credits_is_single_line_when_non_empty`
+    // companion does explicitly assert `!credits.contains('\n')`
+    // — but only when `!credits.is_empty()` — so the helper's
+    // `\n`-cleanliness is currently protected *conditionally* by
+    // that one specific companion.
+    //
+    // That conditional coverage is *coupled* to two layers: (1)
+    // the `if !credits.is_empty()` gate, and (2) the single-line
+    // invariant. A future refactor that landed a non-empty
+    // `gettext("translator-credits")` value with embedded `\n`
+    // line breaks (the GTK convention historically used a `\n`-
+    // separated list of translator pairs like
+    // `"Translator Name <email>\nAnother Name <email>"`, and a
+    // future libadwaita upgrade that taught the credits row to
+    // wrap across multiple lines per translator entry would
+    // naturally relax the single-line companion to drop the
+    // `\n` check) would either flip the gate (a refactor that
+    // dropped the `is_empty` guard entirely) or relax the inner
+    // single-line assertion — at which point the no-`\n`
+    // invariant would silently regress to "allowed" without any
+    // independent byte-cleanliness pin keeping the byte
+    // forbidden. Mirror of the
+    // `_translator_credits_does_not_contain_a_carriage_return_byte`
+    // sibling's same decoupling rationale on the CR side.
+    //
+    // None of the remaining translator_credits companions name
+    // the `\n` byte directly:
+    //   - `_is_empty_until_translations_land` is an exact-value
+    //     pin against the empty string — a future override that
+    //     landed a non-empty `\n`-bearing translator-credits
+    //     value would fail this exact-value pin but ONLY if the
+    //     pin is not updated alongside; once translations land,
+    //     this companion would be relaxed away;
+    //   - `_has_no_surrounding_whitespace_when_non_empty` uses
+    //     `char::is_whitespace()`, which returns true for U+000A
+    //     LF, so this companion DOES reject a leading or
+    //     trailing `\n` when the value is non-empty — but a mid-
+    //     string `\n` (the more dangerous case for the credits
+    //     row layout) slips past;
+    //   - `_does_not_contain_a_null_byte` /
+    //     `_does_not_contain_a_horizontal_tab_byte` /
+    //     `_does_not_contain_a_carriage_return_byte` /
+    //     `_does_not_contain_a_vertical_tab_byte` /
+    //     `_does_not_contain_a_form_feed_byte` /
+    //     `_does_not_contain_a_backspace_byte`
+    //     each name a different byte specifically.
+    //
+    // A regression that landed `"Translator A\nTranslator B"`
+    // (a `\n`-separated list of translator pairs from the GTK
+    // historical convention, a `concat!(_, "\n", _)` form, or
+    // a `gettext("translator-credits")` result preserving the
+    // `.po` file's literal `\n` separators between translator
+    // entries) would mis-render in multiple downstream surfaces:
+    // (1) the GLib-backed `AdwAboutDialog::set_translator_credits`
+    // setter hands the string to Pango for inline rendering in
+    // the credits-page translator row — Pango would interpret
+    // the `\n` byte as a hard line break and wrap the credits
+    // row taller than its baseline layout, breaking the
+    // libadwaita single-line credits-row contract per Paladin's
+    // explicit `_is_single_line_when_non_empty` invariant; (2)
+    // the credits row is the localization-attribution surface
+    // for the dialog — a multi-line credits row erodes the tidy
+    // single-row attribution layout GNOME HIG calls for in the
+    // `AdwAboutDialog` credits page; (3) screen readers that
+    // announce the credits-page translator row treat the `\n`
+    // as a paragraph break and pause between translator entries,
+    // breaking the single-row accessibility-tree announcement
+    // at the byte boundary; (4) downstream tooling that scrapes
+    // the credits-page translator list (localization-attribution
+    // aggregators) would propagate the stray `\n` byte into the
+    // consumer's stream and trigger the same rendering bug.
+    //
+    // Pinning the no-`\n` invariant directly here surfaces the
+    // regression with a message naming the offending byte at
+    // build time rather than via a future single-line decoupling
+    // or `is_empty` gate flip that silently dropped the `\n`
+    // guard. Current helper returns the empty string `""` (no
+    // `\n` byte to find), so this test passes today and serves
+    // as a forcing function so any future override of the helper
+    // — including the eventual landing of a non-empty
+    // `gettext("translator-credits")` value when translations
+    // land — stays free of line-feed bytes even when the
+    // `_is_single_line_when_non_empty` companion is intentionally
+    // relaxed.
+    use paladin_gtk::app::model::format_app_about_dialog_translator_credits;
+
+    let credits = format_app_about_dialog_translator_credits();
+    assert!(
+        !credits.contains('\n'),
+        "AdwAboutDialog translator_credits must not contain the `\\n` line-feed byte (0x0A); the current `\\n`-cleanliness is only protected conditionally by the `_translator_credits_is_single_line_when_non_empty` companion's `if !credits.is_empty()` gate plus its inner `!credits.contains('\\n')` assertion, so a future refactor that landed a non-empty `gettext(\"translator-credits\")` value with embedded line breaks (the GTK historical convention of `\\n`-separated translator pairs) and either flipped the `is_empty` gate or relaxed the inner single-line check would naturally drop the `\\n` guard; a stray `\\n` would cause Pango to interpret the byte as a hard line break and wrap the credits row taller than its baseline layout, erode the libadwaita single-line credits-row contract per Paladin's explicit `_is_single_line_when_non_empty` invariant, break screen-reader credits-row announcements at the byte boundary, and propagate into downstream localization-attribution aggregators; the `_has_no_surrounding_whitespace_when_non_empty` companion does reject a leading or trailing `\\n` (since `char::is_whitespace()` returns true for U+000A LF) but the more dangerous mid-string `\\n` slips past; got {credits:?}",
+    );
+}
