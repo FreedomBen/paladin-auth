@@ -6347,3 +6347,41 @@ fn format_app_window_accelerator_bindings_accelerators_contain_no_whitespace() {
         );
     }
 }
+
+#[test]
+fn format_app_about_dialog_copyright_is_a_single_line_without_embedded_newlines() {
+    // Defense-in-depth sibling of
+    // `format_app_about_dialog_copyright_returns_paladin_copyright_line`
+    // (exact-value pin),
+    // `format_app_about_dialog_copyright_starts_with_copyright_glyph_and_contains_developer_name`
+    // (positive shape pin on the leading glyph + attribution),
+    // and
+    // `format_app_about_dialog_copyright_does_not_contain_a_year_token_so_it_does_not_drift_across_releases`
+    // (negative pin against year drift). Those companions catch
+    // the wrong-value / wrong-prefix / drifting-year regressions
+    // but leave the embedded-newline edge case ungated.
+    //
+    // The `AdwAboutDialog::copyright` property is consumed as a
+    // single-line attribution in the dialog footer (one line
+    // below the license-type chip and above the website / issue
+    // links). A regression that put a `\n` inside the copyright
+    // literal — e.g. `"© The Paladin\ncontributors"` — would
+    // render as a vertically-stretched two-line block in the
+    // dialog footer and visually misalign the footer cluster
+    // against the website / issue-link rows beneath it. Mirror
+    // of the `_developer_name_is_a_single_line_without_embedded_newlines`
+    // companion on the dialog-header side; together they pin the
+    // single-line shape on both the header attribution row and
+    // the footer copyright row against a single source of truth.
+    use paladin_gtk::app::model::format_app_about_dialog_copyright;
+
+    let copyright = format_app_about_dialog_copyright();
+    assert!(
+        !copyright.contains('\n'),
+        "AdwAboutDialog copyright must be a single line so the dialog footer renders as one tidy caption above the website / issue-link cluster rather than as a vertically-stretched two-line block; got {copyright:?}",
+    );
+    assert!(
+        !copyright.contains('\r'),
+        "AdwAboutDialog copyright must use LF-only conventions (no embedded CR), matching the GNOME stack's text expectation for a single-line attribution caption; got {copyright:?}",
+    );
+}
