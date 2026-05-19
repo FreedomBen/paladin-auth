@@ -13217,3 +13217,100 @@ fn format_app_about_dialog_program_name_does_not_contain_a_horizontal_tab_byte()
         "AdwAboutDialog program_name must not contain the `\\t` horizontal-tab byte (0x09); the current `\\t`-cleanliness is only protected transitively by `_has_no_embedded_whitespace`'s broad `char::is_whitespace()` check, so a future refactor that relaxed the no-whitespace invariant to allow a localized multi-word program name might silently drop the `\\t` guard alongside the space relaxation; a stray `\\t` would render as a wide horizontal gap in the bold dialog-header program-name row, mis-align the window manager's taskbar / dock display label under shell-dependent tab-stop semantics, and break screen-reader application-name announcements at the tab boundary; got {program_name:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_version_does_not_contain_a_carriage_return_byte() {
+    // Defense-in-depth per-byte sibling extending the
+    // version-helper byte coverage from the existing
+    // `_version_does_not_contain_a_null_byte` companion to
+    // the carriage-return byte. The existing
+    // `_version_has_no_embedded_whitespace` companion uses
+    // `char::is_whitespace()`, which returns true for `\r`
+    // — so the version helper's `\r`-cleanliness is
+    // currently protected *transitively* by that one
+    // specific companion's broad whitespace check.
+    //
+    // But that transitive protection is *bundled* with the
+    // no-whitespace invariant as a whole: a future refactor
+    // that intentionally allowed a version-suffix separator
+    // space (e.g. `"0.0.1 pre-release"` or `"0.0.1 +build"`)
+    // would naturally relax the
+    // `_has_no_embedded_whitespace` companion — and the
+    // human author of that refactor might reasonably
+    // restructure the check to only reject specific control
+    // bytes (newline, tab) without separately calling out
+    // `\r` on the assumption that "ASCII whitespace is now
+    // allowed". That assumption is wrong: `\r` is a control
+    // byte, not a layout-friendly whitespace character, and
+    // the version slot is rendered as a single-line caption
+    // beneath the program name in the dialog header that
+    // has no CR-line-ending semantics — so dropping the
+    // `\r` check alongside the space-relaxation would
+    // silently regress the no-`\r` invariant.
+    //
+    // The `_is_ascii_only` companion does not catch `\r`
+    // (since `\r` is ASCII, 0x0D), the
+    // `_version_is_non_empty_and_looks_like_semver`
+    // companion only enforces non-empty + semver shape, the
+    // `_starts_with_a_digit` / `_does_not_start_with_a_dot`
+    // / `_does_not_end_with_a_dot` companions only constrain
+    // the boundary bytes, the
+    // `_has_at_least_three_dot_separated_segments` /
+    // `_segments_are_non_empty` companions only check
+    // segment count and non-emptiness, the
+    // `_matches_cargo_pkg_version` cross-helper companion
+    // only enforces equality with `CARGO_PKG_VERSION` (so
+    // any `\r`-bearing override would slip past as long as
+    // Cargo's pinned version had matching bytes), and the
+    // `_does_not_contain_a_null_byte` companion only names
+    // `\0` specifically. None of those names `\r` directly
+    // on this helper — only the `_has_no_embedded_whitespace`
+    // companion catches it transitively, and that coupling
+    // is fragile.
+    //
+    // A regression that landed `"0.0.1\r"` (CRLF copy-paste
+    // from a Windows-edited Cargo.toml `version` field with
+    // the `\n` stripped during a manual line-ending fix-up,
+    // a `concat!(_, "\r", _)` form, or a hand-edited helper
+    // override that lifted the version literal from a CR-
+    // only Mac Classic-style text file) would mis-render in
+    // multiple downstream surfaces: (1) the GLib-backed
+    // `AdwAboutDialog::set_version` setter routes the value
+    // into Pango for inline rendering as the version caption
+    // beneath the program name — Pango's default rendering
+    // of a bare `\r` byte is implementation-defined and
+    // typically renders as a literal control glyph or an
+    // empty box, breaking the tidy version-caption layout;
+    // (2) the same version string is reused by
+    // `_release_notes_version_matches_about_dialog_version`
+    // for the "What's New in v<version>" header — a `\r`
+    // byte in the version would propagate into the release-
+    // notes header and mis-render there too; (3) any
+    // downstream tooling that scrapes the version slot
+    // (release-tracker bots, update-check pings, crash-
+    // report assemblers) would propagate the stray `\r`
+    // byte and trigger the same rendering bug across every
+    // downstream surface; (4) screen readers that announce
+    // the version caption read the `\r` as a literal control
+    // character, breaking the version-caption accessibility-
+    // tree announcement.
+    //
+    // Pinning the no-`\r` invariant directly on this helper
+    // surfaces the regression with a message naming the
+    // offending byte at build time rather than via a future
+    // whitespace-relaxation refactor that silently dropped
+    // the `\r` guard. Current helper returns the value
+    // sourced from `CARGO_PKG_VERSION` (no `\r` byte), so
+    // this test passes today and serves as a forcing
+    // function so any future override of the helper —
+    // including the eventual landing of a build-metadata-
+    // suffixed version string — stays free of carriage
+    // returns.
+    use paladin_gtk::app::model::format_app_about_dialog_version;
+
+    let version = format_app_about_dialog_version();
+    assert!(
+        !version.contains('\r'),
+        "AdwAboutDialog version must not contain the `\\r` carriage-return byte (0x0D); the current `\\r`-cleanliness is only protected transitively by `_has_no_embedded_whitespace`'s broad `char::is_whitespace()` check, so a future refactor that relaxed the no-whitespace invariant to allow a build-metadata-suffixed version like `\"0.0.1 +build\"` might silently drop the `\\r` guard alongside the space relaxation; a stray `\\r` would render as a control glyph in the version caption beneath the program name, propagate into the \"What's New in v<version>\" release-notes header that reuses this string, and break screen-reader version-caption announcements; got {version:?}",
+    );
+}
