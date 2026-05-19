@@ -5638,3 +5638,44 @@ fn format_app_about_dialog_developers_does_not_contain_developer_name() {
         );
     }
 }
+
+#[test]
+fn format_app_window_default_size_fits_typical_desktop_display() {
+    // Defense-in-depth sibling of
+    // `format_app_window_default_size_meets_gnome_hig_narrow_threshold`
+    // (which pins the lower-bound dimensions) and
+    // `format_app_window_default_size_is_landscape_or_square_orientation`
+    // (which pins the orientation invariant). Those two
+    // assertions catch dimensions that are too small or
+    // portrait-flipped, but a regression that ballooned the
+    // default to e.g. `(6400, 4800)` — still positive,
+    // landscape, and above the narrow threshold — would still
+    // pass all three companions while rendering an initial
+    // window that overflows the user's screen before they have
+    // any chance to resize. A common typo class is a trailing
+    // zero (`640` -> `6400`) or a duplicated literal; pinning a
+    // sane upper bound here catches that drift.
+    //
+    // The pinned ceiling is the typical 1920x1080 desktop
+    // resolution (the FHD resolution that has been the most
+    // common single-display layout across GNOME desktops for
+    // years). The current (640, 480) pinned default sits well
+    // below this ceiling; pinning the upper bound here ensures
+    // a future dimension regression that exceeded the typical
+    // FHD display fails the test rather than as an initial
+    // window that does not fit on a standard 1080p screen.
+    use paladin_gtk::app::model::format_app_window_default_size;
+
+    const FHD_WIDTH_CEILING: i32 = 1920;
+    const FHD_HEIGHT_CEILING: i32 = 1080;
+
+    let (width, height) = format_app_window_default_size();
+    assert!(
+        width <= FHD_WIDTH_CEILING,
+        "ApplicationWindow default width {width} must fit within the typical 1920x1080 FHD desktop display (ceiling {FHD_WIDTH_CEILING}px) so the initial window does not overflow a standard 1080p screen before the user has a chance to resize; a regression that appended a trailing zero to the pinned 640px width would fail the test",
+    );
+    assert!(
+        height <= FHD_HEIGHT_CEILING,
+        "ApplicationWindow default height {height} must fit within the typical 1920x1080 FHD desktop display (ceiling {FHD_HEIGHT_CEILING}px) so the initial window does not overflow a standard 1080p screen before the user has a chance to resize; a regression that appended a trailing zero to the pinned 480px height would fail the test",
+    );
+}
