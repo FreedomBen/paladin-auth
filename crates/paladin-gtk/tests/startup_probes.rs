@@ -16609,6 +16609,117 @@ fn format_app_about_dialog_release_notes_version_does_not_contain_a_form_feed_by
 }
 
 #[test]
+fn format_app_about_dialog_release_notes_version_does_not_contain_a_backspace_byte() {
+    // Defense-in-depth per-byte sibling extending the
+    // release_notes_version byte-cleanliness contract past the
+    // just-completed `{null / horizontal-tab / carriage-return /
+    // vertical-tab / form-feed}` quintuple to the backspace byte
+    // `\x08` (0x08), which sits one step below HT (0x09) in the
+    // ASCII C0 block and is the first non-whitespace-classified
+    // C0 byte in the cycle: unlike FF / HT / CR / LF / VT,
+    // `\x08` is NOT matched by `char::is_whitespace()` (Unicode
+    // treats BS as a control byte, not whitespace), so the
+    // `version` helper's transitive `_has_no_embedded_whitespace`
+    // guard (which previously caught `\x0C` via U+000C FF
+    // matching `char::is_whitespace()`) does NOT catch a stray
+    // `\x08` — making backspace strictly more dangerous than
+    // form-feed for this helper, since the transitive protection
+    // collapses entirely instead of being merely brittle.
+    //
+    // The two existing `_matches_about_dialog_version` and
+    // `_matches_cargo_pkg_version` cross-source pins transitively
+    // guarantee `release_notes_version` shares its bytes with
+    // the `version` helper (which in turn equals
+    // `CARGO_PKG_VERSION`). The `version` helper is byte-pinned
+    // by `_version_has_no_embedded_whitespace` (a
+    // `char::is_whitespace()` check), but `char::is_whitespace()`
+    // returns *false* for U+0008 BS, so even the transitive
+    // protection via `version` doesn't catch `\x08` — every byte
+    // of `\x08`-cleanliness in the active value depends solely
+    // on the upstream `CARGO_PKG_VERSION` bytes being clean,
+    // which is not screened by Cargo or by any CI gate today.
+    //
+    // None of the existing companions name the `\x08` byte
+    // directly on this helper:
+    //   - `_release_notes_version_matches_about_dialog_version` /
+    //     `_matches_cargo_pkg_version` only constrain cross-source
+    //     equality (a `\x08`-bearing value would still match if
+    //     all sources shared the regression);
+    //   - `_release_notes_version_segments_are_non_empty` only
+    //     constrains the dot-separated shape — `\x08` is not `.`;
+    //   - `_release_notes_version_starts_with_a_digit` only
+    //     constrains the leading byte (and even there, the test
+    //     only checks if the first byte is a digit — a `\x08`
+    //     after the leading digit slips past);
+    //   - `_does_not_contain_a_null_byte` /
+    //     `_does_not_contain_a_horizontal_tab_byte` /
+    //     `_does_not_contain_a_carriage_return_byte` /
+    //     `_does_not_contain_a_vertical_tab_byte` /
+    //     `_does_not_contain_a_form_feed_byte` each name a
+    //     different byte specifically.
+    //
+    // A regression that landed `"0.0.1\x08"` or `"0\x08.0\x08.1"`
+    // (a backspace byte lifted from a `script(1)` typescript
+    // capturing raw `\x08` edit-stream bytes between version
+    // tokens, a `concat!(_, "\x08", _)` form, a hand-edited
+    // helper override that pasted from a terminal session
+    // recording, or a CHANGELOG.md-derived release-notes version
+    // edited interactively in a terminal with a backspace key)
+    // would mis-render in multiple downstream surfaces,
+    // identically to the analysis on the `version` helper: (1)
+    // the GLib-backed
+    // `AdwAboutDialog::set_release_notes_version` setter routes
+    // the value into Pango for inline rendering as the "What's
+    // New in v<release_notes_version>" header — Pango's default
+    // rendering of a bare `\x08` byte is implementation-defined
+    // and typically renders as a literal control glyph (a hollow
+    // box or tofu-like placeholder), breaking the tidy section-
+    // header layout; (2) the value scopes the "What's New" body
+    // region inside the dialog — a mismatched / mis-rendered
+    // scope key could prevent the body from rendering at all on
+    // libadwaita versions that strip control bytes when computing
+    // the body-region lookup key; (3) when the version is dumped
+    // through a TTY (CI release notification pipelines, `cargo
+    // metadata` pipes), the `\x08` byte erases the preceding
+    // glyph and lets the rendered "What's New in v..." header
+    // diverge from the bytes on disk — a log-injection /
+    // display-spoofing primitive where an attacker who controlled
+    // the upstream version source (a hostile fork that injected
+    // BS bytes into `Cargo.toml` `version`) could craft a payload
+    // whose terminal-rendered form omits or substitutes version
+    // characters without altering the underlying file bytes; (4)
+    // screen readers that announce the "What's New" section
+    // header read the `\x08` as a literal control character or —
+    // on some implementations — as a delete-previous
+    // announcement, breaking the section-header accessibility-
+    // tree announcement at the byte boundary.
+    //
+    // Pinning the no-`\x08` invariant directly on this helper
+    // surfaces the regression with a message naming the
+    // offending byte at build time rather than via a future
+    // decoupling that silently dropped the (already-absent)
+    // transitive `version` guard. Current helper returns the
+    // value sourced from `CARGO_PKG_VERSION` (no `\x08` byte),
+    // so this test passes today and serves as a forcing function
+    // so any future decoupling override of the helper — including
+    // the eventual landing of a separately-scoped release-notes
+    // version derived from CHANGELOG.md headings — stays free of
+    // backspace bytes. Continues the release-notes-version C0
+    // control-byte cycle past the just-completed `{null /
+    // horizontal-tab / carriage-return / vertical-tab / form-
+    // feed}` quintuple so the helper's byte-composition contract
+    // pins each forbidden control byte against a single source
+    // of truth.
+    use paladin_gtk::app::model::format_app_about_dialog_release_notes_version;
+
+    let release_notes_version = format_app_about_dialog_release_notes_version();
+    assert!(
+        !release_notes_version.contains('\x08'),
+        "AdwAboutDialog release_notes_version must not contain the `\\x08` backspace byte (0x08); unlike form-feed, the `version` helper's transitive `_has_no_embedded_whitespace` guard does NOT catch `\\x08` (because `char::is_whitespace()` returns false for U+0008 BS), so every byte of `\\x08`-cleanliness depends solely on the upstream `CARGO_PKG_VERSION` bytes — not screened by Cargo or by any CI gate; a stray `\\x08` would render as a literal control glyph in the dialog's \"What's New in v<release_notes_version>\" section header, enable terminal-erase display-spoofing when the version is dumped through a TTY (the rendered header diverges from the bytes on disk because `\\x08` erases the preceding glyph), could prevent the What's New body from rendering on libadwaita versions that strip control bytes when computing the body-region lookup key, and break screen-reader section-header announcements at the byte boundary; got {release_notes_version:?}",
+    );
+}
+
+#[test]
 fn format_app_about_dialog_release_notes_does_not_contain_a_form_feed_byte() {
     // Defense-in-depth mirror of the just-added
     // `_release_notes_version_does_not_contain_a_form_feed_byte`
