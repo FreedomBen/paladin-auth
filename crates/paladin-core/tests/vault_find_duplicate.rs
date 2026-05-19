@@ -161,6 +161,27 @@ fn returns_first_match_when_multiple_collisions_exist() {
 }
 
 #[test]
+fn finds_cross_kind_collision_on_secret_issuer_label_match() {
+    // §5: the `(secret, issuer, label)` triple is the duplicate
+    // equivalence relation — TOTP-vs-HOTP `kind` is not part of it.
+    // A stored TOTP account therefore collides with an incoming HOTP
+    // candidate sharing the triple, so the front-end "duplicate_account"
+    // warning surfaces regardless of kind mismatch. Pins the rule that
+    // `find_duplicate` ignores kind so a future "scope duplicates per
+    // kind" change cannot land without flipping this test.
+    let mut vault = empty_plaintext_vault();
+    let totp_uri = format!("otpauth://totp/Acme:alice?secret={SECRET_A}");
+    let stored = parse_otpauth(&totp_uri, fixture_now()).unwrap();
+    let stored_id = stored.account.id();
+    vault.add(stored.account);
+
+    let hotp_uri = format!("otpauth://hotp/Acme:alice?secret={SECRET_A}&counter=0");
+    let candidate = parse_otpauth(&hotp_uri, fixture_now()).unwrap();
+    let hit = vault.find_duplicate(&candidate).expect("cross-kind hit");
+    assert_eq!(hit.id(), stored_id);
+}
+
+#[test]
 fn ignores_unrelated_fields_like_digits_or_period() {
     // Two TOTP accounts with identical (secret, issuer, label) but
     // different `digits` / `period` are still duplicates per §5 —
