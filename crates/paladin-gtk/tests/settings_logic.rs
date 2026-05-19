@@ -1752,3 +1752,36 @@ fn format_settings_dialog_spinner_digits_returns_zero() {
         "digits is 0 because the §4.7 seconds settings are integer-valued",
     );
 }
+
+#[test]
+fn format_settings_dialog_spinner_debounce_returns_500_ms() {
+    // The widget arms a `glib::timeout_add_local` after every
+    // `stage_*` call; the timer's tick handler calls
+    // `SettingsState::resolve_debounce` and fires
+    // `Vault::mutate_and_save` on `DebounceOutcome::Save`. The
+    // 500 ms duration is the §"Component tree" `SettingsComponent`
+    // contract that "holding +/- does not fire one save per
+    // click — the most recent buffered value is the one that
+    // saves" — long enough that a multi-press burst coalesces
+    // into a single `mutate_and_save`, short enough that a paused
+    // user does not notice the save lag.
+    //
+    // Pinning the literal through this helper keeps the debounce
+    // window in one place shared by the widget binding
+    // (`glib::timeout_add_local(format_settings_dialog_spinner_debounce(), ...)`)
+    // and the pure-logic tests; the widget layer never duplicates
+    // the literal. Returning a `Duration` (not a `u64` ms value)
+    // matches the `glib::timeout_add_local` argument type so the
+    // widget call site does not need a conversion.
+    //
+    // Pure — returns a `std::time::Duration` without allocating.
+    use std::time::Duration;
+
+    use paladin_gtk::settings::format_settings_dialog_spinner_debounce;
+
+    assert_eq!(
+        format_settings_dialog_spinner_debounce(),
+        Duration::from_millis(500),
+        "debounce window is the 500 ms coalescing budget from the plan",
+    );
+}

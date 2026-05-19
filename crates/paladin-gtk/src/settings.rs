@@ -1029,6 +1029,39 @@ pub fn format_settings_dialog_spinner_digits() -> u32 {
     0
 }
 
+/// Fixed [`std::time::Duration`] the widget hands to
+/// [`glib::timeout_add_local`] for the spinner debounce timer per
+/// `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
+/// "Preferences" and §"Component tree" > `SettingsComponent`.
+///
+/// Returns `Duration::from_millis(500)` — the §"Component tree"
+/// `SettingsComponent` contract that "holding +/- does not fire
+/// one save per click — the most recent buffered value is the one
+/// that saves". Long enough that a multi-press burst coalesces
+/// into a single `Vault::mutate_and_save`, short enough that a
+/// paused user does not notice the save lag. The pure-logic
+/// coalescing contract this duration arms is exercised by
+/// [`SettingsState::stage_auto_lock_secs`] /
+/// [`SettingsState::stage_clipboard_clear_secs`] +
+/// [`SettingsState::resolve_debounce`]; this helper pins the
+/// real-time interval the timer waits between the most recent
+/// stage call and the resolve call.
+///
+/// Pinning the literal through this helper keeps the debounce
+/// window in one place shared by the widget binding
+/// (`glib::timeout_add_local(format_settings_dialog_spinner_debounce(), …)`)
+/// and the pure-logic tests; the widget layer never duplicates
+/// the literal. Returning a [`std::time::Duration`] (not a `u64`
+/// millisecond count) matches the
+/// [`glib::timeout_add_local`] argument type so the widget call
+/// site does not need a conversion.
+///
+/// Pure — returns a [`std::time::Duration`] without allocating.
+#[must_use]
+pub fn format_settings_dialog_spinner_debounce() -> std::time::Duration {
+    std::time::Duration::from_millis(500)
+}
+
 /// Buffered spinner pending the 500 ms debounce.
 #[derive(Debug, Clone, Copy)]
 enum PendingSpinner {
