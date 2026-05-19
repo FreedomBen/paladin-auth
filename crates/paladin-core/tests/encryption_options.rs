@@ -15,6 +15,29 @@
 use paladin_core::{Argon2Params, EncryptionOptions, ErrorKind, PaladinError};
 use secrecy::SecretString;
 
+#[test]
+fn new_rejects_empty_passphrase_with_zero_length_reason() {
+    // `EncryptionOptions::new` is the default-Argon2-cost
+    // constructor (separate code path from `with_params`). It must
+    // also reject an empty passphrase with the stable
+    // `InvalidPassphrase { reason: "zero_length" }` shape so CLI /
+    // TUI / GUI callers that pick the simpler entry point still
+    // surface the same error.
+    let err = EncryptionOptions::new(SecretString::from(String::new())).unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::InvalidPassphrase);
+    let PaladinError::InvalidPassphrase { reason } = err else {
+        panic!("expected InvalidPassphrase")
+    };
+    assert_eq!(reason, "zero_length");
+}
+
+#[test]
+fn new_accepts_non_empty_passphrase_with_default_params() {
+    let opts = EncryptionOptions::new(SecretString::from("hunter2".to_string()))
+        .expect("non-empty pass accepted");
+    assert_eq!(opts.kdf_params, Argon2Params::default());
+}
+
 fn pp(s: &str) -> SecretString {
     SecretString::from(s.to_string())
 }
