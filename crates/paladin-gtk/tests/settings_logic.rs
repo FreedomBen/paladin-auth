@@ -576,6 +576,30 @@ fn format_settings_dialog_auto_lock_group_title_returns_auto_lock() {
 }
 
 #[test]
+fn format_settings_dialog_auto_lock_enabled_row_title_returns_lock_after_inactivity() {
+    // The auto-lock `AdwSwitchRow` carries the toggle that
+    // controls `paladin_core::VaultSettings::auto_lock_enabled`.
+    // Per `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
+    // "Preferences", the SettingsComponent uses idiomatic
+    // libadwaita rows — `AdwSwitchRow` for toggles, `AdwSpinRow`
+    // for timeouts.
+    //
+    // The wording (`"Lock after inactivity"`) names the
+    // behavior the user is enabling — the dialog locks the
+    // vault after the matching idle window expires — without
+    // restating "enabled" or "auto-lock" (the group title
+    // already names that concept). Verb-led wording per the
+    // GNOME HIG.
+    use paladin_gtk::settings::format_settings_dialog_auto_lock_enabled_row_title;
+
+    assert_eq!(
+        format_settings_dialog_auto_lock_enabled_row_title(),
+        "Lock after inactivity",
+        "AdwSwitchRow title is verb-led and HIG-conformant",
+    );
+}
+
+#[test]
 fn format_settings_dialog_clipboard_clear_group_title_returns_clipboard() {
     // Sibling of `format_settings_dialog_auto_lock_group_title`
     // on the clipboard-clear `AdwPreferencesGroup` side. This
