@@ -6980,3 +6980,57 @@ fn format_app_about_dialog_release_notes_has_no_surrounding_whitespace_when_non_
         );
     }
 }
+
+#[test]
+fn format_app_about_dialog_developer_name_has_no_surrounding_whitespace() {
+    // Defense-in-depth sibling of
+    // `format_app_about_dialog_developer_name_returns_the_paladin_contributors`
+    // (exact-value pin),
+    // `format_app_about_dialog_developer_name_is_non_empty_and_distinct_from_program_name`
+    // (positive shape pin on non-empty + distinct), and
+    // `format_app_about_dialog_developer_name_is_a_single_line_without_embedded_newlines`
+    // (negative pin on embedded newlines). Those companions
+    // catch the wrong-value, empty, name-equals-program-name,
+    // and mid-string newline regressions but leave the
+    // surrounding-whitespace edge case ungated.
+    //
+    // The `AdwAboutDialog::developer_name` slot renders as the
+    // attribution row directly under the program-name header
+    // (one line below `program-name`, above the version label).
+    // A regression that put a leading space or tab in the
+    // literal — e.g. ` "The Paladin contributors"` from a copy-
+    // paste import that brought along an indent — would push
+    // the attribution off the centered baseline relative to the
+    // program-name header above it. A trailing space (or worse,
+    // a trailing newline that the embedded-newline companion
+    // already catches because it looks for any `\n`) would
+    // leave a hanging gap on the right edge of the attribution
+    // row. The current `"The Paladin contributors"` literal is
+    // trim-clean, so this test passes today and stays green
+    // until a future contributor regresses the literal in a
+    // way the existing companions don't catch.
+    //
+    // Mirror of the
+    // `_translator_credits_has_no_surrounding_whitespace_when_non_empty`
+    // and `_release_notes_has_no_surrounding_whitespace_when_non_empty`
+    // siblings already pinned on the credits-page and What's
+    // New sides; together they pin the no-padding shape on the
+    // attribution row, the translator-credits row, and the
+    // release-notes section against a single source of truth.
+    // Sibling of the `_comments_is_non_empty_single_line_distinct_from_program_name`
+    // companion which already pins the matching no-padding
+    // invariant on the program-header comments-caption side;
+    // together they pin the attribution-row + caption-row
+    // header cluster as flush against its baseline grid.
+    use paladin_gtk::app::model::format_app_about_dialog_developer_name;
+
+    let developer_name = format_app_about_dialog_developer_name();
+    assert!(
+        !developer_name.starts_with(char::is_whitespace),
+        "AdwAboutDialog developer_name must not start with whitespace so the attribution row renders flush against the centered baseline below the program-name header; got {developer_name:?}",
+    );
+    assert!(
+        !developer_name.ends_with(char::is_whitespace),
+        "AdwAboutDialog developer_name must not end with whitespace so the attribution row does not leave a hanging gap on the right edge below the program-name header; got {developer_name:?}",
+    );
+}
