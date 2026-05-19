@@ -2005,6 +2005,107 @@ fn build_app_about_dialog_threads_every_format_app_about_dialog_helper_through_a
 }
 
 #[test]
+fn format_app_add_button_visible_returns_true_when_a_vault_is_open() {
+    // Per §"libadwaita usage" and §"Component tree": the
+    // header-bar `+` button is hidden entirely before a vault
+    // is open — `Missing` / `Locked` / `StartupError` — and
+    // remains visible (but disabled) during `UnlockedBusy` so
+    // the affordance does not disappear when a vault worker
+    // spawns. The split matches `state.is_unlocked()` (true
+    // for `Unlocked` and `UnlockedBusy`), distinct from the
+    // sensitivity rule (`state.allows_mutating_menu()`, true
+    // only for `Unlocked`). This helper pins the visibility
+    // rule through one source of truth so the widget binding
+    // does not hand-spell `state.is_unlocked()` inline.
+    use paladin_core::ErrorKind;
+    use paladin_gtk::app::model::format_app_add_button_visible;
+    use paladin_gtk::app::state::AppState;
+    use paladin_gtk::startup_error::{StartupError, StartupErrorSource};
+
+    for visible in [
+        AppState::Unlocked {
+            path: std::path::PathBuf::from("/dev/null"),
+        },
+        AppState::UnlockedBusy {
+            path: std::path::PathBuf::from("/dev/null"),
+        },
+    ] {
+        assert!(
+            format_app_add_button_visible(&visible),
+            "{visible:?} must show the + button (vault is open)",
+        );
+    }
+
+    for hidden in [
+        AppState::Missing {
+            path: std::path::PathBuf::from("/dev/null"),
+        },
+        AppState::Locked {
+            path: std::path::PathBuf::from("/dev/null"),
+        },
+        AppState::StartupError {
+            path: None,
+            error: StartupError {
+                source: StartupErrorSource::PathResolution,
+                kind: ErrorKind::IoError,
+                rendered: String::from("resolve_failed"),
+            },
+        },
+    ] {
+        assert!(
+            !format_app_add_button_visible(&hidden),
+            "no-vault-open state must hide the + button per §\"libadwaita usage\"; got visible for {hidden:?}",
+        );
+    }
+}
+
+#[test]
+fn format_app_add_button_visible_is_a_relaxation_of_format_app_add_button_sensitive() {
+    // Cross-check: when the `+` button is sensitive (enabled),
+    // it must also be visible — a `format_app_add_button_sensitive`
+    // → `format_app_add_button_visible` implication. The
+    // converse is allowed to fail (`UnlockedBusy` is visible
+    // but not sensitive). A drift that inverted the implication
+    // would surface a clickable `+` on a hidden button or a
+    // permanently-disabled-and-hidden combination that has no
+    // meaning in the §"libadwaita usage" rules.
+    use paladin_core::ErrorKind;
+    use paladin_gtk::app::model::{format_app_add_button_sensitive, format_app_add_button_visible};
+    use paladin_gtk::app::state::AppState;
+    use paladin_gtk::startup_error::{StartupError, StartupErrorSource};
+
+    for state in [
+        AppState::Unlocked {
+            path: std::path::PathBuf::from("/dev/null"),
+        },
+        AppState::Missing {
+            path: std::path::PathBuf::from("/dev/null"),
+        },
+        AppState::Locked {
+            path: std::path::PathBuf::from("/dev/null"),
+        },
+        AppState::UnlockedBusy {
+            path: std::path::PathBuf::from("/dev/null"),
+        },
+        AppState::StartupError {
+            path: None,
+            error: StartupError {
+                source: StartupErrorSource::PathResolution,
+                kind: ErrorKind::IoError,
+                rendered: String::from("resolve_failed"),
+            },
+        },
+    ] {
+        if format_app_add_button_sensitive(&state) {
+            assert!(
+                format_app_add_button_visible(&state),
+                "format_app_add_button_sensitive returned true for {state:?} but format_app_add_button_visible returned false — every sensitive (enabled) state must also be a visible state",
+            );
+        }
+    }
+}
+
+#[test]
 fn apply_app_add_action_sensitivity_updates_existing_action_for_a_new_state() {
     // Per §"libadwaita usage" and §"Component tree": when
     // `AppModel` transitions between states (e.g. Unlocked →

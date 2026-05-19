@@ -2238,6 +2238,41 @@ pub fn format_app_add_button_sensitive(state: &AppState) -> bool {
     state.allows_mutating_menu()
 }
 
+/// Visibility for the header-bar `+` button bound via
+/// [`format_app_add_button_action`].
+///
+/// Returns the value of [`AppState::is_unlocked`] — `true`
+/// when `AppModel` is in [`AppState::Unlocked`] or
+/// [`AppState::UnlockedBusy`] (the vault is open in either
+/// case), `false` otherwise (`Missing` / `Locked` /
+/// `StartupError`). The widget binding consumes the value
+/// through `set_visible` so the `+` button is hidden entirely
+/// before a vault is open — a relaxation of
+/// [`format_app_add_button_sensitive`] (which also gates on
+/// [`AppState::UnlockedBusy`] via
+/// [`AppState::allows_mutating_menu`], so the button stays
+/// visible-but-disabled during `UnlockedBusy`). The split
+/// matches §"libadwaita usage": the `+` remains visible during
+/// `UnlockedBusy` so the user can see the affordance is
+/// momentarily unavailable rather than seeing the surface
+/// re-flow when a vault worker spawns; it is disabled rather
+/// than hidden so a follow-up keystroke does not race against
+/// the running worker.
+///
+/// Pinning the rule through a helper keeps the widget binding
+/// free of bare `state.is_unlocked()` reads shared between
+/// `view!` and any future runtime visibility update. Sibling
+/// of [`format_app_add_button_sensitive`] on the header-bar-
+/// `+`-button state-projection side; together they pin both
+/// the visibility and the (separate) sensitivity rule against
+/// a single source of truth.
+///
+/// Pure — returns a `bool` without allocating.
+#[must_use]
+pub fn format_app_add_button_visible(state: &AppState) -> bool {
+    state.is_unlocked()
+}
+
 /// Build the header-bar `+` button's
 /// [`gtk::gio::SimpleAction`] from the pinned
 /// [`format_app_add_button_action_name`] (the bare action name
