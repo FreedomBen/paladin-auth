@@ -22090,3 +22090,107 @@ fn format_app_about_dialog_version_does_not_contain_an_acknowledge_byte() {
         "AdwAboutDialog version must not contain the `\\x06` acknowledge byte (0x06); like BEL and BS, ACK is NOT matched by `char::is_whitespace()` (Unicode returns false for U+0006 ACK), so `_has_no_embedded_whitespace` does NOT catch `\\x06` — strictly as dangerous as backspace and bell here, neither caught by the whitespace companion; a stray `\\x06` slips past `_is_ascii_only` / `_is_non_empty_and_looks_like_semver` / `_starts_with_a_digit` / `_does_not_start_with_a_dot` / `_does_not_end_with_a_dot` / `_has_at_least_three_dot_separated_segments` / `_segments_are_non_empty` / `_matches_cargo_pkg_version` and the prior per-byte siblings, would render as a literal control glyph in the version caption beneath the program name, propagate into the \"What's New in v<version>\" release-notes header that reuses this string, confuse serial-protocol-bridging tooling that treats `\\x06` as an ACK-frame indicator on update-check or release-tracker dumps piped through a serial-bridged TTY, and break screen-reader version-caption announcements at the byte boundary; got {version:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_application_icon_name_does_not_contain_an_acknowledge_byte() {
+    // Defense-in-depth per-byte sibling extending the
+    // application-icon-name byte coverage past the just-
+    // completed `{null / horizontal-tab / carriage-return /
+    // vertical-tab / form-feed / backspace / line-feed / bell}`
+    // octuple to the acknowledge byte `\x06` (0x06), continuing
+    // the non-whitespace-classified C0 control-byte cycle past
+    // BEL (0x07) for this helper. Like BEL and BS, ACK is NOT
+    // matched by `char::is_whitespace()` (Unicode treats ACK as
+    // a control byte, not whitespace), so the existing
+    // `_application_icon_name_has_no_embedded_whitespace`
+    // companion does NOT catch `\x06` — making acknowledge
+    // strictly as dangerous as backspace and bell for this
+    // helper, since the transitive protection collapses entirely
+    // rather than being merely brittle.
+    //
+    // None of the existing companions name the `\x06` byte
+    // directly on this helper:
+    //   - `_is_ascii_only` pins each byte as ASCII — `\x06` is
+    //     ASCII so it slips past;
+    //   - `_application_icon_name_has_no_embedded_whitespace` uses
+    //     `char::is_whitespace()`, which returns *false* for
+    //     U+0006 ACK — strictly weaker coverage than the form-
+    //     feed case;
+    //   - `_is_reverse_dns` / `_has_exactly_four_segments` /
+    //     `_starts_with_a_lowercase_ascii_letter` only constrain
+    //     segment-count and leading byte;
+    //   - `_ends_with_gui_segment` / `_does_not_end_with_a_dot`
+    //     / `_does_not_start_with_a_dot` only constrain the
+    //     suffix and dot-boundaries;
+    //   - `_segments_are_non_empty` only checks segment non-
+    //     emptiness;
+    //   - `_matches_app_id` / `_program_name_is_segment_of_application_icon_name`
+    //     only enforce equality with the app-id and segment
+    //     containment with the program name;
+    //   - `_does_not_contain_a_null_byte` /
+    //     `_does_not_contain_a_horizontal_tab_byte` /
+    //     `_does_not_contain_a_carriage_return_byte` /
+    //     `_does_not_contain_a_vertical_tab_byte` /
+    //     `_does_not_contain_a_form_feed_byte` /
+    //     `_does_not_contain_a_backspace_byte` /
+    //     `_does_not_contain_a_line_feed_byte` /
+    //     `_does_not_contain_a_bell_byte` each name a different
+    //     byte specifically.
+    //
+    // A regression that landed `"org.tamx.Paladin\x06.Gui"`
+    // (acknowledge byte lifted from a `script(1)` typescript
+    // capturing raw `\x06` ACK-frame bytes between reverse-DNS
+    // segments of an interactively-edited icon-spec registry
+    // bridged through a serial console mid-token, a
+    // `concat!(_, "\x06", _)` form, or a hand-edited helper
+    // override that pasted from a terminal session interfacing
+    // with a protocol bridge preserving ACK framing bytes)
+    // would mis-render in multiple downstream surfaces: (1) the
+    // `gtk::IconTheme` lookup machinery treats the icon name as
+    // a key into the icon cache — a `\x06`-bearing key would
+    // silently miss the cache and fall through to the
+    // placeholder fallback icon, masking the bug as a missing-
+    // icon surface rather than a malformed-icon-name surface;
+    // (2) the matching `gtk::Window::set_icon_name` setter (the
+    // icon name is mirrored onto the toplevel window's icon
+    // property) routes through GLib's GVariant string-
+    // marshalling layer and may surface as a malformed window-
+    // icon-name property in the X11 / Wayland protocol exchange,
+    // where some compositors silently drop the icon and others
+    // render a broken-icon placeholder; (3) the same icon name
+    // is mirrored to the AppStream metainfo file's `<id>` field
+    // per the §11.4 app-id convention — a `\x06`-bearing icon
+    // name would propagate into the metainfo file and fail
+    // Flathub's strict reverse-DNS-validating metainfo linter on
+    // the next package submission, and a serial-bridged TTY-
+    // rendered Flathub linter diagnostic dump may have the
+    // `\x06` byte intercepted by the receiving end as an ACK-
+    // frame indicator and confuse protocol-bridging tooling that
+    // treats ACK as a transmission acknowledgement on the
+    // submission workflow.
+    //
+    // Pinning the no-`\x06` invariant directly on this helper
+    // surfaces the regression with a message naming the
+    // offending byte at build time rather than as a downstream
+    // icon-cache miss, a malformed-window-icon protocol
+    // exchange, a Flathub metainfo linter failure, or a serial-
+    // protocol ACK-frame collision on linter diagnostics.
+    // Current helper returns the literal `"org.tamx.Paladin.Gui"`
+    // (no `\x06` byte), so this test passes today and serves as
+    // a forcing function so any future override of the helper —
+    // including the eventual landing of a Flatpak app-id rename
+    // — stays free of acknowledge bytes. Continues the non-
+    // whitespace-classified C0 control-byte cycle past the just-
+    // completed `{null / horizontal-tab / carriage-return /
+    // vertical-tab / form-feed / backspace / line-feed / bell}`
+    // octuple so the helper's byte-composition contract pins
+    // each forbidden control byte against a single source of
+    // truth.
+    use paladin_gtk::app::model::format_app_about_dialog_application_icon_name;
+
+    let application_icon_name = format_app_about_dialog_application_icon_name();
+    assert!(
+        !application_icon_name.contains('\x06'),
+        "AdwAboutDialog application_icon_name must not contain the `\\x06` acknowledge byte (0x06); like BEL and BS, ACK is NOT matched by `char::is_whitespace()` (Unicode returns false for U+0006 ACK), so `_has_no_embedded_whitespace` does NOT catch `\\x06` — strictly as dangerous as backspace and bell here, neither caught by the whitespace companion; a stray `\\x06` slips past `_is_ascii_only` / `_is_reverse_dns` / `_has_exactly_four_segments` / `_starts_with_a_lowercase_ascii_letter` / `_ends_with_gui_segment` / `_does_not_end_with_a_dot` / `_does_not_start_with_a_dot` / `_segments_are_non_empty` / `_matches_app_id` / `_program_name_is_segment_of_application_icon_name` and the prior per-byte siblings, would silently miss the `gtk::IconTheme` cache lookup (masking the bug as a placeholder-icon fallback), surface as a malformed window-icon-name property in the X11 / Wayland protocol exchange via `set_icon_name`, propagate into the AppStream metainfo `<id>` field where Flathub's strict reverse-DNS linter would fail the next package submission, and confuse serial-protocol-bridging tooling that treats `\\x06` as an ACK-frame indicator on Flathub linter diagnostics piped through a serial-bridged TTY; got {application_icon_name:?}",
+    );
+}
