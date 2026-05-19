@@ -8509,3 +8509,82 @@ fn format_app_window_accelerator_bindings_accelerators_keysym_is_ascii_only_afte
         }
     }
 }
+
+#[test]
+fn format_app_about_dialog_developers_does_not_contain_app_id() {
+    // Defense-in-depth cross-helper sibling of
+    // `format_app_about_dialog_developers_does_not_contain_developer_name`
+    // (which negatively pins the developers credits-list against
+    // the dialog-header collective attribution string returned by
+    // `format_app_about_dialog_developer_name`),
+    // `format_app_about_dialog_developers_lists_benjamin_porter`
+    // (positive content pin), and
+    // `format_app_about_dialog_developers_entries_are_distinct`
+    // (pairwise-distinctness pin). Those companions catch the
+    // developer-name-collision, wrong-value, and duplicate-entry
+    // regressions but leave the icon-name-collision edge case
+    // ungated.
+    //
+    // The `AdwAboutDialog` developers credits-list (which
+    // surfaces individual contributors on the credits page) and
+    // the dialog application-icon (a reverse-DNS identifier
+    // shared with `gtk::Application::set_application_id` and the
+    // freedesktop icon-theme lookup keyed at
+    // `<icon-cache>/org.tamx.Paladin.Gui.svg`) live on opposite
+    // ends of the dialog semantic space: the developers slot is
+    // human-readable contributor names, while the
+    // application-icon slot is a programmatic identifier the
+    // freedesktop icon-theme machinery resolves. A copy-paste
+    // regression that accidentally seeded the
+    // `paladin_gtk::APP_ID` constant (or the equivalent string
+    // from `format_app_about_dialog_application_icon_name`) into
+    // the developers literal — e.g.
+    // `["org.tamx.Paladin.Gui"]` — would render the credits page
+    // with a contributor whose name is a reverse-DNS identifier,
+    // a UX regression that confuses users reading the credits
+    // page (who wonder why a contributor is named after the
+    // application icon) and breaks any automated credits-scraping
+    // tooling that match-keys off human-readable contributor
+    // strings.
+    //
+    // The existing `_does_not_contain_developer_name` companion
+    // negatively pins against the dialog-header attribution
+    // string ("The Paladin contributors") so the credits list
+    // and the header attribution row carry semantically distinct
+    // strings. This new sibling additionally negatively pins the
+    // developers credits-list against the reverse-DNS
+    // application-icon identifier so the credits list and the
+    // application-icon slot also carry semantically distinct
+    // strings, mirroring the existing pattern at the
+    // application-icon / credits cross-section.
+    //
+    // The current `["Benjamin Porter"]` literal is distinct from
+    // the reverse-DNS `"org.tamx.Paladin.Gui"` identifier so
+    // this test passes today and serves as a forcing function
+    // so any future credits-list refactor stays semantically
+    // distinct from the application-icon slot. Mirror of the
+    // `_developers_does_not_contain_developer_name` companion
+    // on the collective-attribution side; together they pin the
+    // credits-list contents against both the dialog-header
+    // attribution string and the reverse-DNS application-icon
+    // identifier — the two most likely copy-paste sources a
+    // future refactor might accidentally seed into the
+    // developers literal — against a single source of truth.
+    use paladin_gtk::app::model::{
+        format_app_about_dialog_application_icon_name, format_app_about_dialog_developers,
+    };
+    use paladin_gtk::APP_ID;
+
+    let application_icon_name = format_app_about_dialog_application_icon_name();
+    let developers = format_app_about_dialog_developers();
+    for entry in developers {
+        assert_ne!(
+            entry, application_icon_name,
+            "AdwAboutDialog developers credits-list entry {entry:?} must not duplicate the dialog application-icon reverse-DNS identifier {application_icon_name:?}; the credits list surfaces human-readable contributor names while the application-icon slot surfaces a freedesktop icon-theme key, so a credits entry that matches the icon-name byte-for-byte indicates a copy-paste regression seeding the icon-name slot into the developers literal",
+        );
+        assert_ne!(
+            entry, APP_ID,
+            "AdwAboutDialog developers credits-list entry {entry:?} must not duplicate the workspace-wide `paladin_gtk::APP_ID` reverse-DNS constant {APP_ID:?}; the credits list surfaces human-readable contributor names while APP_ID is the GLib / freedesktop / Flatpak application identifier, so a credits entry that matches APP_ID byte-for-byte indicates a copy-paste regression seeding the APP_ID constant into the developers literal",
+        );
+    }
+}
