@@ -6176,3 +6176,40 @@ fn format_app_about_dialog_application_icon_name_segments_are_non_empty() {
         );
     }
 }
+
+#[test]
+fn format_app_window_accelerator_bindings_accelerators_use_control_modifier() {
+    // Defense-in-depth sibling of
+    // `format_app_window_accelerator_bindings_accelerators_carry_modifier_prefix`
+    // which pins each accelerator starts with a non-empty
+    // `<…>` modifier block followed by a keysym, but leaves the
+    // *which* modifier ungated. A regression that swapped one
+    // shortcut's modifier — e.g. `<Shift>n` for the Add button
+    // or `<Alt>q` for Quit — would still pass the per-prefix
+    // companion (the angle-bracket modifier block is still
+    // present) while diverging from the GNOME convention that
+    // primary application actions use the `<Control>` modifier
+    // alone. `<Shift>` + a letter intercepts capital-letter
+    // text entry in dialog `gtk::Entry` rows; `<Alt>` collides
+    // with the GTK mnemonic-accelerator surface on labels.
+    //
+    // The assertion walks every bundled `(accel, target)` pair
+    // and pins each accelerator to start with the `<Control>`
+    // modifier block (the gtk-rs `accels_for_action` form;
+    // GTK case-folds modifier names so we use the docstring's
+    // `<Control>` spelling for the literal compare). Pins the
+    // GNOME-convention choice at the test layer so a future
+    // refactor that drifted any of the three primary shortcuts
+    // off `<Control>` fails the test with a message naming the
+    // offending action target rather than only being noticed
+    // when a user pressed the shortcut and saw the wrong
+    // surface open or no surface open at all.
+    use paladin_gtk::app::model::format_app_window_accelerator_bindings;
+
+    for (accel, target) in format_app_window_accelerator_bindings() {
+        assert!(
+            accel.starts_with("<Control>"),
+            "format_app_window_accelerator_bindings accelerator for target {target:?} must begin with the `<Control>` modifier so primary application actions follow the GNOME convention (a `<Shift>`-modified letter would intercept capital-letter text entry in dialog gtk::Entry rows; an `<Alt>`-modified letter would collide with the GTK mnemonic-accelerator surface); got {accel:?}",
+        );
+    }
+}
