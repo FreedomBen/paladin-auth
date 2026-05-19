@@ -30,6 +30,7 @@ use paladin_core::{
     VaultInit, AUTO_LOCK_SECS_MAX, AUTO_LOCK_SECS_MIN, CLIPBOARD_CLEAR_SECS_MAX,
     CLIPBOARD_CLEAR_SECS_MIN,
 };
+use tempfile::TempDir;
 
 fn empty_plaintext_vault() -> Vault {
     let dir = test_tempdir();
@@ -39,6 +40,17 @@ fn empty_plaintext_vault() -> Vault {
     std::mem::forget(dir);
     let (vault, _store) = Store::create(&path, VaultInit::Plaintext).unwrap();
     vault
+}
+
+// Variant of `empty_plaintext_vault` that keeps the `TempDir` alive so
+// the caller can read the on-disk primary bytes after `Vault::save`.
+fn plaintext_vault_with_path() -> (Vault, Store, TempDir) {
+    let dir = test_tempdir();
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700))
+        .expect("chmod tempdir 0700");
+    let path = dir.path().join("vault.bin");
+    let (vault, store) = Store::create(&path, VaultInit::Plaintext).unwrap();
+    (vault, store, dir)
 }
 
 // ---------------------------------------------------------------------------
@@ -246,6 +258,37 @@ fn apply_setting_patch_matches_direct_setters_for_clipboard_clear_secs() {
         CLIPBOARD_CLEAR_SECS_MIN - 1,
     ));
     assert!(direct_err.is_err() && patch_err.is_err());
+}
+
+#[test]
+fn apply_setting_patch_repeat_same_value_writes_byte_identical_payload() {
+    // §5 "same input → same output" determinism for the settings
+    // setters. Plaintext vault so the on-disk bytes compare directly
+    // without nonce/AEAD rotation. Catches a regression where
+    // `VaultSettings` grows hidden state (e.g. a `last_patched_at`
+    // timestamp) that breaks bincode determinism downstream.
+    for patch in [
+        SettingPatch::AutoLockTimeoutSecs(300),
+        SettingPatch::AutoLockEnabled(true),
+        SettingPatch::ClipboardClearEnabled(false),
+        SettingPatch::ClipboardClearSecs(45),
+    ] {
+        let (mut vault, store, dir) = plaintext_vault_with_path();
+        let path = dir.path().join("vault.bin");
+
+        vault.apply_setting_patch(patch).unwrap();
+        vault.save(&store).expect("first save");
+        let bytes_a = std::fs::read(&path).unwrap();
+
+        vault.apply_setting_patch(patch).unwrap();
+        vault.save(&store).expect("second save");
+        let bytes_b = std::fs::read(&path).unwrap();
+
+        assert_eq!(
+            bytes_a, bytes_b,
+            "repeat apply of {patch:?} must produce byte-identical primary payloads",
+        );
+    }
 }
 
 #[test]

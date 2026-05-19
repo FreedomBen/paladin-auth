@@ -1345,7 +1345,7 @@ and committed in any order.
   at the smallest possible plaintext, and pins that the zeroize
   witness fires regardless of payload size.
 
-- [ ] **`apply_setting_patch` idempotency under repeat
+- [x] **`apply_setting_patch` idempotency under repeat
   application.** Add
   `apply_setting_patch_repeat_same_value_writes_byte_identical_payload`
   to `tests/settings_grammar.rs`. Use a plaintext vault (so
