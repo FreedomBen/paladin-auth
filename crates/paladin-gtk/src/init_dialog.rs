@@ -722,6 +722,35 @@ pub fn format_init_dialog_passphrase_title() -> &'static str {
     "Passphrase"
 }
 
+/// Fixed `title` attribute the widget hands to the
+/// [`InitDialogComponent`]'s confirm-passphrase
+/// `AdwPasswordEntryRow::set_title`.
+///
+/// Returns the static title string the encrypted-path
+/// confirm-passphrase `AdwPasswordEntryRow` renders as the
+/// floating label above the entry. The wording
+/// (`"Confirm passphrase"`) mirrors the CLI `init`'s
+/// `"Confirm passphrase: "` rprompt (see
+/// `crates/paladin-cli/src/commands/init.rs`) — the CLI's
+/// trailing colon and space are its prompt separator and drop
+/// out because `AdwPasswordEntryRow` renders its title as a
+/// floating label above the entry rather than as a prefix.
+/// Pinning the title through a helper keeps the GTK / CLI
+/// wording aligned against a single source of truth so a future
+/// copy change cannot diverge silently.
+///
+/// Pure — returns a `'static str` without allocating. Sibling of
+/// [`format_init_dialog_passphrase_title`] on the dialog-
+/// passphrase-row side; together they pin both passphrase-entry
+/// captions in the encrypted-path `InitDialog` against a single
+/// source of truth, and the cross-check test in
+/// `tests/init_dialog_logic.rs` asserts the two helpers resolve
+/// to distinct strings so the user can tell which row is which.
+#[must_use]
+pub fn format_init_dialog_confirm_passphrase_title() -> &'static str {
+    "Confirm passphrase"
+}
+
 /// Destructive action-button label the [`InitDialogComponent`]'s
 /// `vault_exists` race gate renders on its in-dialog
 /// `AdwAlertDialog` with `destructive-action` styling.

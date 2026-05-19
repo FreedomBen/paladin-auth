@@ -1151,6 +1151,67 @@ fn format_init_dialog_passphrase_title_matches_unlock_dialog_passphrase_title() 
 }
 
 #[test]
+fn format_init_dialog_confirm_passphrase_title_returns_confirm_passphrase() {
+    // Per §"Component tree" > `InitDialog`: the encrypted path
+    // surfaces a second `AdwPasswordEntryRow` whose floating
+    // `set_title` label is populated from this helper. The wording
+    // (`"Confirm passphrase"`) mirrors the CLI `init`'s
+    // `"Confirm passphrase: "` rprompt (see
+    // `crates/paladin-cli/src/commands/init.rs`) — the CLI's
+    // trailing colon and space are its prompt separator and drop
+    // out because `AdwPasswordEntryRow` renders the title as a
+    // floating label above the entry rather than as a prefix.
+    // Pinning the title through a helper keeps the GTK / CLI
+    // wording aligned against a single source of truth so a
+    // future copy change cannot diverge silently.
+    use paladin_gtk::init_dialog::format_init_dialog_confirm_passphrase_title;
+
+    assert_eq!(
+        format_init_dialog_confirm_passphrase_title(),
+        "Confirm passphrase",
+        "InitDialog confirm-passphrase row title mirrors the CLI `init` confirm prompt without the prompt separator",
+    );
+}
+
+#[test]
+fn format_init_dialog_confirm_passphrase_title_is_distinct_from_passphrase_title() {
+    // Defense-in-depth: the two AdwPasswordEntryRow titles in the
+    // InitDialog encrypted path must render distinct captions so
+    // the user can tell which row is which. A drift where both
+    // resolved to `"Passphrase"` would surface as a confusing
+    // ambiguity when the user types into the second row expecting
+    // a different prompt.
+    use paladin_gtk::init_dialog::{
+        format_init_dialog_confirm_passphrase_title, format_init_dialog_passphrase_title,
+    };
+
+    assert_ne!(
+        format_init_dialog_confirm_passphrase_title(),
+        format_init_dialog_passphrase_title(),
+        "InitDialog confirm-passphrase row title must be distinct from the passphrase row title so the two rows read as different prompts",
+    );
+}
+
+#[test]
+fn format_init_dialog_confirm_passphrase_title_is_non_empty_single_line() {
+    // Defense-in-depth: the confirm-passphrase row title must be
+    // a non-empty single-line caption so `AdwPasswordEntryRow`
+    // can render it as the floating label above the entry field
+    // without truncation or wrapping artifacts.
+    use paladin_gtk::init_dialog::format_init_dialog_confirm_passphrase_title;
+
+    let title = format_init_dialog_confirm_passphrase_title();
+    assert!(
+        !title.is_empty(),
+        "InitDialog confirm-passphrase row title must be non-empty; got {title:?}",
+    );
+    assert!(
+        !title.contains('\n'),
+        "InitDialog confirm-passphrase row title must be a single line; got {title:?}",
+    );
+}
+
+#[test]
 fn format_init_dialog_passphrase_title_is_non_empty_single_line() {
     // Defense-in-depth: the passphrase row title must be a non-
     // empty single-line caption so `AdwPasswordEntryRow` can
