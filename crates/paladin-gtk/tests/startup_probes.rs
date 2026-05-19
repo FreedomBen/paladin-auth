@@ -26001,3 +26001,142 @@ fn format_app_about_dialog_empty_credits_section_entries_do_not_contain_an_end_o
         }
     }
 }
+
+#[test]
+fn format_app_about_dialog_release_notes_version_does_not_contain_an_end_of_text_byte() {
+    // Defense-in-depth per-byte sibling extending the
+    // release_notes_version byte-cleanliness contract past
+    // the just-completed `{null / horizontal-tab / carriage-
+    // return / vertical-tab / form-feed / backspace / line-
+    // feed / bell / acknowledge / enquiry / end-of-
+    // transmission}` undecuple to the end-of-text byte
+    // `\x03` (0x03), continuing the non-whitespace-classified
+    // C0 control-byte cycle past EOT (0x04) for this helper.
+    // Like EOT, ENQ, ACK, and BEL, ETX is NOT matched by
+    // `char::is_whitespace()` (Unicode treats ETX as a
+    // control byte, not whitespace), so the `version`
+    // helper's transitive `_has_no_embedded_whitespace` guard
+    // (which catches LF / VT / FF / CR / HT via
+    // `char::is_whitespace()`) does NOT catch a stray `\x03`
+    // — making end-of-text strictly as dangerous as end-of-
+    // transmission, enquiry, acknowledge, backspace, and
+    // bell for this helper, since the transitive protection
+    // collapses entirely rather than being merely brittle.
+    //
+    // The two existing `_matches_about_dialog_version` and
+    // `_matches_cargo_pkg_version` cross-source pins
+    // transitively guarantee `release_notes_version` shares
+    // its bytes with the `version` helper (which in turn
+    // equals `CARGO_PKG_VERSION`). The `version` helper is
+    // byte-pinned by `_version_has_no_embedded_whitespace`
+    // (a `char::is_whitespace()` check), but
+    // `char::is_whitespace()` returns *false* for U+0003
+    // ETX, so even the transitive protection via `version`
+    // doesn't catch `\x03` — every byte of `\x03`-
+    // cleanliness in the active value depends solely on the
+    // upstream `CARGO_PKG_VERSION` bytes being clean, which
+    // is not screened by Cargo or by any CI gate today.
+    //
+    // None of the existing companions name the `\x03` byte
+    // directly on this helper:
+    //   - `_release_notes_version_matches_about_dialog_version` /
+    //     `_matches_cargo_pkg_version` only constrain cross-
+    //     source equality (a `\x03`-bearing value would
+    //     still match if all sources shared the regression);
+    //   - `_release_notes_version_segments_are_non_empty`
+    //     only constrains the dot-separated shape — `\x03`
+    //     is not `.`;
+    //   - `_release_notes_version_starts_with_a_digit` only
+    //     constrains the leading byte (and even there, the
+    //     test only checks if the first byte is a digit — a
+    //     `\x03` after the leading digit slips past);
+    //   - `_does_not_contain_a_null_byte` /
+    //     `_does_not_contain_a_horizontal_tab_byte` /
+    //     `_does_not_contain_a_carriage_return_byte` /
+    //     `_does_not_contain_a_vertical_tab_byte` /
+    //     `_does_not_contain_a_form_feed_byte` /
+    //     `_does_not_contain_a_backspace_byte` /
+    //     `_does_not_contain_a_line_feed_byte` /
+    //     `_does_not_contain_a_bell_byte` /
+    //     `_does_not_contain_an_acknowledge_byte` /
+    //     `_does_not_contain_an_enquiry_byte` /
+    //     `_does_not_contain_an_end_of_transmission_byte`
+    //     each name a different byte specifically.
+    //
+    // A regression that landed `"0.0.1\x03"` or
+    // `"0\x03.0\x03.1"` (end-of-text byte lifted from a
+    // `script(1)` typescript capturing raw `\x03` ETX
+    // framing bytes from a CI build that bridged a serial
+    // console mid-version edit during a Bisync-style text-
+    // block transfer, a `concat!(_, "\x03", _)` form
+    // mirroring a text-segment-delimited version edit, or a
+    // hand-edited helper override that pasted from a
+    // terminal session interfacing with a protocol bridge
+    // preserving ETX framing bytes) would mis-render in
+    // multiple downstream surfaces, identically to the
+    // analysis on the `version` helper: (1) the GLib-backed
+    // `AdwAboutDialog::set_release_notes_version` setter
+    // routes the value into Pango for inline rendering as
+    // the "What's New in v<release_notes_version>" header —
+    // Pango's default rendering of a bare `\x03` byte is
+    // implementation-defined and typically renders as a
+    // literal control glyph (a hollow box or tofu-like
+    // placeholder), breaking the tidy section-header
+    // layout; (2) the value scopes the "What's New" body
+    // region inside the dialog — a mismatched / mis-
+    // rendered scope key could prevent the body from
+    // rendering at all on libadwaita versions that strip
+    // control bytes when computing the body-region lookup
+    // key; (3) when the version is dumped through a serial-
+    // bridged TTY (CI logs over a serial console, an out-
+    // of-band debugging session), the `\x03` byte may be
+    // intercepted by the receiving end as an end-of-text
+    // framing indicator and signal the end of the current
+    // text block, confusing protocol-bridging tooling that
+    // treats ETX as a text-segment terminator and
+    // truncating the version mid-string; on many terminals,
+    // `\x03` is the SIGINT-generating byte (`^C`) when
+    // typed at a foreground process — surfacing as an
+    // unexpected process interruption in any tooling that
+    // captures the section header through a pty in raw
+    // mode that signals on the literal byte; (4) AppStream
+    // release-notes validation (`appstreamcli validate`)
+    // parses the version against the strict SemVer grammar
+    // which has no `\x03` in any of its production rules,
+    // so a `\x03`-bearing version would be rejected at
+    // packaging time as a malformed schema entry; (5)
+    // Flatpak `appstream-builder` would similarly reject
+    // the `\x03`-bearing version when generating the
+    // release-notes index for the published package; (6)
+    // screen readers that announce the "What's New" section
+    // header render the byte as a literal control character
+    // announcement, breaking the section-header
+    // accessibility-tree announcement at the byte boundary.
+    //
+    // Pinning the no-`\x03` invariant directly on this
+    // helper surfaces the regression with a message naming
+    // the offending byte at build time rather than via a
+    // future decoupling that silently dropped the (already-
+    // absent) transitive `version` guard. Current helper
+    // returns the value sourced from `CARGO_PKG_VERSION`
+    // (no `\x03` byte), so this test passes today and
+    // serves as a forcing function so any future
+    // decoupling override of the helper — including the
+    // eventual landing of a separately-scoped release-notes
+    // version derived from CHANGELOG.md headings — stays
+    // free of end-of-text bytes. Continues the non-
+    // whitespace-classified C0 control-byte cycle past the
+    // just-completed `{null / horizontal-tab / carriage-
+    // return / vertical-tab / form-feed / backspace / line-
+    // feed / bell / acknowledge / enquiry / end-of-
+    // transmission}` undecuple so the helper's byte-
+    // composition contract pins each forbidden control byte
+    // against a single source of truth.
+    use paladin_gtk::app::model::format_app_about_dialog_release_notes_version;
+
+    let release_notes_version = format_app_about_dialog_release_notes_version();
+    assert!(
+        !release_notes_version.contains('\x03'),
+        "AdwAboutDialog release_notes_version must not contain the `\\x03` end-of-text byte (0x03); like EOT, ENQ, ACK, and BEL, ETX is NOT matched by `char::is_whitespace()` (Unicode returns false for U+0003 ETX), so the `version` helper's transitive `_has_no_embedded_whitespace` guard does NOT catch `\\x03`; every byte of `\\x03`-cleanliness depends solely on the upstream `CARGO_PKG_VERSION` bytes — not screened by Cargo or by any CI gate; a stray `\\x03` would render as a literal control glyph in the dialog's \"What's New in v<release_notes_version>\" section header, confuse serial-protocol-bridging tooling that treats `\\x03` as an ETX text-segment terminator if dumped through a serial-bridged TTY (truncating the version mid-string), trigger SIGINT-byte (`^C`) tty surprises in tooling capturing the section header through a pty in raw mode, could prevent the What's New body from rendering on libadwaita versions that strip control bytes when computing the body-region lookup key, trigger AppStream `appstreamcli validate` rejection at packaging time (the strict SemVer grammar has no `\\x03` production), and break screen-reader section-header announcements at the byte boundary; got {release_notes_version:?}",
+    );
+}
