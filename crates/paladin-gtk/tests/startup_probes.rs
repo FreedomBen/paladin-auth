@@ -11618,3 +11618,75 @@ fn format_app_about_dialog_empty_credits_section_entries_do_not_contain_a_carria
         }
     }
 }
+
+#[test]
+fn format_app_about_dialog_comments_does_not_contain_a_carriage_return_byte() {
+    // Defense-in-depth sibling of
+    // `format_app_about_dialog_comments_matches_cargo_pkg_description`
+    // (cross-source pin against `CARGO_PKG_DESCRIPTION`),
+    // `format_app_about_dialog_comments_is_non_empty_single_line_distinct_from_program_name`
+    // (positive shape pin: non-empty, no `\n`, no surrounding
+    // whitespace, distinct from program-name),
+    // `format_app_about_dialog_comments_does_not_end_with_a_period_per_libadwaita_convention`
+    // (negative shape pin against a trailing `.`),
+    // `format_app_about_dialog_comments_is_ascii_only` (byte-
+    // composition pin), and
+    // `format_app_about_dialog_comments_does_not_contain_a_null_byte`
+    // (`\0` byte pin). Those companions catch the wrong-value,
+    // wrong-shape, trailing-period, non-ASCII, and null-byte
+    // regressions but leave the embedded-`\r` edge case
+    // ungated.
+    //
+    // The `_is_non_empty_single_line_distinct_from_program_name`
+    // companion implements its single-line check as
+    // `!comments.contains('\n')` — it says nothing about the
+    // sibling `\r` carriage-return byte (0x0D). The
+    // surrounding-whitespace guards (`!comments.starts_with(char::is_whitespace)`
+    // / `!comments.ends_with(char::is_whitespace)`) reject a
+    // `\r` only at the very first or last byte — a mid-string
+    // `\r` is non-surrounding and slips past both ends-with-
+    // whitespace guards. The `_is_ascii_only` companion pins
+    // each byte as ASCII (`0x00`-`0x7F`) — `\r` is ASCII, so a
+    // regression that landed `"OTP authenticator\r for the
+    // command line"` (a CRLF-source `Cargo.toml` description
+    // copy-paste, a `concat!(_, "\r", _)` form, or a hand-
+    // edited helper override that lifted the description from
+    // a Windows-edited source) would slip past every existing
+    // companion.
+    //
+    // A `\r` byte in the comments slot would mis-render in
+    // multiple downstream surfaces: (1) the GLib-backed
+    // `AdwAboutDialog::set_comments` setter hands the string
+    // to Pango for inline rendering beneath the program name
+    // in the dialog header — a stray `\r` byte would render as
+    // a literal control glyph or as a visible whitespace box
+    // on fontconfig setups lacking a U+000D glyph, breaking
+    // the inline-header layout; (2) the comments value is
+    // sourced from `CARGO_PKG_DESCRIPTION` which propagates
+    // into Cargo's `description` field in `Cargo.toml` —
+    // tooling that scrapes this metadata (`cargo metadata`,
+    // crates.io registry indexing, GNOME `gnome-software`
+    // descriptions) would propagate the stray `\r` byte into
+    // every consumer; (3) screen readers that announce the
+    // dialog description read the `\r` as a literal control
+    // character, breaking the description accessibility-tree
+    // announcement.
+    //
+    // Pinning the no-CR invariant directly here surfaces the
+    // regression with a message naming the offending byte at
+    // build time rather than as a downstream dialog-header
+    // rendering bug, a tooling-scrape miss, or a screen-reader
+    // announcement break. Current helper returns the value
+    // sourced from `CARGO_PKG_DESCRIPTION` which has no `\r`
+    // byte, so this test passes today and serves as a forcing
+    // function so any future override of the helper — or any
+    // future edit of the workspace `Cargo.toml` `description`
+    // field — stays free of carriage returns.
+    use paladin_gtk::app::model::format_app_about_dialog_comments;
+
+    let comments = format_app_about_dialog_comments();
+    assert!(
+        !comments.contains('\r'),
+        "AdwAboutDialog comments must not contain the `\\r` carriage-return byte (0x0D); a mid-string `\\r` slips past the `_is_non_empty_single_line_distinct_from_program_name` `\\n`-only single-line check, past the starts/ends-with-whitespace guards (which only reject `\\r` at the boundaries), and past `_is_ascii_only` (because `\\r` is ASCII), and would render as a literal control glyph in the dialog-header description, propagate via `CARGO_PKG_DESCRIPTION` into Cargo metadata scrapers, and break screen-reader description announcements; got {comments:?}",
+    );
+}
