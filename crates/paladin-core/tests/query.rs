@@ -336,6 +336,25 @@ fn matching_accounts_id_prefix_returns_empty_when_no_account_matches() {
     assert!(matches.is_empty());
 }
 
+#[test]
+fn matching_accounts_on_empty_vault_returns_empty_for_every_query_shape() {
+    // Pin the empty-vault path: a CLI / TUI / GUI front end that
+    // calls `matching_accounts` before any account has been added
+    // must get back an empty slice for every grammar branch, not a
+    // panic. Covers the empty `Search`, non-empty `Search`, and the
+    // validated `IdPrefix` shapes so a regression that special-cases
+    // one branch fails the others.
+    let vault = empty_plaintext_vault();
+    let empty_search = parse_account_query("").unwrap();
+    assert!(vault.matching_accounts(&empty_search).is_empty());
+
+    let text_search = parse_account_query("anything").unwrap();
+    assert!(vault.matching_accounts(&text_search).is_empty());
+
+    let id_prefix = parse_account_query("id:0123abcd").unwrap();
+    assert!(vault.matching_accounts(&id_prefix).is_empty());
+}
+
 // ---------------------------------------------------------------------------
 // Vault::shortest_unique_id_prefix — Phase G.15.
 
