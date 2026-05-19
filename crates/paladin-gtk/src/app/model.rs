@@ -2439,6 +2439,55 @@ pub fn build_app_window_action_group(state: &AppState) -> gtk::gio::SimpleAction
     group
 }
 
+/// Apply the per-state sensitivities returned by
+/// [`format_app_primary_menu_action_sensitivities`] and
+/// [`format_app_add_button_sensitive`] to every action on an
+/// existing application-window
+/// [`gtk::gio::SimpleActionGroup`].
+///
+/// Bundles [`apply_app_primary_menu_sensitivities`] (which
+/// walks the six primary-menu bare action names) with an
+/// [`apply_app_add_action_sensitivity`]-equivalent update for
+/// the Add action looked up by
+/// [`format_app_add_button_action_name`] on `group`. The
+/// widget binding calls this helper from [`AppMsg`]
+/// state-transition arms ([`AppState::Missing`] /
+/// [`AppState::Locked`] / [`AppState::Unlocked`] /
+/// [`AppState::UnlockedBusy`] / [`AppState::StartupError`]) so
+/// every gated affordance toggles in one call without the
+/// widget binding hand-spelling the per-action sensitivity
+/// applications.
+///
+/// Mirrors [`build_app_window_action_group`] on the
+/// runtime-update side; together they pin both the
+/// initial construction and every subsequent sensitivity
+/// transition for the bundled action group against the pinned
+/// `format_app_primary_menu_action_sensitivities` /
+/// `format_app_add_button_sensitive` rules so a future change
+/// to either rule reverberates through both consumers without
+/// per-call drift.
+///
+/// If an action is missing from `group` (e.g. the widget
+/// binding constructed the group via something other than
+/// [`build_app_window_action_group`]) the corresponding
+/// sensitivity update is silently skipped — the assertion that
+/// the group has every action lives on
+/// [`build_app_window_action_group`]'s test surface so this
+/// helper stays a no-op-on-missing-action runtime path that
+/// the smoke test can call without setup gymnastics. Pure side-
+/// effect helper (no return value).
+pub fn apply_app_window_action_group_sensitivities(
+    group: &gtk::gio::SimpleActionGroup,
+    state: &AppState,
+) {
+    apply_app_primary_menu_sensitivities(group, state);
+    if let Some(action) = group.lookup_action(format_app_add_button_action_name()) {
+        if let Ok(simple) = action.downcast::<gtk::gio::SimpleAction>() {
+            apply_app_add_action_sensitivity(&simple, state);
+        }
+    }
+}
+
 /// Build the application menu's "About Paladin" entry's
 /// [`adw::AboutDialog`] from the pinned `format_app_about_dialog_*`
 /// helpers.

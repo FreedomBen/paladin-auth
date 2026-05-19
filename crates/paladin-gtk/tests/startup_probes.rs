@@ -2493,6 +2493,113 @@ fn build_app_window_action_group_disables_mutating_actions_in_non_unlocked_state
 }
 
 #[test]
+fn apply_app_window_action_group_sensitivities_updates_every_action_for_a_new_state() {
+    // Per §"libadwaita usage" and §"Component tree": when
+    // `AppModel` transitions between states, every action on
+    // the bundled `app` action group must toggle to the new
+    // state's sensitivity in one call. This helper applies
+    // both the four mutating primary-menu sensitivities
+    // (Import, Export, Passphrase, Preferences) and the Add
+    // action's sensitivity against an existing group built by
+    // `build_app_window_action_group` so the widget binding
+    // can transition every gated affordance through one entry
+    // point — mirrors `build_app_window_action_group` on the
+    // runtime-update side.
+    use libadwaita::prelude::*;
+    use paladin_gtk::app::model::{
+        apply_app_window_action_group_sensitivities, build_app_window_action_group,
+        format_app_add_button_action_name, format_app_add_button_sensitive,
+        format_app_primary_menu_action_names, format_app_primary_menu_action_sensitivities,
+    };
+    use paladin_gtk::app::state::AppState;
+
+    let initial = AppState::Unlocked {
+        path: std::path::PathBuf::from("/dev/null"),
+    };
+    let group = build_app_window_action_group(&initial);
+    let next = AppState::Locked {
+        path: std::path::PathBuf::from("/dev/null"),
+    };
+    apply_app_window_action_group_sensitivities(&group, &next);
+
+    // Every primary menu action must reflect the new state's
+    // pinned sensitivities.
+    let names = format_app_primary_menu_action_names();
+    let expected = format_app_primary_menu_action_sensitivities(&next);
+    for (idx, name) in names.iter().enumerate() {
+        let action = group
+            .lookup_action(name)
+            .and_then(|a| a.downcast::<libadwaita::gio::SimpleAction>().ok())
+            .expect("primary menu action registered");
+        assert_eq!(
+            action.is_enabled(),
+            expected[idx],
+            "apply_app_window_action_group_sensitivities must apply format_app_primary_menu_action_sensitivities[{idx}] to action {name:?} for the new state",
+        );
+    }
+
+    // The Add action must also reflect the new state's
+    // pinned sensitivity.
+    let add_name = format_app_add_button_action_name();
+    let add_action = group
+        .lookup_action(add_name)
+        .and_then(|a| a.downcast::<libadwaita::gio::SimpleAction>().ok())
+        .expect("add action registered");
+    assert_eq!(
+        add_action.is_enabled(),
+        format_app_add_button_sensitive(&next),
+        "apply_app_window_action_group_sensitivities must apply format_app_add_button_sensitive to the Add action for the new state",
+    );
+
+    // Re-applying for Unlocked must re-enable every action so
+    // the helper round-trips cleanly across state transitions.
+    apply_app_window_action_group_sensitivities(&group, &initial);
+    let expected_initial = format_app_primary_menu_action_sensitivities(&initial);
+    for (idx, name) in names.iter().enumerate() {
+        let action = group
+            .lookup_action(name)
+            .and_then(|a| a.downcast::<libadwaita::gio::SimpleAction>().ok())
+            .expect("primary menu action registered");
+        assert_eq!(
+            action.is_enabled(),
+            expected_initial[idx],
+            "re-applying Unlocked state must restore the menu action {name:?} sensitivity",
+        );
+    }
+    let add_action = group
+        .lookup_action(add_name)
+        .and_then(|a| a.downcast::<libadwaita::gio::SimpleAction>().ok())
+        .expect("add action registered");
+    assert_eq!(
+        add_action.is_enabled(),
+        format_app_add_button_sensitive(&initial),
+        "re-applying Unlocked state must re-enable the Add action via apply_app_window_action_group_sensitivities",
+    );
+}
+
+#[test]
+fn apply_app_window_action_group_sensitivities_is_a_noop_on_missing_actions() {
+    // Defense-in-depth: if the widget binding hands a group
+    // that does not contain every bundled action (e.g. a
+    // future refactor that splits the actions across two
+    // groups), the helper must skip the missing actions
+    // silently rather than panic. The
+    // build_app_window_action_group test surface already
+    // asserts the canonical group has every action, so the
+    // noop-on-missing behaviour here keeps the runtime path
+    // resilient to a future bundling change.
+    use paladin_gtk::app::model::apply_app_window_action_group_sensitivities;
+    use paladin_gtk::app::state::AppState;
+
+    let empty = libadwaita::gio::SimpleActionGroup::new();
+    let state = AppState::Locked {
+        path: std::path::PathBuf::from("/dev/null"),
+    };
+    apply_app_window_action_group_sensitivities(&empty, &state);
+    // The empty group still has no actions; the call did not panic.
+}
+
+#[test]
 fn apply_app_primary_menu_sensitivities_updates_existing_group_for_a_new_state() {
     // Per §"libadwaita usage" and §"Component tree": when
     // `AppModel` transitions between states (e.g. Unlocked →
