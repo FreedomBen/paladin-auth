@@ -1657,3 +1657,33 @@ fn format_settings_dialog_spinner_page_increment_returns_ten() {
         "page increment is the conventional 10× step factor",
     );
 }
+
+#[test]
+fn format_settings_dialog_spinner_page_size_returns_zero() {
+    // The last argument `gtk::Adjustment::new` accepts is
+    // `page_size`, which only matters for adjustments backing
+    // sliders (`gtk::Scale`, `gtk::Scrollbar`). `AdwSpinRow`
+    // surfaces a `gtk::SpinButton`-style numeric editor with no
+    // slider area, so the `page_size` must be `0.0`: a non-zero
+    // value would make the spinner's accepted upper bound become
+    // `upper - page_size`, silently shrinking the range we already
+    // pinned through
+    // `format_settings_dialog_auto_lock_secs_adjustment` /
+    // `format_settings_dialog_clipboard_clear_secs_adjustment`.
+    //
+    // Pinning the literal through this helper keeps the
+    // `gtk::Adjustment::new` argument in one place shared by both
+    // spinners so the slider-bound subtraction never accidentally
+    // re-emerges, and rounds out the constructor's six positional
+    // arguments together with the value compose helpers, the
+    // bounds + step adjustment tuple, and
+    // `format_settings_dialog_spinner_page_increment`.
+    //
+    // Pure — returns an `f64` without allocating.
+    use paladin_gtk::settings::format_settings_dialog_spinner_page_size;
+
+    assert!(
+        format_settings_dialog_spinner_page_size().abs() < f64::EPSILON,
+        "page size is 0.0 because AdwSpinRow has no slider area",
+    );
+}
