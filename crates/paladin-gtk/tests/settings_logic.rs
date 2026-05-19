@@ -576,6 +576,31 @@ fn format_settings_dialog_auto_lock_group_title_returns_auto_lock() {
 }
 
 #[test]
+fn format_settings_dialog_clipboard_clear_group_title_returns_clipboard() {
+    // Sibling of `format_settings_dialog_auto_lock_group_title`
+    // on the clipboard-clear `AdwPreferencesGroup` side. This
+    // helper pins the title for the clipboard-clear group so the
+    // wording appears in one place shared by the widget binding
+    // and the pure-logic tests in `tests/settings_logic.rs`.
+    //
+    // The wording (`"Clipboard"`) names the concept the §4.7
+    // `paladin_core::VaultSettings::clipboard_clear_enabled` /
+    // `paladin_core::VaultSettings::clipboard_clear_secs` fields
+    // control. The shorter form (`"Clipboard"`) over
+    // `"Clipboard auto-clear"` keeps the group-title surface lean
+    // — the per-row labels (added in follow-up commits) carry
+    // the verb-led wording on the `AdwSwitchRow` /
+    // `AdwSpinRow` themselves.
+    use paladin_gtk::settings::format_settings_dialog_clipboard_clear_group_title;
+
+    assert_eq!(
+        format_settings_dialog_clipboard_clear_group_title(),
+        "Clipboard",
+        "AdwPreferencesGroup title names the clipboard-clear concept",
+    );
+}
+
+#[test]
 fn format_settings_dialog_title_returns_preferences() {
     // The SettingsComponent's `adw::PreferencesDialog::set_title`
     // attribute is populated from this helper. The wording

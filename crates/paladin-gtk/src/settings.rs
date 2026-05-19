@@ -365,6 +365,33 @@ pub fn format_settings_dialog_auto_lock_group_title() -> &'static str {
     "Auto-lock"
 }
 
+/// Title rendered on the `AdwPreferencesGroup` that hosts the
+/// clipboard-clear toggle + spinner per
+/// `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
+/// "Preferences".
+///
+/// Sibling of [`format_settings_dialog_auto_lock_group_title`]
+/// on the clipboard-clear side; together they pin both
+/// `AdwPreferencesGroup` titles the `SettingsComponent` hosts
+/// in its [`adw::PreferencesDialog`] against a single source of
+/// truth shared by the widget binding and the pure-logic tests
+/// in `tests/settings_logic.rs`.
+///
+/// The wording (`"Clipboard"`) names the concept the §4.7
+/// [`paladin_core::VaultSettings::clipboard_clear_enabled`] /
+/// [`paladin_core::VaultSettings::clipboard_clear_secs`] fields
+/// control. The shorter form (`"Clipboard"`) over
+/// `"Clipboard auto-clear"` keeps the group-title surface lean
+/// — the per-row labels (added in follow-up commits) carry the
+/// verb-led wording on the `AdwSwitchRow` / `AdwSpinRow`
+/// themselves.
+///
+/// Pure — returns a `'static str` without allocating.
+#[must_use]
+pub fn format_settings_dialog_clipboard_clear_group_title() -> &'static str {
+    "Clipboard"
+}
+
 /// Buffered spinner pending the 500 ms debounce.
 #[derive(Debug, Clone, Copy)]
 enum PendingSpinner {
