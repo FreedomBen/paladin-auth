@@ -26140,3 +26140,143 @@ fn format_app_about_dialog_release_notes_version_does_not_contain_an_end_of_text
         "AdwAboutDialog release_notes_version must not contain the `\\x03` end-of-text byte (0x03); like EOT, ENQ, ACK, and BEL, ETX is NOT matched by `char::is_whitespace()` (Unicode returns false for U+0003 ETX), so the `version` helper's transitive `_has_no_embedded_whitespace` guard does NOT catch `\\x03`; every byte of `\\x03`-cleanliness depends solely on the upstream `CARGO_PKG_VERSION` bytes — not screened by Cargo or by any CI gate; a stray `\\x03` would render as a literal control glyph in the dialog's \"What's New in v<release_notes_version>\" section header, confuse serial-protocol-bridging tooling that treats `\\x03` as an ETX text-segment terminator if dumped through a serial-bridged TTY (truncating the version mid-string), trigger SIGINT-byte (`^C`) tty surprises in tooling capturing the section header through a pty in raw mode, could prevent the What's New body from rendering on libadwaita versions that strip control bytes when computing the body-region lookup key, trigger AppStream `appstreamcli validate` rejection at packaging time (the strict SemVer grammar has no `\\x03` production), and break screen-reader section-header announcements at the byte boundary; got {release_notes_version:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_translator_credits_does_not_contain_an_end_of_text_byte() {
+    // Defense-in-depth per-byte sibling extending the
+    // translator_credits byte-cleanliness contract past the
+    // just-completed `{null / horizontal-tab / carriage-
+    // return / vertical-tab / form-feed / backspace / line-
+    // feed / bell / acknowledge / enquiry / end-of-
+    // transmission}` undecuple to the end-of-text byte
+    // `\x03` (0x03), continuing the non-whitespace-classified
+    // C0 control-byte cycle past EOT (0x04) for this helper.
+    // Like EOT, ENQ, ACK, and BEL, ETX is NOT matched by
+    // `char::is_whitespace()` (Unicode treats ETX as a
+    // control byte, not whitespace), so any future
+    // surrounding-whitespace boundary guard on translator-
+    // credits entries would NOT reject a leading or trailing
+    // `\x03` — making end-of-text strictly as dangerous as
+    // end-of-transmission, enquiry, acknowledge, backspace,
+    // and bell here, neither caught by `char::is_whitespace()`.
+    //
+    // The libadwaita translator-credits convention permits
+    // embedded `\n` line breaks between translator entries
+    // (the `_is_single_line_when_non_empty` companion only
+    // asserts the empty-string case, so it does not gate
+    // embedded newlines once a translation lands), so the
+    // helper is one of only three about-dialog helpers
+    // (alongside `format_app_about_dialog_debug_info` and
+    // `format_app_about_dialog_release_notes`) where
+    // embedded line breaks are legitimately expected. That
+    // makes `\x03` (0x03 ETX) a distinct regression
+    // surface: it is NOT covered by
+    // `_has_no_surrounding_whitespace_when_non_empty`
+    // (`\x03` is not whitespace under
+    // `char::is_whitespace()`, so the boundary trim guard
+    // rejects neither leading nor trailing `\x03`), it is
+    // NOT covered by any per-entry single-line check (the
+    // helper itself is explicitly multi-line per
+    // libadwaita convention), it slips past
+    // `_does_not_contain_a_null_byte` (`\x03` is not `\0`),
+    // it slips past `_does_not_contain_a_horizontal_tab_byte`
+    // (`\x03` is not `\t`), it slips past
+    // `_does_not_contain_a_carriage_return_byte` (`\x03`
+    // is not `\r`), it slips past
+    // `_does_not_contain_a_vertical_tab_byte` (`\x03` is
+    // not `\x0B`), it slips past
+    // `_does_not_contain_a_form_feed_byte` (`\x03` is not
+    // `\x0C`), it slips past
+    // `_does_not_contain_a_backspace_byte` (`\x03` is not
+    // `\x08`), it slips past
+    // `_does_not_contain_a_line_feed_byte` (`\x03` is not
+    // `\n`), it slips past `_does_not_contain_a_bell_byte`
+    // (`\x03` is not `\x07`), it slips past
+    // `_does_not_contain_an_acknowledge_byte` (`\x03` is
+    // not `\x06`), it slips past
+    // `_does_not_contain_an_enquiry_byte` (`\x03` is not
+    // `\x05`), and it slips past
+    // `_does_not_contain_an_end_of_transmission_byte`
+    // (`\x03` is not `\x04`). None of the existing
+    // companions name the `\x03` byte directly on this
+    // helper.
+    //
+    // A regression that landed
+    // `"name1\x03<email1>\nname2\x03<email2>"` (end-of-
+    // text-separated `<name>\x03<email>` rows lifted from a
+    // `script(1)` typescript capturing raw `\x03` ETX
+    // framing bytes from a CI build that bridged a serial
+    // console mid-attribution edit during a Bisync-style
+    // text-block transfer, an `xgettext` export that
+    // preserved ETX-bearing values, a `concat!(_, "\x03",
+    // _)` form mirroring a text-segment-delimited
+    // attribution block, or a hand-edited helper that
+    // pasted from a terminal session interfacing with a
+    // protocol bridge preserving ETX framing bytes) would
+    // mis-render in multiple downstream surfaces: (1)
+    // libadwaita's credits-page parser splits the
+    // translator-credits string on `\n` (LF) per the
+    // documented convention, leaving the embedded `\x03`
+    // bytes inside each parsed entry untouched; the GLib-
+    // backed Pango render path treats `\x03` as a literal
+    // control glyph (a hollow box or tofu-like placeholder)
+    // since `\x03` is not classified as whitespace under
+    // any permissive whitespace mode, breaking the tidy
+    // two-column `<name> <email>` attribution layout; (2)
+    // any localization tooling that round-trips the
+    // translator-credits string back through `xgettext`
+    // would propagate the stray `\x03` into every consumer
+    // of the .po / .mo file, and a serial-bridged TTY-
+    // streamed po-file dump may have the `\x03` byte
+    // intercepted by the receiving end as an end-of-text
+    // framing indicator and signal the end of the current
+    // text block, confusing protocol-bridging tooling that
+    // treats ETX as a text-segment terminator and
+    // truncating the attribution at the byte boundary; on
+    // many terminals, `\x03` is the SIGINT-generating byte
+    // (`^C`) when typed at a foreground process —
+    // surfacing as an unexpected process interruption in
+    // any tooling that captures the po-file through a pty
+    // in raw mode that signals on the literal byte; (3)
+    // screen readers that announce the translator-credits
+    // column render the byte as a literal control character
+    // announcement, breaking the attribution accessibility-
+    // tree announcement at the byte boundary.
+    //
+    // Mirror of the just-added
+    // `_developer_name_does_not_contain_an_end_of_text_byte`,
+    // `_copyright_does_not_contain_an_end_of_text_byte`,
+    // `_comments_does_not_contain_an_end_of_text_byte`,
+    // `_developers_entries_do_not_contain_an_end_of_text_byte`,
+    // `_empty_credits_section_entries_do_not_contain_an_end_of_text_byte`,
+    // and `_release_notes_version_does_not_contain_an_end_of_text_byte`
+    // siblings; together they extend the about-dialog
+    // byte-composition contract from the just-completed
+    // `{null / horizontal-tab / carriage-return / vertical-
+    // tab / form-feed / backspace / line-feed / bell /
+    // acknowledge / enquiry / end-of-transmission}`
+    // undecuple to the end-of-text-byte regression surface
+    // as well.
+    //
+    // Pinning the no-`\x03` invariant directly here
+    // surfaces the regression with a message naming the
+    // offending byte at build time rather than as a
+    // downstream credits-page rendering bug, a serial-
+    // protocol ETX-frame text-segment-terminator collision
+    // through a .po round trip, a SIGINT-byte tty surprise,
+    // or a screen-reader announcement break. Current helper
+    // returns the empty literal `""` (no `\x03` byte), so
+    // this test passes today and serves as a forcing
+    // function so any future override of the helper —
+    // including the eventual landing of an actual
+    // translator-credits string — stays free of end-of-text
+    // bytes even when embedded `\n` line breaks are
+    // intentionally present.
+    use paladin_gtk::app::model::format_app_about_dialog_translator_credits;
+
+    let translator_credits = format_app_about_dialog_translator_credits();
+    assert!(
+        !translator_credits.contains('\x03'),
+        "AdwAboutDialog translator_credits must not contain the `\\x03` end-of-text byte (0x03); the libadwaita translator-credits convention splits on `\\n` (LF) only and leaves embedded `\\x03` bytes inside each parsed entry untouched, `\\x03` is NOT classified as whitespace under any permissive whitespace mode (strictly as dangerous as end-of-transmission, enquiry, acknowledge, backspace, and bell, neither caught by `char::is_whitespace()`) so Pango renders it as a literal control glyph; a stray `\\x03` would render as a hollow box or tofu-like placeholder in the credits-page attribution column, would survive `xgettext` round trips and propagate into every consumer of the .po / .mo file, would confuse serial-protocol-bridging tooling that treats `\\x03` as an ETX text-segment terminator if dumped through a serial-bridged TTY (truncating the attribution at the byte boundary), would trigger SIGINT-byte (`^C`) tty surprises in tooling capturing the po-file through a pty in raw mode, and would break screen-reader announcements at every attribution-row column boundary; got {translator_credits:?}",
+    );
+}
