@@ -1754,6 +1754,53 @@ fn format_settings_dialog_spinner_digits_returns_zero() {
 }
 
 #[test]
+fn format_settings_dialog_spinner_snap_to_ticks_returns_true() {
+    // `adw::SpinRow::snap-to-ticks` defaults to `FALSE` in
+    // libadwaita: invalid intermediate values (typed entries that
+    // do not land on a multiple of `step_increment`, or values set
+    // programmatically by external setters / accessibility tooling)
+    // are accepted as-is. The §4.7 settings the spinners edit
+    // (`auto_lock_timeout_secs`, `clipboard_clear_secs`) are `u32`
+    // seconds — every accepted value is an integer multiple of the
+    // `1.0` step pinned by
+    // `format_settings_dialog_auto_lock_secs_adjustment` /
+    // `format_settings_dialog_clipboard_clear_secs_adjustment` — so
+    // turning snap-to-ticks on enforces the integer-seconds grid at
+    // the widget edge: any off-grid value (e.g. a programmatic
+    // `set_value(30.5)` from a screen reader script, or a paste of
+    // `30.5` into the entry buffer) snaps to the nearest whole
+    // second before the spinner ever fires its `changed` signal.
+    //
+    // Pairs with `format_settings_dialog_spinner_digits` returning
+    // `0`: digits controls *display* (no trailing `.0` glyphs),
+    // snap-to-ticks controls *value* (no fractional component
+    // entering the model). Together they enforce the same integer
+    // invariant on both sides of the spinner.
+    //
+    // Pinning the literal through this helper keeps the
+    // snap-to-ticks flag in one place shared by both
+    // `adw::SpinRow::set_snap_to_ticks(
+    // format_settings_dialog_spinner_snap_to_ticks())` calls the
+    // `SettingsComponent` makes; the widget layer never duplicates
+    // the literal.
+    //
+    // Pure — returns a `bool` without allocating. Sibling of
+    // `format_settings_dialog_spinner_climb_rate`,
+    // `format_settings_dialog_spinner_digits`,
+    // `format_settings_dialog_spinner_page_increment`, and
+    // `format_settings_dialog_spinner_page_size` on the
+    // `adw::SpinRow` property side; together they pin every
+    // spinner-property literal the `SettingsComponent` sets beyond
+    // the `gtk::Adjustment` bounds.
+    use paladin_gtk::settings::format_settings_dialog_spinner_snap_to_ticks;
+
+    assert!(
+        format_settings_dialog_spinner_snap_to_ticks(),
+        "snap-to-ticks enforces the integer-seconds grid against off-grid programmatic values",
+    );
+}
+
+#[test]
 fn format_settings_dialog_spinner_debounce_returns_500_ms() {
     // The widget arms a `glib::timeout_add_local` after every
     // `stage_*` call; the timer's tick handler calls
