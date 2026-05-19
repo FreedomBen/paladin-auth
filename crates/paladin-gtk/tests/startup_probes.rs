@@ -5428,3 +5428,64 @@ fn format_app_window_action_names_are_distinct() {
         "the seven bare action names returned by format_app_window_action_names must be distinct (names: {names:?}); a duplicate would silently overwrite one of the gio::SimpleAction registrations on the bundled SimpleActionGroup at build time and collapse two visible surface entries into a single dispatched AppMsg",
     );
 }
+
+#[test]
+fn format_app_window_accelerator_bindings_accelerators_carry_modifier_prefix() {
+    // Defense-in-depth sibling of
+    // `format_app_window_accelerator_bindings_parse_via_gtk_accelerator_parse`
+    // and `format_app_window_accelerator_bindings_accelerators_are_distinct`:
+    // the parse test pins each accelerator spelling reaches a
+    // valid `(keyval, modifiers)` pair via `gtk::accelerator_parse`,
+    // but a parsed pair with an empty (zero) modifier set is
+    // still a bare-keysym shortcut that would conflict with
+    // text entry in the search bar and any dialog `gtk::Entry`
+    // — typing `n`, `q`, or `comma` into the search field would
+    // fire `app.add` / `app.quit` / `app.preferences` instead
+    // of being inserted into the buffer. The three pinned
+    // accelerators today all use the `<Control>` modifier
+    // (`<Control>n`, `<Control>q`, `<Control>comma`), and the
+    // GNOME-HIG accelerator convention for menu / header-bar
+    // shortcuts requires at least one modifier key so the
+    // shortcut does not steal a printable keysym. This
+    // assertion enforces the modifier-prefix invariant at the
+    // pinned-helper layer so a future regression that dropped
+    // the `<…>` modifier block on one of the three accelerators
+    // fails the test rather than silently rebinding the shortcut
+    // to a bare keysym that intercepts text entry.
+    //
+    // The string-shape check below (every accel starts with `<`
+    // and contains a matching `>` before the keysym name) is
+    // intentional rather than calling `gtk::accelerator_parse`
+    // again: the `_parse_via_gtk_accelerator_parse` sibling
+    // already calls `gtk::init` to load the keysym table for its
+    // assertion, and a second `gtk::init` call from a parallel
+    // test worker thread would panic via gtk4-rs's "Attempted to
+    // initialize GTK from two different threads" guard. Scoping
+    // the modifier-presence check to a pure string-shape
+    // invariant keeps this test parallel-safe with the parse
+    // sibling without requiring a `#[gtk::test]` harness or a
+    // `std::sync::Once`-gated init helper.
+    use paladin_gtk::app::model::format_app_window_accelerator_bindings;
+
+    for (accel, target) in format_app_window_accelerator_bindings() {
+        assert!(
+            accel.starts_with('<'),
+            "accelerator {accel:?} for target {target:?} must start with a `<…>` modifier block (today `<Control>`); a bare keysym shortcut would intercept printable text entry from the search bar and dialog gtk::Entry rows",
+        );
+        let close = accel.find('>').unwrap_or_else(|| {
+            panic!(
+                "accelerator {accel:?} for target {target:?} opens a `<` modifier block but never closes it before the keysym; gtk::accelerator_parse would reject this at runtime",
+            )
+        });
+        let modifier = &accel[1..close];
+        assert!(
+            !modifier.is_empty(),
+            "accelerator {accel:?} for target {target:?} opens with `<>` (empty modifier block); the modifier name (e.g. `Control`) must be present so the shortcut carries an actual modifier key rather than parsing as a bare keysym",
+        );
+        let keysym = &accel[close + 1..];
+        assert!(
+            !keysym.is_empty(),
+            "accelerator {accel:?} for target {target:?} carries the `<{modifier}>` modifier block but no keysym after it; gtk::accelerator_parse would reject this at runtime",
+        );
+    }
+}
