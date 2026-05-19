@@ -11118,3 +11118,80 @@ fn format_app_about_dialog_translator_credits_does_not_contain_a_null_byte() {
         "AdwAboutDialog translator_credits must not contain the `\\0` null byte (which would route through GLib's null-terminated `g_strdup` layer in `set_translator_credits`, truncate the credits-page \"Translators\" section at the first `\\0`, mis-attribute the translation team, and silently lose trailing entries on the next localization-pipeline export pass); got {translator_credits:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_release_notes_does_not_contain_a_null_byte() {
+    // Defense-in-depth mirror of the just-added
+    // `_program_name_does_not_contain_a_null_byte` /
+    // `_version_does_not_contain_a_null_byte` /
+    // `_application_icon_name_does_not_contain_a_null_byte` /
+    // `_developer_name_does_not_contain_a_null_byte` /
+    // `_copyright_does_not_contain_a_null_byte` /
+    // `_comments_does_not_contain_a_null_byte` /
+    // `_url_helpers_do_not_contain_a_null_byte` /
+    // `_release_notes_version_does_not_contain_a_null_byte` /
+    // `_developers_entries_do_not_contain_a_null_byte` /
+    // `_translator_credits_does_not_contain_a_null_byte` /
+    // `_debug_info_does_not_contain_a_null_byte` /
+    // `_debug_info_filename_does_not_contain_a_null_byte`
+    // companions on the release-notes body side. The
+    // `_release_notes_is_empty_until_v0_2_ships`
+    // companion pins the helper to the empty literal `""`
+    // for the v0.0.1 / pre-v0.2 workspace because Paladin has
+    // not yet shipped a tagged release; the empty-string
+    // return trivially contains no `\0` byte. However, once
+    // v0.2 ships the helper will return a non-empty Pango-
+    // subset markup body of the form
+    // `"<ul><li>…</li></ul>"` (per
+    // `_starts_and_ends_with_a_markup_element_when_non_empty`)
+    // — at that point a null-byte injection from a tooling
+    // pipeline (a CHANGELOG.md → markup transform that
+    // mishandles a UTF-8 round trip, or a
+    // `concat!(_, "\0", _)` template form) would slip past
+    // `_is_empty_until_v0_2_ships` (the string is no longer
+    // empty),
+    // `_starts_and_ends_with_a_markup_element_when_non_empty`
+    // (a `\0` byte mid-body does not change the opening `<`
+    // or closing `>` markup boundaries),
+    // `_has_no_surrounding_whitespace_when_non_empty` (`\0`
+    // is non-whitespace and is mid-string), and the
+    // `_must_be_paired_with_a_non_empty_version_when_non_empty`
+    // pairing companion (the version remains non-empty
+    // regardless of `\0` in the body).
+    //
+    // Null bytes in the release-notes body would mis-render
+    // in multiple downstream surfaces: (1) the GLib-backed
+    // `AdwAboutDialog::set_release_notes` setter routes
+    // through `g_strdup` (null-terminated) and may truncate
+    // the "What's New" section body at the first `\0` byte,
+    // silently omitting all release-note bullet points after
+    // the truncation; (2) the Pango markup parser the dialog
+    // routes the body through (per the markup-element
+    // companion) terminates the markup parse at the first
+    // `\0` byte regardless of opening tags, so a partially-
+    // rendered body would leave dangling unclosed markup
+    // tags and trigger Pango parse warnings on the console;
+    // (3) any tooling that scrapes the about dialog's
+    // release-notes slot (in-app changelog displays,
+    // release-aggregator bots) would silently lose the
+    // trailing changelog bullets that came after the `\0`.
+    //
+    // Pinning the no-null-byte invariant directly here
+    // surfaces the regression with a message naming the
+    // offending byte at build time rather than as a
+    // downstream truncation of the "What's New" body,
+    // dangling Pango parse warnings, or as a silent loss of
+    // release-aggregator bullets. Current helper returns the
+    // empty literal `""` (no `\0` byte), so this test passes
+    // today and serves as a forcing function so any future
+    // override of the helper — including the eventual
+    // landing of an actual v0.2 release-notes markup body —
+    // stays free of null bytes.
+    use paladin_gtk::app::model::format_app_about_dialog_release_notes;
+
+    let release_notes = format_app_about_dialog_release_notes();
+    assert!(
+        !release_notes.contains('\0'),
+        "AdwAboutDialog release_notes must not contain the `\\0` null byte (which would route through GLib's null-terminated `g_strdup` layer in `set_release_notes`, truncate the \"What's New\" section body at the first `\\0`, terminate the Pango markup parse mid-stream and trigger dangling-tag warnings, and silently lose trailing changelog bullets in downstream release-aggregator scrapers); got {release_notes:?}",
+    );
+}
