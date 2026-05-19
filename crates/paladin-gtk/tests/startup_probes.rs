@@ -6260,3 +6260,49 @@ fn format_app_window_accelerator_bindings_accelerators_carry_exactly_one_modifie
         );
     }
 }
+
+#[test]
+fn format_app_window_accelerator_bindings_accelerators_have_a_non_empty_keysym_after_the_modifier_block(
+) {
+    // Defense-in-depth sibling of
+    // `format_app_window_accelerator_bindings_accelerators_carry_exactly_one_modifier_block`
+    // (which pins exactly one `<` and one `>` ASCII byte per
+    // accelerator) and
+    // `format_app_window_accelerator_bindings_accelerators_carry_modifier_prefix`
+    // (which pins each accelerator starts with a non-empty `<…>`
+    // block). Both companions guard the modifier-block shape but
+    // leave the keysym-after-the-block invariant ungated, so a
+    // future refactor that dropped the trailing keysym — e.g.
+    // `"<Control>"` for any of the three primary surfaces — would
+    // still have exactly one modifier block and the leading
+    // `<Control>` prefix while binding no key at all, silently
+    // unbinding the documented Add / Quit / Preferences shortcut
+    // surface.
+    //
+    // Scoped to a pure string-shape check rather than a second
+    // `gtk::accelerator_parse` call so it stays parallel-safe with
+    // the gtk::init-using parse sibling
+    // (`format_app_window_accelerator_bindings_parse_via_gtk_accelerator_parse`)
+    // without an Once-gated init helper. The assertion finds the
+    // closing `>` byte (already pinned to exactly one occurrence
+    // by the `_carry_exactly_one_modifier_block` companion) and
+    // checks that the substring after it is non-empty so a
+    // regression that returned `"<Control>"` for any of the three
+    // primary keyboard surfaces fails at the pinned layer rather
+    // than only surfacing when a user pressed `Ctrl+N` and nothing
+    // happened.
+    use paladin_gtk::app::model::format_app_window_accelerator_bindings;
+
+    for (accel, target) in format_app_window_accelerator_bindings() {
+        let close_index = accel.bytes().position(|b| b == b'>').unwrap_or_else(|| {
+            panic!(
+                "format_app_window_accelerator_bindings accelerator for target {target:?} must contain a `>` ASCII byte closing the modifier block; got {accel:?}",
+            )
+        });
+        let keysym = &accel[close_index + 1..];
+        assert!(
+            !keysym.is_empty(),
+            "format_app_window_accelerator_bindings accelerator for target {target:?} must carry a non-empty keysym after the `<…>` modifier block so the documented keyboard surface actually binds a key; an accelerator like `<Control>` alone has a valid modifier block but binds no key and silently unbinds the documented shortcut surface; got keysym {keysym:?} in {accel:?}",
+        );
+    }
+}
