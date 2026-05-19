@@ -8270,3 +8270,84 @@ fn format_app_window_title_has_no_embedded_whitespace() {
         );
     }
 }
+
+#[test]
+fn format_app_add_button_action_name_is_ascii_lowercase_only() {
+    // Defense-in-depth sibling of
+    // `format_app_add_button_action_name_returns_add` (exact-value
+    // pin to the static literal `"add"`),
+    // `format_app_add_button_action_name_has_no_separator_or_whitespace`
+    // (positive shape pin on non-empty + no `.` separator + no
+    // ASCII-space byte), and
+    // `format_app_add_button_action_name_round_trips_with_group_and_target`
+    // (cross-consistency with `format_app_action_group_name` and
+    // `format_app_add_button_action`). Those companions catch
+    // the wrong-value, empty, embedded-`.`, embedded-ASCII-space,
+    // and round-trip-mismatch regressions but leave the
+    // casing-drift, embedded-tab / embedded-newline /
+    // embedded-other-ASCII-whitespace, and non-ASCII-byte edge
+    // cases ungated:
+    //
+    // * `_returns_add` only catches the case where the canonical
+    //   literal is similarly corrupted in a lookalike-in-lookalike
+    //   refactor.
+    // * `_has_no_separator_or_whitespace` uses
+    //   `!action.contains(' ')` which only matches the literal
+    //   ASCII-space byte (U+0020) and would accept embedded tab
+    //   (U+0009), newline (U+000A), carriage return (U+000D),
+    //   or any non-ASCII whitespace untouched.
+    // * `_round_trips_with_group_and_target` composes the group
+    //   + bare action via `<group>.<action>` and matches against
+    //   `format_app_add_button_action`; if both helpers drift
+    //   together (a paired regression), the round-trip companion
+    //   would pass on a misleading match.
+    //
+    // The libadwaita / GLib convention for `gio::SimpleAction`
+    // bare names is lowercase ASCII matching the action-group
+    // prefix convention pinned on the new
+    // `format_app_action_group_name_is_ascii_lowercase_only`
+    // sibling and on the existing
+    // `format_app_window_action_names_use_ascii_lowercase_only`
+    // companion. The `format_app_add_button_action` target is
+    // spelled `<group>.<action>` (i.e. `"app.add"`), so the
+    // bare action name and the group prefix must share the same
+    // lowercase-ASCII byte composition for the
+    // `dispatch_app_window_action` case-sensitive lookup (per
+    // `dispatch_app_window_action_is_case_sensitive`) to
+    // resolve when the header-bar `+` button is clicked. A
+    // regression that introduced an upper-case letter on the
+    // bare-action side — e.g. renaming `"add"` to `"Add"` while
+    // leaving the round-trip target at the lowercase form (or
+    // letting both drift together past the round-trip pin) —
+    // would slip past both existing companions while
+    // mis-routing the header-bar `+` button activation through
+    // the case-sensitive dispatch helper at runtime, surfacing
+    // as a no-op `+` press rather than as a build-time
+    // identifier mismatch.
+    //
+    // The current `"add"` literal is lowercase-ASCII, so this
+    // test passes today and serves as a forcing function so
+    // any future override of the bare-action helper stays
+    // aligned with the action-name + group-prefix convention.
+    // Mirror of the
+    // `format_app_action_group_name_is_ascii_lowercase_only`
+    // companion on the gio::ActionGroup prefix side and the
+    // `format_app_window_action_names_use_ascii_lowercase_only`
+    // companion on the bundled per-action-name array side;
+    // together they pin the lowercase-ASCII shape contract
+    // across the GLib action-group prefix, the bundled
+    // per-action-name array, and the bare add-button action
+    // name against a single source of truth, closing the
+    // casing-drift regression surface across every GLib
+    // identifier the `AppModel` registers at runtime.
+    use paladin_gtk::app::model::format_app_add_button_action_name;
+
+    let action = format_app_add_button_action_name();
+    for (idx, ch) in action.char_indices() {
+        assert!(
+            ch.is_ascii_lowercase(),
+            "format_app_add_button_action_name = {action:?} must use lowercase ASCII letters only so the bare action name shares the same case-folded byte composition as the gio::ActionGroup prefix pinned by `_action_group_name_is_ascii_lowercase_only` and the per-window-action-name array pinned by `_window_action_names_use_ascii_lowercase_only`, and the case-sensitive `dispatch_app_window_action` lookup resolves at runtime when the header-bar `+` button is clicked (an upper-case regression like `\"Add\"` would mis-route the header-bar `+` button activation as a no-op press rather than as a build-time identifier mismatch); got disallowed character {ch:?} (U+{:04X}) at byte offset {idx}",
+            ch as u32,
+        );
+    }
+}
