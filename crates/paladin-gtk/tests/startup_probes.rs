@@ -15658,6 +15658,128 @@ fn format_app_about_dialog_copyright_does_not_contain_a_form_feed_byte() {
 }
 
 #[test]
+fn format_app_about_dialog_copyright_does_not_contain_a_backspace_byte() {
+    // Defense-in-depth per-byte sibling extending the copyright
+    // byte-cleanliness contract past the just-completed `{null /
+    // horizontal-tab / carriage-return / vertical-tab / form-
+    // feed}` quintuple to the next C0 control byte. The backspace
+    // byte `\x08` (0x08) sits one step below HT (0x09) in the
+    // ASCII C0 block; like its siblings it is a non-printable
+    // control byte with no legitimate use inside a human-readable
+    // GNOME dialog copyright string, but it carries an additional
+    // terminal-erase semantic — in any pipeline that streams the
+    // copyright through a TTY (release-notes ingest into a CI log,
+    // `paladin-gtk --about` debug-info dump piped to `less` or
+    // `cat`, downstream license-attribution scraper output) a
+    // `\x08` byte erases the previous glyph from the terminal
+    // surface, opening a log-injection / display-spoofing surface
+    // where the rendered legal attribution diverges from the
+    // bytes on disk.
+    //
+    // None of the existing copyright companions name the `\x08`
+    // byte directly:
+    //   - `_copyright_is_a_single_line_without_embedded_newlines`
+    //     only checks `\n` and `\r` — `\x08` is neither;
+    //   - `_copyright_starts_with_copyright_glyph_and_contains_developer_name`
+    //     and `_copyright_ends_with_developer_name` only
+    //     constrain the literal prefix (the `©` glyph + space)
+    //     and the `"The Paladin contributors"` suffix, so a
+    //     mid-string `\x08` between them (`"© The Pa\x08ladin
+    //     contributors"`) satisfies both;
+    //   - `_separates_glyph_and_attribution_with_a_single_space`
+    //     only constrains the single byte immediately after the
+    //     `©` glyph — a `\x08` later in the string slips past;
+    //   - `_does_not_end_with_a_period` only constrains the
+    //     trailing byte;
+    //   - `_does_not_contain_a_year_token_so_it_does_not_drift_across_releases`
+    //     scans for four-digit runs — `\x08` is not a digit;
+    //   - `_does_not_contain_a_null_byte` /
+    //     `_does_not_contain_a_horizontal_tab_byte` /
+    //     `_does_not_contain_a_carriage_return_byte` /
+    //     `_does_not_contain_a_vertical_tab_byte` /
+    //     `_does_not_contain_a_form_feed_byte` each name a
+    //     different byte specifically. Notably `\x08` is NOT
+    //     matched by `char::is_whitespace()` (Unicode treats BS
+    //     as a non-whitespace control byte), so the surrounding-
+    //     whitespace trim guards used by sibling helpers
+    //     (`_comments_*`, `_developer_name_has_no_surrounding_whitespace`)
+    //     would not catch a leading or trailing `\x08` even on
+    //     the boundary — making backspace strictly more
+    //     dangerous than form-feed, which `char::is_whitespace()`
+    //     does match at the boundary.
+    //
+    // The `_returns_paladin_copyright_line` exact-value pin
+    // catches every byte today, but its protection collapses the
+    // moment a multi-line copyright-attribution refactor or a
+    // workspace-vendoring split decouples the helper from the
+    // pinned literal — at that point a `\x08`-bearing override
+    // would slip past every byte-level companion above.
+    //
+    // A regression that landed `"© The Paladin \x08contributors"`
+    // (backspace byte lifted from a hand-edited helper that
+    // pasted from a terminal session recording where `\x08` had
+    // been emitted by an interactive editor's backspace key
+    // between the copyright glyph and the attribution, a
+    // `concat!("© The Paladin ", "\x08", "contributors")` form,
+    // or a `pandoc`-generated text dump preserving raw `\x08`
+    // edit-stream bytes between document sections) would mis-
+    // render in multiple downstream surfaces: (1) the GLib-
+    // backed `AdwAboutDialog::set_copyright` setter hands the
+    // string to Pango for inline rendering in the dialog footer
+    // — Pango's default rendering of a bare `\x08` byte is
+    // implementation-defined and typically renders as a literal
+    // control glyph (a hollow box or tofu-like placeholder),
+    // breaking the tidy single-line copyright layout against
+    // the website / issue-link rows beneath it; (2) the
+    // copyright string is the legal attribution surface for the
+    // dialog — a `\x08`-mis-rendered footer erodes the trusted-
+    // application surface contract by surfacing a control-byte
+    // glyph in the legal-attribution row; (3) when the dialog
+    // copyright is reused as part of the §11.4 debug-info dump
+    // and that dump is piped through a TTY, the `\x08` byte
+    // erases the preceding glyph, so the rendered legal
+    // attribution diverges from the bytes on disk and an
+    // attacker who controlled the upstream copyright source
+    // could craft a payload whose terminal-rendered form omits
+    // or substitutes attribution text without altering the
+    // underlying file bytes (a classic log-injection / display-
+    // spoofing primitive); (4) screen readers that announce the
+    // dialog copyright row read the `\x08` as a literal control
+    // character or — on some implementations — as a delete-
+    // previous announcement, breaking the accessibility-tree
+    // announcement of the legal attribution at the byte
+    // boundary; (5) downstream tooling that scrapes the
+    // copyright string (license-attribution aggregators,
+    // AGPL-3.0-or-later compliance crawlers) would propagate
+    // the stray `\x08` byte into the consumer's stream and
+    // trigger the same rendering bug across every downstream
+    // surface.
+    //
+    // Pinning the no-`\x08` invariant directly here surfaces the
+    // regression with a message naming the offending byte at
+    // build time rather than as a downstream dialog-footer
+    // rendering bug, a terminal-erase display-spoof, or a
+    // screen-reader announcement break. Current helper returns
+    // the literal `"© The Paladin contributors"` (no `\x08`
+    // byte), so this test passes today and serves as a forcing
+    // function so any future override of the helper — including
+    // the eventual landing of a multi-line copyright
+    // attribution — stays free of backspace bytes. Continues the
+    // copyright C0 control-byte cycle past the just-completed
+    // `{null / horizontal-tab / carriage-return / vertical-tab /
+    // form-feed}` quintuple so the helper's byte-composition
+    // contract pins each forbidden control byte against a single
+    // source of truth.
+    use paladin_gtk::app::model::format_app_about_dialog_copyright;
+
+    let copyright = format_app_about_dialog_copyright();
+    assert!(
+        !copyright.contains('\x08'),
+        "AdwAboutDialog copyright must not contain the `\\x08` backspace byte (0x08); a mid-string `\\x08` slips past `_is_a_single_line_without_embedded_newlines` (which only checks `\\n` and `\\r`), past `_starts_with_copyright_glyph_and_contains_developer_name` / `_ends_with_developer_name` (which only constrain the literal prefix and suffix), past `_separates_glyph_and_attribution_with_a_single_space` (which only constrains the single byte after the `©` glyph), past `_does_not_end_with_a_period` (which only constrains the trailing byte), past the no-year-token four-digit-run scan (`\\x08` is not a digit), and past `_does_not_contain_a_null_byte` / `_does_not_contain_a_horizontal_tab_byte` / `_does_not_contain_a_carriage_return_byte` / `_does_not_contain_a_vertical_tab_byte` / `_does_not_contain_a_form_feed_byte` (which each name a different byte specifically); `\\x08` is NOT matched by `char::is_whitespace()` so boundary trim guards do not catch it even on the leading or trailing byte (strictly more dangerous than form-feed which `char::is_whitespace()` does match at the boundary); it would render as a literal control glyph in the dialog-footer copyright row, erode the legal-attribution trusted-surface contract by surfacing a control-byte glyph in the legal row, enable terminal-erase display-spoofing when the copyright is dumped through a TTY in §11.4 debug-info pipelines (the rendered legal attribution diverges from the bytes on disk because `\\x08` erases the preceding glyph), break screen-reader copyright-row announcements at the byte boundary, and propagate into downstream license-attribution scrapers; got {copyright:?}",
+    );
+}
+
+#[test]
 fn format_app_about_dialog_comments_does_not_contain_a_form_feed_byte() {
     // Defense-in-depth per-byte sibling extending the comments
     // byte-cleanliness contract past the just-completed `{null /
