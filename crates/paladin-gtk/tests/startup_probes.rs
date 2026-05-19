@@ -10270,3 +10270,59 @@ fn format_app_about_dialog_debug_info_filename_does_not_start_with_a_dot() {
         "AdwAboutDialog debug_info_filename must not start with a `.` byte (which would make the saved debug-info file a Unix-hidden file omitted from default `ls`, GNOME Files (Nautilus), and GTK file-chooser views — defeating the purpose of the `set_debug_info_filename` slot, which is to surface a copy-pasteable artifact users can attach to bug reports); got {filename:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_debug_info_filename_contains_exactly_one_period() {
+    // Defense-in-depth sibling of
+    // `format_app_about_dialog_debug_info_filename_returns_paladin_debug_info_txt`
+    // (exact-value pin),
+    // `_is_non_empty_single_line_with_txt_extension`
+    // (single-line + extension-presence pin),
+    // `_extension_is_lowercase_txt` (extension-case pin),
+    // `_is_ascii_only` / `_has_no_embedded_whitespace`
+    // (byte-composition pins),
+    // `_does_not_contain_path_separators` (no-path-separator
+    // pin), and `_does_not_start_with_a_dot` (no-leading-dot
+    // pin). Those companions catch the wrong-value / multi-
+    // line / wrong-extension / non-ASCII / embedded-whitespace
+    // / path-separator / hidden-file regressions but a
+    // regression that landed `"paladin.debug.info.txt"`
+    // (over-dotted form where the hyphens were replaced with
+    // periods, surfacing as multiple extension boundaries to
+    // downstream tools) or `"paladin-debug-info.tar.txt"`
+    // (double-extension form from a `concat!(_, ".tar", _)`
+    // injection that mis-implies the file is a tarball when
+    // it's plain text) would slip past every existing
+    // companion: each candidate is single-line, ASCII, ends
+    // with `.txt` lowercase, contains no whitespace / no path
+    // separators, and doesn't start with `.`.
+    //
+    // The libadwaita / GTK file-chooser dialog parses the
+    // suggested filename's extension by splitting on the
+    // *last* `.` byte, so a multi-period filename has an
+    // ambiguous "base name" — the file-chooser dialog
+    // displays `"paladin-debug-info.tar"` as the editable
+    // base name with `".txt"` as the extension, suggesting to
+    // the user that the file is `"paladin-debug-info.tar"`
+    // plus a `".txt"` suffix (i.e. a renamed tarball). Pinning
+    // exactly-one-period directly here surfaces the regression
+    // with a message naming the over-dotted form at build
+    // time rather than as a downstream file-chooser UX
+    // regression where the editable base name doesn't match
+    // the canonical `paladin-debug-info` slug.
+    //
+    // The current `format_app_about_dialog_debug_info_filename`
+    // returns `"paladin-debug-info.txt"` which contains exactly
+    // one `.` (separating `"paladin-debug-info"` from `"txt"`),
+    // so this test passes today and serves as a forcing
+    // function so any future override stays on the simple
+    // `<slug>.<extension>` form.
+    use paladin_gtk::app::model::format_app_about_dialog_debug_info_filename;
+
+    let filename = format_app_about_dialog_debug_info_filename();
+    let period_count = filename.bytes().filter(|&b| b == b'.').count();
+    assert_eq!(
+        period_count, 1,
+        "AdwAboutDialog debug_info_filename must contain exactly one `.` byte (separating the canonical `<slug>` and `<extension>` per the libadwaita / GTK file-chooser dialog's last-`.`-split-into-base-and-extension convention — multi-period filenames render in the file-chooser save dialog with an ambiguous editable base name that doesn't match the canonical slug); got {period_count} periods in {filename:?}",
+    );
+}
