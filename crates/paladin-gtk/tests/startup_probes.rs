@@ -25628,3 +25628,126 @@ fn format_app_about_dialog_copyright_does_not_contain_an_end_of_text_byte() {
         "AdwAboutDialog copyright must not contain the `\\x03` end-of-text byte (0x03); like EOT, ENQ, ACK, and BEL, ETX is NOT matched by `char::is_whitespace()` (Unicode returns false for U+0003 ETX), so the copyright helper's transitive whitespace-boundary / single-line protections from the cluster bytes do NOT cover ETX — making the end-of-text byte strictly more dangerous than the cluster bytes for this helper; a mid-string `\\x03` slips past `_is_a_single_line_without_embedded_newlines` (which only checks `\\n` and `\\r`), past `_starts_with_copyright_glyph_and_contains_developer_name` / `_ends_with_developer_name` / `_separates_glyph_and_attribution_with_a_single_space` (which only constrain the literal prefix, suffix, and the single byte after the © glyph), past `_does_not_end_with_a_period` / `_does_not_contain_a_year_token_so_it_does_not_drift_across_releases` (which only constrain the trailing byte or scan for digits), and past `_does_not_contain_a_null_byte` / `_does_not_contain_a_horizontal_tab_byte` / `_does_not_contain_a_carriage_return_byte` / `_does_not_contain_a_vertical_tab_byte` / `_does_not_contain_a_form_feed_byte` / `_does_not_contain_a_backspace_byte` / `_does_not_contain_a_line_feed_byte` / `_does_not_contain_a_bell_byte` / `_does_not_contain_an_acknowledge_byte` / `_does_not_contain_an_enquiry_byte` / `_does_not_contain_an_end_of_transmission_byte` (which each name a different byte specifically); it would render as a literal control glyph in the dialog footer copyright row, erode the trusted-application legal-attribution surface contract, confuse serial-protocol-bridging tooling that treats `\\x03` as an ETX text-segment terminator if dumped through a serial-bridged TTY (truncating the copyright at the byte boundary), trigger SIGINT-byte (`^C`) tty surprises in tooling capturing the legal-attribution footer through a pty in raw mode, break screen-reader copyright announcements at the byte boundary, and propagate into downstream license-attribution aggregators and AGPL-3.0-or-later compliance crawlers; got {copyright:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_comments_does_not_contain_an_end_of_text_byte() {
+    // Defense-in-depth per-byte sibling extending the
+    // comments byte-cleanliness contract past the just-
+    // completed `{null / horizontal-tab / carriage-return /
+    // vertical-tab / form-feed / backspace / line-feed /
+    // bell / acknowledge / enquiry / end-of-transmission}`
+    // undecuple to the end-of-text byte `\x03` (0x03),
+    // continuing the non-whitespace-classified C0 control-
+    // byte cycle past EOT (0x04).
+    //
+    // Like EOT, ENQ, ACK, and BEL, ETX is NOT matched by
+    // `char::is_whitespace()` (Unicode treats ETX as a
+    // control byte, not whitespace), so the comments
+    // helper's transitive single-line / whitespace-
+    // boundary protections from
+    // `_comments_is_non_empty_single_line_distinct_from_program_name`
+    // (which uses both `!contains('\n')` and
+    // `!comments.starts_with(char::is_whitespace)` /
+    // `!comments.ends_with(char::is_whitespace)`) do NOT
+    // cover ETX — the boundary `char::is_whitespace()`
+    // guards return false for U+0003 ETX and the explicit
+    // `\n` check is byte-specific.
+    //
+    // None of the existing comments companions name the
+    // `\x03` byte directly:
+    //   - `_comments_is_non_empty_single_line_distinct_from_program_name`
+    //     only checks `\n` and uses `char::is_whitespace()`
+    //     for boundary checks — `\x03` is neither;
+    //   - `_comments_is_ascii_only` pins each byte as ASCII
+    //     — `\x03` is ASCII (0x03) so it slips past;
+    //   - `_does_not_end_with_a_period_per_libadwaita_convention`
+    //     only constrains the trailing byte;
+    //   - `_matches_cargo_pkg_description` is an exact-
+    //     value pin coupled to
+    //     `env!("CARGO_PKG_DESCRIPTION")` — a future
+    //     workspace refactor that introduced a `\x03` byte
+    //     into the package description (a hand-edited
+    //     `description = """..."""` literal that pasted
+    //     from a terminal session interfacing with a
+    //     serial-protocol bridge) would propagate the byte
+    //     into the helper, and this companion would still
+    //     pass (the helper still equals the cargo
+    //     description);
+    //   - `_does_not_contain_a_null_byte` /
+    //     `_does_not_contain_a_horizontal_tab_byte` /
+    //     `_does_not_contain_a_carriage_return_byte` /
+    //     `_does_not_contain_a_vertical_tab_byte` /
+    //     `_does_not_contain_a_form_feed_byte` /
+    //     `_does_not_contain_a_backspace_byte` /
+    //     `_does_not_contain_a_line_feed_byte` /
+    //     `_does_not_contain_a_bell_byte` /
+    //     `_does_not_contain_an_acknowledge_byte` /
+    //     `_does_not_contain_an_enquiry_byte` /
+    //     `_does_not_contain_an_end_of_transmission_byte`
+    //     each name a different byte specifically.
+    //
+    // A regression that landed a `\x03`-bearing comments
+    // string (end-of-text byte from a workspace
+    // `Cargo.toml` description that pasted from a terminal
+    // session interfacing with a serial-protocol bridge
+    // preserving ETX framing bytes during a Bisync-style
+    // text-block transfer, a `concat!(_, "\x03", _)` form,
+    // or a hand-edited helper override that lifted the
+    // description from a `script(1)` typescript that
+    // captured raw `\x03` ETX framing bytes) would mis-
+    // render in multiple downstream surfaces: (1) the
+    // GLib-backed `AdwAboutDialog::set_comments` setter
+    // hands the string to Pango for inline rendering
+    // beneath the program-name / version cluster in the
+    // dialog header — Pango's default rendering of a bare
+    // `\x03` byte is implementation-defined and typically
+    // renders as a literal control glyph, breaking the
+    // elevator-pitch comments-row layout; (2) when the
+    // comments string is dumped through a serial-bridged
+    // TTY (CI logs over a serial console, an out-of-band
+    // debugging session), the `\x03` byte may be
+    // intercepted by the receiving end as an end-of-text
+    // framing indicator and signal the end of the current
+    // text block, confusing protocol-bridging tooling that
+    // treats ETX as a text-segment terminator and
+    // truncating the comments at the byte boundary; on
+    // many terminals, `\x03` is the SIGINT-generating
+    // byte (`^C`) when typed at a foreground process —
+    // surfacing as an unexpected process interruption in
+    // any tooling that captures the elevator-pitch through
+    // a pty in raw mode that signals on the literal byte;
+    // (3) screen readers that announce the dialog comments
+    // row render the byte as a literal control character
+    // announcement, breaking the elevator-pitch
+    // accessibility-tree announcement at the byte
+    // boundary; (4) downstream tooling that scrapes the
+    // package description (changelog aggregators, package-
+    // listing generators, AppStream `<summary>`
+    // extractors) would propagate the stray `\x03` byte
+    // into the consumer's stream and trigger the same
+    // control-glyph rendering / SIGINT / protocol-
+    // confusion bug, with the additional risk that
+    // AppStream `<summary>` validation rejects control
+    // bytes at packaging time.
+    //
+    // Pinning the no-`\x03` invariant directly here
+    // surfaces the regression with a message naming the
+    // offending byte at build time rather than via a
+    // downstream dialog rendering bug, a serial-protocol
+    // ETX-frame text-segment-terminator collision, a
+    // SIGINT-byte tty surprise, or an AppStream-validation
+    // packaging-time failure. Current helper returns the
+    // literal `env!("CARGO_PKG_DESCRIPTION")` which
+    // resolves to the single-line workspace description
+    // with no `\x03` byte, so this test passes today and
+    // serves as a forcing function so any future
+    // workspace-description refactor stays free of end-of-
+    // text bytes.
+    use paladin_gtk::app::model::format_app_about_dialog_comments;
+
+    let comments = format_app_about_dialog_comments();
+    assert!(
+        !comments.contains('\x03'),
+        "AdwAboutDialog comments must not contain the `\\x03` end-of-text byte (0x03); like EOT, ENQ, ACK, and BEL, ETX is NOT matched by `char::is_whitespace()` (Unicode returns false for U+0003 ETX), so the comments helper's transitive whitespace-boundary / single-line protections do NOT cover ETX; a mid-string `\\x03` slips past `_is_non_empty_single_line_distinct_from_program_name` (which only checks `\\n` and uses `char::is_whitespace()` for boundary checks — neither catches `\\x03`), past `_is_ascii_only` (because `\\x03` is ASCII), past `_does_not_end_with_a_period_per_libadwaita_convention` (which only constrains the trailing byte), past `_matches_cargo_pkg_description` (a future workspace description that introduced `\\x03` would propagate the byte and this equality pin would still pass), and past `_does_not_contain_a_null_byte` / `_does_not_contain_a_horizontal_tab_byte` / `_does_not_contain_a_carriage_return_byte` / `_does_not_contain_a_vertical_tab_byte` / `_does_not_contain_a_form_feed_byte` / `_does_not_contain_a_backspace_byte` / `_does_not_contain_a_line_feed_byte` / `_does_not_contain_a_bell_byte` / `_does_not_contain_an_acknowledge_byte` / `_does_not_contain_an_enquiry_byte` / `_does_not_contain_an_end_of_transmission_byte` (which each name a different byte specifically); it would render as a literal control glyph in the dialog header comments row, confuse serial-protocol-bridging tooling that treats `\\x03` as an ETX text-segment terminator if dumped through a serial-bridged TTY (truncating the comments at the byte boundary), trigger SIGINT-byte (`^C`) tty surprises in tooling capturing the elevator-pitch through a pty in raw mode, break screen-reader comments announcements at the byte boundary, propagate into downstream changelog aggregators and AppStream `<summary>` extractors, and trigger AppStream `<summary>` validation rejection at packaging time; got {comments:?}",
+    );
+}
