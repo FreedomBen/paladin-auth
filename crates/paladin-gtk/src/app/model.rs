@@ -2389,6 +2389,56 @@ pub fn apply_app_add_button_visibility(button: &gtk::Button, state: &AppState) {
     button.set_visible(format_app_add_button_visible(state));
 }
 
+/// Build the single application-window
+/// [`gtk::gio::SimpleActionGroup`] bundling every primary-menu
+/// action and the header-bar `+` button's Add action.
+///
+/// Builds the primary-menu group via
+/// [`build_app_primary_action_group`] (registering the six
+/// entries Import, Export, Passphrase, Preferences, About,
+/// Quit with their per-state sensitivities) and adds the Add
+/// action constructed by [`build_app_add_action`] under the
+/// same group so the menu targets spelled by
+/// [`format_app_primary_menu_entries`] (`"app.import"`,
+/// `"app.export"`, …, `"app.quit"`) and the header-bar `+`
+/// button's `"app.add"` target all resolve through one
+/// [`gtk::gio::SimpleActionGroup`] inserted on the
+/// [`adw::ApplicationWindow`] via
+/// `insert_action_group(format_app_action_group_name(),
+/// Some(&group))`.
+///
+/// Centralizing the construction in one helper means the
+/// widget binding inserts a single group rather than two — the
+/// `<Ctrl>N` accelerator wired via
+/// `gio::Application::set_accels_for_action("app.add",
+/// &["<Control>n"])` resolves through this group along with
+/// every menu accelerator. Sibling of
+/// [`build_app_primary_menu_model`] on the menu side and
+/// [`build_app_primary_action_group`] /
+/// [`build_app_add_action`] on the per-half construction side;
+/// together they pin both halves of the menu wiring (`gio::Menu`
+/// model plus its companion `gio::SimpleActionGroup`) and the
+/// `+` button against a single source of truth.
+///
+/// The per-action `connect_activate` handler that forwards
+/// each activation to the matching [`AppMsg`] is wired by the
+/// widget binding (the closure needs the
+/// [`relm4::ComponentSender`] that lives on the widget side);
+/// this helper only registers the action surface so the test
+/// suite can prove the names and sensitivities are pinned.
+///
+/// Returns an owned [`gtk::gio::SimpleActionGroup`].
+/// Construction allocates the underlying `GSimpleActionGroup`
+/// and each `GSimpleAction`; the caller is expected to hand
+/// the group to `insert_action_group` and let the widget take
+/// ownership of the group's `GObject` reference.
+#[must_use]
+pub fn build_app_window_action_group(state: &AppState) -> gtk::gio::SimpleActionGroup {
+    let group = build_app_primary_action_group(state);
+    group.add_action(&build_app_add_action(state));
+    group
+}
+
 /// Build the application menu's "About Paladin" entry's
 /// [`adw::AboutDialog`] from the pinned `format_app_about_dialog_*`
 /// helpers.

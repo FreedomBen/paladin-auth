@@ -2344,6 +2344,155 @@ fn build_app_add_action_disables_in_non_unlocked_states() {
 }
 
 #[test]
+fn build_app_window_action_group_bundles_primary_actions_and_add_action() {
+    // Per §"libadwaita usage" and §"Component tree": the
+    // application's `app` action group is the single group
+    // inserted on the `adw::ApplicationWindow` via
+    // `insert_action_group(format_app_action_group_name(),
+    // Some(&group))`. It carries every menu target spelled by
+    // `format_app_primary_menu_entries` (`"app.import"`,
+    // `"app.export"`, …, `"app.quit"`) plus the header-bar
+    // `+` button's `"app.add"` target so the `<Ctrl>N`
+    // accelerator wired via
+    // `gio::Application::set_accels_for_action("app.add",
+    // &["<Control>n"])` resolves through this group.
+    // Centralizing the construction in one helper means the
+    // widget binding inserts a single group rather than two
+    // (or hand-spelling the action names) so the bare action
+    // names, parameter shapes, and sensitivity rules stay
+    // sourced exclusively from the pinned helpers.
+    use libadwaita::prelude::*;
+    use paladin_gtk::app::model::{
+        build_app_window_action_group, format_app_add_button_action_name,
+        format_app_add_button_sensitive, format_app_primary_menu_action_names,
+        format_app_primary_menu_action_sensitivities,
+    };
+    use paladin_gtk::app::state::AppState;
+
+    let state = AppState::Unlocked {
+        path: std::path::PathBuf::from("/dev/null"),
+    };
+    let group = build_app_window_action_group(&state);
+
+    // Every primary menu action must be present with the
+    // pinned sensitivity and no parameter shape.
+    let names = format_app_primary_menu_action_names();
+    let expected_sensitivities = format_app_primary_menu_action_sensitivities(&state);
+    for (idx, name) in names.iter().enumerate() {
+        let action = group
+            .lookup_action(name)
+            .and_then(|a| a.downcast::<libadwaita::gio::SimpleAction>().ok())
+            .unwrap_or_else(|| {
+                panic!(
+                    "build_app_window_action_group must register primary menu action {name:?}; missing at slot {idx}"
+                )
+            });
+        assert_eq!(
+            action.is_enabled(),
+            expected_sensitivities[idx],
+            "build_app_window_action_group must apply format_app_primary_menu_action_sensitivities[{idx}] to action {name:?}",
+        );
+        assert!(
+            action.parameter_type().is_none(),
+            "primary menu action {name:?} must take no parameter so the menu target `app.{name}` resolves through gio::SimpleAction::new(name, None)",
+        );
+    }
+
+    // The Add action must be present with the pinned
+    // sensitivity and no parameter shape, sharing the same
+    // group as the menu actions so `app.add` resolves through
+    // the single inserted action group.
+    let add_name = format_app_add_button_action_name();
+    let add_action = group
+        .lookup_action(add_name)
+        .and_then(|a| a.downcast::<libadwaita::gio::SimpleAction>().ok())
+        .expect(
+            "build_app_window_action_group must register the Add action named format_app_add_button_action_name",
+        );
+    assert_eq!(
+        add_action.is_enabled(),
+        format_app_add_button_sensitive(&state),
+        "build_app_window_action_group must apply format_app_add_button_sensitive to the Add action",
+    );
+    assert!(
+        add_action.parameter_type().is_none(),
+        "Add action must take no parameter so the `app.add` target resolves through gio::SimpleAction::new(name, None)",
+    );
+}
+
+#[test]
+fn build_app_window_action_group_disables_mutating_actions_in_non_unlocked_states() {
+    // Defense-in-depth: the four mutating menu actions
+    // (Import, Export, Passphrase, Preferences) and the Add
+    // action must be disabled in every state except `Unlocked`
+    // per §"libadwaita usage". About and Quit stay enabled
+    // everywhere. Catches a future bundling change that
+    // accidentally inverted the sensitivity rule for any of
+    // the seven actions.
+    use libadwaita::prelude::*;
+    use paladin_core::ErrorKind;
+    use paladin_gtk::app::model::{
+        build_app_window_action_group, format_app_add_button_action_name,
+        format_app_menu_about_action_name, format_app_menu_export_action_name,
+        format_app_menu_import_action_name, format_app_menu_passphrase_action_name,
+        format_app_menu_preferences_action_name, format_app_menu_quit_action_name,
+    };
+    use paladin_gtk::app::state::AppState;
+    use paladin_gtk::startup_error::{StartupError, StartupErrorSource};
+
+    for non_unlocked in [
+        AppState::Missing {
+            path: std::path::PathBuf::from("/dev/null"),
+        },
+        AppState::Locked {
+            path: std::path::PathBuf::from("/dev/null"),
+        },
+        AppState::UnlockedBusy {
+            path: std::path::PathBuf::from("/dev/null"),
+        },
+        AppState::StartupError {
+            path: None,
+            error: StartupError {
+                source: StartupErrorSource::PathResolution,
+                kind: ErrorKind::IoError,
+                rendered: String::from("resolve_failed"),
+            },
+        },
+    ] {
+        let group = build_app_window_action_group(&non_unlocked);
+        for mutating_name in [
+            format_app_menu_import_action_name(),
+            format_app_menu_export_action_name(),
+            format_app_menu_passphrase_action_name(),
+            format_app_menu_preferences_action_name(),
+            format_app_add_button_action_name(),
+        ] {
+            let action = group
+                .lookup_action(mutating_name)
+                .and_then(|a| a.downcast::<libadwaita::gio::SimpleAction>().ok())
+                .expect("mutating action registered");
+            assert!(
+                !action.is_enabled(),
+                "build_app_window_action_group must disable mutating action {mutating_name:?} outside Unlocked state; got enabled for {non_unlocked:?}",
+            );
+        }
+        for always_enabled in [
+            format_app_menu_about_action_name(),
+            format_app_menu_quit_action_name(),
+        ] {
+            let action = group
+                .lookup_action(always_enabled)
+                .and_then(|a| a.downcast::<libadwaita::gio::SimpleAction>().ok())
+                .expect("always-enabled action registered");
+            assert!(
+                action.is_enabled(),
+                "build_app_window_action_group must keep action {always_enabled:?} enabled in {non_unlocked:?}",
+            );
+        }
+    }
+}
+
+#[test]
 fn apply_app_primary_menu_sensitivities_updates_existing_group_for_a_new_state() {
     // Per §"libadwaita usage" and §"Component tree": when
     // `AppModel` transitions between states (e.g. Unlocked →
