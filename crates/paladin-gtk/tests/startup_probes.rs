@@ -17032,6 +17032,119 @@ fn format_app_about_dialog_translator_credits_does_not_contain_a_form_feed_byte(
 }
 
 #[test]
+fn format_app_about_dialog_translator_credits_does_not_contain_a_backspace_byte() {
+    // Defense-in-depth mirror of the just-added
+    // `_release_notes_does_not_contain_a_backspace_byte`
+    // companion on the translator-credits side, extending the
+    // translator_credits byte-cleanliness contract past the
+    // just-completed `{null / horizontal-tab / carriage-return /
+    // vertical-tab / form-feed}` quintuple to the backspace byte
+    // `\x08` (0x08), which sits one step below HT (0x09) in the
+    // ASCII C0 block and is the first non-whitespace-classified
+    // C0 byte in the cycle: unlike FF / HT / CR / LF / VT,
+    // `\x08` is NOT matched by `char::is_whitespace()` (Unicode
+    // treats BS as a control byte, not whitespace), so any
+    // future surrounding-whitespace boundary guard on
+    // translator-credits entries would NOT reject a leading or
+    // trailing `\x08` — making backspace strictly more dangerous
+    // than form-feed here, because the form-feed sibling
+    // documented `\x0C` as "technically whitespace under
+    // `char::is_whitespace()` but has no tab-stop semantics",
+    // whereas `\x08` is not classified as whitespace at all.
+    //
+    // The libadwaita translator-credits convention permits
+    // embedded `\n` line breaks between translator entries (the
+    // `_is_single_line_when_non_empty` companion only asserts
+    // the empty-string case, so it does not gate embedded
+    // newlines once a translation lands), so the helper is one
+    // of only three about-dialog helpers (alongside
+    // `format_app_about_dialog_debug_info` and
+    // `format_app_about_dialog_release_notes`) where embedded
+    // line breaks are legitimately expected. That makes `\x08`
+    // (0x08 BACKSPACE) a distinct regression surface: it is NOT
+    // covered by `_has_no_surrounding_whitespace_when_non_empty`
+    // (`\x08` is not whitespace under `char::is_whitespace()`,
+    // so the boundary trim guard rejects neither leading nor
+    // trailing `\x08`), it is NOT covered by any per-entry
+    // single-line check (the helper itself is explicitly multi-
+    // line per libadwaita convention), it slips past
+    // `_does_not_contain_a_null_byte` (`\x08` is not `\0`), it
+    // slips past `_does_not_contain_a_horizontal_tab_byte`
+    // (`\x08` is not `\t`), it slips past
+    // `_does_not_contain_a_carriage_return_byte` (`\x08` is not
+    // `\r`), it slips past `_does_not_contain_a_vertical_tab_byte`
+    // (`\x08` is not `\x0B`), and it slips past
+    // `_does_not_contain_a_form_feed_byte` (`\x08` is not
+    // `\x0C`). None of the existing companions name the `\x08`
+    // byte directly on this helper.
+    //
+    // A regression that landed
+    // `"name1\x08<email1>\nname2\x08<email2>"` (backspace-
+    // separated `<name>\x08<email>` rows lifted from a `script(1)`
+    // typescript capturing raw `\x08` edit-stream bytes between
+    // attribution rows, an `xgettext` export that preserved BS-
+    // bearing values, a `concat!(_, "\x08", _)` form mirroring
+    // an interactively-edited attribution block, or a hand-
+    // edited helper that pasted from a terminal session
+    // recording) would mis-render in multiple downstream
+    // surfaces: (1) libadwaita's credits-page parser splits the
+    // translator-credits string on `\n` (LF) per the documented
+    // convention, leaving the embedded `\x08` bytes inside each
+    // parsed entry untouched; the GLib-backed Pango render path
+    // treats `\x08` as a literal control glyph (a hollow box or
+    // tofu-like placeholder) since `\x08` is not classified as
+    // whitespace under any permissive whitespace mode, breaking
+    // the tidy two-column `<name> <email>` attribution layout;
+    // (2) any localization tooling that round-trips the
+    // translator-credits string back through `xgettext` would
+    // propagate the stray `\x08` into every consumer of the .po
+    // / .mo file, and a TTY-streamed po-file dump (CI translator-
+    // credits validation piped to `less`, an `msgmerge`
+    // diagnostic rendered into a terminal logger) would
+    // terminal-erase the preceding glyph and let the rendered
+    // attribution diverge from the bytes on disk — a log-
+    // injection / display-spoofing primitive across the
+    // attribution surface; (3) screen readers that announce the
+    // credits-page contents read the `\x08` as a literal control
+    // character or — on some implementations — as a delete-
+    // previous announcement, breaking the accessibility-tree
+    // announcement at every attribution-row column boundary.
+    //
+    // Mirror of the just-added
+    // `_developer_name_does_not_contain_a_backspace_byte`,
+    // `_copyright_does_not_contain_a_backspace_byte`,
+    // `_comments_does_not_contain_a_backspace_byte`,
+    // `_developers_entries_do_not_contain_a_backspace_byte`,
+    // `_empty_credits_section_entries_do_not_contain_a_backspace_byte`,
+    // `_release_notes_version_does_not_contain_a_backspace_byte`,
+    // and `_release_notes_does_not_contain_a_backspace_byte`
+    // siblings; together they extend the about-dialog byte-
+    // composition contract from the just-completed `{null /
+    // horizontal-tab / carriage-return / vertical-tab / form-
+    // feed}` quintuple to the backspace regression surface as
+    // well.
+    //
+    // Pinning the no-`\x08` invariant directly here surfaces the
+    // regression with a message naming the offending byte at
+    // build time rather than as a downstream credits-page
+    // rendering bug, a stray `\x08` byte terminal-erasing a .po
+    // round trip, or a screen-reader announcement break.
+    // Current helper returns the empty literal `""` (no `\x08`
+    // byte), so this test passes today and serves as a forcing
+    // function so any future override of the helper — including
+    // the eventual landing of an actual translator-credits
+    // string — stays free of backspace bytes even when embedded
+    // `\n` line breaks are intentionally present.
+    use paladin_gtk::app::model::format_app_about_dialog_translator_credits;
+
+    let translator_credits = format_app_about_dialog_translator_credits();
+    assert!(
+        !translator_credits.contains('\x08'),
+        "AdwAboutDialog translator_credits must not contain the `\\x08` backspace byte (0x08); the libadwaita translator-credits convention splits on `\\n` (LF) only and leaves embedded `\\x08` bytes inside each parsed entry untouched, `\\x08` is NOT classified as whitespace under any permissive whitespace mode (strictly more dangerous than form-feed which `char::is_whitespace()` does match at the boundary) so Pango renders it as a literal control glyph; a stray `\\x08` would render as a hollow box or tofu-like placeholder in the credits-page attribution column, would survive `xgettext` round trips and propagate into every consumer of the .po / .mo file, would enable terminal-erase display-spoofing when the po-file is dumped through a TTY (the rendered attribution diverges from the bytes on disk because `\\x08` erases the preceding glyph), and would break screen-reader announcements at every attribution-row column boundary; got {translator_credits:?}",
+    );
+}
+
+#[test]
 fn format_app_about_dialog_debug_info_does_not_contain_a_form_feed_byte() {
     // Defense-in-depth per-byte sibling extending the debug_info
     // byte-cleanliness contract past the just-completed `{null /
