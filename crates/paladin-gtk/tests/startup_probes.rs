@@ -2155,6 +2155,64 @@ fn apply_app_add_action_sensitivity_updates_existing_action_for_a_new_state() {
 }
 
 #[test]
+fn dispatch_app_window_action_routes_about_to_open_about_dialog() {
+    // Per §"libadwaita usage" and §"Component tree": the
+    // application menu's bare action names (`format_app_menu_*_action_name`)
+    // are routed to `AppMsg` variants through a single dispatch
+    // table so the widget binding's `connect_activate` handlers
+    // share one source of truth. Activating the `"about"` action
+    // dispatches `AppMsg::OpenAboutDialog`, whose handler
+    // presents the `adw::AboutDialog` built by
+    // `build_app_about_dialog`.
+    use paladin_gtk::app::model::{
+        dispatch_app_window_action, format_app_menu_about_action_name, AppMsg,
+    };
+
+    let msg = dispatch_app_window_action(format_app_menu_about_action_name());
+    assert!(
+        matches!(msg, Some(AppMsg::OpenAboutDialog)),
+        "dispatch_app_window_action must route the about bare action name to AppMsg::OpenAboutDialog; got {msg:?}",
+    );
+}
+
+#[test]
+fn dispatch_app_window_action_routes_quit_to_quit() {
+    // Per §"libadwaita usage": the application menu's Quit
+    // entry dispatches `AppMsg::Quit`, whose handler tears
+    // down the GTK main loop through
+    // `relm4::main_application().quit()`. Quit is always
+    // enabled, so this dispatch can arrive in every state.
+    use paladin_gtk::app::model::{
+        dispatch_app_window_action, format_app_menu_quit_action_name, AppMsg,
+    };
+
+    let msg = dispatch_app_window_action(format_app_menu_quit_action_name());
+    assert!(
+        matches!(msg, Some(AppMsg::Quit)),
+        "dispatch_app_window_action must route the quit bare action name to AppMsg::Quit; got {msg:?}",
+    );
+}
+
+#[test]
+fn dispatch_app_window_action_returns_none_for_unknown_action_names() {
+    // Defense-in-depth: a stray activation from a future
+    // refactor that introduced an action name not yet covered
+    // by the dispatch table must be a benign no-op rather than
+    // a panic. The `connect_activate` handler discards the
+    // `None` return without posting an AppMsg.
+    use paladin_gtk::app::model::dispatch_app_window_action;
+
+    assert!(
+        dispatch_app_window_action("unknown_action").is_none(),
+        "dispatch_app_window_action must return None for unknown bare action names",
+    );
+    assert!(
+        dispatch_app_window_action("").is_none(),
+        "dispatch_app_window_action must return None for the empty action name",
+    );
+}
+
+#[test]
 fn app_msg_carries_open_about_dialog_variant() {
     // Per §"libadwaita usage" and §"Component tree": the
     // application menu's "About Paladin" entry mounts an

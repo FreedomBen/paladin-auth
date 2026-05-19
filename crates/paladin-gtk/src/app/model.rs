@@ -528,6 +528,12 @@ impl SimpleComponent for AppModel {
         }
     }
 
+    // `init` walks startup probes, mounts every per-state child
+    // controller, and wires the header-bar action group — the
+    // sequence reads top-to-bottom and each block has a unique
+    // role, so splitting it would obscure the dispatch table
+    // without isolating reusable logic.
+    #[allow(clippy::too_many_lines)]
     fn init(
         init: Self::Init,
         root: Self::Root,
@@ -583,14 +589,19 @@ impl SimpleComponent for AppModel {
         // and the header-bar `+` button's `"app.add"` target
         // all resolve through one `gio::SimpleActionGroup`.
         let action_group = build_app_window_action_group(&state);
-        if let Some(about_action) = action_group
-            .lookup_action(format_app_menu_about_action_name())
-            .and_then(|a| a.downcast::<gtk::gio::SimpleAction>().ok())
-        {
-            let about_sender = sender.clone();
-            about_action.connect_activate(move |_, _| {
-                about_sender.input(AppMsg::OpenAboutDialog);
-            });
+        for name in format_app_primary_menu_action_names() {
+            if let Some(simple) = action_group
+                .lookup_action(name)
+                .and_then(|a| a.downcast::<gtk::gio::SimpleAction>().ok())
+            {
+                let action_sender = sender.clone();
+                let action_name = name;
+                simple.connect_activate(move |_, _| {
+                    if let Some(msg) = dispatch_app_window_action(action_name) {
+                        action_sender.input(msg);
+                    }
+                });
+            }
         }
         wire_app_window_action_group(&root, &action_group);
 
@@ -2552,6 +2563,41 @@ pub fn wire_app_window_action_group(
     group: &gtk::gio::SimpleActionGroup,
 ) {
     window.insert_action_group(format_app_action_group_name(), Some(group));
+}
+
+/// Map a bare application action name to the matching
+/// [`AppMsg`] dispatch variant.
+///
+/// Mirrors [`crate::account_list::dispatch_row_action`] on the
+/// per-row kebab menu side: a single dispatch table routes the
+/// `gio::SimpleAction` activations registered through
+/// [`build_app_window_action_group`] to their matching
+/// [`AppMsg`] variants so the widget binding's
+/// `connect_activate` handlers share one source of truth.
+///
+/// The mapping today covers the always-enabled entries (About,
+/// Quit); the mutating entries (Import, Export, Passphrase,
+/// Preferences) land in follow-up commits alongside their
+/// widget-bearing dialog components. Returns `None` for any
+/// unknown action name so a stray activation from a future
+/// refactor that introduced an action name not yet covered
+/// here stays a benign no-op rather than a panic — the
+/// [`crate::account_list::dispatch_row_action`] sibling uses
+/// the same `Option` shape so both consumers can fold
+/// `if let Some(msg) = …` into their `connect_activate`
+/// closures.
+///
+/// Pure — `name` is borrowed for the duration of the lookup
+/// only.
+#[must_use]
+pub fn dispatch_app_window_action(name: &str) -> Option<AppMsg> {
+    if name == format_app_menu_about_action_name() {
+        return Some(AppMsg::OpenAboutDialog);
+    }
+    if name == format_app_menu_quit_action_name() {
+        return Some(AppMsg::Quit);
+    }
+    None
 }
 
 /// Build the single application-window
