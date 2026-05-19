@@ -18817,3 +18817,109 @@ fn format_app_about_dialog_comments_does_not_contain_a_line_feed_byte() {
         "AdwAboutDialog comments must not contain the `\\n` line-feed byte (0x0A); the current `\\n`-cleanliness is only protected by the `_comments_is_non_empty_single_line_distinct_from_program_name` companion's coupled multi-part single-line check, so a future refactor that intentionally allowed embedded line breaks in the comments slot (a libadwaita upgrade that taught the comments row to wrap across two lines, a multi-paragraph package-description that lifted comments out of the single-line constraint, or a workspace-vendoring split that decoupled comments from the `env!(\"CARGO_PKG_DESCRIPTION\")` single-line source) would naturally relax that companion to drop the `\\n` check entirely; a stray `\\n` would cause Pango to interpret the byte as a hard line break and wrap the comments onto two lines (pushing the dialog header taller than its baseline layout), erode the tidy single-line elevator-pitch summary GNOME HIG calls for, break log-grep queries that search for the description by a single token, break screen-reader comments announcements at the byte boundary, propagate into downstream changelog aggregators and AppStream `<summary>` extractors, and trigger AppStream `<summary>` validation rejection at packaging time; got {comments:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_developers_entries_do_not_contain_a_line_feed_byte() {
+    // Defense-in-depth per-entry-loop sibling extending the
+    // developers-array byte-cleanliness contract past the just-
+    // completed `{null / horizontal-tab / carriage-return /
+    // vertical-tab / form-feed / backspace}` entry-sextuple to
+    // the line-feed byte `\n` (0x0A), completing the inner C0
+    // control-byte cycle from BS (0x08) through CR (0x0D) for
+    // each entry. The existing
+    // `_is_non_empty_array_of_non_empty_single_line_names`
+    // companion does explicitly assert `!name.contains('\n')` per
+    // entry — so each entry's `\n`-cleanliness is currently
+    // protected *directly* by that one specific companion.
+    //
+    // But that direct coverage is *coupled* to the per-entry
+    // single-line-name invariant: a future refactor that
+    // intentionally allowed embedded `\n` line breaks in
+    // contributor entries (a multi-line attribution that listed a
+    // contributor's role beneath their name in the same array
+    // entry, a libadwaita upgrade that taught the credits-page
+    // contributor row to wrap across two lines, or a workspace-
+    // vendoring split that lifted contributor names out of the
+    // single-line constraint) would naturally relax that
+    // companion to drop the `\n` check entirely — at which point
+    // each entry's no-`\n` invariant would silently regress to
+    // "allowed" without any independent byte-cleanliness pin
+    // keeping the byte forbidden per entry. Mirror of the
+    // `_developers_entries_do_not_contain_a_carriage_return_byte`
+    // sibling's same decoupling rationale on the CR side, which
+    // pins `\r` independently of the per-entry single-line check.
+    //
+    // None of the remaining developers companions name the `\n`
+    // byte directly per entry:
+    //   - `_entries_are_distinct` / `_does_not_contain_developer_name`
+    //     / `_does_not_contain_app_id` /
+    //     `_does_not_contain_program_name` / `_lists_benjamin_porter`
+    //     guard against content-shape regressions but say nothing
+    //     about embedded `\n` bytes;
+    //   - the surrounding-whitespace boundary guards inside
+    //     `_is_non_empty_array_of_non_empty_single_line_names`
+    //     use `char::is_whitespace()`, which under Rust's Unicode
+    //     definition returns *true* for U+000A LF, so they DO
+    //     reject a leading or trailing `\n` per entry — but a
+    //     mid-string `\n` (the more dangerous case for the
+    //     credits-page row layout) slips past those guards;
+    //   - `_entries_do_not_contain_a_null_byte` /
+    //     `_entries_do_not_contain_a_horizontal_tab_byte` /
+    //     `_entries_do_not_contain_a_carriage_return_byte` /
+    //     `_entries_do_not_contain_a_vertical_tab_byte` /
+    //     `_entries_do_not_contain_a_form_feed_byte` /
+    //     `_entries_do_not_contain_a_backspace_byte` siblings
+    //     each name a different byte specifically.
+    //
+    // A regression that landed `["Benjamin\nPorter"]` (an `\n`
+    // byte from a `pandoc`-generated CONTRIBUTORS dump that
+    // preserved a hard line break between the contributor's
+    // first and last name, a `concat!("Benjamin", "\n",
+    // "Porter")` form mirroring a multi-line contributor cell,
+    // or a hand-edited helper that pasted from a multi-line
+    // markdown contributor list preserving the line breaks)
+    // would mis-render in multiple downstream surfaces: (1) the
+    // GLib-backed `AdwAboutDialog::set_developers` setter hands
+    // the array to GTK and Pango renders each entry as a
+    // credits-page row — a stray `\n` byte in the middle of a
+    // contributor name would cause Pango to interpret the byte
+    // as a hard line break and wrap the contributor name onto
+    // two lines, pushing the credits row taller than its
+    // baseline layout and visually misaligning the credits-page
+    // column; (2) any tooling that scrapes the credits-page
+    // contributor list (release-note generators, contributor-
+    // attribution crawlers, GNOME `gnome-software` credit
+    // aggregators) would propagate the stray `\n` byte into the
+    // consumer's stream and trigger the same line-break
+    // rendering bug across every downstream surface, with the
+    // additional risk that a naive aggregator splitting input
+    // on `\n` would interpret the contributor as two separate
+    // entries; (3) screen readers that announce the credits-page
+    // contributor names treat the `\n` as a paragraph break and
+    // pause mid-name, breaking the contributor-name
+    // accessibility-tree announcement at the byte boundary; (4)
+    // log-grep queries searching for a contributor name by the
+    // prefix would capture only the first line and miss the
+    // trailing surname token.
+    //
+    // Pinning the no-`\n` invariant across every contributor
+    // entry in a single per-entry loop surfaces the regression
+    // with a message naming both the offending byte and the
+    // affected entry index at build time rather than via a
+    // future per-entry single-line decoupling that silently
+    // dropped the `\n` guard. Current helper returns the literal
+    // `["Benjamin Porter"]` (no `\n` byte), so this test passes
+    // today and serves as a forcing function so any future
+    // override of the helper — or any future contributor
+    // addition — stays free of line-feed bytes even when the
+    // per-entry single-line companion is intentionally relaxed.
+    use paladin_gtk::app::model::format_app_about_dialog_developers;
+
+    let developers = format_app_about_dialog_developers();
+    for (idx, entry) in developers.iter().enumerate() {
+        assert!(
+            !entry.contains('\n'),
+            "AdwAboutDialog developers entry at index {idx} must not contain the `\\n` line-feed byte (0x0A); the current `\\n`-cleanliness is only protected by the `_is_non_empty_array_of_non_empty_single_line_names` companion's coupled per-entry single-line check, so a future refactor that intentionally allowed embedded line breaks in contributor entries (a multi-line attribution listing a contributor's role beneath their name, or a libadwaita upgrade that taught the credits-page contributor row to wrap across two lines) would naturally relax that companion to drop the `\\n` check entirely; a stray `\\n` would cause Pango to interpret the byte as a hard line break and wrap the contributor name onto two lines in the credits-page \"Developers\" row, propagate into downstream attribution scrapers and `gnome-software` credit aggregators that might split input on `\\n` and interpret the contributor as two separate entries, break screen-reader contributor-name announcements at the byte boundary, and break log-grep queries for the contributor name prefix; the surrounding-whitespace boundary guards inside the single-line companion do reject a leading or trailing `\\n` (since `char::is_whitespace()` returns true for U+000A LF) but the more dangerous mid-string `\\n` slips past; got {entry:?}",
+        );
+    }
+}
