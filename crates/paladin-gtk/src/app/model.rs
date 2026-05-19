@@ -2490,6 +2490,40 @@ pub fn format_app_about_dialog_release_notes_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
+/// Markup body the application menu's "About Paladin" entry's
+/// `AdwAboutDialog` hands to `set_release_notes` for its
+/// "What's New" section, paired with the version returned by
+/// [`format_app_about_dialog_release_notes_version`].
+///
+/// Returns the empty string for the v0.0.1 / pre-v0.2 workspace
+/// because Paladin has not yet shipped a tagged release.
+/// `AdwAboutDialog` follows the libadwaita convention of
+/// suppressing the "What's New" section when the body is empty,
+/// which is the correct rendering for an app that has no
+/// release-notes copy to surface yet.
+///
+/// Once v0.2 is tagged the body should swap to the matching
+/// release-notes markup (the libadwaita `release-notes` slot
+/// accepts a restricted subset of Pango markup); the assertion
+/// in `tests/startup_probes.rs` will be the canary that flags
+/// the swap so the helper is not silently re-routed without
+/// also updating
+/// [`format_app_about_dialog_release_notes_version`] in
+/// lockstep.
+///
+/// Pinning the markup through a helper keeps the wording in one
+/// place shared by the widget binding and the pure-logic tests.
+/// Sibling of [`format_app_about_dialog_release_notes_version`]
+/// on the release-notes-surface side; together they pin the
+/// "What's New" section's body and the version label against a
+/// single source of truth.
+///
+/// Pure — returns a `'static str` without allocating.
+#[must_use]
+pub fn format_app_about_dialog_release_notes() -> &'static str {
+    ""
+}
+
 /// Plain-text payload the application menu's "About Paladin"
 /// entry's `AdwAboutDialog` hands to `set_debug_info` for its
 /// "Copy debug info" button — the text users paste into bug

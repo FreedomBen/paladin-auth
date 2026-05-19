@@ -2854,6 +2854,59 @@ fn format_app_about_dialog_translator_credits_is_single_line_when_non_empty() {
 }
 
 #[test]
+fn format_app_about_dialog_release_notes_is_empty_until_v0_2_ships() {
+    // Per §"libadwaita usage" and §"About / help": the
+    // `AdwAboutDialog` release-notes slot populates the dialog's
+    // "What's New" section, paired with the
+    // `release-notes-version` label returned by
+    // `format_app_about_dialog_release_notes_version`. Paladin
+    // has not yet shipped a tagged release (the workspace is on
+    // v0.0.1 pre-v0.2), so the body returns the empty literal
+    // until v0.2 lands. `AdwAboutDialog` follows the libadwaita
+    // convention of suppressing the "What's New" section
+    // entirely when the body is empty, which is the correct
+    // rendering for an app that has no release-notes copy to
+    // surface yet. Once v0.2 ships the body should swap to the
+    // matching release-notes markup; this assertion is the
+    // canary that flags the swap so the helper is not silently
+    // re-routed without also bumping
+    // `format_app_about_dialog_release_notes_version` in
+    // lockstep.
+    use paladin_gtk::app::model::format_app_about_dialog_release_notes;
+
+    assert_eq!(
+        format_app_about_dialog_release_notes(),
+        "",
+        "AdwAboutDialog release-notes must be empty until v0.2 ships so the What's New section is suppressed",
+    );
+}
+
+#[test]
+fn format_app_about_dialog_release_notes_must_be_paired_with_a_non_empty_version_when_non_empty() {
+    // Defense-in-depth: once the release-notes body is wired to
+    // a non-empty markup string, it must be paired with a
+    // matching non-empty
+    // `format_app_about_dialog_release_notes_version` so the
+    // "What's New" section header has a version label to render
+    // beside the body. The libadwaita `release-notes-version`
+    // slot is independent of the dialog's primary `version`
+    // label and would be displayed as an empty string if the
+    // helper returned an empty value alongside non-empty
+    // release-notes markup. Pinning the invariant here keeps
+    // the two helpers swap-aligned across the v0.2 cutover.
+    use paladin_gtk::app::model::{
+        format_app_about_dialog_release_notes, format_app_about_dialog_release_notes_version,
+    };
+
+    if !format_app_about_dialog_release_notes().is_empty() {
+        assert!(
+            !format_app_about_dialog_release_notes_version().is_empty(),
+            "AdwAboutDialog release-notes body is non-empty so the release-notes-version label must also be non-empty for the What's New section header",
+        );
+    }
+}
+
+#[test]
 fn format_app_about_dialog_release_notes_version_matches_about_dialog_version() {
     // Per §"libadwaita usage" and §"About / help": the
     // `AdwAboutDialog` release-notes-version slot scopes the
