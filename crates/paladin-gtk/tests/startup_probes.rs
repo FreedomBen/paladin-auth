@@ -8019,3 +8019,87 @@ fn format_app_action_group_name_is_ascii_lowercase_only() {
         );
     }
 }
+
+#[test]
+fn format_app_header_bar_button_tooltips_are_ascii_only() {
+    // Cross-button defense-in-depth sibling looping over the
+    // three icon-only header-bar button tooltip helpers
+    // (`format_app_add_button_tooltip`,
+    // `format_app_search_button_tooltip`,
+    // `format_app_menu_button_tooltip`) and pinning each value
+    // as ASCII characters only.
+    //
+    // Sibling of the per-button `_returns_X` exact-value pins
+    // (`format_app_add_button_tooltip_returns_add_account`, …)
+    // and the per-button `_is_non_empty` shape pins
+    // (`format_app_add_button_tooltip_is_non_empty`, …) plus
+    // the cross-button
+    // `format_app_header_bar_button_tooltips_are_distinct`
+    // (pairwise-distinctness pin),
+    // `format_app_header_bar_button_tooltips_are_single_line_without_surrounding_whitespace`
+    // (cross-button shape pin on single-line + no padding).
+    // Those companions catch the wrong-value, empty,
+    // duplicate-tooltip, multi-line, and
+    // surrounding-whitespace regressions but leave the
+    // Unicode-lookalike / mojibake-byte edge case ungated.
+    //
+    // The `gtk::Button::set_tooltip_text` slot is the
+    // screen-reader-readable label for the icon-only
+    // header-bar buttons (Add / search / menu), since the
+    // button has no visible text label. A regression that
+    // swapped a Latin letter for a visually-similar Unicode
+    // lookalike — e.g. `"Аdd account"` where the leading `A`
+    // is Cyrillic U+0410 — would slip past the
+    // `_returns_add_account` exact-value pin (only catches
+    // the case where the canonical literal is similarly
+    // corrupted in a lookalike-in-lookalike refactor) and
+    // every shape companion (still non-empty, still
+    // single-line, still distinct, still trim-clean), and
+    // would propagate verbatim to the AT-SPI accessibility
+    // bus where screen readers like Orca read the byte
+    // sequence aloud — producing a tooltip whose ASCII
+    // pronunciation might match the canonical literal but
+    // whose byte sequence does not, breaking any keyboard
+    // navigation tooling that match-keys off the tooltip
+    // string. Likewise a mojibake byte pattern (e.g. an
+    // accidentally double-UTF-8-encoded sequence) would
+    // render as Unicode replacement characters or as the
+    // tofu-box placeholder on systems with limited Unicode
+    // font fallback.
+    //
+    // The current tooltip literals ("Add account",
+    // "Search accounts", "Main menu") are pure ASCII, so
+    // this test passes today and serves as a forcing
+    // function so any future tooltip refactor stays
+    // ASCII-compatible for both AT-SPI screen-reader
+    // pronunciation and font-fallback stability on
+    // limited-Unicode systems. Mirror of the
+    // `format_app_about_dialog_url_helpers_are_ascii_only`
+    // cross-helper sibling on the AdwAboutDialog footer URL
+    // helpers and the `_program_name_is_ascii_only` /
+    // `_application_icon_name_is_ascii_only` /
+    // `_version_is_ascii_only` siblings on the
+    // AdwAboutDialog header cluster; together they pin the
+    // ASCII-shape contract across every visible / readable /
+    // screen-reader-routed user-surface string against a
+    // single source of truth, closing the Unicode-lookalike
+    // regression surface for the entire AppModel UI.
+    use paladin_gtk::app::model::{
+        format_app_add_button_tooltip, format_app_menu_button_tooltip,
+        format_app_search_button_tooltip,
+    };
+
+    for (label, tooltip) in [
+        ("Add", format_app_add_button_tooltip()),
+        ("search", format_app_search_button_tooltip()),
+        ("menu", format_app_menu_button_tooltip()),
+    ] {
+        for (idx, ch) in tooltip.char_indices() {
+            assert!(
+                ch.is_ascii(),
+                "header-bar {label} button tooltip must use ASCII characters only so the AT-SPI screen-reader pronunciation stays byte-stable (a Unicode lookalike like Cyrillic `А` U+0410 in `\"Аdd account\"` would slip past every exact-value / single-line / distinct companion while breaking any keyboard navigation tooling that match-keys off the tooltip string), and so the tooltip popover renders cleanly on systems with limited Unicode font fallback rather than collapsing the lookalike to the tofu-box placeholder; got non-ASCII char {ch:?} (U+{:04X}) at byte offset {idx} in {tooltip:?}",
+                ch as u32,
+            );
+        }
+    }
+}
