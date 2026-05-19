@@ -24557,3 +24557,141 @@ fn format_app_about_dialog_release_notes_version_does_not_contain_an_end_of_tran
         "AdwAboutDialog release_notes_version must not contain the `\\x04` end-of-transmission byte (0x04); like ENQ, ACK, and BEL, EOT is NOT matched by `char::is_whitespace()` (Unicode returns false for U+0004 EOT), so the `version` helper's transitive `_has_no_embedded_whitespace` guard does NOT catch `\\x04`; every byte of `\\x04`-cleanliness depends solely on the upstream `CARGO_PKG_VERSION` bytes — not screened by Cargo or by any CI gate; a stray `\\x04` would render as a literal control glyph in the dialog's \"What's New in v<release_notes_version>\" section header, prematurely terminate in-flight transmissions if dumped through a serial-bridged TTY treating `\\x04` as an EOT framing byte (truncating the version mid-string), trigger pty-cooked-mode EOF-truncation surprises in tooling capturing the section header through a canonical-mode terminal, could prevent the What's New body from rendering on libadwaita versions that strip control bytes when computing the body-region lookup key, trigger AppStream `appstreamcli validate` rejection at packaging time (the strict SemVer grammar has no `\\x04` production), and break screen-reader section-header announcements at the byte boundary; got {release_notes_version:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_translator_credits_does_not_contain_an_end_of_transmission_byte() {
+    // Defense-in-depth per-byte sibling extending the
+    // translator_credits byte-cleanliness contract past the
+    // just-completed `{null / horizontal-tab / carriage-
+    // return / vertical-tab / form-feed / backspace / line-
+    // feed / bell / acknowledge / enquiry}` decuple to the
+    // end-of-transmission byte `\x04` (0x04), continuing
+    // the non-whitespace-classified C0 control-byte cycle
+    // past ENQ (0x05) for this helper. Like ENQ, ACK, and
+    // BEL, EOT is NOT matched by `char::is_whitespace()`
+    // (Unicode treats EOT as a control byte, not
+    // whitespace), so any future surrounding-whitespace
+    // boundary guard on translator-credits entries would
+    // NOT reject a leading or trailing `\x04` — making
+    // end-of-transmission strictly as dangerous as enquiry,
+    // acknowledge, backspace, and bell here, neither caught
+    // by `char::is_whitespace()`.
+    //
+    // The libadwaita translator-credits convention permits
+    // embedded `\n` line breaks between translator entries
+    // (the `_is_single_line_when_non_empty` companion only
+    // asserts the empty-string case, so it does not gate
+    // embedded newlines once a translation lands), so the
+    // helper is one of only three about-dialog helpers
+    // (alongside `format_app_about_dialog_debug_info` and
+    // `format_app_about_dialog_release_notes`) where
+    // embedded line breaks are legitimately expected. That
+    // makes `\x04` (0x04 EOT) a distinct regression
+    // surface: it is NOT covered by
+    // `_has_no_surrounding_whitespace_when_non_empty`
+    // (`\x04` is not whitespace under
+    // `char::is_whitespace()`, so the boundary trim guard
+    // rejects neither leading nor trailing `\x04`), it is
+    // NOT covered by any per-entry single-line check (the
+    // helper itself is explicitly multi-line per
+    // libadwaita convention), it slips past
+    // `_does_not_contain_a_null_byte` (`\x04` is not `\0`),
+    // it slips past `_does_not_contain_a_horizontal_tab_byte`
+    // (`\x04` is not `\t`), it slips past
+    // `_does_not_contain_a_carriage_return_byte` (`\x04`
+    // is not `\r`), it slips past
+    // `_does_not_contain_a_vertical_tab_byte` (`\x04` is
+    // not `\x0B`), it slips past
+    // `_does_not_contain_a_form_feed_byte` (`\x04` is not
+    // `\x0C`), it slips past
+    // `_does_not_contain_a_backspace_byte` (`\x04` is not
+    // `\x08`), it slips past
+    // `_does_not_contain_a_line_feed_byte` (`\x04` is not
+    // `\n`), it slips past `_does_not_contain_a_bell_byte`
+    // (`\x04` is not `\x07`), it slips past
+    // `_does_not_contain_an_acknowledge_byte` (`\x04` is
+    // not `\x06`), and it slips past
+    // `_does_not_contain_an_enquiry_byte` (`\x04` is not
+    // `\x05`). None of the existing companions name the
+    // `\x04` byte directly on this helper.
+    //
+    // A regression that landed
+    // `"name1\x04<email1>\nname2\x04<email2>"` (end-of-
+    // transmission-separated `<name>\x04<email>` rows
+    // lifted from a `script(1)` typescript capturing raw
+    // `\x04` EOT framing bytes from a CI build that bridged
+    // a serial console mid-attribution edit during an
+    // Xmodem-style transfer, an `xgettext` export that
+    // preserved EOT-bearing values, a `concat!(_, "\x04",
+    // _)` form mirroring a stream-segment-delimited
+    // attribution block, or a hand-edited helper that
+    // pasted from a terminal session interfacing with a
+    // protocol bridge preserving EOT framing bytes) would
+    // mis-render in multiple downstream surfaces: (1)
+    // libadwaita's credits-page parser splits the
+    // translator-credits string on `\n` (LF) per the
+    // documented convention, leaving the embedded `\x04`
+    // bytes inside each parsed entry untouched; the GLib-
+    // backed Pango render path treats `\x04` as a literal
+    // control glyph (a hollow box or tofu-like placeholder)
+    // since `\x04` is not classified as whitespace under
+    // any permissive whitespace mode, breaking the tidy
+    // two-column `<name> <email>` attribution layout; (2)
+    // any localization tooling that round-trips the
+    // translator-credits string back through `xgettext`
+    // would propagate the stray `\x04` into every consumer
+    // of the .po / .mo file, and a serial-bridged TTY-
+    // streamed po-file dump may have the `\x04` byte
+    // intercepted by the receiving end as an end-of-
+    // transmission framing indicator and prematurely
+    // terminate the in-flight transmission at the byte
+    // boundary, truncating the attribution mid-string and
+    // confusing protocol-bridging tooling that treats EOT
+    // as a session-terminator; on POSIX terminals
+    // operating in canonical (cooked) mode where `VEOF`
+    // defaults to `^D` / `\x04`, the byte is the EOF
+    // marker that closes the upstream read — surfacing as
+    // a truncated translator-credits string in any tooling
+    // that captures the po-file through a pty in cooked
+    // mode; (3) screen readers that announce the
+    // translator-credits column render the byte as a
+    // literal control character announcement, breaking the
+    // attribution accessibility-tree announcement at the
+    // byte boundary.
+    //
+    // Mirror of the just-added
+    // `_developer_name_does_not_contain_an_end_of_transmission_byte`,
+    // `_copyright_does_not_contain_an_end_of_transmission_byte`,
+    // `_comments_does_not_contain_an_end_of_transmission_byte`,
+    // `_developers_entries_do_not_contain_an_end_of_transmission_byte`,
+    // `_empty_credits_section_entries_do_not_contain_an_end_of_transmission_byte`,
+    // and `_release_notes_version_does_not_contain_an_end_of_transmission_byte`
+    // siblings; together they extend the about-dialog
+    // byte-composition contract from the just-completed
+    // `{null / horizontal-tab / carriage-return / vertical-
+    // tab / form-feed / backspace / line-feed / bell /
+    // acknowledge / enquiry}` decuple to the end-of-
+    // transmission-byte regression surface as well.
+    //
+    // Pinning the no-`\x04` invariant directly here
+    // surfaces the regression with a message naming the
+    // offending byte at build time rather than as a
+    // downstream credits-page rendering bug, a serial-
+    // protocol EOT-frame session-terminator collision
+    // through a .po round trip, a pty-cooked-mode EOF-
+    // truncation surprise, or a screen-reader announcement
+    // break. Current helper returns the empty literal `""`
+    // (no `\x04` byte), so this test passes today and
+    // serves as a forcing function so any future override
+    // of the helper — including the eventual landing of an
+    // actual translator-credits string — stays free of
+    // end-of-transmission bytes even when embedded `\n`
+    // line breaks are intentionally present.
+    use paladin_gtk::app::model::format_app_about_dialog_translator_credits;
+
+    let translator_credits = format_app_about_dialog_translator_credits();
+    assert!(
+        !translator_credits.contains('\x04'),
+        "AdwAboutDialog translator_credits must not contain the `\\x04` end-of-transmission byte (0x04); the libadwaita translator-credits convention splits on `\\n` (LF) only and leaves embedded `\\x04` bytes inside each parsed entry untouched, `\\x04` is NOT classified as whitespace under any permissive whitespace mode (strictly as dangerous as enquiry, acknowledge, backspace, and bell, neither caught by `char::is_whitespace()`) so Pango renders it as a literal control glyph; a stray `\\x04` would render as a hollow box or tofu-like placeholder in the credits-page attribution column, would survive `xgettext` round trips and propagate into every consumer of the .po / .mo file, would prematurely terminate in-flight transmissions if dumped through a serial-bridged TTY treating `\\x04` as an EOT framing byte (truncating the attribution mid-string), would trigger pty-cooked-mode EOF-truncation surprises in tooling capturing the po-file through a canonical-mode terminal, and would break screen-reader announcements at every attribution-row column boundary; got {translator_credits:?}",
+    );
+}
