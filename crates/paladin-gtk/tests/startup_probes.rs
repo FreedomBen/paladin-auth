@@ -5068,8 +5068,7 @@ fn format_app_primary_menu_entries_targets_dispatch_to_app_msg() {
     // in the dispatch table fails with a message that names the
     // visible menu label, not the bare action name.
     use paladin_gtk::app::model::{
-        dispatch_app_window_action, format_app_action_group_name,
-        format_app_primary_menu_entries,
+        dispatch_app_window_action, format_app_action_group_name, format_app_primary_menu_entries,
     };
 
     let entries = format_app_primary_menu_entries();
@@ -5157,7 +5156,13 @@ fn format_app_window_title_is_non_empty_single_line_without_state_suffix() {
         !title.contains('\n'),
         "ApplicationWindow title must be a single line so the desktop's window-list renders one entry per window; got {title:?}",
     );
-    for forbidden in ["Locked", "Unlocked", "Missing", "UnlockedBusy", "StartupError"] {
+    for forbidden in [
+        "Locked",
+        "Unlocked",
+        "Missing",
+        "UnlockedBusy",
+        "StartupError",
+    ] {
         assert!(
             !title.contains(forbidden),
             "ApplicationWindow title must not embed vault-state name {forbidden:?}; the per-state UI surfaces inside the window already convey the state, and leaking it into the window-list would advertise the live vault status across application switches; got {title:?}",
@@ -5677,5 +5682,41 @@ fn format_app_window_default_size_fits_typical_desktop_display() {
     assert!(
         height <= FHD_HEIGHT_CEILING,
         "ApplicationWindow default height {height} must fit within the typical 1920x1080 FHD desktop display (ceiling {FHD_HEIGHT_CEILING}px) so the initial window does not overflow a standard 1080p screen before the user has a chance to resize; a regression that appended a trailing zero to the pinned 480px height would fail the test",
+    );
+}
+
+#[test]
+fn format_app_about_dialog_debug_info_starts_with_program_name() {
+    // Cross-consistency sibling of
+    // `format_app_about_dialog_debug_info_carries_program_name_version_and_app_id`
+    // which only requires `.contains()` matches anywhere in the
+    // payload. That looser companion would still pass for a
+    // future refactor that moved the program name to the end of
+    // the payload — e.g. `"App ID: org.tamx.Paladin.Gui\nPaladin 0.1.0"` —
+    // even though the bug-report payload that
+    // `AdwAboutDialog::set_debug_info` hands to the "Copy debug
+    // info" / "Save debug info" buttons should lead with the
+    // human-readable program-name + version so the app
+    // identification is obvious at first glance before the
+    // reverse-DNS app ID line. This positional pin catches that
+    // drift at the pinned layer rather than only being noticed
+    // when a maintainer reading a bug-report paste has to scroll
+    // past the machine-oriented app ID to find which app the
+    // report is about.
+    //
+    // Anchoring the program name at the very start (no leading
+    // whitespace or preamble) also pairs with the
+    // `_is_non_empty_text_with_no_trailing_whitespace` companion
+    // which forbids leading whitespace; together they pin the
+    // payload to begin with the program-name display string.
+    use paladin_gtk::app::model::{
+        format_app_about_dialog_debug_info, format_app_about_dialog_program_name,
+    };
+
+    let debug = format_app_about_dialog_debug_info();
+    let program_name = format_app_about_dialog_program_name();
+    assert!(
+        debug.starts_with(program_name),
+        "AdwAboutDialog debug-info must start with the program-name display string {program_name:?} so the bug-report payload's first content is the human-readable app identification before the reverse-DNS app ID line; got {debug:?}",
     );
 }
