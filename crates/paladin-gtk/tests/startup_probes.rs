@@ -15214,3 +15214,115 @@ fn format_app_about_dialog_application_icon_name_does_not_contain_a_vertical_tab
         "AdwAboutDialog application_icon_name must not contain the `\\x0B` vertical-tab byte (0x0B); the current `\\x0B`-cleanliness is only protected transitively by `_has_no_embedded_whitespace`'s broad `char::is_whitespace()` check (which matches U+000B VT), so a future refactor that relaxed the no-whitespace invariant might silently drop the `\\x0B` guard; a stray `\\x0B` would silently miss the `gtk::IconTheme` cache lookup (masking the bug as a placeholder-icon fallback), surface as a malformed window-icon-name property in the X11 / Wayland protocol exchange via `set_icon_name`, and propagate into the AppStream metainfo `<id>` field where Flathub's strict reverse-DNS linter would fail the next package submission; got {application_icon_name:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_debug_info_filename_does_not_contain_a_vertical_tab_byte() {
+    // Defense-in-depth per-byte sibling extending the debug-
+    // info-filename byte coverage past the just-completed
+    // `{null / horizontal-tab / carriage-return}` triplet to
+    // the next C0 control byte. The vertical-tab byte `\x0B`
+    // (0x0B) sits one step above HT (0x09) and one step below
+    // CR (0x0D) in the ASCII C0 block; like its siblings it is
+    // a non-printable control byte with no legitimate use
+    // inside a filesystem filename string.
+    //
+    // The existing `_debug_info_filename_has_no_embedded_whitespace`
+    // companion uses `char::is_whitespace()`, which returns true
+    // for U+000B VT — so the debug-info-filename helper's
+    // `\x0B`-cleanliness is currently protected *transitively*
+    // by that one specific companion's broad whitespace check.
+    //
+    // But that transitive protection is *bundled* with the
+    // no-whitespace invariant as a whole: a future refactor that
+    // intentionally allowed a localized filename with a single
+    // embedded space (a non-trivial scenario per freedesktop.org
+    // file-naming convention but feasible if a localized "Debug
+    // information.txt" filename were ever rendered to non-ASCII
+    // locales) would naturally relax the
+    // `_has_no_embedded_whitespace` companion — and the human
+    // author of that refactor might reasonably restructure the
+    // check to only reject specific control bytes (newline, tab)
+    // without separately calling out `\x0B` on the assumption
+    // that "ASCII whitespace is now allowed". That assumption is
+    // wrong: `\x0B` is a control byte without tab-stop semantics,
+    // not a layout-friendly whitespace character, and a save-
+    // to-disk filename with `\x0B` lands in undefined territory
+    // across POSIX filesystem implementations (most kernel ports
+    // of `open(2)` accept VT in filenames but shell-tooling
+    // pipelines and bug-tracker attachment URL renderers treat
+    // the byte as either an un-printable control glyph or a
+    // dropped byte).
+    //
+    // None of the existing companions name the `\x0B` byte
+    // directly on this helper:
+    //   - `_is_ascii_only` pins each byte as ASCII — `\x0B` is
+    //     ASCII so it slips past;
+    //   - `_returns_paladin_debug_info_txt` exact-value pin only
+    //     holds while the literal is unchanged;
+    //   - `_does_not_contain_path_separators` /
+    //     `_does_not_start_with_a_dot` only constrain the path-
+    //     safety and leading-byte boundaries;
+    //   - `_contains_exactly_one_period` /
+    //     `_extension_is_lowercase_txt` only check dot-count and
+    //     suffix;
+    //   - `_is_non_empty_single_line_with_txt_extension` only
+    //     checks non-empty + single-line + `.txt` suffix shape
+    //     (the single-line check uses `str::lines().count() == 1`
+    //     which does not split on `\x0B`, so a `\x0B`-bearing
+    //     filename like `"pala\x0Bdin-debug-info.txt"` slips
+    //     past this companion entirely);
+    //   - `_does_not_contain_a_null_byte` /
+    //     `_does_not_contain_a_horizontal_tab_byte` /
+    //     `_does_not_contain_a_carriage_return_byte` each name
+    //     a different byte specifically.
+    //
+    // A regression that landed `"pala\x0Bdin-debug-info.txt"`
+    // (vertical-tab byte lifted from a legacy filename registry
+    // authored on a line-printer terminal that used `\x0B` as a
+    // column separator inside a single-token filename, a
+    // `concat!(_, "\x0B", _)` form, or a hand-edited helper
+    // override that lifted the filename literal from an EBCDIC-
+    // to-ASCII translation preserving the original VT byte)
+    // would mis-render in three downstream surfaces: (1) the
+    // GLib-backed `AdwAboutDialog::set_debug_info_filename`
+    // setter routes the value into the dialog's "Save Debug
+    // Information…" file-chooser pre-fill — a `\x0B`-bearing
+    // filename mis-renders in the GtkFileDialog's filename
+    // entry as a literal control glyph (a hollow box or tofu-
+    // like placeholder) since `\x0B` has no tab-stop semantics,
+    // and may also surface in the suggested-filename display in
+    // the file chooser's title bar; (2) when the user saves the
+    // debug-info payload to disk, the filesystem `open(2)` call
+    // routes the `\x0B`-bearing filename through the kernel VFS
+    // layer — most POSIX-conformant kernels (Linux, macOS, BSDs)
+    // accept `\x0B` in filenames but many shell-tooling
+    // pipelines (`ls`, `find`, `tar`) assume printable-only
+    // filenames and either silently strip the `\x0B` or display
+    // the file as an un-readable entry; (3) the saved file's
+    // filename surfaces in any bug-tracker attachment URL or
+    // chat-attachment column where the `\x0B` byte mis-renders
+    // as a literal control glyph, confusing the maintainer's
+    // triage workflow.
+    //
+    // Pinning the no-`\x0B` invariant directly on this helper
+    // surfaces the regression with a message naming the
+    // offending byte at build time rather than as a downstream
+    // file-chooser mis-render, a shell-tooling visibility
+    // break, or a chat-attachment column-render artifact.
+    // Current helper returns the literal `"paladin-debug-info.txt"`
+    // (no `\x0B` byte), so this test passes today and serves as
+    // a forcing function so any future override of the helper —
+    // including the eventual landing of a localized filename —
+    // stays free of vertical tabs. Continues the debug-info-
+    // filename C0 control-byte cycle past the just-completed
+    // `{null / horizontal-tab / carriage-return}` triplet so
+    // the helper's byte-composition contract pins each forbidden
+    // control byte against a single source of truth.
+    use paladin_gtk::app::model::format_app_about_dialog_debug_info_filename;
+
+    let debug_info_filename = format_app_about_dialog_debug_info_filename();
+    assert!(
+        !debug_info_filename.contains('\x0B'),
+        "AdwAboutDialog debug_info_filename must not contain the `\\x0B` vertical-tab byte (0x0B); the current `\\x0B`-cleanliness is only protected transitively by `_has_no_embedded_whitespace`'s broad `char::is_whitespace()` check (which matches U+000B VT), so a future refactor that relaxed the no-whitespace invariant to allow a localized filename like `\"Debug information.txt\"` might silently drop the `\\x0B` guard alongside the space relaxation; a stray `\\x0B` would mis-render as a literal control glyph in the GtkFileDialog filename entry pre-fill, surface as an un-listable file under shell-tooling pipelines (`ls`, `find`, `tar`) that strip non-printable bytes, and confuse maintainer triage with control-glyph artifacts in chat-attachment column renders; got {debug_info_filename:?}",
+    );
+}
