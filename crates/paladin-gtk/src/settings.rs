@@ -1063,6 +1063,42 @@ pub fn format_settings_dialog_search_enabled() -> bool {
     false
 }
 
+/// Fixed `bool` the widget passes to `AdwToast::set_use_markup` for
+/// the [`format_settings_dialog_saved_toast`] body per
+/// `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
+/// "Toast surface" and §"Component tree" > `SettingsComponent`.
+///
+/// Returns `false` — `AdwToast::use-markup` defaults to `TRUE`
+/// (the inherited `title` property is markup-aware), so any `&` /
+/// `<` / `>` byte in the body would otherwise get parsed as Pango
+/// markup. The [`format_settings_dialog_saved_toast`] body is a
+/// static `&'static str` with no entity-quoted glyphs today, but
+/// the helper's docstring leaves the door open to future
+/// localisation; once translators get hold of the string, an `&`
+/// in a translation would silently truncate the toast or surface a
+/// console warning. Pinning the flag to `false` keeps the body as
+/// literal text regardless of future wording, matching every other
+/// plain-text surface in the dialog (the inline subtitle text
+/// helpers return raw [`SaveOutcome`] error / warning `Display`
+/// bodies, not markup).
+///
+/// Pinning the literal through this helper keeps the use-markup
+/// flag in one place shared by the widget binding
+/// (`AdwToast::set_use_markup(
+/// format_settings_dialog_saved_toast_use_markup())`) and the
+/// pure-logic tests in `tests/settings_logic.rs`; the widget layer
+/// never duplicates the literal. Sibling of
+/// [`format_settings_dialog_saved_toast`] (the body text) and
+/// [`format_settings_dialog_saved_toast_timeout`] (the auto-dismiss
+/// window); together they pin every value the success-toast
+/// constructor / setter chain receives.
+///
+/// Pure — returns a `bool` without allocating.
+#[must_use]
+pub fn format_settings_dialog_saved_toast_use_markup() -> bool {
+    false
+}
+
 /// Fixed `u32` count of seconds the
 /// [`format_settings_dialog_saved_toast`] body stays visible on the
 /// `AdwToastOverlay` per `IMPLEMENTATION_PLAN_04_GTK.md`

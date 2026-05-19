@@ -1821,6 +1821,44 @@ fn format_settings_dialog_search_enabled_returns_false() {
 }
 
 #[test]
+fn format_settings_dialog_saved_toast_use_markup_returns_false() {
+    // `adw::Toast::use-markup` toggles whether the body string is
+    // interpreted as Pango markup. The default is `TRUE` —
+    // `AdwToast::new(text)` initialises the inherited `title`
+    // property with `use_markup: true`, so any `&` / `<` / `>` byte
+    // in `text` gets parsed as markup unless the caller explicitly
+    // sets the flag to `false`. The
+    // `format_settings_dialog_saved_toast` body ("Settings saved")
+    // is a static `&'static str` with no entity-quoted glyphs today,
+    // but the helper's docstring leaves the door open to future
+    // localisation — once translators get hold of the string, an
+    // `&` in a translation ("Indstillinger gemt &c.") would silently
+    // truncate the toast or surface a console warning. Pinning the
+    // flag to `false` keeps the body as literal text regardless of
+    // future wording, matching every other plain-text surface in
+    // the dialog (the inline subtitle text helpers return raw
+    // [`SaveOutcome`] error / warning `Display` bodies, not markup).
+    //
+    // Pinning the literal through this helper keeps the use-markup
+    // flag in one place shared by the widget binding
+    // (`AdwToast::set_use_markup(
+    // format_settings_dialog_saved_toast_use_markup())`) and the
+    // pure-logic tests; the widget layer never duplicates the
+    // literal. Sibling of `format_settings_dialog_saved_toast` (the
+    // body text) and `format_settings_dialog_saved_toast_timeout`
+    // (the auto-dismiss window); together they pin every value the
+    // success-toast constructor / setter chain receives.
+    //
+    // Pure — returns a `bool` without allocating.
+    use paladin_gtk::settings::format_settings_dialog_saved_toast_use_markup;
+
+    assert!(
+        !format_settings_dialog_saved_toast_use_markup(),
+        "toast body is plain text, never Pango markup",
+    );
+}
+
+#[test]
 fn format_settings_dialog_saved_toast_timeout_returns_five_seconds() {
     // `adw::Toast::set_timeout` takes a `u32` count of seconds the
     // toast remains visible (0 means the toast never auto-dismisses,
