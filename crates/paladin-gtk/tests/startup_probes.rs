@@ -19658,3 +19658,123 @@ fn format_app_about_dialog_debug_info_filename_does_not_contain_a_line_feed_byte
         "AdwAboutDialog debug_info_filename must not contain the `\\n` line-feed byte (0x0A); the current `\\n`-cleanliness is protected by two coupled companions (`_is_non_empty_single_line_with_txt_extension` which explicitly checks `\\n`, and `_has_no_embedded_whitespace` which transitively catches `\\n` via `char::is_whitespace()`), so a future refactor that relaxed both invariants together (a workspace-vendoring split that lifted the filename out of the strict single-line constraint, or a `concat!` injection that introduced a line break between filename segments) would naturally drop both `\\n` guards; a stray `\\n` would either be rejected by the file-chooser at the operating-system layer (most file systems reject `\\n` in filenames) or saved with an embedded line break in the filename, break the file-chooser dialog-title layout, break screen-reader file-chooser announcements at the byte boundary, and propagate into downstream bug-report parsers and telemetry collectors that expect a single-line filename token; got {filename:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_url_helpers_do_not_contain_a_line_feed_byte() {
+    // Cross-helper defense-in-depth sibling looping over the
+    // three `AdwAboutDialog` footer URL helpers
+    // (`format_app_about_dialog_website`,
+    // `format_app_about_dialog_issue_url`,
+    // `format_app_about_dialog_support_url`) and pinning each
+    // value as free of the line-feed byte `\n` (0x0A). Closes the
+    // inner C0 control-byte cycle from BS (0x08) through CR
+    // (0x0D) for this cross-helper aggregate test by mirroring
+    // the `_url_helpers_do_not_contain_a_null_byte`,
+    // `_url_helpers_do_not_contain_a_carriage_return_byte`,
+    // `_url_helpers_do_not_contain_a_horizontal_tab_byte`,
+    // `_url_helpers_do_not_contain_a_vertical_tab_byte`,
+    // `_url_helpers_do_not_contain_a_form_feed_byte`, and
+    // `_url_helpers_do_not_contain_a_backspace_byte` siblings.
+    //
+    // The existing `_url_helpers_contain_no_embedded_whitespace`
+    // companion uses `char::is_whitespace()`, which returns
+    // *true* for U+000A LF, so that companion DOES catch a stray
+    // `\n` byte in any of the three URL strings. But that
+    // protection is *coupled* to the no-embedded-whitespace
+    // invariant: a future refactor that relaxed the single-line
+    // URL constraint (a workspace-vendoring split that lifted
+    // URLs out of the RFC 3986 grammar, or a `concat!` injection
+    // between URL segments) would naturally drop the `\n` guard.
+    // Mirror of the `_url_helpers_do_not_contain_a_carriage_return_byte`
+    // sibling's same decoupling rationale on the CR side.
+    //
+    // None of the remaining URL companions name the `\n` byte
+    // directly:
+    //   - `_url_helpers_are_ascii_only` pins each byte as
+    //     ASCII — `\n` is ASCII (0x0A) so it slips past;
+    //   - `_url_helpers_do_not_end_with_a_trailing_slash` /
+    //     `_url_helpers_do_not_contain_a_query_string` /
+    //     `_url_helpers_do_not_contain_a_fragment_anchor` /
+    //     `_url_helpers_do_not_contain_a_userinfo_at_sign` /
+    //     `_url_helpers_do_not_contain_a_backslash` name
+    //     other specific characters — `\n` is none of `/`,
+    //     `?`, `#`, `@`, or `\`;
+    //   - `_url_helpers_do_not_contain_a_null_byte` /
+    //     `_url_helpers_do_not_contain_a_horizontal_tab_byte` /
+    //     `_url_helpers_do_not_contain_a_carriage_return_byte` /
+    //     `_url_helpers_do_not_contain_a_vertical_tab_byte` /
+    //     `_url_helpers_do_not_contain_a_form_feed_byte` /
+    //     `_url_helpers_do_not_contain_a_backspace_byte`
+    //     each name a different byte specifically.
+    //
+    // A regression that landed a `\n`-bearing URL (LF byte from
+    // a `concat!(env!("CARGO_PKG_REPOSITORY"), "\n", "/issues")`
+    // injection mirroring a multi-line repository-URL composition,
+    // a workspace `Cargo.toml` that landed a multi-line
+    // `homepage = """https://...\n..."""` TOML literal, or a
+    // hand-edited helper override that pasted from a text dump
+    // preserving line breaks between URL segments) would mis-
+    // render in multiple downstream surfaces: (1) the GLib-
+    // backed `AdwAboutDialog::add_link` setter routes each URL
+    // into a clickable footer link entry — a `\n` byte would
+    // mis-render the link label as a multi-line entry in the
+    // footer (breaking the tidy single-line link row layout)
+    // and fail or mis-route the click-through to the browser
+    // (most browsers reject `\n`-bearing URLs per WHATWG URL
+    // §4.5 or strip the byte before resolving); (2) `\n` is
+    // never a valid byte inside a URL per RFC 3986 (no URL
+    // grammar production rule allows `\n`), so AppStream URL
+    // validation (`appstreamcli validate`) and Flatpak manifest
+    // validation reject `\n`-bearing URLs at packaging time;
+    // (3) screen readers that announce the dialog footer link
+    // labels treat the `\n` as a paragraph break and pause mid-
+    // URL, breaking the link-label accessibility-tree
+    // announcement at the byte boundary; (4) any downstream
+    // tooling that scrapes the URL labels (link-checker bots,
+    // broken-link auditors) would propagate the stray `\n` byte
+    // into the consumer's stream and trigger the same routing
+    // failure across every downstream surface, with the
+    // additional risk that a naive aggregator splitting input
+    // on `\n` would treat the URL as two separate link entries.
+    //
+    // Pinning the no-`\n` invariant directly here surfaces the
+    // regression with a message naming the offending URL helper
+    // at build time rather than as a downstream user-visible
+    // mis-rendered link label, a confusing browser-level error
+    // on click-through, a packaging-time AppStream / Flatpak
+    // rejection, or a link-checker tooling failure. Mirror of
+    // the `_url_helpers_do_not_end_with_a_trailing_slash`,
+    // `_url_helpers_do_not_contain_a_query_string`,
+    // `_url_helpers_do_not_contain_a_fragment_anchor`,
+    // `_url_helpers_do_not_contain_a_userinfo_at_sign`,
+    // `_url_helpers_do_not_contain_a_backslash`,
+    // `_url_helpers_contain_no_embedded_whitespace`,
+    // `_url_helpers_are_ascii_only`,
+    // `_url_helpers_do_not_contain_a_null_byte`,
+    // `_url_helpers_do_not_contain_a_carriage_return_byte`,
+    // `_url_helpers_do_not_contain_a_horizontal_tab_byte`,
+    // `_url_helpers_do_not_contain_a_vertical_tab_byte`,
+    // `_url_helpers_do_not_contain_a_form_feed_byte`, and
+    // `_url_helpers_do_not_contain_a_backspace_byte` cross-URL
+    // siblings; together they pin the URL byte-composition
+    // contract (no whitespace, ASCII-only, no terminal `/`, no
+    // `\0`, no `\r`, no `\t`, no `\x0B`, no `\x0C`, no `\x08`,
+    // no `\n`, no `?` query, no `#` anchor, no `@` userinfo, no
+    // `\` path-confusion byte) across all three footer link
+    // surfaces against a single source of truth.
+    use paladin_gtk::app::model::{
+        format_app_about_dialog_issue_url, format_app_about_dialog_support_url,
+        format_app_about_dialog_website,
+    };
+
+    for (label, url) in [
+        ("website", format_app_about_dialog_website()),
+        ("issue_url", format_app_about_dialog_issue_url()),
+        ("support_url", format_app_about_dialog_support_url()),
+    ] {
+        assert!(
+            !url.contains('\n'),
+            "AdwAboutDialog {label} must not contain the `\\n` line-feed byte (0x0A); `\\n` is never a valid byte inside a URL per RFC 3986 (no URL grammar production rule allows `\\n`); the current `\\n`-cleanliness is only protected transitively via the `_url_helpers_contain_no_embedded_whitespace` companion (which uses `char::is_whitespace()` and returns true for U+000A LF), so a future refactor that relaxed the no-embedded-whitespace invariant (a workspace-vendoring split or a `concat!` injection between URL segments) would naturally drop the `\\n` guard; a stray `\\n` would mis-render the link label as a multi-line entry in the dialog footer (breaking the tidy single-line link row layout), fail or mis-route the click-through to the browser (most browsers reject `\\n`-bearing URLs per WHATWG URL §4.5 or strip the byte before resolving), trigger AppStream / Flatpak URL validation rejection at packaging time, break screen-reader link-label announcements at the byte boundary, and propagate into downstream link-checker tooling that might split input on `\\n` and treat the URL as two separate link entries; got {url:?}",
+        );
+    }
+}
