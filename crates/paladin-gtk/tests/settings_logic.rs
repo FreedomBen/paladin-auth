@@ -520,6 +520,52 @@ fn apply_save_success_promotes_clipboard_clear_enabled_to_committed() {
     assert!(state.committed().clipboard_clear_enabled());
 }
 
+#[test]
+fn apply_save_success_promotes_auto_lock_enabled_to_committed() {
+    // Mirrors `apply_save_success_promotes_clipboard_clear_enabled_to_committed`
+    // for the second toggle. The two existing success-path tests cover
+    // `AutoLockSecs` (spinner field) and `ClipboardClearEnabled`
+    // (toggle field); without this test the `AutoLockEnabled` toggle
+    // would have no success-path assertion, so a regression that swapped
+    // the `commit_attempted` arm for `AutoLockEnabled` against, say,
+    // `ClipboardClearEnabled` would land undetected. Pairs with
+    // `apply_save_durability_unconfirmed_keeps_auto_lock_enabled_visible_with_warning`
+    // on the field-coverage side so every `SettingsField` variant has
+    // both a success-path and a durability-warning-path assertion.
+    let mut state = SettingsState::new(defaults());
+    let _ = state.toggle_auto_lock_enabled(true);
+
+    let outcome = state.apply_save_result(AcceptedChange::AutoLockEnabled(true), Ok(()));
+    assert!(matches!(outcome, SaveOutcome::Success));
+    assert!(state.committed().auto_lock_enabled());
+}
+
+#[test]
+fn apply_save_success_promotes_clipboard_clear_secs_to_committed() {
+    // Mirrors `apply_save_success_promotes_auto_lock_secs_to_committed`
+    // for the second spinner. The two existing success-path tests cover
+    // `AutoLockSecs` (spinner field) and `ClipboardClearEnabled`
+    // (toggle field); without this test the `ClipboardClearSecs`
+    // spinner would have no success-path assertion, so a regression
+    // that swapped the `commit_attempted` arm for `ClipboardClearSecs`
+    // against, say, `AutoLockSecs` would land undetected. Pairs with
+    // `apply_save_durability_unconfirmed_keeps_clipboard_clear_secs_visible_with_warning`
+    // on the field-coverage side so every `SettingsField` variant has
+    // both a success-path and a durability-warning-path assertion. The
+    // visible-value assertion below also pins the
+    // `visible_clipboard_clear_secs` projection promoting to the
+    // committed value once the pending buffer is consumed by the
+    // resolve_debounce + apply_save_result round trip.
+    let mut state = SettingsState::new(defaults());
+    state.stage_clipboard_clear_secs(60);
+    let _ = state.resolve_debounce();
+
+    let outcome = state.apply_save_result(AcceptedChange::ClipboardClearSecs(60), Ok(()));
+    assert!(matches!(outcome, SaveOutcome::Success));
+    assert_eq!(state.committed().clipboard_clear_secs(), 60);
+    assert_eq!(state.visible_clipboard_clear_secs(), 60);
+}
+
 // ---------------------------------------------------------------------------
 // Apply other typed errors — visible value rolls back, inline error attached
 // ---------------------------------------------------------------------------
