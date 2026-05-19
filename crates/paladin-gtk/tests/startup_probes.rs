@@ -13727,3 +13727,115 @@ fn format_app_about_dialog_debug_info_filename_does_not_contain_a_carriage_retur
         "AdwAboutDialog debug_info_filename must not contain the `\\r` carriage-return byte (0x0D); the current `\\r`-cleanliness is only protected transitively by `_has_no_embedded_whitespace`'s broad `char::is_whitespace()` check, so a future refactor that relaxed the no-whitespace invariant to allow a localized filename like `\"Debug information.txt\"` might silently drop the `\\r` guard alongside the space relaxation; a stray `\\r` would mis-render as a control glyph in the GtkFileDialog filename entry pre-fill, surface as an un-listable file under shell-tooling pipelines (`ls`, `find`, `tar`) that strip non-printable bytes, and confuse maintainer triage with `^M` artifacts in chat-attachment column renders; got {debug_info_filename:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_debug_info_filename_does_not_contain_a_horizontal_tab_byte() {
+    // Defense-in-depth per-byte sibling completing the
+    // debug-info-filename byte triplet (null / carriage-
+    // return / horizontal-tab) alongside the existing
+    // `_debug_info_filename_does_not_contain_a_null_byte`
+    // and just-added
+    // `_debug_info_filename_does_not_contain_a_carriage_return_byte`
+    // companions. The existing
+    // `_debug_info_filename_has_no_embedded_whitespace`
+    // companion uses `char::is_whitespace()`, which returns
+    // true for `\t` — so the debug-info-filename helper's
+    // `\t`-cleanliness is currently protected *transitively*
+    // by that one specific companion's broad whitespace
+    // check.
+    //
+    // But that transitive protection is *bundled* with the
+    // no-whitespace invariant as a whole: a future refactor
+    // that intentionally allowed a localized filename with
+    // a single embedded space (a non-trivial scenario per
+    // freedesktop.org file-naming convention but feasible
+    // if a localized "Debug information.txt" filename were
+    // ever rendered to non-ASCII locales) would naturally
+    // relax the `_has_no_embedded_whitespace` companion —
+    // and the human author of that refactor might
+    // reasonably restructure the check to only reject
+    // specific control bytes (newline, carriage-return)
+    // without separately calling out `\t` on the assumption
+    // that "ASCII whitespace is now allowed". That
+    // assumption is wrong: `\t` is a column-aligning
+    // control byte, not a layout-friendly space, and a
+    // save-to-disk filename with `\t` lands in undefined
+    // territory across POSIX filesystem implementations
+    // (some kernel ports of `open(2)` reject `\t` outright,
+    // some accept it but render the file name as a tab-
+    // expanded column under `ls -l` output that mis-aligns
+    // every following column).
+    //
+    // The `_is_ascii_only` companion does not catch `\t`
+    // (since `\t` is ASCII, 0x09), the
+    // `_returns_paladin_debug_info_txt` exact-value pin only
+    // holds while the literal is unchanged, the
+    // `_does_not_contain_path_separators` /
+    // `_does_not_start_with_a_dot` companions only constrain
+    // the path-safety and leading-byte boundaries, the
+    // `_contains_exactly_one_period` /
+    // `_extension_is_lowercase_txt` companions only check
+    // the dot-count and suffix, the
+    // `_is_non_empty_single_line_with_txt_extension`
+    // companion only checks non-empty + single-line + `.txt`
+    // suffix shape (the single-line check uses
+    // `str::lines().count() == 1` which is indifferent to
+    // mid-string `\t` bytes since `\t` is not a line-
+    // terminator under `str::lines()` semantics), the
+    // `_does_not_contain_a_null_byte` companion only names
+    // `\0` specifically, and the
+    // `_does_not_contain_a_carriage_return_byte` companion
+    // only names `\r` specifically. None of those names `\t`
+    // directly on this helper — only the
+    // `_has_no_embedded_whitespace` companion catches it
+    // transitively, and that coupling is fragile.
+    //
+    // A regression that landed `"paladin\t-debug-info.txt"`
+    // or `"paladin-debug-info.txt\t"` (tab-aligned column
+    // from a `printf "%s\t%s"`-style filename formatter, a
+    // `concat!(_, "\t", _)` form mirroring a TSV-style
+    // filename-table cell, or a hand-edited helper override
+    // that lifted the filename from a tab-indented YAML /
+    // Markdown table row) would mis-render in three
+    // downstream surfaces: (1) the GLib-backed
+    // `AdwAboutDialog::set_debug_info_filename` setter
+    // routes the value into the dialog's "Save Debug
+    // Information…" file-chooser pre-fill — a `\t`-bearing
+    // filename mis-renders in the GtkFileDialog's filename
+    // entry as a wide horizontal gap and may also surface
+    // in the suggested-filename display in the file
+    // chooser's title bar with shell-dependent tab-stop
+    // semantics; (2) when the user saves the debug-info
+    // payload to disk, the filesystem `open(2)` call routes
+    // the `\t`-bearing filename through the kernel VFS
+    // layer — some POSIX-conformant kernels (Linux, macOS,
+    // BSDs) accept `\t` in filenames but `ls -l` output
+    // expands `\t` to the next tab-stop column, mis-
+    // aligning every following column in the directory
+    // listing and breaking any pipeline parsers (`awk`,
+    // `cut`) that assume single-space-separated columns;
+    // (3) the saved file's filename surfaces in any bug-
+    // tracker attachment URL or chat-attachment column
+    // where the `\t` byte mis-renders inconsistently
+    // depending on the receiver's tab-stop settings,
+    // confusing the maintainer's triage workflow.
+    //
+    // Pinning the no-`\t` invariant directly on this helper
+    // surfaces the regression with a message naming the
+    // offending byte at build time rather than as a
+    // downstream file-chooser mis-render, a shell-tooling
+    // column-alignment break, or a chat-attachment column-
+    // render inconsistency. Current helper returns the
+    // literal `"paladin-debug-info.txt"` (no `\t` byte), so
+    // this test passes today and serves as a forcing
+    // function so any future override of the helper —
+    // including the eventual landing of a localized
+    // filename — stays free of horizontal tabs.
+    use paladin_gtk::app::model::format_app_about_dialog_debug_info_filename;
+
+    let debug_info_filename = format_app_about_dialog_debug_info_filename();
+    assert!(
+        !debug_info_filename.contains('\t'),
+        "AdwAboutDialog debug_info_filename must not contain the `\\t` horizontal-tab byte (0x09); the current `\\t`-cleanliness is only protected transitively by `_has_no_embedded_whitespace`'s broad `char::is_whitespace()` check, so a future refactor that relaxed the no-whitespace invariant to allow a localized filename like `\"Debug information.txt\"` might silently drop the `\\t` guard alongside the space relaxation; a stray `\\t` would mis-render as a wide horizontal gap in the GtkFileDialog filename entry pre-fill, mis-align every following column in `ls -l` output by expanding to the next tab-stop, and confuse maintainer triage with inconsistent tab-stop renders in chat-attachment column renders; got {debug_info_filename:?}",
+    );
+}
