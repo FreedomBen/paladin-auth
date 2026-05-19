@@ -9050,3 +9050,69 @@ fn format_app_about_dialog_developer_name_starts_with_the_definite_article() {
         "AdwAboutDialog developer-name must start with the definite article `\"The \"` so the collective attribution voicing matches the GNOME / freedesktop convention for project attributions (examples: \"The GNOME Project\", \"The GTK Team\", \"The Files contributors\"); a regression that dropped the article would render the dialog-header attribution row as an inventory rather than as a named collective; got {developer_name:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_developer_name_ends_with_the_contributors_collective_noun() {
+    // Defense-in-depth sibling of
+    // `format_app_about_dialog_developer_name_starts_with_the_definite_article`
+    // (which pins the leading `"The "` article that distinguishes
+    // the collective attribution from an inventory voicing) and
+    // `format_app_about_dialog_developer_name_returns_the_paladin_contributors`
+    // (exact-value pin to `"The Paladin contributors"`). Those
+    // companions catch the dropped-article and wrong-value
+    // regressions but leave the *trailing collective-noun*
+    // ungated.
+    //
+    // The collective-attribution voicing convention pinned by
+    // the `_starts_with_the_definite_article` companion is
+    // `"The <Brand> <collective-noun>"` where `<collective-noun>`
+    // is one of "Project" / "Team" / "contributors" /
+    // "Developers" / etc. The chosen noun signals the
+    // governance model: "The GNOME Project" / "The GTK Team"
+    // imply a named org / team boundary, while "The Files
+    // contributors" / "The Settings contributors" /
+    // "The Paladin contributors" deliberately stays informal
+    // and inclusive — anyone who has committed against the
+    // project is a "contributor". The AGPL-3.0-or-later
+    // open-contributor-pool model the workspace Cargo.toml
+    // enforces (deliberately omitting the `authors` field per
+    // §"AGPL-3.0-or-later open contributor pool") aligns with
+    // the inclusive `"contributors"` collective noun rather
+    // than with the named-team `"Team"` / named-org `"Project"`
+    // alternatives.
+    //
+    // A regression that swapped the trailing collective noun
+    // — e.g. `"The Paladin Project"` (named-org voicing) or
+    // `"The Paladin Team"` (named-team voicing) or
+    // `"The Paladin Developers"` (capitalized noun implying a
+    // closed-group voicing) — would slip past the
+    // `_starts_with_the_definite_article` companion (the
+    // leading `"The "` article is still present), the
+    // `_is_non_empty_and_distinct_from_program_name` companion
+    // (still distinct from the bare `"Paladin"`), the
+    // `_is_a_single_line_without_embedded_newlines` companion
+    // (still single-line), the `_has_no_surrounding_whitespace`
+    // companion (still trim-clean), and the `_is_ascii_only`
+    // companion (still pure ASCII), while quietly mis-routing
+    // the governance signal of the collective attribution and
+    // breaking the AGPL-3.0-or-later open-contributor-pool
+    // alignment.
+    //
+    // Pinning the trailing collective noun directly here
+    // surfaces the regression with a message naming the
+    // offending byte sequence at the suffix slot rather than
+    // as a quiet governance-voicing drift at dialog render
+    // time. Mirror of the `_starts_with_the_definite_article`
+    // sibling on the leading-article side; together they pin
+    // the collective-attribution voicing across the leading
+    // article and the trailing collective-noun slots against
+    // a single source of truth on the GNOME / freedesktop /
+    // AGPL-3.0-or-later attribution-style convention.
+    use paladin_gtk::app::model::format_app_about_dialog_developer_name;
+
+    let developer_name = format_app_about_dialog_developer_name();
+    assert!(
+        developer_name.ends_with(" contributors"),
+        "AdwAboutDialog developer-name must end with the lowercase `\" contributors\"` collective noun (with the leading space so the noun is a separate word from the brand) so the collective-attribution voicing matches the AGPL-3.0-or-later open-contributor-pool model (an inclusive `\"contributors\"` voicing distinct from the named-org `\"Project\"` or named-team `\"Team\"` alternatives the GNOME stack uses for org-boundaried projects); a regression that swapped the noun — e.g. `\"The Paladin Project\"` / `\"The Paladin Team\"` / `\"The Paladin Developers\"` — would mis-route the governance signal of the collective attribution; got {developer_name:?}",
+    );
+}
