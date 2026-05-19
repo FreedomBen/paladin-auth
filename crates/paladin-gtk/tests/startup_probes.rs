@@ -12934,3 +12934,97 @@ fn format_app_about_dialog_developer_name_does_not_contain_a_carriage_return_byt
         "AdwAboutDialog developer-name must not contain the `\\r` carriage-return byte (0x0D); the current `\\r`-cleanliness is only protected by the `_is_a_single_line_without_embedded_newlines` companion's coupled `\\n`/`\\r` check, so a future refactor that intentionally allowed embedded `\\n` line breaks in the attribution slot might reasonably drop the `\\r` check alongside the `\\n` check on the assumption that both line-ending bytes are now allowed (an assumption that is wrong: GNOME-stack strings use LF-only conventions throughout); a stray `\\r` would render as a control glyph in the dialog-header attribution row, propagate into the footer copyright row that reuses this string, and break screen-reader attribution announcements; got {developer:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_copyright_does_not_contain_a_carriage_return_byte() {
+    // Defense-in-depth per-byte sibling completing the
+    // copyright byte triplet (null / horizontal-tab /
+    // carriage-return) alongside the existing
+    // `_copyright_does_not_contain_a_null_byte` and
+    // `_copyright_does_not_contain_a_horizontal_tab_byte`
+    // companions. The existing
+    // `_copyright_is_a_single_line_without_embedded_newlines`
+    // companion does explicitly assert `!copyright.contains('\r')`
+    // alongside its `\n` check — so the copyright helper's
+    // `\r`-cleanliness is currently protected *directly* by
+    // that one specific companion.
+    //
+    // But that direct coverage is *coupled* to the single-
+    // line-attribution invariant: a future refactor that
+    // intentionally allowed embedded `\n` line breaks in the
+    // copyright slot (a multi-line attribution including a
+    // separate copyright-glyph row and contributor row, a
+    // libadwaita upgrade that taught the footer copyright
+    // row to wrap across two lines, or a workspace-vendoring
+    // split that lifted copyright out of the single-line
+    // constraint) would naturally relax the
+    // `_is_a_single_line_without_embedded_newlines` companion
+    // to drop the `\n` check — and the human author of that
+    // refactor might reasonably drop the `\r` check at the
+    // same time on the assumption that "if `\n` is now
+    // allowed, then `\r` as a line-ending companion is also
+    // allowed". That assumption is wrong: `\r` is never the
+    // correct line-ending byte for a GNOME-stack string (the
+    // GNOME stack uses LF-only conventions throughout), so
+    // dropping the `\r` check alongside the `\n` check would
+    // silently regress the no-`\r` invariant.
+    //
+    // The `_starts_with_copyright_glyph_and_contains_developer_name`,
+    // `_ends_with_developer_name`,
+    // `_separates_glyph_and_attribution_with_a_single_space`,
+    // `_does_not_end_with_a_period`,
+    // `_does_not_contain_a_year_token_so_it_does_not_drift_across_releases`,
+    // and `_returns_paladin_copyright_line` exact-value /
+    // shape companions only constrain the prefix, suffix,
+    // glyph-attribution boundary, or full literal — none
+    // catches a mid-string `\r`. The
+    // `_does_not_contain_a_null_byte` companion only names
+    // `\0` specifically and the
+    // `_does_not_contain_a_horizontal_tab_byte` companion
+    // only names `\t` specifically. None of those names `\r`
+    // directly on this helper — only the
+    // `_is_a_single_line_without_embedded_newlines` companion
+    // does, and that coupling is fragile.
+    //
+    // A regression that landed `"© The Paladin\rcontributors"`
+    // (CRLF copy-paste from a Windows-edited COPYRIGHT file
+    // with the `\n` stripped during a manual line-ending
+    // fix-up, a `concat!(_, "\r", _)` form, or a hand-edited
+    // helper that lifted the literal from a CR-only Mac
+    // Classic-style text file) would mis-render in multiple
+    // downstream surfaces: (1) the GLib-backed
+    // `AdwAboutDialog::set_copyright` setter routes the value
+    // into Pango for inline rendering in the dialog footer
+    // — Pango's default rendering of a bare `\r` byte is
+    // implementation-defined and typically renders as a
+    // literal control glyph or an empty box, breaking the
+    // tidy single-line copyright layout against the website /
+    // issue-link rows beneath it; (2) the same copyright
+    // string is the legal attribution surface for the dialog
+    // — a `\r`-mis-rendered footer erodes the trusted-
+    // application surface contract by surfacing a control-
+    // byte glyph in the legal-attribution row; (3) screen
+    // readers that announce the dialog copyright row read
+    // the `\r` as a literal control character, breaking the
+    // accessibility-tree announcement of the legal
+    // attribution.
+    //
+    // Pinning the no-`\r` invariant directly on this helper
+    // surfaces the regression with a message naming the
+    // offending byte at build time rather than via a future
+    // single-line decoupling that silently dropped the `\r`
+    // guard. Current helper returns the literal `"© The
+    // Paladin contributors"` (no `\r` byte), so this test
+    // passes today and serves as a forcing function so any
+    // future override of the helper — including the eventual
+    // landing of a multi-line copyright attribution — stays
+    // free of carriage returns even when embedded `\n` line
+    // breaks are intentionally introduced.
+    use paladin_gtk::app::model::format_app_about_dialog_copyright;
+
+    let copyright = format_app_about_dialog_copyright();
+    assert!(
+        !copyright.contains('\r'),
+        "AdwAboutDialog copyright must not contain the `\\r` carriage-return byte (0x0D); the current `\\r`-cleanliness is only protected by the `_is_a_single_line_without_embedded_newlines` companion's coupled `\\n`/`\\r` check, so a future refactor that intentionally allowed embedded `\\n` line breaks in the copyright slot might reasonably drop the `\\r` check alongside the `\\n` check on the assumption that both line-ending bytes are now allowed (an assumption that is wrong: GNOME-stack strings use LF-only conventions throughout); a stray `\\r` would render as a control glyph in the dialog footer copyright row, erode the legal-attribution trusted-surface contract, and break screen-reader copyright-row announcements; got {copyright:?}",
+    );
+}
