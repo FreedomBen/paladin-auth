@@ -7324,3 +7324,75 @@ fn format_app_about_dialog_debug_info_filename_is_ascii_only() {
         );
     }
 }
+
+#[test]
+fn format_app_about_dialog_debug_info_is_ascii_only() {
+    // Defense-in-depth sibling of
+    // `format_app_about_dialog_debug_info_carries_program_name_version_and_app_id`
+    // (positive shape pin on the three tokens),
+    // `format_app_about_dialog_debug_info_is_non_empty_text_with_no_trailing_whitespace`
+    // (positive pin on non-empty + no trailing whitespace),
+    // `format_app_about_dialog_debug_info_starts_with_program_name`
+    // (positive pin on the leading token),
+    // `format_app_about_dialog_debug_info_app_id_appears_on_a_distinct_line_from_program_name`
+    // (positive pin on line layout),
+    // `format_app_about_dialog_debug_info_has_exactly_two_lines`
+    // (line-count pin),
+    // `format_app_about_dialog_debug_info_program_name_line_ends_with_the_version`
+    // (line-suffix pin on the program-name line), and
+    // `format_app_about_dialog_debug_info_app_id_line_ends_with_the_reverse_dns_app_id`
+    // (line-suffix pin on the App ID line). Those companions
+    // catch the wrong-token, empty, leading-token, line-layout,
+    // line-count, and line-suffix regressions but leave the
+    // non-ASCII-byte edge case ungated.
+    //
+    // The `AdwAboutDialog` "Copy debug info" button hands the
+    // body of this helper to the system clipboard for the user
+    // to paste into a bug-report issue or chat message. The
+    // clipboard handoff round-trips through `gdk::Clipboard`
+    // and may traverse a heterogeneous mix of source / target
+    // encodings (e.g. paste into a Discord chat normalizes via
+    // utf-8, paste into a GitHub-issue text area preserves
+    // bytes verbatim, paste into a terminal may render via the
+    // terminal's locale). A non-ASCII byte in the payload —
+    // a Unicode lookalike on `Paladin`, `App ID:`, or the
+    // version digits inherited from `env!("CARGO_PKG_VERSION")` —
+    // would round-trip differently depending on the paste
+    // target, producing a bug-report payload that the maintainer
+    // cannot trivially match against the workspace's canonical
+    // `Cargo.toml` version field or the `APP_ID` constant
+    // declared in `src/lib.rs`.
+    //
+    // The transitive ASCII guarantee provided by the
+    // `_version_is_ascii_only` and `_application_icon_name_is_ascii_only`
+    // companions — both of which feed into the debug-info
+    // payload — covers the two embedded tokens, but does not
+    // cover the surrounding literal text (`"Paladin "`,
+    // `"\nApp ID: "`). Pinning the ASCII-only invariant
+    // directly here closes that gap and keeps the clipboard
+    // payload byte-stable across paste targets regardless of
+    // future changes to the surrounding-literal layout.
+    //
+    // Mirror of the
+    // `_program_name_is_ascii_only`,
+    // `_application_icon_name_is_ascii_only`,
+    // `_version_is_ascii_only`,
+    // `_developer_name_is_ascii_only`, and
+    // `_debug_info_filename_is_ascii_only` companions; together
+    // they pin the ASCII-shape contract across the four dialog
+    // header slots, the debug-info file-save suggested name,
+    // and the debug-info clipboard payload against a single
+    // source of truth, closing the Unicode-lookalike regression
+    // surface for every dialog-routed string the user can read
+    // or paste into a third-party tool.
+    use paladin_gtk::app::model::format_app_about_dialog_debug_info;
+
+    let debug = format_app_about_dialog_debug_info();
+    for (idx, ch) in debug.char_indices() {
+        assert!(
+            ch.is_ascii(),
+            "AdwAboutDialog debug-info must use ASCII characters only so the Copy debug info button hands the clipboard a byte-stable payload that round-trips identically through gdk::Clipboard regardless of the paste target encoding (terminal, Discord chat, GitHub issue, etc.); got non-ASCII char {ch:?} (U+{:04X}) at byte offset {idx} in {debug:?}",
+            ch as u32,
+        );
+    }
+}
