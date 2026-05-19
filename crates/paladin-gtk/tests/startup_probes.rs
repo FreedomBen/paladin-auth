@@ -6442,7 +6442,7 @@ fn format_app_about_dialog_copyright_separates_glyph_and_attribution_with_a_sing
     );
     let third = chars.next();
     assert!(
-        third.map(|c| !c.is_whitespace()).unwrap_or(false),
+        third.is_some_and(|c| !c.is_whitespace()),
         "AdwAboutDialog copyright must have exactly one space between the `©` glyph and the attribution (a second whitespace char would double the separator and push the attribution off the baseline); got {third:?} in {copyright:?}",
     );
 }
@@ -6804,5 +6804,67 @@ fn format_app_about_dialog_copyright_is_a_single_line_without_embedded_newlines(
     assert!(
         !copyright.contains('\r'),
         "AdwAboutDialog copyright must use LF-only conventions (no embedded CR), matching the GNOME stack's text expectation for a single-line attribution caption; got {copyright:?}",
+    );
+}
+
+#[test]
+fn format_app_about_dialog_comments_does_not_end_with_a_period_per_libadwaita_convention() {
+    // Defense-in-depth sibling of
+    // `format_app_about_dialog_comments_matches_cargo_pkg_description`
+    // (exact-value pin sourcing from `env!("CARGO_PKG_DESCRIPTION")`)
+    // and
+    // `format_app_about_dialog_comments_is_non_empty_single_line_distinct_from_program_name`
+    // (positive shape pin on non-empty + single-line + distinct).
+    // Those companions catch the wrong-source and wrong-shape
+    // regressions but leave the trailing-punctuation edge case
+    // ungated.
+    //
+    // The libadwaita / GNOME HIG convention for the
+    // `AdwAboutDialog::comments` slot is a short single-sentence
+    // fragment without trailing punctuation — the caption renders
+    // directly under the program-name header where a stray
+    // sentence-final period reads as a typographic awkwardness
+    // (the surrounding header rows have no trailing punctuation
+    // either, so a period on the comments row would visually
+    // single-out that one caption). Peer GNOME apps (e.g.
+    // GNOME Authenticator's "Two-Factor Authentication") follow
+    // the same convention.
+    //
+    // The current workspace `[workspace.package].description`
+    // value is `"Paladin: Rust OTP authenticator (TOTP + HOTP)
+    // with CLI, TUI, and GTK front-ends"` — already periodless
+    // and convention-compliant. A future workspace description
+    // edit that added a trailing `.` (e.g. `"... front-ends."`)
+    // would propagate through the `description.workspace = true`
+    // inheritance chain into the `AdwAboutDialog` comments slot
+    // without any per-helper change, slipping past the
+    // `_matches_cargo_pkg_description` exact-value pin (which
+    // tracks the upstream value) and the `_is_non_empty_single_line`
+    // shape pin (which only checks non-emptiness and embedded
+    // newlines). Pinning the no-trailing-period invariant here
+    // is a forcing function so the next workspace-description
+    // edit gets caught at the GTK layer rather than as a visual
+    // HIG inconsistency surfacing only when a contributor opens
+    // the About dialog.
+    //
+    // Mirror of the
+    // `format_app_about_dialog_copyright_does_not_contain_a_year_token_so_it_does_not_drift_across_releases`
+    // companion on the footer side; both are negative pins
+    // against drift-prone shape regressions on the
+    // `AdwAboutDialog` header / footer caption surfaces.
+    use paladin_gtk::app::model::format_app_about_dialog_comments;
+
+    let comments = format_app_about_dialog_comments();
+    assert!(
+        !comments.ends_with('.'),
+        "AdwAboutDialog comments must not end with a sentence-final period per the libadwaita / GNOME HIG convention for short caption fragments under the program-name header; got {comments:?}",
+    );
+    assert!(
+        !comments.ends_with('!'),
+        "AdwAboutDialog comments must not end with `!` per the libadwaita / GNOME HIG convention for short caption fragments under the program-name header; got {comments:?}",
+    );
+    assert!(
+        !comments.ends_with('?'),
+        "AdwAboutDialog comments must not end with `?` per the libadwaita / GNOME HIG convention for short caption fragments under the program-name header; got {comments:?}",
     );
 }
