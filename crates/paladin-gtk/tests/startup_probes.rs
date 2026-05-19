@@ -11910,3 +11910,77 @@ fn format_app_about_dialog_copyright_does_not_contain_a_horizontal_tab_byte() {
         "AdwAboutDialog copyright must not contain the `\\t` horizontal-tab byte (0x09); a mid-string `\\t` slips past `_is_a_single_line_without_embedded_newlines` (which only checks `\\n` and `\\r`), past the no-year-token four-digit-run scan (`\\t` is not a digit), and past `_does_not_contain_a_null_byte` (because `\\t` is not `\\0`); it would render as a wide horizontal gap in the dialog-footer copyright row, visually misalign the footer cluster against the website / issue-link rows, break screen-reader announcements at the tab boundary, and propagate into downstream license-attribution scrapers; got {copyright:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_comments_does_not_contain_a_horizontal_tab_byte() {
+    // Defense-in-depth sibling of the existing
+    // `format_app_about_dialog_comments_matches_cargo_pkg_description`
+    // (cross-source pin),
+    // `_comments_is_non_empty_single_line_distinct_from_program_name`
+    // (positive shape pin: non-empty, no `\n`, no surrounding
+    // whitespace, distinct from program-name; says nothing
+    // about `\t`),
+    // `_comments_does_not_end_with_a_period_per_libadwaita_convention`
+    // (negative shape pin against trailing `.`),
+    // `_comments_is_ascii_only` (byte-composition pin — `\t`
+    // is ASCII (0x09) so it slips past),
+    // `_comments_does_not_contain_a_null_byte` (names `\0`
+    // specifically — `\t` is not `\0`), and
+    // `_comments_does_not_contain_a_carriage_return_byte`
+    // (names `\r` specifically — `\t` is not `\r`).
+    //
+    // None of the existing companions name the `\t` byte
+    // directly. The current `_matches_cargo_pkg_description`
+    // cross-source pin transitively guards the value via
+    // `CARGO_PKG_DESCRIPTION`, but its protection is brittle:
+    // a future refactor that decoupled the helper from the
+    // workspace `Cargo.toml` `description` field (a hand-
+    // edited override for the libadwaita HIG-mandated
+    // single-line summary, a workspace-vendoring split that
+    // lifted comments out of the cross-source chain) would
+    // silently drop the transitive guard the moment the
+    // override path activates.
+    //
+    // A regression that landed `"OTP authenticator\tfor the
+    // command line"` (a tab-separated description lifted
+    // from a TSV-style metadata export, a `concat!(_, "\t",
+    // _)` form, a hand-edited helper that pasted from a
+    // markdown-table cell, or a tooling export pipeline that
+    // preserved tab-separated column values) would mis-render
+    // in multiple downstream surfaces: (1) the GLib-backed
+    // `AdwAboutDialog::set_comments` setter hands the string
+    // to Pango for inline rendering as the dialog header
+    // description beneath the program name — Pango's default
+    // rendering of `\t` is implementation-defined and
+    // typically renders as a wide horizontal gap or an empty
+    // box, breaking the tidy single-line description layout;
+    // (2) the comments value is sourced from
+    // `CARGO_PKG_DESCRIPTION` which propagates into Cargo's
+    // `description` field in `Cargo.toml` — tooling that
+    // scrapes this metadata (`cargo metadata`, crates.io
+    // registry indexing, GNOME `gnome-software` descriptions)
+    // would propagate the stray `\t` byte into every
+    // consumer; (3) screen readers that announce the dialog
+    // description read the `\t` as a literal control
+    // character, breaking the description accessibility-tree
+    // announcement at the tab boundary.
+    //
+    // Pinning the no-`\t` invariant directly here surfaces
+    // the regression with a message naming the offending byte
+    // at build time rather than as a downstream dialog-header
+    // rendering bug, a tooling-scrape miss, or a screen-
+    // reader announcement break. Current helper returns the
+    // value sourced from `CARGO_PKG_DESCRIPTION` (no `\t`
+    // byte), so this test passes today and serves as a
+    // forcing function so any future override of the helper —
+    // or any future edit of the workspace `Cargo.toml`
+    // `description` field — stays free of horizontal-tab
+    // bytes.
+    use paladin_gtk::app::model::format_app_about_dialog_comments;
+
+    let comments = format_app_about_dialog_comments();
+    assert!(
+        !comments.contains('\t'),
+        "AdwAboutDialog comments must not contain the `\\t` horizontal-tab byte (0x09); a mid-string `\\t` slips past `_is_non_empty_single_line_distinct_from_program_name` (which only checks `\\n` and surrounding whitespace), past `_is_ascii_only` (because `\\t` is ASCII), and past `_does_not_contain_a_null_byte` / `_does_not_contain_a_carriage_return_byte` (which name `\\0` and `\\r` specifically); it would render as a wide horizontal gap in the dialog-header description row, propagate via `CARGO_PKG_DESCRIPTION` into Cargo metadata scrapers, and break screen-reader description announcements at the tab boundary; got {comments:?}",
+    );
+}
