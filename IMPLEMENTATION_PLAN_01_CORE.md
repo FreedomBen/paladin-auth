@@ -1182,6 +1182,293 @@ Each step lands as its own commit. Tests come first.
   constructor and hook are excluded from the default public-API snapshot and are
   not part of the stable §4.7 surface.
 
+### Phase K — Test coverage hardening (Milestone 6 prep)
+
+Closes residual gaps surfaced by a post-Phase J coverage review of
+`paladin-core`. Every entry below targets a real semantic invariant
+that is **not** redundant with prior-phase tests. Each item names the
+file the new test lives in, the failure mode it pins, and the
+assertions the test must make so the implementer can land it without
+re-deriving the gap. Items are independent — they can be implemented
+and committed in any order.
+
+- [ ] **HOTP primitive algorithm × digits cross-product.** Add
+  `rfc6238_hotp_primitive_algorithm_digits_cross_product` to
+  `src/otp/hotp.rs#tests`, mirroring the existing
+  `totp_digits_cross_product` in `src/otp/totp.rs`. For each
+  `(algorithm, digits)` ∈ `{SHA1, SHA256, SHA512} × {6, 7, 8}`
+  compute `compute(secret, alg, digits, counter)` at `counter = 1`
+  using the matching RFC 6238 Appendix B key bytes (the same
+  fixtures used by `rfc6238_appendix_b_sha256` /
+  `rfc6238_appendix_b_sha512` in `src/otp/totp.rs`). Assert: the
+  returned `Code.code.len() == digits as usize`, the 6/7-digit
+  forms are the `mod 10^digits` truncation of the 8-digit form,
+  `counter_used == Some(1)`, and `valid_from / valid_until /
+  seconds_remaining` are all `None`. Closes the gap where the
+  pure HOTP primitive only has SHA1 / 6-digit RFC 4226 Appendix
+  D coverage; the cross-product currently exists only on the
+  TOTP side.
+
+- [ ] **HOTP primitive at counter boundary values.** Add
+  `hotp_compute_at_counter_zero_and_u64_max_does_not_panic` to
+  `src/otp/hotp.rs#tests`. Compute the code at `counter = 0`
+  (sanity, re-pins RFC 4226 Appendix D row 0 at the primitive)
+  and at `counter = u64::MAX` (no panic, returns a 6-digit
+  decimal string, `counter_used == Some(u64::MAX)`). The pure
+  primitive must accept `u64::MAX` — overflow on advance is a
+  `Vault`-level concern enforced by `Vault::hotp_advance`, not a
+  primitive concern, and this test pins the layering so a future
+  refactor that pulls the overflow check into `compute` is
+  caught.
+
+- [ ] **`mutate_and_save` closure panic safety.** Add
+  `mutate_and_save_panic_in_closure_does_not_leave_partial_state`
+  to `tests/vault_mutate_and_save.rs`. Use
+  `std::panic::catch_unwind` with `AssertUnwindSafe` to wrap a
+  `Vault::mutate_and_save` call whose closure mutates the vault
+  (e.g. `vault.add(make_totp_account("dave"))`) and then
+  `panic!("synthetic")`s. Capture the pre-call account count, the
+  pre-call primary-file bytes, and the pre-call `VaultSettings`
+  before the call. After the panic is caught, assert:
+  (a) `catch_unwind` returned `Err`; (b)
+  `vault.iter().count()` equals the pre-call count (rollback
+  restored the snapshot); (c) `vault.settings()` is field-by-field
+  equal to the pre-call settings; (d) the on-disk primary file is
+  byte-identical to the pre-call bytes (no save was committed).
+  If the current `mutate_and_save` does **not** wrap the closure
+  in `catch_unwind`, this test will fail — that is the gap. In
+  that case the implementation pass must either (i) add the
+  `catch_unwind` wrap so the rollback snapshot is restored before
+  the unwind continues, **or** (ii) declare panic safety out of
+  scope, update DESIGN.md §4.7's `mutate_and_save` doc-comment to
+  call that out explicitly, and convert the test to
+  `#[should_panic]` documenting the decision. Either path is
+  acceptable but the choice must be user-visible — flag it to
+  the user before landing.
+
+- [ ] **`ImportConflict::Skip` with multiple collisions in one
+  batch.** Add
+  `import_accounts_skip_collects_all_collisions_in_skipped_count`
+  to `tests/vault_import_accounts.rs`. Pre-populate a vault with
+  three TOTP accounts: `("a", Some("X"), S1)`, `("b", Some("X"),
+  S2)`, `("c", Some("X"), S3)`, each using a distinct secret.
+  Call `Vault::import_accounts(batch, ImportConflict::Skip,
+  import_time)` with `batch` containing four entries: exact
+  `(secret, issuer, label)` duplicates of the three pre-existing
+  rows (in mixed source order — e.g. `[c-dup, a-dup, fresh,
+  b-dup]`) plus one fresh `("d", Some("X"), S4)` row. Assert:
+  `report.skipped == 3`, `report.imported == 1`,
+  `report.replaced == 0`, `report.appended == 0`,
+  `report.accounts.len() == 1`, the single ID in
+  `report.accounts` is the fresh row's vault ID, the in-memory
+  vault still contains exactly four accounts (the original three
+  plus the fresh one), and the original three accounts' IDs and
+  `updated_at` timestamps are unchanged. Pins the
+  `report.accounts` source-order rule and the skip accumulator at
+  count > 1; the existing tests only pin `skipped == 1`.
+
+- [ ] **Aegis forward-compatibility — unknown JSON fields ignored.**
+  Add `aegis_extra_unknown_top_level_and_per_entry_fields_are_ignored`
+  to `tests/import_aegis.rs`. Construct an Aegis plaintext export
+  bytes blob with three unknown sibling fields:
+  (1) at the top-level `db` object (e.g. `"unknown_top": 42`),
+  (2) at the `entries[0]` object (e.g. `"unknown_entry": "x"`),
+  and (3) inside `entries[0].info` (e.g. `"unknown_info": true`).
+  The single entry must be a valid TOTP with the
+  `totp_entry_full_field_mapping` shape. Assert
+  `aegis_plaintext(bytes, import_time)` returns `Ok(vec)` with
+  `vec.len() == 1`, the resulting `ValidatedAccount` carries the
+  expected `(label, issuer, secret, algorithm, digits, kind,
+  period)` mapping, and `warnings` does not mention any of the
+  unknown fields. Pins that the `#[derive(Deserialize)]` on
+  `AegisExport` / `AegisEntry` / `AegisInfo` does *not* use
+  `#[serde(deny_unknown_fields)]`; guards against a regression
+  to strict mode that would break round-tripping Aegis exports
+  across minor versions of upstream Aegis.
+
+- [ ] **`Vault::shortest_unique_id_prefix` ≥9-char prefix on
+  forced collision.** Add
+  `shortest_unique_id_prefix_extends_past_eight_chars_on_id_collision`
+  to `src/domain/query.rs#tests`. The in-crate scope is required
+  because forcing a deterministic `AccountId` collision needs
+  `pub(crate)` access — construct two `Account` values whose
+  `AccountId` bytes share their first four bytes (8 hex chars)
+  but differ in the fifth byte, using the same `pub(crate)`
+  constructor pattern already used elsewhere in
+  `src/domain/query.rs#tests`. Call
+  `shortest_unique_id_prefix(&[acct_a, acct_b], id_a)`. Assert
+  the returned prefix is exactly 9 lowercase-hex chars, equals
+  the first 9 chars of `id_a.to_string()`, and is *not* a
+  prefix of `id_b.to_string()`. Add a second sub-case where the
+  two IDs collide on their first 6 bytes (12 hex chars) and
+  assert the prefix has length 13. Pins the iteration-past-8
+  fallback that the existing `_returns_eight_chars_*` tests
+  don't reach.
+
+- [ ] **`PaladinError` `Display` snapshot.** Add
+  `tests/error_display.rs` that iterates the same variant set
+  used by `tests/error_serde.rs`'s `one_per_variant()` helper
+  (re-export the helper to a shared `tests/common/` module or
+  duplicate the fixture set inline — the duplication is
+  intentional, matching the `error_matrix.rs` precedent). For
+  each `(error, kind)` pair assert `format!("{error}")` equals a
+  committed expected string fixture loaded from
+  `crates/paladin-core/tests/fixtures/error_display/<kind>.txt`
+  (slug name from `ErrorKind::as_str()`). Commit one fixture per
+  variant. Justification: `error_serde.rs` pins the machine
+  surface; nothing currently pins the human-readable surface that
+  the CLI / TUI / GUI render. A regression that changes
+  capitalization, punctuation, or a substituted field's render
+  order silently shifts every front-end UX without failing any
+  test. The fixtures live in the test tree (not the crate root)
+  and are byte-compared verbatim.
+
+- [ ] **Encrypted AEAD empty-payload length boundary.** Add
+  `encrypted_save_empty_vault_ciphertext_is_exactly_tag_length`
+  to `tests/encrypted_save_format.rs`. Create an encrypted vault
+  via `Store::create(.., VaultInit::Encrypted(cheap_opts))`
+  carrying zero accounts and `VaultSettings::default()`, call
+  `vault.save(&store)`, read the on-disk primary bytes, and
+  assert: `bytes.len() == MAGIC_LEN + 64 (header) +
+  bincode_encode(&empty_payload).len() + 16` (the Poly1305 tag,
+  per the existing `AEAD output shape` test in
+  `src/crypto/aead.rs`). Drop the vault, reopen via
+  `Store::open(.., VaultLock::Encrypted(cheap_opts.passphrase))`,
+  and assert the reopened vault has zero accounts and
+  `inspect()` reports `Encrypted`. Reuse the existing zeroize
+  witness (`crypto::zeroize_witness::take_observations`) and
+  assert at least one pre-AEAD plaintext-payload observation
+  fires with `all_zero == true` on the empty-payload write path
+  (the scratch buffer must still be wiped even when the
+  plaintext is the bincode encoding of an empty vault). Pins
+  the AEAD `ciphertext.len() == plaintext.len() + 16` invariant
+  at the smallest possible plaintext, and pins that the zeroize
+  witness fires regardless of payload size.
+
+- [ ] **`apply_setting_patch` idempotency under repeat
+  application.** Add
+  `apply_setting_patch_repeat_same_value_writes_byte_identical_payload`
+  to `tests/settings_grammar.rs`. Use a plaintext vault (so
+  payload-equality compares directly without nonce rotation).
+  Apply `SettingPatch::AutoLockTimeoutSecs(300)`, save, read the
+  primary bytes into `bytes_a`. Apply the identical patch a
+  second time, save, read into `bytes_b`. Assert `bytes_a ==
+  bytes_b` byte-for-byte. Repeat the cycle for
+  `SettingPatch::AutoLockEnabled(true)`,
+  `SettingPatch::ClipboardClearEnabled(false)`, and
+  `SettingPatch::ClipboardClearSecs(45)`. Pins the "same input →
+  same output" determinism rule for the settings setters and
+  catches a regression where a `VaultSettings` field grows
+  hidden state (e.g. a `last_patched_at` timestamp) that breaks
+  bincode determinism downstream.
+
+- [ ] **`parse_setting_patch` malformed-value rejection matrix.**
+  Add `parse_setting_patch_rejects_type_mismatched_values` to
+  `tests/settings_grammar.rs`. For each numeric key
+  (`auto_lock.timeout_secs`, `clipboard.clear_secs`) call
+  `parse_setting_patch(key, value)` with the malformed
+  `value` set: `""`, `"abc"`, `"300x"`, `"-1"`, `"30.0"`,
+  `"9999999999999999999999"` (overflow `u32`). For each bool
+  key (`auto_lock.enabled`, `clipboard.clear_enabled`) call
+  with: `""`, `"True"`, `"TRUE"`, `"yes"`, `"1"`, `"false "`
+  (trailing space), `"0"`. Assert each call returns
+  `PaladinError::ValidationError` whose `field` equals the
+  passed-in dotted key and whose `reason` is a stable
+  discriminating string (`"empty"`, `"not_a_u32"`,
+  `"overflow"`, `"not_a_bool"`, etc. — match whatever stable
+  strings the parser already emits; if the parser collapses all
+  of these to one `"malformed"` reason today, this test pins
+  that decision and the matrix is still useful as
+  shape-validation). Pins the malformed-value contract that
+  the existing `_out_of_range_*` tests don't cover (those only
+  exercise in-range-shape values).
+
+- [ ] **`proptest` depth bump + OTP idempotency property.** Update
+  the two integration `proptest!` blocks in
+  `tests/proptest_uri_base32.rs` from
+  `ProptestConfig::with_cases(64)` to
+  `ProptestConfig::with_cases(256)`. Mirror the bump in the
+  inline `proptests` module of `src/domain/validation.rs`. Add
+  one new property to `tests/proptest_uri_base32.rs`:
+  `otp_totp_compute_is_pure_idempotent_over_random_inputs`,
+  which takes `secret_bytes` (10..=32 random bytes via
+  `proptest::collection::vec(any::<u8>(), 10..=32)`),
+  `algorithm` (uniform over `{Sha1, Sha256, Sha512}`),
+  `digits` (uniform over `{6u8, 7, 8}`), `period`
+  (1..=300 `u32`), and `now_secs` (0..=2u64.pow(48)). For each
+  case call `otp::totp::compute(&secret, alg, period, digits,
+  UNIX_EPOCH + Duration::from_secs(now_secs))` twice and assert
+  the two `Code` values are field-by-field equal (including
+  `code`, `valid_from`, `valid_until`, `seconds_remaining`,
+  `counter_used`). Justification: pins the pure-function
+  contract against a regression that introduces hidden state
+  (cache, lazy init, RNG, time sampling) into the primitive.
+  The 64→256 bump catches rarer edge cases in the existing
+  no-panic properties without materially extending CI time
+  (each iteration is microseconds).
+
+- [ ] **Stress: 10,000-account vault round-trip.** Add
+  `tests/vault_stress.rs` (a new file, kept separate from
+  `vault_lifecycle.rs` so the stress entry is easy to
+  individually `--ignored`-gate later if CI demands it).
+  Test name: `large_plaintext_vault_round_trips_through_save_and_reopen`.
+  Build 10,000 unique TOTP accounts via `validate_manual`
+  using `label = format!("acct-{i:05}")` and `issuer =
+  format!("issuer-{j}", j = i % 50)` so labels and issuers
+  vary; secrets share a single committed fixture base32 string
+  (no need for varied secrets — the goal is encoding
+  scalability, not cryptographic variety). Save to a
+  `tempfile::TempDir` at mode `0o700`, drop the vault and
+  store, reopen via `Store::open`, and assert: (a) the
+  reopened vault iterates 10,000 IDs in the same insertion
+  order, (b) every reopened account's `(label, issuer, kind,
+  algorithm, digits, period_secs)` equals the source row's,
+  (c) the on-disk primary file size is strictly less than
+  16 MiB (the Phase E payload cap), and (d) saving the
+  reopened vault produces byte-identical primary bytes (pins
+  encoding determinism at scale). Run in the default
+  `cargo test` matrix; add `#[ignore]` *only* if the wall-clock
+  pushes a clean-room CI run past 30 seconds (measure before
+  deciding). Pins bincode determinism at scale and the 16 MiB
+  cap from the under-the-limit side, which is currently only
+  exercised from the over-the-limit side.
+
+### Items considered and excluded
+
+The following candidates were evaluated during the post-Phase J review
+and **deliberately not landed** as Phase K items. Recording the
+rejection rationale prevents the items from being re-proposed in a
+later review pass.
+
+- *`ImportConflict::Replace` mid-batch failure rollback* —
+  `Vault::import_accounts` (`src/vault.rs:455`) performs its single
+  fallible call (`system_time_to_secs_for`) before any account
+  mutation; the merge loop itself is infallible. No reachable per-row
+  failure mode exists. A `mutate_and_save`-wrapped synthetic-error
+  fallback collapses onto the existing
+  `mutate_and_save_restores_accounts_on_closure_error_after_import_merge`
+  coverage in `tests/vault_mutate_and_save.rs`.
+
+- *`select_after_filter` — prev removed from middle, both neighbors
+  retained* — `select_after_filter` (`src/domain/query.rs:135`) only
+  inspects `filtered.contains(&prev)`; positional history of `prev`
+  in the unfiltered set is invisible to the function, so a
+  "prev-was-in-middle" scenario is observationally identical to
+  the already-covered
+  `select_after_filter_falls_back_to_first_when_prev_missing_from_filtered`
+  (`tests/query.rs:481`).
+
+- *`Vault::is_encrypted` coherence across `mutate_and_save` rollback
+  composed with passphrase transitions* — `VaultSnapshot`
+  (`src/vault.rs:164`) deliberately excludes the encrypted-cache
+  field per the doc comment "passphrase transitions go through
+  their own Phase H entry points". Composing `set_passphrase` /
+  `remove_passphrase` inside a `mutate_and_save` closure is
+  out-of-design; pinning a coherence rule against the documented
+  Phase H boundary would re-litigate the Phase G.9 / Phase H
+  layering decision and is therefore deferred to an explicit
+  design-review pass rather than a coverage-hardening test.
+
 ## Test inventory
 
 This list is exhaustive per CLAUDE.md ("write exhaustive tests"). Every entry
@@ -1492,6 +1779,18 @@ is a separate `#[test]` or table-driven case family.
 - [x] Wrong-passphrase vs corrupt-bundle vs decode-failure distinction
   on encrypted Paladin imports (decrypt_failed on wrong key, decrypt_failed
   on AEAD/AAD tamper, invalid_payload on garbage-but-valid-ciphertext).
+- [ ] Phase K coverage-hardening tests — each enumerated as its own
+  Phase K checklist entry above: HOTP primitive algorithm × digits
+  cross-product, HOTP primitive at counter `0` / `u64::MAX`,
+  `mutate_and_save` closure-panic safety, `ImportConflict::Skip`
+  multi-collision accumulator, Aegis forward-compat unknown-field
+  tolerance, `shortest_unique_id_prefix` ≥9-char collision path,
+  `PaladinError` `Display` snapshot per variant,
+  encrypted-empty-payload AEAD length boundary,
+  `apply_setting_patch` repeat-application byte-identical-payload
+  determinism, `parse_setting_patch` malformed-value rejection
+  matrix, proptest case-count bump plus TOTP idempotency property,
+  and 10,000-account plaintext round-trip stress.
 
 ## Dependencies (per §4.4 / §9)
 
