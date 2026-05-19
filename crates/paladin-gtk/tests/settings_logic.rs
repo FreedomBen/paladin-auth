@@ -674,6 +674,60 @@ fn format_settings_dialog_clipboard_clear_group_title_returns_clipboard() {
 }
 
 #[test]
+fn compose_settings_dialog_auto_lock_secs_value_casts_visible_auto_lock_secs_to_f64() {
+    // The auto-lock `AdwSpinRow` binds its `set_value:` attribute
+    // to this composer per `IMPLEMENTATION_PLAN_04_GTK.md`
+    // §"Component tree" > `SettingsComponent`. The spinner
+    // value is the buffered (pending) auto-lock seconds while a
+    // 500 ms debounce is in flight and the committed value
+    // otherwise — both surfaced by
+    // `SettingsState::visible_auto_lock_secs`. Casting the `u32`
+    // through this composer matches `AdwSpinRow::set_value`'s
+    // `f64` signature without forcing the widget layer to cast
+    // inline.
+    //
+    // Sibling of `paladin_gtk::add_account::compose_manual_period_secs_value`,
+    // `compose_manual_counter_value`, and `compose_manual_digits_value`
+    // on the spinner-value side; together they cover every
+    // `AdwSpinRow::set_value:` binding the GTK front end mounts.
+    use paladin_gtk::settings::{
+        compose_settings_dialog_auto_lock_secs_value, CommittedSettings, SettingsState,
+    };
+
+    let committed = CommittedSettings::new(true, 600, false, 30);
+    let state = SettingsState::new(committed);
+
+    let value = compose_settings_dialog_auto_lock_secs_value(&state);
+    assert!(
+        (value - 600.0).abs() < f64::EPSILON,
+        "composer surfaces the committed value as `f64` when no debounce is pending",
+    );
+}
+
+#[test]
+fn compose_settings_dialog_auto_lock_secs_value_reflects_pending_spinner_buffer() {
+    // While a 500 ms debounce is in flight,
+    // `SettingsState::visible_auto_lock_secs` returns the pending
+    // (buffered) value rather than the committed one — this
+    // composer mirrors that contract on the widget side so the
+    // spinner shows the user's most recent typed value during the
+    // debounce window.
+    use paladin_gtk::settings::{
+        compose_settings_dialog_auto_lock_secs_value, CommittedSettings, SettingsState,
+    };
+
+    let committed = CommittedSettings::new(true, 600, false, 30);
+    let mut state = SettingsState::new(committed);
+    state.stage_auto_lock_secs(900);
+
+    let value = compose_settings_dialog_auto_lock_secs_value(&state);
+    assert!(
+        (value - 900.0).abs() < f64::EPSILON,
+        "composer surfaces the pending buffered value during the debounce window",
+    );
+}
+
+#[test]
 fn format_settings_dialog_auto_lock_secs_adjustment_returns_paladin_core_bounds() {
     // The auto-lock `AdwSpinRow` consumes a `gtk::Adjustment`
     // built from this helper per `IMPLEMENTATION_PLAN_04_GTK.md`

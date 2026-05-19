@@ -553,6 +553,32 @@ pub fn format_settings_dialog_clipboard_clear_secs_adjustment() -> (f64, f64, f6
     )
 }
 
+/// State-driven projection of the auto-lock seconds `AdwSpinRow`'s
+/// visible value, surfaced as the `f64` that `AdwSpinRow::set_value`
+/// expects, per `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+/// `SettingsComponent` and §"Tests > Pure-logic unit tests >
+/// `tests/settings_logic.rs`".
+///
+/// Returns [`SettingsState::visible_auto_lock_secs`] cast to
+/// `f64` — the buffered (pending) spinner value while a 500 ms
+/// debounce is in flight, and the committed value otherwise.
+/// Threading the cast through this composer keeps the widget
+/// binding minimal: the widget's `#[watch] set_value:` reads a
+/// single `f64` instead of pattern-matching against the pending
+/// buffer or casting inline against the live state.
+///
+/// Pure — borrows the state and returns an `f64` without allocating.
+/// Sibling of
+/// [`crate::add_account::compose_manual_period_secs_value`],
+/// [`crate::add_account::compose_manual_counter_value`], and
+/// [`crate::add_account::compose_manual_digits_value`] on the
+/// spinner-value side; together they cover every
+/// `AdwSpinRow::set_value:` binding the GTK front end mounts.
+#[must_use]
+pub fn compose_settings_dialog_auto_lock_secs_value(state: &SettingsState) -> f64 {
+    f64::from(state.visible_auto_lock_secs())
+}
+
 /// Buffered spinner pending the 500 ms debounce.
 #[derive(Debug, Clone, Copy)]
 enum PendingSpinner {
