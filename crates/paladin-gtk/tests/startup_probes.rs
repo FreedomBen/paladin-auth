@@ -18465,3 +18465,128 @@ fn format_app_about_dialog_url_helpers_do_not_contain_a_backspace_byte() {
         );
     }
 }
+
+#[test]
+fn format_app_about_dialog_developer_name_does_not_contain_a_line_feed_byte() {
+    // Defense-in-depth per-byte sibling extending the developer-
+    // name byte-cleanliness contract past the just-completed
+    // `{null / horizontal-tab / carriage-return / vertical-tab /
+    // form-feed / backspace}` sextuple to the line-feed byte
+    // `\n` (0x0A), which sits between BS (0x08) / HT (0x09) and
+    // VT (0x0B) / FF (0x0C) / CR (0x0D) in the ASCII C0 block and
+    // completes the inner C0 control-byte cycle from BS through
+    // CR for this helper. The existing
+    // `_developer_name_is_a_single_line_without_embedded_newlines`
+    // companion does explicitly assert `!developer.contains('\n')`
+    // alongside its `\r` check — so the developer-name helper's
+    // `\n`-cleanliness is currently protected *directly* by that
+    // one specific companion.
+    //
+    // But that direct coverage is *coupled* to the single-line-
+    // attribution invariant: a future refactor that intentionally
+    // allowed embedded `\n` line breaks in the developer-name slot
+    // (a libadwaita upgrade that taught the attribution row to
+    // wrap across two lines, a multi-contributor attribution
+    // column layout that listed each contributor on its own line,
+    // or a workspace-vendoring split that lifted developer-name
+    // out of the single-line constraint) would naturally relax
+    // the `_is_a_single_line_without_embedded_newlines` companion
+    // to drop the `\n` check entirely — at which point the no-
+    // `\n` invariant would silently regress to "allowed" without
+    // any independent byte-cleanliness pin keeping the byte
+    // forbidden in the cases where the byte still mis-renders
+    // (terminal dumps through a TTY, screen-reader attribution
+    // announcements, downstream attribution scrapers that expect
+    // a single-line attribution). Mirror of the
+    // `_developer_name_does_not_contain_a_carriage_return_byte`
+    // companion's same decoupling rationale on the CR side, which
+    // pins `\r` independently of the `_is_a_single_line` check
+    // for exactly the same future-refactor scenario.
+    //
+    // None of the remaining developer-name companions name the
+    // `\n` byte directly:
+    //   - `_developer_name_is_ascii_only` pins each byte as
+    //     ASCII — `\n` is ASCII (0x0A) so it slips past;
+    //   - `_developer_name_has_no_surrounding_whitespace` uses
+    //     `char::is_whitespace()`, which under Rust's Unicode
+    //     definition returns *true* for U+000A LF, so this
+    //     companion DOES reject a leading or trailing `\n` —
+    //     but a mid-string `\n` (the more dangerous case for the
+    //     header-attribution layout) slips past;
+    //   - `_developer_name_starts_with_the_definite_article` and
+    //     `_ends_with_the_contributors_collective_noun` only
+    //     constrain the literal prefix `"The "` and suffix
+    //     `"contributors"`, so a mid-string `\n` between them
+    //     satisfies both;
+    //   - `_does_not_contain_a_null_byte` /
+    //     `_does_not_contain_a_horizontal_tab_byte` /
+    //     `_does_not_contain_a_carriage_return_byte` /
+    //     `_does_not_contain_a_vertical_tab_byte` /
+    //     `_does_not_contain_a_form_feed_byte` /
+    //     `_does_not_contain_a_backspace_byte`
+    //     each name a different byte specifically.
+    //
+    // The current `_returns_the_paladin_contributors` exact-
+    // value pin catches every byte today, but its protection
+    // collapses the moment a contributor-list addition or a
+    // workspace-vendoring split decouples the helper from the
+    // pinned literal — at that point a `\n`-bearing override
+    // would slip past every byte-level companion above and rely
+    // only on the coupled `_is_a_single_line` check.
+    //
+    // A regression that landed `"The Paladin\ncontributors"`
+    // (LF byte lifted from a CONTRIBUTORS file with one
+    // contributor per line that was collapsed via
+    // `concat!(_, "\n", _)` rather than `join(" ")`, a hand-
+    // edited helper that pasted from a multi-line attribution
+    // mockup preserving the line breaks, or a workspace-
+    // vendoring split that allowed multi-line developer-name
+    // strings) would mis-render in multiple downstream surfaces:
+    // (1) the GLib-backed `AdwAboutDialog::set_developer_name`
+    // setter hands the string to Pango for inline rendering
+    // beneath the program name in the dialog header — Pango
+    // would interpret the `\n` byte as a hard line break and
+    // wrap the attribution onto two lines, pushing the dialog
+    // header taller than its baseline layout and visually
+    // misaligning the icon / application-name / version cluster
+    // below; (2) the same developer-name string is reused by
+    // `_copyright_ends_with_developer_name` to construct the
+    // footer copyright row, so an `\n` byte in the developer
+    // name would propagate into the copyright slot and break
+    // the single-line footer copyright layout there too; (3)
+    // when the developer-name is dumped through a TTY (CI logs,
+    // `paladin-gtk --about` debug output piped to `less` or
+    // `cat`), the `\n` byte breaks the attribution across two
+    // log lines so log-grep queries searching for the
+    // attribution string by the prefix `"The Paladin"` would
+    // capture only the first line and miss the trailing
+    // `"contributors"` token; (4) screen readers that announce
+    // the dialog attribution treat the `\n` as a paragraph
+    // break and pause between `"The Paladin"` and
+    // `"contributors"`, breaking the single-caption
+    // accessibility-tree announcement at the byte boundary; (5)
+    // downstream tooling that scrapes the developer-name
+    // attribution (release-note generators, contributor-
+    // attribution crawlers) would propagate the stray `\n` byte
+    // into the consumer's stream and trigger the same line-
+    // break rendering bug across every downstream surface.
+    //
+    // Pinning the no-`\n` invariant directly here surfaces the
+    // regression with a message naming the offending byte at
+    // build time rather than via a future single-line decoupling
+    // that silently dropped the `\n` guard. Current helper
+    // returns the literal `"The Paladin contributors"` (no `\n`
+    // byte), so this test passes today and serves as a forcing
+    // function so any future override of the helper — including
+    // the eventual landing of a multi-contributor attribution
+    // string — stays free of line-feed bytes even when the
+    // `_is_a_single_line_without_embedded_newlines` companion
+    // is intentionally relaxed.
+    use paladin_gtk::app::model::format_app_about_dialog_developer_name;
+
+    let developer = format_app_about_dialog_developer_name();
+    assert!(
+        !developer.contains('\n'),
+        "AdwAboutDialog developer-name must not contain the `\\n` line-feed byte (0x0A); the current `\\n`-cleanliness is only protected by the `_is_a_single_line_without_embedded_newlines` companion's coupled `\\n`/`\\r` check, so a future refactor that intentionally allowed embedded line breaks (a multi-contributor attribution column layout or a libadwaita upgrade that taught the attribution row to wrap across two lines) would naturally relax that companion to drop the `\\n` check entirely; a stray `\\n` would cause Pango to interpret the byte as a hard line break and wrap the attribution onto two lines (pushing the dialog header taller than its baseline layout and visually misaligning the icon / application-name / version cluster below), propagate into the footer copyright row that reuses this string and break the single-line footer copyright layout there too, break log-grep queries that search for the prefix `\"The Paladin\"` and miss the trailing `\"contributors\"` token, break screen-reader attribution announcements at the byte boundary, and propagate into downstream contributor-attribution scrapers; the `_has_no_surrounding_whitespace` companion does reject a leading or trailing `\\n` (since `char::is_whitespace()` returns true for U+000A LF) but the more dangerous mid-string `\\n` slips past; got {developer:?}",
+    );
+}
