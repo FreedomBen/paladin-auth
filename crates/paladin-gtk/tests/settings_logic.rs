@@ -1495,3 +1495,127 @@ fn accepted_change_from_setting_patch_mirrors_setting_patch_enum_field_for_field
         AcceptedChange::ClipboardClearSecs(CLIPBOARD_CLEAR_SECS_MAX),
     );
 }
+
+// ---------------------------------------------------------------------------
+// `SettingsState::last_outcome` — state-resident SaveOutcome slot
+// ---------------------------------------------------------------------------
+
+#[test]
+fn settings_state_last_outcome_is_none_on_construction() {
+    // A freshly opened settings dialog has no prior worker reply
+    // to render — the inline-subtitle slot beneath every row must
+    // stay clear until the first `apply_save_result` call.
+    let state = SettingsState::new(defaults());
+    assert!(
+        state.last_outcome().is_none(),
+        "freshly constructed SettingsState has no prior SaveOutcome",
+    );
+}
+
+#[test]
+fn settings_state_apply_save_result_stores_outcome_for_state_resident_lookup() {
+    // The widget owns one `SettingsState` per dialog and binds the
+    // inline-subtitle compose helpers
+    // (`compose_settings_dialog_inline_subtitle_*_for_field`) through
+    // `state.last_outcome()` so a single `#[watch]` over state covers
+    // every row's body / visibility / CSS class. The state machine
+    // therefore mirrors what `apply_save_result` returns into a
+    // resident slot rather than forcing the widget to thread an
+    // `Option<SaveOutcome>` alongside `&SettingsState` through every
+    // binding.
+    let mut state = SettingsState::new(defaults());
+    state.stage_auto_lock_secs(60);
+    let _ = state.resolve_debounce();
+
+    // Success: the resident slot now reports the success arm so the
+    // widget can decide whether to fire the saved-confirmation
+    // `AdwToast` from `format_settings_dialog_saved_toast`.
+    let outcome = state.apply_save_result(AcceptedChange::AutoLockSecs(60), Ok(()));
+    assert!(matches!(outcome, SaveOutcome::Success));
+    assert!(matches!(state.last_outcome(), Some(SaveOutcome::Success)));
+
+    // Inline failure routes the same body verbatim into the slot so
+    // the subtitle helpers (which take `Option<&SaveOutcome>`) read
+    // it from the state alongside `committed()` /
+    // `visible_auto_lock_secs()` without an extra widget-side cache.
+    let err = PaladinError::IoError {
+        operation: "vault_save",
+        source: std::io::Error::other("disk full"),
+    };
+    let outcome = state.apply_save_result(AcceptedChange::AutoLockSecs(60), Err(err));
+    let (stored_kind, stored_field) = match state.last_outcome() {
+        Some(SaveOutcome::Inline { error, field }) => (error.kind, *field),
+        other => panic!("expected Inline SaveOutcome in last_outcome, got {other:?}"),
+    };
+    assert_eq!(
+        stored_kind,
+        ErrorKind::IoError,
+        "stored outcome carries the IoError discriminator the apply call received",
+    );
+    assert_eq!(
+        stored_field,
+        SettingsField::AutoLockSecs,
+        "stored outcome targets the field that attempted the save",
+    );
+    // Same arm came back from `apply_save_result` directly — the
+    // resident slot is a mirror, not a divergent rewrite.
+    assert!(matches!(
+        outcome,
+        SaveOutcome::Inline {
+            field: SettingsField::AutoLockSecs,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn settings_state_toggle_clears_last_outcome_so_prior_inline_does_not_linger() {
+    // Once the user starts a new change the prior inline error /
+    // durability warning should clear — the user has acknowledged
+    // it by acting again, and a stale subtitle beneath an unrelated
+    // value would be visually noisy. Toggle clicks therefore reset
+    // the resident slot before returning their own
+    // `ToggleOutcome::Save` / `ToggleOutcome::Noop`.
+    let mut state = SettingsState::new(defaults());
+    let _ = state.toggle_auto_lock_enabled(true);
+    let _ = state.apply_save_result(
+        AcceptedChange::AutoLockEnabled(true),
+        Err(PaladinError::SaveDurabilityUnconfirmed),
+    );
+    assert!(matches!(
+        state.last_outcome(),
+        Some(SaveOutcome::DurabilityWarning { .. })
+    ));
+
+    // A fresh toggle (matching or differing) clears the slot before
+    // the widget sees the new outcome.
+    let _ = state.toggle_clipboard_clear_enabled(true);
+    assert!(
+        state.last_outcome().is_none(),
+        "new toggle clears the prior outcome so the subtitle does not linger",
+    );
+}
+
+#[test]
+fn settings_state_stage_clears_last_outcome_so_prior_inline_does_not_linger() {
+    // Spinner stage events (typed values pre-debounce) are also
+    // a fresh user action — clear the resident outcome so the
+    // previous error / warning does not stick to the row while the
+    // user is typing a retry. Mirrors the toggle reset above.
+    let mut state = SettingsState::new(defaults());
+    let _ = state.toggle_auto_lock_enabled(true);
+    let _ = state.apply_save_result(
+        AcceptedChange::AutoLockEnabled(true),
+        Err(save_not_committed_no_backup()),
+    );
+    assert!(matches!(
+        state.last_outcome(),
+        Some(SaveOutcome::Rollback { .. })
+    ));
+
+    state.stage_auto_lock_secs(60);
+    assert!(
+        state.last_outcome().is_none(),
+        "new spinner stage clears the prior outcome so the subtitle does not linger",
+    );
+}

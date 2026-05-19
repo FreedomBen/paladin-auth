@@ -923,6 +923,7 @@ enum PendingSpinner {
 pub struct SettingsState {
     committed: CommittedSettings,
     pending: Option<PendingSpinner>,
+    last_outcome: Option<SaveOutcome>,
 }
 
 impl SettingsState {
@@ -933,6 +934,7 @@ impl SettingsState {
         Self {
             committed,
             pending: None,
+            last_outcome: None,
         }
     }
 
@@ -940,6 +942,23 @@ impl SettingsState {
     #[must_use]
     pub fn committed(&self) -> &CommittedSettings {
         &self.committed
+    }
+
+    /// Last [`SaveOutcome`] reported by [`Self::apply_save_result`],
+    /// or `None` if no worker reply has arrived yet for the open
+    /// dialog (and `None` again after a fresh `stage_*` /
+    /// `toggle_*` clears the slot — see those methods).
+    ///
+    /// The widget pairs this with the
+    /// `compose_settings_dialog_inline_subtitle_*_for_field` family
+    /// so a single `#[watch]` over [`SettingsState`] covers every
+    /// row's body / visibility / CSS class. Sibling of
+    /// [`Self::committed`] and [`Self::visible_auto_lock_secs`] /
+    /// [`Self::visible_clipboard_clear_secs`] on the
+    /// state-resident-projection side.
+    #[must_use]
+    pub fn last_outcome(&self) -> Option<&SaveOutcome> {
+        self.last_outcome.as_ref()
     }
 
     /// Visible `auto_lock_timeout_secs` value — the pending draft if
@@ -964,19 +983,25 @@ impl SettingsState {
 
     /// Buffer a new `auto_lock_timeout_secs` spinner value. Replaces
     /// any prior pending entry (a spinner switch drops the previous
-    /// row's pending). Returns the clamped value the widget should
-    /// display.
+    /// row's pending) and clears any resident
+    /// [`Self::last_outcome`] so a prior inline error / durability
+    /// warning does not linger beneath an unrelated typed retry.
+    /// Returns the clamped value the widget should display.
     pub fn stage_auto_lock_secs(&mut self, raw: u32) -> u32 {
         let clamped = clamp_auto_lock_secs(raw);
         self.pending = Some(PendingSpinner::AutoLockSecs(clamped));
+        self.last_outcome = None;
         clamped
     }
 
     /// Buffer a new `clipboard_clear_secs` spinner value. Replaces
-    /// any prior pending entry. Returns the clamped value.
+    /// any prior pending entry and clears any resident
+    /// [`Self::last_outcome`] (same reasoning as
+    /// [`Self::stage_auto_lock_secs`]). Returns the clamped value.
     pub fn stage_clipboard_clear_secs(&mut self, raw: u32) -> u32 {
         let clamped = clamp_clipboard_clear_secs(raw);
         self.pending = Some(PendingSpinner::ClipboardClearSecs(clamped));
+        self.last_outcome = None;
         clamped
     }
 
@@ -1016,7 +1041,11 @@ impl SettingsState {
     }
 
     /// Flip the `auto_lock_enabled` toggle. Toggles do not debounce.
+    /// Clears any resident [`Self::last_outcome`] before returning
+    /// so a prior inline error / durability warning does not linger
+    /// beneath the row while the user is acting again.
     pub fn toggle_auto_lock_enabled(&mut self, enabled: bool) -> ToggleOutcome {
+        self.last_outcome = None;
         if enabled == self.committed.auto_lock_enabled {
             return ToggleOutcome::Noop;
         }
@@ -1027,8 +1056,11 @@ impl SettingsState {
     }
 
     /// Flip the `clipboard_clear_enabled` toggle. Toggles do not
-    /// debounce.
+    /// debounce. Clears any resident [`Self::last_outcome`] before
+    /// returning (same reasoning as
+    /// [`Self::toggle_auto_lock_enabled`]).
     pub fn toggle_clipboard_clear_enabled(&mut self, enabled: bool) -> ToggleOutcome {
+        self.last_outcome = None;
         if enabled == self.committed.clipboard_clear_enabled {
             return ToggleOutcome::Noop;
         }
@@ -1041,13 +1073,18 @@ impl SettingsState {
     /// Route the typed worker result back into the state machine.
     /// Updates the committed snapshot in the success /
     /// durability-unconfirmed cases (the file is on disk in both)
-    /// and leaves it unchanged on rollback / inline failure.
+    /// and leaves it unchanged on rollback / inline failure. Mirrors
+    /// the typed outcome into [`Self::last_outcome`] so the inline-
+    /// subtitle compose helpers
+    /// (`compose_settings_dialog_inline_subtitle_*_for_field`) can
+    /// read it back off `&SettingsState` without an extra widget-side
+    /// cache.
     pub fn apply_save_result(
         &mut self,
         change: AcceptedChange,
         result: Result<(), PaladinError>,
     ) -> SaveOutcome {
-        match result {
+        let outcome = match result {
             Ok(()) => {
                 self.commit_attempted(change);
                 SaveOutcome::Success
@@ -1067,7 +1104,9 @@ impl SettingsState {
                 error: InlineError::from_error(&err),
                 field: change.field(),
             },
-        }
+        };
+        self.last_outcome = Some(outcome.clone());
+        outcome
     }
 
     fn commit_attempted(&mut self, change: AcceptedChange) {
