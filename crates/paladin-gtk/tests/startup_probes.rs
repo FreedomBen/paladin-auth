@@ -11836,3 +11836,77 @@ fn format_app_about_dialog_developer_name_does_not_contain_a_horizontal_tab_byte
         "AdwAboutDialog developer-name must not contain the `\\t` horizontal-tab byte (0x09); a mid-string `\\t` slips past `_is_a_single_line_without_embedded_newlines` (which only checks `\\n` and `\\r`), past the starts/ends-with-whitespace guards (which only reject `\\t` at the boundaries), past `_is_ascii_only` (because `\\t` is ASCII), and past `_starts_with_the_definite_article` / `_ends_with_the_contributors_collective_noun` (which only constrain the prefix and suffix); it would render as a wide horizontal gap in the dialog-header attribution row, break screen-reader announcements at the tab boundary, and propagate into downstream attribution scrapers; got {developer:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_copyright_does_not_contain_a_horizontal_tab_byte() {
+    // Defense-in-depth sibling of the existing
+    // `format_app_about_dialog_copyright_is_a_single_line_without_embedded_newlines`
+    // (which checks `\n` AND `\r` but not `\t`),
+    // `_copyright_starts_with_copyright_glyph_and_contains_developer_name`
+    // (which constrains the leading glyph and the developer-
+    // name substring), `_copyright_separates_glyph_and_attribution_with_a_single_space`
+    // (which constrains the space immediately after the `©`
+    // glyph), `_copyright_ends_with_developer_name` (which
+    // constrains the trailing substring),
+    // `_copyright_does_not_end_with_a_period` (which constrains
+    // the trailing byte), `_copyright_does_not_contain_a_year_token_so_it_does_not_drift_across_releases`
+    // (which scans for four-digit runs but `\t` is not a
+    // digit), and `_copyright_does_not_contain_a_null_byte`
+    // (which names `\0` specifically — `\t` is not `\0`).
+    //
+    // The copyright helper deliberately omits `_is_ascii_only`
+    // because the canonical `©` U+00A9 (COPYRIGHT SIGN) is
+    // non-ASCII — a strict-ASCII pin would have to be
+    // expressed differently (e.g. "every byte is either ASCII
+    // or the `©` glyph"), and no such variant exists today.
+    // So `\t` is doubly slippable: even an `_is_ascii_only`
+    // sibling would have allowed it as an ASCII byte.
+    //
+    // None of the existing companions name the `\t` byte
+    // directly. The current `_returns_paladin_copyright_line`
+    // exact-value pin catches everything, but its protection
+    // collapses the moment a future override (e.g. a year-
+    // pinned override at the v0.2 release cut, a workspace-
+    // vendoring split that lifted the copyright literal, or a
+    // hand-edited helper that swapped the literal for a
+    // tab-separated multi-column credit line) replaces the
+    // exact value.
+    //
+    // A regression that landed `"© The Paladin\tcontributors"`
+    // (a tab-separated attribution lifted from a TSV-style
+    // CONTRIBUTORS export, a `concat!(_, "\t", _)` form, or a
+    // hand-edited helper that pasted from a markdown-table
+    // cell) would mis-render in multiple downstream surfaces:
+    // (1) the GLib-backed `AdwAboutDialog::set_copyright`
+    // setter hands the string to Pango for inline rendering
+    // in the dialog footer — Pango's default rendering of
+    // `\t` is implementation-defined and typically renders as
+    // a wide horizontal gap or an empty box, visually
+    // misaligning the footer cluster against the website /
+    // issue-link rows beneath it; (2) screen readers that
+    // announce the dialog copyright footer read the `\t` as
+    // a literal control character, breaking the copyright
+    // accessibility-tree announcement at the tab boundary;
+    // (3) any downstream tooling that scrapes the copyright
+    // line (license-attribution crawlers, GNOME
+    // `gnome-software` metadata aggregators) would propagate
+    // the stray `\t` byte into the consumer's stream and
+    // trigger the same rendering bug.
+    //
+    // Pinning the no-`\t` invariant directly here surfaces
+    // the regression with a message naming the offending byte
+    // at build time rather than as a downstream footer-
+    // rendering bug or a screen-reader announcement break.
+    // Current helper returns the literal
+    // `"© The Paladin contributors"` (no `\t` byte), so this
+    // test passes today and serves as a forcing function so
+    // any future override of the helper stays free of
+    // horizontal-tab bytes.
+    use paladin_gtk::app::model::format_app_about_dialog_copyright;
+
+    let copyright = format_app_about_dialog_copyright();
+    assert!(
+        !copyright.contains('\t'),
+        "AdwAboutDialog copyright must not contain the `\\t` horizontal-tab byte (0x09); a mid-string `\\t` slips past `_is_a_single_line_without_embedded_newlines` (which only checks `\\n` and `\\r`), past the no-year-token four-digit-run scan (`\\t` is not a digit), and past `_does_not_contain_a_null_byte` (because `\\t` is not `\\0`); it would render as a wide horizontal gap in the dialog-footer copyright row, visually misalign the footer cluster against the website / issue-link rows, break screen-reader announcements at the tab boundary, and propagate into downstream license-attribution scrapers; got {copyright:?}",
+    );
+}
