@@ -7463,3 +7463,65 @@ fn format_app_about_dialog_debug_info_filename_extension_is_lowercase_txt() {
         "AdwAboutDialog debug_info_filename extension must be the case-sensitive lower-case literal `txt` matching the GNOME / freedesktop convention for plain-text files; got {extension:?} in {filename:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_application_icon_name_has_no_embedded_whitespace() {
+    // Defense-in-depth sibling of
+    // `format_app_about_dialog_application_icon_name_matches_app_id`
+    // (exact-value pin against `APP_ID`),
+    // `format_app_about_dialog_application_icon_name_is_reverse_dns`
+    // (positive shape pin on `.`-separated reverse-DNS form),
+    // `format_app_about_dialog_application_icon_name_segments_are_non_empty`
+    // (positive pin on each segment being non-empty),
+    // `format_app_about_dialog_application_icon_name_ends_with_gui_segment`
+    // (cross-segment pin against the `.Gui` front-end suffix),
+    // and `format_app_about_dialog_application_icon_name_is_ascii_only`
+    // (byte-composition pin against Unicode lookalikes).
+    // Those companions catch the wrong-value, wrong-shape,
+    // empty-segment, wrong-suffix, and non-ASCII-byte
+    // regressions but leave the embedded-whitespace edge case
+    // ungated.
+    //
+    // The `gtk::Application::set_application_id` input is
+    // validated by `g_application_id_is_valid` which rejects any
+    // whitespace byte — a space, tab, or embedded newline in
+    // the application-id literal would either fail the runtime
+    // validation (preventing `gtk::Application::activate` from
+    // firing) or, depending on the libadwaita / GTK version,
+    // silently coerce to an invalid icon-theme lookup key that
+    // renders the broken-image placeholder. The reverse-DNS
+    // shape pin (`_is_reverse_dns`) requires `.`-separated
+    // segments but a `"org.tamx .Paladin.Gui"` (stray space
+    // after `tamx`) would still split into the same segment
+    // count under `.split('.')`, slipping past the
+    // `_segments_are_non_empty` companion because every segment
+    // is non-empty even with the embedded space.
+    //
+    // The new `_is_ascii_only` companion catches non-ASCII
+    // whitespace (e.g. U+00A0 NO-BREAK SPACE, U+2003 EM SPACE)
+    // because those are non-ASCII bytes, but does not catch
+    // ASCII-space (U+0020), ASCII-tab (U+0009), or other ASCII
+    // whitespace inside the literal — those are ASCII-valid
+    // and would slip past every existing companion. Pinning
+    // the no-embedded-whitespace invariant here closes that
+    // remaining gap so a regression that hand-spelled the
+    // helper with stray whitespace surfaces with a message
+    // naming the offending whitespace character rather than
+    // as a confusing runtime icon-lookup miss or
+    // `gtk::Application::activate` no-op.
+    //
+    // Mirror of the `format_app_about_dialog_url_helpers_contain_no_embedded_whitespace`
+    // sibling already pinned on the three AdwAboutDialog footer
+    // URL helpers and the `_action_group_name_has_no_separator_or_whitespace`
+    // companion on the `gio::ApplicationWindow::insert_action_group`
+    // side; together they pin the no-whitespace invariant across
+    // every dialog-routed identifier-shaped helper against a
+    // single source of truth.
+    use paladin_gtk::app::model::format_app_about_dialog_application_icon_name;
+
+    let icon_name = format_app_about_dialog_application_icon_name();
+    assert!(
+        !icon_name.chars().any(char::is_whitespace),
+        "AdwAboutDialog application_icon_name must contain no whitespace byte so the value passes `g_application_id_is_valid` cleanly (which rejects any whitespace) and resolves against the freedesktop icon-theme lookup without falling back to the broken-image placeholder; got {icon_name:?}",
+    );
+}
