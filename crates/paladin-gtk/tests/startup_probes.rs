@@ -9495,3 +9495,64 @@ fn format_app_about_dialog_version_segments_are_non_empty() {
         );
     }
 }
+
+#[test]
+fn format_app_about_dialog_version_does_not_start_with_a_dot() {
+    // Defense-in-depth sibling of the just-added
+    // `format_app_about_dialog_version_does_not_end_with_a_dot`
+    // companion (which pins the trailing-byte against the `.`
+    // byte) on the leading-byte side. Together they pin both
+    // the leading and trailing terminal-byte edge cases against
+    // the strict Semantic Versioning 2.0 (semver.org) grammar.
+    //
+    // The just-added `_starts_with_a_digit` companion already
+    // pins the leading character of the version as an ASCII
+    // digit — which transitively excludes a leading `.` byte
+    // (since `.` is not a digit). Restating the no-leading-dot
+    // rule independently here surfaces the regression with a
+    // message naming the specific offending byte (the `.`
+    // rather than the more general "any non-digit") and keeps
+    // the leading- / trailing-byte rule symmetric across the
+    // two ends of the version string for the case where a
+    // future refactor weakens the `_starts_with_a_digit` pin
+    // (e.g. broadening it to accept letter-prefixed pre-release
+    // tags as a temporary stopgap) — the no-leading-dot pin
+    // here would still hold and catch the leading-`.` edge case
+    // independently.
+    //
+    // A regression that landed `".0.0.1"` (leading dot from a
+    // `concat!(".", env!("CARGO_PKG_VERSION"))` injection) or
+    // `".."` (consecutive dots terminated; mostly caught by
+    // `_segments_are_non_empty` but restated here for the
+    // leading-dot edge case) would render the `AdwAboutDialog`
+    // version row as `"Paladin .0.0.1"` next to the program
+    // name in the bold header row — visually mis-rendering the
+    // leading byte as a punctuation glyph rather than the
+    // canonical leading digit — and would be rejected by
+    // AppStream / Flatpak release-notes tooling (which
+    // validates the version against the strict SemVer grammar
+    // and would reject a leading-`.` version as a malformed
+    // schema entry).
+    //
+    // The current `env!("CARGO_PKG_VERSION")` resolves to
+    // `"0.0.1"` which starts with the `0` digit so this test
+    // passes today and serves as a forcing function so any
+    // future override of the version helper stays aligned
+    // with the strict SemVer 2.0 leading-byte grammar.
+    // Mirror of the `_does_not_end_with_a_dot` companion on
+    // the trailing-byte side, the `_starts_with_a_digit`
+    // companion on the leading-character side, and the
+    // `_segments_are_non_empty` companion on the per-segment
+    // non-emptiness side; together they pin the no-empty-
+    // segment / leading-digit / no-leading-dot / no-trailing-dot
+    // contract across the dialog-header version row against
+    // a single source of truth on the SemVer / GNOME /
+    // AppStream / Flatpak packaging convention.
+    use paladin_gtk::app::model::format_app_about_dialog_version;
+
+    let version = format_app_about_dialog_version();
+    assert!(
+        !version.starts_with('.'),
+        "AdwAboutDialog version must not start with a `.` byte (which is not a valid leading character in any of the Semantic Versioning 2.0 grammar productions — MAJOR must be a non-negative integer starting with `0`-`9` or a non-zero digit followed by digits) so the AppStream / Flatpak release-notes `<release version=\"...\">` XML schema entry resolves at packaging time rather than as a malformed-schema rejection and the AdwAboutDialog version row renders the canonical bare-major leading digit rather than a punctuation glyph next to the program name; got {version:?}",
+    );
+}
