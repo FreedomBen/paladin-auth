@@ -5105,3 +5105,32 @@ fn app_msg_carries_quit_variant() {
 
     let _: AppMsg = AppMsg::Quit;
 }
+
+#[test]
+fn format_app_about_dialog_program_name_matches_format_app_window_title() {
+    // Cross-consistency: `format_app_window_title` populates the
+    // `AdwApplicationWindow::set_title` slot (the window-list
+    // entry and Wayland session-label string), while
+    // `format_app_about_dialog_program_name` populates the
+    // `AdwAboutDialog::set_application_name` slot (the dialog
+    // header). Both must agree so the running binary's identity
+    // shown on the desktop bar and the identity shown in the
+    // About dialog header stay in lockstep — a drift would let
+    // the title bar advertise one name while the About header
+    // shows another. The format_app_menu_about_label docstring
+    // already calls out this invariant ("if either renames in a
+    // future version, both should move together so the menu
+    // entry and window-list entry stay in lockstep"), and the
+    // `format_app_menu_about_label_carries_application_name`
+    // test ties the About menu *label* to
+    // `format_app_window_title`; this assertion completes the
+    // triangle by tying the About *dialog header* to the same
+    // pinned source of truth.
+    use paladin_gtk::app::model::{format_app_about_dialog_program_name, format_app_window_title};
+
+    assert_eq!(
+        format_app_about_dialog_program_name(),
+        format_app_window_title(),
+        "AdwAboutDialog application_name slot must match the AdwApplicationWindow title slot so the desktop bar and the About dialog header advertise the same running-binary identity",
+    );
+}
