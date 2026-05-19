@@ -14814,3 +14814,94 @@ fn format_app_about_dialog_translator_credits_does_not_contain_a_vertical_tab_by
         "AdwAboutDialog translator_credits must not contain the `\\x0B` vertical-tab byte (0x0B); the libadwaita translator-credits convention splits on `\\n` (LF) only and leaves embedded `\\x0B` bytes inside each parsed entry untouched, and `\\x0B` is technically whitespace under `char::is_whitespace()` but has no tab-stop semantics so Pango renders it as a literal control glyph; a stray `\\x0B` would render as a hollow box or tofu-like placeholder in the credits-page attribution column, would survive `xgettext` round trips as either silent dedupe to a single space or `\\x0B` preservation, and would break screen-reader announcements at every attribution-row column boundary; got {translator_credits:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_debug_info_does_not_contain_a_vertical_tab_byte() {
+    // Defense-in-depth per-byte sibling extending the debug_info
+    // byte-cleanliness contract past the just-completed `{null /
+    // horizontal-tab / carriage-return}` triplet to the next C0
+    // control byte. The vertical-tab byte `\x0B` (0x0B) sits one
+    // step above HT (0x09) and one step below CR (0x0D) in the
+    // ASCII C0 block; like its siblings it is a non-printable
+    // control byte with no legitimate use inside a Troubleshooting
+    // → Debugging Information payload.
+    //
+    // The existing `_carries_program_name_version_and_app_id`
+    // (content-shape pin),
+    // `_is_non_empty_text_with_no_trailing_whitespace` (non-empty
+    // + no-trailing-whitespace pin; note that
+    // `char::is_whitespace()` matches U+000B VT, so a *trailing*
+    // `\x0B` is rejected by this companion — but a mid-payload
+    // `\x0B` is non-trailing and slips past),
+    // `_starts_with_program_name` (leading-substring pin),
+    // `_app_id_appears_on_a_distinct_line_from_program_name`
+    // (multi-line pin), `_has_exactly_two_lines` (line-count
+    // pin), `_program_name_line_ends_with_the_version` (line-1
+    // trailing-substring pin),
+    // `_app_id_line_ends_with_the_reverse_dns_app_id` (line-2
+    // trailing-substring pin), `_is_ascii_only` (byte-composition
+    // pin), `_does_not_contain_a_null_byte` (null-byte pin),
+    // `_does_not_contain_a_horizontal_tab_byte` (HT pin), and
+    // `_does_not_contain_a_carriage_return_byte` (CR pin) catch
+    // the wrong-shape / wrong-content / empty / multi-line-count
+    // / wrong-trailing-substring / non-ASCII / `\0`-byte / `\t`-
+    // byte / `\r`-byte regressions but a mid-payload `\x0B`
+    // (`"Paladin\x0B0.0.1\nApp ID: org.tamx.Paladin.Gui"`)
+    // slips past `_is_ascii_only` (since `\x0B` is ASCII), past
+    // the per-byte siblings (which each name a different byte),
+    // past the line-count and trailing-substring companions
+    // (which split on `\n` and check only trailing substrings),
+    // and past the `_is_non_empty_text_with_no_trailing_whitespace`
+    // companion's boundary-only `\x0B` rejection.
+    //
+    // A regression that landed `\x0B` in the payload would mis-
+    // render the debug-info content in three ways: (1) the GLib-
+    // backed `AdwAboutDialog::set_debug_info` setter routes the
+    // value into Pango for rendering inside the dialog's
+    // "Troubleshooting → Debugging Information" body — Pango's
+    // default rendering of a bare `\x0B` byte is implementation-
+    // defined and typically renders as a literal control glyph
+    // (a hollow box or tofu-like placeholder) since `\x0B` has
+    // no tab-stop semantics, breaking the tidy single-column
+    // layout expected by the AdwAboutDialog template; (2) when
+    // the user pastes the payload into a bug-report form on
+    // GitHub, the `\x0B` byte renders inconsistently across
+    // browsers and font stacks (some show a hollow box, some
+    // show a vertical-spacing artifact, some silently drop the
+    // byte), cluttering the maintainer's view of the report
+    // and degrading bug-report quality; (3) when the user saves
+    // the payload to a `.txt` file via the
+    // `AdwAboutDialog::set_debug_info_filename` slot, the GTK
+    // file-writer writes the raw bytes so the resulting file
+    // contains a stray VT byte that breaks POSIX text-processing
+    // tools (`grep`, `awk`, `cut`) whose default field-
+    // delimiter behaviour does not recognize `\x0B` as a
+    // delimiter but also does not treat it as part of the field
+    // payload.
+    //
+    // Pinning the no-`\x0B` invariant directly here surfaces
+    // the regression with a message naming the offending byte
+    // at build time rather than as a downstream dialog rendering
+    // bug, a pasted-bug-report cross-browser drift artifact, or
+    // a saved-file POSIX-text-processing breakage. The current
+    // `format_app_about_dialog_debug_info` returns `"Paladin
+    // 0.0.1\nApp ID: org.tamx.Paladin.Gui"` (built at compile
+    // time via `concat!` with single-space separators between
+    // every column), so this test passes today and serves as a
+    // forcing function so any future override of the debug-info
+    // helper — including the eventual landing of additional
+    // diagnostic fields (locale, Wayland vs X11 session type,
+    // Flatpak vs native) — stays free of vertical-tab bytes.
+    // Continues the debug-info C0 control-byte cycle past the
+    // just-completed `{null / horizontal-tab / carriage-return}`
+    // triplet so the helper's byte-composition contract pins
+    // each forbidden control byte against a single source of
+    // truth.
+    use paladin_gtk::app::model::format_app_about_dialog_debug_info;
+
+    let debug_info = format_app_about_dialog_debug_info();
+    assert!(
+        !debug_info.contains('\x0B'),
+        "AdwAboutDialog debug_info must not contain the `\\x0B` vertical-tab byte (0x0B); a `\\x0B` byte slips past `_is_ascii_only` (since `\\x0B` is ASCII), past `_does_not_contain_a_null_byte` / `_does_not_contain_a_horizontal_tab_byte` / `_does_not_contain_a_carriage_return_byte` (which each name a different byte), past `_has_exactly_two_lines` / `_program_name_line_ends_with_the_version` / `_app_id_line_ends_with_the_reverse_dns_app_id` (which split on `\\n` and only check trailing substrings), and past `_is_non_empty_text_with_no_trailing_whitespace` (which rejects boundary `\\x0B` via `char::is_whitespace()` but not mid-payload occurrences), and would render as a literal control glyph in the Troubleshooting dialog body, drift across browsers and font stacks in pasted bug reports, and propagate a stray VT byte into POSIX text-processing tools (`grep`, `awk`, `cut`) when the payload is saved to disk via `set_debug_info_filename`; got {debug_info:?}",
+    );
+}
