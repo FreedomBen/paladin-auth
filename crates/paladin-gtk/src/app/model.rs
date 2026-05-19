@@ -3634,7 +3634,7 @@ pub fn format_app_about_dialog_release_notes() -> &'static str {
 /// "Copy debug info" button — the text users paste into bug
 /// reports.
 ///
-/// Returns a three-line `\n`-separated payload built at compile
+/// Returns a two-line `\n`-separated payload built at compile
 /// time via `concat!`:
 ///
 /// ```text

@@ -5778,3 +5778,35 @@ fn format_app_about_dialog_debug_info_app_id_appears_on_a_distinct_line_from_pro
         "AdwAboutDialog debug-info program-name and reverse-DNS app ID must land on distinct line indices so the bug-report paste renders as a tidy multi-line block rather than as one ambiguous wrapping run; both landed on line index {program_name_line_idx} of {debug:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_debug_info_has_exactly_two_lines() {
+    // Defense-in-depth sibling of
+    // `format_app_about_dialog_debug_info_app_id_appears_on_a_distinct_line_from_program_name`
+    // which only pins the *distinct-lines* invariant between the
+    // program-name and reverse-DNS App ID segments. That looser
+    // companion would still pass for a future refactor that
+    // ballooned the payload to three, four, or more lines —
+    // e.g. by adding a feature-flag dump, a host-OS line, or a
+    // crash-counter line — without first noting whether the
+    // additional fields belong in the bug-report copy paste at
+    // all. Pinning the exact line count to two here keeps the
+    // payload deliberately minimal: a future addition has to
+    // both update the implementation and bump this expected
+    // count, which is a forcing function for an explicit
+    // decision about whether the new field is worth adding to
+    // the bug-report payload.
+    //
+    // The pinned two-line shape matches the docstring example
+    // on `format_app_about_dialog_debug_info` which renders
+    // `"Paladin <version>"` on line one and
+    // `"App ID: org.tamx.Paladin.Gui"` on line two.
+    use paladin_gtk::app::model::format_app_about_dialog_debug_info;
+
+    let debug = format_app_about_dialog_debug_info();
+    let line_count = debug.lines().count();
+    assert_eq!(
+        line_count, 2,
+        "AdwAboutDialog debug-info must contain exactly two lines so the bug-report payload stays deliberately minimal — program-name + version on line one, reverse-DNS App ID on line two — and a future addition forces an explicit decision; got {line_count} lines in {debug:?}",
+    );
+}
