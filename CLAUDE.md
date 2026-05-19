@@ -11,6 +11,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - After changing code, format and lint it with `cargo fmt` and `cargo clippy`, ensuring no warnings remain.
 - Commit after making changes.  Do not push.
 - For containers, use Containerfile and compose.yaml and always build and run with rootless podman unless explicitly told otherwise.
+- Commit messages should respect git conventions: The first line should be a subject line of 50 characters or less (though go up to 80 if needed), followed by a blank line, and then a body that provides more detail about the change.
 - Multiple agents may be working in this repository simultaneously.  Serialize commits with a simple lock file at `commit.lock`.  Use three separate shell commands so failures at any step stay visible — do **not** bundle creation, commit, and removal into one chained command:
   1. **Acquire**: check the lock does not exist and create it.  Run `[ ! -e commit.lock ] && touch commit.lock` as its own command.  If the file already exists, another agent is mid-commit — wait briefly and retry rather than overwriting it.
   2. **Commit**: `git add <files> && git commit -m "<msg>"` as its own command.

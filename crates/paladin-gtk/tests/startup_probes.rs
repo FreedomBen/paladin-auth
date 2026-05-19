@@ -6213,3 +6213,50 @@ fn format_app_window_accelerator_bindings_accelerators_use_control_modifier() {
         );
     }
 }
+
+#[test]
+fn format_app_window_accelerator_bindings_accelerators_carry_exactly_one_modifier_block() {
+    // Defense-in-depth sibling of
+    // `format_app_window_accelerator_bindings_accelerators_use_control_modifier`
+    // (which pins the leading `<Control>` modifier block) and
+    // `format_app_window_accelerator_bindings_accelerators_carry_modifier_prefix`
+    // (which pins each accelerator starts with a non-empty `<…>`
+    // block followed by a keysym). Both companions guard the
+    // single-block / `<Control>` invariants but leave the
+    // exactly-one-modifier-block invariant ungated, so a future
+    // refactor that compounded modifiers — e.g.
+    // `"<Control><Shift>n"` or `"<Control><Alt>q"` — would slip
+    // past the leading-prefix check while diverging from the
+    // single-modifier GNOME convention and intercepting a
+    // different keyboard shortcut surface than the docstring on
+    // each per-accelerator helper claims.
+    //
+    // Mirrors the `gio::Application::set_accels_for_action` form
+    // for the primary menu shortcuts: the GNOME convention is
+    // one modifier per primary application action; compound
+    // modifiers belong on power-user shortcuts (text-buffer
+    // operations, IDE-style multi-modifier chords) which do not
+    // currently appear in the application menu surface.
+    //
+    // The assertion counts the `<` and `>` ASCII bytes in each
+    // accelerator: an exactly-one-block accelerator like
+    // `"<Control>n"` has one `<` and one `>`. A compound
+    // `"<Control><Shift>n"` would have two each. The keysym
+    // segment (`"n"`, `"q"`, `"comma"`, etc.) contains no angle
+    // brackets so the count maps directly to the modifier-block
+    // count.
+    use paladin_gtk::app::model::format_app_window_accelerator_bindings;
+
+    for (accel, target) in format_app_window_accelerator_bindings() {
+        let open_count = accel.bytes().filter(|&b| b == b'<').count();
+        let close_count = accel.bytes().filter(|&b| b == b'>').count();
+        assert_eq!(
+            open_count, 1,
+            "format_app_window_accelerator_bindings accelerator for target {target:?} must contain exactly one `<` ASCII byte so the single-modifier-block GNOME convention holds; compound modifiers like `<Control><Shift>n` belong on power-user shortcuts not primary application actions; got {open_count} `<` byte(s) in {accel:?}",
+        );
+        assert_eq!(
+            close_count, 1,
+            "format_app_window_accelerator_bindings accelerator for target {target:?} must contain exactly one `>` ASCII byte so the single-modifier-block GNOME convention holds; got {close_count} `>` byte(s) in {accel:?}",
+        );
+    }
+}
