@@ -5810,3 +5810,38 @@ fn format_app_about_dialog_debug_info_has_exactly_two_lines() {
         "AdwAboutDialog debug-info must contain exactly two lines so the bug-report payload stays deliberately minimal — program-name + version on line one, reverse-DNS App ID on line two — and a future addition forces an explicit decision; got {line_count} lines in {debug:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_developer_name_is_a_single_line_without_embedded_newlines() {
+    // Defense-in-depth sibling of
+    // `format_app_about_dialog_developer_name_is_non_empty_and_distinct_from_program_name`
+    // which pins non-empty + no leading/trailing whitespace +
+    // distinct from program-name / application-icon-name. That
+    // companion still allows an embedded `\n` inside the
+    // developer-name string — e.g. `"The Paladin\ncontributors"` —
+    // which would render across two lines in the
+    // `AdwAboutDialog` header attribution slot and break the
+    // tidy single-line header layout `libadwaita` expects.
+    //
+    // The dialog's `developer-name` property is consumed as a
+    // single-line attribution by the dialog header (a "by
+    // <developer-name>" caption beneath the program name); a
+    // multi-line value would push the dialog header taller than
+    // its baseline layout and visually misalign the icon /
+    // application-name / version cluster. Pinning the
+    // single-line invariant here catches that drift at the
+    // pinned layer rather than only being noticed when a user
+    // opened the about dialog and saw a vertically-stretched
+    // header.
+    use paladin_gtk::app::model::format_app_about_dialog_developer_name;
+
+    let developer = format_app_about_dialog_developer_name();
+    assert!(
+        !developer.contains('\n'),
+        "AdwAboutDialog developer-name must be a single line so the dialog header attribution renders as one tidy caption beneath the program name rather than as a vertically-stretched two-line block; got {developer:?}",
+    );
+    assert!(
+        !developer.contains('\r'),
+        "AdwAboutDialog developer-name must use LF-only conventions (no embedded CR), matching the GNOME stack's text expectation for a single-line attribution caption; got {developer:?}",
+    );
+}
