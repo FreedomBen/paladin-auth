@@ -342,6 +342,34 @@ pub enum AppMsg {
     /// in follow-up commits; this commit only wires the dispatch
     /// edge so the menu activation reaches `AppModel`.
     OpenPreferencesDialog,
+    /// Posted by the application menu's Import entry's
+    /// `connect_activate` handler. Mounts the
+    /// [`ImportDialogComponent`](crate::import_dialog) — a
+    /// libadwaita file picker + format selector +
+    /// on-conflict + bundle passphrase row — parented at the
+    /// active [`adw::ApplicationWindow`] so the dialog overlays
+    /// the main window per §"libadwaita usage".
+    ///
+    /// Import is gated by
+    /// [`format_app_primary_menu_action_sensitivities`]'s
+    /// mutating-menu rule
+    /// ([`crate::app::state::AppState::allows_mutating_menu`])
+    /// so the action is disabled outside
+    /// [`AppState::Unlocked`]. A stray dispatch in any other
+    /// state (the action is disabled, but a stray dispatch from
+    /// a future keyboard accelerator would still land here) is
+    /// defensively guarded in the handler so the dialog never
+    /// mounts over a `Missing` / `Locked` / `UnlockedBusy` /
+    /// `StartupError` window.
+    ///
+    /// The fully wired
+    /// [`ImportDialogComponent`](crate::import_dialog) (the
+    /// editable form widgets, the
+    /// [`paladin_core::Vault::mutate_and_save`] merge worker,
+    /// and the inline error / warning surfaces) lands in
+    /// follow-up commits; this commit only wires the dispatch
+    /// edge so the menu activation reaches `AppModel`.
+    OpenImportDialog,
     /// Forwarded from the live [`AddAccountComponent`] when the
     /// user interacts with the dialog. Today only
     /// [`AddAccountOutput::Cancel`] is emitted — `AppModel`
@@ -824,27 +852,23 @@ impl SimpleComponent for AppModel {
                 // automatically when given any descendant.
                 build_app_about_dialog().present(Some(&self.content));
             }
-            AppMsg::OpenPreferencesDialog => {
-                // Application menu Preferences activation.
-                // Defense in depth: the action's sensitivity is
-                // gated by `format_app_primary_menu_action_sensitivities`
-                // (mutating-menu rule → `Unlocked` only), but a
-                // stray dispatch from a future keyboard
-                // accelerator could still land here. Drop the
-                // activation unless `AppState` is `Unlocked`
-                // and a live `(Vault, Store)` pair is present
-                // — the live-apply
-                // `Vault::mutate_and_save` worker the dialog
-                // ultimately drives requires both.
+            AppMsg::OpenPreferencesDialog | AppMsg::OpenImportDialog => {
+                // Mutating menu activations whose dispatch
+                // edges (action → AppMsg) have landed but
+                // whose widget-bearing dialog components have
+                // not yet. Each variant becomes its own arm
+                // with a distinct handler when the matching
+                // `SettingsComponent` / `ImportDialogComponent`
+                // mount lands in follow-up commits.
                 //
-                // The fully wired `SettingsComponent` (the
-                // editable form widgets, the
-                // `Vault::mutate_and_save` live-apply worker,
-                // and the inline error / warning surfaces)
-                // lands in follow-up commits; this arm is a
-                // benign no-op until then so the dispatch edge
-                // (action → AppMsg) can land independently of
-                // the widget tree.
+                // Defense in depth: every variant in the
+                // combined arm is gated by
+                // `format_app_primary_menu_action_sensitivities`'s
+                // mutating-menu rule
+                // (`AppState::allows_mutating_menu` →
+                // `Unlocked` only); a stray dispatch from a
+                // future keyboard accelerator that lands in
+                // any other state is the benign no-op below.
             }
             AppMsg::OpenAddDialog => {
                 // Header-bar `+` button activation. Mount a fresh
@@ -2728,6 +2752,9 @@ pub fn dispatch_app_window_action(name: &str) -> Option<AppMsg> {
     }
     if name == format_app_menu_about_action_name() {
         return Some(AppMsg::OpenAboutDialog);
+    }
+    if name == format_app_menu_import_action_name() {
+        return Some(AppMsg::OpenImportDialog);
     }
     if name == format_app_menu_preferences_action_name() {
         return Some(AppMsg::OpenPreferencesDialog);

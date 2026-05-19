@@ -2281,14 +2281,36 @@ fn dispatch_app_window_action_routes_preferences_to_open_preferences_dialog() {
 }
 
 #[test]
+fn dispatch_app_window_action_routes_import_to_open_import_dialog() {
+    // Per §"libadwaita usage" and §"Component tree": the
+    // application menu's Import entry mounts the
+    // `ImportDialogComponent` (file picker + format +
+    // on-conflict + bundle passphrase). The activation flows
+    // through `AppMsg::OpenImportDialog` so the widget binding
+    // wires `connect_activate` on the `"import"` SimpleAction
+    // to `sender.input(AppMsg::OpenImportDialog)` and `update`
+    // handles the variant by mounting the dialog parented at
+    // the active `adw::ApplicationWindow`.
+    use paladin_gtk::app::model::{
+        dispatch_app_window_action, format_app_menu_import_action_name, AppMsg,
+    };
+
+    let msg = dispatch_app_window_action(format_app_menu_import_action_name());
+    assert!(
+        matches!(msg, Some(AppMsg::OpenImportDialog)),
+        "dispatch_app_window_action must route the import bare action name to AppMsg::OpenImportDialog; got {msg:?}",
+    );
+}
+
+#[test]
 fn dispatch_app_window_action_covers_every_bundled_action_name() {
     // Defense-in-depth: every bare action name registered on
     // the application's `app` action group (via
     // `build_app_window_action_group`) must either dispatch
     // to a concrete `AppMsg` variant or be explicitly
     // documented as "not yet wired" — the remaining mutating
-    // menu entries (Import, Export, Passphrase) land in
-    // follow-up commits alongside their widget-bearing dialog
+    // menu entries (Export, Passphrase) land in follow-up
+    // commits alongside their widget-bearing dialog
     // components. Catches drift between the bundled action
     // group and the dispatch table: a future commit that adds
     // a new action to `format_app_window_action_names` without
@@ -2296,12 +2318,10 @@ fn dispatch_app_window_action_covers_every_bundled_action_name() {
     // pending-set) will surface here as a failing assertion.
     use paladin_gtk::app::model::{
         dispatch_app_window_action, format_app_menu_export_action_name,
-        format_app_menu_import_action_name, format_app_menu_passphrase_action_name,
-        format_app_window_action_names,
+        format_app_menu_passphrase_action_name, format_app_window_action_names,
     };
 
-    let pending_mutating: [&str; 3] = [
-        format_app_menu_import_action_name(),
+    let pending_mutating: [&str; 2] = [
         format_app_menu_export_action_name(),
         format_app_menu_passphrase_action_name(),
     ];
@@ -2377,6 +2397,25 @@ fn app_msg_carries_open_preferences_dialog_variant() {
     use paladin_gtk::app::model::AppMsg;
 
     let _: AppMsg = AppMsg::OpenPreferencesDialog;
+}
+
+#[test]
+fn app_msg_carries_open_import_dialog_variant() {
+    // Per §"libadwaita usage" and §"Component tree": the
+    // application menu's Import entry mounts the
+    // `ImportDialogComponent` (file picker + format +
+    // on-conflict + bundle passphrase). The activation flows
+    // through `AppMsg::OpenImportDialog` so the widget binding
+    // wires `connect_activate` on the `"import"` SimpleAction
+    // to `sender.input(AppMsg::OpenImportDialog)` and `update`
+    // handles the variant by mounting the dialog parented at
+    // the active `adw::ApplicationWindow`. The compile-only
+    // check below pins the variant exists and carries no
+    // payload so the action wiring can post it without
+    // constructor arguments.
+    use paladin_gtk::app::model::AppMsg;
+
+    let _: AppMsg = AppMsg::OpenImportDialog;
 }
 
 #[test]
