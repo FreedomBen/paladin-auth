@@ -627,6 +627,47 @@ fn apply_save_io_error_routes_to_inline_and_rolls_back_visible_value() {
     assert_eq!(state.committed().auto_lock_secs(), 300);
 }
 
+#[test]
+fn apply_save_io_error_for_toggle_routes_to_inline_and_keeps_committed_unchanged() {
+    // Sibling of `apply_save_io_error_routes_to_inline_and_rolls_back_visible_value`
+    // on the toggle side. The existing test exercises the spinner
+    // path (`AutoLockSecs` with a pending buffer); this test
+    // exercises the toggle path (`AutoLockEnabled`, no pending
+    // buffer — toggles bypass debounce). Both must route a
+    // non-`SaveNotCommitted` / non-`SaveDurabilityUnconfirmed`
+    // failure (here `IoError`, the §5 catchall arm) to
+    // `SaveOutcome::Inline` so the matching `AdwSwitchRow` shows
+    // the red error subtitle, and both must leave `committed`
+    // unchanged so the visible toggle (which mirrors
+    // `committed.auto_lock_enabled` because toggles have no
+    // pending buffer) rolls back to the pre-toggle state.
+    //
+    // Without this assertion a regression that special-cased
+    // `commit_attempted` for toggle fields (e.g. promoting the
+    // value even on `Inline`) would land undetected — the dialog
+    // would then show a red error subtitle but the toggle position
+    // would silently match the failed save, masking the failure.
+    let mut state = SettingsState::new(defaults());
+    let _ = state.toggle_auto_lock_enabled(true);
+
+    let err = PaladinError::IoError {
+        operation: "vault_save",
+        source: std::io::Error::other("disk full"),
+    };
+    let outcome = state.apply_save_result(AcceptedChange::AutoLockEnabled(true), Err(err));
+
+    let SaveOutcome::Inline { error, field } = outcome else {
+        panic!("expected Inline, got {outcome:?}");
+    };
+    assert_eq!(error.kind, ErrorKind::IoError);
+    assert_eq!(field, SettingsField::AutoLockEnabled);
+
+    // The on-disk file did not change, so the committed toggle
+    // reverts to its pre-toggle state. `defaults()` returns
+    // `auto_lock_enabled = false`.
+    assert!(!state.committed().auto_lock_enabled());
+}
+
 // ---------------------------------------------------------------------------
 // SettingsComponent format helpers — `AdwPreferencesDialog` chrome
 // ---------------------------------------------------------------------------
