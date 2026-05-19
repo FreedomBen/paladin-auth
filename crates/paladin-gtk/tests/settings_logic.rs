@@ -710,6 +710,41 @@ fn format_settings_dialog_auto_lock_secs_adjustment_returns_paladin_core_bounds(
 }
 
 #[test]
+fn format_settings_dialog_clipboard_clear_secs_adjustment_returns_paladin_core_bounds() {
+    // The clipboard-clear `AdwSpinRow` consumes a
+    // `gtk::Adjustment` built from this helper per
+    // `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
+    // "Preferences" and §"Component tree" > `SettingsComponent`.
+    // Returning the `(lower, upper, step_increment)` tuple here
+    // keeps the spinner bounds pinned against
+    // `paladin_core::CLIPBOARD_CLEAR_SECS_MIN..=paladin_core::CLIPBOARD_CLEAR_SECS_MAX`
+    // — the same range `clamp_clipboard_clear_secs` and
+    // `SettingsState::stage_clipboard_clear_secs` enforce —
+    // without duplicating the integer literals at the widget
+    // layer.
+    //
+    // Sibling of `format_settings_dialog_auto_lock_secs_adjustment`
+    // on the clipboard side; together they pin both `AdwSpinRow`
+    // adjustments the `SettingsComponent` hosts. Step `1.0`
+    // matches the integer-only seconds domain.
+    use paladin_gtk::settings::format_settings_dialog_clipboard_clear_secs_adjustment;
+
+    let (lower, upper, step) = format_settings_dialog_clipboard_clear_secs_adjustment();
+    assert!(
+        (lower - f64::from(paladin_core::CLIPBOARD_CLEAR_SECS_MIN)).abs() < f64::EPSILON,
+        "AdwSpinRow lower bound mirrors paladin_core::CLIPBOARD_CLEAR_SECS_MIN",
+    );
+    assert!(
+        (upper - f64::from(paladin_core::CLIPBOARD_CLEAR_SECS_MAX)).abs() < f64::EPSILON,
+        "AdwSpinRow upper bound mirrors paladin_core::CLIPBOARD_CLEAR_SECS_MAX",
+    );
+    assert!(
+        (step - 1.0).abs() < f64::EPSILON,
+        "AdwSpinRow step is 1 second per click for the integer-only seconds domain",
+    );
+}
+
+#[test]
 fn format_settings_dialog_clipboard_clear_secs_row_title_returns_clear_delay() {
     // The clipboard-clear `AdwSpinRow` carries the spinner that
     // controls `paladin_core::VaultSettings::clipboard_clear_secs`.
