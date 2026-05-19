@@ -4935,3 +4935,45 @@ fn format_app_action_group_name_is_prefix_of_every_primary_menu_action() {
         );
     }
 }
+
+#[test]
+fn format_app_window_accelerator_bindings_targets_are_bundled_action_names() {
+    // Cross-consistency guard: every fully-qualified action
+    // target in `format_app_window_accelerator_bindings`
+    // (`app.add`, `app.quit`, `app.preferences`) must map to a
+    // bare action name actually registered on the bundled
+    // application-window action group, as enumerated by
+    // `format_app_window_action_names`. Without this assertion an
+    // accelerator could point to a non-existent action — for
+    // example a future rename that touched
+    // `format_app_menu_preferences_action_name` without updating
+    // `format_app_menu_preferences_action`, or vice versa — and
+    // the accelerator would silently no-op at runtime because
+    // `gio::Application::set_accels_for_action` accepts any
+    // string and binds it without verifying the target exists.
+    //
+    // The check strips the shared `format_app_action_group_name()
+    // + "."` prefix from each binding's target and asserts the
+    // bare remainder appears in `format_app_window_action_names`,
+    // tying the accelerator surface to the action group's
+    // membership in one place.
+    use paladin_gtk::app::model::{
+        format_app_action_group_name, format_app_window_accelerator_bindings,
+        format_app_window_action_names,
+    };
+
+    let bindings = format_app_window_accelerator_bindings();
+    let names = format_app_window_action_names();
+    let prefix = format!("{}.", format_app_action_group_name());
+    for (accel, target) in bindings {
+        assert!(
+            target.starts_with(&prefix),
+            "accelerator binding target {target:?} (paired with {accel:?}) must start with the shared group prefix {prefix:?}",
+        );
+        let bare = &target[prefix.len()..];
+        assert!(
+            names.contains(&bare),
+            "accelerator binding target {target:?} (paired with {accel:?}) strips to bare action name {bare:?}, which must appear in format_app_window_action_names ({names:?}); otherwise the accelerator binds to a non-existent action and silently no-ops at runtime",
+        );
+    }
+}
