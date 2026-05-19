@@ -12843,3 +12843,94 @@ fn format_app_about_dialog_debug_info_does_not_contain_a_horizontal_tab_byte() {
         "AdwAboutDialog debug_info must not contain the `\\t` horizontal-tab byte (0x09); a `\\t` byte slips past `_is_ascii_only` (since `\\t` is ASCII), past `_does_not_contain_a_null_byte` (since `\\t` is not `\\0`), past `_does_not_contain_a_carriage_return_byte` (since `\\t` is not `\\r`), past `_has_exactly_two_lines` / `_program_name_line_ends_with_the_version` / `_app_id_line_ends_with_the_reverse_dns_app_id` (which split on `\\n` and only check trailing substrings), and would render as a wide horizontal gap in the Troubleshooting dialog body, drift column widths in pasted bug reports, and break POSIX text-processing tools (`grep`, `awk`, `cut`) when the payload is saved to disk via `set_debug_info_filename`; got {debug_info:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_developer_name_does_not_contain_a_carriage_return_byte() {
+    // Defense-in-depth per-byte sibling completing the
+    // developer-name byte triplet (null / horizontal-tab /
+    // carriage-return) alongside the existing
+    // `_developer_name_does_not_contain_a_null_byte` and
+    // `_developer_name_does_not_contain_a_horizontal_tab_byte`
+    // companions. The existing
+    // `_developer_name_is_a_single_line_without_embedded_newlines`
+    // companion does explicitly assert `!developer.contains('\r')`
+    // alongside its `\n` check — so the developer-name
+    // helper's `\r`-cleanliness is currently protected
+    // *directly* by that one specific companion.
+    //
+    // But that direct coverage is *coupled* to the single-
+    // line-attribution invariant: a future refactor that
+    // intentionally allowed embedded `\n` line breaks in the
+    // developer-name slot (a libadwaita upgrade that taught
+    // the attribution row to wrap across two lines, a
+    // multi-contributor attribution column layout that listed
+    // each contributor on its own line, or a workspace-
+    // vendoring split that lifted developer-name out of the
+    // single-line constraint) would naturally relax the
+    // `_is_a_single_line_without_embedded_newlines` companion
+    // to drop the `\n` check — and the human author of that
+    // refactor might reasonably drop the `\r` check at the
+    // same time on the assumption that "if `\n` is now
+    // allowed, then `\r` as a line-ending companion is also
+    // allowed". That assumption is wrong: `\r` is never the
+    // correct line-ending byte for a GNOME-stack string (the
+    // GNOME stack uses LF-only conventions throughout), so
+    // dropping the `\r` check alongside the `\n` check would
+    // silently regress the no-`\r` invariant.
+    //
+    // The `_is_ascii_only` companion does not catch `\r`
+    // (since `\r` is ASCII, 0x0D), the
+    // `_has_no_surrounding_whitespace` companion does not
+    // catch a mid-string `\r`, the
+    // `_starts_with_the_definite_article` and
+    // `_ends_with_the_contributors_collective_noun`
+    // companions only constrain the prefix and suffix, the
+    // `_does_not_contain_a_null_byte` companion only names
+    // `\0` specifically, and the
+    // `_does_not_contain_a_horizontal_tab_byte` companion
+    // only names `\t` specifically. None of those names
+    // `\r` directly on this helper — only the
+    // `_is_a_single_line_without_embedded_newlines`
+    // companion does, and that coupling is fragile.
+    //
+    // A regression that landed `"The Paladin\rcontributors"`
+    // (CRLF copy-paste from a Windows-edited CONTRIBUTORS
+    // file with the `\n` stripped during a manual
+    // line-ending fix-up, a `concat!(_, "\r", _)` form, or a
+    // hand-edited helper that lifted the attribution from a
+    // CR-only Mac Classic-style text file) would mis-render
+    // in multiple downstream surfaces: (1) the GLib-backed
+    // `AdwAboutDialog::set_developer_name` setter routes the
+    // value into Pango for inline rendering beneath the
+    // program name in the dialog header — Pango's default
+    // rendering of a bare `\r` byte is implementation-
+    // defined and typically renders as a literal control
+    // glyph or an empty box, breaking the tidy single-line
+    // attribution layout; (2) the same developer-name string
+    // is reused by `_copyright_ends_with_developer_name` to
+    // construct the footer copyright row, so a `\r` byte in
+    // the developer name would propagate into the copyright
+    // slot and mis-render there too; (3) screen readers that
+    // announce the dialog attribution read the `\r` as a
+    // literal control character, breaking the attribution
+    // accessibility-tree announcement.
+    //
+    // Pinning the no-`\r` invariant directly on this helper
+    // surfaces the regression with a message naming the
+    // offending byte at build time rather than via a future
+    // single-line decoupling that silently dropped the `\r`
+    // guard. Current helper returns the literal `"The
+    // Paladin contributors"` (no `\r` byte), so this test
+    // passes today and serves as a forcing function so any
+    // future override of the helper — including the eventual
+    // landing of a multi-contributor attribution string —
+    // stays free of carriage returns even when embedded `\n`
+    // line breaks are intentionally introduced.
+    use paladin_gtk::app::model::format_app_about_dialog_developer_name;
+
+    let developer = format_app_about_dialog_developer_name();
+    assert!(
+        !developer.contains('\r'),
+        "AdwAboutDialog developer-name must not contain the `\\r` carriage-return byte (0x0D); the current `\\r`-cleanliness is only protected by the `_is_a_single_line_without_embedded_newlines` companion's coupled `\\n`/`\\r` check, so a future refactor that intentionally allowed embedded `\\n` line breaks in the attribution slot might reasonably drop the `\\r` check alongside the `\\n` check on the assumption that both line-ending bytes are now allowed (an assumption that is wrong: GNOME-stack strings use LF-only conventions throughout); a stray `\\r` would render as a control glyph in the dialog-header attribution row, propagate into the footer copyright row that reuses this string, and break screen-reader attribution announcements; got {developer:?}",
+    );
+}
