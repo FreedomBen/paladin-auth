@@ -6135,3 +6135,44 @@ fn format_app_primary_menu_entries_labels_are_single_line_without_surrounding_wh
         );
     }
 }
+
+#[test]
+fn format_app_about_dialog_application_icon_name_segments_are_non_empty() {
+    // Defense-in-depth sibling of
+    // `format_app_about_dialog_application_icon_name_matches_app_id`
+    // (which pins the exact value against `APP_ID`) and
+    // `format_app_about_dialog_application_icon_name_is_reverse_dns`
+    // (which pins non-empty, contains-a-`.`, no whitespace,
+    // distinct from program-name). Those existing companions
+    // catch the wrong-value / wrong-shape / wrong-token
+    // regressions but leave the per-segment shape ungated, so a
+    // future refactor that introduced consecutive dots — e.g.
+    // `"org..tamx.Paladin.Gui"` — or a leading or trailing dot —
+    // e.g. `".org.tamx.Paladin.Gui"` / `"org.tamx.Paladin.Gui."` —
+    // would slip past `_is_reverse_dns` (which just checks
+    // `contains('.')`) while breaking the icon-theme-key /
+    // desktop-entry / AppStream / Flatpak app-id contract.
+    //
+    // The libadwaita / GIO `g_application_id_is_valid` check
+    // rejects identifiers with empty `.`-separated components,
+    // so a regression here would surface as a runtime
+    // `Application::new` panic / icon-theme miss / Flatpak
+    // packaging failure rather than as a failing test. Pinning
+    // the per-segment non-emptiness at the test layer catches
+    // that drift before it ships.
+    use paladin_gtk::app::model::format_app_about_dialog_application_icon_name;
+
+    let icon = format_app_about_dialog_application_icon_name();
+    let segments: Vec<&str> = icon.split('.').collect();
+    assert!(
+        segments.len() >= 2,
+        "AdwAboutDialog application-icon must be a reverse-DNS identifier with at least two `.`-separated segments so the icon-theme / Flatpak app-id contract holds; got only {} segment(s) in {icon:?}",
+        segments.len(),
+    );
+    for (idx, segment) in segments.iter().enumerate() {
+        assert!(
+            !segment.is_empty(),
+            "AdwAboutDialog application-icon reverse-DNS segment at position {idx} must be non-empty so the `g_application_id_is_valid` contract holds and the icon-theme / Flatpak app-id lookup resolves; consecutive or terminal `.` characters are not allowed; got {icon:?}",
+        );
+    }
+}
