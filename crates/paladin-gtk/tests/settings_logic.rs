@@ -674,6 +674,33 @@ fn format_settings_dialog_clipboard_clear_group_title_returns_clipboard() {
 }
 
 #[test]
+fn compose_settings_dialog_clipboard_clear_secs_sensitive_follows_clipboard_clear_enabled() {
+    // The clipboard-clear seconds `AdwSpinRow` binds its
+    // `set_sensitive:` attribute to this composer per
+    // `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+    // `SettingsComponent`. Sibling of
+    // `compose_settings_dialog_auto_lock_secs_sensitive` on the
+    // clipboard side; together they cover both
+    // `AdwSpinRow::set_sensitive:` bindings the
+    // `SettingsComponent` mounts.
+    use paladin_gtk::settings::{
+        compose_settings_dialog_clipboard_clear_secs_sensitive, CommittedSettings, SettingsState,
+    };
+
+    let state_on = SettingsState::new(CommittedSettings::new(false, 60, true, 20));
+    assert!(
+        compose_settings_dialog_clipboard_clear_secs_sensitive(&state_on),
+        "spinner row is sensitive when the toggle is on",
+    );
+
+    let state_off = SettingsState::new(CommittedSettings::new(false, 60, false, 20));
+    assert!(
+        !compose_settings_dialog_clipboard_clear_secs_sensitive(&state_off),
+        "spinner row is insensitive when the toggle is off",
+    );
+}
+
+#[test]
 fn compose_settings_dialog_auto_lock_secs_sensitive_follows_auto_lock_enabled() {
     // The auto-lock seconds `AdwSpinRow` binds its
     // `set_sensitive:` attribute to this composer per
