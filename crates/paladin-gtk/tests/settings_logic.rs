@@ -494,6 +494,40 @@ fn apply_save_durability_unconfirmed_keeps_auto_lock_enabled_visible_with_warnin
     assert!(state.committed().auto_lock_enabled());
 }
 
+#[test]
+fn apply_save_durability_unconfirmed_keeps_clipboard_clear_enabled_visible_with_warning() {
+    // Mirrors `apply_save_durability_unconfirmed_keeps_auto_lock_enabled_visible_with_warning`
+    // for the second toggle. The three existing durability tests cover
+    // `AutoLockSecs`, `ClipboardClearSecs`, and `AutoLockEnabled`;
+    // without this test the `ClipboardClearEnabled` toggle would have
+    // no durability-warning assertion, so a regression that swapped
+    // the `commit_attempted` arm for `ClipboardClearEnabled` inside the
+    // `SaveDurabilityUnconfirmed` branch against, say,
+    // `AutoLockEnabled` would land undetected. Pairs with
+    // `apply_save_success_promotes_clipboard_clear_enabled_to_committed`
+    // on the field-coverage side so every `SettingsField` variant now
+    // has both a success-path and a durability-warning-path assertion,
+    // matching the §"Tests > Pure-logic unit tests >
+    // `tests/settings_logic.rs`" checklist entry that the
+    // `save_durability_unconfirmed` warning attaches to "the changed
+    // `AdwPreferencesGroup` row" — for every row, not just three of
+    // the four.
+    let mut state = SettingsState::new(defaults());
+    let _ = state.toggle_clipboard_clear_enabled(true);
+
+    let outcome = state.apply_save_result(
+        AcceptedChange::ClipboardClearEnabled(true),
+        Err(PaladinError::SaveDurabilityUnconfirmed),
+    );
+
+    let SaveOutcome::DurabilityWarning { warning, field } = outcome else {
+        panic!("expected DurabilityWarning, got {outcome:?}");
+    };
+    assert_eq!(warning.kind, ErrorKind::SaveDurabilityUnconfirmed);
+    assert_eq!(field, SettingsField::ClipboardClearEnabled);
+    assert!(state.committed().clipboard_clear_enabled());
+}
+
 // ---------------------------------------------------------------------------
 // Apply save success — committed promotes to the attempted value
 // ---------------------------------------------------------------------------
