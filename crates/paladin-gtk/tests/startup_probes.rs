@@ -8751,3 +8751,81 @@ fn format_app_about_dialog_application_icon_name_has_exactly_four_segments() {
         len = segments.len(),
     );
 }
+
+#[test]
+fn format_app_about_dialog_url_helpers_do_not_end_with_a_trailing_slash() {
+    // Cross-helper defense-in-depth sibling looping over the
+    // three `AdwAboutDialog` footer URL helpers
+    // (`format_app_about_dialog_website`,
+    // `format_app_about_dialog_issue_url`,
+    // `format_app_about_dialog_support_url`) and pinning each
+    // value as free of a trailing `/` byte so a regression that
+    // landed a slash-terminated URL — e.g.
+    // `"https://paladin.tamx.org/"` (homepage trailing slash) or
+    // `"https://github.com/FreedomBen/paladin/issues/"`
+    // (issue-tracker trailing slash from a paste with the
+    // browser address-bar trailing slash retained) — would fail
+    // at the pinned layer rather than slip past the
+    // `_is_non_empty_https_url` per-URL companion (which only
+    // checks non-empty + `https://` prefix + no space byte),
+    // the `_contain_no_embedded_whitespace` cross-URL companion
+    // (no whitespace bytes anywhere), the `_are_ascii_only`
+    // cross-URL companion (only constrains byte composition to
+    // ASCII), the `_appends_issues_to_cargo_pkg_repository`
+    // companion (which uses `concat!(env!("CARGO_PKG_REPOSITORY"),
+    // "/issues")` — if `CARGO_PKG_REPOSITORY` itself drifted to
+    // end with a slash, the concatenation would produce
+    // `"…paladin//issues"` with a doubled separator, but the
+    // existing exact-match companion would still pass since the
+    // generated URL still appends `/issues` to whatever
+    // `CARGO_PKG_REPOSITORY` resolves to), or the
+    // `_issue_url_and_support_url_share_cargo_pkg_repository_prefix`
+    // companion (still holds since both URLs share the doubled
+    // prefix).
+    //
+    // The libadwaita `AdwAboutDialog::website` / `issue-url` /
+    // `support-url` slots consume the URL verbatim and render
+    // it as a clickable footer link; a trailing slash on a
+    // URL like `"https://github.com/FreedomBen/paladin/issues/"`
+    // would route through HTTP and GitHub's web stack to the
+    // exact same destination as the slash-free form
+    // (`"https://github.com/FreedomBen/paladin/issues"`) and so
+    // would not break the click-through behaviour, but it
+    // would silently break automated URL-canonicalization
+    // tooling (analytics dedup, click-tracking, sitemap
+    // generators, link-checking CI bots) that match-key off
+    // the exact URL byte sequence and would treat the
+    // slash-terminated form as a distinct URL — surfacing as
+    // a dedup-failure or a duplicate-link CI warning rather
+    // than as a build-time mismatch. A trailing slash on the
+    // homepage URL (`"https://paladin.tamx.org/"`) would
+    // similarly normalize at the HTTP layer but break the
+    // analytics-canonicalization contract the bare
+    // `"https://paladin.tamx.org"` form preserves.
+    //
+    // Pinning the no-trailing-slash invariant directly here
+    // surfaces the regression with a message naming the
+    // offending URL helper at build time rather than as a
+    // downstream URL-canonicalization warning at click-through
+    // time. Mirror of the `_url_helpers_contain_no_embedded_whitespace`
+    // and `_url_helpers_are_ascii_only` cross-URL siblings;
+    // together they pin the URL byte-composition contract
+    // (no whitespace, ASCII-only, no terminal `/`) across all
+    // three footer link surfaces against a single source of
+    // truth.
+    use paladin_gtk::app::model::{
+        format_app_about_dialog_issue_url, format_app_about_dialog_support_url,
+        format_app_about_dialog_website,
+    };
+
+    for (label, url) in [
+        ("website", format_app_about_dialog_website()),
+        ("issue_url", format_app_about_dialog_issue_url()),
+        ("support_url", format_app_about_dialog_support_url()),
+    ] {
+        assert!(
+            !url.ends_with('/'),
+            "AdwAboutDialog {label} must not end with a trailing `/` so the URL byte sequence matches the bare canonical form analytics / click-tracking / sitemap-generator / link-checking-CI tooling expects (a trailing slash is normalized at the HTTP layer but breaks URL-byte-sequence dedup match-keys); got {url:?}",
+        );
+    }
+}
