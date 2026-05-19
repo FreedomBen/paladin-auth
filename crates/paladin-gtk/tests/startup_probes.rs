@@ -299,6 +299,29 @@ fn format_app_add_button_tooltip_returns_add_account() {
 }
 
 #[test]
+fn format_app_add_button_tooltip_is_non_empty() {
+    // Defense-in-depth companion to
+    // `format_app_add_button_tooltip_returns_add_account`: the
+    // exact-value assertion catches a wholesale rename, but a
+    // sibling defensive test catches the more nuanced regression
+    // where someone replaces the wording with the empty string,
+    // which would silently degrade the icon-only `+` button's
+    // accessibility surface (screen-readers read tooltips) without
+    // breaking compilation. Mirrors
+    // `format_app_search_button_tooltip_is_non_empty` and
+    // `format_app_menu_button_tooltip_is_non_empty` on the two
+    // sibling header-bar buttons so all three icon-only
+    // affordances share the same defensive coverage.
+    use paladin_gtk::app::model::format_app_add_button_tooltip;
+
+    let tooltip = format_app_add_button_tooltip();
+    assert!(
+        !tooltip.is_empty(),
+        "header-bar add button tooltip must be non-empty so the icon-only affordance carries a screen-reader-readable label; got {tooltip:?}",
+    );
+}
+
+#[test]
 fn format_app_window_title_returns_paladin() {
     // The `AppModel`'s `adw::ApplicationWindow::set_title` attribute
     // is populated from this helper. The wording (`"Paladin"`) names
