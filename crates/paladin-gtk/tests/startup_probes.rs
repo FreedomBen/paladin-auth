@@ -6078,3 +6078,60 @@ fn format_app_header_bar_button_tooltips_are_single_line_without_surrounding_whi
         );
     }
 }
+
+#[test]
+fn format_app_primary_menu_entries_labels_are_single_line_without_surrounding_whitespace() {
+    // Cross-entry defense-in-depth sibling of the per-entry
+    // `format_app_menu_X_label_returns_X` (exact-value pins),
+    // `format_app_menu_X_label_ends_with_ellipsis` /
+    // `_does_not_carry_ellipsis` (HIG suffix invariants), and
+    // the cross-entry `format_app_primary_menu_entries_labels_are_distinct`
+    // companion. Those existing tests catch the wrong-value /
+    // wrong-suffix / collided-label regressions on a per-label
+    // or cross-label basis but leave the broader single-line /
+    // no-surrounding-whitespace shape ungated.
+    //
+    // The `gio::Menu::item_attribute_value(..., "label", ...)`
+    // slot renders each entry as one row of the libadwaita
+    // `PopoverMenu` opened off the header-bar `gtk::MenuButton`.
+    // A regression that introduced an embedded newline — e.g.
+    // `"Import\nfile…"` — would render across two rows of the
+    // popover and break the tidy one-row-per-entry layout. A
+    // leading or trailing space — e.g. `" Import…"` — would
+    // shift the entry text inside the row and surface as a
+    // confusing alignment glitch against its `gtk::Menu`
+    // neighbours.
+    //
+    // The assertion walks every (label, action) pair returned
+    // by `format_app_primary_menu_entries` so a regression in
+    // any of the six entries (Import / Export / Passphrase /
+    // Preferences / About / Quit) fails with a message that
+    // names the offending entry's action target. Mirrors the
+    // recent `format_app_header_bar_button_tooltips_are_single_line_without_surrounding_whitespace`
+    // and `format_app_header_bar_button_icon_names_are_valid_icon_theme_keys`
+    // siblings on the header-bar side.
+    use paladin_gtk::app::model::format_app_primary_menu_entries;
+
+    for (label, action) in format_app_primary_menu_entries() {
+        assert!(
+            !label.is_empty(),
+            "primary menu entry label for action target {action:?} must be non-empty so the popover row renders; got {label:?}",
+        );
+        assert!(
+            !label.contains('\n'),
+            "primary menu entry label for action target {action:?} must be a single line so the popover renders one tidy row per entry rather than a vertically-stretched two-row block; got {label:?}",
+        );
+        assert!(
+            !label.contains('\r'),
+            "primary menu entry label for action target {action:?} must use LF-only conventions (no embedded CR), matching the GNOME stack's text expectation for a single-line menu-entry label; got {label:?}",
+        );
+        assert!(
+            !label.starts_with(char::is_whitespace),
+            "primary menu entry label for action target {action:?} must not start with whitespace; a leading space would shift the entry text inside the popover row and surface as an alignment glitch against its menu neighbours; got {label:?}",
+        );
+        assert!(
+            !label.ends_with(char::is_whitespace),
+            "primary menu entry label for action target {action:?} must not end with whitespace; a trailing space would shift the entry text inside the popover row and surface as an alignment glitch against its menu neighbours; got {label:?}",
+        );
+    }
+}
