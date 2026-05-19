@@ -1029,6 +1029,42 @@ pub fn format_settings_dialog_spinner_digits() -> u32 {
     0
 }
 
+/// Fixed `u32` count of seconds the
+/// [`format_settings_dialog_saved_toast`] body stays visible on the
+/// `AdwToastOverlay` per `IMPLEMENTATION_PLAN_04_GTK.md`
+/// §"libadwaita usage" > "Toast surface" and §"Component tree" >
+/// `SettingsComponent`.
+///
+/// Returns `5` — matches the `AdwToast` default timeout the
+/// [`format_settings_dialog_saved_toast`] docstring was sized for
+/// ("brief enough for an `AdwToast` to fit the default timeout").
+/// Long enough for the user to register the confirmation, short
+/// enough that a rapid sequence of saves does not stack overlapping
+/// toasts on the `AdwToastOverlay`. The `SettingsComponent` raises
+/// the success toast via
+/// `AdwToast::new(format_settings_dialog_saved_toast())` and then
+/// `set_timeout(format_settings_dialog_saved_toast_timeout())`, so
+/// pinning the literal through this helper keeps the timeout in one
+/// place shared by the widget binding and the pure-logic tests in
+/// `tests/settings_logic.rs`; the widget layer never duplicates the
+/// literal.
+///
+/// `0` would disable auto-dismissal entirely (defeating the
+/// transient confirmation surface), so the helper returns a strictly
+/// positive count. Sibling of [`format_settings_dialog_saved_toast`]
+/// (the body text); the two together pin every value the
+/// success-toast constructor call receives. The matching failure /
+/// warning surfaces never use the toast — they route through
+/// [`compose_settings_dialog_inline_subtitle_for_field`] and the
+/// inline-subtitle helpers instead — so this timeout only governs
+/// the affirmative path.
+///
+/// Pure — returns a `u32` without allocating.
+#[must_use]
+pub fn format_settings_dialog_saved_toast_timeout() -> u32 {
+    5
+}
+
 /// Fixed [`std::time::Duration`] the widget hands to
 /// [`glib::timeout_add_local`] for the spinner debounce timer per
 /// `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >

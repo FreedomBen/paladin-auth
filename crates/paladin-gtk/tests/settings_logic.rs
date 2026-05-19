@@ -1785,3 +1785,38 @@ fn format_settings_dialog_spinner_debounce_returns_500_ms() {
         "debounce window is the 500 ms coalescing budget from the plan",
     );
 }
+
+#[test]
+fn format_settings_dialog_saved_toast_timeout_returns_five_seconds() {
+    // `adw::Toast::set_timeout` takes a `u32` count of seconds the
+    // toast remains visible (0 means the toast never auto-dismisses,
+    // which would defeat the transient confirmation surface). The
+    // `SettingsComponent` raises the toast via
+    // `AdwToast::new(format_settings_dialog_saved_toast()).set_timeout(
+    // format_settings_dialog_saved_toast_timeout())` after every
+    // accepted change so the success confirmation surfaces without
+    // blocking interaction. Pinning the literal through this helper
+    // keeps the timeout in one place shared by the widget binding
+    // and the pure-logic tests; the widget layer never duplicates
+    // the literal.
+    //
+    // The value (`5` seconds) matches `AdwToast`'s default and the
+    // wording the `format_settings_dialog_saved_toast` docstring
+    // already cites ("brief enough for an `AdwToast` to fit the
+    // default timeout"): long enough for the user to register the
+    // confirmation, short enough that a rapid sequence of saves
+    // does not stack overlapping toasts on the
+    // `AdwToastOverlay`. Sibling of
+    // `format_settings_dialog_saved_toast` (the body text); the two
+    // together pin every value the success-toast constructor call
+    // receives.
+    //
+    // Pure — returns a `u32` without allocating.
+    use paladin_gtk::settings::format_settings_dialog_saved_toast_timeout;
+
+    assert_eq!(
+        format_settings_dialog_saved_toast_timeout(),
+        5,
+        "toast timeout matches the AdwToast default the body wording was sized for",
+    );
+}
