@@ -17442,6 +17442,99 @@ fn format_app_about_dialog_program_name_does_not_contain_a_form_feed_byte() {
 }
 
 #[test]
+fn format_app_about_dialog_program_name_does_not_contain_a_backspace_byte() {
+    // Defense-in-depth per-byte sibling extending the program-
+    // name byte coverage past the just-completed `{null /
+    // horizontal-tab / carriage-return / vertical-tab / form-
+    // feed}` quintuple to the backspace byte `\x08` (0x08), which
+    // sits one step below HT (0x09) in the ASCII C0 block and is
+    // the first non-whitespace-classified C0 byte in the cycle:
+    // unlike FF / HT / CR / LF / VT, `\x08` is NOT matched by
+    // `char::is_whitespace()` (Unicode treats BS as a control
+    // byte, not whitespace), so the existing
+    // `_program_name_has_no_embedded_whitespace` companion does
+    // NOT catch `\x08` even though it catches `\x0C`. The
+    // backspace byte therefore has NO transitive protection on
+    // this helper today — strictly more dangerous than form-
+    // feed, where the transitive `\x0C` guard at least
+    // *currently* fires before any future relaxation.
+    //
+    // None of the existing companions name the `\x08` byte
+    // directly on this helper:
+    //   - `_is_ascii_only` pins each byte as ASCII — `\x08` is
+    //     ASCII so it slips past;
+    //   - `_program_name_has_no_embedded_whitespace` uses
+    //     `char::is_whitespace()`, which returns *false* for
+    //     U+0008 BS — strictly weaker coverage than the form-
+    //     feed case;
+    //   - `_is_non_empty_and_not_app_id` only checks non-empty
+    //     + distinct-from-app-id;
+    //   - `_matches_format_app_window_title` only enforces
+    //     equality with the window title;
+    //   - `_is_segment_of_application_icon_name` only checks
+    //     segment containment;
+    //   - `_does_not_end_with_a_period` only constrains the
+    //     suffix;
+    //   - `_does_not_contain_a_null_byte` /
+    //     `_does_not_contain_a_horizontal_tab_byte` /
+    //     `_does_not_contain_a_carriage_return_byte` /
+    //     `_does_not_contain_a_vertical_tab_byte` /
+    //     `_does_not_contain_a_form_feed_byte` each name a
+    //     different byte specifically.
+    //
+    // A regression that landed `"Pala\x08din"` (backspace byte
+    // lifted from a `script(1)` typescript capturing raw `\x08`
+    // edit-stream bytes between mid-token characters of an
+    // interactively-edited program-name registry, a `concat!(_,
+    // "\x08", _)` form, or a hand-edited helper override that
+    // pasted from a terminal session recording) would mis-
+    // render in three downstream surfaces: (1) the GLib-backed
+    // `AdwAboutDialog::set_application_name` setter routes the
+    // value into Pango for inline rendering as the bold program-
+    // name row at the dialog header — Pango's default rendering
+    // of a bare `\x08` byte is implementation-defined and
+    // typically renders as a literal control glyph (a hollow box
+    // or tofu-like placeholder), breaking the tidy bold-header
+    // layout; (2) the matching `gtk::Window::set_title` setter
+    // (the program name is mirrored to the window title per
+    // `_matches_format_app_window_title`) renders the `\x08` in
+    // the window manager's taskbar / dock display label,
+    // surfacing the control byte to every shell that lists open
+    // windows — and a TTY-rendered `wmctrl -l` or `swaymsg -t
+    // get_tree` dump would terminal-erase the preceding glyph,
+    // letting the rendered window title diverge from the bytes
+    // a window manager exposes (a log-injection / display-
+    // spoofing primitive on window-list dumps); (3) the GTK
+    // accessibility tree's `accessible-name` property routes
+    // through the same Pango layer, breaking screen-reader
+    // announcements of the application name at the byte boundary.
+    //
+    // Pinning the no-`\x08` invariant directly on this helper
+    // surfaces the regression with a message naming the
+    // offending byte at build time rather than via a future
+    // whitespace-relaxation refactor (which would not have
+    // protected `\x08` anyway), a window-list display-spoof, or
+    // a screen-reader announcement break. Current helper returns
+    // the literal `"Paladin"` (no `\x08` byte), so this test
+    // passes today and serves as a forcing function so any
+    // future override of the helper — including the eventual
+    // landing of a localized multi-word program name — stays
+    // free of backspace bytes. Continues the program-name C0
+    // control-byte cycle past the just-completed `{null /
+    // horizontal-tab / carriage-return / vertical-tab / form-
+    // feed}` quintuple so the helper's byte-composition contract
+    // pins each forbidden control byte against a single source
+    // of truth.
+    use paladin_gtk::app::model::format_app_about_dialog_program_name;
+
+    let program_name = format_app_about_dialog_program_name();
+    assert!(
+        !program_name.contains('\x08'),
+        "AdwAboutDialog program_name must not contain the `\\x08` backspace byte (0x08); unlike form-feed, `_has_no_embedded_whitespace` does NOT catch `\\x08` because `char::is_whitespace()` returns false for U+0008 BS (strictly weaker coverage than form-feed, which the whitespace companion does catch transitively); a stray `\\x08` slips past `_is_ascii_only` / `_is_non_empty_and_not_app_id` / `_matches_format_app_window_title` / `_is_segment_of_application_icon_name` / `_does_not_end_with_a_period` and the per-byte siblings, would render as a literal control glyph in the bold dialog-header program-name row, surface in the window manager's taskbar / dock display label via `_matches_format_app_window_title`, enable terminal-erase display-spoofing on `wmctrl -l` / `swaymsg -t get_tree` window-list dumps (the rendered window title diverges from the bytes a window manager exposes because `\\x08` erases the preceding glyph), and break screen-reader application-name announcements at the byte boundary; got {program_name:?}",
+    );
+}
+
+#[test]
 fn format_app_about_dialog_version_does_not_contain_a_form_feed_byte() {
     // Defense-in-depth per-byte sibling extending the version-
     // helper byte coverage past the just-completed `{null /
