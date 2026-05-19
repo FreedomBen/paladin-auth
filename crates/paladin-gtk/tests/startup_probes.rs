@@ -7208,3 +7208,64 @@ fn format_app_about_dialog_version_is_ascii_only() {
         );
     }
 }
+
+#[test]
+fn format_app_about_dialog_developer_name_is_ascii_only() {
+    // Defense-in-depth sibling of
+    // `format_app_about_dialog_developer_name_returns_the_paladin_contributors`
+    // (exact-value pin),
+    // `format_app_about_dialog_developer_name_is_non_empty_and_distinct_from_program_name`
+    // (positive shape pin on non-empty + distinct),
+    // `format_app_about_dialog_developer_name_is_a_single_line_without_embedded_newlines`
+    // (negative pin on embedded newlines), and the new
+    // `_developer_name_has_no_surrounding_whitespace` sibling.
+    // Those companions catch the wrong-value, empty,
+    // name-equals-program-name, embedded-newline, and surrounding-
+    // whitespace regressions but leave the non-ASCII-byte edge
+    // case ungated.
+    //
+    // The `AdwAboutDialog::developer_name` slot is the
+    // *collective* attribution rendered under the program-name
+    // header — it deliberately does NOT track individual
+    // contributor names (those flow through
+    // `format_app_about_dialog_developers` which has its own
+    // shape pins for the credits-page Developers list and is
+    // free to carry non-ASCII contributor names that match the
+    // upstream commit-author records). Pinning the collective
+    // attribution to ASCII-only keeps the header rendering
+    // stable on systems with limited Unicode font fallback (a
+    // missing glyph would render as the tofu-box placeholder
+    // beside the bold program name) without constraining the
+    // contributor-credits list.
+    //
+    // A regression that swapped a Latin character in the
+    // collective attribution for a visually-similar Unicode
+    // lookalike — e.g. `"The Pаladin contributors"` where the
+    // `a` in `Paladin` is Cyrillic U+0430 — would render
+    // identically in most fonts but fail byte-equality against
+    // the ASCII slug used by the program-name header and the
+    // reverse-DNS icon-name segment, slipping past the
+    // `_returns_the_paladin_contributors` exact-value pin only
+    // if the canonical literal were similarly corrupted in a
+    // lookalike-in-lookalike refactor.
+    //
+    // Mirror of the
+    // `_program_name_is_ascii_only`,
+    // `_application_icon_name_is_ascii_only`, and
+    // `_version_is_ascii_only` companions; together they pin
+    // the ASCII-shape contract across the four dialog header
+    // slots (program-name, version, application-icon-name,
+    // developer-name) against a single source of truth,
+    // closing the Unicode-lookalike regression surface for the
+    // entire visible dialog header cluster.
+    use paladin_gtk::app::model::format_app_about_dialog_developer_name;
+
+    let developer_name = format_app_about_dialog_developer_name();
+    for (idx, ch) in developer_name.char_indices() {
+        assert!(
+            ch.is_ascii(),
+            "AdwAboutDialog developer_name must use ASCII characters only on the collective attribution (individual contributors flow through `format_app_about_dialog_developers` and may carry non-ASCII) so the dialog header below the program-name line renders stably on systems with limited Unicode font fallback; got non-ASCII char {ch:?} (U+{:04X}) at byte offset {idx} in {developer_name:?}",
+            ch as u32,
+        );
+    }
+}
