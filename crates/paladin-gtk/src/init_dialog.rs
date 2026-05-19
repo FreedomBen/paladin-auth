@@ -751,6 +751,39 @@ pub fn format_init_dialog_confirm_passphrase_title() -> &'static str {
     "Confirm passphrase"
 }
 
+/// Caption rendered beside the
+/// [`InitDialogComponent`]'s plaintext-warning acknowledgement
+/// `gtk::CheckButton`.
+///
+/// Returns the short affirmative `"I accept this risk"`. The
+/// wording mirrors the closing line of
+/// [`paladin_core::format_plaintext_storage_warning()`] —
+/// "Use an encrypted vault unless you fully accept this risk." —
+/// so the checkbox caption reads as the affirmative of the
+/// advisory text rendered directly beside it. The longer warning
+/// body lives in [`paladin_core::format_plaintext_storage_warning`]
+/// and is rendered separately above the checkbox; this helper
+/// only covers the short affirmative caption attached to the
+/// checkbox itself.
+///
+/// The gate is required by §"Component tree" > `InitDialog` —
+/// the plaintext path stays disabled until the user ticks the
+/// checkbox, matching the §10 routing test "Plaintext-warning
+/// gate must be ticked before submission is allowed". Pinning
+/// the label through a helper keeps the wording in one place
+/// shared by the widget binding and the pure-logic tests in
+/// `tests/init_dialog_logic.rs`.
+///
+/// Pure — returns a `'static str` without allocating. Sibling of
+/// [`plaintext_warning_body`] on the plaintext-warning-surface
+/// side; together they pin the standalone warning body and the
+/// affirmative checkbox caption against a single source of
+/// truth.
+#[must_use]
+pub fn format_init_dialog_plaintext_warning_label() -> &'static str {
+    "I accept this risk"
+}
+
 /// Destructive action-button label the [`InitDialogComponent`]'s
 /// `vault_exists` race gate renders on its in-dialog
 /// `AdwAlertDialog` with `destructive-action` styling.

@@ -1151,6 +1151,72 @@ fn format_init_dialog_passphrase_title_matches_unlock_dialog_passphrase_title() 
 }
 
 #[test]
+fn format_init_dialog_plaintext_warning_label_returns_accept_risk() {
+    // Per §"Component tree" > `InitDialog`: when the user submits
+    // the plaintext path (both passphrase fields empty), the
+    // dialog renders an explicit acknowledgement checkbox whose
+    // label is populated from this helper. The wording (`"I
+    // accept this risk"`) mirrors the closing line of
+    // `paladin_core::format_plaintext_storage_warning()` —
+    // "Use an encrypted vault unless you fully accept this risk." —
+    // so the checkbox caption reads as the affirmative of the
+    // advisory text rendered directly beside it. Pinning the
+    // wording through a helper keeps the label in one place
+    // shared by the widget binding and the pure-logic tests in
+    // `tests/init_dialog_logic.rs`.
+    use paladin_gtk::init_dialog::format_init_dialog_plaintext_warning_label;
+
+    assert_eq!(
+        format_init_dialog_plaintext_warning_label(),
+        "I accept this risk",
+        "InitDialog plaintext-warning acknowledgement checkbox label is the affirmative of the format_plaintext_storage_warning closing line",
+    );
+}
+
+#[test]
+fn format_init_dialog_plaintext_warning_label_is_non_empty_single_line() {
+    // Defense-in-depth: the checkbox label must be a non-empty
+    // single-line caption so `gtk::CheckButton::set_label` can
+    // render it inline beside the checkbox without wrapping or
+    // truncation artifacts. The longer warning body lives in
+    // `paladin_core::format_plaintext_storage_warning()` and is
+    // rendered separately above the checkbox; this helper only
+    // covers the short affirmative caption attached to the
+    // checkbox itself.
+    use paladin_gtk::init_dialog::format_init_dialog_plaintext_warning_label;
+
+    let label = format_init_dialog_plaintext_warning_label();
+    assert!(
+        !label.is_empty(),
+        "InitDialog plaintext-warning checkbox label must be non-empty; got {label:?}",
+    );
+    assert!(
+        !label.contains('\n'),
+        "InitDialog plaintext-warning checkbox label must be a single line; got {label:?}",
+    );
+}
+
+#[test]
+fn format_init_dialog_plaintext_warning_label_is_distinct_from_warning_body() {
+    // Defense-in-depth: the checkbox label and the longer
+    // warning body must render distinct strings so the
+    // affirmative caption beside the checkbox cannot collapse
+    // onto the same wording as the standalone advisory shown
+    // above it. The warning body comes from
+    // `paladin_core::format_plaintext_storage_warning()`; the
+    // checkbox label is the short affirmative this helper
+    // returns.
+    use paladin_core::format_plaintext_storage_warning;
+    use paladin_gtk::init_dialog::format_init_dialog_plaintext_warning_label;
+
+    assert_ne!(
+        format_init_dialog_plaintext_warning_label(),
+        format_plaintext_storage_warning(),
+        "InitDialog plaintext-warning checkbox label must be distinct from the standalone warning body so the two surfaces read as separate captions",
+    );
+}
+
+#[test]
 fn format_init_dialog_confirm_passphrase_title_returns_confirm_passphrase() {
     // Per §"Component tree" > `InitDialog`: the encrypted path
     // surfaces a second `AdwPasswordEntryRow` whose floating
