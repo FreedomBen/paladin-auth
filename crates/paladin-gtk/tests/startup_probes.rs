@@ -14349,3 +14349,89 @@ fn format_app_about_dialog_comments_does_not_contain_a_vertical_tab_byte() {
         "AdwAboutDialog comments must not contain the `\\x0B` vertical-tab byte (0x0B); a mid-string `\\x0B` slips past `_is_non_empty_single_line_distinct_from_program_name` (which only checks `\\n` and surrounding whitespace, and although `char::is_whitespace()` matches U+000B VT it only rejects boundary occurrences), past `_does_not_end_with_a_period_per_libadwaita_convention` (which only constrains the trailing byte), past `_is_ascii_only` (because `\\x0B` is ASCII), and past `_does_not_contain_a_null_byte` / `_does_not_contain_a_horizontal_tab_byte` / `_does_not_contain_a_carriage_return_byte` (which each name a different byte specifically); it would render as a literal control glyph in the dialog-header description row, propagate via `CARGO_PKG_DESCRIPTION` into Cargo metadata scrapers and `gnome-software` description rows, and break screen-reader description announcements at the byte boundary; got {comments:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_developers_entries_do_not_contain_a_vertical_tab_byte() {
+    // Defense-in-depth per-entry-loop sibling of the just-added
+    // `_developer_name_does_not_contain_a_vertical_tab_byte` and
+    // `_copyright_does_not_contain_a_vertical_tab_byte`
+    // companions on the same C0 control-byte cycle, extending
+    // the developers-array byte-cleanliness contract past the
+    // just-completed `{null / horizontal-tab / carriage-return}`
+    // entry-triplet to the next C0 control byte. The vertical-
+    // tab byte `\x0B` (0x0B) sits one step above HT (0x09) and
+    // one step below CR (0x0D) in the ASCII C0 block; like its
+    // siblings it is a non-printable control byte with no
+    // legitimate use inside a human-readable GNOME credits-page
+    // contributor-name entry.
+    //
+    // None of the existing developers companions name the `\x0B`
+    // byte directly per entry:
+    //   - `_is_non_empty_array_of_non_empty_single_line_names`
+    //     pins each entry as non-empty and single-line via
+    //     `!name.contains('\n')` — `\x0B` is not `\n`. The
+    //     surrounding-whitespace guards
+    //     (`!name.starts_with(char::is_whitespace)` and
+    //     `!name.ends_with(char::is_whitespace)`) reject `\x0B`
+    //     *only* at the boundary bytes (since `char::is_whitespace()`
+    //     under Rust's Unicode definition matches U+000B VT) —
+    //     but a mid-string `\x0B` (`"Benjamin\x0BPorter"`) sits
+    //     between the boundaries and slips past both guards;
+    //   - `_entries_are_distinct` / `_does_not_contain_developer_name`
+    //     / `_does_not_contain_app_id` /
+    //     `_does_not_contain_program_name` / `_lists_benjamin_porter`
+    //     companions guard against content-shape regressions but
+    //     say nothing about the `\x0B` byte;
+    //   - `_entries_do_not_contain_a_null_byte` /
+    //     `_entries_do_not_contain_a_horizontal_tab_byte` /
+    //     `_entries_do_not_contain_a_carriage_return_byte`
+    //     siblings each name a different byte specifically.
+    //
+    // A regression that landed `["Benjamin\x0BPorter"]` (a
+    // vertical-tab byte lifted from a legacy CONTRIBUTORS file
+    // authored on a line-printer terminal that used `\x0B` as a
+    // vertical-spacing separator between first and last names,
+    // a `concat!("Benjamin", "\x0B", "Porter")` form, or a hand-
+    // edited helper that pasted from an EBCDIC-to-ASCII
+    // translation preserving the original VT byte) would mis-
+    // render in multiple downstream surfaces: (1) the GLib-
+    // backed `AdwAboutDialog::set_developers` setter hands the
+    // array to GTK and Pango renders each entry as a credits-
+    // page row — a stray `\x0B` byte in the middle of a
+    // contributor name would render as a literal control glyph
+    // (a hollow box or tofu-like placeholder), breaking the
+    // credits-page contributor-name layout; (2) any tooling
+    // that scrapes the credits-page contributor list (release-
+    // note generators, contributor-attribution crawlers, GNOME
+    // `gnome-software` credit aggregators) would propagate the
+    // stray `\x0B` byte into the consumer's stream; (3) screen
+    // readers that announce the credits-page contributor names
+    // read the `\x0B` as a literal control character, breaking
+    // the contributor-name accessibility-tree announcement at
+    // the byte boundary.
+    //
+    // Pinning the no-`\x0B` invariant across every contributor
+    // entry in a single per-entry loop surfaces the regression
+    // with a message naming both the offending byte and the
+    // affected entry index at build time rather than as a
+    // downstream credits-page rendering artifact, attribution-
+    // scraper miss, or screen-reader announcement break.
+    // Current helper returns the literal `["Benjamin Porter"]`
+    // (no `\x0B` byte), so this test passes today and serves as
+    // a forcing function so any future override of the helper —
+    // or any future contributor addition — stays free of
+    // vertical-tab bytes. Continues the developers-array C0
+    // control-byte cycle past the just-completed `{null /
+    // horizontal-tab / carriage-return}` triplet so each
+    // entry's byte-composition contract pins each forbidden
+    // control byte against a single source of truth.
+    use paladin_gtk::app::model::format_app_about_dialog_developers;
+
+    let developers = format_app_about_dialog_developers();
+    for (idx, entry) in developers.iter().enumerate() {
+        assert!(
+            !entry.contains('\x0B'),
+            "AdwAboutDialog developers entry at index {idx} must not contain the `\\x0B` vertical-tab byte (0x0B); a mid-string `\\x0B` slips past `_is_non_empty_array_of_non_empty_single_line_names` (which only checks `\\n` and rejects boundary whitespace via `char::is_whitespace()` — boundary-only, not mid-string), past `_entries_are_distinct` / `_does_not_contain_developer_name` / `_does_not_contain_app_id` / `_does_not_contain_program_name` / `_lists_benjamin_porter` (which only constrain content shape), and past `_entries_do_not_contain_a_null_byte` / `_entries_do_not_contain_a_horizontal_tab_byte` / `_entries_do_not_contain_a_carriage_return_byte` (which name `\\0`, `\\t`, and `\\r` specifically); it would render as a literal control glyph in the credits-page \"Developers\" row, propagate into downstream attribution scrapers and `gnome-software` credit aggregators, and break screen-reader contributor-name announcements at the byte boundary; got {entry:?}",
+        );
+    }
+}
