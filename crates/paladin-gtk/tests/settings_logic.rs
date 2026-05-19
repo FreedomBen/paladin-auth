@@ -1619,3 +1619,41 @@ fn settings_state_stage_clears_last_outcome_so_prior_inline_does_not_linger() {
         "new spinner stage clears the prior outcome so the subtitle does not linger",
     );
 }
+
+#[test]
+fn format_settings_dialog_spinner_page_increment_returns_ten() {
+    // `gtk::Adjustment::new` takes a `page_increment` separately
+    // from the `step_increment` returned by
+    // `format_settings_dialog_auto_lock_secs_adjustment` /
+    // `format_settings_dialog_clipboard_clear_secs_adjustment`.
+    // The page increment governs the value the `AdwSpinRow` jumps
+    // by on Page Up / Page Down keyboard navigation; both spinners
+    // share the same seconds dimension and the same per-press +/-
+    // step (`1.0`), so the page step is also shared.
+    //
+    // The wording (`10.0`) is the conventional 10× step factor:
+    // small enough to feel responsive on the §4.7-bounded ranges
+    // (auto-lock 30..=86400, clipboard 5..=600) without sliding
+    // past the bounds in a single press, large enough that Page
+    // Up / Down is meaningfully different from the +/- buttons.
+    //
+    // Pinning the page step through this helper keeps the spinner
+    // keyboard navigation in one place shared by both
+    // `gtk::Adjustment::new` calls the `SettingsComponent` makes;
+    // the widget layer never duplicates the literal.
+    //
+    // Sibling of
+    // `format_settings_dialog_auto_lock_secs_adjustment` and
+    // `format_settings_dialog_clipboard_clear_secs_adjustment`
+    // on the `gtk::Adjustment::new` argument side; together they
+    // pin every value the constructor receives for both spinners
+    // (the value itself comes from
+    // `compose_settings_dialog_*_secs_value`, and `page_size`
+    // stays `0.0` because `AdwSpinRow` has no slider area).
+    use paladin_gtk::settings::format_settings_dialog_spinner_page_increment;
+
+    assert!(
+        (format_settings_dialog_spinner_page_increment() - 10.0).abs() < f64::EPSILON,
+        "page increment is the conventional 10× step factor",
+    );
+}

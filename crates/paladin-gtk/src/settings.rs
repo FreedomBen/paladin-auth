@@ -902,6 +902,43 @@ pub fn accepted_change_from_setting_patch(patch: &SettingPatch) -> AcceptedChang
     }
 }
 
+/// Fixed `page_increment` value the widget hands to
+/// [`gtk::Adjustment::new`] for both `AdwSpinRow` adjustments per
+/// `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
+/// "Preferences" and §"Component tree" > `SettingsComponent`.
+///
+/// Returns `10.0` — the conventional 10× step factor relative to
+/// the `1.0` `step_increment` returned by
+/// [`format_settings_dialog_auto_lock_secs_adjustment`] and
+/// [`format_settings_dialog_clipboard_clear_secs_adjustment`].
+/// Governs the value the `AdwSpinRow` jumps by on Page Up / Page
+/// Down keyboard navigation: small enough to feel responsive on
+/// the §4.7-bounded ranges (auto-lock 30..=86400, clipboard
+/// 5..=600) without sliding past the bounds in a single press,
+/// large enough that paging differs meaningfully from the per-
+/// press +/- buttons.
+///
+/// Shared by both spinners — both edit a seconds dimension and
+/// both use the same `1.0` per-press step, so the page step is
+/// also shared. Pinning the literal through this helper keeps
+/// the spinner keyboard navigation in one place; the widget layer
+/// never duplicates the literal.
+///
+/// Pure — returns an `f64` without allocating. Sibling of
+/// [`format_settings_dialog_auto_lock_secs_adjustment`] and
+/// [`format_settings_dialog_clipboard_clear_secs_adjustment`] on
+/// the [`gtk::Adjustment::new`] argument side; together they pin
+/// every value the constructor receives for both spinners (the
+/// `value` itself comes from
+/// [`compose_settings_dialog_auto_lock_secs_value`] /
+/// [`compose_settings_dialog_clipboard_clear_secs_value`], and
+/// `page_size` stays `0.0` because `AdwSpinRow` has no slider
+/// area).
+#[must_use]
+pub fn format_settings_dialog_spinner_page_increment() -> f64 {
+    10.0
+}
+
 /// Buffered spinner pending the 500 ms debounce.
 #[derive(Debug, Clone, Copy)]
 enum PendingSpinner {
