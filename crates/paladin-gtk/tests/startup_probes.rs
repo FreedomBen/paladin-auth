@@ -7396,3 +7396,70 @@ fn format_app_about_dialog_debug_info_is_ascii_only() {
         );
     }
 }
+
+#[test]
+fn format_app_about_dialog_debug_info_filename_extension_is_lowercase_txt() {
+    // Defense-in-depth sibling of
+    // `format_app_about_dialog_debug_info_filename_returns_paladin_debug_info_txt`
+    // (exact-value pin to the static literal
+    // `"paladin-debug-info.txt"`),
+    // `format_app_about_dialog_debug_info_filename_is_non_empty_single_line_with_txt_extension`
+    // (positive shape pin which uses
+    // `ext.eq_ignore_ascii_case("txt")` and therefore would also
+    // accept `.TXT` or `.Txt`), and the new
+    // `_debug_info_filename_is_ascii_only` companion.
+    //
+    // The case-insensitive `.txt` check in the
+    // `_is_non_empty_single_line_with_txt_extension` companion
+    // is deliberately lenient on the extension casing because
+    // freedesktop filesystems are case-sensitive but the
+    // libadwaita / GIO file-save MIME-type dispatch is keyed
+    // off case-folded extensions. That leniency leaves the
+    // case-sensitive lower-case `.txt` convention ungated:
+    // a regression that hand-spelled the helper as
+    // `"paladin-debug-info.TXT"` (uppercase) or
+    // `"paladin-debug-info.Txt"` (mixed case) would slip past
+    // both companions while producing a file-save suggestion
+    // that mis-matches the GNOME / freedesktop convention of
+    // lowercase extensions and renders awkwardly in file
+    // managers next to other text bug-report files (which
+    // overwhelmingly use lowercase `.txt`).
+    //
+    // The current `"paladin-debug-info.txt"` literal is
+    // lowercase-correct, so this test passes today and serves
+    // as a forcing function so any future override of the
+    // filename literal stays aligned with the convention. The
+    // `_is_ascii_only` companion already pins the extension's
+    // *characters* to the ASCII subset; this companion
+    // additionally pins the extension's *casing* against
+    // accidental upper-case drift that would also be
+    // ASCII-valid. Together they pin the extension casing +
+    // byte composition contract against a single source of
+    // truth.
+    use paladin_gtk::app::model::format_app_about_dialog_debug_info_filename;
+
+    let filename = format_app_about_dialog_debug_info_filename();
+    // The case-sensitive `.txt` suffix check is exactly the point of this
+    // pin — the `_is_non_empty_single_line_with_txt_extension` companion
+    // already uses `eq_ignore_ascii_case`, leaving the casing-drift edge
+    // case ungated. The clippy::case_sensitive_file_extension_comparisons
+    // lint default-suggests an `eq_ignore_ascii_case` swap which would
+    // collapse this pin into the lenient companion; allow the lint here.
+    #[allow(clippy::case_sensitive_file_extension_comparisons)]
+    {
+        assert!(
+            filename.ends_with(".txt"),
+            "AdwAboutDialog debug_info_filename must end with a case-sensitive lower-case `.txt` extension matching the GNOME / freedesktop convention for plain-text bug-report files in file managers — the `_is_non_empty_single_line_with_txt_extension` companion uses `eq_ignore_ascii_case` and so would also accept `.TXT` or `.Txt`, leaving the casing-drift edge case ungated; got {filename:?}",
+        );
+    }
+    let extension = std::path::Path::new(filename).extension().unwrap_or_else(|| {
+        panic!(
+            "AdwAboutDialog debug_info_filename must have an extension recognizable by `std::path::Path::extension`; got {filename:?}",
+        )
+    });
+    assert_eq!(
+        extension,
+        "txt",
+        "AdwAboutDialog debug_info_filename extension must be the case-sensitive lower-case literal `txt` matching the GNOME / freedesktop convention for plain-text files; got {extension:?} in {filename:?}",
+    );
+}
