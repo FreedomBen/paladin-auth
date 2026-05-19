@@ -998,6 +998,37 @@ pub fn format_settings_dialog_spinner_climb_rate() -> f64 {
     1.0
 }
 
+/// Fixed `digits` value the widget hands to
+/// [`adw::SpinRow::new`] for both `AdwSpinRow` constructors per
+/// `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
+/// "Preferences" and §"Component tree" > `SettingsComponent`.
+///
+/// Returns `0` because the §4.7 spinner-edited settings
+/// ([`paladin_core::VaultSettings::auto_lock_timeout_secs`] and
+/// [`paladin_core::VaultSettings::clipboard_clear_secs`]) are
+/// `u32` seconds — a whole-number dimension with no fractional
+/// component. A non-zero `digits` would render trailing `.000`
+/// glyphs that misrepresent the typed values and could mislead
+/// the user into entering fractional values the integer parser
+/// already drops on `Vault::apply_setting_patch`.
+///
+/// Pinning the literal through this helper keeps the digits
+/// count in one place shared by both `adw::SpinRow::new` calls
+/// the `SettingsComponent` makes; the widget layer never
+/// duplicates the literal.
+///
+/// Pure — returns a `u32` without allocating. Sibling of
+/// [`format_settings_dialog_spinner_climb_rate`],
+/// [`format_settings_dialog_spinner_page_increment`], and
+/// [`format_settings_dialog_spinner_page_size`] on the
+/// [`adw::SpinRow::new`] argument side; together with the bounds
+/// adjustment tuple and the value compose helpers they pin every
+/// value the constructor receives.
+#[must_use]
+pub fn format_settings_dialog_spinner_digits() -> u32 {
+    0
+}
+
 /// Buffered spinner pending the 500 ms debounce.
 #[derive(Debug, Clone, Copy)]
 enum PendingSpinner {

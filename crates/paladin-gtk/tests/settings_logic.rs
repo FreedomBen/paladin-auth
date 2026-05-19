@@ -1718,3 +1718,37 @@ fn format_settings_dialog_spinner_climb_rate_returns_one() {
         "climb rate is the flat 1.0 acceleration the seconds ranges call for",
     );
 }
+
+#[test]
+fn format_settings_dialog_spinner_digits_returns_zero() {
+    // `adw::SpinRow::new` takes a `digits: u32` argument that
+    // controls how many fractional places the spinner shows.
+    // The §4.7 settings the spinners edit
+    // (`auto_lock_timeout_secs`, `clipboard_clear_secs`) are
+    // `u32` seconds — a whole-number dimension with no
+    // fractional component — so the spinner must show `0`
+    // decimal digits. A non-zero `digits` would render trailing
+    // `.000` glyphs that misrepresent the underlying typed
+    // values and could mislead the user into typing fractional
+    // entries that the integer parser already drops.
+    //
+    // Pinning the literal through this helper keeps the digits
+    // count in one place shared by both `adw::SpinRow::new`
+    // calls the `SettingsComponent` makes; the widget layer
+    // never duplicates the literal.
+    //
+    // Pure — returns a `u32` without allocating. Sibling of
+    // `format_settings_dialog_spinner_climb_rate`,
+    // `format_settings_dialog_spinner_page_increment`, and
+    // `format_settings_dialog_spinner_page_size` on the
+    // `adw::SpinRow::new` argument side; together with the
+    // adjustment tuple they pin every value the constructor
+    // receives.
+    use paladin_gtk::settings::format_settings_dialog_spinner_digits;
+
+    assert_eq!(
+        format_settings_dialog_spinner_digits(),
+        0,
+        "digits is 0 because the §4.7 seconds settings are integer-valued",
+    );
+}
