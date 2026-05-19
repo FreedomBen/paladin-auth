@@ -2258,6 +2258,49 @@ fn dispatch_app_window_action_routes_quit_to_quit() {
 }
 
 #[test]
+fn dispatch_app_window_action_covers_every_bundled_action_name() {
+    // Defense-in-depth: every bare action name registered on
+    // the application's `app` action group (via
+    // `build_app_window_action_group`) must either dispatch
+    // to a concrete `AppMsg` variant or be explicitly
+    // documented as "not yet wired" — the mutating menu
+    // entries (Import, Export, Passphrase, Preferences) land
+    // in follow-up commits alongside their widget-bearing
+    // dialog components. Catches drift between the bundled
+    // action group and the dispatch table: a future commit
+    // that adds a new action to `format_app_window_action_names`
+    // without updating `dispatch_app_window_action` (or this
+    // pending-set) will surface here as a failing assertion.
+    use paladin_gtk::app::model::{
+        dispatch_app_window_action, format_app_menu_export_action_name,
+        format_app_menu_import_action_name, format_app_menu_passphrase_action_name,
+        format_app_menu_preferences_action_name, format_app_window_action_names,
+    };
+
+    let pending_mutating: [&str; 4] = [
+        format_app_menu_import_action_name(),
+        format_app_menu_export_action_name(),
+        format_app_menu_passphrase_action_name(),
+        format_app_menu_preferences_action_name(),
+    ];
+
+    for name in format_app_window_action_names() {
+        let dispatched = dispatch_app_window_action(name);
+        if pending_mutating.contains(&name) {
+            assert!(
+                dispatched.is_none(),
+                "mutating menu entry {name:?} must not yet dispatch — its AppMsg variant lands alongside its widget-bearing dialog component",
+            );
+        } else {
+            assert!(
+                dispatched.is_some(),
+                "bundled action {name:?} must dispatch to a concrete AppMsg variant through dispatch_app_window_action",
+            );
+        }
+    }
+}
+
+#[test]
 fn dispatch_app_window_action_returns_none_for_unknown_action_names() {
     // Defense-in-depth: a stray activation from a future
     // refactor that introduced an action name not yet covered
