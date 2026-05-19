@@ -2160,6 +2160,39 @@ pub fn format_app_add_button_action_name() -> &'static str {
     "add"
 }
 
+/// Keyboard accelerator the header-bar `+` button's
+/// `gio::SimpleAction` is wired to per
+/// `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
+/// "Header bar > Add".
+///
+/// Returns the gtk-rs accelerator spelling `"<Control>n"` —
+/// the same `<Ctrl>N` shortcut referenced verbatim on
+/// [`build_app_add_action`] and [`build_app_window_action_group`]
+/// docstrings. The widget binding consumes this via
+/// `gio::Application::set_accels_for_action(format_app_add_button_action(),
+/// &[format_app_add_button_accelerator()])` so the menu and
+/// button-driven activation paths share one shortcut surface
+/// against a single source of truth, instead of re-spelling
+/// `"<Control>n"` at the wiring site (which would silently
+/// drift away from the documented shortcut on a future rename).
+///
+/// The `<Control>n` form (uppercase modifier in angle brackets,
+/// lowercase key letter) matches gtk-rs `accels_for_action`'s
+/// recognised spelling; `<Primary>` would also resolve on Linux
+/// but `<Control>` keeps the helper aligned with the existing
+/// in-source documentation references.
+///
+/// Pure — returns a `'static str` without allocating. Sibling
+/// of [`format_app_add_button_action`] (the fully-qualified
+/// action target) and [`format_app_add_button_action_name`]
+/// (the bare action name); together they pin the action target,
+/// its bare name, and its keyboard accelerator against a single
+/// source of truth.
+#[must_use]
+pub fn format_app_add_button_accelerator() -> &'static str {
+    "<Control>n"
+}
+
 /// Ordered `(label, detailed_action_name)` pairs the `AppModel`'s
 /// primary `gio::Menu` appends in the §"libadwaita usage"
 /// sequence (Import, Export, Passphrase, Preferences, About,

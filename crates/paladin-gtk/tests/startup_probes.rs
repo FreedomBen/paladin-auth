@@ -1707,6 +1707,71 @@ fn format_app_add_button_action_name_round_trips_with_group_and_target() {
 }
 
 #[test]
+fn format_app_add_button_accelerator_returns_control_n() {
+    // The header-bar `+` button's `gio::SimpleAction` is wired
+    // to the `<Control>n` keyboard accelerator per
+    // `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
+    // "Header bar > Add" and the existing `<Ctrl>N` docstring
+    // references on `build_app_add_action` /
+    // `build_app_window_action_group`. The widget binding hands
+    // this accelerator string to
+    // `gio::Application::set_accels_for_action(format_app_add_button_action(),
+    //  &[format_app_add_button_accelerator()])` so the menu and
+    // button-driven activation paths share the same shortcut
+    // surface against a single source of truth. Pinning the
+    // accelerator here keeps the docstring references and the
+    // future wiring helper aligned without re-spelling the string
+    // in two places.
+    //
+    // The `<Control>n` spelling is the gtk-rs `accels_for_action`
+    // form (uppercase modifier in angle brackets, lowercase key
+    // letter); `Primary` would also resolve on Linux but
+    // `<Control>` matches the existing in-source documentation
+    // (`build_app_add_action` references `<Control>n` verbatim)
+    // so we keep the docstring and the helper in lockstep.
+    //
+    // Pure — returns a `'static str` without allocating. Sibling
+    // of `format_app_add_button_action` (the fully-qualified action
+    // target) and `format_app_add_button_action_name` (the bare
+    // action name); together they pin the action target, its
+    // bare name, and its keyboard accelerator against a single
+    // source of truth.
+    use paladin_gtk::app::model::format_app_add_button_accelerator;
+
+    assert_eq!(
+        format_app_add_button_accelerator(),
+        "<Control>n",
+        "header-bar + button accelerator must be the gtk-rs `<Control>n` form for `set_accels_for_action`",
+    );
+}
+
+#[test]
+fn format_app_add_button_accelerator_is_non_empty_and_well_formed() {
+    // Defensive: the accelerator string is consumed by
+    // `gio::Application::set_accels_for_action`, which accepts
+    // any non-empty gtk-rs accelerator spelling. An accidental
+    // empty string or whitespace-leading entry would silently
+    // unbind the shortcut at runtime without surfacing a
+    // compile-time error — guard against that drift here so the
+    // header-bar + button's `<Ctrl>N` shortcut stays wired.
+    use paladin_gtk::app::model::format_app_add_button_accelerator;
+
+    let accel = format_app_add_button_accelerator();
+    assert!(
+        !accel.is_empty(),
+        "accelerator must be non-empty; got {accel:?}",
+    );
+    assert!(
+        !accel.starts_with(' ') && !accel.ends_with(' '),
+        "accelerator must not have leading or trailing whitespace; got {accel:?}",
+    );
+    assert!(
+        accel.contains('<') && accel.contains('>'),
+        "accelerator must use the `<Modifier>key` form; got {accel:?}",
+    );
+}
+
+#[test]
 fn format_app_primary_menu_entries_returns_six_entries_in_pinned_order() {
     // The `AppModel`'s primary `gio::Menu` is built by appending
     // each entry's (label, detailed-action-name) pair in the
