@@ -10470,3 +10470,67 @@ fn format_app_about_dialog_program_name_does_not_contain_a_null_byte() {
         "AdwAboutDialog program_name must not contain the `\\0` null byte (which would route through GLib's null-terminated `g_strdup` layer in `set_application_name` / `set_title` / `accessible-name` setters and truncate the bold dialog-header program-name row, the window manager's taskbar / dock display label, and screen-reader announcements at the first `\\0`); got {program_name:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_version_does_not_contain_a_null_byte() {
+    // Defense-in-depth mirror of the just-added
+    // `_debug_info_does_not_contain_a_null_byte` /
+    // `_debug_info_filename_does_not_contain_a_null_byte` /
+    // `_program_name_does_not_contain_a_null_byte`
+    // companions on the version side. The `_is_ascii_only`
+    // companion pins each byte as ASCII — the `\0` byte (0x00)
+    // is ASCII, so a regression that landed `"0.0.\01"`
+    // (null-byte injection from a `CString::new` round-trip
+    // that didn't strip the trailing null, or a
+    // `concat!(env!("CARGO_PKG_VERSION"), "\0")` form fed
+    // through a build-script override) would slip past
+    // `_is_ascii_only`, `_has_no_embedded_whitespace` (`\0`
+    // is not whitespace),
+    // `_starts_with_a_digit` (only checks the first char),
+    // `_has_at_least_three_dot_separated_segments` (splitting
+    // by `.` still yields three non-empty segments),
+    // `_does_not_end_with_a_dot`,
+    // `_does_not_start_with_a_dot`,
+    // `_segments_are_non_empty` (each `.`-separated segment
+    // is non-empty even with a `\0` byte inside it), or
+    // `_matches_cargo_pkg_version` (only valid when no manual
+    // override is in place — a hand-edited helper that swapped
+    // `env!("CARGO_PKG_VERSION")` for a string-literal with a
+    // null byte would defeat the matching test).
+    //
+    // Null bytes in the version string would mis-render in
+    // multiple downstream surfaces: (1) the GLib-backed
+    // `AdwAboutDialog::set_version` setter routes through
+    // `g_strdup` (null-terminated) and may truncate the
+    // dialog-header version-label row at the first `\0` byte
+    // (rendering `"0.0.\01"` as `"0.0."`); (2) the same
+    // version string is included in the `set_debug_info`
+    // payload per `_debug_info_carries_program_name_version_and_app_id`,
+    // so a null byte in the version would propagate into the
+    // clipboard-copy / file-save / Pango-render surfaces the
+    // `_debug_info_does_not_contain_a_null_byte` companion
+    // gates; (3) automated bug-report submission tools that
+    // scrape the about dialog's version label rely on a clean
+    // ASCII semver string to populate version fields, and a
+    // mid-string `\0` would silently truncate the reported
+    // version mid-flow.
+    //
+    // Pinning the no-null-byte invariant directly here
+    // surfaces the regression with a message naming the
+    // offending byte at build time rather than as a downstream
+    // truncation of the dialog-header version-label row, the
+    // debug-info payload, or the bug-report version field.
+    // Current helper returns the literal
+    // `env!("CARGO_PKG_VERSION")` value (Cargo enforces the
+    // semver shape upstream, which is null-byte-free), so this
+    // test passes today and serves as a forcing function so
+    // any future override of the helper stays free of null
+    // bytes.
+    use paladin_gtk::app::model::format_app_about_dialog_version;
+
+    let version = format_app_about_dialog_version();
+    assert!(
+        !version.contains('\0'),
+        "AdwAboutDialog version must not contain the `\\0` null byte (which would route through GLib's null-terminated `g_strdup` layer in `set_version`, truncate the dialog-header version-label row at the first `\\0`, propagate into the debug-info payload, and corrupt automated bug-report version-field scraping); got {version:?}",
+    );
+}
