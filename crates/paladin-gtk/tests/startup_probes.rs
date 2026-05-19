@@ -7525,3 +7525,81 @@ fn format_app_about_dialog_application_icon_name_has_no_embedded_whitespace() {
         "AdwAboutDialog application_icon_name must contain no whitespace byte so the value passes `g_application_id_is_valid` cleanly (which rejects any whitespace) and resolves against the freedesktop icon-theme lookup without falling back to the broken-image placeholder; got {icon_name:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_program_name_has_no_embedded_whitespace() {
+    // Defense-in-depth sibling of
+    // `format_app_about_dialog_program_name_returns_paladin`
+    // (exact-value pin against the static literal `"Paladin"`),
+    // `format_app_about_dialog_program_name_is_non_empty_and_not_app_id`
+    // (positive shape pin on non-empty + distinct from `APP_ID`),
+    // `format_app_about_dialog_program_name_matches_format_app_window_title`
+    // (cross-consistency with the window title),
+    // `format_app_about_dialog_program_name_is_segment_of_application_icon_name`
+    // (cross-consistency with the reverse-DNS icon name), and
+    // `format_app_about_dialog_program_name_is_ascii_only`
+    // (byte-composition pin against Unicode lookalikes).
+    // Those companions catch the wrong-value, empty,
+    // name-equals-app-id, wrong-title, not-a-segment, and
+    // non-ASCII-byte regressions but leave the
+    // embedded-ASCII-whitespace edge case ungated.
+    //
+    // The `AdwAboutDialog::program_name` slot renders as the
+    // bold header text at the top of the dialog. The canonical
+    // literal `"Paladin"` is a single word with no internal
+    // whitespace — a regression that hand-spelled the helper as
+    // `"Pal adin"` (stray space) or `"Pal\tadin"` (stray tab)
+    // would slip past the existing pins because:
+    //
+    // * `_returns_paladin` only catches the case where the
+    //   canonical literal is similarly corrupted in a
+    //   lookalike-in-lookalike refactor.
+    // * `_is_non_empty_and_not_app_id` only checks non-emptiness
+    //   and distinctness from `APP_ID`, not byte composition.
+    // * `_is_ascii_only` accepts ASCII-space (U+0020),
+    //   ASCII-tab (U+0009), and other ASCII whitespace
+    //   characters because they are all ASCII-valid bytes.
+    // * `_is_segment_of_application_icon_name` would catch the
+    //   embedded-whitespace regression transitively only because
+    //   the canonical icon-name `"org.tamx.Paladin.Gui"` is
+    //   whitespace-free; if both literals drifted together
+    //   (e.g. `"Pal adin"` here paired with `"org.tamx.Pal adin.Gui"`
+    //   on the icon-name side, which the recently-pinned
+    //   `_application_icon_name_has_no_embedded_whitespace`
+    //   companion would catch separately), this companion would
+    //   continue to pass on a misleading match.
+    //
+    // Whitespace inside the program-name slot also breaks the
+    // visual centering of the bold header text relative to the
+    // surrounding header rows — `AdwAboutDialog` lays the header
+    // out under the assumption that `program_name` is a single
+    // tightly-set word rather than a multi-word phrase — and
+    // would mis-render through any downstream consumer that
+    // splits on whitespace (e.g. an automated bug-report tooling
+    // pass that scrapes the program-name token out of the
+    // `format_app_about_dialog_debug_info` payload).
+    //
+    // Pinning the no-embedded-whitespace invariant directly here
+    // surfaces a regression with a message that names the
+    // offending whitespace character at the byte offset rather
+    // than as a confusing segment-membership failure on the
+    // icon-name side or a quiet centering / scraping mismatch at
+    // render / consumption time. Mirror of the
+    // `format_app_about_dialog_application_icon_name_has_no_embedded_whitespace`
+    // sibling on the reverse-DNS icon-name side and the
+    // `format_app_about_dialog_url_helpers_contain_no_embedded_whitespace`
+    // sibling on the three AdwAboutDialog footer URL helpers;
+    // together they pin the no-whitespace invariant across every
+    // dialog-routed identifier-shaped helper against a single
+    // source of truth.
+    use paladin_gtk::app::model::format_app_about_dialog_program_name;
+
+    let program_name = format_app_about_dialog_program_name();
+    for (idx, ch) in program_name.char_indices() {
+        assert!(
+            !ch.is_whitespace(),
+            "AdwAboutDialog program_name must contain no embedded whitespace so the bold dialog header renders as a single tightly-set word matching libadwaita's program-name layout convention and stays byte-identical to the `Paladin` segment of the reverse-DNS application_icon_name and to any downstream consumer that splits on whitespace; got whitespace char {ch:?} (U+{:04X}) at byte offset {idx} in {program_name:?}",
+            ch as u32,
+        );
+    }
+}
