@@ -19,8 +19,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use paladin_core::{
     classify_init_precheck, default_vault_path, inspect, parse_otpauth, write_secret_file_atomic,
-    Account, ErrorKind, InitPrecheck, PaladinError, PermissionSubject, Store, VaultInit, VaultLock,
-    VaultStatus,
+    Account, ErrorKind, InitPrecheck, PaladinError, PermissionSubject, SettingPatch, Store,
+    VaultInit, VaultLock, VaultStatus,
 };
 use tempfile::TempDir;
 
@@ -264,6 +264,40 @@ fn empty_vault_round_trips_through_save_reopen() {
     assert_eq!(reopened.settings().auto_lock_timeout_secs(), 300);
     assert!(!reopened.settings().clipboard_clear_enabled());
     assert_eq!(reopened.settings().clipboard_clear_secs(), 20);
+}
+
+#[test]
+fn non_default_vault_settings_survive_plaintext_save_and_reopen() {
+    // The `empty_vault_round_trips_*` test above pins that the four §5
+    // settings *defaults* survive a save/reopen cycle. This pins the
+    // complementary path: every settings field set to a non-default
+    // value still survives save → drop → reopen. Catches a regression
+    // where `VaultPayload` (de)serialization omits a settings field or
+    // resets it to the default during decode.
+    let dir = vault_test_dir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = Store::create(&path, VaultInit::Plaintext).unwrap();
+    vault
+        .apply_setting_patch(SettingPatch::AutoLockEnabled(true))
+        .unwrap();
+    vault
+        .apply_setting_patch(SettingPatch::AutoLockTimeoutSecs(900))
+        .unwrap();
+    vault
+        .apply_setting_patch(SettingPatch::ClipboardClearEnabled(true))
+        .unwrap();
+    vault
+        .apply_setting_patch(SettingPatch::ClipboardClearSecs(45))
+        .unwrap();
+    vault.save(&store).unwrap();
+    drop(vault);
+    drop(store);
+
+    let (reopened, _) = Store::open(&path, VaultLock::Plaintext).unwrap();
+    assert!(reopened.settings().auto_lock_enabled());
+    assert_eq!(reopened.settings().auto_lock_timeout_secs(), 900);
+    assert!(reopened.settings().clipboard_clear_enabled());
+    assert_eq!(reopened.settings().clipboard_clear_secs(), 45);
 }
 
 /// §4.3 wire format — a freshly written plaintext vault places its

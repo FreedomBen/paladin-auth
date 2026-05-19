@@ -1779,7 +1779,7 @@ is a separate `#[test]` or table-driven case family.
 - [x] Wrong-passphrase vs corrupt-bundle vs decode-failure distinction
   on encrypted Paladin imports (decrypt_failed on wrong key, decrypt_failed
   on AEAD/AAD tamper, invalid_payload on garbage-but-valid-ciphertext).
-- [ ] Phase K coverage-hardening tests — each enumerated as its own
+- [x] Phase K coverage-hardening tests — each enumerated as its own
   Phase K checklist entry above: HOTP primitive algorithm × digits
   cross-product, HOTP primitive at counter `0` / `u64::MAX`,
   `mutate_and_save` closure-panic safety, `ImportConflict::Skip`
