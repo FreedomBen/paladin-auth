@@ -10734,3 +10734,76 @@ fn format_app_about_dialog_copyright_does_not_contain_a_null_byte() {
         "AdwAboutDialog copyright must not contain the `\\0` null byte (which would route through GLib's null-terminated `g_strdup` layer in `set_copyright`, truncate the dialog-footer copyright row at the first `\\0`, and silently lose trailing AGPL-3.0-or-later attribution in downstream license-aggregator scrapers); got {copyright:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_comments_does_not_contain_a_null_byte() {
+    // Defense-in-depth mirror of the just-added
+    // `_program_name_does_not_contain_a_null_byte` /
+    // `_version_does_not_contain_a_null_byte` /
+    // `_application_icon_name_does_not_contain_a_null_byte` /
+    // `_developer_name_does_not_contain_a_null_byte` /
+    // `_copyright_does_not_contain_a_null_byte` /
+    // `_debug_info_does_not_contain_a_null_byte` /
+    // `_debug_info_filename_does_not_contain_a_null_byte`
+    // companions on the comments-blurb side. The
+    // `_is_ascii_only` companion pins each byte as ASCII —
+    // the `\0` byte (0x00) is ASCII, so a regression that
+    // landed `"Authenticat\0or for TOTP and HOTP"` (null-byte
+    // injection from a `CString::new` round-trip that didn't
+    // strip the trailing null, or a `concat!(env!("CARGO_PKG_DESCRIPTION"), "\0")`
+    // form fed through a build-time override of the helper)
+    // would slip past `_is_ascii_only`,
+    // `_is_non_empty_single_line_distinct_from_program_name`
+    // (`\0` is not `\n` or `\r`, and the string remains
+    // non-empty and distinct from the program-name literal),
+    // `_does_not_end_with_a_period_per_libadwaita_convention`,
+    // or `_matches_cargo_pkg_description` (only valid when no
+    // manual override is in place — a hand-edited helper that
+    // swapped `env!("CARGO_PKG_DESCRIPTION")` for a string-
+    // literal with a null byte would defeat the matching
+    // test).
+    //
+    // Null bytes in the comments blurb would mis-render in
+    // multiple downstream surfaces: (1) the GLib-backed
+    // `AdwAboutDialog::set_comments` setter routes through
+    // `g_strdup` (null-terminated) and may truncate the
+    // dialog-header tagline row at the first `\0` byte
+    // (rendering `"Authenticat\0or for TOTP and HOTP"` as
+    // `"Authenticat"`), losing the explanatory tagline that
+    // distinguishes Paladin from other GTK applications; (2)
+    // the matching Cargo metadata is consumed by `nfpm`
+    // (per `_matches_cargo_pkg_description` and the §11
+    // packaging pipeline) to populate the `Description:`
+    // field of the `.deb` / `.rpm` artifacts, so a null byte
+    // in the helper that came from a build-time override of
+    // Cargo metadata would mid-stream truncate the
+    // distribution package description, breaking
+    // `dpkg-deb --info` and `rpm -qi` output for the
+    // packaged artifacts; (3) AppStream `<summary>` consumers
+    // (`gnome-software`, KDE Discover, the
+    // `appstreamcli validate` pass run by the §11 packaging
+    // dry-run) reject control bytes in the summary slot, so a
+    // null-byte regression here would surface as a validator
+    // failure in CI rather than just a silent dialog
+    // truncation.
+    //
+    // Pinning the no-null-byte invariant directly here
+    // surfaces the regression with a message naming the
+    // offending byte at build time rather than as a
+    // downstream truncation of the dialog-header tagline row,
+    // the `.deb` / `.rpm` `Description:` field, or as an
+    // `appstreamcli validate` failure in CI. Current helper
+    // returns the literal `env!("CARGO_PKG_DESCRIPTION")`
+    // value (Cargo enforces the description as a TOML string,
+    // which is null-byte-free by parser construction), so
+    // this test passes today and serves as a forcing function
+    // so any future override of the helper stays free of null
+    // bytes.
+    use paladin_gtk::app::model::format_app_about_dialog_comments;
+
+    let comments = format_app_about_dialog_comments();
+    assert!(
+        !comments.contains('\0'),
+        "AdwAboutDialog comments must not contain the `\\0` null byte (which would route through GLib's null-terminated `g_strdup` layer in `set_comments`, truncate the dialog-header tagline row at the first `\\0`, truncate the `.deb` / `.rpm` `Description:` field that mirrors `CARGO_PKG_DESCRIPTION`, and fail the `appstreamcli validate` pass on `<summary>` control bytes); got {comments:?}",
+    );
+}
