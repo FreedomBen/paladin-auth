@@ -25070,3 +25070,135 @@ fn format_app_about_dialog_application_icon_name_does_not_contain_an_end_of_tran
         "AdwAboutDialog application_icon_name must not contain the `\\x04` end-of-transmission byte (0x04); like ENQ, ACK, and BEL, EOT is NOT matched by `char::is_whitespace()` (Unicode returns false for U+0004 EOT), so `_has_no_embedded_whitespace` does NOT catch `\\x04` — strictly as dangerous as enquiry, acknowledge, backspace, and bell here, neither caught by the whitespace companion; a stray `\\x04` slips past `_is_ascii_only` / `_is_reverse_dns` / `_has_exactly_four_segments` / `_starts_with_a_lowercase_ascii_letter` / `_ends_with_gui_segment` / `_does_not_end_with_a_dot` / `_does_not_start_with_a_dot` / `_segments_are_non_empty` / `_matches_app_id` / `_program_name_is_segment_of_application_icon_name` and the prior per-byte siblings, would silently miss the `gtk::IconTheme` cache lookup (masking the bug as a placeholder-icon fallback), surface as a malformed window-icon-name property in the X11 / Wayland protocol exchange via `set_icon_name`, propagate into the AppStream metainfo `<id>` field where Flathub's strict reverse-DNS linter would fail the next package submission, prematurely terminate in-flight transmissions if dumped through a serial-bridged TTY treating `\\x04` as an EOT framing byte on Flathub linter diagnostics (truncating the diagnostic mid-output), and trigger pty-cooked-mode EOF-truncation surprises in tooling capturing the Flathub submission workflow through a canonical-mode terminal; got {application_icon_name:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_debug_info_filename_does_not_contain_an_end_of_transmission_byte() {
+    // Defense-in-depth per-byte sibling extending the debug-
+    // info-filename byte coverage past the just-completed
+    // `{null / horizontal-tab / carriage-return / vertical-
+    // tab / form-feed / backspace / line-feed / bell /
+    // acknowledge / enquiry}` decuple to the end-of-
+    // transmission byte `\x04` (0x04), continuing the non-
+    // whitespace-classified C0 control-byte cycle past ENQ
+    // (0x05) for this helper. Like ENQ, ACK, and BEL, EOT
+    // is NOT matched by `char::is_whitespace()` (Unicode
+    // treats EOT as a control byte, not whitespace), so the
+    // existing `_debug_info_filename_has_no_embedded_whitespace`
+    // companion does NOT catch `\x04` — making end-of-
+    // transmission strictly as dangerous as enquiry,
+    // acknowledge, backspace, and bell for this helper,
+    // since the transitive protection collapses entirely
+    // rather than being merely brittle.
+    //
+    // None of the existing companions name the `\x04` byte
+    // directly on this helper:
+    //   - `_is_ascii_only` pins each byte as ASCII — `\x04`
+    //     is ASCII so it slips past;
+    //   - `_debug_info_filename_has_no_embedded_whitespace`
+    //     uses `char::is_whitespace()`, which returns
+    //     *false* for U+0004 EOT — strictly weaker coverage
+    //     than the form-feed case;
+    //   - `_returns_paladin_debug_info_txt` exact-value pin
+    //     only holds while the literal is unchanged;
+    //   - `_does_not_contain_path_separators` /
+    //     `_does_not_start_with_a_dot` only constrain the
+    //     path-safety and leading-byte boundaries;
+    //   - `_contains_exactly_one_period` /
+    //     `_extension_is_lowercase_txt` only check dot-count
+    //     and suffix;
+    //   - `_is_non_empty_single_line_with_txt_extension`
+    //     only checks non-empty + single-line + `.txt`
+    //     suffix shape (the single-line check uses
+    //     `str::lines().count() == 1` which does not split
+    //     on `\x04`, so a `\x04`-bearing filename like
+    //     `"pala\x04din-debug-info.txt"` slips past this
+    //     companion entirely);
+    //   - `_does_not_contain_a_null_byte` /
+    //     `_does_not_contain_a_horizontal_tab_byte` /
+    //     `_does_not_contain_a_carriage_return_byte` /
+    //     `_does_not_contain_a_vertical_tab_byte` /
+    //     `_does_not_contain_a_form_feed_byte` /
+    //     `_does_not_contain_a_backspace_byte` /
+    //     `_does_not_contain_a_line_feed_byte` /
+    //     `_does_not_contain_a_bell_byte` /
+    //     `_does_not_contain_an_acknowledge_byte` /
+    //     `_does_not_contain_an_enquiry_byte` each name a
+    //     different byte specifically.
+    //
+    // A regression that landed `"pala\x04din-debug-info.txt"`
+    // (end-of-transmission byte lifted from a `script(1)`
+    // typescript capturing raw `\x04` EOT framing bytes
+    // from a CI build that bridged a serial console mid-
+    // token of an interactively-edited filename registry
+    // during an Xmodem-style transfer, a `concat!(_, "\x04",
+    // _)` form mirroring a stream-segment-delimited
+    // filename edit, or a hand-edited helper override that
+    // pasted from a terminal session interfacing with a
+    // protocol bridge preserving EOT framing bytes) would
+    // mis-render in multiple downstream surfaces: (1) the
+    // GLib-backed `AdwAboutDialog::set_debug_info_filename`
+    // setter routes the value into the dialog's "Save Debug
+    // Information…" file-chooser pre-fill — a `\x04`-
+    // bearing filename mis-renders in the GtkFileDialog's
+    // filename entry as a literal control glyph (a hollow
+    // box or tofu-like placeholder), and a serial-bridged
+    // TTY-rendered GtkFileDialog screen-cast or `xdotool`
+    // dump may have the `\x04` byte intercepted by the
+    // receiving end as an end-of-transmission framing
+    // indicator and prematurely terminate the in-flight
+    // transmission at the byte boundary, truncating the
+    // screen-cast mid-frame and confusing protocol-bridging
+    // tooling that treats EOT as a session-terminator; (2)
+    // when the user saves the debug-info payload to disk,
+    // the filesystem `open(2)` call routes the `\x04`-
+    // bearing filename through the kernel VFS layer — most
+    // POSIX-conformant kernels (Linux, macOS, BSDs) accept
+    // `\x04` in filenames but `ls`, `find`, and `tar` output
+    // piped to a serial-bridged TTY may have the `\x04` byte
+    // intercepted by the receiving end as an end-of-
+    // transmission framing indicator and prematurely
+    // terminate the in-flight transmission at the byte
+    // boundary, truncating the directory listing mid-entry
+    // and confusing protocol-bridging tooling that treats
+    // EOT as a session-terminator on the directory listing
+    // in a shared CI environment that processes the saved
+    // debug-info payload; on POSIX terminals operating in
+    // canonical (cooked) mode where `VEOF` defaults to
+    // `^D` / `\x04`, the byte is the EOF marker that closes
+    // the upstream read — surfacing as a truncated
+    // directory listing in any tooling that captures `ls` /
+    // `find` / `tar` output through a pty in cooked mode;
+    // (3) the saved file's filename surfaces in any bug-
+    // tracker attachment URL or chat-attachment column where
+    // the `\x04` byte mis-renders as a control glyph or
+    // confuses serial-protocol-bridging tooling on a TTY-
+    // rendered triage workflow, confusing the maintainer's
+    // triage workflow.
+    //
+    // Pinning the no-`\x04` invariant directly on this
+    // helper surfaces the regression with a message naming
+    // the offending byte at build time rather than as a
+    // downstream file-chooser mis-render, a serial-protocol
+    // EOT-frame session-terminator collision on directory
+    // listings, a pty-cooked-mode EOF-truncation surprise,
+    // or a chat-attachment column-render artifact. Current
+    // helper returns the literal `"paladin-debug-info.txt"`
+    // (no `\x04` byte), so this test passes today and
+    // serves as a forcing function so any future override
+    // of the helper — including the eventual landing of a
+    // localized filename — stays free of end-of-transmission
+    // bytes. Continues the non-whitespace-classified C0
+    // control-byte cycle past the just-completed `{null /
+    // horizontal-tab / carriage-return / vertical-tab /
+    // form-feed / backspace / line-feed / bell /
+    // acknowledge / enquiry}` decuple so the helper's byte-
+    // composition contract pins each forbidden control byte
+    // against a single source of truth.
+    use paladin_gtk::app::model::format_app_about_dialog_debug_info_filename;
+
+    let debug_info_filename = format_app_about_dialog_debug_info_filename();
+    assert!(
+        !debug_info_filename.contains('\x04'),
+        "AdwAboutDialog debug_info_filename must not contain the `\\x04` end-of-transmission byte (0x04); like ENQ, ACK, and BEL, EOT is NOT matched by `char::is_whitespace()` (Unicode returns false for U+0004 EOT), so `_has_no_embedded_whitespace` does NOT catch `\\x04` — strictly as dangerous as enquiry, acknowledge, backspace, and bell here, neither caught by the whitespace companion; a stray `\\x04` slips past `_is_ascii_only` / `_returns_paladin_debug_info_txt` / `_does_not_contain_path_separators` / `_does_not_start_with_a_dot` / `_contains_exactly_one_period` / `_extension_is_lowercase_txt` / `_is_non_empty_single_line_with_txt_extension` (`str::lines().count() == 1` does not split on `\\x04`) and the prior per-byte siblings, would mis-render as a literal control glyph in the GtkFileDialog filename entry pre-fill, prematurely terminate in-flight transmissions if dumped through a serial-bridged TTY treating `\\x04` as an EOT framing byte on `ls` / `find` / `tar` output piped through a serial-bridged TTY (truncating the directory listing mid-entry), trigger pty-cooked-mode EOF-truncation surprises in tooling capturing directory listings through a canonical-mode terminal in a shared CI environment that processes the saved debug-info payload, and confuse maintainer triage with control-glyph / EOT-frame artifacts in chat-attachment column renders; got {debug_info_filename:?}",
+    );
+}
