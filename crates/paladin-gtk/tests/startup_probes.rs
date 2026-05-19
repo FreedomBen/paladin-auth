@@ -9965,3 +9965,82 @@ fn format_app_about_dialog_copyright_does_not_end_with_a_period() {
         "AdwAboutDialog copyright must not end with a `.` byte (per the libadwaita convention for the `AdwAboutDialog` copyright slot — the dialog-footer copyright row renders the copyright as a notice, not a sentence, matching the format used by GNOME reference applications like GNOME Calculator, GNOME Text Editor, and GNOME Files which all render their copyright lines without a trailing period); got {copyright:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_program_name_does_not_end_with_a_period() {
+    // Defense-in-depth sibling of
+    // `format_app_about_dialog_program_name_returns_paladin`
+    // (exact-value pin),
+    // `_is_non_empty_and_not_app_id` (non-empty + distinct
+    // pin),
+    // `_matches_format_app_window_title` (cross-helper
+    // consistency pin), `_is_segment_of_application_icon_name`
+    // (cross-helper substring pin), `_is_ascii_only` (byte-
+    // composition pin), and `_has_no_embedded_whitespace`
+    // (no-whitespace pin). Those companions catch the wrong-
+    // value / wrong-shape / cross-helper-drift / non-ASCII /
+    // embedded-whitespace regressions but a regression that
+    // landed `"Paladin."` (trailing period from a sentence-
+    // form override or a `concat!("Paladin", ".")` injection)
+    // would slip past most companions: the
+    // `_is_non_empty_and_not_app_id` companion (the string is
+    // still non-empty and distinct from the reverse-DNS
+    // `org.tamx.Paladin.Gui`), the `_is_ascii_only` companion
+    // (the `.` byte is ASCII), and the
+    // `_has_no_embedded_whitespace` companion (the `.` is not
+    // whitespace). The `_returns_paladin` exact-value pin and
+    // the `_matches_format_app_window_title` /
+    // `_is_segment_of_application_icon_name` cross-helper pins
+    // would catch the regression only when no compensating
+    // change is made on the other side; a future refactor
+    // that intercepted multiple helpers in lockstep with the
+    // trailing period would slip past those cross-helper pins.
+    //
+    // Mirror of the
+    // `_developer_name_does_not_end_with_a_period` and
+    // `_copyright_does_not_end_with_a_period` companions on
+    // the dialog-header program-name-row side, completing the
+    // no-terminal-punctuation contract across all four
+    // rendered text rows in the `AdwAboutDialog`: the bold
+    // dialog-header program-name row (this companion), the
+    // dialog-header attribution row (the
+    // `_developer_name_*` companion), the dialog-header
+    // comments row (the `_comments_*` companion), and the
+    // dialog-footer copyright row (the `_copyright_*`
+    // companion). The libadwaita convention for the
+    // `AdwAboutDialog` program-name slot (which renders in
+    // the bold dialog-header row, the largest typographic
+    // element in the dialog) pins the program name as a
+    // label, not a sentence — terminal punctuation would
+    // visually clash with the version that shares the same
+    // bold header row (which the
+    // `_version_does_not_end_with_a_dot` companion already
+    // pins).
+    //
+    // A regression that landed `"Paladin."` would render in
+    // the bold header row as `"Paladin. 0.0.1"` next to the
+    // version, mis-rendering the program-name row as a
+    // sentence fragment and visually clashing with the
+    // adjacent no-trailing-dot version row.
+    //
+    // Pinning the no-trailing-period invariant directly here
+    // surfaces the regression with a message naming the
+    // offending trailing byte at build time and keeps the
+    // dialog-header program-name-row no-terminal-punctuation
+    // contract aligned with the libadwaita reference
+    // implementation across all four rendered text rows.
+    //
+    // The current `format_app_about_dialog_program_name`
+    // returns `"Paladin"` which ends with the `n` letter, so
+    // this test passes today and serves as a forcing function
+    // so any future override of the program-name helper stays
+    // aligned with the libadwaita no-terminal-punctuation
+    // convention for the dialog-header program-name row.
+    use paladin_gtk::app::model::format_app_about_dialog_program_name;
+
+    let program_name = format_app_about_dialog_program_name();
+    assert!(
+        !program_name.ends_with('.'),
+        "AdwAboutDialog program_name must not end with a `.` byte (per the libadwaita convention for the `AdwAboutDialog` program-name slot — the bold dialog-header row renders the program name as a label, not a sentence, so terminal punctuation visually clashes with the adjacent no-trailing-dot version row pinned by `_version_does_not_end_with_a_dot`); got {program_name:?}",
+    );
+}
