@@ -1754,6 +1754,53 @@ fn format_settings_dialog_spinner_digits_returns_zero() {
 }
 
 #[test]
+fn format_settings_dialog_spinner_wrap_returns_false() {
+    // `gtk::SpinButton::wrap` (surfaced through `adw::SpinRow`)
+    // defaults to `FALSE` — once the value reaches `upper` (or
+    // `lower`), continued `+` (or `-`) presses keep the value
+    // pinned at the boundary rather than wrapping to the opposite
+    // end. The §4.7 ranges
+    // (`auto_lock_timeout_secs` 30..=86400; `clipboard_clear_secs`
+    // 5..=600) make wrap-around behavior actively user-hostile: a
+    // user holding `-` on the clipboard-clear spinner expecting it
+    // to drop toward 5 would suddenly find it at 600, a 12x jump
+    // in the opposite direction. Pinning the flag to `false`
+    // matches the default but makes the bounded-behavior contract
+    // explicit so future contributors do not flip it on by mistake
+    // (e.g. for a clock-face hour picker that genuinely benefits
+    // from wrap).
+    //
+    // Pairs with the bounded `gtk::Adjustment` returned by
+    // `format_settings_dialog_auto_lock_secs_adjustment` /
+    // `format_settings_dialog_clipboard_clear_secs_adjustment` on
+    // the value-range side; wrap controls the *traversal* across
+    // those bounds while the adjustment pins the bounds themselves.
+    //
+    // Pinning the literal through this helper keeps the wrap flag
+    // in one place shared by both `adw::SpinRow::set_wrap(
+    // format_settings_dialog_spinner_wrap())` calls the
+    // `SettingsComponent` makes; the widget layer never duplicates
+    // the literal. Sibling of
+    // `format_settings_dialog_spinner_climb_rate`,
+    // `format_settings_dialog_spinner_digits`,
+    // `format_settings_dialog_spinner_numeric`,
+    // `format_settings_dialog_spinner_page_increment`,
+    // `format_settings_dialog_spinner_page_size`, and
+    // `format_settings_dialog_spinner_snap_to_ticks` on the
+    // `adw::SpinRow` property side; together they pin every
+    // spinner-property literal the `SettingsComponent` sets beyond
+    // the `gtk::Adjustment` bounds.
+    //
+    // Pure — returns a `bool` without allocating.
+    use paladin_gtk::settings::format_settings_dialog_spinner_wrap;
+
+    assert!(
+        !format_settings_dialog_spinner_wrap(),
+        "wrap is pinned off so holding +/- pins to the boundary instead of jumping to the other end",
+    );
+}
+
+#[test]
 fn format_settings_dialog_spinner_numeric_returns_true() {
     // `adw::SpinRow::numeric` (the libadwaita-side override of the
     // `gtk::SpinButton` property of the same name) defaults to
