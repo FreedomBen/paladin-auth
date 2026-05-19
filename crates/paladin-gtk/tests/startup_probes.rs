@@ -5388,3 +5388,43 @@ fn format_app_primary_menu_entries_actions_are_distinct() {
         "the six primary-menu entry action targets must be distinct (entries: {entries:?}); a duplicate would route two visible menu rows to the same gio::SimpleAction and dispatch the same AppMsg from both, collapsing one of the six menu actions into an unreachable duplicate",
     );
 }
+
+#[test]
+fn format_app_window_action_names_are_distinct() {
+    // Defense-in-depth: `format_app_window_action_names` returns
+    // the seven bare action names that
+    // `build_app_primary_action_group` registers on the bundled
+    // `gio::SimpleActionGroup` — the six primary-menu actions
+    // (`import`, `export`, `passphrase`, `preferences`, `about`,
+    // `quit`) plus the header-bar `+` button's `add` action.
+    // Each name becomes a `gio::SimpleAction` keyed by that bare
+    // name inside the group; registering two actions with the
+    // same name on the same `SimpleActionGroup` is a silent
+    // overwrite at the gio layer (the second insertion wins),
+    // collapsing two surface entries into a single dispatched
+    // `AppMsg`. The pairwise sibling tests
+    // `format_app_primary_menu_entries_actions_are_distinct`
+    // (which guards the six menu actions only via their fully-
+    // qualified `app.*` targets) and the
+    // `format_app_window_action_names_lists_the_six_primary_menu_entries_then_add`
+    // ordering test (which pins the slot layout) leave a gap
+    // where the Add action's bare name could collide with one of
+    // the six menu bare names — a regression that would silently
+    // overwrite the Add `SimpleAction` registration. Mirroring
+    // the `_are_distinct` pattern at the seven-name layer closes
+    // that gap so the drift surfaces as a failing test rather
+    // than as an Add button that silently fires the wrong
+    // `AppMsg`.
+    use paladin_gtk::app::model::format_app_window_action_names;
+
+    let names = format_app_window_action_names();
+    let before_dedup = names.len();
+    let mut deduped: Vec<&str> = names.to_vec();
+    deduped.sort_unstable();
+    deduped.dedup();
+    assert_eq!(
+        before_dedup,
+        deduped.len(),
+        "the seven bare action names returned by format_app_window_action_names must be distinct (names: {names:?}); a duplicate would silently overwrite one of the gio::SimpleAction registrations on the bundled SimpleActionGroup at build time and collapse two visible surface entries into a single dispatched AppMsg",
+    );
+}
