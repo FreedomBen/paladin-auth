@@ -16395,6 +16395,126 @@ fn format_app_about_dialog_empty_credits_section_entries_do_not_contain_a_form_f
 }
 
 #[test]
+fn format_app_about_dialog_empty_credits_section_entries_do_not_contain_a_backspace_byte() {
+    // Cross-helper defense-in-depth sibling looping over the
+    // three currently-empty `AdwAboutDialog` credits-section
+    // array helpers
+    // (`format_app_about_dialog_designers`,
+    // `format_app_about_dialog_artists`,
+    // `format_app_about_dialog_documenters`) and pinning each
+    // entry as free of the backspace byte `\x08` (0x08). Mirror
+    // of the just-added
+    // `_developers_entries_do_not_contain_a_backspace_byte`
+    // sibling on the populated-developers side and of the
+    // `_empty_credits_section_entries_do_not_contain_a_form_feed_byte`
+    // / `_empty_credits_section_entries_do_not_contain_a_vertical_tab_byte`
+    // / `_empty_credits_section_entries_do_not_contain_a_carriage_return_byte`
+    // / `_empty_credits_section_entries_do_not_contain_a_horizontal_tab_byte`
+    // / `_empty_credits_section_entries_do_not_contain_a_null_byte`
+    // siblings on the prior C0 control-byte cycle, structured as
+    // a single cross-helper loop matching those existing
+    // companions.
+    //
+    // The backspace byte sits one step below HT (0x09) in the
+    // ASCII C0 block and is the first non-whitespace-classified
+    // C0 byte in the cycle: unlike FF / HT / CR / LF / VT,
+    // `\x08` is NOT matched by `char::is_whitespace()` (Unicode
+    // treats BS as a control byte, not whitespace), so any
+    // future surrounding-whitespace boundary guard would NOT
+    // reject a leading or trailing `\x08` on a credits-section
+    // entry — making backspace strictly more dangerous than
+    // form-feed for these helpers once they grow non-empty
+    // returns.
+    //
+    // The three helpers currently return the empty array `[]`
+    // because Paladin does not yet have a separately-credited
+    // designer / artist / documenter for the v0.2 release. The
+    // empty-array return trivially contains no entries (let
+    // alone `\x08`-bearing entries), so this test passes today
+    // as the loop body is never entered. However, once any of
+    // the three credits sections gains a contributor, the helper
+    // return type will switch from `[&'static str; 0]` to
+    // `[&'static str; N]` with non-empty entries — at that point
+    // a `\x08` injection from a `script(1)` typescript capturing
+    // raw `\x08` edit-stream bytes between contributor names, a
+    // `concat!(_, "\x08", _)` form, a hand-edited helper that
+    // pasted from a terminal session recording, or a tooling
+    // export pipeline that preserved BS-bearing values inside a
+    // single-name entry would slip past every other companion
+    // the way the
+    // `_developers_entries_do_not_contain_a_backspace_byte`
+    // sibling already documents for the developers helper.
+    //
+    // Backspace bytes in the credits-section entries would mis-
+    // render in multiple downstream surfaces, identically to the
+    // `set_developers` analysis in the
+    // `_developers_entries_do_not_contain_a_backspace_byte`
+    // companion: (1) the GLib-backed `set_designers` /
+    // `set_artists` / `set_documenters` setters route through
+    // GTK and Pango renders each entry as a credits-page row —
+    // a stray `\x08` byte in the middle of a contributor name
+    // would render as a literal control glyph (a hollow box or
+    // tofu-like placeholder), visually breaking the credits-page
+    // contributor-name layout; (2) any tooling that scrapes the
+    // credits-page contributor list (GNOME `gnome-software`
+    // credit aggregators) would propagate the stray `\x08` byte
+    // into the consumer's stream, and a TTY-streamed attribution
+    // dump (CI release-note generation piped to `less`, an
+    // `xdotool` clipboard-grab of the credits page rendered into
+    // a terminal logger) would terminal-erase the preceding
+    // glyph and let the rendered contributor name diverge from
+    // the bytes on disk — a log-injection / display-spoofing
+    // primitive across the credits sections; (3) screen readers
+    // that announce the credits-page contributor names read the
+    // `\x08` as a literal control character or — on some
+    // implementations — as a delete-previous announcement,
+    // breaking the contributor-name accessibility-tree
+    // announcement at the byte boundary.
+    //
+    // Pinning the no-`\x08` invariant across all three
+    // currently-empty credits-section helpers in a single cross-
+    // helper loop surfaces the regression with a message naming
+    // the affected helper, the offending byte, and the entry
+    // index at build time rather than as a downstream rendering
+    // artifact, a terminal-erase display-spoof, or a screen-
+    // reader announcement break. Current helpers return the
+    // empty array `[]` (zero entries, no `\x08` byte to find),
+    // so this test passes today and serves as a forcing function
+    // so any future override of the helpers — including the
+    // eventual landing of separately-credited designer / artist
+    // / documenter strings — stays free of backspace bytes.
+    // Continues the empty-credits-section C0 control-byte cycle
+    // past the just-completed `{null / horizontal-tab /
+    // carriage-return / vertical-tab / form-feed}` entry-
+    // quintuple so each entry's byte-composition contract pins
+    // each forbidden control byte against a single source of
+    // truth.
+    use paladin_gtk::app::model::{
+        format_app_about_dialog_artists, format_app_about_dialog_designers,
+        format_app_about_dialog_documenters,
+    };
+
+    let designers = format_app_about_dialog_designers();
+    let artists = format_app_about_dialog_artists();
+    let documenters = format_app_about_dialog_documenters();
+
+    let sections: [(&str, &[&str]); 3] = [
+        ("designers", &designers),
+        ("artists", &artists),
+        ("documenters", &documenters),
+    ];
+
+    for (label, entries) in sections {
+        for (idx, entry) in entries.iter().enumerate() {
+            assert!(
+                !entry.contains('\x08'),
+                "AdwAboutDialog {label} entry at index {idx} must not contain the `\\x08` backspace byte (0x08); a mid-string `\\x08` would render as a literal control glyph in the credits-page \"{label}\" row via `set_{label}`, enable terminal-erase display-spoofing when the credits are dumped through a TTY (the rendered contributor name diverges from the bytes on disk because `\\x08` erases the preceding glyph), propagate into downstream attribution scrapers and `gnome-software` credit aggregators, and break screen-reader contributor-name announcements at the byte boundary; got {entry:?}",
+            );
+        }
+    }
+}
+
+#[test]
 fn format_app_about_dialog_release_notes_version_does_not_contain_a_form_feed_byte() {
     // Defense-in-depth per-byte sibling extending the
     // release_notes_version byte-cleanliness contract past the
