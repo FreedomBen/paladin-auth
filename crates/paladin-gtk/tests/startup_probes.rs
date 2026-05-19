@@ -5962,3 +5962,57 @@ fn format_app_about_dialog_issue_url_and_support_url_share_cargo_pkg_repository_
         "AdwAboutDialog support-url must start with the workspace `CARGO_PKG_REPOSITORY` prefix {repository_prefix:?} so the community-Q&A link follows a workspace-wide repository move in lockstep; got {support_url:?}",
     );
 }
+
+#[test]
+fn format_app_header_bar_button_icon_names_are_valid_icon_theme_keys() {
+    // Defense-in-depth sibling of the per-button
+    // `_ends_with_symbolic_suffix` (HIG-conformant theming),
+    // `_returns_X` (exact-value pin), and the cross-button
+    // `format_app_header_bar_button_icon_names_are_distinct`
+    // companions. Those existing tests catch the
+    // wrong-suffix / wrong-value / duplicated-glyph regressions
+    // but leave the broader icon-theme-key shape ungated.
+    //
+    // A `gtk::IconTheme::lookup_icon` consumer hands the icon
+    // name verbatim to the theme; a regression that introduced
+    // whitespace, a path separator, or a leading dot — e.g.
+    // `"list add symbolic"` (space-separated), `"icons/list-add-symbolic"`
+    // (path-style), or `".list-add-symbolic"` (hidden-file
+    // prefix) — would silently fail the icon lookup at runtime
+    // and fall back to the broken-image placeholder rather than
+    // failing at compile or pinned-test time.
+    //
+    // The assertion loops over the three header-bar button
+    // icon-name helpers (Add / search / menu) and pins each
+    // value as non-empty, whitespace-free, and free of POSIX /
+    // Windows path separators or dotfile prefixes so a future
+    // regression in any of the three fails with a message that
+    // names the offending button.
+    use paladin_gtk::app::model::{
+        format_app_add_button_icon_name, format_app_menu_button_icon_name,
+        format_app_search_button_icon_name,
+    };
+
+    for (label, icon) in [
+        ("Add", format_app_add_button_icon_name()),
+        ("search", format_app_search_button_icon_name()),
+        ("menu", format_app_menu_button_icon_name()),
+    ] {
+        assert!(
+            !icon.is_empty(),
+            "header-bar {label} button icon-name must be non-empty so `gtk::IconTheme::lookup_icon` resolves the symbolic glyph; got {icon:?}",
+        );
+        assert!(
+            !icon.chars().any(char::is_whitespace),
+            "header-bar {label} button icon-name must not contain whitespace; the icon-theme key is a single slug, not a multi-word phrase; got {icon:?}",
+        );
+        assert!(
+            !icon.contains('/') && !icon.contains('\\'),
+            "header-bar {label} button icon-name must not contain POSIX or Windows path separators; the icon-theme key is a bare slug, not a filesystem path; got {icon:?}",
+        );
+        assert!(
+            !icon.starts_with('.'),
+            "header-bar {label} button icon-name must not begin with a dot; a leading dot would mis-route the icon-theme lookup as a dotfile prefix; got {icon:?}",
+        );
+    }
+}
