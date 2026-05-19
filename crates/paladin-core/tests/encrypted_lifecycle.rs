@@ -20,7 +20,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use paladin_core::{
     inspect, parse_otpauth, Account, Argon2Params, EncryptionOptions, ErrorKind, PaladinError,
-    PermissionSubject, Store, VaultInit, VaultLock, VaultMode, VaultStatus,
+    PermissionSubject, SettingPatch, Store, VaultInit, VaultLock, VaultMode, VaultStatus,
 };
 use secrecy::SecretString;
 use tempfile::TempDir;
@@ -93,6 +93,42 @@ fn encrypted_open_round_trips_empty_vault() {
     let (vault2, _store2) = Store::open(&path, VaultLock::Encrypted(pp("hunter2"))).unwrap();
     assert!(vault2.accounts().is_empty());
     assert!(vault2.is_encrypted());
+}
+
+#[test]
+fn non_default_vault_settings_survive_encrypted_save_and_reopen() {
+    // Encrypted-path complement to
+    // `non_default_vault_settings_survive_plaintext_save_and_reopen`
+    // in `tests/vault_lifecycle.rs`. The encrypted save path encodes
+    // the settings inside the AEAD plaintext payload; this pins that
+    // a regression dropping a settings field from `VaultPayload` would
+    // be caught for the encrypted mode too, not only plaintext.
+    let dir = vault_test_dir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) =
+        Store::create(&path, VaultInit::Encrypted(cheap_options("hunter2"))).unwrap();
+    vault
+        .apply_setting_patch(SettingPatch::AutoLockEnabled(true))
+        .unwrap();
+    vault
+        .apply_setting_patch(SettingPatch::AutoLockTimeoutSecs(900))
+        .unwrap();
+    vault
+        .apply_setting_patch(SettingPatch::ClipboardClearEnabled(true))
+        .unwrap();
+    vault
+        .apply_setting_patch(SettingPatch::ClipboardClearSecs(45))
+        .unwrap();
+    vault.save(&store).expect("encrypted save");
+    drop(vault);
+    drop(store);
+
+    let (reopened, _store) = Store::open(&path, VaultLock::Encrypted(pp("hunter2"))).unwrap();
+    assert!(reopened.is_encrypted());
+    assert!(reopened.settings().auto_lock_enabled());
+    assert_eq!(reopened.settings().auto_lock_timeout_secs(), 900);
+    assert!(reopened.settings().clipboard_clear_enabled());
+    assert_eq!(reopened.settings().clipboard_clear_secs(), 45);
 }
 
 #[test]
