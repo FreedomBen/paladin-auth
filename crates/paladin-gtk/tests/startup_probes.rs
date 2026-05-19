@@ -19778,3 +19778,125 @@ fn format_app_about_dialog_url_helpers_do_not_contain_a_line_feed_byte() {
         );
     }
 }
+
+#[test]
+fn format_app_about_dialog_developer_name_does_not_contain_a_bell_byte() {
+    // Defense-in-depth per-byte sibling opening the next C0
+    // control-byte cycle for the developer-name helper after the
+    // just-completed `{null / horizontal-tab / carriage-return /
+    // vertical-tab / form-feed / backspace / line-feed}` septuple
+    // covered the inner C0 cluster from NUL (0x00) and BS (0x08)
+    // through CR (0x0D). The bell byte `\x07` (0x07) sits one
+    // step below BS (0x08) in the ASCII C0 block — the audible-
+    // alert byte historically used by terminal `printf "\a"` to
+    // ring a system bell.
+    //
+    // Like BS, BEL is NOT matched by `char::is_whitespace()`
+    // (Unicode treats BEL as a control byte, not whitespace), so
+    // the `_developer_name_has_no_surrounding_whitespace`
+    // boundary guard does NOT reject a leading or trailing `\x07`
+    // — making the bell byte strictly as dangerous as backspace
+    // for this helper. Unlike the cluster bytes (HT / LF / VT /
+    // FF / CR) which `char::is_whitespace()` does catch
+    // transitively through the surrounding-whitespace guard, BEL
+    // has zero transitive protection from existing companions.
+    //
+    // None of the existing developer-name companions name the
+    // `\x07` byte directly:
+    //   - `_developer_name_is_a_single_line_without_embedded_newlines`
+    //     only checks `\n` and `\r` — `\x07` is neither;
+    //   - `_developer_name_is_ascii_only` pins each byte as
+    //     ASCII — `\x07` is ASCII (0x07) so it slips past;
+    //   - `_developer_name_has_no_surrounding_whitespace` uses
+    //     `char::is_whitespace()`, which returns *false* for
+    //     U+0007 BEL, so this companion does NOT reject `\x07`
+    //     even at the boundaries — strictly weaker coverage
+    //     than the form-feed / line-feed / vertical-tab /
+    //     horizontal-tab / carriage-return cases;
+    //   - `_developer_name_starts_with_the_definite_article` and
+    //     `_ends_with_the_contributors_collective_noun` only
+    //     constrain the literal prefix `"The "` and suffix
+    //     `"contributors"`, so a mid-string `\x07` between them
+    //     satisfies both;
+    //   - `_does_not_contain_a_null_byte` /
+    //     `_does_not_contain_a_horizontal_tab_byte` /
+    //     `_does_not_contain_a_carriage_return_byte` /
+    //     `_does_not_contain_a_vertical_tab_byte` /
+    //     `_does_not_contain_a_form_feed_byte` /
+    //     `_does_not_contain_a_backspace_byte` /
+    //     `_does_not_contain_a_line_feed_byte`
+    //     each name a different byte specifically.
+    //
+    // The current `_returns_the_paladin_contributors` exact-
+    // value pin catches every byte today, but its protection
+    // collapses the moment a contributor-list addition or a
+    // workspace-vendoring split decouples the helper from the
+    // pinned literal — at that point a `\x07`-bearing override
+    // would slip past every byte-level companion above with
+    // zero transitive protection (BEL is neither in the `\n`/
+    // `\r` newline check nor in the `char::is_whitespace()`
+    // boundary check).
+    //
+    // A regression that landed `"The Paladin\x07contributors"`
+    // (bell byte lifted from a `script(1)` typescript that
+    // captured raw `\x07` audible-alert bytes from a CI build
+    // that triggered the terminal bell mid-contributor-name
+    // edit, a `concat!(_, "\x07", _)` form, or a hand-edited
+    // helper that pasted from a CHANGELOG.md interactively-
+    // edited block where the editor injected an audible-alert
+    // byte) would mis-render in multiple downstream surfaces:
+    // (1) the GLib-backed `AdwAboutDialog::set_developer_name`
+    // setter hands the string to Pango for inline rendering
+    // beneath the program name in the dialog header — Pango's
+    // default rendering of a bare `\x07` byte is implementation-
+    // defined and typically renders as a literal control glyph
+    // (a hollow box or tofu-like placeholder), breaking the
+    // tidy single-line attribution layout; (2) the same
+    // developer-name string is reused by
+    // `_copyright_ends_with_developer_name` to construct the
+    // footer copyright row, so a `\x07` byte in the developer
+    // name would propagate into the copyright slot and mis-
+    // render there too; (3) when the developer-name is dumped
+    // through a TTY (CI logs, `paladin-gtk --about` debug
+    // output piped to `less` or `cat`), the `\x07` byte rings
+    // the terminal bell on the user's session — an audible-
+    // alert injection primitive where an attacker who
+    // controlled the upstream developer-name source could
+    // trigger CI-runner bell notifications repeatedly or
+    // weaponize the bell as a covert side-channel in a shared
+    // CI environment; (4) screen readers that announce the
+    // dialog attribution may emit an audible alert tone or
+    // — on some implementations — render the byte as a literal
+    // control character announcement, breaking the attribution
+    // accessibility-tree announcement at the byte boundary;
+    // (5) downstream tooling that scrapes the developer-name
+    // attribution (release-note generators, contributor-
+    // attribution crawlers) would propagate the stray `\x07`
+    // byte into the consumer's stream and trigger the same
+    // bell-ring / control-glyph rendering across every
+    // downstream surface.
+    //
+    // Pinning the no-`\x07` invariant directly here surfaces
+    // the regression with a message naming the offending byte
+    // at build time rather than via a downstream dialog-header
+    // rendering bug, an audible-alert injection through TTY
+    // dumps, or a screen-reader announcement break. Current
+    // helper returns the literal `"The Paladin contributors"`
+    // (no `\x07` byte), so this test passes today and serves
+    // as a forcing function so any future override of the
+    // helper — including the eventual landing of a multi-
+    // contributor attribution string — stays free of bell
+    // bytes. Opens the next non-whitespace-classified C0
+    // control-byte cycle past the just-completed `{null /
+    // horizontal-tab / carriage-return / vertical-tab / form-
+    // feed / backspace / line-feed}` septuple so the helper's
+    // byte-composition contract pins each forbidden control
+    // byte against a single source of truth.
+    use paladin_gtk::app::model::format_app_about_dialog_developer_name;
+
+    let developer = format_app_about_dialog_developer_name();
+    assert!(
+        !developer.contains('\x07'),
+        "AdwAboutDialog developer-name must not contain the `\\x07` bell byte (0x07); a mid-string `\\x07` slips past `_is_a_single_line_without_embedded_newlines` (which only checks `\\n` and `\\r`), past `_is_ascii_only` (because `\\x07` is ASCII), past `_has_no_surrounding_whitespace` (which uses `char::is_whitespace()` — Unicode returns false for U+0007 BEL so this companion does NOT reject `\\x07` even at the boundaries, strictly weaker coverage than form-feed / line-feed / vertical-tab / horizontal-tab / carriage-return), past `_starts_with_the_definite_article` / `_ends_with_the_contributors_collective_noun` (which only constrain the literal prefix and suffix), and past `_does_not_contain_a_null_byte` / `_does_not_contain_a_horizontal_tab_byte` / `_does_not_contain_a_carriage_return_byte` / `_does_not_contain_a_vertical_tab_byte` / `_does_not_contain_a_form_feed_byte` / `_does_not_contain_a_backspace_byte` / `_does_not_contain_a_line_feed_byte` (which each name a different byte specifically); it would render as a literal control glyph in the dialog-header attribution row, propagate into the footer copyright row that reuses this string, ring the terminal bell when the developer-name is dumped through a TTY (an audible-alert injection / covert side-channel primitive in shared CI environments), break screen-reader attribution announcements at the byte boundary, and propagate into downstream contributor-attribution scrapers; got {developer:?}",
+    );
+}
