@@ -1407,7 +1407,7 @@ and committed in any order.
   no-panic properties without materially extending CI time
   (each iteration is microseconds).
 
-- [ ] **Stress: 10,000-account vault round-trip.** Add
+- [x] **Stress: 10,000-account vault round-trip.** Add
   `tests/vault_stress.rs` (a new file, kept separate from
   `vault_lifecycle.rs` so the stress entry is easy to
   individually `--ignored`-gate later if CI demands it).
