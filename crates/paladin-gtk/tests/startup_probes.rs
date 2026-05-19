@@ -6349,6 +6349,48 @@ fn format_app_window_accelerator_bindings_accelerators_contain_no_whitespace() {
 }
 
 #[test]
+fn format_app_about_dialog_application_icon_name_ends_with_gui_segment() {
+    // Defense-in-depth sibling of
+    // `format_app_about_dialog_application_icon_name_matches_app_id`
+    // (which pins the exact value against `APP_ID`),
+    // `_is_reverse_dns` (which pins the `.`-separated shape), and
+    // `_segments_are_non_empty` (which pins each `.`-separated
+    // segment is non-empty). Those companions catch the
+    // wrong-value / wrong-shape / empty-segment regressions but
+    // leave the trailing `.Gui` segment ungated.
+    //
+    // The reverse-DNS app-id namespace `org.tamx.Paladin.*` is
+    // shared between the GTK GUI (`org.tamx.Paladin.Gui`) and
+    // any future surface — a CLI Flatpak would presumably use
+    // `org.tamx.Paladin.Cli`, a daemon variant `org.tamx.Paladin.Daemon`,
+    // and so on. The `.Gui` suffix is what distinguishes this
+    // crate's Flatpak identity from those siblings; a regression
+    // that dropped the suffix to `"org.tamx.Paladin"` or swapped
+    // it to `"org.tamx.Paladin.Cli"` would still pass the
+    // existing `_is_reverse_dns` and `_segments_are_non_empty`
+    // companions (both invariants still hold) while colliding
+    // with the surface name reserved for a different front-end
+    // on Flathub / hicolor icon-theme / desktop-entry lookups.
+    //
+    // Pinning `.ends_with(".Gui")` here keeps the GUI's reverse-
+    // DNS identity stable across releases and forces an explicit
+    // decision if a future workspace rename moves the GUI off
+    // the `.Gui` slot. Sibling of
+    // `format_app_about_dialog_program_name_is_segment_of_application_icon_name`
+    // (which ties the human program-name into the icon-name via
+    // the brand-string segment); together they pin both the
+    // brand-string and the front-end-distinguishing segment
+    // against a single source of truth.
+    use paladin_gtk::app::model::format_app_about_dialog_application_icon_name;
+
+    let icon = format_app_about_dialog_application_icon_name();
+    assert!(
+        icon.ends_with(".Gui"),
+        "AdwAboutDialog application-icon must end with `.Gui` to distinguish this crate's reverse-DNS Flatpak identity from a future CLI / daemon front-end sharing the `org.tamx.Paladin.*` namespace; got {icon:?}",
+    );
+}
+
+#[test]
 fn format_app_header_bar_button_icon_names_use_lowercase_kebab_case() {
     // Defense-in-depth sibling of the recent
     // `format_app_header_bar_button_icon_names_are_valid_icon_theme_keys`
