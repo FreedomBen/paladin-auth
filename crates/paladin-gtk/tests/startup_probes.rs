@@ -8588,3 +8588,96 @@ fn format_app_about_dialog_developers_does_not_contain_app_id() {
         );
     }
 }
+
+#[test]
+fn format_app_about_dialog_developers_does_not_contain_program_name() {
+    // Defense-in-depth cross-helper sibling of
+    // `format_app_about_dialog_developers_does_not_contain_developer_name`
+    // (which negatively pins the developers credits-list against
+    // the dialog-header collective attribution string
+    // "The Paladin contributors" returned by
+    // `format_app_about_dialog_developer_name`) and
+    // `format_app_about_dialog_developers_does_not_contain_app_id`
+    // (which negatively pins the developers credits-list against
+    // the reverse-DNS application-icon identifier
+    // "org.tamx.Paladin.Gui" shared by
+    // `paladin_gtk::APP_ID` and
+    // `format_app_about_dialog_application_icon_name`). Those two
+    // companions catch the collective-attribution and
+    // application-icon copy-paste sources but leave the bare
+    // program-name literal ungated.
+    //
+    // The bare program-name literal "Paladin" is shared by
+    // `format_app_about_dialog_program_name` (the bold dialog
+    // header) and `format_app_window_title` (the ApplicationWindow
+    // title) and is the third common copy-paste source a future
+    // refactor might accidentally seed into the developers
+    // literal. A regression that landed `["Paladin"]` as the
+    // developers literal would not match the
+    // collective-attribution string "The Paladin contributors"
+    // byte-for-byte (since the bare program name is a substring
+    // not a duplicate of the attribution string) and would not
+    // match the reverse-DNS identifier "org.tamx.Paladin.Gui"
+    // byte-for-byte (since the bare program name is the
+    // human-readable label not the GLib / freedesktop / Flatpak
+    // identifier), so it would slip past both existing
+    // `_does_not_contain_developer_name` and
+    // `_does_not_contain_app_id` companions and render the
+    // credits page with a contributor whose name is the
+    // application's own bold dialog-header program-name — a UX
+    // regression that confuses users reading the credits page
+    // (who wonder why a contributor shares the application's
+    // bold header label) and breaks any automated
+    // credits-scraping tooling that match-keys off
+    // human-readable contributor strings distinct from the
+    // application name.
+    //
+    // The `_lists_benjamin_porter` exact-value pin only catches
+    // a stand-alone swap to the program-name literal, not a
+    // paired lookalike-in-lookalike refactor where both this
+    // helper and the program-name helper drift together; the
+    // `_is_non_empty_array_of_non_empty_single_line_names` shape
+    // pin would still accept "Paladin" (non-empty, single-line);
+    // the `_entries_are_distinct` pairwise-distinctness pin
+    // would trivially pass for a single corrupted entry; and the
+    // `_developer_name_starts_with_the_definite_article`
+    // cross-helper pin only constrains the collective-attribution
+    // side (the developer-name slot, not the credits-list slot)
+    // — so the program-name copy-paste regression slips through
+    // every neighbouring guard unless this sibling pins it
+    // directly.
+    //
+    // The current `["Benjamin Porter"]` literal is distinct from
+    // the bare `"Paladin"` program-name identifier so this test
+    // passes today and serves as a forcing function so any
+    // future credits-list refactor stays semantically distinct
+    // from the program-name slot. Mirror of the
+    // `_developers_does_not_contain_developer_name` companion
+    // on the collective-attribution side and the
+    // `_developers_does_not_contain_app_id` companion on the
+    // reverse-DNS application-icon identifier side; together
+    // they pin the credits-list contents against the three most
+    // likely copy-paste sources a future refactor might
+    // accidentally seed into the developers literal — the
+    // dialog-header collective attribution string, the
+    // reverse-DNS application-icon identifier, and the bare
+    // program-name literal — against a single source of truth.
+    use paladin_gtk::app::model::{
+        format_app_about_dialog_developers, format_app_about_dialog_program_name,
+        format_app_window_title,
+    };
+
+    let program_name = format_app_about_dialog_program_name();
+    let window_title = format_app_window_title();
+    let developers = format_app_about_dialog_developers();
+    for entry in developers {
+        assert_ne!(
+            entry, program_name,
+            "AdwAboutDialog developers credits-list entry {entry:?} must not duplicate the bare dialog program-name literal {program_name:?} returned by `format_app_about_dialog_program_name`; the credits list surfaces human-readable contributor names while the program-name slot surfaces the bold dialog-header application identifier, so a credits entry that matches the program-name byte-for-byte indicates a copy-paste regression seeding the program-name into the developers literal",
+        );
+        assert_ne!(
+            entry, window_title,
+            "AdwAboutDialog developers credits-list entry {entry:?} must not duplicate the bare ApplicationWindow title literal {window_title:?} returned by `format_app_window_title`; the credits list surfaces human-readable contributor names while the window-title slot surfaces the desktop window-list label, so a credits entry that matches the window-title byte-for-byte indicates a copy-paste regression seeding the window-title into the developers literal (and since `format_app_about_dialog_program_name_matches_format_app_window_title` ties the two literals together, asserting against both here keeps the negative pin in lockstep even if the two literals drift apart in a future refactor)",
+        );
+    }
+}
