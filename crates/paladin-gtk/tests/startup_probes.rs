@@ -6349,6 +6349,63 @@ fn format_app_window_accelerator_bindings_accelerators_contain_no_whitespace() {
 }
 
 #[test]
+fn format_app_about_dialog_copyright_separates_glyph_and_attribution_with_a_single_space() {
+    // Defense-in-depth sibling of
+    // `format_app_about_dialog_copyright_starts_with_copyright_glyph_and_contains_developer_name`
+    // (which pins the leading `©` glyph and the embedded
+    // developer-name attribution) and
+    // `_does_not_contain_a_year_token_so_it_does_not_drift_across_releases`
+    // (which pins the no-year invariant). Those companions catch
+    // the wrong-glyph / wrong-attribution / drifting-year
+    // regressions but leave the *glyph-attribution separator*
+    // ungated.
+    //
+    // The libadwaita HIG (and GNOME copyright convention generally)
+    // renders the legal `©` glyph and the attribution string with
+    // a single space between them: `"© <attribution>"`. A
+    // regression that dropped the space — `"©The Paladin contributors"` —
+    // would still pass the existing companions (the `©` glyph is
+    // still the leading char and the developer-name is still a
+    // substring) while rendering as a visually-cramped footer
+    // row where the glyph and attribution have no breathing
+    // space. A regression that doubled the space —
+    // `"©  The Paladin contributors"` — would slip past the
+    // existing companions for the same reason while pushing the
+    // attribution off the expected baseline alignment.
+    //
+    // The assertion checks the first two chars of the copyright
+    // literal are exactly the `©` glyph followed by a single
+    // ASCII space byte. Mirrors the per-character pin pattern
+    // used by `_starts_with_copyright_glyph_and_contains_developer_name`
+    // on the leading glyph alone.
+    use paladin_gtk::app::model::format_app_about_dialog_copyright;
+
+    let copyright = format_app_about_dialog_copyright();
+    let mut chars = copyright.chars();
+    let first = chars
+        .next()
+        .unwrap_or_else(|| panic!("AdwAboutDialog copyright must be non-empty; got {copyright:?}"));
+    assert_eq!(
+        first, '\u{00A9}',
+        "AdwAboutDialog copyright must begin with the `©` (U+00A9) glyph; got {first:?} in {copyright:?}",
+    );
+    let second = chars.next().unwrap_or_else(|| {
+        panic!(
+            "AdwAboutDialog copyright must have content after the `©` glyph (one-space separator + attribution); got {copyright:?}",
+        )
+    });
+    assert_eq!(
+        second, ' ',
+        "AdwAboutDialog copyright must use a single ASCII space between the `©` glyph and the attribution string so the footer row renders with GNOME-standard breathing space; a missing or doubled space would surface as a cramped or off-baseline footer alignment; got {second:?} in {copyright:?}",
+    );
+    let third = chars.next();
+    assert!(
+        third.map(|c| !c.is_whitespace()).unwrap_or(false),
+        "AdwAboutDialog copyright must have exactly one space between the `©` glyph and the attribution (a second whitespace char would double the separator and push the attribution off the baseline); got {third:?} in {copyright:?}",
+    );
+}
+
+#[test]
 fn format_app_about_dialog_application_icon_name_ends_with_gui_segment() {
     // Defense-in-depth sibling of
     // `format_app_about_dialog_application_icon_name_matches_app_id`
