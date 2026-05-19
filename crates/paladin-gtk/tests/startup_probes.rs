@@ -6349,6 +6349,62 @@ fn format_app_window_accelerator_bindings_accelerators_contain_no_whitespace() {
 }
 
 #[test]
+fn format_app_about_dialog_debug_info_program_name_line_ends_with_the_version() {
+    // Defense-in-depth sibling of
+    // `format_app_about_dialog_debug_info_app_id_line_ends_with_the_reverse_dns_app_id`
+    // (which pins the trailing-token shape on the *machine-
+    // oriented* App ID line) and
+    // `format_app_about_dialog_debug_info_starts_with_program_name`
+    // (which pins the leading content). Those companions guard
+    // the App ID line's trailing shape and the very first byte of
+    // the payload but leave the *human-readable* program-name
+    // line's trailing shape ungated, so a regression like
+    // `"Paladin 0.1.0 (Linux)"` (host OS appended), `"Paladin 0.1.0 — git: abcd"`
+    // (build-info appended), or `"Paladin 0.1.0 "` (trailing
+    // space) would slip past the existing companions while
+    // quietly expanding the bug-report payload beyond the
+    // deliberately minimal `"Paladin <version>"` shape the
+    // `format_app_about_dialog_debug_info` docstring renders in
+    // its example.
+    //
+    // Pinning `.ends_with(version)` on the program-name line
+    // forces the line to terminate with the package version
+    // string exactly, so a future commit that appended any
+    // trailing tokens to the human-readable line — even a
+    // trailing space — has to either drop the trailing content
+    // or update this assertion in the same commit. Both outcomes
+    // are fine; the forcing function is that the decision becomes
+    // explicit rather than slipping in as a silent expansion of
+    // the bug-report payload past its pinned minimum.
+    //
+    // Completes the bracket on both endpoints of the two-line
+    // payload's interior shape alongside the App ID line sibling:
+    // line 1 begins with the human program-name and ends with
+    // the version; line 2 begins with the `App ID:` label and
+    // ends with the reverse-DNS identifier.
+    use paladin_gtk::app::model::{
+        format_app_about_dialog_debug_info, format_app_about_dialog_program_name,
+        format_app_about_dialog_version,
+    };
+
+    let debug = format_app_about_dialog_debug_info();
+    let program_name = format_app_about_dialog_program_name();
+    let version = format_app_about_dialog_version();
+    let program_name_line = debug
+        .lines()
+        .find(|line| line.contains(program_name))
+        .unwrap_or_else(|| {
+            panic!(
+                "AdwAboutDialog debug-info must have at least one line containing the program-name display string {program_name:?}; got {debug:?}",
+            )
+        });
+    assert!(
+        program_name_line.ends_with(version),
+        "AdwAboutDialog debug-info program-name line must end with the package version {version:?} exactly (no trailing tokens like ` (Linux)` or ` — git: abcd`) so the bug-report payload stays deliberately minimal and a future expansion has to first update this pin; got {program_name_line:?} in {debug:?}",
+    );
+}
+
+#[test]
 fn format_app_about_dialog_debug_info_app_id_line_ends_with_the_reverse_dns_app_id() {
     // Defense-in-depth sibling of
     // `format_app_about_dialog_debug_info_app_id_appears_on_a_distinct_line_from_program_name`
