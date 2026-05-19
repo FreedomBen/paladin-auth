@@ -2155,6 +2155,29 @@ fn apply_app_add_action_sensitivity_updates_existing_action_for_a_new_state() {
 }
 
 #[test]
+fn dispatch_app_window_action_routes_add_to_open_add_dialog() {
+    // Per §"libadwaita usage" and §"Component tree": the
+    // header-bar `+` button's `"app.add"` activation
+    // dispatches `AppMsg::OpenAddDialog`, whose handler
+    // mounts a fresh `AddAccountComponent` seeded with the
+    // resolved vault path. Routing the activation through the
+    // shared `dispatch_app_window_action` table means the
+    // button can use `gtk::Button::set_action_name("app.add")`
+    // and inherit its enabled state from the SimpleAction,
+    // instead of hand-spelling a `connect_clicked` handler
+    // that bypasses the action group.
+    use paladin_gtk::app::model::{
+        dispatch_app_window_action, format_app_add_button_action_name, AppMsg,
+    };
+
+    let msg = dispatch_app_window_action(format_app_add_button_action_name());
+    assert!(
+        matches!(msg, Some(AppMsg::OpenAddDialog)),
+        "dispatch_app_window_action must route the add bare action name to AppMsg::OpenAddDialog; got {msg:?}",
+    );
+}
+
+#[test]
 fn dispatch_app_window_action_routes_about_to_open_about_dialog() {
     // Per §"libadwaita usage" and §"Component tree": the
     // application menu's bare action names (`format_app_menu_*_action_name`)

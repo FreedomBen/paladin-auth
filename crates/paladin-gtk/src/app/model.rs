@@ -589,7 +589,9 @@ impl SimpleComponent for AppModel {
         // and the header-bar `+` button's `"app.add"` target
         // all resolve through one `gio::SimpleActionGroup`.
         let action_group = build_app_window_action_group(&state);
-        for name in format_app_primary_menu_action_names() {
+        let mut action_names: Vec<&'static str> = format_app_primary_menu_action_names().to_vec();
+        action_names.push(format_app_add_button_action_name());
+        for name in action_names {
             if let Some(simple) = action_group
                 .lookup_action(name)
                 .and_then(|a| a.downcast::<gtk::gio::SimpleAction>().ok())
@@ -2591,6 +2593,9 @@ pub fn wire_app_window_action_group(
 /// only.
 #[must_use]
 pub fn dispatch_app_window_action(name: &str) -> Option<AppMsg> {
+    if name == format_app_add_button_action_name() {
+        return Some(AppMsg::OpenAddDialog);
+    }
     if name == format_app_menu_about_action_name() {
         return Some(AppMsg::OpenAboutDialog);
     }
