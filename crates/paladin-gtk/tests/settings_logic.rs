@@ -2046,6 +2046,37 @@ fn settings_state_stage_clears_last_outcome_for_prior_inline_io_error() {
 }
 
 #[test]
+fn settings_state_toggle_clears_last_outcome_for_prior_rollback() {
+    // Mirrors `settings_state_stage_clears_last_outcome_so_prior_inline_does_not_linger`
+    // (which exercises the `Rollback` arm on the stage side, despite
+    // its older "inline" name) on the toggle side. The sibling
+    // `settings_state_toggle_clears_last_outcome_so_prior_inline_does_not_linger`
+    // uses `SaveDurabilityUnconfirmed`, which lands in the
+    // `DurabilityWarning` slot, so the toggle path's clear contract
+    // for the `Rollback` variant was the last terminal-outcome gap.
+    // Pairs with the existing `_for_prior_durability_warning` and
+    // `_for_prior_inline_io_error` toggle tests so all three
+    // terminal save outcomes have explicit toggle-side clear
+    // coverage.
+    let mut state = SettingsState::new(defaults());
+    let _ = state.toggle_auto_lock_enabled(true);
+    let _ = state.apply_save_result(
+        AcceptedChange::AutoLockEnabled(true),
+        Err(save_not_committed_no_backup()),
+    );
+    assert!(matches!(
+        state.last_outcome(),
+        Some(SaveOutcome::Rollback { .. })
+    ));
+
+    let _ = state.toggle_auto_lock_enabled(false);
+    assert!(
+        state.last_outcome().is_none(),
+        "new toggle clears the prior rollback so the red subtitle does not linger",
+    );
+}
+
+#[test]
 fn settings_state_toggle_clears_last_outcome_for_prior_inline_io_error() {
     // Mirrors `settings_state_stage_clears_last_outcome_for_prior_inline_io_error`
     // on the toggle side. The original sibling pair covers the
