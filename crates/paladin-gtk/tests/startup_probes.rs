@@ -25202,3 +25202,165 @@ fn format_app_about_dialog_debug_info_filename_does_not_contain_an_end_of_transm
         "AdwAboutDialog debug_info_filename must not contain the `\\x04` end-of-transmission byte (0x04); like ENQ, ACK, and BEL, EOT is NOT matched by `char::is_whitespace()` (Unicode returns false for U+0004 EOT), so `_has_no_embedded_whitespace` does NOT catch `\\x04` — strictly as dangerous as enquiry, acknowledge, backspace, and bell here, neither caught by the whitespace companion; a stray `\\x04` slips past `_is_ascii_only` / `_returns_paladin_debug_info_txt` / `_does_not_contain_path_separators` / `_does_not_start_with_a_dot` / `_contains_exactly_one_period` / `_extension_is_lowercase_txt` / `_is_non_empty_single_line_with_txt_extension` (`str::lines().count() == 1` does not split on `\\x04`) and the prior per-byte siblings, would mis-render as a literal control glyph in the GtkFileDialog filename entry pre-fill, prematurely terminate in-flight transmissions if dumped through a serial-bridged TTY treating `\\x04` as an EOT framing byte on `ls` / `find` / `tar` output piped through a serial-bridged TTY (truncating the directory listing mid-entry), trigger pty-cooked-mode EOF-truncation surprises in tooling capturing directory listings through a canonical-mode terminal in a shared CI environment that processes the saved debug-info payload, and confuse maintainer triage with control-glyph / EOT-frame artifacts in chat-attachment column renders; got {debug_info_filename:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_url_helpers_do_not_contain_an_end_of_transmission_byte() {
+    // Cross-helper defense-in-depth sibling looping over the
+    // three `AdwAboutDialog` footer URL helpers
+    // (`format_app_about_dialog_website`,
+    // `format_app_about_dialog_issue_url`,
+    // `format_app_about_dialog_support_url`) and pinning each
+    // value as free of the end-of-transmission byte `\x04`
+    // (0x04). Continues the about-dialog non-whitespace-
+    // classified C0 control-byte cycle past the just-finished
+    // `{null / horizontal-tab / carriage-return / vertical-
+    // tab / form-feed / backspace / line-feed / bell /
+    // acknowledge / enquiry}` cross-URL decuple.
+    //
+    // The end-of-transmission byte sits one step below ENQ
+    // (0x05) in the ASCII C0 block — the framing byte
+    // historically used by serial protocols (Xmodem, Ymodem,
+    // Kermit) to mark the end of a transmitted block /
+    // file. Like ENQ, ACK, and BEL, EOT is NOT matched by
+    // `char::is_whitespace()` (Unicode treats EOT as a
+    // control byte, not whitespace), so the existing
+    // `url_helpers_contain_no_embedded_whitespace` companion
+    // does NOT catch `\x04` even though it catches `\x0C`.
+    // The end-of-transmission byte therefore has NO
+    // transitive protection on the URL helpers today —
+    // strictly as dangerous as enquiry, acknowledge,
+    // backspace, and bell, neither caught by the whitespace
+    // companion.
+    //
+    // A regression would slip past every existing companion:
+    //   - `_is_non_empty_https_url[_distinct_*]` per-URL
+    //     companion (which only checks non-empty + `https://`
+    //     prefix + no space byte — a `\x04` byte mid-URL
+    //     satisfies all three since `\x04` is not the
+    //     literal U+0020 SPACE);
+    //   - `_are_ascii_only` cross-URL companion (`\x04` is
+    //     ASCII so it slips past);
+    //   - `_url_helpers_contain_no_embedded_whitespace`
+    //     uses `char::is_whitespace()`, which returns
+    //     *false* for U+0004 EOT — strictly weaker coverage
+    //     than the form-feed case;
+    //   - `_do_not_end_with_a_trailing_slash` (which only
+    //     constrains the final byte);
+    //   - `_do_not_contain_a_null_byte` /
+    //     `_do_not_contain_a_horizontal_tab_byte` /
+    //     `_do_not_contain_a_carriage_return_byte` /
+    //     `_do_not_contain_a_vertical_tab_byte` /
+    //     `_do_not_contain_a_form_feed_byte` /
+    //     `_do_not_contain_a_backspace_byte` /
+    //     `_do_not_contain_a_line_feed_byte` /
+    //     `_do_not_contain_a_bell_byte` /
+    //     `_do_not_contain_an_acknowledge_byte` /
+    //     `_do_not_contain_an_enquiry_byte` siblings (which
+    //     each name a different byte specifically);
+    //   - `_do_not_contain_a_query_string` /
+    //     `_do_not_contain_a_fragment_anchor` /
+    //     `_do_not_contain_a_userinfo_at_sign` /
+    //     `_do_not_contain_a_backslash` siblings (which
+    //     each name a different byte specifically).
+    // None of the existing companions name the `\x04` byte
+    // directly.
+    //
+    // `\x04` is never a valid byte inside a URL per RFC 3986
+    // (the end-of-transmission byte is not in any of the URL
+    // grammar's production rules), so the no-`\x04`
+    // invariant is unconditional regardless of any future
+    // percent-encoded-space relaxation.
+    //
+    // A regression that landed
+    // `"https://github.com\x04FreedomBen/paladin"` (end-of-
+    // transmission byte lifted from a `script(1)` typescript
+    // capturing raw `\x04` EOT framing bytes from a CI build
+    // that bridged a serial console mid-URL during an
+    // Xmodem-style transfer between the host and path of an
+    // interactively-edited URL registry, a `concat!(_,
+    // "\x04", _)` form mirroring a stream-segment-delimited
+    // URL-table cell, or a hand-edited helper override that
+    // pasted from a terminal session interfacing with a
+    // protocol bridge preserving EOT framing bytes) would
+    // mis-render in multiple downstream surfaces: (1) the
+    // GLib-backed `AdwAboutDialog::set_website` /
+    // `set_issue_url` / `set_support_url` setters route the
+    // value into Pango for inline rendering as the
+    // underlined link label in the dialog footer — Pango's
+    // default rendering of a bare `\x04` byte is
+    // implementation-defined and typically renders as a
+    // literal control glyph (a hollow box or tofu-like
+    // placeholder), breaking the trusted-application surface
+    // contract of the link label; (2) when the user clicks
+    // the URL, GIO's `gtk_show_uri_full` routes the value
+    // through the session's `xdg-open` / portal layer where
+    // some URL parsers (WHATWG URL §4.5 implementations)
+    // reject `\x04` outright with `InvalidUrl`, breaking the
+    // click-through routing entirely, while others percent-
+    // encode the `\x04` as `%04` and route to a non-existent
+    // URL with a `Bad Request` response surfacing as a
+    // confusing browser-level error; (3) when the URL labels
+    // are dumped through a serial-bridged TTY (link-checker
+    // tooling output piped to `less`, a `gtk-launch` dry-run
+    // rendered into a serial-bridged terminal logger), the
+    // `\x04` byte may be intercepted by the receiving end as
+    // an end-of-transmission framing indicator and
+    // prematurely terminate the in-flight transmission at
+    // the byte boundary, truncating the link-checker output
+    // mid-stream and confusing protocol-bridging tooling
+    // that treats EOT as a session-terminator — a serial-
+    // protocol covert side-channel primitive where an
+    // attacker who controlled the upstream URL source could
+    // weaponize the EOT framing as a covert session-
+    // truncator in a shared CI environment that processes
+    // the link-checker output; on POSIX terminals operating
+    // in canonical (cooked) mode where `VEOF` defaults to
+    // `^D` / `\x04`, the byte is the EOF marker that closes
+    // the upstream read — surfacing as a truncated link-
+    // checker output in any tooling that captures the dump
+    // through a pty in cooked mode; (4) screen readers that
+    // announce the URL label may render the byte as a
+    // literal control character announcement, breaking the
+    // link-label accessibility-tree announcement at the byte
+    // boundary; (5) any downstream tooling that scrapes the
+    // URL labels (link-checker bots, broken-link auditors)
+    // would propagate the stray `\x04` byte into the
+    // consumer's stream and trigger the same routing failure
+    // across every downstream surface.
+    //
+    // Pinning the no-`\x04` invariant directly here surfaces
+    // the regression with a message naming the offending URL
+    // helper at build time rather than as a downstream user-
+    // visible mis-rendered link label, a confusing browser-
+    // level error on click-through, a serial-protocol EOT-
+    // frame session-terminator collision on URL-label dumps,
+    // a pty-cooked-mode EOF-truncation surprise, or a link-
+    // checker tooling failure. Mirror of the
+    // `_url_helpers_do_not_contain_a_backspace_byte`,
+    // `_url_helpers_do_not_contain_a_bell_byte`,
+    // `_url_helpers_do_not_contain_an_acknowledge_byte`, and
+    // `_url_helpers_do_not_contain_an_enquiry_byte` cross-
+    // URL siblings; together they pin the URL byte-
+    // composition contract (no whitespace, ASCII-only, no
+    // terminal `/`, no `\0`, no `\r`, no `\t`, no `\x0B`,
+    // no `\x0C`, no `\x08`, no `\n`, no `\x07`, no `\x06`,
+    // no `\x05`, no `\x04`, no `?` query, no `#` anchor, no
+    // `@` userinfo, no `\` path-confusion byte) across all
+    // three footer link surfaces against a single source of
+    // truth.
+    use paladin_gtk::app::model::{
+        format_app_about_dialog_issue_url, format_app_about_dialog_support_url,
+        format_app_about_dialog_website,
+    };
+
+    for (label, url) in [
+        ("website", format_app_about_dialog_website()),
+        ("issue_url", format_app_about_dialog_issue_url()),
+        ("support_url", format_app_about_dialog_support_url()),
+    ] {
+        assert!(
+            !url.contains('\x04'),
+            "AdwAboutDialog {label} must not contain the `\\x04` end-of-transmission byte (0x04) — `\\x04` is never a valid byte inside a URL per RFC 3986 (the end-of-transmission byte is not in any of the URL grammar's production rules); like ENQ, ACK, and BEL, EOT is NOT matched by `char::is_whitespace()` (Unicode returns false for U+0004 EOT), so `_url_helpers_contain_no_embedded_whitespace` does NOT catch `\\x04` — strictly as dangerous as enquiry, acknowledge, backspace, and bell here, neither caught by the whitespace companion; a stray `\\x04` would mis-render as a literal control glyph in the dialog footer link label, fail or mis-route the click-through routing across WHATWG URL §4.5 implementations vs `%04`-encoding implementations, prematurely terminate in-flight transmissions if dumped through a serial-bridged TTY treating `\\x04` as an EOT framing byte on URL-label dumps (truncating the dump mid-stream — a covert session-truncator primitive in shared CI environments), trigger pty-cooked-mode EOF-truncation surprises in tooling capturing URL-label dumps through a canonical-mode terminal, break screen-reader link-label announcements at the byte boundary, and propagate into downstream link-checker tooling; got {url:?}",
+        );
+    }
+}
