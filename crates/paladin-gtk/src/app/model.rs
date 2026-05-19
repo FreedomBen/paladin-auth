@@ -472,8 +472,15 @@ impl SimpleComponent for AppModel {
                         // `+` is hidden outside the vault-open
                         // states so users cannot trigger an
                         // `OpenAddDialog` race against a missing /
-                        // locked / errored vault.
+                        // locked / errored vault. Sensitivity is
+                        // pinned through
+                        // `format_app_add_button_sensitive` so the
+                        // button stays visible-but-disabled during
+                        // `UnlockedBusy` — a relaxation of the
+                        // visibility rule that mirrors the four
+                        // mutating primary-menu entries.
                         set_visible: format_app_add_button_visible(&state),
+                        set_sensitive: format_app_add_button_sensitive(&state),
                         connect_clicked[sender] => move |_| {
                             sender.input(AppMsg::OpenAddDialog);
                         },
@@ -2387,6 +2394,43 @@ pub fn apply_app_add_action_sensitivity(action: &gtk::gio::SimpleAction, state: 
 /// Pure side-effect helper (no return value).
 pub fn apply_app_add_button_visibility(button: &gtk::Button, state: &AppState) {
     button.set_visible(format_app_add_button_visible(state));
+}
+
+/// Apply the per-state sensitivity returned by
+/// [`format_app_add_button_sensitive`] to an existing
+/// header-bar `+` button [`gtk::Button`].
+///
+/// Calls [`gtk::prelude::WidgetExt::set_sensitive`] on
+/// `button` with [`format_app_add_button_sensitive`]'s value
+/// for the supplied `state`. The widget binding calls this
+/// helper from [`AppMsg`] state-transition arms
+/// ([`AppState::Missing`] / [`AppState::Locked`] /
+/// [`AppState::Unlocked`] / [`AppState::UnlockedBusy`] /
+/// [`AppState::StartupError`]) so the `+` button is disabled
+/// in every non-`Unlocked` state — sibling of
+/// [`apply_app_add_button_visibility`] on the visibility-
+/// update side and [`apply_app_add_action_sensitivity`] on
+/// the [`gtk::gio::SimpleAction`] companion side. The
+/// widget-level helper is what the binding calls when the
+/// button is wired through [`gtk::Button::connect_clicked`]
+/// directly; the action-level helper is what the binding
+/// calls when the button is wired through
+/// [`gtk::Button::set_action_name`] against the
+/// [`build_app_add_action`] action.
+///
+/// Centralizing the runtime sensitivity application in one
+/// helper means the `+` button's `set_sensitive` call site
+/// stays sourced exclusively from
+/// [`format_app_add_button_sensitive`] — the widget binding
+/// never hand-spells a bare `state.allows_mutating_menu()`
+/// read inline. Together with
+/// [`apply_app_add_button_visibility`] they pin every
+/// state-change visibility and sensitivity update for the
+/// `+` button against the pinned format helpers.
+///
+/// Pure side-effect helper (no return value).
+pub fn apply_app_add_button_sensitive(button: &gtk::Button, state: &AppState) {
+    button.set_sensitive(format_app_add_button_sensitive(state));
 }
 
 /// Build the single application-window

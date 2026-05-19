@@ -2155,6 +2155,109 @@ fn apply_app_add_action_sensitivity_updates_existing_action_for_a_new_state() {
 }
 
 #[test]
+fn apply_app_add_button_sensitive_updates_existing_button_for_a_new_state() {
+    // Per §"libadwaita usage" and §"Component tree": when
+    // `AppModel` transitions between states (e.g. Unlocked →
+    // UnlockedBusy on a vault worker spawn), the header-bar
+    // `+` button must toggle disabled even though it stays
+    // visible. This helper applies the new state's sensitivity
+    // to an existing `gtk::Button` so the widget binding can
+    // transition the affordance without re-creating the button
+    // — sibling of `apply_app_add_button_visibility` on the
+    // visibility side and `apply_app_add_action_sensitivity`
+    // for the SimpleAction companion.
+    use libadwaita::prelude::*;
+    use paladin_core::ErrorKind;
+    use paladin_gtk::app::model::{
+        apply_app_add_button_sensitive, format_app_add_button_sensitive,
+    };
+    use paladin_gtk::app::state::AppState;
+    use paladin_gtk::startup_error::{StartupError, StartupErrorSource};
+
+    if gtk4::init().is_err() {
+        println!("skipping: gtk::init failed (no display server); CI covers this under xvfb-run");
+        return;
+    }
+
+    let button = gtk4::Button::new();
+    // Pre-set the button to the opposite of the starting
+    // expectation so the assertion proves the helper applies
+    // the rule rather than reading whatever the constructor
+    // happened to default to.
+    button.set_sensitive(false);
+
+    let unlocked = AppState::Unlocked {
+        path: std::path::PathBuf::from("/dev/null"),
+    };
+    apply_app_add_button_sensitive(&button, &unlocked);
+    assert_eq!(
+        button.is_sensitive(),
+        format_app_add_button_sensitive(&unlocked),
+        "apply_app_add_button_sensitive must apply format_app_add_button_sensitive for the Unlocked state",
+    );
+    assert!(
+        button.is_sensitive(),
+        "Unlocked state must enable the + button per §\"libadwaita usage\"",
+    );
+
+    // Transitioning to UnlockedBusy (vault worker in flight)
+    // must disable the affordance even though the button
+    // stays visible — `format_app_add_button_visible`
+    // continues to return true for `UnlockedBusy`.
+    let busy = AppState::UnlockedBusy {
+        path: std::path::PathBuf::from("/dev/null"),
+    };
+    apply_app_add_button_sensitive(&button, &busy);
+    assert_eq!(
+        button.is_sensitive(),
+        format_app_add_button_sensitive(&busy),
+        "apply_app_add_button_sensitive must apply format_app_add_button_sensitive for the UnlockedBusy state",
+    );
+    assert!(
+        !button.is_sensitive(),
+        "UnlockedBusy state must disable the + button per §\"libadwaita usage\"",
+    );
+
+    // Locked / Missing / StartupError must also disable the
+    // affordance per the four-non-Unlocked-states rule.
+    for non_unlocked in [
+        AppState::Locked {
+            path: std::path::PathBuf::from("/dev/null"),
+        },
+        AppState::Missing {
+            path: std::path::PathBuf::from("/dev/null"),
+        },
+        AppState::StartupError {
+            path: None,
+            error: StartupError {
+                source: StartupErrorSource::PathResolution,
+                kind: ErrorKind::IoError,
+                rendered: String::from("resolve_failed"),
+            },
+        },
+    ] {
+        apply_app_add_button_sensitive(&button, &non_unlocked);
+        assert_eq!(
+            button.is_sensitive(),
+            format_app_add_button_sensitive(&non_unlocked),
+            "apply_app_add_button_sensitive must apply format_app_add_button_sensitive for {non_unlocked:?}",
+        );
+        assert!(
+            !button.is_sensitive(),
+            "{non_unlocked:?} must disable the + button per §\"libadwaita usage\"",
+        );
+    }
+
+    // Re-applying for Unlocked must re-enable the button so
+    // the helper round-trips cleanly across state transitions.
+    apply_app_add_button_sensitive(&button, &unlocked);
+    assert!(
+        button.is_sensitive(),
+        "re-applying Unlocked state must re-enable the + button via apply_app_add_button_sensitive",
+    );
+}
+
+#[test]
 fn apply_app_add_button_visibility_updates_existing_button_for_a_new_state() {
     // Per §"libadwaita usage" and §"Component tree": when
     // `AppModel` transitions between states (e.g. Unlocked →
