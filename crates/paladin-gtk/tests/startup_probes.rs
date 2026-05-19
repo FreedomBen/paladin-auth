@@ -5020,3 +5020,46 @@ fn format_app_window_accelerator_bindings_targets_dispatch_to_app_msg() {
         );
     }
 }
+
+#[test]
+fn format_app_primary_menu_entries_targets_dispatch_to_app_msg() {
+    // Direct defense-in-depth check on the primary-menu side
+    // that mirrors `format_app_window_accelerator_bindings_targets_dispatch_to_app_msg`:
+    // every (label, fully-qualified action target) pair in
+    // `format_app_primary_menu_entries` must strip its
+    // `format_app_action_group_name() + "."` prefix and route
+    // through `dispatch_app_window_action` to a concrete `AppMsg`
+    // variant. A future commit adding a new menu entry without
+    // also wiring a `dispatch_app_window_action` match arm would
+    // otherwise let the menu render the new item (because
+    // `build_app_primary_menu_model` appends every pair) and
+    // activate a no-op at runtime — the user clicks, the
+    // `SimpleAction` fires, the `connect_activate` closure routes
+    // through `dispatch_app_window_action`, the lookup returns
+    // `None`, and the closure silently exits.
+    //
+    // `dispatch_app_window_action_covers_every_bundled_action_name`
+    // and `format_app_primary_menu_action_names_parallels_primary_menu_entries`
+    // already chain transitively to the same guarantee; this
+    // direct assertion shortens the diagnostic path so a regression
+    // in the dispatch table fails with a message that names the
+    // visible menu label, not the bare action name.
+    use paladin_gtk::app::model::{
+        dispatch_app_window_action, format_app_action_group_name,
+        format_app_primary_menu_entries,
+    };
+
+    let entries = format_app_primary_menu_entries();
+    let prefix = format!("{}.", format_app_action_group_name());
+    for (label, target) in entries {
+        assert!(
+            target.starts_with(&prefix),
+            "primary menu entry {label:?} target {target:?} must start with the shared group prefix {prefix:?}",
+        );
+        let bare = &target[prefix.len()..];
+        assert!(
+            dispatch_app_window_action(bare).is_some(),
+            "primary menu entry {label:?} (target {target:?}) strips to bare action name {bare:?}, which must route through dispatch_app_window_action to a concrete AppMsg variant; got None, so a click on the menu entry would silently no-op at runtime",
+        );
+    }
+}
