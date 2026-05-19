@@ -6349,6 +6349,58 @@ fn format_app_window_accelerator_bindings_accelerators_contain_no_whitespace() {
 }
 
 #[test]
+fn format_app_about_dialog_debug_info_app_id_line_ends_with_the_reverse_dns_app_id() {
+    // Defense-in-depth sibling of
+    // `format_app_about_dialog_debug_info_app_id_appears_on_a_distinct_line_from_program_name`
+    // (which pins that the App ID and program-name segments land on
+    // distinct lines via `.contains()` matching) and
+    // `format_app_about_dialog_debug_info_has_exactly_two_lines`
+    // (which pins the overall line count). Those companions still
+    // allow trailing tokens after the App ID on its line — e.g.
+    // `"App ID: org.tamx.Paladin.Gui (Flatpak)"` or
+    // `"App ID: org.tamx.Paladin.Gui — host: linux"` — which would
+    // slip past the `.contains()` companion while quietly expanding
+    // the bug-report payload beyond the deliberately minimal
+    // `App ID: <reverse-dns>` shape the `format_app_about_dialog_debug_info`
+    // docstring renders in its example.
+    //
+    // Pinning `.ends_with(app_id)` on the App ID line forces the
+    // line to terminate with the reverse-DNS identifier exactly,
+    // so a future commit that appended any trailing tokens to the
+    // machine-oriented line — even a trailing space — has to
+    // either update the implementation to drop the trailing
+    // content or update this assertion in the same commit. Both
+    // outcomes are fine; the forcing function is that the
+    // decision becomes explicit rather than slipping in as a
+    // silent expansion of the bug-report payload past its pinned
+    // minimum.
+    //
+    // Sibling of `format_app_about_dialog_debug_info_starts_with_program_name`
+    // on the leading-line side; together they pin both endpoints
+    // of the two-line payload (line 1 begins with the human
+    // program-name; line 2 ends with the machine app ID) against
+    // a single source of truth.
+    use paladin_gtk::app::model::{
+        format_app_about_dialog_application_icon_name, format_app_about_dialog_debug_info,
+    };
+
+    let debug = format_app_about_dialog_debug_info();
+    let app_id = format_app_about_dialog_application_icon_name();
+    let app_id_line = debug
+        .lines()
+        .find(|line| line.contains(app_id))
+        .unwrap_or_else(|| {
+            panic!(
+                "AdwAboutDialog debug-info must have at least one line containing the reverse-DNS app ID {app_id:?}; got {debug:?}",
+            )
+        });
+    assert!(
+        app_id_line.ends_with(app_id),
+        "AdwAboutDialog debug-info App ID line must end with the reverse-DNS app ID {app_id:?} exactly (no trailing tokens like ` (Flatpak)` or ` — host: linux`) so the bug-report payload stays deliberately minimal and a future expansion has to first update this pin; got {app_id_line:?} in {debug:?}",
+    );
+}
+
+#[test]
 fn format_app_about_dialog_url_helpers_contain_no_embedded_whitespace() {
     // Cross-helper defense-in-depth sibling looping over the
     // three `AdwAboutDialog` footer URL helpers
