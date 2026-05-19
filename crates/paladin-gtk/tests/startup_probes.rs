@@ -9556,3 +9556,86 @@ fn format_app_about_dialog_version_does_not_start_with_a_dot() {
         "AdwAboutDialog version must not start with a `.` byte (which is not a valid leading character in any of the Semantic Versioning 2.0 grammar productions — MAJOR must be a non-negative integer starting with `0`-`9` or a non-zero digit followed by digits) so the AppStream / Flatpak release-notes `<release version=\"...\">` XML schema entry resolves at packaging time rather than as a malformed-schema rejection and the AdwAboutDialog version row renders the canonical bare-major leading digit rather than a punctuation glyph next to the program name; got {version:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_application_icon_name_does_not_end_with_a_dot() {
+    // Defense-in-depth sibling of
+    // `format_app_about_dialog_application_icon_name_matches_app_id`
+    // (exact-value pin),
+    // `_is_reverse_dns` (reverse-DNS shape pin),
+    // `_is_ascii_only` (byte-composition pin),
+    // `_has_no_embedded_whitespace` (no-whitespace pin),
+    // `_segments_are_non_empty` (per-segment non-emptiness pin),
+    // `_has_exactly_four_segments` (segment-count pin), and
+    // `_ends_with_gui_segment` (trailing-segment pin). Those
+    // companions catch the wrong-value / wrong-shape / non-ASCII
+    // / embedded-whitespace / empty-segment / wrong-segment-count
+    // / wrong-trailing-segment regressions but a regression that
+    // landed `"org.tamx.Paladin.Gui."` (trailing dot from a
+    // `concat!(crate::APP_ID, ".")` injection) would slip past
+    // the `_ends_with_gui_segment` companion (since `ends_with`
+    // checks the substring `"Gui"` and `"org.tamx.Paladin.Gui."`
+    // does not literally end with `"Gui"` — wait, let's
+    // re-examine: `_ends_with_gui_segment` would *catch* a literal
+    // trailing dot since the string no longer ends with `"Gui"`),
+    // but the symmetric `_segments_are_non_empty` companion would
+    // *not* always catch every trailing-dot variant cleanly: a
+    // `"org.tamx.Paladin.Gui."` form splits into
+    // `["org", "tamx", "Paladin", "Gui", ""]` which would be
+    // caught by `_segments_are_non_empty` (the empty trailing
+    // segment trips the loop) but the `_has_exactly_four_segments`
+    // companion would also fail (since the split count is now
+    // 5, not 4) — both companions would fire on this regression,
+    // which is good defense-in-depth, but neither names the
+    // *trailing-`.` byte* directly in its failure message.
+    //
+    // Pinning the no-trailing-dot invariant directly here
+    // surfaces the regression with a failure message naming the
+    // specific offending trailing byte (the `.` rather than the
+    // more general "wrong segment count" or "empty segment at
+    // position N"), and keeps the leading- / trailing-byte rule
+    // symmetric with the `format_app_about_dialog_version_does_not_end_with_a_dot`
+    // sibling on the version side. The reverse-DNS application-ID
+    // grammar that GNOME's D-Bus naming convention and the
+    // AppStream / Flatpak `<id>...</id>` schema validate against
+    // — and which `gio::ApplicationId::is_valid` enforces at
+    // application-startup — pins each `.`-separated segment as a
+    // non-empty alphanumeric/underscore identifier with no
+    // leading or trailing dots, so a trailing-dot reverse-DNS
+    // string would be rejected by `gio::ApplicationId::is_valid`
+    // at startup, by the AppStream validator at packaging time,
+    // and by the Flatpak `--build-finish` step that validates
+    // the `<id>` against the directory name in the build
+    // sandbox.
+    //
+    // Pinning the no-trailing-dot invariant directly here
+    // surfaces the regression with a message naming the offending
+    // application-icon-name string at build time rather than as a
+    // downstream GIO startup rejection, AppStream packaging
+    // rejection, or Flatpak build-finish rejection. The current
+    // `crate::APP_ID` resolves to `"org.tamx.Paladin.Gui"` which
+    // ends with the `i` letter of the trailing `Gui` segment
+    // (not with a `.`), so this test passes today and serves as
+    // a forcing function so any future override of the
+    // application-icon-name helper stays aligned with the strict
+    // reverse-DNS / GNOME / D-Bus / AppStream / Flatpak naming
+    // convention. Mirror of the
+    // `format_app_about_dialog_version_does_not_end_with_a_dot`
+    // companion on the version-side trailing-byte rule, and
+    // sibling of the
+    // `format_app_about_dialog_application_icon_name_segments_are_non_empty`
+    // / `_has_exactly_four_segments` / `_ends_with_gui_segment`
+    // companions on the reverse-DNS shape side; together they
+    // pin the no-empty-segment / exact-four-segment / known-
+    // trailing-segment / no-trailing-dot contract across the
+    // application-icon reverse-DNS identifier against a single
+    // source of truth on the GNOME / D-Bus / AppStream / Flatpak
+    // packaging convention.
+    use paladin_gtk::app::model::format_app_about_dialog_application_icon_name;
+
+    let icon_name = format_app_about_dialog_application_icon_name();
+    assert!(
+        !icon_name.ends_with('.'),
+        "AdwAboutDialog application_icon_name must not end with a `.` byte (which is not a valid terminal in the reverse-DNS application-ID grammar that GNOME's D-Bus naming convention and the AppStream / Flatpak `<id>...</id>` schema validate against — each `.`-separated segment must be a non-empty alphanumeric/underscore identifier) so `gio::ApplicationId::is_valid` resolves at application startup, the AppStream validator resolves at packaging time, and the Flatpak `--build-finish` step resolves the `<id>` against the directory name in the build sandbox rather than as a downstream rejection; got {icon_name:?}",
+    );
+}
