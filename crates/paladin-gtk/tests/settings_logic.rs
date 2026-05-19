@@ -1317,3 +1317,124 @@ fn compose_settings_dialog_inline_subtitle_revealed_for_field_mirrors_subtitle_t
         }
     }
 }
+
+#[test]
+fn compose_settings_dialog_inline_subtitle_css_class_for_field_routes_error_and_warning_by_variant()
+{
+    // The inline-subtitle `gtk::Label` styles itself by CSS class:
+    // "error" for `SaveOutcome::Inline` / `SaveOutcome::Rollback`
+    // (red foreground, matching the
+    // `crate::rename_dialog::RenameDialogComponent` error label
+    // styling), "warning" for `SaveOutcome::DurabilityWarning`
+    // (amber, distinguishing the post-commit-but-fsync-failed case
+    // from the pre-commit rollback path), and `None` for both the
+    // idle state and `SaveOutcome::Success` (no CSS class
+    // attached). Pinning the class through this helper lets the
+    // widget bind `add_css_class:` and `remove_css_class:`
+    // declaratively instead of re-routing on `SaveOutcome` inline.
+    //
+    // Mirrors the partitioning of
+    // `compose_settings_dialog_inline_subtitle_for_field` (text) /
+    // `compose_settings_dialog_inline_subtitle_revealed_for_field`
+    // (visibility) on the styling side; the three projections flip
+    // together on the same `SaveOutcome` dispatch.
+    use paladin_gtk::settings::compose_settings_dialog_inline_subtitle_css_class_for_field;
+
+    let io_err = PaladinError::IoError {
+        operation: "write",
+        source: std::io::Error::other("disk full"),
+    };
+
+    // Idle: no outcome → no class for any row.
+    for field in [
+        SettingsField::AutoLockEnabled,
+        SettingsField::AutoLockSecs,
+        SettingsField::ClipboardClearEnabled,
+        SettingsField::ClipboardClearSecs,
+    ] {
+        assert_eq!(
+            compose_settings_dialog_inline_subtitle_css_class_for_field(None, field),
+            None,
+            "idle: row {field:?} has no CSS class",
+        );
+    }
+
+    // Success: outcome exists but every row stays unstyled.
+    let success = SaveOutcome::Success;
+    for field in [
+        SettingsField::AutoLockEnabled,
+        SettingsField::AutoLockSecs,
+        SettingsField::ClipboardClearEnabled,
+        SettingsField::ClipboardClearSecs,
+    ] {
+        assert_eq!(
+            compose_settings_dialog_inline_subtitle_css_class_for_field(Some(&success), field),
+            None,
+            "Success: row {field:?} has no CSS class",
+        );
+    }
+
+    // Inline error: matching row gets the "error" class.
+    let inline = SaveOutcome::Inline {
+        error: InlineError::from_error(&io_err),
+        field: SettingsField::ClipboardClearSecs,
+    };
+    assert_eq!(
+        compose_settings_dialog_inline_subtitle_css_class_for_field(
+            Some(&inline),
+            SettingsField::ClipboardClearSecs,
+        ),
+        Some("error"),
+        "Inline error attaches the \"error\" CSS class to the matching row",
+    );
+    for other in [
+        SettingsField::AutoLockEnabled,
+        SettingsField::AutoLockSecs,
+        SettingsField::ClipboardClearEnabled,
+    ] {
+        assert_eq!(
+            compose_settings_dialog_inline_subtitle_css_class_for_field(Some(&inline), other),
+            None,
+            "Inline error: row {other:?} stays unstyled",
+        );
+    }
+
+    // Rollback: matching row also gets the "error" class.
+    let rollback = SaveOutcome::Rollback {
+        error: InlineError::from_error(&save_not_committed_no_backup()),
+        field: SettingsField::AutoLockEnabled,
+    };
+    assert_eq!(
+        compose_settings_dialog_inline_subtitle_css_class_for_field(
+            Some(&rollback),
+            SettingsField::AutoLockEnabled,
+        ),
+        Some("error"),
+        "Rollback error attaches the \"error\" CSS class to the reverted row",
+    );
+
+    // DurabilityWarning: matching row gets the "warning" class.
+    let warning = SaveOutcome::DurabilityWarning {
+        warning: InlineWarning::from_error(&PaladinError::SaveDurabilityUnconfirmed),
+        field: SettingsField::AutoLockSecs,
+    };
+    assert_eq!(
+        compose_settings_dialog_inline_subtitle_css_class_for_field(
+            Some(&warning),
+            SettingsField::AutoLockSecs,
+        ),
+        Some("warning"),
+        "Durability warning attaches the \"warning\" CSS class to the changed row",
+    );
+    for other in [
+        SettingsField::AutoLockEnabled,
+        SettingsField::ClipboardClearEnabled,
+        SettingsField::ClipboardClearSecs,
+    ] {
+        assert_eq!(
+            compose_settings_dialog_inline_subtitle_css_class_for_field(Some(&warning), other),
+            None,
+            "Durability warning: row {other:?} stays unstyled",
+        );
+    }
+}

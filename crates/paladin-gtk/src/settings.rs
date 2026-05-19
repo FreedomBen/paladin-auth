@@ -811,6 +811,61 @@ pub fn compose_settings_dialog_inline_subtitle_revealed_for_field(
     compose_settings_dialog_inline_subtitle_for_field(outcome, field).is_some()
 }
 
+/// State-driven projection of the CSS class the inline-subtitle
+/// `gtk::Label` beneath the `AdwSwitchRow` / `AdwSpinRow`
+/// identified by `field` carries per
+/// `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
+/// "Preferences" and §"Tests > Pure-logic unit tests >
+/// `tests/settings_logic.rs`".
+///
+/// Routes a [`SaveOutcome`] (the typed reply from
+/// [`SettingsState::apply_save_result`]) into the styling class
+/// the matching row's inline-subtitle label uses so the widget
+/// can bind `add_css_class:` / `remove_css_class:` declaratively
+/// rather than re-routing on [`SaveOutcome`] inline:
+///
+/// * [`SaveOutcome::Inline`] / [`SaveOutcome::Rollback`] → the
+///   matching row carries the `"error"` class (red foreground,
+///   matching the `crate::rename_dialog::RenameDialogComponent`
+///   inline-error label styling so failures across dialogs read
+///   identically).
+/// * [`SaveOutcome::DurabilityWarning`] → the matching row carries
+///   the `"warning"` class (amber, distinguishing the
+///   post-commit-but-fsync-failed case from the pre-commit
+///   rollback path so the user can tell the value is on disk
+///   even though the warning is showing).
+/// * [`SaveOutcome::Success`] and `None` → no CSS class.
+/// * Non-matching rows always return `None`.
+///
+/// Pure — borrows the outcome and returns an `Option<&'static str>`
+/// without allocating; the returned slice is one of the two
+/// libadwaita-recognized class names (`"error"` / `"warning"`).
+/// Sibling of
+/// [`compose_settings_dialog_inline_subtitle_for_field`] (the text
+/// body) and
+/// [`compose_settings_dialog_inline_subtitle_revealed_for_field`]
+/// (the visibility flag); the three projections partition
+/// [`SaveOutcome`] in lockstep so the row chrome — body, class,
+/// and visibility — flips together on the same dispatch.
+#[must_use]
+pub fn compose_settings_dialog_inline_subtitle_css_class_for_field(
+    outcome: Option<&SaveOutcome>,
+    field: SettingsField,
+) -> Option<&'static str> {
+    match outcome? {
+        SaveOutcome::Inline { field: target, .. } | SaveOutcome::Rollback { field: target, .. }
+            if *target == field =>
+        {
+            Some("error")
+        }
+        SaveOutcome::DurabilityWarning { field: target, .. } if *target == field => Some("warning"),
+        SaveOutcome::Success
+        | SaveOutcome::Inline { .. }
+        | SaveOutcome::Rollback { .. }
+        | SaveOutcome::DurabilityWarning { .. } => None,
+    }
+}
+
 /// Buffered spinner pending the 500 ms debounce.
 #[derive(Debug, Clone, Copy)]
 enum PendingSpinner {
