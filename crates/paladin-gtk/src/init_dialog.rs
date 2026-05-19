@@ -690,6 +690,38 @@ pub fn format_init_dialog_create_label() -> &'static str {
     "Create vault"
 }
 
+/// Fixed `title` attribute the widget hands to the
+/// [`InitDialogComponent`]'s passphrase
+/// `AdwPasswordEntryRow::set_title`.
+///
+/// Returns the static title string the encrypted-path passphrase
+/// `AdwPasswordEntryRow` renders as the floating label above the
+/// entry. The wording (`"Passphrase"`) matches the sibling
+/// [`crate::unlock_dialog::format_unlock_dialog_passphrase_title`]
+/// so the GTK init and unlock surfaces render the same passphrase-
+/// row caption — a drift would surface as a confusing
+/// "Passphrase" vs "Password" vs "Passcode" inconsistency when the
+/// user reaches both dialogs from the same launch (Missing → Init,
+/// then Locked → Unlock after a passphrase set).
+///
+/// Pinning the title through a helper keeps the wording in one
+/// place shared by the widget binding and the pure-logic tests in
+/// `tests/init_dialog_logic.rs`. No TUI parity beyond the existing
+/// `passphrase_line` prompt mirrored by
+/// [`crate::unlock_dialog::format_unlock_dialog_passphrase_title`]
+/// — the TUI's `init` command takes the passphrase via stdin and
+/// has no labeled row to mirror.
+///
+/// Pure — returns a `'static str` without allocating. Sibling of
+/// [`crate::unlock_dialog::format_unlock_dialog_passphrase_title`]
+/// on the dialog-passphrase-row side; together they pin every
+/// passphrase-entry-row caption in this crate against a single
+/// source of truth.
+#[must_use]
+pub fn format_init_dialog_passphrase_title() -> &'static str {
+    "Passphrase"
+}
+
 /// Destructive action-button label the [`InitDialogComponent`]'s
 /// `vault_exists` race gate renders on its in-dialog
 /// `AdwAlertDialog` with `destructive-action` styling.

@@ -1107,3 +1107,64 @@ fn format_init_dialog_force_cancel_label_is_distinct_from_force_confirm() {
         "InitDialog destructive cancel label must be distinct from the destructive confirm label so the two affordances read as different actions",
     );
 }
+
+#[test]
+fn format_init_dialog_passphrase_title_returns_passphrase() {
+    // Per §"Component tree" > `InitDialog`: the encrypted path
+    // surfaces a passphrase `AdwPasswordEntryRow` whose floating
+    // `set_title` label is populated from this helper. The wording
+    // (`"Passphrase"`) matches the sibling
+    // `format_unlock_dialog_passphrase_title` so the GTK init and
+    // unlock surfaces render the same passphrase-row caption — a
+    // drift would surface as a confusing "Passphrase" vs
+    // "Password" vs "Passcode" inconsistency when the user reaches
+    // both surfaces from the same launch. Pinning the title through
+    // a helper keeps the GTK wording aligned against a single
+    // source of truth so a future copy change cannot diverge
+    // silently.
+    use paladin_gtk::init_dialog::format_init_dialog_passphrase_title;
+
+    assert_eq!(
+        format_init_dialog_passphrase_title(),
+        "Passphrase",
+        "InitDialog passphrase row title uses the standard \"Passphrase\" HIG wording",
+    );
+}
+
+#[test]
+fn format_init_dialog_passphrase_title_matches_unlock_dialog_passphrase_title() {
+    // Cross-check: every passphrase entry row in this crate
+    // should render the exact same `"Passphrase"` wording so the
+    // application's passphrase-row vocabulary stays uniform across
+    // the init and unlock surfaces. A drift between the two would
+    // surface as a confusing copy inconsistency when the user
+    // reaches both dialogs from the same launch (Missing → Init,
+    // then Locked → Unlock after a passphrase set).
+    use paladin_gtk::init_dialog::format_init_dialog_passphrase_title;
+    use paladin_gtk::unlock_dialog::format_unlock_dialog_passphrase_title;
+
+    assert_eq!(
+        format_init_dialog_passphrase_title(),
+        format_unlock_dialog_passphrase_title(),
+        "InitDialog passphrase row title must match the UnlockDialog passphrase row title so the passphrase-row vocabulary stays uniform",
+    );
+}
+
+#[test]
+fn format_init_dialog_passphrase_title_is_non_empty_single_line() {
+    // Defense-in-depth: the passphrase row title must be a non-
+    // empty single-line caption so `AdwPasswordEntryRow` can
+    // render it as the floating label above the entry field
+    // without truncation or wrapping artifacts.
+    use paladin_gtk::init_dialog::format_init_dialog_passphrase_title;
+
+    let title = format_init_dialog_passphrase_title();
+    assert!(
+        !title.is_empty(),
+        "InitDialog passphrase row title must be non-empty; got {title:?}",
+    );
+    assert!(
+        !title.contains('\n'),
+        "InitDialog passphrase row title must be a single line; got {title:?}",
+    );
+}
