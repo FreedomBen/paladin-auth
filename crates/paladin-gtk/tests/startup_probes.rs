@@ -6349,6 +6349,39 @@ fn format_app_window_accelerator_bindings_accelerators_contain_no_whitespace() {
 }
 
 #[test]
+fn dispatch_app_window_action_is_case_sensitive() {
+    // Defense-in-depth sibling of
+    // `dispatch_app_window_action_returns_none_for_unknown_action_names`
+    // (which pins that unknown / empty bare names resolve to `None`)
+    // and `dispatch_app_window_action_covers_every_bundled_action_name`
+    // (which pins that every bundled name resolves to `Some`).
+    // Those companions guard the pinned / unknown ends but leave
+    // the case-folding edge case ungated, so a regression that
+    // re-wrote the dispatch table with `.eq_ignore_ascii_case` or
+    // `.to_lowercase()` would still satisfy both companions while
+    // accepting an off-case bare name from a `gio::SimpleActionGroup`
+    // lookup that mis-bound an action under e.g. `"ADD"` or `"Quit"`.
+    //
+    // The libadwaita `gio::Action` infrastructure spells every
+    // registered name lowercase per
+    // [`format_app_menu_<X>_action_name_returns_<X>` exact-value
+    // pins], and `gio::SimpleActionGroup::activate_action` is
+    // case-sensitive on the bare name lookup. Pinning the
+    // dispatch helper to mirror that case-sensitivity here
+    // catches a future drift before it surfaces as a runtime
+    // mismatch between the SimpleAction registered on the group
+    // and the AppMsg variant routed off the activation.
+    use paladin_gtk::app::model::dispatch_app_window_action;
+
+    for bare in ["ADD", "Add", "ABOUT", "About", "Quit", "QUIT"] {
+        assert!(
+            dispatch_app_window_action(bare).is_none(),
+            "dispatch_app_window_action must be case-sensitive so the off-case bare name {bare:?} resolves to None and stays a benign no-op rather than dispatching to the matching AppMsg variant a future case-folding regression would accept",
+        );
+    }
+}
+
+#[test]
 fn format_app_primary_menu_action_names_are_distinct() {
     // Cross-name defense-in-depth sibling of the per-name
     // `format_app_menu_<X>_action_name_returns_<X>` exact-value
