@@ -2300,6 +2300,40 @@ pub fn format_app_window_accelerator_bindings() -> [(&'static str, &'static str)
     ]
 }
 
+/// Register every pinned keyboard accelerator on `app` per
+/// `IMPLEMENTATION_PLAN_04_GTK.md` §"libadwaita usage" >
+/// "Primary menu" / "Header bar > Add".
+///
+/// Iterates [`format_app_window_accelerator_bindings`] (the
+/// `(accelerator, fully-qualified action target)` pairs for
+/// Add, Quit, and Preferences) and calls
+/// `gio::Application::set_accels_for_action(target, &[accel])`
+/// per pair so the menu and button activations share their
+/// keyboard surfaces against a single source of truth instead
+/// of three hand-spelled `set_accels_for_action` calls that
+/// could silently drift in order or coverage.
+///
+/// The widget binding calls this helper inside `init` once the
+/// shared application reference is available
+/// (`relm4::main_application()`); the registrations stay live
+/// for the lifetime of the application. Sibling of
+/// [`wire_app_window_action_group`] (action-group insertion) and
+/// [`wire_app_window_action_activations`] (per-action
+/// `connect_activate` wiring); together the three helpers cover
+/// the full keyboard-and-menu wiring for the application window
+/// against the pinned source of truth.
+///
+/// Pure side-effect helper (no return value). Each
+/// `set_accels_for_action` call overrides any prior binding for
+/// the same target, so a repeat invocation is idempotent and
+/// safe under hot-reload scenarios where the application
+/// already has a partial accelerator surface.
+pub fn wire_app_window_accelerators(app: &adw::Application) {
+    for (accel, target) in format_app_window_accelerator_bindings() {
+        app.set_accels_for_action(target, &[accel]);
+    }
+}
+
 /// Ordered `(label, detailed_action_name)` pairs the `AppModel`'s
 /// primary `gio::Menu` appends in the §"libadwaita usage"
 /// sequence (Import, Export, Passphrase, Preferences, About,

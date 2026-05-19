@@ -1967,6 +1967,26 @@ fn format_app_window_accelerator_bindings_accelerators_are_distinct() {
 }
 
 #[test]
+fn wire_app_window_accelerators_signature_takes_application_reference() {
+    // Per §"libadwaita usage" and §"Component tree": the
+    // application-window wiring registers every pinned
+    // keyboard accelerator on the shared `adw::Application`
+    // via `gio::Application::set_accels_for_action(target, &[accel])`
+    // per `(accel, target)` pair returned by
+    // `format_app_window_accelerator_bindings`. This helper
+    // performs that registration in one place so the widget
+    // binding does not hand-spell three `set_accels_for_action`
+    // calls. The compile-only signature check below pins the
+    // helper's shape — `fn(&adw::Application)` — without
+    // instantiating a second `adw::Application` in the test
+    // process (only one application instance per process is
+    // permitted by glib). The end-to-end accelerator registration
+    // is covered by the `xvfb-run`-driven `tests/gtk_smoke.rs`
+    // mount.
+    let _: fn(&libadwaita::Application) = paladin_gtk::app::model::wire_app_window_accelerators;
+}
+
+#[test]
 fn format_app_add_button_accelerator_is_non_empty_and_well_formed() {
     // Defensive: the accelerator string is consumed by
     // `gio::Application::set_accels_for_action`, which accepts
