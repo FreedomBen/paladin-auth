@@ -13953,3 +13953,126 @@ fn format_app_about_dialog_url_helpers_do_not_contain_a_carriage_return_byte() {
         );
     }
 }
+
+#[test]
+fn format_app_about_dialog_url_helpers_do_not_contain_a_horizontal_tab_byte() {
+    // Cross-helper defense-in-depth sibling looping over the
+    // three `AdwAboutDialog` footer URL helpers
+    // (`format_app_about_dialog_website`,
+    // `format_app_about_dialog_issue_url`,
+    // `format_app_about_dialog_support_url`) and pinning each
+    // value as free of the `\t` horizontal-tab byte (0x09).
+    // The existing `url_helpers_contain_no_embedded_whitespace`
+    // companion uses `char::is_whitespace()`, which returns
+    // true for `\t` — so the URL-helpers' `\t`-cleanliness
+    // is currently protected *transitively* by that one
+    // specific companion's broad whitespace check.
+    //
+    // But that transitive protection is *bundled* with the
+    // no-whitespace invariant as a whole: a future refactor
+    // that intentionally allowed a URL with a single
+    // percent-encoded space (a non-trivial scenario per RFC
+    // 3986, which forbids unencoded spaces in URLs but
+    // permits `%20` percent-encoding for them — but a
+    // workspace-vendoring refactor or a CI codegen step
+    // could relax the `_contain_no_embedded_whitespace`
+    // companion incorrectly when handling decoded percent-
+    // encoded strings) would naturally drop the `\t` check
+    // at the same time on the assumption that "ASCII
+    // whitespace is now allowed". That assumption is wrong:
+    // `\t` is never a valid byte inside a URL per RFC 3986
+    // (the horizontal-tab byte is not in any of the URL
+    // grammar's production rules), so dropping the `\t`
+    // check alongside the percent-encoded-space relaxation
+    // would silently regress the no-`\t` invariant.
+    //
+    // A regression would slip past every existing companion:
+    // the `_is_non_empty_https_url[_distinct_*]` per-URL
+    // companion (which only checks non-empty + `https://`
+    // prefix + no space byte — a `\t` byte mid-URL satisfies
+    // all three since `\t` is not the literal U+0020 SPACE),
+    // the `_are_ascii_only` cross-URL companion (`\t` is
+    // ASCII 0x09 so it slips past), the
+    // `_do_not_end_with_a_trailing_slash` companion (which
+    // only constrains the final byte), the
+    // `_do_not_contain_a_null_byte` companion (which only
+    // names `\0` specifically), the
+    // `_do_not_contain_a_carriage_return_byte` companion
+    // (which names `\r` specifically), the
+    // `_do_not_contain_a_query_string` /
+    // `_do_not_contain_a_fragment_anchor` /
+    // `_do_not_contain_a_userinfo_at_sign` /
+    // `_do_not_contain_a_backslash` siblings (which each
+    // name a different byte specifically). None of the
+    // existing companions name the `\t` byte directly.
+    //
+    // A regression that landed
+    // `"https://github.com\tFreedomBen/paladin"` (tab-aligned
+    // column from a `printf "%s\t%s"`-style URL formatter, a
+    // `concat!(_, "\t", _)` form mirroring a TSV-style URL-
+    // table cell, or a hand-edited helper override that
+    // lifted the URL from a tab-indented YAML / Markdown
+    // table row or a TSV-formatted bookmarks export) would
+    // mis-render in multiple downstream surfaces: (1) the
+    // GLib-backed `AdwAboutDialog::set_website` /
+    // `set_issue_url` / `set_support_url` setters route the
+    // value into Pango for inline rendering as the underlined
+    // link label in the dialog footer — Pango's default
+    // rendering of `\t` is implementation-defined and
+    // typically renders as a wide horizontal gap or an empty
+    // box, breaking the trusted-application surface contract
+    // of the link label; (2) when the user clicks the URL,
+    // GIO's `gtk_show_uri_full` routes the value through the
+    // session's `xdg-open` / portal layer where some URL
+    // parsers (WHATWG URL §4.5 implementations) reject `\t`
+    // outright with `InvalidUrl`, breaking the click-through
+    // routing entirely, while others percent-encode the `\t`
+    // as `%09` and route to a non-existent URL with a
+    // `Bad Request` response surfacing as a confusing
+    // browser-level error; (3) screen readers that announce
+    // the URL label read the `\t` as a literal control
+    // character, breaking the link-label accessibility-tree
+    // announcement at the tab boundary; (4) any downstream
+    // tooling that scrapes the URL labels (link-checker
+    // bots, broken-link auditors) would propagate the stray
+    // `\t` byte into the consumer's stream and trigger the
+    // same routing failure across every downstream surface.
+    //
+    // Pinning the no-tab invariant directly here surfaces
+    // the regression with a message naming the offending URL
+    // helper at build time rather than as a downstream user-
+    // visible mis-rendered link label, a confusing browser-
+    // level error on click-through, an inconsistent URL-
+    // parser-implementation routing surface, or a link-
+    // checker tooling failure. Mirror of the
+    // `_url_helpers_do_not_end_with_a_trailing_slash`,
+    // `_url_helpers_do_not_contain_a_query_string`,
+    // `_url_helpers_do_not_contain_a_fragment_anchor`,
+    // `_url_helpers_do_not_contain_a_userinfo_at_sign`,
+    // `_url_helpers_do_not_contain_a_backslash`,
+    // `_url_helpers_contain_no_embedded_whitespace`,
+    // `_url_helpers_are_ascii_only`,
+    // `_url_helpers_do_not_contain_a_null_byte`, and just-
+    // added `_url_helpers_do_not_contain_a_carriage_return_byte`
+    // cross-URL siblings; together they pin the URL byte-
+    // composition contract (no whitespace, ASCII-only, no
+    // terminal `/`, no `\0`, no `\r`, no `\t`, no `?` query,
+    // no `#` anchor, no `@` userinfo, no `\` path-confusion
+    // byte) across all three footer link surfaces against a
+    // single source of truth.
+    use paladin_gtk::app::model::{
+        format_app_about_dialog_issue_url, format_app_about_dialog_support_url,
+        format_app_about_dialog_website,
+    };
+
+    for (label, url) in [
+        ("website", format_app_about_dialog_website()),
+        ("issue_url", format_app_about_dialog_issue_url()),
+        ("support_url", format_app_about_dialog_support_url()),
+    ] {
+        assert!(
+            !url.contains('\t'),
+            "AdwAboutDialog {label} must not contain the `\\t` horizontal-tab byte (0x09) — `\\t` is never a valid byte inside a URL per RFC 3986 (the horizontal-tab byte is not in any of the URL grammar's production rules); the current `\\t`-cleanliness is only protected transitively by `_url_helpers_contain_no_embedded_whitespace`'s broad `char::is_whitespace()` check, so a future percent-encoded-space relaxation would silently drop the `\\t` guard; a stray `\\t` would mis-render as a wide horizontal gap in the dialog footer link label, fail or mis-route the click-through routing across WHATWG URL §4.5 implementations vs `%09`-encoding implementations, break screen-reader link-label announcements at the tab boundary, and propagate into downstream link-checker tooling; got {url:?}",
+        );
+    }
+}
