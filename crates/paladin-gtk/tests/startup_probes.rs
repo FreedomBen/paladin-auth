@@ -14076,3 +14076,98 @@ fn format_app_about_dialog_url_helpers_do_not_contain_a_horizontal_tab_byte() {
         );
     }
 }
+
+#[test]
+fn format_app_about_dialog_developer_name_does_not_contain_a_vertical_tab_byte() {
+    // Defense-in-depth per-byte sibling beginning the next C0
+    // control-byte cycle for the developer-name helper after
+    // the just-completed `{null / horizontal-tab / carriage-
+    // return}` triplet. The vertical-tab byte `\x0B` (0x0B)
+    // sits one step above HT (0x09) and one step below CR
+    // (0x0D) in the ASCII C0 block; like its siblings it is a
+    // non-printable control byte that has no legitimate use
+    // inside a human-readable GNOME dialog attribution string.
+    //
+    // None of the existing developer-name companions name the
+    // `\x0B` byte directly:
+    //   - `_developer_name_is_a_single_line_without_embedded_newlines`
+    //     only checks `\n` and `\r` — `\x0B` is neither;
+    //   - `_developer_name_is_ascii_only` pins each byte as
+    //     ASCII — `\x0B` is ASCII so it slips past;
+    //   - `_developer_name_has_no_surrounding_whitespace`
+    //     uses `char::is_whitespace()`, which under Rust's
+    //     Unicode definition returns true for U+000B VT, so
+    //     this companion *does* reject a leading or trailing
+    //     `\x0B` — but a mid-string `\x0B` (`"The Pa\x0Bladin
+    //     contributors"`) sits between the boundaries and
+    //     slips past;
+    //   - `_developer_name_starts_with_the_definite_article`
+    //     and `_ends_with_the_contributors_collective_noun`
+    //     only constrain the literal prefix `"The "` and
+    //     suffix `"contributors"`, so a mid-string `\x0B`
+    //     between them satisfies both;
+    //   - `_does_not_contain_a_null_byte` /
+    //     `_does_not_contain_a_horizontal_tab_byte` /
+    //     `_does_not_contain_a_carriage_return_byte`
+    //     each name a different byte specifically.
+    //
+    // The current `_returns_the_paladin_contributors` exact-
+    // value pin catches every byte today, but its protection
+    // collapses the moment a contributor-list addition or a
+    // workspace-vendoring split decouples the helper from the
+    // pinned literal — at that point a `\x0B`-bearing override
+    // would slip past every byte-level companion above (since
+    // `char::is_whitespace` only catches the boundary `\x0B`,
+    // not a mid-string one).
+    //
+    // A regression that landed `"The Paladin\x0Bcontributors"`
+    // (vertical-tab byte lifted from a legacy plain-text
+    // CONTRIBUTORS file authored on a mainframe terminal that
+    // used `\x0B` as a vertical-spacing separator, a
+    // `concat!(_, "\x0B", _)` form, or a hand-edited helper
+    // that pasted from an EBCDIC-to-ASCII translation table
+    // row preserving the original VT byte) would mis-render
+    // in multiple downstream surfaces: (1) the GLib-backed
+    // `AdwAboutDialog::set_developer_name` setter hands the
+    // string to Pango for inline rendering beneath the program
+    // name in the dialog header — Pango's default rendering of
+    // a bare `\x0B` byte is implementation-defined and
+    // typically renders as a literal control glyph (a hollow
+    // box, a tofu-like placeholder, or an invisible column-
+    // advance), breaking the tidy single-line attribution
+    // layout; (2) the same developer-name string is reused by
+    // `_copyright_ends_with_developer_name` to construct the
+    // footer copyright row, so a `\x0B` byte in the developer
+    // name would propagate into the copyright slot and mis-
+    // render there too; (3) screen readers that announce the
+    // dialog attribution read the `\x0B` as a literal control
+    // character, breaking the attribution accessibility-tree
+    // announcement at the byte boundary; (4) downstream
+    // tooling that scrapes the developer-name attribution
+    // (release-note generators, contributor-attribution
+    // crawlers) would propagate the stray `\x0B` byte into the
+    // consumer's stream and trigger the same rendering bug
+    // across every downstream surface.
+    //
+    // Pinning the no-`\x0B` invariant directly here surfaces
+    // the regression with a message naming the offending byte
+    // at build time rather than as a downstream dialog-header
+    // rendering bug or a screen-reader announcement break.
+    // Current helper returns the literal `"The Paladin
+    // contributors"` (no `\x0B` byte), so this test passes
+    // today and serves as a forcing function so any future
+    // override of the helper — including the eventual landing
+    // of a multi-contributor attribution string — stays free
+    // of vertical-tab bytes. Begins the developer-name C0
+    // control-byte cycle past the just-completed `{null /
+    // horizontal-tab / carriage-return}` triplet so the
+    // helper's byte-composition contract pins each forbidden
+    // control byte against a single source of truth.
+    use paladin_gtk::app::model::format_app_about_dialog_developer_name;
+
+    let developer = format_app_about_dialog_developer_name();
+    assert!(
+        !developer.contains('\x0B'),
+        "AdwAboutDialog developer-name must not contain the `\\x0B` vertical-tab byte (0x0B); a mid-string `\\x0B` slips past `_is_a_single_line_without_embedded_newlines` (which only checks `\\n` and `\\r`), past `_is_ascii_only` (because `\\x0B` is ASCII), past `_has_no_surrounding_whitespace` (which only rejects `\\x0B` at the boundaries via `char::is_whitespace()`), past `_starts_with_the_definite_article` / `_ends_with_the_contributors_collective_noun` (which only constrain the literal prefix and suffix), and past `_does_not_contain_a_null_byte` / `_does_not_contain_a_horizontal_tab_byte` / `_does_not_contain_a_carriage_return_byte` (which each name a different byte specifically); it would render as a literal control glyph in the dialog-header attribution row, propagate into the footer copyright row that reuses this string, break screen-reader attribution announcements at the byte boundary, and propagate into downstream contributor-attribution scrapers; got {developer:?}",
+    );
+}
