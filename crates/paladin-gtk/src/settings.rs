@@ -312,6 +312,35 @@ pub fn clamp_clipboard_clear_secs(value: u32) -> u32 {
     value.clamp(CLIPBOARD_CLEAR_SECS_MIN, CLIPBOARD_CLEAR_SECS_MAX)
 }
 
+/// Title rendered by `SettingsComponent`'s
+/// [`adw::PreferencesDialog::set_title`] call.
+///
+/// The wording (`"Preferences"`) matches the menu entry label
+/// returned by
+/// [`crate::app::model::format_app_menu_preferences_label`] so the
+/// dialog chrome reads identically to the affordance the user
+/// activated. Pinning the title through this helper keeps the
+/// wording in one place shared by the widget binding and the
+/// pure-logic tests in `tests/settings_logic.rs`.
+///
+/// No TUI parity: the TUI's `settings` command is CLI-shaped
+/// and runs in-place rather than mounting a dialog header (see
+/// `crates/paladin-tui/src/view`), so the wording is
+/// GTK-specific.
+///
+/// Pure — returns a `'static str` without allocating. Sibling of
+/// [`crate::unlock_dialog::format_unlock_dialog_title`],
+/// [`crate::init_dialog::format_init_dialog_title`],
+/// [`crate::rename_dialog::format_rename_dialog_title`],
+/// [`crate::remove_dialog::format_remove_dialog_title`], and
+/// [`crate::startup_error::format_startup_error_title`] on the
+/// dialog-header-title side; together they pin every dialog's
+/// titled surface against a single source of truth.
+#[must_use]
+pub fn format_settings_dialog_title() -> &'static str {
+    "Preferences"
+}
+
 /// Buffered spinner pending the 500 ms debounce.
 #[derive(Debug, Clone, Copy)]
 enum PendingSpinner {

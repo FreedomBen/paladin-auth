@@ -545,3 +545,39 @@ fn apply_save_io_error_routes_to_inline_and_rolls_back_visible_value() {
     // the on-disk file did not change, so the committed reverts.
     assert_eq!(state.committed().auto_lock_secs(), 300);
 }
+
+// ---------------------------------------------------------------------------
+// SettingsComponent format helpers — `AdwPreferencesDialog` chrome
+// ---------------------------------------------------------------------------
+
+#[test]
+fn format_settings_dialog_title_returns_preferences() {
+    // The SettingsComponent's `adw::PreferencesDialog::set_title`
+    // attribute is populated from this helper. The wording
+    // (`"Preferences"`) matches the menu entry label returned by
+    // `format_app_menu_preferences_label` so the dialog chrome
+    // reads identically to the affordance the user activated.
+    // Pinning the title through a helper keeps the wording in one
+    // place shared by the widget binding and the pure-logic
+    // tests in `tests/settings_logic.rs`.
+    //
+    // No TUI parity: the TUI's `settings` command is CLI-shaped
+    // and runs in-place rather than mounting a dialog header
+    // (see `crates/paladin-tui/src/view`), so the wording is
+    // GTK-specific. Sibling of
+    // `paladin_gtk::unlock_dialog::format_unlock_dialog_title`,
+    // `paladin_gtk::init_dialog::format_init_dialog_title`,
+    // `paladin_gtk::rename_dialog::format_rename_dialog_title`,
+    // `paladin_gtk::remove_dialog::format_remove_dialog_title`,
+    // `paladin_gtk::add_account::format_add_dialog_title`, and
+    // `paladin_gtk::startup_error::format_startup_error_title`
+    // on the dialog-header-title side; together they pin every
+    // dialog's titled surface against a single source of truth.
+    use paladin_gtk::settings::format_settings_dialog_title;
+
+    assert_eq!(
+        format_settings_dialog_title(),
+        "Preferences",
+        "AdwPreferencesDialog title matches the menu entry label",
+    );
+}
