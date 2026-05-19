@@ -10660,3 +10660,77 @@ fn format_app_about_dialog_developer_name_does_not_contain_a_null_byte() {
         "AdwAboutDialog developer_name must not contain the `\\0` null byte (which would route through GLib's null-terminated `g_strdup` layer in `set_developer_name`, truncate the dialog-header attribution row, propagate into the footer copyright row that reuses this string, and silently lose trailing attribution in downstream scrapers); got {developer_name:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_copyright_does_not_contain_a_null_byte() {
+    // Defense-in-depth mirror of the just-added
+    // `_program_name_does_not_contain_a_null_byte` /
+    // `_version_does_not_contain_a_null_byte` /
+    // `_application_icon_name_does_not_contain_a_null_byte` /
+    // `_developer_name_does_not_contain_a_null_byte` /
+    // `_debug_info_does_not_contain_a_null_byte` /
+    // `_debug_info_filename_does_not_contain_a_null_byte`
+    // companions on the copyright side. The copyright helper
+    // intentionally contains a non-ASCII byte (the U+00A9 ©
+    // glyph encoded as the two-byte UTF-8 sequence
+    // `0xC2 0xA9`), so the `_is_ascii_only` companion that
+    // gates the program-name / version / application-icon-name
+    // / developer-name helpers cannot apply here — meaning a
+    // null-byte regression has even more room to hide. A
+    // regression that landed `"\u{00A9} The Paladin\0
+    // contributors"` (null-byte injection from a
+    // `CString::new` round-trip that didn't strip the trailing
+    // null, or a `concat!(_, "\0", _)` form) would slip past
+    // `_starts_with_copyright_glyph_and_contains_developer_name`
+    // (the `©` prefix and `developer_name` substring are both
+    // intact),
+    // `_does_not_contain_a_year_token_so_it_does_not_drift_across_releases`
+    // (`\0` is not a digit), `_separates_glyph_and_attribution_with_a_single_space`
+    // (the single-space separator after `©` is intact),
+    // `_is_a_single_line_without_embedded_newlines` (`\0` is
+    // not `\n` or `\r`), `_ends_with_developer_name` (the
+    // suffix matches because the developer_name itself was
+    // truncated to match per the
+    // `_developer_name_does_not_contain_a_null_byte`
+    // companion), `_does_not_end_with_a_period`, or
+    // `_returns_paladin_copyright_line` (only valid when no
+    // manual override is in place — a hand-edited helper that
+    // swapped the literal for a string with a null byte would
+    // defeat the matching test).
+    //
+    // Null bytes in the copyright string would mis-render in
+    // multiple downstream surfaces: (1) the GLib-backed
+    // `AdwAboutDialog::set_copyright` setter routes through
+    // `g_strdup` (null-terminated) and may truncate the
+    // dialog-footer copyright row at the first `\0` byte
+    // (rendering `"\u{00A9} The Paladin\0 contributors"` as
+    // `"\u{00A9} The Paladin"`), turning the collective
+    // attribution into what looks like an unfinished personal
+    // copyright line; (2) any tooling that scrapes the
+    // copyright slot (license-attribution aggregators, legal-
+    // compliance checks) would silently lose the trailing
+    // portion of the AGPL-3.0-or-later attribution and could
+    // mis-attribute or reject the project on the basis of an
+    // apparently truncated copyright notice; (3) the matching
+    // `_ends_with_developer_name` invariant means a null-byte
+    // regression on `format_app_about_dialog_developer_name`
+    // automatically propagates here, so this test provides
+    // an independent guard at the copyright layer.
+    //
+    // Pinning the no-null-byte invariant directly here
+    // surfaces the regression with a message naming the
+    // offending byte at build time rather than as a
+    // downstream truncation of the dialog-footer copyright
+    // row or downstream license-attribution scraping. Current
+    // helper returns the literal `"\u{00A9} The Paladin
+    // contributors"` (no `\0` byte), so this test passes
+    // today and serves as a forcing function so any future
+    // override of the helper stays free of null bytes.
+    use paladin_gtk::app::model::format_app_about_dialog_copyright;
+
+    let copyright = format_app_about_dialog_copyright();
+    assert!(
+        !copyright.contains('\0'),
+        "AdwAboutDialog copyright must not contain the `\\0` null byte (which would route through GLib's null-terminated `g_strdup` layer in `set_copyright`, truncate the dialog-footer copyright row at the first `\\0`, and silently lose trailing AGPL-3.0-or-later attribution in downstream license-aggregator scrapers); got {copyright:?}",
+    );
+}
