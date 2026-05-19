@@ -11195,3 +11195,99 @@ fn format_app_about_dialog_release_notes_does_not_contain_a_null_byte() {
         "AdwAboutDialog release_notes must not contain the `\\0` null byte (which would route through GLib's null-terminated `g_strdup` layer in `set_release_notes`, truncate the \"What's New\" section body at the first `\\0`, terminate the Pango markup parse mid-stream and trigger dangling-tag warnings, and silently lose trailing changelog bullets in downstream release-aggregator scrapers); got {release_notes:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_empty_credits_section_entries_do_not_contain_a_null_byte() {
+    // Cross-helper defense-in-depth sibling looping over the
+    // three currently-empty `AdwAboutDialog` credits-section
+    // array helpers
+    // (`format_app_about_dialog_designers`,
+    // `format_app_about_dialog_artists`,
+    // `format_app_about_dialog_documenters`) and pinning each
+    // entry as free of the `\0` null byte. Mirror of the
+    // just-added per-helper / cross-helper companions
+    // (`_program_name_does_not_contain_a_null_byte`,
+    // `_version_does_not_contain_a_null_byte`,
+    // `_application_icon_name_does_not_contain_a_null_byte`,
+    // `_developer_name_does_not_contain_a_null_byte`,
+    // `_copyright_does_not_contain_a_null_byte`,
+    // `_comments_does_not_contain_a_null_byte`,
+    // `_url_helpers_do_not_contain_a_null_byte`,
+    // `_release_notes_version_does_not_contain_a_null_byte`,
+    // `_developers_entries_do_not_contain_a_null_byte`,
+    // `_translator_credits_does_not_contain_a_null_byte`,
+    // `_release_notes_does_not_contain_a_null_byte`,
+    // `_debug_info_does_not_contain_a_null_byte`,
+    // `_debug_info_filename_does_not_contain_a_null_byte`)
+    // structured as a single cross-helper loop similar to the
+    // existing `_url_helpers_are_ascii_only` /
+    // `_url_helpers_do_not_contain_a_null_byte`
+    // cross-helper companions.
+    //
+    // The three helpers currently return the empty array
+    // `[]` because Paladin does not yet have a separately-
+    // credited designer / artist / documenter for the v0.2
+    // release. The empty-array return trivially contains no
+    // entries (let alone null-byte-bearing entries), so this
+    // test passes today as the loop body is never entered.
+    // However, once any of the three credits sections gains
+    // a contributor, the helper return type will switch from
+    // `[&'static str; 0]` to `[&'static str; N]` with
+    // non-empty entries — at that point a null-byte injection
+    // from a `concat!(_, "\0", _)` form or from a tooling
+    // export pipeline (CHANGELOG.md → credits transform)
+    // would slip past every other companion the way the
+    // `_developers_entries_do_not_contain_a_null_byte`
+    // sibling already documents for the developers helper.
+    //
+    // Null bytes in the credits-section entries would mis-
+    // render in multiple downstream surfaces, identically to
+    // the `set_developers` analysis in the
+    // `_developers_entries_do_not_contain_a_null_byte`
+    // companion: (1) the GLib-backed `set_designers` /
+    // `set_artists` / `set_documenters` setters route through
+    // `g_strdupv` / `g_strdup` and may truncate each entry at
+    // the first `\0` byte in the credits-page section; (2)
+    // any tooling that scrapes the credits-page contributor
+    // list (GNOME `gnome-software` credit aggregators) would
+    // silently lose the surname portion of each truncated
+    // entry; (3) future scrolling-credits widgets that depend
+    // on per-entry text-width calculations would render
+    // layout bugs around the truncated entries.
+    //
+    // Pinning the no-null-byte invariant across all three
+    // currently-empty credits-section helpers in a single
+    // cross-helper loop surfaces the regression with a
+    // message naming the affected helper, the offending byte,
+    // and the entry index at build time rather than as a
+    // downstream truncation of the credits-page sections.
+    // Current helpers return the empty array `[]` (zero
+    // entries, no `\0` byte to find), so this test passes
+    // today and serves as a forcing function so any future
+    // override of the helpers — including the eventual
+    // landing of separately-credited designer / artist /
+    // documenter strings — stays free of null bytes.
+    use paladin_gtk::app::model::{
+        format_app_about_dialog_artists, format_app_about_dialog_designers,
+        format_app_about_dialog_documenters,
+    };
+
+    let designers = format_app_about_dialog_designers();
+    let artists = format_app_about_dialog_artists();
+    let documenters = format_app_about_dialog_documenters();
+
+    let sections: [(&str, &[&str]); 3] = [
+        ("designers", &designers),
+        ("artists", &artists),
+        ("documenters", &documenters),
+    ];
+
+    for (label, entries) in sections {
+        for (idx, entry) in entries.iter().enumerate() {
+            assert!(
+                !entry.contains('\0'),
+                "AdwAboutDialog {label} entry at index {idx} must not contain the `\\0` null byte (which would route through GLib's null-terminated `g_strdupv` / `g_strdup` layer in `set_{label}`, truncate the credits-page section entry at the first `\\0`, and silently lose the surname portion in downstream attribution scrapers); got {entry:?}",
+            );
+        }
+    }
+}
