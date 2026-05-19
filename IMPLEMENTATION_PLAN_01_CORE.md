@@ -1267,7 +1267,7 @@ and committed in any order.
   `report.accounts` source-order rule and the skip accumulator at
   count > 1; the existing tests only pin `skipped == 1`.
 
-- [ ] **Aegis forward-compatibility — unknown JSON fields ignored.**
+- [x] **Aegis forward-compatibility — unknown JSON fields ignored.**
   Add `aegis_extra_unknown_top_level_and_per_entry_fields_are_ignored`
   to `tests/import_aegis.rs`. Construct an Aegis plaintext export
   bytes blob with three unknown sibling fields:

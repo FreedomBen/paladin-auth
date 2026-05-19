@@ -288,3 +288,58 @@ fn invalid_algo_string_rejects_with_source_index() {
     assert_eq!(field, "algorithm");
     assert_eq!(source_index, Some(0));
 }
+
+// ---------- Forward-compatibility: unknown JSON fields are ignored ----------
+
+/// Guards against a regression where `#[derive(Deserialize)]` on
+/// `AegisExport` / `AegisEntry` / `AegisInfo` grows
+/// `#[serde(deny_unknown_fields)]`. Aegis adds optional fields across
+/// upstream releases; round-tripping must survive unknown siblings at
+/// each level (top-level `db`, per-entry, inside `info`).
+#[test]
+fn aegis_extra_unknown_top_level_and_per_entry_fields_are_ignored() {
+    let bytes = br#"{
+        "version": 1,
+        "header": {"slots": null, "params": null},
+        "db": {
+            "version": 2,
+            "unknown_top": 42,
+            "entries": [{
+                "type": "totp",
+                "uuid": "00000000-0000-0000-0000-000000000001",
+                "name": "alice",
+                "issuer": "Acme",
+                "unknown_entry": "x",
+                "info": {
+                    "secret": "JBSWY3DPEHPK3PXP",
+                    "algo": "SHA256",
+                    "digits": 8,
+                    "period": 60,
+                    "unknown_info": true
+                }
+            }]
+        }
+    }"#;
+
+    let imported = import::aegis_plaintext(bytes, import_time()).unwrap();
+    assert_eq!(imported.len(), 1);
+    let validated = &imported[0];
+    let acct = &validated.account;
+    assert_eq!(acct.label(), "alice");
+    assert_eq!(acct.issuer(), Some("Acme"));
+    assert_eq!(acct.algorithm(), Algorithm::Sha256);
+    assert_eq!(acct.digits(), 8);
+    assert_eq!(acct.kind(), AccountKindSummary::Totp);
+    assert_eq!(acct.period(), Some(60));
+
+    // Warnings must not reference the unknown siblings.
+    for w in &validated.warnings {
+        let rendered = format!("{w:?}");
+        assert!(
+            !rendered.contains("unknown_top")
+                && !rendered.contains("unknown_entry")
+                && !rendered.contains("unknown_info"),
+            "warnings must not reference unknown JSON fields: {rendered}",
+        );
+    }
+}
