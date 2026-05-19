@@ -5571,3 +5571,33 @@ fn format_app_window_default_size_meets_gnome_hig_narrow_threshold() {
         "ApplicationWindow default height {height} must meet the GNOME HIG narrow-window adaptive floor ({NARROW_HEIGHT_FLOOR}px) so the chrome-plus-content layout (header bar + a useful run of account rows) renders without clipping the bottom of the list",
     );
 }
+
+#[test]
+fn format_app_window_default_size_is_landscape_or_square_orientation() {
+    // Defense-in-depth sibling of
+    // `format_app_window_default_size_meets_gnome_hig_narrow_threshold`:
+    // the narrow-threshold test pins both dimensions sit above
+    // the libadwaita HIG floors, but a regression that swapped
+    // the two slots — e.g. `(480, 640)` instead of the pinned
+    // `(640, 480)` — would still pass both the threshold and
+    // the positivity assertions while flipping the window into
+    // a portrait orientation. The `AccountListComponent`'s
+    // `<issuer>:<label>` rows render most cleanly when the
+    // window is at least as wide as it is tall (landscape or
+    // square), so the row text has horizontal room before
+    // libadwaita's `AdwSqueezer` decides to ellipsize the
+    // label. The docstring on `format_app_window_default_size`
+    // explicitly orders the docs as "wide enough… tall enough",
+    // pinning width as the primary axis. This assertion encodes
+    // the orientation invariant at the pinned-helper layer so a
+    // future regression that flipped the tuple surfaces as a
+    // failing test rather than as an unfamiliar portrait-shaped
+    // initial window the user has not yet resized.
+    use paladin_gtk::app::model::format_app_window_default_size;
+
+    let (width, height) = format_app_window_default_size();
+    assert!(
+        width >= height,
+        "ApplicationWindow default size must be landscape or square (width >= height) so the AccountListComponent's `<issuer>:<label>` rows render with horizontal room before AdwSqueezer ellipsizes the label; got ({width}, {height}) which is portrait-oriented",
+    );
+}
