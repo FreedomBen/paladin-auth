@@ -6016,3 +6016,65 @@ fn format_app_header_bar_button_icon_names_are_valid_icon_theme_keys() {
         );
     }
 }
+
+#[test]
+fn format_app_header_bar_button_tooltips_are_single_line_without_surrounding_whitespace() {
+    // Cross-button defense-in-depth sibling of the per-button
+    // `_is_non_empty` tooltip companions
+    // (`format_app_add_button_tooltip_is_non_empty`,
+    // `format_app_search_button_tooltip_is_non_empty`,
+    // `format_app_menu_button_tooltip_is_non_empty`) and the
+    // cross-button `format_app_header_bar_button_tooltips_are_distinct`
+    // companion. Those tests guard the non-empty + distinct
+    // invariants but leave the broader single-line / no-
+    // surrounding-whitespace shape ungated.
+    //
+    // The `gtk::Button::set_tooltip_text` slot consumes the
+    // string verbatim and renders it as a single-line tooltip
+    // popover beneath the icon-only header-bar button (the
+    // screen-reader-readable label, since the button has no
+    // visible text label). A regression that introduced an
+    // embedded newline — e.g. `"Add\naccount"` — would render
+    // a vertically-stretched two-line tooltip and break the
+    // visual alignment libadwaita expects. A leading or
+    // trailing space — e.g. `" Add account"` — would shift the
+    // popover content off the icon center and surface as a
+    // confusing alignment glitch on tooltip render.
+    //
+    // The assertion loops over all three icon-only header-bar
+    // button tooltip helpers (Add / search / menu) and pins
+    // each value as single-line and surrounded by no
+    // whitespace so a future regression in any of the three
+    // fails with a message that names the offending button.
+    // Mirrors the new
+    // `format_app_header_bar_button_icon_names_are_valid_icon_theme_keys`
+    // companion which pins the matching shape on the icon-name
+    // side.
+    use paladin_gtk::app::model::{
+        format_app_add_button_tooltip, format_app_menu_button_tooltip,
+        format_app_search_button_tooltip,
+    };
+
+    for (label, tooltip) in [
+        ("Add", format_app_add_button_tooltip()),
+        ("search", format_app_search_button_tooltip()),
+        ("menu", format_app_menu_button_tooltip()),
+    ] {
+        assert!(
+            !tooltip.contains('\n'),
+            "header-bar {label} button tooltip must be a single line so the popover renders as one tidy caption rather than a vertically-stretched two-line block; got {tooltip:?}",
+        );
+        assert!(
+            !tooltip.contains('\r'),
+            "header-bar {label} button tooltip must use LF-only conventions (no embedded CR), matching the GNOME stack's text expectation for a single-line tooltip caption; got {tooltip:?}",
+        );
+        assert!(
+            !tooltip.starts_with(char::is_whitespace),
+            "header-bar {label} button tooltip must not start with whitespace; a leading space would shift the popover content off the icon center and surface as a confusing alignment glitch; got {tooltip:?}",
+        );
+        assert!(
+            !tooltip.ends_with(char::is_whitespace),
+            "header-bar {label} button tooltip must not end with whitespace; a trailing space would shift the popover content off the icon center and surface as a confusing alignment glitch; got {tooltip:?}",
+        );
+    }
+}
