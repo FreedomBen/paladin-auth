@@ -2663,6 +2663,56 @@ fn format_app_about_dialog_developers_is_non_empty_array_of_non_empty_single_lin
 }
 
 #[test]
+fn format_app_about_dialog_artists_is_empty_until_an_artist_joins() {
+    // Per §"libadwaita usage" and §"About / help": the
+    // `AdwAboutDialog` artists slot populates the dialog's
+    // credits-page "Artists" section. Paladin does not yet have
+    // a separately-credited artist — the application icon and
+    // any auxiliary glyphs ship with the standard freedesktop /
+    // Adwaita symbolic icon set (which carries its own upstream
+    // credits) and the founding contributor in
+    // `format_app_about_dialog_developers` owns the Paladin-
+    // specific visual choices — so the artists slot stays empty
+    // until a credited artist joins. The empty array makes
+    // `AdwAboutDialog` skip the credits-page "Artists" row
+    // entirely (per the libadwaita convention), which is the
+    // correct rendering for an app with no credited artist.
+    use paladin_gtk::app::model::format_app_about_dialog_artists;
+
+    let artists: [&str; 0] = format_app_about_dialog_artists();
+    assert!(
+        artists.is_empty(),
+        "AdwAboutDialog artists must be empty until a separately-credited artist joins so the credits-page Artists row is suppressed",
+    );
+}
+
+#[test]
+fn format_app_about_dialog_artists_is_distinct_type_from_developers() {
+    // Defense-in-depth: even though both helpers populate
+    // credits-page sections, the developers list returns a
+    // non-empty `[&'static str; 1]` while the artists list
+    // returns the empty `[&'static str; 0]` — so the dialog
+    // renders the "Developers" section but skips the "Artists"
+    // section. A drift that copy-pasted the developers literal
+    // into the artists helper would surface as a duplicate
+    // contributor credit on the credits page.
+    use paladin_gtk::app::model::{
+        format_app_about_dialog_artists, format_app_about_dialog_developers,
+    };
+
+    let artists = format_app_about_dialog_artists();
+    let developers = format_app_about_dialog_developers();
+    assert!(
+        artists.is_empty(),
+        "AdwAboutDialog artists must be empty so the credits-page Artists row is suppressed",
+    );
+    assert!(
+        !developers.is_empty(),
+        "AdwAboutDialog developers must be non-empty so the credits-page Developers row renders the founding contributor",
+    );
+}
+
+#[test]
 fn format_app_about_dialog_designers_is_empty_until_a_designer_joins() {
     // Per §"libadwaita usage" and §"About / help": the
     // `AdwAboutDialog` designers slot populates the dialog's

@@ -2377,6 +2377,41 @@ pub fn format_app_about_dialog_designers() -> [&'static str; 0] {
     []
 }
 
+/// Ordered artist-credit list the application menu's "About
+/// Paladin" entry's `AdwAboutDialog` hands to `set_artists` for
+/// its credits-page "Artists" section.
+///
+/// Returns the empty array for the v0.2 release. Paladin does
+/// not yet have a separately-credited artist — the application
+/// icon and any auxiliary glyphs ship with the standard
+/// freedesktop / Adwaita symbolic icon set, which carries its
+/// own upstream credits, and the founding contributor in
+/// [`format_app_about_dialog_developers`] owns the Paladin-
+/// specific visual choices — so the artists slot stays empty
+/// until a credited artist joins. `AdwAboutDialog` follows the
+/// libadwaita convention of suppressing the credits-page
+/// "Artists" row when the slice is empty, which is the correct
+/// rendering for an app with no credited artist.
+///
+/// Pinning the empty slice through a helper rather than passing
+/// `&[]` inline at the call site keeps the credits-page wiring
+/// uniform: every credits-page list is sourced from a
+/// `format_app_about_dialog_<role>` helper so a future
+/// contributor change updates one helper without touching the
+/// widget binding. Companion of
+/// [`format_app_about_dialog_developers`],
+/// [`format_app_about_dialog_designers`], and
+/// [`format_app_about_dialog_translator_credits`] on the
+/// credits-page-contributor side; together they pin every
+/// credits-page row against a single source of truth.
+///
+/// Pure — returns a fixed-size empty array of `'static` strings
+/// without allocating.
+#[must_use]
+pub fn format_app_about_dialog_artists() -> [&'static str; 0] {
+    []
+}
+
 /// Translator-credits string the application menu's "About
 /// Paladin" entry's `AdwAboutDialog` hands to
 /// `set_translator_credits` for its credits-page "Translators"
