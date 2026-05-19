@@ -14719,3 +14719,98 @@ fn format_app_about_dialog_release_notes_does_not_contain_a_vertical_tab_byte() 
         "AdwAboutDialog release_notes must not contain the `\\x0B` vertical-tab byte (0x0B); the Pango markup parser permits ASCII whitespace between elements but renders `\\x0B` as a literal control glyph (a hollow box or tofu-like placeholder) since `\\x0B` is technically whitespace under `char::is_whitespace()` but has no tab-stop semantics, so a stray `\\x0B` between the wrapping `<ul>` and each `<li>` bullet would surface as visible boxes in the dialog's What's New body, propagate the same rendering bug into any external changelog reuse, and break screen-reader bullet-boundary announcements at every indent; got {release_notes:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_translator_credits_does_not_contain_a_vertical_tab_byte() {
+    // Defense-in-depth mirror of the just-added
+    // `_release_notes_does_not_contain_a_vertical_tab_byte`
+    // companion on the translator-credits side, extending the
+    // translator_credits byte-cleanliness contract past the
+    // just-completed `{null / horizontal-tab / carriage-return}`
+    // triplet to the next C0 control byte. The vertical-tab byte
+    // `\x0B` (0x0B) sits one step above HT (0x09) and one step
+    // below CR (0x0D) in the ASCII C0 block; like its siblings
+    // it is a non-printable control byte with no legitimate use
+    // inside a libadwaita-convention translator-credits string.
+    //
+    // The libadwaita translator-credits convention permits
+    // embedded `\n` line breaks between translator entries (the
+    // `_is_single_line_when_non_empty` companion only asserts
+    // the empty-string case, so it does not gate embedded
+    // newlines once a translation lands), so the helper is one
+    // of only three about-dialog helpers (alongside
+    // `format_app_about_dialog_debug_info` and
+    // `format_app_about_dialog_release_notes`) where embedded
+    // line breaks are legitimately expected. That makes `\x0B`
+    // (0x0B VERTICAL TAB) a distinct regression surface: it is
+    // NOT covered by `_has_no_surrounding_whitespace_when_non_empty`
+    // (`\x0B` mid-string is non-surrounding), it is NOT covered
+    // by any per-entry single-line check (the helper itself is
+    // explicitly multi-line per libadwaita convention), it
+    // slips past `_does_not_contain_a_null_byte` (`\x0B` is not
+    // `\0`), it slips past `_does_not_contain_a_horizontal_tab_byte`
+    // (`\x0B` is not `\t`), and it slips past
+    // `_does_not_contain_a_carriage_return_byte` (`\x0B` is not
+    // `\r`). None of the existing companions name the `\x0B`
+    // byte directly on this helper.
+    //
+    // A regression that landed
+    // `"name1\x0B<email1>\nname2\x0B<email2>"` (vertical-tab-
+    // separated `<name>\x0B<email>` rows lifted from a legacy
+    // contributors export pipeline that used `\x0B` as a column
+    // separator on line-printer terminals, an `xgettext` export
+    // that preserved VT-aligned column values, a `concat!(_,
+    // "\x0B", _)` form mirroring a VT-aligned attribution block,
+    // or a hand-edited helper that pasted from an EBCDIC-to-
+    // ASCII translation preserving the original VT byte) would
+    // mis-render in multiple downstream surfaces: (1) libadwaita's
+    // credits-page parser splits the translator-credits string
+    // on `\n` (LF) per the documented convention, leaving the
+    // embedded `\x0B` bytes inside each parsed entry untouched;
+    // the GLib-backed Pango render path treats `\x0B` as a
+    // literal control glyph (a hollow box or tofu-like
+    // placeholder) since `\x0B` is technically whitespace under
+    // `char::is_whitespace()` but has no tab-stop semantics,
+    // breaking the tidy two-column `<name> <email>` attribution
+    // layout; (2) any localization tooling that round-trips the
+    // translator-credits string back through `xgettext` would
+    // either silently dedupe the `\x0B` to a single space (data
+    // loss) or preserve the `\x0B` and propagate the same
+    // rendering bug across every downstream consumer of the .po
+    // / .mo file; (3) screen readers that announce the credits-
+    // page contents read the `\x0B` as a literal control
+    // character, breaking the accessibility-tree announcement
+    // at every attribution-row column boundary.
+    //
+    // Mirror of the just-added
+    // `_developer_name_does_not_contain_a_vertical_tab_byte`,
+    // `_copyright_does_not_contain_a_vertical_tab_byte`,
+    // `_comments_does_not_contain_a_vertical_tab_byte`,
+    // `_developers_entries_do_not_contain_a_vertical_tab_byte`,
+    // `_empty_credits_section_entries_do_not_contain_a_vertical_tab_byte`,
+    // `_release_notes_version_does_not_contain_a_vertical_tab_byte`,
+    // and `_release_notes_does_not_contain_a_vertical_tab_byte`
+    // siblings; together they extend the about-dialog byte-
+    // composition contract from the just-completed `{null /
+    // horizontal-tab / carriage-return}` triplet to the
+    // vertical-tab regression surface as well.
+    //
+    // Pinning the no-`\x0B` invariant directly here surfaces the
+    // regression with a message naming the offending byte at
+    // build time rather than as a downstream credits-page
+    // rendering bug, a stray `\x0B` byte in the .po round trip,
+    // or a screen-reader announcement break. Current helper
+    // returns the empty literal `""` (no `\x0B` byte), so this
+    // test passes today and serves as a forcing function so any
+    // future override of the helper — including the eventual
+    // landing of an actual translator-credits string — stays
+    // free of vertical tabs even when embedded `\n` line breaks
+    // are intentionally present.
+    use paladin_gtk::app::model::format_app_about_dialog_translator_credits;
+
+    let translator_credits = format_app_about_dialog_translator_credits();
+    assert!(
+        !translator_credits.contains('\x0B'),
+        "AdwAboutDialog translator_credits must not contain the `\\x0B` vertical-tab byte (0x0B); the libadwaita translator-credits convention splits on `\\n` (LF) only and leaves embedded `\\x0B` bytes inside each parsed entry untouched, and `\\x0B` is technically whitespace under `char::is_whitespace()` but has no tab-stop semantics so Pango renders it as a literal control glyph; a stray `\\x0B` would render as a hollow box or tofu-like placeholder in the credits-page attribution column, would survive `xgettext` round trips as either silent dedupe to a single space or `\\x0B` preservation, and would break screen-reader announcements at every attribution-row column boundary; got {translator_credits:?}",
+    );
+}
