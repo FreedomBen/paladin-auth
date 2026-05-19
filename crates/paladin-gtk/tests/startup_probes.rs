@@ -9257,3 +9257,77 @@ fn format_app_about_dialog_version_starts_with_a_digit() {
         first as u32,
     );
 }
+
+#[test]
+fn format_app_about_dialog_version_has_at_least_three_dot_separated_segments() {
+    // Defense-in-depth sibling of
+    // `format_app_about_dialog_version_matches_cargo_pkg_version`
+    // (exact-value pin),
+    // `_is_non_empty_and_looks_like_semver` (non-empty +
+    // `contains('.')` shape pin + no-space byte pin),
+    // `_is_ascii_only` (byte-composition pin),
+    // `_has_no_embedded_whitespace` (no-whitespace pin), and
+    // `_starts_with_a_digit` (leading-character pin). Those
+    // companions catch the wrong-value / wrong-shape / non-ASCII
+    // / embedded-whitespace / wrong-leading-byte regressions but
+    // leave the *segment-count* convention ungated.
+    //
+    // The Semantic Versioning 2.0 specification (semver.org)
+    // pins a valid version as exactly the form
+    // `MAJOR.MINOR.PATCH[-pre-release][+build-metadata]` where
+    // the three required numeric segments are separated by `.`
+    // characters. The cargo `CARGO_PKG_VERSION` env var resolves
+    // to the workspace Cargo.toml `version` field (which cargo
+    // validates against the semver grammar), so the version
+    // helper is always a valid semver at build time. But a
+    // future refactor that intercepted the helper with a manual
+    // override — e.g. dropping the patch segment to `"0.1"`
+    // (two segments) for a `Cargo.toml` `version = "0.1"` (which
+    // cargo actually accepts as shorthand, normalizing to
+    // `"0.1.0"` for the package metadata but leaving the
+    // env-var value at the raw `"0.1"` string in some toolchain
+    // versions) or overriding it to a single-segment string
+    // `"1"` from a CI build-tag injection — would slip past the
+    // `_contains_dot` companion (which uses `contains('.')`
+    // matching for any count ≥ 1, so the `"0.1"` two-segment
+    // form passes trivially) while diverging from the strict
+    // three-segment semver shape AppStream / Flatpak
+    // release-notes tooling expects in the
+    // `<release version="0.0.1">` XML schema and the
+    // `flatpak-builder` `--repo-include-detached-metadata` pass
+    // (both of which validate the version against the strict
+    // three-segment semver grammar at packaging time and would
+    // reject a two-segment version as a malformed schema
+    // entry).
+    //
+    // Pinning the at-least-three-segments invariant directly
+    // here surfaces the regression with a message naming the
+    // offending segment count and the offending version string
+    // at build time rather than as a downstream AppStream /
+    // Flatpak release-notes schema rejection at packaging time
+    // or as a quiet version-row layout regression at dialog
+    // render time. The assertion uses `>= 3` rather than
+    // `== 3` so pre-release suffixes (`"0.0.1-alpha.1"` which
+    // splits to four `.`-separated segments) and build-metadata
+    // suffixes (`"0.0.1+build.42"`, three segments before the
+    // `+` separator) still pass.
+    //
+    // Mirror of the `_looks_like_semver` companion on the
+    // `.`-separator side and the `_starts_with_a_digit` /
+    // `_application_icon_name_has_exactly_four_segments`
+    // siblings on the leading-character / segment-count side;
+    // together they pin the segment-count contract across the
+    // dialog-header version row and the application-icon
+    // reverse-DNS identifier against a single source of truth
+    // on the SemVer / GNOME / AppStream / Flatpak packaging
+    // convention.
+    use paladin_gtk::app::model::format_app_about_dialog_version;
+
+    let version = format_app_about_dialog_version();
+    let segments: Vec<&str> = version.split('.').collect();
+    assert!(
+        segments.len() >= 3,
+        "AdwAboutDialog version must have at least three `.`-separated segments to match the Semantic Versioning 2.0 `MAJOR.MINOR.PATCH` convention so the AppStream / Flatpak release-notes tooling resolves the `<release version=\"...\">` XML schema entry at packaging time and the bold AdwAboutDialog version row renders the canonical three-segment semver next to the program name; got {len} segment(s) in {version:?} (segments: {segments:?})",
+        len = segments.len(),
+    );
+}
