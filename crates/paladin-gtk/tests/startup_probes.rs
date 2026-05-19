@@ -10534,3 +10534,66 @@ fn format_app_about_dialog_version_does_not_contain_a_null_byte() {
         "AdwAboutDialog version must not contain the `\\0` null byte (which would route through GLib's null-terminated `g_strdup` layer in `set_version`, truncate the dialog-header version-label row at the first `\\0`, propagate into the debug-info payload, and corrupt automated bug-report version-field scraping); got {version:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_application_icon_name_does_not_contain_a_null_byte() {
+    // Defense-in-depth mirror of the just-added
+    // `_program_name_does_not_contain_a_null_byte` /
+    // `_version_does_not_contain_a_null_byte` /
+    // `_debug_info_does_not_contain_a_null_byte` /
+    // `_debug_info_filename_does_not_contain_a_null_byte`
+    // companions on the application-icon-name side. The
+    // `_is_ascii_only` companion pins each byte as ASCII —
+    // the `\0` byte (0x00) is ASCII, so a regression that
+    // landed `"org.tamx.Paladin\0.Gui"` (null-byte injection
+    // from a `CString::new` round-trip that didn't strip the
+    // trailing null, or a `concat!(_, "\0", _)` form fed
+    // through a build-time override of `crate::APP_ID`)
+    // would slip past `_is_ascii_only`,
+    // `_has_no_embedded_whitespace` (`\0` is not whitespace),
+    // `_has_exactly_four_segments` (splitting by `.` still
+    // yields four non-empty segments because `\0` is not the
+    // `.` separator), `_does_not_start_with_a_dot`,
+    // `_does_not_end_with_a_dot`, or
+    // `_starts_with_a_lowercase_ascii_letter` (only checks
+    // the first char).
+    //
+    // Null bytes in the application-icon-name string would
+    // mis-render in multiple downstream surfaces: (1) the
+    // GLib-backed `AdwAboutDialog::set_application_icon`
+    // setter routes through `g_strdup` (null-terminated) and
+    // may truncate the icon-theme lookup key at the first
+    // `\0` byte, so the about-dialog header glyph would
+    // either fall back to the generic application icon or
+    // fail to resolve entirely; (2) the matching launcher /
+    // desktop-entry / AppStream `<id>` icon lookups (all
+    // sharing the same `crate::APP_ID` string per
+    // `_application_icon_name_matches_crate_app_id`) would
+    // suffer the same truncation, breaking the launcher icon,
+    // the §11.3 `/usr/share/icons/hicolor/...` install layout
+    // resolution, and Flathub's metainfo icon resolution; (3)
+    // the `RelmApp::new(APP_ID)` constructor call routes
+    // through the same GLib-null-terminated layer for its
+    // application-id parameter, so DBus activation
+    // (`org.freedesktop.DBus.RequestName` on
+    // `org.tamx.Paladin.Gui`) would register a truncated bus
+    // name and break the single-instance contract.
+    //
+    // Pinning the no-null-byte invariant directly here
+    // surfaces the regression with a message naming the
+    // offending byte at build time rather than as a
+    // downstream icon-theme lookup miss, launcher-icon
+    // fallback, or DBus single-instance miss. Current helper
+    // returns the literal `crate::APP_ID`
+    // (`"org.tamx.Paladin.Gui"`, no `\0` byte), so this test
+    // passes today and serves as a forcing function so any
+    // future override of `crate::APP_ID` or the helper stays
+    // free of null bytes.
+    use paladin_gtk::app::model::format_app_about_dialog_application_icon_name;
+
+    let icon_name = format_app_about_dialog_application_icon_name();
+    assert!(
+        !icon_name.contains('\0'),
+        "AdwAboutDialog application_icon_name must not contain the `\\0` null byte (which would route through GLib's null-terminated `g_strdup` layer in `set_application_icon` / `RelmApp::new` and truncate the dialog-header glyph icon-theme lookup, the launcher / desktop-entry / AppStream `<id>` icon lookups, and the DBus single-instance bus-name registration at the first `\\0`); got {icon_name:?}",
+    );
+}
