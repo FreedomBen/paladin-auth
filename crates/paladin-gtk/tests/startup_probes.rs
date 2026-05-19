@@ -19900,3 +19900,111 @@ fn format_app_about_dialog_developer_name_does_not_contain_a_bell_byte() {
         "AdwAboutDialog developer-name must not contain the `\\x07` bell byte (0x07); a mid-string `\\x07` slips past `_is_a_single_line_without_embedded_newlines` (which only checks `\\n` and `\\r`), past `_is_ascii_only` (because `\\x07` is ASCII), past `_has_no_surrounding_whitespace` (which uses `char::is_whitespace()` — Unicode returns false for U+0007 BEL so this companion does NOT reject `\\x07` even at the boundaries, strictly weaker coverage than form-feed / line-feed / vertical-tab / horizontal-tab / carriage-return), past `_starts_with_the_definite_article` / `_ends_with_the_contributors_collective_noun` (which only constrain the literal prefix and suffix), and past `_does_not_contain_a_null_byte` / `_does_not_contain_a_horizontal_tab_byte` / `_does_not_contain_a_carriage_return_byte` / `_does_not_contain_a_vertical_tab_byte` / `_does_not_contain_a_form_feed_byte` / `_does_not_contain_a_backspace_byte` / `_does_not_contain_a_line_feed_byte` (which each name a different byte specifically); it would render as a literal control glyph in the dialog-header attribution row, propagate into the footer copyright row that reuses this string, ring the terminal bell when the developer-name is dumped through a TTY (an audible-alert injection / covert side-channel primitive in shared CI environments), break screen-reader attribution announcements at the byte boundary, and propagate into downstream contributor-attribution scrapers; got {developer:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_copyright_does_not_contain_a_bell_byte() {
+    // Defense-in-depth per-byte sibling extending the copyright
+    // byte-cleanliness contract past the just-completed
+    // `{null / horizontal-tab / carriage-return / vertical-tab /
+    // form-feed / backspace / line-feed}` septuple to the bell
+    // byte `\x07` (0x07), opening the next non-whitespace-
+    // classified C0 control-byte cycle for this helper. Like BS,
+    // BEL is NOT matched by `char::is_whitespace()` (Unicode
+    // treats BEL as a control byte, not whitespace), so the
+    // copyright helper's transitive single-line / whitespace-
+    // boundary protections from the cluster bytes (HT / LF / VT
+    // / FF / CR) do NOT cover BEL — making the bell byte
+    // strictly more dangerous than the cluster bytes for this
+    // helper.
+    //
+    // None of the existing copyright companions name the `\x07`
+    // byte directly:
+    //   - `_copyright_is_a_single_line_without_embedded_newlines`
+    //     only checks `\n` and `\r` — `\x07` is neither;
+    //   - `_copyright_starts_with_copyright_glyph_and_contains_developer_name`
+    //     and `_copyright_ends_with_developer_name` only
+    //     constrain the literal `©` glyph prefix and the
+    //     `"The Paladin contributors"` suffix, so a mid-string
+    //     `\x07` between them satisfies both;
+    //   - `_separates_glyph_and_attribution_with_a_single_space`
+    //     only constrains the single byte immediately after the
+    //     `©` glyph — a `\x07` later in the string slips past;
+    //   - `_does_not_end_with_a_period` only constrains the
+    //     trailing byte;
+    //   - `_does_not_contain_a_year_token_so_it_does_not_drift_across_releases`
+    //     scans for four-digit runs — `\x07` is not a digit;
+    //   - `_does_not_contain_a_null_byte` /
+    //     `_does_not_contain_a_horizontal_tab_byte` /
+    //     `_does_not_contain_a_carriage_return_byte` /
+    //     `_does_not_contain_a_vertical_tab_byte` /
+    //     `_does_not_contain_a_form_feed_byte` /
+    //     `_does_not_contain_a_backspace_byte` /
+    //     `_does_not_contain_a_line_feed_byte`
+    //     each name a different byte specifically.
+    //
+    // The `_returns_paladin_copyright_line` exact-value pin
+    // catches every byte today, but its protection collapses
+    // the moment a multi-line copyright-attribution refactor or
+    // a workspace-vendoring split decouples the helper from the
+    // pinned literal — at that point a `\x07`-bearing override
+    // would slip past every byte-level companion above.
+    //
+    // A regression that landed `"\u{00A9} The Paladin\x07contributors"`
+    // (bell byte lifted from a `script(1)` typescript that
+    // captured raw `\x07` audible-alert bytes between sections
+    // of a COPYRIGHT file mid-edit, a `concat!("\u{00A9} The
+    // Paladin", "\x07", "contributors")` form, or a hand-
+    // edited helper that pasted from a terminal session
+    // recording preserving raw `\x07` bytes) would mis-render
+    // in multiple downstream surfaces: (1) the GLib-backed
+    // `AdwAboutDialog::set_copyright` setter hands the string
+    // to Pango for inline rendering in the dialog footer —
+    // Pango's default rendering of a bare `\x07` byte is
+    // implementation-defined and typically renders as a literal
+    // control glyph (a hollow box or tofu-like placeholder),
+    // breaking the tidy single-line copyright layout against
+    // the website / issue-link rows beneath it; (2) the
+    // copyright string is the legal attribution surface for
+    // the dialog — a `\x07`-mis-rendered footer erodes the
+    // trusted-application surface contract; (3) when the
+    // copyright is dumped through a TTY (CI logs,
+    // `paladin-gtk --about` debug output piped to `less` or
+    // `cat`, an `xdotool` clipboard-grab of the footer rendered
+    // into a terminal logger), the `\x07` byte rings the
+    // terminal bell on the user's session — an audible-alert
+    // injection / covert side-channel primitive in shared CI
+    // environments; (4) screen readers that announce the
+    // dialog copyright row may emit an audible alert tone or
+    // render the byte as a literal control character
+    // announcement, breaking the legal-attribution accessibility-
+    // tree announcement at the byte boundary; (5) downstream
+    // tooling that scrapes the copyright string (license-
+    // attribution aggregators, AGPL-3.0-or-later compliance
+    // crawlers) would propagate the stray `\x07` byte into the
+    // consumer's stream and trigger the same bell-ring /
+    // control-glyph rendering bug across every downstream
+    // surface.
+    //
+    // Pinning the no-`\x07` invariant directly here surfaces
+    // the regression with a message naming the offending byte
+    // at build time rather than via a downstream dialog-footer
+    // rendering bug, an audible-alert injection through TTY
+    // dumps, or a screen-reader announcement break. Current
+    // helper returns the literal `"\u{00A9} The Paladin
+    // contributors"` (no `\x07` byte), so this test passes
+    // today and serves as a forcing function so any future
+    // override of the helper stays free of bell bytes. Opens
+    // the next non-whitespace-classified C0 control-byte cycle
+    // past the just-completed `{null / horizontal-tab /
+    // carriage-return / vertical-tab / form-feed / backspace /
+    // line-feed}` septuple so the helper's byte-composition
+    // contract pins each forbidden control byte against a
+    // single source of truth.
+    use paladin_gtk::app::model::format_app_about_dialog_copyright;
+
+    let copyright = format_app_about_dialog_copyright();
+    assert!(
+        !copyright.contains('\x07'),
+        "AdwAboutDialog copyright must not contain the `\\x07` bell byte (0x07); like BS, BEL is NOT matched by `char::is_whitespace()` (Unicode returns false for U+0007 BEL), so the copyright helper's transitive whitespace-boundary / single-line protections from the cluster bytes do NOT cover BEL — making the bell byte strictly more dangerous than the cluster bytes for this helper; a mid-string `\\x07` slips past `_is_a_single_line_without_embedded_newlines` (which only checks `\\n` and `\\r`), past `_starts_with_copyright_glyph_and_contains_developer_name` / `_ends_with_developer_name` / `_separates_glyph_and_attribution_with_a_single_space` (which only constrain the literal prefix, suffix, and the single byte after the © glyph), past `_does_not_end_with_a_period` / `_does_not_contain_a_year_token_so_it_does_not_drift_across_releases` (which only constrain the trailing byte or scan for digits), and past `_does_not_contain_a_null_byte` / `_does_not_contain_a_horizontal_tab_byte` / `_does_not_contain_a_carriage_return_byte` / `_does_not_contain_a_vertical_tab_byte` / `_does_not_contain_a_form_feed_byte` / `_does_not_contain_a_backspace_byte` / `_does_not_contain_a_line_feed_byte` (which each name a different byte specifically); it would render as a literal control glyph in the dialog footer copyright row, erode the trusted-application legal-attribution surface contract, ring the terminal bell when the copyright is dumped through a TTY (an audible-alert injection / covert side-channel primitive in shared CI environments), break screen-reader copyright announcements at the byte boundary, and propagate into downstream license-attribution aggregators and AGPL-3.0-or-later compliance crawlers; got {copyright:?}",
+    );
+}
