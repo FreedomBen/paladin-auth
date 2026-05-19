@@ -9405,3 +9405,93 @@ fn format_app_about_dialog_version_does_not_end_with_a_dot() {
         "AdwAboutDialog version must not end with a `.` byte (which is not a valid terminal in any of the three Semantic Versioning 2.0 grammar productions for MAJOR.MINOR.PATCH, `-<pre-release>`, or `+<build-metadata>`) so the AppStream / Flatpak release-notes `<release version=\"...\">` XML schema entry resolves at packaging time rather than as a malformed-schema rejection; got {version:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_version_segments_are_non_empty() {
+    // Defense-in-depth sibling of
+    // `format_app_about_dialog_version_matches_cargo_pkg_version`
+    // (exact-value pin),
+    // `_is_non_empty_and_looks_like_semver` (non-empty +
+    // `contains('.')` shape pin + no-space byte pin),
+    // `_is_ascii_only` (byte-composition pin),
+    // `_has_no_embedded_whitespace` (no-whitespace pin),
+    // `_starts_with_a_digit` (leading-character pin),
+    // `_has_at_least_three_dot_separated_segments`
+    // (segment-count pin), and `_does_not_end_with_a_dot`
+    // (trailing-byte pin). Those companions catch the
+    // wrong-value / wrong-shape / non-ASCII / embedded-
+    // whitespace / wrong-leading-byte / wrong-segment-count /
+    // trailing-dot regressions but leave the *empty-segment*
+    // edge case in the *middle* of the version string
+    // ungated.
+    //
+    // The Semantic Versioning 2.0 specification (semver.org)
+    // pins each `.`-separated segment as a non-empty numeric
+    // identifier (or alphanumeric identifier for pre-release
+    // segments) — the grammar production for a SemVer
+    // identifier requires at least one character, so the
+    // segments `["0", "", "1"]` (from a `"0..1"` regression)
+    // are not a valid SemVer because the second segment is
+    // empty. A regression that landed `"0..1"` (consecutive
+    // dots from a `concat!(env!("CARGO_PKG_VERSION"), ".",
+    // env!("BUILD_NUMBER"))` injection where `BUILD_NUMBER`
+    // expanded to the empty string) or `".0.0.1"` (leading
+    // dot from a `concat!(".", env!("CARGO_PKG_VERSION"))`
+    // injection) would slip past the
+    // `_is_non_empty_and_looks_like_semver` companion (the
+    // `.` separator is still present so `contains('.')`
+    // resolves true), the `_starts_with_a_digit` companion
+    // (the `"0..1"` form still starts with a digit; only the
+    // `".0.0.1"` form would fail this companion but the
+    // `"0..1"` form would slip past), the `_is_ascii_only` /
+    // `_has_no_embedded_whitespace` companions (the `.`
+    // byte is ASCII and not whitespace), the
+    // `_has_at_least_three_dot_separated_segments` companion
+    // (the `"0..1"` form splits into `["0", "", "1"]` which
+    // has three segments, trivially passing the `>= 3` count
+    // check), the `_does_not_end_with_a_dot` companion (the
+    // `"0..1"` form ends with the `1` digit), and the
+    // `_matches_cargo_pkg_version` exact-value pin (only
+    // valid when no manual override is in place — a future
+    // refactor that intercepted the helper with a manual
+    // override or a `concat!` injection would slip past),
+    // diverging from the strict SemVer 2.0 grammar (which
+    // requires every segment to be a non-empty identifier)
+    // and would be rejected by AppStream / Flatpak
+    // release-notes tooling (which validates the version
+    // against the strict SemVer grammar at packaging time
+    // via `appstreamcli validate` and `flatpak-builder
+    // --repo-include-detached-metadata` and would reject an
+    // empty-segment version as a malformed schema entry,
+    // surfacing as a packaging-time rejection rather than as
+    // a build-time failing test).
+    //
+    // Pinning the per-segment non-emptiness invariant
+    // directly here surfaces the regression with a message
+    // naming the offending segment index and the offending
+    // version string at build time rather than as a
+    // downstream AppStream / Flatpak release-notes schema
+    // rejection at packaging time. The assertion walks every
+    // `.`-separated segment (so any empty segment — leading
+    // dot, trailing dot, or consecutive dots — is caught by
+    // the same loop body). Mirror of the
+    // `format_app_about_dialog_application_icon_name_segments_are_non_empty`
+    // sibling on the application-icon reverse-DNS side and
+    // the `_starts_with_a_digit` / `_does_not_end_with_a_dot`
+    // / `_has_at_least_three_dot_separated_segments`
+    // companions on the version-segment-shape side; together
+    // they pin the per-segment non-emptiness contract across
+    // the dialog-header version row and the application-icon
+    // reverse-DNS identifier against a single source of truth
+    // on the SemVer / GNOME / AppStream / Flatpak packaging
+    // convention.
+    use paladin_gtk::app::model::format_app_about_dialog_version;
+
+    let version = format_app_about_dialog_version();
+    for (idx, segment) in version.split('.').enumerate() {
+        assert!(
+            !segment.is_empty(),
+            "AdwAboutDialog version `.`-separated segment at position {idx} must be non-empty so each segment is a valid Semantic Versioning 2.0 identifier (consecutive `.` characters or a leading / trailing `.` would inject an empty segment and break the strict SemVer grammar AppStream / Flatpak release-notes tooling expects); got {version:?}",
+        );
+    }
+}
