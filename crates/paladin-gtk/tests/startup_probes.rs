@@ -6868,3 +6868,56 @@ fn format_app_about_dialog_comments_does_not_end_with_a_period_per_libadwaita_co
         "AdwAboutDialog comments must not end with `?` per the libadwaita / GNOME HIG convention for short caption fragments under the program-name header; got {comments:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_translator_credits_has_no_surrounding_whitespace_when_non_empty() {
+    // Defense-in-depth sibling of
+    // `format_app_about_dialog_translator_credits_is_empty_until_translations_land`
+    // (exact-value pin to the empty literal) and
+    // `format_app_about_dialog_translator_credits_is_single_line_when_non_empty`
+    // (positive shape pin against embedded newlines once the
+    // gettext swap lands). Those companions catch the wrong-value
+    // and embedded-newline regressions but leave the
+    // surrounding-whitespace edge case ungated.
+    //
+    // Once gettext is wired up and this helper is swapped to
+    // `gettext("translator-credits")`, a translator could submit
+    // a `.po` entry like `" Bob Smith\n"` or `"\tBob Smith"` —
+    // a single space, tab, or trailing newline survives the
+    // gettext lookup and propagates straight into the
+    // `AdwAboutDialog::translator_credits` slot. The credits-page
+    // "Translators" row renders the value inline, so a leading
+    // space would push the name off the left baseline and a
+    // trailing space would leave a hanging gap on the right.
+    // The embedded-newline companion catches `"Bob\nSmith"`
+    // (newline mid-string) but does not catch the leading-tab /
+    // trailing-space case.
+    //
+    // Pinning the no-surrounding-whitespace invariant here is a
+    // forcing function so the next contributor wires gettext
+    // alongside the per-locale `.po` review that strips
+    // accidental padding rather than letting the credit row
+    // visually misalign on the credits page. The current empty-
+    // literal state trivially passes (no surrounding whitespace
+    // to strip), so the test stays green now and serves as a
+    // canary on the gettext swap. Mirror of the
+    // `_comments_is_non_empty_single_line_distinct_from_program_name`
+    // companion which already pins the same no-surrounding-
+    // whitespace invariant on the program-header caption side;
+    // together they pin the no-padding shape on both the header
+    // caption and the credits-page translator row against a
+    // single source of truth.
+    use paladin_gtk::app::model::format_app_about_dialog_translator_credits;
+
+    let credits = format_app_about_dialog_translator_credits();
+    if !credits.is_empty() {
+        assert!(
+            !credits.starts_with(char::is_whitespace),
+            "AdwAboutDialog translator-credits must not start with whitespace so the credits-page Translators row renders flush against the left baseline; got {credits:?}",
+        );
+        assert!(
+            !credits.ends_with(char::is_whitespace),
+            "AdwAboutDialog translator-credits must not end with whitespace so the credits-page Translators row does not leave a hanging gap on the right; got {credits:?}",
+        );
+    }
+}
