@@ -12157,3 +12157,88 @@ fn format_app_about_dialog_empty_credits_section_entries_do_not_contain_a_horizo
         }
     }
 }
+
+#[test]
+fn format_app_about_dialog_url_helpers_do_not_contain_a_query_string() {
+    // Cross-helper defense-in-depth sibling looping over the
+    // three `AdwAboutDialog` footer URL helpers
+    // (`format_app_about_dialog_website`,
+    // `format_app_about_dialog_issue_url`,
+    // `format_app_about_dialog_support_url`) and pinning each
+    // value as free of a `?` query-string-introducer byte so a
+    // regression that landed a query-string-terminated URL —
+    // e.g. `"https://paladin.tamx.org?utm_source=about"` (UTM-
+    // tagged homepage from a marketing-link refactor),
+    // `"https://github.com/FreedomBen/paladin/issues?q=is%3Aopen"`
+    // (filtered issue-tracker view from a paste with the
+    // browser address-bar query parameters retained), or
+    // `"https://github.com/FreedomBen/paladin/discussions?discussions_q=is%3Aopen"`
+    // (filtered discussions view) — would fail at the pinned
+    // layer rather than slip past the
+    // `_is_non_empty_https_url[_distinct_*]` per-URL companion
+    // (which only checks non-empty + `https://` prefix + no
+    // space byte), the `_contain_no_embedded_whitespace` /
+    // `_are_ascii_only` cross-URL companions (no whitespace
+    // bytes anywhere, only ASCII bytes — `?` is both non-
+    // whitespace and ASCII, so it slips past both), the
+    // `_appends_issues_to_cargo_pkg_repository` /
+    // `_appends_discussions_to_cargo_pkg_repository`
+    // companions (which use `concat!(env!("CARGO_PKG_REPOSITORY"),
+    // "/issues")` — if `CARGO_PKG_REPOSITORY` itself drifted to
+    // include a query suffix, the concatenation would produce
+    // `"…paladin?param=value/issues"` — though that exact form
+    // would actually break the path-after-host shape, a more
+    // plausible drift like `CARGO_PKG_REPOSITORY="https://github.com/FreedomBen/paladin"`
+    // becoming `"https://github.com/FreedomBen/paladin?tab=overview"`
+    // would yield a `?`-bearing concatenation), the
+    // `_issue_url_and_support_url_share_cargo_pkg_repository_prefix`
+    // companion (still holds since both URLs share the same
+    // `?`-bearing prefix), or the
+    // `_url_helpers_do_not_end_with_a_trailing_slash` companion
+    // (a `?`-terminated URL doesn't end with a slash).
+    //
+    // The libadwaita `AdwAboutDialog::website` / `issue-url` /
+    // `support-url` slots consume the URL verbatim and render
+    // it as a clickable footer link; a `?`-introducer on a URL
+    // like `"https://github.com/FreedomBen/paladin/issues?q=is%3Aopen"`
+    // would route through HTTP and GitHub's web stack to a
+    // *pre-filtered* destination view rather than to the bare
+    // issue-tracker landing page, surfacing as a confusing
+    // first-impression UX where the issue list arrives pre-
+    // narrowed to the maintainer's most recently saved filter.
+    // Worse, a UTM-tagged homepage URL would leak the
+    // referring application identity to analytics across every
+    // about-dialog open — an anti-feature for a privacy-
+    // focused authenticator, where the user's intent in
+    // opening the dialog is to learn about the application
+    // rather than to be tracked.
+    //
+    // Pinning the no-query-string invariant directly here
+    // surfaces the regression with a message naming the
+    // offending URL helper at build time rather than as a
+    // downstream pre-filtered click-through landing or an
+    // analytics-leak surface. Mirror of the
+    // `_url_helpers_do_not_end_with_a_trailing_slash`,
+    // `_url_helpers_contain_no_embedded_whitespace`,
+    // `_url_helpers_are_ascii_only`, and
+    // `_url_helpers_do_not_contain_a_null_byte` cross-URL
+    // siblings; together they pin the URL byte-composition
+    // contract (no whitespace, ASCII-only, no terminal `/`,
+    // no `\0`, no `?` query introducer) across all three
+    // footer link surfaces against a single source of truth.
+    use paladin_gtk::app::model::{
+        format_app_about_dialog_issue_url, format_app_about_dialog_support_url,
+        format_app_about_dialog_website,
+    };
+
+    for (label, url) in [
+        ("website", format_app_about_dialog_website()),
+        ("issue_url", format_app_about_dialog_issue_url()),
+        ("support_url", format_app_about_dialog_support_url()),
+    ] {
+        assert!(
+            !url.contains('?'),
+            "AdwAboutDialog {label} must not contain the `?` query-string-introducer byte so the URL byte sequence resolves to the bare canonical destination (the about-dialog footer is intended to surface the home / issue / support landing page, not a pre-filtered view) and so a UTM-tagged URL cannot leak the referring application identity to analytics on every dialog open; got {url:?}",
+        );
+    }
+}
