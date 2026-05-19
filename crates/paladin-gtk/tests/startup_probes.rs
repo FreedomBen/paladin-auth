@@ -16149,3 +16149,107 @@ fn format_app_about_dialog_release_notes_does_not_contain_a_form_feed_byte() {
         "AdwAboutDialog release_notes must not contain the `\\x0C` form-feed byte (0x0C); the Pango markup parser permits ASCII whitespace between elements but renders `\\x0C` as a literal control glyph (a hollow box or tofu-like placeholder) since `\\x0C` is technically whitespace under `char::is_whitespace()` but has no tab-stop semantics, so a stray `\\x0C` between the wrapping `<ul>` and each `<li>` bullet would surface as visible boxes in the dialog's What's New body, propagate the same rendering bug into any external changelog reuse (with text-paginator pipelines treating it as a hard page break), and break screen-reader bullet-boundary announcements at every indent; got {release_notes:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_translator_credits_does_not_contain_a_form_feed_byte() {
+    // Defense-in-depth mirror of the just-added
+    // `_release_notes_does_not_contain_a_form_feed_byte`
+    // companion on the translator-credits side, extending the
+    // translator_credits byte-cleanliness contract past the
+    // just-completed `{null / horizontal-tab / carriage-return /
+    // vertical-tab}` quadruple to the next C0 control byte. The
+    // form-feed byte `\x0C` (0x0C) sits one step above VT (0x0B)
+    // and one step below CR (0x0D) in the ASCII C0 block; like
+    // its siblings it is a non-printable control byte with no
+    // legitimate use inside a libadwaita-convention translator-
+    // credits string.
+    //
+    // The libadwaita translator-credits convention permits
+    // embedded `\n` line breaks between translator entries (the
+    // `_is_single_line_when_non_empty` companion only asserts
+    // the empty-string case, so it does not gate embedded
+    // newlines once a translation lands), so the helper is one
+    // of only three about-dialog helpers (alongside
+    // `format_app_about_dialog_debug_info` and
+    // `format_app_about_dialog_release_notes`) where embedded
+    // line breaks are legitimately expected. That makes `\x0C`
+    // (0x0C FORM FEED) a distinct regression surface: it is NOT
+    // covered by `_has_no_surrounding_whitespace_when_non_empty`
+    // (`\x0C` mid-string is non-surrounding), it is NOT covered
+    // by any per-entry single-line check (the helper itself is
+    // explicitly multi-line per libadwaita convention), it slips
+    // past `_does_not_contain_a_null_byte` (`\x0C` is not `\0`),
+    // it slips past `_does_not_contain_a_horizontal_tab_byte`
+    // (`\x0C` is not `\t`), it slips past
+    // `_does_not_contain_a_carriage_return_byte` (`\x0C` is not
+    // `\r`), and it slips past
+    // `_does_not_contain_a_vertical_tab_byte` (`\x0C` is not
+    // `\x0B`). None of the existing companions name the `\x0C`
+    // byte directly on this helper.
+    //
+    // A regression that landed
+    // `"name1\x0C<email1>\nname2\x0C<email2>"` (form-feed-
+    // separated `<name>\x0C<email>` rows lifted from a legacy
+    // contributors export pipeline that used `\x0C` to advance
+    // to the next page between attribution rows on a line-
+    // printer terminal, an `xgettext` export that preserved FF-
+    // paginated values, a `concat!(_, "\x0C", _)` form mirroring
+    // an FF-paginated attribution block, a `pandoc`-generated
+    // text dump that preserved `\x0C` page-break markers between
+    // attribution rows, or a hand-edited helper that pasted from
+    // a page-broken text file) would mis-render in multiple
+    // downstream surfaces: (1) libadwaita's credits-page parser
+    // splits the translator-credits string on `\n` (LF) per the
+    // documented convention, leaving the embedded `\x0C` bytes
+    // inside each parsed entry untouched; the GLib-backed Pango
+    // render path treats `\x0C` as a literal control glyph (a
+    // hollow box or tofu-like placeholder) since `\x0C` is
+    // technically whitespace under `char::is_whitespace()` but
+    // has no tab-stop semantics, breaking the tidy two-column
+    // `<name> <email>` attribution layout; (2) any localization
+    // tooling that round-trips the translator-credits string
+    // back through `xgettext` would either silently dedupe the
+    // `\x0C` to a single space (data loss) or preserve the
+    // `\x0C` and propagate the same rendering bug across every
+    // downstream consumer of the .po / .mo file, with the
+    // additional risk that text-paginator pipelines treat the
+    // `\x0C` as a hard page break and split the attribution row
+    // mid-stream in printed reports; (3) screen readers that
+    // announce the credits-page contents read the `\x0C` as a
+    // literal control character or — on some implementations —
+    // as a section-break announcement, breaking the
+    // accessibility-tree announcement at every attribution-row
+    // column boundary.
+    //
+    // Mirror of the just-added
+    // `_developer_name_does_not_contain_a_form_feed_byte`,
+    // `_copyright_does_not_contain_a_form_feed_byte`,
+    // `_comments_does_not_contain_a_form_feed_byte`,
+    // `_developers_entries_do_not_contain_a_form_feed_byte`,
+    // `_empty_credits_section_entries_do_not_contain_a_form_feed_byte`,
+    // `_release_notes_version_does_not_contain_a_form_feed_byte`,
+    // and `_release_notes_does_not_contain_a_form_feed_byte`
+    // siblings; together they extend the about-dialog byte-
+    // composition contract from the just-completed `{null /
+    // horizontal-tab / carriage-return / vertical-tab}`
+    // quadruple to the form-feed regression surface as well.
+    //
+    // Pinning the no-`\x0C` invariant directly here surfaces the
+    // regression with a message naming the offending byte at
+    // build time rather than as a downstream credits-page
+    // rendering bug, a stray `\x0C` byte in the .po round trip,
+    // or a screen-reader announcement break. Current helper
+    // returns the empty literal `""` (no `\x0C` byte), so this
+    // test passes today and serves as a forcing function so any
+    // future override of the helper — including the eventual
+    // landing of an actual translator-credits string — stays
+    // free of form-feed bytes even when embedded `\n` line
+    // breaks are intentionally present.
+    use paladin_gtk::app::model::format_app_about_dialog_translator_credits;
+
+    let translator_credits = format_app_about_dialog_translator_credits();
+    assert!(
+        !translator_credits.contains('\x0C'),
+        "AdwAboutDialog translator_credits must not contain the `\\x0C` form-feed byte (0x0C); the libadwaita translator-credits convention splits on `\\n` (LF) only and leaves embedded `\\x0C` bytes inside each parsed entry untouched, and `\\x0C` is technically whitespace under `char::is_whitespace()` but has no tab-stop semantics so Pango renders it as a literal control glyph; a stray `\\x0C` would render as a hollow box or tofu-like placeholder in the credits-page attribution column, would survive `xgettext` round trips as either silent dedupe to a single space or `\\x0C` preservation (with text-paginator pipelines treating it as a hard page break), and would break screen-reader announcements at every attribution-row column boundary; got {translator_credits:?}",
+    );
+}
