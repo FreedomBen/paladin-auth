@@ -10044,3 +10044,83 @@ fn format_app_about_dialog_program_name_does_not_end_with_a_period() {
         "AdwAboutDialog program_name must not end with a `.` byte (per the libadwaita convention for the `AdwAboutDialog` program-name slot — the bold dialog-header row renders the program name as a label, not a sentence, so terminal punctuation visually clashes with the adjacent no-trailing-dot version row pinned by `_version_does_not_end_with_a_dot`); got {program_name:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_debug_info_filename_does_not_contain_path_separators() {
+    // Defense-in-depth security sibling of
+    // `format_app_about_dialog_debug_info_filename_returns_paladin_debug_info_txt`
+    // (exact-value pin),
+    // `_is_non_empty_single_line_with_txt_extension`
+    // (single-line + extension pin), `_is_ascii_only`
+    // (byte-composition pin), `_extension_is_lowercase_txt`
+    // (extension-case pin), and `_has_no_embedded_whitespace`
+    // (no-whitespace pin). Those companions catch the wrong-
+    // value / multi-line / non-ASCII / wrong-extension-case /
+    // embedded-whitespace regressions but a regression that
+    // landed `"../etc/passwd.txt"` (path-traversal injection
+    // from an override that builds the filename by joining a
+    // user-supplied directory segment with the canonical
+    // suffix), `"subdir/paladin-debug-info.txt"` (relative-
+    // path segment from a sub-directory-form override), or
+    // `"~/Downloads/paladin-debug-info.txt"` (tilde-expansion
+    // from a home-relative-form override) would slip past
+    // every existing companion: each candidate is still a
+    // single line, still ASCII, still ends with `.txt`
+    // (lowercase), and contains no whitespace. The
+    // `_returns_paladin_debug_info_txt` exact-value pin would
+    // catch the regression only when no manual override is in
+    // place; a future refactor that intercepted the helper
+    // with a manual override built around a user-supplied
+    // path segment would slip past.
+    //
+    // This filename is the default name suggested by the
+    // `AdwAboutDialog::set_debug_info_filename` slot when the
+    // user clicks the "Save debug info" button in the about
+    // dialog's debug-info section — the GTK
+    // `gtk::FileChooserNative` save dialog populates its
+    // filename field with this string. If the string contains
+    // a `/` (POSIX path separator) or `\\` (Windows path
+    // separator, surfaced by some GTK backends on Linux
+    // through CIFS / Samba mounts), the file-chooser dialog
+    // would either resolve the path-separated form as a
+    // relative path (descending into a sub-directory of the
+    // user-selected directory) or as an absolute path (when
+    // the leading segment is `/`), exposing a path-traversal
+    // hazard. While the user must still confirm the save
+    // location through the file-chooser dialog (so this is
+    // not a direct sandbox-escape attack), pinning the
+    // bare-filename invariant here prevents the suggested
+    // filename from being used as a vehicle for path-
+    // traversal social engineering (a maintainer
+    // submitting a bug report that suggests overwriting a
+    // system file by accepting the proposed filename), and
+    // mirrors the safer-default contract Paladin already
+    // enforces for vault-file paths (where `0700` parent dir
+    // and `0600` file permissions, plus atomic
+    // `vault.bin.bak` rotation, are pinned per DESIGN.md §6).
+    //
+    // The current `format_app_about_dialog_debug_info_filename`
+    // returns the bare filename `"paladin-debug-info.txt"`
+    // which contains neither `/` nor `\\`, so this test
+    // passes today and serves as a forcing function so any
+    // future override of the debug-info-filename helper stays
+    // a bare filename rather than a path-segmented form. Sibling
+    // of the security-relevant `_is_ascii_only` /
+    // `_has_no_embedded_whitespace` / `_extension_is_lowercase_txt`
+    // companions on the bare-filename-shape side; together
+    // they pin the bare-ASCII-no-whitespace-no-path-separators
+    // contract across the `set_debug_info_filename`
+    // file-chooser default name against a single source of
+    // truth.
+    use paladin_gtk::app::model::format_app_about_dialog_debug_info_filename;
+
+    let filename = format_app_about_dialog_debug_info_filename();
+    assert!(
+        !filename.contains('/'),
+        "AdwAboutDialog debug_info_filename must not contain the `/` POSIX path separator (a path-separated suggested filename in the `AdwAboutDialog::set_debug_info_filename` slot would route through the `gtk::FileChooserNative` save-dialog filename-field as a relative or absolute path, exposing a path-traversal hazard when the user accepts the suggested filename); got {filename:?}",
+    );
+    assert!(
+        !filename.contains('\\'),
+        "AdwAboutDialog debug_info_filename must not contain the `\\` Windows path separator (some GTK backends on Linux surface `\\` through CIFS / Samba mounts as a path separator, so a `\\`-separated suggested filename would route through the file-chooser dialog as a path-separated form on those backends, exposing the same path-traversal hazard as the POSIX `/` case); got {filename:?}",
+    );
+}
