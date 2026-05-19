@@ -13028,3 +13028,94 @@ fn format_app_about_dialog_copyright_does_not_contain_a_carriage_return_byte() {
         "AdwAboutDialog copyright must not contain the `\\r` carriage-return byte (0x0D); the current `\\r`-cleanliness is only protected by the `_is_a_single_line_without_embedded_newlines` companion's coupled `\\n`/`\\r` check, so a future refactor that intentionally allowed embedded `\\n` line breaks in the copyright slot might reasonably drop the `\\r` check alongside the `\\n` check on the assumption that both line-ending bytes are now allowed (an assumption that is wrong: GNOME-stack strings use LF-only conventions throughout); a stray `\\r` would render as a control glyph in the dialog footer copyright row, erode the legal-attribution trusted-surface contract, and break screen-reader copyright-row announcements; got {copyright:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_program_name_does_not_contain_a_carriage_return_byte() {
+    // Defense-in-depth per-byte sibling extending the
+    // program-name byte coverage from the existing
+    // `_program_name_does_not_contain_a_null_byte` companion
+    // to the carriage-return byte. The existing
+    // `_program_name_has_no_embedded_whitespace` companion
+    // uses `char::is_whitespace()`, which returns true for
+    // `\r` — so the program-name helper's `\r`-cleanliness
+    // is currently protected *transitively* by that one
+    // specific companion's broad whitespace check.
+    //
+    // But that transitive protection is *bundled* with the
+    // no-whitespace invariant as a whole: a future refactor
+    // that intentionally allowed a single embedded space in
+    // the program-name slot (a localized program-name string
+    // like `"Paladin Auth"` or a workspace-vendoring split
+    // that lifted program-name out of the no-whitespace
+    // constraint) would naturally relax the
+    // `_has_no_embedded_whitespace` companion — and the
+    // human author of that refactor might reasonably
+    // restructure the check to only reject specific control
+    // bytes (newline, tab) without separately calling out
+    // `\r` on the assumption that "ASCII whitespace is now
+    // allowed". That assumption is wrong: `\r` is a control
+    // byte, not a layout-friendly whitespace character, and
+    // GNOME-stack strings use LF-only conventions
+    // throughout, so dropping the `\r` check alongside the
+    // space-relaxation would silently regress the no-`\r`
+    // invariant.
+    //
+    // The `_is_ascii_only` companion does not catch `\r`
+    // (since `\r` is ASCII, 0x0D), the
+    // `_is_non_empty_and_not_app_id` companion only checks
+    // non-empty + distinct-from-app-id, the
+    // `_matches_format_app_window_title` cross-helper
+    // companion only enforces equality with the window title
+    // (so any `\r`-bearing override would slip past as long
+    // as the window title helper had matching bytes), the
+    // `_is_segment_of_application_icon_name` cross-helper
+    // companion only checks segment containment, the
+    // `_does_not_end_with_a_period` companion only constrains
+    // the suffix, and the `_does_not_contain_a_null_byte`
+    // companion only names `\0` specifically. None of those
+    // names `\r` directly on this helper — only the
+    // `_has_no_embedded_whitespace` companion catches it
+    // transitively, and that coupling is fragile.
+    //
+    // A regression that landed `"Paladin\r"` (CRLF copy-
+    // paste from a Windows-edited Cargo.toml `name` field
+    // with the `\n` stripped during a manual line-ending
+    // fix-up, a `concat!(_, "\r", _)` form, or a hand-edited
+    // helper override that lifted the program name from a
+    // CR-only Mac Classic-style text file) would mis-render
+    // in three downstream surfaces: (1) the GLib-backed
+    // `AdwAboutDialog::set_application_name` setter routes
+    // the value into Pango for inline rendering as the bold
+    // program-name row at the dialog header — Pango's
+    // default rendering of a bare `\r` byte is
+    // implementation-defined and typically renders as a
+    // literal control glyph or an empty box, breaking the
+    // tidy bold-header layout; (2) the matching
+    // `gtk::Window::set_title` setter (the program name is
+    // mirrored to the window title per
+    // `_matches_format_app_window_title`) renders the `\r`
+    // in the window manager's taskbar / dock display label,
+    // surfacing the control byte to every shell that lists
+    // open windows; (3) the GTK accessibility tree's
+    // `accessible-name` property routes through the same
+    // Pango layer, breaking screen-reader announcements of
+    // the application name at the `\r` boundary.
+    //
+    // Pinning the no-`\r` invariant directly on this helper
+    // surfaces the regression with a message naming the
+    // offending byte at build time rather than via a future
+    // whitespace-relaxation refactor that silently dropped
+    // the `\r` guard. Current helper returns the literal
+    // `"Paladin"` (no `\r` byte), so this test passes today
+    // and serves as a forcing function so any future
+    // override of the helper — including the eventual
+    // landing of a localized multi-word program name —
+    // stays free of carriage returns.
+    use paladin_gtk::app::model::format_app_about_dialog_program_name;
+
+    let program_name = format_app_about_dialog_program_name();
+    assert!(
+        !program_name.contains('\r'),
+        "AdwAboutDialog program_name must not contain the `\\r` carriage-return byte (0x0D); the current `\\r`-cleanliness is only protected transitively by `_has_no_embedded_whitespace`'s broad `char::is_whitespace()` check, so a future refactor that relaxed the no-whitespace invariant to allow a localized multi-word program name might silently drop the `\\r` guard alongside the space relaxation; a stray `\\r` would render as a control glyph in the bold dialog-header program-name row, surface in the window manager's taskbar / dock display label, and break screen-reader application-name announcements; got {program_name:?}",
+    );
+}
