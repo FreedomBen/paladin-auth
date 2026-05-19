@@ -10597,3 +10597,66 @@ fn format_app_about_dialog_application_icon_name_does_not_contain_a_null_byte() 
         "AdwAboutDialog application_icon_name must not contain the `\\0` null byte (which would route through GLib's null-terminated `g_strdup` layer in `set_application_icon` / `RelmApp::new` and truncate the dialog-header glyph icon-theme lookup, the launcher / desktop-entry / AppStream `<id>` icon lookups, and the DBus single-instance bus-name registration at the first `\\0`); got {icon_name:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_developer_name_does_not_contain_a_null_byte() {
+    // Defense-in-depth mirror of the just-added
+    // `_program_name_does_not_contain_a_null_byte` /
+    // `_version_does_not_contain_a_null_byte` /
+    // `_application_icon_name_does_not_contain_a_null_byte` /
+    // `_debug_info_does_not_contain_a_null_byte` /
+    // `_debug_info_filename_does_not_contain_a_null_byte`
+    // companions on the developer-name side. The
+    // `_is_ascii_only` companion pins each byte as ASCII —
+    // the `\0` byte (0x00) is ASCII, so a regression that
+    // landed `"The Paladin\0 contributors"` (null-byte
+    // injection from a `CString::new` round-trip that didn't
+    // strip the trailing null, or a `concat!(_, "\0", _)`
+    // form) would slip past `_is_ascii_only`,
+    // `_has_no_surrounding_whitespace` (`\0` is not
+    // whitespace and is not at the start/end of the string),
+    // `_does_not_end_with_a_period`,
+    // `_starts_with_the_definite_article` (`"The "` prefix
+    // intact), `_ends_with_the_contributors_collective_noun`
+    // (`"contributors"` suffix intact), or
+    // `_returns_the_paladin_contributors` (only valid when no
+    // manual override is in place — a hand-edited helper that
+    // swapped the literal for a string with a null byte would
+    // defeat the matching test).
+    //
+    // Null bytes in the developer-name string would mis-
+    // render in multiple downstream surfaces: (1) the GLib-
+    // backed `AdwAboutDialog::set_developer_name` setter
+    // routes through `g_strdup` (null-terminated) and may
+    // truncate the dialog-header attribution row at the first
+    // `\0` byte (rendering `"The Paladin\0 contributors"` as
+    // `"The Paladin"`), confusingly suggesting Paladin is
+    // attributed to a single author rather than a collective;
+    // (2) the same developer-name string is reused by
+    // `_copyright_ends_with_developer_name` to construct the
+    // footer copyright row, so a null byte in the developer
+    // name would propagate into the copyright slot and
+    // similarly truncate the legal attribution line; (3) any
+    // future automation that scrapes the developer-name slot
+    // (e.g. credit aggregators, license-attribution tooling)
+    // would silently lose the trailing portion of the
+    // attribution.
+    //
+    // Pinning the no-null-byte invariant directly here
+    // surfaces the regression with a message naming the
+    // offending byte at build time rather than as a
+    // downstream truncation of the dialog-header attribution
+    // row, the footer copyright row, or downstream credit-
+    // aggregator output. Current helper returns the literal
+    // `"The Paladin contributors"` (no `\0` byte), so this
+    // test passes today and serves as a forcing function so
+    // any future override of the helper stays free of null
+    // bytes.
+    use paladin_gtk::app::model::format_app_about_dialog_developer_name;
+
+    let developer_name = format_app_about_dialog_developer_name();
+    assert!(
+        !developer_name.contains('\0'),
+        "AdwAboutDialog developer_name must not contain the `\\0` null byte (which would route through GLib's null-terminated `g_strdup` layer in `set_developer_name`, truncate the dialog-header attribution row, propagate into the footer copyright row that reuses this string, and silently lose trailing attribution in downstream scrapers); got {developer_name:?}",
+    );
+}
