@@ -20452,3 +20452,118 @@ fn format_app_about_dialog_release_notes_version_does_not_contain_a_bell_byte() 
         "AdwAboutDialog release_notes_version must not contain the `\\x07` bell byte (0x07); like BS, BEL is NOT matched by `char::is_whitespace()` (Unicode returns false for U+0007 BEL), so the `version` helper's transitive `_has_no_embedded_whitespace` guard does NOT catch `\\x07`; every byte of `\\x07`-cleanliness depends solely on the upstream `CARGO_PKG_VERSION` bytes — not screened by Cargo or by any CI gate; a stray `\\x07` would render as a literal control glyph in the dialog's \"What's New in v<release_notes_version>\" section header, ring the terminal bell when the version is dumped through a TTY (an audible-alert injection / covert side-channel primitive in shared CI environments), could prevent the What's New body from rendering on libadwaita versions that strip control bytes when computing the body-region lookup key, trigger AppStream `appstreamcli validate` rejection at packaging time (the strict SemVer grammar has no `\\x07` production), and break screen-reader section-header announcements at the byte boundary; got {release_notes_version:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_translator_credits_does_not_contain_a_bell_byte() {
+    // Defense-in-depth per-byte sibling extending the
+    // translator_credits byte-cleanliness contract past the just-
+    // completed `{null / horizontal-tab / carriage-return /
+    // vertical-tab / form-feed / backspace / line-feed}` septuple
+    // to the bell byte `\x07` (0x07), opening the next non-
+    // whitespace-classified C0 control-byte cycle for this
+    // helper. Like BS, BEL is NOT matched by
+    // `char::is_whitespace()` (Unicode treats BEL as a control
+    // byte, not whitespace), so any future surrounding-whitespace
+    // boundary guard on translator-credits entries would NOT
+    // reject a leading or trailing `\x07` — making bell strictly
+    // as dangerous as backspace here, because the form-feed
+    // sibling documented `\x0C` as "technically whitespace under
+    // `char::is_whitespace()` but has no tab-stop semantics",
+    // whereas `\x07` is not classified as whitespace at all.
+    //
+    // The libadwaita translator-credits convention permits
+    // embedded `\n` line breaks between translator entries (the
+    // `_is_single_line_when_non_empty` companion only asserts
+    // the empty-string case, so it does not gate embedded
+    // newlines once a translation lands), so the helper is one
+    // of only three about-dialog helpers (alongside
+    // `format_app_about_dialog_debug_info` and
+    // `format_app_about_dialog_release_notes`) where embedded
+    // line breaks are legitimately expected. That makes `\x07`
+    // (0x07 BEL) a distinct regression surface: it is NOT covered
+    // by `_has_no_surrounding_whitespace_when_non_empty` (`\x07`
+    // is not whitespace under `char::is_whitespace()`, so the
+    // boundary trim guard rejects neither leading nor trailing
+    // `\x07`), it is NOT covered by any per-entry single-line
+    // check (the helper itself is explicitly multi-line per
+    // libadwaita convention), it slips past
+    // `_does_not_contain_a_null_byte` (`\x07` is not `\0`), it
+    // slips past `_does_not_contain_a_horizontal_tab_byte`
+    // (`\x07` is not `\t`), it slips past
+    // `_does_not_contain_a_carriage_return_byte` (`\x07` is not
+    // `\r`), it slips past `_does_not_contain_a_vertical_tab_byte`
+    // (`\x07` is not `\x0B`), it slips past
+    // `_does_not_contain_a_form_feed_byte` (`\x07` is not
+    // `\x0C`), it slips past `_does_not_contain_a_backspace_byte`
+    // (`\x07` is not `\x08`), and it slips past
+    // `_does_not_contain_a_line_feed_byte` (`\x07` is not `\n`).
+    // None of the existing companions name the `\x07` byte
+    // directly on this helper.
+    //
+    // A regression that landed
+    // `"name1\x07<email1>\nname2\x07<email2>"` (bell-separated
+    // `<name>\x07<email>` rows lifted from a `script(1)`
+    // typescript capturing raw `\x07` audible-alert bytes from a
+    // CI build that triggered the terminal bell mid-attribution
+    // edit, an `xgettext` export that preserved BEL-bearing
+    // values, a `concat!(_, "\x07", _)` form mirroring an
+    // interactively-edited attribution block, or a hand-edited
+    // helper that pasted from a terminal session recording
+    // preserving audible-alert bytes) would mis-render in
+    // multiple downstream surfaces: (1) libadwaita's credits-page
+    // parser splits the translator-credits string on `\n` (LF)
+    // per the documented convention, leaving the embedded `\x07`
+    // bytes inside each parsed entry untouched; the GLib-backed
+    // Pango render path treats `\x07` as a literal control glyph
+    // (a hollow box or tofu-like placeholder) since `\x07` is not
+    // classified as whitespace under any permissive whitespace
+    // mode, breaking the tidy two-column `<name> <email>`
+    // attribution layout; (2) any localization tooling that
+    // round-trips the translator-credits string back through
+    // `xgettext` would propagate the stray `\x07` into every
+    // consumer of the .po / .mo file, and a TTY-streamed po-file
+    // dump (CI translator-credits validation piped to `less`, an
+    // `msgmerge` diagnostic rendered into a terminal logger)
+    // would ring the terminal bell on the user's session — an
+    // audible-alert injection / covert side-channel primitive
+    // where an attacker who controlled the upstream translation
+    // source could trigger CI-runner bell notifications
+    // repeatedly or weaponize the bell as a covert side-channel
+    // in a shared CI environment; (3) screen readers that
+    // announce the credits-page contents may emit an audible
+    // alert tone or render the byte as a literal control
+    // character announcement, breaking the accessibility-tree
+    // announcement at every attribution-row column boundary.
+    //
+    // Mirror of the just-added
+    // `_developer_name_does_not_contain_a_bell_byte`,
+    // `_copyright_does_not_contain_a_bell_byte`,
+    // `_comments_does_not_contain_a_bell_byte`,
+    // `_developers_entries_do_not_contain_a_bell_byte`,
+    // `_empty_credits_section_entries_do_not_contain_a_bell_byte`,
+    // and `_release_notes_version_does_not_contain_a_bell_byte`
+    // siblings; together they extend the about-dialog byte-
+    // composition contract from the just-completed `{null /
+    // horizontal-tab / carriage-return / vertical-tab / form-
+    // feed / backspace / line-feed}` septuple to the bell-byte
+    // regression surface as well.
+    //
+    // Pinning the no-`\x07` invariant directly here surfaces the
+    // regression with a message naming the offending byte at
+    // build time rather than as a downstream credits-page
+    // rendering bug, a stray `\x07` byte ringing the terminal
+    // bell through a .po round trip, or a screen-reader
+    // announcement break. Current helper returns the empty
+    // literal `""` (no `\x07` byte), so this test passes today
+    // and serves as a forcing function so any future override of
+    // the helper — including the eventual landing of an actual
+    // translator-credits string — stays free of bell bytes even
+    // when embedded `\n` line breaks are intentionally present.
+    use paladin_gtk::app::model::format_app_about_dialog_translator_credits;
+
+    let translator_credits = format_app_about_dialog_translator_credits();
+    assert!(
+        !translator_credits.contains('\x07'),
+        "AdwAboutDialog translator_credits must not contain the `\\x07` bell byte (0x07); the libadwaita translator-credits convention splits on `\\n` (LF) only and leaves embedded `\\x07` bytes inside each parsed entry untouched, `\\x07` is NOT classified as whitespace under any permissive whitespace mode (strictly as dangerous as backspace, neither caught by `char::is_whitespace()`) so Pango renders it as a literal control glyph; a stray `\\x07` would render as a hollow box or tofu-like placeholder in the credits-page attribution column, would survive `xgettext` round trips and propagate into every consumer of the .po / .mo file, would ring the terminal bell when the po-file is dumped through a TTY (an audible-alert injection / covert side-channel primitive in shared CI environments), and would break screen-reader announcements at every attribution-row column boundary; got {translator_credits:?}",
+    );
+}
