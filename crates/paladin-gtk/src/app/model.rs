@@ -2167,6 +2167,53 @@ pub fn build_app_primary_action_group(state: &AppState) -> gtk::gio::SimpleActio
     group
 }
 
+/// Apply the per-state sensitivities returned by
+/// [`format_app_primary_menu_action_sensitivities`] to an
+/// existing primary [`gtk::gio::SimpleActionGroup`].
+///
+/// Walks the six bare action names in the §"libadwaita usage"
+/// sequence (Import, Export, Passphrase, Preferences, About,
+/// Quit) and applies
+/// [`gtk::gio::SimpleAction::set_enabled`] to each matching
+/// action looked up against `group`. The widget binding calls
+/// this helper from [`AppMsg`] state-transition arms
+/// ([`AppState::Missing`] / [`AppState::Locked`] /
+/// [`AppState::Unlocked`] / [`AppState::UnlockedBusy`] /
+/// [`AppState::StartupError`]) so the mutating affordances
+/// (Import, Export, Passphrase, Preferences) toggle off
+/// whenever `AppModel` leaves [`AppState::Unlocked`] without
+/// re-creating the group. About and Quit stay enabled
+/// everywhere per §"libadwaita usage".
+///
+/// Mirrors [`build_app_primary_action_group`] on the runtime-
+/// update side; together they pin every primary-menu
+/// sensitivity transition against
+/// [`format_app_primary_menu_action_sensitivities`] so a future
+/// change to the mutating-menu rule reverberates through both
+/// the initial group construction and every subsequent state
+/// transition without per-call drift.
+///
+/// If an action is missing from `group` (e.g. the widget
+/// binding constructed the group via something other than
+/// [`build_app_primary_action_group`]) the corresponding
+/// sensitivity update is silently skipped — the assertion that
+/// the group has every action lives on
+/// [`build_app_primary_action_group`]'s test surface so this
+/// helper stays a no-op-on-missing-action runtime path that
+/// the smoke test can call without setup gymnastics. Pure side-
+/// effect helper (no return value).
+pub fn apply_app_primary_menu_sensitivities(group: &gtk::gio::SimpleActionGroup, state: &AppState) {
+    let names = format_app_primary_menu_action_names();
+    let enabled = format_app_primary_menu_action_sensitivities(state);
+    for (name, sensitive) in names.iter().zip(enabled.iter()) {
+        if let Some(action) = group.lookup_action(name) {
+            if let Ok(simple) = action.downcast::<gtk::gio::SimpleAction>() {
+                simple.set_enabled(*sensitive);
+            }
+        }
+    }
+}
+
 /// Sensitive (enabled) state for the header-bar `+` button bound
 /// via [`format_app_add_button_action`].
 ///
