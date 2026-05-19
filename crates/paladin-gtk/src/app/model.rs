@@ -2412,6 +2412,40 @@ pub fn format_app_about_dialog_artists() -> [&'static str; 0] {
     []
 }
 
+/// Ordered documenter-credit list the application menu's "About
+/// Paladin" entry's `AdwAboutDialog` hands to `set_documenters`
+/// for its credits-page "Documentation" section.
+///
+/// Returns the empty array for the v0.2 release. Paladin does
+/// not yet have a separately-credited documenter — the project
+/// `README.md`, `DESIGN.md`, and inline rustdoc are written by
+/// the founding contributor in
+/// [`format_app_about_dialog_developers`] — so the documenters
+/// slot stays empty until a credited documenter joins.
+/// `AdwAboutDialog` follows the libadwaita convention of
+/// suppressing the credits-page "Documentation" row when the
+/// slice is empty, which is the correct rendering for an app
+/// with no credited documenter.
+///
+/// Pinning the empty slice through a helper rather than passing
+/// `&[]` inline at the call site keeps the credits-page wiring
+/// uniform: every credits-page list is sourced from a
+/// `format_app_about_dialog_<role>` helper so a future
+/// contributor change updates one helper without touching the
+/// widget binding. Completes the credits-page contributor row
+/// surface alongside [`format_app_about_dialog_developers`],
+/// [`format_app_about_dialog_designers`],
+/// [`format_app_about_dialog_artists`], and
+/// [`format_app_about_dialog_translator_credits`]; together they
+/// pin every credits-page row against a single source of truth.
+///
+/// Pure — returns a fixed-size empty array of `'static` strings
+/// without allocating.
+#[must_use]
+pub fn format_app_about_dialog_documenters() -> [&'static str; 0] {
+    []
+}
+
 /// Translator-credits string the application menu's "About
 /// Paladin" entry's `AdwAboutDialog` hands to
 /// `set_translator_credits` for its credits-page "Translators"

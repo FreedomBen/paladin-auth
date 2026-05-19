@@ -2663,6 +2663,56 @@ fn format_app_about_dialog_developers_is_non_empty_array_of_non_empty_single_lin
 }
 
 #[test]
+fn format_app_about_dialog_documenters_is_empty_until_a_documenter_joins() {
+    // Per §"libadwaita usage" and §"About / help": the
+    // `AdwAboutDialog` documenters slot populates the dialog's
+    // credits-page "Documentation" section. Paladin does not
+    // yet have a separately-credited documenter — the project
+    // `README.md`, `DESIGN.md`, and inline rustdoc are written
+    // by the founding contributor in
+    // `format_app_about_dialog_developers` — so the documenters
+    // slot stays empty until a credited documenter joins. The
+    // empty array makes `AdwAboutDialog` skip the credits-page
+    // "Documentation" row entirely (per the libadwaita
+    // convention), which is the correct rendering for an app
+    // with no credited documenter.
+    use paladin_gtk::app::model::format_app_about_dialog_documenters;
+
+    let documenters: [&str; 0] = format_app_about_dialog_documenters();
+    assert!(
+        documenters.is_empty(),
+        "AdwAboutDialog documenters must be empty until a separately-credited documenter joins so the credits-page Documentation row is suppressed",
+    );
+}
+
+#[test]
+fn format_app_about_dialog_documenters_is_distinct_type_from_developers() {
+    // Defense-in-depth: even though both helpers populate
+    // credits-page sections, the developers list returns a
+    // non-empty `[&'static str; 1]` while the documenters list
+    // returns the empty `[&'static str; 0]` — so the dialog
+    // renders the "Developers" section but skips the
+    // "Documentation" section. A drift that copy-pasted the
+    // developers literal into the documenters helper would
+    // surface as a duplicate contributor credit on the credits
+    // page.
+    use paladin_gtk::app::model::{
+        format_app_about_dialog_developers, format_app_about_dialog_documenters,
+    };
+
+    let documenters = format_app_about_dialog_documenters();
+    let developers = format_app_about_dialog_developers();
+    assert!(
+        documenters.is_empty(),
+        "AdwAboutDialog documenters must be empty so the credits-page Documentation row is suppressed",
+    );
+    assert!(
+        !developers.is_empty(),
+        "AdwAboutDialog developers must be non-empty so the credits-page Developers row renders the founding contributor",
+    );
+}
+
+#[test]
 fn format_app_about_dialog_artists_is_empty_until_an_artist_joins() {
     // Per §"libadwaita usage" and §"About / help": the
     // `AdwAboutDialog` artists slot populates the dialog's
