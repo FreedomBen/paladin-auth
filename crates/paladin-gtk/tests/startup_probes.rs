@@ -20209,3 +20209,127 @@ fn format_app_about_dialog_developers_entries_do_not_contain_a_bell_byte() {
         );
     }
 }
+
+#[test]
+fn format_app_about_dialog_empty_credits_section_entries_do_not_contain_a_bell_byte() {
+    // Cross-helper defense-in-depth sibling looping over the
+    // three currently-empty `AdwAboutDialog` credits-section
+    // array helpers
+    // (`format_app_about_dialog_designers`,
+    // `format_app_about_dialog_artists`,
+    // `format_app_about_dialog_documenters`) and pinning each
+    // entry as free of the bell byte `\x07` (0x07). Mirror of
+    // the just-added
+    // `_developers_entries_do_not_contain_a_bell_byte` sibling
+    // on the populated-developers side, and of the
+    // `_empty_credits_section_entries_do_not_contain_a_null_byte`
+    // / `_empty_credits_section_entries_do_not_contain_a_carriage_return_byte`
+    // / `_empty_credits_section_entries_do_not_contain_a_horizontal_tab_byte`
+    // / `_empty_credits_section_entries_do_not_contain_a_vertical_tab_byte`
+    // / `_empty_credits_section_entries_do_not_contain_a_form_feed_byte`
+    // / `_empty_credits_section_entries_do_not_contain_a_backspace_byte`
+    // / `_empty_credits_section_entries_do_not_contain_a_line_feed_byte`
+    // siblings on the prior C0 control-byte cycle, structured as
+    // a single cross-helper loop matching those existing
+    // companions and opening the next non-whitespace-classified
+    // C0 control-byte cycle past the just-completed
+    // `{null / horizontal-tab / carriage-return / vertical-tab /
+    // form-feed / backspace / line-feed}` septuple for each entry
+    // across every empty credits section.
+    //
+    // Like BS, BEL is NOT matched by `char::is_whitespace()`
+    // (Unicode treats BEL as a control byte, not whitespace), so
+    // any future surrounding-whitespace boundary guards on the
+    // empty credits-section helpers would NOT reject a leading
+    // or trailing `\x07` per entry — making the bell byte
+    // strictly as dangerous as backspace for each entry, and
+    // necessitating an independent per-byte pin that names
+    // `\x07` directly.
+    //
+    // The three helpers currently return the empty array `[]`
+    // because Paladin does not yet have a separately-credited
+    // designer / artist / documenter for the v0.2 release. The
+    // empty-array return trivially contains no entries (let
+    // alone `\x07`-bearing entries), so this test passes today as
+    // the loop body is never entered. However, once any of the
+    // three credits sections gains a contributor, the helper
+    // return type will switch from `[&'static str; 0]` to
+    // `[&'static str; N]` with non-empty entries — at that point
+    // a `\x07` injection from a `script(1)` typescript capturing
+    // raw `\x07` audible-alert bytes from a CI build that
+    // triggered the terminal bell mid-contributor-name edit, a
+    // `concat!(_, "\x07", _)` form, or a hand-edited helper that
+    // pasted from a terminal session recording preserving
+    // audible-alert bytes would slip past any byte-cleanliness
+    // companion the way the
+    // `_developers_entries_do_not_contain_a_bell_byte` sibling
+    // already documents for the developers helper.
+    //
+    // Bell bytes in the credits-section entries would mis-render
+    // in multiple downstream surfaces, identically to the
+    // `set_developers` analysis in the
+    // `_developers_entries_do_not_contain_a_bell_byte`
+    // companion: (1) the GLib-backed `set_designers` /
+    // `set_artists` / `set_documenters` setters route through
+    // GTK and Pango renders each entry as a credits-page row —
+    // a stray `\x07` byte in the middle of a contributor name
+    // would render as a literal control glyph (a hollow box or
+    // tofu-like placeholder), breaking the credits-page
+    // contributor-name layout for the affected section; (2) when
+    // the credits-page is dumped through a TTY (CI logs,
+    // `paladin-gtk --about` debug output piped to `less` or
+    // `cat`, an `xdotool` clipboard-grab of the credits page
+    // rendered into a terminal logger), the `\x07` byte rings
+    // the terminal bell on the user's session — an audible-
+    // alert injection / covert side-channel primitive where an
+    // attacker who controlled the upstream contributor source
+    // could trigger CI-runner bell notifications repeatedly or
+    // weaponize the bell as a covert side-channel in a shared CI
+    // environment; (3) any tooling that scrapes the credits-page
+    // contributor list (GNOME `gnome-software` credit
+    // aggregators, release-note generators) would propagate the
+    // stray `\x07` byte into the consumer's stream and trigger
+    // the same bell-ring / control-glyph rendering bug across
+    // every downstream surface; (4) screen readers that announce
+    // the credits-page contributor names may emit an audible
+    // alert tone or render the byte as a literal control
+    // character announcement, breaking the contributor-name
+    // accessibility-tree announcement at the byte boundary.
+    //
+    // Pinning the no-`\x07` invariant across all three currently-
+    // empty credits-section helpers in a single cross-helper
+    // loop surfaces the regression with a message naming the
+    // affected helper, the offending byte, and the entry index
+    // at build time rather than as a downstream rendering
+    // artifact of the credits-page sections, an audible-alert
+    // injection through TTY dumps, or a screen-reader
+    // announcement break. Current helpers return the empty array
+    // `[]` (zero entries, no `\x07` byte to find), so this test
+    // passes today and serves as a forcing function so any
+    // future override of the helpers — including the eventual
+    // landing of separately-credited designer / artist /
+    // documenter strings — stays free of bell bytes.
+    use paladin_gtk::app::model::{
+        format_app_about_dialog_artists, format_app_about_dialog_designers,
+        format_app_about_dialog_documenters,
+    };
+
+    let designers = format_app_about_dialog_designers();
+    let artists = format_app_about_dialog_artists();
+    let documenters = format_app_about_dialog_documenters();
+
+    let sections: [(&str, &[&str]); 3] = [
+        ("designers", &designers),
+        ("artists", &artists),
+        ("documenters", &documenters),
+    ];
+
+    for (label, entries) in sections {
+        for (idx, entry) in entries.iter().enumerate() {
+            assert!(
+                !entry.contains('\x07'),
+                "AdwAboutDialog {label} entry at index {idx} must not contain the `\\x07` bell byte (0x07); like BS, BEL is NOT matched by `char::is_whitespace()` (Unicode returns false for U+0007 BEL), so a mid-string `\\x07` slips past any future surrounding-whitespace boundary guards on the {label} helper and past the prior `_empty_credits_section_entries_do_not_contain_a_null_byte` / `_empty_credits_section_entries_do_not_contain_a_horizontal_tab_byte` / `_empty_credits_section_entries_do_not_contain_a_carriage_return_byte` / `_empty_credits_section_entries_do_not_contain_a_vertical_tab_byte` / `_empty_credits_section_entries_do_not_contain_a_form_feed_byte` / `_empty_credits_section_entries_do_not_contain_a_backspace_byte` / `_empty_credits_section_entries_do_not_contain_a_line_feed_byte` siblings (which each name a different byte specifically); it would render as a literal control glyph in the credits-page \"{label}\" row via `set_{label}`, ring the terminal bell when the credits are dumped through a TTY (an audible-alert injection / covert side-channel primitive in shared CI environments), propagate into downstream attribution scrapers and `gnome-software` credit aggregators, and break screen-reader contributor-name announcements at the byte boundary; got {entry:?}",
+            );
+        }
+    }
+}
