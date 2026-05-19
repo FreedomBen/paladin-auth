@@ -15455,3 +15455,106 @@ fn format_app_about_dialog_url_helpers_do_not_contain_a_vertical_tab_byte() {
         );
     }
 }
+
+#[test]
+fn format_app_about_dialog_developer_name_does_not_contain_a_form_feed_byte() {
+    // Defense-in-depth per-byte sibling beginning the next C0
+    // control-byte cycle for the developer-name helper after
+    // the just-completed `{null / horizontal-tab / carriage-
+    // return / vertical-tab}` quadruple. The form-feed byte
+    // `\x0C` (0x0C) sits one step above VT (0x0B) and one step
+    // below CR (0x0D) in the ASCII C0 block; like its siblings
+    // it is a non-printable control byte that has no
+    // legitimate use inside a human-readable GNOME dialog
+    // attribution string.
+    //
+    // None of the existing developer-name companions name the
+    // `\x0C` byte directly:
+    //   - `_developer_name_is_a_single_line_without_embedded_newlines`
+    //     only checks `\n` and `\r` — `\x0C` is neither;
+    //   - `_developer_name_is_ascii_only` pins each byte as
+    //     ASCII — `\x0C` is ASCII so it slips past;
+    //   - `_developer_name_has_no_surrounding_whitespace`
+    //     uses `char::is_whitespace()`, which under Rust's
+    //     Unicode definition returns true for U+000C FF, so
+    //     this companion *does* reject a leading or trailing
+    //     `\x0C` — but a mid-string `\x0C` (`"The Pa\x0Cladin
+    //     contributors"`) sits between the boundaries and
+    //     slips past;
+    //   - `_developer_name_starts_with_the_definite_article`
+    //     and `_ends_with_the_contributors_collective_noun`
+    //     only constrain the literal prefix `"The "` and
+    //     suffix `"contributors"`, so a mid-string `\x0C`
+    //     between them satisfies both;
+    //   - `_does_not_contain_a_null_byte` /
+    //     `_does_not_contain_a_horizontal_tab_byte` /
+    //     `_does_not_contain_a_carriage_return_byte` /
+    //     `_does_not_contain_a_vertical_tab_byte`
+    //     each name a different byte specifically.
+    //
+    // The current `_returns_the_paladin_contributors` exact-
+    // value pin catches every byte today, but its protection
+    // collapses the moment a contributor-list addition or a
+    // workspace-vendoring split decouples the helper from the
+    // pinned literal — at that point a `\x0C`-bearing override
+    // would slip past every byte-level companion above (since
+    // `char::is_whitespace` only catches the boundary `\x0C`,
+    // not a mid-string one).
+    //
+    // A regression that landed `"The Paladin\x0Ccontributors"`
+    // (form-feed byte lifted from a legacy plain-text
+    // CONTRIBUTORS file authored on a line-printer terminal
+    // that used `\x0C` to advance to the next page between
+    // sections of a printed contributors list, a
+    // `concat!(_, "\x0C", _)` form, a `pandoc`-generated text
+    // dump that preserved `\x0C` page-break markers, or a
+    // hand-edited helper that pasted from a page-broken text
+    // file) would mis-render in multiple downstream surfaces:
+    // (1) the GLib-backed `AdwAboutDialog::set_developer_name`
+    // setter hands the string to Pango for inline rendering
+    // beneath the program name in the dialog header — Pango's
+    // default rendering of a bare `\x0C` byte is implementation-
+    // defined and typically renders as a literal control glyph
+    // (a hollow box, a tofu-like placeholder, or an invisible
+    // page-advance), breaking the tidy single-line attribution
+    // layout; (2) the same developer-name string is reused by
+    // `_copyright_ends_with_developer_name` to construct the
+    // footer copyright row, so a `\x0C` byte in the developer
+    // name would propagate into the copyright slot and mis-
+    // render there too; (3) screen readers that announce the
+    // dialog attribution read the `\x0C` as a literal control
+    // character or — on some implementations — as a section-
+    // break announcement, breaking the attribution
+    // accessibility-tree announcement at the byte boundary;
+    // (4) downstream tooling that scrapes the developer-name
+    // attribution (release-note generators, contributor-
+    // attribution crawlers) would propagate the stray `\x0C`
+    // byte into the consumer's stream and trigger the same
+    // rendering bug across every downstream surface, with the
+    // additional risk that text-paginator pipelines treat the
+    // `\x0C` as a hard page break and split the attribution
+    // mid-string in printed reports.
+    //
+    // Pinning the no-`\x0C` invariant directly here surfaces
+    // the regression with a message naming the offending byte
+    // at build time rather than as a downstream dialog-header
+    // rendering bug or a screen-reader announcement break.
+    // Current helper returns the literal `"The Paladin
+    // contributors"` (no `\x0C` byte), so this test passes
+    // today and serves as a forcing function so any future
+    // override of the helper — including the eventual landing
+    // of a multi-contributor attribution string — stays free
+    // of form-feed bytes. Begins the developer-name C0
+    // control-byte cycle past the just-completed `{null /
+    // horizontal-tab / carriage-return / vertical-tab}`
+    // quadruple so the helper's byte-composition contract
+    // pins each forbidden control byte against a single
+    // source of truth.
+    use paladin_gtk::app::model::format_app_about_dialog_developer_name;
+
+    let developer = format_app_about_dialog_developer_name();
+    assert!(
+        !developer.contains('\x0C'),
+        "AdwAboutDialog developer-name must not contain the `\\x0C` form-feed byte (0x0C); a mid-string `\\x0C` slips past `_is_a_single_line_without_embedded_newlines` (which only checks `\\n` and `\\r`), past `_is_ascii_only` (because `\\x0C` is ASCII), past `_has_no_surrounding_whitespace` (which only rejects `\\x0C` at the boundaries via `char::is_whitespace()`), past `_starts_with_the_definite_article` / `_ends_with_the_contributors_collective_noun` (which only constrain the literal prefix and suffix), and past `_does_not_contain_a_null_byte` / `_does_not_contain_a_horizontal_tab_byte` / `_does_not_contain_a_carriage_return_byte` / `_does_not_contain_a_vertical_tab_byte` (which each name a different byte specifically); it would render as a literal control glyph in the dialog-header attribution row, propagate into the footer copyright row that reuses this string, break screen-reader attribution announcements at the byte boundary, and propagate into downstream contributor-attribution scrapers — text-paginator pipelines would additionally treat the `\\x0C` as a hard page break and split the attribution mid-string in printed reports; got {developer:?}",
+    );
+}
