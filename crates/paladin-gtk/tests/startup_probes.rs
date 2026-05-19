@@ -9185,3 +9185,75 @@ fn format_app_about_dialog_copyright_ends_with_developer_name() {
         "AdwAboutDialog copyright {copyright:?} must end with the developer-name byte sequence {developer_name:?} so the footer-copyright row and the dialog-header attribution row carry the same trailing byte sequence (a regression that appended a tail like `\" (all rights reserved)\"` would diverge the two rows and would also be a false license claim against the AGPL-3.0-or-later share-alike grant)",
     );
 }
+
+#[test]
+fn format_app_about_dialog_version_starts_with_a_digit() {
+    // Defense-in-depth sibling of
+    // `format_app_about_dialog_version_matches_cargo_pkg_version`
+    // (exact-value pin against `env!("CARGO_PKG_VERSION")`),
+    // `_is_non_empty_and_looks_like_semver` (non-empty +
+    // contains-a-`.` shape pin + no-space byte pin), `_is_ascii_only`
+    // (byte-composition pin), and `_has_no_embedded_whitespace`
+    // (no-whitespace pin). Those companions catch the wrong-value
+    // / wrong-shape / non-ASCII / embedded-whitespace regressions
+    // but leave the *leading-character is-digit* convention
+    // ungated.
+    //
+    // The Semantic Versioning 2.0 specification (semver.org)
+    // pins the leading character of a valid version string as
+    // an ASCII digit (the major-version number): `MAJOR.MINOR.PATCH`
+    // where `MAJOR` is `0` or a non-negative integer with no
+    // leading zeroes. The cargo `CARGO_PKG_VERSION` env var
+    // resolves to the workspace Cargo.toml `version` field (a
+    // semver-validated value), so the version helper is always
+    // a valid semver — but a future refactor that intercepted
+    // the helper with a manual override and prefixed the
+    // version with `"v"` (a common convention in git-tag /
+    // npm-version contexts: `"v0.0.1"` instead of `"0.0.1"`) or
+    // with a build-metadata string (`"build-0.0.1"`) would
+    // slip past the `_contains_dot` companion (the `.` separator
+    // is still present), the `_matches_cargo_pkg_version` pin
+    // (only valid when no manual override is in place), and
+    // the `_is_ascii_only` / `_has_no_embedded_whitespace`
+    // companions (the prefix is still ASCII and whitespace-free).
+    // The libadwaita `AdwAboutDialog::version` slot consumes
+    // the string verbatim and renders it next to the program
+    // name in the bold header row; a `v`-prefixed version
+    // would render as `"Paladin v0.0.1"` instead of the
+    // canonical `"Paladin 0.0.1"`, diverging from the GNOME
+    // convention for the about-dialog version row (which
+    // renders the bare semver) and breaking any AppStream /
+    // Flatpak release-notes tooling that match-keys off the
+    // bare semver (`<release version="0.0.1">` in the
+    // AppStream XML schema, not `<release version="v0.0.1">`).
+    //
+    // Pinning the leading-digit invariant directly here
+    // surfaces the regression with a message naming the
+    // offending leading character at build time rather than
+    // as a downstream AppStream / Flatpak release-notes
+    // schema mismatch at packaging time or as a quiet
+    // version-row UX regression at dialog render time.
+    // Mirror of the `_looks_like_semver` companion on the
+    // `.`-separator side and the `_starts_with_the_definite_article`
+    // / `_ends_with_the_contributors_collective_noun` siblings
+    // on the developer-name leading- / trailing-character
+    // side; together they pin the leading-character contract
+    // across the dialog-header version row, the dialog-header
+    // attribution row, and the footer-copyright row against a
+    // single source of truth on the SemVer / GNOME /
+    // AppStream / AGPL-3.0-or-later attribution-style
+    // convention.
+    use paladin_gtk::app::model::format_app_about_dialog_version;
+
+    let version = format_app_about_dialog_version();
+    let first = version.chars().next().unwrap_or_else(|| {
+        panic!(
+            "AdwAboutDialog version must be non-empty (the `_is_non_empty_and_looks_like_semver` companion already pins this; restated here so the leading-digit assertion has a non-empty char to inspect); got {version:?}"
+        )
+    });
+    assert!(
+        first.is_ascii_digit(),
+        "AdwAboutDialog version must start with an ASCII digit so the leading character matches the Semantic Versioning 2.0 `MAJOR.MINOR.PATCH` convention (a regression that prefixed the version with `\"v\"` like `\"v0.0.1\"` from a git-tag / npm-version convention shadow refactor would render as `\"Paladin v0.0.1\"` next to the program name in the bold AdwAboutDialog header row rather than as the canonical `\"Paladin 0.0.1\"`, diverging from the GNOME convention for the about-dialog version row and breaking AppStream / Flatpak release-notes tooling that match-keys off the bare semver in the `<release version=\"...\">` XML schema); got first character {first:?} (U+{:04X}) in version {version:?}",
+        first as u32,
+    );
+}
