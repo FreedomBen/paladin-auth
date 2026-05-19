@@ -7152,3 +7152,59 @@ fn format_app_about_dialog_application_icon_name_is_ascii_only() {
         );
     }
 }
+
+#[test]
+fn format_app_about_dialog_version_is_ascii_only() {
+    // Defense-in-depth sibling of
+    // `format_app_about_dialog_version_matches_cargo_pkg_version`
+    // (exact-value pin sourcing from `env!("CARGO_PKG_VERSION")`)
+    // and
+    // `format_app_about_dialog_version_is_non_empty_and_looks_like_semver`
+    // (positive shape pin on non-empty + contains `.` + no
+    // ASCII-space). Those companions catch the wrong-source,
+    // empty, missing-`.`, and embedded-space regressions but
+    // leave the non-ASCII-byte edge case ungated.
+    //
+    // The `[workspace.package].version` value in `Cargo.toml`
+    // is enforced by Cargo to follow the semver shape, which is
+    // pure ASCII (digits, `.`, optional pre-release / build
+    // metadata with hyphens, plus signs, and `.`). A hand-edit
+    // that swapped an ASCII digit for a visually-similar Unicode
+    // digit — e.g. `"0.0.1"` → `"0.0.١"` where the trailing
+    // character is U+0661 ARABIC-INDIC DIGIT ONE — would
+    // technically still parse as a string but fail any
+    // byte-equality comparison against the canonical semver and
+    // break Cargo's own version-comparison machinery on the
+    // workspace side. The dialog version label would render
+    // with the lookalike digit, which is a quiet UX regression
+    // since the user has no easy way to spot the visual swap.
+    //
+    // Pinning the ASCII-only invariant here is a forcing
+    // function so the Cargo-enforced semver shape stays visible
+    // at the GTK dialog layer rather than as a confusing
+    // version-comparison miss elsewhere. The current
+    // `env!("CARGO_PKG_VERSION")` value is ASCII (Cargo
+    // enforces it upstream), so this test trivially passes
+    // today and serves as a canary on any hand-edited override
+    // of the version helper.
+    //
+    // Mirror of the
+    // `_program_name_is_ascii_only` and
+    // `_application_icon_name_is_ascii_only` companions on the
+    // dialog program-name and application-icon-name sides;
+    // together they pin the ASCII-shape contract across the
+    // three dialog header slots (program-name, version,
+    // application-icon-name) against a single source of truth,
+    // closing the Unicode-lookalike regression surface for the
+    // visible dialog header cluster.
+    use paladin_gtk::app::model::format_app_about_dialog_version;
+
+    let version = format_app_about_dialog_version();
+    for (idx, ch) in version.char_indices() {
+        assert!(
+            ch.is_ascii(),
+            "AdwAboutDialog version must use ASCII characters only so the dialog version label stays byte-identical to the Cargo-enforced semver shape from `env!(\"CARGO_PKG_VERSION\")` (a Unicode digit lookalike like `1` -> `١` U+0661 would parse as text but fail byte-equality against the canonical semver); got non-ASCII char {ch:?} (U+{:04X}) at byte offset {idx} in {version:?}",
+            ch as u32,
+        );
+    }
+}
