@@ -19028,3 +19028,108 @@ fn format_app_about_dialog_empty_credits_section_entries_do_not_contain_a_line_f
         }
     }
 }
+
+#[test]
+fn format_app_about_dialog_release_notes_version_does_not_contain_a_line_feed_byte() {
+    // Defense-in-depth per-byte sibling extending the
+    // release_notes_version byte-cleanliness contract past the
+    // just-completed `{null / horizontal-tab / carriage-return /
+    // vertical-tab / form-feed / backspace}` sextuple to the
+    // line-feed byte `\n` (0x0A), completing the inner C0
+    // control-byte cycle from BS (0x08) through CR (0x0D) for
+    // this helper. The `release_notes_version` helper sources
+    // from `env!("CARGO_PKG_VERSION")` and is constrained
+    // transitively through `_matches_about_dialog_version` to
+    // equal the value returned by `format_app_about_dialog_version`,
+    // which has its own no-embedded-whitespace companion
+    // (`_version_has_no_embedded_whitespace`) that uses
+    // `char::is_whitespace()` — and `char::is_whitespace()`
+    // returns *true* for U+000A LF, so the transitive guard DOES
+    // catch a stray `\n` byte in the version string.
+    //
+    // But that protection is *coupled* through two layers: (1)
+    // the `_matches_about_dialog_version` companion's equality
+    // pin against the version helper, and (2) the version
+    // helper's own `_has_no_embedded_whitespace` companion. A
+    // future refactor that intentionally allowed line breaks in
+    // either the version string (a multi-line SemVer build-meta
+    // suffix, a `concat!` injection that introduced a hard line
+    // break) or that decoupled `release_notes_version` from
+    // `version` (a multi-release release-notes header that
+    // landed `format_app_about_dialog_release_notes_version`
+    // distinct from the about-dialog version) would naturally
+    // relax either coupled guard — at which point the no-`\n`
+    // invariant would silently regress to "allowed" without any
+    // independent byte-cleanliness pin keeping the byte
+    // forbidden for this helper. Mirror of the
+    // `_release_notes_version_does_not_contain_a_carriage_return_byte`
+    // sibling's same decoupling rationale on the CR side, which
+    // pins `\r` independently of the transitive version-guard
+    // chain.
+    //
+    // None of the existing release_notes_version companions name
+    // the `\n` byte directly:
+    //   - `_matches_about_dialog_version` is an equality pin
+    //     against the version helper — a future refactor that
+    //     introduced `\n` into the version string would
+    //     propagate `\n` into the release_notes_version helper
+    //     via that equality, and this companion would still
+    //     pass (both helpers equal each other);
+    //   - `_matches_cargo_pkg_version` is an exact-value pin
+    //     against `env!("CARGO_PKG_VERSION")` — a future
+    //     workspace refactor that introduced `\n` into the
+    //     package version string would propagate `\n` into the
+    //     helper, and this companion would still pass (the
+    //     helper still equals the cargo version);
+    //   - `_does_not_contain_a_null_byte` /
+    //     `_does_not_contain_a_horizontal_tab_byte` /
+    //     `_does_not_contain_a_carriage_return_byte` /
+    //     `_does_not_contain_a_vertical_tab_byte` /
+    //     `_does_not_contain_a_form_feed_byte` /
+    //     `_does_not_contain_a_backspace_byte`
+    //     each name a different byte specifically.
+    //
+    // A regression that landed `"0.0.1\n"` (LF byte from a
+    // multi-line workspace `version` TOML literal, a `concat!`
+    // injection, or a hand-edited helper override that pasted
+    // from a text dump preserving trailing line breaks) would
+    // mis-render in multiple downstream surfaces: (1) the GLib-
+    // backed `AdwAboutDialog::add_release_notes_for_version` /
+    // `add_release_notes` setter consumes the version string as
+    // the "What's New" section header — Pango would interpret a
+    // stray `\n` as a hard line break in the section header and
+    // break the tidy single-line "What's New in 0.0.1" caption
+    // layout; (2) AppStream release-notes validation
+    // (`appstreamcli validate`) parses the version against the
+    // strict SemVer grammar which has no `\n` in any of its
+    // production rules, so a `\n`-bearing version would be
+    // rejected at packaging time as a malformed schema entry;
+    // (3) Flatpak `appstream-builder` would similarly reject the
+    // `\n`-bearing version when generating the release-notes
+    // index for the published package; (4) screen readers that
+    // announce the "What's New" section header read the `\n` as
+    // a paragraph break and pause mid-header, breaking the
+    // section-header accessibility-tree announcement at the byte
+    // boundary; (5) downstream tooling that scrapes the version
+    // (changelog aggregators, package-listing generators) would
+    // propagate the stray `\n` byte into the consumer's stream
+    // and trigger the same rendering bug across every downstream
+    // surface.
+    //
+    // Pinning the no-`\n` invariant directly here surfaces the
+    // regression with a message naming the offending byte at
+    // build time rather than via a future coupling decoupling
+    // that silently dropped the transitive `\n` guard. Current
+    // helper returns the literal `env!("CARGO_PKG_VERSION")`
+    // which resolves to `"0.0.1"` (no `\n` byte), so this test
+    // passes today and serves as a forcing function so any
+    // future workspace-version refactor stays free of line-feed
+    // bytes.
+    use paladin_gtk::app::model::format_app_about_dialog_release_notes_version;
+
+    let release_notes_version = format_app_about_dialog_release_notes_version();
+    assert!(
+        !release_notes_version.contains('\n'),
+        "AdwAboutDialog release_notes_version must not contain the `\\n` line-feed byte (0x0A); the current `\\n`-cleanliness is only protected transitively via the `_matches_about_dialog_version` equality pin against the version helper's `_has_no_embedded_whitespace` companion (which uses `char::is_whitespace()` and returns true for U+000A LF), so a future refactor that decoupled `release_notes_version` from `version` (a multi-release release-notes header that landed a distinct release-notes version) or that relaxed the version helper's no-embedded-whitespace guard (a multi-line SemVer build-meta suffix) would naturally drop the transitive `\\n` guard; a stray `\\n` would cause Pango to interpret the byte as a hard line break in the \"What's New\" section header, break the tidy single-line caption layout, trigger AppStream `appstreamcli validate` rejection at packaging time (the strict SemVer grammar has no `\\n` production), trigger Flatpak `appstream-builder` rejection when generating the release-notes index, break screen-reader section-header announcements at the byte boundary, and propagate into downstream changelog aggregators; got {release_notes_version:?}",
+    );
+}
