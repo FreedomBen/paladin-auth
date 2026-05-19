@@ -322,4 +322,52 @@ mod tests {
         assert!(got.bytes().all(|b| !b.is_ascii_uppercase()));
         assert!(got.len() >= HEX_MIN && got.len() <= HEX_MAX);
     }
+
+    /// Forced-collision iteration past 8 chars. Pins that the
+    /// disambiguator extends one hex char beyond the deepest
+    /// common prefix even when that takes the length far beyond
+    /// the 8-char floor, and that the returned slice is a prefix
+    /// of the target id but not of the colliding sibling.
+    #[test]
+    fn shortest_unique_id_prefix_extends_past_eight_chars_on_id_collision() {
+        // Sub-case 1: bytes share their first 4 bytes (8 hex
+        // chars), the 5th byte's high nibble differs → exactly 9.
+        {
+            let id_a = id_from_hex("aaaaaaaa1bcdef0123456789abcdef01");
+            let id_b = id_from_hex("aaaaaaaa2bcdef0123456789abcdef02");
+            let accounts = vec![
+                make_account_with_id("a", id_a),
+                make_account_with_id("b", id_b),
+            ];
+            let got_a = shortest_unique_id_prefix(&accounts, id_a).expect("id present");
+            let target_hex = id_a.hex_prefix(HEX_MAX);
+            let sibling_hex = id_b.hex_prefix(HEX_MAX);
+            assert_eq!(got_a.len(), 9);
+            assert_eq!(got_a, target_hex[..9]);
+            assert!(
+                !sibling_hex.starts_with(&got_a),
+                "{got_a} must not be a prefix of {sibling_hex}",
+            );
+        }
+
+        // Sub-case 2: bytes share their first 6 bytes (12 hex
+        // chars), the 7th byte's high nibble differs → exactly 13.
+        {
+            let id_a = id_from_hex("aaaaaaaaaaaa1ef0123456789abcdef0");
+            let id_b = id_from_hex("aaaaaaaaaaaa2ef0123456789abcdef0");
+            let accounts = vec![
+                make_account_with_id("a", id_a),
+                make_account_with_id("b", id_b),
+            ];
+            let got_a = shortest_unique_id_prefix(&accounts, id_a).expect("id present");
+            let target_hex = id_a.hex_prefix(HEX_MAX);
+            let sibling_hex = id_b.hex_prefix(HEX_MAX);
+            assert_eq!(got_a.len(), 13);
+            assert_eq!(got_a, target_hex[..13]);
+            assert!(
+                !sibling_hex.starts_with(&got_a),
+                "{got_a} must not be a prefix of {sibling_hex}",
+            );
+        }
+    }
 }

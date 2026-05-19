@@ -1286,7 +1286,7 @@ and committed in any order.
   to strict mode that would break round-tripping Aegis exports
   across minor versions of upstream Aegis.
 
-- [ ] **`Vault::shortest_unique_id_prefix` ≥9-char prefix on
+- [x] **`Vault::shortest_unique_id_prefix` ≥9-char prefix on
   forced collision.** Add
   `shortest_unique_id_prefix_extends_past_eight_chars_on_id_collision`
   to `src/domain/query.rs#tests`. The in-crate scope is required
