@@ -11045,3 +11045,76 @@ fn format_app_about_dialog_developers_entries_do_not_contain_a_null_byte() {
         );
     }
 }
+
+#[test]
+fn format_app_about_dialog_translator_credits_does_not_contain_a_null_byte() {
+    // Defense-in-depth mirror of the just-added
+    // `_program_name_does_not_contain_a_null_byte` /
+    // `_version_does_not_contain_a_null_byte` /
+    // `_application_icon_name_does_not_contain_a_null_byte` /
+    // `_developer_name_does_not_contain_a_null_byte` /
+    // `_copyright_does_not_contain_a_null_byte` /
+    // `_comments_does_not_contain_a_null_byte` /
+    // `_url_helpers_do_not_contain_a_null_byte` /
+    // `_release_notes_version_does_not_contain_a_null_byte` /
+    // `_developers_entries_do_not_contain_a_null_byte` /
+    // `_debug_info_does_not_contain_a_null_byte` /
+    // `_debug_info_filename_does_not_contain_a_null_byte`
+    // companions on the translator-credits side. The
+    // `_translator_credits_is_empty_until_translations_land`
+    // companion pins the helper to the empty literal `""` for
+    // the v0.0.1 / pre-v0.2 workspace because Paladin has not
+    // yet shipped a translation; the empty-string return
+    // trivially contains no `\0` byte. However, once
+    // translations land, the helper will return a non-empty
+    // string of the form `"name1 <email1>\nname2 <email2>"`
+    // (libadwaita's translator-credits convention) — at that
+    // point a null-byte injection from a tooling export
+    // pipeline (`xgettext` / `msgfmt` round-trips that
+    // mishandle UTF-8 encoding, or a `concat!(_, "\0", _)`
+    // template form) would slip past the
+    // `_is_empty_until_translations_land` companion (the
+    // string is no longer empty),
+    // `_is_single_line_when_non_empty` (the libadwaita
+    // convention uses `\n` between translator entries — `\0`
+    // is not `\n` or `\r`, so a `\0` byte embedded mid-entry
+    // would not register as a line break), or
+    // `_has_no_surrounding_whitespace_when_non_empty` (the
+    // null byte is non-whitespace and is mid-string).
+    //
+    // Null bytes in the translator-credits string would mis-
+    // render in multiple downstream surfaces: (1) the GLib-
+    // backed `AdwAboutDialog::set_translator_credits` setter
+    // routes through `g_strdup` (null-terminated) and may
+    // truncate the credits-page "Translators" section at the
+    // first `\0` byte, mis-attributing the translation team
+    // or silently omitting downstream translators in the
+    // listed order; (2) any `gettext` / `xgettext` re-import
+    // pipeline that round-trips the translator credits back
+    // through the localization tooling would silently lose
+    // the trailing entries on the next export pass; (3) the
+    // `_starts_and_ends_with_a_markup_element_when_non_empty`
+    // companion only applies to release-notes (the
+    // translator-credits slot follows a different
+    // libadwaita convention), so this test fills a gap
+    // unique to the translator-credits side.
+    //
+    // Pinning the no-null-byte invariant directly here
+    // surfaces the regression with a message naming the
+    // offending byte at build time rather than as a
+    // downstream truncation of the credits-page
+    // "Translators" section or as a silent loss of
+    // localization-pipeline entries. Current helper returns
+    // the empty literal `""` (no `\0` byte), so this test
+    // passes today and serves as a forcing function so any
+    // future override of the helper — including the eventual
+    // landing of an actual translator-credits string — stays
+    // free of null bytes.
+    use paladin_gtk::app::model::format_app_about_dialog_translator_credits;
+
+    let translator_credits = format_app_about_dialog_translator_credits();
+    assert!(
+        !translator_credits.contains('\0'),
+        "AdwAboutDialog translator_credits must not contain the `\\0` null byte (which would route through GLib's null-terminated `g_strdup` layer in `set_translator_credits`, truncate the credits-page \"Translators\" section at the first `\\0`, mis-attribute the translation team, and silently lose trailing entries on the next localization-pipeline export pass); got {translator_credits:?}",
+    );
+}
