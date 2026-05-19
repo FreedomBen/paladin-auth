@@ -8424,3 +8424,88 @@ fn format_app_about_dialog_release_notes_starts_and_ends_with_a_markup_element_w
         );
     }
 }
+
+#[test]
+fn format_app_window_accelerator_bindings_accelerators_keysym_is_ascii_only_after_the_modifier_block(
+) {
+    // Defense-in-depth sibling of
+    // `format_app_window_accelerator_bindings_accelerators_have_a_non_empty_keysym_after_the_modifier_block`
+    // (which pins the keysym suffix is non-empty),
+    // `format_app_window_accelerator_bindings_accelerators_contain_no_whitespace`
+    // (which pins the full accelerator is whitespace-free —
+    // covering the keysym suffix too), and
+    // `format_app_window_accelerator_bindings_parse_via_gtk_accelerator_parse`
+    // (which round-trips each spelling through
+    // `gtk::accelerator_parse` but skips without a display
+    // server in CI environments without a synthetic X11
+    // session). Those companions catch the empty,
+    // embedded-whitespace, and runtime-parse-failure
+    // regressions on the keysym suffix but leave the
+    // non-ASCII-byte edge case ungated:
+    //
+    // * `_have_a_non_empty_keysym_after_the_modifier_block`
+    //   only constrains the keysym suffix to be non-empty,
+    //   not its byte composition.
+    // * `_accelerators_contain_no_whitespace` only forbids
+    //   whitespace bytes; a non-ASCII byte sequence with no
+    //   whitespace would slip past it.
+    // * `_parse_via_gtk_accelerator_parse` would reject a
+    //   non-ASCII keysym at runtime, but the parse-side
+    //   companion skips on CI environments that lack a
+    //   display server (the `gtk::init` precondition fails
+    //   without a synthetic X11 server), so the pure
+    //   string-shape rule needs to hold independently.
+    //
+    // The X11 / GDK keysym vocabulary defined in
+    // `gdkkeysyms.h` (`GDK_KEY_*` constants) and consumed
+    // by `gtk::accelerator_parse` is pure ASCII: lowercase
+    // letters (`a`-`z`), digits (`0`-`9`), and named keys
+    // in camelCase ASCII (`Return`, `Escape`, `Tab`,
+    // `Page_Up`, `Home`, etc.). A regression that hand-spelled
+    // a keysym with a Unicode lookalike — e.g. swapping the
+    // canonical ASCII `n` keysym in `<Control>n` for a Cyrillic
+    // `п` U+043F lookalike or a fullwidth `ｎ` U+FF4E — would
+    // slip past the non-empty / no-whitespace shape companions
+    // while failing `gtk::accelerator_parse` at runtime and
+    // silently unbinding the documented shortcut surface (the
+    // Add / Quit / Preferences accelerator press would resolve
+    // to no action). The current keysyms (`n`, `q`, `comma`)
+    // are pure ASCII, so this test passes today and serves as
+    // a forcing function so any future accelerator binding
+    // override stays ASCII-compatible against the X11 / GDK
+    // keysym vocabulary.
+    //
+    // The assertion locates the closing `>` byte (already
+    // pinned to exactly one occurrence by the
+    // `_carry_exactly_one_modifier_block` companion), slices
+    // the suffix after it (the keysym portion), and walks each
+    // char to surface a regression with a message naming the
+    // offending non-ASCII byte at the byte offset within the
+    // keysym and the offending action target. Scoped to a
+    // pure string-shape check (no `gtk::accelerator_parse`
+    // call) so it stays parallel-safe with the gtk::init-using
+    // parse sibling without an Once-gated init helper. Mirror
+    // of the `_accelerators_contain_no_whitespace` and
+    // `_have_a_non_empty_keysym_after_the_modifier_block`
+    // siblings; together they pin the keysym suffix's
+    // non-empty + whitespace-free + ASCII-only byte
+    // composition against a single source of truth on the
+    // accelerator-bindings array.
+    use paladin_gtk::app::model::format_app_window_accelerator_bindings;
+
+    for (accel, target) in format_app_window_accelerator_bindings() {
+        let close_index = accel.bytes().position(|b| b == b'>').unwrap_or_else(|| {
+            panic!(
+                "format_app_window_accelerator_bindings accelerator for target {target:?} must contain a `>` ASCII byte closing the modifier block; got {accel:?}",
+            )
+        });
+        let keysym = &accel[close_index + 1..];
+        for (idx, ch) in keysym.char_indices() {
+            assert!(
+                ch.is_ascii(),
+                "format_app_window_accelerator_bindings accelerator keysym for target {target:?} must use ASCII characters only so gtk::accelerator_parse resolves the keysym against the X11 / GDK keysym vocabulary defined in `gdkkeysyms.h` (which is pure ASCII — lowercase letters, digits, and camelCase named keys); a Unicode lookalike like Cyrillic `п` U+043F swapped for the canonical ASCII `n` would fail gtk::accelerator_parse at runtime and silently unbind the documented shortcut surface (the Add / Quit / Preferences accelerator press would resolve to no action); got non-ASCII char {ch:?} (U+{:04X}) at byte offset {idx} in keysym {keysym:?} from {accel:?}",
+                ch as u32,
+            );
+        }
+    }
+}
