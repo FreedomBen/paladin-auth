@@ -5922,3 +5922,43 @@ fn format_app_about_dialog_developers_entries_are_distinct() {
         seen.push(entry);
     }
 }
+
+#[test]
+fn format_app_about_dialog_issue_url_and_support_url_share_cargo_pkg_repository_prefix() {
+    // Cross-consistency sibling of the per-side
+    // `_issue_url_appends_issues_to_cargo_pkg_repository` and
+    // `_support_url_appends_discussions_to_cargo_pkg_repository`
+    // companions which independently anchor each URL to
+    // `env!("CARGO_PKG_REPOSITORY")` with the appropriate
+    // GitHub suffix. Each existing companion validates one
+    // side in isolation; this cross-check ties both sides to
+    // the same repository prefix so a future refactor that
+    // hand-spelled either URL against a different repository
+    // base — e.g. moving `support_url` to a separate Discourse
+    // forum while leaving `issue_url` on the workspace
+    // repository — fails the test rather than silently
+    // splitting the bug-reporting and community-Q&A surfaces
+    // across two different project homes.
+    //
+    // Together with the `_issue_url_is_non_empty_https_url_distinct_from_website`
+    // and `_support_url_is_non_empty_https_url_distinct_from_issue_and_website`
+    // siblings (which pin pairwise distinctness) this completes
+    // the triangle: both URLs are distinct from each other and
+    // from the homepage, yet both still share the workspace
+    // repository prefix.
+    use paladin_gtk::app::model::{
+        format_app_about_dialog_issue_url, format_app_about_dialog_support_url,
+    };
+
+    let repository_prefix = env!("CARGO_PKG_REPOSITORY");
+    let issue_url = format_app_about_dialog_issue_url();
+    let support_url = format_app_about_dialog_support_url();
+    assert!(
+        issue_url.starts_with(repository_prefix),
+        "AdwAboutDialog issue-url must start with the workspace `CARGO_PKG_REPOSITORY` prefix {repository_prefix:?} so the bug-tracker link follows a workspace-wide repository move in lockstep; got {issue_url:?}",
+    );
+    assert!(
+        support_url.starts_with(repository_prefix),
+        "AdwAboutDialog support-url must start with the workspace `CARGO_PKG_REPOSITORY` prefix {repository_prefix:?} so the community-Q&A link follows a workspace-wide repository move in lockstep; got {support_url:?}",
+    );
+}
