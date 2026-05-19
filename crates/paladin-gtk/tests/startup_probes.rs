@@ -8681,3 +8681,73 @@ fn format_app_about_dialog_developers_does_not_contain_program_name() {
         );
     }
 }
+
+#[test]
+fn format_app_about_dialog_application_icon_name_has_exactly_four_segments() {
+    // Defense-in-depth sibling of
+    // `format_app_about_dialog_application_icon_name_matches_app_id`
+    // (which pins the exact value against `APP_ID`),
+    // `_is_reverse_dns` (which pins `contains('.')` shape +
+    // no-whitespace + distinct from program-name),
+    // `_segments_are_non_empty` (which pins each
+    // `.`-separated segment is non-empty),
+    // `_ends_with_gui_segment` (which pins the trailing
+    // `.Gui` suffix that distinguishes this crate's reverse-DNS
+    // identity from a future CLI / daemon front-end),
+    // `_is_ascii_only` (byte-composition pin), and
+    // `_has_no_embedded_whitespace` (no-whitespace pin). Those
+    // companions catch the wrong-value / wrong-shape /
+    // empty-segment / wrong-suffix / non-ASCII / embedded-
+    // whitespace regressions but leave the *segment count*
+    // itself ungated, so a regression that doubled a segment
+    // — e.g. `"org.org.tamx.Paladin.Gui"` (five segments) or
+    // `"org.tamx.tamx.Paladin.Gui"` — or dropped a segment —
+    // e.g. `"org.Paladin.Gui"` (three segments, with `tamx`
+    // removed) — would slip past every neighbouring guard
+    // (`_segments_are_non_empty` requires only `>= 2` so any
+    // count in [2, ∞) passes; `_ends_with_gui_segment` still
+    // holds since the trailing literal is preserved;
+    // `_is_reverse_dns` still holds since `contains('.')` is
+    // trivially true).
+    //
+    // The libadwaita / GIO / Flatpak app-id contract
+    // (`g_application_id_is_valid`) accepts any reverse-DNS
+    // identifier with two-or-more non-empty segments, but the
+    // `org.tamx.Paladin.Gui` brand-string identity is
+    // specifically a four-segment reverse-DNS — TLD `org`,
+    // SLD `tamx`, brand `Paladin`, front-end-distinguishing
+    // `Gui` — so a regression that drifted the segment count
+    // up or down would not break the GIO / Flatpak runtime
+    // contract but would silently break the Flathub /
+    // hicolor icon-theme / desktop-entry / AppStream pinned
+    // brand-string identity (the Flathub submission file the
+    // `.deb` / `.rpm` / `.flatpak` artifacts at §11 ship is
+    // keyed at `org.tamx.Paladin.Gui` and would mis-route a
+    // segment-count-drifted regression to a different cache
+    // / installation slot at install time, surfacing as an
+    // icon-missing / desktop-entry-orphaned packaging bug
+    // rather than as a failing test).
+    //
+    // Pinning the segment count at four directly here
+    // surfaces the regression with a message naming the
+    // offending count (and the offending segment array)
+    // rather than as a downstream packaging / icon-theme /
+    // desktop-entry mismatch at install time. Mirror of the
+    // `_segments_are_non_empty` companion on the per-segment
+    // non-emptiness side and the `_ends_with_gui_segment`
+    // companion on the trailing-segment-identity side;
+    // together they pin the reverse-DNS shape contract
+    // across the per-segment non-emptiness invariant, the
+    // trailing-`.Gui` identity, and the overall segment
+    // count against a single source of truth.
+    use paladin_gtk::app::model::format_app_about_dialog_application_icon_name;
+
+    let icon = format_app_about_dialog_application_icon_name();
+    let segments: Vec<&str> = icon.split('.').collect();
+    assert_eq!(
+        segments.len(),
+        4,
+        "AdwAboutDialog application-icon must be a four-segment reverse-DNS identifier matching the pinned `org.tamx.Paladin.Gui` brand-string identity (TLD `org`, SLD `tamx`, brand `Paladin`, front-end-distinguishing `Gui`) so the Flathub / hicolor icon-theme / desktop-entry / AppStream packaging artifacts at §11 resolve to the pinned cache / installation slot at install time; got {len} segment(s) in {icon:?} (segments: {segments:?})",
+        len = segments.len(),
+    );
+}
