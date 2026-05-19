@@ -7684,3 +7684,83 @@ fn format_app_about_dialog_version_has_no_embedded_whitespace() {
         );
     }
 }
+
+#[test]
+fn format_app_about_dialog_debug_info_filename_has_no_embedded_whitespace() {
+    // Defense-in-depth sibling of
+    // `format_app_about_dialog_debug_info_filename_returns_paladin_debug_info_txt`
+    // (exact-value pin against the static literal
+    // `"paladin-debug-info.txt"`),
+    // `format_app_about_dialog_debug_info_filename_is_non_empty_single_line_with_txt_extension`
+    // (positive shape pin on non-empty + no `\n` + `.txt`
+    // extension + no path separators),
+    // `format_app_about_dialog_debug_info_filename_is_ascii_only`
+    // (byte-composition pin against Unicode lookalikes),
+    // and
+    // `format_app_about_dialog_debug_info_filename_extension_is_lowercase_txt`
+    // (case-sensitive lowercase pin on the `.txt` extension).
+    // Those companions catch the wrong-value, empty,
+    // embedded-newline, wrong-extension, path-separator,
+    // non-ASCII-byte, and upper-case-extension regressions
+    // but leave the embedded-ASCII-space, embedded-ASCII-tab,
+    // embedded-ASCII-carriage-return, and other ASCII
+    // whitespace (vertical tab, form feed) edge cases
+    // ungated:
+    //
+    // * `_is_non_empty_single_line_with_txt_extension` uses
+    //   `!name.contains('\n')` which only matches the literal
+    //   ASCII-newline byte (U+000A) and would accept
+    //   `"paladin debug-info.txt"` (embedded space) or
+    //   `"paladin\tdebug-info.txt"` (embedded tab) untouched.
+    // * `_is_ascii_only` only constrains the byte composition
+    //   to the ASCII subset; ASCII space (U+0020), ASCII tab
+    //   (U+0009), ASCII carriage return (U+000D), and other
+    //   ASCII whitespace bytes are all ASCII-valid and would
+    //   slip past it.
+    //
+    // A filename with stray ASCII whitespace inside —
+    // e.g. `"paladin debug-info.txt"` (embedded space) —
+    // renders awkwardly in file managers (the file appears
+    // visually broken into two tokens which the file manager
+    // does not understand as the same file) and forces users
+    // who copy the filename into terminal commands (the GNOME
+    // HIG flow for sharing a bug-report file with a project
+    // maintainer over IRC / chat) to manually escape or quote
+    // the whitespace — a paste like `cat paladin debug-info.txt`
+    // would resolve to two separate path arguments which the
+    // shell could not satisfy. Likewise an embedded tab
+    // (`"paladin\tdebug-info.txt"`) would either render with a
+    // visible gap in file managers or be normalized away by
+    // some path-handling layers in the GIO / freedesktop chain,
+    // producing a silently-different on-disk filename than the
+    // user expected to type.
+    //
+    // Pinning the no-embedded-whitespace invariant directly
+    // here surfaces the regression with a message that names
+    // the offending whitespace character at the byte offset
+    // rather than as a confusing
+    // "I saved my bug report but my shell can't find it"
+    // user-support thread or as a quiet file-manager
+    // mis-render. Mirror of the
+    // `_program_name_has_no_embedded_whitespace`,
+    // `_application_icon_name_has_no_embedded_whitespace`,
+    // and `_version_has_no_embedded_whitespace` siblings on
+    // the dialog header-cluster sides plus the
+    // `_url_helpers_contain_no_embedded_whitespace` companion
+    // on the three AdwAboutDialog footer URL helpers;
+    // together they pin the no-whitespace invariant across
+    // every dialog-routed identifier-shaped helper (program-name,
+    // version, application-icon-name, debug-info filename,
+    // and the three footer URLs) against a single source of
+    // truth.
+    use paladin_gtk::app::model::format_app_about_dialog_debug_info_filename;
+
+    let filename = format_app_about_dialog_debug_info_filename();
+    for (idx, ch) in filename.char_indices() {
+        assert!(
+            !ch.is_whitespace(),
+            "AdwAboutDialog debug_info_filename must contain no embedded whitespace so the suggested file-save filename renders as a single token in file managers (rather than visually splitting into two tokens at the embedded space), can be pasted directly into terminal commands without manual escaping (a paste like `cat paladin debug-info.txt` would resolve to two path arguments under any POSIX shell), and stays byte-stable through any path-handling layer in the GIO / freedesktop chain that might normalize away a stray tab or carriage return; got whitespace char {ch:?} (U+{:04X}) at byte offset {idx} in {filename:?}",
+            ch as u32,
+        );
+    }
+}
