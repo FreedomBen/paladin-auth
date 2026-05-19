@@ -25364,3 +25364,135 @@ fn format_app_about_dialog_url_helpers_do_not_contain_an_end_of_transmission_byt
         );
     }
 }
+
+#[test]
+fn format_app_about_dialog_developer_name_does_not_contain_an_end_of_text_byte() {
+    // Defense-in-depth per-byte sibling continuing the developer-
+    // name byte-cleanliness contract past the just-completed
+    // `{null / horizontal-tab / carriage-return / vertical-tab /
+    // form-feed / backspace / line-feed / bell / acknowledge /
+    // enquiry / end-of-transmission}` undecuple to the end-of-
+    // text byte `\x03` (0x03). ETX sits one step below EOT
+    // (0x04) in the ASCII C0 block — the framing byte
+    // historically used by serial protocols (ASCII telegraph,
+    // Bisync) to mark the end of a text segment. Like EOT,
+    // ENQ, ACK, and BEL, ETX is NOT matched by
+    // `char::is_whitespace()` (Unicode treats ETX as a control
+    // byte, not whitespace), so the
+    // `_developer_name_has_no_surrounding_whitespace` boundary
+    // guard does NOT reject a leading or trailing `\x03` —
+    // making the end-of-text byte strictly as dangerous as
+    // end-of-transmission, enquiry, acknowledge, bell, and
+    // backspace for this helper. ETX has zero transitive
+    // protection from existing companions.
+    //
+    // None of the existing developer-name companions name the
+    // `\x03` byte directly:
+    //   - `_developer_name_is_a_single_line_without_embedded_newlines`
+    //     only checks `\n` and `\r` — `\x03` is neither;
+    //   - `_developer_name_is_ascii_only` pins each byte as
+    //     ASCII — `\x03` is ASCII (0x03) so it slips past;
+    //   - `_developer_name_has_no_surrounding_whitespace` uses
+    //     `char::is_whitespace()`, which returns *false* for
+    //     U+0003 ETX, so this companion does NOT reject `\x03`
+    //     even at the boundaries — strictly weaker coverage
+    //     than the form-feed / line-feed / vertical-tab /
+    //     horizontal-tab / carriage-return cases;
+    //   - `_developer_name_starts_with_the_definite_article`
+    //     and `_ends_with_the_contributors_collective_noun`
+    //     only constrain the literal prefix `"The "` and
+    //     suffix `"contributors"`, so a mid-string `\x03`
+    //     between them satisfies both;
+    //   - `_does_not_contain_a_null_byte` /
+    //     `_does_not_contain_a_horizontal_tab_byte` /
+    //     `_does_not_contain_a_carriage_return_byte` /
+    //     `_does_not_contain_a_vertical_tab_byte` /
+    //     `_does_not_contain_a_form_feed_byte` /
+    //     `_does_not_contain_a_backspace_byte` /
+    //     `_does_not_contain_a_line_feed_byte` /
+    //     `_does_not_contain_a_bell_byte` /
+    //     `_does_not_contain_an_acknowledge_byte` /
+    //     `_does_not_contain_an_enquiry_byte` /
+    //     `_does_not_contain_an_end_of_transmission_byte`
+    //     each name a different byte specifically.
+    //
+    // The current `_returns_the_paladin_contributors` exact-
+    // value pin catches every byte today, but its protection
+    // collapses the moment a contributor-list addition or a
+    // workspace-vendoring split decouples the helper from the
+    // pinned literal — at that point a `\x03`-bearing override
+    // would slip past every byte-level companion above with
+    // zero transitive protection.
+    //
+    // A regression that landed `"The Paladin\x03contributors"`
+    // (end-of-text byte lifted from a `script(1)` typescript
+    // that captured raw `\x03` ETX framing bytes from a CI
+    // build that bridged a serial console mid-contributor-name
+    // edit during a Bisync-style text-block transfer, a
+    // `concat!(_, "\x03", _)` form mirroring a text-segment-
+    // delimited contributor edit, or a hand-edited helper that
+    // pasted from a terminal session interfacing with a
+    // protocol bridge preserving ETX framing bytes) would mis-
+    // render in multiple downstream surfaces: (1) the GLib-
+    // backed `AdwAboutDialog::set_developer_name` setter hands
+    // the string to Pango for inline rendering beneath the
+    // program name in the dialog header — Pango's default
+    // rendering of a bare `\x03` byte is implementation-
+    // defined and typically renders as a literal control glyph
+    // (a hollow box or tofu-like placeholder), breaking the
+    // tidy single-line attribution layout; (2) the same
+    // developer-name string is reused by
+    // `_copyright_ends_with_developer_name` to construct the
+    // footer copyright row, so a `\x03` byte in the developer
+    // name would propagate into the copyright slot and mis-
+    // render there too; (3) when the developer-name is dumped
+    // through a serial-bridged TTY (CI logs over a serial
+    // console, an out-of-band debugging session), the `\x03`
+    // byte may be intercepted by the receiving end as an end-
+    // of-text framing indicator and signal the end of the
+    // current text block, confusing protocol-bridging tooling
+    // that treats ETX as a text-segment terminator and
+    // truncating the attribution at the byte boundary; on
+    // many terminals, `\x03` is the SIGINT-generating byte
+    // (`^C`) when typed at a foreground process — surfacing
+    // as an unexpected process interruption in any tooling
+    // that captures the attribution through a pty in raw
+    // mode that signals on the literal byte; (4) screen
+    // readers that announce the dialog attribution render
+    // the byte as a literal control character announcement,
+    // breaking the attribution accessibility-tree
+    // announcement at the byte boundary; (5) downstream
+    // tooling that scrapes the developer-name attribution
+    // (release-note generators, contributor-attribution
+    // crawlers) would propagate the stray `\x03` byte into
+    // the consumer's stream and trigger the same control-
+    // glyph rendering / SIGINT / protocol-confusion across
+    // every downstream surface.
+    //
+    // Pinning the no-`\x03` invariant directly here surfaces
+    // the regression with a message naming the offending byte
+    // at build time rather than via a downstream dialog-header
+    // rendering bug, a serial-protocol ETX-frame text-
+    // segment-terminator collision, a SIGINT-byte tty
+    // surprise, or a screen-reader announcement break.
+    // Current helper returns the literal `"The Paladin
+    // contributors"` (no `\x03` byte), so this test passes
+    // today and serves as a forcing function so any future
+    // override of the helper — including the eventual
+    // landing of a multi-contributor attribution string —
+    // stays free of end-of-text bytes. Opens the next non-
+    // whitespace-classified C0 control-byte cycle past the
+    // just-completed `{null / horizontal-tab / carriage-
+    // return / vertical-tab / form-feed / backspace / line-
+    // feed / bell / acknowledge / enquiry / end-of-
+    // transmission}` undecuple so the helper's byte-
+    // composition contract pins each forbidden control byte
+    // against a single source of truth.
+    use paladin_gtk::app::model::format_app_about_dialog_developer_name;
+
+    let developer = format_app_about_dialog_developer_name();
+    assert!(
+        !developer.contains('\x03'),
+        "AdwAboutDialog developer-name must not contain the `\\x03` end-of-text byte (0x03); a mid-string `\\x03` slips past `_is_a_single_line_without_embedded_newlines` (which only checks `\\n` and `\\r`), past `_is_ascii_only` (because `\\x03` is ASCII), past `_has_no_surrounding_whitespace` (which uses `char::is_whitespace()` — Unicode returns false for U+0003 ETX so this companion does NOT reject `\\x03` even at the boundaries, strictly weaker coverage than form-feed / line-feed / vertical-tab / horizontal-tab / carriage-return), past `_starts_with_the_definite_article` / `_ends_with_the_contributors_collective_noun` (which only constrain the literal prefix and suffix), and past `_does_not_contain_a_null_byte` / `_does_not_contain_a_horizontal_tab_byte` / `_does_not_contain_a_carriage_return_byte` / `_does_not_contain_a_vertical_tab_byte` / `_does_not_contain_a_form_feed_byte` / `_does_not_contain_a_backspace_byte` / `_does_not_contain_a_line_feed_byte` / `_does_not_contain_a_bell_byte` / `_does_not_contain_an_acknowledge_byte` / `_does_not_contain_an_enquiry_byte` / `_does_not_contain_an_end_of_transmission_byte` (which each name a different byte specifically); it would render as a literal control glyph in the dialog-header attribution row, propagate into the footer copyright row that reuses this string, confuse serial-protocol-bridging tooling that treats `\\x03` as an ETX text-segment terminator if dumped through a serial-bridged TTY (truncating the attribution at the byte boundary), trigger SIGINT-byte (`^C`) tty surprises in tooling capturing the attribution through a pty in raw mode, break screen-reader attribution announcements at the byte boundary, and propagate into downstream contributor-attribution scrapers; got {developer:?}",
+    );
+}
