@@ -19345,3 +19345,118 @@ fn format_app_about_dialog_program_name_does_not_contain_a_line_feed_byte() {
         "AdwAboutDialog program_name must not contain the `\\n` line-feed byte (0x0A); the current `\\n`-cleanliness is only protected transitively via the `_program_name_has_no_embedded_whitespace` companion (which uses `char::is_whitespace()` and returns true for U+000A LF), so a future refactor that relaxed the no-embedded-whitespace invariant (a libadwaita upgrade that taught the dialog header program-name row to wrap across two lines, or a workspace-vendoring split that lifted program-name out of the single-line constraint) would naturally drop the `\\n` guard; a stray `\\n` would cause Pango to interpret the byte as a hard line break and wrap the program name onto two lines (pushing the dialog header taller than its baseline layout), propagate into the application window title that reuses this string, break screen-reader program-name announcements at the byte boundary, propagate into downstream desktop-file readers and AppStream `<name>` extractors, and trigger AppStream `<name>` validation rejection at packaging time; got {program_name:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_version_does_not_contain_a_line_feed_byte() {
+    // Defense-in-depth per-byte sibling extending the version
+    // byte-cleanliness contract past the just-completed
+    // `{null / horizontal-tab / carriage-return / vertical-tab /
+    // form-feed / backspace}` sextuple to the line-feed byte
+    // `\n` (0x0A), completing the inner C0 control-byte cycle
+    // from BS (0x08) through CR (0x0D) for this helper. The
+    // existing `_version_has_no_embedded_whitespace` companion
+    // uses `char::is_whitespace()`, which under Rust's Unicode
+    // definition returns *true* for U+000A LF, so that companion
+    // DOES catch a stray `\n` byte in the version string.
+    //
+    // But that protection is *coupled* to the no-embedded-
+    // whitespace invariant: a future refactor that intentionally
+    // allowed embedded `\n` line breaks in the version slot
+    // (a multi-line SemVer build-meta suffix, a `concat!`
+    // injection between SemVer segments, or a workspace-
+    // vendoring split that lifted version out of the strict
+    // SemVer grammar) would naturally relax the
+    // `_has_no_embedded_whitespace` companion to drop the `\n`
+    // check — at which point the no-`\n` invariant would
+    // silently regress to "allowed" without any independent
+    // byte-cleanliness pin keeping the byte forbidden. Mirror of
+    // the `_version_does_not_contain_a_carriage_return_byte`
+    // sibling's same decoupling rationale on the CR side.
+    //
+    // None of the remaining version companions name the `\n`
+    // byte directly:
+    //   - `_version_matches_cargo_pkg_version` is an exact-value
+    //     pin against `env!("CARGO_PKG_VERSION")` — a future
+    //     workspace refactor that introduced `\n` into the
+    //     package version (a multi-line TOML literal
+    //     `version = """\n0.0.1\n"""` or a `concat!` injection
+    //     in a workspace-vendoring split) would propagate `\n`
+    //     into the helper, and this companion would still pass
+    //     (the helper still equals the cargo version);
+    //   - `_version_is_non_empty_and_looks_like_semver` only
+    //     checks `contains('.')` for the SemVer separator —
+    //     `\n` is not `.`, and `"0.0\n1"` still contains `.`;
+    //   - `_version_is_ascii_only` pins each byte as ASCII —
+    //     `\n` is ASCII (0x0A) so it slips past;
+    //   - `_version_starts_with_a_digit` /
+    //     `_version_does_not_start_with_a_dot` /
+    //     `_version_does_not_end_with_a_dot` only constrain the
+    //     leading or trailing byte;
+    //   - `_version_has_at_least_three_dot_separated_segments`
+    //     /  `_version_segments_are_non_empty` scan the
+    //     `.`-separator structure — `\n` is not `.` and a
+    //     `"0\n.0.1"` form still has three non-empty `.`-
+    //     separated segments;
+    //   - `_does_not_contain_a_null_byte` /
+    //     `_does_not_contain_a_horizontal_tab_byte` /
+    //     `_does_not_contain_a_carriage_return_byte` /
+    //     `_does_not_contain_a_vertical_tab_byte` /
+    //     `_does_not_contain_a_form_feed_byte` /
+    //     `_does_not_contain_a_backspace_byte`
+    //     each name a different byte specifically.
+    //
+    // A regression that landed `"0.0.1\n"` or `"0\n.0.1"` (LF
+    // byte from a multi-line TOML literal in the workspace
+    // `Cargo.toml`, a `concat!` injection, a `version = """..."""`
+    // multi-line TOML literal that introduced a trailing line
+    // break, or a hand-edited helper override that pasted from
+    // a text dump preserving line breaks between SemVer
+    // segments) would mis-render in multiple downstream
+    // surfaces: (1) the GLib-backed `AdwAboutDialog::set_version`
+    // setter hands the string to Pango for inline rendering in
+    // the dialog header next to the program name — Pango would
+    // interpret the `\n` byte as a hard line break and wrap the
+    // version onto two lines, pushing the dialog header taller
+    // than its baseline layout and visually misaligning the
+    // header / footer column-flow that libadwaita uses; (2) the
+    // version string flows into the `release_notes_version`
+    // helper via `_matches_about_dialog_version`, so a `\n`
+    // byte in the version would propagate into the release-
+    // notes section header and break the tidy single-line
+    // "What's New in 0.0.1" caption there too; (3) the version
+    // string flows into the `debug_info` helper via the
+    // `concat!("Paladin ", env!("CARGO_PKG_VERSION"), ...)`
+    // composition, so a `\n` byte would introduce a third line
+    // into debug_info and break the
+    // `_debug_info_has_exactly_two_lines` invariant; (4)
+    // AppStream version validation (`appstreamcli validate`)
+    // parses the version against the strict SemVer grammar
+    // which has no `\n` in any of its production rules, so a
+    // `\n`-bearing version would be rejected at packaging time;
+    // (5) screen readers that announce the dialog header treat
+    // the `\n` as a paragraph break and pause mid-version,
+    // breaking the version accessibility-tree announcement at
+    // the byte boundary; (6) downstream tooling that scrapes
+    // the version (changelog aggregators, package-listing
+    // generators) would propagate the stray `\n` byte into the
+    // consumer's stream and trigger the same line-break
+    // rendering bug across every downstream surface.
+    //
+    // Pinning the no-`\n` invariant directly here surfaces the
+    // regression with a message naming the offending byte at
+    // build time rather than via a future no-embedded-whitespace
+    // decoupling that silently dropped the `\n` guard. Current
+    // helper returns the literal `env!("CARGO_PKG_VERSION")`
+    // which resolves to `"0.0.1"` (no `\n` byte), so this test
+    // passes today and serves as a forcing function so any
+    // future workspace-version refactor stays free of line-feed
+    // bytes even when the `_has_no_embedded_whitespace`
+    // companion is intentionally relaxed.
+    use paladin_gtk::app::model::format_app_about_dialog_version;
+
+    let version = format_app_about_dialog_version();
+    assert!(
+        !version.contains('\n'),
+        "AdwAboutDialog version must not contain the `\\n` line-feed byte (0x0A); the current `\\n`-cleanliness is only protected transitively via the `_version_has_no_embedded_whitespace` companion (which uses `char::is_whitespace()` and returns true for U+000A LF), so a future refactor that relaxed the no-embedded-whitespace invariant (a multi-line SemVer build-meta suffix, a `concat!` injection, or a workspace-vendoring split that lifted version out of the strict SemVer grammar) would naturally drop the `\\n` guard; a stray `\\n` would cause Pango to interpret the byte as a hard line break and wrap the version onto two lines (pushing the dialog header taller than its baseline layout), propagate into `release_notes_version` via the equality pin and break the \"What's New\" caption layout, propagate into `debug_info` via the `concat!` composition and break the `_debug_info_has_exactly_two_lines` invariant, trigger AppStream `appstreamcli validate` rejection at packaging time (the strict SemVer grammar has no `\\n` production), break screen-reader version announcements at the byte boundary, and propagate into downstream changelog aggregators; got {version:?}",
+    );
+}
