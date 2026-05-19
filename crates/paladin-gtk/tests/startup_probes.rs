@@ -5193,3 +5193,43 @@ fn format_app_about_dialog_program_name_matches_format_app_window_title() {
         "AdwAboutDialog application_name slot must match the AdwApplicationWindow title slot so the desktop bar and the About dialog header advertise the same running-binary identity",
     );
 }
+
+#[test]
+fn format_app_action_group_name_is_prefix_of_format_app_add_button_action() {
+    // Companion to
+    // `format_app_action_group_name_is_prefix_of_every_primary_menu_action`:
+    // that test verifies the six primary-menu action targets start
+    // with `format_app_action_group_name() + "."`; this assertion
+    // extends the coverage to the seventh action on the bundled
+    // group — the header-bar `+` button's `app.add` target — so a
+    // future rename of `format_app_action_group_name` lands as a
+    // failing test for every action target on the bundled group,
+    // not just the menu six.
+    //
+    // `format_app_add_button_action_uses_app_group_prefix` already
+    // pins the `"app."` literal at the source level, but that
+    // assertion hardcodes the prefix string and would not catch a
+    // drift where `format_app_action_group_name` was renamed (the
+    // primary-menu sibling would fail there, but the header-bar
+    // button would silently continue to use the old literal). This
+    // sibling closes that gap by routing through
+    // `format_app_action_group_name` dynamically.
+    use paladin_gtk::app::model::{format_app_action_group_name, format_app_add_button_action};
+
+    let group = format_app_action_group_name();
+    let prefix = format!("{group}.");
+    let action = format_app_add_button_action();
+    assert!(
+        action.starts_with(&prefix),
+        "header-bar + button action target {action:?} must start with the shared group prefix {prefix:?} so the bundled application action group resolves it alongside the six primary-menu entries",
+    );
+    let bare = &action[prefix.len()..];
+    assert!(
+        !bare.is_empty(),
+        "header-bar + button action target {action:?} must carry a non-empty bare action name after the {prefix:?} prefix",
+    );
+    assert!(
+        !bare.contains('.'),
+        "header-bar + button action target {action:?} must not embed a second `.` separator after the {prefix:?} group prefix",
+    );
+}
