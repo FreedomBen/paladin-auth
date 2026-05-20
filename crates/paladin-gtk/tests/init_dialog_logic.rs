@@ -49,10 +49,11 @@ use paladin_core::{
 use secrecy::SecretString;
 
 use paladin_gtk::init_dialog::{
-    classify_create_error, classify_create_force_error, classify_mode, classify_precheck,
-    destructive_gate_body, plaintext_warning_body, prepare_vault_init, run_init_worker,
-    CreateOutcome, InitMode, InitWorkerCompletion, InitWorkerEffect, InitWorkerInput,
-    InitWorkerMode, InlineError, PrecheckOutcome, SubmitRejection,
+    apply_msg, classify_create_error, classify_create_force_error, classify_mode,
+    classify_precheck, destructive_gate_body, plaintext_warning_body, prepare_vault_init,
+    run_init_worker, CreateOutcome, InitDialogMsg, InitDialogOutput, InitDialogState, InitMode,
+    InitWorkerCompletion, InitWorkerEffect, InitWorkerInput, InitWorkerMode, InlineError,
+    PrecheckOutcome, SubmitRejection,
 };
 use paladin_gtk::secret_fields::{ClearReason, InitSecretState};
 
@@ -1362,4 +1363,606 @@ fn format_init_dialog_passphrase_title_is_non_empty_single_line() {
         !title.contains('\n'),
         "InitDialog passphrase row title must be a single line; got {title:?}",
     );
+}
+
+// ---------------------------------------------------------------------------
+// InlineError::from_rejection — confirmation_mismatch maps to invalid_passphrase
+// ---------------------------------------------------------------------------
+
+#[test]
+fn inline_error_from_rejection_confirmation_mismatch_carries_invalid_passphrase_kind() {
+    // The two-field encrypted submission rejection lifts to the
+    // §5 `invalid_passphrase` projection so the GUI surfaces the
+    // same stable `error_kind` the CLI / TUI do.
+    let inline = InlineError::from_rejection(SubmitRejection::ConfirmationMismatch)
+        .expect("ConfirmationMismatch maps to an InlineError");
+    assert_eq!(inline.kind, ErrorKind::InvalidPassphrase);
+}
+
+#[test]
+fn inline_error_from_rejection_confirmation_mismatch_renders_invalid_passphrase_reason() {
+    // Rendered body uses the typed `PaladinError::Display` so the
+    // stable `reason: "confirmation_mismatch"` discriminator
+    // surfaces in the inline label verbatim.
+    let inline = InlineError::from_rejection(SubmitRejection::ConfirmationMismatch)
+        .expect("ConfirmationMismatch maps to an InlineError");
+    let expected = PaladinError::InvalidPassphrase {
+        reason: "confirmation_mismatch",
+    }
+    .to_string();
+    assert_eq!(inline.rendered, expected);
+}
+
+#[test]
+fn inline_error_from_rejection_plaintext_warning_required_returns_none() {
+    // The plaintext-warning gate is a UI-only precondition (it
+    // returns `None` from `SubmitRejection::error_kind`), so the
+    // inline-error projection collapses to `None` — the widget
+    // surfaces the warning body separately, not as an inline error.
+    assert!(InlineError::from_rejection(SubmitRejection::PlaintextWarningRequired).is_none());
+}
+
+// ---------------------------------------------------------------------------
+// InitDialogState — basic getters / setters
+// ---------------------------------------------------------------------------
+
+#[test]
+fn init_dialog_state_new_is_empty_with_unticked_warning() {
+    let state = InitDialogState::new();
+    assert!(state.passphrase_text().is_empty());
+    assert!(state.confirm_text().is_empty());
+    assert!(!state.plaintext_warning_acknowledged());
+    assert!(state.inline_error().is_none());
+}
+
+#[test]
+fn init_dialog_state_default_matches_new() {
+    let lhs = InitDialogState::default();
+    let rhs = InitDialogState::new();
+    assert_eq!(lhs.passphrase_text(), rhs.passphrase_text());
+    assert_eq!(lhs.confirm_text(), rhs.confirm_text());
+    assert_eq!(
+        lhs.plaintext_warning_acknowledged(),
+        rhs.plaintext_warning_acknowledged()
+    );
+    assert!(lhs.inline_error().is_none() && rhs.inline_error().is_none());
+}
+
+#[test]
+fn init_dialog_state_set_passphrase_shadows_typed_bytes() {
+    let mut state = InitDialogState::new();
+    state.set_passphrase("hunter2");
+    assert_eq!(state.passphrase_text(), "hunter2");
+}
+
+#[test]
+fn init_dialog_state_set_confirm_shadows_typed_bytes() {
+    let mut state = InitDialogState::new();
+    state.set_confirm("hunter2");
+    assert_eq!(state.confirm_text(), "hunter2");
+}
+
+#[test]
+fn init_dialog_state_set_plaintext_warning_flips_flag() {
+    let mut state = InitDialogState::new();
+    assert!(!state.plaintext_warning_acknowledged());
+    state.set_plaintext_warning(true);
+    assert!(state.plaintext_warning_acknowledged());
+    state.set_plaintext_warning(false);
+    assert!(!state.plaintext_warning_acknowledged());
+}
+
+#[test]
+fn init_dialog_state_set_passphrase_clears_inline_error() {
+    // Typing dismisses any stale rejection / worker error so the
+    // dialog never carries a stale message into the next attempt.
+    let mut state = InitDialogState::new();
+    state.set_passphrase("hunter2");
+    state.set_confirm("hunter3");
+    let _ = state.submit(); // stages the mismatch inline error
+    assert!(state.inline_error().is_some());
+    state.set_passphrase("hunter4");
+    assert!(state.inline_error().is_none());
+}
+
+#[test]
+fn init_dialog_state_set_confirm_clears_inline_error() {
+    let mut state = InitDialogState::new();
+    state.set_passphrase("hunter2");
+    state.set_confirm("hunter3");
+    let _ = state.submit();
+    assert!(state.inline_error().is_some());
+    state.set_confirm("hunter2");
+    assert!(state.inline_error().is_none());
+}
+
+#[test]
+fn init_dialog_state_set_plaintext_warning_clears_inline_error() {
+    let mut state = InitDialogState::new();
+    state.set_passphrase("hunter2");
+    state.set_confirm("hunter3");
+    let _ = state.submit();
+    assert!(state.inline_error().is_some());
+    state.set_plaintext_warning(true);
+    assert!(state.inline_error().is_none());
+}
+
+#[test]
+fn init_dialog_state_mode_tracks_field_emptiness() {
+    let mut state = InitDialogState::new();
+    assert_eq!(state.mode(), InitMode::Plaintext);
+    state.set_passphrase("hunter2");
+    assert_eq!(state.mode(), InitMode::Encrypted);
+    state.set_passphrase("");
+    state.set_confirm("hunter2");
+    assert_eq!(state.mode(), InitMode::Encrypted);
+    state.set_confirm("");
+    assert_eq!(state.mode(), InitMode::Plaintext);
+}
+
+// ---------------------------------------------------------------------------
+// InitDialogState::submit_button_sensitive — gates the primary action
+// ---------------------------------------------------------------------------
+
+#[test]
+fn submit_button_sensitive_plaintext_without_warning_is_disabled() {
+    // Plaintext mode requires the warning checkbox ticked. Empty
+    // fields without the tick must leave the button disabled.
+    let state = InitDialogState::new();
+    assert!(!state.submit_button_sensitive());
+}
+
+#[test]
+fn submit_button_sensitive_plaintext_with_warning_is_enabled() {
+    let mut state = InitDialogState::new();
+    state.set_plaintext_warning(true);
+    assert!(state.submit_button_sensitive());
+}
+
+#[test]
+fn submit_button_sensitive_encrypted_one_empty_is_disabled() {
+    let mut state = InitDialogState::new();
+    state.set_passphrase("hunter2");
+    assert!(!state.submit_button_sensitive());
+    state.set_passphrase("");
+    state.set_confirm("hunter2");
+    assert!(!state.submit_button_sensitive());
+}
+
+#[test]
+fn submit_button_sensitive_encrypted_mismatched_is_disabled() {
+    let mut state = InitDialogState::new();
+    state.set_passphrase("hunter2");
+    state.set_confirm("hunter3");
+    assert!(!state.submit_button_sensitive());
+}
+
+#[test]
+fn submit_button_sensitive_encrypted_matching_is_enabled() {
+    let mut state = InitDialogState::new();
+    state.set_passphrase("hunter2");
+    state.set_confirm("hunter2");
+    assert!(state.submit_button_sensitive());
+}
+
+// ---------------------------------------------------------------------------
+// InitDialogState::submit — accepts / rejects per prepare_vault_init
+// ---------------------------------------------------------------------------
+
+#[test]
+fn submit_plaintext_with_warning_returns_plaintext_init() {
+    let mut state = InitDialogState::new();
+    state.set_plaintext_warning(true);
+    let init = state
+        .submit()
+        .expect("plaintext init accepted with warning");
+    assert!(matches!(init, VaultInit::Plaintext));
+    // Plaintext buffers are already empty (the user never typed any
+    // passphrase). The submit path preserves whatever buffers exist,
+    // so the empty state is unchanged.
+    assert!(state.passphrase_text().is_empty());
+    assert!(state.confirm_text().is_empty());
+    assert!(state.inline_error().is_none());
+}
+
+#[test]
+fn submit_encrypted_match_returns_encrypted_init_and_preserves_buffers() {
+    // The destructive-gate retry path requires the buffers to survive
+    // the first-pass submit so `stage_pending_for_force` can rebuild a
+    // second `VaultInit` on a `vault_exists` race. `VaultInit` is
+    // non-`Clone`, so we cannot keep a duplicate alongside the one
+    // consumed by the first worker call — instead we rebuild from the
+    // preserved buffers when `WorkerCompletedDestructive` arrives.
+    let mut state = InitDialogState::new();
+    state.set_passphrase("hunter2");
+    state.set_confirm("hunter2");
+    let init = state.submit().expect("matching pair accepted");
+    assert!(matches!(init, VaultInit::Encrypted(_)));
+    assert_eq!(state.passphrase_text(), "hunter2");
+    assert_eq!(state.confirm_text(), "hunter2");
+    assert!(state.inline_error().is_none());
+    drop(init);
+}
+
+#[test]
+fn submit_plaintext_without_warning_returns_rejection_and_preserves_buffers() {
+    let mut state = InitDialogState::new();
+    let rej = state
+        .submit()
+        .expect_err("plaintext requires warning ticked");
+    assert_eq!(rej, SubmitRejection::PlaintextWarningRequired);
+    // PlaintextWarningRequired collapses to `None` in
+    // `InlineError::from_rejection`, so no inline error is staged.
+    assert!(state.inline_error().is_none());
+}
+
+#[test]
+fn submit_encrypted_mismatch_stages_inline_error_and_preserves_buffers() {
+    let mut state = InitDialogState::new();
+    state.set_passphrase("hunter2");
+    state.set_confirm("hunter3");
+    let rej = state.submit().expect_err("mismatched pair rejects");
+    assert_eq!(rej, SubmitRejection::ConfirmationMismatch);
+    let inline = state.inline_error().expect("inline error staged");
+    assert_eq!(inline.kind, ErrorKind::InvalidPassphrase);
+    // Buffers stay so the user can correct without retyping.
+    assert_eq!(state.passphrase_text(), "hunter2");
+    assert_eq!(state.confirm_text(), "hunter3");
+}
+
+#[test]
+fn submit_encrypted_one_empty_stages_inline_error() {
+    let mut state = InitDialogState::new();
+    state.set_passphrase("hunter2");
+    let rej = state.submit().expect_err("one-empty pair rejects");
+    assert_eq!(rej, SubmitRejection::ConfirmationMismatch);
+    assert!(state.inline_error().is_some());
+}
+
+// ---------------------------------------------------------------------------
+// InitDialogState — inline-error slot setter
+// ---------------------------------------------------------------------------
+
+#[test]
+fn set_inline_error_stores_some_and_none_clears() {
+    let mut state = InitDialogState::new();
+    let inline = InlineError::from_error(&unsafe_permissions_err());
+    state.set_inline_error(Some(inline));
+    assert!(state.inline_error().is_some());
+    state.set_inline_error(None);
+    assert!(state.inline_error().is_none());
+}
+
+// ---------------------------------------------------------------------------
+// InitDialogState — clear_for wipes buffers and pending
+// ---------------------------------------------------------------------------
+
+#[test]
+fn clear_for_cancel_wipes_buffers_and_returns_pending() {
+    let mut state = InitDialogState::new();
+    state.set_passphrase("hunter2");
+    state.set_confirm("hunter2");
+    let init = state.submit().expect("matching pair accepted");
+    state.stage_pending(init);
+    let prior = state.clear_for(ClearReason::Cancel);
+    assert!(matches!(prior, Some(VaultInit::Encrypted(_))));
+    assert!(state.passphrase_text().is_empty());
+    assert!(state.confirm_text().is_empty());
+    drop(prior);
+}
+
+#[test]
+fn clear_for_submit_wipes_buffers_returns_no_pending_when_already_consumed() {
+    // After a successful submit, the worker dispatch site consumes
+    // the pending via `consume_pending` (which clears the buffers
+    // as a side effect). A subsequent `clear_for(Submit)` finds the
+    // pending slot already empty.
+    let mut state = InitDialogState::new();
+    state.set_passphrase("hunter2");
+    state.set_confirm("hunter2");
+    let init = state.submit().expect("matching pair accepted");
+    state.stage_pending(init);
+    let _ = state.consume_pending();
+    let prior = state.clear_for(ClearReason::Submit);
+    assert!(prior.is_none());
+}
+
+// ---------------------------------------------------------------------------
+// InitDialogMsg::PassphraseChanged / ConfirmChanged / WarningToggled
+// ---------------------------------------------------------------------------
+
+#[test]
+fn apply_msg_passphrase_changed_updates_buffer_and_emits_no_output() {
+    let mut state = InitDialogState::new();
+    let out = apply_msg(&mut state, InitDialogMsg::PassphraseChanged("h".into()));
+    assert!(out.is_none());
+    assert_eq!(state.passphrase_text(), "h");
+}
+
+#[test]
+fn apply_msg_confirm_changed_updates_buffer_and_emits_no_output() {
+    let mut state = InitDialogState::new();
+    let out = apply_msg(&mut state, InitDialogMsg::ConfirmChanged("c".into()));
+    assert!(out.is_none());
+    assert_eq!(state.confirm_text(), "c");
+}
+
+#[test]
+fn apply_msg_warning_toggled_updates_flag_and_emits_no_output() {
+    let mut state = InitDialogState::new();
+    let out = apply_msg(&mut state, InitDialogMsg::WarningToggled(true));
+    assert!(out.is_none());
+    assert!(state.plaintext_warning_acknowledged());
+}
+
+// ---------------------------------------------------------------------------
+// InitDialogMsg::SubmitClicked — routes via state.submit
+// ---------------------------------------------------------------------------
+
+#[test]
+fn apply_msg_submit_clicked_plaintext_with_warning_emits_submit_create() {
+    let mut state = InitDialogState::new();
+    state.set_plaintext_warning(true);
+    let out = apply_msg(&mut state, InitDialogMsg::SubmitClicked);
+    match out {
+        Some(InitDialogOutput::SubmitCreate(init)) => {
+            assert!(matches!(init, VaultInit::Plaintext));
+        }
+        other => panic!("expected SubmitCreate(Plaintext), got {other:?}"),
+    }
+}
+
+#[test]
+fn apply_msg_submit_clicked_encrypted_match_emits_submit_create_encrypted() {
+    let mut state = InitDialogState::new();
+    state.set_passphrase("hunter2");
+    state.set_confirm("hunter2");
+    let out = apply_msg(&mut state, InitDialogMsg::SubmitClicked);
+    match out {
+        Some(InitDialogOutput::SubmitCreate(VaultInit::Encrypted(_))) => {}
+        other => panic!("expected SubmitCreate(Encrypted), got {other:?}"),
+    }
+}
+
+#[test]
+fn apply_msg_submit_clicked_plaintext_without_warning_returns_none() {
+    // The plaintext-warning gate is the only pre-submit gate that
+    // collapses to `None` (no inline error staged) — the button is
+    // already disabled by `submit_button_sensitive`, but a stray
+    // dispatch from a keyboard accelerator must not produce an
+    // output either.
+    let mut state = InitDialogState::new();
+    let out = apply_msg(&mut state, InitDialogMsg::SubmitClicked);
+    assert!(out.is_none());
+}
+
+#[test]
+fn apply_msg_submit_clicked_encrypted_mismatch_returns_none_and_stages_inline_error() {
+    let mut state = InitDialogState::new();
+    state.set_passphrase("hunter2");
+    state.set_confirm("hunter3");
+    let out = apply_msg(&mut state, InitDialogMsg::SubmitClicked);
+    assert!(out.is_none());
+    let inline = state.inline_error().expect("inline error staged");
+    assert_eq!(inline.kind, ErrorKind::InvalidPassphrase);
+}
+
+// ---------------------------------------------------------------------------
+// InitDialogMsg::WorkerCompletedInline — staging projection
+// ---------------------------------------------------------------------------
+
+#[test]
+fn apply_msg_worker_completed_inline_stages_inline_error_and_emits_no_output() {
+    let mut state = InitDialogState::new();
+    let inline = InlineError::from_error(&unsafe_permissions_err());
+    let out = apply_msg(&mut state, InitDialogMsg::WorkerCompletedInline(inline));
+    assert!(out.is_none());
+    assert!(state.inline_error().is_some());
+    assert_eq!(
+        state.inline_error().unwrap().kind,
+        ErrorKind::UnsafePermissions
+    );
+}
+
+// ---------------------------------------------------------------------------
+// InitDialogMsg::ForceConfirmClicked / ForceCancelClicked — destructive gate
+// ---------------------------------------------------------------------------
+
+#[test]
+fn apply_msg_force_confirm_consumes_pending_and_emits_submit_force_create() {
+    let mut state = InitDialogState::new();
+    state.set_passphrase("hunter2");
+    state.set_confirm("hunter2");
+    // First submit stages the pending VaultInit (the dispatch site
+    // calls `stage_pending` before spawning the worker).
+    let init = state.submit().expect("matching pair accepted");
+    state.stage_pending(init);
+    let out = apply_msg(&mut state, InitDialogMsg::ForceConfirmClicked);
+    match out {
+        Some(InitDialogOutput::SubmitForceCreate(VaultInit::Encrypted(_))) => {}
+        other => panic!("expected SubmitForceCreate(Encrypted), got {other:?}"),
+    }
+    // Pending consumed.
+    assert!(state.consume_pending().is_none());
+}
+
+#[test]
+fn apply_msg_force_confirm_without_pending_returns_none() {
+    // Defensive: no pending means the user reached the destructive
+    // confirm button without an active first-pass submit — the
+    // dispatch is a no-op.
+    let mut state = InitDialogState::new();
+    let out = apply_msg(&mut state, InitDialogMsg::ForceConfirmClicked);
+    assert!(out.is_none());
+}
+
+#[test]
+fn apply_msg_force_cancel_drops_pending_and_wipes_passphrases() {
+    let mut state = InitDialogState::new();
+    state.set_passphrase("hunter2");
+    state.set_confirm("hunter2");
+    let init = state.submit().expect("matching pair accepted");
+    state.stage_pending(init);
+    let out = apply_msg(&mut state, InitDialogMsg::ForceCancelClicked);
+    assert!(out.is_none());
+    // After force-cancel, pending is dropped and buffers wiped.
+    assert!(state.consume_pending().is_none());
+    assert!(state.passphrase_text().is_empty());
+    assert!(state.confirm_text().is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// stage_pending — replaces prior pending and clears buffers
+// ---------------------------------------------------------------------------
+
+#[test]
+fn stage_pending_replaces_prior_pending() {
+    let mut state = InitDialogState::new();
+    state.set_passphrase("hunter2");
+    state.set_confirm("hunter2");
+    let init1 = state.submit().expect("matching pair accepted");
+    let prior = state.stage_pending(init1);
+    assert!(prior.is_none());
+    // Subsequent re-submit (different passphrase) replaces the pending.
+    state.set_passphrase("hunter3");
+    state.set_confirm("hunter3");
+    let init2 = state.submit().expect("matching pair accepted");
+    let prior = state.stage_pending(init2);
+    assert!(matches!(prior, Some(VaultInit::Encrypted(_))));
+    drop(prior);
+}
+
+// ---------------------------------------------------------------------------
+// stage_pending_for_force — re-derives VaultInit from preserved buffers
+// ---------------------------------------------------------------------------
+
+#[test]
+fn stage_pending_for_force_with_encrypted_buffers_stages_pending() {
+    let mut state = InitDialogState::new();
+    state.set_passphrase("hunter2");
+    state.set_confirm("hunter2");
+    // Simulate the first-pass submit that preserves the buffers.
+    let init = state.submit().expect("matching pair accepted");
+    drop(init);
+    // The worker reports DestructiveGate; the dialog rebuilds from
+    // buffers.
+    let prior = state
+        .stage_pending_for_force()
+        .expect("rebuild succeeds with preserved buffers");
+    assert!(prior.is_none());
+    assert!(state.has_pending_force());
+}
+
+#[test]
+fn stage_pending_for_force_with_plaintext_warning_stages_plaintext() {
+    let mut state = InitDialogState::new();
+    state.set_plaintext_warning(true);
+    let _ = state
+        .submit()
+        .expect("plaintext init accepted with warning");
+    let prior = state
+        .stage_pending_for_force()
+        .expect("rebuild succeeds for plaintext path");
+    assert!(prior.is_none());
+    assert!(state.has_pending_force());
+    // Confirming consumes the staged plaintext init.
+    let taken = state
+        .consume_pending()
+        .expect("pending consumed on confirm");
+    assert!(matches!(taken, VaultInit::Plaintext));
+}
+
+#[test]
+fn stage_pending_for_force_rebuild_failure_returns_rejection() {
+    // Defensive: if the buffers were modified between submit and
+    // worker return (the dialog should be disabled during this
+    // window, so this is a safety net), the rebuild fails with the
+    // typed §5 rejection.
+    let mut state = InitDialogState::new();
+    state.set_passphrase("hunter2");
+    state.set_confirm("hunter3"); // mismatched
+    let rej = state
+        .stage_pending_for_force()
+        .expect_err("mismatched rebuild rejects");
+    assert_eq!(rej, SubmitRejection::ConfirmationMismatch);
+    assert!(!state.has_pending_force());
+}
+
+// ---------------------------------------------------------------------------
+// has_pending_force — destructive AlertDialog visibility watch
+// ---------------------------------------------------------------------------
+
+#[test]
+fn has_pending_force_false_when_no_pending_staged() {
+    let state = InitDialogState::new();
+    assert!(!state.has_pending_force());
+}
+
+#[test]
+fn has_pending_force_true_after_stage_pending() {
+    let mut state = InitDialogState::new();
+    state.set_passphrase("hunter2");
+    state.set_confirm("hunter2");
+    let init = state.submit().expect("matching pair accepted");
+    let _ = state.stage_pending(init);
+    assert!(state.has_pending_force());
+}
+
+#[test]
+fn has_pending_force_false_after_consume_pending() {
+    let mut state = InitDialogState::new();
+    state.set_passphrase("hunter2");
+    state.set_confirm("hunter2");
+    let init = state.submit().expect("matching pair accepted");
+    let _ = state.stage_pending(init);
+    let _ = state.consume_pending();
+    assert!(!state.has_pending_force());
+}
+
+#[test]
+fn has_pending_force_false_after_force_cancel() {
+    let mut state = InitDialogState::new();
+    state.set_passphrase("hunter2");
+    state.set_confirm("hunter2");
+    let init = state.submit().expect("matching pair accepted");
+    let _ = state.stage_pending(init);
+    let _ = apply_msg(&mut state, InitDialogMsg::ForceCancelClicked);
+    assert!(!state.has_pending_force());
+}
+
+// ---------------------------------------------------------------------------
+// InitDialogMsg::WorkerCompletedDestructive — stages pending via rebuild
+// ---------------------------------------------------------------------------
+
+#[test]
+fn apply_msg_worker_completed_destructive_stages_pending_from_buffers() {
+    let mut state = InitDialogState::new();
+    state.set_passphrase("hunter2");
+    state.set_confirm("hunter2");
+    let init = state.submit().expect("matching pair accepted");
+    drop(init);
+    let out = apply_msg(&mut state, InitDialogMsg::WorkerCompletedDestructive);
+    assert!(out.is_none());
+    assert!(state.has_pending_force());
+    // Force-confirm then consumes the staged init and emits
+    // SubmitForceCreate.
+    let out = apply_msg(&mut state, InitDialogMsg::ForceConfirmClicked);
+    match out {
+        Some(InitDialogOutput::SubmitForceCreate(VaultInit::Encrypted(_))) => {}
+        other => panic!("expected SubmitForceCreate(Encrypted), got {other:?}"),
+    }
+}
+
+#[test]
+fn apply_msg_worker_completed_destructive_plaintext_round_trip() {
+    let mut state = InitDialogState::new();
+    state.set_plaintext_warning(true);
+    let _ = state.submit().expect("plaintext init accepted");
+    let _ = apply_msg(&mut state, InitDialogMsg::WorkerCompletedDestructive);
+    assert!(state.has_pending_force());
+    let out = apply_msg(&mut state, InitDialogMsg::ForceConfirmClicked);
+    match out {
+        Some(InitDialogOutput::SubmitForceCreate(VaultInit::Plaintext)) => {}
+        other => panic!("expected SubmitForceCreate(Plaintext), got {other:?}"),
+    }
 }

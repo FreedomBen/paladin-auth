@@ -92,6 +92,8 @@ use paladin_core::{
 };
 use secrecy::SecretString;
 
+use crate::secret_fields::{ClearReason, InitSecretState};
+
 /// Vault mode selected by the current passphrase-field contents.
 ///
 /// See [`classify_mode`].
@@ -120,7 +122,7 @@ pub fn classify_mode(passphrase: &str, confirm: &str) -> InitMode {
 
 /// Inline rejection produced by [`prepare_vault_init`] before any
 /// vault work runs.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SubmitRejection {
     /// Plaintext mode selected but the warning checkbox is unticked.
     /// The dialog must surface
@@ -548,6 +550,37 @@ impl InlineError {
             backup_path: backup_path_of(err),
         }
     }
+
+    /// Build an [`InlineError`] from a pre-flight [`SubmitRejection`].
+    ///
+    /// Returns `Some` for [`SubmitRejection::ConfirmationMismatch`] —
+    /// the §5 `invalid_passphrase` projection with
+    /// `reason: "confirmation_mismatch"` so the GUI surfaces the same
+    /// stable `error_kind` / `reason` the CLI / TUI do.
+    ///
+    /// Returns `None` for [`SubmitRejection::PlaintextWarningRequired`]
+    /// — that gate is a UI-only precondition that never lifts to a §5
+    /// [`PaladinError`] kind; the dialog surfaces the unticked warning
+    /// body separately, not as an inline error. Mirroring the typed
+    /// `SubmitRejection::error_kind() -> Option<ErrorKind>` contract,
+    /// this constructor returns `Option<InlineError>` so the caller
+    /// can distinguish "no inline error to stage" from "inline error
+    /// staged" without re-deriving the routing.
+    ///
+    /// The rendered text and [`ErrorKind`] match the equivalent
+    /// [`PaladinError`] variant so the GUI surfaces the same stable §5
+    /// `error_kind` / `reason` pair the CLI / TUI do.
+    #[must_use]
+    pub fn from_rejection(rejection: SubmitRejection) -> Option<Self> {
+        match rejection {
+            SubmitRejection::ConfirmationMismatch => {
+                Some(Self::from_error(&PaladinError::InvalidPassphrase {
+                    reason: rejection.reason()?,
+                }))
+            }
+            SubmitRejection::PlaintextWarningRequired => None,
+        }
+    }
 }
 
 fn render_inline(err: &PaladinError) -> String {
@@ -880,17 +913,431 @@ pub struct InitDialogInit {
     pub vault_path: PathBuf,
 }
 
+/// Live state owned by [`InitDialogComponent`].
+///
+/// Wraps the shared [`InitSecretState`] (passphrase + confirm
+/// [`crate::secret_fields::SecretEntry`] shadow buffers plus the
+/// destructive-gate pending [`VaultInit`]) and tracks the additional
+/// dialog-local state: the plaintext-warning acknowledgement
+/// checkbox and the [`InlineError`] slot the widget binds to its
+/// inline-error label.
+///
+/// The struct deliberately does not derive `Debug` — `InitSecretState`
+/// is the §8 boundary that keeps secret bytes inside `Zeroizing<String>`
+/// and out of `Debug` output.
+#[derive(Default)]
+pub struct InitDialogState {
+    secret: InitSecretState,
+    plaintext_warning_acknowledged: bool,
+    inline_error: Option<InlineError>,
+}
+
+impl InitDialogState {
+    /// Construct an empty state — equivalent to `Self::default()`.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Replace the passphrase shadow buffer with the entry row's
+    /// current text.
+    ///
+    /// Called from the widget's `connect_changed` signal on every
+    /// keystroke. Also dismisses any prior [`InlineError`] so the
+    /// dialog never carries a stale message into the next attempt —
+    /// mirrors the [`crate::unlock_dialog::UnlockDialogState`]
+    /// affordance.
+    pub fn set_passphrase(&mut self, text: &str) {
+        self.secret.passphrase.set(text);
+        self.inline_error = None;
+    }
+
+    /// Replace the confirm-passphrase shadow buffer with the entry
+    /// row's current text. Also dismisses any prior [`InlineError`].
+    pub fn set_confirm(&mut self, text: &str) {
+        self.secret.confirm.set(text);
+        self.inline_error = None;
+    }
+
+    /// Flip the plaintext-warning acknowledgement flag.
+    ///
+    /// Called from the warning checkbox's `connect_toggled` signal.
+    /// Also dismisses any prior [`InlineError`] so toggling the
+    /// checkbox after a stale rejection clears the message.
+    pub fn set_plaintext_warning(&mut self, acknowledged: bool) {
+        self.plaintext_warning_acknowledged = acknowledged;
+        self.inline_error = None;
+    }
+
+    /// Borrow the passphrase shadow buffer.
+    #[must_use]
+    pub fn passphrase_text(&self) -> &str {
+        self.secret.passphrase.text()
+    }
+
+    /// Borrow the confirm-passphrase shadow buffer.
+    #[must_use]
+    pub fn confirm_text(&self) -> &str {
+        self.secret.confirm.text()
+    }
+
+    /// Whether the plaintext-warning checkbox is ticked.
+    #[must_use]
+    pub fn plaintext_warning_acknowledged(&self) -> bool {
+        self.plaintext_warning_acknowledged
+    }
+
+    /// Borrow the inline-error slot for the widget's `gtk::Label`
+    /// binding.
+    #[must_use]
+    pub fn inline_error(&self) -> Option<&InlineError> {
+        self.inline_error.as_ref()
+    }
+
+    /// Replace the inline-error slot.
+    ///
+    /// `Some(_)` is staged by the worker dispatch site when
+    /// [`run_init_worker`] returns [`InitWorkerEffect::InlineError`];
+    /// `None` clears the slot on a successful destructive-gate
+    /// cancel or after the user starts typing.
+    pub fn set_inline_error(&mut self, err: Option<InlineError>) {
+        self.inline_error = err;
+    }
+
+    /// Whether a destructive-gate `VaultInit` is staged in the
+    /// pending slot.
+    ///
+    /// Used by the widget to flip the destructive
+    /// [`adw::AlertDialog`] into visible state once
+    /// `InitWorkerEffect::DestructiveGate` lands.
+    #[must_use]
+    pub fn has_pending_force(&self) -> bool {
+        self.secret.pending.is_some()
+    }
+
+    /// Classify the dialog's current passphrase-field contents.
+    #[must_use]
+    pub fn mode(&self) -> InitMode {
+        classify_mode(self.passphrase_text(), self.confirm_text())
+    }
+
+    /// Whether the primary "Create vault" button is currently
+    /// sensitive.
+    ///
+    /// The widget's `#[watch] set_sensitive` binding reads this
+    /// predicate so the per-mode gate in [`prepare_vault_init`]
+    /// never fires through a normal click:
+    ///
+    /// * Plaintext mode requires the warning checkbox ticked.
+    /// * Encrypted mode requires both fields non-empty and matching.
+    ///
+    /// Defense-in-depth: a stray keyboard accelerator that bypasses
+    /// the sensitivity binding still goes through
+    /// [`InitDialogState::submit`] which re-runs
+    /// [`prepare_vault_init`] and stages the typed rejection.
+    #[must_use]
+    pub fn submit_button_sensitive(&self) -> bool {
+        match self.mode() {
+            InitMode::Plaintext => self.plaintext_warning_acknowledged,
+            InitMode::Encrypted => {
+                !self.passphrase_text().is_empty()
+                    && !self.confirm_text().is_empty()
+                    && self.passphrase_text() == self.confirm_text()
+            }
+        }
+    }
+
+    /// Run the pre-submit gate when the "Create vault" button fires.
+    ///
+    /// Delegates to [`prepare_vault_init`] on the current passphrase
+    /// shadow buffers and the warning-acknowledgement flag.
+    ///
+    /// On success, the passphrase shadow buffers are **preserved** so
+    /// the destructive-gate retry path can re-derive a second
+    /// [`VaultInit`] (the type is non-`Clone`) when the worker
+    /// returns [`InitWorkerEffect::DestructiveGate`]. The dialog
+    /// stays in [`crate::app::state::AppState::UnlockedBusy`] while
+    /// the worker is in flight so editing is disabled and the buffers
+    /// cannot drift before the destructive-gate decision is made.
+    /// `consume_pending` (the destructive-confirm path) and
+    /// [`clear_for`](Self::clear_for) (cancel / close / auto-lock)
+    /// wipe the buffers when they complete.
+    ///
+    /// On rejection, the buffers are left untouched so the user can
+    /// correct without retyping. `ConfirmationMismatch` stages an
+    /// inline error via [`InlineError::from_rejection`];
+    /// `PlaintextWarningRequired` returns the rejection without
+    /// staging an inline error (the unticked warning gate is rendered
+    /// separately by the widget).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SubmitRejection`] when the §5 pre-vault gate fails.
+    pub fn submit(&mut self) -> Result<VaultInit, SubmitRejection> {
+        match prepare_vault_init(
+            self.passphrase_text(),
+            self.confirm_text(),
+            self.plaintext_warning_acknowledged,
+        ) {
+            Ok(init) => {
+                self.inline_error = None;
+                Ok(init)
+            }
+            Err(rejection) => {
+                self.inline_error = InlineError::from_rejection(rejection);
+                Err(rejection)
+            }
+        }
+    }
+
+    /// Re-derive a fresh [`VaultInit`] from the current buffers and
+    /// stage it in the pending slot, returning the prior pending (if
+    /// any).
+    ///
+    /// Called from [`apply_msg`]'s
+    /// [`InitDialogMsg::WorkerCompletedDestructive`] arm so the
+    /// destructive-gate confirm path has a `VaultInit` to consume on
+    /// the create-force re-run. `VaultInit` is non-`Clone`, so we
+    /// cannot keep a copy alongside the one consumed by the first
+    /// worker call — instead we rebuild a second value from the
+    /// preserved buffers.
+    ///
+    /// Returns `Ok(prior_pending)` on success; the prior pending (if
+    /// any) is returned for the caller to drop explicitly so its
+    /// `SecretString` passphrase zeroes. Returns `Err(rejection)` if
+    /// [`prepare_vault_init`] now refuses (e.g., the user managed to
+    /// modify the buffers between Submit and the worker return — the
+    /// dialog should be disabled during this window, so this branch
+    /// is defensive).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SubmitRejection`] when the §5 pre-vault gate refuses
+    /// the rebuild.
+    pub fn stage_pending_for_force(&mut self) -> Result<Option<VaultInit>, SubmitRejection> {
+        let init = prepare_vault_init(
+            self.passphrase_text(),
+            self.confirm_text(),
+            self.plaintext_warning_acknowledged,
+        )?;
+        Ok(self.secret.replace_pending(init))
+    }
+
+    /// Stage a freshly built [`VaultInit`] in the pending slot,
+    /// returning the prior pending (if any).
+    ///
+    /// Called by the worker dispatch site after [`InitDialogState::submit`]
+    /// succeeds so the destructive-gate re-run path
+    /// ([`InitWorkerEffect::DestructiveGate`] → user confirms force)
+    /// can consume the same `VaultInit` without re-deriving it from
+    /// the passphrase buffers — which by then have been wiped.
+    /// Mirrors [`InitSecretState::replace_pending`].
+    pub fn stage_pending(&mut self, init: VaultInit) -> Option<VaultInit> {
+        self.secret.replace_pending(init)
+    }
+
+    /// Consume the pending [`VaultInit`] for a `create_force` re-run.
+    ///
+    /// Wipes both passphrase buffers as a side effect — mirrors
+    /// [`InitSecretState::consume_pending`]. Returns `None` when no
+    /// pending is staged (defensive: a stray force-confirm dispatch
+    /// without an active first-pass submit).
+    #[must_use]
+    pub fn consume_pending(&mut self) -> Option<VaultInit> {
+        self.secret.consume_pending()
+    }
+
+    /// Wipe both passphrase buffers and drop any pending
+    /// [`VaultInit`].
+    ///
+    /// Mirrors [`InitSecretState::clear_for`] — covers Submit /
+    /// Cancel / Close / `AutoLock` / Replace per DESIGN §8. Returns
+    /// the prior pending so the caller can drop it explicitly.
+    /// Also clears the inline-error slot so a re-mounted dialog
+    /// does not flash a stale message.
+    pub fn clear_for(&mut self, reason: ClearReason) -> Option<VaultInit> {
+        let prior = self.secret.clear_for(reason);
+        self.inline_error = None;
+        prior
+    }
+}
+
 /// Messages handled by [`InitDialogComponent`].
 ///
-/// This milestone scaffolds the read-only render path — the
-/// `submit` / `cancel` / destructive-gate transitions described in
-/// §"Component tree" land in a follow-up commit alongside the
-/// passphrase-field wiring on `AppModel`. The empty enum is the
-/// deliberate v0.2 starting point — relm4 requires the associated
-/// `Input` type to exist even when no inbound messages are wired
-/// yet.
+/// Live keystrokes from the two passphrase entries and toggles of
+/// the plaintext-warning checkbox arrive as
+/// [`Self::PassphraseChanged`] / [`Self::ConfirmChanged`] /
+/// [`Self::WarningToggled`]; the handler shadows the typed bytes /
+/// flag into the [`InitDialogState`] so the cleartext lives in
+/// Paladin-owned memory rather than escaping through `AppMsg` /
+/// `AppOutput`. [`Self::SubmitClicked`] arrives from the "Create
+/// vault" button's `connect_clicked`; the handler runs
+/// [`InitDialogState::submit`] so the typed rejection stages an
+/// inline error and the `Ok` branch forwards as
+/// [`InitDialogOutput::SubmitCreate`]. [`Self::ForceConfirmClicked`] /
+/// [`Self::ForceCancelClicked`] arrive from the destructive
+/// [`adw::AlertDialog`]'s two buttons after the worker reports
+/// [`InitWorkerEffect::DestructiveGate`]. [`Self::WorkerCompletedInline`] is
+/// pushed back from `AppModel` after the worker returns
+/// [`InitWorkerEffect::InlineError`]; the handler stages the
+/// pre-projected [`InlineError`] into [`InitDialogState`]'s inline
+/// slot so the dialog body can render it.
+///
+/// `Clone` is unnecessary — the relm4 channel consumes the message
+/// by value — and would conflict with the `VaultInit` carried by
+/// [`InitDialogOutput`] (whose [`EncryptionOptions`] passphrase is a
+/// non-`Clone` [`secrecy::SecretString`]).
 #[derive(Debug)]
-pub enum InitDialogMsg {}
+pub enum InitDialogMsg {
+    /// Raw text from the passphrase [`adw::PasswordEntryRow`] after
+    /// a keystroke. Carries `String` because the [`gtk::EntryBuffer`]
+    /// is the unavoidable §8 UI boundary; the bytes transit the
+    /// relm4 channel before the handler shadows them into the
+    /// [`crate::secret_fields::SecretEntry`].
+    PassphraseChanged(String),
+    /// Raw text from the confirm-passphrase
+    /// [`adw::PasswordEntryRow`] after a keystroke. Mirrors
+    /// [`Self::PassphraseChanged`] for the second entry row.
+    ConfirmChanged(String),
+    /// New value of the plaintext-warning [`gtk::CheckButton`] after
+    /// a toggle.
+    WarningToggled(bool),
+    /// The "Create vault" button was clicked. Routes through
+    /// [`apply_msg`] / [`InitDialogState::submit`]; success forwards
+    /// [`InitDialogOutput::SubmitCreate`].
+    SubmitClicked,
+    /// The destructive [`adw::AlertDialog`]'s confirm button (worded
+    /// `"Replace"` per [`format_init_dialog_force_confirm_label`])
+    /// was clicked. Routes through [`apply_msg`] /
+    /// [`InitDialogState::consume_pending`] and forwards
+    /// [`InitDialogOutput::SubmitForceCreate`].
+    ForceConfirmClicked,
+    /// The destructive [`adw::AlertDialog`]'s cancel button (worded
+    /// `"Cancel"` per [`format_init_dialog_force_cancel_label`]) was
+    /// clicked. The handler drops the pending [`VaultInit`] and
+    /// wipes both passphrase buffers via
+    /// [`InitDialogState::clear_for`] with [`ClearReason::Cancel`].
+    ForceCancelClicked,
+    /// `AppModel` pushes the [`InlineError`] branch of
+    /// [`InitWorkerEffect::InlineError`] back to the dialog after
+    /// the worker returns a typed failure. The handler stages the
+    /// pre-projected error into the dialog's inline-error slot.
+    WorkerCompletedInline(InlineError),
+    /// `AppModel` pushes this after the worker returns
+    /// [`InitWorkerEffect::DestructiveGate`]. The handler re-derives
+    /// a fresh [`VaultInit`] from the preserved passphrase buffers
+    /// via [`InitDialogState::stage_pending_for_force`] and stages it
+    /// in the pending slot so the [`Self::ForceConfirmClicked`] path
+    /// has a value to consume for the `create_force` worker call.
+    /// The destructive [`adw::AlertDialog`]'s visibility is bound to
+    /// [`InitDialogState::has_pending_force`] so staging the pending
+    /// triggers the dialog to show itself.
+    WorkerCompletedDestructive,
+}
+
+/// Outputs forwarded from [`InitDialogComponent`] up to `AppModel`.
+///
+/// Carries the [`VaultInit`] the GUI handed to
+/// [`InitDialogState::submit`] (first-pass [`Self::SubmitCreate`]) or
+/// to [`InitDialogState::consume_pending`] (destructive-gate re-run
+/// [`Self::SubmitForceCreate`]) so `AppModel::update` can build the
+/// matching [`InitWorkerInput`] and spawn the worker on
+/// `gtk::gio::spawn_blocking` without re-deriving the value from the
+/// dialog's now-wiped passphrase buffers.
+///
+/// Not `Clone` / `PartialEq` because [`VaultInit::Encrypted`] wraps a
+/// [`paladin_core::EncryptionOptions`] whose `SecretString` passphrase
+/// is intentionally non-`Clone` / non-`Eq`: the cleartext bytes must
+/// move once into the worker and zeroize on drop. `AppModel`'s
+/// handler consumes the variant by value and never observes the
+/// cleartext again.
+#[derive(Debug)]
+pub enum InitDialogOutput {
+    /// "Create vault" button pressed with a valid first-pass
+    /// submission (plaintext + warning ticked, or encrypted +
+    /// matching pair). Carries the [`VaultInit`] for
+    /// [`InitWorkerMode::Create`] dispatch.
+    SubmitCreate(VaultInit),
+    /// Destructive [`adw::AlertDialog`] confirm button pressed after
+    /// [`InitWorkerEffect::DestructiveGate`]. Carries the
+    /// [`VaultInit`] previously staged via
+    /// [`InitDialogState::stage_pending`] for
+    /// [`InitWorkerMode::CreateForce`] dispatch.
+    SubmitForceCreate(VaultInit),
+}
+
+/// Apply an inbound [`InitDialogMsg`] to `state` and return the
+/// optional [`InitDialogOutput`] the widget layer should forward to
+/// `AppModel`.
+///
+/// Pulled out of [`InitDialogComponent::update`] so the per-message
+/// routing decisions stay unit-testable in
+/// `tests/init_dialog_logic.rs` without spinning up GTK / libadwaita.
+///
+/// * [`InitDialogMsg::PassphraseChanged`] /
+///   [`InitDialogMsg::ConfirmChanged`] /
+///   [`InitDialogMsg::WarningToggled`] shadow the value into the
+///   matching [`InitDialogState`] slot and emit no output.
+/// * [`InitDialogMsg::SubmitClicked`] runs
+///   [`InitDialogState::submit`]: rejection stages the inline
+///   projection (or is silently ignored for the plaintext-warning
+///   gate); the `Ok` branch is staged in the pending slot via
+///   [`InitDialogState::stage_pending`] and forwarded as
+///   [`InitDialogOutput::SubmitCreate`].
+/// * [`InitDialogMsg::ForceConfirmClicked`] consumes the pending
+///   [`VaultInit`] via [`InitDialogState::consume_pending`] and
+///   forwards [`InitDialogOutput::SubmitForceCreate`]; a stray
+///   dispatch without a pending value is a benign no-op.
+/// * [`InitDialogMsg::ForceCancelClicked`] drops the pending value
+///   and wipes both passphrase buffers via
+///   [`InitDialogState::clear_for`] with [`ClearReason::Cancel`].
+/// * [`InitDialogMsg::WorkerCompletedInline`] stages the
+///   pre-projected error into [`InitDialogState`]'s inline slot.
+pub fn apply_msg(state: &mut InitDialogState, msg: InitDialogMsg) -> Option<InitDialogOutput> {
+    match msg {
+        InitDialogMsg::PassphraseChanged(text) => {
+            state.set_passphrase(&text);
+            None
+        }
+        InitDialogMsg::ConfirmChanged(text) => {
+            state.set_confirm(&text);
+            None
+        }
+        InitDialogMsg::WarningToggled(value) => {
+            state.set_plaintext_warning(value);
+            None
+        }
+        InitDialogMsg::SubmitClicked => match state.submit() {
+            Ok(init) => Some(InitDialogOutput::SubmitCreate(init)),
+            Err(_rejection) => None,
+        },
+        InitDialogMsg::ForceConfirmClicked => state
+            .consume_pending()
+            .map(InitDialogOutput::SubmitForceCreate),
+        InitDialogMsg::ForceCancelClicked => {
+            let _ = state.clear_for(ClearReason::Cancel);
+            None
+        }
+        InitDialogMsg::WorkerCompletedInline(inline) => {
+            state.set_inline_error(Some(inline));
+            None
+        }
+        InitDialogMsg::WorkerCompletedDestructive => {
+            // Rebuild a fresh `VaultInit` from the preserved buffers
+            // and stage it in pending. The destructive
+            // `adw::AlertDialog`'s `set_visible` watch on
+            // `has_pending_force()` flips to `true`, surfacing the
+            // alert. A rebuild rejection here is defensive — the
+            // dialog is in `UnlockedBusy` while the worker runs so
+            // the buffers should be intact — but is silently dropped
+            // because the prior submit succeeded by definition (the
+            // worker would not have returned `DestructiveGate`
+            // otherwise).
+            let _ = state.stage_pending_for_force();
+            None
+        }
+    }
+}
 
 /// Widget-bearing dialog for the
 /// [`crate::app::state::AppState::Missing`] branch.
@@ -911,6 +1358,11 @@ pub struct InitDialogComponent {
     /// value through every signal.
     #[allow(dead_code)]
     vault_path: PathBuf,
+    /// Live state owned by the dialog: passphrase + confirm shadow
+    /// buffers, the plaintext-warning acknowledgement flag, and the
+    /// inline-error slot the widget binds to its error label.
+    #[allow(dead_code)]
+    state: InitDialogState,
 }
 
 #[allow(missing_docs)]
@@ -918,7 +1370,7 @@ pub struct InitDialogComponent {
 impl SimpleComponent for InitDialogComponent {
     type Init = InitDialogInit;
     type Input = InitDialogMsg;
-    type Output = ();
+    type Output = InitDialogOutput;
 
     view! {
         #[root]
@@ -938,14 +1390,21 @@ impl SimpleComponent for InitDialogComponent {
     ) -> ComponentParts<Self> {
         let model = InitDialogComponent {
             vault_path: init.vault_path,
+            state: InitDialogState::new(),
         };
         let widgets = view_output!();
         ComponentParts { model, widgets }
     }
 
-    fn update(&mut self, _msg: Self::Input, _sender: ComponentSender<Self>) {
-        // No inbound messages handled at this milestone — see
-        // `InitDialogMsg` doc comment for the upcoming submit /
-        // cancel / destructive-gate actions.
+    fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>) {
+        // Routing lives in `apply_msg` so the per-message decisions
+        // stay unit-testable without spinning up GTK. The full widget
+        // body (passphrase entries, warning checkbox, destructive
+        // alert) lands in a follow-up commit; this commit wires the
+        // pure-logic dispatch so the widget callbacks can be added on
+        // top of a stable message API.
+        if let Some(output) = apply_msg(&mut self.state, msg) {
+            let _ = sender.output(output);
+        }
     }
 }
