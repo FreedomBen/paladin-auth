@@ -31,16 +31,23 @@
 //! / libadwaita.
 
 use std::io;
-use std::path::PathBuf;
-use std::time::Duration;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use paladin_core::{AccountId, AccountKindSummary, PaladinError, TICK_INTERVAL_MS};
+use secrecy::SecretString;
+
+use paladin_core::{
+    validate_manual, AccountId, AccountInput, AccountKindInput, AccountKindSummary, Algorithm,
+    IconHintInput, PaladinError, Store, Vault, VaultInit, VaultLock, TICK_INTERVAL_MS,
+};
 
 use paladin_gtk::account_list::AccountRowModel;
+use paladin_gtk::account_row::{CodeDisplay, RowDisplay};
 use paladin_gtk::app::state::AppState;
 use paladin_gtk::startup_error::StartupError;
 use paladin_gtk::ticker::{
-    has_visible_totp_row, should_install, tick_interval, ticker_transition, TickerTransition,
+    compute_tick_displays, has_visible_totp_row, should_install, tick_interval, ticker_transition,
+    TickerTransition,
 };
 
 // ---------------------------------------------------------------------------
@@ -321,4 +328,330 @@ fn ticker_transition_teardown_on_unlocked_to_locked_with_totp() {
         ticker_transition(true, &locked(), &rows),
         TickerTransition::Teardown,
     );
+}
+
+// ---------------------------------------------------------------------------
+// `compute_tick_displays` — per-tick TOTP row refresh
+//
+// The plan's "On each tick, recompute the TOTP gauge value and the
+// visible code from `paladin_core::totp_code(account, now)` for every
+// TOTP row in the current list view" bullet binds to this projection.
+// HOTP rows pull from the reveal slot on demand, so they are not in
+// the per-tick refresh set. Missing account ids (a race between a
+// vault mutation and the tick firing) and `totp_code` errors
+// (pre-Unix-epoch `now`, `valid_until` overflow) drop silently — the
+// widget layer leaves the prior display in place rather than blanking
+// the row on a transient failure.
+// ---------------------------------------------------------------------------
+
+fn secure_tempdir() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700))
+            .expect("chmod tempdir 0700");
+    }
+    dir
+}
+
+fn open_plaintext_pair(path: &Path) -> (Vault, Store) {
+    let (vault, store) = Store::create(path, VaultInit::Plaintext).expect("create plaintext");
+    vault.save(&store).expect("commit empty vault");
+    drop(vault);
+    drop(store);
+    Store::open(path, VaultLock::Plaintext).expect("reopen plaintext")
+}
+
+fn add_totp(vault: &mut Vault, store: &Store, issuer: Option<&str>, label: &str) -> AccountId {
+    let input = AccountInput {
+        label: label.to_string(),
+        issuer: issuer.map(str::to_string),
+        secret: SecretString::from("JBSWY3DPEHPK3PXP".to_string()),
+        algorithm: Algorithm::Sha1,
+        digits: 6,
+        kind: AccountKindInput::Totp,
+        period_secs: None,
+        counter: None,
+        icon_hint: IconHintInput::Default,
+    };
+    let validated = validate_manual(input, SystemTime::now()).expect("valid manual input");
+    let id = vault.add(validated.account);
+    vault.save(store).expect("commit added account");
+    id
+}
+
+fn add_hotp(
+    vault: &mut Vault,
+    store: &Store,
+    issuer: Option<&str>,
+    label: &str,
+    counter: u64,
+) -> AccountId {
+    let input = AccountInput {
+        label: label.to_string(),
+        issuer: issuer.map(str::to_string),
+        secret: SecretString::from("JBSWY3DPEHPK3PXP".to_string()),
+        algorithm: Algorithm::Sha1,
+        digits: 6,
+        kind: AccountKindInput::Hotp,
+        period_secs: None,
+        counter: Some(counter),
+        icon_hint: IconHintInput::Default,
+    };
+    let validated = validate_manual(input, SystemTime::now()).expect("valid manual input");
+    let id = vault.add(validated.account);
+    vault.save(store).expect("commit added account");
+    id
+}
+
+fn totp_row_for(id: AccountId, label: &str) -> AccountRowModel {
+    AccountRowModel {
+        id,
+        display_label: label.to_string(),
+        kind: AccountKindSummary::Totp,
+        counter: None,
+    }
+}
+
+fn hotp_row_for(id: AccountId, label: &str, counter: u64) -> AccountRowModel {
+    AccountRowModel {
+        id,
+        display_label: label.to_string(),
+        kind: AccountKindSummary::Hotp,
+        counter: Some(counter),
+    }
+}
+
+#[test]
+fn compute_tick_displays_empty_rows_returns_empty() {
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (vault, _store) = open_plaintext_pair(&path);
+
+    let displays = compute_tick_displays(&vault, &[], SystemTime::now());
+    assert!(
+        displays.is_empty(),
+        "an empty row set produces an empty refresh: {displays:?}",
+    );
+}
+
+#[test]
+fn compute_tick_displays_hotp_only_rows_returns_empty() {
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+
+    let id = add_hotp(&mut vault, &store, Some("Acme"), "alice", 7);
+    let rows = vec![hotp_row_for(id, "Acme:alice", 7)];
+
+    let displays = compute_tick_displays(&vault, &rows, SystemTime::now());
+    assert!(
+        displays.is_empty(),
+        "HOTP rows are not in the per-tick refresh set; got: {displays:?}",
+    );
+}
+
+#[test]
+fn compute_tick_displays_single_totp_row_returns_visible_code() {
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+
+    let id = add_totp(&mut vault, &store, Some("Acme"), "alice");
+    let rows = vec![totp_row_for(id, "Acme:alice")];
+
+    // Pin `now` so the expected code is stable across test runs;
+    // re-derive the expected digits from `Vault::totp_code` so the
+    // assertion stays independent of the test secret.
+    let now = UNIX_EPOCH + Duration::from_secs(59);
+    let expected_code = vault
+        .totp_code(id, now)
+        .expect("totp_code at t=59 is well-defined");
+    let displays = compute_tick_displays(&vault, &rows, now);
+    assert_eq!(
+        displays.len(),
+        1,
+        "one TOTP row → one display: {displays:?}"
+    );
+    let (out_id, display) = &displays[0];
+    assert_eq!(*out_id, id);
+    assert_eq!(display.label, "Acme:alice");
+    assert_eq!(display.kind, AccountKindSummary::Totp);
+    match &display.code {
+        CodeDisplay::Visible(text) => {
+            assert_eq!(*text, expected_code.code);
+            assert_eq!(text.len(), 6, "default digits = 6: {text}");
+            assert!(
+                text.chars().all(|c| c.is_ascii_digit()),
+                "TOTP code is all ASCII digits: {text}",
+            );
+        }
+        CodeDisplay::Hidden => panic!("per-tick refresh must publish a visible code"),
+    }
+    assert_eq!(display.counter, None, "TOTP rows carry no counter widget");
+    assert!(display.copy_enabled, "TOTP rows always allow copy");
+    assert!(
+        !display.next_button_visible,
+        "TOTP rows never expose the HOTP next button",
+    );
+    assert!(
+        display.progress_visible,
+        "TOTP rows expose the progress gauge",
+    );
+    assert!(display.kebab_visible, "every row exposes the kebab menu");
+}
+
+#[test]
+fn compute_tick_displays_skips_hotp_rows_in_mixed_set() {
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+
+    let totp_id = add_totp(&mut vault, &store, Some("Acme"), "alice");
+    let hotp_id = add_hotp(&mut vault, &store, Some("Acme"), "bob", 3);
+
+    let rows = vec![
+        totp_row_for(totp_id, "Acme:alice"),
+        hotp_row_for(hotp_id, "Acme:bob", 3),
+    ];
+
+    let displays = compute_tick_displays(&vault, &rows, SystemTime::now());
+    assert_eq!(displays.len(), 1, "only TOTP rows refresh: {displays:?}");
+    assert_eq!(displays[0].0, totp_id);
+    let ids: Vec<AccountId> = displays.iter().map(|(id, _)| *id).collect();
+    assert!(
+        !ids.contains(&hotp_id),
+        "HOTP id must not appear in tick displays",
+    );
+}
+
+#[test]
+fn compute_tick_displays_preserves_row_order_for_totp_rows() {
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+
+    let a = add_totp(&mut vault, &store, Some("Acme"), "alice");
+    let b = add_totp(&mut vault, &store, Some("Acme"), "bob");
+    let c = add_totp(&mut vault, &store, Some("Acme"), "carol");
+
+    // Pass rows in non-vault-insertion order — the projection must
+    // preserve the caller's order, not re-sort by vault.
+    let rows = vec![
+        totp_row_for(c, "Acme:carol"),
+        totp_row_for(a, "Acme:alice"),
+        totp_row_for(b, "Acme:bob"),
+    ];
+
+    let displays = compute_tick_displays(&vault, &rows, SystemTime::now());
+    let ids: Vec<AccountId> = displays.iter().map(|(id, _)| *id).collect();
+    assert_eq!(
+        ids,
+        vec![c, a, b],
+        "order matches `rows`, not vault insertion order",
+    );
+}
+
+#[test]
+fn compute_tick_displays_skips_rows_missing_from_vault() {
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+
+    let real = add_totp(&mut vault, &store, Some("Acme"), "alice");
+    // A stale id that does not exist in the vault — simulates a
+    // race where the row set lags one tick behind a remove.
+    let stale = AccountId::new();
+
+    let rows = vec![
+        totp_row_for(stale, "Stale:row"),
+        totp_row_for(real, "Acme:alice"),
+    ];
+
+    let displays = compute_tick_displays(&vault, &rows, SystemTime::now());
+    assert_eq!(displays.len(), 1, "stale id is skipped: {displays:?}");
+    assert_eq!(displays[0].0, real, "only the live id projects");
+}
+
+#[test]
+fn compute_tick_displays_skips_rows_when_totp_code_fails() {
+    // `Vault::totp_code` surfaces `time_range` from the underlying
+    // TOTP primitive when `now` precedes the Unix epoch. A transient
+    // clock failure must not blank an otherwise valid row — the
+    // projection skips the row and the widget layer leaves its prior
+    // display in place.
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+
+    let id = add_totp(&mut vault, &store, Some("Acme"), "alice");
+    let rows = vec![totp_row_for(id, "Acme:alice")];
+
+    let pre_epoch = UNIX_EPOCH
+        .checked_sub(Duration::from_secs(1))
+        .expect("UNIX_EPOCH supports a 1-second rewind on this platform");
+    let displays = compute_tick_displays(&vault, &rows, pre_epoch);
+    assert!(
+        displays.is_empty(),
+        "TOTP errors drop silently: {displays:?}",
+    );
+}
+
+#[test]
+fn compute_tick_displays_publishes_each_row_independently() {
+    // Two TOTP rows with distinct labels — each must produce its own
+    // display, both with `progress_visible = true` so the gauge ticks
+    // on every TOTP row.
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+
+    let alice = add_totp(&mut vault, &store, Some("Acme"), "alice");
+    let bob = add_totp(&mut vault, &store, Some("Acme"), "bob");
+    let rows = vec![
+        totp_row_for(alice, "Acme:alice"),
+        totp_row_for(bob, "Acme:bob"),
+    ];
+
+    let displays = compute_tick_displays(&vault, &rows, SystemTime::now());
+    assert_eq!(displays.len(), 2);
+    for (_, display) in &displays {
+        assert!(display.progress_visible);
+        assert!(matches!(display.code, CodeDisplay::Visible(_)));
+        assert!(display.copy_enabled);
+        assert!(!display.next_button_visible);
+    }
+    let labels: Vec<&str> = displays.iter().map(|(_, d)| d.label.as_str()).collect();
+    assert_eq!(labels, vec!["Acme:alice", "Acme:bob"]);
+}
+
+#[test]
+fn compute_tick_displays_carries_full_row_display_shape() {
+    // Defensive: confirm the returned `RowDisplay` shape is identical
+    // to what `account_row::project_row` would emit, so the widget
+    // layer can swap the per-tick path in without conditional binds.
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+
+    let id = add_totp(&mut vault, &store, Some("Acme"), "alice");
+    let rows = vec![totp_row_for(id, "Acme:alice")];
+
+    let now = UNIX_EPOCH + Duration::from_secs(30);
+    let displays = compute_tick_displays(&vault, &rows, now);
+    assert_eq!(displays.len(), 1);
+    let (_, display) = &displays[0];
+
+    let expected = RowDisplay {
+        label: "Acme:alice".to_string(),
+        kind: AccountKindSummary::Totp,
+        code: display.code.clone(),
+        counter: None,
+        copy_enabled: true,
+        next_button_visible: false,
+        progress_visible: true,
+        kebab_visible: true,
+    };
+    assert_eq!(display, &expected);
 }

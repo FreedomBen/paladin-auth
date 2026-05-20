@@ -18,11 +18,12 @@
 //! decisions. `tests/ticker_logic.rs` exercises the helpers without
 //! spinning up GTK or libadwaita.
 
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
-use paladin_core::{AccountKindSummary, TICK_INTERVAL_MS};
+use paladin_core::{AccountId, AccountKindSummary, Vault, TICK_INTERVAL_MS};
 
 use crate::account_list::AccountRowModel;
+use crate::account_row::{project_row, RowDisplay};
 use crate::app::state::AppState;
 
 /// Per-tick interval for the TOTP ticker.
@@ -127,4 +128,47 @@ pub fn ticker_transition(
         (true, false) => TickerTransition::Teardown,
         _ => TickerTransition::NoChange,
     }
+}
+
+/// Compute refreshed [`RowDisplay`] projections for every TOTP row
+/// in `rows` against the live `vault` at `now`.
+///
+/// HOTP rows are skipped because their codes come from the reveal
+/// slot on demand (see `paladin_core::policy::hotp_reveal`); a HOTP
+/// row never participates in the per-tick refresh set. Output order
+/// matches `rows`, not vault insertion order, so the widget layer
+/// can index back into the rendered list without re-sorting.
+///
+/// Two transient-failure paths drop silently rather than blanking
+/// the row:
+///
+/// 1. `row.id` is not present in `vault.summaries()` — a race
+///    between a vault mutation (remove / replace) and the timer
+///    firing. The widget layer leaves the prior display in place
+///    until the next refresh after `AccountListMsg::Refresh`.
+/// 2. `vault.totp_code(row.id, now)` returns an error — clock-skew
+///    edge cases like a pre-Unix-epoch `now` or `valid_until`
+///    overflow. Same rule: the row's prior display stays put.
+///
+/// The plan's "On each tick, recompute the TOTP gauge value and the
+/// visible code from `paladin_core::totp_code(account, now)` for
+/// every TOTP row in the current list view" bullet binds to this
+/// function. The widget driver fans the returned `(AccountId,
+/// RowDisplay)` pairs out to the live row factory under
+/// `AccountListMsg::Tick`; the lifecycle (Install / Teardown) is
+/// already gated by [`ticker_transition`].
+#[must_use]
+pub fn compute_tick_displays(
+    vault: &Vault,
+    rows: &[AccountRowModel],
+    now: SystemTime,
+) -> Vec<(AccountId, RowDisplay)> {
+    rows.iter()
+        .filter(|row| matches!(row.kind, AccountKindSummary::Totp))
+        .filter_map(|row| {
+            let summary = vault.summaries().find(|s| s.id == row.id)?;
+            let code = vault.totp_code(row.id, now).ok()?;
+            Some((row.id, project_row(&summary, Some(&code))))
+        })
+        .collect()
 }
