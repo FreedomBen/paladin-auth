@@ -28586,3 +28586,141 @@ fn format_app_about_dialog_url_helpers_do_not_contain_a_start_of_text_byte() {
         );
     }
 }
+
+#[test]
+fn format_app_about_dialog_developer_name_does_not_contain_a_start_of_heading_byte() {
+    // Defense-in-depth per-byte sibling continuing the developer-
+    // name byte-cleanliness contract past the just-completed
+    // `{null / horizontal-tab / carriage-return / vertical-tab /
+    // form-feed / backspace / line-feed / bell / acknowledge /
+    // enquiry / end-of-transmission / end-of-text / start-of-
+    // text}` tredecuple to the start-of-heading byte `\x01`
+    // (0x01). SOH sits one step below STX (0x02) in the ASCII
+    // C0 block — the framing byte historically used by Bisync
+    // and similar block-protocol transports to mark the
+    // beginning of a header block (preceding the STX-marked
+    // text block). Like STX, ETX, EOT, ENQ, ACK, and BEL, SOH
+    // is NOT matched by `char::is_whitespace()` (Unicode treats
+    // SOH as a control byte, not whitespace), so the
+    // `_developer_name_has_no_surrounding_whitespace` boundary
+    // guard does NOT reject a leading or trailing `\x01` —
+    // making the start-of-heading byte strictly as dangerous as
+    // start-of-text, end-of-text, end-of-transmission, enquiry,
+    // acknowledge, bell, and backspace for this helper. SOH
+    // has zero transitive protection from existing companions.
+    //
+    // None of the existing developer-name companions name the
+    // `\x01` byte directly:
+    //   - `_developer_name_is_a_single_line_without_embedded_newlines`
+    //     only checks `\n` and `\r` — `\x01` is neither;
+    //   - `_developer_name_is_ascii_only` pins each byte as
+    //     ASCII — `\x01` is ASCII (0x01) so it slips past;
+    //   - `_developer_name_has_no_surrounding_whitespace` uses
+    //     `char::is_whitespace()`, which returns *false* for
+    //     U+0001 SOH, so this companion does NOT reject `\x01`
+    //     even at the boundaries — strictly weaker coverage
+    //     than the form-feed / line-feed / vertical-tab /
+    //     horizontal-tab / carriage-return cases;
+    //   - `_developer_name_starts_with_the_definite_article`
+    //     and `_ends_with_the_contributors_collective_noun`
+    //     only constrain the literal prefix `"The "` and
+    //     suffix `"contributors"`, so a mid-string `\x01`
+    //     between them satisfies both;
+    //   - `_does_not_contain_a_null_byte` /
+    //     `_does_not_contain_a_horizontal_tab_byte` /
+    //     `_does_not_contain_a_carriage_return_byte` /
+    //     `_does_not_contain_a_vertical_tab_byte` /
+    //     `_does_not_contain_a_form_feed_byte` /
+    //     `_does_not_contain_a_backspace_byte` /
+    //     `_does_not_contain_a_line_feed_byte` /
+    //     `_does_not_contain_a_bell_byte` /
+    //     `_does_not_contain_an_acknowledge_byte` /
+    //     `_does_not_contain_an_enquiry_byte` /
+    //     `_does_not_contain_an_end_of_transmission_byte` /
+    //     `_does_not_contain_an_end_of_text_byte` /
+    //     `_does_not_contain_a_start_of_text_byte` each name a
+    //     different byte specifically.
+    //
+    // The current `_returns_the_paladin_contributors` exact-
+    // value pin catches every byte today, but its protection
+    // collapses the moment a contributor-list addition or a
+    // workspace-vendoring split decouples the helper from the
+    // pinned literal — at that point a `\x01`-bearing override
+    // would slip past every byte-level companion above with
+    // zero transitive protection.
+    //
+    // A regression that landed `"The Paladin\x01contributors"`
+    // (start-of-heading byte lifted from a `script(1)`
+    // typescript that captured raw `\x01` SOH framing bytes
+    // from a CI build that bridged a serial console mid-
+    // contributor-name edit during a Bisync-style header-
+    // block transfer, a `concat!(_, "\x01", _)` form mirroring
+    // a header-segment-delimited contributor edit, or a hand-
+    // edited helper that pasted from a terminal session
+    // interfacing with a protocol bridge preserving SOH
+    // framing bytes) would mis-render in multiple downstream
+    // surfaces: (1) the GLib-backed
+    // `AdwAboutDialog::set_developer_name` setter hands the
+    // string to Pango for inline rendering beneath the program
+    // name in the dialog header — Pango's default rendering of
+    // a bare `\x01` byte is implementation-defined and
+    // typically renders as a literal control glyph (a hollow
+    // box or tofu-like placeholder), breaking the tidy single-
+    // line attribution layout; (2) the same developer-name
+    // string is reused by `_copyright_ends_with_developer_name`
+    // to construct the footer copyright row, so a `\x01` byte
+    // in the developer name would propagate into the copyright
+    // slot and mis-render there too; (3) when the developer-
+    // name is dumped through a serial-bridged TTY (CI logs
+    // over a serial console, an out-of-band debugging
+    // session), the `\x01` byte may be intercepted by the
+    // receiving end as a start-of-heading framing indicator
+    // and signal the start of a header block, confusing
+    // protocol-bridging tooling that treats SOH as a header-
+    // block opener and splicing the attribution at the byte
+    // boundary into an unexpected header-followed-by-text
+    // sequence; on POSIX terminals using emacs-style line
+    // editing where `^A` defaults to the beginning-of-line
+    // keybinding (`bind -l` shows `\C-a` → `beginning-of-
+    // line`), the byte may surface as an unexpected cursor-
+    // to-line-start jump in any interactive shell that
+    // captures the attribution through a pty with readline
+    // bound to the default Emacs keymap; (4) screen readers
+    // that announce the dialog attribution render the byte as
+    // a literal control character announcement, breaking the
+    // attribution accessibility-tree announcement at the byte
+    // boundary; (5) downstream tooling that scrapes the
+    // developer-name attribution (release-note generators,
+    // contributor-attribution crawlers) would propagate the
+    // stray `\x01` byte into the consumer's stream and trigger
+    // the same control-glyph rendering / readline-keybinding /
+    // protocol-confusion across every downstream surface.
+    //
+    // Pinning the no-`\x01` invariant directly here surfaces
+    // the regression with a message naming the offending byte
+    // at build time rather than via a downstream dialog-header
+    // rendering bug, a serial-protocol SOH-frame header-block-
+    // opener collision, a readline `^A` beginning-of-line
+    // surprise, or a screen-reader announcement break.
+    // Current helper returns the literal `"The Paladin
+    // contributors"` (no `\x01` byte), so this test passes
+    // today and serves as a forcing function so any future
+    // override of the helper — including the eventual landing
+    // of a multi-contributor attribution string — stays free
+    // of start-of-heading bytes. Opens the next non-
+    // whitespace-classified C0 control-byte cycle past the
+    // just-completed `{null / horizontal-tab / carriage-
+    // return / vertical-tab / form-feed / backspace / line-
+    // feed / bell / acknowledge / enquiry / end-of-
+    // transmission / end-of-text / start-of-text}`
+    // tredecuple so the helper's byte-composition contract
+    // pins each forbidden control byte against a single
+    // source of truth.
+    use paladin_gtk::app::model::format_app_about_dialog_developer_name;
+
+    let developer = format_app_about_dialog_developer_name();
+    assert!(
+        !developer.contains('\x01'),
+        "AdwAboutDialog developer-name must not contain the `\\x01` start-of-heading byte (0x01); a mid-string `\\x01` slips past `_is_a_single_line_without_embedded_newlines` (which only checks `\\n` and `\\r`), past `_is_ascii_only` (because `\\x01` is ASCII), past `_has_no_surrounding_whitespace` (which uses `char::is_whitespace()` — Unicode returns false for U+0001 SOH so this companion does NOT reject `\\x01` even at the boundaries, strictly weaker coverage than form-feed / line-feed / vertical-tab / horizontal-tab / carriage-return), past `_starts_with_the_definite_article` / `_ends_with_the_contributors_collective_noun` (which only constrain the literal prefix and suffix), and past `_does_not_contain_a_null_byte` / `_does_not_contain_a_horizontal_tab_byte` / `_does_not_contain_a_carriage_return_byte` / `_does_not_contain_a_vertical_tab_byte` / `_does_not_contain_a_form_feed_byte` / `_does_not_contain_a_backspace_byte` / `_does_not_contain_a_line_feed_byte` / `_does_not_contain_a_bell_byte` / `_does_not_contain_an_acknowledge_byte` / `_does_not_contain_an_enquiry_byte` / `_does_not_contain_an_end_of_transmission_byte` / `_does_not_contain_an_end_of_text_byte` / `_does_not_contain_a_start_of_text_byte` (which each name a different byte specifically); it would render as a literal control glyph in the dialog-header attribution row, propagate into the footer copyright row that reuses this string, confuse serial-protocol-bridging tooling that treats `\\x01` as a SOH header-block opener if dumped through a serial-bridged TTY (splicing the attribution at the byte boundary into an unexpected header-followed-by-text sequence), trigger readline `^A` beginning-of-line cursor-jump surprises in interactive shells capturing the attribution through a pty with the default Emacs keymap, break screen-reader attribution announcements at the byte boundary, and propagate into downstream contributor-attribution scrapers; got {developer:?}",
+    );
+}
