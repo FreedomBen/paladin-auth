@@ -27221,3 +27221,128 @@ fn format_app_about_dialog_copyright_does_not_contain_a_start_of_text_byte() {
         "AdwAboutDialog copyright must not contain the `\\x02` start-of-text byte (0x02); like ETX, EOT, ENQ, ACK, and BEL, STX is NOT matched by `char::is_whitespace()` (Unicode returns false for U+0002 STX), so the copyright helper's transitive whitespace-boundary / single-line protections from the cluster bytes do NOT cover STX — making the start-of-text byte strictly more dangerous than the cluster bytes for this helper; a mid-string `\\x02` slips past `_is_a_single_line_without_embedded_newlines` (which only checks `\\n` and `\\r`), past `_starts_with_copyright_glyph_and_contains_developer_name` / `_ends_with_developer_name` / `_separates_glyph_and_attribution_with_a_single_space` (which only constrain the literal prefix, suffix, and the single byte after the © glyph), past `_does_not_end_with_a_period` / `_does_not_contain_a_year_token_so_it_does_not_drift_across_releases` (which only constrain the trailing byte or scan for digits), and past `_does_not_contain_a_null_byte` / `_does_not_contain_a_horizontal_tab_byte` / `_does_not_contain_a_carriage_return_byte` / `_does_not_contain_a_vertical_tab_byte` / `_does_not_contain_a_form_feed_byte` / `_does_not_contain_a_backspace_byte` / `_does_not_contain_a_line_feed_byte` / `_does_not_contain_a_bell_byte` / `_does_not_contain_an_acknowledge_byte` / `_does_not_contain_an_enquiry_byte` / `_does_not_contain_an_end_of_transmission_byte` / `_does_not_contain_an_end_of_text_byte` (which each name a different byte specifically); it would render as a literal control glyph in the dialog footer copyright row, erode the trusted-application legal-attribution surface contract, confuse serial-protocol-bridging tooling that treats `\\x02` as a STX text-segment opener if dumped through a serial-bridged TTY (splicing the copyright at the byte boundary into an unexpected follow-on block), trigger readline `^B` cursor-jump surprises in interactive shells capturing the legal-attribution footer through a pty with the default Emacs keymap, break screen-reader copyright announcements at the byte boundary, and propagate into downstream license-attribution aggregators and AGPL-3.0-or-later compliance crawlers; got {copyright:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_comments_does_not_contain_a_start_of_text_byte() {
+    // Defense-in-depth per-byte sibling extending the
+    // comments byte-cleanliness contract past the just-
+    // completed `{null / horizontal-tab / carriage-return /
+    // vertical-tab / form-feed / backspace / line-feed /
+    // bell / acknowledge / enquiry / end-of-transmission /
+    // end-of-text}` duodecuple to the start-of-text byte
+    // `\x02` (0x02), continuing the non-whitespace-classified
+    // C0 control-byte cycle past ETX (0x03).
+    //
+    // Like ETX, EOT, ENQ, ACK, and BEL, STX is NOT matched
+    // by `char::is_whitespace()` (Unicode treats STX as a
+    // control byte, not whitespace), so the comments
+    // helper's transitive single-line / whitespace-
+    // boundary protections from
+    // `_comments_is_non_empty_single_line_distinct_from_program_name`
+    // (which uses both `!contains('\n')` and
+    // `!comments.starts_with(char::is_whitespace)` /
+    // `!comments.ends_with(char::is_whitespace)`) do NOT
+    // cover STX — the boundary `char::is_whitespace()`
+    // guards return false for U+0002 STX and the explicit
+    // `\n` check is byte-specific.
+    //
+    // None of the existing comments companions name the
+    // `\x02` byte directly:
+    //   - `_comments_is_non_empty_single_line_distinct_from_program_name`
+    //     only checks `\n` and uses `char::is_whitespace()`
+    //     for boundary checks — `\x02` is neither;
+    //   - `_comments_is_ascii_only` pins each byte as ASCII
+    //     — `\x02` is ASCII (0x02) so it slips past;
+    //   - `_does_not_end_with_a_period_per_libadwaita_convention`
+    //     only constrains the trailing byte;
+    //   - `_matches_cargo_pkg_description` is an exact-
+    //     value pin coupled to
+    //     `env!("CARGO_PKG_DESCRIPTION")` — a future
+    //     workspace refactor that introduced a `\x02` byte
+    //     into the package description (a hand-edited
+    //     `description = """..."""` literal that pasted
+    //     from a terminal session interfacing with a
+    //     serial-protocol bridge) would propagate the byte
+    //     into the helper, and this companion would still
+    //     pass (the helper still equals the cargo
+    //     description);
+    //   - `_does_not_contain_a_null_byte` /
+    //     `_does_not_contain_a_horizontal_tab_byte` /
+    //     `_does_not_contain_a_carriage_return_byte` /
+    //     `_does_not_contain_a_vertical_tab_byte` /
+    //     `_does_not_contain_a_form_feed_byte` /
+    //     `_does_not_contain_a_backspace_byte` /
+    //     `_does_not_contain_a_line_feed_byte` /
+    //     `_does_not_contain_a_bell_byte` /
+    //     `_does_not_contain_an_acknowledge_byte` /
+    //     `_does_not_contain_an_enquiry_byte` /
+    //     `_does_not_contain_an_end_of_transmission_byte` /
+    //     `_does_not_contain_an_end_of_text_byte` each
+    //     name a different byte specifically.
+    //
+    // A regression that landed a `\x02`-bearing comments
+    // string (start-of-text byte from a workspace
+    // `Cargo.toml` description that pasted from a terminal
+    // session interfacing with a serial-protocol bridge
+    // preserving STX framing bytes during a Bisync-style
+    // text-block transfer, a `concat!(_, "\x02", _)` form,
+    // or a hand-edited helper override that lifted the
+    // description from a `script(1)` typescript that
+    // captured raw `\x02` STX framing bytes) would mis-
+    // render in multiple downstream surfaces: (1) the
+    // GLib-backed `AdwAboutDialog::set_comments` setter
+    // hands the string to Pango for inline rendering
+    // beneath the program-name / version cluster in the
+    // dialog header — Pango's default rendering of a bare
+    // `\x02` byte is implementation-defined and typically
+    // renders as a literal control glyph, breaking the
+    // elevator-pitch comments-row layout; (2) when the
+    // comments string is dumped through a serial-bridged
+    // TTY (CI logs over a serial console, an out-of-band
+    // debugging session), the `\x02` byte may be
+    // intercepted by the receiving end as a start-of-text
+    // framing indicator and signal the start of a new
+    // text block, confusing protocol-bridging tooling
+    // that treats STX as a text-segment opener and
+    // splicing the comments at the byte boundary into an
+    // unexpected follow-on block; on POSIX terminals
+    // using emacs-style line editing where `^B` defaults
+    // to the backward-one-character keybinding, the byte
+    // may surface as an unexpected cursor jump in any
+    // interactive shell that captures the elevator-pitch
+    // through a pty with readline bound to the default
+    // Emacs keymap; (3) screen readers that announce the
+    // dialog comments row render the byte as a literal
+    // control character announcement, breaking the
+    // elevator-pitch accessibility-tree announcement at
+    // the byte boundary; (4) downstream tooling that
+    // scrapes the package description (changelog
+    // aggregators, package-listing generators, AppStream
+    // `<summary>` extractors) would propagate the stray
+    // `\x02` byte into the consumer's stream and trigger
+    // the same control-glyph rendering / readline-
+    // keybinding / protocol-confusion bug, with the
+    // additional risk that AppStream `<summary>`
+    // validation rejects control bytes at packaging time.
+    //
+    // Pinning the no-`\x02` invariant directly here
+    // surfaces the regression with a message naming the
+    // offending byte at build time rather than via a
+    // downstream dialog rendering bug, a serial-protocol
+    // STX-frame text-segment-opener collision, a readline
+    // `^B` cursor surprise, or an AppStream-validation
+    // packaging-time failure. Current helper returns the
+    // literal `env!("CARGO_PKG_DESCRIPTION")` which
+    // resolves to the single-line workspace description
+    // with no `\x02` byte, so this test passes today and
+    // serves as a forcing function so any future
+    // workspace-description refactor stays free of start-
+    // of-text bytes.
+    use paladin_gtk::app::model::format_app_about_dialog_comments;
+
+    let comments = format_app_about_dialog_comments();
+    assert!(
+        !comments.contains('\x02'),
+        "AdwAboutDialog comments must not contain the `\\x02` start-of-text byte (0x02); like ETX, EOT, ENQ, ACK, and BEL, STX is NOT matched by `char::is_whitespace()` (Unicode returns false for U+0002 STX), so the comments helper's transitive whitespace-boundary / single-line protections do NOT cover STX; a mid-string `\\x02` slips past `_is_non_empty_single_line_distinct_from_program_name` (which only checks `\\n` and uses `char::is_whitespace()` for boundary checks — neither catches `\\x02`), past `_is_ascii_only` (because `\\x02` is ASCII), past `_does_not_end_with_a_period_per_libadwaita_convention` (which only constrains the trailing byte), past `_matches_cargo_pkg_description` (a future workspace description that introduced `\\x02` would propagate the byte and this equality pin would still pass), and past `_does_not_contain_a_null_byte` / `_does_not_contain_a_horizontal_tab_byte` / `_does_not_contain_a_carriage_return_byte` / `_does_not_contain_a_vertical_tab_byte` / `_does_not_contain_a_form_feed_byte` / `_does_not_contain_a_backspace_byte` / `_does_not_contain_a_line_feed_byte` / `_does_not_contain_a_bell_byte` / `_does_not_contain_an_acknowledge_byte` / `_does_not_contain_an_enquiry_byte` / `_does_not_contain_an_end_of_transmission_byte` / `_does_not_contain_an_end_of_text_byte` (which each name a different byte specifically); it would render as a literal control glyph in the dialog header comments row, confuse serial-protocol-bridging tooling that treats `\\x02` as a STX text-segment opener if dumped through a serial-bridged TTY (splicing the comments at the byte boundary into an unexpected follow-on block), trigger readline `^B` cursor-jump surprises in interactive shells capturing the elevator-pitch through a pty with the default Emacs keymap, break screen-reader comments announcements at the byte boundary, propagate into downstream changelog aggregators and AppStream `<summary>` extractors, and trigger AppStream `<summary>` validation rejection at packaging time; got {comments:?}",
+    );
+}
