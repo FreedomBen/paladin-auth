@@ -1360,7 +1360,7 @@ sign-off.
     from `ImportDialog`.
   - [x] Keep the smoke-test-only `--exit-after-startup` flag hidden from
     `--help` while still parsing it for `tests/gtk_smoke.rs`.
-- [ ] Startup routing and non-mutating startup-error actions.
+- [x] Startup routing and non-mutating startup-error actions.
   - [x] Resolve the startup path from `--vault` or
     `paladin_core::default_vault_path()` before inspecting the vault.
   - [x] Route `VaultStatus::Plaintext` through
@@ -1375,12 +1375,12 @@ sign-off.
     failures to `StartupErrorComponent` with rendered text sourced from
     `paladin_core::format_unsafe_permissions(&err)` when available and
     `PaladinError::Display` otherwise.
-  - [ ] Wire the `StartupErrorComponent` Retry action to re-run path
+  - [x] Wire the `StartupErrorComponent` Retry action to re-run path
     resolution plus `inspect` and then re-route to `Missing`, `Locked`,
     `Unlocked`, or `StartupError` from the fresh probe result.
-  - [ ] Wire the `StartupErrorComponent` Quit action through the same
+  - [x] Wire the `StartupErrorComponent` Quit action through the same
     application quit path used by the primary menu.
-  - [ ] Keep `StartupErrorComponent` display-only: retry and quit are
+  - [x] Keep `StartupErrorComponent` display-only: retry and quit are
     the only actions, and the component never creates, overwrites,
     repairs, chmods, or selects a different vault path in v0.2.
 - [ ] Window shell and toast surface (`AdwApplicationWindow` root,

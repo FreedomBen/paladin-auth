@@ -34,7 +34,9 @@ use std::path::{Path, PathBuf};
 
 use libadwaita as adw;
 use libadwaita::prelude::*;
+use relm4::gtk;
 use relm4::prelude::*;
+use relm4::ComponentSender;
 
 use paladin_core::{format_unsafe_permissions, ErrorKind, PaladinError, VaultStatus};
 
@@ -286,14 +288,74 @@ pub struct StartupErrorInit {
 
 /// Messages handled by [`StartupErrorComponent`].
 ///
-/// This milestone scaffolds the read-only render path; the
-/// `retry` and `quit` actions described in §"Vault interaction"
-/// land in a follow-up commit alongside the action-bar wiring on
-/// `AppModel`. The empty enum is the deliberate v0.2 starting
-/// point — relm4 requires the associated `Input` type to exist
-/// even when no inbound messages are wired yet.
-#[derive(Debug)]
-pub enum StartupErrorMsg {}
+/// The two `*Clicked` variants are dispatched by the matching
+/// `gtk::Button::connect_clicked` handlers on the
+/// [`adw::StatusPage`] action-row buttons rendered for the
+/// Retry and Quit actions described in §"Vault interaction".
+/// Routing through `apply_startup_error_msg` (the pure-logic
+/// shape consumed by the relm4 `update` closure) emits the
+/// matching [`StartupErrorOutput`], which `AppModel` forwards
+/// through `crate::app::model::dispatch_startup_error_output`
+/// to either re-run the startup probe or tear the application
+/// down through the primary-menu shutdown path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StartupErrorMsg {
+    /// The Retry button was clicked. Routes through
+    /// [`apply_startup_error_msg`] to
+    /// [`StartupErrorOutput::Retry`].
+    RetryClicked,
+    /// The Quit button was clicked. Routes through
+    /// [`apply_startup_error_msg`] to
+    /// [`StartupErrorOutput::Quit`].
+    QuitClicked,
+}
+
+/// Outputs emitted by [`StartupErrorComponent`].
+///
+/// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Vault interaction"
+/// the `StartupErrorComponent` is display-only: Retry and Quit
+/// are the only actions, and the component never creates,
+/// overwrites, repairs, chmods, or selects a different vault
+/// path in v0.2. The two variants here lock that contract on
+/// the Output surface — adding a mutating variant (e.g. a
+/// "create vault here" affordance) would require an explicit
+/// design revisit in `DESIGN.md` and `IMPLEMENTATION_PLAN_04_GTK.md`.
+///
+/// `AppModel` consumes both variants by forwarding them through
+/// `crate::app::model::dispatch_startup_error_output`:
+/// [`StartupErrorOutput::Quit`] dispatches the same `AppMsg::Quit`
+/// shutdown path the primary menu's Quit entry uses, and
+/// [`StartupErrorOutput::Retry`] dispatches a dedicated
+/// `AppMsg::StartupErrorRetry` that re-runs the path-resolution
+/// and `inspect` probe and re-routes to the matching per-state
+/// child controller.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StartupErrorOutput {
+    /// User asked to re-run the startup probe.
+    Retry,
+    /// User asked to tear the application down through the
+    /// primary-menu shutdown path.
+    Quit,
+}
+
+/// Translate a [`StartupErrorMsg`] into the optional
+/// [`StartupErrorOutput`] the widget layer should forward.
+///
+/// Pure — no side effects, no I/O. The relm4 `update` closure
+/// reads the returned `Option` and calls
+/// [`ComponentSender::output`] only when `Some`, matching the
+/// emit-on-success pattern used by every other relm4 component
+/// in this crate (`apply_msg` on `UnlockDialogComponent`,
+/// `apply_msg` on `RemoveDialogComponent`, …). The pure shape
+/// lets `tests/startup_error_logic.rs` exercise the
+/// click-to-Output mapping without a display server.
+#[must_use]
+pub fn apply_startup_error_msg(msg: StartupErrorMsg) -> Option<StartupErrorOutput> {
+    match msg {
+        StartupErrorMsg::RetryClicked => Some(StartupErrorOutput::Retry),
+        StartupErrorMsg::QuitClicked => Some(StartupErrorOutput::Quit),
+    }
+}
 
 /// Widget-bearing non-mutating error surface for the
 /// [`crate::app::state::AppState::StartupError`] branch.
@@ -320,7 +382,7 @@ pub struct StartupErrorComponent {
 impl SimpleComponent for StartupErrorComponent {
     type Init = StartupErrorInit;
     type Input = StartupErrorMsg;
-    type Output = ();
+    type Output = StartupErrorOutput;
 
     view! {
         #[root]
@@ -330,23 +392,47 @@ impl SimpleComponent for StartupErrorComponent {
             set_description: Some(model.error.rendered.as_str()),
             set_hexpand: true,
             set_vexpand: true,
+
+            #[wrap(Some)]
+            set_child = &gtk::Box {
+                set_orientation: gtk::Orientation::Horizontal,
+                set_halign: gtk::Align::Center,
+                set_spacing: 12,
+
+                gtk::Button {
+                    set_label: format_startup_error_retry_label(),
+                    add_css_class: "suggested-action",
+                    add_css_class: "pill",
+                    connect_clicked[sender] => move |_| {
+                        sender.input(StartupErrorMsg::RetryClicked);
+                    },
+                },
+
+                gtk::Button {
+                    set_label: format_startup_error_quit_label(),
+                    add_css_class: "pill",
+                    connect_clicked[sender] => move |_| {
+                        sender.input(StartupErrorMsg::QuitClicked);
+                    },
+                },
+            },
         }
     }
 
     fn init(
         init: Self::Init,
         root: Self::Root,
-        _sender: ComponentSender<Self>,
+        sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
         let model = StartupErrorComponent { error: init.error };
         let widgets = view_output!();
         ComponentParts { model, widgets }
     }
 
-    fn update(&mut self, _msg: Self::Input, _sender: ComponentSender<Self>) {
-        // No inbound messages handled at this milestone — see
-        // `StartupErrorMsg` doc comment for the upcoming retry
-        // and quit actions.
+    fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>) {
+        if let Some(output) = apply_startup_error_msg(msg) {
+            let _ = sender.output(output);
+        }
     }
 }
 

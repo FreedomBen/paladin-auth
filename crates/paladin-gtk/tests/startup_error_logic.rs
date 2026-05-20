@@ -677,3 +677,169 @@ fn format_startup_error_quit_label_is_non_empty_single_line_distinct_from_retry(
         "AdwStatusPage quit button label must be distinct from the retry button label so the two action buttons read as separate options",
     );
 }
+
+// ---------------------------------------------------------------------------
+// Output enum: display-only invariant + per-button output emission
+// ---------------------------------------------------------------------------
+
+#[test]
+fn startup_error_output_retry_variant_exists() {
+    // The Retry action button's `connect_clicked` handler emits
+    // `StartupErrorOutput::Retry`, which `AppModel` forwards
+    // through `dispatch_startup_error_output` to re-run the
+    // path-resolution + inspect probe per §"Vault interaction".
+    use paladin_gtk::startup_error::StartupErrorOutput;
+    let out = StartupErrorOutput::Retry;
+    assert!(matches!(out, StartupErrorOutput::Retry));
+}
+
+#[test]
+fn startup_error_output_quit_variant_exists() {
+    // The Quit action button's `connect_clicked` handler emits
+    // `StartupErrorOutput::Quit`, which `AppModel` forwards
+    // through `dispatch_startup_error_output` to the same
+    // `AppMsg::Quit` shutdown path the primary menu's Quit
+    // entry uses per §"Vault interaction".
+    use paladin_gtk::startup_error::StartupErrorOutput;
+    let out = StartupErrorOutput::Quit;
+    assert!(matches!(out, StartupErrorOutput::Quit));
+}
+
+#[test]
+fn startup_error_output_is_exhaustively_retry_and_quit() {
+    // Display-only invariant: per §"Vault interaction", the
+    // `StartupErrorComponent` is the non-mutating startup / open
+    // error surface. Retry and Quit are the only actions it
+    // exposes; the component never creates, overwrites, repairs,
+    // chmods, or selects a different vault path in v0.2. The
+    // exhaustive `match` arms here lock the Output enum to exactly
+    // those two variants so adding a mutating variant (e.g. a
+    // "create vault here" affordance) fails to compile until the
+    // design decision is explicitly revisited.
+    use paladin_gtk::startup_error::StartupErrorOutput;
+    fn classify(out: StartupErrorOutput) -> &'static str {
+        match out {
+            StartupErrorOutput::Retry => "retry",
+            StartupErrorOutput::Quit => "quit",
+        }
+    }
+    assert_eq!(classify(StartupErrorOutput::Retry), "retry");
+    assert_eq!(classify(StartupErrorOutput::Quit), "quit");
+}
+
+#[test]
+fn apply_startup_error_msg_retry_clicked_emits_retry_output() {
+    // The Retry button's `connect_clicked` handler dispatches
+    // `StartupErrorMsg::RetryClicked`, which the component
+    // routes through `apply_startup_error_msg` and surfaces as
+    // `StartupErrorOutput::Retry` for `AppModel` to forward.
+    use paladin_gtk::startup_error::{
+        apply_startup_error_msg, StartupErrorMsg, StartupErrorOutput,
+    };
+    let output = apply_startup_error_msg(StartupErrorMsg::RetryClicked);
+    assert!(
+        matches!(output, Some(StartupErrorOutput::Retry)),
+        "RetryClicked must emit StartupErrorOutput::Retry; got {output:?}",
+    );
+}
+
+#[test]
+fn apply_startup_error_msg_quit_clicked_emits_quit_output() {
+    // The Quit button's `connect_clicked` handler dispatches
+    // `StartupErrorMsg::QuitClicked`, which the component
+    // routes through `apply_startup_error_msg` and surfaces as
+    // `StartupErrorOutput::Quit` for `AppModel` to forward.
+    use paladin_gtk::startup_error::{
+        apply_startup_error_msg, StartupErrorMsg, StartupErrorOutput,
+    };
+    let output = apply_startup_error_msg(StartupErrorMsg::QuitClicked);
+    assert!(
+        matches!(output, Some(StartupErrorOutput::Quit)),
+        "QuitClicked must emit StartupErrorOutput::Quit; got {output:?}",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Output → AppMsg dispatch: Quit reuses the primary-menu shutdown path;
+// Retry re-runs the startup probe through `AppMsg::StartupErrorRetry`.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn dispatch_startup_error_output_quit_routes_to_app_msg_quit() {
+    // Per §"Vault interaction" the StartupErrorComponent's Quit
+    // button must tear the application down through the same
+    // application quit path the primary menu's Quit entry uses,
+    // so the application has one shutdown path through
+    // `relm4::main_application().quit()` regardless of which
+    // surface initiates Quit. Both `dispatch_startup_error_output`
+    // and the primary menu's Quit action must dispatch the same
+    // `AppMsg::Quit` variant — a drift between the two would
+    // surface as a confusing alternate quit path that bypasses
+    // the §"In-flight effect ownership" worker-deferred shutdown
+    // handling pinned on `AppMsg::Quit`.
+    use paladin_gtk::app::model::{
+        dispatch_app_window_action, dispatch_startup_error_output,
+        format_app_menu_quit_action_name, AppMsg,
+    };
+    use paladin_gtk::startup_error::StartupErrorOutput;
+
+    let from_startup_error = dispatch_startup_error_output(StartupErrorOutput::Quit);
+    let from_menu = dispatch_app_window_action(format_app_menu_quit_action_name())
+        .expect("primary menu must dispatch a Quit AppMsg");
+    assert!(
+        matches!(from_startup_error, AppMsg::Quit),
+        "StartupErrorComponent Quit must dispatch AppMsg::Quit; got {from_startup_error:?}",
+    );
+    assert!(
+        matches!(from_menu, AppMsg::Quit),
+        "primary menu Quit must dispatch AppMsg::Quit; got {from_menu:?}",
+    );
+}
+
+#[test]
+fn dispatch_startup_error_output_retry_routes_to_startup_error_retry_app_msg() {
+    // The Retry button re-runs the startup probe via a
+    // dedicated `AppMsg::StartupErrorRetry` arm in `update` —
+    // distinct from `AppMsg::Quit` and from every mutating
+    // dispatch arm so the retry handler stays display-only per
+    // §"Vault interaction" (re-resolve path, re-inspect, re-mount;
+    // never create / overwrite / repair).
+    use paladin_gtk::app::model::{dispatch_startup_error_output, AppMsg};
+    use paladin_gtk::startup_error::StartupErrorOutput;
+
+    let msg = dispatch_startup_error_output(StartupErrorOutput::Retry);
+    assert!(
+        matches!(msg, AppMsg::StartupErrorRetry),
+        "StartupErrorComponent Retry must dispatch AppMsg::StartupErrorRetry; got {msg:?}",
+    );
+}
+
+#[test]
+fn dispatch_startup_error_output_is_exhaustive_retry_and_quit_only() {
+    // Display-only invariant on the dispatch side: the only two
+    // `AppMsg` variants the StartupErrorComponent can possibly
+    // dispatch are `Quit` (primary-menu shutdown path) and
+    // `StartupErrorRetry` (re-run startup probes). The match arms
+    // here lock the dispatch table so a future addition of a
+    // mutating Output variant fails to compile in `dispatch_startup_error_output`
+    // and in this test until the design decision is explicitly
+    // revisited per §"Vault interaction".
+    use paladin_gtk::app::model::{dispatch_startup_error_output, AppMsg};
+    use paladin_gtk::startup_error::StartupErrorOutput;
+
+    fn intent(msg: &AppMsg) -> &'static str {
+        match msg {
+            AppMsg::Quit => "quit",
+            AppMsg::StartupErrorRetry => "retry",
+            _ => "other",
+        }
+    }
+    assert_eq!(
+        intent(&dispatch_startup_error_output(StartupErrorOutput::Retry)),
+        "retry",
+    );
+    assert_eq!(
+        intent(&dispatch_startup_error_output(StartupErrorOutput::Quit)),
+        "quit",
+    );
+}

@@ -107,6 +107,7 @@ use crate::settings::{
 };
 use crate::startup_error::{
     format_startup_error_marker, StartupError, StartupErrorComponent, StartupErrorInit,
+    StartupErrorOutput,
 };
 use crate::unlock_dialog::{
     format_unlock_dialog_marker, UnlockDialogComponent, UnlockDialogInit, UnlockDialogOutput,
@@ -658,6 +659,31 @@ pub enum AppMsg {
     /// [`crate::app::state::apply_add_vault_install_inplace`]
     /// unconditionally.
     AddWorkerCompleted(AddWorkerCompletion),
+    /// Posted by [`dispatch_startup_error_output`] when
+    /// [`StartupErrorComponent`](crate::startup_error::StartupErrorComponent)
+    /// emits [`StartupErrorOutput::Retry`].
+    ///
+    /// The handler re-runs the startup probe via
+    /// [`run_startup_probes`] against the cached
+    /// [`AppModel::vault_path`] override (so an explicit
+    /// `--vault` flag still wins on retry), replaces
+    /// [`AppModel::state`] and [`AppModel::vault`] with the
+    /// fresh outcome, tears down the currently-mounted screen
+    /// controller, and remounts the per-state controller that
+    /// matches the new [`AppState`] — mirroring `init`'s
+    /// per-state mount sequence so the retry path produces a
+    /// content tree byte-for-byte equivalent to a fresh
+    /// process start.
+    ///
+    /// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Vault interaction"
+    /// the handler is non-mutating: it does not create,
+    /// overwrite, repair, chmod, or select a different vault
+    /// path. The only side effects are the re-run probe (which
+    /// is itself read-only — `paladin_core::default_vault_path`,
+    /// `inspect`, and the plaintext-`open` already in the
+    /// startup sequence are all non-mutating) and the
+    /// controller swap in the content tree.
+    StartupErrorRetry,
 }
 
 // `relm4::component(pub)` generates a public `AppModelWidgets` struct so the
@@ -831,7 +857,7 @@ impl SimpleComponent for AppModel {
                 .launch(StartupErrorInit {
                     error: error.clone(),
                 })
-                .detach();
+                .forward(sender.input_sender(), dispatch_startup_error_output);
             widgets.content.append(controller.widget());
             Some(controller)
         } else {
@@ -895,6 +921,24 @@ impl SimpleComponent for AppModel {
     fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>) {
         match msg {
             AppMsg::Quit => relm4::main_application().quit(),
+            AppMsg::StartupErrorRetry => {
+                // User clicked the StartupErrorComponent Retry
+                // button. Re-run the same probe sequence
+                // `run_startup_probes` walks at process start
+                // (path resolution → `inspect` → plaintext
+                // `open`) against the cached `vault_path`
+                // override so an explicit `--vault` flag still
+                // wins on retry. The probe is non-mutating per
+                // `IMPLEMENTATION_PLAN_04_GTK.md`
+                // §"Vault interaction"; the retry path
+                // similarly never creates / overwrites /
+                // repairs / chmods / selects a different vault
+                // path.
+                let StartupOutcome { state, vault } = run_startup_probes(self.vault_path.clone());
+                self.vault = vault;
+                self.remount_for_state(&state, &sender);
+                self.state = Some(state);
+            }
             AppMsg::AccountListAction(AccountListOutput::OpenRenameDialog(id)) => {
                 // Look up the targeted account in the live vault and
                 // mount the rename dialog. A `None` projection means
@@ -1641,6 +1685,84 @@ impl SimpleComponent for AppModel {
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+impl AppModel {
+    /// Tear down the currently-mounted screen controller and mount
+    /// the per-state controller matching `state`, mirroring `init`'s
+    /// per-state mount sequence.
+    ///
+    /// Called from the [`AppMsg::StartupErrorRetry`] handler after
+    /// [`run_startup_probes`] has produced a fresh
+    /// [`StartupOutcome`]; together they form the
+    /// `IMPLEMENTATION_PLAN_04_GTK.md` §"Vault interaction" retry
+    /// path: re-resolve the vault path, re-`inspect`, and remount
+    /// the matching child controller without creating, overwriting,
+    /// repairing, chmod'ing, or selecting a different vault path.
+    /// The screen controller currently mounted on
+    /// [`AppModel::content`] is whichever of
+    /// [`AppModel::startup_error`], [`AppModel::init_dialog`],
+    /// [`AppModel::unlock_dialog`], or [`AppModel::account_list`]
+    /// is `Some`; this helper takes each in turn (so the
+    /// `GtkWidget` reference held by relm4 is released back to GTK)
+    /// before mounting the new per-state controller through the
+    /// same builder calls `init` uses.
+    fn remount_for_state(&mut self, state: &AppState, sender: &ComponentSender<Self>) {
+        if let Some(controller) = self.startup_error.take() {
+            self.content.remove(controller.widget());
+        }
+        if let Some(controller) = self.init_dialog.take() {
+            self.content.remove(controller.widget());
+        }
+        if let Some(controller) = self.unlock_dialog.take() {
+            self.content.remove(controller.widget());
+        }
+        if let Some(controller) = self.account_list.take() {
+            self.content.remove(controller.widget());
+        }
+
+        match state {
+            AppState::Unlocked { .. } | AppState::UnlockedBusy { .. } => {
+                let rows: Vec<AccountRowModel> = self
+                    .vault
+                    .as_ref()
+                    .map(|(v, _)| row_models_from_vault(v))
+                    .unwrap_or_default();
+                let controller = AccountListComponent::builder()
+                    .launch(AccountListInit { rows })
+                    .forward(sender.input_sender(), AppMsg::AccountListAction);
+                self.content.append(controller.widget());
+                self.account_list = Some(controller);
+            }
+            AppState::StartupError { error, .. } => {
+                let controller = StartupErrorComponent::builder()
+                    .launch(StartupErrorInit {
+                        error: error.clone(),
+                    })
+                    .forward(sender.input_sender(), dispatch_startup_error_output);
+                self.content.append(controller.widget());
+                self.startup_error = Some(controller);
+            }
+            AppState::Missing { path } => {
+                let controller = InitDialogComponent::builder()
+                    .launch(InitDialogInit {
+                        vault_path: path.clone(),
+                    })
+                    .detach();
+                self.content.append(controller.widget());
+                self.init_dialog = Some(controller);
+            }
+            AppState::Locked { path } => {
+                let controller = UnlockDialogComponent::builder()
+                    .launch(UnlockDialogInit {
+                        vault_path: path.clone(),
+                    })
+                    .forward(sender.input_sender(), AppMsg::UnlockDialogAction);
+                self.content.append(controller.widget());
+                self.unlock_dialog = Some(controller);
             }
         }
     }
@@ -3272,6 +3394,47 @@ pub fn dispatch_app_window_action(name: &str) -> Option<AppMsg> {
         return Some(AppMsg::Quit);
     }
     None
+}
+
+/// Map a [`StartupErrorOutput`] emitted by
+/// [`crate::startup_error::StartupErrorComponent`] to the matching
+/// [`AppMsg`] dispatch variant.
+///
+/// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Vault interaction" the
+/// [`crate::startup_error::StartupErrorComponent`] is display-only:
+/// Retry and Quit are the only actions. The two arms of this
+/// match lock that contract on the dispatch side:
+///
+/// * [`StartupErrorOutput::Quit`] → [`AppMsg::Quit`]. The
+///   primary menu's "Quit" entry routes through the same
+///   `AppMsg::Quit` variant via [`dispatch_app_window_action`]
+///   so the application has one shutdown path through
+///   `relm4::main_application().quit()` regardless of which
+///   surface initiates Quit. A cross-check test in
+///   `tests/startup_error_logic.rs` asserts both surfaces
+///   resolve to the same variant so a future drift surfaces
+///   as a failing test rather than a silent alternate quit
+///   path.
+/// * [`StartupErrorOutput::Retry`] → [`AppMsg::StartupErrorRetry`].
+///   The dedicated retry arm in `update` re-runs the
+///   path-resolution + `inspect` probe and remounts the
+///   per-state child controller; routing through a distinct
+///   `AppMsg` variant (rather than reusing the Unlock-/Add-/…
+///   dispatch arms) keeps the retry handler clearly
+///   separable from the mutating dispatch arms and lets the
+///   exhaustive match in the test surface guarantee no
+///   mutating variant slips in without an explicit design
+///   revisit.
+///
+/// Mirrors [`dispatch_app_window_action`] on the menu-action
+/// dispatch side. Pure — `out` is moved into the match by
+/// value; no I/O, no allocation.
+#[must_use]
+pub fn dispatch_startup_error_output(out: StartupErrorOutput) -> AppMsg {
+    match out {
+        StartupErrorOutput::Quit => AppMsg::Quit,
+        StartupErrorOutput::Retry => AppMsg::StartupErrorRetry,
+    }
 }
 
 /// Build the single application-window
