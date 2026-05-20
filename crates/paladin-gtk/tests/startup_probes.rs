@@ -28991,3 +28991,134 @@ fn format_app_about_dialog_comments_does_not_contain_a_start_of_heading_byte() {
         "AdwAboutDialog comments must not contain the `\\x01` start-of-heading byte (0x01); like STX, ETX, EOT, ENQ, ACK, and BEL, SOH is NOT matched by `char::is_whitespace()` (Unicode returns false for U+0001 SOH), so the comments helper's transitive whitespace-boundary / single-line protections do NOT cover SOH; a mid-string `\\x01` slips past `_is_non_empty_single_line_distinct_from_program_name` (which only checks `\\n` and uses `char::is_whitespace()` for boundary checks — neither catches `\\x01`), past `_is_ascii_only` (because `\\x01` is ASCII), past `_does_not_end_with_a_period_per_libadwaita_convention` (which only constrains the trailing byte), past `_matches_cargo_pkg_description` (a future workspace description that introduced `\\x01` would propagate the byte and this equality pin would still pass), and past `_does_not_contain_a_null_byte` / `_does_not_contain_a_horizontal_tab_byte` / `_does_not_contain_a_carriage_return_byte` / `_does_not_contain_a_vertical_tab_byte` / `_does_not_contain_a_form_feed_byte` / `_does_not_contain_a_backspace_byte` / `_does_not_contain_a_line_feed_byte` / `_does_not_contain_a_bell_byte` / `_does_not_contain_an_acknowledge_byte` / `_does_not_contain_an_enquiry_byte` / `_does_not_contain_an_end_of_transmission_byte` / `_does_not_contain_an_end_of_text_byte` / `_does_not_contain_a_start_of_text_byte` (which each name a different byte specifically); it would render as a literal control glyph in the dialog header comments row, confuse serial-protocol-bridging tooling that treats `\\x01` as a SOH header-block opener if dumped through a serial-bridged TTY (splicing the comments at the byte boundary into an unexpected header-followed-by-text sequence), trigger readline `^A` beginning-of-line cursor-jump surprises in interactive shells capturing the elevator-pitch through a pty with the default Emacs keymap, break screen-reader comments announcements at the byte boundary, propagate into downstream changelog aggregators and AppStream `<summary>` extractors, and trigger AppStream `<summary>` validation rejection at packaging time; got {comments:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_developers_entries_do_not_contain_a_start_of_heading_byte() {
+    // Defense-in-depth per-entry-loop sibling extending the
+    // developers-array byte-cleanliness contract past the
+    // just-completed `{null / horizontal-tab / carriage-
+    // return / vertical-tab / form-feed / backspace / line-
+    // feed / bell / acknowledge / enquiry / end-of-
+    // transmission / end-of-text / start-of-text}` entry-
+    // tredecuple to the start-of-heading byte `\x01`
+    // (0x01), continuing the non-whitespace-classified C0
+    // control-byte cycle past STX (0x02) for each entry.
+    // Like STX, ETX, EOT, ENQ, ACK, and BEL, SOH is NOT
+    // matched by `char::is_whitespace()` (Unicode treats
+    // SOH as a control byte, not whitespace), so the
+    // `_is_non_empty_array_of_non_empty_single_line_names`
+    // surrounding-whitespace boundary guards
+    // (`!name.starts_with(char::is_whitespace)` and
+    // `!name.ends_with(char::is_whitespace)`) do NOT reject
+    // a leading or trailing `\x01` per entry — making the
+    // start-of-heading byte strictly as dangerous as start-
+    // of-text, end-of-text, end-of-transmission, enquiry,
+    // acknowledge, backspace, and bell for each entry.
+    //
+    // None of the existing developers companions name the
+    // `\x01` byte directly per entry:
+    //   - `_is_non_empty_array_of_non_empty_single_line_names`
+    //     pins each entry as non-empty and single-line via
+    //     `!name.contains('\n')` — `\x01` is not `\n`. The
+    //     surrounding-whitespace boundary guards use
+    //     `char::is_whitespace()`, which returns *false*
+    //     for U+0001 SOH, so neither guard rejects `\x01`
+    //     even at the boundary;
+    //   - `_entries_are_distinct` / `_does_not_contain_developer_name`
+    //     / `_does_not_contain_app_id` /
+    //     `_does_not_contain_program_name` /
+    //     `_lists_benjamin_porter` guard against content-
+    //     shape regressions but say nothing about embedded
+    //     `\x01` bytes;
+    //   - `_entries_do_not_contain_a_null_byte` /
+    //     `_entries_do_not_contain_a_horizontal_tab_byte` /
+    //     `_entries_do_not_contain_a_carriage_return_byte` /
+    //     `_entries_do_not_contain_a_vertical_tab_byte` /
+    //     `_entries_do_not_contain_a_form_feed_byte` /
+    //     `_entries_do_not_contain_a_backspace_byte` /
+    //     `_entries_do_not_contain_a_line_feed_byte` /
+    //     `_entries_do_not_contain_a_bell_byte` /
+    //     `_entries_do_not_contain_an_acknowledge_byte` /
+    //     `_entries_do_not_contain_an_enquiry_byte` /
+    //     `_entries_do_not_contain_an_end_of_transmission_byte`
+    //     / `_entries_do_not_contain_an_end_of_text_byte` /
+    //     `_entries_do_not_contain_a_start_of_text_byte`
+    //     siblings each name a different byte specifically.
+    //
+    // A regression that landed `["Benjamin\x01Porter"]`
+    // (a start-of-heading byte lifted from a `script(1)`
+    // typescript capturing raw `\x01` SOH framing bytes
+    // from a CI build that bridged a serial console mid-
+    // contributor-name edit during a Bisync-style header-
+    // block transfer, a `concat!("Benjamin", "\x01",
+    // "Porter")` form mirroring a header-segment-delimited
+    // contributor edit, or a hand-edited helper that
+    // pasted from a terminal session interfacing with a
+    // protocol bridge preserving SOH framing bytes) would
+    // mis-render in multiple downstream surfaces: (1) the
+    // GLib-backed `AdwAboutDialog::set_developers` setter
+    // hands the array to GTK and Pango renders each entry
+    // as a credits-page row — a stray `\x01` byte in the
+    // middle of a contributor name would render as a
+    // literal control glyph (a hollow box or tofu-like
+    // placeholder), breaking the credits-page contributor-
+    // name layout; (2) when the credits-page is dumped
+    // through a serial-bridged TTY (CI logs over a serial
+    // console, an out-of-band debugging session), the
+    // `\x01` byte may be intercepted by the receiving end
+    // as a start-of-heading framing indicator and signal
+    // the start of a header block, confusing protocol-
+    // bridging tooling that treats SOH as a header-block
+    // opener and splicing the contributor name at the byte
+    // boundary into an unexpected header-followed-by-text
+    // sequence; on POSIX terminals using emacs-style line
+    // editing where `^A` defaults to the beginning-of-line
+    // keybinding, the byte may surface as an unexpected
+    // cursor-to-line-start jump in any interactive shell
+    // that captures the credits-page through a pty with
+    // readline bound to the default Emacs keymap; (3) any
+    // tooling that scrapes the credits-page contributor
+    // list (release-note generators, contributor-
+    // attribution crawlers, GNOME `gnome-software` credit
+    // aggregators) would propagate the stray `\x01` byte
+    // into the consumer's stream and trigger the same
+    // control-glyph / readline-keybinding / protocol-
+    // confusion bug across every downstream surface; (4)
+    // screen readers that announce the credits-page
+    // contributor names render the byte as a literal
+    // control character announcement, breaking the
+    // contributor-name accessibility-tree announcement at
+    // the byte boundary.
+    //
+    // Pinning the no-`\x01` invariant across every
+    // contributor entry in a single per-entry loop
+    // surfaces the regression with a message naming both
+    // the offending byte and the affected entry index at
+    // build time rather than as a downstream credits-page
+    // rendering artifact, a serial-protocol SOH-frame
+    // header-block-opener collision through TTY dumps, a
+    // readline `^A` beginning-of-line surprise, or a
+    // screen-reader announcement break. Current helper
+    // returns the literal `["Benjamin Porter"]` (no `\x01`
+    // byte), so this test passes today and serves as a
+    // forcing function so any future override of the
+    // helper — or any future contributor addition — stays
+    // free of start-of-heading bytes. Continues the non-
+    // whitespace-classified C0 control-byte cycle past the
+    // just-completed `{null / horizontal-tab / carriage-
+    // return / vertical-tab / form-feed / backspace /
+    // line-feed / bell / acknowledge / enquiry / end-of-
+    // transmission / end-of-text / start-of-text}`
+    // tredecuple so each entry's byte-composition contract
+    // pins each forbidden control byte against a single
+    // source of truth.
+    use paladin_gtk::app::model::format_app_about_dialog_developers;
+
+    let developers = format_app_about_dialog_developers();
+    for (idx, entry) in developers.iter().enumerate() {
+        assert!(
+            !entry.contains('\x01'),
+            "AdwAboutDialog developers entry at index {idx} must not contain the `\\x01` start-of-heading byte (0x01); like STX, ETX, EOT, ENQ, ACK, and BEL, SOH is NOT matched by `char::is_whitespace()` (Unicode returns false for U+0001 SOH), so a mid-string `\\x01` slips past `_is_non_empty_array_of_non_empty_single_line_names` (which only checks `\\n` per entry and uses `char::is_whitespace()` for boundary checks — neither catches `\\x01`), past `_entries_are_distinct` / `_does_not_contain_developer_name` / `_does_not_contain_app_id` / `_does_not_contain_program_name` / `_lists_benjamin_porter` (which only constrain content shape), and past `_entries_do_not_contain_a_null_byte` / `_entries_do_not_contain_a_horizontal_tab_byte` / `_entries_do_not_contain_a_carriage_return_byte` / `_entries_do_not_contain_a_vertical_tab_byte` / `_entries_do_not_contain_a_form_feed_byte` / `_entries_do_not_contain_a_backspace_byte` / `_entries_do_not_contain_a_line_feed_byte` / `_entries_do_not_contain_a_bell_byte` / `_entries_do_not_contain_an_acknowledge_byte` / `_entries_do_not_contain_an_enquiry_byte` / `_entries_do_not_contain_an_end_of_transmission_byte` / `_entries_do_not_contain_an_end_of_text_byte` / `_entries_do_not_contain_a_start_of_text_byte` (which each name a different byte specifically); it would render as a literal control glyph in the credits-page \"Developers\" row, confuse serial-protocol-bridging tooling that treats `\\x01` as a SOH header-block opener if dumped through a serial-bridged TTY (splicing the contributor name at the byte boundary into an unexpected header-followed-by-text sequence), trigger readline `^A` beginning-of-line cursor-jump surprises in interactive shells capturing the credits-page through a pty with the default Emacs keymap, propagate into downstream attribution scrapers and `gnome-software` credit aggregators, and break screen-reader contributor-name announcements at the byte boundary; got {entry:?}",
+        );
+    }
+}
