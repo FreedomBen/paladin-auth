@@ -63,13 +63,20 @@ crates/paladin-gtk/
 └── tests/
     ├── icon_resolution.rs
     ├── search_logic.rs
+    ├── cli_global_args.rs
+    ├── startup_probes.rs
+    ├── app_state_logic.rs
     ├── auto_lock_logic.rs        # pure logic; no display required
     ├── clipboard_clear_logic.rs  # pure logic; no display required
     ├── hotp_reveal_logic.rs
     ├── secret_fields_logic.rs
     ├── startup_error_logic.rs
     ├── qr_clipboard_logic.rs
+    ├── account_list_logic.rs
+    ├── account_row_logic.rs
     ├── init_dialog_logic.rs
+    ├── unlock_dialog_logic.rs
+    ├── add_account_logic.rs
     ├── rename_dialog_logic.rs
     ├── remove_dialog_logic.rs
     ├── otpauth_uri_paste_logic.rs
@@ -78,6 +85,9 @@ crates/paladin-gtk/
     ├── passphrase_dialog_logic.rs
     ├── settings_logic.rs
     ├── effect_ownership_logic.rs
+    ├── no_tokio_source.rs
+    ├── thinness.rs
+    ├── manual_test_plan_doc.rs
     ├── gtk_smoke.rs              # xvfb-run integration smoke test
     └── manual/MANUAL_TEST_PLAN.md
 ```
@@ -758,6 +768,50 @@ These run without a display server. Each lives under
 - [x] CLI's `id:<hex>` prefix form is **not** honored by the GUI
   search (parity with the TUI).
 
+#### `tests/cli_global_args.rs`
+
+- [x] `--vault <path>` parses and leaves the default path unresolved
+  when omitted.
+- [x] `--no-color` parses as a GUI no-op for CLI / TUI parity.
+- [x] `--json` rejects with clap text output and never renders a JSON
+  envelope.
+- [x] Positional file paths and `otpauth://` URIs reject; imports
+  start from `ImportDialog`.
+- [x] Hidden `--exit-after-startup` parses for smoke tests and stays
+  absent from `--help`.
+
+#### `tests/startup_probes.rs`
+
+- [x] `run_startup_probes` resolves the requested path, calls
+  `paladin_core::inspect`, and opens plaintext vaults into
+  `AppState::Unlocked` with the live `(Vault, Store)` pair.
+- [x] Missing vaults route to `AppState::Missing` without creating a
+  file; encrypted vaults route to `AppState::Locked` without running
+  Argon2id.
+- [x] Default-path, inspect, and plaintext-open failures route to
+  `AppState::StartupError` without carrying a live vault.
+- [x] `startup_state_marker` and the per-state smoke-test markers
+  remain single-line and stable for `--exit-after-startup` assertions.
+- [x] Header-menu and About-dialog pure-format helpers keep action
+  labels, action sensitivity, icon names, and Cargo-derived metadata
+  stable without requiring a display server.
+
+#### `tests/app_state_logic.rs`
+
+- [x] Startup state decisions map path-resolution / inspect / open
+  outcomes to `Missing`, `Locked`, `Unlocked`, and `StartupError`.
+- [x] Unlock submit / worker-result routing preserves inline
+  passphrase failures, startup-routed failures, and success
+  transitions.
+- [x] Mutating dialog dispatch decisions for Add / Remove / Rename /
+  Import / Export / Passphrase / Settings only start from
+  `Unlocked` and enter `UnlockedBusy` consistently.
+- [x] Worker completions reinstall the returned `(Vault, Store)` pair
+  before applying UI success, inline-error, or warning outcomes.
+- [x] Dialog-drop / keep-mounted decisions match the success,
+  inline-failure, and durability-unconfirmed contracts for each
+  mutating surface.
+
 #### `tests/auto_lock_logic.rs`
 
 - [x] Idle-event source feeds
@@ -825,8 +879,9 @@ These run without a display server. Each lives under
 - [x] `unsafe_permissions` rendering uses the `Some(text)` from
   `paladin_core::format_unsafe_permissions(&err)`, falling back to
   the generic error text only when the formatter returns `None`.
-- [x] Retry from `StartupErrorComponent` re-runs vault-path
-  resolution + `inspect`.
+- [x] Retry helper for `StartupErrorComponent` re-runs vault-path
+  resolution + `inspect`; widget action wiring is tracked in the
+  Milestone 7 startup-routing checklist.
 
 #### `tests/qr_clipboard_logic.rs`
 
@@ -838,6 +893,32 @@ These run without a display server. Each lives under
 - [x] Decoded buffer is passed to
   `paladin_core::import::qr_image_bytes` with `ImportConflict::Skip`
   and reports imported / skipped / warning counts (parity with §6).
+
+#### `tests/account_list_logic.rs`
+
+- [x] `row_models_from_vault` projects accounts through
+  `paladin_core::AccountSummary` without exposing secret bytes.
+- [x] Empty vaults render no rows; populated vaults preserve insertion
+  order across TOTP and HOTP rows.
+- [x] Empty issuer display collapses to the bare label instead of a
+  dangling colon.
+- [x] `format_rendered_marker` and widget-state markers stay stable
+  for `tests/gtk_smoke.rs` assertions.
+- [x] Row action dispatch carries the selected account ID for Rename
+  and Remove without touching the vault.
+
+#### `tests/account_row_logic.rs`
+
+- [x] Row display labels match CLI / TUI summary formatting for
+  issuer / label combinations.
+- [x] TOTP rows show copy + progress controls; HOTP rows show copy
+  only during reveal and expose the "next" action.
+- [x] Hidden HOTP rows show the stored next counter; revealed rows
+  show `Code.counter_used` until the reveal expires.
+- [x] Row projections keep code / counter display decisions pure so
+  widget factories do not need direct vault access.
+- [x] Row output events carry the account ID for Rename / Remove
+  dispatch.
 
 #### `tests/init_dialog_logic.rs`
 
@@ -877,6 +958,40 @@ These run without a display server. Each lives under
   against a pre-existing seeded vault returns `Success` and rotates
   the prior primary to `vault.bin.bak`; the post-success vault
   survives a `Store::open` round trip.
+
+#### `tests/unlock_dialog_logic.rs`
+
+- [x] Unlock view is required only for encrypted vaults and skipped
+  for plaintext / missing vault statuses.
+- [x] Empty passphrase submit rejects inline with
+  `invalid_passphrase` (`reason: "zero_length"`); non-empty
+  passphrases build `VaultLock::Encrypted(secret)`.
+- [x] `decrypt_failed` and `invalid_passphrase` stay inline on
+  `UnlockComponent`; `unsafe_permissions`, `wrong_vault_lock`,
+  `invalid_header`, `invalid_payload`, `unsupported_format_version`,
+  `kdf_params_out_of_bounds`, and `io_error` route to
+  `StartupErrorComponent`.
+- [x] Passphrase buffers zeroize on submit / clear and are wrapped in
+  zeroizing values at the component boundary.
+- [x] Inline errors clear when the user edits or clears the
+  passphrase field.
+
+#### `tests/add_account_logic.rs`
+
+- [x] Manual Add maps widget fields onto
+  `paladin_core::AccountInput`, including kind-conditional TOTP
+  period / HOTP counter handling.
+- [x] Icon-hint text normalizes through
+  `paladin_core::parse_icon_hint_token` for slug / `default` /
+  `none` parity with CLI / TUI add flows.
+- [x] `paladin_core::validate_manual` warnings proceed with inline
+  warning display; field parse errors and core `validation_error`
+  reject inline without mutating the vault.
+- [x] Duplicate detection returns the existing account and stages a
+  pending `ValidatedAccount` for the add-anyway confirmation.
+- [x] Post-effect routing maps `save_durability_unconfirmed` to
+  keep-with-warning and all pre-commit / validation failures to
+  inline failure.
 
 #### `tests/rename_dialog_logic.rs`
 
@@ -1211,6 +1326,11 @@ an X11 session before sign-off.
 
 ## Milestone 7 checklist (expanded from §12)
 
+The order below follows implementation dependencies: crate and parser
+foundation, startup/window routing, vault access, list/row behavior,
+dialog flows, shared policy/effect plumbing, then desktop packaging and
+sign-off.
+
 - [x] Add the `paladin-gtk` crate to the workspace.
 - [x] Relm4 component tree (Init / Unlock / List / Row / Add / Remove /
   Rename / Import / Export / Passphrase / Settings / StartupError).
@@ -1229,6 +1349,40 @@ an X11 session before sign-off.
   / `ExportDialogComponent` / `PassphraseDialogComponent` /
   `SettingsComponent`, full row body migration) attach behavior on
   top of these mounts.
+- [x] Global argument parser contract (`cli.rs`).
+  - [x] Accept `--vault <path>` and plumb the optional override into
+    `AppInit` so startup probes inspect that path instead of the default.
+  - [x] Accept `--no-color` as a parser-level no-op for CLI / TUI
+    parity; do not expose any GUI theme override from this flag.
+  - [x] Reject `--json` at parse time with clap's standard text
+    diagnostic; never emit a JSON envelope from `paladin-gtk`.
+  - [x] Reject positional file / URI arguments; imports always start
+    from `ImportDialog`.
+  - [x] Keep the smoke-test-only `--exit-after-startup` flag hidden from
+    `--help` while still parsing it for `tests/gtk_smoke.rs`.
+- [ ] Startup routing and non-mutating startup-error actions.
+  - [x] Resolve the startup path from `--vault` or
+    `paladin_core::default_vault_path()` before inspecting the vault.
+  - [x] Route `VaultStatus::Plaintext` through
+    `paladin_core::Store::open(..., VaultLock::Plaintext)` and seed
+    `AppState::Unlocked` plus the live `(Vault, Store)` pair.
+  - [x] Route `VaultStatus::Encrypted` to `AppState::Locked` and mount
+    `UnlockComponent`; do not run Argon2id until the user submits a
+    passphrase.
+  - [x] Route `VaultStatus::Missing` to `AppState::Missing` and mount
+    `InitDialog` without creating files before explicit confirmation.
+  - [x] Route `default_vault_path`, `inspect`, and non-passphrase open
+    failures to `StartupErrorComponent` with rendered text sourced from
+    `paladin_core::format_unsafe_permissions(&err)` when available and
+    `PaladinError::Display` otherwise.
+  - [ ] Wire the `StartupErrorComponent` Retry action to re-run path
+    resolution plus `inspect` and then re-route to `Missing`, `Locked`,
+    `Unlocked`, or `StartupError` from the fresh probe result.
+  - [ ] Wire the `StartupErrorComponent` Quit action through the same
+    application quit path used by the primary menu.
+  - [ ] Keep `StartupErrorComponent` display-only: retry and quit are
+    the only actions, and the component never creates, overwrites,
+    repairs, chmods, or selects a different vault path in v0.2.
 - [ ] Window shell and toast surface (`AdwApplicationWindow` root,
   `AdwToolbarView`, `AdwToastOverlay`, scoped CSS).
   - [ ] Build `AppModel`'s widget root as an `AdwApplicationWindow`
@@ -1294,122 +1448,19 @@ an X11 session before sign-off.
   - [ ] Zeroize passphrase-entry widget buffers and the pending
     `VaultInit` on submit, cancel, destructive-confirmation cancel,
     dialog close, and auto-lock per §"Secret entry handling".
-- [ ] In-app account rename (`RenameDialog` reachable from the row
-  kebab menu; calls `Vault::rename` inside `Vault::mutate_and_save`).
-  - [ ] Add a `gtk::MenuButton` kebab on each row whose `gio::Menu`
-    exposes "Rename…" alongside the existing "Remove…".
-  - [ ] Build `RenameDialogComponent` as a modal carrying a
-    pre-populated `AdwEntryRow` for the label plus Save / Cancel
-    buttons.
-  - [ ] Validate the label inline (non-empty, §4.1 length limits) and
-    gate the Save button.
-  - [ ] On submit, call `Vault::rename(id, new_label, now)` inside
-    `Vault::mutate_and_save` regardless of whether the new label
-    equals the current one (so `updated_at` always bumps, matching
-    the CLI).
-  - [ ] Handle `save_not_committed` by restoring the prior label in
-    memory and keeping the dialog open with the inline error.
-  - [ ] Handle `save_durability_unconfirmed` by keeping the new label
-    in memory and attaching the warning to the dialog body.
-  - [ ] Reset the entry buffer on cancel / submit / dialog close.
-- [ ] `RemoveDialog` confirmation flow (`AdwAlertDialog` with
-  `destructive-action` styling gating `Vault::remove` inside
-  `Vault::mutate_and_save`).
-  - [ ] Open `RemoveDialog` as an `AdwAlertDialog` with
-    `destructive-action` styling on the destructive button when the
-    user picks "Remove…" from the row kebab menu.
-  - [ ] Render the dialog body using
-    `summary_display_label(&AccountSummary)` so the wording matches
-    the CLI / TUI (`<issuer>:<label>` when issuer is set; empty
-    issuer collapses to the bare-label form so the body never
-    renders a dangling `:label` colon).
-  - [ ] On confirm, call `Vault::remove(id)` inside
-    `Vault::mutate_and_save`; handle `save_not_committed` by
-    restoring the account at its previous position and keeping the
-    dialog open with the inline error, and handle
-    `save_durability_unconfirmed` by keeping the account removed
-    from in-memory state and attaching the warning to the dialog
-    body.
-  - [ ] Surface `invalid_state { state: "account_not_found" }`,
-    `io_error`, and defensive `validation_error` inline without
-    closing the dialog; the dialog never mutates visible state
-    until the worker returns.
-  - [ ] Cancel closes the dialog without mutating the vault.
-- [ ] `AddAccountComponent` manual fields path (label, issuer,
-  Base32 secret, algorithm, digits, kind, TOTP period, HOTP counter,
-  icon hint).
-  - [ ] Mount the manual form on the `AdwViewStack`'s "Manual" page
-    using `AdwEntryRow` / `AdwSpinRow` / `AdwComboRow` rows that map
-    onto `paladin_core::AccountInput`.
-  - [ ] Default the form fields to the CLI manual-add defaults from
-    DESIGN §5 (TOTP, SHA1, 6 digits, 30 s period, HOTP counter 0,
-    icon-hint mode `Default from issuer`).
-  - [ ] Normalize the icon-hint entry through
-    `paladin_core::parse_icon_hint_token` so the slug / `default` /
-    `none` parsing matches the CLI / TUI add modals exactly.
-  - [ ] On submit, validate the inputs through
-    `paladin_core::validate_manual`; parse errors (invalid Base32,
-    empty label, out-of-range digits / period / counter) and any
-    core-returned `validation_error` block submission inline without
-    mutating the vault.
-  - [ ] Render validation warnings inline via
-    `paladin_core::format_validation_warning()` without blocking
-    creation.
-  - [ ] On successful validation, call
-    `Vault::find_duplicate(&validated)` and reject inline with the
-    existing account; offer the "add anyway" confirmation that
-    consumes the pending `ValidatedAccount` on the duplicate-allowed
-    path (CLI parity with `--allow-duplicate`).
-  - [ ] Run successful manual additions inside
-    `Vault::mutate_and_save`; handle `save_not_committed` rollback
-    (the just-inserted account is removed) and
-    `save_durability_unconfirmed` keep-with-warning per §"Effect
-    errors".
-  - [ ] Zeroize the manual Base32 secret entry buffer on submit /
-    cancel / dialog close / auto-lock and when the user switches
-    away from the manual stack page.
-- [ ] Add-via-`otpauth://`-URI paste path in `AddAccountComponent`,
-  decoded via `paladin_core::parse_otpauth` and sharing the manual
-  duplicate / validation paths.
-  - [ ] Wrap the manual form, the URI entry, and the clipboard QR
-    path in an `AdwViewStack` controlled by an `AdwViewSwitcher` so
-    the user can pick the active path.
-  - [ ] Add a URI `AdwEntryRow` for the `otpauth://` string on its
-    dedicated stack page.
-  - [ ] On submit, call `paladin_core::parse_otpauth` synchronously
-    on the main thread (no I/O); surface parse failures inline
-    without echoing the URI text.
-  - [ ] Route the resulting `ValidatedAccount` through the same
-    duplicate-detection / "add anyway" / `Vault::mutate_and_save`
-    insertion path the manual form already uses.
-  - [ ] Clear the URI entry buffer (and any pending duplicate-add
-    state) when the user switches stack pages, on submit, on cancel,
-    on dialog close, and on auto-lock; never carry the URI in
-    `AppMsg` or `AppOutput`.
-- [ ] `AddAccountComponent` QR clipboard image path (`gdk::Clipboard`
-  texture read → `paladin_core::import::qr_image_bytes` with
-  `ImportConflict::Skip`).
-  - [ ] Mount the QR-clipboard action on the `AdwViewStack`'s "Scan
-    clipboard" page; on activation, read a `gdk::Texture` from the
-    GDK clipboard.
-  - [ ] Allocate an exact `width * height * 4` straight
-    (non-premultiplied) RGBA8 buffer with overflow-checked
-    multiplication; reject sizes above
-    `paladin_core::QR_RGBA_MAX_BYTES` before allocation / download.
-  - [ ] Download the texture via a `gdk::TextureDownloader` set to
-    `gdk::MemoryFormat::R8g8b8a8` with row stride `width * 4` (the
-    default `Texture::download` yields premultiplied pixels the QR
-    decoder cannot consume).
-  - [ ] Pass width, height, bytes, and `import_time` into
-    `paladin_core::import::qr_image_bytes`; the call returns
-    `Vec<ValidatedAccount>` regardless of QR count.
-  - [ ] Insert the returned accounts through
-    `Vault::import_accounts(accounts, ImportConflict::Skip,
-    import_time)` inside `Vault::mutate_and_save`; report
-    imported / skipped / warning counts inline (parity with §6).
-  - [ ] Surface no-image, image-decode failure, zero-decoded-QRs,
-    and invalid-payload errors inline in the Add dialog; never
-    mutate vault state on failure.
+- [ ] Secret-entry ownership and zeroization guardrails.
+  - [ ] Keep passphrases, manual Base32 secrets, `otpauth://` URI
+    text, HOTP reveal codes, pending clipboard-clear payloads, and
+    pending duplicate / create values out of `AppModel`, `AppMsg`,
+    `AppOutput`, and other long-lived non-zeroizing state.
+  - [ ] Wrap Paladin-owned secret copies in `SecretString` or
+    `Zeroizing` immediately at submit / copy time, and drop them as
+    soon as the core call or clipboard policy no longer needs them.
+  - [ ] Clear the relevant GTK entry widgets on submit, cancel,
+    dialog close, auto-lock, and Add path switches.
+  - [ ] Ensure validation, duplicate, import, export, and status
+    messages can name fields / reasons but never echo secret-bearing
+    input values.
 - [x] Conditional unlock view (encrypted vaults only).
 - [ ] `UnlockComponent` full implementation (passphrase entry,
   `paladin_core::open` on `gio::spawn_blocking`, inline-error
@@ -1426,8 +1477,9 @@ an X11 session before sign-off.
   - [ ] On success, transition `AppModel` from `Locked` to
     `Unlocked` with the returned `(Vault, Store)` pair and route to
     `AccountListComponent`.
-  - [ ] Render wrong-passphrase failures inline on the dialog so
-    the user can retry without leaving `Locked`.
+  - [ ] Render wrong-passphrase / passphrase-validation failures
+    (`decrypt_failed` and `invalid_passphrase`) inline on the dialog
+    so the user can retry without leaving `Locked`.
   - [ ] Transition to `StartupErrorComponent` for non-authentication
     open failures (`unsafe_permissions`, `wrong_vault_lock`,
     `invalid_header`, `invalid_payload`,
@@ -1482,6 +1534,8 @@ an X11 session before sign-off.
   - [ ] Add a copy button that copies the visible code to
     `gdk::Clipboard` and schedules clipboard auto-clear; disable
     copying on a hidden HOTP row.
+  - [ ] If a GDK clipboard write fails, surface an inline / status
+    error and do not schedule clipboard auto-clear for that attempt.
   - [ ] Add a kebab `gtk::MenuButton` whose `gio::Menu` exposes
     "Rename…" (opens `RenameDialog` for that row) and "Remove…"
     (opens `RemoveDialog` for that row).
@@ -1539,6 +1593,148 @@ an X11 session before sign-off.
     `None`, empty, or unresolved.
   - [ ] Ship the placeholder icon in the gresource bundle so it is
     available identically in native and Flatpak builds.
+- [ ] In-app account rename (`RenameDialog` reachable from the row
+  kebab menu; calls `Vault::rename` inside `Vault::mutate_and_save`).
+  - [ ] Add a `gtk::MenuButton` kebab on each row whose `gio::Menu`
+    exposes "Rename…" alongside the existing "Remove…".
+  - [ ] Build `RenameDialogComponent` as a modal carrying a
+    pre-populated `AdwEntryRow` for the label plus Save / Cancel
+    buttons.
+  - [ ] Validate the label inline (non-empty, §4.1 length limits) and
+    gate the Save button.
+  - [ ] On submit, call `Vault::rename(id, new_label, now)` inside
+    `Vault::mutate_and_save` regardless of whether the new label
+    equals the current one (so `updated_at` always bumps, matching
+    the CLI).
+  - [ ] Handle `save_not_committed` by restoring the prior label in
+    memory and keeping the dialog open with the inline error.
+  - [ ] Handle `save_durability_unconfirmed` by keeping the new label
+    in memory and attaching the warning to the dialog body.
+  - [ ] On success, refresh `AccountListComponent` from the returned
+    vault, close the dialog, and surface a status / toast confirmation.
+  - [ ] Reset the entry buffer on cancel / submit / dialog close.
+- [ ] `RemoveDialog` confirmation flow (`AdwAlertDialog` with
+  `destructive-action` styling gating `Vault::remove` inside
+  `Vault::mutate_and_save`).
+  - [ ] Open `RemoveDialog` as an `AdwAlertDialog` with
+    `destructive-action` styling on the destructive button when the
+    user picks "Remove…" from the row kebab menu.
+  - [ ] Render the dialog body using
+    `summary_display_label(&AccountSummary)` so the wording matches
+    the CLI / TUI (`<issuer>:<label>` when issuer is set; empty
+    issuer collapses to the bare-label form so the body never
+    renders a dangling `:label` colon).
+  - [ ] On confirm, call `Vault::remove(id)` inside
+    `Vault::mutate_and_save`; handle `save_not_committed` by
+    restoring the account at its previous position and keeping the
+    dialog open with the inline error, and handle
+    `save_durability_unconfirmed` by keeping the account removed
+    from in-memory state and attaching the warning to the dialog
+    body.
+  - [ ] Surface `invalid_state { state: "account_not_found" }`,
+    `io_error`, and defensive `validation_error` inline without
+    closing the dialog; the dialog never mutates visible state
+    until the worker returns.
+  - [ ] On success, refresh `AccountListComponent` from the returned
+    vault, close the dialog, and surface a status / toast confirmation.
+  - [ ] Cancel closes the dialog without mutating the vault.
+- [ ] `AddAccountComponent` shared shell and mutation pipeline.
+  - [ ] Wrap the manual form, the URI entry, and the clipboard QR path
+    in an `AdwViewStack` controlled by an `AdwViewSwitcher` before the
+    path-specific pages are wired.
+  - [ ] Keep Add dialog submit / cancel / close handling centralized so
+    every path can disable submit while a worker is in flight and can
+    clear path-local pending state on dismissal.
+  - [ ] On path switch, clear hidden secret-bearing fields (manual
+    Base32 secret and URI text) plus any pending duplicate/add-anyway
+    state before the newly selected page becomes active.
+  - [ ] Share one duplicate-detection / "add anyway" / serialized
+    `Vault::mutate_and_save` insertion path for manual and URI
+    submissions; QR clipboard imports use the import-report path
+    described below.
+  - [ ] Keep successful manual and URI additions consistent with §7:
+    refresh the list from the returned vault, close the dialog, and
+    surface a status / toast confirmation.
+  - [ ] Keep successful clipboard-QR additions on a post-success counts
+    panel until the user dismisses it, so imported / skipped / warning
+    counts remain visible.
+- [ ] `AddAccountComponent` manual fields path (label, issuer,
+  Base32 secret, algorithm, digits, kind, TOTP period, HOTP counter,
+  icon hint).
+  - [ ] Mount the manual form on the `AdwViewStack`'s "Manual" page
+    using `AdwEntryRow` / `AdwSpinRow` / `AdwComboRow` rows that map
+    onto `paladin_core::AccountInput`.
+  - [ ] Default the form fields to the CLI manual-add defaults from
+    DESIGN §5 (TOTP, SHA1, 6 digits, 30 s period, HOTP counter 0,
+    icon-hint mode `Default from issuer`).
+  - [ ] Normalize the icon-hint entry through
+    `paladin_core::parse_icon_hint_token` so the slug / `default` /
+    `none` parsing matches the CLI / TUI add modals exactly.
+  - [ ] On submit, validate the inputs through
+    `paladin_core::validate_manual`; parse errors (invalid Base32,
+    empty label, out-of-range digits / period / counter) and any
+    core-returned `validation_error` block submission inline without
+    mutating the vault.
+  - [ ] Render validation warnings inline via
+    `paladin_core::format_validation_warning()` without blocking
+    creation.
+  - [ ] On successful validation, call
+    `Vault::find_duplicate(&validated)` and reject inline with the
+    existing account; offer the "add anyway" confirmation that
+    consumes the pending `ValidatedAccount` on the duplicate-allowed
+    path (CLI parity with `--allow-duplicate`).
+  - [ ] Run successful manual additions inside
+    `Vault::mutate_and_save`; handle `save_not_committed` rollback
+    (the just-inserted account is removed) and
+    `save_durability_unconfirmed` keep-with-warning per §"Effect
+    errors".
+  - [ ] Zeroize the manual Base32 secret entry buffer on submit /
+    cancel / dialog close / auto-lock and when the user switches
+    away from the manual stack page.
+- [ ] Add-via-`otpauth://`-URI paste path in `AddAccountComponent`,
+  decoded via `paladin_core::parse_otpauth` and sharing the manual
+  duplicate / validation paths.
+  - [ ] Add a URI `AdwEntryRow` for the `otpauth://` string on its
+    dedicated stack page.
+  - [ ] On submit, call `paladin_core::parse_otpauth` synchronously
+    on the main thread (no I/O); surface parse failures inline
+    without echoing the URI text.
+  - [ ] Route the resulting `ValidatedAccount` through the same
+    duplicate-detection / "add anyway" / `Vault::mutate_and_save`
+    insertion path the manual form already uses.
+  - [ ] Clear the URI entry buffer (and any pending duplicate-add
+    state) when the user switches stack pages, on submit, on cancel,
+    on dialog close, and on auto-lock; never carry the URI in
+    `AppMsg` or `AppOutput`.
+- [ ] `AddAccountComponent` QR clipboard image path (`gdk::Clipboard`
+  texture read → `paladin_core::import::qr_image_bytes` with
+  `ImportConflict::Skip`).
+  - [ ] Mount the QR-clipboard action on the `AdwViewStack`'s "Scan
+    clipboard" page; on activation, read a `gdk::Texture` from the
+    GDK clipboard.
+  - [ ] Allocate an exact `width * height * 4` straight
+    (non-premultiplied) RGBA8 buffer with overflow-checked
+    multiplication; reject sizes above
+    `paladin_core::QR_RGBA_MAX_BYTES` before allocation / download.
+  - [ ] Download the texture via a `gdk::TextureDownloader` set to
+    `gdk::MemoryFormat::R8g8b8a8` with row stride `width * 4` (the
+    default `Texture::download` yields premultiplied pixels the QR
+    decoder cannot consume).
+  - [ ] Pass width, height, bytes, and `import_time` into
+    `paladin_core::import::qr_image_bytes`; the call returns
+    `Vec<ValidatedAccount>` regardless of QR count.
+  - [ ] Insert the returned accounts through
+    `Vault::import_accounts(accounts, ImportConflict::Skip,
+    import_time)` inside `Vault::mutate_and_save`; report
+    imported / skipped / warning counts inline (parity with §6).
+  - [ ] Handle `save_not_committed` by restoring the
+    `Vault::mutate_and_save` snapshot and keeping the Add dialog open
+    with the inline error; handle `save_durability_unconfirmed` by
+    keeping the imported accounts visible and surfacing the warning on
+    the counts panel.
+  - [ ] Surface no-image, image-decode failure, zero-decoded-QRs,
+    and invalid-payload errors inline in the Add dialog; never
+    mutate vault state on failure.
 - [ ] `ImportDialogComponent` full implementation (file picker,
   format selector, on-conflict selector, passphrase prompt routing,
   merge call, error display).
@@ -1561,8 +1757,11 @@ an X11 session before sign-off.
     merge, and the surrounding `Vault::mutate_and_save` as one
     serialized `gio::spawn_blocking` worker (encrypted-Paladin runs
     Argon2id; keep it off the main loop).
+  - [ ] On success, refresh `AccountListComponent` from the returned
+    vault and keep the dialog on a post-success counts panel until the
+    user dismisses it.
   - [ ] Surface post-merge counts (`imported` / `skipped` /
-    `replaced` / `appended` / `warnings`) inline on success.
+    `replaced` / `appended` / `warnings`) inline on the success panel.
   - [ ] Handle `save_not_committed` by restoring the
     `Vault::mutate_and_save` snapshot and keeping the dialog open
     with the inline error; handle `save_durability_unconfirmed` by
@@ -1636,8 +1835,9 @@ an X11 session before sign-off.
     in-memory mode / key rollback / replacement); the dialog stays
     open on both failure classes.
   - [ ] On success, update the visible vault-mode flag before
-    closing the dialog and re-ask `IdlePolicy::should_arm` so the
-    auto-lock timer state tracks the new on-disk mode.
+    closing the dialog, post a status / toast confirmation, and re-ask
+    `IdlePolicy::should_arm` so the auto-lock timer state tracks the
+    new on-disk mode.
   - [ ] Zeroize all passphrase widget buffers on submit / cancel /
     dialog close / auto-lock.
 - [ ] `SettingsComponent` full implementation
@@ -1662,6 +1862,9 @@ an X11 session before sign-off.
   - [ ] Keep the new value visible on
     `save_durability_unconfirmed` and attach the warning to the
     changed `AdwPreferencesGroup` row.
+  - [ ] On successful live-apply, keep the committed value visible
+    and post a non-blocking settings-saved `AdwToast` through the
+    shared toast overlay.
   - [ ] Re-ask `IdlePolicy::should_arm` after auto-lock toggle or
     timeout changes so the timer state tracks the new policy
     without re-inspecting the file.
@@ -1762,6 +1965,18 @@ an X11 session before sign-off.
   - [ ] Route workers that fail before returning the pair to
     `StartupErrorComponent` without trying to reconstruct in-memory
     vault state.
+- [x] GUI runtime and dependency guardrails.
+  - [x] Use GTK / GLib / Relm4 as the GUI event loop and run long work
+    through `gio::spawn_blocking`; do not use `tokio` directly from
+    `paladin-gtk` source.
+  - [x] Keep `tokio` out of `paladin-gtk` direct dependencies; allow
+    only the transitive `relm4 → tokio` carve-out captured in
+    `deny.toml`.
+  - [x] Enforce the source-level runtime/network guard with
+    `crates/paladin-gtk/tests/no_tokio_source.rs`.
+  - [x] Keep the GUI thinness guard in `tests/thinness.rs` so crypto,
+    storage, import/export parsers, QR decoding, path discovery, and
+    OTP primitives remain in `paladin-core`.
 - [x] Use `paladin_core::account_matches_search` for `search.rs` filtering,
   `paladin_core::format_validation_warning()` for validation-warning
   messages, and `paladin_core::format_plaintext_export_warning()` for the
@@ -1830,9 +2045,20 @@ an X11 session before sign-off.
     `.rpm`, Flatpak, and AppImage artifacts and runs
     `desktop-file-validate` plus the AppStream validator on the
     installed payload.
-- [x] Manual test plan documented.
-- [x] `xvfb-run` headless smoke test green in CI (plaintext vault opens
-  and renders the list).
+- [ ] Milestone 7 automated and manual sign-off stays tracked.
+  - [x] Manual test plan documented in
+    `crates/paladin-gtk/tests/manual/MANUAL_TEST_PLAN.md`, with
+    `tests/manual_test_plan_doc.rs` guarding that the file exists and
+    carries every required checklist item from this plan.
+  - [ ] Execute every manual test-plan item cleanly on both a Wayland
+    session and an X11 session before Milestone 7 sign-off.
+  - [x] `xvfb-run` headless smoke test is green in CI for launch,
+    plaintext unlock-to-list, rendered account rows, missing-vault
+    `InitDialog` mount, encrypted-vault `UnlockComponent` mount, and
+    corrupt-vault `StartupErrorComponent` mount.
+  - [ ] Before checking off any remaining implementation item, add or
+    update the matching pure-logic test, smoke-test assertion, or
+    manual-test checklist entry named in §"Tests".
 
 ## Dependencies (per §9)
 
@@ -2023,15 +2249,20 @@ section just pins which Adwaita class fills each role.
 - **Every Tests checklist item above is ticked** — including each
   bullet in the per-file pure-logic checklists
   (`tests/icon_resolution.rs`, `tests/search_logic.rs`,
-  `tests/auto_lock_logic.rs`, `tests/clipboard_clear_logic.rs`,
-  `tests/hotp_reveal_logic.rs`, `tests/secret_fields_logic.rs`,
-  `tests/startup_error_logic.rs`, `tests/qr_clipboard_logic.rs`,
-  `tests/init_dialog_logic.rs`, `tests/rename_dialog_logic.rs`,
+  `tests/cli_global_args.rs`, `tests/startup_probes.rs`,
+  `tests/app_state_logic.rs`, `tests/auto_lock_logic.rs`,
+  `tests/clipboard_clear_logic.rs`, `tests/hotp_reveal_logic.rs`,
+  `tests/secret_fields_logic.rs`, `tests/startup_error_logic.rs`,
+  `tests/qr_clipboard_logic.rs`, `tests/account_list_logic.rs`,
+  `tests/account_row_logic.rs`, `tests/init_dialog_logic.rs`,
+  `tests/unlock_dialog_logic.rs`, `tests/add_account_logic.rs`,
+  `tests/rename_dialog_logic.rs`, `tests/remove_dialog_logic.rs`,
   `tests/otpauth_uri_paste_logic.rs`, `tests/import_dialog_logic.rs`,
   `tests/export_dialog_logic.rs`, `tests/passphrase_dialog_logic.rs`,
   `tests/settings_logic.rs`, `tests/effect_ownership_logic.rs`), the
   `tests/gtk_smoke.rs` smoke-test bullets, the `tests/thinness.rs`
-  source guard tracked under §"Thinness contract", and every step in
+  and `tests/no_tokio_source.rs` source guards, the
+  `tests/manual_test_plan_doc.rs` guard, and every step in
   `tests/manual/MANUAL_TEST_PLAN.md`.
 - `xvfb-run` headless smoke test green in CI.
 - Manual test plan executes cleanly on a Wayland and an X11 session.
