@@ -1237,24 +1237,167 @@ an X11 session before sign-off.
   `paladin_core::format_init_force_warning(existing_path)` when a vault
   already exists at the path; pre-commit + durability-unconfirmed
   handling).
+  - [ ] Add two `AdwPasswordEntryRow` passphrase entries (passphrase +
+    confirmation) to `InitDialogComponent`'s body, keeping the existing
+    `Missing`-branch path label as the `AdwStatusPage` description.
+  - [ ] Render `paladin_core::format_plaintext_storage_warning()`
+    verbatim alongside a confirmation tick; gate submission on the tick
+    when both passphrase fields are empty (the plaintext path).
+  - [ ] Route plaintext vs encrypted on submit by the empty-vs-non-empty
+    state of the passphrase fields (both empty → plaintext; non-empty →
+    encrypted).
+  - [ ] Validate encrypted submissions: reject one-empty or mismatched
+    pairs inline with `invalid_passphrase`
+    (`reason: "confirmation_mismatch"`); accept twice-confirm match.
+  - [ ] Build a `VaultInit` from the accepted entries
+    (`VaultInit::Plaintext` or
+    `VaultInit::Encrypted(EncryptionOptions::new(secret)?)`) and stash
+    it in the zeroizing pending-create slot before dispatch.
+  - [ ] Dispatch `init_dialog::run_init_worker` with
+    `InitWorkerMode::Create` on `gio::spawn_blocking` so the §4.4
+    Argon2id KDF stays off the main loop; surface a spinner / busy
+    affordance while the join is pending.
+  - [ ] Handle `InitWorkerEffect::Success { vault, store }` by
+    transitioning `AppModel` to `Unlocked` with the returned pair and
+    closing the dialog.
+  - [ ] Handle `InitWorkerEffect::DestructiveGate` by opening an
+    in-dialog `AdwAlertDialog` with `destructive-action` styling whose
+    body is `paladin_core::format_init_force_warning(existing_path)`.
+  - [ ] On destructive-gate confirm, re-dispatch the worker with
+    `InitWorkerMode::CreateForce`, consuming the pending `VaultInit`.
+  - [ ] On destructive-gate cancel, close the alert and return to the
+    `vault_exists` state without mutating the existing vault, then
+    zeroize the pending `VaultInit`.
+  - [ ] Handle `InitWorkerEffect::InlineError(InlineError)` rendering
+    for `unsafe_permissions`, `save_not_committed` (carrying the
+    `create_force`-only `backup_path` field when applicable),
+    `save_durability_unconfirmed`, and any other typed error returned
+    by `classify_create_error`.
+  - [ ] Render `unsafe_permissions` from the `Some(text)` of
+    `paladin_core::format_unsafe_permissions(&err)`, falling back to
+    the generic error text only when the formatter returns `None`.
+  - [ ] Zeroize passphrase-entry widget buffers and the pending
+    `VaultInit` on submit, cancel, destructive-confirmation cancel,
+    dialog close, and auto-lock per §"Secret entry handling".
 - [ ] In-app account rename (`RenameDialog` reachable from the row
   kebab menu; calls `Vault::rename` inside `Vault::mutate_and_save`).
+  - [ ] Add a `gtk::MenuButton` kebab on each row whose `gio::Menu`
+    exposes "Rename…" alongside the existing "Remove…".
+  - [ ] Build `RenameDialogComponent` as a modal carrying a
+    pre-populated `AdwEntryRow` for the label plus Save / Cancel
+    buttons.
+  - [ ] Validate the label inline (non-empty, §4.1 length limits) and
+    gate the Save button.
+  - [ ] On submit, call `Vault::rename(id, new_label, now)` inside
+    `Vault::mutate_and_save` regardless of whether the new label
+    equals the current one (so `updated_at` always bumps, matching
+    the CLI).
+  - [ ] Handle `save_not_committed` by restoring the prior label in
+    memory and keeping the dialog open with the inline error.
+  - [ ] Handle `save_durability_unconfirmed` by keeping the new label
+    in memory and attaching the warning to the dialog body.
+  - [ ] Reset the entry buffer on cancel / submit / dialog close.
 - [ ] Add-via-`otpauth://`-URI paste path in `AddAccountComponent`,
   decoded via `paladin_core::parse_otpauth` and sharing the manual
   duplicate / validation paths.
+  - [ ] Wrap the manual form, the URI entry, and the clipboard QR
+    path in an `AdwViewStack` controlled by an `AdwViewSwitcher` so
+    the user can pick the active path.
+  - [ ] Add a URI `AdwEntryRow` for the `otpauth://` string on its
+    dedicated stack page.
+  - [ ] On submit, call `paladin_core::parse_otpauth` synchronously
+    on the main thread (no I/O); surface parse failures inline
+    without echoing the URI text.
+  - [ ] Route the resulting `ValidatedAccount` through the same
+    duplicate-detection / "add anyway" / `Vault::mutate_and_save`
+    insertion path the manual form already uses.
+  - [ ] Clear the URI entry buffer (and any pending duplicate-add
+    state) when the user switches stack pages, on submit, on cancel,
+    on dialog close, and on auto-lock; never carry the URI in
+    `AppMsg` or `AppOutput`.
 - [x] Conditional unlock view (encrypted vaults only).
 - [ ] Header-bar `+` button and primary menu wired with the pinned
   entries (Import…, Export…, Passphrase…, Preferences, About Paladin,
   Quit) per §"libadwaita usage", with Unlocked / `UnlockedBusy` gating
   applied to the mutating entries.
+  - [ ] Mount an `AdwHeaderBar` inside the `AdwToolbarView` top slot
+    on the unlocked screen.
+  - [ ] Add the primary "Add account" `+` button at the start of the
+    right side (icon `list-add-symbolic`, tooltip "Add account")
+    wired to open `AddAccountComponent`.
+  - [ ] Add the search-toggle button bound to
+    `gtk::SearchBar::search-mode-enabled` inside
+    `AccountListComponent`.
+  - [ ] Add the primary `gtk::MenuButton` driven by a `gio::Menu`
+    with the fixed entries Import…, Export…, Passphrase…,
+    Preferences, About Paladin, Quit.
+  - [ ] Wire each menu entry to its target component (`ImportDialog`,
+    `ExportDialog`, `PassphraseDialog` with the sub-flow gated by
+    `Vault::is_encrypted()`, `SettingsComponent`'s
+    `AdwPreferencesDialog`, `AdwAboutDialog`, application quit).
+  - [ ] Disable the `+` button and the Import / Export / Passphrase /
+    Preferences entries whenever `AppModel` is not `Unlocked`
+    (Missing / Locked / StartupError) and while `UnlockedBusy` is
+    active; keep About and Quit enabled in every state.
 - [ ] Clipboard + auto-lock parity with TUI (opt-in). Use
   `Vault::is_encrypted()` to decide whether to arm the auto-lock
   timer (encrypted only) and to track the visible vault-mode flag
   across passphrase transitions.
+  - [ ] Wire `gtk::EventControllerKey` and pointer motion controllers
+    at the `AppModel` root so idle events feed
+    `paladin_core::policy::auto_lock::IdlePolicy`.
+  - [ ] Drive the auto-lock timer via `glib::timeout_add_local`
+    against `IdlePolicy::next_deadline` / `is_expired`; arm only
+    when `IdlePolicy::should_arm` returns `true` for the current
+    `Vault::is_encrypted()` value so plaintext vaults remain
+    unarmed via the core decision (not a GUI shortcut).
+  - [ ] On expiry, drop `Vault`, switch `AppModel` to `Locked`,
+    discard open HOTP reveal windows, the search query, and any
+    open dialog, then re-present `UnlockComponent`.
+  - [ ] Re-ask `IdlePolicy::should_arm` after every successful
+    `PassphraseDialog` transition so arm/disarm tracks the on-disk
+    vault mode without re-inspecting the file.
+  - [ ] Wire `gdk::Clipboard.read_text` / `set_text` for the copy
+    and clear paths inside `clipboard.rs`.
+  - [ ] Drive clipboard auto-clear via
+    `paladin_core::policy::clipboard_clear::ClipboardClearPolicy::schedule`
+    at copy time and `should_clear` on wake against the current
+    clipboard text (only-if-unchanged); apply mode-agnostically
+    (both plaintext and encrypted vaults).
+  - [ ] Keep pending copied values in a `Zeroizing<Vec<u8>>` buffer
+    and zeroize after clear attempt or stale-token drop.
+  - [ ] Preserve clipboard auto-clear timers across lock so a timer
+    scheduled before lock still fires only-if-unchanged after lock.
 - [ ] Serialized in-flight vault effects: one vault-touching worker at a time,
   mutating controls disabled while busy, and worker results restore
   `(Vault, Store)` before UI state applies success / typed failure handling;
   quit and auto-lock requests are deferred until the worker returns.
+  - [ ] Add the `AppState::UnlockedBusy { effect, ui_snapshot }`
+    variant and the transition from `Unlocked` whenever a
+    vault-touching effect dispatches.
+  - [ ] Move `(Vault, Store)` into the worker on
+    `gio::spawn_blocking` for HOTP `next`, add / remove / rename /
+    import / settings / passphrase / export operations.
+  - [ ] Standardize the worker return type as
+    `(Vault, Store, EffectOutcome)` on both success and typed
+    failure; reinstall the pair before applying the UI outcome.
+  - [ ] Disable mutating controls (row `next`, dialog submit buttons,
+    passphrase actions, import / export, settings) while
+    `UnlockedBusy` is active and surface the spinner / busy
+    affordance on the current surface.
+  - [ ] Defer quit and window-close requests until the worker
+    returns.
+  - [ ] On auto-lock expiry during `UnlockedBusy`, record a
+    lock-after-effect request; apply it after the worker returns
+    only if the returned vault is still encrypted, and discard it
+    if the operation changed the vault to plaintext.
+  - [ ] Coalesce settings spinner debounce to the latest pre-save
+    value when an effect is in flight; refuse toggle changes that
+    would overlap an active vault effect until the control is
+    re-enabled.
+  - [ ] Route workers that fail before returning the pair to
+    `StartupErrorComponent` without trying to reconstruct in-memory
+    vault state.
 - [x] Use `paladin_core::account_matches_search` for `search.rs` filtering,
   `paladin_core::format_validation_warning()` for validation-warning
   messages, and `paladin_core::format_plaintext_export_warning()` for the
@@ -1264,8 +1407,65 @@ an X11 session before sign-off.
   encrypted-Paladin-bundle import prompt so the GUI shares the CLI / TUI
   Paladin header decision table.
 - [ ] Linux desktop file, AppStream metadata, and icon.
+  - [ ] Write `data/org.tamx.Paladin.Gui.desktop` with `Name=Paladin`,
+    `Icon=org.tamx.Paladin.Gui`,
+    `StartupWMClass=org.tamx.Paladin.Gui`,
+    `Categories=Utility;Security;`, security/authenticator
+    `Keywords=`, and `Exec=paladin-gtk` (no file/URI placeholders).
+  - [ ] Write `data/metainfo/org.tamx.Paladin.Gui.metainfo.xml`
+    AppStream metadata with the matching
+    `<launchable type="desktop-id">` plus screenshots and release
+    notes for v0.2.
+  - [ ] Ship the scalable app icon at
+    `data/icons/hicolor/scalable/apps/org.tamx.Paladin.Gui.svg` and
+    16/24/32/48 PNG fallbacks under
+    `data/icons/hicolor/<size>/apps/org.tamx.Paladin.Gui.png`.
+  - [ ] Ship the symbolic variant at
+    `data/icons/hicolor/symbolic/apps/org.tamx.Paladin.Gui-symbolic.svg`
+    when the Adwaita palette warrants it.
+  - [ ] Wire `build.rs` + `data/paladin-gtk.gresource.xml` to compile
+    the gresource bundle deterministically via
+    `glib-compile-resources` (fixed input order).
+  - [ ] Add `desktop-file-validate` and the AppStream validator to
+    the CI / packaging dry-run so both files are checked on every
+    build.
 - [ ] `.deb`, `.rpm`, Flatpak, and AppImage artifacts for `paladin-gtk`,
   signed and published per §11.3–§11.6; Flathub submission filed.
+  - [ ] Update `crates/paladin-gtk/Cargo.toml` to inherit
+    `description` / `repository` / `homepage` / `license` /
+    `edition` / `rust-version` from `[workspace.package]` and set
+    the binary-specific `keywords` / `categories` locally.
+  - [ ] Add `packaging/deb/paladin-gtk.yaml` (`nfpm`) installing
+    `/usr/bin/paladin-gtk`, the desktop entry, the AppStream
+    metainfo, and the hicolor icon set; declare
+    `libgtk-4-1 (>= 4.16)` and `libadwaita-1-0 (>= 1.6)`; no
+    maintainer scripts.
+  - [ ] Add `packaging/rpm/paladin-gtk.yaml` (`nfpm`) installing the
+    same payload with matching `gtk4` / `libadwaita` package names.
+  - [ ] Add `packaging/flatpak/paladin-gtk.yml` declaring
+    `org.gnome.Platform//47` and the matching SDK, the §11.4 sandbox
+    permissions (`xdg-data/paladin:create`,
+    `xdg-config/paladin:create`, `--socket=wayland`,
+    `--socket=fallback-x11`, `--share=ipc`), no `--share=network`,
+    and exporting the metainfo file to `/usr/share/metainfo/`.
+  - [ ] Wire AppImage assembly via `linuxdeploy` +
+    `linuxdeploy-plugin-gtk` so GTK4 modules, schemas, and pixbuf
+    loaders ship inside the bundle; output
+    `paladin-gtk-<version>-x86_64.AppImage` with embedded `zsync`
+    pointing at GitHub Releases.
+  - [ ] Make the build reproducible: vendored deps,
+    `cargo build --locked`, `SOURCE_DATE_EPOCH` from the release
+    tag, with the gresource bundle and `linuxdeploy` step both
+    deterministic.
+  - [ ] Sign `.deb`, `.rpm`, and AppImage with `minisign` per §11.6;
+    publish the public key + signature alongside each artifact on
+    GitHub Releases.
+  - [ ] File the Flathub submission and inherit Flatpak signing from
+    Flathub.
+  - [ ] Add the packaging dry-run job to CI: produces `.deb`,
+    `.rpm`, Flatpak, and AppImage artifacts and runs
+    `desktop-file-validate` plus the AppStream validator on the
+    installed payload.
 - [x] Manual test plan documented.
 - [x] `xvfb-run` headless smoke test green in CI (plaintext vault opens
   and renders the list).
