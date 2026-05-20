@@ -36,6 +36,7 @@ use crate::account_row::{
     copy_enabled, display_label, kebab_visible, next_button_visible, progress_visible, CodeDisplay,
     CounterText, RowDisplay,
 };
+use crate::icon_resolution::resolve_display_icon;
 use crate::search::filtered_account_ids;
 
 /// Shared per-row live [`RowDisplay`] cache.
@@ -231,6 +232,14 @@ pub struct AccountRowModel {
     /// `paladin_core::Vault::summaries` always supplies one for
     /// HOTP).
     pub counter: Option<u64>,
+    /// Optional icon-hint slug from `AccountSummary::icon_hint`. The
+    /// widget factory feeds this through
+    /// [`crate::icon_resolution::resolve_display_icon`] against the
+    /// live `gtk::IconTheme` to pick the row's icon, falling back to
+    /// [`crate::icon_resolution::PLACEHOLDER_ICON_NAME`] on `None`,
+    /// empty, or unresolved slugs. CLI / TUI ignore this field per
+    /// `IMPLEMENTATION_PLAN_04_GTK.md` §"Icons".
+    pub icon_hint: Option<String>,
 }
 
 /// Project every account in `vault` into an [`AccountRowModel`].
@@ -249,6 +258,7 @@ pub fn row_models_from_vault(vault: &Vault) -> Vec<AccountRowModel> {
             display_label: display_label(&summary),
             kind: summary.kind,
             counter: summary.counter,
+            icon_hint: summary.icon_hint.clone(),
         })
         .collect()
 }
@@ -276,6 +286,7 @@ pub fn row_model_for_account(vault: &Vault, id: AccountId) -> Option<AccountRowM
             display_label: display_label(&summary),
             kind: summary.kind,
             counter: summary.counter,
+            icon_hint: summary.icon_hint.clone(),
         })
 }
 
@@ -806,6 +817,7 @@ fn build_row_factory(
         let cache = live_displays.borrow();
         let display = bind_display_for_row(cache.get(&row.id), &row);
         bind_row(&container, &display);
+        bind_row_icon(&container, row.icon_hint.as_deref());
         install_row_action_group(&container, row.id, output_sender.clone());
     });
     factory
@@ -814,12 +826,21 @@ fn build_row_factory(
 /// Construct one row's widget bundle.
 ///
 /// The container is a horizontal `gtk::Box` whose children are
-/// appended in the order `display label → HOTP counter → code
+/// appended in the order `icon → display label → HOTP counter → code
 /// label → copy button → HOTP next button → kebab menu`. The label
-/// expands to claim the row's free space so the counter / code
-/// labels and the trailing affordances stay end-aligned and the
+/// expands to claim the row's free space so the icon, counter / code
+/// labels, and the trailing affordances stay edge-aligned and the
 /// column edges line up across rows. [`bind_row`] walks the children
 /// in this same order to apply the projection.
+///
+/// The leading `gtk::Image` is seeded with
+/// [`crate::icon_resolution::PLACEHOLDER_ICON_NAME`] so a row that
+/// is mounted before [`bind_row_icon`] resolves the live theme still
+/// shows the freedesktop fallback rather than an empty slot. The
+/// factory's `connect_bind` callback re-resolves the icon name from
+/// the row's [`AccountRowModel::icon_hint`] against the live
+/// `gtk::IconTheme` and calls [`bind_row_icon`] to publish the
+/// result.
 ///
 /// The kebab `gtk::MenuButton` carries a `view-more-symbolic` icon,
 /// the `.flat` style class for the row-trailing affordance look, and
@@ -834,6 +855,11 @@ fn build_row_widget() -> gtk::Box {
         .orientation(gtk::Orientation::Horizontal)
         .spacing(12)
         .hexpand(true)
+        .build();
+    let icon = gtk::Image::builder()
+        .icon_name(crate::icon_resolution::PLACEHOLDER_ICON_NAME)
+        .valign(gtk::Align::Center)
+        .pixel_size(24)
         .build();
     let label = gtk::Label::builder()
         .halign(gtk::Align::Start)
@@ -870,6 +896,7 @@ fn build_row_widget() -> gtk::Box {
         .menu_model(&build_kebab_menu_model())
         .build();
     kebab.add_css_class("flat");
+    container.append(&icon);
     container.append(&label);
     container.append(&counter);
     container.append(&code);
@@ -971,7 +998,10 @@ fn install_row_action_group(
 ///   kept for parity with the other affordances so a future
 ///   per-row override stays a one-line projection change.
 fn bind_row(container: &gtk::Box, display: &RowDisplay) {
-    let Some(label) = container.first_child().and_downcast::<gtk::Label>() else {
+    let Some(icon) = container.first_child().and_downcast::<gtk::Image>() else {
+        return;
+    };
+    let Some(label) = icon.next_sibling().and_downcast::<gtk::Label>() else {
         return;
     };
     let Some(counter) = label.next_sibling().and_downcast::<gtk::Label>() else {
@@ -1009,4 +1039,34 @@ fn bind_row(container: &gtk::Box, display: &RowDisplay) {
     copy.set_sensitive(display.copy_enabled);
     next.set_visible(display.next_button_visible);
     kebab.set_visible(display.kebab_visible);
+}
+
+/// Resolve the row's icon against the live `gtk::IconTheme` and
+/// publish the result onto the leading `gtk::Image` child built by
+/// [`build_row_widget`].
+///
+/// The icon-name decision routes through
+/// [`crate::icon_resolution::resolve_display_icon`] so the
+/// `None` / empty / unresolved-slug fallback to
+/// [`crate::icon_resolution::PLACEHOLDER_ICON_NAME`] matches the
+/// pure-logic contract pinned by `tests/icon_resolution.rs`. The
+/// closure forwarded to `resolve_display_icon` is the live
+/// `gtk::IconTheme::has_icon` membership probe scoped to the
+/// container's display, so distribution / Flatpak theme differences
+/// are respected at bind time without baking a slug allowlist into
+/// `paladin_core`.
+///
+/// Called from the row factory's `connect_bind` callback after
+/// [`bind_row`] so the per-tick rebind path (which re-splices the
+/// same rows into the `gio::ListStore`) keeps the icon in lockstep
+/// with any future `AccountRowModel::icon_hint` change (rename
+/// today; explicit icon-hint edit lands with the manual-edit row in
+/// a follow-up commit).
+fn bind_row_icon(container: &gtk::Box, icon_hint: Option<&str>) {
+    let Some(icon_widget) = container.first_child().and_downcast::<gtk::Image>() else {
+        return;
+    };
+    let icon_theme = gtk::IconTheme::for_display(&WidgetExt::display(container));
+    let icon_name = resolve_display_icon(icon_hint, |slug| icon_theme.has_icon(slug));
+    icon_widget.set_icon_name(Some(icon_name));
 }

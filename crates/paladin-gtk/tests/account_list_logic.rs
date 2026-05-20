@@ -170,6 +170,116 @@ fn row_models_drop_empty_issuer_in_display_label() {
     assert_eq!(rows[0].display_label, "alice");
 }
 
+// Variant of `add_totp` that lets a test specify the icon-hint mode
+// (Default / Clear / explicit Slug) — the default helpers above always
+// pass `IconHintInput::Default`, which is the right contract for the
+// label / counter / ordering tests but not for icon-hint coverage.
+fn add_totp_with_icon(
+    vault: &mut Vault,
+    store: &Store,
+    issuer: Option<&str>,
+    label: &str,
+    icon_hint: IconHintInput,
+) -> AccountId {
+    let input = AccountInput {
+        label: label.to_string(),
+        issuer: issuer.map(str::to_string),
+        secret: SecretString::from("JBSWY3DPEHPK3PXP".to_string()),
+        algorithm: Algorithm::Sha1,
+        digits: 6,
+        kind: AccountKindInput::Totp,
+        period_secs: None,
+        counter: None,
+        icon_hint,
+    };
+    let validated = validate_manual(input, SystemTime::now()).expect("valid manual input");
+    let id = vault.add(validated.account);
+    vault.save(store).expect("commit added account");
+    id
+}
+
+#[test]
+fn row_models_carry_icon_hint_derived_from_issuer() {
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+
+    // `IconHintInput::Default` (the helper default) slugifies the
+    // issuer into a stable icon-theme slug. The row model must echo
+    // that slug so the widget factory can feed it through
+    // `icon_resolution::resolve_display_icon`.
+    add_totp(&mut vault, &store, Some("GitHub"), "ben");
+
+    let rows = row_models_from_vault(&vault);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0].icon_hint.as_deref(),
+        Some("github"),
+        "default icon hint slugifies the issuer for the row's icon_hint",
+    );
+}
+
+#[test]
+fn row_models_carry_explicit_icon_hint_slug() {
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+
+    add_totp_with_icon(
+        &mut vault,
+        &store,
+        Some("GitHub"),
+        "ben",
+        IconHintInput::Slug("custom-slug".to_string()),
+    );
+
+    let rows = row_models_from_vault(&vault);
+    assert_eq!(
+        rows[0].icon_hint.as_deref(),
+        Some("custom-slug"),
+        "explicit Slug overrides the issuer-derived default",
+    );
+}
+
+#[test]
+fn row_models_icon_hint_is_none_for_no_issuer_default() {
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+
+    // No issuer + `IconHintInput::Default` = no slug to derive.
+    add_totp(&mut vault, &store, None, "solo");
+
+    let rows = row_models_from_vault(&vault);
+    assert!(
+        rows[0].icon_hint.is_none(),
+        "no issuer + default icon hint must not project a row icon hint, got: {:?}",
+        rows[0].icon_hint,
+    );
+}
+
+#[test]
+fn row_models_icon_hint_is_none_when_cleared() {
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+
+    add_totp_with_icon(
+        &mut vault,
+        &store,
+        Some("GitHub"),
+        "ben",
+        IconHintInput::Clear,
+    );
+
+    let rows = row_models_from_vault(&vault);
+    assert!(
+        rows[0].icon_hint.is_none(),
+        "explicit Clear suppresses any issuer-derived slug, got: {:?}",
+        rows[0].icon_hint,
+    );
+}
+
 // ---------------------------------------------------------------------------
 // `row_model_for_account`
 // ---------------------------------------------------------------------------
@@ -248,6 +358,22 @@ fn row_model_for_account_finds_id_in_any_position() {
         assert_eq!(model.id, id);
         assert_eq!(model.display_label, expected);
     }
+}
+
+#[test]
+fn row_model_for_account_carries_icon_hint() {
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+
+    let id = add_totp(&mut vault, &store, Some("GitHub"), "ben");
+
+    let model = row_model_for_account(&vault, id).expect("present id projects");
+    assert_eq!(
+        model.icon_hint.as_deref(),
+        Some("github"),
+        "single-row projection echoes icon_hint so it stays in lockstep with `row_models_from_vault`",
+    );
 }
 
 #[test]
@@ -359,6 +485,7 @@ fn hidden_row_display_totp_renders_hidden_code_and_no_counter() {
         display_label: "Acme:alice".to_string(),
         kind: AccountKindSummary::Totp,
         counter: None,
+        icon_hint: None,
     };
     let expected = RowDisplay {
         label: "Acme:alice".to_string(),
@@ -380,6 +507,7 @@ fn hidden_row_display_hotp_renders_stored_counter_and_disabled_copy() {
         display_label: "solo".to_string(),
         kind: AccountKindSummary::Hotp,
         counter: Some(7),
+        icon_hint: None,
     };
     let expected = RowDisplay {
         label: "solo".to_string(),
@@ -404,6 +532,7 @@ fn hidden_row_display_hotp_with_missing_counter_defaults_to_zero() {
         display_label: "solo".to_string(),
         kind: AccountKindSummary::Hotp,
         counter: None,
+        icon_hint: None,
     };
     let display = hidden_row_display(&model);
     assert_eq!(display.counter, Some(CounterText::Stored(0)));
@@ -837,6 +966,7 @@ fn totp_model_for(id: AccountId, label: &str) -> AccountRowModel {
         display_label: label.to_string(),
         kind: AccountKindSummary::Totp,
         counter: None,
+        icon_hint: None,
     }
 }
 
@@ -846,6 +976,7 @@ fn hotp_model_for(id: AccountId, label: &str, counter: u64) -> AccountRowModel {
         display_label: label.to_string(),
         kind: AccountKindSummary::Hotp,
         counter: Some(counter),
+        icon_hint: None,
     }
 }
 

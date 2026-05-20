@@ -1548,7 +1548,7 @@ sign-off.
     `summary_display_label(&AccountSummary)` (CLI / TUI parity:
     `<issuer>:<label>` when issuer is set, bare label otherwise;
     empty issuer collapses to the no-issuer form).
-  - [ ] Render the icon via `gtk::IconTheme` against
+  - [x] Render the icon via `gtk::IconTheme` against
     `AccountSummary.icon_hint` with the placeholder fallback (see
     "Icon resolution" item below).
   - [ ] Render a code label populated from
@@ -1619,11 +1619,17 @@ sign-off.
     captures the visible code without advancing again.
 - [ ] Icon resolution (`gtk::IconTheme` lookup against
   `AccountSummary.icon_hint` with placeholder fallback).
-  - [ ] Implement `icons.rs` lookups against the system
+  - [x] Implement `icons.rs` lookups against the system
     `gtk::IconTheme` for the slug carried in
-    `AccountSummary.icon_hint`.
-  - [ ] Fall back to a generic placeholder icon when the slug is
-    `None`, empty, or unresolved.
+    `AccountSummary.icon_hint`. (Lives in
+    `crates/paladin-gtk/src/icon_resolution.rs`; the row factory in
+    `account_list::build_row_factory` resolves the slug via
+    `icon_resolution::resolve_display_icon` against
+    `gtk::IconTheme::for_display(...).has_icon(...)` at bind time.)
+  - [x] Fall back to a generic placeholder icon when the slug is
+    `None`, empty, or unresolved. (`PLACEHOLDER_ICON_NAME =
+    "dialog-password-symbolic"`; pinned by
+    `tests/icon_resolution.rs` and used by `bind_row_icon`.)
   - [ ] Ship the placeholder icon in the gresource bundle so it is
     available identically in native and Flatpak builds.
 - [ ] In-app account rename (`RenameDialog` reachable from the row
