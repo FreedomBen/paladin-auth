@@ -1229,6 +1229,21 @@ an X11 session before sign-off.
   / `ExportDialogComponent` / `PassphraseDialogComponent` /
   `SettingsComponent`, full row body migration) attach behavior on
   top of these mounts.
+- [ ] Window shell and toast surface (`AdwApplicationWindow` root,
+  `AdwToolbarView`, `AdwToastOverlay`, scoped CSS).
+  - [ ] Build `AppModel`'s widget root as an `AdwApplicationWindow`
+    whose content is an `AdwToolbarView` so the header bar sits in
+    the top slot and the active screen sits in the content slot.
+  - [ ] Wrap the active screen in an `AdwToastOverlay` so transient
+    feedback (copy confirmation, settings-saved, clipboard-clear-fired
+    notice, HOTP `save_durability_unconfirmed` warning, export-success
+    path) can be delivered via `AdwToast`.
+  - [ ] Load `data/style.css` from the gresource bundle via
+    `gtk::CssProvider` so Paladin-specific tweaks layer on top of
+    Adwaita defaults; never re-skin the Adwaita palette.
+  - [ ] Route every active screen (`InitDialog`, `UnlockComponent`,
+    `StartupErrorComponent`, `AccountListComponent`) through the same
+    overlay so state transitions never lose pending toasts.
 - [ ] In-app vault initialization (`InitDialog` for missing vaults;
   plaintext + encrypted paths; explicit confirmation; plaintext-path
   warning sourced from
@@ -1297,6 +1312,62 @@ an X11 session before sign-off.
   - [ ] Handle `save_durability_unconfirmed` by keeping the new label
     in memory and attaching the warning to the dialog body.
   - [ ] Reset the entry buffer on cancel / submit / dialog close.
+- [ ] `RemoveDialog` confirmation flow (`AdwAlertDialog` with
+  `destructive-action` styling gating `Vault::remove` inside
+  `Vault::mutate_and_save`).
+  - [ ] Open `RemoveDialog` as an `AdwAlertDialog` with
+    `destructive-action` styling on the destructive button when the
+    user picks "Remove…" from the row kebab menu.
+  - [ ] Render the dialog body using
+    `summary_display_label(&AccountSummary)` so the wording matches
+    the CLI / TUI (`<issuer>:<label>` when issuer is set; empty
+    issuer collapses to the bare-label form so the body never
+    renders a dangling `:label` colon).
+  - [ ] On confirm, call `Vault::remove(id)` inside
+    `Vault::mutate_and_save`; handle `save_not_committed` by
+    restoring the account at its previous position and keeping the
+    dialog open with the inline error, and handle
+    `save_durability_unconfirmed` by keeping the account removed
+    from in-memory state and attaching the warning to the dialog
+    body.
+  - [ ] Surface `invalid_state { state: "account_not_found" }`,
+    `io_error`, and defensive `validation_error` inline without
+    closing the dialog; the dialog never mutates visible state
+    until the worker returns.
+  - [ ] Cancel closes the dialog without mutating the vault.
+- [ ] `AddAccountComponent` manual fields path (label, issuer,
+  Base32 secret, algorithm, digits, kind, TOTP period, HOTP counter,
+  icon hint).
+  - [ ] Mount the manual form on the `AdwViewStack`'s "Manual" page
+    using `AdwEntryRow` / `AdwSpinRow` / `AdwComboRow` rows that map
+    onto `paladin_core::AccountInput`.
+  - [ ] Default the form fields to the CLI manual-add defaults from
+    DESIGN §5 (TOTP, SHA1, 6 digits, 30 s period, HOTP counter 0,
+    icon-hint mode `Default from issuer`).
+  - [ ] Normalize the icon-hint entry through
+    `paladin_core::parse_icon_hint_token` so the slug / `default` /
+    `none` parsing matches the CLI / TUI add modals exactly.
+  - [ ] On submit, validate the inputs through
+    `paladin_core::validate_manual`; parse errors (invalid Base32,
+    empty label, out-of-range digits / period / counter) and any
+    core-returned `validation_error` block submission inline without
+    mutating the vault.
+  - [ ] Render validation warnings inline via
+    `paladin_core::format_validation_warning()` without blocking
+    creation.
+  - [ ] On successful validation, call
+    `Vault::find_duplicate(&validated)` and reject inline with the
+    existing account; offer the "add anyway" confirmation that
+    consumes the pending `ValidatedAccount` on the duplicate-allowed
+    path (CLI parity with `--allow-duplicate`).
+  - [ ] Run successful manual additions inside
+    `Vault::mutate_and_save`; handle `save_not_committed` rollback
+    (the just-inserted account is removed) and
+    `save_durability_unconfirmed` keep-with-warning per §"Effect
+    errors".
+  - [ ] Zeroize the manual Base32 secret entry buffer on submit /
+    cancel / dialog close / auto-lock and when the user switches
+    away from the manual stack page.
 - [ ] Add-via-`otpauth://`-URI paste path in `AddAccountComponent`,
   decoded via `paladin_core::parse_otpauth` and sharing the manual
   duplicate / validation paths.
@@ -1315,7 +1386,285 @@ an X11 session before sign-off.
     state) when the user switches stack pages, on submit, on cancel,
     on dialog close, and on auto-lock; never carry the URI in
     `AppMsg` or `AppOutput`.
+- [ ] `AddAccountComponent` QR clipboard image path (`gdk::Clipboard`
+  texture read → `paladin_core::import::qr_image_bytes` with
+  `ImportConflict::Skip`).
+  - [ ] Mount the QR-clipboard action on the `AdwViewStack`'s "Scan
+    clipboard" page; on activation, read a `gdk::Texture` from the
+    GDK clipboard.
+  - [ ] Allocate an exact `width * height * 4` straight
+    (non-premultiplied) RGBA8 buffer with overflow-checked
+    multiplication; reject sizes above
+    `paladin_core::QR_RGBA_MAX_BYTES` before allocation / download.
+  - [ ] Download the texture via a `gdk::TextureDownloader` set to
+    `gdk::MemoryFormat::R8g8b8a8` with row stride `width * 4` (the
+    default `Texture::download` yields premultiplied pixels the QR
+    decoder cannot consume).
+  - [ ] Pass width, height, bytes, and `import_time` into
+    `paladin_core::import::qr_image_bytes`; the call returns
+    `Vec<ValidatedAccount>` regardless of QR count.
+  - [ ] Insert the returned accounts through
+    `Vault::import_accounts(accounts, ImportConflict::Skip,
+    import_time)` inside `Vault::mutate_and_save`; report
+    imported / skipped / warning counts inline (parity with §6).
+  - [ ] Surface no-image, image-decode failure, zero-decoded-QRs,
+    and invalid-payload errors inline in the Add dialog; never
+    mutate vault state on failure.
 - [x] Conditional unlock view (encrypted vaults only).
+- [ ] `UnlockComponent` full implementation (passphrase entry,
+  `paladin_core::open` on `gio::spawn_blocking`, inline-error
+  handling).
+  - [ ] Add an `AdwPasswordEntryRow` to `UnlockComponent`'s body so
+    the user can type a passphrase against the resolved encrypted
+    vault.
+  - [ ] On submit, wrap the entered passphrase in
+    `secrecy::SecretString` and dispatch
+    `paladin_core::open(path, VaultLock::Encrypted(secret))` on
+    `gio::spawn_blocking` so the §4.4 Argon2 KDF stays off the main
+    loop; surface a spinner / busy affordance while the join is
+    pending.
+  - [ ] On success, transition `AppModel` from `Locked` to
+    `Unlocked` with the returned `(Vault, Store)` pair and route to
+    `AccountListComponent`.
+  - [ ] Render wrong-passphrase failures inline on the dialog so
+    the user can retry without leaving `Locked`.
+  - [ ] Transition to `StartupErrorComponent` for non-authentication
+    open failures (`unsafe_permissions`, `wrong_vault_lock`,
+    `invalid_header`, `invalid_payload`,
+    `unsupported_format_version`, `kdf_params_out_of_bounds`,
+    `io_error`); `unsafe_permissions` renders the `Some(text)` from
+    `paladin_core::format_unsafe_permissions(&err)` with the generic
+    error text fallback so wording matches the CLI / TUI exactly.
+  - [ ] Zeroize the passphrase widget buffer on submit / cancel /
+    dialog close / auto-lock per §"Secret entry handling".
+- [ ] `AccountListComponent` full implementation (`gtk::ListView` +
+  factory + `gio::ListStore`, search bar + entry, selection
+  management).
+  - [ ] Build a `gio::ListStore<BoxedAnyObject<AccountRowModel>>`
+    seeded from `Vault::iter()` projected through
+    `paladin_core::AccountSummary` (no secret bytes leave
+    `paladin_core`).
+  - [ ] Mount a `gtk::ListView` bound to the store via a
+    `SignalListItemFactory` whose row body is the
+    `AccountRowComponent` (see the row item below).
+  - [ ] Host a `gtk::SearchEntry` inside a `gtk::SearchBar` whose
+    `search-mode-enabled` is bound to the header-bar search-toggle
+    button.
+  - [ ] On query change, rebuild the list by calling
+    `paladin_core::account_matches_search(&Account, query)` against
+    `Vault::iter()` before projecting matches to `AccountSummary`;
+    preserve insertion order among matches.
+  - [ ] After each filter rebuild, set the selected row from
+    `paladin_core::select_after_filter(prev, filtered)` (preserve
+    prior selection if still present, else first match) for parity
+    with the TUI.
+  - [ ] Refresh the store after every vault mutation (Add / Remove /
+    Rename / Import / settings change that toggles a row's
+    presentation) without reordering surviving rows.
+- [ ] `AccountRowComponent` full body (label, icon, code, TOTP
+  gauge / HOTP next, copy button, kebab menu).
+  - [ ] Render the display label via
+    `summary_display_label(&AccountSummary)` (CLI / TUI parity:
+    `<issuer>:<label>` when issuer is set, bare label otherwise;
+    empty issuer collapses to the no-issuer form).
+  - [ ] Render the icon via `gtk::IconTheme` against
+    `AccountSummary.icon_hint` with the placeholder fallback (see
+    "Icon resolution" item below).
+  - [ ] Render a code label populated from
+    `paladin_core::totp_code` for TOTP rows and from the hidden /
+    reveal state for HOTP rows (see "HOTP reveal" item below).
+  - [ ] For TOTP rows, render a progress widget (gauge / level bar)
+    that ticks against the shared `paladin_core::TICK_INTERVAL_MS`
+    source (see "TOTP ticker" item below).
+  - [ ] For HOTP rows, render the "next" button that activates the
+    `hotp_peek` / `hotp_advance` reveal worker (see "HOTP reveal"
+    item below).
+  - [ ] Add a copy button that copies the visible code to
+    `gdk::Clipboard` and schedules clipboard auto-clear; disable
+    copying on a hidden HOTP row.
+  - [ ] Add a kebab `gtk::MenuButton` whose `gio::Menu` exposes
+    "Rename…" (opens `RenameDialog` for that row) and "Remove…"
+    (opens `RemoveDialog` for that row).
+  - [ ] Disable mutating row controls (copy, "next", kebab) while
+    `AppModel` is `UnlockedBusy` per §"In-flight effect ownership".
+- [ ] TOTP ticker (`paladin_core::TICK_INTERVAL_MS` timeout source
+  for gauge updates and clipboard staleness checks).
+  - [ ] Install a single `glib::timeout_add_local` source ticking
+    at `paladin_core::TICK_INTERVAL_MS` while at least one TOTP row
+    is visible.
+  - [ ] On each tick, recompute the TOTP gauge value and the
+    visible code from `paladin_core::totp_code(account, now)` for
+    every TOTP row in the current list view.
+  - [ ] On each tick, give the clipboard auto-clear policy a chance
+    to wake against the current `gdk::Clipboard` text
+    (only-if-unchanged) so stale copies clear even without explicit
+    user activity.
+  - [ ] Tear down the ticker on `Locked` / `StartupError`
+    transitions and reinstall on `Unlocked` so plaintext and
+    encrypted vaults share the same lifecycle.
+- [ ] HOTP reveal window behavior
+  (`paladin_core::policy::hotp_reveal::deadline` driver,
+  peek-stage-advance worker, restart-on-next semantics,
+  hidden-state copy disabling).
+  - [ ] On row activation of "next", stage the would-be visible
+    `Code` from `Vault::hotp_peek` into a zeroizing pending slot
+    before calling `Vault::hotp_advance` inside the spawn-blocking
+    worker.
+  - [ ] On worker success or `save_durability_unconfirmed`, publish
+    the staged code to the row's reveal slot and start the reveal
+    timer from `paladin_core::policy::hotp_reveal::deadline(now)`.
+  - [ ] On `save_durability_unconfirmed`, additionally post an
+    `AdwToast` carrying the committed-but-uncertain warning so the
+    row stays usable with the new code in hand.
+  - [ ] On worker pre-commit failure (`save_not_committed`) or any
+    other typed error, leave the previous reveal state unchanged
+    (hidden if no reveal was open), zeroize the staged code, and
+    surface the inline / status error.
+  - [ ] Hide the code and revert to the stored next counter when
+    the reveal deadline elapses.
+  - [ ] Activating "next" during an open reveal advances again,
+    consumes a fresh `hotp_peek` / `hotp_advance` round trip, and
+    restarts the reveal timer with the newly committed code.
+  - [ ] Hidden HOTP rows show the stored next counter as their
+    visible label; during reveal, the row shows the
+    `Code.counter_used` of the visible code until expiry.
+  - [ ] Disable copy on hidden HOTP rows; during reveal, copy
+    captures the visible code without advancing again.
+- [ ] Icon resolution (`gtk::IconTheme` lookup against
+  `AccountSummary.icon_hint` with placeholder fallback).
+  - [ ] Implement `icons.rs` lookups against the system
+    `gtk::IconTheme` for the slug carried in
+    `AccountSummary.icon_hint`.
+  - [ ] Fall back to a generic placeholder icon when the slug is
+    `None`, empty, or unresolved.
+  - [ ] Ship the placeholder icon in the gresource bundle so it is
+    available identically in native and Flatpak builds.
+- [ ] `ImportDialogComponent` full implementation (file picker,
+  format selector, on-conflict selector, passphrase prompt routing,
+  merge call, error display).
+  - [ ] Pick the source file via `gtk::FileDialog` (the GTK 4.10+
+    replacement for the deprecated `gtk::FileChooserNative`).
+  - [ ] Add a format selector (auto-detect / explicit `otpauth` /
+    `aegis` / `paladin` / `qr`) and an on-conflict selector
+    (`skip` / `replace` / `append`).
+  - [ ] Before any Paladin-bundle passphrase prompt, call
+    `paladin_core::classify_paladin_import_precheck(path,
+    forced_format)` and act on the returned variant:
+    `PromptForPassphrase` prompts inside the dialog, `Reject(err)`
+    surfaces the exact core error inline without prompting, and
+    `NoPrompt` continues through `paladin_core::import::from_file`.
+  - [ ] Clear the bundle-passphrase row when the source path or
+    forced format changes after entry, and restart the probe /
+    prompt flow.
+  - [ ] Run the selected `paladin_core::import::from_file` call,
+    the `Vault::import_accounts(accounts, conflict, import_time)`
+    merge, and the surrounding `Vault::mutate_and_save` as one
+    serialized `gio::spawn_blocking` worker (encrypted-Paladin runs
+    Argon2id; keep it off the main loop).
+  - [ ] Surface post-merge counts (`imported` / `skipped` /
+    `replaced` / `appended` / `warnings`) inline on success.
+  - [ ] Handle `save_not_committed` by restoring the
+    `Vault::mutate_and_save` snapshot and keeping the dialog open
+    with the inline error; handle `save_durability_unconfirmed` by
+    keeping the merged accounts and surfacing the warning inline.
+  - [ ] Surface importer errors inline without closing the dialog
+    or mutating vault state: `unsupported_import_format`,
+    `unsupported_plaintext_vault`, `unsupported_encrypted_aegis`,
+    `unsupported_aegis_entry_type`, `validation_error`,
+    `no_entries_to_import`, `decrypt_failed`, `invalid_header`,
+    `invalid_payload`, `unsupported_format_version`,
+    `kdf_params_out_of_bounds`, `io_error`.
+  - [ ] Zeroize the bundle-passphrase widget buffer on submit /
+    cancel / dialog close / auto-lock.
+- [ ] `ExportDialogComponent` full implementation (format selector,
+  destination picker, overwrite gate, plaintext warning,
+  twice-confirm passphrase, `write_secret_file_atomic` call).
+  - [ ] Add a format selector (plaintext `otpauth://` JSON list or
+    encrypted Paladin bundle) and pick the destination via
+    `gtk::FileDialog`.
+  - [ ] Reject overwriting an existing file unless the user
+    confirms an inline overwrite gate (parity with CLI `--force`);
+    resolve the overwrite gate before accepting any
+    encrypted-bundle passphrase rows.
+  - [ ] Render `paladin_core::format_plaintext_export_warning()`
+    verbatim on the plaintext path and require explicit
+    confirmation before the write proceeds.
+  - [ ] Reset overwrite and plaintext-warning confirmations when
+    the destination or format changes; clear the passphrase rows
+    and re-prompt when the destination or format changes after
+    passphrase entry.
+  - [ ] Prompt twice for the encrypted-bundle passphrase; reject
+    mismatch with `invalid_passphrase`
+    (`reason: "confirmation_mismatch"`) and zero-length with
+    `invalid_passphrase` (`reason: "zero_length"`) inline.
+  - [ ] Dispatch the write on `gio::spawn_blocking` (encrypted
+    bundle to keep the fresh-AEAD-key derivation off the main loop;
+    plaintext for symmetry since `write_secret_file_atomic` chains
+    multiple `fsync`s); the write goes through
+    `paladin_core::write_secret_file_atomic`.
+  - [ ] On success, close the dialog and surface the written path
+    via `AdwToast` on the main toast overlay.
+  - [ ] Surface writer errors (`io_error`, `save_not_committed`,
+    `save_durability_unconfirmed`, `invalid_passphrase`) and the
+    refused overwrite gate inline; export does not mutate the
+    vault, so there is no rollback path.
+  - [ ] Zeroize the encrypted-bundle passphrase widget buffers on
+    submit / cancel / dialog close / auto-lock.
+- [ ] `PassphraseDialogComponent` full implementation (`set` /
+  `change` / `remove` sub-flows, gating, validation, error
+  handling).
+  - [ ] Add the three sub-flow entry points (`set` / `change` /
+    `remove`) and gate the available sub-flow against
+    `Vault::is_encrypted()`: `set` only when the getter returns
+    `false`; `change` and `remove` only when it returns `true`.
+  - [ ] Render `set` / `change` with twice-confirmed
+    `AdwPasswordEntryRow` entries; mismatch returns inline with
+    `invalid_passphrase` (`reason: "confirmation_mismatch"`).
+  - [ ] Reject zero-length new passphrases on `set` / `change`
+    inline with `invalid_passphrase` (`reason: "zero_length"`).
+  - [ ] Render `remove` with
+    `paladin_core::format_plaintext_storage_warning()` verbatim and
+    require explicit confirmation before mutation.
+  - [ ] Clear all passphrase rows and any pending
+    plaintext-removal confirmation when the user switches
+    sub-flows.
+  - [ ] Dispatch the chosen transition on `gio::spawn_blocking` so
+    the §4.5 KDF runs off the main loop; surface a spinner / busy
+    affordance while the join is pending.
+  - [ ] Surface `save_not_committed` and
+    `save_durability_unconfirmed` inline (DESIGN §4.5 owns the
+    in-memory mode / key rollback / replacement); the dialog stays
+    open on both failure classes.
+  - [ ] On success, update the visible vault-mode flag before
+    closing the dialog and re-ask `IdlePolicy::should_arm` so the
+    auto-lock timer state tracks the new on-disk mode.
+  - [ ] Zeroize all passphrase widget buffers on submit / cancel /
+    dialog close / auto-lock.
+- [ ] `SettingsComponent` full implementation
+  (`AdwPreferencesDialog` with toggles and spinners; live-apply
+  through `Vault::mutate_and_save`).
+  - [ ] Render the surface as an `AdwPreferencesDialog` with one
+    `AdwPreferencesGroup` for auto-lock and one for
+    clipboard-clear; do not use the libadwaita 1.6-deprecated
+    `AdwPreferencesWindow`.
+  - [ ] Mount toggles as `AdwSwitchRow` and timeouts as
+    `AdwSpinRow` inside the matching `AdwPreferencesGroup`.
+  - [ ] Clamp the timeout spinners to
+    `paladin_core::AUTO_LOCK_SECS_MIN..=paladin_core::AUTO_LOCK_SECS_MAX`
+    and
+    `paladin_core::CLIPBOARD_CLEAR_SECS_MIN..=paladin_core::CLIPBOARD_CLEAR_SECS_MAX`.
+  - [ ] Live-apply each accepted change by invoking the matching
+    setter inside `Vault::mutate_and_save`; debounce spinner
+    changes 500 ms via `glib::timeout_add_local` so holding +/-
+    coalesces to a single save with the most recent buffered value.
+  - [ ] Revert the visible widget value on `save_not_committed`
+    pre-commit rollback so memory matches disk.
+  - [ ] Keep the new value visible on
+    `save_durability_unconfirmed` and attach the warning to the
+    changed `AdwPreferencesGroup` row.
+  - [ ] Re-ask `IdlePolicy::should_arm` after auto-lock toggle or
+    timeout changes so the timer state tracks the new policy
+    without re-inspecting the file.
 - [ ] Header-bar `+` button and primary menu wired with the pinned
   entries (Import…, Export…, Passphrase…, Preferences, About Paladin,
   Quit) per §"libadwaita usage", with Unlocked / `UnlockedBusy` gating
@@ -1339,6 +1688,21 @@ an X11 session before sign-off.
     Preferences entries whenever `AppModel` is not `Unlocked`
     (Missing / Locked / StartupError) and while `UnlockedBusy` is
     active; keep About and Quit enabled in every state.
+- [ ] About dialog (`AdwAboutDialog` wired to the primary menu's
+  "About Paladin" entry, metadata sourced from Cargo package fields
+  embedded at compile time).
+  - [ ] Mount `AdwAboutDialog` behind the primary menu's "About
+    Paladin" entry; pull `application-name`, `version`,
+    `developers`, `website`, and `issue-tracker` from Cargo package
+    metadata via `env!` / `option_env!` so the strings stay in sync
+    with the workspace.
+  - [ ] Ship the AGPL-3.0-or-later license text in the gresource
+    bundle and surface it through
+    `AdwAboutDialog::license-type` set to `Custom` with the bundled
+    text.
+  - [ ] Show the app icon `org.tamx.Paladin.Gui` and link to the
+    repository / issue tracker URLs declared in the workspace
+    `[workspace.package]` table.
 - [ ] Clipboard + auto-lock parity with TUI (opt-in). Use
   `Vault::is_encrypted()` to decide whether to arm the auto-lock
   timer (encrypted only) and to track the visible vault-mode flag
