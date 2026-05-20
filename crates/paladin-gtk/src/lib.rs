@@ -41,6 +41,7 @@ pub mod search;
 pub mod secret_fields;
 pub mod settings;
 pub mod startup_error;
+pub mod ticker;
 pub mod unlock_dialog;
 
 /// Stable application identifier per §"Linux desktop integration" /
