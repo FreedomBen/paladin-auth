@@ -2,12 +2,19 @@
 
 ## Agent Instructions
 
-- For commit messages, use clear subjects without `feat:` or `bug:` prefixes. Add a body that explains what changed and why.  Use lists with - markers when appropriate.  Do not create or switch branches unless asked, and never push from an agent session.  Respect the conventional line length of 72 characters for commit message bodies.
 - `DESIGN.md` is the source of truth for how the application and library should work.  If the user requests a change that conflicts, update DESIGN.md so it stays in sync.
+- When changing the CLI, TUI, or GTK, update the relevant `IMPLEMENTATION_PLAN_0X_*.md` with the new behavior and API details before implementing it.  This keeps design and implementation aligned.
 - Write exhaustive tests that cover base functionality and any edge cases, particularly for the core shared library.
 - Use a Test Driven Development (TDD) approach: write failing tests before implementing features, then implement the code to make the tests pass.
+- After changing code, format and lint it with `cargo fmt` and `cargo clippy`, ensuring no warnings remain.
 - Commit after making changes.  Do not push.
 - For containers, use Containerfile and compose.yaml and always build and run with rootless podman unless explicitly told otherwise.
+- Commit messages should respect git conventions: The first line should be a subject line of 50 characters or less (though go up to 80 if needed), followed by a blank line, and then a body that provides more detail about the change.
+- Multiple agents may be working in this repository simultaneously.  Serialize commits with a simple lock file at `commit.lock`.  Use three separate shell commands so failures at any step stay visible — do **not** bundle creation, commit, and removal into one chained command:
+  1. **Acquire**: check the lock does not exist and create it.  Run `[ ! -e commit.lock ] && touch commit.lock` as its own command.  If the file already exists, another agent is mid-commit — wait briefly and retry rather than overwriting it.
+  2. **Commit**: `git add <files> && git commit -m "<msg>"` as its own command.
+  3. **Release**: `rm commit.lock` as its own command, only after the commit step has returned.
+  Keeping these as three discrete commands minimizes the window where a created lock could be paired with a failed-but-unobserved commit, and lets you see at each step what state the working tree is in.  If you find a stale lock from a crashed prior agent (no commit in flight per `git status` / `git log`), remove it before proceeding.
 
 ## Project Structure & Module Organization
 
