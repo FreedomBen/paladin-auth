@@ -29122,3 +29122,134 @@ fn format_app_about_dialog_developers_entries_do_not_contain_a_start_of_heading_
         );
     }
 }
+
+#[test]
+fn format_app_about_dialog_empty_credits_section_entries_do_not_contain_a_start_of_heading_byte() {
+    // Cross-helper defense-in-depth sibling looping over the
+    // three currently-empty `AdwAboutDialog` credits-section
+    // array helpers (`format_app_about_dialog_designers`,
+    // `format_app_about_dialog_artists`,
+    // `format_app_about_dialog_documenters`) and pinning each
+    // entry as free of the start-of-heading byte `\x01`
+    // (0x01). Mirror of the just-added
+    // `_developers_entries_do_not_contain_a_start_of_heading_byte`
+    // sibling on the populated-developers side, structured as
+    // a single cross-helper loop matching the existing
+    // `_empty_credits_section_entries_do_not_contain_a_start_of_text_byte`
+    // / `_an_end_of_text_byte` / `_an_end_of_transmission_byte`
+    // / `_an_enquiry_byte` / `_an_acknowledge_byte` /
+    // `_a_bell_byte` / `_a_backspace_byte` /
+    // `_a_line_feed_byte` companions, and continuing the
+    // non-whitespace-classified C0 control-byte cycle past
+    // STX (0x02) for each entry across every empty credits
+    // section.
+    //
+    // Like STX, ETX, EOT, ENQ, ACK, and BEL, SOH is NOT
+    // matched by `char::is_whitespace()` (Unicode treats SOH
+    // as a control byte, not whitespace), so any future
+    // surrounding-whitespace boundary guards on the empty
+    // credits-section helpers would NOT reject a leading or
+    // trailing `\x01` per entry — making the start-of-heading
+    // byte strictly as dangerous as start-of-text, end-of-
+    // text, end-of-transmission, enquiry, acknowledge,
+    // backspace, and bell for each entry, and necessitating
+    // an independent per-byte pin that names `\x01` directly.
+    //
+    // The three helpers currently return the empty array `[]`
+    // because Paladin does not yet have a separately-credited
+    // designer / artist / documenter for the v0.2 release.
+    // The empty-array return trivially contains no entries
+    // (let alone `\x01`-bearing entries), so this test passes
+    // today as the loop body is never entered. However, once
+    // any of the three credits sections gains a contributor,
+    // the helper return type will switch from
+    // `[&'static str; 0]` to `[&'static str; N]` with non-
+    // empty entries — at that point a `\x01` injection from
+    // a `script(1)` typescript capturing raw `\x01` SOH
+    // framing bytes from a CI build that bridged a serial
+    // console mid-contributor-name edit during a Bisync-style
+    // header-block transfer, a `concat!(_, "\x01", _)` form,
+    // or a hand-edited helper that pasted from a terminal
+    // session interfacing with a protocol bridge preserving
+    // SOH framing bytes would slip past any byte-cleanliness
+    // companion the way the
+    // `_developers_entries_do_not_contain_a_start_of_heading_byte`
+    // sibling already documents for the developers helper.
+    //
+    // Start-of-heading bytes in the credits-section entries
+    // would mis-render in multiple downstream surfaces,
+    // identically to the `set_developers` analysis in the
+    // `_developers_entries_do_not_contain_a_start_of_heading_byte`
+    // companion: (1) the GLib-backed `set_designers` /
+    // `set_artists` / `set_documenters` setters route through
+    // GTK and Pango renders each entry as a credits-page row
+    // — a stray `\x01` byte in the middle of a contributor
+    // name would render as a literal control glyph (a hollow
+    // box or tofu-like placeholder), breaking the credits-
+    // page contributor-name layout for the affected section;
+    // (2) when the credits-page is dumped through a serial-
+    // bridged TTY (CI logs over a serial console, an out-of-
+    // band debugging session), the `\x01` byte may be
+    // intercepted by the receiving end as a start-of-heading
+    // framing indicator and signal the start of a header
+    // block, confusing protocol-bridging tooling that treats
+    // SOH as a header-block opener and splicing the
+    // contributor name at the byte boundary into an
+    // unexpected header-followed-by-text sequence; on POSIX
+    // terminals using emacs-style line editing where `^A`
+    // defaults to the beginning-of-line keybinding, the
+    // byte may surface as an unexpected cursor-to-line-start
+    // jump in any interactive shell that captures the
+    // credits-page through a pty with readline bound to the
+    // default Emacs keymap; (3) any tooling that scrapes the
+    // credits-page contributor list (GNOME `gnome-software`
+    // credit aggregators, release-note generators) would
+    // propagate the stray `\x01` byte into the consumer's
+    // stream and trigger the same control-glyph / readline-
+    // keybinding / protocol-confusion bug across every
+    // downstream surface; (4) screen readers that announce
+    // the credits-page contributor names render the byte as
+    // a literal control character announcement, breaking the
+    // contributor-name accessibility-tree announcement at
+    // the byte boundary.
+    //
+    // Pinning the no-`\x01` invariant across all three
+    // currently-empty credits-section helpers in a single
+    // cross-helper loop surfaces the regression with a
+    // message naming the affected helper, the offending
+    // byte, and the entry index at build time rather than
+    // as a downstream rendering artifact of the credits-
+    // page sections, a serial-protocol SOH-frame header-
+    // block-opener collision through TTY dumps, a readline
+    // `^A` beginning-of-line surprise, or a screen-reader
+    // announcement break. Current helpers return the empty
+    // array `[]` (zero entries, no `\x01` byte to find), so
+    // this test passes today and serves as a forcing
+    // function so any future override of the helpers —
+    // including the eventual landing of separately-credited
+    // designer / artist / documenter strings — stays free
+    // of start-of-heading bytes.
+    use paladin_gtk::app::model::{
+        format_app_about_dialog_artists, format_app_about_dialog_designers,
+        format_app_about_dialog_documenters,
+    };
+
+    let designers = format_app_about_dialog_designers();
+    let artists = format_app_about_dialog_artists();
+    let documenters = format_app_about_dialog_documenters();
+
+    let sections: [(&str, &[&str]); 3] = [
+        ("designers", &designers),
+        ("artists", &artists),
+        ("documenters", &documenters),
+    ];
+
+    for (label, entries) in sections {
+        for (idx, entry) in entries.iter().enumerate() {
+            assert!(
+                !entry.contains('\x01'),
+                "AdwAboutDialog {label} entry at index {idx} must not contain the `\\x01` start-of-heading byte (0x01); like STX, ETX, EOT, ENQ, ACK, and BEL, SOH is NOT matched by `char::is_whitespace()` (Unicode returns false for U+0001 SOH), so a mid-string `\\x01` slips past any future surrounding-whitespace boundary guards on the {label} helper and past the prior `_empty_credits_section_entries_do_not_contain_a_null_byte` / `_empty_credits_section_entries_do_not_contain_a_horizontal_tab_byte` / `_empty_credits_section_entries_do_not_contain_a_carriage_return_byte` / `_empty_credits_section_entries_do_not_contain_a_vertical_tab_byte` / `_empty_credits_section_entries_do_not_contain_a_form_feed_byte` / `_empty_credits_section_entries_do_not_contain_a_backspace_byte` / `_empty_credits_section_entries_do_not_contain_a_line_feed_byte` / `_empty_credits_section_entries_do_not_contain_a_bell_byte` / `_empty_credits_section_entries_do_not_contain_an_acknowledge_byte` / `_empty_credits_section_entries_do_not_contain_an_enquiry_byte` / `_empty_credits_section_entries_do_not_contain_an_end_of_transmission_byte` / `_empty_credits_section_entries_do_not_contain_an_end_of_text_byte` / `_empty_credits_section_entries_do_not_contain_a_start_of_text_byte` siblings (which each name a different byte specifically); it would render as a literal control glyph in the credits-page \"{label}\" row via `set_{label}`, confuse serial-protocol-bridging tooling that treats `\\x01` as a SOH header-block opener if dumped through a serial-bridged TTY (splicing the contributor name at the byte boundary into an unexpected header-followed-by-text sequence), trigger readline `^A` beginning-of-line cursor-jump surprises in interactive shells capturing the credits-page through a pty with the default Emacs keymap, propagate into downstream attribution scrapers and `gnome-software` credit aggregators, and break screen-reader contributor-name announcements at the byte boundary; got {entry:?}",
+            );
+        }
+    }
+}
