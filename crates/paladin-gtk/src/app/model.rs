@@ -63,11 +63,12 @@
 //! reached under `xvfb-run` without driving widgets.
 
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::time::{Instant, SystemTime};
 
 use libadwaita as adw;
 use libadwaita::prelude::*;
 use relm4::gtk;
+use relm4::gtk::glib;
 use relm4::prelude::*;
 
 use crate::account_list::{
@@ -113,6 +114,7 @@ use crate::startup_error::{
     format_startup_error_marker, StartupError, StartupErrorComponent, StartupErrorInit,
     StartupErrorOutput,
 };
+use crate::ticker::{tick, tick_interval, ticker_transition, TickerTransition};
 use crate::unlock_dialog::{
     format_unlock_dialog_marker, UnlockDialogComponent, UnlockDialogInit, UnlockDialogOutput,
 };
@@ -263,6 +265,17 @@ pub struct AppModel {
     /// reset to the empty string in the next mount) when the vault
     /// locks, so there is no observable cross-vault query leak.
     search_query: String,
+    /// Live `glib::timeout_add_local` source for the TOTP ticker.
+    ///
+    /// Installed by [`AppModel::apply_ticker_transition`] when the
+    /// app enters `Unlocked` / `UnlockedBusy` with at least one
+    /// visible TOTP row; torn down on transitions back to `Locked`,
+    /// `Missing`, or `StartupError`, and on `Quit`. The source ID
+    /// is stored as an [`Option`] because `glib::SourceId::remove`
+    /// takes the source by value (the consumed `SourceId` cannot
+    /// be re-removed). See `IMPLEMENTATION_PLAN_04_GTK.md`
+    /// §"Milestone 7 checklist" > TOTP ticker.
+    ticker_source: Option<glib::SourceId>,
 }
 
 impl std::fmt::Debug for AppModel {
@@ -314,6 +327,10 @@ impl std::fmt::Debug for AppModel {
             )
             .field("content", &"<gtk::Box>")
             .field("search_query", &self.search_query)
+            .field(
+                "ticker_source",
+                &self.ticker_source.as_ref().map(|_| "<installed>"),
+            )
             .finish()
     }
 }
@@ -751,6 +768,38 @@ pub enum AppMsg {
     /// startup sequence are all non-mutating) and the
     /// controller swap in the content tree.
     StartupErrorRetry,
+    /// Fired by the live `glib::timeout_add_local` ticker source
+    /// installed via [`AppModel::apply_ticker_transition`].
+    ///
+    /// The handler projects the live `(Vault, Store)` pair plus
+    /// the rendered row set through [`crate::ticker::tick`] and
+    /// forwards the resulting display updates to the live
+    /// [`AccountListComponent`] via [`AccountListMsg::Tick`] so
+    /// the TOTP gauge / code labels refresh in lockstep with the
+    /// shared `paladin_core::TICK_INTERVAL_MS` cadence (parity with
+    /// the TUI). The `clipboard_wake_due` hint is reserved for the
+    /// follow-up commit that wires the copy button and the
+    /// `gdk::Clipboard` only-if-unchanged check.
+    ///
+    /// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist"
+    /// TOTP ticker. A stray tick that lands after `Vault` has
+    /// been dropped (e.g. between a `Locked` transition and the
+    /// matching `ticker_transition` teardown) is a benign no-op:
+    /// the handler returns early when [`AppModel::vault`] is `None`.
+    Tick {
+        /// Wall-clock at the tick firing. Used by TOTP code
+        /// generation (`paladin_core::totp_code` is
+        /// [`SystemTime`]-driven so the codes follow the user's
+        /// wall clock rather than the monotonic timer).
+        wall_clock: SystemTime,
+        /// Monotonic timestamp at the tick firing. Used by the
+        /// clipboard auto-clear policy's deadline check
+        /// ([`PendingClipboardClear::deadline`] is monotonic so
+        /// the wipe survives wall-clock adjustments).
+        ///
+        /// [`PendingClipboardClear::deadline`]: crate::clipboard_clear::PendingClipboardClear::deadline
+        monotonic: Instant,
+    },
 }
 
 // `relm4::component(pub)` generates a public `AppModelWidgets` struct so the
@@ -1007,7 +1056,17 @@ impl SimpleComponent for AppModel {
             passphrase_dialog: None,
             content: widgets.content.clone(),
             search_query: String::new(),
+            ticker_source: None,
         };
+
+        // Install the TOTP ticker if the resolved startup state is
+        // `Unlocked` and the projected row set contains at least one
+        // TOTP row. `ticker_transition(was_installed: false, ...)`
+        // collapses to `NoChange` in every other case so the call is
+        // a benign no-op for `Missing` / `Locked` / `StartupError`
+        // startups and for unlocked vaults that are HOTP-only / empty.
+        let mut model = model;
+        model.apply_ticker_transition(&sender);
 
         if exit_after_startup {
             sender.input(AppMsg::Quit);
@@ -1023,7 +1082,18 @@ impl SimpleComponent for AppModel {
     #[allow(clippy::too_many_lines)]
     fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>) {
         match msg {
-            AppMsg::Quit => relm4::main_application().quit(),
+            AppMsg::Quit => {
+                if let Some(source_id) = self.ticker_source.take() {
+                    source_id.remove();
+                }
+                relm4::main_application().quit();
+            }
+            AppMsg::Tick {
+                wall_clock,
+                monotonic,
+            } => {
+                self.handle_tick(wall_clock, monotonic);
+            }
             AppMsg::StartupErrorRetry => {
                 // User clicked the StartupErrorComponent Retry
                 // button. Re-run the same probe sequence
@@ -1924,10 +1994,112 @@ impl SimpleComponent for AppModel {
                 }
             }
         }
+
+        // Re-evaluate the TOTP ticker after every dispatch. The
+        // `(state, rows)` snapshot may have transitioned through
+        // `Locked → Unlocked` (unlock success), `Unlocked → Locked`
+        // (auto-lock), `Missing → Unlocked` (init success), or
+        // `has_visible_totp_row` may have flipped (Add / Remove
+        // worker completions). `ticker_transition(was_installed,
+        // ...)` collapses to `NoChange` for steady-state dispatches
+        // (search query change, settings save with no TOTP delta,
+        // dialog cancel) so this call is a benign no-op in the
+        // common case.
+        self.apply_ticker_transition(&sender);
     }
 }
 
 impl AppModel {
+    /// Re-evaluate the TOTP ticker against the current
+    /// `(state, rows)` pair and install / teardown the live
+    /// `glib::timeout_add_local` source as needed.
+    ///
+    /// Routes through [`ticker_transition`] so the four-outcome
+    /// truth table (`NoChange` / `Install` / `Teardown`) is the same
+    /// pure-logic decision exercised by `tests/ticker_logic.rs`.
+    /// The current row set is re-projected through
+    /// [`filtered_row_models_from_vault`] using
+    /// [`Self::search_query`] (the same source the post-mutation
+    /// refresh path consumes) so the install decision sees exactly
+    /// what the live [`AccountListComponent`] is rendering.
+    ///
+    /// Called after every state transition: process startup
+    /// ([`SimpleComponent::init`]), unlock success
+    /// ([`AppMsg::UnlockWorkerCompleted`]), init success
+    /// ([`AppMsg::InitWorkerCompleted`]), retry
+    /// ([`AppMsg::StartupErrorRetry`]), and the Add / Remove
+    /// worker completions (rows changing kind can transition
+    /// `has_visible_totp_row`). The TUI parity contract pins this
+    /// to the §"Milestone 7 checklist" > TOTP ticker bullet "Tear
+    /// down the ticker on `Locked` / `StartupError` transitions
+    /// and reinstall on `Unlocked`".
+    fn apply_ticker_transition(&mut self, sender: &ComponentSender<Self>) {
+        let Some(state) = self.state.as_ref() else {
+            // Pre-init or post-Quit; tear down any source so a
+            // dangling timer doesn't outlive `AppModel`.
+            if let Some(source_id) = self.ticker_source.take() {
+                source_id.remove();
+            }
+            return;
+        };
+        let rows: Vec<AccountRowModel> = match self.vault.as_ref() {
+            Some((vault, _)) => filtered_row_models_from_vault(vault, &self.search_query),
+            None => Vec::new(),
+        };
+        let was_installed = self.ticker_source.is_some();
+        match ticker_transition(was_installed, state, &rows) {
+            TickerTransition::NoChange => {}
+            TickerTransition::Install => {
+                let send = sender.input_sender().clone();
+                let source_id = glib::timeout_add_local(tick_interval(), move || {
+                    // Per-tick callback: emit AppMsg::Tick with the
+                    // wall-clock + monotonic timestamps captured at
+                    // fire time so the handler does not race against
+                    // the time it took to be dispatched through the
+                    // GLib main loop.
+                    let _ = send.send(AppMsg::Tick {
+                        wall_clock: SystemTime::now(),
+                        monotonic: Instant::now(),
+                    });
+                    glib::ControlFlow::Continue
+                });
+                self.ticker_source = Some(source_id);
+            }
+            TickerTransition::Teardown => {
+                if let Some(source_id) = self.ticker_source.take() {
+                    source_id.remove();
+                }
+            }
+        }
+    }
+
+    /// Handle one [`AppMsg::Tick`] firing.
+    ///
+    /// Projects the live `(Vault, Store)` pair plus the rendered
+    /// row set through [`tick`] and forwards the resulting display
+    /// updates to the live [`AccountListComponent`] via
+    /// [`AccountListMsg::Tick`]. The `clipboard_wake_due` hint is
+    /// preserved for the follow-up commit that wires the
+    /// `gdk::Clipboard` only-if-unchanged check.
+    ///
+    /// Defensive: a tick that lands after [`Self::vault`] has been
+    /// dropped (e.g. between a `Locked` transition and the matching
+    /// `ticker_transition` teardown) is a benign no-op.
+    fn handle_tick(&mut self, wall_clock: SystemTime, monotonic: Instant) {
+        let Some((vault, _)) = self.vault.as_ref() else {
+            return;
+        };
+        let Some(controller) = self.account_list.as_ref() else {
+            return;
+        };
+        let rows = filtered_row_models_from_vault(vault, &self.search_query);
+        let outcome = tick(vault, &rows, wall_clock, monotonic, None);
+        let _ = monotonic; // reserved for the follow-up clipboard-wake commit
+        if !outcome.display_updates.is_empty() {
+            controller.emit(AccountListMsg::Tick(outcome.display_updates));
+        }
+    }
+
     /// Re-project rows off the live `(Vault, Store)` pair and emit
     /// [`AccountListMsg::Refresh`] so the visible row set matches
     /// the post-mutation vault state per

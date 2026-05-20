@@ -1572,17 +1572,21 @@ sign-off.
     `AppModel` is `UnlockedBusy` per §"In-flight effect ownership".
 - [ ] TOTP ticker (`paladin_core::TICK_INTERVAL_MS` timeout source
   for gauge updates and clipboard staleness checks).
-  - [ ] Install a single `glib::timeout_add_local` source ticking
+  - [x] Install a single `glib::timeout_add_local` source ticking
     at `paladin_core::TICK_INTERVAL_MS` while at least one TOTP row
     is visible.
-  - [ ] On each tick, recompute the TOTP gauge value and the
+  - [x] On each tick, recompute the TOTP gauge value and the
     visible code from `paladin_core::totp_code(account, now)` for
     every TOTP row in the current list view.
   - [ ] On each tick, give the clipboard auto-clear policy a chance
     to wake against the current `gdk::Clipboard` text
     (only-if-unchanged) so stale copies clear even without explicit
-    user activity.
-  - [ ] Tear down the ticker on `Locked` / `StartupError`
+    user activity. Pure-logic deadline check is wired through
+    `ticker::tick`'s `clipboard_wake_due` field; the live
+    `gdk::Clipboard` round trip lands alongside the copy button
+    (`AccountRowComponent` body) so there is something to fire
+    against.
+  - [x] Tear down the ticker on `Locked` / `StartupError`
     transitions and reinstall on `Unlocked` so plaintext and
     encrypted vaults share the same lifecycle.
 - [ ] HOTP reveal window behavior

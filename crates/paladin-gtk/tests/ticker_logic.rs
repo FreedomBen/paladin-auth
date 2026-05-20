@@ -32,9 +32,10 @@
 
 use std::io;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use secrecy::SecretString;
+use zeroize::Zeroizing;
 
 use paladin_core::{
     validate_manual, AccountId, AccountInput, AccountKindInput, AccountKindSummary, Algorithm,
@@ -44,10 +45,11 @@ use paladin_core::{
 use paladin_gtk::account_list::AccountRowModel;
 use paladin_gtk::account_row::{CodeDisplay, RowDisplay};
 use paladin_gtk::app::state::AppState;
+use paladin_gtk::clipboard_clear::PendingClipboardClear;
 use paladin_gtk::startup_error::StartupError;
 use paladin_gtk::ticker::{
-    compute_tick_displays, has_visible_totp_row, should_install, tick_interval, ticker_transition,
-    TickerTransition,
+    compute_tick_displays, has_visible_totp_row, should_install, tick, tick_interval,
+    ticker_transition, TickOutcome, TickerTransition,
 };
 
 // ---------------------------------------------------------------------------
@@ -654,4 +656,218 @@ fn compute_tick_displays_carries_full_row_display_shape() {
         kebab_visible: true,
     };
     assert_eq!(display, &expected);
+}
+
+// ---------------------------------------------------------------------------
+// `tick` — joint TOTP-refresh + clipboard-wake decision
+//
+// The plan's "On each tick, give the clipboard auto-clear policy a chance
+// to wake against the current `gdk::Clipboard` text" bullet routes through
+// this helper: the GTK call site fires the tick callback, this function
+// returns the typed [`TickOutcome`], and the widget layer applies the
+// display updates and (only when `clipboard_wake_due == true`) reads the
+// live `gdk::Clipboard` and routes the bytes through `evaluate_wake`.
+//
+// The wake decision is `pending.deadline <= now`. Future deadlines stay
+// dormant; the deadline boundary itself fires (matching the TUI's
+// `wake_due` rule and the `glib::timeout_add_local` semantics on the
+// fallback timer source).
+// ---------------------------------------------------------------------------
+
+fn pending_with_deadline(
+    vault: &mut Vault,
+    store: &Store,
+    deadline: Instant,
+) -> PendingClipboardClear {
+    vault.set_clipboard_clear_enabled(true);
+    vault
+        .set_clipboard_clear_secs(30)
+        .expect("clipboard_clear_secs within bounds");
+    vault.save(store).expect("save vault settings");
+    let mut pending = paladin_gtk::clipboard_clear::schedule_copy(
+        Instant::now(),
+        vault.settings(),
+        Zeroizing::new(b"123456".to_vec()),
+    )
+    .expect("schedule_copy returned Some once clipboard_clear is enabled");
+    pending.deadline = deadline;
+    pending
+}
+
+#[test]
+fn tick_returns_empty_displays_when_no_totp_rows() {
+    // Empty row set → empty display projection; clipboard wake is
+    // independently `false` because no pending was supplied.
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (vault, _store) = open_plaintext_pair(&path);
+
+    let outcome = tick(&vault, &[], SystemTime::now(), Instant::now(), None);
+    assert!(outcome.display_updates.is_empty());
+    assert!(!outcome.clipboard_wake_due);
+}
+
+#[test]
+fn tick_returns_display_updates_for_totp_rows() {
+    // TOTP row → display projection includes a visible code; with
+    // no pending the clipboard wake stays dormant.
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+
+    let id = add_totp(&mut vault, &store, Some("Acme"), "alice");
+    let rows = vec![totp_row_for(id, "Acme:alice")];
+
+    let outcome = tick(
+        &vault,
+        &rows,
+        UNIX_EPOCH + Duration::from_secs(30),
+        Instant::now(),
+        None,
+    );
+    assert_eq!(outcome.display_updates.len(), 1);
+    let (out_id, out_display) = &outcome.display_updates[0];
+    assert_eq!(*out_id, id);
+    assert!(matches!(out_display.code, CodeDisplay::Visible(_)));
+    assert!(out_display.progress_visible);
+    assert!(!outcome.clipboard_wake_due);
+}
+
+#[test]
+fn tick_returns_no_wake_when_pending_deadline_is_in_the_future() {
+    // The pending wipe is still in the future at the tick instant —
+    // wake stays dormant, no `gdk::Clipboard` round trip is needed.
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+    let monotonic_now = Instant::now();
+    let pending =
+        pending_with_deadline(&mut vault, &store, monotonic_now + Duration::from_secs(10));
+
+    let outcome = tick(
+        &vault,
+        &[],
+        SystemTime::now(),
+        monotonic_now,
+        Some(&pending),
+    );
+    assert!(!outcome.clipboard_wake_due);
+}
+
+#[test]
+fn tick_returns_wake_due_when_pending_deadline_already_elapsed() {
+    // The pending wipe's deadline has already passed at the tick
+    // instant — the widget layer should now read the clipboard and
+    // route through `evaluate_wake`.
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+    let monotonic_now = Instant::now();
+    let pending = pending_with_deadline(
+        &mut vault,
+        &store,
+        monotonic_now
+            .checked_sub(Duration::from_millis(1))
+            .expect("monotonic_now is past Instant epoch"),
+    );
+
+    let outcome = tick(
+        &vault,
+        &[],
+        SystemTime::now(),
+        monotonic_now,
+        Some(&pending),
+    );
+    assert!(outcome.clipboard_wake_due);
+}
+
+#[test]
+fn tick_returns_wake_due_when_pending_deadline_lands_exactly_on_tick() {
+    // Boundary case: the deadline lands exactly on the tick instant.
+    // The `<=` comparison fires (matching TUI / `timeout_add_local`
+    // semantics: a timer scheduled for `now` is considered ready).
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+    let monotonic_now = Instant::now();
+    let pending = pending_with_deadline(&mut vault, &store, monotonic_now);
+
+    let outcome = tick(
+        &vault,
+        &[],
+        SystemTime::now(),
+        monotonic_now,
+        Some(&pending),
+    );
+    assert!(outcome.clipboard_wake_due);
+}
+
+#[test]
+fn tick_combines_displays_and_clipboard_wake_independently() {
+    // Both fields populate independently: a TOTP row produces display
+    // updates AND a due pending wipe sets `clipboard_wake_due = true`.
+    // The widget driver applies both effects in the same callback.
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+
+    let id = add_totp(&mut vault, &store, Some("Acme"), "alice");
+    let rows = vec![totp_row_for(id, "Acme:alice")];
+    let monotonic_now = Instant::now();
+    let pending = pending_with_deadline(
+        &mut vault,
+        &store,
+        monotonic_now
+            .checked_sub(Duration::from_secs(1))
+            .expect("monotonic_now is past Instant epoch"),
+    );
+
+    let outcome = tick(
+        &vault,
+        &rows,
+        SystemTime::now(),
+        monotonic_now,
+        Some(&pending),
+    );
+    assert_eq!(outcome.display_updates.len(), 1);
+    assert!(outcome.clipboard_wake_due);
+}
+
+#[test]
+fn tick_display_updates_match_compute_tick_displays_for_same_inputs() {
+    // Defensive: the `tick` wrapper must not re-derive the display
+    // projection — it forwards the same `compute_tick_displays`
+    // output so the widget layer sees one consistent shape regardless
+    // of which entry point it calls.
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+
+    let id_a = add_totp(&mut vault, &store, Some("Acme"), "alice");
+    let id_b = add_totp(&mut vault, &store, Some("Acme"), "bob");
+    let rows = vec![
+        totp_row_for(id_a, "Acme:alice"),
+        totp_row_for(id_b, "Acme:bob"),
+    ];
+
+    let now = UNIX_EPOCH + Duration::from_secs(60);
+    let outcome = tick(&vault, &rows, now, Instant::now(), None);
+    let direct = compute_tick_displays(&vault, &rows, now);
+    assert_eq!(outcome.display_updates, direct);
+}
+
+#[test]
+fn tick_outcome_struct_carries_named_fields() {
+    // Pin the public field names so the widget call site doesn't
+    // shift onto positional destructuring.
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (vault, _store) = open_plaintext_pair(&path);
+
+    let TickOutcome {
+        display_updates,
+        clipboard_wake_due,
+    } = tick(&vault, &[], SystemTime::now(), Instant::now(), None);
+    assert!(display_updates.is_empty());
+    assert!(!clipboard_wake_due);
 }

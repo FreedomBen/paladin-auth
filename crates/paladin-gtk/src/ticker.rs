@@ -18,13 +18,14 @@
 //! decisions. `tests/ticker_logic.rs` exercises the helpers without
 //! spinning up GTK or libadwaita.
 
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use paladin_core::{AccountId, AccountKindSummary, Vault, TICK_INTERVAL_MS};
 
 use crate::account_list::AccountRowModel;
 use crate::account_row::{project_row, RowDisplay};
 use crate::app::state::AppState;
+use crate::clipboard_clear::PendingClipboardClear;
 
 /// Per-tick interval for the TOTP ticker.
 ///
@@ -171,4 +172,64 @@ pub fn compute_tick_displays(
             Some((row.id, project_row(&summary, Some(&code))))
         })
         .collect()
+}
+
+/// Outcome of one ticker firing.
+///
+/// The widget-layer tick handler in `AppModel` runs three side
+/// effects per tick — the TOTP gauge / code refresh ([`compute_tick_displays`]),
+/// the clipboard auto-clear policy wake against the live
+/// `gdk::Clipboard` text, and (in follow-up commits) the HOTP reveal
+/// expiry check — but the decisions for the first two route through
+/// [`tick`] so the GTK call sites stay free of timing logic and the
+/// pure-logic tests in `tests/ticker_logic.rs` exercise the full
+/// per-tick contract without spinning up GTK / libadwaita.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TickOutcome {
+    /// Refreshed [`RowDisplay`] projections for every visible TOTP
+    /// row, in caller-supplied row order. The widget driver dispatches
+    /// these to [`crate::account_list::AccountListMsg::Tick`] so the
+    /// row factory rebinds the affected positions without rebuilding
+    /// the `gio::ListStore`.
+    pub display_updates: Vec<(AccountId, RowDisplay)>,
+    /// `true` iff there is a [`PendingClipboardClear`] entry whose
+    /// monotonic `deadline` is `<= monotonic_now`. The widget driver
+    /// pairs this hint with a live `gdk::Clipboard::read_text` and
+    /// routes the byte-equality decision through
+    /// [`crate::clipboard_clear::evaluate_wake`]; `false` means the
+    /// pending wipe is still in the future (or there is no pending
+    /// wipe at all) and the per-tick wake is a no-op.
+    pub clipboard_wake_due: bool,
+}
+
+/// Compute the per-tick widget driver effect for `(vault, rows)` at
+/// the given wall-clock / monotonic instants.
+///
+/// Combines [`compute_tick_displays`] with the clipboard auto-clear
+/// deadline check so the widget layer makes one call per tick and
+/// applies the typed [`TickOutcome`] to the live `gtk::ListView`
+/// (display updates) plus the live `gdk::Clipboard` (wake on
+/// `clipboard_wake_due`). The two decisions are bundled here rather
+/// than split because the call site that drives one always drives
+/// the other — keeping them together lets the pure-logic tests pin
+/// the joint contract.
+///
+/// `pending_clipboard` is the live pending-clear slot from the
+/// `AppModel`; `None` means the user has not opted in (or no copy
+/// is outstanding) and the wake is a no-op. The deadline is checked
+/// with `<=` so a wake that lands exactly on the deadline fires
+/// (matching the TUI `wake_due` rule); future deadlines stay
+/// dormant until the next tick.
+#[must_use]
+pub fn tick(
+    vault: &Vault,
+    rows: &[AccountRowModel],
+    wall_clock: SystemTime,
+    monotonic_now: Instant,
+    pending_clipboard: Option<&PendingClipboardClear>,
+) -> TickOutcome {
+    TickOutcome {
+        display_updates: compute_tick_displays(vault, rows, wall_clock),
+        clipboard_wake_due: pending_clipboard.is_some_and(|p| p.deadline <= monotonic_now),
+    }
 }

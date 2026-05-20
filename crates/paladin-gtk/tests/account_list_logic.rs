@@ -27,11 +27,11 @@ use paladin_core::{
     IconHintInput, Store, Vault, VaultInit, VaultLock,
 };
 use paladin_gtk::account_list::{
-    dispatch_row_action, filtered_row_models_from_vault, format_rendered_marker,
-    format_widget_states_marker, hidden_row_display, row_model_for_account, row_models_from_vault,
-    selected_row_after_refresh, AccountListOutput, AccountRowModel,
-    ACCOUNT_LIST_WIDGET_STATES_MARKER_PREFIX, ROW_ACTION_GROUP_NAME, ROW_REMOVE_ACTION_NAME,
-    ROW_RENAME_ACTION_NAME,
+    bind_display_for_row, dispatch_row_action, filtered_row_models_from_vault,
+    format_rendered_marker, format_widget_states_marker, hidden_row_display, prune_cache_to_rows,
+    row_model_for_account, row_models_from_vault, selected_row_after_refresh, AccountListOutput,
+    AccountRowModel, ACCOUNT_LIST_WIDGET_STATES_MARKER_PREFIX, ROW_ACTION_GROUP_NAME,
+    ROW_REMOVE_ACTION_NAME, ROW_RENAME_ACTION_NAME,
 };
 use paladin_gtk::account_row::{CodeDisplay, CounterText, RowDisplay};
 
@@ -809,4 +809,200 @@ fn selected_row_after_refresh_returns_first_when_prev_is_none() {
         Some(a),
         "fresh refresh with no prior selection picks the first row",
     );
+}
+
+// ---------------------------------------------------------------------------
+// `bind_display_for_row` — live-cache lookup before hidden fallback
+//
+// The factory's `connect_bind` callback routes through this helper so the
+// per-tick refresh path can publish a live visible code without rebuilding
+// the `AccountRowModel` entries in the `gio::ListStore`. The contract:
+//
+// 1. When the live cache holds a [`RowDisplay`] for the row's
+//    [`AccountId`], that display is returned verbatim (cloned, so the
+//    factory and the cache do not alias the same heap allocation).
+// 2. When the cache is empty / does not hold an entry for this row, the
+//    fallback is [`hidden_row_display`] — the same default the factory
+//    used before the live cache was introduced, so the row mount stays
+//    backward-compatible.
+//
+// The follow-up commit that wires `AccountListMsg::Tick` updates the
+// cache and forces a rebind via `gio::ListStore::splice`; the contract
+// pinned here is what the factory call site needs in either path.
+// ---------------------------------------------------------------------------
+
+fn totp_model_for(id: AccountId, label: &str) -> AccountRowModel {
+    AccountRowModel {
+        id,
+        display_label: label.to_string(),
+        kind: AccountKindSummary::Totp,
+        counter: None,
+    }
+}
+
+fn hotp_model_for(id: AccountId, label: &str, counter: u64) -> AccountRowModel {
+    AccountRowModel {
+        id,
+        display_label: label.to_string(),
+        kind: AccountKindSummary::Hotp,
+        counter: Some(counter),
+    }
+}
+
+#[test]
+fn bind_display_for_row_returns_live_clone_when_cache_hits() {
+    let id = AccountId::new();
+    let model = totp_model_for(id, "Acme:alice");
+    let live = RowDisplay {
+        label: "Acme:alice".to_string(),
+        kind: AccountKindSummary::Totp,
+        code: CodeDisplay::Visible("123 456".to_string()),
+        counter: None,
+        copy_enabled: true,
+        next_button_visible: false,
+        progress_visible: true,
+        kebab_visible: true,
+    };
+    let bound = bind_display_for_row(Some(&live), &model);
+    assert_eq!(bound, live, "cache hit wins over hidden fallback");
+}
+
+#[test]
+fn bind_display_for_row_falls_back_to_hidden_when_cache_misses() {
+    let id = AccountId::new();
+    let model = totp_model_for(id, "Acme:alice");
+    let bound = bind_display_for_row(None, &model);
+    assert_eq!(
+        bound,
+        hidden_row_display(&model),
+        "cache miss falls back to hidden — initial mount, post-refresh window, or HOTP outside reveal",
+    );
+}
+
+#[test]
+fn bind_display_for_row_hidden_fallback_preserves_kind_specific_state() {
+    // HOTP rows in the hidden state expose a visible stored counter
+    // and the "next" button; TOTP rows hide the counter and show the
+    // progress gauge. The fallback path must honor those rules.
+    let totp_id = AccountId::new();
+    let totp_model = totp_model_for(totp_id, "TOTPCo:alice");
+    let totp_bound = bind_display_for_row(None, &totp_model);
+    assert!(totp_bound.progress_visible);
+    assert!(!totp_bound.next_button_visible);
+    assert!(totp_bound.counter.is_none());
+
+    let hotp_id = AccountId::new();
+    let hotp_model = hotp_model_for(hotp_id, "HOTPCo:bob", 7);
+    let hotp_bound = bind_display_for_row(None, &hotp_model);
+    assert!(!hotp_bound.progress_visible);
+    assert!(hotp_bound.next_button_visible);
+    assert!(matches!(hotp_bound.counter, Some(CounterText::Stored(7))));
+}
+
+#[test]
+fn bind_display_for_row_returned_clone_does_not_alias_cache() {
+    // Mutating the returned display must not bleed back into the
+    // cache entry — the factory consumes the display by value and
+    // updates widget properties; the cache stays the canonical
+    // record for the next bind round.
+    let id = AccountId::new();
+    let model = totp_model_for(id, "Acme:alice");
+    let live = RowDisplay {
+        label: "Acme:alice".to_string(),
+        kind: AccountKindSummary::Totp,
+        code: CodeDisplay::Visible("111 222".to_string()),
+        counter: None,
+        copy_enabled: true,
+        next_button_visible: false,
+        progress_visible: true,
+        kebab_visible: true,
+    };
+    let mut bound = bind_display_for_row(Some(&live), &model);
+    bound.label = "scribbled".to_string();
+    assert_eq!(
+        live.label, "Acme:alice",
+        "the original cache entry is not mutated through the returned clone",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// `prune_cache_to_rows` — drop stale cache entries on refresh
+//
+// `AccountListMsg::Refresh` calls this helper so a Remove / search-filter
+// rebuild that drops accounts does not leave a stale live display behind.
+// Surviving entries stay in the cache so the user keeps seeing the live
+// code across an Add / Rename / settings refresh without waiting for the
+// next tick (max one tick interval of stale-label exposure on a Rename,
+// which the next `tick(...)` call overwrites).
+// ---------------------------------------------------------------------------
+
+fn live_display(label: &str) -> RowDisplay {
+    RowDisplay {
+        label: label.to_string(),
+        kind: AccountKindSummary::Totp,
+        code: CodeDisplay::Visible("999 888".to_string()),
+        counter: None,
+        copy_enabled: true,
+        next_button_visible: false,
+        progress_visible: true,
+        kebab_visible: true,
+    }
+}
+
+#[test]
+fn prune_cache_to_rows_keeps_entries_for_surviving_ids() {
+    let surviving = AccountId::new();
+    let rows = vec![totp_model_for(surviving, "Acme:alice")];
+
+    let mut cache = std::collections::HashMap::new();
+    cache.insert(surviving, live_display("Acme:alice"));
+
+    prune_cache_to_rows(&mut cache, &rows);
+    assert!(
+        cache.contains_key(&surviving),
+        "surviving id keeps its cached display so the user does not lose the live code mid-refresh",
+    );
+}
+
+#[test]
+fn prune_cache_to_rows_drops_entries_for_removed_ids() {
+    let surviving = AccountId::new();
+    let removed = AccountId::new();
+    let rows = vec![totp_model_for(surviving, "Acme:alice")];
+
+    let mut cache = std::collections::HashMap::new();
+    cache.insert(surviving, live_display("Acme:alice"));
+    cache.insert(removed, live_display("Acme:bob"));
+
+    prune_cache_to_rows(&mut cache, &rows);
+    assert!(
+        !cache.contains_key(&removed),
+        "removed id no longer in the cache"
+    );
+    assert!(cache.contains_key(&surviving), "surviving id still cached");
+}
+
+#[test]
+fn prune_cache_to_rows_empty_rows_clears_cache_entirely() {
+    // The all-rows-filtered-out case: a search query that matches no
+    // account, an empty vault after Remove, …
+    let alice = AccountId::new();
+    let bob = AccountId::new();
+    let mut cache = std::collections::HashMap::new();
+    cache.insert(alice, live_display("Acme:alice"));
+    cache.insert(bob, live_display("Acme:bob"));
+
+    prune_cache_to_rows(&mut cache, &[]);
+    assert!(cache.is_empty(), "empty row set drops every cache entry");
+}
+
+#[test]
+fn prune_cache_to_rows_empty_cache_no_op() {
+    let alice = AccountId::new();
+    let rows = vec![totp_model_for(alice, "Acme:alice")];
+
+    let mut cache: std::collections::HashMap<AccountId, RowDisplay> =
+        std::collections::HashMap::new();
+    prune_cache_to_rows(&mut cache, &rows);
+    assert!(cache.is_empty(), "no entries to prune is a benign no-op");
 }

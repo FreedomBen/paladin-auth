@@ -20,6 +20,10 @@
 //!   layer never reaches for the live `Account` — it only reads
 //!   the already-projected [`AccountRowModel`].
 
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
+
 use relm4::gtk;
 use relm4::gtk::gio;
 use relm4::gtk::glib;
@@ -33,6 +37,62 @@ use crate::account_row::{
     CounterText, RowDisplay,
 };
 use crate::search::filtered_account_ids;
+
+/// Shared per-row live [`RowDisplay`] cache.
+///
+/// The factory's `connect_bind` callback consults this cache via
+/// [`bind_display_for_row`] before falling back to
+/// [`hidden_row_display`]; per-tick refresh (and follow-up HOTP
+/// reveal commits) updates entries here and then forces a rebind via
+/// `gio::ListStore::splice` so the factory re-projects every row.
+///
+/// `Rc<RefCell<…>>` because the cache is shared between the
+/// [`AccountListComponent`] state (which writes entries on
+/// [`AccountListMsg::Tick`]) and the row factory closure (which
+/// reads entries on rebind). The map is single-threaded — the GTK
+/// main loop is the only writer.
+pub type LiveDisplayCache = Rc<RefCell<HashMap<AccountId, RowDisplay>>>;
+
+/// Resolve the per-row [`RowDisplay`] the factory should bind for a
+/// given [`AccountRowModel`].
+///
+/// Routes through the cache's [`HashMap::get`] first so the per-tick
+/// refresh path can publish a live visible code without rebuilding
+/// the [`AccountRowModel`] entries in the `gio::ListStore`. When no
+/// cache entry is present (the initial mount before the first tick,
+/// the brief window between [`AccountListMsg::Refresh`] and the next
+/// tick, or any HOTP row outside its reveal window), falls back to
+/// [`hidden_row_display`].
+///
+/// The helper is pure logic so the cache-then-hidden contract is
+/// pinned by `tests/account_list_logic.rs` without spinning up GTK
+/// or libadwaita.
+#[must_use]
+pub fn bind_display_for_row(live: Option<&RowDisplay>, model: &AccountRowModel) -> RowDisplay {
+    live.cloned().unwrap_or_else(|| hidden_row_display(model))
+}
+
+/// Prune cache entries whose [`AccountId`] no longer appears in
+/// `rows`.
+///
+/// Called by [`AccountListMsg::Refresh`] so a Remove / search-filter
+/// rebuild that drops accounts does not leave a stale live display
+/// behind. Surviving entries are preserved so the user keeps seeing
+/// the live code immediately after a non-removing refresh (Add,
+/// Rename, settings change) without waiting for the next tick.
+///
+/// The renamed-account edge case is benign: the cache entry's
+/// `RowDisplay.label` may be the old `<issuer>:<label>` text for at
+/// most one tick interval after a rename, then the next tick
+/// re-projects through [`crate::ticker::tick`] and overwrites the
+/// entry with the fresh label.
+pub fn prune_cache_to_rows<S: std::hash::BuildHasher>(
+    cache: &mut HashMap<AccountId, RowDisplay, S>,
+    rows: &[AccountRowModel],
+) {
+    let surviving: std::collections::HashSet<AccountId> = rows.iter().map(|r| r.id).collect();
+    cache.retain(|id, _| surviving.contains(id));
+}
 
 /// Stdout marker prefix emitted under `--exit-after-startup` once
 /// the [`AccountListComponent`] has bound rows from the live vault.
@@ -434,6 +494,20 @@ pub struct AccountListComponent {
     /// [`AccountListMsg::Refresh`] so a subsequent rebuild can pass
     /// it back through [`AccountListInit::initial_selection`].
     current_selection: Option<AccountId>,
+    /// Most recent row set installed by
+    /// [`AccountListMsg::Refresh`]. Kept on `self` so
+    /// [`AccountListMsg::Tick`] can splice the same rows back into
+    /// [`Self::model`] (which forces the factory to rebind through
+    /// the freshly updated [`Self::live_displays`] cache) without
+    /// asking `AppModel` for a fresh projection.
+    current_rows: Vec<AccountRowModel>,
+    /// Shared cache of live per-row [`RowDisplay`] projections.
+    /// The factory's `connect_bind` callback (in [`build_row_factory`])
+    /// reads through this cache via [`bind_display_for_row`] before
+    /// falling back to [`hidden_row_display`]. The per-tick refresh
+    /// path mutates the cache and then triggers a rebind by
+    /// re-splicing [`Self::current_rows`] into [`Self::model`].
+    live_displays: LiveDisplayCache,
 }
 
 /// Messages handled by [`AccountListComponent`].
@@ -470,6 +544,19 @@ pub enum AccountListMsg {
     /// Show / hide the `gtk::SearchBar`. Mirrors the header-bar
     /// search-toggle button's `active` state.
     SetSearchModeEnabled(bool),
+    /// Per-tick TOTP refresh from the [`crate::ticker`] driver.
+    ///
+    /// `AppModel`'s per-tick `glib::timeout_add_local` callback
+    /// projects the live `(Vault, Store)` pair through
+    /// [`crate::ticker::tick`] and forwards the resulting
+    /// `Vec<(AccountId, RowDisplay)>` here. The handler updates
+    /// the shared [`AccountListComponent::live_displays`] cache and
+    /// re-splices [`AccountListComponent::current_rows`] back into
+    /// [`AccountListComponent::model`] so the factory rebinds every
+    /// row through the freshly cached displays. Empty payload is a
+    /// benign no-op (e.g. an HOTP-only vault — no TOTP refresh is
+    /// needed).
+    Tick(Vec<(AccountId, RowDisplay)>),
 }
 
 #[allow(missing_docs)]
@@ -515,7 +602,8 @@ impl SimpleComponent for AccountListComponent {
         let selection = gtk::SingleSelection::new(Some(model.clone()));
         apply_selection(&selection, &init.rows, init.initial_selection);
 
-        let factory = build_row_factory(sender.output_sender().clone());
+        let live_displays: LiveDisplayCache = Rc::new(RefCell::new(HashMap::new()));
+        let factory = build_row_factory(sender.output_sender().clone(), Rc::clone(&live_displays));
 
         let search_entry = gtk::SearchEntry::builder()
             .placeholder_text("Search accounts")
@@ -545,6 +633,8 @@ impl SimpleComponent for AccountListComponent {
             search_entry,
             current_query: init.initial_query,
             current_selection: init.initial_selection,
+            current_rows: init.rows,
+            live_displays,
         };
         ComponentParts {
             model: component,
@@ -573,12 +663,32 @@ impl SimpleComponent for AccountListComponent {
                 // the §6 / §7 preservation rule lives in pure logic.
                 let prev = selection.or(self.current_selection);
                 let effective_selection = selected_row_after_refresh(prev, &rows);
+                prune_cache_to_rows(&mut self.live_displays.borrow_mut(), &rows);
                 splice_rows(&self.model, &rows);
                 apply_selection(&self.selection, &rows, effective_selection);
                 self.current_selection = effective_selection;
+                self.current_rows = rows;
             }
             AccountListMsg::SetSearchModeEnabled(enabled) => {
                 self.search_bar.set_search_mode(enabled);
+            }
+            AccountListMsg::Tick(displays) => {
+                if displays.is_empty() {
+                    return;
+                }
+                {
+                    let mut cache = self.live_displays.borrow_mut();
+                    for (id, display) in displays {
+                        cache.insert(id, display);
+                    }
+                }
+                // Re-splice with the same rows so the factory
+                // re-binds every visible item through the freshly
+                // updated cache. Selection is preserved through the
+                // same `apply_selection` pass used on
+                // [`AccountListMsg::Refresh`].
+                splice_rows(&self.model, &self.current_rows);
+                apply_selection(&self.selection, &self.current_rows, self.current_selection);
             }
         }
     }
@@ -649,10 +759,14 @@ fn format_counter_label(counter: CounterText) -> String {
 /// `AccountRowModel` (wrapped in `BoxedAnyObject`) onto the per-row
 /// widget bundle (display label, HOTP counter, code label).
 ///
-/// Each row binds [`hidden_row_display`] to drive the visible text;
-/// the factory itself never reaches for the live `Account` or
-/// `Code` — it only reads the already-projected
-/// [`AccountRowModel`], so the row binding stays secret-free. The
+/// Each row's display is resolved through [`bind_display_for_row`]
+/// against the shared [`LiveDisplayCache`]: per-tick refresh updates
+/// the cache and re-splices the same rows back into the store, which
+/// fires `items-changed` and forces this `connect_bind` callback to
+/// rebind every visible item through the freshly cached displays.
+/// The factory itself never reaches for the live `Account` or
+/// `Code` — it only reads the already-projected [`AccountRowModel`]
+/// plus the shared cache, so the row binding stays secret-free. The
 /// per-row widget bundle expands incrementally; copy / "next" /
 /// kebab affordances per §"Component tree" > `AccountRowComponent`
 /// land in follow-up commits.
@@ -663,6 +777,7 @@ fn format_counter_label(counter: CounterText) -> String {
 /// forward typed [`AccountListOutput`] messages to `AppModel`.
 fn build_row_factory(
     output_sender: relm4::Sender<AccountListOutput>,
+    live_displays: LiveDisplayCache,
 ) -> gtk::SignalListItemFactory {
     let factory = gtk::SignalListItemFactory::new();
     factory.connect_setup(|_, item| {
@@ -688,7 +803,8 @@ fn build_row_factory(
             return;
         };
         let row: std::cell::Ref<AccountRowModel> = boxed.borrow();
-        let display = hidden_row_display(&row);
+        let cache = live_displays.borrow();
+        let display = bind_display_for_row(cache.get(&row.id), &row);
         bind_row(&container, &display);
         install_row_action_group(&container, row.id, output_sender.clone());
     });
