@@ -27086,3 +27086,138 @@ fn format_app_about_dialog_developer_name_does_not_contain_a_start_of_text_byte(
         "AdwAboutDialog developer-name must not contain the `\\x02` start-of-text byte (0x02); a mid-string `\\x02` slips past `_is_a_single_line_without_embedded_newlines` (which only checks `\\n` and `\\r`), past `_is_ascii_only` (because `\\x02` is ASCII), past `_has_no_surrounding_whitespace` (which uses `char::is_whitespace()` — Unicode returns false for U+0002 STX so this companion does NOT reject `\\x02` even at the boundaries, strictly weaker coverage than form-feed / line-feed / vertical-tab / horizontal-tab / carriage-return), past `_starts_with_the_definite_article` / `_ends_with_the_contributors_collective_noun` (which only constrain the literal prefix and suffix), and past `_does_not_contain_a_null_byte` / `_does_not_contain_a_horizontal_tab_byte` / `_does_not_contain_a_carriage_return_byte` / `_does_not_contain_a_vertical_tab_byte` / `_does_not_contain_a_form_feed_byte` / `_does_not_contain_a_backspace_byte` / `_does_not_contain_a_line_feed_byte` / `_does_not_contain_a_bell_byte` / `_does_not_contain_an_acknowledge_byte` / `_does_not_contain_an_enquiry_byte` / `_does_not_contain_an_end_of_transmission_byte` / `_does_not_contain_an_end_of_text_byte` (which each name a different byte specifically); it would render as a literal control glyph in the dialog-header attribution row, propagate into the footer copyright row that reuses this string, confuse serial-protocol-bridging tooling that treats `\\x02` as a STX text-segment opener if dumped through a serial-bridged TTY (splicing the attribution at the byte boundary into an unexpected follow-on block), trigger readline `^B` cursor-jump surprises in interactive shells capturing the attribution through a pty with the default Emacs keymap, break screen-reader attribution announcements at the byte boundary, and propagate into downstream contributor-attribution scrapers; got {developer:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_copyright_does_not_contain_a_start_of_text_byte() {
+    // Defense-in-depth per-byte sibling extending the
+    // copyright byte-cleanliness contract past the just-
+    // completed `{null / horizontal-tab / carriage-return /
+    // vertical-tab / form-feed / backspace / line-feed /
+    // bell / acknowledge / enquiry / end-of-transmission /
+    // end-of-text}` duodecuple to the start-of-text byte
+    // `\x02` (0x02), continuing the non-whitespace-classified
+    // C0 control-byte cycle past ETX (0x03). Like ETX, EOT,
+    // ENQ, ACK, and BEL, STX is NOT matched by
+    // `char::is_whitespace()` (Unicode treats STX as a
+    // control byte, not whitespace), so the copyright
+    // helper's transitive single-line / whitespace-boundary
+    // protections from the cluster bytes (HT / LF / VT / FF
+    // / CR) do NOT cover STX — making the start-of-text byte
+    // strictly more dangerous than the cluster bytes for
+    // this helper.
+    //
+    // None of the existing copyright companions name the
+    // `\x02` byte directly:
+    //   - `_copyright_is_a_single_line_without_embedded_newlines`
+    //     only checks `\n` and `\r` — `\x02` is neither;
+    //   - `_copyright_starts_with_copyright_glyph_and_contains_developer_name`
+    //     and `_copyright_ends_with_developer_name` only
+    //     constrain the literal `©` glyph prefix and the
+    //     `"The Paladin contributors"` suffix, so a mid-
+    //     string `\x02` between them satisfies both;
+    //   - `_separates_glyph_and_attribution_with_a_single_space`
+    //     only constrains the single byte immediately after
+    //     the `©` glyph — a `\x02` later in the string slips
+    //     past;
+    //   - `_does_not_end_with_a_period` only constrains the
+    //     trailing byte;
+    //   - `_does_not_contain_a_year_token_so_it_does_not_drift_across_releases`
+    //     scans for four-digit runs — `\x02` is not a digit;
+    //   - `_does_not_contain_a_null_byte` /
+    //     `_does_not_contain_a_horizontal_tab_byte` /
+    //     `_does_not_contain_a_carriage_return_byte` /
+    //     `_does_not_contain_a_vertical_tab_byte` /
+    //     `_does_not_contain_a_form_feed_byte` /
+    //     `_does_not_contain_a_backspace_byte` /
+    //     `_does_not_contain_a_line_feed_byte` /
+    //     `_does_not_contain_a_bell_byte` /
+    //     `_does_not_contain_an_acknowledge_byte` /
+    //     `_does_not_contain_an_enquiry_byte` /
+    //     `_does_not_contain_an_end_of_transmission_byte` /
+    //     `_does_not_contain_an_end_of_text_byte` each name
+    //     a different byte specifically.
+    //
+    // The `_returns_paladin_copyright_line` exact-value pin
+    // catches every byte today, but its protection
+    // collapses the moment a multi-line copyright-
+    // attribution refactor or a workspace-vendoring split
+    // decouples the helper from the pinned literal — at
+    // that point a `\x02`-bearing override would slip past
+    // every byte-level companion above.
+    //
+    // A regression that landed
+    // `"\u{00A9} The Paladin\x02contributors"` (start-of-
+    // text byte lifted from a `script(1)` typescript that
+    // captured raw `\x02` STX framing bytes from a CI build
+    // that bridged a serial console mid-edit of a
+    // COPYRIGHT file during a Bisync-style text-block
+    // transfer, a `concat!("\u{00A9} The Paladin", "\x02",
+    // "contributors")` form mirroring a text-segment-
+    // delimited attribution edit, or a hand-edited helper
+    // that pasted from a terminal session interfacing with
+    // a protocol bridge preserving STX framing bytes) would
+    // mis-render in multiple downstream surfaces: (1) the
+    // GLib-backed `AdwAboutDialog::set_copyright` setter
+    // hands the string to Pango for inline rendering in
+    // the dialog footer — Pango's default rendering of a
+    // bare `\x02` byte is implementation-defined and
+    // typically renders as a literal control glyph (a
+    // hollow box or tofu-like placeholder), breaking the
+    // tidy single-line copyright layout against the
+    // website / issue-link rows beneath it; (2) the
+    // copyright string is the legal attribution surface
+    // for the dialog — a `\x02`-mis-rendered footer erodes
+    // the trusted-application surface contract; (3) when
+    // the copyright is dumped through a serial-bridged TTY
+    // (CI logs over a serial console, an out-of-band
+    // debugging session), the `\x02` byte may be
+    // intercepted by the receiving end as a start-of-text
+    // framing indicator and signal the start of a new text
+    // block, confusing protocol-bridging tooling that
+    // treats STX as a text-segment opener and splicing the
+    // copyright at the byte boundary into an unexpected
+    // follow-on block; on POSIX terminals using emacs-style
+    // line editing where `^B` defaults to the backward-one-
+    // character keybinding, the byte may surface as an
+    // unexpected cursor jump in any interactive shell that
+    // captures the legal-attribution footer through a pty
+    // with readline bound to the default Emacs keymap; (4)
+    // screen readers that announce the dialog copyright
+    // row render the byte as a literal control character
+    // announcement, breaking the legal-attribution
+    // accessibility-tree announcement at the byte
+    // boundary; (5) downstream tooling that scrapes the
+    // copyright string (license-attribution aggregators,
+    // AGPL-3.0-or-later compliance crawlers) would
+    // propagate the stray `\x02` byte into the consumer's
+    // stream and trigger the same control-glyph rendering /
+    // readline-keybinding / protocol-confusion across every
+    // downstream surface.
+    //
+    // Pinning the no-`\x02` invariant directly here
+    // surfaces the regression with a message naming the
+    // offending byte at build time rather than via a
+    // downstream dialog-footer rendering bug, a serial-
+    // protocol STX-frame text-segment-opener collision, a
+    // readline `^B` cursor surprise, or a screen-reader
+    // announcement break. Current helper returns the
+    // literal `"\u{00A9} The Paladin contributors"` (no
+    // `\x02` byte), so this test passes today and serves
+    // as a forcing function so any future override of the
+    // helper stays free of start-of-text bytes. Continues
+    // the non-whitespace-classified C0 control-byte cycle
+    // past the just-completed `{null / horizontal-tab /
+    // carriage-return / vertical-tab / form-feed /
+    // backspace / line-feed / bell / acknowledge / enquiry
+    // / end-of-transmission / end-of-text}` duodecuple so
+    // the helper's byte-composition contract pins each
+    // forbidden control byte against a single source of
+    // truth.
+    use paladin_gtk::app::model::format_app_about_dialog_copyright;
+
+    let copyright = format_app_about_dialog_copyright();
+    assert!(
+        !copyright.contains('\x02'),
+        "AdwAboutDialog copyright must not contain the `\\x02` start-of-text byte (0x02); like ETX, EOT, ENQ, ACK, and BEL, STX is NOT matched by `char::is_whitespace()` (Unicode returns false for U+0002 STX), so the copyright helper's transitive whitespace-boundary / single-line protections from the cluster bytes do NOT cover STX — making the start-of-text byte strictly more dangerous than the cluster bytes for this helper; a mid-string `\\x02` slips past `_is_a_single_line_without_embedded_newlines` (which only checks `\\n` and `\\r`), past `_starts_with_copyright_glyph_and_contains_developer_name` / `_ends_with_developer_name` / `_separates_glyph_and_attribution_with_a_single_space` (which only constrain the literal prefix, suffix, and the single byte after the © glyph), past `_does_not_end_with_a_period` / `_does_not_contain_a_year_token_so_it_does_not_drift_across_releases` (which only constrain the trailing byte or scan for digits), and past `_does_not_contain_a_null_byte` / `_does_not_contain_a_horizontal_tab_byte` / `_does_not_contain_a_carriage_return_byte` / `_does_not_contain_a_vertical_tab_byte` / `_does_not_contain_a_form_feed_byte` / `_does_not_contain_a_backspace_byte` / `_does_not_contain_a_line_feed_byte` / `_does_not_contain_a_bell_byte` / `_does_not_contain_an_acknowledge_byte` / `_does_not_contain_an_enquiry_byte` / `_does_not_contain_an_end_of_transmission_byte` / `_does_not_contain_an_end_of_text_byte` (which each name a different byte specifically); it would render as a literal control glyph in the dialog footer copyright row, erode the trusted-application legal-attribution surface contract, confuse serial-protocol-bridging tooling that treats `\\x02` as a STX text-segment opener if dumped through a serial-bridged TTY (splicing the copyright at the byte boundary into an unexpected follow-on block), trigger readline `^B` cursor-jump surprises in interactive shells capturing the legal-attribution footer through a pty with the default Emacs keymap, break screen-reader copyright announcements at the byte boundary, and propagate into downstream license-attribution aggregators and AGPL-3.0-or-later compliance crawlers; got {copyright:?}",
+    );
+}
