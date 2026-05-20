@@ -66,7 +66,11 @@
 //! through [`PaladinError::Display`], so wording stays in lock-step
 //! with the CLI / TUI verbatim.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+use libadwaita as adw;
+use libadwaita::prelude::*;
+use relm4::prelude::*;
 
 use paladin_core::{
     ErrorKind, ImportConflict, ImportFormat, ImportOptions, ImportReport, PaladinError,
@@ -357,5 +361,110 @@ impl InlineWarning {
             kind: err.kind(),
             rendered: err.to_string(),
         }
+    }
+}
+
+/// Construction parameters for [`ImportDialogComponent`].
+///
+/// The dialog opens against the live vault so the merge worker that
+/// lands in follow-up commits can call
+/// `Vault::mutate_and_save(|v| { from_file(...) → v.import_accounts(...) })`
+/// against the same on-disk file `AppModel` resolved at startup.
+/// Cloned from `AppModel::state` at mount time so a mid-flight
+/// passphrase-transition or lock cannot retarget the dialog.
+#[derive(Debug, Clone)]
+pub struct ImportDialogInit {
+    /// Vault path the merge worker will target.
+    pub vault_path: PathBuf,
+}
+
+/// Messages handled by [`ImportDialogComponent`].
+///
+/// This milestone scaffolds the read-only `adw::Dialog` mount; the
+/// file-picker / format-selector / conflict-selector / bundle-
+/// passphrase / submit / worker-result transitions described in
+/// `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" > `ImportDialog`
+/// land in follow-up commits alongside the live-apply behavior. The
+/// empty enum is the deliberate v0.2 starting point — relm4 requires
+/// the associated `Input` type to exist even when no inbound messages
+/// are wired yet.
+#[derive(Debug)]
+pub enum ImportDialogMsg {}
+
+/// Messages emitted by [`ImportDialogComponent`] for `AppModel` to consume.
+///
+/// `AppModel` forwards these into `AppMsg::ImportDialogAction(...)`;
+/// the dispatch arm drops the live `Controller<ImportDialogComponent>`
+/// so the underlying `adw::Dialog` is torn down. Submit / merge-result
+/// outputs that propagate the post-merge [`ImportReport`] (or typed
+/// failure) to `AppModel` land in the same follow-up commits that add
+/// the matching [`ImportDialogMsg`] variants.
+#[derive(Debug, Clone)]
+pub enum ImportDialogOutput {
+    /// User dismissed the dialog (Close button / Escape / window
+    /// close). `AppModel` responds by dropping the live controller
+    /// so the dialog disappears and any in-flight pending form draft
+    /// (selected source path, format / conflict choice, bundle
+    /// passphrase entry) is discarded.
+    Close,
+}
+
+/// Widget-bearing `adw::Dialog` for the application menu's Import… entry.
+///
+/// Mounts the libadwaita dialog described in DESIGN.md §7
+/// (`ImportDialog`) and `IMPLEMENTATION_PLAN_04_GTK.md` §"Component
+/// tree" > `ImportDialog`. The widget body is a read-only scaffold at
+/// this milestone (an empty `adw::ToolbarView` wrapped in `adw::Dialog`
+/// with the dialog title set), so the controller mounts cleanly under
+/// `xvfb-run` without yet exposing the file picker, format / conflict
+/// selectors, or bundle-passphrase row. Follow-up commits attach the
+/// real form widgets and the
+/// `Vault::mutate_and_save(|v| { from_file(...) → v.import_accounts(...) })`
+/// worker that drives [`classify_merge_result`].
+pub struct ImportDialogComponent {
+    /// Vault path the dialog mounts against, kept on `self` so the
+    /// follow-up merge worker can reach it without re-plumbing
+    /// through every signal. The pure-logic round-trip is asserted
+    /// by `tests/import_dialog_logic.rs`.
+    #[allow(dead_code)]
+    vault_path: PathBuf,
+}
+
+#[allow(missing_docs)]
+#[relm4::component(pub)]
+impl SimpleComponent for ImportDialogComponent {
+    type Init = ImportDialogInit;
+    type Input = ImportDialogMsg;
+    type Output = ImportDialogOutput;
+
+    view! {
+        #[root]
+        adw::Dialog {
+            set_title: "Import",
+
+            #[wrap(Some)]
+            set_child = &adw::ToolbarView {
+                add_top_bar = &adw::HeaderBar {},
+            },
+        }
+    }
+
+    fn init(
+        init: Self::Init,
+        root: Self::Root,
+        _sender: ComponentSender<Self>,
+    ) -> ComponentParts<Self> {
+        let model = ImportDialogComponent {
+            vault_path: init.vault_path,
+        };
+        let widgets = view_output!();
+        ComponentParts { model, widgets }
+    }
+
+    fn update(&mut self, _msg: Self::Input, _sender: ComponentSender<Self>) {
+        // No inbound messages handled at this milestone — see
+        // `ImportDialogMsg` doc comment for the upcoming file-picker /
+        // format / conflict / passphrase / submit / worker-result
+        // transitions.
     }
 }

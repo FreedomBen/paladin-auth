@@ -88,6 +88,7 @@ use crate::app::state::{
     decide_state_from_inspect, decide_state_from_open_error, run_unlock_worker, AppState,
     OpenErrorOutcome, UnlockWorkerCompletion,
 };
+use crate::import_dialog::{ImportDialogComponent, ImportDialogInit, ImportDialogOutput};
 use crate::init_dialog::{format_init_dialog_marker, InitDialogComponent, InitDialogInit};
 use crate::remove_dialog::{
     decide_remove_target, run_remove_worker, RemoveDialogComponent, RemoveDialogOutput,
@@ -211,6 +212,13 @@ pub struct AppModel {
     /// [`AppMsg::OpenPreferencesDialog`] handler.
     #[allow(dead_code)]
     settings_dialog: Option<Controller<SettingsComponent>>,
+    /// Live [`ImportDialogComponent`] controller when the user has
+    /// activated the application menu's Import… entry. `None`
+    /// between activations. Held on `self` so the rendered
+    /// `adw::Dialog` is not dropped at the end of the
+    /// [`AppMsg::OpenImportDialog`] handler.
+    #[allow(dead_code)]
+    import_dialog: Option<Controller<ImportDialogComponent>>,
     /// Reference-counted handle to the window's content box.
     ///
     /// `gtk::Box` is a `GObject`, so cloning it just bumps the
@@ -257,6 +265,10 @@ impl std::fmt::Debug for AppModel {
             .field(
                 "settings_dialog",
                 &self.settings_dialog.as_ref().map(|_| "<mounted>"),
+            )
+            .field(
+                "import_dialog",
+                &self.import_dialog.as_ref().map(|_| "<mounted>"),
             )
             .field("content", &"<gtk::Box>")
             .finish()
@@ -457,6 +469,18 @@ pub enum AppMsg {
     /// `Vault::mutate_and_save` land in follow-up commits alongside
     /// the editable rows in the dialog body.
     SettingsDialogAction(SettingsDialogOutput),
+    /// Forwarded from the live [`ImportDialogComponent`] when the
+    /// user interacts with the `adw::Dialog`. Today only
+    /// [`ImportDialogOutput::Close`] is emitted — `AppModel`
+    /// responds by dropping the controller so the dialog disappears
+    /// and any in-flight pending form draft (selected source path,
+    /// format / conflict choice, bundle passphrase entry) is
+    /// discarded. Submit / merge-result outputs that propagate the
+    /// post-merge [`paladin_core::ImportReport`] (or typed failure
+    /// via [`crate::import_dialog::classify_merge_result`]) to
+    /// `AppModel` land in follow-up commits alongside the editable
+    /// form widgets in the dialog body.
+    ImportDialogAction(ImportDialogOutput),
     /// Forwarded from the live [`UnlockDialogComponent`] when the
     /// user submits a non-empty passphrase. Today only
     /// [`UnlockDialogOutput::SubmitLock`] is emitted — the
@@ -798,6 +822,7 @@ impl SimpleComponent for AppModel {
             remove_dialog: None,
             add_dialog: None,
             settings_dialog: None,
+            import_dialog: None,
             content: widgets.content.clone(),
         };
 
@@ -985,15 +1010,55 @@ impl SimpleComponent for AppModel {
                 // this is a benign no-op.
                 self.settings_dialog = None;
             }
-            AppMsg::OpenImportDialog | AppMsg::OpenExportDialog | AppMsg::OpenPassphraseDialog => {
+            AppMsg::OpenImportDialog => {
+                // Application menu "Import…" activation. Mount a fresh
+                // `ImportDialogComponent` seeded with the resolved
+                // vault path and present the `adw::Dialog` modally.
+                // The menu entry's sensitivity is gated against
+                // `AppState::allows_mutating_menu` (`Unlocked` only),
+                // but a stray dispatch from a future keyboard
+                // accelerator could still arrive in a non-unlocked
+                // state — defend against that here so the dialog
+                // never mounts over a `Missing` / `Locked` /
+                // `UnlockedBusy` / `StartupError` window.
+                if let Some(state) = self.state.as_ref() {
+                    if state.is_unlocked() {
+                        if let Some(path) = state.path() {
+                            let init = ImportDialogInit {
+                                vault_path: path.to_path_buf(),
+                            };
+                            let controller = ImportDialogComponent::builder()
+                                .launch(init)
+                                .forward(sender.input_sender(), AppMsg::ImportDialogAction);
+                            controller.widget().present(Some(&self.content));
+                            self.import_dialog = Some(controller);
+                        }
+                    }
+                }
+            }
+            AppMsg::ImportDialogAction(ImportDialogOutput::Close) => {
+                // User dismissed the `adw::Dialog`. Drop the live
+                // controller so the widget is released and any
+                // in-flight pending form draft (selected source
+                // path, format / conflict choice, bundle passphrase
+                // entry) is discarded. `adw::Dialog` self-detaches
+                // from its toplevel parent on close, so no
+                // `self.content.remove` is needed — unlike
+                // `AddAccountComponent` / `RenameDialogComponent` /
+                // `RemoveDialogComponent` which are appended into
+                // the content tree directly. Defensive: if the field
+                // is already `None` (controller swapped under us by
+                // a future race), this is a benign no-op.
+                self.import_dialog = None;
+            }
+            AppMsg::OpenExportDialog | AppMsg::OpenPassphraseDialog => {
                 // Mutating menu activations whose dispatch
                 // edges (action → AppMsg) have landed but
                 // whose widget-bearing dialog components have
                 // not yet. Each variant becomes its own arm
                 // with a distinct handler when the matching
-                // `ImportDialogComponent` / `ExportDialogComponent`
-                // / `PassphraseDialogComponent` mount lands in
-                // follow-up commits.
+                // `ExportDialogComponent` / `PassphraseDialogComponent`
+                // mount lands in follow-up commits.
                 //
                 // Defense in depth: every variant in the
                 // combined arm is gated by

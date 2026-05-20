@@ -702,3 +702,60 @@ fn passphrase_needs_reset_distinguishes_relative_paths() {
         Some(ImportFormat::Paladin)
     ));
 }
+
+// ---------------------------------------------------------------------------
+// ImportDialogComponent scaffold (Milestone 7 component-tree wiring)
+// ---------------------------------------------------------------------------
+//
+// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" entry
+// "Relm4 component tree (Init / Unlock / List / Row / Add / Remove /
+// Rename / Import / Export / Passphrase / Settings / StartupError)",
+// `ImportDialogComponent` joins the eight already-mounted controllers
+// (`AccountListComponent`, `StartupErrorComponent`,
+// `InitDialogComponent`, `UnlockDialogComponent`,
+// `RenameDialogComponent`, `RemoveDialogComponent`,
+// `AddAccountComponent`, `SettingsComponent`) with the same scaffold
+// shape: `<Name>Init` / `<Name>Msg` / `<Name>Output` plus a
+// `relm4::SimpleComponent` impl. The widget body (file picker +
+// format selector + on-conflict selector + bundle-passphrase row)
+// lands in follow-up commits alongside the live-apply behavior —
+// this commit only adds the controller so the menu's Import… entry
+// can mount it.
+
+#[test]
+fn import_dialog_init_round_trips_vault_path() {
+    use paladin_gtk::import_dialog::ImportDialogInit;
+
+    let vault_path = PathBuf::from("/tmp/import-scaffold/vault.bin");
+    let init = ImportDialogInit {
+        vault_path: vault_path.clone(),
+    };
+    assert_eq!(init.vault_path, vault_path);
+}
+
+#[test]
+fn import_dialog_output_close_is_constructible() {
+    use paladin_gtk::import_dialog::ImportDialogOutput;
+
+    let output = ImportDialogOutput::Close;
+    assert!(matches!(output, ImportDialogOutput::Close));
+}
+
+#[test]
+fn import_dialog_component_input_and_output_match_dispatch_edges() {
+    use paladin_gtk::import_dialog::{ImportDialogComponent, ImportDialogMsg, ImportDialogOutput};
+    use relm4::SimpleComponent;
+
+    // Compile-only assertion that ties `ImportDialogComponent` to its
+    // associated `Input` / `Output` types so the AppModel dispatch
+    // edges stay in lock-step with the component declaration. If a
+    // future refactor renames `ImportDialogMsg` or
+    // `ImportDialogOutput`, this test fails at compile time before
+    // the AppModel build does.
+    fn assert_types<C>()
+    where
+        C: SimpleComponent<Input = ImportDialogMsg, Output = ImportDialogOutput>,
+    {
+    }
+    assert_types::<ImportDialogComponent>();
+}
