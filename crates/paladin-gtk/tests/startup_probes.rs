@@ -29402,3 +29402,150 @@ fn format_app_about_dialog_release_notes_version_does_not_contain_a_start_of_hea
         "AdwAboutDialog release_notes_version must not contain the `\\x01` start-of-heading byte (0x01); like STX, ETX, EOT, ENQ, ACK, and BEL, SOH is NOT matched by `char::is_whitespace()` (Unicode returns false for U+0001 SOH), so the `version` helper's transitive `_has_no_embedded_whitespace` guard does NOT catch `\\x01`; every byte of `\\x01`-cleanliness depends solely on the upstream `CARGO_PKG_VERSION` bytes — not screened by Cargo or by any CI gate; a stray `\\x01` would render as a literal control glyph in the dialog's \"What's New in v<release_notes_version>\" section header, confuse serial-protocol-bridging tooling that treats `\\x01` as a SOH header-block opener if dumped through a serial-bridged TTY (splicing the version at the byte boundary into an unexpected header-followed-by-text sequence), trigger readline `^A` beginning-of-line cursor-jump surprises in interactive shells capturing the section header through a pty with the default Emacs keymap, could prevent the What's New body from rendering on libadwaita versions that strip control bytes when computing the body-region lookup key, trigger AppStream `appstreamcli validate` rejection at packaging time (the strict SemVer grammar has no `\\x01` production), and break screen-reader section-header announcements at the byte boundary; got {release_notes_version:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_translator_credits_does_not_contain_a_start_of_heading_byte() {
+    // Defense-in-depth per-byte sibling extending the
+    // translator_credits byte-cleanliness contract past the
+    // just-completed `{null / horizontal-tab / carriage-
+    // return / vertical-tab / form-feed / backspace / line-
+    // feed / bell / acknowledge / enquiry / end-of-
+    // transmission / end-of-text / start-of-text}`
+    // tredecuple to the start-of-heading byte `\x01`
+    // (0x01), continuing the non-whitespace-classified C0
+    // control-byte cycle past STX (0x02) for this helper.
+    // Like STX, ETX, EOT, ENQ, ACK, and BEL, SOH is NOT
+    // matched by `char::is_whitespace()` (Unicode treats
+    // SOH as a control byte, not whitespace), so any
+    // future surrounding-whitespace boundary guard on
+    // translator-credits entries would NOT reject a leading
+    // or trailing `\x01` — making start-of-heading strictly
+    // as dangerous as start-of-text, end-of-text, end-of-
+    // transmission, enquiry, acknowledge, backspace, and
+    // bell here, neither caught by `char::is_whitespace()`.
+    //
+    // The libadwaita translator-credits convention permits
+    // embedded `\n` line breaks between translator entries
+    // (the `_is_single_line_when_non_empty` companion only
+    // asserts the empty-string case, so it does not gate
+    // embedded newlines once a translation lands), so the
+    // helper is one of only three about-dialog helpers
+    // (alongside `format_app_about_dialog_debug_info` and
+    // `format_app_about_dialog_release_notes`) where
+    // embedded line breaks are legitimately expected. That
+    // makes `\x01` (0x01 SOH) a distinct regression
+    // surface: it is NOT covered by
+    // `_has_no_surrounding_whitespace_when_non_empty`
+    // (`\x01` is not whitespace under
+    // `char::is_whitespace()`, so the boundary trim guard
+    // rejects neither leading nor trailing `\x01`), it is
+    // NOT covered by any per-entry single-line check (the
+    // helper itself is explicitly multi-line per
+    // libadwaita convention), it slips past
+    // `_does_not_contain_a_null_byte` (`\x01` is not `\0`),
+    // it slips past `_does_not_contain_a_horizontal_tab_byte`
+    // (`\x01` is not `\t`), it slips past
+    // `_does_not_contain_a_carriage_return_byte` (`\x01`
+    // is not `\r`), it slips past
+    // `_does_not_contain_a_vertical_tab_byte` (`\x01` is
+    // not `\x0B`), it slips past
+    // `_does_not_contain_a_form_feed_byte` (`\x01` is not
+    // `\x0C`), it slips past
+    // `_does_not_contain_a_backspace_byte` (`\x01` is not
+    // `\x08`), it slips past
+    // `_does_not_contain_a_line_feed_byte` (`\x01` is not
+    // `\n`), it slips past `_does_not_contain_a_bell_byte`
+    // (`\x01` is not `\x07`), it slips past
+    // `_does_not_contain_an_acknowledge_byte` (`\x01` is
+    // not `\x06`), it slips past
+    // `_does_not_contain_an_enquiry_byte` (`\x01` is not
+    // `\x05`), it slips past
+    // `_does_not_contain_an_end_of_transmission_byte`
+    // (`\x01` is not `\x04`), it slips past
+    // `_does_not_contain_an_end_of_text_byte` (`\x01` is
+    // not `\x03`), and it slips past
+    // `_does_not_contain_a_start_of_text_byte` (`\x01` is
+    // not `\x02`). None of the existing companions name
+    // the `\x01` byte directly on this helper.
+    //
+    // A regression that landed
+    // `"name1\x01<email1>\nname2\x01<email2>"` (start-of-
+    // heading-separated `<name>\x01<email>` rows lifted
+    // from a `script(1)` typescript capturing raw `\x01`
+    // SOH framing bytes from a CI build that bridged a
+    // serial console mid-attribution edit during a Bisync-
+    // style header-block transfer, an `xgettext` export
+    // that preserved SOH-bearing values, a `concat!(_,
+    // "\x01", _)` form mirroring a header-segment-
+    // delimited attribution block, or a hand-edited helper
+    // that pasted from a terminal session interfacing with
+    // a protocol bridge preserving SOH framing bytes)
+    // would mis-render in multiple downstream surfaces:
+    // (1) libadwaita's credits-page parser splits the
+    // translator-credits string on `\n` (LF) per the
+    // documented convention, leaving the embedded `\x01`
+    // bytes inside each parsed entry untouched; the GLib-
+    // backed Pango render path treats `\x01` as a literal
+    // control glyph (a hollow box or tofu-like placeholder)
+    // since `\x01` is not classified as whitespace under
+    // any permissive whitespace mode, breaking the tidy
+    // two-column `<name> <email>` attribution layout; (2)
+    // any localization tooling that round-trips the
+    // translator-credits string back through `xgettext`
+    // would propagate the stray `\x01` into every consumer
+    // of the .po / .mo file, and a serial-bridged TTY-
+    // streamed po-file dump may have the `\x01` byte
+    // intercepted by the receiving end as a start-of-
+    // heading framing indicator and signal the start of a
+    // header block, confusing protocol-bridging tooling
+    // that treats SOH as a header-block opener and
+    // splicing the attribution at the byte boundary into
+    // an unexpected header-followed-by-text sequence; on
+    // POSIX terminals using emacs-style line editing where
+    // `^A` defaults to the beginning-of-line keybinding,
+    // the byte may surface as an unexpected cursor-to-
+    // line-start jump in any interactive shell that
+    // captures the po-file through a pty with readline
+    // bound to the default Emacs keymap; (3) screen
+    // readers that announce the translator-credits column
+    // render the byte as a literal control character
+    // announcement, breaking the attribution accessibility-
+    // tree announcement at the byte boundary.
+    //
+    // Mirror of the just-added
+    // `_developer_name_does_not_contain_a_start_of_heading_byte`,
+    // `_copyright_does_not_contain_a_start_of_heading_byte`,
+    // `_comments_does_not_contain_a_start_of_heading_byte`,
+    // `_developers_entries_do_not_contain_a_start_of_heading_byte`,
+    // `_empty_credits_section_entries_do_not_contain_a_start_of_heading_byte`,
+    // and `_release_notes_version_does_not_contain_a_start_of_heading_byte`
+    // siblings; together they extend the about-dialog
+    // byte-composition contract from the just-completed
+    // `{null / horizontal-tab / carriage-return / vertical-
+    // tab / form-feed / backspace / line-feed / bell /
+    // acknowledge / enquiry / end-of-transmission / end-
+    // of-text / start-of-text}` tredecuple to the start-
+    // of-heading-byte regression surface as well.
+    //
+    // Pinning the no-`\x01` invariant directly here
+    // surfaces the regression with a message naming the
+    // offending byte at build time rather than as a
+    // downstream credits-page rendering bug, a serial-
+    // protocol SOH-frame header-block-opener collision
+    // through a .po round trip, a readline `^A` beginning-
+    // of-line surprise, or a screen-reader announcement
+    // break. Current helper returns the empty literal `""`
+    // (no `\x01` byte), so this test passes today and
+    // serves as a forcing function so any future override
+    // of the helper — including the eventual landing of an
+    // actual translator-credits string — stays free of
+    // start-of-heading bytes even when embedded `\n` line
+    // breaks are intentionally present.
+    use paladin_gtk::app::model::format_app_about_dialog_translator_credits;
+
+    let translator_credits = format_app_about_dialog_translator_credits();
+    assert!(
+        !translator_credits.contains('\x01'),
+        "AdwAboutDialog translator_credits must not contain the `\\x01` start-of-heading byte (0x01); the libadwaita translator-credits convention splits on `\\n` (LF) only and leaves embedded `\\x01` bytes inside each parsed entry untouched, `\\x01` is NOT classified as whitespace under any permissive whitespace mode (strictly as dangerous as start-of-text, end-of-text, end-of-transmission, enquiry, acknowledge, backspace, and bell, neither caught by `char::is_whitespace()`) so Pango renders it as a literal control glyph; a stray `\\x01` would render as a hollow box or tofu-like placeholder in the credits-page attribution column, would survive `xgettext` round trips and propagate into every consumer of the .po / .mo file, would confuse serial-protocol-bridging tooling that treats `\\x01` as a SOH header-block opener if dumped through a serial-bridged TTY (splicing the attribution at the byte boundary into an unexpected header-followed-by-text sequence), would trigger readline `^A` beginning-of-line cursor-jump surprises in interactive shells capturing the po-file through a pty with the default Emacs keymap, and would break screen-reader announcements at every attribution-row column boundary; got {translator_credits:?}",
+    );
+}
