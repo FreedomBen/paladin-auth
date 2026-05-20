@@ -91,6 +91,9 @@ use crate::app::state::{
 use crate::export_dialog::{ExportDialogComponent, ExportDialogInit, ExportDialogOutput};
 use crate::import_dialog::{ImportDialogComponent, ImportDialogInit, ImportDialogOutput};
 use crate::init_dialog::{format_init_dialog_marker, InitDialogComponent, InitDialogInit};
+use crate::passphrase_dialog::{
+    PassphraseDialogComponent, PassphraseDialogInit, PassphraseDialogOutput,
+};
 use crate::remove_dialog::{
     decide_remove_target, run_remove_worker, RemoveDialogComponent, RemoveDialogOutput,
     RemoveWorkerCompletion,
@@ -227,6 +230,13 @@ pub struct AppModel {
     /// [`AppMsg::OpenExportDialog`] handler.
     #[allow(dead_code)]
     export_dialog: Option<Controller<ExportDialogComponent>>,
+    /// Live [`PassphraseDialogComponent`] controller when the user
+    /// has activated the application menu's Passphrase… entry.
+    /// `None` between activations. Held on `self` so the rendered
+    /// `adw::Dialog` is not dropped at the end of the
+    /// [`AppMsg::OpenPassphraseDialog`] handler.
+    #[allow(dead_code)]
+    passphrase_dialog: Option<Controller<PassphraseDialogComponent>>,
     /// Reference-counted handle to the window's content box.
     ///
     /// `gtk::Box` is a `GObject`, so cloning it just bumps the
@@ -281,6 +291,10 @@ impl std::fmt::Debug for AppModel {
             .field(
                 "export_dialog",
                 &self.export_dialog.as_ref().map(|_| "<mounted>"),
+            )
+            .field(
+                "passphrase_dialog",
+                &self.passphrase_dialog.as_ref().map(|_| "<mounted>"),
             )
             .field("content", &"<gtk::Box>")
             .finish()
@@ -505,6 +519,20 @@ pub enum AppMsg {
     /// to `AppModel` land in follow-up commits alongside the
     /// editable form widgets in the dialog body.
     ExportDialogAction(ExportDialogOutput),
+    /// Forwarded from the live [`PassphraseDialogComponent`] when
+    /// the user interacts with the `adw::Dialog`. Today only
+    /// [`PassphraseDialogOutput::Close`] is emitted — `AppModel`
+    /// responds by dropping the controller so the dialog disappears
+    /// and any in-flight pending form draft (selected sub-flow,
+    /// current / new / confirm passphrase entries, pending
+    /// destructive acknowledgement) is discarded. Submit / worker-
+    /// result outputs that propagate the typed
+    /// [`paladin_core::Vault::set_passphrase`] /
+    /// [`paladin_core::Vault::change_passphrase`] /
+    /// [`paladin_core::Vault::remove_passphrase`] outcomes to
+    /// `AppModel` land in follow-up commits alongside the
+    /// editable form widgets in the dialog body.
+    PassphraseDialogAction(PassphraseDialogOutput),
     /// Forwarded from the live [`UnlockDialogComponent`] when the
     /// user submits a non-empty passphrase. Today only
     /// [`UnlockDialogOutput::SubmitLock`] is emitted — the
@@ -848,6 +876,7 @@ impl SimpleComponent for AppModel {
             settings_dialog: None,
             import_dialog: None,
             export_dialog: None,
+            passphrase_dialog: None,
             content: widgets.content.clone(),
         };
 
@@ -1119,20 +1148,52 @@ impl SimpleComponent for AppModel {
                 self.export_dialog = None;
             }
             AppMsg::OpenPassphraseDialog => {
-                // Mutating menu activation whose dispatch edge
-                // (action → AppMsg) has landed but whose
-                // widget-bearing `PassphraseDialogComponent` mount
-                // lands in a follow-up commit. Becomes its own arm
-                // with a distinct handler when the matching
-                // controller wiring lands.
-                //
-                // Defense in depth: the menu entry is gated by
-                // `format_app_primary_menu_action_sensitivities`'s
-                // mutating-menu rule
-                // (`AppState::allows_mutating_menu` →
-                // `Unlocked` only); a stray dispatch from a
-                // future keyboard accelerator that lands in
-                // any other state is the benign no-op below.
+                // Application menu "Passphrase…" activation. Mount a
+                // fresh `PassphraseDialogComponent` seeded with the
+                // resolved vault path and the encryption snapshot the
+                // sub-flow gating
+                // ([`crate::passphrase_dialog::available_sub_flows`])
+                // depends on, then present the `adw::Dialog` modally.
+                // The menu entry's sensitivity is gated against
+                // `AppState::allows_mutating_menu` (`Unlocked` only),
+                // but a stray dispatch from a future keyboard
+                // accelerator could still arrive in a non-unlocked
+                // state — defend against that here so the dialog
+                // never mounts over a `Missing` / `Locked` /
+                // `UnlockedBusy` / `StartupError` window.
+                if let Some(state) = self.state.as_ref() {
+                    if state.is_unlocked() {
+                        if let Some((vault, _)) = self.vault.as_ref() {
+                            if let Some(path) = state.path() {
+                                let init = PassphraseDialogInit {
+                                    vault_path: path.to_path_buf(),
+                                    is_encrypted: vault.is_encrypted(),
+                                };
+                                let controller = PassphraseDialogComponent::builder()
+                                    .launch(init)
+                                    .forward(sender.input_sender(), AppMsg::PassphraseDialogAction);
+                                controller.widget().present(Some(&self.content));
+                                self.passphrase_dialog = Some(controller);
+                            }
+                        }
+                    }
+                }
+            }
+            AppMsg::PassphraseDialogAction(PassphraseDialogOutput::Close) => {
+                // User dismissed the `adw::Dialog`. Drop the live
+                // controller so the widget is released and any
+                // in-flight pending form draft (selected sub-flow,
+                // current / new / confirm passphrase entries, pending
+                // destructive acknowledgement) is discarded.
+                // `adw::Dialog` self-detaches from its toplevel
+                // parent on close, so no `self.content.remove` is
+                // needed — unlike `AddAccountComponent` /
+                // `RenameDialogComponent` / `RemoveDialogComponent`
+                // which are appended into the content tree directly.
+                // Defensive: if the field is already `None`
+                // (controller swapped under us by a future race),
+                // this is a benign no-op.
+                self.passphrase_dialog = None;
             }
             AppMsg::OpenAddDialog => {
                 // Header-bar `+` button activation. Mount a fresh

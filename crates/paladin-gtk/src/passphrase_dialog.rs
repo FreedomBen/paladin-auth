@@ -61,6 +61,12 @@
 //! acknowledgement cannot survive a cancel / close / auto-lock and
 //! re-arm a future attempt).
 
+use std::path::PathBuf;
+
+use libadwaita as adw;
+use libadwaita::prelude::*;
+use relm4::prelude::*;
+
 use paladin_core::{format_plaintext_storage_warning, EncryptionOptions, ErrorKind};
 use secrecy::SecretString;
 
@@ -201,4 +207,126 @@ pub fn prepare_new_passphrase(
 #[must_use]
 pub fn remove_warning_body() -> String {
     format_plaintext_storage_warning()
+}
+
+/// Construction parameters for [`PassphraseDialogComponent`].
+///
+/// The dialog opens against the live vault so the worker that lands
+/// in follow-up commits can call
+/// [`paladin_core::Vault::set_passphrase`] /
+/// [`paladin_core::Vault::change_passphrase`] /
+/// [`paladin_core::Vault::remove_passphrase`] against the same on-
+/// disk file `AppModel` resolved at startup. Cloned from
+/// `AppModel::state` at mount time so a mid-flight passphrase-
+/// transition or lock cannot retarget the dialog. The encryption
+/// snapshot is also captured at mount time because sub-flow gating
+/// (`available_sub_flows(is_encrypted)`) depends on it.
+#[derive(Debug, Clone)]
+pub struct PassphraseDialogInit {
+    /// Vault path the passphrase worker will target.
+    pub vault_path: PathBuf,
+    /// Snapshot of [`paladin_core::Vault::is_encrypted`] at mount
+    /// time. Threads into [`available_sub_flows`] so the dialog only
+    /// presents sub-flows the core would not refuse with
+    /// `invalid_state`.
+    pub is_encrypted: bool,
+}
+
+/// Messages handled by [`PassphraseDialogComponent`].
+///
+/// This milestone scaffolds the read-only `adw::Dialog` mount; the
+/// sub-flow-selector / Set / Change / Remove / destructive-gate /
+/// submit / worker-result transitions described in
+/// `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+/// `PassphraseDialog` land in follow-up commits alongside the
+/// live-apply behavior. The empty enum is the deliberate v0.2
+/// starting point — relm4 requires the associated `Input` type to
+/// exist even when no inbound messages are wired yet.
+#[derive(Debug)]
+pub enum PassphraseDialogMsg {}
+
+/// Messages emitted by [`PassphraseDialogComponent`] for `AppModel` to consume.
+///
+/// `AppModel` forwards these into `AppMsg::PassphraseDialogAction(...)`;
+/// the dispatch arm drops the live
+/// `Controller<PassphraseDialogComponent>` so the underlying
+/// `adw::Dialog` is torn down. Submit / worker-result outputs that
+/// propagate the typed [`paladin_core::PaladinError`] / vault-mode
+/// transition signals to `AppModel` land in the same follow-up
+/// commits that add the matching [`PassphraseDialogMsg`] variants.
+#[derive(Debug, Clone)]
+pub enum PassphraseDialogOutput {
+    /// User dismissed the dialog (Close button / Escape / window
+    /// close). `AppModel` responds by dropping the live controller
+    /// so the dialog disappears and any in-flight pending form draft
+    /// (selected sub-flow, current / new / confirm passphrase
+    /// entries, pending destructive acknowledgement) is discarded.
+    Close,
+}
+
+/// Widget-bearing `adw::Dialog` for the application menu's Passphrase… entry.
+///
+/// Mounts the libadwaita dialog described in DESIGN.md §7
+/// (`PassphraseDialog`) and `IMPLEMENTATION_PLAN_04_GTK.md`
+/// §"Component tree" > `PassphraseDialog`. The widget body is a
+/// read-only scaffold at this milestone (an empty `adw::ToolbarView`
+/// wrapped in `adw::Dialog` with the dialog title set), so the
+/// controller mounts cleanly under `xvfb-run` without yet exposing
+/// the sub-flow segmented control, Set / Change / Remove fields, or
+/// destructive `adw::AlertDialog` gate. Follow-up commits attach the
+/// real form widgets and the
+/// `paladin_core::Vault::{set,change,remove}_passphrase` worker
+/// alongside the wording sourced from [`remove_warning_body`].
+pub struct PassphraseDialogComponent {
+    /// Vault path the dialog mounts against, kept on `self` so the
+    /// follow-up passphrase worker can reach it without re-plumbing
+    /// through every signal. The pure-logic round-trip is asserted
+    /// by `tests/passphrase_dialog_logic.rs`.
+    #[allow(dead_code)]
+    vault_path: PathBuf,
+    /// Encryption snapshot captured at mount time. Used by the
+    /// follow-up [`available_sub_flows`] wiring to gate the sub-
+    /// flow selector against the live vault mode.
+    #[allow(dead_code)]
+    is_encrypted: bool,
+}
+
+#[allow(missing_docs)]
+#[relm4::component(pub)]
+impl SimpleComponent for PassphraseDialogComponent {
+    type Init = PassphraseDialogInit;
+    type Input = PassphraseDialogMsg;
+    type Output = PassphraseDialogOutput;
+
+    view! {
+        #[root]
+        adw::Dialog {
+            set_title: "Passphrase",
+
+            #[wrap(Some)]
+            set_child = &adw::ToolbarView {
+                add_top_bar = &adw::HeaderBar {},
+            },
+        }
+    }
+
+    fn init(
+        init: Self::Init,
+        root: Self::Root,
+        _sender: ComponentSender<Self>,
+    ) -> ComponentParts<Self> {
+        let model = PassphraseDialogComponent {
+            vault_path: init.vault_path,
+            is_encrypted: init.is_encrypted,
+        };
+        let widgets = view_output!();
+        ComponentParts { model, widgets }
+    }
+
+    fn update(&mut self, _msg: Self::Input, _sender: ComponentSender<Self>) {
+        // No inbound messages handled at this milestone — see
+        // `PassphraseDialogMsg` doc comment for the upcoming sub-flow
+        // / Set / Change / Remove / destructive-gate / submit /
+        // worker-result transitions.
+    }
 }

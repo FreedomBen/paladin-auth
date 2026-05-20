@@ -29,6 +29,8 @@
 //! confirmation across the destructive gate (DESIGN §8 / plan
 //! §"Secret entry handling").
 
+use std::path::PathBuf;
+
 use paladin_core::{format_plaintext_storage_warning, ErrorKind};
 
 use paladin_gtk::passphrase_dialog::{
@@ -319,4 +321,81 @@ fn passphrase_state_clear_for_auto_lock_wipes_all_state() {
     assert!(state.new_passphrase.is_empty());
     assert!(state.confirm_passphrase.is_empty());
     assert!(!state.remove_confirmed);
+}
+
+// ---------------------------------------------------------------------------
+// PassphraseDialogComponent scaffold (Milestone 7 component-tree wiring)
+// ---------------------------------------------------------------------------
+//
+// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" entry
+// "Relm4 component tree (Init / Unlock / List / Row / Add / Remove /
+// Rename / Import / Export / Passphrase / Settings / StartupError)",
+// `PassphraseDialogComponent` joins the ten already-mounted
+// controllers (`AccountListComponent`, `StartupErrorComponent`,
+// `InitDialogComponent`, `UnlockDialogComponent`,
+// `RenameDialogComponent`, `RemoveDialogComponent`,
+// `AddAccountComponent`, `SettingsComponent`,
+// `ImportDialogComponent`, `ExportDialogComponent`) with the same
+// scaffold shape: `<Name>Init` / `<Name>Msg` / `<Name>Output` plus a
+// `relm4::SimpleComponent` impl. The widget body (sub-flow segmented
+// control + Set / Change / Remove fields + destructive
+// `adw::AlertDialog` gate + worker wiring) lands in follow-up
+// commits alongside the live-apply behavior — this commit only adds
+// the controller so the menu's Passphrase… entry can mount it.
+
+#[test]
+fn passphrase_dialog_init_round_trips_vault_path_and_encryption_state() {
+    use paladin_gtk::passphrase_dialog::PassphraseDialogInit;
+
+    let vault_path = PathBuf::from("/tmp/passphrase-scaffold/vault.bin");
+    let init = PassphraseDialogInit {
+        vault_path: vault_path.clone(),
+        is_encrypted: true,
+    };
+    assert_eq!(init.vault_path, vault_path);
+    assert!(init.is_encrypted);
+}
+
+#[test]
+fn passphrase_dialog_init_round_trips_plaintext_vault() {
+    use paladin_gtk::passphrase_dialog::PassphraseDialogInit;
+
+    // Sub-flow gating depends on `is_encrypted`: a plaintext vault
+    // exposes only `SubFlow::Set`. The scaffold init must preserve
+    // the bit so the follow-up `available_sub_flows` wiring threads
+    // the correct value.
+    let init = PassphraseDialogInit {
+        vault_path: PathBuf::from("/tmp/passphrase-scaffold/plaintext.bin"),
+        is_encrypted: false,
+    };
+    assert!(!init.is_encrypted);
+}
+
+#[test]
+fn passphrase_dialog_output_close_is_constructible() {
+    use paladin_gtk::passphrase_dialog::PassphraseDialogOutput;
+
+    let output = PassphraseDialogOutput::Close;
+    assert!(matches!(output, PassphraseDialogOutput::Close));
+}
+
+#[test]
+fn passphrase_dialog_component_input_and_output_match_dispatch_edges() {
+    use paladin_gtk::passphrase_dialog::{
+        PassphraseDialogComponent, PassphraseDialogMsg, PassphraseDialogOutput,
+    };
+    use relm4::SimpleComponent;
+
+    // Compile-only assertion that ties `PassphraseDialogComponent` to
+    // its associated `Input` / `Output` types so the AppModel
+    // dispatch edges stay in lock-step with the component
+    // declaration. If a future refactor renames
+    // `PassphraseDialogMsg` or `PassphraseDialogOutput`, this test
+    // fails at compile time before the AppModel build does.
+    fn assert_types<C>()
+    where
+        C: SimpleComponent<Input = PassphraseDialogMsg, Output = PassphraseDialogOutput>,
+    {
+    }
+    assert_types::<PassphraseDialogComponent>();
 }
