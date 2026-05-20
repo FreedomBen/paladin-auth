@@ -1448,19 +1448,48 @@ sign-off.
   - [x] Zeroize passphrase-entry widget buffers and the pending
     `VaultInit` on submit, cancel, destructive-confirmation cancel,
     dialog close, and auto-lock per §"Secret entry handling".
-- [ ] Secret-entry ownership and zeroization guardrails.
-  - [ ] Keep passphrases, manual Base32 secrets, `otpauth://` URI
+- [x] Secret-entry ownership and zeroization guardrails.
+  - [x] Keep passphrases, manual Base32 secrets, `otpauth://` URI
     text, HOTP reveal codes, pending clipboard-clear payloads, and
     pending duplicate / create values out of `AppModel`, `AppMsg`,
-    `AppOutput`, and other long-lived non-zeroizing state.
-  - [ ] Wrap Paladin-owned secret copies in `SecretString` or
+    `AppOutput`, and other long-lived non-zeroizing state. The
+    source-level guard `tests/secret_message_boundaries.rs`
+    (`long_lived_types_carry_no_raw_secret_bearing_strings` /
+    `dialog_output_enums_carry_no_raw_secret_bearing_strings`) scans
+    `AppMsg` / `AppModel` / `AppInit` / `StartupOutcome` / `AppState`
+    plus every dialog `*Output` enum and fails on a raw
+    `String` / `Vec<u8>` field whose name carries a §8 secret marker
+    (`passphrase`, `secret`, `otpauth`, `uri`, `clipboard`,
+    `cleartext`, `phrase`, HOTP / TOTP / reveal-code spellings) —
+    plain plaintext fields (rename `label`, issuer, file path)
+    stay clear.
+  - [x] Wrap Paladin-owned secret copies in `SecretString` or
     `Zeroizing` immediately at submit / copy time, and drop them as
     soon as the core call or clipboard policy no longer needs them.
-  - [ ] Clear the relevant GTK entry widgets on submit, cancel,
-    dialog close, auto-lock, and Add path switches.
-  - [ ] Ensure validation, duplicate, import, export, and status
+    `tests/secret_fields_logic.rs::secret_entry_take_returns_zeroizing_and_empties_self`
+    and `secret_entry_drop_zeroizes_inner_bytes_structurally` pin
+    that `SecretEntry::take` yields `Zeroizing<String>` and that
+    the inner buffer zeroizes on drop; the unlock-dialog flow is
+    covered end-to-end by
+    `tests/unlock_dialog_logic.rs::unlock_dialog_state_take_passphrase_returns_zeroizing_and_empties_state`.
+  - [x] Clear the relevant GTK entry widgets on submit, cancel,
+    dialog close, auto-lock, and Add path switches. The
+    `ClearReason::{Submit, Cancel, Close, AutoLock, Replace,
+    PathSwitch}` variants and the `*SecretState::clear_for` /
+    `switch_path` / `switch_sub_flow` helpers in
+    `crates/paladin-gtk/src/secret_fields.rs` are exercised by
+    `tests/secret_fields_logic.rs` (35+ tests covering Add / Init /
+    Passphrase state machines).
+  - [x] Ensure validation, duplicate, import, export, and status
     messages can name fields / reasons but never echo secret-bearing
-    input values.
+    input values. Covered by
+    `tests/otpauth_uri_paste_logic.rs::inline_error_does_not_echo_uri_*`,
+    `tests/add_account_logic.rs::*manual_*_marker*`,
+    `tests/init_dialog_logic.rs::submit_confirmation_mismatch_inline_error_does_not_echo_passphrase_or_confirm`,
+    plus the source-level guard above which prevents
+    `InlineError::from_error` signatures from accepting a
+    passphrase / secret parameter (those formatters only take
+    `&PaladinError`, which never carries the typed-in passphrase).
 - [x] Conditional unlock view (encrypted vaults only).
 - [x] `UnlockComponent` full implementation (passphrase entry,
   `paladin_core::open` on `gio::spawn_blocking`, inline-error

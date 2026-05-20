@@ -1402,6 +1402,40 @@ fn inline_error_from_rejection_plaintext_warning_required_returns_none() {
     assert!(InlineError::from_rejection(SubmitRejection::PlaintextWarningRequired).is_none());
 }
 
+#[test]
+fn submit_confirmation_mismatch_inline_error_does_not_echo_passphrase_or_confirm() {
+    // Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" →
+    // "Secret-entry ownership and zeroization guardrails": validation
+    // messages can name fields / reasons but must never echo
+    // secret-bearing input values. Type a distinctive passphrase and
+    // a distinctive different confirm, trigger the mismatch
+    // rejection, and assert the rendered inline error contains
+    // neither marker.
+    const PASSPHRASE_MARKER: &str = "ZZ-init-passphrase-marker-ZZ";
+    const CONFIRM_MARKER: &str = "QQ-init-confirm-marker-QQ";
+    let mut state = InitDialogState::new();
+    state.set_passphrase(PASSPHRASE_MARKER);
+    state.set_confirm(CONFIRM_MARKER);
+    let rejection = state
+        .submit()
+        .expect_err("non-empty mismatched pair must reject");
+    assert_eq!(rejection, SubmitRejection::ConfirmationMismatch);
+    let inline = state
+        .inline_error()
+        .cloned()
+        .expect("ConfirmationMismatch stages the inline error");
+    assert!(
+        !inline.rendered.contains(PASSPHRASE_MARKER),
+        "inline body must not echo the passphrase, got {:?}",
+        inline.rendered,
+    );
+    assert!(
+        !inline.rendered.contains(CONFIRM_MARKER),
+        "inline body must not echo the confirm passphrase, got {:?}",
+        inline.rendered,
+    );
+}
+
 // ---------------------------------------------------------------------------
 // InitDialogState — basic getters / setters
 // ---------------------------------------------------------------------------
