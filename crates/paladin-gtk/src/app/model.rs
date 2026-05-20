@@ -62,7 +62,7 @@
 //! so `tests/gtk_smoke.rs` can assert which startup state was
 //! reached under `xvfb-run` without driving widgets.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use libadwaita as adw;
@@ -90,7 +90,10 @@ use crate::app::state::{
 };
 use crate::export_dialog::{ExportDialogComponent, ExportDialogInit, ExportDialogOutput};
 use crate::import_dialog::{ImportDialogComponent, ImportDialogInit, ImportDialogOutput};
-use crate::init_dialog::{format_init_dialog_marker, InitDialogComponent, InitDialogInit};
+use crate::init_dialog::{
+    format_init_dialog_marker, run_init_worker, InitDialogComponent, InitDialogInit, InitDialogMsg,
+    InitDialogOutput, InitWorkerCompletion, InitWorkerEffect, InitWorkerInput, InitWorkerMode,
+};
 use crate::passphrase_dialog::{
     PassphraseDialogComponent, PassphraseDialogInit, PassphraseDialogOutput,
 };
@@ -659,6 +662,46 @@ pub enum AppMsg {
     /// [`crate::app::state::apply_add_vault_install_inplace`]
     /// unconditionally.
     AddWorkerCompleted(AddWorkerCompletion),
+    /// Forwarded from the live [`InitDialogComponent`] when the user
+    /// submits the "Create vault" button
+    /// ([`InitDialogOutput::SubmitCreate`]) or confirms the destructive
+    /// `vault_exists` race gate
+    /// ([`InitDialogOutput::SubmitForceCreate`]). The handler stages
+    /// the [`paladin_core::VaultInit`] plus the resolved vault path
+    /// into an [`InitWorkerInput`] (with
+    /// [`InitWorkerMode::Create`] / [`InitWorkerMode::CreateForce`]),
+    /// spawns [`run_init_worker`] on `gtk::gio::spawn_blocking` so the
+    /// §4.4 Argon2id KDF stays off the main loop, and posts the
+    /// resulting [`InitWorkerCompletion`] back as
+    /// [`Self::InitWorkerCompleted`].
+    InitDialogAction(InitDialogOutput),
+    /// Posted by the `gio::spawn_blocking
+    /// paladin_core::Store::create` / `Store::create_force` init
+    /// worker after it consumes the bundled [`InitWorkerInput`] and
+    /// reports its routed outcome as an [`InitWorkerCompletion`].
+    ///
+    /// On [`InitWorkerEffect::Success`] the handler installs the
+    /// returned `(Vault, Store)` pair into [`AppModel::vault`],
+    /// transitions [`AppModel::state`] to
+    /// [`crate::app::state::AppState::Unlocked`], and remounts the
+    /// content tree via [`AppModel::remount_for_state`] so the
+    /// `AccountListComponent` is the only visible chrome.
+    ///
+    /// On [`InitWorkerEffect::DestructiveGate`] the handler forwards
+    /// [`InitDialogMsg::WorkerCompletedDestructive`] to the live
+    /// `InitDialogComponent` so the dialog rebuilds the pending
+    /// `VaultInit` from the preserved buffers and presents the
+    /// destructive [`adw::AlertDialog`].
+    ///
+    /// On [`InitWorkerEffect::InlineError`] the handler forwards
+    /// [`InitDialogMsg::WorkerCompletedInline`] carrying the typed
+    /// [`crate::init_dialog::InlineError`] so the dialog renders the
+    /// rendering verbatim alongside the still-populated entries —
+    /// `unsafe_permissions`, `save_not_committed`,
+    /// `save_durability_unconfirmed`, and any other typed error
+    /// returned by `classify_create_error` / `classify_create_force_error`
+    /// stay inline and never transition the dialog out.
+    InitWorkerCompleted(InitWorkerCompletion),
     /// Posted by [`dispatch_startup_error_output`] when
     /// [`StartupErrorComponent`](crate::startup_error::StartupErrorComponent)
     /// emits [`StartupErrorOutput::Retry`].
@@ -883,7 +926,7 @@ impl SimpleComponent for AppModel {
                 .launch(InitDialogInit {
                     vault_path: path.clone(),
                 })
-                .detach();
+                .forward(sender.input_sender(), AppMsg::InitDialogAction);
             widgets.content.append(controller.widget());
             Some(controller)
         } else {
@@ -1532,6 +1575,92 @@ impl SimpleComponent for AppModel {
                     }
                 }
             }
+            AppMsg::InitDialogAction(output) => {
+                // Spawn the `paladin_core::Store::create` /
+                // `Store::create_force` worker once the dialog hands
+                // back a [`VaultInit`]. The `Missing` state owns no
+                // live `(Vault, Store)` pair — the worker returns one
+                // on success and we install it via the
+                // `InitWorkerCompleted` arm below. The vault path
+                // comes from the cached `AppState::Missing` variant
+                // (the dialog's local copy is the same path).
+                //
+                // The widget's submit-button sensitivity gate
+                // (`InitDialogState::submit_button_sensitive`) and
+                // `apply_msg`'s rejection routing keep buffer-empty
+                // and confirmation-mismatch submissions from reaching
+                // here, so the worker spawn is unconditional once we
+                // have the path.
+                let (mode, init) = match output {
+                    InitDialogOutput::SubmitCreate(init) => (InitWorkerMode::Create, init),
+                    InitDialogOutput::SubmitForceCreate(init) => {
+                        (InitWorkerMode::CreateForce, init)
+                    }
+                };
+                let vault_path = self
+                    .state
+                    .as_ref()
+                    .and_then(AppState::path)
+                    .map(Path::to_path_buf);
+                if let Some(vault_path) = vault_path {
+                    let input = InitWorkerInput {
+                        init,
+                        vault_path,
+                        mode,
+                    };
+                    let sender = sender.clone();
+                    gtk::glib::spawn_future_local(async move {
+                        let completion = gtk::gio::spawn_blocking(move || run_init_worker(input))
+                            .await
+                            .expect("paladin_core::Store::create init worker panicked");
+                        sender.input(AppMsg::InitWorkerCompleted(completion));
+                    });
+                }
+            }
+            AppMsg::InitWorkerCompleted(completion) => {
+                // Worker-outcome dispatch per
+                // `IMPLEMENTATION_PLAN_04_GTK.md` §"Vault interaction":
+                //
+                // * `Success { vault, store }` — install the returned
+                //   pair into `AppModel::vault`, transition
+                //   `AppModel::state` from `Missing` to `Unlocked`
+                //   (preserving the resolved path) via
+                //   `remount_for_state`, which also drops the init
+                //   dialog and mounts the AccountListComponent.
+                // * `DestructiveGate` — forward
+                //   `InitDialogMsg::WorkerCompletedDestructive` to the
+                //   live dialog so it rebuilds the pending VaultInit
+                //   and presents the destructive AdwAlertDialog.
+                // * `InlineError(err)` — forward
+                //   `InitDialogMsg::WorkerCompletedInline(err)` so the
+                //   dialog stages the inline projection.
+                let InitWorkerCompletion { effect } = completion;
+                match effect {
+                    InitWorkerEffect::Success { vault, store } => {
+                        let path = self
+                            .state
+                            .as_ref()
+                            .and_then(AppState::path)
+                            .map(Path::to_path_buf);
+                        if let Some(path) = path {
+                            self.vault = Some((vault, store));
+                            let new_state = AppState::Unlocked { path };
+                            self.remount_for_state(&new_state, &sender);
+                            self.state = Some(new_state);
+                        }
+                    }
+                    InitWorkerEffect::DestructiveGate => {
+                        if let Some(controller) = self.init_dialog.as_ref() {
+                            controller.emit(InitDialogMsg::WorkerCompletedDestructive);
+                        }
+                    }
+                    InitWorkerEffect::InlineError(inline) => {
+                        if let Some(controller) = self.init_dialog.as_ref() {
+                            controller.emit(InitDialogMsg::WorkerCompletedInline(inline));
+                        }
+                    }
+                }
+            }
             AppMsg::RemoveWorkerCompleted(completion) => {
                 // Worker-outcome dispatch. Mirrors
                 // `RenameWorkerCompleted` exactly: `compose_remove_dispatch`
@@ -1765,7 +1894,7 @@ impl AppModel {
                     .launch(InitDialogInit {
                         vault_path: path.clone(),
                     })
-                    .detach();
+                    .forward(sender.input_sender(), AppMsg::InitDialogAction);
                 self.content.append(controller.widget());
                 self.init_dialog = Some(controller);
             }

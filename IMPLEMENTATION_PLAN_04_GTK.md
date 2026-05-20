@@ -1398,7 +1398,7 @@ sign-off.
   - [x] Route every active screen (`InitDialog`, `UnlockComponent`,
     `StartupErrorComponent`, `AccountListComponent`) through the same
     overlay so state transitions never lose pending toasts.
-- [ ] In-app vault initialization (`InitDialog` for missing vaults;
+- [x] In-app vault initialization (`InitDialog` for missing vaults;
   plaintext + encrypted paths; explicit confirmation; plaintext-path
   warning sourced from
   `paladin_core::format_plaintext_storage_warning()`; in-dialog
@@ -1406,46 +1406,46 @@ sign-off.
   `paladin_core::format_init_force_warning(existing_path)` when a vault
   already exists at the path; pre-commit + durability-unconfirmed
   handling).
-  - [ ] Add two `AdwPasswordEntryRow` passphrase entries (passphrase +
+  - [x] Add two `AdwPasswordEntryRow` passphrase entries (passphrase +
     confirmation) to `InitDialogComponent`'s body, keeping the existing
     `Missing`-branch path label as the `AdwStatusPage` description.
-  - [ ] Render `paladin_core::format_plaintext_storage_warning()`
+  - [x] Render `paladin_core::format_plaintext_storage_warning()`
     verbatim alongside a confirmation tick; gate submission on the tick
     when both passphrase fields are empty (the plaintext path).
-  - [ ] Route plaintext vs encrypted on submit by the empty-vs-non-empty
+  - [x] Route plaintext vs encrypted on submit by the empty-vs-non-empty
     state of the passphrase fields (both empty → plaintext; non-empty →
     encrypted).
-  - [ ] Validate encrypted submissions: reject one-empty or mismatched
+  - [x] Validate encrypted submissions: reject one-empty or mismatched
     pairs inline with `invalid_passphrase`
     (`reason: "confirmation_mismatch"`); accept twice-confirm match.
-  - [ ] Build a `VaultInit` from the accepted entries
+  - [x] Build a `VaultInit` from the accepted entries
     (`VaultInit::Plaintext` or
     `VaultInit::Encrypted(EncryptionOptions::new(secret)?)`) and stash
     it in the zeroizing pending-create slot before dispatch.
-  - [ ] Dispatch `init_dialog::run_init_worker` with
+  - [x] Dispatch `init_dialog::run_init_worker` with
     `InitWorkerMode::Create` on `gio::spawn_blocking` so the §4.4
     Argon2id KDF stays off the main loop; surface a spinner / busy
     affordance while the join is pending.
-  - [ ] Handle `InitWorkerEffect::Success { vault, store }` by
+  - [x] Handle `InitWorkerEffect::Success { vault, store }` by
     transitioning `AppModel` to `Unlocked` with the returned pair and
     closing the dialog.
-  - [ ] Handle `InitWorkerEffect::DestructiveGate` by opening an
+  - [x] Handle `InitWorkerEffect::DestructiveGate` by opening an
     in-dialog `AdwAlertDialog` with `destructive-action` styling whose
     body is `paladin_core::format_init_force_warning(existing_path)`.
-  - [ ] On destructive-gate confirm, re-dispatch the worker with
+  - [x] On destructive-gate confirm, re-dispatch the worker with
     `InitWorkerMode::CreateForce`, consuming the pending `VaultInit`.
-  - [ ] On destructive-gate cancel, close the alert and return to the
+  - [x] On destructive-gate cancel, close the alert and return to the
     `vault_exists` state without mutating the existing vault, then
     zeroize the pending `VaultInit`.
-  - [ ] Handle `InitWorkerEffect::InlineError(InlineError)` rendering
+  - [x] Handle `InitWorkerEffect::InlineError(InlineError)` rendering
     for `unsafe_permissions`, `save_not_committed` (carrying the
     `create_force`-only `backup_path` field when applicable),
     `save_durability_unconfirmed`, and any other typed error returned
     by `classify_create_error`.
-  - [ ] Render `unsafe_permissions` from the `Some(text)` of
+  - [x] Render `unsafe_permissions` from the `Some(text)` of
     `paladin_core::format_unsafe_permissions(&err)`, falling back to
     the generic error text only when the formatter returns `None`.
-  - [ ] Zeroize passphrase-entry widget buffers and the pending
+  - [x] Zeroize passphrase-entry widget buffers and the pending
     `VaultInit` on submit, cancel, destructive-confirmation cancel,
     dialog close, and auto-lock per §"Secret entry handling".
 - [ ] Secret-entry ownership and zeroization guardrails.
