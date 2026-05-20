@@ -91,6 +91,9 @@ use crate::app::state::{
     decide_state_from_inspect, decide_state_from_open_error, run_unlock_worker, AppState,
     OpenErrorOutcome, UnlockWorkerCompletion,
 };
+use crate::clipboard_clear::{
+    evaluate_wake, prepare_copy_bytes, schedule_copy, PendingClipboardClear, WakeDecision,
+};
 use crate::export_dialog::{ExportDialogComponent, ExportDialogInit, ExportDialogOutput};
 use crate::hotp_reveal::{
     apply_advance_decision, apply_advance_outcome, expired_reveals,
@@ -303,6 +306,21 @@ pub struct AppModel {
     /// completion arms without rebuilding the overlay reference.
     #[allow(dead_code)]
     toast_overlay: adw::ToastOverlay,
+    /// Pending wipe-after-copy slot for the clipboard auto-clear
+    /// policy.
+    ///
+    /// Set by [`AppMsg::AccountListAction(AccountListOutput::CopyCode)`]
+    /// when the user has opted in via
+    /// `VaultSettings::clipboard_clear_enabled` and the live
+    /// `gdk::Clipboard::set_text` write succeeded; cleared on
+    /// [`crate::clipboard_clear::WakeDecision::Clear`] /
+    /// [`crate::clipboard_clear::WakeDecision::Mismatch`] outcomes
+    /// from the per-tick wake (the captured bytes are zeroized via
+    /// `Zeroizing<Vec<u8>>` on drop) and on `Locked` / `Quit`
+    /// transitions for parity with [`Self::reveal_windows`]. See
+    /// `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" >
+    /// `AccountRowComponent` copy button.
+    pending_clipboard: Option<PendingClipboardClear>,
 }
 
 impl std::fmt::Debug for AppModel {
@@ -363,6 +381,10 @@ impl std::fmt::Debug for AppModel {
                 &format!("<{} open>", self.reveal_windows.len()),
             )
             .field("toast_overlay", &"<adw::ToastOverlay>")
+            .field(
+                "pending_clipboard",
+                &self.pending_clipboard.as_ref().map(|_| "<armed>"),
+            )
             .finish()
     }
 }
@@ -851,6 +873,46 @@ pub enum AppMsg {
         /// [`PendingClipboardClear::deadline`]: crate::clipboard_clear::PendingClipboardClear::deadline
         monotonic: Instant,
     },
+    /// Outcome of an asynchronous `gdk::Clipboard::read_text_async`
+    /// issued from [`AppModel::handle_tick`] when the per-tick
+    /// `clipboard_wake_due` hint fires.
+    ///
+    /// The handler feeds `(token, current)` through
+    /// [`crate::clipboard_clear::evaluate_wake`] and acts on the
+    /// returned [`WakeDecision`]:
+    ///
+    /// * [`WakeDecision::Clear`] — write empty text through
+    ///   `gdk::Clipboard::set_text` and drop
+    ///   [`AppModel::pending_clipboard`] (the
+    ///   `Zeroizing<Vec<u8>>` wipes on drop).
+    /// * [`WakeDecision::Mismatch`] — the user replaced the
+    ///   clipboard contents in the interim; drop
+    ///   [`AppModel::pending_clipboard`] without touching the
+    ///   clipboard so the user's new copy is preserved.
+    /// * [`WakeDecision::Stale`] — a fresher copy has superseded
+    ///   the issued token; the in-flight pending entry stays in
+    ///   place and the wake is a benign no-op.
+    ///
+    /// A read failure (`read_text_async` errored or returned no
+    /// text) forwards an empty `current` slice. The policy treats
+    /// empty as non-equal to any non-empty pending value, so the
+    /// captured `Zeroizing<Vec<u8>>` is dropped and the clipboard
+    /// is left alone — the safe non-leaky default.
+    ClipboardWakeRead {
+        /// Token issued by `ClipboardClearPolicy::schedule` when
+        /// the pending entry was armed. A wake that arrives after
+        /// the user re-copied (which issued a fresher token)
+        /// resolves to [`WakeDecision::Stale`] via the token gate.
+        token: paladin_core::ClipboardClearToken,
+        /// Current `gdk::Clipboard` text at the time the async read
+        /// resolved, as raw bytes wrapped in [`Zeroizing`] so the
+        /// buffer wipes on drop (the clipboard text may itself be
+        /// an OTP). Empty when the read failed or the clipboard
+        /// had no text. Compared byte-equal against
+        /// [`PendingClipboardClear::value`] inside
+        /// [`crate::clipboard_clear::evaluate_wake`].
+        current: zeroize::Zeroizing<Vec<u8>>,
+    },
 }
 
 // `relm4::component(pub)` generates a public `AppModelWidgets` struct so the
@@ -1111,6 +1173,7 @@ impl SimpleComponent for AppModel {
             ticker_source: None,
             reveal_windows: HashMap::new(),
             toast_overlay: widgets.toast_overlay.clone(),
+            pending_clipboard: None,
         };
 
         // Install the TOTP ticker if the resolved startup state is
@@ -1142,15 +1205,64 @@ impl SimpleComponent for AppModel {
                 }
                 // Drop every open reveal so the `Zeroizing<String>`
                 // wrappers wipe the visible digits before the
-                // process exits.
+                // process exits. Drop the pending clipboard slot
+                // too so the captured `Zeroizing<Vec<u8>>` wipes in
+                // lockstep — the clipboard contents themselves are
+                // not touched here.
                 self.reveal_windows.clear();
+                self.pending_clipboard = None;
                 relm4::main_application().quit();
             }
             AppMsg::Tick {
                 wall_clock,
                 monotonic,
             } => {
-                self.handle_tick(wall_clock, monotonic);
+                if let Some(token) = self.handle_tick(wall_clock, monotonic) {
+                    // The per-tick clipboard wake deadline elapsed
+                    // and the pending entry is still armed. Issue an
+                    // async `gdk::Clipboard::read_text` and route
+                    // the byte-equality decision through
+                    // `evaluate_wake` on completion — keeping the
+                    // sync part of the tick handler free of the
+                    // round trip so a slow clipboard read never
+                    // blocks the next TOTP gauge refresh.
+                    let clipboard = WidgetExt::display(&self.content).clipboard();
+                    let dispatch = sender.clone();
+                    clipboard.read_text_async(None::<&gtk::gio::Cancellable>, move |result| {
+                        let current = zeroize::Zeroizing::new(
+                            result
+                                .ok()
+                                .flatten()
+                                .map(|s| s.as_bytes().to_vec())
+                                .unwrap_or_default(),
+                        );
+                        dispatch.input(AppMsg::ClipboardWakeRead { token, current });
+                    });
+                }
+            }
+            AppMsg::ClipboardWakeRead { token, current } => {
+                // Resolve the token against the live pending slot.
+                // `evaluate_wake` gates on token first so a wake
+                // that arrives after a fresher copy supersedes the
+                // pending entry is a benign no-op; on `Clear` /
+                // `Mismatch` we drop the pending entry (zeroizing
+                // its captured bytes via `Zeroizing<Vec<u8>>`) and
+                // on `Clear` we additionally wipe the clipboard.
+                let decision = self
+                    .pending_clipboard
+                    .as_ref()
+                    .map(|p| evaluate_wake(p, token, &current));
+                match decision {
+                    Some(WakeDecision::Clear) => {
+                        let clipboard = WidgetExt::display(&self.content).clipboard();
+                        clipboard.set_text("");
+                        self.pending_clipboard = None;
+                    }
+                    Some(WakeDecision::Mismatch) => {
+                        self.pending_clipboard = None;
+                    }
+                    Some(WakeDecision::Stale) | None => {}
+                }
             }
             AppMsg::StartupErrorRetry => {
                 // User clicked the StartupErrorComponent Retry
@@ -1254,6 +1366,36 @@ impl SimpleComponent for AppModel {
                                 .expect("Vault::hotp_advance worker panicked");
                         sender.input(AppMsg::HotpAdvanceWorkerCompleted(completion));
                     });
+                }
+            }
+            AppMsg::AccountListAction(AccountListOutput::CopyCode(id)) => {
+                // Per-row copy button → resolve the visible code via
+                // `prepare_copy_bytes`, write to the default
+                // `gdk::Clipboard` via `set_text`, and (when the
+                // user has opted in via
+                // `clipboard.clear_enabled`) arm the auto-clear
+                // policy through `schedule_copy` per
+                // `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+                // `AccountRowComponent`. Hidden HOTP rows return
+                // `None` from `prepare_copy_bytes` so a stray click
+                // through the action group is a benign no-op even
+                // though the row's copy `gtk::Button` is also
+                // desensitized via `RowDisplay::copy_enabled`.
+                if let Some((vault, _)) = self.vault.as_ref() {
+                    let wall_clock = SystemTime::now();
+                    if let Some(bytes) =
+                        prepare_copy_bytes(vault, &self.reveal_windows, id, wall_clock)
+                    {
+                        let display = WidgetExt::display(&self.content);
+                        let clipboard = display.clipboard();
+                        let text = String::from_utf8_lossy(&bytes);
+                        clipboard.set_text(&text);
+                        if let Some(pending) =
+                            schedule_copy(Instant::now(), vault.settings(), bytes)
+                        {
+                            self.pending_clipboard = Some(pending);
+                        }
+                    }
                 }
             }
             AppMsg::AccountListAction(AccountListOutput::QueryChanged(query)) => {
@@ -2164,18 +2306,24 @@ impl SimpleComponent for AppModel {
 }
 
 impl AppModel {
-    /// Drop every open HOTP reveal window when the app is no longer
-    /// in `Unlocked` / `UnlockedBusy`.
+    /// Drop every open HOTP reveal window and any pending
+    /// clipboard auto-clear entry when the app is no longer in
+    /// `Unlocked` / `UnlockedBusy`.
     ///
-    /// The reveal-window map holds `Zeroizing<String>` codes that
-    /// must not outlive the unlocked session — clearing here on the
-    /// `Locked` / `Missing` / `StartupError` transitions ensures the
-    /// secret bytes are wiped in lockstep with the vault lock per
-    /// DESIGN.md §4.5 / §"Memory hygiene".
+    /// The reveal-window map holds `Zeroizing<String>` codes and
+    /// the pending clipboard slot holds `Zeroizing<Vec<u8>>` bytes
+    /// that must not outlive the unlocked session — clearing here
+    /// on the `Locked` / `Missing` / `StartupError` transitions
+    /// ensures the secret bytes are wiped in lockstep with the
+    /// vault lock per DESIGN.md §4.5 / §"Memory hygiene". The
+    /// clipboard itself is NOT wiped here; the in-flight pending
+    /// entry simply forgets its byte capture so a follow-up wake
+    /// has nothing to match against (only-if-unchanged).
     fn prune_reveals_if_locked(&mut self) {
         let unlocked = self.state.as_ref().is_some_and(AppState::is_unlocked);
         if !unlocked {
             self.reveal_windows.clear();
+            self.pending_clipboard = None;
         }
     }
 }
@@ -2249,22 +2397,31 @@ impl AppModel {
     /// Projects the live `(Vault, Store)` pair plus the rendered
     /// row set through [`tick`] and forwards the resulting display
     /// updates to the live [`AccountListComponent`] via
-    /// [`AccountListMsg::Tick`]. The `clipboard_wake_due` hint is
-    /// preserved for the follow-up commit that wires the
-    /// `gdk::Clipboard` only-if-unchanged check.
+    /// [`AccountListMsg::Tick`]. Returns
+    /// `Some(token)` when the per-tick `clipboard_wake_due` hint
+    /// fires against a live pending entry so the caller can issue
+    /// the asynchronous `gdk::Clipboard::read_text_async` round
+    /// trip whose result lands as [`AppMsg::ClipboardWakeRead`];
+    /// otherwise `None`.
     ///
     /// Defensive: a tick that lands after [`Self::vault`] has been
     /// dropped (e.g. between a `Locked` transition and the matching
     /// `ticker_transition` teardown) is a benign no-op.
-    fn handle_tick(&mut self, wall_clock: SystemTime, monotonic: Instant) {
-        let Some((vault, _)) = self.vault.as_ref() else {
-            return;
-        };
-        let Some(controller) = self.account_list.as_ref() else {
-            return;
-        };
+    fn handle_tick(
+        &mut self,
+        wall_clock: SystemTime,
+        monotonic: Instant,
+    ) -> Option<paladin_core::ClipboardClearToken> {
+        let (vault, _) = self.vault.as_ref()?;
+        let controller = self.account_list.as_ref()?;
         let rows = filtered_row_models_from_vault(vault, &self.search_query);
-        let outcome = tick(vault, &rows, wall_clock, monotonic, None);
+        let outcome = tick(
+            vault,
+            &rows,
+            wall_clock,
+            monotonic,
+            self.pending_clipboard.as_ref(),
+        );
         let mut updates = outcome.display_updates;
 
         // HOTP reveal expiry: drop windows past their deadline and
@@ -2284,6 +2441,12 @@ impl AppModel {
 
         if !updates.is_empty() {
             controller.emit(AccountListMsg::Tick(updates));
+        }
+
+        if outcome.clipboard_wake_due {
+            self.pending_clipboard.as_ref().map(|p| p.token)
+        } else {
+            None
         }
     }
 

@@ -14,24 +14,30 @@
 //!   stale-token drop.
 //! * A clipboard auto-clear timer scheduled before lock survives lock
 //!   and still fires only-if-unchanged.
+//! * `prepare_copy_bytes` returns the visible code for TOTP rows
+//!   and for HOTP rows inside an open reveal window, `None` for
+//!   hidden HOTP rows and missing-account ids.
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use secrecy::SecretString;
 use tempfile::TempDir;
 use zeroize::Zeroizing;
 
 use paladin_core::{
-    Argon2Params, ClipboardClearPolicy, EncryptionOptions, Store, Vault, VaultInit,
+    validate_manual, AccountId, AccountInput, AccountKindInput, Algorithm, Argon2Params,
+    ClipboardClearPolicy, EncryptionOptions, IconHintInput, Store, Vault, VaultInit,
 };
 
 use paladin_gtk::auto_lock::{lock_on_expiry, UnlockedDiscards};
 use paladin_gtk::clipboard_clear::{
-    evaluate_wake, schedule_copy, PendingClipboardClear, WakeDecision,
+    evaluate_wake, prepare_copy_bytes, schedule_copy, PendingClipboardClear, WakeDecision,
 };
+use paladin_gtk::hotp_reveal::RevealWindow;
 
 // `ClipboardClearPolicy::schedule` advances a process-wide monotonic
 // counter, so tests that rely on adjacent token issuance must
@@ -426,4 +432,155 @@ fn schedule_then_wake_with_same_clipboard_signals_clear_via_should_clear() {
         WakeDecision::Clear
     );
     assert!(ClipboardClearPolicy::should_clear(&pending.value, value));
+}
+
+// ---------------------------------------------------------------------------
+// prepare_copy_bytes — resolves the visible code per row kind.
+// ---------------------------------------------------------------------------
+
+fn add_totp(vault: &mut Vault, store: &Store, label: &str) -> AccountId {
+    let input = AccountInput {
+        label: label.to_string(),
+        issuer: Some("Acme".to_string()),
+        secret: SecretString::from("JBSWY3DPEHPK3PXP".to_string()),
+        algorithm: Algorithm::Sha1,
+        digits: 6,
+        kind: AccountKindInput::Totp,
+        period_secs: Some(30),
+        counter: None,
+        icon_hint: IconHintInput::Default,
+    };
+    let validated =
+        validate_manual(input, SystemTime::now()).expect("totp account input validates");
+    let id = vault.add(validated.account);
+    vault.save(store).expect("commit added account");
+    id
+}
+
+fn add_hotp(vault: &mut Vault, store: &Store, label: &str, counter: u64) -> AccountId {
+    let input = AccountInput {
+        label: label.to_string(),
+        issuer: Some("Acme".to_string()),
+        secret: SecretString::from("JBSWY3DPEHPK3PXP".to_string()),
+        algorithm: Algorithm::Sha1,
+        digits: 6,
+        kind: AccountKindInput::Hotp,
+        period_secs: None,
+        counter: Some(counter),
+        icon_hint: IconHintInput::Default,
+    };
+    let validated =
+        validate_manual(input, SystemTime::now()).expect("hotp account input validates");
+    let id = vault.add(validated.account);
+    vault.save(store).expect("commit added account");
+    id
+}
+
+#[test]
+fn prepare_copy_bytes_returns_totp_code_bytes() {
+    // TOTP rows always have a visible code — the helper generates a
+    // fresh code via `Vault::totp_code` and wraps the digits in
+    // `Zeroizing<Vec<u8>>` so the captured bytes wipe on drop.
+    let tmp = secure_tempdir();
+    let (mut vault, store) = create_plaintext(&tmp.path().join("plain.bin"));
+    let id = add_totp(&mut vault, &store, "alice");
+
+    let now = SystemTime::now();
+    let reveals: HashMap<AccountId, RevealWindow> = HashMap::new();
+    let bytes = prepare_copy_bytes(&vault, &reveals, id, now).expect("totp row is always copyable");
+
+    let expected = vault.totp_code(id, now).expect("totp code generation");
+    assert_eq!(&bytes[..], expected.code.as_bytes());
+}
+
+#[test]
+fn prepare_copy_bytes_returns_revealed_hotp_code_bytes() {
+    // HOTP rows are copyable iff a reveal window is open. The helper
+    // reads the visible code straight from the reveal window's
+    // `Zeroizing<String>` slot so the row never has to round-trip the
+    // counter through the vault again.
+    let tmp = secure_tempdir();
+    let (mut vault, store) = create_plaintext(&tmp.path().join("plain.bin"));
+    let id = add_hotp(&mut vault, &store, "bob", 1);
+
+    let mut reveals: HashMap<AccountId, RevealWindow> = HashMap::new();
+    reveals.insert(
+        id,
+        RevealWindow {
+            account_id: id,
+            counter_used: 1,
+            code: Zeroizing::new("123456".to_string()),
+            deadline: Instant::now() + Duration::from_secs(60),
+        },
+    );
+
+    let bytes = prepare_copy_bytes(&vault, &reveals, id, SystemTime::now())
+        .expect("hotp row with reveal is copyable");
+    assert_eq!(&bytes[..], b"123456");
+}
+
+#[test]
+fn prepare_copy_bytes_returns_none_for_hidden_hotp_row() {
+    // HOTP rows without an open reveal window have no visible code —
+    // the row's copy button is desensitized via `copy_enabled`, but
+    // the pure-logic helper is the final gate so a stray dispatch
+    // (race between expiry and click) stays a benign no-op.
+    let tmp = secure_tempdir();
+    let (mut vault, store) = create_plaintext(&tmp.path().join("plain.bin"));
+    let id = add_hotp(&mut vault, &store, "bob", 1);
+
+    let reveals: HashMap<AccountId, RevealWindow> = HashMap::new();
+    assert!(prepare_copy_bytes(&vault, &reveals, id, SystemTime::now()).is_none());
+}
+
+#[test]
+fn prepare_copy_bytes_ignores_reveal_for_missing_account() {
+    // An `AccountId` that no longer exists in `vault.summaries()`
+    // (e.g. removed mid-click) returns `None` regardless of stale
+    // entries left in the reveal map.
+    let tmp = secure_tempdir();
+    let (vault, _store) = create_plaintext(&tmp.path().join("plain.bin"));
+    let stray = AccountId::new();
+
+    let mut reveals: HashMap<AccountId, RevealWindow> = HashMap::new();
+    reveals.insert(
+        stray,
+        RevealWindow {
+            account_id: stray,
+            counter_used: 0,
+            code: Zeroizing::new("999999".to_string()),
+            deadline: Instant::now() + Duration::from_secs(60),
+        },
+    );
+    assert!(prepare_copy_bytes(&vault, &reveals, stray, SystemTime::now()).is_none());
+}
+
+#[test]
+fn prepare_copy_bytes_ignores_reveal_window_for_totp_row() {
+    // A stale TOTP reveal entry must not be consulted — the TOTP
+    // code is always re-derived from `Vault::totp_code(now)` so the
+    // visible code stays in lockstep with the wall clock. Defensive:
+    // the reveal map should never carry TOTP entries, but the helper
+    // pins the contract so a future bug never leaks a stale string
+    // into the clipboard.
+    let tmp = secure_tempdir();
+    let (mut vault, store) = create_plaintext(&tmp.path().join("plain.bin"));
+    let id = add_totp(&mut vault, &store, "alice");
+
+    let mut reveals: HashMap<AccountId, RevealWindow> = HashMap::new();
+    reveals.insert(
+        id,
+        RevealWindow {
+            account_id: id,
+            counter_used: 0,
+            code: Zeroizing::new("000000".to_string()),
+            deadline: Instant::now() + Duration::from_secs(60),
+        },
+    );
+
+    let now = SystemTime::now();
+    let bytes = prepare_copy_bytes(&vault, &reveals, id, now).expect("totp row is always copyable");
+    let expected = vault.totp_code(id, now).expect("totp code generation");
+    assert_eq!(&bytes[..], expected.code.as_bytes());
+    assert_ne!(&bytes[..], b"000000");
 }

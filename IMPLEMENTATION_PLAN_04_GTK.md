@@ -1576,11 +1576,27 @@ sign-off.
     (`crate::hotp_reveal::run_hotp_advance_worker`) that stages the
     pre-advance code via `Vault::hotp_peek` and commits via
     `Vault::hotp_advance`.
-  - [ ] Add a copy button that copies the visible code to
+  - [x] Add a copy button that copies the visible code to
     `gdk::Clipboard` and schedules clipboard auto-clear; disable
-    copying on a hidden HOTP row.
-  - [ ] If a GDK clipboard write fails, surface an inline / status
+    copying on a hidden HOTP row. The copy `gtk::Button` built by
+    `build_row_widget` is bound to the per-row `row.copy` action
+    (constant `ROW_COPY_ACTION_NAME`); `bind_row` toggles the
+    button's sensitivity through `RowDisplay::copy_enabled` so a
+    hidden HOTP row never fires the action. The
+    `AccountListOutput::CopyCode(AccountId)` dispatch routes through
+    `AppMsg::AccountListAction` into the AppModel handler that
+    resolves the visible code via
+    `crate::clipboard_clear::prepare_copy_bytes`, writes through
+    `gdk::Clipboard::set_text`, and arms the auto-clear policy via
+    `schedule_copy` into `AppModel::pending_clipboard`.
+  - [x] If a GDK clipboard write fails, surface an inline / status
     error and do not schedule clipboard auto-clear for that attempt.
+    GTK4's `gdk::Clipboard::set_text` has no failure return — the
+    write lands or no-ops at the GDK layer — so the "schedule only
+    on success" rule is satisfied by routing through `set_text`
+    directly. A future GDK with a fallible write surface would gate
+    the `schedule_copy` call on the result without changing the
+    surrounding pure-logic plumbing.
   - [ ] Add a kebab `gtk::MenuButton` whose `gio::Menu` exposes
     "Rename…" (opens `RenameDialog` for that row) and "Remove…"
     (opens `RemoveDialog` for that row).
@@ -1594,14 +1610,21 @@ sign-off.
   - [x] On each tick, recompute the TOTP gauge value and the
     visible code from `paladin_core::totp_code(account, now)` for
     every TOTP row in the current list view.
-  - [ ] On each tick, give the clipboard auto-clear policy a chance
+  - [x] On each tick, give the clipboard auto-clear policy a chance
     to wake against the current `gdk::Clipboard` text
     (only-if-unchanged) so stale copies clear even without explicit
-    user activity. Pure-logic deadline check is wired through
-    `ticker::tick`'s `clipboard_wake_due` field; the live
-    `gdk::Clipboard` round trip lands alongside the copy button
-    (`AccountRowComponent` body) so there is something to fire
-    against.
+    user activity. The pure-logic deadline check is wired through
+    `ticker::tick`'s `clipboard_wake_due` field against
+    `AppModel::pending_clipboard`; when the hint fires
+    `AppModel::handle_tick` returns the issued
+    `ClipboardClearToken` and the dispatch arm kicks off
+    `gdk::Clipboard::read_text_async`. The async result lands as
+    `AppMsg::ClipboardWakeRead { token, current }` whose handler
+    routes through `crate::clipboard_clear::evaluate_wake` and acts
+    on the `WakeDecision`: `Clear` writes empty text and drops the
+    pending entry; `Mismatch` drops the pending entry untouched;
+    `Stale` leaves it alone. The captured bytes are wrapped in
+    `Zeroizing<Vec<u8>>` so drops wipe in place.
   - [x] Tear down the ticker on `Locked` / `StartupError`
     transitions and reinstall on `Unlocked` so plaintext and
     encrypted vaults share the same lifecycle.

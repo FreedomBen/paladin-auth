@@ -157,6 +157,21 @@ pub const ROW_REMOVE_ACTION_NAME: &str = "remove";
 /// menu so the name is pinned here for parity.
 pub const ROW_NEXT_ACTION_NAME: &str = "next";
 
+/// Action name within [`ROW_ACTION_GROUP_NAME`] activated by the
+/// per-row copy `gtk::Button`.
+///
+/// Dispatch through [`dispatch_row_action`] routes this to
+/// [`AccountListOutput::CopyCode`] carrying the row's [`AccountId`].
+/// `AppModel` consumes the output to write the visible code into
+/// the live `gdk::Clipboard` and (when the user has opted in)
+/// schedules the clipboard auto-clear policy via
+/// [`crate::clipboard_clear::schedule_copy`] per
+/// `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+/// `AccountRowComponent`. Hidden HOTP rows disable the button
+/// through [`crate::account_row::copy_enabled`], so the action
+/// never fires before a reveal opens.
+pub const ROW_COPY_ACTION_NAME: &str = "copy";
+
 /// Output forwarded from [`AccountListComponent`] up to `AppModel`
 /// in response to a row-level user intent or a search-query change.
 ///
@@ -197,6 +212,17 @@ pub enum AccountListOutput {
     /// through [`crate::hotp_reveal::apply_advance_outcome`] once
     /// the worker returns.
     AdvanceHotp(AccountId),
+    /// User clicked the per-row copy `gtk::Button`. `AppModel`
+    /// reads the row's visible code via
+    /// [`crate::clipboard_clear::prepare_copy_bytes`], writes the
+    /// bytes through `gdk::Clipboard::set_text`, and (when the user
+    /// has opted in via `clipboard.clear_enabled`) seeds the
+    /// pending wipe through [`crate::clipboard_clear::schedule_copy`]
+    /// per `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+    /// `AccountRowComponent`. Hidden HOTP rows ship a desensitized
+    /// button via [`crate::account_row::copy_enabled`], so this
+    /// variant never fires before a reveal opens.
+    CopyCode(AccountId),
     /// User changed the search-bar query. `AppModel` recomputes the
     /// filtered row set against the live `Vault` and sends a
     /// matching [`AccountListMsg::Refresh`] back so the
@@ -208,17 +234,19 @@ pub enum AccountListOutput {
 /// [`AccountListOutput`] forwarded to `AppModel`.
 ///
 /// Returns [`Some`] for [`ROW_RENAME_ACTION_NAME`],
-/// [`ROW_REMOVE_ACTION_NAME`], and [`ROW_NEXT_ACTION_NAME`]; [`None`]
-/// for every other input — the widget layer installs exactly those
-/// three actions on each row, so an unrecognized name signals a
-/// wiring drift (typo in the action group, stale kebab menu target,
-/// …) and stays a silent no-op rather than crashing the row.
+/// [`ROW_REMOVE_ACTION_NAME`], [`ROW_NEXT_ACTION_NAME`], and
+/// [`ROW_COPY_ACTION_NAME`]; [`None`] for every other input — the
+/// widget layer installs exactly those four actions on each row, so
+/// an unrecognized name signals a wiring drift (typo in the action
+/// group, stale kebab menu target, …) and stays a silent no-op
+/// rather than crashing the row.
 #[must_use]
 pub fn dispatch_row_action(name: &str, id: AccountId) -> Option<AccountListOutput> {
     match name {
         ROW_RENAME_ACTION_NAME => Some(AccountListOutput::OpenRenameDialog(id)),
         ROW_REMOVE_ACTION_NAME => Some(AccountListOutput::OpenRemoveDialog(id)),
         ROW_NEXT_ACTION_NAME => Some(AccountListOutput::AdvanceHotp(id)),
+        ROW_COPY_ACTION_NAME => Some(AccountListOutput::CopyCode(id)),
         _ => None,
     }
 }
@@ -922,6 +950,7 @@ fn build_row_widget() -> gtk::Box {
         .icon_name("edit-copy-symbolic")
         .tooltip_text("Copy code")
         .valign(gtk::Align::Center)
+        .action_name(format!("{ROW_ACTION_GROUP_NAME}.{ROW_COPY_ACTION_NAME}"))
         .build();
     copy.add_css_class("flat");
     let next = gtk::Button::builder()
@@ -1022,13 +1051,26 @@ fn install_row_action_group(
     // membership stays stable as `gtk::ListView` recycles the
     // container — no separate group rebuild on each rebind.
     let next = gio::SimpleAction::new(ROW_NEXT_ACTION_NAME, None);
-    let next_sender = output_sender;
+    let next_sender = output_sender.clone();
     next.connect_activate(move |_, _| {
         if let Some(out) = dispatch_row_action(ROW_NEXT_ACTION_NAME, id) {
             let _ = next_sender.send(out);
         }
     });
     actions.add_action(&next);
+
+    // Per-row copy button activates `row.copy`. `bind_row` toggles
+    // the button's sensitivity through `RowDisplay::copy_enabled`, so
+    // the activation closure only fires for rows with a visible code
+    // in hand (TOTP always; HOTP only inside an open reveal window).
+    let copy = gio::SimpleAction::new(ROW_COPY_ACTION_NAME, None);
+    let copy_sender = output_sender;
+    copy.connect_activate(move |_, _| {
+        if let Some(out) = dispatch_row_action(ROW_COPY_ACTION_NAME, id) {
+            let _ = copy_sender.send(out);
+        }
+    });
+    actions.add_action(&copy);
 
     container.insert_action_group(ROW_ACTION_GROUP_NAME, Some(&actions));
 }

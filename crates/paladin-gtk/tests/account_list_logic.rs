@@ -31,7 +31,7 @@ use paladin_gtk::account_list::{
     format_rendered_marker, format_widget_states_marker, hidden_row_display, prune_cache_to_rows,
     row_model_for_account, row_models_from_vault, selected_row_after_refresh, AccountListOutput,
     AccountRowModel, ACCOUNT_LIST_WIDGET_STATES_MARKER_PREFIX, ROW_ACTION_GROUP_NAME,
-    ROW_NEXT_ACTION_NAME, ROW_REMOVE_ACTION_NAME, ROW_RENAME_ACTION_NAME,
+    ROW_COPY_ACTION_NAME, ROW_NEXT_ACTION_NAME, ROW_REMOVE_ACTION_NAME, ROW_RENAME_ACTION_NAME,
 };
 use paladin_gtk::account_row::{CodeDisplay, CounterText, ProgressDisplay, RowDisplay};
 
@@ -712,6 +712,17 @@ fn row_next_action_name_is_next() {
 }
 
 #[test]
+fn row_copy_action_name_is_copy() {
+    // The per-row copy `gtk::Button` targets `row.copy`, which
+    // resolves to the action named `copy` inside the `row` group.
+    // Pinning the name keeps the widget binding in
+    // `build_row_widget` and the action installed by
+    // [`install_row_action_group`] in lockstep with
+    // [`dispatch_row_action`].
+    assert_eq!(ROW_COPY_ACTION_NAME, "copy");
+}
+
+#[test]
 fn dispatch_row_action_routes_rename_to_open_rename_dialog() {
     let id = AccountId::new();
     assert_eq!(
@@ -740,6 +751,21 @@ fn dispatch_row_action_routes_next_to_advance_hotp() {
     assert_eq!(
         dispatch_row_action(ROW_NEXT_ACTION_NAME, id),
         Some(AccountListOutput::AdvanceHotp(id)),
+    );
+}
+
+#[test]
+fn dispatch_row_action_routes_copy_to_copy_code() {
+    // The per-row copy button's `row.copy` activation resolves to
+    // `AccountListOutput::CopyCode(id)`. `AppModel` consumes that
+    // output to write the visible code into `gdk::Clipboard` and
+    // schedule the clipboard auto-clear policy per
+    // `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+    // `AccountRowComponent`.
+    let id = AccountId::new();
+    assert_eq!(
+        dispatch_row_action(ROW_COPY_ACTION_NAME, id),
+        Some(AccountListOutput::CopyCode(id)),
     );
 }
 

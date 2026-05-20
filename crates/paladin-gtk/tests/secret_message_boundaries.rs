@@ -72,16 +72,24 @@ const DIALOG_OUTPUT_ENUMS: &[(&str, &str)] = &[
 /// `Option<PathBuf>` or `Box<dyn Trait>` stay clear.
 const FORBIDDEN_RAW_TYPES: &[&str] = &["String", "Vec<u8>", "Box<str>", "&str"];
 
-/// Per-type allowlist of trimmed field declarations that are vetted
-/// to carry only non-secret plaintext (typed user input that never
-/// names a passphrase / Base32 secret / `otpauth://` URI / HOTP
-/// reveal code / clipboard payload). Each entry pairs the long-lived
-/// type name from [`LONG_LIVED_TYPES`] with the complete
-/// `<field>: <type>,` declaration (whitespace-trimmed) that
-/// [`long_lived_types_carry_no_raw_secret_bearing_strings`] is
-/// allowed to skip when scanning for [`FORBIDDEN_RAW_TYPES`]. The
-/// match is exact so a future refactor that changes the type or
-/// renames the field forces a fresh review of the allowlist.
+/// Per-type allowlist of trimmed field declarations that the
+/// [`forbidden_token_in`] scan should skip when checking
+/// [`FORBIDDEN_RAW_TYPES`]. Entries cover two vetted cases:
+///
+/// 1. Non-secret plaintext (typed user input that never names a
+///    passphrase / Base32 secret / `otpauth://` URI / HOTP reveal
+///    code / clipboard payload).
+/// 2. Secret-bearing bytes that satisfy DESIGN §8 through an inner
+///    wrapper (`zeroize::Zeroizing`, `secrecy::SecretString`) — the
+///    literal source text still contains a `Vec<u8>` / `String`
+///    substring that the dumb whole-word scanner cannot see through,
+///    so the wrapped declaration is recorded here explicitly.
+///
+/// Each entry pairs the long-lived type name from [`LONG_LIVED_TYPES`]
+/// with the complete `<field>: <type>,` declaration
+/// (whitespace-trimmed). The match is exact so a future refactor
+/// that changes the type or renames the field forces a fresh
+/// review of the allowlist.
 const KNOWN_NON_SECRET_LINES: &[(&str, &[&str])] = &[
     // `search_query` mirrors `AccountListComponent::current_query` —
     // the literal substring the user typed into the `gtk::SearchEntry`
@@ -91,6 +99,15 @@ const KNOWN_NON_SECRET_LINES: &[(&str, &[&str])] = &[
     // search query is not one of the secret-bearing values that must
     // be wrapped in zeroizing storage.
     ("AppModel", &["search_query: String,"]),
+    // `ClipboardWakeRead::current` carries the live `gdk::Clipboard`
+    // text the per-tick wake just read. The buffer may itself be an
+    // OTP (the user has not yet pasted), so the bytes are wrapped in
+    // `zeroize::Zeroizing` per the
+    // [`crate::clipboard_clear::PendingClipboardClear::value`]
+    // contract — the message drops the wrapper on the next dispatch
+    // and the bytes wipe in place. Pinned here because the inner
+    // `Vec<u8>` substring trips the whole-word scanner.
+    ("AppMsg", &["current: zeroize::Zeroizing<Vec<u8>>,"]),
 ];
 
 /// Identifier substrings (case-insensitive) whose presence in a

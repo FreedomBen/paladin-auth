@@ -25,11 +25,17 @@
 //!
 //! [gdk_clipboard]: https://gtk-rs.org/gtk4-rs/git/docs/gdk4/struct.Clipboard.html
 
-use std::time::Instant;
+use std::collections::HashMap;
+use std::hash::BuildHasher;
+use std::time::{Instant, SystemTime};
 
 use zeroize::Zeroizing;
 
-use paladin_core::{ClipboardClearPolicy, ClipboardClearToken, VaultSettings};
+use paladin_core::{
+    AccountId, AccountKindSummary, ClipboardClearPolicy, ClipboardClearToken, Vault, VaultSettings,
+};
+
+use crate::hotp_reveal::RevealWindow;
 
 /// Pending wipe-after-copy entry carried on the GUI's model state.
 ///
@@ -144,5 +150,51 @@ pub fn evaluate_wake(
         WakeDecision::Clear
     } else {
         WakeDecision::Mismatch
+    }
+}
+
+/// Resolve the clipboard payload for a row-level copy request.
+///
+/// Returns the bytes the widget layer should write through
+/// `gdk::Clipboard::set_text` wrapped in [`Zeroizing`] so the capture
+/// wipes on drop. The lookup mirrors the row-display projection rules
+/// in [`crate::account_row::code_display`] / [`copy_enabled`]:
+///
+/// * TOTP rows always produce bytes — the helper re-derives the code
+///   via [`Vault::totp_code`] against `wall_clock` so the value
+///   stays in lockstep with the visible row label.
+/// * HOTP rows produce bytes iff `reveal_windows` carries an open
+///   [`RevealWindow`] for `id`. The reveal window is the only source
+///   of truth for an HOTP code; the helper never re-reads
+///   `Vault::hotp_peek` so a click outside the reveal window cannot
+///   leak a code the user has not requested.
+/// * Returns [`None`] for an `id` that no longer appears in
+///   `vault.summaries()` (raced removal), for an HOTP row without an
+///   open reveal, and for any TOTP `Vault::totp_code` failure.
+///
+/// The function is `(GTK, gdk::Clipboard)`-free so the routing rules
+/// are exercised by `tests/clipboard_clear_logic.rs` without a
+/// display server. The caller is expected to:
+///
+/// 1. Write the returned bytes through `gdk::Clipboard::set_text`.
+/// 2. Hand them to [`schedule_copy`] so the auto-clear policy can
+///    arm against the captured value.
+#[must_use]
+pub fn prepare_copy_bytes<S: BuildHasher>(
+    vault: &Vault,
+    reveal_windows: &HashMap<AccountId, RevealWindow, S>,
+    id: AccountId,
+    wall_clock: SystemTime,
+) -> Option<Zeroizing<Vec<u8>>> {
+    let summary = vault.summaries().find(|s| s.id == id)?;
+    match summary.kind {
+        AccountKindSummary::Totp => {
+            let code = vault.totp_code(id, wall_clock).ok()?;
+            Some(Zeroizing::new(code.code.into_bytes()))
+        }
+        AccountKindSummary::Hotp => {
+            let window = reveal_windows.get(&id)?;
+            Some(Zeroizing::new(window.code.as_bytes().to_vec()))
+        }
     }
 }
