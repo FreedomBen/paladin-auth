@@ -1212,8 +1212,23 @@ an X11 session before sign-off.
 ## Milestone 7 checklist (expanded from §12)
 
 - [x] Add the `paladin-gtk` crate to the workspace.
-- [ ] Relm4 component tree (Init / Unlock / List / Row / Add / Remove /
+- [x] Relm4 component tree (Init / Unlock / List / Row / Add / Remove /
   Rename / Import / Export / Passphrase / Settings / StartupError).
+  All twelve controllers mount with the same `<Name>Init` /
+  `<Name>Msg` / `<Name>Output` plus `relm4::SimpleComponent` scaffold
+  shape, with TDD coverage in the per-component
+  `tests/<name>_logic.rs`. Row sits inside `AccountListComponent`'s
+  `SignalListItemFactory` binding today rather than as a separate
+  `Controller<AccountRowComponent>` on `AppModel`; the parallel
+  `AccountRowComponent` controller surface is in place so a follow-
+  up migration from `SignalListItemFactory` to
+  `relm4::factory::FactoryVecDeque<AccountRowComponent>` has a
+  stable public API to land against. The follow-up commits for each
+  controller (full passphrase entry on `InitDialog` / `UnlockDialog`,
+  full form widgets on `AddAccountComponent` / `ImportDialogComponent`
+  / `ExportDialogComponent` / `PassphraseDialogComponent` /
+  `SettingsComponent`, full row body migration) attach behavior on
+  top of these mounts.
 - [ ] In-app vault initialization (`InitDialog` for missing vaults;
   plaintext + encrypted paths; explicit confirmation; plaintext-path
   warning sourced from

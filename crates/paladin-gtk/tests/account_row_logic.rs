@@ -329,3 +329,93 @@ fn project_row_collapses_empty_issuer_to_bare_label() {
     let row = project_row(&s, Some(&code));
     assert_eq!(row.label, "alice");
 }
+
+// ---------------------------------------------------------------------------
+// AccountRowComponent scaffold (Milestone 7 component-tree wiring)
+// ---------------------------------------------------------------------------
+//
+// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" entry
+// "Relm4 component tree (Init / Unlock / List / Row / Add / Remove /
+// Rename / Import / Export / Passphrase / Settings / StartupError)",
+// `AccountRowComponent` is the final entry, joining the eleven
+// already-mounted controllers (`AccountListComponent`,
+// `StartupErrorComponent`, `InitDialogComponent`,
+// `UnlockDialogComponent`, `RenameDialogComponent`,
+// `RemoveDialogComponent`, `AddAccountComponent`,
+// `SettingsComponent`, `ImportDialogComponent`,
+// `ExportDialogComponent`, `PassphraseDialogComponent`) with the
+// same scaffold shape: `<Name>Init` / `<Name>Msg` / `<Name>Output`
+// plus a `relm4::SimpleComponent` impl.
+//
+// Unlike the other ten widget-bearing dialog controllers, Row is
+// per-list-item: `AccountListComponent` currently binds the row's
+// display children through a `SignalListItemFactory` against the
+// pure-logic helpers in `account_row.rs`, and its
+// `AccountListOutput::OpenRenameDialog(AccountId)` /
+// `AccountListOutput::OpenRemoveDialog(AccountId)` variants already
+// forward the row's kebab dispatches up to `AppModel`. The scaffold
+// here adds the parallel `AccountRowComponent` controller surface
+// (`AccountRowInit { account_id }`, `AccountRowOutput` covering the
+// same Rename / Remove forwards) so a follow-up migration from
+// `SignalListItemFactory` to a `relm4::factory::FactoryVecDeque<
+// AccountRowComponent>` has a stable public API to land against.
+// This commit only adds the controller surface — `AccountListComponent`
+// keeps its existing factory-bound rendering until that migration
+// lands.
+
+#[test]
+fn account_row_init_round_trips_account_id() {
+    use paladin_gtk::account_row::AccountRowInit;
+
+    let id = AccountId::new();
+    let init = AccountRowInit { account_id: id };
+    assert_eq!(init.account_id, id);
+}
+
+#[test]
+fn account_row_output_request_rename_carries_account_id() {
+    use paladin_gtk::account_row::AccountRowOutput;
+
+    let id = AccountId::new();
+    let output = AccountRowOutput::RequestRename(id);
+    match output {
+        AccountRowOutput::RequestRename(carried) => assert_eq!(carried, id),
+        AccountRowOutput::RequestRemove(other) => {
+            panic!("expected RequestRename({id:?}), got RequestRemove({other:?})")
+        }
+    }
+}
+
+#[test]
+fn account_row_output_request_remove_carries_account_id() {
+    use paladin_gtk::account_row::AccountRowOutput;
+
+    let id = AccountId::new();
+    let output = AccountRowOutput::RequestRemove(id);
+    match output {
+        AccountRowOutput::RequestRemove(carried) => assert_eq!(carried, id),
+        AccountRowOutput::RequestRename(other) => {
+            panic!("expected RequestRemove({id:?}), got RequestRename({other:?})")
+        }
+    }
+}
+
+#[test]
+fn account_row_component_input_and_output_match_dispatch_edges() {
+    use paladin_gtk::account_row::{AccountRowComponent, AccountRowMsg, AccountRowOutput};
+    use relm4::SimpleComponent;
+
+    // Compile-only assertion that ties `AccountRowComponent` to its
+    // associated `Input` / `Output` types so a future migration of
+    // `AccountListComponent` from `SignalListItemFactory` to
+    // `relm4::factory::FactoryVecDeque<AccountRowComponent>` stays
+    // in lock-step with the row controller surface. If a future
+    // refactor renames `AccountRowMsg` or `AccountRowOutput`, this
+    // test fails at compile time before the integration build does.
+    fn assert_types<C>()
+    where
+        C: SimpleComponent<Input = AccountRowMsg, Output = AccountRowOutput>,
+    {
+    }
+    assert_types::<AccountRowComponent>();
+}

@@ -40,7 +40,11 @@
 //! `Code.counter_used` that produced the visible code
 //! ([`CounterText::Used`]). TOTP rows render no counter.
 
-use paladin_core::{AccountKindSummary, AccountSummary, Code};
+use libadwaita as adw;
+use libadwaita::prelude::*;
+use relm4::prelude::*;
+
+use paladin_core::{AccountId, AccountKindSummary, AccountSummary, Code};
 
 /// Render the row's display-label string.
 ///
@@ -227,5 +231,140 @@ pub fn project_row(summary: &AccountSummary, visible_code: Option<&Code>) -> Row
         next_button_visible: next_button_visible(summary.kind),
         progress_visible: progress_visible(summary.kind),
         kebab_visible: kebab_visible(summary.kind),
+    }
+}
+
+/// Construction parameters for [`AccountRowComponent`].
+///
+/// Each row identifies itself by its stable [`paladin_core::AccountId`]
+/// so the row's kebab-menu dispatches ([`AccountRowOutput::RequestRename`] /
+/// [`AccountRowOutput::RequestRemove`]) can carry the ID up to
+/// `AppModel` without re-projecting the live [`AccountSummary`]
+/// through the row controller boundary. Mirrors the
+/// `AccountListOutput::OpenRenameDialog(AccountId)` /
+/// `AccountListOutput::OpenRemoveDialog(AccountId)` shape that the
+/// `SignalListItemFactory` binding in `account_list.rs` already
+/// uses, so a follow-up migration from `SignalListItemFactory` to
+/// `relm4::factory::FactoryVecDeque<AccountRowComponent>` does not
+/// need to widen the per-row payload.
+#[derive(Debug, Clone)]
+pub struct AccountRowInit {
+    /// Stable account identifier the row's kebab-menu dispatches
+    /// carry back up to `AppModel`. Captured from the
+    /// [`AccountRowModel::id`](crate::account_list::AccountRowModel)
+    /// the parent factory iterates so the row never holds a live
+    /// `(Vault, Store)` reference across the controller boundary.
+    pub account_id: AccountId,
+}
+
+/// Messages handled by [`AccountRowComponent`].
+///
+/// This milestone scaffolds the read-only row controller surface;
+/// the visible-code refresh / HOTP reveal / copy-button / progress-
+/// tick transitions described in `IMPLEMENTATION_PLAN_04_GTK.md`
+/// §"Component tree" > `AccountRowComponent` land alongside the
+/// migration of `AccountListComponent` from `SignalListItemFactory`
+/// to `relm4::factory::FactoryVecDeque<AccountRowComponent>`. The
+/// empty enum is the deliberate v0.2 starting point — relm4
+/// requires the associated `Input` type to exist even when no
+/// inbound messages are wired yet.
+#[derive(Debug)]
+pub enum AccountRowMsg {}
+
+/// Messages emitted by [`AccountRowComponent`] for the parent
+/// factory / `AccountListComponent` to consume.
+///
+/// Mirrors the
+/// `AccountListOutput::OpenRenameDialog(AccountId)` /
+/// `AccountListOutput::OpenRemoveDialog(AccountId)` shape that the
+/// existing `SignalListItemFactory` binding already forwards up to
+/// `AppModel`, so the follow-up migration from
+/// `SignalListItemFactory` to `FactoryVecDeque<AccountRowComponent>`
+/// can re-use the same `AppModel` dispatch arms. Submit / copy /
+/// HOTP-advance outputs land in the same follow-up commits that add
+/// the matching [`AccountRowMsg`] variants.
+#[derive(Debug, Clone)]
+pub enum AccountRowOutput {
+    /// Row's kebab-menu "Rename…" entry activated. Carries the
+    /// [`AccountId`] of the row's account so the parent can look up
+    /// the current label and mount the `RenameDialog`.
+    RequestRename(AccountId),
+    /// Row's kebab-menu "Remove…" entry activated. Carries the
+    /// [`AccountId`] of the row's account so the parent can look up
+    /// the current label and mount the `RemoveDialog`.
+    RequestRemove(AccountId),
+}
+
+/// Widget-bearing controller surface for a single account row.
+///
+/// Per DESIGN.md §7 and `IMPLEMENTATION_PLAN_04_GTK.md` §"Component
+/// tree" > `AccountRowComponent`, each row in
+/// `AccountListComponent`'s `gtk::ListView` shows the
+/// `<issuer>:<label>` display string, the current code (or a hidden
+/// placeholder for HOTP rows that have not been revealed), a TOTP
+/// progress indicator or HOTP "next" button, a copy button, and a
+/// kebab `gtk::MenuButton` whose `gio::Menu` exposes Rename… /
+/// Remove… entries.
+///
+/// Today `AccountListComponent` binds these row children through a
+/// `SignalListItemFactory` against the pure-logic helpers
+/// ([`project_row`], [`display_label`], etc.) earlier in this
+/// module, and forwards its row-level kebab dispatches up to
+/// `AppModel` via
+/// `AccountListOutput::OpenRenameDialog(AccountId)` /
+/// `AccountListOutput::OpenRemoveDialog(AccountId)`. The widget body
+/// here is a read-only scaffold at this milestone (an empty
+/// `gtk::Box`), so the controller surface compiles cleanly without
+/// yet replacing the `SignalListItemFactory` binding. Follow-up
+/// commits migrate `AccountListComponent` to a
+/// `relm4::factory::FactoryVecDeque<AccountRowComponent>` and
+/// attach the real widgets that drive the pure-logic helpers.
+pub struct AccountRowComponent {
+    /// Stable identifier the row's kebab dispatches carry. Kept on
+    /// `self` so the upcoming Rename… / Remove… click handlers can
+    /// forward the ID without re-plumbing through every signal. The
+    /// pure-logic round-trip is asserted by
+    /// `tests/account_row_logic.rs`.
+    #[allow(dead_code)]
+    account_id: AccountId,
+}
+
+#[allow(missing_docs)]
+#[relm4::component(pub)]
+impl SimpleComponent for AccountRowComponent {
+    type Init = AccountRowInit;
+    type Input = AccountRowMsg;
+    type Output = AccountRowOutput;
+
+    view! {
+        #[root]
+        adw::ActionRow {
+            // The display-label / code / progress / kebab children
+            // land alongside the `FactoryVecDeque` migration; until
+            // then the row's `title` is left blank so the existing
+            // `SignalListItemFactory` binding in
+            // `AccountListComponent` remains the single source of
+            // truth for the visible row body.
+            set_title: "",
+        },
+    }
+
+    fn init(
+        init: Self::Init,
+        root: Self::Root,
+        _sender: ComponentSender<Self>,
+    ) -> ComponentParts<Self> {
+        let model = AccountRowComponent {
+            account_id: init.account_id,
+        };
+        let widgets = view_output!();
+        ComponentParts { model, widgets }
+    }
+
+    fn update(&mut self, _msg: Self::Input, _sender: ComponentSender<Self>) {
+        // No inbound messages handled at this milestone — see
+        // `AccountRowMsg` doc comment for the upcoming visible-code
+        // refresh / HOTP reveal / copy / progress-tick transitions
+        // that land alongside the `FactoryVecDeque` migration.
     }
 }
