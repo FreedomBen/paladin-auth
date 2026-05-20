@@ -1144,6 +1144,26 @@ impl SimpleComponent for AppModel {
                     }
                 }
             }
+            AppMsg::AccountListAction(AccountListOutput::AdvanceHotp(_id)) => {
+                // HOTP row "next" button dispatch landing site. The
+                // full `Vault::hotp_peek` + `Vault::hotp_advance`
+                // worker (per `IMPLEMENTATION_PLAN_04_GTK.md`
+                // §"Component tree" > `AccountRowComponent` and the
+                // §"HOTP reveal window behavior" cluster of the
+                // Milestone 7 checklist) lands in a follow-up commit
+                // that wires the `(Vault, Store)` round-trip,
+                // `EffectKind::HotpAdvance` busy-gating, and the
+                // `crate::hotp_reveal::apply_advance_outcome` reveal
+                // publication. This arm exists today so the
+                // dispatch pipeline (row button → action group →
+                // `dispatch_row_action` → `AccountListOutput` →
+                // `AppMsg`) is exhaustively matched and the action
+                // group's `next` activation has somewhere to land.
+                // Without this arm the compiler would refuse the
+                // new `AccountListOutput::AdvanceHotp` variant, so
+                // landing the dispatch wiring and the worker as one
+                // commit is impractical.
+            }
             AppMsg::AccountListAction(AccountListOutput::QueryChanged(query)) => {
                 // The user typed into the search bar. Cache the query
                 // on `self.search_query` so the post-mutation refresh

@@ -143,6 +143,20 @@ pub const ROW_RENAME_ACTION_NAME: &str = "rename";
 /// [`AccountId`].
 pub const ROW_REMOVE_ACTION_NAME: &str = "remove";
 
+/// Action name within [`ROW_ACTION_GROUP_NAME`] activated by the
+/// HOTP row's "next" button.
+///
+/// Dispatch through [`dispatch_row_action`] routes this to
+/// [`AccountListOutput::AdvanceHotp`] carrying the row's
+/// [`AccountId`]. `AppModel` consumes the output to spawn the
+/// `Vault::hotp_peek` / `Vault::hotp_advance` worker per
+/// `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+/// `AccountRowComponent`. TOTP rows hide the button via
+/// [`crate::account_row::next_button_visible`] so the action never
+/// fires for them, but the dispatch table is shared with the kebab
+/// menu so the name is pinned here for parity.
+pub const ROW_NEXT_ACTION_NAME: &str = "next";
+
 /// Output forwarded from [`AccountListComponent`] up to `AppModel`
 /// in response to a row-level user intent or a search-query change.
 ///
@@ -175,6 +189,14 @@ pub enum AccountListOutput {
     /// [`AccountId`]. `AppModel` opens `RemoveDialog` (the destructive
     /// confirmation per §"Component tree" > `RemoveDialog`).
     OpenRemoveDialog(AccountId),
+    /// User activated the HOTP row's "next" button. `AppModel`
+    /// transitions to `UnlockedBusy { HotpAdvance, .. }` and spawns
+    /// the `Vault::hotp_peek` + `Vault::hotp_advance` worker per
+    /// `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+    /// `AccountRowComponent`. The reveal-window publication routes
+    /// through [`crate::hotp_reveal::apply_advance_outcome`] once
+    /// the worker returns.
+    AdvanceHotp(AccountId),
     /// User changed the search-bar query. `AppModel` recomputes the
     /// filtered row set against the live `Vault` and sends a
     /// matching [`AccountListMsg::Refresh`] back so the
@@ -185,17 +207,18 @@ pub enum AccountListOutput {
 /// Dispatch table mapping a row-level action name onto the typed
 /// [`AccountListOutput`] forwarded to `AppModel`.
 ///
-/// Returns [`Some`] for [`ROW_RENAME_ACTION_NAME`] /
-/// [`ROW_REMOVE_ACTION_NAME`] and [`None`] for every other input —
-/// the widget layer installs exactly two actions on each row, so an
-/// unrecognized name signals a wiring drift (typo in the action
-/// group, stale kebab menu target, …) and stays a silent no-op
-/// rather than crashing the row.
+/// Returns [`Some`] for [`ROW_RENAME_ACTION_NAME`],
+/// [`ROW_REMOVE_ACTION_NAME`], and [`ROW_NEXT_ACTION_NAME`]; [`None`]
+/// for every other input — the widget layer installs exactly those
+/// three actions on each row, so an unrecognized name signals a
+/// wiring drift (typo in the action group, stale kebab menu target,
+/// …) and stays a silent no-op rather than crashing the row.
 #[must_use]
 pub fn dispatch_row_action(name: &str, id: AccountId) -> Option<AccountListOutput> {
     match name {
         ROW_RENAME_ACTION_NAME => Some(AccountListOutput::OpenRenameDialog(id)),
         ROW_REMOVE_ACTION_NAME => Some(AccountListOutput::OpenRemoveDialog(id)),
+        ROW_NEXT_ACTION_NAME => Some(AccountListOutput::AdvanceHotp(id)),
         _ => None,
     }
 }
@@ -852,9 +875,17 @@ fn build_row_factory(
 /// a `gio::Menu` model built by [`build_kebab_menu_model`] with the
 /// Rename… / Remove… entries described in
 /// `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
-/// `AccountRowComponent`. The action targets land in a follow-up
-/// commit that wires `AccountListMsg::OpenRenameDialog` /
-/// `OpenRemoveDialog` per row.
+/// `AccountRowComponent`.
+///
+/// The trailing "next" button is bound to the per-row
+/// `row.next` action (the same action group the kebab menu targets),
+/// so clicks fire [`dispatch_row_action`] →
+/// [`AccountListOutput::AdvanceHotp`] without an extra
+/// `connect_clicked` closure. HOTP-only visibility is enforced at
+/// bind time by [`bind_row`] reading
+/// [`crate::account_row::next_button_visible`]; TOTP rows hide the
+/// button outright so the action is unreachable for them even
+/// though the per-row action group still carries the entry.
 fn build_row_widget() -> gtk::Box {
     let container = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
@@ -897,6 +928,7 @@ fn build_row_widget() -> gtk::Box {
         .icon_name("view-refresh-symbolic")
         .tooltip_text("Reveal next HOTP code")
         .valign(gtk::Align::Center)
+        .action_name(format!("{ROW_ACTION_GROUP_NAME}.{ROW_NEXT_ACTION_NAME}"))
         .build();
     next.add_css_class("flat");
     let kebab = gtk::MenuButton::builder()
@@ -975,13 +1007,28 @@ fn install_row_action_group(
     actions.add_action(&rename);
 
     let remove = gio::SimpleAction::new(ROW_REMOVE_ACTION_NAME, None);
-    let remove_sender = output_sender;
+    let remove_sender = output_sender.clone();
     remove.connect_activate(move |_, _| {
         if let Some(out) = dispatch_row_action(ROW_REMOVE_ACTION_NAME, id) {
             let _ = remove_sender.send(out);
         }
     });
     actions.add_action(&remove);
+
+    // HOTP rows expose "next" via the trailing button; TOTP rows
+    // hide the button per [`crate::account_row::next_button_visible`]
+    // so the activation closure only fires for HOTP rows. The action
+    // is still registered on every row so the per-row action group's
+    // membership stays stable as `gtk::ListView` recycles the
+    // container — no separate group rebuild on each rebind.
+    let next = gio::SimpleAction::new(ROW_NEXT_ACTION_NAME, None);
+    let next_sender = output_sender;
+    next.connect_activate(move |_, _| {
+        if let Some(out) = dispatch_row_action(ROW_NEXT_ACTION_NAME, id) {
+            let _ = next_sender.send(out);
+        }
+    });
+    actions.add_action(&next);
 
     container.insert_action_group(ROW_ACTION_GROUP_NAME, Some(&actions));
 }

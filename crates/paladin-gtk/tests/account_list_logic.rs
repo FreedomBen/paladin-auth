@@ -31,7 +31,7 @@ use paladin_gtk::account_list::{
     format_rendered_marker, format_widget_states_marker, hidden_row_display, prune_cache_to_rows,
     row_model_for_account, row_models_from_vault, selected_row_after_refresh, AccountListOutput,
     AccountRowModel, ACCOUNT_LIST_WIDGET_STATES_MARKER_PREFIX, ROW_ACTION_GROUP_NAME,
-    ROW_REMOVE_ACTION_NAME, ROW_RENAME_ACTION_NAME,
+    ROW_NEXT_ACTION_NAME, ROW_REMOVE_ACTION_NAME, ROW_RENAME_ACTION_NAME,
 };
 use paladin_gtk::account_row::{CodeDisplay, CounterText, ProgressDisplay, RowDisplay};
 
@@ -701,6 +701,17 @@ fn row_remove_action_name_is_remove() {
 }
 
 #[test]
+fn row_next_action_name_is_next() {
+    // The HOTP row's "next" button targets `row.next`, which
+    // resolves to the action named `next` inside the `row` group.
+    // Pinning the name here keeps the widget binding in
+    // `build_row_widget` and the action installed by
+    // [`install_row_action_group`] in lockstep with
+    // [`dispatch_row_action`].
+    assert_eq!(ROW_NEXT_ACTION_NAME, "next");
+}
+
+#[test]
 fn dispatch_row_action_routes_rename_to_open_rename_dialog() {
     let id = AccountId::new();
     assert_eq!(
@@ -715,6 +726,20 @@ fn dispatch_row_action_routes_remove_to_open_remove_dialog() {
     assert_eq!(
         dispatch_row_action(ROW_REMOVE_ACTION_NAME, id),
         Some(AccountListOutput::OpenRemoveDialog(id)),
+    );
+}
+
+#[test]
+fn dispatch_row_action_routes_next_to_advance_hotp() {
+    // The HOTP "next" button's `row.next` activation resolves to
+    // `AccountListOutput::AdvanceHotp(id)`. `AppModel` consumes that
+    // output to spawn the `Vault::hotp_peek` / `Vault::hotp_advance`
+    // worker per `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+    // `AccountRowComponent`.
+    let id = AccountId::new();
+    assert_eq!(
+        dispatch_row_action(ROW_NEXT_ACTION_NAME, id),
+        Some(AccountListOutput::AdvanceHotp(id)),
     );
 }
 
@@ -752,14 +777,33 @@ fn account_list_output_carries_account_id_for_remove() {
 }
 
 #[test]
+fn account_list_output_carries_account_id_for_advance_hotp() {
+    let id = AccountId::new();
+    let out = AccountListOutput::AdvanceHotp(id);
+    let AccountListOutput::AdvanceHotp(carried) = out else {
+        panic!("AdvanceHotp should round-trip its AccountId");
+    };
+    assert_eq!(carried, id);
+}
+
+#[test]
 fn account_list_output_variants_are_distinct() {
     // Same id, different variants must compare unequal — the
     // dispatch table relies on the variant carrying the user's
-    // intent (rename vs. remove), not just the row identity.
+    // intent (rename vs. remove vs. advance-hotp), not just the row
+    // identity.
     let id = AccountId::new();
     assert_ne!(
         AccountListOutput::OpenRenameDialog(id),
         AccountListOutput::OpenRemoveDialog(id),
+    );
+    assert_ne!(
+        AccountListOutput::OpenRenameDialog(id),
+        AccountListOutput::AdvanceHotp(id),
+    );
+    assert_ne!(
+        AccountListOutput::OpenRemoveDialog(id),
+        AccountListOutput::AdvanceHotp(id),
     );
 }
 
