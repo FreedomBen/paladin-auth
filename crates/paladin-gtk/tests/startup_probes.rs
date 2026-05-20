@@ -27346,3 +27346,132 @@ fn format_app_about_dialog_comments_does_not_contain_a_start_of_text_byte() {
         "AdwAboutDialog comments must not contain the `\\x02` start-of-text byte (0x02); like ETX, EOT, ENQ, ACK, and BEL, STX is NOT matched by `char::is_whitespace()` (Unicode returns false for U+0002 STX), so the comments helper's transitive whitespace-boundary / single-line protections do NOT cover STX; a mid-string `\\x02` slips past `_is_non_empty_single_line_distinct_from_program_name` (which only checks `\\n` and uses `char::is_whitespace()` for boundary checks — neither catches `\\x02`), past `_is_ascii_only` (because `\\x02` is ASCII), past `_does_not_end_with_a_period_per_libadwaita_convention` (which only constrains the trailing byte), past `_matches_cargo_pkg_description` (a future workspace description that introduced `\\x02` would propagate the byte and this equality pin would still pass), and past `_does_not_contain_a_null_byte` / `_does_not_contain_a_horizontal_tab_byte` / `_does_not_contain_a_carriage_return_byte` / `_does_not_contain_a_vertical_tab_byte` / `_does_not_contain_a_form_feed_byte` / `_does_not_contain_a_backspace_byte` / `_does_not_contain_a_line_feed_byte` / `_does_not_contain_a_bell_byte` / `_does_not_contain_an_acknowledge_byte` / `_does_not_contain_an_enquiry_byte` / `_does_not_contain_an_end_of_transmission_byte` / `_does_not_contain_an_end_of_text_byte` (which each name a different byte specifically); it would render as a literal control glyph in the dialog header comments row, confuse serial-protocol-bridging tooling that treats `\\x02` as a STX text-segment opener if dumped through a serial-bridged TTY (splicing the comments at the byte boundary into an unexpected follow-on block), trigger readline `^B` cursor-jump surprises in interactive shells capturing the elevator-pitch through a pty with the default Emacs keymap, break screen-reader comments announcements at the byte boundary, propagate into downstream changelog aggregators and AppStream `<summary>` extractors, and trigger AppStream `<summary>` validation rejection at packaging time; got {comments:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_developers_entries_do_not_contain_a_start_of_text_byte() {
+    // Defense-in-depth per-entry-loop sibling extending the
+    // developers-array byte-cleanliness contract past the
+    // just-completed `{null / horizontal-tab / carriage-
+    // return / vertical-tab / form-feed / backspace / line-
+    // feed / bell / acknowledge / enquiry / end-of-
+    // transmission / end-of-text}` entry-duodecuple to the
+    // start-of-text byte `\x02` (0x02), continuing the non-
+    // whitespace-classified C0 control-byte cycle past ETX
+    // (0x03) for each entry. Like ETX, EOT, ENQ, ACK, and
+    // BEL, STX is NOT matched by `char::is_whitespace()`
+    // (Unicode treats STX as a control byte, not
+    // whitespace), so the
+    // `_is_non_empty_array_of_non_empty_single_line_names`
+    // surrounding-whitespace boundary guards
+    // (`!name.starts_with(char::is_whitespace)` and
+    // `!name.ends_with(char::is_whitespace)`) do NOT reject
+    // a leading or trailing `\x02` per entry — making the
+    // start-of-text byte strictly as dangerous as end-of-
+    // text, end-of-transmission, enquiry, acknowledge,
+    // backspace, and bell for each entry.
+    //
+    // None of the existing developers companions name the
+    // `\x02` byte directly per entry:
+    //   - `_is_non_empty_array_of_non_empty_single_line_names`
+    //     pins each entry as non-empty and single-line via
+    //     `!name.contains('\n')` — `\x02` is not `\n`. The
+    //     surrounding-whitespace boundary guards use
+    //     `char::is_whitespace()`, which returns *false*
+    //     for U+0002 STX, so neither guard rejects `\x02`
+    //     even at the boundary;
+    //   - `_entries_are_distinct` / `_does_not_contain_developer_name`
+    //     / `_does_not_contain_app_id` /
+    //     `_does_not_contain_program_name` /
+    //     `_lists_benjamin_porter` guard against content-
+    //     shape regressions but say nothing about embedded
+    //     `\x02` bytes;
+    //   - `_entries_do_not_contain_a_null_byte` /
+    //     `_entries_do_not_contain_a_horizontal_tab_byte` /
+    //     `_entries_do_not_contain_a_carriage_return_byte` /
+    //     `_entries_do_not_contain_a_vertical_tab_byte` /
+    //     `_entries_do_not_contain_a_form_feed_byte` /
+    //     `_entries_do_not_contain_a_backspace_byte` /
+    //     `_entries_do_not_contain_a_line_feed_byte` /
+    //     `_entries_do_not_contain_a_bell_byte` /
+    //     `_entries_do_not_contain_an_acknowledge_byte` /
+    //     `_entries_do_not_contain_an_enquiry_byte` /
+    //     `_entries_do_not_contain_an_end_of_transmission_byte`
+    //     / `_entries_do_not_contain_an_end_of_text_byte`
+    //     siblings each name a different byte specifically.
+    //
+    // A regression that landed `["Benjamin\x02Porter"]`
+    // (a start-of-text byte lifted from a `script(1)`
+    // typescript capturing raw `\x02` STX framing bytes
+    // from a CI build that bridged a serial console mid-
+    // contributor-name edit during a Bisync-style text-
+    // block transfer, a `concat!("Benjamin", "\x02",
+    // "Porter")` form mirroring a text-segment-delimited
+    // contributor edit, or a hand-edited helper that
+    // pasted from a terminal session interfacing with a
+    // protocol bridge preserving STX framing bytes) would
+    // mis-render in multiple downstream surfaces: (1) the
+    // GLib-backed `AdwAboutDialog::set_developers` setter
+    // hands the array to GTK and Pango renders each entry
+    // as a credits-page row — a stray `\x02` byte in the
+    // middle of a contributor name would render as a
+    // literal control glyph (a hollow box or tofu-like
+    // placeholder), breaking the credits-page contributor-
+    // name layout; (2) when the credits-page is dumped
+    // through a serial-bridged TTY (CI logs over a serial
+    // console, an out-of-band debugging session), the
+    // `\x02` byte may be intercepted by the receiving end
+    // as a start-of-text framing indicator and signal the
+    // start of a new text block, confusing protocol-
+    // bridging tooling that treats STX as a text-segment
+    // opener and splicing the contributor name at the byte
+    // boundary into an unexpected follow-on block; on
+    // POSIX terminals using emacs-style line editing where
+    // `^B` defaults to the backward-one-character
+    // keybinding, the byte may surface as an unexpected
+    // cursor jump in any interactive shell that captures
+    // the credits-page through a pty with readline bound
+    // to the default Emacs keymap; (3) any tooling that
+    // scrapes the credits-page contributor list (release-
+    // note generators, contributor-attribution crawlers,
+    // GNOME `gnome-software` credit aggregators) would
+    // propagate the stray `\x02` byte into the consumer's
+    // stream and trigger the same control-glyph /
+    // readline-keybinding / protocol-confusion bug across
+    // every downstream surface; (4) screen readers that
+    // announce the credits-page contributor names render
+    // the byte as a literal control character
+    // announcement, breaking the contributor-name
+    // accessibility-tree announcement at the byte
+    // boundary.
+    //
+    // Pinning the no-`\x02` invariant across every
+    // contributor entry in a single per-entry loop
+    // surfaces the regression with a message naming both
+    // the offending byte and the affected entry index at
+    // build time rather than as a downstream credits-page
+    // rendering artifact, a serial-protocol STX-frame
+    // text-segment-opener collision through TTY dumps, a
+    // readline `^B` cursor surprise, or a screen-reader
+    // announcement break. Current helper returns the
+    // literal `["Benjamin Porter"]` (no `\x02` byte), so
+    // this test passes today and serves as a forcing
+    // function so any future override of the helper — or
+    // any future contributor addition — stays free of
+    // start-of-text bytes. Continues the non-whitespace-
+    // classified C0 control-byte cycle past the just-
+    // completed `{null / horizontal-tab / carriage-return
+    // / vertical-tab / form-feed / backspace / line-feed /
+    // bell / acknowledge / enquiry / end-of-transmission /
+    // end-of-text}` duodecuple so each entry's byte-
+    // composition contract pins each forbidden control
+    // byte against a single source of truth.
+    use paladin_gtk::app::model::format_app_about_dialog_developers;
+
+    let developers = format_app_about_dialog_developers();
+    for (idx, entry) in developers.iter().enumerate() {
+        assert!(
+            !entry.contains('\x02'),
+            "AdwAboutDialog developers entry at index {idx} must not contain the `\\x02` start-of-text byte (0x02); like ETX, EOT, ENQ, ACK, and BEL, STX is NOT matched by `char::is_whitespace()` (Unicode returns false for U+0002 STX), so a mid-string `\\x02` slips past `_is_non_empty_array_of_non_empty_single_line_names` (which only checks `\\n` per entry and uses `char::is_whitespace()` for boundary checks — neither catches `\\x02`), past `_entries_are_distinct` / `_does_not_contain_developer_name` / `_does_not_contain_app_id` / `_does_not_contain_program_name` / `_lists_benjamin_porter` (which only constrain content shape), and past `_entries_do_not_contain_a_null_byte` / `_entries_do_not_contain_a_horizontal_tab_byte` / `_entries_do_not_contain_a_carriage_return_byte` / `_entries_do_not_contain_a_vertical_tab_byte` / `_entries_do_not_contain_a_form_feed_byte` / `_entries_do_not_contain_a_backspace_byte` / `_entries_do_not_contain_a_line_feed_byte` / `_entries_do_not_contain_a_bell_byte` / `_entries_do_not_contain_an_acknowledge_byte` / `_entries_do_not_contain_an_enquiry_byte` / `_entries_do_not_contain_an_end_of_transmission_byte` / `_entries_do_not_contain_an_end_of_text_byte` (which each name a different byte specifically); it would render as a literal control glyph in the credits-page \"Developers\" row, confuse serial-protocol-bridging tooling that treats `\\x02` as a STX text-segment opener if dumped through a serial-bridged TTY (splicing the contributor name at the byte boundary into an unexpected follow-on block), trigger readline `^B` cursor-jump surprises in interactive shells capturing the credits-page through a pty with the default Emacs keymap, propagate into downstream attribution scrapers and `gnome-software` credit aggregators, and break screen-reader contributor-name announcements at the byte boundary; got {entry:?}",
+        );
+    }
+}
