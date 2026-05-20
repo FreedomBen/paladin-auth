@@ -20,7 +20,7 @@
 //!   layer never reaches for the live `Account` — it only reads
 //!   the already-projected [`AccountRowModel`].
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -33,8 +33,9 @@ use relm4::prelude::*;
 use paladin_core::{select_after_filter, AccountId, AccountKindSummary, Vault};
 
 use crate::account_row::{
-    copy_enabled, kebab_visible, next_button_visible, progress_fraction, progress_visible,
-    summary_display_label, CodeDisplay, CounterText, RowDisplay,
+    apply_busy_mask, copy_enabled, kebab_enabled, kebab_visible, next_button_enabled,
+    next_button_visible, progress_fraction, progress_visible, summary_display_label, CodeDisplay,
+    CounterText, RowDisplay,
 };
 use crate::icon_resolution::resolve_display_icon;
 use crate::search::filtered_account_ids;
@@ -54,6 +55,22 @@ use crate::search::filtered_account_ids;
 /// main loop is the only writer.
 pub type LiveDisplayCache = Rc<RefCell<HashMap<AccountId, RowDisplay>>>;
 
+/// Shared per-list "is the parent `AppModel` in `UnlockedBusy`?" flag.
+///
+/// `AppModel` dispatches [`AccountListMsg::SetBusy`] when it enters /
+/// leaves `AppState::UnlockedBusy`; the component stores the latest
+/// value through this `Cell` and the row factory closure reads it on
+/// every bind so [`bind_display_for_row`] can clamp the mutating-row
+/// affordances via [`apply_busy_mask`] per
+/// `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership".
+///
+/// `Rc<Cell<bool>>` because the flag is shared between the
+/// [`AccountListComponent`] state (which writes on
+/// [`AccountListMsg::SetBusy`]) and the row factory closure (which
+/// reads on rebind). Single-threaded — the GTK main loop is the
+/// only writer.
+pub type BusyFlag = Rc<Cell<bool>>;
+
 /// Resolve the per-row [`RowDisplay`] the factory should bind for a
 /// given [`AccountRowModel`].
 ///
@@ -69,8 +86,14 @@ pub type LiveDisplayCache = Rc<RefCell<HashMap<AccountId, RowDisplay>>>;
 /// pinned by `tests/account_list_logic.rs` without spinning up GTK
 /// or libadwaita.
 #[must_use]
-pub fn bind_display_for_row(live: Option<&RowDisplay>, model: &AccountRowModel) -> RowDisplay {
-    live.cloned().unwrap_or_else(|| hidden_row_display(model))
+pub fn bind_display_for_row(
+    live: Option<&RowDisplay>,
+    model: &AccountRowModel,
+    busy: bool,
+) -> RowDisplay {
+    let mut display = live.cloned().unwrap_or_else(|| hidden_row_display(model));
+    apply_busy_mask(&mut display, busy);
+    display
 }
 
 /// Prune cache entries whose [`AccountId`] no longer appears in
@@ -412,9 +435,11 @@ pub fn hidden_row_display(model: &AccountRowModel) -> RowDisplay {
         counter,
         copy_enabled: copy_enabled(model.kind, false),
         next_button_visible: next_button_visible(model.kind),
+        next_button_enabled: next_button_enabled(model.kind),
         progress_visible: progress_visible(model.kind),
         progress: None,
         kebab_visible: kebab_visible(model.kind),
+        kebab_enabled: kebab_enabled(),
     }
 }
 
@@ -444,14 +469,15 @@ pub fn format_rendered_marker(rows: &[AccountRowModel]) -> String {
 /// * `copy:on` / `copy:off` — driven by
 ///   [`crate::account_row::RowDisplay::copy_enabled`].
 /// * `next:on` / `next:off` — driven by
-///   [`crate::account_row::RowDisplay::next_button_visible`]; the
-///   HOTP "next" button is exposed on HOTP rows and hidden on TOTP
-///   rows.
+///   [`crate::account_row::RowDisplay::next_button_enabled`]; the
+///   HOTP "next" button is enabled on HOTP rows and disabled (and
+///   hidden) on TOTP rows. While `AppModel` is `UnlockedBusy` the
+///   per-row [`apply_busy_mask`] flips this to `off`.
 /// * `kebab:on` / `kebab:off` — driven by
-///   [`crate::account_row::RowDisplay::kebab_visible`]; every row
+///   [`crate::account_row::RowDisplay::kebab_enabled`]; every row
 ///   exposes the Rename… / Remove… kebab menu unconditionally, so
-///   this key renders `on` in practice. Pinning the entry keeps
-///   "the bundle mounted the kebab" an explicit invariant.
+///   this key renders `on` in practice — except while `UnlockedBusy`,
+///   when [`apply_busy_mask`] flips it to `off`.
 ///
 /// Pipe matches [`format_rendered_marker`]; colon separates key
 /// from value and comma separates key/value pairs within a row,
@@ -464,8 +490,8 @@ pub fn format_widget_states_marker(displays: &[RowDisplay]) -> String {
             format!(
                 "copy:{},next:{},kebab:{}",
                 if d.copy_enabled { "on" } else { "off" },
-                if d.next_button_visible { "on" } else { "off" },
-                if d.kebab_visible { "on" } else { "off" },
+                if d.next_button_enabled { "on" } else { "off" },
+                if d.kebab_enabled { "on" } else { "off" },
             )
         })
         .collect();
@@ -571,6 +597,14 @@ pub struct AccountListComponent {
     /// path mutates the cache and then triggers a rebind by
     /// re-splicing [`Self::current_rows`] into [`Self::model`].
     live_displays: LiveDisplayCache,
+    /// Shared "is `AppModel` in `UnlockedBusy`?" flag the factory's
+    /// `connect_bind` callback reads through
+    /// [`bind_display_for_row`] so the row's mutating-row affordances
+    /// (copy, "next", kebab) dim while a vault-touching worker is in
+    /// flight per `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect
+    /// ownership". `AppModel` flips this through
+    /// [`AccountListMsg::SetBusy`].
+    busy_flag: BusyFlag,
 }
 
 /// Messages handled by [`AccountListComponent`].
@@ -620,6 +654,20 @@ pub enum AccountListMsg {
     /// benign no-op (e.g. an HOTP-only vault — no TOTP refresh is
     /// needed).
     Tick(Vec<(AccountId, RowDisplay)>),
+    /// Latch the parent `AppModel`'s `AppState::is_busy()` state so
+    /// the row factory can dim copy / "next" / kebab while a
+    /// vault-touching worker is in flight per
+    /// `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership".
+    ///
+    /// `AppModel` sends `SetBusy(true)` on entry into
+    /// `UnlockedBusy` and `SetBusy(false)` on the worker return /
+    /// `Locked` / `StartupError` transitions. Re-splicing the row
+    /// store after the flag flips forces the factory to rebind every
+    /// visible row through [`bind_display_for_row`], which applies
+    /// the busy mask via
+    /// [`crate::account_row::apply_busy_mask`]. Idempotent — sending
+    /// the same value twice is a benign no-op (no splice fires).
+    SetBusy(bool),
 }
 
 #[allow(missing_docs)]
@@ -666,7 +714,12 @@ impl SimpleComponent for AccountListComponent {
         apply_selection(&selection, &init.rows, init.initial_selection);
 
         let live_displays: LiveDisplayCache = Rc::new(RefCell::new(HashMap::new()));
-        let factory = build_row_factory(sender.output_sender().clone(), Rc::clone(&live_displays));
+        let busy_flag: BusyFlag = Rc::new(Cell::new(false));
+        let factory = build_row_factory(
+            sender.output_sender().clone(),
+            Rc::clone(&live_displays),
+            Rc::clone(&busy_flag),
+        );
 
         let search_entry = gtk::SearchEntry::builder()
             .placeholder_text("Search accounts")
@@ -698,6 +751,7 @@ impl SimpleComponent for AccountListComponent {
             current_selection: init.initial_selection,
             current_rows: init.rows,
             live_displays,
+            busy_flag,
         };
         ComponentParts {
             model: component,
@@ -750,6 +804,20 @@ impl SimpleComponent for AccountListComponent {
                 // updated cache. Selection is preserved through the
                 // same `apply_selection` pass used on
                 // [`AccountListMsg::Refresh`].
+                splice_rows(&self.model, &self.current_rows);
+                apply_selection(&self.selection, &self.current_rows, self.current_selection);
+            }
+            AccountListMsg::SetBusy(busy) => {
+                if self.busy_flag.get() == busy {
+                    return;
+                }
+                self.busy_flag.set(busy);
+                // Re-splice with the same rows so the factory rebinds
+                // every visible item through `bind_display_for_row`,
+                // which now sees the updated busy flag and applies
+                // `apply_busy_mask` to the resulting `RowDisplay`.
+                // Selection survives through the same
+                // `apply_selection` pass used on `Refresh` / `Tick`.
                 splice_rows(&self.model, &self.current_rows);
                 apply_selection(&self.selection, &self.current_rows, self.current_selection);
             }
@@ -841,6 +909,7 @@ fn format_counter_label(counter: CounterText) -> String {
 fn build_row_factory(
     output_sender: relm4::Sender<AccountListOutput>,
     live_displays: LiveDisplayCache,
+    busy_flag: BusyFlag,
 ) -> gtk::SignalListItemFactory {
     let factory = gtk::SignalListItemFactory::new();
     factory.connect_setup(|_, item| {
@@ -867,7 +936,7 @@ fn build_row_factory(
         };
         let row: std::cell::Ref<AccountRowModel> = boxed.borrow();
         let cache = live_displays.borrow();
-        let display = bind_display_for_row(cache.get(&row.id), &row);
+        let display = bind_display_for_row(cache.get(&row.id), &row, busy_flag.get());
         bind_row(&container, &display);
         bind_row_icon(&container, row.icon_hint.as_deref());
         install_row_action_group(&container, row.id, output_sender.clone());
@@ -1087,16 +1156,25 @@ fn install_row_action_group(
 ///   HOTP rows are sensitive only while a visible reveal code is in
 ///   hand, matching the `IMPLEMENTATION_PLAN_04_GTK.md` §"Component
 ///   tree" > `AccountRowComponent` rule that copying a hidden HOTP
-///   row is disabled.
+///   row is disabled. While `AppModel` is `UnlockedBusy`,
+///   [`bind_display_for_row`] runs the projection through
+///   [`apply_busy_mask`] so this bit flips off and the row's copy
+///   action no longer fires.
 /// * The HOTP "next" button's visibility mirrors
 ///   [`RowDisplay::next_button_visible`]: HOTP rows show it (the
 ///   user activates it to advance the counter and open a reveal
-///   window); TOTP rows hide it.
+///   window); TOTP rows hide it. Its sensitive state mirrors
+///   [`RowDisplay::next_button_enabled`], which is dimmed by
+///   [`apply_busy_mask`] while `UnlockedBusy` so the worker holds
+///   the `(Vault, Store)` pair uncontested per
+///   §"In-flight effect ownership".
 /// * The kebab `MenuButton`'s visibility mirrors
 ///   [`RowDisplay::kebab_visible`]: every row exposes the
 ///   Rename… / Remove… menu unconditionally. The visibility bind is
 ///   kept for parity with the other affordances so a future
-///   per-row override stays a one-line projection change.
+///   per-row override stays a one-line projection change. Its
+///   sensitive state mirrors [`RowDisplay::kebab_enabled`], dimmed
+///   by [`apply_busy_mask`] while `UnlockedBusy`.
 fn bind_row(container: &gtk::Box, display: &RowDisplay) {
     let Some(icon) = container.first_child().and_downcast::<gtk::Image>() else {
         return;
@@ -1147,7 +1225,9 @@ fn bind_row(container: &gtk::Box, display: &RowDisplay) {
 
     copy.set_sensitive(display.copy_enabled);
     next.set_visible(display.next_button_visible);
+    next.set_sensitive(display.next_button_enabled);
     kebab.set_visible(display.kebab_visible);
+    kebab.set_sensitive(display.kebab_enabled);
 }
 
 /// Resolve the row's icon against the live `gtk::IconTheme` and

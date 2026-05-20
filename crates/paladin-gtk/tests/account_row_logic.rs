@@ -29,9 +29,10 @@
 use paladin_core::{AccountId, AccountKindSummary, AccountSummary, Algorithm, Code};
 
 use paladin_gtk::account_row::{
-    code_display, copy_enabled, counter_display, kebab_visible, next_button_visible,
-    progress_display, progress_fraction, progress_visible, project_row, summary_display_label,
-    CodeDisplay, CounterText, ProgressDisplay, RowDisplay,
+    apply_busy_mask, code_display, copy_enabled, counter_display, kebab_enabled, kebab_visible,
+    next_button_enabled, next_button_visible, progress_display, progress_fraction,
+    progress_visible, project_row, summary_display_label, CodeDisplay, CounterText,
+    ProgressDisplay, RowDisplay,
 };
 
 // ---------------------------------------------------------------------------
@@ -269,6 +270,115 @@ fn kebab_visible_always_on_for_totp_and_hotp() {
 }
 
 // ---------------------------------------------------------------------------
+// `next_button_enabled` — intrinsic clickability; mirrors visibility (HOTP only)
+//
+// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+// `AccountRowComponent`, the "next" button is rendered only on HOTP rows.
+// The intrinsic-enabled projection mirrors that visibility — the widget
+// layer feeds it into `gtk::Button::set_sensitive` and the per-component
+// busy mask (see [`apply_busy_mask`]) flips it to `false` while
+// `AppModel` is `UnlockedBusy` per §"In-flight effect ownership".
+// ---------------------------------------------------------------------------
+
+#[test]
+fn next_button_enabled_only_for_hotp() {
+    assert!(!next_button_enabled(AccountKindSummary::Totp));
+    assert!(next_button_enabled(AccountKindSummary::Hotp));
+}
+
+// ---------------------------------------------------------------------------
+// `kebab_enabled` — always on (every row exposes the kebab menu)
+//
+// Intrinsic clickability of the row kebab menu. Always `true` for parity
+// with [`kebab_visible`]; the per-component busy mask flips it to `false`
+// while `AppModel` is `UnlockedBusy`.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn kebab_enabled_always_on() {
+    assert!(kebab_enabled());
+}
+
+// ---------------------------------------------------------------------------
+// `apply_busy_mask` — clamp mutating-row affordances during `UnlockedBusy`
+//
+// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership" /
+// §"Component tree" > `AccountRowComponent` ("Disable mutating row
+// controls (copy, 'next', kebab) while `AppModel` is `UnlockedBusy`"),
+// the row factory threads the current `AppState::is_busy()` flag through
+// this mask before binding the row's widgets. When `busy == true`, the
+// three mutating-affordance enabled flags collapse to `false`; visibility
+// and the progress / counter projections are untouched so the row keeps
+// rendering the code and gauge while the worker is in flight.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn apply_busy_mask_busy_true_clears_all_three_enabled_flags() {
+    let s = hotp_summary("bob", Some("Acme"), 6);
+    let code = hotp_code("999000", 5);
+    let mut row = project_row(&s, Some(&code));
+    apply_busy_mask(&mut row, true);
+    assert!(!row.copy_enabled);
+    assert!(!row.next_button_enabled);
+    assert!(!row.kebab_enabled);
+}
+
+#[test]
+fn apply_busy_mask_busy_false_is_noop() {
+    let s = hotp_summary("bob", Some("Acme"), 6);
+    let code = hotp_code("999000", 5);
+    let row = project_row(&s, Some(&code));
+    let mut masked = row.clone();
+    apply_busy_mask(&mut masked, false);
+    assert_eq!(masked, row);
+}
+
+#[test]
+fn apply_busy_mask_preserves_visibility_and_progress() {
+    // Busy must dim the controls without hiding them or wiping the
+    // visible code / progress fields — the row keeps rendering while
+    // the worker is in flight so the user sees what's still on screen.
+    let s = totp_summary("alice", Some("Acme"));
+    let code = totp_code("111222", 18);
+    let original = project_row(&s, Some(&code));
+    let mut masked = original.clone();
+    apply_busy_mask(&mut masked, true);
+    assert_eq!(masked.label, original.label);
+    assert_eq!(masked.kind, original.kind);
+    assert_eq!(masked.code, original.code);
+    assert_eq!(masked.counter, original.counter);
+    assert_eq!(masked.next_button_visible, original.next_button_visible);
+    assert_eq!(masked.progress_visible, original.progress_visible);
+    assert_eq!(masked.progress, original.progress);
+    assert_eq!(masked.kebab_visible, original.kebab_visible);
+}
+
+#[test]
+fn apply_busy_mask_busy_true_dims_totp_kebab_too() {
+    // TOTP rows have `next_button_enabled = false` intrinsically, but
+    // their kebab + copy controls must still be dimmed while busy.
+    let s = totp_summary("alice", Some("Acme"));
+    let code = totp_code("111222", 18);
+    let mut row = project_row(&s, Some(&code));
+    apply_busy_mask(&mut row, true);
+    assert!(!row.copy_enabled);
+    assert!(!row.next_button_enabled);
+    assert!(!row.kebab_enabled);
+}
+
+#[test]
+fn apply_busy_mask_busy_true_dims_hidden_hotp_row() {
+    // Hidden HOTP rows already have `copy_enabled = false`; busy still
+    // forces `next_button_enabled = false` and `kebab_enabled = false`.
+    let s = hotp_summary("bob", None, 0);
+    let mut row = project_row(&s, None);
+    apply_busy_mask(&mut row, true);
+    assert!(!row.copy_enabled);
+    assert!(!row.next_button_enabled);
+    assert!(!row.kebab_enabled);
+}
+
+// ---------------------------------------------------------------------------
 // `copy_enabled` — TOTP always; HOTP only during reveal
 // ---------------------------------------------------------------------------
 
@@ -392,12 +502,14 @@ fn project_row_totp_with_visible_code() {
         counter: None,
         copy_enabled: true,
         next_button_visible: false,
+        next_button_enabled: false,
         progress_visible: true,
         progress: Some(ProgressDisplay {
             period_secs: 30,
             seconds_remaining: 18,
         }),
         kebab_visible: true,
+        kebab_enabled: true,
     };
     assert_eq!(row, expected);
 }
@@ -413,9 +525,11 @@ fn project_row_hotp_hidden() {
         counter: Some(CounterText::Stored(5)),
         copy_enabled: false,
         next_button_visible: true,
+        next_button_enabled: true,
         progress_visible: false,
         progress: None,
         kebab_visible: true,
+        kebab_enabled: true,
     };
     assert_eq!(row, expected);
 }
@@ -432,9 +546,11 @@ fn project_row_hotp_revealed() {
         counter: Some(CounterText::Used(5)),
         copy_enabled: true,
         next_button_visible: true,
+        next_button_enabled: true,
         progress_visible: false,
         progress: None,
         kebab_visible: true,
+        kebab_enabled: true,
     };
     assert_eq!(row, expected);
 }

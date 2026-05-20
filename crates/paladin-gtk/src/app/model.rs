@@ -321,6 +321,17 @@ pub struct AppModel {
     /// `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" >
     /// `AccountRowComponent` copy button.
     pending_clipboard: Option<PendingClipboardClear>,
+    /// Last `AppState::is_busy()` value dispatched to the live
+    /// [`AccountListComponent`] via [`AccountListMsg::SetBusy`].
+    ///
+    /// Tracked here so [`AppModel::sync_account_list_busy`] can
+    /// debounce — the per-dispatch reconcile only emits the message
+    /// when the busy flag actually flips, avoiding a redundant
+    /// row-store splice on every steady-state update. Initialized to
+    /// `false` because every startup path ([`AppState::Missing`],
+    /// [`AppState::Locked`], [`AppState::Unlocked`],
+    /// [`AppState::StartupError`]) yields `is_busy() == false`.
+    last_account_list_busy: bool,
 }
 
 impl std::fmt::Debug for AppModel {
@@ -385,6 +396,7 @@ impl std::fmt::Debug for AppModel {
                 "pending_clipboard",
                 &self.pending_clipboard.as_ref().map(|_| "<armed>"),
             )
+            .field("last_account_list_busy", &self.last_account_list_busy)
             .finish()
     }
 }
@@ -1174,6 +1186,7 @@ impl SimpleComponent for AppModel {
             reveal_windows: HashMap::new(),
             toast_overlay: widgets.toast_overlay.clone(),
             pending_clipboard: None,
+            last_account_list_busy: false,
         };
 
         // Install the TOTP ticker if the resolved startup state is
@@ -2302,6 +2315,41 @@ impl SimpleComponent for AppModel {
         // common case.
         self.apply_ticker_transition(&sender);
         self.prune_reveals_if_locked();
+        self.sync_account_list_busy();
+    }
+}
+
+impl AppModel {
+    /// Reconcile the live [`AccountListComponent`]'s busy flag against
+    /// the current [`AppState::is_busy()`] reading.
+    ///
+    /// Called once per `AppModel::update` dispatch (alongside
+    /// [`Self::apply_ticker_transition`] /
+    /// [`Self::prune_reveals_if_locked`]) so every state transition
+    /// that flips `is_busy` propagates to the row factory's
+    /// `connect_bind` callback. Per `IMPLEMENTATION_PLAN_04_GTK.md`
+    /// §"In-flight effect ownership" / §"Component tree" >
+    /// `AccountRowComponent` ("Disable mutating row controls (copy,
+    /// 'next', kebab) while `AppModel` is `UnlockedBusy`"), each
+    /// flip re-splices the `gio::ListStore` so every visible row
+    /// rebinds through [`crate::account_list::bind_display_for_row`]
+    /// with the freshly masked [`crate::account_row::RowDisplay`].
+    ///
+    /// Debounced through [`Self::last_account_list_busy`] — when the
+    /// dispatched value matches the last seen value, no message is
+    /// emitted and the row store is not re-spliced. `Missing` /
+    /// `Locked` / `StartupError` and the pre-init window all
+    /// project to `is_busy() == false`, matching the initial cache
+    /// value, so the first dispatch is also a benign no-op.
+    fn sync_account_list_busy(&mut self) {
+        let busy = self.state.as_ref().is_some_and(AppState::is_busy);
+        if busy == self.last_account_list_busy {
+            return;
+        }
+        self.last_account_list_busy = busy;
+        if let Some(controller) = self.account_list.as_ref() {
+            controller.emit(AccountListMsg::SetBusy(busy));
+        }
     }
 }
 

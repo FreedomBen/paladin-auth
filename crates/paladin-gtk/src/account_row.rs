@@ -98,6 +98,28 @@ pub fn kebab_visible(_kind: AccountKindSummary) -> bool {
     true
 }
 
+/// Intrinsic clickability of the row's "next" button.
+///
+/// Mirrors [`next_button_visible`] (HOTP rows only — TOTP rows have
+/// no "next" affordance), exposed as a distinct projection so the
+/// per-component busy mask in [`apply_busy_mask`] can dim the
+/// button while `AppModel` is `UnlockedBusy` per
+/// `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership"
+/// without flipping the row's visibility.
+#[must_use]
+pub fn next_button_enabled(kind: AccountKindSummary) -> bool {
+    matches!(kind, AccountKindSummary::Hotp)
+}
+
+/// Intrinsic clickability of the row's kebab `MenuButton`.
+///
+/// Always `true` for parity with [`kebab_visible`]; the busy mask in
+/// [`apply_busy_mask`] dims it while `AppModel` is `UnlockedBusy`.
+#[must_use]
+pub fn kebab_enabled() -> bool {
+    true
+}
+
 /// Whether the row's copy button is enabled.
 ///
 /// TOTP rows: always enabled.
@@ -111,6 +133,31 @@ pub fn copy_enabled(kind: AccountKindSummary, has_visible_code: bool) -> bool {
         AccountKindSummary::Totp => true,
         AccountKindSummary::Hotp => has_visible_code,
     }
+}
+
+/// Clamp the three mutating-row affordances in a [`RowDisplay`] when
+/// the parent `AppModel` is in `AppState::UnlockedBusy`.
+///
+/// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership"
+/// / §"Component tree" > `AccountRowComponent` ("Disable mutating row
+/// controls (copy, 'next', kebab) while `AppModel` is `UnlockedBusy`"),
+/// the row factory routes every binding through this mask so the
+/// gating contract is uniform regardless of which effect is in
+/// flight. When `busy == true`, `copy_enabled`, `next_button_enabled`,
+/// and `kebab_enabled` collapse to `false`; visibility, the visible
+/// code, the counter, and the progress projection are untouched so
+/// the row keeps rendering what the user can already see while the
+/// worker is in flight.
+///
+/// When `busy == false`, the mask is a no-op — the intrinsic
+/// projections from [`project_row`] reach the widget layer unchanged.
+pub fn apply_busy_mask(display: &mut RowDisplay, busy: bool) {
+    if !busy {
+        return;
+    }
+    display.copy_enabled = false;
+    display.next_button_enabled = false;
+    display.kebab_enabled = false;
 }
 
 /// HOTP counter text displayed alongside the row.
@@ -281,10 +328,14 @@ pub struct RowDisplay {
     pub code: CodeDisplay,
     /// Result of [`counter_display`].
     pub counter: Option<CounterText>,
-    /// Result of [`copy_enabled`].
+    /// Result of [`copy_enabled`]; dimmed by [`apply_busy_mask`] while
+    /// `AppModel` is `UnlockedBusy`.
     pub copy_enabled: bool,
     /// Result of [`next_button_visible`].
     pub next_button_visible: bool,
+    /// Result of [`next_button_enabled`]; dimmed by
+    /// [`apply_busy_mask`] while `AppModel` is `UnlockedBusy`.
+    pub next_button_enabled: bool,
     /// Result of [`progress_visible`].
     pub progress_visible: bool,
     /// Result of [`progress_display`]. `Some(_)` for TOTP rows once
@@ -294,16 +345,26 @@ pub struct RowDisplay {
     pub progress: Option<ProgressDisplay>,
     /// Result of [`kebab_visible`].
     pub kebab_visible: bool,
+    /// Result of [`kebab_enabled`]; dimmed by [`apply_busy_mask`]
+    /// while `AppModel` is `UnlockedBusy`.
+    pub kebab_enabled: bool,
 }
 
 /// Bundle every row projection together.
 ///
 /// Composes [`summary_display_label`], [`code_display`],
 /// [`counter_display`], [`copy_enabled`], [`next_button_visible`],
-/// [`progress_visible`], and [`kebab_visible`] into a [`RowDisplay`].
-/// The widget layer reads `Some(&Code)` from either the TOTP per-tick
-/// compute slot or the HOTP reveal slot and passes it through; the
-/// helpers all agree on `None ⇒ hidden`.
+/// [`next_button_enabled`], [`progress_visible`], [`kebab_visible`],
+/// and [`kebab_enabled`] into a [`RowDisplay`]. The widget layer
+/// reads `Some(&Code)` from either the TOTP per-tick compute slot or
+/// the HOTP reveal slot and passes it through; the helpers all
+/// agree on `None ⇒ hidden`.
+///
+/// The returned [`RowDisplay`] carries the *intrinsic* enabled state
+/// for the three mutating-row controls; the widget layer routes it
+/// through [`apply_busy_mask`] before binding so the
+/// `UnlockedBusy` gating contract from `IMPLEMENTATION_PLAN_04_GTK.md`
+/// §"In-flight effect ownership" stays a single hook.
 #[must_use]
 pub fn project_row(summary: &AccountSummary, visible_code: Option<&Code>) -> RowDisplay {
     let has_visible_code = visible_code.is_some();
@@ -314,9 +375,11 @@ pub fn project_row(summary: &AccountSummary, visible_code: Option<&Code>) -> Row
         counter: counter_display(summary, visible_code),
         copy_enabled: copy_enabled(summary.kind, has_visible_code),
         next_button_visible: next_button_visible(summary.kind),
+        next_button_enabled: next_button_enabled(summary.kind),
         progress_visible: progress_visible(summary.kind),
         progress: progress_display(summary, visible_code),
         kebab_visible: kebab_visible(summary.kind),
+        kebab_enabled: kebab_enabled(),
     }
 }
 

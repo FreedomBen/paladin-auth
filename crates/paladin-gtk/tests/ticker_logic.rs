@@ -656,12 +656,14 @@ fn compute_tick_displays_carries_full_row_display_shape() {
         counter: None,
         copy_enabled: true,
         next_button_visible: false,
+        next_button_enabled: false,
         progress_visible: true,
         progress: Some(ProgressDisplay {
             period_secs: 30,
             seconds_remaining: 30,
         }),
         kebab_visible: true,
+        kebab_enabled: true,
     };
     assert_eq!(display, &expected);
 }

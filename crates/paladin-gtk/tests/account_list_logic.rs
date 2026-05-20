@@ -495,9 +495,11 @@ fn hidden_row_display_totp_renders_hidden_code_and_no_counter() {
         counter: None,
         copy_enabled: true,
         next_button_visible: false,
+        next_button_enabled: false,
         progress_visible: true,
         progress: None,
         kebab_visible: true,
+        kebab_enabled: true,
     };
     assert_eq!(hidden_row_display(&model), expected);
 }
@@ -518,9 +520,11 @@ fn hidden_row_display_hotp_renders_stored_counter_and_disabled_copy() {
         counter: Some(CounterText::Stored(7)),
         copy_enabled: false,
         next_button_visible: true,
+        next_button_enabled: true,
         progress_visible: false,
         progress: None,
         kebab_visible: true,
+        kebab_enabled: true,
     };
     assert_eq!(hidden_row_display(&model), expected);
 }
@@ -564,9 +568,11 @@ fn totp_display(label: &str) -> RowDisplay {
         counter: None,
         copy_enabled: true,
         next_button_visible: false,
+        next_button_enabled: false,
         progress_visible: true,
         progress: None,
         kebab_visible: true,
+        kebab_enabled: true,
     }
 }
 
@@ -578,9 +584,11 @@ fn hotp_hidden_display(label: &str, counter: u64) -> RowDisplay {
         counter: Some(CounterText::Stored(counter)),
         copy_enabled: false,
         next_button_visible: true,
+        next_button_enabled: true,
         progress_visible: false,
         progress: None,
         kebab_visible: true,
+        kebab_enabled: true,
     }
 }
 
@@ -625,12 +633,13 @@ fn widget_states_marker_renders_copy_off_next_on_kebab_on_for_hidden_hotp() {
 }
 
 #[test]
-fn widget_states_marker_renders_kebab_off_when_projection_hides_it() {
-    // Defensive: the `kebab_visible` field is a `bool`, so the
+fn widget_states_marker_renders_kebab_off_when_projection_disables_it() {
+    // Defensive: the `kebab_enabled` field is a `bool`, so the
     // marker must still render `kebab:off` if a caller ever
-    // constructs a row that hides the kebab. Today the projection
-    // never produces this; pinning it keeps the encoding symmetric
-    // with `copy:` and `next:`.
+    // constructs a row whose kebab is disabled. Today the only path
+    // that flips it is `apply_busy_mask` while `AppModel` is
+    // `UnlockedBusy`; pinning it keeps the encoding symmetric with
+    // `copy:` and `next:`.
     let display = RowDisplay {
         label: "spy:row".to_string(),
         kind: AccountKindSummary::Totp,
@@ -638,9 +647,11 @@ fn widget_states_marker_renders_kebab_off_when_projection_hides_it() {
         counter: None,
         copy_enabled: true,
         next_button_visible: false,
+        next_button_enabled: false,
         progress_visible: true,
         progress: None,
-        kebab_visible: false,
+        kebab_visible: true,
+        kebab_enabled: false,
     };
     let displays = vec![display];
     assert_eq!(
@@ -1067,14 +1078,16 @@ fn bind_display_for_row_returns_live_clone_when_cache_hits() {
         counter: None,
         copy_enabled: true,
         next_button_visible: false,
+        next_button_enabled: false,
         progress_visible: true,
         progress: Some(ProgressDisplay {
             period_secs: 30,
             seconds_remaining: 18,
         }),
         kebab_visible: true,
+        kebab_enabled: true,
     };
-    let bound = bind_display_for_row(Some(&live), &model);
+    let bound = bind_display_for_row(Some(&live), &model, false);
     assert_eq!(bound, live, "cache hit wins over hidden fallback");
 }
 
@@ -1082,7 +1095,7 @@ fn bind_display_for_row_returns_live_clone_when_cache_hits() {
 fn bind_display_for_row_falls_back_to_hidden_when_cache_misses() {
     let id = AccountId::new();
     let model = totp_model_for(id, "Acme:alice");
-    let bound = bind_display_for_row(None, &model);
+    let bound = bind_display_for_row(None, &model, false);
     assert_eq!(
         bound,
         hidden_row_display(&model),
@@ -1097,14 +1110,14 @@ fn bind_display_for_row_hidden_fallback_preserves_kind_specific_state() {
     // progress gauge. The fallback path must honor those rules.
     let totp_id = AccountId::new();
     let totp_model = totp_model_for(totp_id, "TOTPCo:alice");
-    let totp_bound = bind_display_for_row(None, &totp_model);
+    let totp_bound = bind_display_for_row(None, &totp_model, false);
     assert!(totp_bound.progress_visible);
     assert!(!totp_bound.next_button_visible);
     assert!(totp_bound.counter.is_none());
 
     let hotp_id = AccountId::new();
     let hotp_model = hotp_model_for(hotp_id, "HOTPCo:bob", 7);
-    let hotp_bound = bind_display_for_row(None, &hotp_model);
+    let hotp_bound = bind_display_for_row(None, &hotp_model, false);
     assert!(!hotp_bound.progress_visible);
     assert!(hotp_bound.next_button_visible);
     assert!(matches!(hotp_bound.counter, Some(CounterText::Stored(7))));
@@ -1125,19 +1138,95 @@ fn bind_display_for_row_returned_clone_does_not_alias_cache() {
         counter: None,
         copy_enabled: true,
         next_button_visible: false,
+        next_button_enabled: false,
         progress_visible: true,
         progress: Some(ProgressDisplay {
             period_secs: 30,
             seconds_remaining: 12,
         }),
         kebab_visible: true,
+        kebab_enabled: true,
     };
-    let mut bound = bind_display_for_row(Some(&live), &model);
+    let mut bound = bind_display_for_row(Some(&live), &model, false);
     bound.label = "scribbled".to_string();
     assert_eq!(
         live.label, "Acme:alice",
         "the original cache entry is not mutated through the returned clone",
     );
+}
+
+#[test]
+fn bind_display_for_row_busy_dims_cache_hit_affordances() {
+    // While `AppModel` is `UnlockedBusy`, the per-row mutating
+    // affordances dim regardless of the cache hit's intrinsic
+    // state. Per `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect
+    // ownership", `apply_busy_mask` flips copy / next / kebab
+    // enabled to `false`; the visible code, counter, progress, and
+    // visibility bits stay intact so the row keeps rendering while
+    // the worker holds the `(Vault, Store)` pair.
+    let id = AccountId::new();
+    let model = hotp_model_for(id, "Acme:solo", 5);
+    let live = RowDisplay {
+        label: "Acme:solo".to_string(),
+        kind: AccountKindSummary::Hotp,
+        code: CodeDisplay::Visible("999 000".to_string()),
+        counter: Some(CounterText::Used(4)),
+        copy_enabled: true,
+        next_button_visible: true,
+        next_button_enabled: true,
+        progress_visible: false,
+        progress: None,
+        kebab_visible: true,
+        kebab_enabled: true,
+    };
+    let bound = bind_display_for_row(Some(&live), &model, true);
+    assert!(!bound.copy_enabled);
+    assert!(!bound.next_button_enabled);
+    assert!(!bound.kebab_enabled);
+    // Visible bits and the live code survive the mask.
+    assert_eq!(bound.code, live.code);
+    assert_eq!(bound.counter, live.counter);
+    assert!(bound.next_button_visible);
+    assert!(bound.kebab_visible);
+}
+
+#[test]
+fn bind_display_for_row_busy_dims_hidden_fallback_too() {
+    // Cache miss → `hidden_row_display` path is also gated by busy:
+    // the freshly hidden HOTP row's "next" button and the kebab
+    // dim, and the already-disabled copy stays disabled.
+    let id = AccountId::new();
+    let model = hotp_model_for(id, "HOTPCo:bob", 0);
+    let bound = bind_display_for_row(None, &model, true);
+    assert!(!bound.copy_enabled);
+    assert!(!bound.next_button_enabled);
+    assert!(!bound.kebab_enabled);
+}
+
+#[test]
+fn bind_display_for_row_busy_false_matches_unmasked_projection() {
+    // `busy = false` is the steady-state path; the returned display
+    // matches the cache hit verbatim (no mask, no mutation).
+    let id = AccountId::new();
+    let model = totp_model_for(id, "Acme:alice");
+    let live = RowDisplay {
+        label: "Acme:alice".to_string(),
+        kind: AccountKindSummary::Totp,
+        code: CodeDisplay::Visible("123 456".to_string()),
+        counter: None,
+        copy_enabled: true,
+        next_button_visible: false,
+        next_button_enabled: false,
+        progress_visible: true,
+        progress: Some(ProgressDisplay {
+            period_secs: 30,
+            seconds_remaining: 9,
+        }),
+        kebab_visible: true,
+        kebab_enabled: true,
+    };
+    let bound = bind_display_for_row(Some(&live), &model, false);
+    assert_eq!(bound, live);
 }
 
 // ---------------------------------------------------------------------------
@@ -1159,12 +1248,14 @@ fn live_display(label: &str) -> RowDisplay {
         counter: None,
         copy_enabled: true,
         next_button_visible: false,
+        next_button_enabled: false,
         progress_visible: true,
         progress: Some(ProgressDisplay {
             period_secs: 30,
             seconds_remaining: 5,
         }),
         kebab_visible: true,
+        kebab_enabled: true,
     }
 }
 

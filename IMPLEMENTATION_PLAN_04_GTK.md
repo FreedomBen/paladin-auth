@@ -1600,8 +1600,21 @@ sign-off.
   - [ ] Add a kebab `gtk::MenuButton` whose `gio::Menu` exposes
     "Rename…" (opens `RenameDialog` for that row) and "Remove…"
     (opens `RemoveDialog` for that row).
-  - [ ] Disable mutating row controls (copy, "next", kebab) while
+  - [x] Disable mutating row controls (copy, "next", kebab) while
     `AppModel` is `UnlockedBusy` per §"In-flight effect ownership".
+    `account_row::apply_busy_mask` flips `RowDisplay::copy_enabled`,
+    `next_button_enabled`, and `kebab_enabled` to `false` when the
+    parent is busy; `account_list::bind_display_for_row` runs the
+    mask before binding, and `bind_row` writes the three bits onto
+    `gtk::Button::set_sensitive` / `gtk::MenuButton::set_sensitive`.
+    `AccountListMsg::SetBusy(bool)` latches a shared
+    `Rc<Cell<bool>>` (`account_list::BusyFlag`) the factory's
+    `connect_bind` closure reads on every rebind; the
+    `AppModel::sync_account_list_busy` reconcile (peer of
+    `apply_ticker_transition` / `prune_reveals_if_locked`) fires
+    after every dispatch so any state transition flipping
+    `AppState::is_busy()` propagates a debounced re-splice through
+    the row factory.
 - [ ] TOTP ticker (`paladin_core::TICK_INTERVAL_MS` timeout source
   for gauge updates and clipboard staleness checks).
   - [x] Install a single `glib::timeout_add_local` source ticking
