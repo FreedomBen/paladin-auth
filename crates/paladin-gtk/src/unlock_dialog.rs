@@ -40,10 +40,15 @@
 //! outcome surfaces directly beneath the passphrase entry once the
 //! worker populates the slot; typing dismisses the prior message.
 //!
-//! The module is a pure-logic shell — it owns no widgets and no
-//! `gio::spawn_blocking` plumbing — so
-//! `tests/unlock_dialog_logic.rs` can exercise every branch without
-//! spinning up GTK or libadwaita.
+//! The widget-bearing [`UnlockDialogComponent`] lives in this module
+//! too, but every routing decision it makes is delegated to one of
+//! the pure-logic helpers above ([`prepare_unlock_lock`],
+//! [`UnlockDialogState::submit`], [`apply_msg`], …) so the
+//! widget-free routing rules are exercised end-to-end by
+//! `tests/unlock_dialog_logic.rs` without spinning up GTK or
+//! libadwaita. The `gio::spawn_blocking paladin_core::open` worker
+//! plumbing lives in [`crate::app::state::run_unlock_worker`] and is
+//! dispatched by `AppModel::update`.
 
 use std::path::{Path, PathBuf};
 
@@ -530,11 +535,12 @@ impl UnlockDialogState {
     /// Borrow the inline-error slot for the widget's `gtk::Label`
     /// binding.
     ///
-    /// `None` while no error is pending; `Some` after the future
-    /// `gio::spawn_blocking paladin_core::open` worker reports a
-    /// [`PaladinError::DecryptFailed`] or
-    /// [`PaladinError::InvalidPassphrase`] result (per
-    /// [`classify_unlock_error`]).
+    /// `None` while no error is pending; `Some` after the
+    /// `gio::spawn_blocking paladin_core::open` worker fired from
+    /// `AppModel::update` reports a [`PaladinError::DecryptFailed`]
+    /// or [`PaladinError::InvalidPassphrase`] result (per
+    /// [`classify_unlock_error`]) and the typed inline projection is
+    /// forwarded back via [`UnlockDialogMsg::OpenFailedInline`].
     #[must_use]
     pub fn inline_error(&self) -> Option<&InlineError> {
         self.inline_error.as_ref()
@@ -542,7 +548,8 @@ impl UnlockDialogState {
 
     /// Replace the inline-error slot.
     ///
-    /// Called by the future worker commit on
+    /// Called by the `gio::spawn_blocking paladin_core::open` worker
+    /// completion path in `AppModel::update` on
     /// [`OpenErrorRouting::InlinePassphrase`] results
     /// (`set_inline_error(Some(_))`) and on the successful unlock
     /// transition (`set_inline_error(None)`) so the dialog hands a
@@ -605,11 +612,13 @@ impl UnlockDialogState {
 /// `AppOutput`. `SubmitClicked` arrives from the "Unlock" button's
 /// `connect_clicked` signal; the handler runs
 /// [`UnlockDialogState::submit`] so the pre-flight rejection stages
-/// inline. The `gio::spawn_blocking paladin_core::open` worker
-/// described in §"Component tree" > `UnlockComponent` lands in a
-/// follow-up commit alongside the `UnlockedBusy` worker
-/// infrastructure; for now the `Ok` branch of `submit` is intentionally
-/// discarded by the widget's `update`.
+/// inline. The `Ok` branch flows to `AppModel::update` as
+/// [`UnlockDialogOutput::SubmitLock`], which captures the resolved
+/// vault path from [`crate::app::state::AppState::Locked`], applies
+/// the [`crate::app::state::AppState::UnlockedBusy`] gate, and spawns
+/// [`crate::app::state::run_unlock_worker`] on
+/// `gio::spawn_blocking` so the §4.4 Argon2id KDF runs off the GTK
+/// main loop.
 ///
 /// `Clone` lets [`crate::app::state::compose_unlock_dispatch`] hand
 /// `AppModel::update` an owned [`UnlockDialogMsg`] inside the
@@ -637,14 +646,15 @@ pub enum UnlockDialogMsg {
     /// error projection; the `Ok` branch is wrapped in
     /// [`UnlockDialogOutput::SubmitLock`] and forwarded to
     /// `AppModel`. The `gio::spawn_blocking paladin_core::open`
-    /// worker that consumes the forwarded `VaultLock` lands in a
-    /// follow-up commit alongside the `UnlockedBusy` worker
-    /// infrastructure.
+    /// worker that consumes the forwarded `VaultLock` is
+    /// [`crate::app::state::run_unlock_worker`], dispatched by
+    /// `AppModel::update` after applying the
+    /// [`crate::app::state::AppState::UnlockedBusy`] gate.
     SubmitClicked,
     /// `AppModel` pushes the inline branch of
     /// [`route_unlock_open_error`] back to the dialog after the
-    /// future `gio::spawn_blocking paladin_core::open` worker
-    /// reports a `decrypt_failed` / `invalid_passphrase` failure.
+    /// `gio::spawn_blocking paladin_core::open` worker reports a
+    /// `decrypt_failed` / `invalid_passphrase` failure.
     ///
     /// The variant carries the already-projected [`InlineError`]
     /// (built once by `AppModel` from the typed `PaladinError`) so
@@ -733,16 +743,26 @@ pub fn apply_msg(
 /// [`UnlockDialogState::submit`]: rejection stages the inline error
 /// projection; the `Ok` branch is wrapped in
 /// [`UnlockDialogOutput::SubmitLock`] and forwarded to `AppModel`.
-/// The `gio::spawn_blocking paladin_core::open` worker that consumes
-/// the forwarded [`VaultLock`] and the inline `DecryptFailed` /
-/// `InvalidPassphrase` error surface flip land in follow-up commits
-/// alongside the `UnlockedBusy` worker infrastructure.
+/// `AppModel::update` captures the resolved path from
+/// [`crate::app::state::AppState::Locked`], applies the
+/// [`crate::app::state::AppState::UnlockedBusy`] gate via
+/// [`crate::app::state::apply_submit_unlock_inplace`], and spawns
+/// [`crate::app::state::run_unlock_worker`] on
+/// `gio::spawn_blocking`. On worker return,
+/// [`crate::app::state::compose_unlock_dispatch`] surfaces a
+/// success transition to [`crate::app::state::AppState::Unlocked`],
+/// an inline [`UnlockDialogMsg::OpenFailedInline`] message back to
+/// this dialog, or a transition to
+/// [`crate::startup_error::StartupErrorComponent`] per
+/// [`classify_unlock_error`].
 pub struct UnlockDialogComponent {
-    /// Resolved vault path the dialog will hand to a
-    /// `paladin_core::open` worker on submit. Kept on `self` so a
-    /// future message handler can read it without re-plumbing the
-    /// value through every signal.
-    #[allow(dead_code)]
+    /// Resolved vault path. Kept on `self` for the
+    /// [`adw::StatusPage::set_description`] binding (rendered via
+    /// [`format_unlock_dialog_description`]); the live
+    /// `paladin_core::Store::open` call site reads the path from
+    /// [`crate::app::state::AppState::Locked`] inside
+    /// `AppModel::update`, so the dialog does not need to forward
+    /// the value through [`UnlockDialogOutput::SubmitLock`].
     vault_path: PathBuf,
     /// Live passphrase shadow buffer driven from the
     /// [`adw::PasswordEntryRow`]'s `connect_changed` signal. Also
@@ -750,10 +770,13 @@ pub struct UnlockDialogComponent {
     /// to. The view also `#[watch]`-binds the "Unlock" button's
     /// `set_sensitive` property to
     /// [`UnlockDialogState::submit_button_sensitive`] so the gate
-    /// tracks the live buffer. The submit handler will read
-    /// [`UnlockDialogState::passphrase_text`] (or
-    /// [`UnlockDialogState::take_passphrase`]) once the
-    /// `UnlockedBusy` worker lands.
+    /// tracks the live buffer. The submit handler reads
+    /// [`UnlockDialogState::take_passphrase`] inside
+    /// [`UnlockDialogState::submit`], which hands the
+    /// [`Zeroizing<String>`] to [`prepare_unlock_lock`] and zeroes
+    /// the shadow buffer before
+    /// [`crate::app::state::run_unlock_worker`] consumes the
+    /// [`VaultLock::Encrypted`] on `gio::spawn_blocking`.
     state: UnlockDialogState,
 }
 
@@ -796,11 +819,12 @@ impl SimpleComponent for UnlockDialogComponent {
             },
 
             // Inline-error surface beneath the passphrase entry. The
-            // future `gio::spawn_blocking paladin_core::open` worker
-            // populates `state.inline_error` from
+            // `gio::spawn_blocking paladin_core::open` worker fired by
+            // `AppModel::update` populates `state.inline_error` from
             // `classify_unlock_error`'s `InlinePassphrase` outcome
-            // (decrypt_failed / invalid_passphrase); typing a new
-            // passphrase dismisses the prior message.
+            // (decrypt_failed / invalid_passphrase) via the
+            // `UnlockDialogMsg::OpenFailedInline` round trip; typing a
+            // new passphrase dismisses the prior message.
             #[name = "error_label"]
             gtk::Label {
                 set_xalign: 0.0,
@@ -829,11 +853,11 @@ impl SimpleComponent for UnlockDialogComponent {
                 // dispatches `SubmitClicked`, whose handler routes
                 // through `apply_msg`: rejection stages the inline
                 // error inline beneath the entry; the `Ok` branch is
-                // forwarded as `UnlockDialogOutput::SubmitLock`. The
-                // `gio::spawn_blocking paladin_core::open` worker
-                // that consumes the forwarded `VaultLock` lands in a
-                // follow-up commit alongside the `UnlockedBusy`
-                // worker infrastructure.
+                // forwarded as `UnlockDialogOutput::SubmitLock`.
+                // `AppModel::update` consumes the lock, applies the
+                // `Locked → UnlockedBusy` gate, and spawns
+                // `run_unlock_worker` on `gio::spawn_blocking` so the
+                // §4.4 Argon2id KDF stays off the main loop.
                 #[name = "unlock_button"]
                 gtk::Button {
                     set_label: format_unlock_button_label(),
@@ -865,11 +889,11 @@ impl SimpleComponent for UnlockDialogComponent {
         // Routing lives in `apply_msg` so the per-message decisions
         // — `PassphraseChanged` shadows the buffer; `SubmitClicked`
         // either stages the inline rejection or forwards
-        // `UnlockDialogOutput::SubmitLock` — stay unit-testable
-        // without spinning up GTK. The `gio::spawn_blocking
-        // paladin_core::open` worker that consumes
-        // `SubmitLock(VaultLock)` lands in a follow-up commit
-        // alongside the `UnlockedBusy` worker infrastructure.
+        // `UnlockDialogOutput::SubmitLock`; `OpenFailedInline` stages
+        // the routed inline error — stay unit-testable without
+        // spinning up GTK. `AppModel::update` consumes the
+        // `SubmitLock(VaultLock)` output by spawning
+        // `run_unlock_worker` on `gio::spawn_blocking`.
         if let Some(output) = apply_msg(&mut self.state, msg) {
             let _ = sender.output(output);
         }

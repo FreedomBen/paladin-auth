@@ -1462,32 +1462,32 @@ sign-off.
     messages can name fields / reasons but never echo secret-bearing
     input values.
 - [x] Conditional unlock view (encrypted vaults only).
-- [ ] `UnlockComponent` full implementation (passphrase entry,
+- [x] `UnlockComponent` full implementation (passphrase entry,
   `paladin_core::open` on `gio::spawn_blocking`, inline-error
   handling).
-  - [ ] Add an `AdwPasswordEntryRow` to `UnlockComponent`'s body so
+  - [x] Add an `AdwPasswordEntryRow` to `UnlockComponent`'s body so
     the user can type a passphrase against the resolved encrypted
     vault.
-  - [ ] On submit, wrap the entered passphrase in
+  - [x] On submit, wrap the entered passphrase in
     `secrecy::SecretString` and dispatch
     `paladin_core::open(path, VaultLock::Encrypted(secret))` on
     `gio::spawn_blocking` so the §4.4 Argon2 KDF stays off the main
     loop; surface a spinner / busy affordance while the join is
     pending.
-  - [ ] On success, transition `AppModel` from `Locked` to
+  - [x] On success, transition `AppModel` from `Locked` to
     `Unlocked` with the returned `(Vault, Store)` pair and route to
     `AccountListComponent`.
-  - [ ] Render wrong-passphrase / passphrase-validation failures
+  - [x] Render wrong-passphrase / passphrase-validation failures
     (`decrypt_failed` and `invalid_passphrase`) inline on the dialog
     so the user can retry without leaving `Locked`.
-  - [ ] Transition to `StartupErrorComponent` for non-authentication
+  - [x] Transition to `StartupErrorComponent` for non-authentication
     open failures (`unsafe_permissions`, `wrong_vault_lock`,
     `invalid_header`, `invalid_payload`,
     `unsupported_format_version`, `kdf_params_out_of_bounds`,
     `io_error`); `unsafe_permissions` renders the `Some(text)` from
     `paladin_core::format_unsafe_permissions(&err)` with the generic
     error text fallback so wording matches the CLI / TUI exactly.
-  - [ ] Zeroize the passphrase widget buffer on submit / cancel /
+  - [x] Zeroize the passphrase widget buffer on submit / cancel /
     dialog close / auto-lock per §"Secret entry handling".
 - [ ] `AccountListComponent` full implementation (`gtk::ListView` +
   factory + `gio::ListStore`, search bar + entry, selection

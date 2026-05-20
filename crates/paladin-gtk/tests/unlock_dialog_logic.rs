@@ -1319,6 +1319,99 @@ fn apply_msg_open_failed_inline_with_routed_decrypt_failed_round_trip() {
     assert_eq!(staged.rendered, inline.rendered);
 }
 
+#[test]
+fn apply_msg_full_submit_failed_retype_flow_button_sensitivity_round_trip() {
+    // End-to-end pin of the `Locked → UnlockedBusy → Locked` retry
+    // round trip the user sees when the first passphrase attempt is
+    // wrong:
+    //
+    // 1. User types `wrong-pass` — `submit_button_sensitive` flips
+    //    to `true`.
+    // 2. User clicks Unlock — `SubmitClicked` consumes the buffer
+    //    via `take_passphrase`, forwards `SubmitLock`, and the gate
+    //    re-locks to `false` so a stray keyboard accelerator cannot
+    //    re-fire while `AppModel` is in `UnlockedBusy`.
+    // 3. Worker returns `DecryptFailed` → `OpenFailedInline` stages
+    //    the inline error. The gate stays `false` because the
+    //    buffer is still empty (the worker error message is
+    //    independent of the shadow buffer state).
+    // 4. User retypes — `set_passphrase` dismisses the staged
+    //    inline error and `submit_button_sensitive` flips back to
+    //    `true` for the next attempt.
+    //
+    // Pinned as a single integration test so a future refactor that
+    // splits the per-step apply_msg paths cannot silently regress
+    // any of the four observable transitions.
+    let mut state = UnlockDialogState::new();
+
+    let _ = apply_msg(
+        &mut state,
+        UnlockDialogMsg::PassphraseChanged("wrong-pass".to_string()),
+    );
+    assert!(
+        state.submit_button_sensitive(),
+        "Step 1: typing populates the buffer and enables the submit button",
+    );
+    assert!(
+        state.inline_error().is_none(),
+        "Step 1: no inline error has been staged yet",
+    );
+
+    let out = apply_msg(&mut state, UnlockDialogMsg::SubmitClicked);
+    assert!(
+        matches!(out, Some(UnlockDialogOutput::SubmitLock(_))),
+        "Step 2: a non-empty submit forwards the SubmitLock output, got {out:?}",
+    );
+    assert!(
+        !state.submit_button_sensitive(),
+        "Step 2: take_passphrase consumed the buffer so the gate re-locks before the worker spawns",
+    );
+    assert!(
+        state.passphrase_text().is_empty(),
+        "Step 2: the live shadow buffer is empty after take_passphrase",
+    );
+
+    let inline = match route_unlock_open_error(&PaladinError::DecryptFailed) {
+        UnlockOpenRouting::Inline(inline) => inline,
+        UnlockOpenRouting::Startup => panic!("decrypt_failed must route to Inline, not Startup"),
+    };
+    let out = apply_msg(
+        &mut state,
+        UnlockDialogMsg::OpenFailedInline(inline.clone()),
+    );
+    assert!(
+        out.is_none(),
+        "Step 3: OpenFailedInline never forwards an output",
+    );
+    assert!(
+        !state.submit_button_sensitive(),
+        "Step 3: the staged inline error must not re-enable the submit button while the buffer is empty",
+    );
+    let staged = state
+        .inline_error()
+        .expect("Step 3: the routed inline error must land in the state slot");
+    assert_eq!(staged.kind, inline.kind);
+    assert_eq!(staged.rendered, inline.rendered);
+
+    let _ = apply_msg(
+        &mut state,
+        UnlockDialogMsg::PassphraseChanged("retype".to_string()),
+    );
+    assert!(
+        state.submit_button_sensitive(),
+        "Step 4: retyping populates the buffer and re-enables the submit button",
+    );
+    assert!(
+        state.inline_error().is_none(),
+        "Step 4: the first retype keystroke dismisses the prior inline error",
+    );
+    assert_eq!(
+        state.passphrase_text(),
+        "retype",
+        "Step 4: the retyped passphrase is the live shadow buffer for the next attempt",
+    );
+}
+
 // `format_unlock_dialog_marker` / `UNLOCK_DIALOG_MARKER_PREFIX` pin
 // the `--exit-after-startup` stdout contract consumed by
 // `tests/gtk_smoke.rs` for the `Locked` branch. Pure-logic tests
