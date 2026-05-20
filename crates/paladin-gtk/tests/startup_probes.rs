@@ -30267,3 +30267,193 @@ fn format_app_about_dialog_url_helpers_do_not_contain_a_start_of_heading_byte() 
         );
     }
 }
+
+// ---- Window shell & toast surface (Milestone 7 — IMPLEMENTATION_PLAN_04_GTK.md
+// §"Window shell and toast surface") ------------------------------------------
+//
+// These tests pin the gresource paths, the bundled `data/style.css`
+// payload, the toast-overlay binding name, and the runtime-side
+// `wire_app_css_provider` / `register_app_gresource_bundle` helper
+// signatures. The end-to-end CSS provider attach + toast-overlay
+// mount live behind GTK initialization and are covered by the
+// `xvfb-run` smoke test in `tests/gtk_smoke.rs`; the pure-logic
+// assertions below run without a display.
+
+#[test]
+fn format_app_style_css_resource_path_returns_org_tamx_paladin_gui_style_css() {
+    // Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Window shell and toast
+    // surface", Paladin-specific CSS layers on Adwaita defaults via
+    // a `gtk::CssProvider` that loads `data/style.css` from the
+    // bundled gresource. The path must match the gresource XML's
+    // `<file>` entry exactly, and the prefix carries the reverse-
+    // DNS app ID so the resource pool does not collide with other
+    // gresource-shipping apps in the same process.
+    use paladin_gtk::app::model::format_app_style_css_resource_path;
+
+    assert_eq!(
+        format_app_style_css_resource_path(),
+        "/org/tamx/Paladin/Gui/style.css",
+        "gresource path for the Paladin-specific CSS provider stays in lockstep with `data/paladin-gtk.gresource.xml` and the `wire_app_css_provider` runtime call site",
+    );
+}
+
+#[test]
+fn format_app_style_css_resource_path_is_an_absolute_gresource_path() {
+    // gresource paths used by `gtk::CssProvider::load_from_resource`
+    // / `gio::resources_lookup_data` are rooted at `/`. A relative
+    // form would silently mis-route the lookup at runtime.
+    use paladin_gtk::app::model::format_app_style_css_resource_path;
+
+    let path = format_app_style_css_resource_path();
+    assert!(
+        path.starts_with('/'),
+        "gresource path must be rooted at `/`; got {path:?}",
+    );
+}
+
+#[test]
+fn format_app_style_css_resource_path_ends_with_style_css() {
+    // The bundled CSS file is shipped at `data/style.css`; the
+    // gresource path therefore terminates with `/style.css` so the
+    // CssProvider resolves the correct payload.
+    use paladin_gtk::app::model::format_app_style_css_resource_path;
+
+    assert!(
+        format_app_style_css_resource_path().ends_with("/style.css"),
+        "gresource path must end with `/style.css` so the bundled CSS payload is the one the CssProvider loads",
+    );
+}
+
+#[test]
+fn format_app_style_css_resource_path_carries_app_id_segments() {
+    // The path prefix mirrors `crate::APP_ID` (`org.tamx.Paladin.Gui`)
+    // segmented on `.`, so the resource pool namespaces by reverse-
+    // DNS app ID. A drift here would collide with other gresource-
+    // shipping apps loaded in the same process.
+    use paladin_gtk::app::model::format_app_style_css_resource_path;
+
+    let path = format_app_style_css_resource_path();
+    for segment in ["/org/", "/tamx/", "/Paladin/", "/Gui/"] {
+        assert!(
+            path.contains(segment),
+            "gresource path must carry the `{segment}` segment derived from `crate::APP_ID`; got {path:?}",
+        );
+    }
+}
+
+#[test]
+fn data_style_css_file_is_shipped_in_the_crate() {
+    // `data/style.css` must exist in the crate root so the build-
+    // time `glib-build-tools::compile_resources` invocation can
+    // bundle it. Without this file the runtime CssProvider load
+    // would silently no-op.
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("data/style.css");
+    assert!(
+        path.is_file(),
+        "expected the bundled CSS payload at {}; ensure `crates/paladin-gtk/data/style.css` is committed alongside the gresource XML per IMPLEMENTATION_PLAN_04_GTK.md §\"Crate layout\"",
+        path.display(),
+    );
+}
+
+#[test]
+fn data_gresource_xml_is_shipped_in_the_crate() {
+    // `data/paladin-gtk.gresource.xml` is the source-of-truth
+    // manifest the build script feeds to
+    // `glib-build-tools::compile_resources`. Without it the build
+    // script has nothing to compile.
+    let path =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("data/paladin-gtk.gresource.xml");
+    assert!(
+        path.is_file(),
+        "expected the gresource manifest at {}; ensure `crates/paladin-gtk/data/paladin-gtk.gresource.xml` is committed per IMPLEMENTATION_PLAN_04_GTK.md §\"Crate layout\"",
+        path.display(),
+    );
+}
+
+#[test]
+fn data_gresource_xml_references_style_css_under_app_prefix() {
+    // The gresource manifest must declare both the `data/style.css`
+    // payload and the `/org/tamx/Paladin/Gui` prefix consumed by
+    // `format_app_style_css_resource_path` so the bundle compiled
+    // by build.rs and the runtime CssProvider load resolve to the
+    // same path.
+    let path =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("data/paladin-gtk.gresource.xml");
+    let xml = std::fs::read_to_string(&path)
+        .unwrap_or_else(|err| panic!("read {}: {err}", path.display()));
+    assert!(
+        xml.contains("style.css"),
+        "gresource manifest at {} must reference the bundled style.css payload",
+        path.display(),
+    );
+    assert!(
+        xml.contains("/org/tamx/Paladin/Gui"),
+        "gresource manifest at {} must declare the `/org/tamx/Paladin/Gui` prefix matching `crate::APP_ID`",
+        path.display(),
+    );
+}
+
+#[test]
+fn register_app_gresource_bundle_signature_is_zero_argument_unit() {
+    // `register_app_gresource_bundle` is the once-per-process
+    // bootstrap that hands the compiled gresource bytes to
+    // `gio::resources_register`. Calling it before
+    // `wire_app_css_provider` is what lets the CssProvider find the
+    // `/org/tamx/Paladin/Gui/style.css` payload. Pinning the
+    // signature here keeps the call site in `lib.rs::run` stable
+    // (`paladin_gtk::app::model::register_app_gresource_bundle()`).
+    let _: fn() = paladin_gtk::app::model::register_app_gresource_bundle;
+}
+
+#[test]
+fn wire_app_css_provider_signature_takes_display_reference() {
+    // Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Window shell and toast
+    // surface", `wire_app_css_provider` attaches the Paladin-
+    // specific `gtk::CssProvider` (loading `data/style.css` from
+    // the gresource bundle) to the supplied display, layered on
+    // top of the Adwaita defaults via
+    // `gtk::STYLE_PROVIDER_PRIORITY_APPLICATION`. The compile-only
+    // signature check pins
+    // `fn(&gtk::gdk::Display)` so the smoke-test and runtime call
+    // sites stay in lockstep.
+    let _: fn(&relm4::gtk::gdk::Display) = paladin_gtk::app::model::wire_app_css_provider;
+}
+
+#[test]
+fn format_app_toast_overlay_widget_name_returns_toast_overlay() {
+    // Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Window shell and toast
+    // surface", every active screen (`InitDialog`,
+    // `UnlockComponent`, `StartupErrorComponent`,
+    // `AccountListComponent`) is appended into the
+    // `adw::ToastOverlay` so state transitions never lose pending
+    // toasts. The view! macro names the overlay binding with the
+    // string returned here so the post-init handler that posts
+    // `AdwToast`s reads the same name from a single source of
+    // truth.
+    use paladin_gtk::app::model::format_app_toast_overlay_widget_name;
+
+    assert_eq!(
+        format_app_toast_overlay_widget_name(),
+        "toast_overlay",
+        "the AdwToastOverlay widget binding in `AppModel`'s view! macro is named through this helper",
+    );
+}
+
+#[test]
+fn format_app_toast_overlay_widget_name_has_no_separator_or_whitespace() {
+    // Widget binding names are bare identifiers; a stray `.` or
+    // whitespace would refuse to compile inside the `#[name = "…"]`
+    // attribute used in the view! macro.
+    use paladin_gtk::app::model::format_app_toast_overlay_widget_name;
+
+    let name = format_app_toast_overlay_widget_name();
+    assert!(
+        !name.contains('.'),
+        "widget binding name must not contain `.`; got {name:?}"
+    );
+    assert!(
+        !name.chars().any(char::is_whitespace),
+        "widget binding name must not contain whitespace; got {name:?}",
+    );
+    assert!(!name.is_empty(), "widget binding name must be non-empty");
+}

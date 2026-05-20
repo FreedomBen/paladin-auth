@@ -753,12 +753,26 @@ impl SimpleComponent for AppModel {
                     },
                 },
 
+                // Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Window
+                // shell and toast surface", every active screen
+                // (`InitDialog`, `UnlockComponent`,
+                // `StartupErrorComponent`, `AccountListComponent`)
+                // renders inside a single `adw::ToastOverlay` so
+                // copy confirmations, settings-saved notices,
+                // clipboard-clear-fired notices, HOTP
+                // `save_durability_unconfirmed` warnings, and
+                // export-success toasts survive state transitions.
+                // The overlay's child is the same `content`
+                // `gtk::Box` the per-state controllers append into,
+                // so the post-init mount sites stay unchanged from
+                // before the overlay landed.
                 #[wrap(Some)]
-                set_content = &gtk::Box {
-                    set_orientation: gtk::Orientation::Vertical,
+                set_content = &adw::ToastOverlay {
+                    set_widget_name: format_app_toast_overlay_widget_name(),
 
+                    #[wrap(Some)]
                     #[name = "content"]
-                    append = &gtk::Box {
+                    set_child = &gtk::Box {
                         set_orientation: gtk::Orientation::Vertical,
                         set_hexpand: true,
                         set_vexpand: true,
@@ -4134,4 +4148,145 @@ pub fn format_app_about_dialog_debug_info_filename() -> &'static str {
 #[must_use]
 pub fn format_app_action_group_name() -> &'static str {
     "app"
+}
+
+/// gresource path the bundled `data/style.css` payload mounts at
+/// inside the application's gresource pool.
+///
+/// Returns the static absolute resource path
+/// `"/org/tamx/Paladin/Gui/style.css"`. The prefix segments
+/// (`org` / `tamx` / `Paladin` / `Gui`) mirror [`crate::APP_ID`]
+/// (`"org.tamx.Paladin.Gui"`) split on `.` so the resource pool
+/// namespaces by reverse-DNS app ID and never collides with other
+/// gresource-shipping apps loaded in the same process. The
+/// terminal `style.css` matches the `<file>` entry declared in
+/// `data/paladin-gtk.gresource.xml`, so the bundle compiled by
+/// `build.rs` and the runtime [`wire_app_css_provider`] `CssProvider`
+/// load resolve to the same payload.
+///
+/// Pinning the resource path through a helper keeps the call site
+/// in [`wire_app_css_provider`] free of bare string literals and
+/// lets the pure-logic tests in `tests/startup_probes.rs` assert
+/// the prefix/suffix shape without spinning up GTK.
+///
+/// Pure — returns a `'static str` without allocating. Companion of
+/// [`register_app_gresource_bundle`] (which hands the compiled
+/// gresource bytes to `gio::resources_register` so this path
+/// resolves at runtime) and [`wire_app_css_provider`] (which calls
+/// `gtk::CssProvider::load_from_resource` against this path);
+/// together they pin the gresource side of the Paladin CSS layer
+/// against a single source of truth.
+#[must_use]
+pub fn format_app_style_css_resource_path() -> &'static str {
+    "/org/tamx/Paladin/Gui/style.css"
+}
+
+/// Bare widget binding name the view! macro assigns to the
+/// `adw::ToastOverlay` wrapping every active screen.
+///
+/// Returns the static widget name `"toast_overlay"` — used both as
+/// the relm4 `#[name = "…"]` binding inside [`AppModel`]'s view!
+/// macro and as the GTK widget name (via `set_widget_name`) so
+/// future selectors / accessibility queries can resolve the overlay
+/// through a single source of truth. The overlay's child is the
+/// `content` `gtk::Box` per-state controllers append into, so
+/// state transitions (`InitDialog` → `AccountListComponent`,
+/// `UnlockComponent` → `AccountListComponent`, etc.) never lose
+/// pending toasts — the overlay is mounted once and survives every
+/// child swap.
+///
+/// Pure — returns a `'static str` without allocating. Distinct
+/// from the `content` binding the per-state controllers append
+/// into; the toast overlay is the parent of `content`, never the
+/// child.
+#[must_use]
+pub fn format_app_toast_overlay_widget_name() -> &'static str {
+    "toast_overlay"
+}
+
+/// Compiled gresource bundle bytes embedded at build time.
+///
+/// `build.rs` invokes `glib_build_tools::compile_resources` to pack
+/// `data/paladin-gtk.gresource.xml` (which references
+/// `data/style.css` and, in subsequent commits, the placeholder
+/// icon and any `*.ui` templates) into
+/// `OUT_DIR/paladin-gtk.gresource`. The `include_bytes!` macro
+/// pulls the resulting binary blob into the crate so
+/// [`register_app_gresource_bundle`] can register it without
+/// depending on the gresource file existing on disk at runtime —
+/// crucial for the Flatpak / `AppImage` builds where the binary is
+/// the only artifact shipped.
+const APP_GRESOURCE_BUNDLE_BYTES: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/paladin-gtk.gresource"));
+
+/// Hand the compiled gresource bundle to the process-wide `gio`
+/// resource pool so subsequent `gtk::CssProvider::load_from_resource`
+/// / `gio::resources_lookup_data` calls resolve the bundled
+/// `data/style.css` payload (and, in subsequent commits, the
+/// placeholder icon and `*.ui` templates).
+///
+/// Called once from [`crate::run`] at startup, before
+/// [`wire_app_css_provider`] attaches the `CssProvider` to the
+/// default display. Internally builds a `glib::Bytes` view over
+/// [`APP_GRESOURCE_BUNDLE_BYTES`] (no copy), constructs a
+/// `gio::Resource` from those bytes, and calls
+/// `gio::resources_register`. A double-registration would be a
+/// programming error (the bundle is only registered from `run`),
+/// but `gio` tolerates duplicate registrations so the function
+/// stays idempotent in practice.
+///
+/// Sibling of [`wire_app_css_provider`] on the CSS-attach side and
+/// [`format_app_style_css_resource_path`] on the gresource-path
+/// side; together they pin the three halves of the Paladin CSS
+/// layer (bundle bytes, resource path, `CssProvider` attach) against
+/// a single source of truth.
+///
+/// # Panics
+///
+/// Panics if `gio::Resource::from_data` rejects the embedded
+/// bytes. The bytes are produced deterministically by
+/// `glib_build_tools::compile_resources` at build time, so any
+/// rejection indicates a tooling regression rather than a runtime
+/// failure mode.
+pub fn register_app_gresource_bundle() {
+    use gtk::gio;
+    use gtk::glib;
+
+    let bytes = glib::Bytes::from_static(APP_GRESOURCE_BUNDLE_BYTES);
+    let resource = gio::Resource::from_data(&bytes)
+        .expect("paladin-gtk gresource bundle bytes must be valid GResource format");
+    gio::resources_register(&resource);
+}
+
+/// Layer Paladin's CSS on top of the Adwaita stylesheet for
+/// `display`.
+///
+/// Builds a fresh `gtk::CssProvider`, loads
+/// `data/style.css` from the registered gresource bundle via
+/// [`format_app_style_css_resource_path`], and attaches it to
+/// `display` at
+/// `gtk::STYLE_PROVIDER_PRIORITY_APPLICATION` so the application-
+/// specific tweaks override generic theme rules without re-skinning
+/// the Adwaita palette per `IMPLEMENTATION_PLAN_04_GTK.md`
+/// §"Window shell and toast surface".
+///
+/// [`register_app_gresource_bundle`] must run before this helper so
+/// the gresource pool can resolve the CSS path; otherwise the
+/// `CssProvider` load is a silent no-op and the Adwaita defaults
+/// stand alone. [`crate::run`] orders the two calls correctly at
+/// startup.
+///
+/// Sibling of [`register_app_gresource_bundle`] on the gresource
+/// side and [`format_app_style_css_resource_path`] on the path
+/// side; together they pin the three halves of the Paladin CSS
+/// layer (bundle bytes, resource path, `CssProvider` attach) against
+/// a single source of truth.
+pub fn wire_app_css_provider(display: &gtk::gdk::Display) {
+    let provider = gtk::CssProvider::new();
+    provider.load_from_resource(format_app_style_css_resource_path());
+    gtk::style_context_add_provider_for_display(
+        display,
+        &provider,
+        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+    );
 }

@@ -88,6 +88,27 @@ pub fn run() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
+    // Register the build-time gresource bundle on the process-wide
+    // `gio` resource pool before any consumer (`wire_app_css_provider`
+    // here; future widget `gtk::Builder::from_resource` /
+    // `gtk::Image::from_resource` call sites) looks up a payload at
+    // `/org/tamx/Paladin/Gui/...` per `IMPLEMENTATION_PLAN_04_GTK.md`
+    // §"Window shell and toast surface".
+    app::model::register_app_gresource_bundle();
+
+    // Layer Paladin's `data/style.css` on top of the Adwaita
+    // stylesheet via `gtk::CssProvider` against the default display.
+    // Adwaita owns the base palette / colors / widget styles; this
+    // layer only adds the Paladin-specific tweaks the v0.2 GUI
+    // needs and never re-skins the Adwaita palette.
+    if let Some(display) = relm4::gtk::gdk::Display::default() {
+        app::model::wire_app_css_provider(&display);
+    } else {
+        eprintln!(
+            "paladin-gtk: no default GDK display available; skipping Paladin CSS layer (Adwaita defaults still apply)",
+        );
+    }
+
     let init = app::model::AppInit {
         vault_path: args.vault,
         exit_after_startup: args.exit_after_startup,

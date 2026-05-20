@@ -1,0 +1,16 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+/*
+ * Paladin GTK — application stylesheet layered on top of the Adwaita
+ * defaults per IMPLEMENTATION_PLAN_04_GTK.md §"Window shell and toast
+ * surface": Paladin-specific tweaks only, never a re-skin of the
+ * Adwaita palette. The bundle path is pinned by
+ * `paladin_gtk::app::model::format_app_style_css_resource_path`
+ * (`/org/tamx/Paladin/Gui/style.css`); the runtime CssProvider attach
+ * lives in `paladin_gtk::app::model::wire_app_css_provider`.
+ *
+ * This file is intentionally minimal at this milestone — the
+ * Adwaita stylesheet supplies every base color, font, and widget
+ * style. Subsequent commits add per-row HOTP-reveal cues, copy-
+ * confirmation toasts, and other Paladin-specific affordances here
+ * without overriding base Adwaita colors.
+ */

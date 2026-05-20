@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  SPDX-License-Identifier: AGPL-3.0-or-later
+
+  Paladin GTK gresource bundle manifest. The `prefix` mirrors
+  `paladin_gtk::APP_ID` (`org.tamx.Paladin.Gui`) so the resource
+  pool namespaces by reverse-DNS app ID, and the entries listed
+  below resolve at runtime under `/org/tamx/Paladin/Gui/<file>`
+  paths spelled by the `format_app_*_resource_path` helpers in
+  `paladin_gtk::app::model`. Build-time compilation happens in
+  `build.rs` via `glib_build_tools::compile_resources`, which
+  feeds this manifest to `glib-compile-resources` and emits the
+  packed `paladin-gtk.gresource` payload under `OUT_DIR` for
+  `include_bytes!` to embed into the binary.
+-->
+<gresources>
+  <gresource prefix="/org/tamx/Paladin/Gui">
+    <file compressed="true" alias="style.css">style.css</file>
+  </gresource>
+</gresources>

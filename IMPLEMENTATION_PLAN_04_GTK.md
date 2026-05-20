@@ -1383,19 +1383,19 @@ sign-off.
   - [x] Keep `StartupErrorComponent` display-only: retry and quit are
     the only actions, and the component never creates, overwrites,
     repairs, chmods, or selects a different vault path in v0.2.
-- [ ] Window shell and toast surface (`AdwApplicationWindow` root,
+- [x] Window shell and toast surface (`AdwApplicationWindow` root,
   `AdwToolbarView`, `AdwToastOverlay`, scoped CSS).
-  - [ ] Build `AppModel`'s widget root as an `AdwApplicationWindow`
+  - [x] Build `AppModel`'s widget root as an `AdwApplicationWindow`
     whose content is an `AdwToolbarView` so the header bar sits in
     the top slot and the active screen sits in the content slot.
-  - [ ] Wrap the active screen in an `AdwToastOverlay` so transient
+  - [x] Wrap the active screen in an `AdwToastOverlay` so transient
     feedback (copy confirmation, settings-saved, clipboard-clear-fired
     notice, HOTP `save_durability_unconfirmed` warning, export-success
     path) can be delivered via `AdwToast`.
-  - [ ] Load `data/style.css` from the gresource bundle via
+  - [x] Load `data/style.css` from the gresource bundle via
     `gtk::CssProvider` so Paladin-specific tweaks layer on top of
     Adwaita defaults; never re-skin the Adwaita palette.
-  - [ ] Route every active screen (`InitDialog`, `UnlockComponent`,
+  - [x] Route every active screen (`InitDialog`, `UnlockComponent`,
     `StartupErrorComponent`, `AccountListComponent`) through the same
     overlay so state transitions never lose pending toasts.
 - [ ] In-app vault initialization (`InitDialog` for missing vaults;
