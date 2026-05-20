@@ -56,7 +56,11 @@
 //! inline-warning bodies render through [`PaladinError::Display`] so
 //! wording stays in lock-step with the CLI / TUI verbatim.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+use libadwaita as adw;
+use libadwaita::prelude::*;
+use relm4::prelude::*;
 
 use paladin_core::{format_plaintext_export_warning, EncryptionOptions, ErrorKind, PaladinError};
 use secrecy::SecretString;
@@ -332,5 +336,115 @@ impl InlineWarning {
             kind: err.kind(),
             rendered: err.to_string(),
         }
+    }
+}
+
+/// Construction parameters for [`ExportDialogComponent`].
+///
+/// The dialog opens against the live vault so the export worker that
+/// lands in follow-up commits can call
+/// [`paladin_core::export::otpauth_list`] /
+/// [`paladin_core::export::encrypted`] against the same in-memory
+/// accounts `AppModel` resolved at startup. Cloned from
+/// `AppModel::state` at mount time so a mid-flight passphrase-
+/// transition or lock cannot retarget the dialog.
+#[derive(Debug, Clone)]
+pub struct ExportDialogInit {
+    /// Vault path the export source reads from; carried so the
+    /// follow-up worker can resolve writes relative to a stable
+    /// vault identity even if the live `AppState` retargets.
+    pub vault_path: PathBuf,
+}
+
+/// Messages handled by [`ExportDialogComponent`].
+///
+/// This milestone scaffolds the read-only `adw::Dialog` mount; the
+/// file-picker / format-selector / overwrite-gate / plaintext-warning /
+/// twice-confirm passphrase / submit / worker-result transitions
+/// described in `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+/// `ExportDialog` land in follow-up commits alongside the live-apply
+/// behavior. The empty enum is the deliberate v0.2 starting point —
+/// relm4 requires the associated `Input` type to exist even when no
+/// inbound messages are wired yet.
+#[derive(Debug)]
+pub enum ExportDialogMsg {}
+
+/// Messages emitted by [`ExportDialogComponent`] for `AppModel` to consume.
+///
+/// `AppModel` forwards these into `AppMsg::ExportDialogAction(...)`;
+/// the dispatch arm drops the live `Controller<ExportDialogComponent>`
+/// so the underlying `adw::Dialog` is torn down. Submit / export-
+/// result outputs that propagate the typed
+/// [`classify_export_result`] verdict to `AppModel` land in the same
+/// follow-up commits that add the matching [`ExportDialogMsg`]
+/// variants.
+#[derive(Debug, Clone)]
+pub enum ExportDialogOutput {
+    /// User dismissed the dialog (Close button / Escape / window
+    /// close). `AppModel` responds by dropping the live controller
+    /// so the dialog disappears and any in-flight pending form draft
+    /// (selected destination path, format choice, overwrite
+    /// acknowledgement, plaintext-warning acknowledgement,
+    /// twice-confirm passphrase entries) is discarded.
+    Close,
+}
+
+/// Widget-bearing `adw::Dialog` for the application menu's Export… entry.
+///
+/// Mounts the libadwaita dialog described in DESIGN.md §7
+/// (`ExportDialog`) and `IMPLEMENTATION_PLAN_04_GTK.md` §"Component
+/// tree" > `ExportDialog`. The widget body is a read-only scaffold
+/// at this milestone (an empty `adw::ToolbarView` wrapped in
+/// `adw::Dialog` with the dialog title set), so the controller
+/// mounts cleanly under `xvfb-run` without yet exposing the file
+/// picker, format selector, overwrite gate, plaintext-warning gate,
+/// or twice-confirm passphrase row. Follow-up commits attach the
+/// real form widgets and the export worker that drives
+/// [`classify_export_result`].
+pub struct ExportDialogComponent {
+    /// Vault path the dialog mounts against, kept on `self` so the
+    /// follow-up export worker can reach it without re-plumbing
+    /// through every signal. The pure-logic round-trip is asserted
+    /// by `tests/export_dialog_logic.rs`.
+    #[allow(dead_code)]
+    vault_path: PathBuf,
+}
+
+#[allow(missing_docs)]
+#[relm4::component(pub)]
+impl SimpleComponent for ExportDialogComponent {
+    type Init = ExportDialogInit;
+    type Input = ExportDialogMsg;
+    type Output = ExportDialogOutput;
+
+    view! {
+        #[root]
+        adw::Dialog {
+            set_title: "Export",
+
+            #[wrap(Some)]
+            set_child = &adw::ToolbarView {
+                add_top_bar = &adw::HeaderBar {},
+            },
+        }
+    }
+
+    fn init(
+        init: Self::Init,
+        root: Self::Root,
+        _sender: ComponentSender<Self>,
+    ) -> ComponentParts<Self> {
+        let model = ExportDialogComponent {
+            vault_path: init.vault_path,
+        };
+        let widgets = view_output!();
+        ComponentParts { model, widgets }
+    }
+
+    fn update(&mut self, _msg: Self::Input, _sender: ComponentSender<Self>) {
+        // No inbound messages handled at this milestone — see
+        // `ExportDialogMsg` doc comment for the upcoming file-picker /
+        // format / overwrite / plaintext-warning / passphrase /
+        // submit / worker-result transitions.
     }
 }
