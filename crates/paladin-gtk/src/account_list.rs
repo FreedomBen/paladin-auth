@@ -26,12 +26,13 @@ use relm4::gtk::glib;
 use relm4::gtk::prelude::*;
 use relm4::prelude::*;
 
-use paladin_core::{AccountId, AccountKindSummary, Vault};
+use paladin_core::{select_after_filter, AccountId, AccountKindSummary, Vault};
 
 use crate::account_row::{
     copy_enabled, display_label, kebab_visible, next_button_visible, progress_visible, CodeDisplay,
     CounterText, RowDisplay,
 };
+use crate::search::filtered_account_ids;
 
 /// Stdout marker prefix emitted under `--exit-after-startup` once
 /// the [`AccountListComponent`] has bound rows from the live vault.
@@ -82,7 +83,7 @@ pub const ROW_RENAME_ACTION_NAME: &str = "rename";
 pub const ROW_REMOVE_ACTION_NAME: &str = "remove";
 
 /// Output forwarded from [`AccountListComponent`] up to `AppModel`
-/// in response to a row-level user intent.
+/// in response to a row-level user intent or a search-query change.
 ///
 /// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
 /// `AccountRowComponent`, the row kebab menu carries Rename… /
@@ -92,6 +93,17 @@ pub const ROW_REMOVE_ACTION_NAME: &str = "remove";
 /// variants via [`dispatch_row_action`] and forwards it through
 /// `relm4::Sender::output` so `AppModel` can open the corresponding
 /// dialog widget against the row's [`AccountId`].
+///
+/// The [`QueryChanged`](AccountListOutput::QueryChanged) variant
+/// is emitted whenever the embedded `gtk::SearchEntry`'s
+/// `search-changed` signal fires, so `AppModel` can recompute the
+/// filtered row set via
+/// [`filtered_row_models_from_vault`] /
+/// [`selected_row_after_refresh`] and feed the result back through
+/// [`AccountListMsg::Refresh`]. Pushing the filter through `AppModel`
+/// keeps `paladin_core::account_matches_search` the single source of
+/// truth for the substring match (`AccountListComponent` never
+/// reaches for the live `Vault`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AccountListOutput {
     /// User asked to rename the account identified by the inner
@@ -102,6 +114,11 @@ pub enum AccountListOutput {
     /// [`AccountId`]. `AppModel` opens `RemoveDialog` (the destructive
     /// confirmation per §"Component tree" > `RemoveDialog`).
     OpenRemoveDialog(AccountId),
+    /// User changed the search-bar query. `AppModel` recomputes the
+    /// filtered row set against the live `Vault` and sends a
+    /// matching [`AccountListMsg::Refresh`] back so the
+    /// `gio::ListStore` reflects the new filter.
+    QueryChanged(String),
 }
 
 /// Dispatch table mapping a row-level action name onto the typed
@@ -202,6 +219,48 @@ pub fn row_model_for_account(vault: &Vault, id: AccountId) -> Option<AccountRowM
         })
 }
 
+/// Project every account in `vault` whose `<issuer>:<label>` match
+/// key contains `query` (case-insensitive) into an
+/// [`AccountRowModel`], preserving vault insertion order among
+/// matches.
+///
+/// Composes [`crate::search::filtered_account_ids`] with
+/// [`row_model_for_account`] so the GUI's incremental search filter
+/// shares the case-insensitive substring contract used by
+/// `paladin_core::account_matches_search` (and therefore by the CLI
+/// / TUI search). Empty `query` matches every account.
+///
+/// The projection is `AccountSummary`-driven via
+/// [`row_model_for_account`], so no secret bytes leave
+/// `paladin_core`.
+#[must_use]
+pub fn filtered_row_models_from_vault(vault: &Vault, query: &str) -> Vec<AccountRowModel> {
+    filtered_account_ids(vault, query)
+        .into_iter()
+        .filter_map(|id| row_model_for_account(vault, id))
+        .collect()
+}
+
+/// Pick the selected row id after the `AccountListComponent`'s
+/// `gio::ListStore` has been spliced with a fresh `rows` set.
+///
+/// Wraps [`paladin_core::select_after_filter`] against the row
+/// models the list binds so the GUI's selection-preservation rule
+/// matches the CLI / TUI search-selection contract (DESIGN §6 / §7):
+///
+/// * `prev = Some(id)` survives iff `id` is still in `rows`;
+/// * otherwise the first id in `rows` wins (vault insertion order);
+/// * an empty `rows` returns `None`, so the list view clears its
+///   `SingleSelection` rather than pointing at a stale id.
+#[must_use]
+pub fn selected_row_after_refresh(
+    prev: Option<AccountId>,
+    rows: &[AccountRowModel],
+) -> Option<AccountId> {
+    let ids: Vec<AccountId> = rows.iter().map(|row| row.id).collect();
+    select_after_filter(prev, &ids)
+}
+
 /// Project an [`AccountRowModel`] onto the no-visible-code
 /// [`RowDisplay`] the row factory binds at mount time.
 ///
@@ -297,11 +356,28 @@ pub fn format_widget_states_marker(displays: &[RowDisplay]) -> String {
 #[derive(Debug, Clone)]
 pub struct AccountListInit {
     /// Row models projected from the live vault by
-    /// [`row_models_from_vault`]. Cloned into the `gio::ListStore`
-    /// at mount time; subsequent commits will replace this single-
-    /// shot init with a message-driven re-bind on add / remove /
-    /// rename.
+    /// [`row_models_from_vault`] (when `initial_query` is empty) or
+    /// by [`filtered_row_models_from_vault`] (when the parent is
+    /// preserving a non-empty query across a controller rebuild).
+    /// Cloned into the `gio::ListStore` at mount time; subsequent
+    /// updates flow through [`AccountListMsg::Refresh`].
     pub rows: Vec<AccountRowModel>,
+    /// Search-bar query the component restores on mount.
+    ///
+    /// Defaults to the empty string for a fresh launch. The parent
+    /// passes the most recently observed
+    /// [`AccountListOutput::QueryChanged`] value so the visible
+    /// query survives a controller rebuild (e.g. after a successful
+    /// passphrase transition that bounces through `Locked`).
+    pub initial_query: String,
+    /// Selection the component installs on the
+    /// [`gtk::SingleSelection`] after seeding the store. `None`
+    /// clears the selection (i.e. the sentinel
+    /// `gtk::INVALID_LIST_POSITION` row index). Mirrors the
+    /// [`AccountListMsg::Refresh`] `selection` field so the rebuild
+    /// and the live refresh share one selection-application code
+    /// path.
+    pub initial_selection: Option<AccountId>,
 }
 
 /// Widget-bearing list view for the unlocked vault state.
@@ -313,23 +389,88 @@ pub struct AccountListInit {
 /// The factory does not touch the live `Account` or `Code` — it
 /// only reads the already-projected [`AccountRowModel`], so the
 /// row binding is secret-free.
+///
+/// The component additionally owns the `gtk::SearchBar` hosting a
+/// `gtk::SearchEntry` and the `gtk::SingleSelection` driving row
+/// selection. `current_query` mirrors the entry's text so the parent
+/// can re-feed it via [`AccountListInit::initial_query`] on a
+/// rebuild; `current_selection` mirrors the visible row id for the
+/// same reason. The widget references are cached on `self` so the
+/// [`SimpleComponent::update`] handler can drive
+/// [`AccountListMsg::Refresh`] (splice the store + apply selection)
+/// and [`AccountListMsg::SetSearchModeEnabled`] (toggle the
+/// `search-mode-enabled` property) imperatively without round-tripping
+/// through the relm4 `view!` macro on every refresh.
 pub struct AccountListComponent {
     /// Backing `gio::ListStore` of `BoxedAnyObject<AccountRowModel>`.
-    /// Retained on `self` so future messages (add / remove / rename)
-    /// can `append` / `remove` / `splice` against it.
-    #[allow(dead_code)]
+    /// Spliced inside [`AccountListMsg::Refresh`] so add / remove /
+    /// rename / settings refresh and search-filter refresh share one
+    /// code path.
     model: gio::ListStore,
+    /// `gtk::SingleSelection` wrapping [`Self::model`]. Selection is
+    /// reapplied through [`apply_selection`] after every
+    /// [`AccountListMsg::Refresh`] so the user's cursor follows the
+    /// CLI / TUI selection-preservation rule
+    /// ([`selected_row_after_refresh`]).
+    selection: gtk::SingleSelection,
+    /// `gtk::SearchBar` whose `search-mode-enabled` property is
+    /// toggled by [`AccountListMsg::SetSearchModeEnabled`]. The
+    /// header-bar search-toggle button (wired in `app/model.rs`)
+    /// dispatches that message so the bar reveals / hides in
+    /// lockstep with the toggle's `active` state.
+    search_bar: gtk::SearchBar,
+    /// `gtk::SearchEntry` nested inside [`Self::search_bar`]. Its
+    /// `search-changed` signal fires [`AccountListMsg::SetQuery`],
+    /// which the [`SimpleComponent::update`] handler mirrors into
+    /// [`Self::current_query`] and bubbles up as
+    /// [`AccountListOutput::QueryChanged`].
+    #[allow(dead_code)]
+    search_entry: gtk::SearchEntry,
+    /// Last query the user typed into [`Self::search_entry`].
+    /// Cached so [`AccountListMsg::Refresh`] can recompute the
+    /// selection without rereading the entry buffer.
+    current_query: String,
+    /// Last selected row id surfaced to the parent. Updated by
+    /// [`AccountListMsg::Refresh`] so a subsequent rebuild can pass
+    /// it back through [`AccountListInit::initial_selection`].
+    current_selection: Option<AccountId>,
 }
 
 /// Messages handled by [`AccountListComponent`].
 ///
-/// This milestone delivers the read-only render path; subsequent
-/// commits will add Add / Remove / Rename / Copy variants. The
-/// empty enum is the deliberate v0.2 starting point — relm4
-/// requires the associated `Input` type to exist even when no
-/// inbound messages are wired yet.
-#[derive(Debug)]
-pub enum AccountListMsg {}
+/// * [`SetQuery`](AccountListMsg::SetQuery): emitted from the
+///   `gtk::SearchEntry`'s `search-changed` signal. Caches the new
+///   query and bubbles it up as
+///   [`AccountListOutput::QueryChanged`] so `AppModel` recomputes
+///   the filtered row set against the live `Vault`.
+/// * [`Refresh`](AccountListMsg::Refresh): sent by `AppModel` after
+///   a vault mutation or a search-filter recomputation. Splices the
+///   `gio::ListStore` with the new row set and reapplies the
+///   selection so the visible state matches the just-committed
+///   `Vault`.
+/// * [`SetSearchModeEnabled`](AccountListMsg::SetSearchModeEnabled):
+///   sent by `AppModel` when the header-bar search-toggle button
+///   flips. Drives the `gtk::SearchBar`'s `search-mode-enabled`
+///   property so the bar reveals / hides in lockstep with the
+///   toggle.
+#[derive(Debug, Clone)]
+pub enum AccountListMsg {
+    /// New query text from the `gtk::SearchEntry`'s `search-changed`
+    /// signal.
+    SetQuery(String),
+    /// New filtered row set (and selection) from `AppModel`.
+    Refresh {
+        /// Rows to render in vault insertion order. Empty when the
+        /// vault has no matching accounts.
+        rows: Vec<AccountRowModel>,
+        /// Selection to install on the `gtk::SingleSelection`.
+        /// `None` clears the selection.
+        selection: Option<AccountId>,
+    },
+    /// Show / hide the `gtk::SearchBar`. Mirrors the header-bar
+    /// search-toggle button's `active` state.
+    SetSearchModeEnabled(bool),
+}
 
 #[allow(missing_docs)]
 #[relm4::component(pub)]
@@ -340,15 +481,23 @@ impl SimpleComponent for AccountListComponent {
 
     view! {
         #[root]
-        gtk::ScrolledWindow {
+        gtk::Box {
+            set_orientation: gtk::Orientation::Vertical,
             set_hexpand: true,
             set_vexpand: true,
 
-            #[wrap(Some)]
-            set_child = &gtk::ListView {
-                set_model: Some(&gtk::SingleSelection::new(Some(model.clone()))),
-                set_factory: Some(&factory),
-                add_css_class: "navigation-sidebar",
+            append: &search_bar,
+
+            gtk::ScrolledWindow {
+                set_hexpand: true,
+                set_vexpand: true,
+
+                #[wrap(Some)]
+                set_child = &gtk::ListView {
+                    set_model: Some(&selection),
+                    set_factory: Some(&factory),
+                    add_css_class: "navigation-sidebar",
+                },
             },
         }
     }
@@ -363,20 +512,114 @@ impl SimpleComponent for AccountListComponent {
             model.append(&glib::BoxedAnyObject::new(row.clone()));
         }
 
+        let selection = gtk::SingleSelection::new(Some(model.clone()));
+        apply_selection(&selection, &init.rows, init.initial_selection);
+
         let factory = build_row_factory(sender.output_sender().clone());
+
+        let search_entry = gtk::SearchEntry::builder()
+            .placeholder_text("Search accounts")
+            .build();
+        if !init.initial_query.is_empty() {
+            search_entry.set_text(&init.initial_query);
+        }
+        let entry_input = sender.input_sender().clone();
+        search_entry.connect_search_changed(move |entry| {
+            let text: String = entry.text().into();
+            let _ = entry_input.send(AccountListMsg::SetQuery(text));
+        });
+
+        let search_bar = gtk::SearchBar::builder()
+            .search_mode_enabled(false)
+            .show_close_button(true)
+            .build();
+        search_bar.set_child(Some(&search_entry));
+        search_bar.connect_entry(&search_entry);
+
         let widgets = view_output!();
 
-        let component = AccountListComponent { model };
+        let component = AccountListComponent {
+            model,
+            selection,
+            search_bar,
+            search_entry,
+            current_query: init.initial_query,
+            current_selection: init.initial_selection,
+        };
         ComponentParts {
             model: component,
             widgets,
         }
     }
 
-    fn update(&mut self, _msg: Self::Input, _sender: ComponentSender<Self>) {
-        // No inbound messages handled at this milestone — see
-        // `AccountListMsg` doc comment.
+    fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>) {
+        match msg {
+            AccountListMsg::SetQuery(query) => {
+                if self.current_query == query {
+                    return;
+                }
+                self.current_query.clone_from(&query);
+                let _ = sender.output(AccountListOutput::QueryChanged(query));
+            }
+            AccountListMsg::Refresh { rows, selection } => {
+                // Parent's `selection` is treated as the preferred
+                // prior id: `Some(id)` is the explicit ask (e.g.
+                // post-Add the new account should win),
+                // `None` falls back to the component's
+                // [`Self::current_selection`] so the user's cursor
+                // survives a search-query refresh that does not
+                // remove the selected row. The actual surviving id
+                // is resolved by [`selected_row_after_refresh`] so
+                // the §6 / §7 preservation rule lives in pure logic.
+                let prev = selection.or(self.current_selection);
+                let effective_selection = selected_row_after_refresh(prev, &rows);
+                splice_rows(&self.model, &rows);
+                apply_selection(&self.selection, &rows, effective_selection);
+                self.current_selection = effective_selection;
+            }
+            AccountListMsg::SetSearchModeEnabled(enabled) => {
+                self.search_bar.set_search_mode(enabled);
+            }
+        }
     }
+}
+
+/// Replace the `gio::ListStore`'s contents with `rows`.
+///
+/// `gio::ListStore::splice(position, n_removals, additions)` swaps
+/// the entire model in one notify so the `gtk::ListView` emits a
+/// single `items-changed` instead of one per row. Cloning the row
+/// models into fresh `BoxedAnyObject`s keeps the store's elements
+/// owned by the store (no shared references with the parent's
+/// projection).
+fn splice_rows(store: &gio::ListStore, rows: &[AccountRowModel]) {
+    let additions: Vec<glib::Object> = rows
+        .iter()
+        .map(|row| glib::BoxedAnyObject::new(row.clone()).upcast::<glib::Object>())
+        .collect();
+    let n_removals = store.n_items();
+    store.splice(0, n_removals, &additions);
+}
+
+/// Install `target` as the [`gtk::SingleSelection`]'s selected row.
+///
+/// Resolves the row id to its position in `rows`, falling back to
+/// the sentinel `gtk::INVALID_LIST_POSITION` (no selection) when the
+/// id is `None` or not present. The widget layer never picks the
+/// selection itself; the choice flows from
+/// [`selected_row_after_refresh`] / [`AccountListInit::initial_selection`]
+/// so the filter-aware preservation rule stays in pure logic.
+fn apply_selection(
+    selection: &gtk::SingleSelection,
+    rows: &[AccountRowModel],
+    target: Option<AccountId>,
+) {
+    let position = target
+        .and_then(|id| rows.iter().position(|row| row.id == id))
+        .map_or(gtk::INVALID_LIST_POSITION, |idx| {
+            u32::try_from(idx).unwrap_or(gtk::INVALID_LIST_POSITION)
+        });
+    selection.set_selected(position);
 }
 
 /// Placeholder rendered in the code column whenever the row's

@@ -1531,11 +1531,11 @@ sign-off.
   - [ ] Host a `gtk::SearchEntry` inside a `gtk::SearchBar` whose
     `search-mode-enabled` is bound to the header-bar search-toggle
     button.
-  - [ ] On query change, rebuild the list by calling
+  - [x] On query change, rebuild the list by calling
     `paladin_core::account_matches_search(&Account, query)` against
     `Vault::iter()` before projecting matches to `AccountSummary`;
     preserve insertion order among matches.
-  - [ ] After each filter rebuild, set the selected row from
+  - [x] After each filter rebuild, set the selected row from
     `paladin_core::select_after_filter(prev, filtered)` (preserve
     prior selection if still present, else first match) for parity
     with the TUI.

@@ -71,8 +71,9 @@ use relm4::gtk;
 use relm4::prelude::*;
 
 use crate::account_list::{
-    format_rendered_marker, format_widget_states_marker, hidden_row_display, row_models_from_vault,
-    AccountListComponent, AccountListInit, AccountListOutput, AccountRowModel,
+    filtered_row_models_from_vault, format_rendered_marker, format_widget_states_marker,
+    hidden_row_display, row_models_from_vault, selected_row_after_refresh, AccountListComponent,
+    AccountListInit, AccountListMsg, AccountListOutput, AccountRowModel,
 };
 use crate::add_account::{
     run_add_worker, AddAccountComponent, AddAccountInit, AddAccountOutput, AddWorkerCompletion,
@@ -901,7 +902,11 @@ impl SimpleComponent for AppModel {
 
         let account_list = if state.is_unlocked() {
             let controller = AccountListComponent::builder()
-                .launch(AccountListInit { rows })
+                .launch(AccountListInit {
+                    rows,
+                    initial_query: String::new(),
+                    initial_selection: None,
+                })
                 .forward(sender.input_sender(), AppMsg::AccountListAction);
             widgets.content.append(controller.widget());
             Some(controller)
@@ -1026,6 +1031,26 @@ impl SimpleComponent for AppModel {
                         self.content.append(controller.widget());
                         self.remove_dialog = Some(controller);
                     }
+                }
+            }
+            AppMsg::AccountListAction(AccountListOutput::QueryChanged(query)) => {
+                // The user typed into the search bar. Filter the live
+                // vault through `paladin_core::account_matches_search`
+                // (via `filtered_row_models_from_vault`) and re-feed
+                // the projected rows back to the live
+                // `AccountListComponent`. The selection-preservation
+                // rule is deferred to the component: passing `None`
+                // for the `selection` slot lets
+                // `selected_row_after_refresh` resolve against the
+                // component's own `current_selection`, so the user's
+                // cursor follows the §6 / §7 contract (preserve when
+                // still visible, else first match).
+                if let (Some((vault, _)), Some(controller)) =
+                    (self.vault.as_ref(), self.account_list.as_ref())
+                {
+                    let rows = filtered_row_models_from_vault(vault, &query);
+                    let selection = selected_row_after_refresh(None, &rows);
+                    controller.emit(AccountListMsg::Refresh { rows, selection });
                 }
             }
             AppMsg::RenameDialogAction(RenameDialogOutput::Cancel) => {
@@ -1875,7 +1900,11 @@ impl AppModel {
                     .map(|(v, _)| row_models_from_vault(v))
                     .unwrap_or_default();
                 let controller = AccountListComponent::builder()
-                    .launch(AccountListInit { rows })
+                    .launch(AccountListInit {
+                        rows,
+                        initial_query: String::new(),
+                        initial_selection: None,
+                    })
                     .forward(sender.input_sender(), AppMsg::AccountListAction);
                 self.content.append(controller.widget());
                 self.account_list = Some(controller);

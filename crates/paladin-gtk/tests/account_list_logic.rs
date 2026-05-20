@@ -27,8 +27,9 @@ use paladin_core::{
     IconHintInput, Store, Vault, VaultInit, VaultLock,
 };
 use paladin_gtk::account_list::{
-    dispatch_row_action, format_rendered_marker, format_widget_states_marker, hidden_row_display,
-    row_model_for_account, row_models_from_vault, AccountListOutput, AccountRowModel,
+    dispatch_row_action, filtered_row_models_from_vault, format_rendered_marker,
+    format_widget_states_marker, hidden_row_display, row_model_for_account, row_models_from_vault,
+    selected_row_after_refresh, AccountListOutput, AccountRowModel,
     ACCOUNT_LIST_WIDGET_STATES_MARKER_PREFIX, ROW_ACTION_GROUP_NAME, ROW_REMOVE_ACTION_NAME,
     ROW_RENAME_ACTION_NAME,
 };
@@ -624,5 +625,188 @@ fn account_list_output_variants_are_distinct() {
     assert_ne!(
         AccountListOutput::OpenRenameDialog(id),
         AccountListOutput::OpenRemoveDialog(id),
+    );
+}
+
+// ---------------------------------------------------------------------------
+// `filtered_row_models_from_vault`
+// ---------------------------------------------------------------------------
+//
+// Pure-logic projection of the live vault into the row models the
+// search bar's incremental filter binds onto the `gio::ListStore`.
+// Composes [`row_models_from_vault`] with `paladin_core::
+// account_matches_search` (via `crate::search::filtered_account_ids`)
+// so the GUI's filter contract matches the CLI / TUI search exactly:
+// case-insensitive substring against `<issuer>:<label>`, insertion
+// order preserved among matches, empty query matches every account.
+
+#[test]
+fn filtered_row_models_empty_query_returns_all_in_order() {
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+
+    let a = add_totp(&mut vault, &store, Some("GitHub"), "ben");
+    let b = add_totp(&mut vault, &store, Some("GitLab"), "alice");
+    let c = add_totp(&mut vault, &store, None, "solo");
+
+    let rows = filtered_row_models_from_vault(&vault, "");
+    let ids: Vec<AccountId> = rows.iter().map(|r| r.id).collect();
+    assert_eq!(
+        ids,
+        vec![a, b, c],
+        "empty query matches every account in insertion order",
+    );
+}
+
+#[test]
+fn filtered_row_models_case_insensitive_substring() {
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+
+    let github = add_totp(&mut vault, &store, Some("GitHub"), "ben");
+    let _gitlab = add_totp(&mut vault, &store, Some("GitLab"), "alice");
+    let _solo = add_totp(&mut vault, &store, None, "solo");
+
+    // Substring `"hub"` (case-insensitive) appears only in the
+    // GitHub row's `<issuer>:<label>` match key.
+    let rows = filtered_row_models_from_vault(&vault, "HUB");
+    let ids: Vec<AccountId> = rows.iter().map(|r| r.id).collect();
+    assert_eq!(ids, vec![github]);
+    assert_eq!(rows[0].display_label, "GitHub:ben");
+}
+
+#[test]
+fn filtered_row_models_no_match_returns_empty() {
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+
+    add_totp(&mut vault, &store, Some("GitHub"), "ben");
+    add_totp(&mut vault, &store, Some("GitLab"), "alice");
+
+    let rows = filtered_row_models_from_vault(&vault, "nope");
+    assert!(rows.is_empty(), "no-match query projects no rows");
+}
+
+#[test]
+fn filtered_row_models_preserves_insertion_order_among_matches() {
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+
+    // Insert non-matches between two matching rows to verify the
+    // filter walks insertion order (not match order or alphabetical).
+    let first = add_totp(&mut vault, &store, Some("Acme"), "alice");
+    add_totp(&mut vault, &store, Some("Other"), "ben");
+    let third = add_totp(&mut vault, &store, Some("Acme"), "carol");
+    add_totp(&mut vault, &store, Some("Different"), "dan");
+
+    let rows = filtered_row_models_from_vault(&vault, "acme");
+    let ids: Vec<AccountId> = rows.iter().map(|r| r.id).collect();
+    assert_eq!(
+        ids,
+        vec![first, third],
+        "matches preserve vault insertion order",
+    );
+}
+
+#[test]
+fn filtered_row_models_match_key_keeps_colon_for_empty_issuer() {
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+
+    // Empty issuer keeps the colon in the match key (parity with
+    // `paladin_core::account_matches_search` and the parallel
+    // `search_logic.rs` coverage) — querying `:` matches this row.
+    let id = add_totp(&mut vault, &store, Some(""), "alice");
+
+    let rows = filtered_row_models_from_vault(&vault, ":");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].id, id);
+    // The row's display_label still collapses to the bare label
+    // even though the match key retained the colon.
+    assert_eq!(rows[0].display_label, "alice");
+}
+
+// ---------------------------------------------------------------------------
+// `selected_row_after_refresh`
+// ---------------------------------------------------------------------------
+//
+// Wraps `paladin_core::select_after_filter` against
+// `&[AccountRowModel]` so the `AccountListComponent` can re-pick its
+// selected row after every refresh (vault mutation, search query
+// change) without re-deriving the filter rule the CLI / TUI already
+// share. Coverage parallels `tests/search_logic.rs`'s
+// `select_after_search_*` cases.
+
+#[test]
+fn selected_row_after_refresh_preserves_prev_when_still_present() {
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+
+    let a = add_totp(&mut vault, &store, Some("GitHub"), "ben");
+    let b = add_totp(&mut vault, &store, Some("GitLab"), "alice");
+    let _c = add_totp(&mut vault, &store, None, "solo");
+
+    let rows = row_models_from_vault(&vault);
+    assert_eq!(
+        selected_row_after_refresh(Some(b), &rows),
+        Some(b),
+        "prev selection survives when the row is still present",
+    );
+    // Sanity: a different prev id also survives if still present.
+    assert_eq!(selected_row_after_refresh(Some(a), &rows), Some(a));
+}
+
+#[test]
+fn selected_row_after_refresh_falls_back_to_first_when_prev_gone() {
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+
+    let a = add_totp(&mut vault, &store, Some("GitHub"), "ben");
+    add_totp(&mut vault, &store, Some("GitLab"), "alice");
+
+    let rows = row_models_from_vault(&vault);
+    let gone = AccountId::default();
+    assert_eq!(
+        selected_row_after_refresh(Some(gone), &rows),
+        Some(a),
+        "falls back to first row when prev is no longer in the set",
+    );
+}
+
+#[test]
+fn selected_row_after_refresh_returns_none_for_empty_rows() {
+    // An empty post-filter set yields no selection — the
+    // `AccountListComponent` clears its `SingleSelection` instead of
+    // pointing at a stale id.
+    let empty: Vec<AccountRowModel> = Vec::new();
+    assert_eq!(selected_row_after_refresh(None, &empty), None);
+    assert_eq!(
+        selected_row_after_refresh(Some(AccountId::new()), &empty),
+        None,
+        "stale prev does not survive an empty refresh",
+    );
+}
+
+#[test]
+fn selected_row_after_refresh_returns_first_when_prev_is_none() {
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+
+    let a = add_totp(&mut vault, &store, Some("GitHub"), "ben");
+    add_totp(&mut vault, &store, Some("GitLab"), "alice");
+
+    let rows = row_models_from_vault(&vault);
+    assert_eq!(
+        selected_row_after_refresh(None, &rows),
+        Some(a),
+        "fresh refresh with no prior selection picks the first row",
     );
 }
