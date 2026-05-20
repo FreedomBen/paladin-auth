@@ -30090,3 +30090,180 @@ fn format_app_about_dialog_debug_info_filename_does_not_contain_a_start_of_headi
         "AdwAboutDialog debug_info_filename must not contain the `\\x01` start-of-heading byte (0x01); like STX, ETX, EOT, ENQ, ACK, and BEL, SOH is NOT matched by `char::is_whitespace()` (Unicode returns false for U+0001 SOH), so `_has_no_embedded_whitespace` does NOT catch `\\x01` — strictly as dangerous as start-of-text, end-of-text, end-of-transmission, enquiry, acknowledge, backspace, and bell here, neither caught by the whitespace companion; a stray `\\x01` slips past `_is_ascii_only` / `_returns_paladin_debug_info_txt` / `_does_not_contain_path_separators` / `_does_not_start_with_a_dot` / `_contains_exactly_one_period` / `_extension_is_lowercase_txt` / `_is_non_empty_single_line_with_txt_extension` (`str::lines().count() == 1` does not split on `\\x01`) and the prior per-byte siblings, would mis-render as a literal control glyph in the GtkFileDialog filename entry pre-fill, confuse serial-protocol-bridging tooling that treats `\\x01` as a SOH header-block opener if dumped through a serial-bridged TTY on `ls` / `find` / `tar` output piped through a serial-bridged TTY (splicing the directory listing at the byte boundary into an unexpected header-followed-by-text sequence), trigger readline `^A` beginning-of-line cursor-jump surprises in tooling capturing directory listings through a pty with the default Emacs keymap in a shared CI environment that processes the saved debug-info payload, and confuse maintainer triage with control-glyph / SOH-frame artifacts in chat-attachment column renders; got {debug_info_filename:?}",
     );
 }
+
+#[test]
+fn format_app_about_dialog_url_helpers_do_not_contain_a_start_of_heading_byte() {
+    // Cross-helper defense-in-depth sibling looping over the
+    // three `AdwAboutDialog` footer URL helpers
+    // (`format_app_about_dialog_website`,
+    // `format_app_about_dialog_issue_url`,
+    // `format_app_about_dialog_support_url`) and pinning each
+    // value as free of the start-of-heading byte `\x01`
+    // (0x01). Continues the about-dialog non-whitespace-
+    // classified C0 control-byte cycle past the just-
+    // finished `{null / horizontal-tab / carriage-return /
+    // vertical-tab / form-feed / backspace / line-feed /
+    // bell / acknowledge / enquiry / end-of-transmission /
+    // end-of-text / start-of-text}` cross-URL tredecuple.
+    //
+    // The start-of-heading byte sits one step below STX
+    // (0x02) in the ASCII C0 block — the framing byte
+    // historically used by Bisync and similar block-
+    // protocol transports to mark the beginning of a
+    // header block (preceding the STX-marked text block).
+    // Like STX, ETX, EOT, ENQ, ACK, and BEL, SOH is NOT
+    // matched by `char::is_whitespace()` (Unicode treats
+    // SOH as a control byte, not whitespace), so the
+    // existing `url_helpers_contain_no_embedded_whitespace`
+    // companion does NOT catch `\x01` even though it
+    // catches `\x0C`. The start-of-heading byte therefore
+    // has NO transitive protection on the URL helpers
+    // today — strictly as dangerous as start-of-text, end-
+    // of-text, end-of-transmission, enquiry, acknowledge,
+    // backspace, and bell, neither caught by the
+    // whitespace companion.
+    //
+    // A regression would slip past every existing companion:
+    //   - `_is_non_empty_https_url[_distinct_*]` per-URL
+    //     companion (which only checks non-empty + `https://`
+    //     prefix + no space byte — a `\x01` byte mid-URL
+    //     satisfies all three since `\x01` is not the
+    //     literal U+0020 SPACE);
+    //   - `_are_ascii_only` cross-URL companion (`\x01` is
+    //     ASCII so it slips past);
+    //   - `_url_helpers_contain_no_embedded_whitespace`
+    //     uses `char::is_whitespace()`, which returns
+    //     *false* for U+0001 SOH — strictly weaker coverage
+    //     than the form-feed case;
+    //   - `_do_not_end_with_a_trailing_slash` (which only
+    //     constrains the final byte);
+    //   - `_do_not_contain_a_null_byte` /
+    //     `_do_not_contain_a_horizontal_tab_byte` /
+    //     `_do_not_contain_a_carriage_return_byte` /
+    //     `_do_not_contain_a_vertical_tab_byte` /
+    //     `_do_not_contain_a_form_feed_byte` /
+    //     `_do_not_contain_a_backspace_byte` /
+    //     `_do_not_contain_a_line_feed_byte` /
+    //     `_do_not_contain_a_bell_byte` /
+    //     `_do_not_contain_an_acknowledge_byte` /
+    //     `_do_not_contain_an_enquiry_byte` /
+    //     `_do_not_contain_an_end_of_transmission_byte` /
+    //     `_do_not_contain_an_end_of_text_byte` /
+    //     `_do_not_contain_a_start_of_text_byte` siblings
+    //     (which each name a different byte specifically);
+    //   - `_do_not_contain_a_query_string` /
+    //     `_do_not_contain_a_fragment_anchor` /
+    //     `_do_not_contain_a_userinfo_at_sign` /
+    //     `_do_not_contain_a_backslash` siblings (which
+    //     each name a different byte specifically).
+    // None of the existing companions name the `\x01` byte
+    // directly.
+    //
+    // `\x01` is never a valid byte inside a URL per RFC 3986
+    // (the start-of-heading byte is not in any of the URL
+    // grammar's production rules), so the no-`\x01`
+    // invariant is unconditional regardless of any future
+    // percent-encoded-space relaxation.
+    //
+    // A regression that landed
+    // `"https://github.com\x01FreedomBen/paladin"` (start-
+    // of-heading byte lifted from a `script(1)` typescript
+    // capturing raw `\x01` SOH framing bytes from a CI
+    // build that bridged a serial console mid-URL during a
+    // Bisync-style header-block transfer between the host
+    // and path of an interactively-edited URL registry, a
+    // `concat!(_, "\x01", _)` form mirroring a header-
+    // segment-delimited URL-table cell, or a hand-edited
+    // helper override that pasted from a terminal session
+    // interfacing with a protocol bridge preserving SOH
+    // framing bytes) would mis-render in multiple
+    // downstream surfaces: (1) the GLib-backed
+    // `AdwAboutDialog::set_website` / `set_issue_url` /
+    // `set_support_url` setters route the value into Pango
+    // for inline rendering as the underlined link label in
+    // the dialog footer — Pango's default rendering of a
+    // bare `\x01` byte is implementation-defined and
+    // typically renders as a literal control glyph (a
+    // hollow box or tofu-like placeholder), breaking the
+    // trusted-application surface contract of the link
+    // label; (2) when the user clicks the URL, GIO's
+    // `gtk_show_uri_full` routes the value through the
+    // session's `xdg-open` / portal layer where some URL
+    // parsers (WHATWG URL §4.5 implementations) reject
+    // `\x01` outright with `InvalidUrl`, breaking the
+    // click-through routing entirely, while others
+    // percent-encode the `\x01` as `%01` and route to a
+    // non-existent URL with a `Bad Request` response
+    // surfacing as a confusing browser-level error; (3)
+    // when the URL labels are dumped through a serial-
+    // bridged TTY (link-checker tooling output piped to
+    // `less`, a `gtk-launch` dry-run rendered into a
+    // serial-bridged terminal logger), the `\x01` byte may
+    // be intercepted by the receiving end as a start-of-
+    // heading framing indicator and signal the start of a
+    // header block, confusing protocol-bridging tooling
+    // that treats SOH as a header-block opener and
+    // splicing the link-checker output at the byte
+    // boundary into an unexpected header-followed-by-text
+    // sequence — a serial-protocol covert side-channel
+    // primitive where an attacker who controlled the
+    // upstream URL source could weaponize the SOH framing
+    // as a covert header-block-opener splicer in a shared
+    // CI environment that processes the link-checker
+    // output; on POSIX terminals using emacs-style line
+    // editing where `^A` defaults to the beginning-of-line
+    // keybinding, the byte may surface as an unexpected
+    // cursor-to-line-start jump in any interactive shell
+    // that captures the dump through a pty with readline
+    // bound to the default Emacs keymap; (4) screen
+    // readers that announce the URL label may render the
+    // byte as a literal control character announcement,
+    // breaking the link-label accessibility-tree
+    // announcement at the byte boundary; (5) any
+    // downstream tooling that scrapes the URL labels
+    // (link-checker bots, broken-link auditors) would
+    // propagate the stray `\x01` byte into the consumer's
+    // stream and trigger the same routing failure across
+    // every downstream surface.
+    //
+    // Pinning the no-`\x01` invariant directly here
+    // surfaces the regression with a message naming the
+    // offending URL helper at build time rather than as a
+    // downstream user-visible mis-rendered link label, a
+    // confusing browser-level error on click-through, a
+    // serial-protocol SOH-frame header-block-opener
+    // collision on URL-label dumps, a readline `^A`
+    // beginning-of-line surprise, or a link-checker
+    // tooling failure. Mirror of the
+    // `_url_helpers_do_not_contain_a_backspace_byte`,
+    // `_url_helpers_do_not_contain_a_bell_byte`,
+    // `_url_helpers_do_not_contain_an_acknowledge_byte`,
+    // `_url_helpers_do_not_contain_an_enquiry_byte`,
+    // `_url_helpers_do_not_contain_an_end_of_transmission_byte`,
+    // `_url_helpers_do_not_contain_an_end_of_text_byte`,
+    // and `_url_helpers_do_not_contain_a_start_of_text_byte`
+    // cross-URL siblings; together they pin the URL byte-
+    // composition contract (no whitespace, ASCII-only, no
+    // terminal `/`, no `\0`, no `\r`, no `\t`, no `\x0B`,
+    // no `\x0C`, no `\x08`, no `\n`, no `\x07`, no `\x06`,
+    // no `\x05`, no `\x04`, no `\x03`, no `\x02`, no
+    // `\x01`, no `?` query, no `#` anchor, no `@`
+    // userinfo, no `\` path-confusion byte) across all
+    // three footer link surfaces against a single source
+    // of truth.
+    use paladin_gtk::app::model::{
+        format_app_about_dialog_issue_url, format_app_about_dialog_support_url,
+        format_app_about_dialog_website,
+    };
+
+    for (label, url) in [
+        ("website", format_app_about_dialog_website()),
+        ("issue_url", format_app_about_dialog_issue_url()),
+        ("support_url", format_app_about_dialog_support_url()),
+    ] {
+        assert!(
+            !url.contains('\x01'),
+            "AdwAboutDialog {label} must not contain the `\\x01` start-of-heading byte (0x01) — `\\x01` is never a valid byte inside a URL per RFC 3986 (the start-of-heading byte is not in any of the URL grammar's production rules); like STX, ETX, EOT, ENQ, ACK, and BEL, SOH is NOT matched by `char::is_whitespace()` (Unicode returns false for U+0001 SOH), so `_url_helpers_contain_no_embedded_whitespace` does NOT catch `\\x01` — strictly as dangerous as start-of-text, end-of-text, end-of-transmission, enquiry, acknowledge, backspace, and bell here, neither caught by the whitespace companion; a stray `\\x01` would mis-render as a literal control glyph in the dialog footer link label, fail or mis-route the click-through routing across WHATWG URL §4.5 implementations vs `%01`-encoding implementations, confuse serial-protocol-bridging tooling that treats `\\x01` as a SOH header-block opener if dumped through a serial-bridged TTY on URL-label dumps (splicing the dump at the byte boundary into an unexpected header-followed-by-text sequence — a covert header-block-opener primitive in shared CI environments), trigger readline `^A` beginning-of-line cursor-jump surprises in tooling capturing URL-label dumps through a pty with the default Emacs keymap, break screen-reader link-label announcements at the byte boundary, and propagate into downstream link-checker tooling; got {url:?}",
+        );
+    }
+}
