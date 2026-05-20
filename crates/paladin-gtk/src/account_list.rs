@@ -33,8 +33,8 @@ use relm4::prelude::*;
 use paladin_core::{select_after_filter, AccountId, AccountKindSummary, Vault};
 
 use crate::account_row::{
-    copy_enabled, display_label, kebab_visible, next_button_visible, progress_visible, CodeDisplay,
-    CounterText, RowDisplay,
+    copy_enabled, display_label, kebab_visible, next_button_visible, progress_fraction,
+    progress_visible, CodeDisplay, CounterText, RowDisplay,
 };
 use crate::icon_resolution::resolve_display_icon;
 use crate::search::filtered_account_ids;
@@ -362,6 +362,7 @@ pub fn hidden_row_display(model: &AccountRowModel) -> RowDisplay {
         copy_enabled: copy_enabled(model.kind, false),
         next_button_visible: next_button_visible(model.kind),
         progress_visible: progress_visible(model.kind),
+        progress: None,
         kebab_visible: kebab_visible(model.kind),
     }
 }
@@ -827,11 +828,15 @@ fn build_row_factory(
 ///
 /// The container is a horizontal `gtk::Box` whose children are
 /// appended in the order `icon → display label → HOTP counter → code
-/// label → copy button → HOTP next button → kebab menu`. The label
-/// expands to claim the row's free space so the icon, counter / code
-/// labels, and the trailing affordances stay edge-aligned and the
-/// column edges line up across rows. [`bind_row`] walks the children
-/// in this same order to apply the projection.
+/// label → TOTP progress bar → copy button → HOTP next button →
+/// kebab menu`. The label expands to claim the row's free space so the
+/// icon, counter / code labels, and the trailing affordances stay
+/// edge-aligned and the column edges line up across rows. [`bind_row`]
+/// walks the children in this same order to apply the projection.
+///
+/// The TOTP progress bar uses a fixed width and is hidden for HOTP
+/// rows via [`bind_row`]; per-tick refresh updates its `fraction`
+/// from [`crate::account_row::progress_fraction`].
 ///
 /// The leading `gtk::Image` is seeded with
 /// [`crate::icon_resolution::PLACEHOLDER_ICON_NAME`] so a row that
@@ -877,6 +882,11 @@ fn build_row_widget() -> gtk::Box {
         .xalign(1.0)
         .build();
     code.add_css_class("numeric");
+    let progress = gtk::ProgressBar::builder()
+        .valign(gtk::Align::Center)
+        .width_request(96)
+        .show_text(false)
+        .build();
     let copy = gtk::Button::builder()
         .icon_name("edit-copy-symbolic")
         .tooltip_text("Copy code")
@@ -900,6 +910,7 @@ fn build_row_widget() -> gtk::Box {
     container.append(&label);
     container.append(&counter);
     container.append(&code);
+    container.append(&progress);
     container.append(&copy);
     container.append(&next);
     container.append(&kebab);
@@ -1010,7 +1021,10 @@ fn bind_row(container: &gtk::Box, display: &RowDisplay) {
     let Some(code) = counter.next_sibling().and_downcast::<gtk::Label>() else {
         return;
     };
-    let Some(copy) = code.next_sibling().and_downcast::<gtk::Button>() else {
+    let Some(progress) = code.next_sibling().and_downcast::<gtk::ProgressBar>() else {
+        return;
+    };
+    let Some(copy) = progress.next_sibling().and_downcast::<gtk::Button>() else {
         return;
     };
     let Some(next) = copy.next_sibling().and_downcast::<gtk::Button>() else {
@@ -1035,6 +1049,12 @@ fn bind_row(container: &gtk::Box, display: &RowDisplay) {
         CodeDisplay::Visible(c) => c.clone(),
     };
     code.set_label(&code_text);
+
+    progress.set_visible(display.progress_visible);
+    match display.progress {
+        Some(p) => progress.set_fraction(progress_fraction(&p)),
+        None => progress.set_fraction(0.0),
+    }
 
     copy.set_sensitive(display.copy_enabled);
     next.set_visible(display.next_button_visible);

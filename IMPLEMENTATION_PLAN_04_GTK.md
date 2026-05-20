@@ -1554,9 +1554,16 @@ sign-off.
   - [ ] Render a code label populated from
     `paladin_core::totp_code` for TOTP rows and from the hidden /
     reveal state for HOTP rows (see "HOTP reveal" item below).
-  - [ ] For TOTP rows, render a progress widget (gauge / level bar)
+  - [x] For TOTP rows, render a progress widget (gauge / level bar)
     that ticks against the shared `paladin_core::TICK_INTERVAL_MS`
-    source (see "TOTP ticker" item below).
+    source (see "TOTP ticker" item below). The continuous
+    `gtk::ProgressBar` is appended to each row by `build_row_widget`
+    and bound by `bind_row` from
+    `crate::account_row::progress_fraction(&ProgressDisplay)`; HOTP
+    rows hide the bar via `progress_visible`. Per-tick refresh
+    publishes a fresh `RowDisplay { progress: Some(_), .. }` through
+    the existing `LiveDisplayCache`, so the bar updates in lockstep
+    with the visible code without a separate signal.
   - [ ] For HOTP rows, render the "next" button that activates the
     `hotp_peek` / `hotp_advance` reveal worker (see "HOTP reveal"
     item below).

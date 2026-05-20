@@ -30,7 +30,8 @@ use paladin_core::{AccountId, AccountKindSummary, AccountSummary, Algorithm, Cod
 
 use paladin_gtk::account_row::{
     code_display, copy_enabled, counter_display, display_label, kebab_visible, next_button_visible,
-    progress_visible, project_row, CodeDisplay, CounterText, RowDisplay,
+    progress_display, progress_fraction, progress_visible, project_row, CodeDisplay, CounterText,
+    ProgressDisplay, RowDisplay,
 };
 
 // ---------------------------------------------------------------------------
@@ -139,6 +140,90 @@ fn next_button_visible_only_for_hotp() {
 fn progress_visible_only_for_totp() {
     assert!(progress_visible(AccountKindSummary::Totp));
     assert!(!progress_visible(AccountKindSummary::Hotp));
+}
+
+// ---------------------------------------------------------------------------
+// `progress_display` — pure-logic gauge projection for the TOTP bar
+// ---------------------------------------------------------------------------
+
+#[test]
+fn progress_display_hotp_is_none_regardless_of_code() {
+    let s = hotp_summary("bob", None, 1);
+    let code = hotp_code("123456", 1);
+    assert_eq!(progress_display(&s, None), None);
+    assert_eq!(progress_display(&s, Some(&code)), None);
+}
+
+#[test]
+fn progress_display_totp_without_visible_code_is_none() {
+    let s = totp_summary("alice", None);
+    assert_eq!(progress_display(&s, None), None);
+}
+
+#[test]
+fn progress_display_totp_with_visible_code_returns_period_and_remaining() {
+    let s = totp_summary("alice", Some("Acme"));
+    let code = totp_code("111222", 12);
+    assert_eq!(
+        progress_display(&s, Some(&code)),
+        Some(ProgressDisplay {
+            period_secs: 30,
+            seconds_remaining: 12,
+        })
+    );
+}
+
+// ---------------------------------------------------------------------------
+// `progress_fraction` — widget-bind fraction from a ProgressDisplay
+// ---------------------------------------------------------------------------
+
+#[test]
+fn progress_fraction_full_period_returns_one() {
+    let p = ProgressDisplay {
+        period_secs: 30,
+        seconds_remaining: 30,
+    };
+    assert!((progress_fraction(&p) - 1.0).abs() < f64::EPSILON);
+}
+
+#[test]
+fn progress_fraction_zero_seconds_remaining_returns_zero() {
+    let p = ProgressDisplay {
+        period_secs: 30,
+        seconds_remaining: 0,
+    };
+    assert!(progress_fraction(&p).abs() < f64::EPSILON);
+}
+
+#[test]
+fn progress_fraction_partial_window_returns_seconds_over_period() {
+    let p = ProgressDisplay {
+        period_secs: 30,
+        seconds_remaining: 18,
+    };
+    let expected = 18.0_f64 / 30.0_f64;
+    assert!((progress_fraction(&p) - expected).abs() < f64::EPSILON);
+}
+
+#[test]
+fn progress_fraction_clamps_overflow_to_one() {
+    // Defensive: paladin_core invariant pins seconds_remaining to
+    // 1..=period, but the widget binding should still saturate
+    // rather than feed a >1.0 fraction into gtk::ProgressBar.
+    let p = ProgressDisplay {
+        period_secs: 30,
+        seconds_remaining: 60,
+    };
+    assert!((progress_fraction(&p) - 1.0).abs() < f64::EPSILON);
+}
+
+#[test]
+fn progress_fraction_zero_period_returns_zero_defensively() {
+    let p = ProgressDisplay {
+        period_secs: 0,
+        seconds_remaining: 5,
+    };
+    assert!(progress_fraction(&p).abs() < f64::EPSILON);
 }
 
 // ---------------------------------------------------------------------------
@@ -282,6 +367,10 @@ fn project_row_totp_with_visible_code() {
         copy_enabled: true,
         next_button_visible: false,
         progress_visible: true,
+        progress: Some(ProgressDisplay {
+            period_secs: 30,
+            seconds_remaining: 18,
+        }),
         kebab_visible: true,
     };
     assert_eq!(row, expected);
@@ -299,6 +388,7 @@ fn project_row_hotp_hidden() {
         copy_enabled: false,
         next_button_visible: true,
         progress_visible: false,
+        progress: None,
         kebab_visible: true,
     };
     assert_eq!(row, expected);
@@ -317,6 +407,7 @@ fn project_row_hotp_revealed() {
         copy_enabled: true,
         next_button_visible: true,
         progress_visible: false,
+        progress: None,
         kebab_visible: true,
     };
     assert_eq!(row, expected);

@@ -43,7 +43,7 @@ use paladin_core::{
 };
 
 use paladin_gtk::account_list::AccountRowModel;
-use paladin_gtk::account_row::{CodeDisplay, RowDisplay};
+use paladin_gtk::account_row::{CodeDisplay, ProgressDisplay, RowDisplay};
 use paladin_gtk::app::state::AppState;
 use paladin_gtk::clipboard_clear::PendingClipboardClear;
 use paladin_gtk::startup_error::StartupError;
@@ -657,6 +657,10 @@ fn compute_tick_displays_carries_full_row_display_shape() {
         copy_enabled: true,
         next_button_visible: false,
         progress_visible: true,
+        progress: Some(ProgressDisplay {
+            period_secs: 30,
+            seconds_remaining: 30,
+        }),
         kebab_visible: true,
     };
     assert_eq!(display, &expected);

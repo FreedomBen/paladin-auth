@@ -148,6 +148,79 @@ pub fn counter_display(
     }
 }
 
+/// Per-row TOTP gauge projection.
+///
+/// Carries the data the widget layer needs to drive a continuous
+/// progress bar (or any equivalent indicator) without re-reading the
+/// live `(Vault, Code)` pair on every bind. Only the period and the
+/// remaining-seconds count cross the projection boundary, so the
+/// gauge stays a pure-logic decision pinned by
+/// `tests/account_row_logic.rs`.
+///
+/// HOTP rows never produce a [`ProgressDisplay`] — the per-tick
+/// refresh skips them entirely and the row factory hides the bar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProgressDisplay {
+    /// TOTP period in seconds (from [`AccountSummary::period`]).
+    pub period_secs: u32,
+    /// Seconds remaining in the current TOTP window (from
+    /// [`Code::seconds_remaining`]; `paladin_core` pins this to
+    /// `1..=period_secs` per `crates/paladin-core/src/otp/totp.rs`).
+    pub seconds_remaining: u32,
+}
+
+/// Compute the TOTP gauge projection for a row.
+///
+/// Returns `None` for HOTP rows and for TOTP rows that have no
+/// visible [`Code`] yet (initial mount before the first per-tick
+/// compute). Otherwise returns `Some(ProgressDisplay { … })` with
+/// the row's period and the code's remaining-seconds count so the
+/// widget layer can drive a continuous gauge through
+/// [`progress_fraction`].
+///
+/// Defensive: a TOTP summary with `period: None` or a TOTP code with
+/// `seconds_remaining: None` both yield `None` — `paladin_core` never
+/// produces either shape today, but keeping the projection total lets
+/// the row factory avoid `unwrap_or` patterns at bind time.
+#[must_use]
+pub fn progress_display(
+    summary: &AccountSummary,
+    visible_code: Option<&Code>,
+) -> Option<ProgressDisplay> {
+    match summary.kind {
+        AccountKindSummary::Hotp => None,
+        AccountKindSummary::Totp => {
+            let period_secs = summary.period?;
+            let seconds_remaining = visible_code?.seconds_remaining?;
+            Some(ProgressDisplay {
+                period_secs,
+                seconds_remaining,
+            })
+        }
+    }
+}
+
+/// Render a [`ProgressDisplay`] as a `gtk::ProgressBar` fraction
+/// (in `0.0..=1.0`).
+///
+/// The fraction is `seconds_remaining / period_secs`, clamped to
+/// `1.0` if `seconds_remaining > period_secs` (defensive — the
+/// `paladin_core` invariant pins it to `1..=period`) and to `0.0`
+/// when `period_secs == 0` (defensive — `paladin_core::validation`
+/// rejects a zero period upstream). A full window renders a full
+/// bar; one remaining second still renders the matching sliver.
+///
+/// Keeping this in pure logic so the gauge math is exercised by
+/// `tests/account_row_logic.rs` without spinning up GTK.
+#[must_use]
+pub fn progress_fraction(progress: &ProgressDisplay) -> f64 {
+    if progress.period_secs == 0 {
+        return 0.0;
+    }
+    let remaining = progress.seconds_remaining.min(progress.period_secs);
+    f64::from(remaining) / f64::from(progress.period_secs)
+}
+
 /// Body for the row's code label.
 ///
 /// The widget renders [`CodeDisplay::Hidden`] as the row's hidden
@@ -207,6 +280,11 @@ pub struct RowDisplay {
     pub next_button_visible: bool,
     /// Result of [`progress_visible`].
     pub progress_visible: bool,
+    /// Result of [`progress_display`]. `Some(_)` for TOTP rows once
+    /// a visible code is in hand; `None` for HOTP rows and TOTP rows
+    /// before the first per-tick compute. The widget layer feeds this
+    /// through [`progress_fraction`] to drive the row's `gtk::ProgressBar`.
+    pub progress: Option<ProgressDisplay>,
     /// Result of [`kebab_visible`].
     pub kebab_visible: bool,
 }
@@ -230,6 +308,7 @@ pub fn project_row(summary: &AccountSummary, visible_code: Option<&Code>) -> Row
         copy_enabled: copy_enabled(summary.kind, has_visible_code),
         next_button_visible: next_button_visible(summary.kind),
         progress_visible: progress_visible(summary.kind),
+        progress: progress_display(summary, visible_code),
         kebab_visible: kebab_visible(summary.kind),
     }
 }

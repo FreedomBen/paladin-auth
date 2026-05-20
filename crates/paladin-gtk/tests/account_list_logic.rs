@@ -33,7 +33,7 @@ use paladin_gtk::account_list::{
     AccountRowModel, ACCOUNT_LIST_WIDGET_STATES_MARKER_PREFIX, ROW_ACTION_GROUP_NAME,
     ROW_REMOVE_ACTION_NAME, ROW_RENAME_ACTION_NAME,
 };
-use paladin_gtk::account_row::{CodeDisplay, CounterText, RowDisplay};
+use paladin_gtk::account_row::{CodeDisplay, CounterText, ProgressDisplay, RowDisplay};
 
 // --- fixtures ----------------------------------------------------------------
 
@@ -495,6 +495,7 @@ fn hidden_row_display_totp_renders_hidden_code_and_no_counter() {
         copy_enabled: true,
         next_button_visible: false,
         progress_visible: true,
+        progress: None,
         kebab_visible: true,
     };
     assert_eq!(hidden_row_display(&model), expected);
@@ -517,6 +518,7 @@ fn hidden_row_display_hotp_renders_stored_counter_and_disabled_copy() {
         copy_enabled: false,
         next_button_visible: true,
         progress_visible: false,
+        progress: None,
         kebab_visible: true,
     };
     assert_eq!(hidden_row_display(&model), expected);
@@ -562,6 +564,7 @@ fn totp_display(label: &str) -> RowDisplay {
         copy_enabled: true,
         next_button_visible: false,
         progress_visible: true,
+        progress: None,
         kebab_visible: true,
     }
 }
@@ -575,6 +578,7 @@ fn hotp_hidden_display(label: &str, counter: u64) -> RowDisplay {
         copy_enabled: false,
         next_button_visible: true,
         progress_visible: false,
+        progress: None,
         kebab_visible: true,
     }
 }
@@ -634,6 +638,7 @@ fn widget_states_marker_renders_kebab_off_when_projection_hides_it() {
         copy_enabled: true,
         next_button_visible: false,
         progress_visible: true,
+        progress: None,
         kebab_visible: false,
     };
     let displays = vec![display];
@@ -992,6 +997,10 @@ fn bind_display_for_row_returns_live_clone_when_cache_hits() {
         copy_enabled: true,
         next_button_visible: false,
         progress_visible: true,
+        progress: Some(ProgressDisplay {
+            period_secs: 30,
+            seconds_remaining: 18,
+        }),
         kebab_visible: true,
     };
     let bound = bind_display_for_row(Some(&live), &model);
@@ -1046,6 +1055,10 @@ fn bind_display_for_row_returned_clone_does_not_alias_cache() {
         copy_enabled: true,
         next_button_visible: false,
         progress_visible: true,
+        progress: Some(ProgressDisplay {
+            period_secs: 30,
+            seconds_remaining: 12,
+        }),
         kebab_visible: true,
     };
     let mut bound = bind_display_for_row(Some(&live), &model);
@@ -1076,6 +1089,10 @@ fn live_display(label: &str) -> RowDisplay {
         copy_enabled: true,
         next_button_visible: false,
         progress_visible: true,
+        progress: Some(ProgressDisplay {
+            period_secs: 30,
+            seconds_remaining: 5,
+        }),
         kebab_visible: true,
     }
 }
