@@ -83,6 +83,7 @@ use std::path::{Path, PathBuf};
 
 use libadwaita as adw;
 use libadwaita::prelude::*;
+use relm4::gtk;
 use relm4::prelude::*;
 
 use paladin_core::{
@@ -1342,27 +1343,44 @@ pub fn apply_msg(state: &mut InitDialogState, msg: InitDialogMsg) -> Option<Init
 /// Widget-bearing dialog for the
 /// [`crate::app::state::AppState::Missing`] branch.
 ///
-/// Mounts a libadwaita [`adw::StatusPage`] that surfaces the
-/// resolved vault path alongside the standard plaintext-storage
-/// warning copy. Subsequent commits replace the placeholder body
-/// with the two-field passphrase entry, the warning checkbox, and
-/// the destructive-`create_force` confirmation gate; until then,
-/// keeping the widget read-only mirrors the
-/// [`crate::startup_error::StartupErrorComponent`] pattern (the
-/// `StartupError` branch also mounted a status page first and grew
-/// inbound actions later).
+/// Mounts a libadwaita [`adw::StatusPage`] heading naming the
+/// resolved vault path, two [`adw::PasswordEntryRow`] entries
+/// (passphrase + confirmation) inside an
+/// [`adw::PreferencesGroup`], a [`gtk::CheckButton`] for the
+/// plaintext-storage warning acknowledgement, an inline-error
+/// [`gtk::Label`] beneath the entries, and a "Create vault" submit
+/// button whose sensitivity binds to
+/// [`InitDialogState::submit_button_sensitive`] so the per-mode gate
+/// in [`prepare_vault_init`] never fires through a normal click.
+/// Keystrokes in the passphrase entries shadow into the model's
+/// [`InitDialogState`] [`crate::secret_fields::SecretEntry`] buffers;
+/// the warning checkbox feeds the same state's acknowledgement
+/// flag. The button's `connect_clicked` signal routes through
+/// [`apply_msg`] / [`InitDialogState::submit`]; success forwards
+/// [`InitDialogOutput::SubmitCreate`] to `AppModel` for the
+/// `Store::create` worker dispatch. The destructive
+/// [`adw::AlertDialog`] for the `vault_exists` race is presented
+/// from [`update`](SimpleComponent::update) on
+/// [`InitDialogMsg::WorkerCompletedDestructive`] so the alert can be
+/// constructed fresh each time with response callbacks dispatching
+/// [`InitDialogMsg::ForceConfirmClicked`] /
+/// [`InitDialogMsg::ForceCancelClicked`].
 pub struct InitDialogComponent {
     /// Resolved vault path the dialog will hand to a
-    /// `Store::create` worker on submit. Kept on `self` so a
-    /// future message handler can read it without re-plumbing the
-    /// value through every signal.
-    #[allow(dead_code)]
+    /// `Store::create` worker on submit. Surfaced in the dialog body
+    /// and in the destructive-gate [`adw::AlertDialog`] body.
     vault_path: PathBuf,
     /// Live state owned by the dialog: passphrase + confirm shadow
     /// buffers, the plaintext-warning acknowledgement flag, and the
     /// inline-error slot the widget binds to its error label.
-    #[allow(dead_code)]
     state: InitDialogState,
+    /// Reference-counted handle to the root [`gtk::Box`] so the
+    /// destructive [`adw::AlertDialog`] in [`update`] can use it as
+    /// a presentation parent (`AdwDialog::present` walks up to the
+    /// active [`adw::ApplicationWindow`] from any descendant).
+    /// `gtk::Box` is a `GObject`, so cloning just bumps the
+    /// reference count rather than duplicating the widget.
+    root_box: gtk::Box,
 }
 
 #[allow(missing_docs)]
@@ -1374,37 +1392,189 @@ impl SimpleComponent for InitDialogComponent {
 
     view! {
         #[root]
-        adw::StatusPage {
-            set_icon_name: Some(format_init_dialog_icon_name()),
-            set_title: format_init_dialog_title(),
-            set_description: Some(&format_init_dialog_description(&model.vault_path)),
+        #[name = "root_box"]
+        gtk::Box {
+            set_orientation: gtk::Orientation::Vertical,
+            set_spacing: 12,
             set_hexpand: true,
             set_vexpand: true,
+
+            adw::StatusPage {
+                set_icon_name: Some(format_init_dialog_icon_name()),
+                set_title: format_init_dialog_title(),
+                set_description: Some(&format_init_dialog_description(&model.vault_path)),
+                set_hexpand: true,
+            },
+
+            adw::PreferencesGroup {
+                #[name = "passphrase_row"]
+                add = &adw::PasswordEntryRow {
+                    set_title: format_init_dialog_passphrase_title(),
+                    // `connect_changed` fires on every keystroke so
+                    // the `SecretEntry` shadow buffer tracks the live
+                    // entry and Paladin-owned `Zeroizing<String>` is
+                    // the only long-lived home for the cleartext
+                    // bytes.
+                    connect_changed[sender] => move |entry| {
+                        sender.input(InitDialogMsg::PassphraseChanged(
+                            entry.text().to_string(),
+                        ));
+                    },
+                },
+                #[name = "confirm_row"]
+                add = &adw::PasswordEntryRow {
+                    set_title: format_init_dialog_confirm_passphrase_title(),
+                    connect_changed[sender] => move |entry| {
+                        sender.input(InitDialogMsg::ConfirmChanged(
+                            entry.text().to_string(),
+                        ));
+                    },
+                },
+            },
+
+            // Plaintext-warning acknowledgement checkbox. The
+            // standard warning body is already surfaced through the
+            // `AdwStatusPage` `set_description` above
+            // (`format_init_dialog_description`); this `gtk::CheckButton`
+            // carries the short affirmative caption and gates the
+            // plaintext path's `submit_button_sensitive` until the
+            // user explicitly acknowledges.
+            #[name = "warning_check"]
+            gtk::CheckButton {
+                set_label: Some(format_init_dialog_plaintext_warning_label()),
+                connect_toggled[sender] => move |btn| {
+                    sender.input(InitDialogMsg::WarningToggled(btn.is_active()));
+                },
+            },
+
+            // Inline-error label. The post-submit / post-worker
+            // `WorkerCompletedInline` arms populate
+            // `state.inline_error`; typing in either entry or
+            // toggling the warning checkbox dismisses the prior
+            // message through the dedicated `set_*` clearers.
+            #[name = "error_label"]
+            gtk::Label {
+                set_xalign: 0.0,
+                set_wrap: true,
+                add_css_class: "error",
+                #[watch]
+                set_label: model
+                    .state
+                    .inline_error()
+                    .map_or("", |err| err.rendered.as_str()),
+                #[watch]
+                set_visible: model.state.inline_error().is_some(),
+            },
+
+            gtk::Box {
+                set_orientation: gtk::Orientation::Horizontal,
+                set_spacing: 6,
+                set_halign: gtk::Align::End,
+
+                // "Create vault" submit button. The `suggested-action`
+                // CSS class renders it as the primary affordance per
+                // the libadwaita HIG. `set_sensitive` binds to
+                // `submit_button_sensitive` so the per-mode gate in
+                // `prepare_vault_init` never fires through a normal
+                // click. `connect_clicked` dispatches `SubmitClicked`,
+                // whose handler routes through `apply_msg`: rejection
+                // stages the inline error inline beneath the entries;
+                // the `Ok` branch is forwarded as
+                // `InitDialogOutput::SubmitCreate`. The
+                // `gio::spawn_blocking Store::create` worker that
+                // consumes the forwarded `VaultInit` lands in the
+                // follow-up `AppModel` dispatch commit.
+                #[name = "create_button"]
+                gtk::Button {
+                    set_label: format_init_dialog_create_label(),
+                    add_css_class: "suggested-action",
+                    #[watch]
+                    set_sensitive: model.state.submit_button_sensitive(),
+                    connect_clicked[sender] => move |_| {
+                        sender.input(InitDialogMsg::SubmitClicked);
+                    },
+                },
+            },
         }
     }
 
     fn init(
         init: Self::Init,
         root: Self::Root,
-        _sender: ComponentSender<Self>,
+        sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
+        let root_box = root.clone();
         let model = InitDialogComponent {
             vault_path: init.vault_path,
             state: InitDialogState::new(),
+            root_box,
         };
         let widgets = view_output!();
         ComponentParts { model, widgets }
     }
 
     fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>) {
-        // Routing lives in `apply_msg` so the per-message decisions
-        // stay unit-testable without spinning up GTK. The full widget
-        // body (passphrase entries, warning checkbox, destructive
-        // alert) lands in a follow-up commit; this commit wires the
-        // pure-logic dispatch so the widget callbacks can be added on
-        // top of a stable message API.
+        // Capture whether this dispatch is the worker→destructive
+        // signal *before* `apply_msg` consumes the message, so the
+        // post-routing branch below can react after the pending
+        // VaultInit has been staged.
+        let was_worker_destructive = matches!(msg, InitDialogMsg::WorkerCompletedDestructive);
+
         if let Some(output) = apply_msg(&mut self.state, msg) {
+            // Ignore send failures: if `AppModel` has already dropped
+            // the controller (e.g. window closed mid-click), there's
+            // nothing left to dismiss.
             let _ = sender.output(output);
         }
+
+        // After `apply_msg` returns from `WorkerCompletedDestructive`,
+        // the pending [`VaultInit`] is staged and `has_pending_force()`
+        // is `true`. Present the destructive [`adw::AlertDialog`]
+        // worded by [`destructive_gate_body`] (same wording as the
+        // CLI `init --force` confirmation); response callbacks dispatch
+        // back through the same sender so the AlertDialog stays
+        // self-contained.
+        if was_worker_destructive && self.state.has_pending_force() {
+            self.present_destructive_alert(&sender);
+        }
+    }
+}
+
+impl InitDialogComponent {
+    /// Construct and present the destructive `vault_exists`
+    /// [`adw::AlertDialog`].
+    ///
+    /// The alert is built fresh each time so heading / body / button
+    /// labels resolve through the pinned format helpers without
+    /// re-binding stateful widgets across presentations. The
+    /// `replace` response is styled `destructive-action`; the
+    /// `cancel` response is the default and is invoked on Escape /
+    /// outside-click via `set_close_response`. Both responses
+    /// dispatch the matching [`InitDialogMsg`] through `sender` so
+    /// `apply_msg` remains the single routing entry point.
+    fn present_destructive_alert(&self, sender: &ComponentSender<Self>) {
+        let alert = adw::AlertDialog::new(
+            Some(format_init_dialog_force_heading()),
+            Some(&destructive_gate_body(&self.vault_path)),
+        );
+        let cancel_id = "cancel";
+        let confirm_id = "replace";
+        alert.add_response(cancel_id, format_init_dialog_force_cancel_label());
+        alert.add_response(confirm_id, format_init_dialog_force_confirm_label());
+        alert.set_response_appearance(confirm_id, adw::ResponseAppearance::Destructive);
+        alert.set_default_response(Some(cancel_id));
+        alert.set_close_response(cancel_id);
+
+        let confirm_id_owned = confirm_id.to_string();
+        let sender = sender.clone();
+        alert.connect_response(None, move |_dialog, response| {
+            if response == confirm_id_owned {
+                sender.input(InitDialogMsg::ForceConfirmClicked);
+            } else {
+                sender.input(InitDialogMsg::ForceCancelClicked);
+            }
+        });
+
+        alert.present(Some(&self.root_box));
     }
 }
