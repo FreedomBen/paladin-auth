@@ -72,6 +72,27 @@ const DIALOG_OUTPUT_ENUMS: &[(&str, &str)] = &[
 /// `Option<PathBuf>` or `Box<dyn Trait>` stay clear.
 const FORBIDDEN_RAW_TYPES: &[&str] = &["String", "Vec<u8>", "Box<str>", "&str"];
 
+/// Per-type allowlist of trimmed field declarations that are vetted
+/// to carry only non-secret plaintext (typed user input that never
+/// names a passphrase / Base32 secret / `otpauth://` URI / HOTP
+/// reveal code / clipboard payload). Each entry pairs the long-lived
+/// type name from [`LONG_LIVED_TYPES`] with the complete
+/// `<field>: <type>,` declaration (whitespace-trimmed) that
+/// [`long_lived_types_carry_no_raw_secret_bearing_strings`] is
+/// allowed to skip when scanning for [`FORBIDDEN_RAW_TYPES`]. The
+/// match is exact so a future refactor that changes the type or
+/// renames the field forces a fresh review of the allowlist.
+const KNOWN_NON_SECRET_LINES: &[(&str, &[&str])] = &[
+    // `search_query` mirrors `AccountListComponent::current_query` —
+    // the literal substring the user typed into the `gtk::SearchEntry`
+    // that drives `paladin_core::account_matches_search` against
+    // issuer / label text. Per `IMPLEMENTATION_PLAN_04_GTK.md`
+    // §"Component tree" > `AccountListComponent` and DESIGN §8, the
+    // search query is not one of the secret-bearing values that must
+    // be wrapped in zeroizing storage.
+    ("AppModel", &["search_query: String,"]),
+];
+
 /// Identifier substrings (case-insensitive) whose presence in a
 /// variant declaration signals that the variant is conveying one of
 /// the secret-bearing values DESIGN §8 enumerates: passphrases,
@@ -198,9 +219,18 @@ fn contains_forbidden_token(text: &str, token: &str) -> bool {
 
 /// Return the first forbidden raw-type token that appears in `text`,
 /// scanning line-by-line so end-of-line `// …` comments are skipped.
-fn forbidden_token_in(text: &str) -> Option<&'static str> {
+///
+/// `allowlist` carries trimmed field declarations that the scan
+/// skips even when they contain a forbidden token, so vetted
+/// non-secret plaintext fields (see [`KNOWN_NON_SECRET_LINES`]) do
+/// not regress the test.
+fn forbidden_token_in(text: &str, allowlist: &[&str]) -> Option<&'static str> {
     for raw_line in text.lines() {
         let code = strip_line_comment(raw_line);
+        let trimmed = code.trim();
+        if !trimmed.is_empty() && allowlist.contains(&trimmed) {
+            continue;
+        }
         for &token in FORBIDDEN_RAW_TYPES {
             if contains_forbidden_token(code, token) {
                 return Some(token);
@@ -287,7 +317,11 @@ fn long_lived_types_carry_no_raw_secret_bearing_strings() {
         for name in *type_names {
             let body = extract_type_body(&source, name)
                 .unwrap_or_else(|| panic!("expected to find pub enum/struct `{name}` in {rel}"));
-            if let Some(token) = forbidden_token_in(body) {
+            let allowlist = KNOWN_NON_SECRET_LINES
+                .iter()
+                .find(|(ty, _)| *ty == *name)
+                .map_or(&[][..], |(_, lines)| *lines);
+            if let Some(token) = forbidden_token_in(body, allowlist) {
                 offenses.push(format!(
                     "{rel}: `{name}` carries forbidden raw type `{token}` — \
                      wrap secret-bearing bytes in \
@@ -335,7 +369,7 @@ fn dialog_output_enums_carry_no_raw_secret_bearing_strings() {
         for variant in split_variants(body) {
             let (Some(marker), Some(token)) = (
                 contains_secret_marker(&variant),
-                forbidden_token_in(&variant),
+                forbidden_token_in(&variant, &[]),
             ) else {
                 continue;
             };
@@ -401,7 +435,7 @@ fn forbidden_token_scan_recognizes_string() {
     // body that contains a bare `String`. Guards against a future
     // refactor accidentally short-circuiting the matcher.
     let synthetic = "    Passphrase(String),\n";
-    assert_eq!(forbidden_token_in(synthetic), Some("String"));
+    assert_eq!(forbidden_token_in(synthetic, &[]), Some("String"));
 }
 
 #[test]
@@ -410,7 +444,7 @@ fn forbidden_token_scan_ignores_pathbuf_and_string_inside_identifiers() {
     // `format_string_helper`, `SecretString` re-export) do *not*
     // trip the scanner. Whole-word matching is the invariant.
     let synthetic = "    path: PathBuf,\n    helper: SecretString,\n";
-    assert_eq!(forbidden_token_in(synthetic), None);
+    assert_eq!(forbidden_token_in(synthetic, &[]), None);
 }
 
 #[test]
@@ -419,7 +453,27 @@ fn forbidden_token_scan_skips_trailing_line_comments() {
     // scanner. Otherwise documentation that mentions `String` in
     // prose would force noisy renames.
     let synthetic = "    pub path: PathBuf, // String would be wrong here\n";
-    assert_eq!(forbidden_token_in(synthetic), None);
+    assert_eq!(forbidden_token_in(synthetic, &[]), None);
+}
+
+#[test]
+fn forbidden_token_scan_skips_allowlisted_lines() {
+    // Self-test: confirm the `allowlist` parameter lets vetted
+    // non-secret fields through even when they contain a forbidden
+    // token. The exact trimmed match is what
+    // `long_lived_types_carry_no_raw_secret_bearing_strings` uses to
+    // honor `KNOWN_NON_SECRET_LINES`.
+    let synthetic = "    search_query: String,\n    other: String,\n";
+    assert_eq!(
+        forbidden_token_in(synthetic, &["search_query: String,"]),
+        Some("String"),
+        "allowlist must skip only the matching line — `other: String,` still trips the scan",
+    );
+    assert_eq!(
+        forbidden_token_in("    search_query: String,\n", &["search_query: String,"],),
+        None,
+        "an isolated allowlisted line clears the scan",
+    );
 }
 
 #[test]

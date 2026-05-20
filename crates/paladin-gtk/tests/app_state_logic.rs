@@ -5696,6 +5696,156 @@ fn should_drop_rename_dialog_after_partitions_on_success_only() {
 }
 
 // ---------------------------------------------------------------------------
+// should_refresh_list_after_rename — list-refresh decision projection
+// ---------------------------------------------------------------------------
+//
+// `AppMsg::RenameWorkerCompleted` consults this to decide whether to
+// re-project rows off the freshly reinstalled `(Vault, Store)` pair
+// and emit `AccountListMsg::Refresh` so the visible row label
+// matches the post-mutation vault state per
+// `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+// `AccountListComponent` ("Refresh the store after every vault
+// mutation … without reordering surviving rows"):
+//
+// * `Success` → `true`. The rename committed and the new label
+//   must surface in the list.
+// * `Failure(RestorePrior)` → `false`. `Vault::mutate_and_save`
+//   rolled back to the pre-attempt snapshot; the visible rows
+//   already match the post-rollback state.
+// * `Failure(KeepNewWithWarning)` → `true`. Primary save succeeded
+//   so the new label is durable in memory; the list must surface
+//   it even though the parent fsync was uncertain.
+// * `Failure(InlineError)` → `false`. Defensive branch where
+//   `Vault::rename` rejected the call before any mutation
+//   occurred.
+//
+// The projection inspects only the typed `RenameWorkerEffect`
+// variant so the side-effect decision in `AppModel::update` stays
+// unit-testable without spinning up GTK / libadwaita.
+
+#[test]
+fn should_refresh_list_after_rename_success_returns_true() {
+    use paladin_gtk::app::state::should_refresh_list_after_rename;
+    use paladin_gtk::rename_dialog::RenameWorkerEffect;
+
+    let effect = RenameWorkerEffect::Success;
+    assert!(
+        should_refresh_list_after_rename(&effect),
+        "Success refreshes the list so the row label updates to the new value",
+    );
+}
+
+#[test]
+fn should_refresh_list_after_rename_failure_restore_prior_returns_false() {
+    use paladin_gtk::app::state::should_refresh_list_after_rename;
+    use paladin_gtk::rename_dialog::{
+        classify_rename_error, RenameErrorOutcome, RenameWorkerEffect,
+    };
+
+    let err = PaladinError::SaveNotCommitted {
+        committed: false,
+        backup_path: None,
+    };
+    let outcome = classify_rename_error(&err);
+    assert!(
+        matches!(outcome, RenameErrorOutcome::RestorePrior(_)),
+        "save_not_committed routes to RestorePrior",
+    );
+    let effect = RenameWorkerEffect::Failure(outcome);
+    assert!(
+        !should_refresh_list_after_rename(&effect),
+        "RestorePrior leaves vault state unchanged so no list refresh is needed",
+    );
+}
+
+#[test]
+fn should_refresh_list_after_rename_failure_keep_new_with_warning_returns_true() {
+    use paladin_gtk::app::state::should_refresh_list_after_rename;
+    use paladin_gtk::rename_dialog::{
+        classify_rename_error, RenameErrorOutcome, RenameWorkerEffect,
+    };
+
+    let err = PaladinError::SaveDurabilityUnconfirmed;
+    let outcome = classify_rename_error(&err);
+    assert!(
+        matches!(outcome, RenameErrorOutcome::KeepNewWithWarning(_)),
+        "save_durability_unconfirmed routes to KeepNewWithWarning",
+    );
+    let effect = RenameWorkerEffect::Failure(outcome);
+    assert!(
+        should_refresh_list_after_rename(&effect),
+        "KeepNewWithWarning commits the new label in memory; the list must surface it",
+    );
+}
+
+#[test]
+fn should_refresh_list_after_rename_failure_inline_error_returns_false() {
+    use paladin_gtk::app::state::should_refresh_list_after_rename;
+    use paladin_gtk::rename_dialog::{
+        classify_rename_error, RenameErrorOutcome, RenameWorkerEffect,
+    };
+
+    let err = PaladinError::InvalidState {
+        operation: "rename",
+        state: "account_not_found",
+    };
+    let outcome = classify_rename_error(&err);
+    assert!(
+        matches!(outcome, RenameErrorOutcome::InlineError(_)),
+        "invalid_state routes to defensive InlineError",
+    );
+    let effect = RenameWorkerEffect::Failure(outcome);
+    assert!(
+        !should_refresh_list_after_rename(&effect),
+        "defensive InlineError leaves vault state unchanged so no list refresh is needed",
+    );
+}
+
+#[test]
+fn should_refresh_list_after_rename_partitions_on_committed_outcomes() {
+    // Cross-check: the projection partitions effects into "refresh"
+    // (`Success` + `KeepNewWithWarning`) and "skip" (`RestorePrior`
+    // + defensive `InlineError`). Pin the partition across every
+    // typed outcome so a future routing refinement that flips a
+    // branch is caught here.
+    use paladin_gtk::app::state::should_refresh_list_after_rename;
+    use paladin_gtk::rename_dialog::{classify_rename_error, RenameWorkerEffect};
+
+    let refresh_effects = [
+        RenameWorkerEffect::Success,
+        RenameWorkerEffect::Failure(classify_rename_error(
+            &PaladinError::SaveDurabilityUnconfirmed,
+        )),
+    ];
+    let skip_effects = [
+        RenameWorkerEffect::Failure(classify_rename_error(&PaladinError::SaveNotCommitted {
+            committed: false,
+            backup_path: None,
+        })),
+        RenameWorkerEffect::Failure(classify_rename_error(&PaladinError::SaveNotCommitted {
+            committed: true,
+            backup_path: None,
+        })),
+        RenameWorkerEffect::Failure(classify_rename_error(&PaladinError::InvalidState {
+            operation: "rename",
+            state: "account_not_found",
+        })),
+    ];
+    for effect in &refresh_effects {
+        assert!(
+            should_refresh_list_after_rename(effect),
+            "refresh partition expects true for effect={effect:?}",
+        );
+    }
+    for effect in &skip_effects {
+        assert!(
+            !should_refresh_list_after_rename(effect),
+            "skip partition expects false for effect={effect:?}",
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // rename_dialog_msg_after — inline-message projection
 // ---------------------------------------------------------------------------
 //
@@ -6040,7 +6190,7 @@ fn compose_rename_dispatch_failure_inline_error_keeps_dialog_with_msg_and_unlock
 fn compose_rename_dispatch_mirrors_trio_for_every_effect() {
     use paladin_gtk::app::state::{
         compose_rename_dispatch, rename_dialog_msg_after, rename_final_app_state,
-        should_drop_rename_dialog_after,
+        should_drop_rename_dialog_after, should_refresh_list_after_rename,
     };
     use paladin_gtk::rename_dialog::{classify_rename_error, RenameWorkerEffect};
 
@@ -6070,6 +6220,11 @@ fn compose_rename_dispatch_mirrors_trio_for_every_effect() {
             dispatch.drop_dialog,
             should_drop_rename_dialog_after(effect),
             "drop_dialog must mirror the trio for effect={effect:?}",
+        );
+        assert_eq!(
+            dispatch.refresh_list,
+            should_refresh_list_after_rename(effect),
+            "refresh_list must mirror the helper for effect={effect:?}",
         );
         let trio_msg = rename_dialog_msg_after(effect);
         match (&dispatch.dialog_msg, &trio_msg) {
@@ -7044,6 +7199,109 @@ fn remove_dialog_msg_after_is_mutually_exclusive_with_should_drop() {
 }
 
 #[test]
+fn should_refresh_list_after_remove_success_returns_true() {
+    use paladin_gtk::app::state::should_refresh_list_after_remove;
+    use paladin_gtk::remove_dialog::RemoveWorkerEffect;
+
+    assert!(
+        should_refresh_list_after_remove(&RemoveWorkerEffect::Success),
+        "Success refreshes the list so the removed row disappears",
+    );
+}
+
+#[test]
+fn should_refresh_list_after_remove_failure_restore_prior_returns_false() {
+    use paladin_gtk::app::state::should_refresh_list_after_remove;
+    use paladin_gtk::remove_dialog::{
+        classify_remove_error, RemoveErrorOutcome, RemoveWorkerEffect,
+    };
+
+    let outcome = classify_remove_error(&PaladinError::SaveNotCommitted {
+        committed: false,
+        backup_path: None,
+    });
+    assert!(matches!(outcome, RemoveErrorOutcome::RestorePrior(_)));
+    let effect = RemoveWorkerEffect::Failure(outcome);
+    assert!(
+        !should_refresh_list_after_remove(&effect),
+        "RestorePrior leaves vault state unchanged so no list refresh is needed",
+    );
+}
+
+#[test]
+fn should_refresh_list_after_remove_failure_keep_removed_with_warning_returns_true() {
+    use paladin_gtk::app::state::should_refresh_list_after_remove;
+    use paladin_gtk::remove_dialog::{
+        classify_remove_error, RemoveErrorOutcome, RemoveWorkerEffect,
+    };
+
+    let outcome = classify_remove_error(&PaladinError::SaveDurabilityUnconfirmed);
+    assert!(matches!(
+        outcome,
+        RemoveErrorOutcome::KeepRemovedWithWarning(_)
+    ));
+    let effect = RemoveWorkerEffect::Failure(outcome);
+    assert!(
+        should_refresh_list_after_remove(&effect),
+        "KeepRemovedWithWarning commits the removal in memory; the list must surface it",
+    );
+}
+
+#[test]
+fn should_refresh_list_after_remove_failure_inline_error_returns_false() {
+    use paladin_gtk::app::state::should_refresh_list_after_remove;
+    use paladin_gtk::remove_dialog::{
+        account_not_found_error, classify_remove_error, RemoveErrorOutcome, RemoveWorkerEffect,
+    };
+
+    let outcome = classify_remove_error(&account_not_found_error());
+    assert!(matches!(outcome, RemoveErrorOutcome::InlineError(_)));
+    let effect = RemoveWorkerEffect::Failure(outcome);
+    assert!(
+        !should_refresh_list_after_remove(&effect),
+        "defensive InlineError leaves vault state unchanged so no list refresh is needed",
+    );
+}
+
+#[test]
+fn should_refresh_list_after_remove_partitions_on_committed_outcomes() {
+    use paladin_gtk::app::state::should_refresh_list_after_remove;
+    use paladin_gtk::remove_dialog::{
+        account_not_found_error, classify_remove_error, RemoveWorkerEffect,
+    };
+
+    let refresh_effects = [
+        RemoveWorkerEffect::Success,
+        RemoveWorkerEffect::Failure(classify_remove_error(
+            &PaladinError::SaveDurabilityUnconfirmed,
+        )),
+    ];
+    let skip_effects = [
+        RemoveWorkerEffect::Failure(classify_remove_error(&PaladinError::SaveNotCommitted {
+            committed: false,
+            backup_path: None,
+        })),
+        RemoveWorkerEffect::Failure(classify_remove_error(&PaladinError::SaveNotCommitted {
+            committed: true,
+            backup_path: None,
+        })),
+        RemoveWorkerEffect::Failure(classify_remove_error(&account_not_found_error())),
+    ];
+    for effect in &refresh_effects {
+        assert!(
+            should_refresh_list_after_remove(effect),
+            "refresh partition expects true for effect={effect:?}",
+        );
+    }
+    for effect in &skip_effects {
+        assert!(
+            !should_refresh_list_after_remove(effect),
+            "skip partition expects false for effect={effect:?}",
+        );
+    }
+}
+
+#[test]
 fn compose_remove_dispatch_success_bundles_drop_and_unlocked_rollback() {
     use paladin_gtk::app::state::compose_remove_dispatch;
     use paladin_gtk::remove_dialog::RemoveWorkerEffect;
@@ -7052,6 +7310,10 @@ fn compose_remove_dispatch_success_bundles_drop_and_unlocked_rollback() {
     let dispatch = compose_remove_dispatch(&busy, &RemoveWorkerEffect::Success);
     assert!(dispatch.drop_dialog);
     assert!(dispatch.dialog_msg.is_none());
+    assert!(
+        dispatch.refresh_list,
+        "Success refreshes the list so the removed row disappears",
+    );
     let next = dispatch.app_state.expect("Success rolls back to Unlocked");
     assert!(matches!(next, AppState::Unlocked { .. }));
     assert_path_eq(&next, &path);
@@ -7077,6 +7339,10 @@ fn compose_remove_dispatch_failure_keeps_dialog_with_msg_and_unlocked_rollback()
         msg,
         RemoveDialogMsg::WorkerFailed(RemoveErrorOutcome::RestorePrior(_))
     ));
+    assert!(
+        !dispatch.refresh_list,
+        "RestorePrior leaves vault state unchanged so no list refresh is needed",
+    );
     let next = dispatch
         .app_state
         .expect("Failure still rolls UnlockedBusy back to Unlocked");
@@ -7306,6 +7572,158 @@ fn should_drop_add_dialog_after_partitions_on_success_only() {
         assert!(
             !should_drop_add_dialog_after(effect),
             "keep partition expects false for effect={effect:?}",
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// should_refresh_list_after_add — list-refresh decision projection
+// ---------------------------------------------------------------------------
+//
+// `AppMsg::AddWorkerCompleted` consults this to decide whether to
+// re-project rows off the freshly reinstalled `(Vault, Store)` pair
+// and emit `AccountListMsg::Refresh` so the new account appears in
+// the visible row set per `IMPLEMENTATION_PLAN_04_GTK.md`
+// §"Component tree" > `AccountListComponent` ("Refresh the store
+// after every vault mutation … without reordering surviving rows"):
+//
+// * `Success` → `true`. The add committed and the new row must
+//   surface in the list.
+// * `Failure(AddPostEffectOutcome::Inline)` → `false`.
+//   `Vault::mutate_and_save` rolled back (`save_not_committed`,
+//   `io_error`) or never mutated (defensive
+//   `validation_error` / `invalid_state`); the visible rows
+//   already match the post-rollback state.
+// * `Failure(AddPostEffectOutcome::KeepWithWarning)` → `true`.
+//   Primary save succeeded so the new account is durable in
+//   memory; the list must surface it even though the parent
+//   fsync was uncertain.
+
+#[test]
+fn should_refresh_list_after_add_success_returns_true() {
+    use paladin_core::AccountId;
+    use paladin_gtk::add_account::AddWorkerEffect;
+    use paladin_gtk::app::state::should_refresh_list_after_add;
+
+    let effect = AddWorkerEffect::Success {
+        account_id: AccountId::new(),
+    };
+    assert!(
+        should_refresh_list_after_add(&effect),
+        "Success refreshes the list so the new row appears",
+    );
+}
+
+#[test]
+fn should_refresh_list_after_add_failure_inline_returns_false() {
+    use paladin_gtk::add_account::{
+        classify_add_post_effect_error, AddPostEffectOutcome, AddWorkerEffect,
+    };
+    use paladin_gtk::app::state::should_refresh_list_after_add;
+
+    let err = PaladinError::SaveNotCommitted {
+        committed: false,
+        backup_path: None,
+    };
+    let outcome = classify_add_post_effect_error(&err);
+    assert!(
+        matches!(outcome, AddPostEffectOutcome::Inline(_)),
+        "save_not_committed routes to Inline",
+    );
+    let effect = AddWorkerEffect::Failure(outcome);
+    assert!(
+        !should_refresh_list_after_add(&effect),
+        "Inline failure leaves vault state unchanged so no list refresh is needed",
+    );
+}
+
+#[test]
+fn should_refresh_list_after_add_failure_keep_with_warning_returns_true() {
+    use paladin_gtk::add_account::{
+        classify_add_post_effect_error, AddPostEffectOutcome, AddWorkerEffect,
+    };
+    use paladin_gtk::app::state::should_refresh_list_after_add;
+
+    let err = PaladinError::SaveDurabilityUnconfirmed;
+    let outcome = classify_add_post_effect_error(&err);
+    assert!(
+        matches!(outcome, AddPostEffectOutcome::KeepWithWarning(_)),
+        "save_durability_unconfirmed routes to KeepWithWarning",
+    );
+    let effect = AddWorkerEffect::Failure(outcome);
+    assert!(
+        should_refresh_list_after_add(&effect),
+        "KeepWithWarning commits the new account in memory; the list must surface it",
+    );
+}
+
+#[test]
+fn should_refresh_list_after_add_failure_defensive_inline_returns_false() {
+    use paladin_gtk::add_account::{
+        classify_add_post_effect_error, AddPostEffectOutcome, AddWorkerEffect,
+    };
+    use paladin_gtk::app::state::should_refresh_list_after_add;
+
+    let err = PaladinError::InvalidState {
+        operation: "add",
+        state: "account_not_found",
+    };
+    let outcome = classify_add_post_effect_error(&err);
+    assert!(
+        matches!(outcome, AddPostEffectOutcome::Inline(_)),
+        "defensive invalid_state routes to Inline",
+    );
+    let effect = AddWorkerEffect::Failure(outcome);
+    assert!(
+        !should_refresh_list_after_add(&effect),
+        "defensive Inline leaves vault state unchanged so no list refresh is needed",
+    );
+}
+
+#[test]
+fn should_refresh_list_after_add_partitions_on_committed_outcomes() {
+    use paladin_core::AccountId;
+    use paladin_gtk::add_account::{classify_add_post_effect_error, AddWorkerEffect};
+    use paladin_gtk::app::state::should_refresh_list_after_add;
+
+    let refresh_effects = [
+        AddWorkerEffect::Success {
+            account_id: AccountId::new(),
+        },
+        AddWorkerEffect::Failure(classify_add_post_effect_error(
+            &PaladinError::SaveDurabilityUnconfirmed,
+        )),
+    ];
+    let skip_effects = [
+        AddWorkerEffect::Failure(classify_add_post_effect_error(
+            &PaladinError::SaveNotCommitted {
+                committed: false,
+                backup_path: None,
+            },
+        )),
+        AddWorkerEffect::Failure(classify_add_post_effect_error(
+            &PaladinError::SaveNotCommitted {
+                committed: true,
+                backup_path: None,
+            },
+        )),
+        AddWorkerEffect::Failure(classify_add_post_effect_error(
+            &PaladinError::InvalidState {
+                operation: "add",
+                state: "account_not_found",
+            },
+        )),
+    ];
+    for effect in &refresh_effects {
+        assert!(
+            should_refresh_list_after_add(effect),
+            "refresh partition expects true for effect={effect:?}",
+        );
+    }
+    for effect in &skip_effects {
+        assert!(
+            !should_refresh_list_after_add(effect),
+            "skip partition expects false for effect={effect:?}",
         );
     }
 }
@@ -7681,7 +8099,7 @@ fn compose_add_dispatch_mirrors_trio_for_every_effect() {
     use paladin_gtk::add_account::{classify_add_post_effect_error, AddWorkerEffect};
     use paladin_gtk::app::state::{
         add_dialog_msg_after, add_final_app_state, compose_add_dispatch,
-        should_drop_add_dialog_after,
+        should_drop_add_dialog_after, should_refresh_list_after_add,
     };
 
     let path = vault_path();
@@ -7718,6 +8136,11 @@ fn compose_add_dispatch_mirrors_trio_for_every_effect() {
             dispatch.drop_dialog,
             should_drop_add_dialog_after(effect),
             "drop_dialog must mirror the trio for effect={effect:?}",
+        );
+        assert_eq!(
+            dispatch.refresh_list,
+            should_refresh_list_after_add(effect),
+            "refresh_list must mirror the helper for effect={effect:?}",
         );
         let trio_msg = add_dialog_msg_after(effect);
         match (&dispatch.dialog_msg, &trio_msg) {

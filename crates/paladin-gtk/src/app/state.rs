@@ -1368,6 +1368,50 @@ pub fn should_drop_rename_dialog_after(effect: &RenameWorkerEffect) -> bool {
     }
 }
 
+/// List-refresh projection after a rename worker outcome.
+///
+/// `AppMsg::RenameWorkerCompleted` consults this to decide whether
+/// to re-project rows off the freshly reinstalled `(Vault, Store)`
+/// pair and emit [`crate::account_list::AccountListMsg::Refresh`]
+/// so the visible row label matches the post-mutation vault state
+/// per `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+/// `AccountListComponent` ("Refresh the store after every vault
+/// mutation … without reordering surviving rows"):
+///
+/// * [`RenameWorkerEffect::Success`] → `true`. The rename
+///   committed and the new label must surface in the list.
+/// * [`RenameWorkerEffect::Failure`] with
+///   [`crate::rename_dialog::RenameErrorOutcome::RestorePrior`] →
+///   `false`. `Vault::mutate_and_save` rolled back to the
+///   pre-attempt snapshot; the visible rows already match the
+///   post-rollback state.
+/// * [`RenameWorkerEffect::Failure`] with
+///   [`crate::rename_dialog::RenameErrorOutcome::KeepNewWithWarning`]
+///   → `true`. Primary save succeeded so the new label is durable
+///   in memory; the list must surface it even though the parent
+///   fsync was uncertain.
+/// * [`RenameWorkerEffect::Failure`] with
+///   [`crate::rename_dialog::RenameErrorOutcome::InlineError`] →
+///   `false`. Defensive branch where `Vault::rename` rejected the
+///   call before any mutation occurred.
+///
+/// The projection inspects only the typed [`RenameWorkerEffect`]
+/// variant — it does not consult [`AppState`] or the live
+/// `(Vault, Store)` pair — so the side-effect decision in
+/// `AppModel::update` stays unit-testable in
+/// `tests/app_state_logic.rs` without spinning up GTK / libadwaita.
+#[must_use]
+pub fn should_refresh_list_after_rename(effect: &RenameWorkerEffect) -> bool {
+    match effect {
+        RenameWorkerEffect::Success => true,
+        RenameWorkerEffect::Failure(outcome) => match outcome {
+            crate::rename_dialog::RenameErrorOutcome::KeepNewWithWarning(_) => true,
+            crate::rename_dialog::RenameErrorOutcome::RestorePrior(_)
+            | crate::rename_dialog::RenameErrorOutcome::InlineError(_) => false,
+        },
+    }
+}
+
 /// Inline-message projection for the live
 /// [`crate::rename_dialog::RenameDialogComponent`] after a rename
 /// worker outcome.
@@ -1468,6 +1512,16 @@ pub struct RenameDispatch {
     /// branch; stays mounted on every failure branch so the inline
     /// error / body warning is visible and the user can retry.
     pub drop_dialog: bool,
+    /// Whether `AppModel::update` should re-project rows off the
+    /// freshly reinstalled `(Vault, Store)` pair and emit
+    /// [`crate::account_list::AccountListMsg::Refresh`] so the
+    /// visible row label matches the post-mutation vault state.
+    /// Mirrors [`should_refresh_list_after_rename`] — `true` on
+    /// `Success` and `KeepNewWithWarning` (both leave the new label
+    /// in memory), `false` on `RestorePrior` and defensive
+    /// `InlineError` (both leave the vault unchanged so the visible
+    /// rows already match disk).
+    pub refresh_list: bool,
 }
 
 /// Bundle the trio of rename-dispatch decisions into a single
@@ -1510,6 +1564,7 @@ pub fn compose_rename_dispatch(current: &AppState, effect: &RenameWorkerEffect) 
         app_state: rename_final_app_state(current, effect),
         dialog_msg: rename_dialog_msg_after(effect),
         drop_dialog: should_drop_rename_dialog_after(effect),
+        refresh_list: should_refresh_list_after_rename(effect),
     }
 }
 
@@ -1871,6 +1926,42 @@ pub fn should_drop_add_dialog_after(effect: &AddWorkerEffect) -> bool {
     }
 }
 
+/// List-refresh projection after an add worker outcome.
+///
+/// Symmetric partner of [`should_refresh_list_after_rename`] for the
+/// add path. `AppMsg::AddWorkerCompleted` consults this to decide
+/// whether to re-project rows off the freshly reinstalled
+/// `(Vault, Store)` pair and emit
+/// [`crate::account_list::AccountListMsg::Refresh`] so the new
+/// account appears in the visible row set per
+/// `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+/// `AccountListComponent` ("Refresh the store after every vault
+/// mutation … without reordering surviving rows"):
+///
+/// * [`AddWorkerEffect::Success`] → `true`. The add committed and
+///   the new row must surface in the list.
+/// * [`AddWorkerEffect::Failure`] with
+///   [`crate::add_account::AddPostEffectOutcome::Inline`] → `false`.
+///   `Vault::mutate_and_save` rolled back to the pre-attempt
+///   snapshot (or never mutated for the defensive
+///   `validation_error` / `invalid_state` branches); the visible
+///   rows already match the post-rollback state.
+/// * [`AddWorkerEffect::Failure`] with
+///   [`crate::add_account::AddPostEffectOutcome::KeepWithWarning`]
+///   → `true`. Primary save succeeded so the new account is durable
+///   in memory; the list must surface it even though the parent
+///   fsync was uncertain.
+#[must_use]
+pub fn should_refresh_list_after_add(effect: &AddWorkerEffect) -> bool {
+    match effect {
+        AddWorkerEffect::Success { .. } => true,
+        AddWorkerEffect::Failure(outcome) => match outcome {
+            crate::add_account::AddPostEffectOutcome::KeepWithWarning(_) => true,
+            crate::add_account::AddPostEffectOutcome::Inline(_) => false,
+        },
+    }
+}
+
 /// Inline-message projection for the live
 /// [`crate::add_account::AddAccountComponent`] after an add worker
 /// outcome.
@@ -1969,6 +2060,15 @@ pub struct AddDispatch {
     /// stays mounted on every failure branch so the inline error /
     /// body warning is visible and the user can retry or acknowledge.
     pub drop_dialog: bool,
+    /// Whether `AppModel::update` should re-project rows off the
+    /// freshly reinstalled `(Vault, Store)` pair and emit
+    /// [`crate::account_list::AccountListMsg::Refresh`] so the new
+    /// account appears in the visible row set. Mirrors
+    /// [`should_refresh_list_after_add`] — `true` on `Success` and
+    /// `KeepWithWarning` (both leave the new account in memory),
+    /// `false` on the `Inline` failure branches (where the vault is
+    /// unchanged so the visible rows already match disk).
+    pub refresh_list: bool,
 }
 
 /// Bundle the trio of add-dispatch decisions into a single
@@ -2011,6 +2111,7 @@ pub fn compose_add_dispatch(current: &AppState, effect: &AddWorkerEffect) -> Add
         app_state: add_final_app_state(current, effect),
         dialog_msg: add_dialog_msg_after(effect),
         drop_dialog: should_drop_add_dialog_after(effect),
+        refresh_list: should_refresh_list_after_add(effect),
     }
 }
 
@@ -2232,6 +2333,46 @@ pub fn should_drop_remove_dialog_after(effect: &RemoveWorkerEffect) -> bool {
     }
 }
 
+/// List-refresh projection after a remove worker outcome.
+///
+/// Symmetric partner of [`should_refresh_list_after_rename`] for the
+/// remove path. `AppMsg::RemoveWorkerCompleted` consults this to
+/// decide whether to re-project rows off the freshly reinstalled
+/// `(Vault, Store)` pair and emit
+/// [`crate::account_list::AccountListMsg::Refresh`] so the removed
+/// account disappears from the visible row set per
+/// `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+/// `AccountListComponent` ("Refresh the store after every vault
+/// mutation … without reordering surviving rows"):
+///
+/// * [`RemoveWorkerEffect::Success`] → `true`. The remove
+///   committed and the row must disappear from the list.
+/// * [`RemoveWorkerEffect::Failure`] with
+///   [`crate::remove_dialog::RemoveErrorOutcome::RestorePrior`] →
+///   `false`. `Vault::mutate_and_save` restored the removed
+///   account at its previous position; the visible rows already
+///   match the post-rollback state.
+/// * [`RemoveWorkerEffect::Failure`] with
+///   [`crate::remove_dialog::RemoveErrorOutcome::KeepRemovedWithWarning`]
+///   → `true`. Primary save succeeded so the removal is durable
+///   in memory; the list must surface it even though the parent
+///   fsync was uncertain.
+/// * [`RemoveWorkerEffect::Failure`] with
+///   [`crate::remove_dialog::RemoveErrorOutcome::InlineError`] →
+///   `false`. Defensive branch (`invalid_state` /
+///   `account_not_found`) where the vault was not mutated.
+#[must_use]
+pub fn should_refresh_list_after_remove(effect: &RemoveWorkerEffect) -> bool {
+    match effect {
+        RemoveWorkerEffect::Success => true,
+        RemoveWorkerEffect::Failure(outcome) => match outcome {
+            crate::remove_dialog::RemoveErrorOutcome::KeepRemovedWithWarning(_) => true,
+            crate::remove_dialog::RemoveErrorOutcome::RestorePrior(_)
+            | crate::remove_dialog::RemoveErrorOutcome::InlineError(_) => false,
+        },
+    }
+}
+
 /// Inline-message projection for the live
 /// [`crate::remove_dialog::RemoveDialogComponent`] after a remove
 /// worker outcome.
@@ -2315,6 +2456,16 @@ pub struct RemoveDispatch {
     /// branch; stays mounted on every failure branch so the inline
     /// error / body warning is visible and the user can retry.
     pub drop_dialog: bool,
+    /// Whether `AppModel::update` should re-project rows off the
+    /// freshly reinstalled `(Vault, Store)` pair and emit
+    /// [`crate::account_list::AccountListMsg::Refresh`] so the
+    /// removed account disappears from the visible row set.
+    /// Mirrors [`should_refresh_list_after_remove`] — `true` on
+    /// `Success` and `KeepRemovedWithWarning` (both leave the
+    /// removal in memory), `false` on `RestorePrior` and defensive
+    /// `InlineError` (both leave the vault unchanged so the
+    /// visible rows already match disk).
+    pub refresh_list: bool,
 }
 
 /// Bundle the trio of remove-dispatch decisions into a single
@@ -2355,6 +2506,7 @@ pub fn compose_remove_dispatch(current: &AppState, effect: &RemoveWorkerEffect) 
         app_state: remove_final_app_state(current, effect),
         dialog_msg: remove_dialog_msg_after(effect),
         drop_dialog: should_drop_remove_dialog_after(effect),
+        refresh_list: should_refresh_list_after_remove(effect),
     }
 }
 

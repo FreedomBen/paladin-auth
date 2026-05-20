@@ -252,6 +252,17 @@ pub struct AppModel {
     /// themselves to the active view.
     #[allow(dead_code)]
     content: gtk::Box,
+    /// Cached search query mirroring [`AccountListComponent`]'s
+    /// `current_query`. Updated when
+    /// [`crate::account_list::AccountListOutput::QueryChanged`]
+    /// bubbles up so the post-mutation refresh path
+    /// ([`AppModel::refresh_account_list`]) can re-filter the live
+    /// vault through `paladin_core::account_matches_search` without
+    /// asking the controller for its current entry text. The
+    /// `AccountListComponent` controller is dropped (and the cache
+    /// reset to the empty string in the next mount) when the vault
+    /// locks, so there is no observable cross-vault query leak.
+    search_query: String,
 }
 
 impl std::fmt::Debug for AppModel {
@@ -302,6 +313,7 @@ impl std::fmt::Debug for AppModel {
                 &self.passphrase_dialog.as_ref().map(|_| "<mounted>"),
             )
             .field("content", &"<gtk::Box>")
+            .field("search_query", &self.search_query)
             .finish()
     }
 }
@@ -994,6 +1006,7 @@ impl SimpleComponent for AppModel {
             export_dialog: None,
             passphrase_dialog: None,
             content: widgets.content.clone(),
+            search_query: String::new(),
         };
 
         if exit_after_startup {
@@ -1062,10 +1075,14 @@ impl SimpleComponent for AppModel {
                 }
             }
             AppMsg::AccountListAction(AccountListOutput::QueryChanged(query)) => {
-                // The user typed into the search bar. Filter the live
-                // vault through `paladin_core::account_matches_search`
-                // (via `filtered_row_models_from_vault`) and re-feed
-                // the projected rows back to the live
+                // The user typed into the search bar. Cache the query
+                // on `self.search_query` so the post-mutation refresh
+                // path (`refresh_account_list`) can re-filter the live
+                // vault without asking the controller for its current
+                // entry text, then filter through
+                // `paladin_core::account_matches_search` (via
+                // `filtered_row_models_from_vault`) and re-feed the
+                // projected rows back to the live
                 // `AccountListComponent`. The selection-preservation
                 // rule is deferred to the component: passing `None`
                 // for the `selection` slot lets
@@ -1073,10 +1090,11 @@ impl SimpleComponent for AppModel {
                 // component's own `current_selection`, so the user's
                 // cursor follows the §6 / §7 contract (preserve when
                 // still visible, else first match).
+                self.search_query = query;
                 if let (Some((vault, _)), Some(controller)) =
                     (self.vault.as_ref(), self.account_list.as_ref())
                 {
-                    let rows = filtered_row_models_from_vault(vault, &query);
+                    let rows = filtered_row_models_from_vault(vault, &self.search_query);
                     let selection = selected_row_after_refresh(None, &rows);
                     controller.emit(AccountListMsg::Refresh { rows, selection });
                 }
@@ -1779,6 +1797,9 @@ impl SimpleComponent for AppModel {
                             self.content.remove(controller.widget());
                         }
                     }
+                    if dispatch.refresh_list {
+                        self.refresh_account_list();
+                    }
                 }
             }
             AppMsg::RenameWorkerCompleted(completion) => {
@@ -1839,6 +1860,9 @@ impl SimpleComponent for AppModel {
                             self.content.remove(controller.widget());
                         }
                     }
+                    if dispatch.refresh_list {
+                        self.refresh_account_list();
+                    }
                 }
             }
             AppMsg::AddWorkerCompleted(completion) => {
@@ -1894,6 +1918,9 @@ impl SimpleComponent for AppModel {
                             self.content.remove(controller.widget());
                         }
                     }
+                    if dispatch.refresh_list {
+                        self.refresh_account_list();
+                    }
                 }
             }
         }
@@ -1901,6 +1928,39 @@ impl SimpleComponent for AppModel {
 }
 
 impl AppModel {
+    /// Re-project rows off the live `(Vault, Store)` pair and emit
+    /// [`AccountListMsg::Refresh`] so the visible row set matches
+    /// the post-mutation vault state per
+    /// `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+    /// `AccountListComponent` ("Refresh the store after every vault
+    /// mutation … without reordering surviving rows"). Used by the
+    /// rename / add / remove worker-completion handlers when the
+    /// dispatch's `refresh_list` flag is set.
+    ///
+    /// Filters through [`filtered_row_models_from_vault`] using
+    /// [`Self::search_query`] so an active search filter survives
+    /// the post-mutation refresh. The `selection: None` argument
+    /// lets the [`AccountListComponent`] resolve the new selection
+    /// against its own `current_selection` via
+    /// [`selected_row_after_refresh`] (preserve the prior selection
+    /// when still present, else first match).
+    ///
+    /// Defensive: if the vault slot or the controller is `None`
+    /// (the worker outcome arrived after auto-lock dropped the
+    /// vault, or before the `AccountListComponent` was mounted),
+    /// this is a benign no-op.
+    fn refresh_account_list(&self) {
+        if let (Some((vault, _)), Some(controller)) =
+            (self.vault.as_ref(), self.account_list.as_ref())
+        {
+            let rows = filtered_row_models_from_vault(vault, &self.search_query);
+            controller.emit(AccountListMsg::Refresh {
+                rows,
+                selection: None,
+            });
+        }
+    }
+
     /// Tear down the currently-mounted screen controller and mount
     /// the per-state controller matching `state`, mirroring `init`'s
     /// per-state mount sequence.
