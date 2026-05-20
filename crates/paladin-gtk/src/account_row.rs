@@ -22,8 +22,10 @@
 //! issuer of `Some(non_empty)` renders as `<issuer>:<label>`;
 //! everything else (`None` or `Some("")`) renders as the bare
 //! `<label>` so the body never carries a dangling `:label` colon.
-//! The same rule lives in [`crate::remove_dialog::summary_display_label`];
-//! both call sites use the same projection helper here.
+//! [`summary_display_label`] is the canonical helper for this rule;
+//! [`crate::remove_dialog::summary_display_label`] re-exports it so
+//! the row factory and the `RemoveDialog` body share one source of
+//! truth.
 //!
 //! Copy / "next" gating follows the plan §"Component tree" >
 //! `AccountRowComponent` rules:
@@ -52,8 +54,13 @@ use paladin_core::{AccountId, AccountKindSummary, AccountSummary, Code};
 /// `Some(non_empty)` and the bare `<label>` otherwise (CLI / TUI
 /// parity; `Some("")` collapses to the no-issuer form so the row
 /// never renders `:label`).
+///
+/// Canonical helper for the row's `<issuer>:<label>` body shape;
+/// [`crate::remove_dialog::summary_display_label`] re-exports this
+/// function so the list row and the `RemoveDialog` confirmation body
+/// never drift.
 #[must_use]
-pub fn display_label(summary: &AccountSummary) -> String {
+pub fn summary_display_label(summary: &AccountSummary) -> String {
     match summary.issuer.as_deref().filter(|i| !i.is_empty()) {
         Some(issuer) => format!("{issuer}:{}", summary.label),
         None => summary.label.clone(),
@@ -264,7 +271,7 @@ pub fn code_display(_kind: AccountKindSummary, visible_code: Option<&Code>) -> C
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RowDisplay {
-    /// Result of [`display_label`].
+    /// Result of [`summary_display_label`].
     pub label: String,
     /// Account kind (echoed back for downstream widget routing —
     /// HOTP rows reach for the "next" button, TOTP rows for the
@@ -291,17 +298,17 @@ pub struct RowDisplay {
 
 /// Bundle every row projection together.
 ///
-/// Composes [`display_label`], [`code_display`], [`counter_display`],
-/// [`copy_enabled`], [`next_button_visible`], [`progress_visible`],
-/// and [`kebab_visible`] into a [`RowDisplay`]. The widget layer
-/// reads `Some(&Code)` from either the TOTP per-tick compute slot or
-/// the HOTP reveal slot and passes it through; the helpers all agree
-/// on `None ⇒ hidden`.
+/// Composes [`summary_display_label`], [`code_display`],
+/// [`counter_display`], [`copy_enabled`], [`next_button_visible`],
+/// [`progress_visible`], and [`kebab_visible`] into a [`RowDisplay`].
+/// The widget layer reads `Some(&Code)` from either the TOTP per-tick
+/// compute slot or the HOTP reveal slot and passes it through; the
+/// helpers all agree on `None ⇒ hidden`.
 #[must_use]
 pub fn project_row(summary: &AccountSummary, visible_code: Option<&Code>) -> RowDisplay {
     let has_visible_code = visible_code.is_some();
     RowDisplay {
-        label: display_label(summary),
+        label: summary_display_label(summary),
         kind: summary.kind,
         code: code_display(summary.kind, visible_code),
         counter: counter_display(summary, visible_code),

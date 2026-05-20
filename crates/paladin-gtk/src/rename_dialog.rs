@@ -55,7 +55,7 @@ use relm4::prelude::*;
 
 use paladin_core::{validate_label, AccountId, ErrorKind, PaladinError, Store, Vault};
 
-use crate::account_row::display_label;
+use crate::account_row::summary_display_label;
 
 /// Pre-submit validation outcome.
 ///
@@ -469,9 +469,9 @@ pub struct RenameDialogInit {
     /// module-level "Same-label submission" note).
     pub current_label: String,
     /// Pre-formatted `<issuer>:<label>` heading mirroring
-    /// `account_row::display_label`. Used as the dialog title chip so
-    /// the user can confirm which row they are renaming. Empty
-    /// issuer collapses to the bare label (parity with the row
+    /// `account_row::summary_display_label`. Used as the dialog title
+    /// chip so the user can confirm which row they are renaming.
+    /// Empty issuer collapses to the bare label (parity with the row
     /// projection).
     pub display_label: String,
 }
@@ -484,9 +484,10 @@ pub struct RenameDialogInit {
 /// (the account was removed between the kebab activation and the
 /// dispatch) and does not mount the dialog.
 ///
-/// The display label uses the same `account_row::display_label`
-/// projection the list-row factory binds, so the dialog heading and
-/// the row's heading never drift.
+/// The display label uses the same
+/// `account_row::summary_display_label` projection the list-row
+/// factory binds, so the dialog heading and the row's heading never
+/// drift.
 #[must_use]
 pub fn decide_rename_target(vault: &Vault, id: AccountId) -> Option<RenameDialogInit> {
     vault
@@ -495,7 +496,7 @@ pub fn decide_rename_target(vault: &Vault, id: AccountId) -> Option<RenameDialog
         .map(|summary| RenameDialogInit {
             account_id: summary.id,
             current_label: summary.label.clone(),
-            display_label: display_label(&summary),
+            display_label: summary_display_label(&summary),
         })
 }
 

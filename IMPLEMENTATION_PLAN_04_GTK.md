@@ -1544,10 +1544,14 @@ sign-off.
     presentation) without reordering surviving rows.
 - [ ] `AccountRowComponent` full body (label, icon, code, TOTP
   gauge / HOTP next, copy button, kebab menu).
-  - [ ] Render the display label via
+  - [x] Render the display label via
     `summary_display_label(&AccountSummary)` (CLI / TUI parity:
     `<issuer>:<label>` when issuer is set, bare label otherwise;
-    empty issuer collapses to the no-issuer form).
+    empty issuer collapses to the no-issuer form). `account_row.rs`
+    owns the canonical helper; `remove_dialog.rs` re-exports it so
+    the row factory (`row_models_from_vault` /
+    `row_model_for_account` in `account_list.rs`) and the
+    `RemoveDialog` body share one source of truth.
   - [x] Render the icon via `gtk::IconTheme` against
     `AccountSummary.icon_hint` with the placeholder fallback (see
     "Icon resolution" item below).

@@ -29,9 +29,9 @@
 use paladin_core::{AccountId, AccountKindSummary, AccountSummary, Algorithm, Code};
 
 use paladin_gtk::account_row::{
-    code_display, copy_enabled, counter_display, display_label, kebab_visible, next_button_visible,
-    progress_display, progress_fraction, progress_visible, project_row, CodeDisplay, CounterText,
-    ProgressDisplay, RowDisplay,
+    code_display, copy_enabled, counter_display, kebab_visible, next_button_visible,
+    progress_display, progress_fraction, progress_visible, project_row, summary_display_label,
+    CodeDisplay, CounterText, ProgressDisplay, RowDisplay,
 };
 
 // ---------------------------------------------------------------------------
@@ -91,35 +91,61 @@ fn hotp_code(digits: &str, counter_used: u64) -> Code {
 }
 
 // ---------------------------------------------------------------------------
-// `display_label` — CLI / TUI parity (issuer:label or bare label)
+// `summary_display_label` — CLI / TUI parity (issuer:label or bare label)
 // ---------------------------------------------------------------------------
 
 #[test]
-fn display_label_renders_issuer_colon_label_when_issuer_set() {
+fn summary_display_label_renders_issuer_colon_label_when_issuer_set() {
     let s = totp_summary("alice", Some("Acme"));
-    assert_eq!(display_label(&s), "Acme:alice");
+    assert_eq!(summary_display_label(&s), "Acme:alice");
 }
 
 #[test]
-fn display_label_renders_bare_label_when_issuer_none() {
+fn summary_display_label_renders_bare_label_when_issuer_none() {
     let s = totp_summary("alice", None);
-    assert_eq!(display_label(&s), "alice");
+    assert_eq!(summary_display_label(&s), "alice");
 }
 
 #[test]
-fn display_label_collapses_empty_issuer_to_bare_label() {
-    // `Some("")` must not render `":alice"` (parity with the
-    // CLI / TUI / `remove_dialog::summary_display_label` rule).
+fn summary_display_label_collapses_empty_issuer_to_bare_label() {
+    // `Some("")` must not render `":alice"` (CLI / TUI parity;
+    // the same rule applies to the re-export at
+    // `remove_dialog::summary_display_label`).
     let s = totp_summary("alice", Some(""));
-    assert_eq!(display_label(&s), "alice");
+    assert_eq!(summary_display_label(&s), "alice");
 }
 
 #[test]
-fn display_label_handles_hotp_account_identically_to_totp() {
+fn summary_display_label_handles_hotp_account_identically_to_totp() {
     let s = hotp_summary("bob", Some("Acme"), 7);
-    assert_eq!(display_label(&s), "Acme:bob");
+    assert_eq!(summary_display_label(&s), "Acme:bob");
     let s = hotp_summary("bob", None, 7);
-    assert_eq!(display_label(&s), "bob");
+    assert_eq!(summary_display_label(&s), "bob");
+}
+
+#[test]
+fn summary_display_label_matches_remove_dialog_helper() {
+    // Both modules must agree on the CLI / TUI body shape — the
+    // row label rendered into the `gtk::ListView` factory and the
+    // body rendered into `RemoveDialog`'s `AdwAlertDialog` should
+    // never drift. `remove_dialog::summary_display_label` re-exports
+    // the canonical helper from `account_row`, so calling either
+    // module's name resolves to the same function.
+    let s = totp_summary("alice", Some("Acme"));
+    assert_eq!(
+        summary_display_label(&s),
+        paladin_gtk::remove_dialog::summary_display_label(&s),
+    );
+    let s = totp_summary("alice", Some(""));
+    assert_eq!(
+        summary_display_label(&s),
+        paladin_gtk::remove_dialog::summary_display_label(&s),
+    );
+    let s = totp_summary("alice", None);
+    assert_eq!(
+        summary_display_label(&s),
+        paladin_gtk::remove_dialog::summary_display_label(&s),
+    );
 }
 
 // ---------------------------------------------------------------------------

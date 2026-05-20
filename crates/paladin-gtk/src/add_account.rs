@@ -96,7 +96,7 @@ use paladin_core::{
     ValidatedAccount, ValidationWarning, Vault,
 };
 
-use crate::account_row::display_label;
+use crate::account_row::summary_display_label;
 use crate::secret_fields::{AddPath, AddSecretState, ClearReason};
 
 /// Per-keystroke reactive state for the non-secret manual entries.
@@ -1259,16 +1259,16 @@ pub fn format_add_dialog_marker(path: &Path) -> String {
 /// theme rebind the confirm gesture without re-wording the prompt.
 ///
 /// The carried [`AccountSummary`] routes through
-/// [`crate::account_row::display_label`] — the same projection the
-/// visible row label uses — so the colliding row's display name in
-/// the prompt matches what the user already sees in the account
+/// [`crate::account_row::summary_display_label`] — the same projection
+/// the visible row label uses — so the colliding row's display name
+/// in the prompt matches what the user already sees in the account
 /// list. `Some("")` issuers collapse to the bare-label form for
-/// parity with [`crate::account_row::display_label`].
+/// parity with [`crate::account_row::summary_display_label`].
 #[must_use]
 pub fn format_duplicate_confirm_body(existing: &AccountSummary) -> String {
     format!(
         "account already exists with the same (secret, issuer, label): {}",
-        display_label(existing),
+        summary_display_label(existing),
     )
 }
 

@@ -33,8 +33,8 @@ use relm4::prelude::*;
 use paladin_core::{select_after_filter, AccountId, AccountKindSummary, Vault};
 
 use crate::account_row::{
-    copy_enabled, display_label, kebab_visible, next_button_visible, progress_fraction,
-    progress_visible, CodeDisplay, CounterText, RowDisplay,
+    copy_enabled, kebab_visible, next_button_visible, progress_fraction, progress_visible,
+    summary_display_label, CodeDisplay, CounterText, RowDisplay,
 };
 use crate::icon_resolution::resolve_display_icon;
 use crate::search::filtered_account_ids;
@@ -219,7 +219,7 @@ pub struct AccountRowModel {
     /// menu, …) back to `paladin_core::Vault`.
     pub id: AccountId,
     /// Pre-formatted `<issuer>:<label>` heading per
-    /// [`crate::account_row::display_label`]. Empty / missing
+    /// [`crate::account_row::summary_display_label`]. Empty / missing
     /// issuer collapses to the bare label so the row never carries
     /// a dangling `:label` colon (parity with TUI / CLI).
     pub display_label: String,
@@ -255,7 +255,7 @@ pub fn row_models_from_vault(vault: &Vault) -> Vec<AccountRowModel> {
         .summaries()
         .map(|summary| AccountRowModel {
             id: summary.id,
-            display_label: display_label(&summary),
+            display_label: summary_display_label(&summary),
             kind: summary.kind,
             counter: summary.counter,
             icon_hint: summary.icon_hint.clone(),
@@ -283,7 +283,7 @@ pub fn row_model_for_account(vault: &Vault, id: AccountId) -> Option<AccountRowM
         .find(|summary| summary.id == id)
         .map(|summary| AccountRowModel {
             id: summary.id,
-            display_label: display_label(&summary),
+            display_label: summary_display_label(&summary),
             kind: summary.kind,
             counter: summary.counter,
             icon_hint: summary.icon_hint.clone(),

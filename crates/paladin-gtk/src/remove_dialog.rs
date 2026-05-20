@@ -52,21 +52,18 @@ use libadwaita::prelude::*;
 use relm4::gtk;
 use relm4::prelude::*;
 
-use paladin_core::{AccountId, AccountSummary, ErrorKind, PaladinError, Store, Vault};
+use paladin_core::{AccountId, ErrorKind, PaladinError, Store, Vault};
 
 /// Render the dialog's confirmation body label.
 ///
-/// Returns `<issuer>:<label>` when `issuer` is `Some(non_empty)` and
-/// the bare `label` otherwise. CLI / TUI parity: `Some("")` collapses
-/// to the no-issuer form so the body never renders a dangling
-/// `:label` colon for accounts imported / created without an issuer.
-#[must_use]
-pub fn summary_display_label(summary: &AccountSummary) -> String {
-    match summary.issuer.as_deref().filter(|i| !i.is_empty()) {
-        Some(issuer) => format!("{issuer}:{}", summary.label),
-        None => summary.label.clone(),
-    }
-}
+/// Re-exports [`crate::account_row::summary_display_label`] so the
+/// `RemoveDialog` confirmation body and the `AccountListComponent`
+/// row factory share a single source of truth for the
+/// `<issuer>:<label>` body shape. CLI / TUI parity: `Some("")`
+/// collapses to the no-issuer form so the body never renders a
+/// dangling `:label` colon for accounts imported / created without an
+/// issuer.
+pub use crate::account_row::summary_display_label;
 
 /// Build the defensive `account_not_found` error used inside the
 /// `Vault::mutate_and_save` closure when `Vault::remove` returns
@@ -474,11 +471,12 @@ pub struct RemoveDialogInit {
     /// `Vault::remove` inside `Vault::mutate_and_save` on confirm so
     /// the worker targets the same account the kebab dispatched.
     pub account_id: AccountId,
-    /// Pre-formatted `<issuer>:<label>` heading mirroring
-    /// `account_row::display_label` (and identical to
-    /// [`summary_display_label`]). Used as the dialog body so the
-    /// user can confirm which row they are removing. Empty issuer
-    /// collapses to the bare label (parity with the row projection).
+    /// Pre-formatted `<issuer>:<label>` heading from
+    /// [`summary_display_label`] (re-exported from
+    /// `account_row::summary_display_label`). Used as the dialog body
+    /// so the user can confirm which row they are removing. Empty
+    /// issuer collapses to the bare label (parity with the row
+    /// projection).
     pub display_label: String,
 }
 

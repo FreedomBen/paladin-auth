@@ -161,8 +161,9 @@ fn row_models_drop_empty_issuer_in_display_label() {
     let (mut vault, store) = open_plaintext_pair(&path);
 
     // Issuer-only-empty must collapse to the bare label so the row
-    // never carries a dangling `:label` colon (parity with
-    // `account_row::display_label` and `remove_dialog::summary_display_label`).
+    // never carries a dangling `:label` colon (parity with the
+    // canonical `account_row::summary_display_label`, also re-exported
+    // as `remove_dialog::summary_display_label`).
     add_totp(&mut vault, &store, Some(""), "alice");
 
     let rows = row_models_from_vault(&vault);
