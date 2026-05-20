@@ -62,6 +62,7 @@
 //! so `tests/gtk_smoke.rs` can assert which startup state was
 //! reached under `xvfb-run` without driving widgets.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime};
 
@@ -91,6 +92,12 @@ use crate::app::state::{
     OpenErrorOutcome, UnlockWorkerCompletion,
 };
 use crate::export_dialog::{ExportDialogComponent, ExportDialogInit, ExportDialogOutput};
+use crate::hotp_reveal::{
+    apply_advance_decision, apply_advance_outcome, expired_reveals,
+    format_hotp_advance_failed_toast, format_hotp_durability_unconfirmed_toast,
+    row_display_for_reveal, run_hotp_advance_worker, HotpAdvanceWorkerCompletion,
+    HotpAdvanceWorkerInput, RevealEffect, RevealWindow,
+};
 use crate::import_dialog::{ImportDialogComponent, ImportDialogInit, ImportDialogOutput};
 use crate::init_dialog::{
     format_init_dialog_marker, run_init_worker, InitDialogComponent, InitDialogInit, InitDialogMsg,
@@ -276,6 +283,26 @@ pub struct AppModel {
     /// be re-removed). See `IMPLEMENTATION_PLAN_04_GTK.md`
     /// §"Milestone 7 checklist" > TOTP ticker.
     ticker_source: Option<glib::SourceId>,
+    /// Open HOTP reveal windows keyed by [`paladin_core::AccountId`].
+    ///
+    /// Each entry's `code` field is wrapped in `Zeroizing<String>` so
+    /// dropping a window (replace on a re-press, expiry on the
+    /// ticker, or full map clear on `Locked` / `Quit`) zeroes the
+    /// visible digits in place. `AppModel::update` mutates the map
+    /// via [`apply_advance_decision`] on `HotpAdvanceWorkerCompleted`
+    /// and via [`expired_reveals`] on every `Tick`. See
+    /// `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" >
+    /// "HOTP reveal window behavior".
+    reveal_windows: HashMap<paladin_core::AccountId, RevealWindow>,
+    /// Reference-counted handle to the window's `adw::ToastOverlay`.
+    ///
+    /// `adw::ToastOverlay` is a `GObject`, so cloning it just bumps
+    /// the reference count rather than duplicating the widget. The
+    /// clone lets `AppModel::update` raise toasts (HOTP durability-
+    /// unconfirmed warning, HOTP advance failure) from the worker-
+    /// completion arms without rebuilding the overlay reference.
+    #[allow(dead_code)]
+    toast_overlay: adw::ToastOverlay,
 }
 
 impl std::fmt::Debug for AppModel {
@@ -331,6 +358,11 @@ impl std::fmt::Debug for AppModel {
                 "ticker_source",
                 &self.ticker_source.as_ref().map(|_| "<installed>"),
             )
+            .field(
+                "reveal_windows",
+                &format!("<{} open>", self.reveal_windows.len()),
+            )
+            .field("toast_overlay", &"<adw::ToastOverlay>")
             .finish()
     }
 }
@@ -703,6 +735,25 @@ pub enum AppMsg {
     /// [`crate::app::state::apply_add_vault_install_inplace`]
     /// unconditionally.
     AddWorkerCompleted(AddWorkerCompletion),
+    /// Posted by the `gio::spawn_blocking` worker that runs
+    /// `Vault::hotp_peek` + `Vault::hotp_advance` after it consumes
+    /// the bundled [`HotpAdvanceWorkerInput`] and reports its routed
+    /// outcome as a [`HotpAdvanceWorkerCompletion`] — the typed
+    /// [`crate::hotp_reveal::AdvanceOutcome`] bundled with the
+    /// `(Vault, Store)` pair returned by the worker.
+    ///
+    /// The handler reinstalls the pair into [`AppModel::vault`],
+    /// transitions `UnlockedBusy → Unlocked` via `state.leave_busy()`,
+    /// then routes the outcome through
+    /// [`crate::hotp_reveal::apply_advance_outcome`] +
+    /// [`crate::hotp_reveal::apply_advance_decision`] so the reveal-
+    /// window map gains (or replaces) the entry for the affected
+    /// account. The widget side-effect (cache rebind via
+    /// [`AccountListMsg::Tick`], optional `AdwToast` raised on the
+    /// `AdwToastOverlay`) follows the [`RevealEffect`] returned by
+    /// the reducer. See `IMPLEMENTATION_PLAN_04_GTK.md`
+    /// §"Milestone 7 checklist" > "HOTP reveal window behavior".
+    HotpAdvanceWorkerCompleted(HotpAdvanceWorkerCompletion),
     /// Forwarded from the live [`InitDialogComponent`] when the user
     /// submits the "Create vault" button
     /// ([`InitDialogOutput::SubmitCreate`]) or confirms the destructive
@@ -900,6 +951,7 @@ impl SimpleComponent for AppModel {
                 // so the post-init mount sites stay unchanged from
                 // before the overlay landed.
                 #[wrap(Some)]
+                #[name = "toast_overlay"]
                 set_content = &adw::ToastOverlay {
                     set_widget_name: format_app_toast_overlay_widget_name(),
 
@@ -1057,6 +1109,8 @@ impl SimpleComponent for AppModel {
             content: widgets.content.clone(),
             search_query: String::new(),
             ticker_source: None,
+            reveal_windows: HashMap::new(),
+            toast_overlay: widgets.toast_overlay.clone(),
         };
 
         // Install the TOTP ticker if the resolved startup state is
@@ -1086,6 +1140,10 @@ impl SimpleComponent for AppModel {
                 if let Some(source_id) = self.ticker_source.take() {
                     source_id.remove();
                 }
+                // Drop every open reveal so the `Zeroizing<String>`
+                // wrappers wipe the visible digits before the
+                // process exits.
+                self.reveal_windows.clear();
                 relm4::main_application().quit();
             }
             AppMsg::Tick {
@@ -1144,25 +1202,59 @@ impl SimpleComponent for AppModel {
                     }
                 }
             }
-            AppMsg::AccountListAction(AccountListOutput::AdvanceHotp(_id)) => {
-                // HOTP row "next" button dispatch landing site. The
-                // full `Vault::hotp_peek` + `Vault::hotp_advance`
-                // worker (per `IMPLEMENTATION_PLAN_04_GTK.md`
-                // §"Component tree" > `AccountRowComponent` and the
-                // §"HOTP reveal window behavior" cluster of the
-                // Milestone 7 checklist) lands in a follow-up commit
-                // that wires the `(Vault, Store)` round-trip,
-                // `EffectKind::HotpAdvance` busy-gating, and the
-                // `crate::hotp_reveal::apply_advance_outcome` reveal
-                // publication. This arm exists today so the
-                // dispatch pipeline (row button → action group →
-                // `dispatch_row_action` → `AccountListOutput` →
-                // `AppMsg`) is exhaustively matched and the action
-                // group's `next` activation has somewhere to land.
-                // Without this arm the compiler would refuse the
-                // new `AccountListOutput::AdvanceHotp` variant, so
-                // landing the dispatch wiring and the worker as one
-                // commit is impractical.
+            AppMsg::AccountListAction(AccountListOutput::AdvanceHotp(id)) => {
+                // HOTP row "next" button → `Vault::hotp_peek` +
+                // `Vault::hotp_advance` worker per
+                // `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7
+                // checklist" > "HOTP reveal window behavior". The
+                // worker takes the live `(Vault, Store)` pair by
+                // value, stages the pre-advance code via `hotp_peek`,
+                // then commits via `hotp_advance` + `mutate_and_save`
+                // and posts the outcome back as
+                // `AppMsg::HotpAdvanceWorkerCompleted`. The busy gate
+                // transitions `Unlocked → UnlockedBusy` before the
+                // spawn so a second click on any row is no-op until
+                // the worker returns and rolls the gate back.
+                let now = SystemTime::now();
+                let in_progress = match (self.state.as_ref(), self.vault.take()) {
+                    (Some(state), Some(pair)) => {
+                        if let Some(busy_state) = state.clone().enter_busy() {
+                            let (vault, store) = pair;
+                            Some((
+                                HotpAdvanceWorkerInput {
+                                    vault,
+                                    store,
+                                    account_id: id,
+                                    now,
+                                },
+                                busy_state,
+                            ))
+                        } else {
+                            // Stray dispatch from a non-`Unlocked`
+                            // state — reinstall the pair untouched so
+                            // `AppModel.vault` is not lost.
+                            self.vault = Some(pair);
+                            None
+                        }
+                    }
+                    (_, pair) => {
+                        if let Some(pair) = pair {
+                            self.vault = Some(pair);
+                        }
+                        None
+                    }
+                };
+                if let Some((input, busy_state)) = in_progress {
+                    self.state = Some(busy_state);
+                    let sender = sender.clone();
+                    gtk::glib::spawn_future_local(async move {
+                        let completion =
+                            gtk::gio::spawn_blocking(move || run_hotp_advance_worker(input))
+                                .await
+                                .expect("Vault::hotp_advance worker panicked");
+                        sender.input(AppMsg::HotpAdvanceWorkerCompleted(completion));
+                    });
+                }
             }
             AppMsg::AccountListAction(AccountListOutput::QueryChanged(query)) => {
                 // The user typed into the search bar. Cache the query
@@ -1955,6 +2047,47 @@ impl SimpleComponent for AppModel {
                     }
                 }
             }
+            AppMsg::HotpAdvanceWorkerCompleted(completion) => {
+                // Worker-outcome dispatch per `IMPLEMENTATION_PLAN_04_GTK.md`
+                // §"Milestone 7 checklist" > "HOTP reveal window
+                // behavior":
+                //
+                // * Reinstall the `(Vault, Store)` pair unconditionally
+                //   (the worker is authoritative for the post-advance
+                //   state — `mutate_and_save` already rolled back on
+                //   pre-commit failures).
+                // * Roll `UnlockedBusy → Unlocked` so the busy gate
+                //   releases. A non-busy source state is a benign
+                //   defensive case (a stray completion from a future
+                //   race); we leave the state untouched.
+                // * Route the typed `AdvanceOutcome` through the pure-
+                //   logic state machine (`apply_advance_outcome` +
+                //   `apply_advance_decision`) so the reveal-window map
+                //   gains / replaces the entry for the affected account
+                //   on success and on `save_durability_unconfirmed`,
+                //   and stays put on every other typed error.
+                // * Publish the visible code into the
+                //   `AccountListComponent` cache via
+                //   `AccountListMsg::Tick` so the row binds through
+                //   the freshly inserted `RowDisplay`.
+                // * Raise an `AdwToast` on the durability-unconfirmed
+                //   path (warning) and on every other failure (status
+                //   error) per the bullets in the plan.
+                let HotpAdvanceWorkerCompletion {
+                    outcome,
+                    vault,
+                    store,
+                } = completion;
+                self.vault = Some((vault, store));
+                if let Some(state) = self.state.take() {
+                    let new_state = state.clone().leave_busy().unwrap_or(state);
+                    self.state = Some(new_state);
+                }
+                let account_id = outcome.account_id;
+                let decision = apply_advance_outcome(outcome);
+                let effect = apply_advance_decision(&mut self.reveal_windows, decision);
+                self.publish_reveal_for(account_id, effect);
+            }
             AppMsg::AddWorkerCompleted(completion) => {
                 // Worker-outcome dispatch. Mirrors
                 // `RenameWorkerCompleted` / `RemoveWorkerCompleted`
@@ -2026,6 +2159,24 @@ impl SimpleComponent for AppModel {
         // dialog cancel) so this call is a benign no-op in the
         // common case.
         self.apply_ticker_transition(&sender);
+        self.prune_reveals_if_locked();
+    }
+}
+
+impl AppModel {
+    /// Drop every open HOTP reveal window when the app is no longer
+    /// in `Unlocked` / `UnlockedBusy`.
+    ///
+    /// The reveal-window map holds `Zeroizing<String>` codes that
+    /// must not outlive the unlocked session — clearing here on the
+    /// `Locked` / `Missing` / `StartupError` transitions ensures the
+    /// secret bytes are wiped in lockstep with the vault lock per
+    /// DESIGN.md §4.5 / §"Memory hygiene".
+    fn prune_reveals_if_locked(&mut self) {
+        let unlocked = self.state.as_ref().is_some_and(AppState::is_unlocked);
+        if !unlocked {
+            self.reveal_windows.clear();
+        }
     }
 }
 
@@ -2114,9 +2265,65 @@ impl AppModel {
         };
         let rows = filtered_row_models_from_vault(vault, &self.search_query);
         let outcome = tick(vault, &rows, wall_clock, monotonic, None);
-        let _ = monotonic; // reserved for the follow-up clipboard-wake commit
-        if !outcome.display_updates.is_empty() {
-            controller.emit(AccountListMsg::Tick(outcome.display_updates));
+        let mut updates = outcome.display_updates;
+
+        // HOTP reveal expiry: drop windows past their deadline and
+        // emit hidden RowDisplays so the row reverts to the stored
+        // next counter per `IMPLEMENTATION_PLAN_04_GTK.md`
+        // §"Milestone 7 checklist" > "Hide the code and revert to
+        // the stored next counter when the reveal deadline elapses."
+        let expired = expired_reveals(&self.reveal_windows, monotonic);
+        for id in &expired {
+            self.reveal_windows.remove(id);
+        }
+        for id in &expired {
+            if let Some(row) = rows.iter().find(|r| r.id == *id) {
+                updates.push((*id, hidden_row_display(row)));
+            }
+        }
+
+        if !updates.is_empty() {
+            controller.emit(AccountListMsg::Tick(updates));
+        }
+    }
+
+    /// Publish the per-row [`RowDisplay`] for the affected HOTP row
+    /// after [`apply_advance_decision`] mutated the reveal-window
+    /// map, plus the matching `AdwToast` surface.
+    ///
+    /// On [`RevealEffect::Refreshed`] the row's cache entry is
+    /// replaced with [`row_display_for_reveal`] so the live
+    /// `gtk::ListView` re-binds through the freshly inserted
+    /// [`RevealWindow`]. On [`RevealEffect::Refreshed`] with
+    /// `show_toast = true` the durability-unconfirmed toast also
+    /// fires. On [`RevealEffect::Retained`] no cache mutation is
+    /// needed; the row keeps its prior display and the generic
+    /// HOTP-advance-failed toast surfaces so the user sees the
+    /// failure surface per `IMPLEMENTATION_PLAN_04_GTK.md`
+    /// §"Milestone 7 checklist" > "surface the inline / status
+    /// error".
+    fn publish_reveal_for(&self, account_id: paladin_core::AccountId, effect: RevealEffect) {
+        match effect {
+            RevealEffect::Refreshed { show_toast } => {
+                if let (Some((vault, _)), Some(controller), Some(window)) = (
+                    self.vault.as_ref(),
+                    self.account_list.as_ref(),
+                    self.reveal_windows.get(&account_id),
+                ) {
+                    if let Some(summary) = vault.summaries().find(|s| s.id == account_id) {
+                        let display = row_display_for_reveal(&summary, window);
+                        controller.emit(AccountListMsg::Tick(vec![(account_id, display)]));
+                    }
+                }
+                if show_toast {
+                    self.toast_overlay
+                        .add_toast(adw::Toast::new(format_hotp_durability_unconfirmed_toast()));
+                }
+            }
+            RevealEffect::Retained => {
+                self.toast_overlay
+                    .add_toast(adw::Toast::new(format_hotp_advance_failed_toast()));
+            }
         }
     }
 

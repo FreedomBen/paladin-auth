@@ -1568,9 +1568,14 @@ sign-off.
     publishes a fresh `RowDisplay { progress: Some(_), .. }` through
     the existing `LiveDisplayCache`, so the bar updates in lockstep
     with the visible code without a separate signal.
-  - [ ] For HOTP rows, render the "next" button that activates the
+  - [x] For HOTP rows, render the "next" button that activates the
     `hotp_peek` / `hotp_advance` reveal worker (see "HOTP reveal"
-    item below).
+    item below). The `AccountListOutput::AdvanceHotp(AccountId)`
+    dispatch routes through `AppMsg::AccountListAction` into the
+    `gio::spawn_blocking` worker
+    (`crate::hotp_reveal::run_hotp_advance_worker`) that stages the
+    pre-advance code via `Vault::hotp_peek` and commits via
+    `Vault::hotp_advance`.
   - [ ] Add a copy button that copies the visible code to
     `gdk::Clipboard` and schedules clipboard auto-clear; disable
     copying on a hidden HOTP row.
@@ -1600,34 +1605,66 @@ sign-off.
   - [x] Tear down the ticker on `Locked` / `StartupError`
     transitions and reinstall on `Unlocked` so plaintext and
     encrypted vaults share the same lifecycle.
-- [ ] HOTP reveal window behavior
+- [x] HOTP reveal window behavior
   (`paladin_core::policy::hotp_reveal::deadline` driver,
   peek-stage-advance worker, restart-on-next semantics,
   hidden-state copy disabling).
-  - [ ] On row activation of "next", stage the would-be visible
+  - [x] On row activation of "next", stage the would-be visible
     `Code` from `Vault::hotp_peek` into a zeroizing pending slot
     before calling `Vault::hotp_advance` inside the spawn-blocking
-    worker.
-  - [ ] On worker success or `save_durability_unconfirmed`, publish
+    worker. (Lives in
+    `crate::hotp_reveal::run_hotp_advance_worker`; the worker
+    captures the pre-advance code through `StagedCode::from_code`
+    before calling `Vault::hotp_advance` so the staged bytes are
+    available for the `save_durability_unconfirmed` publication
+    path.)
+  - [x] On worker success or `save_durability_unconfirmed`, publish
     the staged code to the row's reveal slot and start the reveal
     timer from `paladin_core::policy::hotp_reveal::deadline(now)`.
-  - [ ] On `save_durability_unconfirmed`, additionally post an
+    (`apply_advance_outcome` → `apply_advance_decision` inserts the
+    `RevealWindow` into `AppModel::reveal_windows` keyed by
+    `AccountId`; `row_display_for_reveal` projects the live code
+    through `AccountListMsg::Tick` so the row binds through the
+    `LiveDisplayCache`.)
+  - [x] On `save_durability_unconfirmed`, additionally post an
     `AdwToast` carrying the committed-but-uncertain warning so the
-    row stays usable with the new code in hand.
-  - [ ] On worker pre-commit failure (`save_not_committed`) or any
+    row stays usable with the new code in hand. (Toast body lives
+    at `crate::hotp_reveal::format_hotp_durability_unconfirmed_toast`;
+    `RevealEffect::Refreshed { show_toast: true }` raises it on
+    `AppModel::toast_overlay`.)
+  - [x] On worker pre-commit failure (`save_not_committed`) or any
     other typed error, leave the previous reveal state unchanged
     (hidden if no reveal was open), zeroize the staged code, and
-    surface the inline / status error.
-  - [ ] Hide the code and revert to the stored next counter when
-    the reveal deadline elapses.
-  - [ ] Activating "next" during an open reveal advances again,
+    surface the inline / status error. (`AdvanceDecision::Retain`
+    drops the staged code via `Zeroizing<String>`; the matching
+    `RevealEffect::Retained` arm raises
+    `format_hotp_advance_failed_toast` on the overlay.)
+  - [x] Hide the code and revert to the stored next counter when
+    the reveal deadline elapses. (`AppModel::handle_tick` calls
+    `expired_reveals` against the monotonic clock, removes the
+    expired entries from `reveal_windows`, and re-emits
+    `AccountListMsg::Tick` with `hidden_row_display(row)` so the
+    row reverts to the stored next-counter projection.)
+  - [x] Activating "next" during an open reveal advances again,
     consumes a fresh `hotp_peek` / `hotp_advance` round trip, and
     restarts the reveal timer with the newly committed code.
-  - [ ] Hidden HOTP rows show the stored next counter as their
+    (`apply_advance_decision` overwrites the entry for the same
+    `AccountId`; the prior `RevealWindow` drops, zeroing its
+    `Zeroizing<String>` bytes in place. The new deadline rebases
+    on the worker's `completed_at`.)
+  - [x] Hidden HOTP rows show the stored next counter as their
     visible label; during reveal, the row shows the
-    `Code.counter_used` of the visible code until expiry.
-  - [ ] Disable copy on hidden HOTP rows; during reveal, copy
-    captures the visible code without advancing again.
+    `Code.counter_used` of the visible code until expiry. (Already
+    wired through `crate::account_row::counter_display` /
+    `project_row`: `None` visible code → `CounterText::Stored`;
+    `Some(code)` with `counter_used` set → `CounterText::Used`.)
+  - [x] Disable copy on hidden HOTP rows; during reveal, copy
+    captures the visible code without advancing again. (The pure-
+    logic side is in `crate::account_row::copy_enabled`, returning
+    `false` for HOTP rows without a visible code and `true` while a
+    `RevealWindow` is open; the copy button widget binding lands
+    alongside the copy / clipboard bullet earlier in the
+    `AccountRowComponent` cluster.)
 - [ ] Icon resolution (`gtk::IconTheme` lookup against
   `AccountSummary.icon_hint` with placeholder fallback).
   - [x] Implement `icons.rs` lookups against the system
