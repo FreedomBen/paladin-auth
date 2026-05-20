@@ -97,6 +97,9 @@ use crate::rename_dialog::{
     decide_rename_target, run_rename_worker, RenameDialogComponent, RenameDialogOutput,
     RenameWorkerCompletion,
 };
+use crate::settings::{
+    CommittedSettings, SettingsComponent, SettingsDialogInit, SettingsDialogOutput,
+};
 use crate::startup_error::{
     format_startup_error_marker, StartupError, StartupErrorComponent, StartupErrorInit,
 };
@@ -201,6 +204,13 @@ pub struct AppModel {
     /// dropped at the end of the [`AppMsg::OpenAddDialog`] handler.
     #[allow(dead_code)]
     add_dialog: Option<Controller<AddAccountComponent>>,
+    /// Live [`SettingsComponent`] controller when the user has
+    /// activated the application menu's Preferences entry. `None`
+    /// between activations. Held on `self` so the rendered
+    /// `AdwPreferencesDialog` is not dropped at the end of the
+    /// [`AppMsg::OpenPreferencesDialog`] handler.
+    #[allow(dead_code)]
+    settings_dialog: Option<Controller<SettingsComponent>>,
     /// Reference-counted handle to the window's content box.
     ///
     /// `gtk::Box` is a `GObject`, so cloning it just bumps the
@@ -244,6 +254,10 @@ impl std::fmt::Debug for AppModel {
                 &self.remove_dialog.as_ref().map(|_| "<mounted>"),
             )
             .field("add_dialog", &self.add_dialog.as_ref().map(|_| "<mounted>"))
+            .field(
+                "settings_dialog",
+                &self.settings_dialog.as_ref().map(|_| "<mounted>"),
+            )
             .field("content", &"<gtk::Box>")
             .finish()
     }
@@ -433,6 +447,16 @@ pub enum AppMsg {
     /// widget from the content tree. Submit / worker outputs land
     /// in follow-up commits alongside the editable form widgets.
     AddAccountAction(AddAccountOutput),
+    /// Forwarded from the live [`SettingsComponent`] when the user
+    /// interacts with the `AdwPreferencesDialog`. Today only
+    /// [`SettingsDialogOutput::Close`] is emitted — `AppModel`
+    /// responds by dropping the controller so the dialog disappears
+    /// and any in-flight pending spinner draft is discarded. Toggle
+    /// / spinner / debounce outputs that propagate
+    /// [`paladin_core::SettingPatch`] values to
+    /// `Vault::mutate_and_save` land in follow-up commits alongside
+    /// the editable rows in the dialog body.
+    SettingsDialogAction(SettingsDialogOutput),
     /// Forwarded from the live [`UnlockDialogComponent`] when the
     /// user submits a non-empty passphrase. Today only
     /// [`UnlockDialogOutput::SubmitLock`] is emitted — the
@@ -773,6 +797,7 @@ impl SimpleComponent for AppModel {
             rename_dialog: None,
             remove_dialog: None,
             add_dialog: None,
+            settings_dialog: None,
             content: widgets.content.clone(),
         };
 
@@ -918,18 +943,56 @@ impl SimpleComponent for AppModel {
                 // automatically when given any descendant.
                 build_app_about_dialog().present(Some(&self.content));
             }
-            AppMsg::OpenPreferencesDialog
-            | AppMsg::OpenImportDialog
-            | AppMsg::OpenExportDialog
-            | AppMsg::OpenPassphraseDialog => {
+            AppMsg::OpenPreferencesDialog => {
+                // Application menu "Preferences" activation. Mount a
+                // fresh `SettingsComponent` seeded with a snapshot of
+                // the live vault's `paladin_core::VaultSettings` and
+                // present the `AdwPreferencesDialog` parented at the
+                // content tree's toplevel. The dispatch edge is gated
+                // to [`AppState::Unlocked`] by
+                // `format_app_primary_menu_action_sensitivities`'s
+                // mutating-menu rule, but a stray dispatch from a
+                // future keyboard accelerator could still arrive in a
+                // non-unlocked state — defend against that here so
+                // the dialog never mounts over a `Missing` / `Locked`
+                // / `UnlockedBusy` / `StartupError` window.
+                if let Some(state) = self.state.as_ref() {
+                    if state.is_unlocked() {
+                        if let Some((vault, _)) = self.vault.as_ref() {
+                            let init = SettingsDialogInit {
+                                settings: CommittedSettings::from_vault_settings(vault.settings()),
+                            };
+                            let controller = SettingsComponent::builder()
+                                .launch(init)
+                                .forward(sender.input_sender(), AppMsg::SettingsDialogAction);
+                            controller.widget().present(Some(&self.content));
+                            self.settings_dialog = Some(controller);
+                        }
+                    }
+                }
+            }
+            AppMsg::SettingsDialogAction(SettingsDialogOutput::Close) => {
+                // User dismissed the `AdwPreferencesDialog`. Drop the
+                // live controller so the widget is released and any
+                // in-flight pending spinner draft is discarded.
+                // `adw::PreferencesDialog` self-detaches from its
+                // toplevel parent on close, so no `self.content.remove`
+                // is needed — unlike `AddAccountComponent` /
+                // `RenameDialogComponent` / `RemoveDialogComponent`
+                // which are appended into the content tree directly.
+                // Defensive: if the field is already `None`
+                // (controller swapped under us by a future race),
+                // this is a benign no-op.
+                self.settings_dialog = None;
+            }
+            AppMsg::OpenImportDialog | AppMsg::OpenExportDialog | AppMsg::OpenPassphraseDialog => {
                 // Mutating menu activations whose dispatch
                 // edges (action → AppMsg) have landed but
                 // whose widget-bearing dialog components have
                 // not yet. Each variant becomes its own arm
                 // with a distinct handler when the matching
-                // `SettingsComponent` / `ImportDialogComponent`
-                // / `ExportDialogComponent` /
-                // `PassphraseDialogComponent` mount lands in
+                // `ImportDialogComponent` / `ExportDialogComponent`
+                // / `PassphraseDialogComponent` mount lands in
                 // follow-up commits.
                 //
                 // Defense in depth: every variant in the

@@ -46,6 +46,10 @@
 //! re-exposed surface, and both route through `paladin-core`
 //! constants / typed setters.
 
+use libadwaita as adw;
+use libadwaita::prelude::*;
+use relm4::prelude::*;
+
 use paladin_core::{
     ErrorKind, PaladinError, SettingPatch, AUTO_LOCK_SECS_MAX, AUTO_LOCK_SECS_MIN,
     CLIPBOARD_CLEAR_SECS_MAX, CLIPBOARD_CLEAR_SECS_MIN,
@@ -1522,5 +1526,112 @@ impl SettingsState {
             AcceptedChange::ClipboardClearEnabled(v) => self.committed.clipboard_clear_enabled = v,
             AcceptedChange::ClipboardClearSecs(v) => self.committed.clipboard_clear_secs = v,
         }
+    }
+}
+
+/// Construction parameters for [`SettingsComponent`].
+///
+/// The dialog opens on a snapshot of the current `paladin_core::VaultSettings`
+/// (captured via [`CommittedSettings::from_vault_settings`] at the call site
+/// in `AppModel`), so the component can seed its [`SettingsState`] without
+/// holding a live `Vault` reference across the controller boundary.
+#[derive(Debug, Clone)]
+pub struct SettingsDialogInit {
+    /// On-disk settings snapshot the dialog renders.
+    pub settings: CommittedSettings,
+}
+
+/// Messages handled by [`SettingsComponent`].
+///
+/// This milestone scaffolds the read-only `AdwPreferencesDialog` mount;
+/// the toggle / spinner / debounce-tick / save-result transitions
+/// described in `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+/// `SettingsComponent` land in follow-up commits alongside the
+/// live-apply behavior. The empty enum is the deliberate v0.2 starting
+/// point — relm4 requires the associated `Input` type to exist even
+/// when no inbound messages are wired yet.
+#[derive(Debug)]
+pub enum SettingsDialogMsg {}
+
+/// Messages emitted by [`SettingsComponent`] for `AppModel` to consume.
+///
+/// `AppModel` forwards these into `AppMsg::SettingsDialogAction(...)`;
+/// the dispatch arm drops the live `Controller<SettingsComponent>` so
+/// the underlying `AdwPreferencesDialog` is torn down. Toggle / spinner
+/// outputs that propagate accepted [`SettingPatch`] values to
+/// `Vault::mutate_and_save` land in the same follow-up commits that
+/// add the matching [`SettingsDialogMsg`] variants.
+#[derive(Debug, Clone)]
+pub enum SettingsDialogOutput {
+    /// User dismissed the dialog (Close button / Escape / window
+    /// close). `AppModel` responds by dropping the live controller
+    /// so the dialog disappears and any in-flight pending spinner
+    /// draft is discarded.
+    Close,
+}
+
+/// Widget-bearing `AdwPreferencesDialog` for the Preferences menu entry.
+///
+/// Mounts the libadwaita preferences surface described in DESIGN.md §7
+/// (`SettingsComponent`) and `IMPLEMENTATION_PLAN_04_GTK.md`
+/// §"Component tree" > `SettingsComponent`. The widget body is a
+/// read-only scaffold at this milestone: two `AdwPreferencesGroup`
+/// sections, titled via the existing
+/// `format_settings_dialog_auto_lock_group_title` /
+/// `format_settings_dialog_clipboard_clear_group_title` helpers, so
+/// the wording stays in lock-step with the pure-logic tests in
+/// `tests/settings_logic.rs`. Follow-up commits attach the
+/// `AdwSwitchRow` toggles and `AdwSpinRow` spinners that drive
+/// [`SettingsState`] / [`SettingPatch`] live-apply.
+pub struct SettingsComponent {
+    /// Live state machine seeded from [`SettingsDialogInit::settings`]
+    /// in `init`. Kept on `self` so the upcoming toggle / spinner
+    /// message handlers can mutate it without re-plumbing the value
+    /// through every signal. The pure-logic round-trip is asserted by
+    /// `tests/settings_logic.rs`.
+    #[allow(dead_code)]
+    state: SettingsState,
+}
+
+#[allow(missing_docs)]
+#[relm4::component(pub)]
+impl SimpleComponent for SettingsComponent {
+    type Init = SettingsDialogInit;
+    type Input = SettingsDialogMsg;
+    type Output = SettingsDialogOutput;
+
+    view! {
+        #[root]
+        adw::PreferencesDialog {
+            set_title: format_settings_dialog_title(),
+            set_search_enabled: format_settings_dialog_search_enabled(),
+
+            add = &adw::PreferencesPage {
+                add = &adw::PreferencesGroup {
+                    set_title: format_settings_dialog_auto_lock_group_title(),
+                },
+
+                add = &adw::PreferencesGroup {
+                    set_title: format_settings_dialog_clipboard_clear_group_title(),
+                },
+            },
+        }
+    }
+
+    fn init(
+        init: Self::Init,
+        root: Self::Root,
+        _sender: ComponentSender<Self>,
+    ) -> ComponentParts<Self> {
+        let state = SettingsState::new(init.settings);
+        let model = SettingsComponent { state };
+        let widgets = view_output!();
+        ComponentParts { model, widgets }
+    }
+
+    fn update(&mut self, _msg: Self::Input, _sender: ComponentSender<Self>) {
+        // No inbound messages handled at this milestone — see
+        // `SettingsDialogMsg` doc comment for the upcoming
+        // toggle / spinner / debounce / save-result transitions.
     }
 }

@@ -2386,3 +2386,58 @@ fn format_settings_dialog_saved_toast_timeout_returns_five_seconds() {
         "toast timeout matches the AdwToast default the body wording was sized for",
     );
 }
+
+// ---------------------------------------------------------------------------
+// SettingsComponent scaffold (Milestone 7 component-tree wiring)
+// ---------------------------------------------------------------------------
+//
+// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" entry
+// "Relm4 component tree (Init / Unlock / List / Row / Add / Remove /
+// Rename / Import / Export / Passphrase / Settings / StartupError)",
+// `SettingsComponent` joins the seven already-mounted controllers
+// (`AccountListComponent`, `StartupErrorComponent`,
+// `InitDialogComponent`, `UnlockDialogComponent`,
+// `RenameDialogComponent`, `RemoveDialogComponent`,
+// `AddAccountComponent`) with the same scaffold shape:
+// `<Name>Init` / `<Name>Msg` / `<Name>Output` plus a
+// `relm4::SimpleComponent` impl. The widget body of the
+// `AdwPreferencesDialog` (toggles + spinners + debounce) lands in
+// follow-up commits alongside the live-apply behavior — this
+// commit only adds the controller so the menu's Preferences entry
+// can mount it.
+
+#[test]
+fn settings_dialog_init_round_trips_committed_settings() {
+    use paladin_gtk::settings::SettingsDialogInit;
+
+    let snapshot = defaults();
+    let init = SettingsDialogInit { settings: snapshot };
+    assert_eq!(init.settings, snapshot);
+}
+
+#[test]
+fn settings_dialog_output_close_is_constructible() {
+    use paladin_gtk::settings::SettingsDialogOutput;
+
+    let output = SettingsDialogOutput::Close;
+    assert!(matches!(output, SettingsDialogOutput::Close));
+}
+
+#[test]
+fn settings_component_input_and_output_match_dispatch_edges() {
+    use paladin_gtk::settings::{SettingsComponent, SettingsDialogMsg, SettingsDialogOutput};
+    use relm4::SimpleComponent;
+
+    // Compile-only assertion that ties `SettingsComponent` to its
+    // associated `Input` / `Output` types so the AppModel dispatch
+    // edges stay in lock-step with the component declaration. If a
+    // future refactor renames `SettingsDialogMsg` or
+    // `SettingsDialogOutput`, this test fails at compile time
+    // before the AppModel build does.
+    fn assert_types<C>()
+    where
+        C: SimpleComponent<Input = SettingsDialogMsg, Output = SettingsDialogOutput>,
+    {
+    }
+    assert_types::<SettingsComponent>();
+}
