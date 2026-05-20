@@ -453,7 +453,7 @@ pub struct AccountListComponent {
 ///   flips. Drives the `gtk::SearchBar`'s `search-mode-enabled`
 ///   property so the bar reveals / hides in lockstep with the
 ///   toggle.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AccountListMsg {
     /// New query text from the `gtk::SearchEntry`'s `search-changed`
     /// signal.

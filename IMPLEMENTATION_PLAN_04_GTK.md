@@ -1521,14 +1521,14 @@ sign-off.
 - [ ] `AccountListComponent` full implementation (`gtk::ListView` +
   factory + `gio::ListStore`, search bar + entry, selection
   management).
-  - [ ] Build a `gio::ListStore<BoxedAnyObject<AccountRowModel>>`
+  - [x] Build a `gio::ListStore<BoxedAnyObject<AccountRowModel>>`
     seeded from `Vault::iter()` projected through
     `paladin_core::AccountSummary` (no secret bytes leave
     `paladin_core`).
   - [ ] Mount a `gtk::ListView` bound to the store via a
     `SignalListItemFactory` whose row body is the
     `AccountRowComponent` (see the row item below).
-  - [ ] Host a `gtk::SearchEntry` inside a `gtk::SearchBar` whose
+  - [x] Host a `gtk::SearchEntry` inside a `gtk::SearchBar` whose
     `search-mode-enabled` is bound to the header-bar search-toggle
     button.
   - [x] On query change, rebuild the list by calling

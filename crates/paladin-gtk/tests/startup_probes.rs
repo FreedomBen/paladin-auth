@@ -445,6 +445,236 @@ fn format_app_search_button_tooltip_is_non_empty() {
 }
 
 #[test]
+fn format_app_search_button_visible_returns_true_when_a_vault_is_open() {
+    // Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+    // `AccountListComponent`: the search-toggle header-bar
+    // affordance toggles the `gtk::SearchBar` inside
+    // `AccountListComponent`, which is only mounted while the
+    // vault is open. The toggle is therefore hidden in every
+    // non-vault-open state — `Missing` / `Locked` /
+    // `StartupError` — and stays visible during
+    // `UnlockedBusy` so the affordance does not disappear when
+    // a vault worker spawns. The split matches
+    // `state.is_unlocked()` (true for `Unlocked` and
+    // `UnlockedBusy`), mirroring the `+` button rule in
+    // `format_app_add_button_visible`. This helper pins the
+    // visibility rule through one source of truth so the
+    // widget binding does not hand-spell `state.is_unlocked()`
+    // inline.
+    use paladin_core::ErrorKind;
+    use paladin_gtk::app::model::format_app_search_button_visible;
+    use paladin_gtk::app::state::AppState;
+    use paladin_gtk::startup_error::{StartupError, StartupErrorSource};
+
+    for visible in [
+        AppState::Unlocked {
+            path: std::path::PathBuf::from("/dev/null"),
+        },
+        AppState::UnlockedBusy {
+            path: std::path::PathBuf::from("/dev/null"),
+        },
+    ] {
+        assert!(
+            format_app_search_button_visible(&visible),
+            "{visible:?} must show the search-toggle button (vault is open)",
+        );
+    }
+
+    for hidden in [
+        AppState::Missing {
+            path: std::path::PathBuf::from("/dev/null"),
+        },
+        AppState::Locked {
+            path: std::path::PathBuf::from("/dev/null"),
+        },
+        AppState::StartupError {
+            path: None,
+            error: StartupError {
+                source: StartupErrorSource::PathResolution,
+                kind: ErrorKind::IoError,
+                rendered: String::from("resolve_failed"),
+            },
+        },
+    ] {
+        assert!(
+            !format_app_search_button_visible(&hidden),
+            "no-vault-open state must hide the search-toggle button per §\"Component tree\" > AccountListComponent; got visible for {hidden:?}",
+        );
+    }
+}
+
+#[test]
+fn format_app_search_button_visible_matches_format_app_add_button_visible() {
+    // Cross-check: the search-toggle and `+` button share one
+    // visibility rule — both are header-bar affordances tied
+    // to the vault-open state. A drift between the two would
+    // surface a half-visible header bar in `UnlockedBusy` (or
+    // in `Locked`) which has no meaning in the §"libadwaita
+    // usage" rules. Pinning the equivalence guards against
+    // an accidental divergence (e.g. someone tightening one
+    // to `allows_mutating_menu` without the other).
+    use paladin_core::ErrorKind;
+    use paladin_gtk::app::model::{
+        format_app_add_button_visible, format_app_search_button_visible,
+    };
+    use paladin_gtk::app::state::AppState;
+    use paladin_gtk::startup_error::{StartupError, StartupErrorSource};
+
+    for state in [
+        AppState::Unlocked {
+            path: std::path::PathBuf::from("/dev/null"),
+        },
+        AppState::Missing {
+            path: std::path::PathBuf::from("/dev/null"),
+        },
+        AppState::Locked {
+            path: std::path::PathBuf::from("/dev/null"),
+        },
+        AppState::UnlockedBusy {
+            path: std::path::PathBuf::from("/dev/null"),
+        },
+        AppState::StartupError {
+            path: None,
+            error: StartupError {
+                source: StartupErrorSource::PathResolution,
+                kind: ErrorKind::IoError,
+                rendered: String::from("resolve_failed"),
+            },
+        },
+    ] {
+        assert_eq!(
+            format_app_search_button_visible(&state),
+            format_app_add_button_visible(&state),
+            "search-toggle and `+` button must share one visibility rule for {state:?}",
+        );
+    }
+}
+
+#[test]
+fn apply_app_search_button_visibility_updates_existing_button_for_a_new_state() {
+    // Per §"libadwaita usage" and §"Component tree": when
+    // `AppModel` transitions between states the search-toggle
+    // header-bar affordance must hide/reveal in lockstep with
+    // `format_app_search_button_visible`. This helper covers
+    // the runtime-update side: a `gtk::ToggleButton` already
+    // mounted in the header bar gets `set_visible` called
+    // with the new state's value without re-creating the
+    // widget. Mirrors `apply_app_add_button_visibility` on
+    // the `+` button side.
+    use libadwaita::prelude::*;
+    use paladin_core::ErrorKind;
+    use paladin_gtk::app::model::{
+        apply_app_search_button_visibility, format_app_search_button_visible,
+    };
+    use paladin_gtk::app::state::AppState;
+    use paladin_gtk::startup_error::{StartupError, StartupErrorSource};
+
+    // `gtk::init` must run before `gtk::ToggleButton::new`
+    // will construct successfully. On dev environments without
+    // a display server we skip rather than fail — CI runs
+    // under `xvfb-run` per the Milestone 7 checklist.
+    if gtk4::init().is_err() {
+        println!("skipping: gtk::init failed (no display server); CI covers this under xvfb-run");
+        return;
+    }
+
+    let button = gtk4::ToggleButton::new();
+    // Pre-set the button to the opposite of the starting
+    // expectation so the assertion proves the helper applies
+    // the rule rather than reading whatever the constructor
+    // happened to default to.
+    button.set_visible(false);
+
+    let unlocked = AppState::Unlocked {
+        path: std::path::PathBuf::from("/dev/null"),
+    };
+    apply_app_search_button_visibility(&button, &unlocked);
+    assert_eq!(
+        button.is_visible(),
+        format_app_search_button_visible(&unlocked),
+        "apply_app_search_button_visibility must apply format_app_search_button_visible for the Unlocked state",
+    );
+    assert!(
+        button.is_visible(),
+        "Unlocked state must show the search-toggle button per §\"Component tree\" > AccountListComponent",
+    );
+
+    let locked = AppState::Locked {
+        path: std::path::PathBuf::from("/dev/null"),
+    };
+    apply_app_search_button_visibility(&button, &locked);
+    assert_eq!(
+        button.is_visible(),
+        format_app_search_button_visible(&locked),
+        "apply_app_search_button_visibility must apply format_app_search_button_visible for the Locked state",
+    );
+    assert!(
+        !button.is_visible(),
+        "Locked state must hide the search-toggle button per §\"Component tree\" > AccountListComponent",
+    );
+
+    let busy = AppState::UnlockedBusy {
+        path: std::path::PathBuf::from("/dev/null"),
+    };
+    apply_app_search_button_visibility(&button, &busy);
+    assert_eq!(
+        button.is_visible(),
+        format_app_search_button_visible(&busy),
+        "apply_app_search_button_visibility must apply format_app_search_button_visible for the UnlockedBusy state",
+    );
+    assert!(
+        button.is_visible(),
+        "UnlockedBusy state must keep the search-toggle button visible — the SearchBar filter is non-mutating",
+    );
+
+    let errored = AppState::StartupError {
+        path: None,
+        error: StartupError {
+            source: StartupErrorSource::PathResolution,
+            kind: ErrorKind::IoError,
+            rendered: String::from("resolve_failed"),
+        },
+    };
+    apply_app_search_button_visibility(&button, &errored);
+    assert_eq!(
+        button.is_visible(),
+        format_app_search_button_visible(&errored),
+        "apply_app_search_button_visibility must apply format_app_search_button_visible for the StartupError state",
+    );
+    assert!(
+        !button.is_visible(),
+        "StartupError state must hide the search-toggle button — no vault is open to search",
+    );
+}
+
+#[test]
+fn format_app_search_toggle_msg_active_emits_set_search_mode_enabled_true() {
+    // The header-bar `gtk::ToggleButton::connect_toggled`
+    // handler is wired to dispatch through this helper so the
+    // active-flag → `AccountListMsg::SetSearchModeEnabled`
+    // mapping stays in pure logic. When the user toggles the
+    // header-bar button on, the SearchBar inside
+    // `AccountListComponent` must reveal — i.e. `set_search_mode(true)`
+    // — and vice versa. Pinning the mapping in a helper means
+    // the widget binding does not hand-spell the
+    // `active → AccountListMsg::SetSearchModeEnabled` projection
+    // inline.
+    use paladin_gtk::account_list::AccountListMsg;
+    use paladin_gtk::app::model::format_app_search_toggle_msg;
+
+    assert_eq!(
+        format_app_search_toggle_msg(true),
+        AccountListMsg::SetSearchModeEnabled(true),
+        "toggling the search-toggle button on must dispatch SetSearchModeEnabled(true) to reveal the SearchBar",
+    );
+    assert_eq!(
+        format_app_search_toggle_msg(false),
+        AccountListMsg::SetSearchModeEnabled(false),
+        "toggling the search-toggle button off must dispatch SetSearchModeEnabled(false) to hide the SearchBar",
+    );
+}
+
+#[test]
 fn format_app_menu_button_icon_name_returns_open_menu_symbolic() {
     // The `AppModel`'s header-bar primary `gtk::MenuButton`'s
     // `set_icon_name` attribute is populated from this helper.

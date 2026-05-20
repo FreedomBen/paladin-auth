@@ -328,6 +328,17 @@ pub enum AppMsg {
     /// editable / destructive chrome and the `Vault::mutate_and_save`
     /// workers land in follow-up commits.
     AccountListAction(AccountListOutput),
+    /// Posted by the header-bar search-toggle `gtk::ToggleButton`'s
+    /// `connect_toggled` handler with the toggle's new `is_active`
+    /// state. The handler routes through [`format_app_search_toggle_msg`]
+    /// to emit [`AccountListMsg::SetSearchModeEnabled`] on the live
+    /// [`AccountListComponent`] controller so the `gtk::SearchBar`
+    /// reveals / hides in lockstep with the toggle. The search-toggle
+    /// button is only visible per [`format_app_search_button_visible`]
+    /// when the vault is open, so this message arriving in any other
+    /// state is a benign no-op — `AppModel` drops it when
+    /// [`AppModel::account_list`] is `None`.
+    SearchToggled(bool),
     /// Forwarded from the live [`RenameDialogComponent`] when the
     /// user interacts with the dialog. Today only
     /// [`RenameDialogOutput::Cancel`] is emitted — `AppModel`
@@ -794,6 +805,23 @@ impl SimpleComponent for AppModel {
                     pack_end = &gtk::ToggleButton {
                         set_icon_name: format_app_search_button_icon_name(),
                         set_tooltip_text: Some(format_app_search_button_tooltip()),
+                        // Initial visibility tracks the resolved
+                        // startup state through the pinned
+                        // `format_app_search_button_visible`
+                        // helper — mirrors the `+` button rule so
+                        // both header-bar affordances appear / hide
+                        // together with the vault-open state.
+                        // `connect_toggled` posts
+                        // `AppMsg::SearchToggled(active)` so the
+                        // update handler emits
+                        // `AccountListMsg::SetSearchModeEnabled` to
+                        // the live `AccountListComponent` controller
+                        // (and silently drops the message in states
+                        // where the controller is not mounted).
+                        set_visible: format_app_search_button_visible(&state),
+                        connect_toggled[sender] => move |btn| {
+                            sender.input(AppMsg::SearchToggled(btn.is_active()));
+                        },
                     },
                 },
 
@@ -1051,6 +1079,20 @@ impl SimpleComponent for AppModel {
                     let rows = filtered_row_models_from_vault(vault, &query);
                     let selection = selected_row_after_refresh(None, &rows);
                     controller.emit(AccountListMsg::Refresh { rows, selection });
+                }
+            }
+            AppMsg::SearchToggled(active) => {
+                // The header-bar search-toggle `gtk::ToggleButton`
+                // fired `connect_toggled`. Forward the new active
+                // state to the live `AccountListComponent` through
+                // the pinned `format_app_search_toggle_msg` mapping
+                // so the `gtk::SearchBar` reveals / hides in
+                // lockstep with the toggle. If the controller is
+                // not mounted (e.g. the user managed to fire the
+                // signal through a keyboard shortcut while the
+                // button was hidden), this is a benign no-op.
+                if let Some(controller) = self.account_list.as_ref() {
+                    controller.emit(format_app_search_toggle_msg(active));
                 }
             }
             AppMsg::RenameDialogAction(RenameDialogOutput::Cancel) => {
@@ -3316,6 +3358,97 @@ pub fn apply_app_add_action_sensitivity(action: &gtk::gio::SimpleAction, state: 
 /// Pure side-effect helper (no return value).
 pub fn apply_app_add_button_visibility(button: &gtk::Button, state: &AppState) {
     button.set_visible(format_app_add_button_visible(state));
+}
+
+/// Per-state visibility flag the widget binding hands to the
+/// header-bar search-toggle `gtk::ToggleButton::set_visible`.
+///
+/// Returns the value of [`AppState::is_unlocked`] — `true`
+/// when `AppModel` is in [`AppState::Unlocked`] or
+/// [`AppState::UnlockedBusy`] (the vault is open and
+/// `AccountListComponent` is mounted in either case), `false`
+/// otherwise (`Missing` / `Locked` / `StartupError`). The
+/// search-toggle is hidden entirely before a vault is open
+/// because the `gtk::SearchBar` it controls only exists inside
+/// `AccountListComponent` — the user cannot search what is not
+/// mounted. Stays visible during `UnlockedBusy` so the
+/// affordance does not disappear when a vault worker spawns;
+/// the search filter itself is non-mutating and remains
+/// available regardless of the worker. Mirrors the
+/// [`format_app_add_button_visible`] split on the `+` button
+/// side so both header-bar affordances follow one rule.
+///
+/// Pinning the rule through a helper keeps the widget binding
+/// free of bare `state.is_unlocked()` reads shared between
+/// `view!` and any future runtime visibility update. Sibling
+/// of [`format_app_add_button_visible`] on the header-bar-
+/// visibility side; together they pin both header-bar
+/// affordances' visibility against a single source of truth.
+///
+/// Pure — returns a `bool` without allocating.
+#[must_use]
+pub fn format_app_search_button_visible(state: &AppState) -> bool {
+    state.is_unlocked()
+}
+
+/// Apply the per-state visibility returned by
+/// [`format_app_search_button_visible`] to an existing
+/// header-bar search-toggle [`gtk::ToggleButton`].
+///
+/// Calls [`gtk::prelude::WidgetExt::set_visible`] on `button`
+/// with [`format_app_search_button_visible`]'s value for the
+/// supplied `state`. The widget binding calls this helper from
+/// [`AppMsg`] state-transition arms ([`AppState::Missing`] /
+/// [`AppState::Locked`] / [`AppState::Unlocked`] /
+/// [`AppState::UnlockedBusy`] / [`AppState::StartupError`]) so
+/// the search-toggle is hidden entirely whenever `AppModel`
+/// leaves a vault-open state and re-appears when a vault is
+/// open again — mirrors [`apply_app_add_button_visibility`] on
+/// the `+`-button side so both header-bar affordances toggle
+/// together.
+///
+/// Centralizing the runtime visibility application in one
+/// helper means the search-toggle's `set_visible` call site
+/// stays sourced exclusively from
+/// [`format_app_search_button_visible`] — the widget binding
+/// never hand-spells a bare `state.is_unlocked()` read inline.
+/// Sibling of [`apply_app_add_button_visibility`] on the
+/// runtime-update side; together they pin every state-change
+/// visibility update for both header-bar affordances against
+/// the pinned format helpers.
+///
+/// Pure side-effect helper (no return value).
+pub fn apply_app_search_button_visibility(button: &gtk::ToggleButton, state: &AppState) {
+    button.set_visible(format_app_search_button_visible(state));
+}
+
+/// Map the header-bar search-toggle `gtk::ToggleButton`'s
+/// `is_active` flag onto the [`AccountListMsg`] the live
+/// [`AccountListComponent`] consumes.
+///
+/// The `connect_toggled` handler in `view!` posts
+/// [`AppMsg::SearchToggled`] with the toggle's new `is_active`
+/// state; the update arm calls this helper to derive the
+/// matching [`AccountListMsg::SetSearchModeEnabled`] payload
+/// before emitting it on the controller. Pinning the mapping
+/// in a pure helper means the widget binding never hand-spells
+/// the `active → AccountListMsg::SetSearchModeEnabled`
+/// projection inline, and a future change (e.g. a guard
+/// preventing the bar from opening during an in-flight
+/// passphrase transition) reverberates through one call site.
+///
+/// Returns [`AccountListMsg::SetSearchModeEnabled(active)`]:
+/// `true` reveals the `gtk::SearchBar` inside
+/// `AccountListComponent`, `false` hides it. Sibling of the
+/// [`AccountListOutput::QueryChanged`] dispatch on the
+/// search-bar text side; together they cover both halves of
+/// the user-driven search-bar surface.
+///
+/// Pure — `active` is consumed by value, no I/O, no
+/// allocation.
+#[must_use]
+pub fn format_app_search_toggle_msg(active: bool) -> AccountListMsg {
+    AccountListMsg::SetSearchModeEnabled(active)
 }
 
 /// Apply the per-state sensitivity returned by
