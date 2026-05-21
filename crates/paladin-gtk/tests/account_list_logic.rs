@@ -374,6 +374,103 @@ fn filtered_row_models_after_vault_rename_updates_label_in_place() {
     );
 }
 
+#[test]
+fn row_models_after_sequence_of_add_rename_remove_preserves_surviving_order() {
+    // End-to-end pin for `IMPLEMENTATION_PLAN_04_GTK.md` §"Component
+    // tree" > `AccountListComponent`: "Refresh the store after every
+    // vault mutation (Add / Remove / Rename / Import / settings change
+    // that toggles a row's presentation) **without reordering
+    // surviving rows**".
+    //
+    // `AppModel::refresh_account_list` re-projects through
+    // `filtered_row_models_from_vault` after every mutating worker
+    // outcome that sets `dispatch.refresh_list = true`
+    // (`should_refresh_list_after_{add,remove,rename}` in
+    // `paladin_gtk::app::state`). The single-mutation tests above pin
+    // the projection's ordering guarantee per mutation kind; this test
+    // pins the same guarantee across a multi-mutation session
+    // (Add → Rename → Remove) so a future regression that depends on
+    // composition order would surface here.
+    //
+    // Import (`IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+    // `ImportDialog` → "On success, refresh `AccountListComponent`
+    // from the returned vault") plugs into the same
+    // `filtered_row_models_from_vault` helper once
+    // `ImportDialogComponent` lands, so the ordering invariant carries
+    // forward to that path without re-deriving it. The auto-lock /
+    // clipboard-clear settings managed by `SettingsComponent` do not
+    // toggle row presentation, so no settings-driven refresh is
+    // expected today.
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+
+    let a = add_totp(&mut vault, &store, Some("Acme"), "alice");
+    let b = add_totp(&mut vault, &store, Some("Acme"), "bob");
+    let c = add_totp(&mut vault, &store, Some("Acme"), "carol");
+
+    // Step 1: append a fresh row at the tail.
+    let d = add_totp(&mut vault, &store, Some("Acme"), "dan");
+    let after_add: Vec<AccountId> = filtered_row_models_from_vault(&vault, "")
+        .iter()
+        .map(|r| r.id)
+        .collect();
+    assert_eq!(
+        after_add,
+        vec![a, b, c, d],
+        "Add: prior rows hold their positions and the new row lands at the tail",
+    );
+
+    // Step 2: rename a middle row to a lexicographically earlier
+    // label. Surviving positions must not reshuffle — the §6 / §7
+    // ordering rule is vault-insertion order, not display-label
+    // order.
+    vault
+        .rename(b, "aardvark", SystemTime::now())
+        .expect("rename succeeds");
+    vault.save(&store).expect("commit rename");
+    let after_rename = filtered_row_models_from_vault(&vault, "");
+    let after_rename_ids: Vec<AccountId> = after_rename.iter().map(|r| r.id).collect();
+    assert_eq!(
+        after_rename_ids,
+        vec![a, b, c, d],
+        "Rename: row positions are unchanged even when the new label sorts earlier alphabetically",
+    );
+    assert_eq!(
+        after_rename[1].display_label, "Acme:aardvark",
+        "Rename: row carries the freshly-projected display label so the refresh re-renders it",
+    );
+
+    // Step 3: remove a middle row; the gap closes in vault order
+    // (no swap with the tail).
+    vault.remove(c);
+    vault.save(&store).expect("commit removal");
+    let after_remove: Vec<AccountId> = filtered_row_models_from_vault(&vault, "")
+        .iter()
+        .map(|r| r.id)
+        .collect();
+    assert_eq!(
+        after_remove,
+        vec![a, b, d],
+        "Remove: surviving rows keep their relative order; the trailing row does not slide into the gap",
+    );
+
+    // Step 4: an active search filter survives the same multi-mutation
+    // session — `AppModel::refresh_account_list` passes
+    // `Self::search_query` into the projection, so the filtered view
+    // observes the same ordering guarantee against the post-mutation
+    // vault.
+    let filtered: Vec<AccountId> = filtered_row_models_from_vault(&vault, "acme")
+        .iter()
+        .map(|r| r.id)
+        .collect();
+    assert_eq!(
+        filtered,
+        vec![a, b, d],
+        "Filtered refresh sees the post-mutation vault in insertion order",
+    );
+}
+
 // Variant of `add_totp` that lets a test specify the icon-hint mode
 // (Default / Clear / explicit Slug) — the default helpers above always
 // pass `IconHintInput::Default`, which is the right contract for the

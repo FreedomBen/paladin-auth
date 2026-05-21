@@ -1518,7 +1518,7 @@ sign-off.
     error text fallback so wording matches the CLI / TUI exactly.
   - [x] Zeroize the passphrase widget buffer on submit / cancel /
     dialog close / auto-lock per §"Secret entry handling".
-- [ ] `AccountListComponent` full implementation (`gtk::ListView` +
+- [x] `AccountListComponent` full implementation (`gtk::ListView` +
   factory + `gio::ListStore`, search bar + entry, selection
   management).
   - [x] Build a `gio::ListStore<BoxedAnyObject<AccountRowModel>>`
@@ -1557,9 +1557,28 @@ sign-off.
     `paladin_core::select_after_filter(prev, filtered)` (preserve
     prior selection if still present, else first match) for parity
     with the TUI.
-  - [ ] Refresh the store after every vault mutation (Add / Remove /
+  - [x] Refresh the store after every vault mutation (Add / Remove /
     Rename / Import / settings change that toggles a row's
-    presentation) without reordering surviving rows.
+    presentation) without reordering surviving rows. `AppModel::
+    refresh_account_list` re-projects via
+    `filtered_row_models_from_vault` (which walks `Vault::iter()` in
+    insertion order) and emits `AccountListMsg::Refresh`. The
+    Add / Remove / Rename worker-completion handlers gate the call
+    on `dispatch.refresh_list` (set by
+    `should_refresh_list_after_{add,remove,rename}` for every
+    committed outcome — Success or
+    `save_durability_unconfirmed`-routed `KeepWithWarning`). The
+    surviving-row ordering invariant is pinned by
+    `tests/account_list_logic.rs::row_models_after_sequence_of_add_rename_remove_preserves_surviving_order`
+    plus the per-mutation `row_models_after_vault_*` /
+    `filtered_row_models_after_vault_*` siblings. Import plugs into
+    the same helper once `ImportDialogComponent`'s full
+    implementation (§"Milestone 7 checklist" >
+    `ImportDialogComponent` > "On success, refresh
+    `AccountListComponent` from the returned vault") lands. The
+    `SettingsComponent` auto-lock / clipboard-clear toggles do not
+    toggle row presentation, so no settings-driven refresh is
+    needed today.
 - [x] `AccountRowComponent` full body (label, icon, code, TOTP
   gauge / HOTP next, copy button, kebab menu).
   - [x] Render the display label via
