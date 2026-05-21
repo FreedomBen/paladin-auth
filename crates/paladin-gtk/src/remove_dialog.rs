@@ -247,6 +247,52 @@ pub fn format_remove_dialog_cancel_label() -> &'static str {
     "Cancel"
 }
 
+/// Response identifier the widget hands to
+/// [`adw::AlertDialog::add_response`] /
+/// [`adw::AlertDialog::set_response_appearance`] /
+/// [`adw::AlertDialog::connect_response`] for the destructive Remove
+/// button.
+///
+/// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+/// `RemoveDialog` the destructive button is styled
+/// [`adw::ResponseAppearance::Destructive`] so libadwaita paints it in
+/// the platform's destructive red. The response id is the stable
+/// token `add_response` keys on; the `connect_response` match arm
+/// uses the same string to dispatch [`RemoveDialogMsg::Confirm`].
+/// Pinning the id through a helper keeps the string in one place
+/// shared by the widget binding and the pure-logic tests so the
+/// dispatch arm and the response registration never drift apart.
+///
+/// Pure — returns a `'static str` without allocating. Sibling of
+/// [`format_remove_dialog_cancel_response_id`].
+#[must_use]
+pub fn format_remove_dialog_destructive_response_id() -> &'static str {
+    "remove"
+}
+
+/// Response identifier the widget hands to
+/// [`adw::AlertDialog::add_response`] /
+/// [`adw::AlertDialog::set_default_response`] /
+/// [`adw::AlertDialog::set_close_response`] /
+/// [`adw::AlertDialog::connect_response`] for the Cancel button.
+///
+/// Cancel is the dialog's default and close response so the
+/// [`adw::AlertDialog`] dismisses without removing on Escape,
+/// outside-click, or window close — matching the §"Effect errors"
+/// rule that the dialog never mutates visible state until the worker
+/// returns. The
+/// `connect_response` match arm dispatches [`RemoveDialogMsg::Cancel`]
+/// when the response id matches this value. Pinning the id through a
+/// helper keeps the string in one place shared by the widget binding
+/// and the pure-logic tests.
+///
+/// Pure — returns a `'static str` without allocating. Sibling of
+/// [`format_remove_dialog_destructive_response_id`].
+#[must_use]
+pub fn format_remove_dialog_cancel_response_id() -> &'static str {
+    "cancel"
+}
+
 /// Body the widget hands to the [`RemoveDialogComponent`]'s
 /// `adw::StatusPage::set_description` attribute.
 ///
@@ -786,12 +832,17 @@ pub fn apply_msg(
 /// [`crate::account_list::AccountListOutput::OpenRemoveDialog`]
 /// branch.
 ///
-/// Mounts a libadwaita [`adw::StatusPage`] that surfaces the
-/// targeted account's `<issuer>:<label>` heading so the user can
-/// confirm which row will be removed, plus Cancel / Remove buttons
-/// that drive the `Vault::mutate_and_save(|v| v.remove(...))` worker
-/// in `AppModel` via [`RemoveDialogOutput`]. Mirrors the
-/// [`crate::rename_dialog::RenameDialogComponent`] pattern.
+/// Mounts an [`adw::AlertDialog`] with the destructive Remove
+/// response styled [`adw::ResponseAppearance::Destructive`] so
+/// libadwaita paints the affordance in the platform's destructive red.
+/// The dialog's heading and body identify the targeted
+/// `<issuer>:<label>` so the user can confirm which row will be
+/// removed; the `extra_child` slot carries the inline error / warning
+/// labels that surface `Vault::mutate_and_save(|v| v.remove(...))`
+/// worker outcomes. Mirrors the
+/// [`crate::rename_dialog::RenameDialogComponent`] pattern on the
+/// dispatch side but uses the [`adw::AlertDialog`] chrome rather than
+/// a hand-rolled `gtk::Box` footer.
 pub struct RemoveDialogComponent {
     /// Pure-logic state machine. `apply_msg` mutates this in place;
     /// the widget reads back through accessors for re-renders.
@@ -807,78 +858,45 @@ impl SimpleComponent for RemoveDialogComponent {
 
     view! {
         #[root]
-        gtk::Box {
-            set_orientation: gtk::Orientation::Vertical,
-            set_spacing: 12,
-            set_hexpand: true,
-            set_vexpand: true,
+        adw::AlertDialog {
+            set_heading: Some(format_remove_dialog_title()),
+            #[watch]
+            set_body: &format_remove_dialog_subtitle(model.state.display_label()),
 
-            adw::StatusPage {
-                set_icon_name: Some(format_remove_dialog_icon_name()),
-                set_title: format_remove_dialog_title(),
-                set_description: Some(&format_remove_dialog_subtitle(
-                    model.state.display_label(),
-                )),
-                set_hexpand: true,
-                set_vexpand: true,
-            },
-
-            // `RestorePrior` and defensive `InlineError` branches surface
-            // here so the user sees why the remove rolled back / refused
-            // before deciding to retry. The `error` CSS class paints the
-            // text in the platform's destructive red to match the dialog's
-            // Remove button affordance.
-            #[name = "error_label"]
-            gtk::Label {
-                set_xalign: 0.0,
-                set_wrap: true,
-                add_css_class: "error",
-                #[watch]
-                set_label: format_remove_dialog_inline_error_text(&model.state),
-                #[watch]
-                set_visible: format_remove_dialog_inline_error_visible(&model.state),
-            },
-
-            // `KeepRemovedWithWarning` (save_durability_unconfirmed)
-            // surfaces here so the user can dismiss the parent-fsync
-            // uncertainty explicitly while the remove stays committed.
-            // The `warning` CSS class paints the text in the platform's
-            // warning amber so the message reads as advisory rather than
-            // a rollback gate.
-            #[name = "warning_label"]
-            gtk::Label {
-                set_xalign: 0.0,
-                set_wrap: true,
-                add_css_class: "warning",
-                #[watch]
-                set_label: format_remove_dialog_inline_warning_text(&model.state),
-                #[watch]
-                set_visible: format_remove_dialog_inline_warning_visible(&model.state),
-            },
-
-            gtk::Box {
-                set_orientation: gtk::Orientation::Horizontal,
+            // The extra_child slot carries the inline error / warning
+            // labels beneath the AlertDialog's body. `RestorePrior` /
+            // defensive `InlineError` branches render through the
+            // `error_label`; `KeepRemovedWithWarning` renders through
+            // the `warning_label`. The labels are mounted unconditionally
+            // and gated by their `#[watch] set_visible` bindings so the
+            // layout flow drops the empty surface entirely until the
+            // worker reports a typed failure.
+            #[wrap(Some)]
+            set_extra_child = &gtk::Box {
+                set_orientation: gtk::Orientation::Vertical,
                 set_spacing: 6,
-                set_halign: gtk::Align::End,
+                set_hexpand: true,
 
-                #[name = "cancel_button"]
-                gtk::Button {
-                    set_label: format_remove_dialog_cancel_label(),
-                    connect_clicked[sender] => move |_| {
-                        sender.input(RemoveDialogMsg::Cancel);
-                    },
+                #[name = "error_label"]
+                gtk::Label {
+                    set_xalign: 0.0,
+                    set_wrap: true,
+                    add_css_class: "error",
+                    #[watch]
+                    set_label: format_remove_dialog_inline_error_text(&model.state),
+                    #[watch]
+                    set_visible: format_remove_dialog_inline_error_visible(&model.state),
                 },
 
-                // `destructive-action` CSS class renders the button in the
-                // platform's destructive red so the irreversible operation
-                // is visually distinct from the Cancel affordance.
-                #[name = "remove_button"]
-                gtk::Button {
-                    set_label: format_remove_dialog_remove_label(),
-                    add_css_class: "destructive-action",
-                    connect_clicked[sender] => move |_| {
-                        sender.input(RemoveDialogMsg::Confirm);
-                    },
+                #[name = "warning_label"]
+                gtk::Label {
+                    set_xalign: 0.0,
+                    set_wrap: true,
+                    add_css_class: "warning",
+                    #[watch]
+                    set_label: format_remove_dialog_inline_warning_text(&model.state),
+                    #[watch]
+                    set_visible: format_remove_dialog_inline_warning_visible(&model.state),
                 },
             },
         }
@@ -893,6 +911,44 @@ impl SimpleComponent for RemoveDialogComponent {
             state: RemoveDialogState::new(&init),
         };
         let widgets = view_output!();
+
+        // Register the AlertDialog's two responses imperatively after
+        // `view_output!` builds the root. `add_response` must run
+        // before `set_response_appearance` / `set_default_response` /
+        // `set_close_response`, which key on the response id. Doing
+        // this in `init` keeps the order explicit and the view!
+        // macro free of multi-arg builder syntax.
+        let cancel_id = format_remove_dialog_cancel_response_id();
+        let destructive_id = format_remove_dialog_destructive_response_id();
+        root.add_response(cancel_id, format_remove_dialog_cancel_label());
+        root.add_response(destructive_id, format_remove_dialog_remove_label());
+        root.set_response_appearance(destructive_id, adw::ResponseAppearance::Destructive);
+        // Cancel is the default and close response so Escape /
+        // outside-click / window-close dismiss without removing,
+        // matching the §"Effect errors" rule that the dialog never
+        // mutates visible state until the worker returns.
+        root.set_default_response(Some(cancel_id));
+        root.set_close_response(cancel_id);
+
+        // The AlertDialog's two responses are dispatched through
+        // `connect_response` so Escape / outside-click / window
+        // close (which route through the `close` response wired
+        // above) all land on the same handler. The match arms route
+        // the destructive id to `Confirm` and the cancel id to
+        // `Cancel`; any unrecognized response is silently dropped
+        // (the close-response wiring guarantees this only fires for
+        // the registered ids). `connect_response(None, …)` matches
+        // every response — see `init_dialog::present_destructive_alert`
+        // for the sibling pattern.
+        let response_sender = sender.clone();
+        root.connect_response(None, move |_dialog, response| {
+            if response == format_remove_dialog_destructive_response_id() {
+                response_sender.input(RemoveDialogMsg::Confirm);
+            } else if response == format_remove_dialog_cancel_response_id() {
+                response_sender.input(RemoveDialogMsg::Cancel);
+            }
+        });
+
         ComponentParts { model, widgets }
     }
 

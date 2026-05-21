@@ -1316,13 +1316,18 @@ impl SimpleComponent for AppModel {
                 // mount the remove dialog. A `None` projection means
                 // the account was removed between the kebab
                 // activation and this dispatch — treat that as a
-                // benign race and drop the action.
+                // benign race and drop the action. The widget is an
+                // `adw::AlertDialog` with the destructive Remove
+                // response styled `adw::ResponseAppearance::Destructive`,
+                // so `present(parent)` raises the modal chrome and
+                // self-detaches on close — no `self.content.append`
+                // / `self.content.remove` plumbing needed.
                 if let Some((vault, _store)) = self.vault.as_ref() {
                     if let Some(init) = decide_remove_target(vault, id) {
                         let controller = RemoveDialogComponent::builder()
                             .launch(init)
                             .forward(sender.input_sender(), AppMsg::RemoveDialogAction);
-                        self.content.append(controller.widget());
+                        controller.widget().present(Some(&self.content));
                         self.remove_dialog = Some(controller);
                     }
                 }
@@ -1527,13 +1532,15 @@ impl SimpleComponent for AppModel {
                 }
             }
             AppMsg::RemoveDialogAction(RemoveDialogOutput::Cancel) => {
-                // Detach the dialog widget from the content tree and
-                // drop the controller. Defensive: if the field is
-                // already `None` (controller swapped under us by a
-                // future race), this is a benign no-op.
-                if let Some(controller) = self.remove_dialog.take() {
-                    self.content.remove(controller.widget());
-                }
+                // Drop the controller so the `adw::AlertDialog` widget
+                // tears itself down. `adw::AlertDialog` self-detaches
+                // from its toplevel parent on close (the
+                // `connect_response` close-response wiring fires when
+                // Escape / outside-click / window-close runs), so no
+                // `self.content.remove` is needed. Defensive: if the
+                // field is already `None` (controller swapped under us
+                // by a future race), this is a benign no-op.
+                self.remove_dialog = None;
             }
             AppMsg::OpenAboutDialog => {
                 // Application menu "About Paladin" activation.
@@ -2130,8 +2137,16 @@ impl SimpleComponent for AppModel {
                         }
                     }
                     if dispatch.drop_dialog {
+                        // `adw::AlertDialog` auto-dismisses on the
+                        // response click that triggered the worker, so
+                        // explicitly `force_close` here covers the
+                        // race where the worker returns before the
+                        // dismissal completes, then drop the
+                        // controller. No `self.content.remove` —
+                        // `adw::AlertDialog` self-detaches from its
+                        // toplevel parent on close.
                         if let Some(controller) = self.remove_dialog.take() {
-                            self.content.remove(controller.widget());
+                            controller.widget().force_close();
                         }
                     }
                     if dispatch.refresh_list {

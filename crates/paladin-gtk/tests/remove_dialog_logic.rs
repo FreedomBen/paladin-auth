@@ -963,6 +963,84 @@ fn format_remove_dialog_title_returns_remove_account() {
 }
 
 // ---------------------------------------------------------------------------
+// `format_remove_dialog_destructive_response_id` /
+// `format_remove_dialog_cancel_response_id`
+//
+// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" > `RemoveDialog`
+// and §"Milestone 7 checklist" > "Open `RemoveDialog` as an `AdwAlertDialog`
+// with `destructive-action` styling on the destructive button", the dialog
+// is rendered as an `adw::AlertDialog`. The two response IDs identify the
+// Cancel and destructive Remove buttons in `add_response` /
+// `set_response_appearance` / `set_default_response` / `set_close_response`
+// / `connect_response`. Pinning them through helpers keeps the strings in
+// one place shared by the widget binding and the pure-logic tests so the
+// response-handler match arm and the `add_response` call never drift apart.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn format_remove_dialog_destructive_response_id_returns_remove() {
+    use paladin_gtk::remove_dialog::format_remove_dialog_destructive_response_id;
+
+    assert_eq!(
+        format_remove_dialog_destructive_response_id(),
+        "remove",
+        "destructive response id matches the verb the dialog binds against",
+    );
+}
+
+#[test]
+fn format_remove_dialog_cancel_response_id_returns_cancel() {
+    use paladin_gtk::remove_dialog::format_remove_dialog_cancel_response_id;
+
+    assert_eq!(
+        format_remove_dialog_cancel_response_id(),
+        "cancel",
+        "cancel response id matches the dialog's default and close response",
+    );
+}
+
+#[test]
+fn format_remove_dialog_response_ids_are_distinct() {
+    // `adw::AlertDialog::add_response` keys on the response id; the
+    // Cancel and destructive Remove responses must use different
+    // identifiers so the connect_response match arm can route each
+    // unambiguously and `set_response_appearance(Destructive)` only
+    // targets the destructive button.
+    use paladin_gtk::remove_dialog::{
+        format_remove_dialog_cancel_response_id, format_remove_dialog_destructive_response_id,
+    };
+
+    assert_ne!(
+        format_remove_dialog_destructive_response_id(),
+        format_remove_dialog_cancel_response_id(),
+        "Cancel and Remove must use distinct AlertDialog response ids",
+    );
+}
+
+#[test]
+fn format_remove_dialog_response_ids_are_non_empty_single_tokens() {
+    // libadwaita expects response ids to be short ASCII identifiers
+    // (no whitespace, no empty strings) so that they round-trip
+    // through `add_response` / `connect_response` cleanly. Pinning
+    // the contract here guards against an accidental rename to a
+    // multi-word string that would silently fail to match.
+    use paladin_gtk::remove_dialog::{
+        format_remove_dialog_cancel_response_id, format_remove_dialog_destructive_response_id,
+    };
+
+    for id in [
+        format_remove_dialog_destructive_response_id(),
+        format_remove_dialog_cancel_response_id(),
+    ] {
+        assert!(!id.is_empty(), "response id must be non-empty; got {id:?}");
+        assert!(
+            !id.chars().any(char::is_whitespace),
+            "response id must be a single ASCII token; got {id:?}",
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // `format_remove_dialog_inline_error_*` / `format_remove_dialog_inline_warning_*`
 //
 // The view! macro's `#[watch]` bindings for the inline error and warning

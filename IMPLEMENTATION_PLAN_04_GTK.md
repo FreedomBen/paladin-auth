@@ -1891,9 +1891,29 @@ sign-off.
 - [ ] `RemoveDialog` confirmation flow (`AdwAlertDialog` with
   `destructive-action` styling gating `Vault::remove` inside
   `Vault::mutate_and_save`).
-  - [ ] Open `RemoveDialog` as an `AdwAlertDialog` with
+  - [x] Open `RemoveDialog` as an `AdwAlertDialog` with
     `destructive-action` styling on the destructive button when the
     user picks "Remove…" from the row kebab menu.
+    (`RemoveDialogComponent`'s view! macro now uses
+    `adw::AlertDialog` as `#[root]` with the body and inline
+    error / warning labels in `set_extra_child`; `init`
+    imperatively calls `add_response` for Cancel and Remove,
+    `set_response_appearance(destructive_id, ResponseAppearance::Destructive)`,
+    `set_default_response(Some(cancel_id))`, and
+    `set_close_response(cancel_id)`. `connect_response(None, …)`
+    routes the response id through the new
+    `format_remove_dialog_destructive_response_id` /
+    `format_remove_dialog_cancel_response_id` helpers into
+    `RemoveDialogMsg::Confirm` / `Cancel`. `AppModel` now calls
+    `controller.widget().present(Some(&self.content))` on
+    `AccountListOutput::OpenRemoveDialog` and `force_close()` on
+    worker success — the alert self-detaches on close so the prior
+    `self.content.append` / `self.content.remove` plumbing is gone.
+    Pinned by
+    `tests/remove_dialog_logic.rs::format_remove_dialog_destructive_response_id_returns_remove`,
+    `format_remove_dialog_cancel_response_id_returns_cancel`,
+    `format_remove_dialog_response_ids_are_distinct`, and
+    `format_remove_dialog_response_ids_are_non_empty_single_tokens`.)
   - [x] Render the dialog body using
     `summary_display_label(&AccountSummary)` so the wording matches
     the CLI / TUI (`<issuer>:<label>` when issuer is set; empty
