@@ -2775,6 +2775,33 @@ pub fn format_uri_text_title() -> &'static str {
     "otpauth:// URI"
 }
 
+/// Body text for the `AdwToast` raised on the
+/// [`AddWorkerEffect::Success`] branch.
+///
+/// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" >
+/// `AddAccountComponent` shared shell ("Keep successful manual and
+/// URI additions consistent with §7: refresh the list from the
+/// returned vault, close the dialog, and surface a status / toast
+/// confirmation."). The widget layer raises the toast on the
+/// `adw::ToastOverlay` after the dispatch drops the dialog and the
+/// new row appears in `AccountListComponent` through
+/// `AccountListMsg::Refresh`. Sibling of
+/// [`crate::rename_dialog::format_rename_dialog_success_toast`] /
+/// [`crate::remove_dialog::format_remove_dialog_success_toast`] on
+/// the toast-body-text side.
+///
+/// The wording is intentionally generic so the toast does not need
+/// to carry the new account's display label across the worker
+/// boundary — the freshly inserted row is already visible in the
+/// list, and the toast is a confirmation that the save committed
+/// rather than a recap of which account was added.
+///
+/// Pure — returns a `'static str` without allocating.
+#[must_use]
+pub fn format_add_dialog_success_toast() -> &'static str {
+    "Account added."
+}
+
 /// Apply an inbound [`AddAccountMsg`] and return the optional
 /// [`AddAccountOutput`] the widget layer should forward to
 /// `AppModel`.

@@ -2007,6 +2007,42 @@ pub fn should_refresh_list_after_add(effect: &AddWorkerEffect) -> bool {
     }
 }
 
+/// Toast-body projection after an add worker outcome.
+///
+/// `AppMsg::AddWorkerCompleted` consults this to decide whether to
+/// raise an `AdwToast` on the `adw::ToastOverlay` per
+/// `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" >
+/// `AddAccountComponent` shared shell ("Keep successful manual and
+/// URI additions consistent with §7: refresh the list from the
+/// returned vault, close the dialog, and surface a status / toast
+/// confirmation."):
+///
+/// * [`AddWorkerEffect::Success`] → `Some(body)`. The dialog dismisses
+///   and the new row appears; the toast confirms the save committed.
+/// * [`AddWorkerEffect::Failure`] → `None`. The dialog stays mounted
+///   with the inline error / body warning, which is the surface that
+///   conveys the typed outcome — no toast layered on top.
+///
+/// The body comes from
+/// [`crate::add_account::format_add_dialog_success_toast`] so the
+/// wording stays in one place shared by the widget binding and the
+/// pure-logic tests. Sibling of [`rename_success_toast_after`] /
+/// [`remove_success_toast_after`].
+///
+/// The projection inspects only the typed [`AddWorkerEffect`] variant
+/// so the side-effect decision in `AppModel::update` stays
+/// unit-testable in `tests/app_state_logic.rs` without spinning up
+/// GTK / libadwaita.
+#[must_use]
+pub fn add_success_toast_after(effect: &AddWorkerEffect) -> Option<String> {
+    match effect {
+        AddWorkerEffect::Success { .. } => {
+            Some(crate::add_account::format_add_dialog_success_toast().to_string())
+        }
+        AddWorkerEffect::Failure(_) => None,
+    }
+}
+
 /// Inline-message projection for the live
 /// [`crate::add_account::AddAccountComponent`] after an add worker
 /// outcome.
@@ -2114,6 +2150,13 @@ pub struct AddDispatch {
     /// `false` on the `Inline` failure branches (where the vault is
     /// unchanged so the visible rows already match disk).
     pub refresh_list: bool,
+    /// Optional `AdwToast` body to raise on the `adw::ToastOverlay`
+    /// after applying the add worker outcome. Mirrors
+    /// [`add_success_toast_after`] — `Some(body)` on
+    /// [`AddWorkerEffect::Success`] and `None` on every `Failure`
+    /// variant so the dialog's inline error / body warning stays the
+    /// only surface that conveys the typed outcome.
+    pub success_toast: Option<String>,
 }
 
 /// Bundle the trio of add-dispatch decisions into a single
@@ -2157,6 +2200,7 @@ pub fn compose_add_dispatch(current: &AppState, effect: &AddWorkerEffect) -> Add
         dialog_msg: add_dialog_msg_after(effect),
         drop_dialog: should_drop_add_dialog_after(effect),
         refresh_list: should_refresh_list_after_add(effect),
+        success_toast: add_success_toast_after(effect),
     }
 }
 

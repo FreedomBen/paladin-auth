@@ -8752,3 +8752,43 @@ fn format_uri_text_title_returns_otpauth_uri() {
         "URI row title names the URL scheme the user pastes",
     );
 }
+
+// ---------------------------------------------------------------------------
+// `format_add_dialog_success_toast` — body text for the `AdwToast` raised
+// after a successful add worker outcome per
+// `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" > `AddAccountComponent`
+// shared shell ("Keep successful manual and URI additions consistent with §7:
+// refresh the list from the returned vault, close the dialog, and surface a
+// status / toast confirmation."). Sibling of
+// `format_rename_dialog_success_toast` /
+// `format_remove_dialog_success_toast` so wording stays single-sourced and
+// the dispatch projection `add_success_toast_after` can rely on the helper
+// for the bundled toast body.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn format_add_dialog_success_toast_returns_added() {
+    use paladin_gtk::add_account::format_add_dialog_success_toast;
+
+    assert_eq!(
+        format_add_dialog_success_toast(),
+        "Account added.",
+        "wording must stay in one place shared by the widget toast binding and the dispatch projection",
+    );
+}
+
+#[test]
+fn format_add_dialog_success_toast_is_non_empty_single_sentence() {
+    use paladin_gtk::add_account::format_add_dialog_success_toast;
+
+    let body = format_add_dialog_success_toast();
+    assert!(!body.is_empty(), "toast body must not be empty");
+    assert!(
+        body.ends_with('.'),
+        "toast body should read as a complete sentence so it matches the rename / remove success toast wording style",
+    );
+    assert!(
+        !body.contains('\n'),
+        "toast body must stay on one line so `adw::Toast::new` renders a single-line confirmation",
+    );
+}

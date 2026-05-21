@@ -8126,6 +8126,112 @@ fn add_dialog_msg_after_is_mutually_exclusive_with_should_drop() {
 }
 
 // ---------------------------------------------------------------------------
+// add_success_toast_after — toast-body projection for the add worker outcome.
+// ---------------------------------------------------------------------------
+//
+// `AppMsg::AddWorkerCompleted` consults this to decide whether to
+// raise an `AdwToast` on the `adw::ToastOverlay` per
+// `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" >
+// `AddAccountComponent` shared shell ("Keep successful manual and URI
+// additions consistent with §7: refresh the list from the returned
+// vault, close the dialog, and surface a status / toast confirmation.").
+// The projection inspects only the typed `AddWorkerEffect` variant so
+// the side-effect decision in `AppModel::update` stays unit-testable
+// in `tests/app_state_logic.rs` without spinning up GTK / libadwaita.
+// Sibling of `rename_success_toast_after` / `remove_success_toast_after`.
+
+#[test]
+fn add_success_toast_after_success_returns_body() {
+    use paladin_gtk::add_account::{format_add_dialog_success_toast, AddWorkerEffect};
+    use paladin_gtk::app::state::add_success_toast_after;
+
+    let effect = AddWorkerEffect::Success {
+        account_id: AccountId::new(),
+    };
+    let toast =
+        add_success_toast_after(&effect).expect("Success must surface a confirmation toast");
+    assert_eq!(
+        toast,
+        format_add_dialog_success_toast(),
+        "toast body must come from format_add_dialog_success_toast so wording stays single-sourced",
+    );
+}
+
+#[test]
+fn add_success_toast_after_failure_returns_none() {
+    use paladin_gtk::add_account::{classify_add_post_effect_error, AddWorkerEffect};
+    use paladin_gtk::app::state::add_success_toast_after;
+
+    let failures = [
+        PaladinError::SaveNotCommitted {
+            committed: false,
+            backup_path: None,
+        },
+        PaladinError::SaveNotCommitted {
+            committed: true,
+            backup_path: None,
+        },
+        PaladinError::SaveDurabilityUnconfirmed,
+        PaladinError::InvalidState {
+            operation: "add",
+            state: "duplicate_account",
+        },
+    ];
+    for err in &failures {
+        let outcome = classify_add_post_effect_error(err);
+        let effect = AddWorkerEffect::Failure(outcome);
+        assert!(
+            add_success_toast_after(&effect).is_none(),
+            "Failure must not raise a success toast for err={err:?}",
+        );
+    }
+}
+
+#[test]
+fn compose_add_dispatch_populates_success_toast_only_on_success() {
+    // `compose_add_dispatch` bundles `add_success_toast_after` alongside
+    // the existing drop-dialog / refresh-list / dialog-msg / app-state
+    // decisions so the dispatch site can raise the toast in one shot.
+    // The success branch carries the toast body so the widget layer
+    // just adds it as an `adw::Toast::new(&body)`; the failure branches
+    // stay `None` so the dialog's inline error / body warning is the
+    // only surface that conveys the typed outcome.
+    use paladin_gtk::add_account::{classify_add_post_effect_error, AddWorkerEffect};
+    use paladin_gtk::app::state::{add_success_toast_after, compose_add_dispatch};
+
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let effects = [
+        AddWorkerEffect::Success {
+            account_id: AccountId::new(),
+        },
+        AddWorkerEffect::Failure(classify_add_post_effect_error(
+            &PaladinError::SaveNotCommitted {
+                committed: false,
+                backup_path: None,
+            },
+        )),
+        AddWorkerEffect::Failure(classify_add_post_effect_error(
+            &PaladinError::SaveDurabilityUnconfirmed,
+        )),
+        AddWorkerEffect::Failure(classify_add_post_effect_error(
+            &PaladinError::InvalidState {
+                operation: "add",
+                state: "duplicate_account",
+            },
+        )),
+    ];
+    for effect in &effects {
+        let dispatch = compose_add_dispatch(&busy, effect);
+        assert_eq!(
+            dispatch.success_toast,
+            add_success_toast_after(effect),
+            "success_toast must mirror the projection for effect={effect:?}",
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // compose_add_dispatch — bundling composer for the add worker outcome
 // ---------------------------------------------------------------------------
 //

@@ -2126,9 +2126,32 @@ sign-off.
     `Vault::mutate_and_save` insertion path for manual and URI
     submissions; QR clipboard imports use the import-report path
     described below.
-  - [ ] Keep successful manual and URI additions consistent with §7:
+  - [x] Keep successful manual and URI additions consistent with §7:
     refresh the list from the returned vault, close the dialog, and
     surface a status / toast confirmation.
+    `AppMsg::AddWorkerCompleted` routes the worker outcome through
+    `compose_add_dispatch`, which now bundles
+    `should_drop_add_dialog_after` (drops the dialog on `Success`),
+    `should_refresh_list_after_add` (re-emits
+    `AccountListMsg::Refresh` from the reinstalled `(Vault, Store)`
+    pair on `Success` and `KeepWithWarning`), and
+    `add_success_toast_after` (returns
+    `Some(format_add_dialog_success_toast().to_string())` on
+    `Success` only). The dispatch site raises the body as
+    `self.toast_overlay.add_toast(adw::Toast::new(&body))` on the same
+    `adw::ToastOverlay` used by the rename / remove / HOTP
+    durability-unconfirmed surfaces; the failure branches stay `None`
+    so the dialog's inline error / body warning is the only surface
+    that conveys the typed outcome. Wording is pinned through
+    `format_add_dialog_success_toast` (`"Account added."`) so the
+    helper, the projection, and the bundled
+    `AddDispatch::success_toast` field stay in lockstep.
+    Pinned by
+    `tests/add_account_logic.rs::format_add_dialog_success_toast_returns_added`,
+    `format_add_dialog_success_toast_is_non_empty_single_sentence`,
+    `tests/app_state_logic.rs::add_success_toast_after_success_returns_body`,
+    `add_success_toast_after_failure_returns_none`, and
+    `compose_add_dispatch_populates_success_toast_only_on_success`.
   - [ ] Keep successful clipboard-QR additions on a post-success counts
     panel until the user dismisses it, so imported / skipped / warning
     counts remain visible.
