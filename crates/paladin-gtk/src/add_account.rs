@@ -1908,6 +1908,42 @@ pub fn format_add_path_name(path: crate::secret_fields::AddPath) -> &'static str
     }
 }
 
+/// Inverse of [`format_add_path_name`].
+///
+/// The `AddAccountComponent` widget body mounts each sub-path on the
+/// `AdwViewStack` keyed by the slug `format_add_path_name` emits, and
+/// wires `AdwViewStack::connect_visible_child_notify` to translate the
+/// notified `visible_child_name()` back into an
+/// [`crate::secret_fields::AddPath`] so it can dispatch
+/// [`AddAccountMsg::SwitchPath`]. That dispatch is the only path that
+/// reaches [`crate::secret_fields::AddSecretState::switch_path`], which
+/// owns the §"Secret entry handling" contract that switching sub-pages
+/// wipes the leaving path's hidden secret-bearing buffer (manual Base32
+/// secret / URI text) and drops any pending duplicate-add
+/// [`paladin_core::ValidatedAccount`] before the entering page becomes
+/// active.
+///
+/// Accepts exactly the slugs `format_add_path_name` emits — `"manual"`,
+/// `"uri"`, `"qr"`. Anything else (empty, capitalized, whitespace-padded,
+/// case-folded variants, or unknown slugs) returns [`None`] so a future
+/// renamed / mistyped page or accidental display-label hand-off cannot
+/// silently bypass the secret-buffer wipe. Callers route a [`None`]
+/// result as a no-op rather than dispatching a fallback `SwitchPath`,
+/// which mirrors the `AdwViewStack` widget's behavior of refusing to
+/// surface an unknown child name as a visible-child notify.
+///
+/// Pure — borrows the input slug and returns [`Option`]; sibling of
+/// [`format_add_path_name`] on the parser side.
+#[must_use]
+pub fn parse_add_path_name(slug: &str) -> Option<crate::secret_fields::AddPath> {
+    match slug {
+        "manual" => Some(crate::secret_fields::AddPath::Manual),
+        "uri" => Some(crate::secret_fields::AddPath::Uri),
+        "qr" => Some(crate::secret_fields::AddPath::Qr),
+        _ => None,
+    }
+}
+
 /// Fixed iteration order the widget uses to add the manual / URI
 /// sub-paths to the `AdwViewStack`.
 ///
@@ -3438,11 +3474,84 @@ impl SimpleComponent for AddAccountComponent {
                 add_css_class: "title-2",
             },
 
-            adw::PreferencesGroup {
-                set_title: "New account",
-                set_description: Some(
-                    "The editable manual / URI / QR sub-paths land in a follow-up commit.",
-                ),
+            // The three sub-path pages share one `adw::ViewStack`
+            // so the `AdwViewSwitcherBar` below toggles between
+            // them. Per-page bodies (the editable manual form,
+            // the URI entry row, the clipboard-QR action) land in
+            // follow-up commits; mounting empty `gtk::Box`
+            // placeholders behind named pages now is what makes
+            // `connect_visible_child_notify` routable, which in
+            // turn carries the L2122 contract that switching
+            // pages wipes the leaving path's hidden secret-bearing
+            // buffer via `AddSecretState::switch_path`.
+            #[name = "view_stack"]
+            adw::ViewStack {
+                set_hexpand: true,
+                set_vexpand: true,
+
+                add_titled_with_icon[
+                    Some(format_add_path_name(AddPath::Manual)),
+                    format_add_path_label(AddPath::Manual),
+                    "document-edit-symbolic",
+                ] = &gtk::Box {
+                    set_orientation: gtk::Orientation::Vertical,
+                    set_spacing: 12,
+                },
+
+                add_titled_with_icon[
+                    Some(format_add_path_name(AddPath::Uri)),
+                    format_add_path_label(AddPath::Uri),
+                    "insert-link-symbolic",
+                ] = &gtk::Box {
+                    set_orientation: gtk::Orientation::Vertical,
+                    set_spacing: 12,
+                },
+
+                add_titled_with_icon[
+                    Some(format_add_path_name(AddPath::Qr)),
+                    format_add_path_label(AddPath::Qr),
+                    "camera-photo-symbolic",
+                ] = &gtk::Box {
+                    set_orientation: gtk::Orientation::Vertical,
+                    set_spacing: 12,
+                },
+
+                // State-driven binding: any programmatic state
+                // change (e.g. `Cancel` clearing draft state, a
+                // future deep-link, or a unit-test-driven
+                // dispatch) flips the visible page through the
+                // `compose_active_path_name` projection so the
+                // widget and the pure-logic state stay in lockstep.
+                #[watch]
+                set_visible_child_name: compose_active_path_name(&model.state),
+
+                // User-driven binding: clicking a different tab
+                // in the switcher fires `notify::visible-child`
+                // on the stack. `parse_add_path_name` is the exact
+                // inverse of the `format_add_path_name` slugs the
+                // `add_titled_with_icon` calls above used, so an
+                // unknown / case-folded / whitespace-padded slug
+                // routes as `None` rather than silently
+                // dispatching a fallback `SwitchPath`. The pure-
+                // logic `apply_msg(AddAccountMsg::SwitchPath)` arm
+                // then runs `AddSecretState::switch_path`, which
+                // wipes the leaving path's hidden secret-bearing
+                // buffer (manual Base32 / URI text) and drops any
+                // pending duplicate-add `ValidatedAccount` per the
+                // §"Secret entry handling" contract.
+                connect_visible_child_notify[sender] => move |stack| {
+                    if let Some(name) = stack.visible_child_name() {
+                        if let Some(path) = parse_add_path_name(name.as_str()) {
+                            sender.input(AddAccountMsg::SwitchPath(path));
+                        }
+                    }
+                },
+            },
+
+            #[name = "view_switcher_bar"]
+            adw::ViewSwitcherBar {
+                set_stack: Some(&view_stack),
+                set_reveal: true,
             },
 
             gtk::Box {

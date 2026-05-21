@@ -8792,3 +8792,184 @@ fn format_add_dialog_success_toast_is_non_empty_single_sentence() {
         "toast body must stay on one line so `adw::Toast::new` renders a single-line confirmation",
     );
 }
+
+// ---------------------------------------------------------------------------
+// `parse_add_path_name` — inverse of `format_add_path_name`, used by the
+// `AdwViewStack`'s `connect_visible_child_notify` handler to translate the
+// notified visible-child-name slug back into an `AddPath` so the widget can
+// dispatch `AddAccountMsg::SwitchPath(path)`. The on-page-switch contract at
+// `IMPLEMENTATION_PLAN_04_GTK.md` L2122 hinges on every user-driven page
+// switch reaching `AddSecretState::switch_path`, so this inverse helper has
+// to recognize exactly the slugs `format_add_path_name` emits — no extra
+// case-folding, no whitespace tolerance — and reject anything else so a
+// future renamed / mistyped page does not silently bypass the secret-buffer
+// wipe.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn parse_add_path_name_manual_slug_returns_manual_path() {
+    use paladin_gtk::add_account::parse_add_path_name;
+    use paladin_gtk::secret_fields::AddPath;
+
+    assert_eq!(
+        parse_add_path_name("manual"),
+        Some(AddPath::Manual),
+        "manual sub-path slug must round-trip to AddPath::Manual",
+    );
+}
+
+#[test]
+fn parse_add_path_name_uri_slug_returns_uri_path() {
+    use paladin_gtk::add_account::parse_add_path_name;
+    use paladin_gtk::secret_fields::AddPath;
+
+    assert_eq!(
+        parse_add_path_name("uri"),
+        Some(AddPath::Uri),
+        "URI sub-path slug must round-trip to AddPath::Uri",
+    );
+}
+
+#[test]
+fn parse_add_path_name_qr_slug_returns_qr_path() {
+    use paladin_gtk::add_account::parse_add_path_name;
+    use paladin_gtk::secret_fields::AddPath;
+
+    assert_eq!(
+        parse_add_path_name("qr"),
+        Some(AddPath::Qr),
+        "QR sub-path slug must round-trip to AddPath::Qr",
+    );
+}
+
+#[test]
+fn parse_add_path_name_round_trips_format_add_path_name_for_every_variant() {
+    // For every `AddPath` enum value emitted by `format_add_path_order`,
+    // `parse_add_path_name(format_add_path_name(path))` must return
+    // `Some(path)`. Sibling of
+    // `format_add_path_order_names_align_with_format_add_path_name` on the
+    // round-trip side: that test asserts the order helper's slugs match the
+    // formatter's slugs, while this one asserts the parser is the formatter's
+    // exact inverse so the user-driven `AdwViewStack` page-switch path never
+    // silently drops a tab click.
+    use paladin_gtk::add_account::{
+        format_add_path_name, format_add_path_order, parse_add_path_name,
+    };
+
+    for &path in format_add_path_order() {
+        let slug = format_add_path_name(path);
+        assert_eq!(
+            parse_add_path_name(slug),
+            Some(path),
+            "{slug:?} → {path:?} round-trip must hold for every AddPath variant",
+        );
+    }
+}
+
+#[test]
+fn parse_add_path_name_empty_slug_returns_none() {
+    use paladin_gtk::add_account::parse_add_path_name;
+
+    assert_eq!(
+        parse_add_path_name(""),
+        None,
+        "empty slug must not match any sub-path",
+    );
+}
+
+#[test]
+fn parse_add_path_name_unknown_slug_returns_none() {
+    use paladin_gtk::add_account::parse_add_path_name;
+
+    assert_eq!(
+        parse_add_path_name("settings"),
+        None,
+        "unknown slug must not match any sub-path",
+    );
+    assert_eq!(
+        parse_add_path_name("totp"),
+        None,
+        "unknown slug 'totp' must not match — `AddPath` enumerates input sub-paths, not OTP kinds",
+    );
+}
+
+#[test]
+fn parse_add_path_name_rejects_capitalized_label_form() {
+    // The display label (`format_add_path_label`) is a localized /
+    // capitalized string — `parse_add_path_name` must not accept it as a
+    // page-name slug because the widget uses
+    // `AdwViewStack::set_visible_child_name`, which keys off the lowercase
+    // slug only. Pinning this rejection prevents a future caller from
+    // accidentally feeding the display label into the parser and silently
+    // bypassing the secret-buffer wipe.
+    use paladin_gtk::add_account::parse_add_path_name;
+
+    assert_eq!(
+        parse_add_path_name("Manual"),
+        None,
+        "capitalized display label must not be accepted as a page-name slug",
+    );
+    assert_eq!(
+        parse_add_path_name("URI"),
+        None,
+        "uppercased display label must not be accepted as a page-name slug",
+    );
+    assert_eq!(
+        parse_add_path_name("Scan clipboard"),
+        None,
+        "QR display label must not be accepted as a page-name slug",
+    );
+}
+
+#[test]
+fn parse_add_path_name_rejects_whitespace_padded_slug() {
+    // Page-name slugs come straight out of
+    // `AdwViewStack::visible_child_name`, which returns the literal child
+    // name the widget set in `add_titled_with_name`. The parser must reject
+    // padded variants so a future caller cannot accidentally pre-process
+    // the slug (e.g. trimming a user-typed string) and silently route a
+    // page switch through this helper.
+    use paladin_gtk::add_account::parse_add_path_name;
+
+    assert_eq!(
+        parse_add_path_name(" manual"),
+        None,
+        "leading whitespace must not be tolerated",
+    );
+    assert_eq!(
+        parse_add_path_name("manual "),
+        None,
+        "trailing whitespace must not be tolerated",
+    );
+    assert_eq!(
+        parse_add_path_name("\tqr"),
+        None,
+        "tab-prefixed slug must not be tolerated",
+    );
+}
+
+#[test]
+fn parse_add_path_name_is_case_sensitive() {
+    // `AdwViewStack` page names are case-sensitive — the widget keys
+    // them as exact byte sequences. The parser must mirror that: any
+    // case-folded variant of the slug must reject so the user-driven
+    // page-switch path stays pinned to the canonical lowercase form
+    // emitted by `format_add_path_name`.
+    use paladin_gtk::add_account::parse_add_path_name;
+
+    assert_eq!(
+        parse_add_path_name("MANUAL"),
+        None,
+        "uppercase slug must reject",
+    );
+    assert_eq!(
+        parse_add_path_name("Uri"),
+        None,
+        "mixed-case slug must reject",
+    );
+    assert_eq!(
+        parse_add_path_name("Qr"),
+        None,
+        "title-case slug must reject",
+    );
+}

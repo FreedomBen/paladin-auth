@@ -2119,9 +2119,45 @@ sign-off.
     `apply_msg_close_wipes_uri_buffer`,
     `apply_msg_close_drops_pending_duplicate_and_existing_summary`,
     and `add_account_output_close_is_distinct_variant`.)
-  - [ ] On path switch, clear hidden secret-bearing fields (manual
+  - [x] On path switch, clear hidden secret-bearing fields (manual
     Base32 secret and URI text) plus any pending duplicate/add-anyway
     state before the newly selected page becomes active.
+    (`AddAccountComponent`'s `view!` block now mounts an
+    `adw::ViewStack` carrying three named pages — slugs from
+    [`crate::add_account::format_add_path_name`], display labels from
+    [`crate::add_account::format_add_path_label`], iteration order from
+    [`crate::add_account::format_add_path_order`] — with an
+    `adw::ViewSwitcherBar` bound to the same stack. The stack's
+    `connect_visible_child_notify` reads
+    `gtk::Stack::visible_child_name()` and routes the slug through
+    [`crate::add_account::parse_add_path_name`] (the exact inverse of
+    `format_add_path_name`); a recognized slug dispatches
+    [`AddAccountMsg::SwitchPath`], whose existing `apply_msg` arm calls
+    [`crate::secret_fields::AddSecretState::switch_path`] to wipe the
+    leaving path's hidden secret-bearing buffer — the manual Base32
+    secret on `Manual` → `*`, the URI text on `Uri` → `*` — and drops
+    any pending duplicate-add [`paladin_core::ValidatedAccount`] via
+    `Box`'s `ZeroizeOnDrop` impl. An unknown / case-folded /
+    whitespace-padded slug routes through `parse_add_path_name` as
+    `None` and the dispatch arm leaves visible state untouched so a
+    future renamed / mistyped page cannot silently bypass the wipe.
+    Programmatic state changes flip the stack's visible page through
+    the `#[watch]`-bound [`crate::add_account::compose_active_path_name`]
+    projection so the widget and pure-logic state stay in lockstep.
+    Pinned by
+    `tests/add_account_logic.rs::parse_add_path_name_manual_slug_returns_manual_path`,
+    `parse_add_path_name_uri_slug_returns_uri_path`,
+    `parse_add_path_name_qr_slug_returns_qr_path`,
+    `parse_add_path_name_round_trips_format_add_path_name_for_every_variant`,
+    `parse_add_path_name_empty_slug_returns_none`,
+    `parse_add_path_name_unknown_slug_returns_none`,
+    `parse_add_path_name_rejects_capitalized_label_form`,
+    `parse_add_path_name_rejects_whitespace_padded_slug`, and
+    `parse_add_path_name_is_case_sensitive`, plus the existing
+    `apply_msg_switch_path_*` arms and the
+    `tests/secret_fields_logic.rs::add_state_switch_*` invariants that
+    cover the secret-buffer wipe + pending-duplicate drop on every
+    sub-path transition.)
   - [ ] Share one duplicate-detection / "add anyway" / serialized
     `Vault::mutate_and_save` insertion path for manual and URI
     submissions; QR clipboard imports use the import-report path
