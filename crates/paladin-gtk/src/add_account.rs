@@ -4075,6 +4075,84 @@ impl SimpleComponent for AddAccountComponent {
                 set_reveal: true,
             },
 
+            // Pre-effect inline error surface. Populated by
+            // `AddAccountMsg::RenderInlineError` when
+            // `compose_save_click_outcome` returns
+            // `SaveClickOutcome::InlineError` — typed §5 rejections
+            // from `classify_manual_submit`, `classify_uri_submit`,
+            // or the QR path's no-image / decode-failure / zero-QR
+            // / invalid-payload arms. The `error` CSS class matches
+            // the rename / remove / unlock dialogs' inline-error
+            // styling. Drained by `apply_msg` on the next user
+            // edit (any `Manual*Changed` / `UriTextChanged` arm),
+            // on `SwitchPath` across sub-paths, on `SubmitProceed`
+            // / `ConfirmAddAnyway`, and on `Cancel` / `Close`, so
+            // the projection collapses back to hidden the moment
+            // the rejection is no longer applicable. Pinned by
+            // `tests/add_account_logic.rs::compose_inline_error_body_*`
+            // and `compose_inline_error_revealed_*`.
+            #[name = "inline_error_label"]
+            gtk::Label {
+                set_xalign: 0.0,
+                set_wrap: true,
+                add_css_class: "error",
+                #[watch]
+                set_label: compose_inline_error_body(&model.state).unwrap_or(""),
+                #[watch]
+                set_visible: compose_inline_error_revealed(&model.state),
+            },
+
+            // Post-effect inline error surface. Populated by
+            // `AddAccountMsg::WorkerFailed(AddPostEffectOutcome::Inline)`
+            // when `Vault::mutate_and_save(|v| v.add(...))` returned
+            // `save_not_committed`, defensive `validation_error` /
+            // `invalid_state` / `io_error`, etc. The
+            // `Vault::mutate_and_save` snapshot already rolled the
+            // pre-attempt state back so the just-inserted account
+            // is gone from `Vault::iter()`; the dialog stays open
+            // with the typed body so the user can retry without
+            // losing the in-flight buffers. Mutually exclusive with
+            // `post_effect_warning_label` below — `KeepWithWarning`
+            // surfaces there instead. Pinned by
+            // `tests/add_account_logic.rs::compose_post_effect_inline_error_body_*`
+            // and `compose_post_effect_inline_error_revealed_*`.
+            #[name = "post_effect_inline_error_label"]
+            gtk::Label {
+                set_xalign: 0.0,
+                set_wrap: true,
+                add_css_class: "error",
+                #[watch]
+                set_label: compose_post_effect_inline_error_body(&model.state)
+                    .unwrap_or(""),
+                #[watch]
+                set_visible: compose_post_effect_inline_error_revealed(&model.state),
+            },
+
+            // Post-effect durability warning surface. Populated by
+            // `AddAccountMsg::WorkerFailed(AddPostEffectOutcome::KeepWithWarning)`
+            // when `Vault::mutate_and_save(|v| v.add(...))` returned
+            // `save_durability_unconfirmed` — the inserted account
+            // is in memory and matches the committed on-disk state,
+            // but the parent-directory fsync could not be confirmed.
+            // The `warning` CSS class paints the text advisory amber
+            // rather than destructive red so the user reads it as a
+            // committed-but-uncertain notice. Mutually exclusive
+            // with `post_effect_inline_error_label` above — the
+            // `Inline` branch routes to the error label instead.
+            // Pinned by
+            // `tests/add_account_logic.rs::compose_post_effect_warning_body_*`
+            // and `compose_post_effect_warning_revealed_*`.
+            #[name = "post_effect_warning_label"]
+            gtk::Label {
+                set_xalign: 0.0,
+                set_wrap: true,
+                add_css_class: "warning",
+                #[watch]
+                set_label: compose_post_effect_warning_body(&model.state).unwrap_or(""),
+                #[watch]
+                set_visible: compose_post_effect_warning_revealed(&model.state),
+            },
+
             gtk::Box {
                 set_orientation: gtk::Orientation::Horizontal,
                 set_spacing: 6,

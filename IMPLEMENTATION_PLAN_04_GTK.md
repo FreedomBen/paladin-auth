@@ -2384,14 +2384,44 @@ sign-off.
     `manual_draft_state_default_matches_cli_manual_add_defaults` /
     `add_dialog_state_new_initializes_manual_draft_to_defaults`
     siblings.
-  - [ ] Normalize the icon-hint entry through
+  - [x] Normalize the icon-hint entry through
     `paladin_core::parse_icon_hint_token` so the slug / `default` /
     `none` parsing matches the CLI / TUI add modals exactly.
-  - [ ] On submit, validate the inputs through
+    `classify_manual_submit` threads the typed
+    `ManualDraftState::icon_hint_text` (preserved verbatim — case and
+    whitespace included — by `apply_msg(AddAccountMsg::ManualIconHintChanged)`
+    per the L2364 widget binding) through
+    `paladin_core::parse_icon_hint_token`, short-circuiting any
+    malformed slug as `ManualSubmitOutcome::InlineError` before
+    `validate_manual` runs. Empty / `none` (any case) / explicit
+    lowercase slugs map to `IconHintInput::Default` /
+    `IconHintInput::None` / `IconHintInput::Slug(s)` respectively
+    — same boundary the CLI / TUI add flows cross. Pinned by
+    `tests/add_account_logic.rs::classify_manual_submit_empty_icon_hint_defaults_from_issuer`,
+    `classify_manual_submit_none_token_clears_icon_hint`,
+    `classify_manual_submit_explicit_slug_stored_verbatim`, and
+    `classify_manual_submit_malformed_slug_rejects_inline`.
+  - [x] On submit, validate the inputs through
     `paladin_core::validate_manual`; parse errors (invalid Base32,
     empty label, out-of-range digits / period / counter) and any
     core-returned `validation_error` block submission inline without
-    mutating the vault.
+    mutating the vault. `classify_manual_submit` calls
+    `validate_manual(input, import_time)` after the icon-hint
+    normalization above and wraps the `Err` as
+    `ManualSubmitOutcome::InlineError(InlineError::from_error(&err))`
+    so the typed §5 body propagates through the shared
+    `compose_save_click_outcome` pipeline as
+    `SaveClickOutcome::InlineError`. The Save handler dispatches
+    `AddAccountMsg::RenderInlineError`, which parks the body in
+    `AddDialogState::inline_error`; the `view!` macro `#[watch]`-
+    binds `compose_inline_error_body(&model.state).unwrap_or("")` /
+    `compose_inline_error_revealed(&model.state)` onto a new
+    `inline_error_label` gtk::Label (`error` CSS class) so the
+    rejection actually surfaces to the user without mutating
+    vault state. Pinned by
+    `tests/add_account_logic.rs::compose_inline_error_body_*` /
+    `compose_inline_error_revealed_*` plus the existing
+    `classify_manual_submit_*` rejection invariants.
   - [ ] Render validation warnings inline via
     `paladin_core::format_validation_warning()` without blocking
     creation.
@@ -2400,14 +2430,62 @@ sign-off.
     existing account; offer the "add anyway" confirmation that
     consumes the pending `ValidatedAccount` on the duplicate-allowed
     path (CLI parity with `--allow-duplicate`).
-  - [ ] Run successful manual additions inside
+  - [x] Run successful manual additions inside
     `Vault::mutate_and_save`; handle `save_not_committed` rollback
     (the just-inserted account is removed) and
     `save_durability_unconfirmed` keep-with-warning per §"Effect
-    errors".
-  - [ ] Zeroize the manual Base32 secret entry buffer on submit /
+    errors". `AppModel::update`'s `AddAccountOutput::Submit` arm
+    spawns `run_add_worker` on `gio::spawn_blocking`; the worker's
+    `vault.mutate_and_save(&store, |v| { v.add(account); Ok(()) })`
+    closure routes `Ok(())` as `AddWorkerEffect::Success` and the
+    typed failures through `classify_add_post_effect_error` into
+    `AddPostEffectOutcome::Inline` (`save_not_committed`,
+    defensive `validation_error` / `invalid_state` / `io_error`)
+    or `AddPostEffectOutcome::KeepWithWarning`
+    (`save_durability_unconfirmed`). The completion message
+    threads the typed outcome back to the dialog via
+    `AddAccountMsg::WorkerFailed`, which parks it in
+    `AddDialogState::worker_outcome`. The `view!` macro
+    `#[watch]`-binds `compose_post_effect_inline_error_body`
+    / `_revealed` onto a `post_effect_inline_error_label`
+    (`error` CSS class) and `compose_post_effect_warning_body`
+    / `_revealed` onto a `post_effect_warning_label` (`warning`
+    CSS class) so the typed body actually surfaces to the user
+    on both branches; the two labels are mutually exclusive so
+    a single worker outcome never stacks them. Pinned by
+    `tests/add_account_logic.rs::run_add_worker_save_failure_routes_inline_and_returns_pair`,
+    `classify_add_post_effect_error_save_durability_unconfirmed_keeps_success_with_warning`,
+    `compose_post_effect_inline_error_body_*` /
+    `compose_post_effect_inline_error_revealed_*`,
+    `compose_post_effect_warning_body_*` /
+    `compose_post_effect_warning_revealed_*`, and the new
+    cross-cutting mutual-exclusion invariants
+    `compose_post_effect_inline_error_and_warning_revealed_are_mutually_exclusive_on_inline_outcome`,
+    `compose_post_effect_inline_error_and_warning_revealed_are_mutually_exclusive_on_keep_with_warning_outcome`,
+    and `compose_post_effect_inline_error_and_warning_revealed_both_false_when_no_outcome`.
+  - [x] Zeroize the manual Base32 secret entry buffer on submit /
     cancel / dialog close / auto-lock and when the user switches
     away from the manual stack page.
+    `AddSecretState::manual_secret` stores the
+    `AddAccountMsg::ManualSecretChanged` shadow in a Paladin-owned
+    `SecretEntry` (a `Zeroizing<String>` whose bytes wipe on drop /
+    `take` / `set`), and `apply_msg` drains it through
+    `AddSecretState::clear_for(ClearReason::Submit | Cancel | Close)`
+    on the corresponding arms plus `AddSecretState::switch_path`
+    on `SwitchPath` away from the manual page. Auto-lock routes
+    through the shared dialog-drop path so the dialog's secret
+    state drops alongside the live `(Vault, Store)` pair when
+    `IdlePolicy::is_expired` fires. Pinned by
+    `tests/add_account_logic.rs::apply_msg_manual_secret_changed_shadows_into_secret_state`,
+    `apply_msg_cancel_wipes_secret_state_buffers`,
+    `apply_msg_close_wipes_secret_state_buffers`,
+    `apply_msg_submit_proceed_wipes_secret_state_buffers`,
+    `apply_msg_switch_path_to_uri_flips_active_path_and_emits_no_output`,
+    `apply_msg_switch_path_same_path_is_idempotent_noop`, plus
+    `tests/secret_fields_logic.rs::*` for the `SecretEntry`
+    zeroize invariants and
+    `tests/add_account_logic.rs::inline_error_does_not_echo_manual_secret_text`
+    for the §"Secret entry handling" redaction contract.
 - [ ] Add-via-`otpauth://`-URI paste path in `AddAccountComponent`,
   decoded via `paladin_core::parse_otpauth` and sharing the manual
   duplicate / validation paths.

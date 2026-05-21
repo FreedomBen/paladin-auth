@@ -10059,3 +10059,101 @@ fn fresh_add_dialog_icon_hint_default_resolves_to_default_from_issuer_mode() {
         "empty initial entry resolves to `Default from issuer` mode",
     );
 }
+
+// ---------------------------------------------------------------------------
+// Widget binding contract: pre/post-effect surfaces are mutually exclusive
+// across the `WorkerFailed` routing branches, so the `error` and `warning`
+// CSS-class `gtk::Label`s share screen space without ever both rendering
+// for a single worker outcome. The `view!` macro in `add_account.rs`
+// `#[watch]`-binds three labels (pre-effect inline error, post-effect
+// inline error, post-effect durability warning); the projections below
+// drive their `set_visible` flags. Pin the cross-cutting invariants so a
+// future routing change cannot silently land both labels at once.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn compose_post_effect_inline_error_and_warning_revealed_are_mutually_exclusive_on_inline_outcome()
+{
+    // `AddPostEffectOutcome::Inline(_)` (the routed branch for
+    // `save_not_committed`, defensive `validation_error` /
+    // `invalid_state` / `io_error`) flips the post-effect
+    // inline-error label visible and leaves the durability-warning
+    // label hidden. Sibling of
+    // `compose_post_effect_inline_error_revealed_with_inline_outcome_is_true`
+    // (which pins the error-side revealed flag) and
+    // `compose_post_effect_warning_revealed_with_inline_outcome_is_false`
+    // (which pins the warning-side hidden flag). The cross-cutting
+    // invariant here is the AND of both — the same `worker_outcome`
+    // slot cannot satisfy both `set_visible` bindings, so the two
+    // gtk::Label widgets never stack atop one another for a single
+    // failure.
+    use paladin_gtk::add_account::{
+        apply_msg, classify_add_post_effect_error, compose_post_effect_inline_error_revealed,
+        compose_post_effect_warning_revealed, AddAccountMsg, AddDialogState,
+    };
+
+    let outcome = classify_add_post_effect_error(&validation_error("label", "empty"));
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(&mut state, AddAccountMsg::WorkerFailed(outcome));
+
+    assert!(
+        compose_post_effect_inline_error_revealed(&state),
+        "Inline outcome reveals the post-effect inline-error label",
+    );
+    assert!(
+        !compose_post_effect_warning_revealed(&state),
+        "Inline outcome leaves the post-effect durability-warning label hidden",
+    );
+}
+
+#[test]
+fn compose_post_effect_inline_error_and_warning_revealed_are_mutually_exclusive_on_keep_with_warning_outcome(
+) {
+    // Mirror of the `Inline` invariant above on the
+    // `AddPostEffectOutcome::KeepWithWarning(_)` branch (routed
+    // for `save_durability_unconfirmed`): the durability-warning
+    // label flips visible and the post-effect inline-error label
+    // stays hidden. The cross-cutting AND keeps the two §"Effect
+    // errors" surfaces from rendering for a single worker outcome.
+    use paladin_gtk::add_account::{
+        apply_msg, classify_add_post_effect_error, compose_post_effect_inline_error_revealed,
+        compose_post_effect_warning_revealed, AddAccountMsg, AddDialogState,
+    };
+
+    let outcome = classify_add_post_effect_error(&PaladinError::SaveDurabilityUnconfirmed);
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(&mut state, AddAccountMsg::WorkerFailed(outcome));
+
+    assert!(
+        compose_post_effect_warning_revealed(&state),
+        "KeepWithWarning outcome reveals the post-effect durability-warning label",
+    );
+    assert!(
+        !compose_post_effect_inline_error_revealed(&state),
+        "KeepWithWarning outcome leaves the post-effect inline-error label hidden",
+    );
+}
+
+#[test]
+fn compose_post_effect_inline_error_and_warning_revealed_both_false_when_no_outcome() {
+    // Sanity sibling: with no `worker_outcome` recorded, neither
+    // post-effect label is revealed. Pins that the fresh-dialog
+    // state renders neither surface (only the pre-effect
+    // `inline_error_label` could fire, and only after a rejected
+    // Save click).
+    use paladin_gtk::add_account::{
+        compose_post_effect_inline_error_revealed, compose_post_effect_warning_revealed,
+        AddDialogState,
+    };
+
+    let state = AddDialogState::new();
+
+    assert!(
+        !compose_post_effect_inline_error_revealed(&state),
+        "fresh dialog has no worker_outcome → inline-error label hidden",
+    );
+    assert!(
+        !compose_post_effect_warning_revealed(&state),
+        "fresh dialog has no worker_outcome → durability-warning label hidden",
+    );
+}
