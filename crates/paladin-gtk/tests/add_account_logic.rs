@@ -10669,3 +10669,215 @@ fn should_present_duplicate_alert_does_not_fire_when_state_has_no_pending() {
         "the negative-on-both-sides case must not fire either",
     );
 }
+
+// ---------------------------------------------------------------------------
+// Scan clipboard button on the QR sub-path (Milestone 7 — clipboard-QR
+// add path, sub-item L2651: "Mount the QR-clipboard action on the
+// AdwViewStack's 'Scan' page").
+// ---------------------------------------------------------------------------
+
+#[test]
+fn format_scan_clipboard_button_label_is_non_empty() {
+    // The Scan clipboard button on the QR sub-path activates the
+    // clipboard-image-read path. Its label is rendered through a
+    // pure-logic helper so the wording stays under test and aligned
+    // against the dialog's other Static labels
+    // (`format_add_dialog_save_label`, `format_add_dialog_cancel_label`).
+    use paladin_gtk::add_account::format_scan_clipboard_button_label;
+    let label = format_scan_clipboard_button_label();
+    assert!(
+        !label.is_empty(),
+        "Scan clipboard button label must be non-empty so the user can identify the activation action",
+    );
+}
+
+#[test]
+fn format_scan_clipboard_button_label_returns_scan_clipboard() {
+    // Pin the wording verbatim so a future copy change cannot drift
+    // without a deliberate update. Mirror of the
+    // `format_add_path_label(AddPath::Qr)` projection that names the
+    // page itself "Scan clipboard"; keeping the button label aligned
+    // with the page name makes the activation surface unambiguous.
+    use paladin_gtk::add_account::format_scan_clipboard_button_label;
+    assert_eq!(format_scan_clipboard_button_label(), "Scan clipboard");
+}
+
+#[test]
+fn compose_scan_clipboard_button_sensitive_active_on_qr_path_when_idle() {
+    // The Scan clipboard button activates only when the user has
+    // navigated to the QR sub-path. The shared Save submit at the
+    // dialog footer is gated off the QR path (see
+    // `compose_save_button_sensitive`'s `AddPath::Qr => false` arm);
+    // this projection is its page-local counterpart.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_scan_clipboard_button_sensitive, AddAccountMsg, AddDialogState,
+    };
+    use paladin_gtk::secret_fields::AddPath;
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(&mut state, AddAccountMsg::SwitchPath(AddPath::Qr));
+
+    assert!(
+        compose_scan_clipboard_button_sensitive(&state),
+        "on the QR sub-path with no in-flight worker, the page-local Scan clipboard button must be sensitive",
+    );
+}
+
+#[test]
+fn compose_scan_clipboard_button_sensitive_inactive_on_manual_path() {
+    // The Manual sub-path activates through the shared Save submit;
+    // the page-local Scan clipboard button must stay disabled there
+    // so a stray click cannot fire the clipboard-image-read path
+    // outside the QR page.
+    use paladin_gtk::add_account::{compose_scan_clipboard_button_sensitive, AddDialogState};
+    use paladin_gtk::secret_fields::AddPath;
+
+    let state = AddDialogState::new();
+    assert_eq!(
+        state.secret_state().active_path,
+        AddPath::Manual,
+        "fresh state starts on Manual",
+    );
+    assert!(
+        !compose_scan_clipboard_button_sensitive(&state),
+        "Scan clipboard button must be insensitive on Manual sub-path",
+    );
+}
+
+#[test]
+fn compose_scan_clipboard_button_sensitive_inactive_on_uri_path() {
+    // Symmetric assertion for the URI sub-path: its own Save submit
+    // owns the activation pipeline, so the Scan clipboard button
+    // stays disabled while the user types an `otpauth://` URI.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_scan_clipboard_button_sensitive, AddAccountMsg, AddDialogState,
+    };
+    use paladin_gtk::secret_fields::AddPath;
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(&mut state, AddAccountMsg::SwitchPath(AddPath::Uri));
+
+    assert!(
+        !compose_scan_clipboard_button_sensitive(&state),
+        "Scan clipboard button must be insensitive on URI sub-path",
+    );
+}
+
+#[test]
+fn compose_scan_clipboard_button_sensitive_inactive_when_busy() {
+    // An in-flight worker owns the `(Vault, Store)` pair per
+    // `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership".
+    // The Scan clipboard button must dim while busy, mirroring the
+    // `compose_save_button_sensitive` busy short-circuit.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_scan_clipboard_button_sensitive, AddAccountMsg, AddDialogState,
+    };
+    use paladin_gtk::secret_fields::AddPath;
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(&mut state, AddAccountMsg::SwitchPath(AddPath::Qr));
+    assert!(
+        compose_scan_clipboard_button_sensitive(&state),
+        "precondition: QR sub-path with no busy latch is sensitive",
+    );
+    let _ = apply_msg(&mut state, AddAccountMsg::SetBusy(true));
+    assert!(
+        !compose_scan_clipboard_button_sensitive(&state),
+        "Scan clipboard button must dim while a worker is in flight even on the QR sub-path",
+    );
+}
+
+#[test]
+fn apply_msg_scan_clipboard_clicked_emits_no_output_in_initial_stage() {
+    // Initial milestone landing: the `AddAccountMsg::ScanClipboardClicked`
+    // variant exists so the widget's button click can dispatch into
+    // the `apply_msg` routing, but the AppModel-side handler that
+    // actually reads `gdk::Clipboard`, allocates the RGBA buffer,
+    // calls `decode_clipboard_qr`, and dispatches the QR worker
+    // lands in a follow-up commit alongside the
+    // `AddAccountOutput::RequestScanClipboard` (or equivalent) wiring.
+    // Pin the no-output behavior so the staged rollout stays
+    // explicit — parity with the `WorkerFailed` variant's staged
+    // landing in commit `ae8fd44`.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddAccountOutput, AddDialogState};
+    use paladin_gtk::secret_fields::AddPath;
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(&mut state, AddAccountMsg::SwitchPath(AddPath::Qr));
+    let output: Option<AddAccountOutput> =
+        apply_msg(&mut state, AddAccountMsg::ScanClipboardClicked);
+    assert!(
+        output.is_none(),
+        "the initial-stage Scan clipboard click is a state-side no-op; \
+         the parent wiring that reads the GDK clipboard and dispatches a QR worker \
+         lands in a follow-up commit",
+    );
+}
+
+#[test]
+fn apply_msg_scan_clipboard_clicked_preserves_active_path() {
+    // The Scan click must not flip the active path away from the
+    // QR page (the user expects to stay on the Scan view while the
+    // GDK clipboard read runs asynchronously and any inline error
+    // surfaces on the same page).
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+    use paladin_gtk::secret_fields::AddPath;
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(&mut state, AddAccountMsg::SwitchPath(AddPath::Qr));
+    let _ = apply_msg(&mut state, AddAccountMsg::ScanClipboardClicked);
+    assert_eq!(
+        state.secret_state().active_path,
+        AddPath::Qr,
+        "ScanClipboardClicked is a Qr-page-local activation; active_path stays Qr",
+    );
+}
+
+#[test]
+fn apply_msg_scan_clipboard_clicked_does_not_disturb_manual_or_uri_buffers() {
+    // The Scan click does not touch the manual / URI shadow buffers
+    // — those belong to other sub-paths and the user may have
+    // started typing there before navigating to the QR page; the
+    // existing `SwitchPath` clearing rules (per the
+    // `apply_msg_switch_path_*` invariants) are the single source of
+    // truth for cross-path buffer clearing.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_manual_issuer_text, compose_manual_label_text, compose_uri_text_value,
+        AddAccountMsg, AddDialogState,
+    };
+    use paladin_gtk::secret_fields::AddPath;
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualLabelChanged("alice".to_string()),
+    );
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualIssuerChanged("Acme".to_string()),
+    );
+    let _ = apply_msg(&mut state, AddAccountMsg::SwitchPath(AddPath::Qr));
+    // The SwitchPath(Qr) already clears manual / URI per the
+    // SwitchPath rules; the Scan click after that must not
+    // reintroduce or further mutate any of them.
+    let label_before = compose_manual_label_text(&state).to_string();
+    let issuer_before = compose_manual_issuer_text(&state).to_string();
+    let uri_before = compose_uri_text_value(&state).to_string();
+    let _ = apply_msg(&mut state, AddAccountMsg::ScanClipboardClicked);
+
+    assert_eq!(
+        compose_manual_label_text(&state),
+        label_before,
+        "ScanClipboardClicked does not mutate the manual label buffer",
+    );
+    assert_eq!(
+        compose_manual_issuer_text(&state),
+        issuer_before,
+        "ScanClipboardClicked does not mutate the manual issuer buffer",
+    );
+    assert_eq!(
+        compose_uri_text_value(&state),
+        uri_before,
+        "ScanClipboardClicked does not mutate the URI text buffer",
+    );
+}

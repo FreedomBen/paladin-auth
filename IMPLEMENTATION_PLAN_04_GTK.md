@@ -2326,7 +2326,7 @@ sign-off.
     `compose_qr_counts_panel_imported_label_returns_some_after_success`,
     `compose_qr_counts_panel_skipped_label_returns_some_after_success`,
     and `compose_qr_counts_panel_warnings_label_returns_some_after_success`.)
-- [ ] `AddAccountComponent` manual fields path (label, issuer,
+- [x] `AddAccountComponent` manual fields path (label, issuer,
   Base32 secret, algorithm, digits, kind, TOTP period, HOTP counter,
   icon hint).
   - [x] Mount the manual form on the `AdwViewStack`'s "Manual" page
@@ -2648,9 +2648,31 @@ sign-off.
 - [ ] `AddAccountComponent` QR clipboard image path (`gdk::Clipboard`
   texture read → `paladin_core::import::qr_image_bytes` with
   `ImportConflict::Skip`).
-  - [ ] Mount the QR-clipboard action on the `AdwViewStack`'s "Scan
+  - [x] Mount the QR-clipboard action on the `AdwViewStack`'s "Scan
     clipboard" page; on activation, read a `gdk::Texture` from the
-    GDK clipboard.
+    GDK clipboard. The `AddAccountComponent`'s `view!` macro now
+    mounts a page-local `gtk::Button` (`#[name = "scan_clipboard_button"]`,
+    `"suggested-action"` CSS class) inside the Qr stack page's
+    `gtk::Box`, with `set_label: format_scan_clipboard_button_label()`
+    (`"Scan clipboard"`), `#[watch] set_sensitive:
+    compose_scan_clipboard_button_sensitive(&model.state)`, and a
+    `connect_clicked` handler that dispatches
+    `AddAccountMsg::ScanClipboardClicked`. The `apply_msg` arm for
+    that variant is currently a state-side no-op (initial-stage
+    landing — parity with the `WorkerFailed` staged rollout); the
+    `AppModel`-side handler that reads `gdk::Display::default()
+    .clipboard()`, runs `gdk::TextureDownloader` (next sub-item), and
+    dispatches the QR worker (subsequent sub-items) lands in
+    follow-up commits. Pinned by
+    `tests/add_account_logic.rs::format_scan_clipboard_button_label_is_non_empty`,
+    `format_scan_clipboard_button_label_returns_scan_clipboard`,
+    `compose_scan_clipboard_button_sensitive_active_on_qr_path_when_idle`,
+    `compose_scan_clipboard_button_sensitive_inactive_on_manual_path`,
+    `compose_scan_clipboard_button_sensitive_inactive_on_uri_path`,
+    `compose_scan_clipboard_button_sensitive_inactive_when_busy`,
+    `apply_msg_scan_clipboard_clicked_emits_no_output_in_initial_stage`,
+    `apply_msg_scan_clipboard_clicked_preserves_active_path`, and
+    `apply_msg_scan_clipboard_clicked_does_not_disturb_manual_or_uri_buffers`.
   - [ ] Allocate an exact `width * height * 4` straight
     (non-premultiplied) RGBA8 buffer with overflow-checked
     multiplication; reject sizes above

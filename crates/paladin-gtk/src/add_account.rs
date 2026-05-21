@@ -1256,6 +1256,35 @@ pub enum AddAccountMsg {
     /// the `tests/add_account_logic.rs::apply_msg_save_clicked_*`
     /// invariants.
     SaveClicked,
+    /// Clipboard-QR sub-path activation button on the
+    /// `AdwViewStack`'s "Scan" page.
+    ///
+    /// The Save submit at the dialog footer covers the manual and
+    /// URI sub-paths through [`compose_save_click_outcome`], but
+    /// the QR path activates differently: it reads a `gdk::Texture`
+    /// from the GDK clipboard, allocates a `width * height * 4`
+    /// straight RGBA8 buffer, downloads via `gdk::TextureDownloader`
+    /// set to `gdk::MemoryFormat::R8g8b8a8`, and calls
+    /// [`crate::qr_clipboard::decode_clipboard_qr`] before handing
+    /// the resulting `Vec<ValidatedAccount>` to a
+    /// `gio::spawn_blocking Vault::mutate_and_save(|v| v.import_accounts(...))`
+    /// worker (parity with §6's
+    /// [`paladin_core::ImportConflict::Skip`] policy). Because the
+    /// activation owns its own pipeline, the QR page hides the
+    /// shared Save submit (see `compose_save_button_sensitive`'s
+    /// `AddPath::Qr => false` arm) and presents this page-local
+    /// "Scan clipboard" button instead.
+    ///
+    /// Initial milestone landing: the variant exists so the
+    /// widget's `connect_clicked[sender] => sender.input(...)` can
+    /// dispatch into [`apply_msg`], but the `AppModel`-side handler
+    /// that reads the GDK clipboard, runs the worker, and routes
+    /// success / failure back through [`Self::QrSuccess`] /
+    /// [`Self::WorkerFailed`] lands in follow-up commits — parity
+    /// with the [`Self::WorkerFailed`] staged rollout. For now the
+    /// arm is a state-side no-op; see
+    /// `tests/add_account_logic.rs::apply_msg_scan_clipboard_clicked_emits_no_output_in_initial_stage`.
+    ScanClipboardClicked,
     /// Clipboard-QR worker reported a successful import. `AppModel`
     /// extracts the [`QrImportSummary`] from the worker's
     /// [`paladin_core::ImportReport`] via
@@ -2741,6 +2770,63 @@ pub fn compose_save_button_sensitive(state: &AddDialogState) -> bool {
     }
 }
 
+/// Fixed display label for the page-local "Scan clipboard" button
+/// mounted on the `AdwViewStack`'s `AddPath::Qr` page.
+///
+/// Returns the static string the button renders. The wording is
+/// pinned through this helper so the GTK label, the
+/// `format_add_path_label(AddPath::Qr)` page name, and the
+/// `manual/MANUAL_TEST_PLAN.md` Add-via-clipboard-image checklist
+/// items stay aligned against a single source of truth — a future
+/// copy change cannot drift the activation surface silently.
+///
+/// Pure — returns a `'static str` without allocating. Mirror of
+/// [`format_add_dialog_save_label`] on the page-local activation
+/// side: the QR page hides the shared Save submit (see
+/// [`compose_save_button_sensitive`]'s `AddPath::Qr => false` arm)
+/// and presents this label on its own button instead.
+#[must_use]
+pub fn format_scan_clipboard_button_label() -> &'static str {
+    "Scan clipboard"
+}
+
+/// State-driven projection of whether the page-local
+/// `AddPath::Qr` "Scan clipboard" button's `set_sensitive:` is
+/// `true`.
+///
+/// Routing rule:
+///
+/// * An in-flight save / open / passphrase / import / export
+///   worker owns the live `(Vault, Store)` pair (per
+///   `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership")
+///   and short-circuits the button to insensitive even on the QR
+///   sub-path — mirror of [`compose_save_button_sensitive`]'s
+///   busy gate.
+/// * Otherwise the button activates only while
+///   [`crate::secret_fields::AddSecretState::active_path`] is
+///   [`crate::secret_fields::AddPath::Qr`]. The Manual and URI
+///   sub-paths reach the activation pipeline through the shared
+///   Save submit at the dialog footer, and the QR page-local
+///   activation must stay dim on those sub-paths so a stray click
+///   cannot fire the clipboard-image-read path outside its page.
+///
+/// Lets the widget bind a single `#[watch] set_sensitive:` over
+/// the projection so a sub-path switch or a busy latch flip
+/// re-renders the button without inspecting the state inline.
+/// Pure — borrows the state and returns a `bool` without
+/// allocating; sibling of [`compose_save_button_sensitive`] on the
+/// page-local activation side.
+#[must_use]
+pub fn compose_scan_clipboard_button_sensitive(state: &AddDialogState) -> bool {
+    if state.is_busy() {
+        return false;
+    }
+    matches!(
+        state.secret_state().active_path,
+        crate::secret_fields::AddPath::Qr
+    )
+}
+
 /// Fixed `title` attribute the widget hands to the manual sub-path's
 /// label `AdwEntryRow::set_title`.
 ///
@@ -3865,6 +3951,22 @@ pub fn apply_msg(state: &mut AddDialogState, msg: AddAccountMsg) -> Option<AddAc
             // `tests/add_account_logic.rs`.
             Some(AddAccountOutput::RequestSaveClick)
         }
+        AddAccountMsg::ScanClipboardClicked => {
+            // Initial-stage landing: see the
+            // `AddAccountMsg::ScanClipboardClicked` doc-comment. The
+            // GDK clipboard read, the `decode_clipboard_qr` call,
+            // and the QR worker dispatch all land in follow-up
+            // commits alongside the `AddAccountOutput`
+            // request variant and the `AppModel`-side handler.
+            // Mutating state here would conflate the page-local
+            // activation signal with downstream side effects the
+            // parent has not yet wired, so the arm is deliberately
+            // a no-op until the staged rollout is complete. Pinned
+            // by `apply_msg_scan_clipboard_clicked_emits_no_output_in_initial_stage` /
+            // `apply_msg_scan_clipboard_clicked_preserves_active_path` /
+            // `apply_msg_scan_clipboard_clicked_does_not_disturb_manual_or_uri_buffers`.
+            None
+        }
         AddAccountMsg::QrSuccess(summary) => {
             // Clear any prior pre-effect inline_error and post-
             // effect worker_outcome so the freshly-rendered counts
@@ -4229,6 +4331,49 @@ impl SimpleComponent for AddAccountComponent {
                 ] = &gtk::Box {
                     set_orientation: gtk::Orientation::Vertical,
                     set_spacing: 12,
+
+                    // Page-local "Scan clipboard" activation button.
+                    // The shared Save submit at the dialog footer is
+                    // dimmed on the QR sub-path (see
+                    // `compose_save_button_sensitive`'s
+                    // `AddPath::Qr => false` arm); this button drives
+                    // the clipboard-image-read pipeline instead.
+                    //
+                    // The click dispatches `AddAccountMsg::ScanClipboardClicked`
+                    // into `apply_msg`. The current initial-stage
+                    // arm is a state-side no-op; the
+                    // `AppModel`-side handler that reads the GDK
+                    // clipboard via `gdk::Display::default().clipboard()`,
+                    // downloads the texture through
+                    // `gdk::TextureDownloader` set to
+                    // `gdk::MemoryFormat::R8g8b8a8`, runs
+                    // `crate::qr_clipboard::decode_clipboard_qr`,
+                    // and dispatches the QR worker lands in
+                    // follow-up commits alongside the matching
+                    // `AddAccountOutput` request variant — parity
+                    // with the staged `WorkerFailed` rollout.
+                    //
+                    // Sensitivity binds through
+                    // `compose_scan_clipboard_button_sensitive`,
+                    // which short-circuits on `state.is_busy()` and
+                    // otherwise activates only on the QR sub-path.
+                    // The `AdwViewStack` already hides this page
+                    // when the active path is Manual / URI, so the
+                    // page-relative sensitivity check is a
+                    // belt-and-braces gate against a stray
+                    // programmatic dispatch (e.g. accelerator) that
+                    // would bypass the visible-page filter.
+                    #[name = "scan_clipboard_button"]
+                    gtk::Button {
+                        set_label: format_scan_clipboard_button_label(),
+                        add_css_class: "suggested-action",
+                        set_halign: gtk::Align::Center,
+                        #[watch]
+                        set_sensitive: compose_scan_clipboard_button_sensitive(&model.state),
+                        connect_clicked[sender] => move |_| {
+                            sender.input(AddAccountMsg::ScanClipboardClicked);
+                        },
+                    },
                 },
 
                 // State-driven binding: any programmatic state
