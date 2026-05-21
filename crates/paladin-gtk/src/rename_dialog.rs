@@ -436,6 +436,31 @@ pub fn format_rename_dialog_save_label() -> &'static str {
     "Save"
 }
 
+/// Body text for the `AdwToast` raised on the
+/// [`RenameWorkerEffect::Success`] branch.
+///
+/// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" >
+/// "In-app account rename" ("On success, refresh
+/// `AccountListComponent` from the returned vault, close the dialog,
+/// and surface a status / toast confirmation."). The widget layer
+/// raises the toast on the `adw::ToastOverlay` after the dispatch
+/// drops the dialog and the row label updates through
+/// `AccountListMsg::Refresh`. Sibling of
+/// [`crate::hotp_reveal::format_hotp_durability_unconfirmed_toast`]
+/// on the toast-body-text side.
+///
+/// The wording is intentionally generic so the toast does not need
+/// to carry the new label across the worker boundary — the affected
+/// row already reflects the new label in the list, and the toast is
+/// a confirmation that the save committed rather than a recap of
+/// which account changed.
+///
+/// Pure — returns a `'static str` without allocating.
+#[must_use]
+pub fn format_rename_dialog_success_toast() -> &'static str {
+    "Account renamed."
+}
+
 /// Decide whether the Save `gtk::Button` should be sensitive given
 /// the dialog's cached validation state.
 ///

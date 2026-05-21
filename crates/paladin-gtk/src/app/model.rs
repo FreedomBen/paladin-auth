@@ -2200,6 +2200,9 @@ impl SimpleComponent for AppModel {
                     if dispatch.refresh_list {
                         self.refresh_account_list();
                     }
+                    if let Some(body) = dispatch.success_toast {
+                        self.toast_overlay.add_toast(adw::Toast::new(&body));
+                    }
                 }
             }
             AppMsg::HotpAdvanceWorkerCompleted(completion) => {

@@ -1448,3 +1448,23 @@ fn format_rename_dialog_save_button_sensitive_dimmed_when_validation_fails() {
         "Save button must be dimmed when the live draft fails validation",
     );
 }
+
+#[test]
+fn format_rename_dialog_success_toast_returns_renamed() {
+    // `AppMsg::RenameWorkerCompleted` raises an `AdwToast` on the
+    // success branch per `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone
+    // 7 checklist" > "In-app account rename" ("On success, refresh
+    // `AccountListComponent` from the returned vault, close the
+    // dialog, and surface a status / toast confirmation."). The body
+    // is pinned through this helper so the wording stays in one place
+    // shared by the widget binding and the pure-logic tests; sibling
+    // of `format_hotp_durability_unconfirmed_toast` on the
+    // toast-body-text side.
+    use paladin_gtk::rename_dialog::format_rename_dialog_success_toast;
+
+    assert_eq!(
+        format_rename_dialog_success_toast(),
+        "Account renamed.",
+        "wording must stay stable so the success toast does not drift silently",
+    );
+}

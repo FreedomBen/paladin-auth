@@ -6190,7 +6190,8 @@ fn compose_rename_dispatch_failure_inline_error_keeps_dialog_with_msg_and_unlock
 fn compose_rename_dispatch_mirrors_trio_for_every_effect() {
     use paladin_gtk::app::state::{
         compose_rename_dispatch, rename_dialog_msg_after, rename_final_app_state,
-        should_drop_rename_dialog_after, should_refresh_list_after_rename,
+        rename_success_toast_after, should_drop_rename_dialog_after,
+        should_refresh_list_after_rename,
     };
     use paladin_gtk::rename_dialog::{classify_rename_error, RenameWorkerEffect};
 
@@ -6225,6 +6226,11 @@ fn compose_rename_dispatch_mirrors_trio_for_every_effect() {
             dispatch.refresh_list,
             should_refresh_list_after_rename(effect),
             "refresh_list must mirror the helper for effect={effect:?}",
+        );
+        assert_eq!(
+            dispatch.success_toast,
+            rename_success_toast_after(effect),
+            "success_toast must mirror the projection for effect={effect:?}",
         );
         let trio_msg = rename_dialog_msg_after(effect);
         match (&dispatch.dialog_msg, &trio_msg) {
@@ -6302,6 +6308,99 @@ fn compose_rename_dispatch_from_non_unlocked_busy_returns_no_app_state() {
             "non-UnlockedBusy source={source:?} must refuse to install a phantom Unlocked, \
              got {:?}",
             dispatch.app_state,
+        );
+    }
+}
+
+// rename_success_toast_after — toast-body projection for the rename
+// worker outcome. `AppMsg::RenameWorkerCompleted` consults this to
+// decide whether to raise an `AdwToast` on the `adw::ToastOverlay`
+// per `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" >
+// "In-app account rename" ("On success, refresh
+// `AccountListComponent` from the returned vault, close the dialog,
+// and surface a status / toast confirmation."). The projection
+// inspects only the typed `RenameWorkerEffect` variant so the
+// side-effect decision in `AppModel::update` stays unit-testable
+// without spinning up GTK / libadwaita.
+
+#[test]
+fn rename_success_toast_after_success_returns_body() {
+    use paladin_gtk::app::state::rename_success_toast_after;
+    use paladin_gtk::rename_dialog::{format_rename_dialog_success_toast, RenameWorkerEffect};
+
+    let toast = rename_success_toast_after(&RenameWorkerEffect::Success)
+        .expect("Success must surface a confirmation toast");
+    assert_eq!(
+        toast,
+        format_rename_dialog_success_toast(),
+        "toast body must come from format_rename_dialog_success_toast so wording stays single-sourced",
+    );
+}
+
+#[test]
+fn rename_success_toast_after_failure_returns_none() {
+    use paladin_gtk::app::state::rename_success_toast_after;
+    use paladin_gtk::rename_dialog::{classify_rename_error, RenameWorkerEffect};
+
+    let failures = [
+        PaladinError::SaveNotCommitted {
+            committed: false,
+            backup_path: None,
+        },
+        PaladinError::SaveNotCommitted {
+            committed: true,
+            backup_path: None,
+        },
+        PaladinError::SaveDurabilityUnconfirmed,
+        PaladinError::InvalidState {
+            operation: "rename",
+            state: "account_not_found",
+        },
+    ];
+    for err in &failures {
+        let outcome = classify_rename_error(err);
+        let effect = RenameWorkerEffect::Failure(outcome);
+        assert!(
+            rename_success_toast_after(&effect).is_none(),
+            "Failure must not raise a success toast for err={err:?}",
+        );
+    }
+}
+
+#[test]
+fn compose_rename_dispatch_populates_success_toast_only_on_success() {
+    // `compose_rename_dispatch` bundles `rename_success_toast_after`
+    // alongside the existing drop-dialog / refresh-list / dialog-msg /
+    // app-state decisions so the dispatch site can raise the toast in
+    // one shot. The success branch carries the toast body so the
+    // widget layer just adds it as an `adw::Toast::new(&body)`; the
+    // failure branches stay `None` so the dialog's inline error /
+    // warning is the only surface that conveys the typed outcome.
+    use paladin_gtk::app::state::{compose_rename_dispatch, rename_success_toast_after};
+    use paladin_gtk::rename_dialog::{classify_rename_error, RenameWorkerEffect};
+
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let effects = [
+        RenameWorkerEffect::Success,
+        RenameWorkerEffect::Failure(classify_rename_error(&PaladinError::SaveNotCommitted {
+            committed: false,
+            backup_path: None,
+        })),
+        RenameWorkerEffect::Failure(classify_rename_error(
+            &PaladinError::SaveDurabilityUnconfirmed,
+        )),
+        RenameWorkerEffect::Failure(classify_rename_error(&PaladinError::InvalidState {
+            operation: "rename",
+            state: "account_not_found",
+        })),
+    ];
+    for effect in &effects {
+        let dispatch = compose_rename_dispatch(&busy, effect);
+        assert_eq!(
+            dispatch.success_toast,
+            rename_success_toast_after(effect),
+            "success_toast must mirror the projection for effect={effect:?}",
         );
     }
 }

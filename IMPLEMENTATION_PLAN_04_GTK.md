@@ -1768,8 +1768,24 @@ sign-off.
     memory and keeping the dialog open with the inline error.
   - [ ] Handle `save_durability_unconfirmed` by keeping the new label
     in memory and attaching the warning to the dialog body.
-  - [ ] On success, refresh `AccountListComponent` from the returned
+  - [x] On success, refresh `AccountListComponent` from the returned
     vault, close the dialog, and surface a status / toast confirmation.
+    `AppMsg::RenameWorkerCompleted` routes the worker outcome through
+    `compose_rename_dispatch`, which bundles
+    `should_drop_rename_dialog_after` (drops the dialog on `Success`),
+    `should_refresh_list_after_rename` (re-emits
+    `AccountListMsg::Refresh` from the reinstalled `(Vault, Store)`
+    pair on `Success` and `KeepNewWithWarning`), and
+    `rename_success_toast_after` (returns
+    `Some(format_rename_dialog_success_toast().to_string())` on
+    `Success` only). The dispatch site raises the body as
+    `self.toast_overlay.add_toast(adw::Toast::new(&body))` on the same
+    `adw::ToastOverlay` used by the HOTP durability-unconfirmed
+    surface; the failure branches stay `None` so the dialog's inline
+    error / body warning is the only surface that conveys the typed
+    outcome. Wording is pinned through `format_rename_dialog_success_toast`
+    (`"Account renamed."`) so the helper, the projection, and the
+    bundled `RenameDispatch::success_toast` field stay in lockstep.
   - [ ] Reset the entry buffer on cancel / submit / dialog close.
 - [ ] `RemoveDialog` confirmation flow (`AdwAlertDialog` with
   `destructive-action` styling gating `Vault::remove` inside
