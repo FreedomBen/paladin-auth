@@ -419,6 +419,42 @@ pub fn format_rename_dialog_cancel_label() -> &'static str {
     "Cancel"
 }
 
+/// Fixed `"Save"` label the widget hands to the Rename account
+/// dialog's footer Save `gtk::Button::set_label`.
+///
+/// The label is the affirmative affordance the user clicks to
+/// commit the validated draft through
+/// `Vault::mutate_and_save(|v| v.rename(...))`. Wording is the
+/// GNOME-convention `"Save"` — surfaced through a helper so the
+/// string lives in one place shared by the widget binding and the
+/// pure-logic tests in `tests/rename_dialog_logic.rs`. Sibling of
+/// [`format_rename_dialog_cancel_label`] on the dialog-footer side.
+///
+/// Pure — returns a `'static str` without allocating.
+#[must_use]
+pub fn format_rename_dialog_save_label() -> &'static str {
+    "Save"
+}
+
+/// Decide whether the Save `gtk::Button` should be sensitive given
+/// the dialog's cached validation state.
+///
+/// Returns `true` when [`RenameDialogState::last_validation`] is a
+/// [`SubmitOutcome::Proceed`] — the draft passes §4.1 validation and
+/// `RenameDialogState::submit` would forward
+/// [`RenameDialogOutput::SubmitLabel`] — and `false` on
+/// [`SubmitOutcome::InlineError`] so the user cannot bypass the
+/// inline error to submit an empty / overlong label.
+///
+/// Pure — inspects only the cached [`SubmitOutcome`] and never
+/// re-runs validation. The widget binds this through `#[watch]` so
+/// the button updates in lockstep with `connect_changed` keystrokes
+/// without spinning up GTK in `tests/rename_dialog_logic.rs`.
+#[must_use]
+pub fn format_rename_dialog_save_button_sensitive(state: &RenameDialogState) -> bool {
+    matches!(state.last_validation(), SubmitOutcome::Proceed(_))
+}
+
 /// Render the rename dialog's display-label-bearing sub-title
 /// line — the `gtk::Label` beneath the
 /// [`format_rename_dialog_title`] header that names which account
@@ -813,12 +849,15 @@ pub fn apply_msg(
 /// `<issuer>:<label>` row, an editable [`adw::EntryRow`] pre-filled
 /// with the account's current label, an inline-error label that
 /// reflects [`RenameDialogState::inline_error`] as the user types,
-/// and a Cancel button that forwards
-/// [`RenameDialogOutput::Cancel`] so `AppModel` can dismiss the
-/// dialog. The Save button and the
-/// `Vault::mutate_and_save(|v| v.rename(...))` worker land in a
-/// follow-up commit alongside the `UnlockedBusy` worker
-/// infrastructure.
+/// a Cancel button that forwards [`RenameDialogOutput::Cancel`] so
+/// `AppModel` can dismiss the dialog, and a Save button (with the
+/// `suggested-action` style class) that fires
+/// [`RenameDialogMsg::SubmitClicked`] and is gated by
+/// [`format_rename_dialog_save_button_sensitive`] so it dims
+/// whenever the live draft fails §4.1 validation. The
+/// `Vault::mutate_and_save(|v| v.rename(...))` worker dispatch
+/// itself lives in `AppModel`'s
+/// [`crate::rename_dialog::RenameDialogOutput::SubmitLabel`] arm.
 pub struct RenameDialogComponent {
     /// Construction parameters retained on `self` so future message
     /// handlers can read the targeted account id and reset the draft
@@ -894,6 +933,17 @@ impl SimpleComponent for RenameDialogComponent {
                     set_label: format_rename_dialog_cancel_label(),
                     connect_clicked[sender] => move |_| {
                         sender.input(RenameDialogMsg::Cancel);
+                    },
+                },
+
+                #[name = "save_button"]
+                gtk::Button {
+                    set_label: format_rename_dialog_save_label(),
+                    add_css_class: "suggested-action",
+                    #[watch]
+                    set_sensitive: format_rename_dialog_save_button_sensitive(&model.state),
+                    connect_clicked[sender] => move |_| {
+                        sender.input(RenameDialogMsg::SubmitClicked);
                     },
                 },
             },

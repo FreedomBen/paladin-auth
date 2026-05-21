@@ -1745,11 +1745,21 @@ sign-off.
   kebab menu; calls `Vault::rename` inside `Vault::mutate_and_save`).
   - [ ] Add a `gtk::MenuButton` kebab on each row whose `gio::Menu`
     exposes "Rename…" alongside the existing "Remove…".
-  - [ ] Build `RenameDialogComponent` as a modal carrying a
+  - [x] Build `RenameDialogComponent` as a modal carrying a
     pre-populated `AdwEntryRow` for the label plus Save / Cancel
-    buttons.
-  - [ ] Validate the label inline (non-empty, §4.1 length limits) and
-    gate the Save button.
+    buttons. The Save `gtk::Button` (with the `suggested-action`
+    style class) sits beside the Cancel button in the dialog
+    footer; the entry row is seeded imperatively from
+    `RenameDialogState::draft` in `init` so the dialog opens with
+    the user-editable current label in place.
+  - [x] Validate the label inline (non-empty, §4.1 length limits) and
+    gate the Save button. The keystroke-driven `connect_changed`
+    signal re-runs `classify_submit` via
+    `RenameDialogState::set_draft`; the Save button binds to
+    `format_rename_dialog_save_button_sensitive(&model.state)` via
+    `#[watch]` so the affirmative affordance dims whenever
+    `last_validation` is `SubmitOutcome::InlineError` and the
+    inline-error label renders the matching §4.1 rejection.
   - [ ] On submit, call `Vault::rename(id, new_label, now)` inside
     `Vault::mutate_and_save` regardless of whether the new label
     equals the current one (so `updated_at` always bumps, matching

@@ -1375,3 +1375,76 @@ fn format_rename_dialog_subtitle_renders_renaming_display_label() {
         "empty display label degrades to the literal trailing period without panicking",
     );
 }
+
+#[test]
+fn format_rename_dialog_save_label_returns_save() {
+    // The Rename account dialog's footer Save `gtk::Button`'s
+    // `set_label` attribute is populated from this helper. The
+    // label wording is the GNOME-convention `"Save"` — surfaced
+    // through a helper so the string lives in one place shared by
+    // the widget binding and the snapshot tests, mirroring the
+    // partner `format_rename_dialog_cancel_label` helper on the
+    // dialog-footer-cancel side.
+    use paladin_gtk::rename_dialog::format_rename_dialog_save_label;
+
+    assert_eq!(
+        format_rename_dialog_save_label(),
+        "Save",
+        "dialog save button label is the fixed GNOME-convention wording",
+    );
+}
+
+#[test]
+fn format_rename_dialog_save_button_sensitive_proceeds_when_validation_succeeds() {
+    // The Save `gtk::Button`'s `set_sensitive` attribute is
+    // bound through this helper so the dialog reads off the
+    // cached `RenameDialogState::last_validation` rather than
+    // re-running `classify_submit` on every redraw. A
+    // `SubmitOutcome::Proceed` outcome enables the button so the
+    // user can commit the validated label.
+    use paladin_gtk::rename_dialog::format_rename_dialog_save_button_sensitive;
+
+    let init = RenameDialogInit {
+        account_id: AccountId::new(),
+        current_label: "alice".to_string(),
+        display_label: "GitHub:alice".to_string(),
+    };
+    let state = RenameDialogState::new(&init);
+    assert!(
+        matches!(state.last_validation(), SubmitOutcome::Proceed(_)),
+        "seeded label passes §4.1 validation",
+    );
+
+    assert!(
+        format_rename_dialog_save_button_sensitive(&state),
+        "Save button must be sensitive when the live draft validates",
+    );
+}
+
+#[test]
+fn format_rename_dialog_save_button_sensitive_dimmed_when_validation_fails() {
+    // The Save button must dim when the draft fails §4.1
+    // validation so the user cannot bypass the inline error to
+    // submit an empty / overlong label. The helper inspects the
+    // cached [`RenameDialogState::last_validation`] and returns
+    // `false` on `SubmitOutcome::InlineError` so the widget
+    // disables the button until the user fixes the draft.
+    use paladin_gtk::rename_dialog::format_rename_dialog_save_button_sensitive;
+
+    let init = RenameDialogInit {
+        account_id: AccountId::new(),
+        current_label: "alice".to_string(),
+        display_label: "GitHub:alice".to_string(),
+    };
+    let mut state = RenameDialogState::new(&init);
+    state.set_draft(String::new());
+    assert!(
+        matches!(state.last_validation(), SubmitOutcome::InlineError(_)),
+        "empty draft fails §4.1 validation",
+    );
+
+    assert!(
+        !format_rename_dialog_save_button_sensitive(&state),
+        "Save button must be dimmed when the live draft fails validation",
+    );
+}
