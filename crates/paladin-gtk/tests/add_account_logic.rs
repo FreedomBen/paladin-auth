@@ -9919,3 +9919,143 @@ fn compose_qr_counts_panel_warnings_label_returns_some_after_success() {
         Some("Warnings: 3"),
     );
 }
+
+// ---------------------------------------------------------------------------
+// DESIGN §5 manual-add defaults contract.
+//
+// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" >
+// `AddAccountComponent` manual fields path: a freshly-opened Add
+// dialog must seed the manual form widgets with the CLI manual-add
+// defaults from DESIGN §5 — TOTP, SHA1, 6 digits, 30 s period, HOTP
+// counter 0, icon-hint mode "Default from issuer". Each default is
+// already individually pinned by the `compose_manual_*_fresh_dialog_*`
+// tests above; the two tests below aggregate the contract in one
+// place so a future field-by-field tweak surfaces as a DESIGN §5
+// regression and the icon-hint "Default from issuer" mode is pinned
+// at the `parse_icon_hint_token` boundary the manual submit path
+// actually consults.
+// ---------------------------------------------------------------------------
+
+#[test]
+#[allow(clippy::float_cmp)]
+fn fresh_add_dialog_seeds_manual_form_to_design_section_5_cli_defaults() {
+    // Aggregating contract pin. A freshly-opened `AddDialogState`
+    // exposes every manual-form widget projection at its DESIGN §5
+    // default so the initial render of the dialog matches the CLI
+    // `paladin add` manual-input defaults without any user input.
+    // Sibling per-field tests:
+    //   * `compose_manual_kind_selected_fresh_dialog_returns_totp`
+    //   * `compose_manual_algorithm_selected_fresh_dialog_returns_sha1`
+    //   * `compose_manual_digits_value_fresh_dialog_returns_default`
+    //   * `compose_manual_period_secs_value_fresh_dialog_returns_default`
+    //   * `compose_manual_counter_value_fresh_dialog_returns_default`
+    //   * `compose_manual_period_secs_visible_default_state_is_true`
+    //   * `compose_manual_counter_visible_default_state_is_false`
+    //   * `compose_manual_label_text_fresh_dialog_returns_empty`
+    //   * `compose_manual_issuer_text_fresh_dialog_returns_empty`
+    //   * `compose_manual_icon_hint_text_fresh_dialog_returns_empty`
+    use paladin_gtk::add_account::{
+        compose_manual_algorithm_selected, compose_manual_counter_value,
+        compose_manual_counter_visible, compose_manual_digits_value, compose_manual_icon_hint_text,
+        compose_manual_issuer_text, compose_manual_kind_selected, compose_manual_label_text,
+        compose_manual_period_secs_value, compose_manual_period_secs_visible, AddDialogState,
+        ManualDraftState,
+    };
+
+    let state = AddDialogState::new();
+
+    // Kind dropdown defaults to TOTP (index 0 per
+    // `format_manual_kind_selected`).
+    assert_eq!(
+        compose_manual_kind_selected(&state),
+        0,
+        "DESIGN §5: manual-add defaults to TOTP",
+    );
+    // Algorithm dropdown defaults to SHA1 (index 0 per
+    // `format_manual_algorithm_selected`).
+    assert_eq!(
+        compose_manual_algorithm_selected(&state),
+        0,
+        "DESIGN §5: manual-add algorithm defaults to SHA1",
+    );
+    assert_eq!(
+        compose_manual_digits_value(&state),
+        6.0,
+        "DESIGN §5: manual-add digits defaults to 6",
+    );
+    assert_eq!(
+        compose_manual_period_secs_value(&state),
+        30.0,
+        "DESIGN §5: manual-add TOTP period defaults to 30 seconds",
+    );
+    assert_eq!(
+        compose_manual_counter_value(&state),
+        0.0,
+        "DESIGN §5: manual-add HOTP counter defaults to 0",
+    );
+    assert!(
+        compose_manual_period_secs_visible(&state),
+        "default TOTP kind shows the period row at first render",
+    );
+    assert!(
+        !compose_manual_counter_visible(&state),
+        "default TOTP kind hides the counter row at first render",
+    );
+    assert_eq!(
+        compose_manual_label_text(&state),
+        "",
+        "label entry opens empty",
+    );
+    assert_eq!(
+        compose_manual_issuer_text(&state),
+        "",
+        "issuer entry opens empty",
+    );
+    assert_eq!(
+        compose_manual_icon_hint_text(&state),
+        "",
+        "icon-hint entry opens empty (icon-hint mode 'Default from issuer')",
+    );
+
+    // Belt-and-braces: the underlying typed draft must match the
+    // documented `ManualDraftState::default` so any future drift
+    // between the state defaults and the projections trips here too.
+    let draft = state.manual_draft();
+    let expected = ManualDraftState::default();
+    assert_eq!(draft.label, expected.label);
+    assert_eq!(draft.issuer, expected.issuer);
+    assert_eq!(draft.algorithm, expected.algorithm);
+    assert_eq!(draft.digits, expected.digits);
+    assert_eq!(draft.kind, expected.kind);
+    assert_eq!(draft.period_secs, expected.period_secs);
+    assert_eq!(draft.counter, expected.counter);
+    assert_eq!(draft.icon_hint_text, expected.icon_hint_text);
+}
+
+#[test]
+fn fresh_add_dialog_icon_hint_default_resolves_to_default_from_issuer_mode() {
+    // The icon-hint entry opens empty (see
+    // `compose_manual_icon_hint_text_fresh_dialog_returns_empty`),
+    // and DESIGN §5 names the default mode "Default from issuer".
+    // The submit path threads the raw entry text through
+    // `paladin_core::parse_icon_hint_token` to map widget text →
+    // `IconHintInput`; pin that the empty initial buffer resolves
+    // to `IconHintInput::Default` so the documented default-mode
+    // contract is anchored against the actual core boundary.
+    // The submit-time wiring is exercised end-to-end by
+    // `classify_manual_submit_empty_icon_hint_defaults_from_issuer`.
+    use paladin_core::{parse_icon_hint_token, IconHintInput};
+    use paladin_gtk::add_account::{compose_manual_icon_hint_text, AddDialogState};
+
+    let state = AddDialogState::new();
+    let initial = compose_manual_icon_hint_text(&state);
+    assert_eq!(initial, "", "precondition: icon-hint entry opens empty");
+
+    let resolved = parse_icon_hint_token(initial)
+        .expect("empty icon-hint token must parse cleanly into `IconHintInput::Default` per §5");
+    assert_eq!(
+        resolved,
+        IconHintInput::Default,
+        "empty initial entry resolves to `Default from issuer` mode",
+    );
+}

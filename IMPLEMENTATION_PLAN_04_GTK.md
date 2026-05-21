@@ -2361,9 +2361,29 @@ sign-off.
     plus the existing `apply_msg_manual_*_changed_*` /
     `format_manual_*_title` / `compose_manual_*` invariants that
     cover the dispatch and projection layers.
-  - [ ] Default the form fields to the CLI manual-add defaults from
+  - [x] Default the form fields to the CLI manual-add defaults from
     DESIGN §5 (TOTP, SHA1, 6 digits, 30 s period, HOTP counter 0,
-    icon-hint mode `Default from issuer`).
+    icon-hint mode `Default from issuer`). `ManualDraftState::default`
+    already seeds the typed draft at the §5 defaults, and the
+    `view!` macro reads each manual-form widget through the
+    `compose_manual_*(&model.state)` projections so the dialog's
+    first render already matches the CLI `paladin add` defaults
+    without user input. Pinned by
+    `tests/add_account_logic.rs::fresh_add_dialog_seeds_manual_form_to_design_section_5_cli_defaults`
+    (aggregating contract over `compose_manual_kind_selected`,
+    `compose_manual_algorithm_selected`, `compose_manual_digits_value`,
+    `compose_manual_period_secs_value`, `compose_manual_counter_value`,
+    `compose_manual_period_secs_visible`, `compose_manual_counter_visible`,
+    `compose_manual_label_text`, `compose_manual_issuer_text`, and
+    `compose_manual_icon_hint_text`) and
+    `fresh_add_dialog_icon_hint_default_resolves_to_default_from_issuer_mode`
+    (pins that the empty icon-hint entry threads through
+    `paladin_core::parse_icon_hint_token` into
+    `IconHintInput::Default`), on top of the existing per-field
+    `compose_manual_*_fresh_dialog_*` /
+    `manual_draft_state_default_matches_cli_manual_add_defaults` /
+    `add_dialog_state_new_initializes_manual_draft_to_defaults`
+    siblings.
   - [ ] Normalize the icon-hint entry through
     `paladin_core::parse_icon_hint_token` so the slug / `default` /
     `none` parsing matches the CLI / TUI add modals exactly.
