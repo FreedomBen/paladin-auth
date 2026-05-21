@@ -1542,7 +1542,7 @@ sign-off.
   - [ ] Refresh the store after every vault mutation (Add / Remove /
     Rename / Import / settings change that toggles a row's
     presentation) without reordering surviving rows.
-- [ ] `AccountRowComponent` full body (label, icon, code, TOTP
+- [x] `AccountRowComponent` full body (label, icon, code, TOTP
   gauge / HOTP next, copy button, kebab menu).
   - [x] Render the display label via
     `summary_display_label(&AccountSummary)` (CLI / TUI parity:
@@ -1555,9 +1555,26 @@ sign-off.
   - [x] Render the icon via `gtk::IconTheme` against
     `AccountSummary.icon_hint` with the placeholder fallback (see
     "Icon resolution" item below).
-  - [ ] Render a code label populated from
+  - [x] Render a code label populated from
     `paladin_core::totp_code` for TOTP rows and from the hidden /
     reveal state for HOTP rows (see "HOTP reveal" item below).
+    `account_list::bind_row` reads `RowDisplay::code` and writes
+    the resulting text through `code.set_label(&code_text)` —
+    `CodeDisplay::Hidden` renders the `HIDDEN_CODE_PLACEHOLDER`
+    and `CodeDisplay::Visible(c)` renders the live code. For TOTP
+    rows, the ticker (`crate::ticker::compute_tick_displays`)
+    publishes `vault.totp_code(row.id, now)` through `project_row`
+    on every `paladin_core::TICK_INTERVAL_MS` tick so the visible
+    code stays in lockstep with `paladin_core`'s TOTP window;
+    races against vault mutations or clock-skew failures fall
+    through to leave the prior display in place, never blanking
+    the row. For HOTP rows, `crate::hotp_reveal::project_row_with_code`
+    renders `CodeDisplay::Visible` from the in-flight reveal `Code`
+    and `crate::account_list::hidden_row_display` renders
+    `CodeDisplay::Hidden` once the reveal window expires, matching
+    the §"Component tree" > `AccountRowComponent` rules that
+    hidden rows show the stored next counter and revealed rows
+    show the `Code.counter_used` label.
   - [x] For TOTP rows, render a progress widget (gauge / level bar)
     that ticks against the shared `paladin_core::TICK_INTERVAL_MS`
     source (see "TOTP ticker" item below). The continuous
@@ -1633,7 +1650,7 @@ sign-off.
     after every dispatch so any state transition flipping
     `AppState::is_busy()` propagates a debounced re-splice through
     the row factory.
-- [ ] TOTP ticker (`paladin_core::TICK_INTERVAL_MS` timeout source
+- [x] TOTP ticker (`paladin_core::TICK_INTERVAL_MS` timeout source
   for gauge updates and clipboard staleness checks).
   - [x] Install a single `glib::timeout_add_local` source ticking
     at `paladin_core::TICK_INTERVAL_MS` while at least one TOTP row
@@ -1719,7 +1736,7 @@ sign-off.
     `RevealWindow` is open; the copy button widget binding lands
     alongside the copy / clipboard bullet earlier in the
     `AccountRowComponent` cluster.)
-- [ ] Icon resolution (`gtk::IconTheme` lookup against
+- [x] Icon resolution (`gtk::IconTheme` lookup against
   `AccountSummary.icon_hint` with placeholder fallback).
   - [x] Implement `icons.rs` lookups against the system
     `gtk::IconTheme` for the slug carried in
@@ -1741,7 +1758,7 @@ sign-off.
     `IconTheme::for_display(display).add_resource_path(format_app_icon_theme_resource_path())`
     so the placeholder resolves against the embedded payload even in
     sandboxed Flatpak runtimes.)
-- [ ] In-app account rename (`RenameDialog` reachable from the row
+- [x] In-app account rename (`RenameDialog` reachable from the row
   kebab menu; calls `Vault::rename` inside `Vault::mutate_and_save`).
   - [x] Add a `gtk::MenuButton` kebab on each row whose `gio::Menu`
     exposes "Rename…" alongside the existing "Remove…".
@@ -2028,7 +2045,7 @@ sign-off.
     `tests/remove_dialog_logic.rs::apply_msg_cancel_emits_cancel_output`,
     `apply_msg_cancel_does_not_mutate_worker_outcome`, and
     `remove_dialog_output_cancel_is_distinct_variant`.)
-- [ ] `AddAccountComponent` shared shell and mutation pipeline.
+- [x] `AddAccountComponent` shared shell and mutation pipeline.
   - [x] Wrap the manual form, the URI entry, and the clipboard QR path
     in an `AdwViewStack` controlled by an `AdwViewSwitcher` before the
     path-specific pages are wired.
@@ -2227,9 +2244,51 @@ sign-off.
     `tests/app_state_logic.rs::add_success_toast_after_success_returns_body`,
     `add_success_toast_after_failure_returns_none`, and
     `compose_add_dispatch_populates_success_toast_only_on_success`.
-  - [ ] Keep successful clipboard-QR additions on a post-success counts
+  - [x] Keep successful clipboard-QR additions on a post-success counts
     panel until the user dismisses it, so imported / skipped / warning
     counts remain visible.
+    (`AddDialogState::qr_success_counts: Option<QrImportSummary>` parks
+    the imported / skipped / warning counts after a successful
+    clipboard-QR worker completion; `AddAccountMsg::QrSuccess(QrImportSummary)`
+    sets the slot (also dropping any prior `inline_error` /
+    `worker_outcome` so the panel renders against a clean body), and
+    `AddAccountMsg::DismissQrCountsPanel` drains it on the explicit
+    Dismiss click. The panel survives between worker completion and
+    the user's Dismiss; it is drained on `AddAccountMsg::Cancel` /
+    `Close` and on `SwitchPath` off the QR sub-path so a follow-up
+    open / manual or URI sub-path starts on a clean body. The widget
+    binds `compose_qr_counts_panel_visible` for the panel container's
+    visibility and `compose_qr_counts_panel_imported_label` /
+    `compose_qr_counts_panel_skipped_label` /
+    `compose_qr_counts_panel_warnings_label` for the per-row text,
+    with the heading and dismiss-button wording pinned by
+    `format_qr_counts_panel_heading` /
+    `format_qr_counts_panel_dismiss_label`. The actual QR worker
+    dispatch lands alongside §"Milestone 7 checklist" >
+    `AddAccountComponent` QR clipboard image path (L2310) which
+    populates this state via the `QrSuccess` arm. Pinned by
+    `tests/add_account_logic.rs::qr_success_counts_is_none_by_default`,
+    `apply_msg_qr_success_stores_summary_on_state`,
+    `apply_msg_dismiss_qr_counts_panel_clears_slot`,
+    `apply_msg_dismiss_qr_counts_panel_on_empty_state_is_noop`,
+    `apply_msg_qr_success_replaces_prior_summary`,
+    `apply_msg_qr_success_clears_prior_inline_error`,
+    `apply_msg_qr_success_clears_prior_worker_outcome`,
+    `apply_msg_cancel_clears_qr_success_counts`,
+    `apply_msg_close_clears_qr_success_counts`,
+    `apply_msg_switch_path_clears_qr_success_counts`,
+    `apply_msg_switch_path_same_qr_preserves_counts`,
+    `compose_qr_counts_panel_visible_returns_false_for_default_state`,
+    `compose_qr_counts_panel_visible_returns_true_after_qr_success`,
+    `compose_qr_counts_panel_visible_returns_false_after_dismiss`,
+    `format_qr_counts_panel_imported_label_renders_count`,
+    `format_qr_counts_panel_skipped_label_renders_count`,
+    `format_qr_counts_panel_warnings_label_renders_count`,
+    `format_qr_counts_panel_heading_is_non_empty`,
+    `format_qr_counts_panel_dismiss_label_is_non_empty`,
+    `compose_qr_counts_panel_imported_label_returns_some_after_success`,
+    `compose_qr_counts_panel_skipped_label_returns_some_after_success`,
+    and `compose_qr_counts_panel_warnings_label_returns_some_after_success`.)
 - [ ] `AddAccountComponent` manual fields path (label, issuer,
   Base32 secret, algorithm, digits, kind, TOTP period, HOTP counter,
   icon hint).

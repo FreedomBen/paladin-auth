@@ -97,6 +97,7 @@ use paladin_core::{
 };
 
 use crate::account_row::summary_display_label;
+use crate::qr_clipboard::QrImportSummary;
 use crate::secret_fields::{AddPath, AddSecretState, ClearReason};
 
 /// Per-keystroke reactive state for the non-secret manual entries.
@@ -1233,6 +1234,35 @@ pub enum AddAccountMsg {
     /// the `tests/add_account_logic.rs::apply_msg_save_clicked_*`
     /// invariants.
     SaveClicked,
+    /// Clipboard-QR worker reported a successful import. `AppModel`
+    /// extracts the [`QrImportSummary`] from the worker's
+    /// [`paladin_core::ImportReport`] via
+    /// [`QrImportSummary::from_report`] and forwards it through
+    /// this variant so the dialog can park the counts on
+    /// [`AddDialogState::qr_success_counts`] and render the post-
+    /// success counts panel.
+    ///
+    /// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+    /// `AddAccountComponent` shared shell L2230: successful QR adds
+    /// keep the dialog open on the counts panel (imported /
+    /// skipped / warnings) until the user dismisses it, distinct
+    /// from manual / URI adds which dismiss via toast on success.
+    ///
+    /// [`apply_msg`] drops any prior pre-effect [`InlineError`] and
+    /// post-effect [`AddPostEffectOutcome`] before parking the
+    /// counts so the panel renders against a clean dialog body.
+    /// Dialog-local — no [`AddAccountOutput`] is emitted; the
+    /// parent already knows the worker landed.
+    QrSuccess(QrImportSummary),
+    /// User clicked Dismiss on the post-success counts panel. The
+    /// arm drains [`AddDialogState::qr_success_counts`] so the
+    /// widget's `#[watch]` binding re-renders without the panel.
+    /// The dialog stays open so the user can chain another import
+    /// or switch sub-paths without re-opening Add.
+    ///
+    /// Defensive: a stray dispatch on a dialog that has not seen a
+    /// QR success is a benign no-op (no output, no state change).
+    DismissQrCountsPanel,
 }
 
 /// Outbound messages emitted by [`AddAccountComponent`] back to
@@ -1756,6 +1786,107 @@ pub fn compose_post_effect_inline_error_body(state: &AddDialogState) -> Option<&
         AddPostEffectOutcome::Inline(inline) => Some(inline.rendered.as_str()),
         AddPostEffectOutcome::KeepWithWarning(_) => None,
     }
+}
+
+/// Heading rendered atop the clipboard-QR post-success counts panel.
+///
+/// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+/// `AddAccountComponent` shared shell L2230, the counts panel keeps
+/// imported / skipped / warning counts visible until the user
+/// dismisses it. The heading is a fixed string so the wording stays
+/// pinned by the `format_qr_counts_panel_heading_is_non_empty` test.
+#[must_use]
+pub fn format_qr_counts_panel_heading() -> &'static str {
+    "QR import complete"
+}
+
+/// Label rendered on the Dismiss button of the clipboard-QR post-
+/// success counts panel.
+///
+/// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+/// `AddAccountComponent` shared shell L2230, the user dismisses the
+/// panel via an explicit click that routes through
+/// [`AddAccountMsg::DismissQrCountsPanel`]; the button label is
+/// rendered through this helper so the wording stays pinned by the
+/// `format_qr_counts_panel_dismiss_label_is_non_empty` test.
+#[must_use]
+pub fn format_qr_counts_panel_dismiss_label() -> &'static str {
+    "Dismiss"
+}
+
+/// Format the "Imported: N" row of the clipboard-QR post-success
+/// counts panel.
+///
+/// Pure helper so the widget renders the imported count verbatim
+/// without re-deriving the label string at the binding site.
+#[must_use]
+pub fn format_qr_counts_panel_imported_label(count: usize) -> String {
+    format!("Imported: {count}")
+}
+
+/// Format the "Skipped: N" row of the clipboard-QR post-success
+/// counts panel.
+#[must_use]
+pub fn format_qr_counts_panel_skipped_label(count: usize) -> String {
+    format!("Skipped: {count}")
+}
+
+/// Format the "Warnings: N" row of the clipboard-QR post-success
+/// counts panel.
+#[must_use]
+pub fn format_qr_counts_panel_warnings_label(count: usize) -> String {
+    format!("Warnings: {count}")
+}
+
+/// State-driven projection of whether the clipboard-QR post-success
+/// counts panel is currently visible.
+///
+/// Returns `true` while [`AddDialogState::qr_success_counts`] is
+/// populated and `false` otherwise. The widget binds a `#[watch]`
+/// over this projection to drive the panel container's visibility
+/// instead of pattern-matching on the slot inline. Sibling of
+/// [`compose_qr_counts_panel_imported_label`] /
+/// [`compose_qr_counts_panel_skipped_label`] /
+/// [`compose_qr_counts_panel_warnings_label`] so the visibility
+/// and the per-row labels flip together on the same
+/// [`AddAccountMsg::QrSuccess`] / [`AddAccountMsg::DismissQrCountsPanel`]
+/// dispatches.
+#[must_use]
+pub fn compose_qr_counts_panel_visible(state: &AddDialogState) -> bool {
+    state.qr_success_counts().is_some()
+}
+
+/// State-driven projection of the "Imported: N" row label, or `None`
+/// when the panel is hidden.
+///
+/// Returns `Some(format_qr_counts_panel_imported_label(n))` while
+/// [`AddDialogState::qr_success_counts`] is populated. Pairs with
+/// [`compose_qr_counts_panel_skipped_label`] /
+/// [`compose_qr_counts_panel_warnings_label`] so the three rows
+/// stay in lockstep.
+#[must_use]
+pub fn compose_qr_counts_panel_imported_label(state: &AddDialogState) -> Option<String> {
+    state
+        .qr_success_counts()
+        .map(|s| format_qr_counts_panel_imported_label(s.imported))
+}
+
+/// State-driven projection of the "Skipped: N" row label, or `None`
+/// when the panel is hidden.
+#[must_use]
+pub fn compose_qr_counts_panel_skipped_label(state: &AddDialogState) -> Option<String> {
+    state
+        .qr_success_counts()
+        .map(|s| format_qr_counts_panel_skipped_label(s.skipped))
+}
+
+/// State-driven projection of the "Warnings: N" row label, or `None`
+/// when the panel is hidden.
+#[must_use]
+pub fn compose_qr_counts_panel_warnings_label(state: &AddDialogState) -> Option<String> {
+    state
+        .qr_success_counts()
+        .map(|s| format_qr_counts_panel_warnings_label(s.warnings))
 }
 
 /// State-driven projection of whether the post-effect inline-error
@@ -3080,6 +3211,25 @@ pub struct AddDialogState {
     /// [`crate::account_list::BusyFlag`] latch that
     /// `AccountListComponent` uses for its row affordances.
     busy: bool,
+    /// Counts panel parked by the most recent clipboard-QR
+    /// import worker completion, or `None` if no QR success is
+    /// currently surfaced.
+    ///
+    /// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+    /// `AddAccountComponent` shared shell L2230: a successful
+    /// clipboard-QR add keeps the dialog open on a counts panel
+    /// (imported / skipped / warnings) until the user dismisses
+    /// it, unlike the manual / URI add paths which dismiss via
+    /// toast on success. This slot survives between the QR worker
+    /// completion and the user's explicit
+    /// [`AddAccountMsg::DismissQrCountsPanel`] click.
+    ///
+    /// Drained on dialog dismissal ([`AddAccountMsg::Cancel`],
+    /// [`AddAccountMsg::Close`]), on a leaving sub-path transition
+    /// ([`AddAccountMsg::SwitchPath`] off the QR page), and on the
+    /// explicit Dismiss click so the panel does not survive across
+    /// dialog opens or unrelated sub-paths.
+    qr_success_counts: Option<QrImportSummary>,
 }
 
 impl AddDialogState {
@@ -3203,6 +3353,23 @@ impl AddDialogState {
     pub fn is_busy(&self) -> bool {
         self.busy
     }
+
+    /// Counts surfaced by the most recent successful clipboard-QR
+    /// add, or `None` if no QR success is currently parked.
+    ///
+    /// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+    /// `AddAccountComponent` shared shell L2230 (post-success counts
+    /// panel). The widget binds a `#[watch]` over this through
+    /// [`compose_qr_counts_panel_visible`] /
+    /// [`compose_qr_counts_panel_imported_label`] /
+    /// [`compose_qr_counts_panel_skipped_label`] /
+    /// [`compose_qr_counts_panel_warnings_label`] so the counts
+    /// panel renders the live numbers until the user dismisses it
+    /// via [`AddAccountMsg::DismissQrCountsPanel`].
+    #[must_use]
+    pub fn qr_success_counts(&self) -> Option<&QrImportSummary> {
+        self.qr_success_counts.as_ref()
+    }
 }
 
 /// Map a [`SaveClickOutcome`] from [`compose_save_click_outcome`]
@@ -3288,6 +3455,11 @@ pub fn apply_msg(state: &mut AddDialogState, msg: AddAccountMsg) -> Option<AddAc
             // does not render a stale existing summary against a
             // fresh empty pending.
             state.pending_duplicate_existing = None;
+            // Drain the QR post-success counts panel so a follow-up
+            // dialog open starts on a clean body — the panel is
+            // dialog-local UI state, not vault state, so dismissal
+            // must drop it alongside the secret-bearing buffers.
+            state.qr_success_counts = None;
             Some(AddAccountOutput::Cancel)
         }
         AddAccountMsg::WorkerFailed(outcome) => {
@@ -3350,6 +3522,13 @@ pub fn apply_msg(state: &mut AddDialogState, msg: AddAccountMsg) -> Option<AddAc
                 // does not render a stale existing summary against
                 // a fresh empty pending.
                 state.pending_duplicate_existing = None;
+                // The QR post-success counts panel is QR-specific
+                // UI state; leaving the QR sub-path drains it so
+                // the manual / URI pages do not render an irrelevant
+                // counts row. Same-path re-entry leaves the panel
+                // intact — the `path_changed` guard above mirrors
+                // the secret-state same-path no-op rule.
+                state.qr_success_counts = None;
             }
             None
         }
@@ -3520,6 +3699,9 @@ pub fn apply_msg(state: &mut AddDialogState, msg: AddAccountMsg) -> Option<AddAc
             // carried bytes.
             let _dropped_pending = state.secret_state.clear_for(ClearReason::Close);
             state.pending_duplicate_existing = None;
+            // Mirror of the Cancel arm: drain the QR counts panel so
+            // the next dialog open starts on a clean body.
+            state.qr_success_counts = None;
             Some(AddAccountOutput::Close)
         }
         AddAccountMsg::SaveClicked => {
@@ -3543,6 +3725,29 @@ pub fn apply_msg(state: &mut AddDialogState, msg: AddAccountMsg) -> Option<AddAc
             // by the `apply_msg_save_clicked_*` tests in
             // `tests/add_account_logic.rs`.
             Some(AddAccountOutput::RequestSaveClick)
+        }
+        AddAccountMsg::QrSuccess(summary) => {
+            // Clear any prior pre-effect inline_error and post-
+            // effect worker_outcome so the freshly-rendered counts
+            // panel does not sit alongside stale text from an
+            // earlier failed Save click or a stale durability
+            // warning. Mirror of the `SubmitProceed` /
+            // `ConfirmAddAnyway` drops, but the success surface
+            // here is the counts panel rather than the parent's
+            // toast — so the dialog stays open and the slot is
+            // populated before returning.
+            state.inline_error = None;
+            state.worker_outcome = None;
+            state.qr_success_counts = Some(summary);
+            None
+        }
+        AddAccountMsg::DismissQrCountsPanel => {
+            // Defensive: assigning `None` is idempotent so a stray
+            // click on an already-empty slot is a benign no-op.
+            // The widget's #[watch] over `qr_success_counts`
+            // collapses the panel as soon as this returns.
+            state.qr_success_counts = None;
+            None
         }
     }
 }

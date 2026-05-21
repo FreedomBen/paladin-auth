@@ -9387,3 +9387,535 @@ fn parse_manual_algorithm_from_selected_round_trips_format_manual_algorithm_sele
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// QR clipboard post-success counts panel
+// ---------------------------------------------------------------------------
+//
+// `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+// `AddAccountComponent` shared shell L2230:
+//
+//   "Keep successful clipboard-QR additions on a post-success counts panel
+//    until the user dismisses it, so imported / skipped / warning counts
+//    remain visible."
+//
+// Distinct from the manual / URI add paths (which dismiss via toast on
+// success per L2204) because the QR path imports zero-to-many accounts in
+// one shot and the user needs to see the breakdown of imported / skipped /
+// warning counts before the dialog goes away.
+
+#[test]
+fn qr_success_counts_is_none_by_default() {
+    // A freshly-opened dialog has not yet seen a QR worker completion,
+    // so the slot must collapse to `None` — the widget binds a
+    // `#[watch]` over the projection so the counts panel stays hidden
+    // until a QR success is parked.
+    use paladin_gtk::add_account::AddDialogState;
+
+    let state = AddDialogState::new();
+
+    assert!(
+        state.qr_success_counts().is_none(),
+        "fresh dialog has no QR success counts",
+    );
+}
+
+#[test]
+fn apply_msg_qr_success_stores_summary_on_state() {
+    // `AddAccountMsg::QrSuccess(QrImportSummary)` is the parent's hook
+    // for forwarding the QR clipboard worker's post-merge counts back
+    // into the dialog so the counts panel can render imported /
+    // skipped / warning numbers verbatim until the user dismisses it.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+    use paladin_gtk::qr_clipboard::QrImportSummary;
+
+    let summary = QrImportSummary {
+        imported: 3,
+        skipped: 1,
+        warnings: 2,
+    };
+    let mut state = AddDialogState::new();
+
+    let output = apply_msg(&mut state, AddAccountMsg::QrSuccess(summary));
+
+    assert!(
+        output.is_none(),
+        "QrSuccess is dialog-local; no output forwarded to AppModel",
+    );
+    assert_eq!(
+        state.qr_success_counts(),
+        Some(&summary),
+        "QrSuccess parks the carried summary verbatim",
+    );
+}
+
+#[test]
+fn apply_msg_dismiss_qr_counts_panel_clears_slot() {
+    // The "Dismiss" button on the counts panel routes through
+    // `AddAccountMsg::DismissQrCountsPanel`; the arm drains the
+    // `qr_success_counts` slot so the widget's `#[watch]` binding
+    // re-renders without the panel. The dialog stays open so the user
+    // can chain another clipboard QR import without re-opening Add.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+    use paladin_gtk::qr_clipboard::QrImportSummary;
+
+    let summary = QrImportSummary {
+        imported: 1,
+        skipped: 0,
+        warnings: 0,
+    };
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(&mut state, AddAccountMsg::QrSuccess(summary));
+    assert!(
+        state.qr_success_counts().is_some(),
+        "precondition: panel set"
+    );
+
+    let output = apply_msg(&mut state, AddAccountMsg::DismissQrCountsPanel);
+
+    assert!(
+        output.is_none(),
+        "DismissQrCountsPanel is dialog-local; no output forwarded",
+    );
+    assert!(
+        state.qr_success_counts().is_none(),
+        "DismissQrCountsPanel drains the qr_success_counts slot",
+    );
+}
+
+#[test]
+fn apply_msg_dismiss_qr_counts_panel_on_empty_state_is_noop() {
+    // Defensive: a stray Dismiss click on a dialog that has not seen a
+    // QR success is a benign no-op (no allocation, no output, no state
+    // change). The widget enables the Dismiss button only while the
+    // panel is visible, but the message handler must not panic if the
+    // slot is already empty.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+
+    let output = apply_msg(&mut state, AddAccountMsg::DismissQrCountsPanel);
+
+    assert!(output.is_none(), "no-op dismiss emits no output");
+    assert!(
+        state.qr_success_counts().is_none(),
+        "no-op dismiss leaves the empty slot empty",
+    );
+}
+
+#[test]
+fn apply_msg_qr_success_replaces_prior_summary() {
+    // Back-to-back clipboard QR imports inside the same dialog open
+    // replace the visible panel with the latest counts. The Dismiss
+    // button is the user-driven escape hatch; a fresh QR success is
+    // the system-driven replacement so the panel always shows the
+    // most recent merge.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+    use paladin_gtk::qr_clipboard::QrImportSummary;
+
+    let first = QrImportSummary {
+        imported: 2,
+        skipped: 0,
+        warnings: 0,
+    };
+    let second = QrImportSummary {
+        imported: 5,
+        skipped: 3,
+        warnings: 1,
+    };
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(&mut state, AddAccountMsg::QrSuccess(first));
+    let _ = apply_msg(&mut state, AddAccountMsg::QrSuccess(second));
+
+    assert_eq!(
+        state.qr_success_counts(),
+        Some(&second),
+        "the latest QrSuccess replaces the prior counts",
+    );
+}
+
+#[test]
+fn apply_msg_qr_success_clears_prior_inline_error() {
+    // A successful QR merge invalidates any prior pre-effect inline
+    // error (e.g. from a rejected Save click against the manual /
+    // URI sub-path); drop it so the panel can render alongside a
+    // clean dialog body. Mirror of the `SubmitProceed` arm's
+    // inline_error drop.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState, InlineError};
+    use paladin_gtk::qr_clipboard::QrImportSummary;
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::RenderInlineError(InlineError::from_error(&validation_error(
+            "label", "empty",
+        ))),
+    );
+    assert!(
+        state.inline_error().is_some(),
+        "precondition: inline_error set"
+    );
+
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::QrSuccess(QrImportSummary::default()),
+    );
+
+    assert!(
+        state.inline_error().is_none(),
+        "QrSuccess clears any prior inline_error",
+    );
+}
+
+#[test]
+fn apply_msg_qr_success_clears_prior_worker_outcome() {
+    // A successful QR merge invalidates any prior post-effect worker
+    // outcome (a stale `KeepWithWarning` from an earlier manual / URI
+    // add) so the dialog body renders the fresh counts panel against
+    // a clean slate. Mirror of the `SubmitProceed` arm's
+    // worker_outcome drop.
+    use paladin_gtk::add_account::{
+        apply_msg, classify_add_post_effect_error, AddAccountMsg, AddDialogState,
+    };
+    use paladin_gtk::qr_clipboard::QrImportSummary;
+
+    let mut state = AddDialogState::new();
+    let outcome = classify_add_post_effect_error(&PaladinError::SaveDurabilityUnconfirmed);
+    let _ = apply_msg(&mut state, AddAccountMsg::WorkerFailed(outcome));
+    assert!(
+        state.worker_outcome().is_some(),
+        "precondition: worker_outcome set",
+    );
+
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::QrSuccess(QrImportSummary::default()),
+    );
+
+    assert!(
+        state.worker_outcome().is_none(),
+        "QrSuccess clears any prior post-effect worker outcome",
+    );
+}
+
+#[test]
+fn apply_msg_cancel_clears_qr_success_counts() {
+    // Dialog dismissal via Cancel drains the counts panel — the next
+    // dialog open starts clean. Mirror of the other Cancel drains
+    // (`secret_state`, `pending_duplicate_existing`).
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddAccountOutput, AddDialogState};
+    use paladin_gtk::qr_clipboard::QrImportSummary;
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::QrSuccess(QrImportSummary {
+            imported: 2,
+            skipped: 0,
+            warnings: 0,
+        }),
+    );
+    assert!(
+        state.qr_success_counts().is_some(),
+        "precondition: panel set"
+    );
+
+    let output = apply_msg(&mut state, AddAccountMsg::Cancel);
+
+    assert!(
+        matches!(output, Some(AddAccountOutput::Cancel)),
+        "Cancel still emits the typed dismissal output",
+    );
+    assert!(
+        state.qr_success_counts().is_none(),
+        "Cancel drains the counts panel alongside the secret state",
+    );
+}
+
+#[test]
+fn apply_msg_close_clears_qr_success_counts() {
+    // Window-close / parent-navigation dismissal drains the counts
+    // panel — mirror of Cancel, with the distinct `Close` output so
+    // `AppModel` can attribute the dismissal source.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddAccountOutput, AddDialogState};
+    use paladin_gtk::qr_clipboard::QrImportSummary;
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::QrSuccess(QrImportSummary {
+            imported: 1,
+            skipped: 0,
+            warnings: 0,
+        }),
+    );
+
+    let output = apply_msg(&mut state, AddAccountMsg::Close);
+
+    assert!(
+        matches!(output, Some(AddAccountOutput::Close)),
+        "Close still emits the typed dismissal output",
+    );
+    assert!(
+        state.qr_success_counts().is_none(),
+        "Close drains the counts panel alongside the secret state",
+    );
+}
+
+#[test]
+fn apply_msg_switch_path_clears_qr_success_counts() {
+    // Switching away from the QR sub-path drains the counts panel —
+    // the panel is QR-specific so leaving the QR page returns the
+    // dialog body to the manual / URI layout without the stale
+    // counts. Same-path re-entry is a no-op (no actual transition).
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+    use paladin_gtk::qr_clipboard::QrImportSummary;
+    use paladin_gtk::secret_fields::AddPath;
+
+    let mut state = AddDialogState::new();
+    // First move the active path to Qr so a switch to Manual is a
+    // real transition (`switch_path` early-returns on same-path
+    // re-entry).
+    let _ = apply_msg(&mut state, AddAccountMsg::SwitchPath(AddPath::Qr));
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::QrSuccess(QrImportSummary {
+            imported: 4,
+            skipped: 1,
+            warnings: 0,
+        }),
+    );
+    assert!(
+        state.qr_success_counts().is_some(),
+        "precondition: panel set"
+    );
+
+    let _ = apply_msg(&mut state, AddAccountMsg::SwitchPath(AddPath::Manual));
+
+    assert!(
+        state.qr_success_counts().is_none(),
+        "SwitchPath off the QR page drains the counts panel",
+    );
+}
+
+#[test]
+fn apply_msg_switch_path_same_qr_preserves_counts() {
+    // `switch_path` is an idempotent no-op on same-path re-entry —
+    // a duplicate `SwitchPath(Qr)` dispatch must not drain the
+    // counts panel, mirroring the secret-state same-path no-op rule.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+    use paladin_gtk::qr_clipboard::QrImportSummary;
+    use paladin_gtk::secret_fields::AddPath;
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(&mut state, AddAccountMsg::SwitchPath(AddPath::Qr));
+    let summary = QrImportSummary {
+        imported: 1,
+        skipped: 0,
+        warnings: 0,
+    };
+    let _ = apply_msg(&mut state, AddAccountMsg::QrSuccess(summary));
+
+    let _ = apply_msg(&mut state, AddAccountMsg::SwitchPath(AddPath::Qr));
+
+    assert_eq!(
+        state.qr_success_counts(),
+        Some(&summary),
+        "same-path SwitchPath does not drain the counts panel",
+    );
+}
+
+#[test]
+fn compose_qr_counts_panel_visible_returns_false_for_default_state() {
+    // Read-side mirror of `qr_success_counts_is_none_by_default`:
+    // the widget binds a `#[watch]` over `compose_qr_counts_panel_visible`
+    // so the panel container stays collapsed until a QR success is
+    // parked.
+    use paladin_gtk::add_account::{compose_qr_counts_panel_visible, AddDialogState};
+
+    let state = AddDialogState::new();
+
+    assert!(
+        !compose_qr_counts_panel_visible(&state),
+        "panel hidden on the default state",
+    );
+}
+
+#[test]
+fn compose_qr_counts_panel_visible_returns_true_after_qr_success() {
+    use paladin_gtk::add_account::{
+        apply_msg, compose_qr_counts_panel_visible, AddAccountMsg, AddDialogState,
+    };
+    use paladin_gtk::qr_clipboard::QrImportSummary;
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::QrSuccess(QrImportSummary::default()),
+    );
+
+    assert!(
+        compose_qr_counts_panel_visible(&state),
+        "panel visible after QrSuccess",
+    );
+}
+
+#[test]
+fn compose_qr_counts_panel_visible_returns_false_after_dismiss() {
+    use paladin_gtk::add_account::{
+        apply_msg, compose_qr_counts_panel_visible, AddAccountMsg, AddDialogState,
+    };
+    use paladin_gtk::qr_clipboard::QrImportSummary;
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::QrSuccess(QrImportSummary {
+            imported: 1,
+            skipped: 0,
+            warnings: 0,
+        }),
+    );
+
+    let _ = apply_msg(&mut state, AddAccountMsg::DismissQrCountsPanel);
+
+    assert!(
+        !compose_qr_counts_panel_visible(&state),
+        "panel hidden after DismissQrCountsPanel",
+    );
+}
+
+#[test]
+fn format_qr_counts_panel_imported_label_renders_count() {
+    use paladin_gtk::add_account::format_qr_counts_panel_imported_label;
+
+    assert_eq!(format_qr_counts_panel_imported_label(0), "Imported: 0");
+    assert_eq!(format_qr_counts_panel_imported_label(1), "Imported: 1");
+    assert_eq!(format_qr_counts_panel_imported_label(42), "Imported: 42");
+}
+
+#[test]
+fn format_qr_counts_panel_skipped_label_renders_count() {
+    use paladin_gtk::add_account::format_qr_counts_panel_skipped_label;
+
+    assert_eq!(format_qr_counts_panel_skipped_label(0), "Skipped: 0");
+    assert_eq!(format_qr_counts_panel_skipped_label(7), "Skipped: 7");
+}
+
+#[test]
+fn format_qr_counts_panel_warnings_label_renders_count() {
+    use paladin_gtk::add_account::format_qr_counts_panel_warnings_label;
+
+    assert_eq!(format_qr_counts_panel_warnings_label(0), "Warnings: 0");
+    assert_eq!(format_qr_counts_panel_warnings_label(3), "Warnings: 3");
+}
+
+#[test]
+fn format_qr_counts_panel_heading_is_non_empty() {
+    use paladin_gtk::add_account::format_qr_counts_panel_heading;
+
+    let heading = format_qr_counts_panel_heading();
+    assert!(
+        !heading.is_empty(),
+        "panel heading must be non-empty so it has a visible title",
+    );
+}
+
+#[test]
+fn format_qr_counts_panel_dismiss_label_is_non_empty() {
+    use paladin_gtk::add_account::format_qr_counts_panel_dismiss_label;
+
+    let label = format_qr_counts_panel_dismiss_label();
+    assert!(
+        !label.is_empty(),
+        "dismiss button must carry a visible label",
+    );
+}
+
+#[test]
+fn compose_qr_counts_panel_imported_label_returns_some_after_success() {
+    // Composer-level mirror of `format_qr_counts_panel_imported_label`
+    // — the widget binds a `#[watch]` over the composer so the
+    // visible label updates on every QrSuccess / Dismiss.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_qr_counts_panel_imported_label, AddAccountMsg, AddDialogState,
+    };
+    use paladin_gtk::qr_clipboard::QrImportSummary;
+
+    let mut state = AddDialogState::new();
+    assert!(
+        compose_qr_counts_panel_imported_label(&state).is_none(),
+        "no panel → no imported label",
+    );
+
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::QrSuccess(QrImportSummary {
+            imported: 5,
+            skipped: 1,
+            warnings: 2,
+        }),
+    );
+
+    assert_eq!(
+        compose_qr_counts_panel_imported_label(&state).as_deref(),
+        Some("Imported: 5"),
+        "composer renders the imported label from the live counts",
+    );
+}
+
+#[test]
+fn compose_qr_counts_panel_skipped_label_returns_some_after_success() {
+    use paladin_gtk::add_account::{
+        apply_msg, compose_qr_counts_panel_skipped_label, AddAccountMsg, AddDialogState,
+    };
+    use paladin_gtk::qr_clipboard::QrImportSummary;
+
+    let mut state = AddDialogState::new();
+    assert!(
+        compose_qr_counts_panel_skipped_label(&state).is_none(),
+        "no panel → no skipped label",
+    );
+
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::QrSuccess(QrImportSummary {
+            imported: 0,
+            skipped: 4,
+            warnings: 0,
+        }),
+    );
+
+    assert_eq!(
+        compose_qr_counts_panel_skipped_label(&state).as_deref(),
+        Some("Skipped: 4"),
+    );
+}
+
+#[test]
+fn compose_qr_counts_panel_warnings_label_returns_some_after_success() {
+    use paladin_gtk::add_account::{
+        apply_msg, compose_qr_counts_panel_warnings_label, AddAccountMsg, AddDialogState,
+    };
+    use paladin_gtk::qr_clipboard::QrImportSummary;
+
+    let mut state = AddDialogState::new();
+    assert!(
+        compose_qr_counts_panel_warnings_label(&state).is_none(),
+        "no panel → no warnings label",
+    );
+
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::QrSuccess(QrImportSummary {
+            imported: 0,
+            skipped: 0,
+            warnings: 3,
+        }),
+    );
+
+    assert_eq!(
+        compose_qr_counts_panel_warnings_label(&state).as_deref(),
+        Some("Warnings: 3"),
+    );
+}
