@@ -1208,6 +1208,31 @@ pub enum AddAccountMsg {
     /// stay distinct so future telemetry / smoke markers can
     /// attribute the dismissal source without a heuristic.
     Close,
+    /// Shared Save-button activation at the dialog footer covering
+    /// the manual and URI sub-paths.
+    ///
+    /// The widget cannot run [`compose_save_click_outcome`] on its
+    /// own — the composer borrows `&Vault` for the duplicate-
+    /// detection pre-flight and the dialog never owns the live
+    /// `(Vault, Store)` pair. [`apply_msg`] therefore forwards
+    /// [`AddAccountOutput::RequestSaveClick`] up to `AppModel`,
+    /// which reads the cached state via `controller.model()`,
+    /// runs [`compose_save_click_outcome(state, &vault, now)`], and
+    /// dispatches the resulting [`AddAccountMsg`] back via
+    /// `controller.emit(...)`. The shared pipeline keeps both
+    /// sub-paths converging on a single
+    /// [`AddAccountOutput::Submit`] boundary per
+    /// `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+    /// `AddAccountComponent` shared shell L2161.
+    ///
+    /// Dialog-local side effects are deliberately minimal — the
+    /// parent's compose result is authoritative for whether prior
+    /// pending state should drain, so the arm only forwards the
+    /// request without mutating `manual_draft`, `secret_state`,
+    /// `pending_duplicate_existing`, or `inline_error`. Pinned by
+    /// the `tests/add_account_logic.rs::apply_msg_save_clicked_*`
+    /// invariants.
+    SaveClicked,
 }
 
 /// Outbound messages emitted by [`AddAccountComponent`] back to
@@ -1257,6 +1282,30 @@ pub enum AddAccountOutput {
         /// vault.
         account: Account,
     },
+    /// Shared Save-button activation request — the dialog's footer
+    /// Save button was clicked and the parent must run
+    /// [`compose_save_click_outcome`] against the live
+    /// `(Vault, Store)` pair on its behalf.
+    ///
+    /// `AppModel` reads the cached dialog state via the live
+    /// `Controller<AddAccountComponent>`'s
+    /// [`relm4::ComponentController::model`], borrows the live
+    /// vault from `self.vault`, runs the composer with
+    /// [`SystemTime::now`] (captured at the dispatch site so a
+    /// long worker queue cannot stamp a stale `Code.timestamp`),
+    /// and dispatches the resulting [`AddAccountMsg`] back via
+    /// `controller.emit(save_click_outcome_to_msg(outcome))`. The
+    /// `RequestSaveClick` variant carries no payload because the
+    /// parent has direct read access to the live state via
+    /// `ComponentController::model`; the message is the wake-up
+    /// signal, not the data carrier.
+    ///
+    /// `AppModel` defensively no-ops this dispatch when the cached
+    /// `(Vault, Store)` pair is unavailable (`UnlockedBusy`,
+    /// `Locked`, `Missing`, `StartupError`) so a stray Save click
+    /// during a worker round trip cannot punch through to a
+    /// duplicate check the live state cannot answer.
+    RequestSaveClick,
 }
 
 /// Construction parameters for [`AddAccountComponent`].
@@ -3421,6 +3470,28 @@ pub fn apply_msg(state: &mut AddDialogState, msg: AddAccountMsg) -> Option<AddAc
             state.pending_duplicate_existing = None;
             Some(AddAccountOutput::Close)
         }
+        AddAccountMsg::SaveClicked => {
+            // Shared Save-button activation. The widget cannot
+            // call [`compose_save_click_outcome`] itself —
+            // `&Vault` is parent-owned — so the arm forwards
+            // [`AddAccountOutput::RequestSaveClick`] up to
+            // `AppModel`. The parent reads the cached dialog
+            // state via `ComponentController::model`, borrows the
+            // live vault, runs the composer with
+            // [`SystemTime::now`] captured at dispatch time, and
+            // dispatches the resulting [`AddAccountMsg`] back via
+            // `controller.emit(save_click_outcome_to_msg(outcome))`.
+            //
+            // The arm is deliberately side-effect-free on the
+            // dialog state: the parent's compose result is the
+            // single source of truth for whether prior
+            // `manual_draft` / `secret_state` / pending /
+            // `inline_error` slots should drain, so the arm only
+            // forwards the request without mutating them. Pinned
+            // by the `apply_msg_save_clicked_*` tests in
+            // `tests/add_account_logic.rs`.
+            Some(AddAccountOutput::RequestSaveClick)
+        }
     }
 }
 
@@ -3444,13 +3515,20 @@ pub struct AddAccountComponent {
     /// handlers can read the resolved vault path. Held by value so
     /// the dialog never re-resolves the path mid-flight.
     init: AddAccountInit,
-    /// Reactive state owned by the dialog. Currently carries the
-    /// latest [`AddPostEffectOutcome`] from the
-    /// `Vault::mutate_and_save` add worker so the view can route
-    /// inline-error / durability-warning rendering. The editable
-    /// manual / URI / QR sub-path state lands as additional fields
-    /// in follow-up commits.
-    state: AddDialogState,
+    /// Reactive state owned by the dialog. Carries the latest
+    /// [`AddPostEffectOutcome`] from the `Vault::mutate_and_save`
+    /// add worker plus the manual / URI / QR draft buffers so the
+    /// view can route inline-error / durability-warning rendering.
+    ///
+    /// Crate-public so `AppModel::update` can peek through
+    /// `ComponentController::model` and call
+    /// [`compose_save_click_outcome`] against the live state on
+    /// the shared Save click compose request
+    /// (`AddAccountOutput::RequestSaveClick`). Keeping the field
+    /// pub(crate) instead of public means the GTK / libadwaita
+    /// crate boundary still owns the dialog state — only the
+    /// in-crate `AppModel` reads it, not downstream consumers.
+    pub(crate) state: AddDialogState,
 }
 
 #[allow(missing_docs)]
@@ -3564,6 +3642,35 @@ impl SimpleComponent for AddAccountComponent {
                     set_label: format_add_dialog_cancel_label(),
                     connect_clicked[sender] => move |_| {
                         sender.input(AddAccountMsg::Cancel);
+                    },
+                },
+
+                // Shared Save button at the dialog footer; covers
+                // both the manual and URI sub-paths through the
+                // unified pipeline. Sensitivity is bound through
+                // `compose_save_button_sensitive`, which short-
+                // circuits on `state.is_busy()` (parent flips it
+                // via `AddAccountMsg::SetBusy` around the
+                // `gio::spawn_blocking` worker) and otherwise
+                // returns `false` for the QR path so the user
+                // is steered toward the page-local Scan
+                // activation. Click forwards
+                // `AddAccountMsg::SaveClicked`, which emits
+                // `AddAccountOutput::RequestSaveClick`; `AppModel`
+                // composes against the live `(Vault, Store)` pair
+                // and dispatches the routed `AddAccountMsg` back
+                // via `controller.emit(save_click_outcome_to_msg(
+                // outcome))`. Per `IMPLEMENTATION_PLAN_04_GTK.md`
+                // §"Component tree" > `AddAccountComponent`
+                // shared shell L2161.
+                #[name = "save_button"]
+                gtk::Button {
+                    set_label: format_add_dialog_save_label(),
+                    add_css_class: "suggested-action",
+                    #[watch]
+                    set_sensitive: compose_save_button_sensitive(&model.state),
+                    connect_clicked[sender] => move |_| {
+                        sender.input(AddAccountMsg::SaveClicked);
                     },
                 },
             },

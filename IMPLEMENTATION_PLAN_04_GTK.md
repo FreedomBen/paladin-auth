@@ -2158,10 +2158,49 @@ sign-off.
     `tests/secret_fields_logic.rs::add_state_switch_*` invariants that
     cover the secret-buffer wipe + pending-duplicate drop on every
     sub-path transition.)
-  - [ ] Share one duplicate-detection / "add anyway" / serialized
+  - [x] Share one duplicate-detection / "add anyway" / serialized
     `Vault::mutate_and_save` insertion path for manual and URI
     submissions; QR clipboard imports use the import-report path
     described below.
+    The shared Save click pipeline now spans the widget→parent
+    boundary: clicking the dialog footer's Save button dispatches
+    `AddAccountMsg::SaveClicked`, whose `apply_msg` arm forwards
+    `AddAccountOutput::RequestSaveClick` up to `AppModel`. The
+    `AppMsg::AddAccountAction(RequestSaveClick)` arm reads the
+    cached dialog state via `ComponentController::model`, borrows
+    the live `(Vault, Store)` pair, runs
+    `compose_save_click_outcome(state, &vault, SystemTime::now())`
+    on the main thread, and dispatches the routed
+    `AddAccountMsg` back via
+    `controller.emit(save_click_outcome_to_msg(outcome))`. Both
+    sub-paths converge on the same downstream arms: a
+    non-collision routes through `SubmitProceed { account }` and
+    a collision routes through `StagePendingDuplicate { account,
+    warnings, existing }`; the "add anyway" confirmation consumes
+    the parked pending via `ConfirmAddAnyway`. All three pre-
+    effect outcomes funnel into the single
+    `AddAccountOutput::Submit { account }` boundary the existing
+    `compose_add_worker_input` + `gio::spawn_blocking
+    run_add_worker` pipeline handles, so the
+    `Vault::mutate_and_save(|v| v.add(account))` worker stays a
+    single shared insertion path. Serialization comes from the
+    `AppModel::sync_add_dialog_busy` reconcile flipping
+    `AddAccountMsg::SetBusy` around the worker lifetime;
+    `compose_save_button_sensitive` dims the footer Save button
+    while busy so a second Save cannot start until the prior
+    `(Vault, Store)` pair returns. Pinned by
+    `tests/add_account_logic.rs::apply_msg_save_clicked_routes_to_request_save_click_output`,
+    `apply_msg_save_clicked_routes_identically_for_manual_and_uri_paths`,
+    `apply_msg_save_clicked_preserves_manual_draft_state`,
+    `apply_msg_save_clicked_preserves_uri_buffer`,
+    `apply_msg_save_clicked_does_not_drop_pending_duplicate`,
+    `apply_msg_save_clicked_does_not_clear_inline_error`, and
+    `add_account_output_request_save_click_is_distinct_variant`,
+    plus the existing
+    `compose_save_click_outcome_*` /
+    `save_click_outcome_to_msg_*` invariants that pin the per-
+    path routing and the unified `AddAccountOutput::Submit`
+    boundary.
   - [x] Keep successful manual and URI additions consistent with §7:
     refresh the list from the returned vault, close the dialog, and
     surface a status / toast confirmation.

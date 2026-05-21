@@ -8973,3 +8973,252 @@ fn parse_add_path_name_is_case_sensitive() {
         "title-case slug must reject",
     );
 }
+
+// `AddAccountMsg::SaveClicked` is the widget's hook for the shared
+// Save button at the dialog footer. The widget cannot run the
+// duplicate-detection pre-flight on its own (the
+// `compose_save_click_outcome` composer borrows `&Vault`, which the
+// dialog never owns) so the dispatch crosses the Component
+// boundary as `AddAccountOutput::RequestSaveClick`: `AppModel`
+// reads the live `(Vault, Store)` pair plus the cached dialog
+// state, runs the composer, and dispatches the resulting
+// `AddAccountMsg::SubmitProceed` / `StagePendingDuplicate` /
+// `RenderInlineError` back via `controller.emit(...)`. The shared
+// pipeline keeps the manual and URI submit paths converging on a
+// single `AddAccountOutput::Submit { account }` boundary per
+// `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+// `AddAccountComponent` shared shell L2161.
+
+#[test]
+fn apply_msg_save_clicked_routes_to_request_save_click_output() {
+    // The shared Save button click crosses the Component boundary
+    // as `AddAccountOutput::RequestSaveClick` — distinct from
+    // `Submit { account }`, which only fires after the parent has
+    // composed against the live vault and routed back through
+    // `SubmitProceed` / `ConfirmAddAnyway`.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddAccountOutput, AddDialogState};
+
+    let mut state = AddDialogState::new();
+
+    let output = apply_msg(&mut state, AddAccountMsg::SaveClicked);
+
+    assert!(
+        matches!(output, Some(AddAccountOutput::RequestSaveClick)),
+        "SaveClicked must route to AddAccountOutput::RequestSaveClick, got {output:?}",
+    );
+}
+
+#[test]
+fn add_account_output_request_save_click_is_distinct_variant() {
+    use paladin_gtk::add_account::AddAccountOutput;
+
+    // Pin the typed-enum distinction so a future shrink to a
+    // `Dismiss` / `Submit` super-variant has to come with an
+    // explicit decision (and updated AppModel callers). The
+    // RequestSaveClick variant carries no payload because the
+    // parent reads the live dialog state via `controller.model()`
+    // — the message is the wake-up signal, not the data carrier.
+    assert!(
+        !matches!(AddAccountOutput::RequestSaveClick, AddAccountOutput::Cancel),
+        "RequestSaveClick is a distinct variant from Cancel",
+    );
+    assert!(
+        !matches!(AddAccountOutput::RequestSaveClick, AddAccountOutput::Close),
+        "RequestSaveClick is a distinct variant from Close",
+    );
+    assert!(
+        !matches!(
+            AddAccountOutput::RequestSaveClick,
+            AddAccountOutput::Submit { .. },
+        ),
+        "RequestSaveClick is a distinct variant from Submit — Submit only fires after the parent composes",
+    );
+}
+
+#[test]
+fn apply_msg_save_clicked_preserves_manual_draft_state() {
+    // The parent runs `compose_save_click_outcome(state, vault, now)`
+    // against the cached dialog state immediately after the dispatch,
+    // so the SaveClicked arm must not mutate `manual_draft`,
+    // `secret_state`, or any pending slot — otherwise the compose
+    // would see an incomplete state and never reach the duplicate
+    // check. The arm is purely a request to the parent.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+    use paladin_gtk::secret_fields::AddPath;
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualLabelChanged("alice".to_string()),
+    );
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualIssuerChanged("Acme".to_string()),
+    );
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualSecretChanged(SECRET_20_B32.to_string()),
+    );
+    let label_before = state.manual_draft().label.clone();
+    let issuer_before = state.manual_draft().issuer.clone();
+    let secret_before = state.secret_state().manual_secret.text().to_string();
+
+    let _ = apply_msg(&mut state, AddAccountMsg::SaveClicked);
+
+    assert_eq!(
+        state.manual_draft().label,
+        label_before,
+        "SaveClicked must not mutate the manual label so the parent compose sees the user's typed value",
+    );
+    assert_eq!(
+        state.manual_draft().issuer,
+        issuer_before,
+        "SaveClicked must not mutate the manual issuer",
+    );
+    assert_eq!(
+        state.secret_state().manual_secret.text(),
+        secret_before,
+        "SaveClicked must not clear the manual Base32 secret before the parent composes",
+    );
+    assert_eq!(
+        state.secret_state().active_path,
+        AddPath::Manual,
+        "SaveClicked must not switch the active path",
+    );
+}
+
+#[test]
+fn apply_msg_save_clicked_preserves_uri_buffer() {
+    // Mirror of `apply_msg_save_clicked_preserves_manual_draft_state`
+    // on the URI sub-path: the parent's `compose_save_click_outcome`
+    // routes by `active_path` and reads the URI text from
+    // `secret_state.uri_text`, so the SaveClicked arm must leave
+    // the URI buffer intact.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+    use paladin_gtk::secret_fields::AddPath;
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(&mut state, AddAccountMsg::SwitchPath(AddPath::Uri));
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::UriTextChanged(
+            "otpauth://totp/Acme:alice?secret=JBSWY3DPEHPK3PXP&issuer=Acme".to_string(),
+        ),
+    );
+    let uri_before = state.secret_state().uri_text.text().to_string();
+
+    let _ = apply_msg(&mut state, AddAccountMsg::SaveClicked);
+
+    assert_eq!(
+        state.secret_state().uri_text.text(),
+        uri_before,
+        "SaveClicked must not clear the URI buffer before the parent composes",
+    );
+    assert_eq!(
+        state.secret_state().active_path,
+        AddPath::Uri,
+        "SaveClicked must not switch the active path away from URI",
+    );
+}
+
+#[test]
+fn apply_msg_save_clicked_routes_identically_for_manual_and_uri_paths() {
+    // Shared-pipeline invariant: the SaveClicked dispatch must
+    // emit `RequestSaveClick` regardless of which sub-path is
+    // active. Both Manual and URI submissions converge on the
+    // same parent boundary so the duplicate-detection / mutate-
+    // and-save worker stays a single shared pipeline per
+    // `IMPLEMENTATION_PLAN_04_GTK.md` §2161.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddAccountOutput, AddDialogState};
+    use paladin_gtk::secret_fields::AddPath;
+
+    let mut manual_state = AddDialogState::new();
+    let manual_output = apply_msg(&mut manual_state, AddAccountMsg::SaveClicked);
+
+    let mut uri_state = AddDialogState::new();
+    let _ = apply_msg(&mut uri_state, AddAccountMsg::SwitchPath(AddPath::Uri));
+    let uri_output = apply_msg(&mut uri_state, AddAccountMsg::SaveClicked);
+
+    assert!(
+        matches!(manual_output, Some(AddAccountOutput::RequestSaveClick)),
+        "Manual-active SaveClicked must request a parent compose",
+    );
+    assert!(
+        matches!(uri_output, Some(AddAccountOutput::RequestSaveClick)),
+        "URI-active SaveClicked must request the same parent compose",
+    );
+}
+
+#[test]
+fn apply_msg_save_clicked_does_not_drop_pending_duplicate() {
+    // After `StagePendingDuplicate` parks a `ValidatedAccount` in
+    // `secret_state.pending`, the widget can re-dispatch
+    // `SaveClicked` (e.g. the user retypes a different field then
+    // clicks Save again). The parent will re-compose: the new
+    // result either supersedes the parked pending (a new
+    // `StagePendingDuplicate`), drops it (a `SubmitProceed` /
+    // `RenderInlineError`), or — if the field churn did not
+    // actually change the duplicate-collision outcome — the same
+    // pending is replaced in place. None of those paths require
+    // the SaveClicked arm itself to mutate the pending slot, so
+    // pin that invariant here.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let validated = validate_manual_totp("alice", Some("Acme"));
+    let warnings = validated.warnings.clone();
+    let account = validated.account;
+    let existing = dummy_existing_summary();
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::StagePendingDuplicate {
+            account,
+            warnings,
+            existing,
+        },
+    );
+    assert!(
+        state.pending_duplicate_existing().is_some(),
+        "test fixture: StagePendingDuplicate must have parked the existing summary",
+    );
+
+    let _ = apply_msg(&mut state, AddAccountMsg::SaveClicked);
+
+    assert!(
+        state.pending_duplicate_existing().is_some(),
+        "SaveClicked must not drop the parked colliding-summary projection; the parent's compose result decides",
+    );
+}
+
+#[test]
+fn apply_msg_save_clicked_does_not_clear_inline_error() {
+    // A prior typed-§5 rejection from
+    // `RenderInlineError(InlineError { … })` stays in
+    // `state.inline_error` until the user edits the failing field
+    // (the per-field `Manual*Changed` arms drop it) or the parent
+    // composes a fresh outcome. The SaveClicked arm itself must
+    // not pre-emptively clear the inline error — the parent's
+    // compose result is the single source of truth for whether
+    // the stale rejection still applies. Otherwise a tight
+    // SaveClicked → parent-compose-rejected loop would render
+    // empty error text between the two states and the user would
+    // see flicker.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState, InlineError};
+
+    let err = InlineError::from_error(&validation_error("label", "empty"));
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(&mut state, AddAccountMsg::RenderInlineError(err.clone()));
+    assert!(
+        state.inline_error().is_some(),
+        "test fixture: RenderInlineError must have parked the projection",
+    );
+
+    let _ = apply_msg(&mut state, AddAccountMsg::SaveClicked);
+
+    let stored = state.inline_error().expect(
+        "SaveClicked must not clear the prior projection before the parent's fresh compose lands",
+    );
+    assert_eq!(stored.kind, err.kind);
+    assert_eq!(stored.rendered, err.rendered);
+}

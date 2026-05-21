@@ -1858,6 +1858,52 @@ impl SimpleComponent for AppModel {
                     });
                 }
             }
+            AppMsg::AddAccountAction(AddAccountOutput::RequestSaveClick) => {
+                // Shared Save-button compose request. The dialog
+                // cannot run `compose_save_click_outcome` itself
+                // because the duplicate-detection pre-flight
+                // borrows `&Vault` and the dialog never owns the
+                // live `(Vault, Store)` pair. `AppModel` borrows
+                // the cached dialog state via
+                // `ComponentController::model`, borrows the live
+                // vault from `self.vault`, runs the composer with
+                // `SystemTime::now()` captured here so a long
+                // worker queue cannot stamp a stale
+                // `Code.timestamp`, and dispatches the resulting
+                // `AddAccountMsg` back via
+                // `controller.emit(save_click_outcome_to_msg(outcome))`.
+                //
+                // Defensive: a `None` controller, a `None` vault
+                // slot, or a non-`Unlocked` cached state all
+                // short-circuit to a benign no-op. The shared
+                // pipeline keeps the manual / URI submit paths
+                // converging on a single
+                // `AddAccountOutput::Submit { account }` boundary
+                // per `IMPLEMENTATION_PLAN_04_GTK.md`
+                // §"Component tree" > `AddAccountComponent`
+                // shared shell L2161 — the `SubmitProceed` arm
+                // emitted by `save_click_outcome_to_msg` flows
+                // through the same `AddAccountOutput::Submit`
+                // handler above.
+                if let (Some(controller), Some((vault, _store)), Some(app_state)) = (
+                    self.add_dialog.as_ref(),
+                    self.vault.as_ref(),
+                    self.state.as_ref(),
+                ) {
+                    if matches!(app_state, AppState::Unlocked { .. }) {
+                        let now = SystemTime::now();
+                        let outcome = {
+                            let model_ref = controller.model();
+                            crate::add_account::compose_save_click_outcome(
+                                &model_ref.state,
+                                vault,
+                                now,
+                            )
+                        };
+                        controller.emit(crate::add_account::save_click_outcome_to_msg(outcome));
+                    }
+                }
+            }
             AppMsg::RemoveDialogAction(RemoveDialogOutput::SubmitConfirm { account_id }) => {
                 // Entry side of the `gio::spawn_blocking
                 // Vault::mutate_and_save(|v| v.remove(account_id))`
