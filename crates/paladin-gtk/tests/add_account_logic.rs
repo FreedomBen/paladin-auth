@@ -10881,3 +10881,303 @@ fn apply_msg_scan_clipboard_clicked_does_not_disturb_manual_or_uri_buffers() {
         "ScanClipboardClicked does not mutate the URI text buffer",
     );
 }
+
+// ---------------------------------------------------------------------------
+// QR worker (Milestone 7 — clipboard-QR add path, sub-items L2665-L2673:
+// "Insert the returned accounts through `Vault::import_accounts(...)`
+// inside `Vault::mutate_and_save`; report imported / skipped / warning
+// counts inline (parity with §6)" and the matching
+// `save_not_committed` / `save_durability_unconfirmed` routing).
+//
+// Mirrors the existing `run_add_worker_*` invariants on the QR side —
+// pinning the worker shape so the `AppModel` dispatch site can land
+// against it without needing the live `gdk::Clipboard` round trip.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn run_qr_worker_plaintext_import_succeeds_and_returns_live_pair_with_report() {
+    // Happy path: a fresh plaintext vault accepts a one-account import
+    // batch from the QR worker. The worker returns `Success(report)`
+    // with `imported == 1`, the new account is visible in the
+    // returned vault, and the `(Vault, Store)` pair survives so
+    // `AppModel::update` can reinstall it.
+    use paladin_core::ImportConflict;
+    use paladin_gtk::add_account::{
+        run_qr_worker, QrWorkerCompletion, QrWorkerEffect, QrWorkerInput,
+    };
+    use paladin_gtk::qr_clipboard::CLIPBOARD_QR_CONFLICT_POLICY;
+
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (vault, store) = open_plaintext_pair(&path);
+    let validated = validate_manual_totp("alice", Some("Acme"));
+    let expected_label = validated.account.label().to_string();
+
+    // Pin the worker's policy choice against the qr_clipboard module's
+    // constant so a drift in either side surfaces here rather than
+    // through a silent behavior change at runtime.
+    assert_eq!(
+        CLIPBOARD_QR_CONFLICT_POLICY,
+        ImportConflict::Skip,
+        "qr_clipboard pins Skip; the worker must reuse the same constant",
+    );
+
+    let completion = run_qr_worker(QrWorkerInput {
+        vault,
+        store,
+        accounts: vec![validated],
+        import_time: now_for_tests(),
+    });
+
+    let QrWorkerCompletion {
+        effect,
+        vault,
+        store: _,
+    } = completion;
+    match effect {
+        QrWorkerEffect::Success(report) => {
+            assert_eq!(report.imported, 1, "single fresh account → imported=1");
+            assert_eq!(report.skipped, 0, "no duplicate → skipped=0");
+            assert_eq!(report.replaced, 0, "Skip policy → replaced=0");
+            assert_eq!(report.appended, 0, "Skip policy → appended=0");
+            assert_eq!(
+                report.warnings.len(),
+                0,
+                "20-byte secret → no ShortSecret warning",
+            );
+            assert_eq!(
+                report.accounts.len(),
+                1,
+                "report.accounts surfaces the stable id of the inserted row",
+            );
+        }
+        other @ QrWorkerEffect::Failure(_) => {
+            panic!("plaintext QR import must surface Success, got {other:?}")
+        }
+    }
+    let summary = vault
+        .summaries()
+        .find(|s| s.label == expected_label)
+        .expect("imported account visible in returned vault");
+    assert_eq!(summary.issuer.as_deref(), Some("Acme"));
+}
+
+#[test]
+fn run_qr_worker_persists_imported_accounts_to_disk() {
+    // The worker goes through `mutate_and_save`, so the imported
+    // batch must survive a reopen — parity with the run_add_worker
+    // disk round-trip invariant.
+    use paladin_gtk::add_account::{run_qr_worker, QrWorkerEffect, QrWorkerInput};
+
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (vault, store) = open_plaintext_pair(&path);
+    let v1 = validate_manual_totp("alice", Some("Acme"));
+    let v2 = validate_manual_totp("bob", None);
+
+    let completion = run_qr_worker(QrWorkerInput {
+        vault,
+        store,
+        accounts: vec![v1, v2],
+        import_time: now_for_tests(),
+    });
+    assert!(matches!(completion.effect, QrWorkerEffect::Success(_)));
+    drop(completion);
+
+    let (reopened, _store) = Store::open(&path, VaultLock::Plaintext).expect("reopen vault");
+    let labels: Vec<String> = reopened.summaries().map(|s| s.label.clone()).collect();
+    assert!(labels.iter().any(|l| l == "alice"), "alice survives reopen",);
+    assert!(labels.iter().any(|l| l == "bob"), "bob survives reopen");
+}
+
+#[test]
+fn run_qr_worker_skip_policy_skips_duplicate_with_same_secret_issuer_label() {
+    // The clipboard-QR path pins `ImportConflict::Skip` per §6 — a
+    // colliding `(secret, issuer, label)` triple keeps the existing
+    // account and increments `report.skipped` without mutating the
+    // existing row. Pin this so a drift to a different default
+    // policy (Replace / Append) shows up here.
+    use paladin_gtk::add_account::{run_qr_worker, QrWorkerEffect, QrWorkerInput};
+
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+
+    // Pre-insert the colliding account, then import a freshly-
+    // validated copy that shares secret / issuer / label.
+    let existing = validate_manual_totp("alice", Some("Acme"));
+    let existing_id = existing.account.id();
+    vault.add(existing.account);
+    vault.save(&store).expect("commit pre-existing account");
+
+    let duplicate = validate_manual_totp("alice", Some("Acme"));
+    let completion = run_qr_worker(QrWorkerInput {
+        vault,
+        store,
+        accounts: vec![duplicate],
+        import_time: now_for_tests(),
+    });
+
+    match completion.effect {
+        QrWorkerEffect::Success(report) => {
+            assert_eq!(report.imported, 0, "colliding account is not imported");
+            assert_eq!(report.skipped, 1, "Skip policy bumps the skipped count");
+            assert_eq!(report.replaced, 0, "Skip policy never replaces");
+            assert_eq!(report.appended, 0, "Skip policy never appends");
+        }
+        other @ QrWorkerEffect::Failure(_) => {
+            panic!("duplicate-collision must still route Success, got {other:?}")
+        }
+    }
+    // The existing row is intact.
+    let ids: Vec<AccountId> = completion.vault.summaries().map(|s| s.id).collect();
+    assert_eq!(
+        ids,
+        vec![existing_id],
+        "Skip policy leaves the original row unchanged with its original id",
+    );
+}
+
+#[test]
+fn run_qr_worker_empty_input_returns_success_with_zero_counts() {
+    // A zero-account import batch is the degenerate case (e.g. the
+    // clipboard texture decoded no QRs). `import_accounts` returns a
+    // default report and `mutate_and_save` still commits (a no-op
+    // write); the worker routes Success and surfaces zeroes.
+    //
+    // Note: this is a *defensive* assertion — the upstream
+    // `decode_clipboard_qr` call surfaces `NoEntriesToImport` for
+    // zero-QR cases before the worker is even dispatched, so under
+    // normal flow this code path is unreachable. Pinning it keeps
+    // the worker robust to a future caller that hands it an
+    // empty Vec without re-checking.
+    use paladin_gtk::add_account::{run_qr_worker, QrWorkerEffect, QrWorkerInput};
+
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (vault, store) = open_plaintext_pair(&path);
+
+    let completion = run_qr_worker(QrWorkerInput {
+        vault,
+        store,
+        accounts: vec![],
+        import_time: now_for_tests(),
+    });
+
+    match completion.effect {
+        QrWorkerEffect::Success(report) => {
+            assert_eq!(report.imported, 0);
+            assert_eq!(report.skipped, 0);
+            assert_eq!(report.replaced, 0);
+            assert_eq!(report.appended, 0);
+            assert!(report.warnings.is_empty());
+            assert!(report.accounts.is_empty());
+        }
+        other @ QrWorkerEffect::Failure(_) => {
+            panic!("empty input must still route Success, got {other:?}")
+        }
+    }
+}
+
+#[test]
+fn run_qr_worker_propagates_validation_warnings_through_report() {
+    // §4.1 short-secret warnings on a `ValidatedAccount` flow into
+    // the `ImportReport.warnings` collection (one entry per source
+    // index that produced a warning). The worker's job is just to
+    // route what `import_accounts` returns; this test pins that the
+    // pass-through actually happens rather than being silently
+    // dropped on the QR side.
+    use paladin_core::{validate_manual, AccountInput, IconHintInput};
+    use paladin_gtk::add_account::{run_qr_worker, QrWorkerEffect, QrWorkerInput};
+
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (vault, store) = open_plaintext_pair(&path);
+
+    // Short-secret input emits a `ShortSecret` validation warning on
+    // the `Proceed` arm; the QR worker forwards it into the report.
+    let validated = validate_manual(
+        AccountInput {
+            label: "alice".to_string(),
+            issuer: None,
+            secret: SecretString::from(SHORT_SECRET_B32.to_string()),
+            algorithm: Algorithm::Sha1,
+            digits: 6,
+            kind: AccountKindInput::Totp,
+            period_secs: Some(30),
+            counter: None,
+            icon_hint: IconHintInput::Default,
+        },
+        now_for_tests(),
+    )
+    .expect("short-secret input still validates with a warning");
+    assert!(
+        !validated.warnings.is_empty(),
+        "fixture: short-secret input must produce at least one warning",
+    );
+
+    let completion = run_qr_worker(QrWorkerInput {
+        vault,
+        store,
+        accounts: vec![validated],
+        import_time: now_for_tests(),
+    });
+
+    match completion.effect {
+        QrWorkerEffect::Success(report) => {
+            assert_eq!(
+                report.imported, 1,
+                "the row still imports — warnings are non-fatal"
+            );
+            assert!(
+                !report.warnings.is_empty(),
+                "the ShortSecret warning surfaces in report.warnings so the dialog can render it",
+            );
+        }
+        other @ QrWorkerEffect::Failure(_) => {
+            panic!("short-secret input must still route Success, got {other:?}")
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn run_qr_worker_save_failure_routes_inline_and_returns_pair() {
+    // Defensive: when `Vault::mutate_and_save` returns a typed save
+    // failure that is not `save_durability_unconfirmed`, the worker
+    // routes through `classify_add_post_effect_error` to
+    // `AddPostEffectOutcome::Inline` and still returns the live
+    // `(Vault, Store)` pair so `AppModel::update` can reinstall it
+    // before applying the inline error. Parity with
+    // `run_add_worker_save_failure_routes_inline_and_returns_pair`.
+    use paladin_gtk::add_account::{run_qr_worker, QrWorkerEffect, QrWorkerInput};
+
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (vault, store) = open_plaintext_pair(&path);
+    let validated = validate_manual_totp("alice", Some("Acme"));
+
+    // Drop the tempdir so the parent dir vanishes; the next save
+    // attempt fails because the atomic tempfile cannot be created.
+    drop(dir);
+
+    let completion = run_qr_worker(QrWorkerInput {
+        vault,
+        store,
+        accounts: vec![validated],
+        import_time: now_for_tests(),
+    });
+
+    match completion.effect {
+        QrWorkerEffect::Failure(AddPostEffectOutcome::Inline(inline)) => {
+            assert_ne!(
+                inline.kind,
+                ErrorKind::SaveDurabilityUnconfirmed,
+                "missing-parent save failure must not route to KeepWithWarning",
+            );
+        }
+        other => panic!("expected Failure(Inline) when save fails, got {other:?}"),
+    }
+    let _ = completion.vault;
+    let _ = completion.store;
+}

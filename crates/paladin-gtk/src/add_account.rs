@@ -92,8 +92,8 @@ use secrecy::SecretString;
 
 use paladin_core::{
     format_validation_warning, parse_icon_hint_token, validate_manual, Account, AccountId,
-    AccountInput, AccountKindInput, AccountSummary, Algorithm, ErrorKind, PaladinError, Store,
-    ValidatedAccount, ValidationWarning, Vault,
+    AccountInput, AccountKindInput, AccountSummary, Algorithm, ErrorKind, ImportConflict,
+    ImportReport, PaladinError, Store, ValidatedAccount, ValidationWarning, Vault,
 };
 
 use crate::account_row::summary_display_label;
@@ -837,6 +837,168 @@ pub fn run_add_worker(input: AddWorkerInput) -> AddWorkerCompletion {
         Err(err) => AddWorkerEffect::Failure(classify_add_post_effect_error(&err)),
     };
     AddWorkerCompletion {
+        effect,
+        vault,
+        store,
+    }
+}
+
+/// Input bundle for [`run_qr_worker`].
+///
+/// Symmetric partner of [`AddWorkerInput`] on the clipboard-QR sub-
+/// path. The manual / URI sub-paths submit a single
+/// [`ValidatedAccount`] through [`AddWorkerInput::account`]; the QR
+/// sub-path submits a batch — `paladin_core::import::qr_image_bytes`
+/// returns `Vec<ValidatedAccount>` regardless of QR count, and the
+/// worker merges the entire batch under
+/// [`crate::qr_clipboard::CLIPBOARD_QR_CONFLICT_POLICY`]
+/// (`ImportConflict::Skip` per §6).
+///
+/// `Clone` / `PartialEq` are deliberately not derived: [`Store`]
+/// holds non-`Clone` filesystem state, [`ValidatedAccount`] holds
+/// zeroizing secret bytes, and `AppModel::update` consumes the
+/// input exactly once when it moves it into the
+/// `gio::spawn_blocking` closure.
+#[derive(Debug)]
+pub struct QrWorkerInput {
+    /// Live vault from the `Unlocked` `(Vault, Store)` pair. Moved
+    /// into the worker so `mutate_and_save` can borrow it mutably
+    /// without keeping `AppModel` in `Unlocked` for the duration of
+    /// the save call.
+    pub vault: Vault,
+    /// Live store from the `Unlocked` `(Vault, Store)` pair. Moved
+    /// alongside `vault` so the same `(Vault, Store)` pair returns
+    /// from the worker even on typed failure.
+    pub store: Store,
+    /// Decoded import batch. Comes from
+    /// [`crate::qr_clipboard::decode_clipboard_qr`], which forwards
+    /// the raw RGBA buffer through
+    /// [`paladin_core::import::qr_image_bytes`]; one entry per
+    /// successfully-decoded QR. Always merged under
+    /// [`crate::qr_clipboard::CLIPBOARD_QR_CONFLICT_POLICY`].
+    pub accounts: Vec<ValidatedAccount>,
+    /// Merge timestamp. Threaded through
+    /// [`paladin_core::Vault::import_accounts`] so the in-vault
+    /// `updated_at` for any replaced row (if a future caller swaps
+    /// the policy off `Skip`) matches the user-visible decode time
+    /// rather than the QR worker's spawn time.
+    pub import_time: SystemTime,
+}
+
+/// Outcome of [`run_qr_worker`] for `AppModel::update` to apply.
+///
+/// `Success(report)` indicates the import committed and the
+/// visible account list should be refreshed; the carried
+/// [`ImportReport`] supplies the §6 counts (`imported`, `skipped`,
+/// `replaced`, `appended`) and the `Vec<ImportWarning>` the dialog
+/// surfaces on the counts panel. `AppModel` projects the report
+/// through [`QrImportSummary::from_report`] before dispatching the
+/// [`AddAccountMsg::QrSuccess(summary)`] message into the dialog.
+///
+/// `Failure(outcome)` wraps the [`AddPostEffectOutcome`] from
+/// [`classify_add_post_effect_error`] so the dialog can re-render
+/// the inline error / durability warning without re-deriving the
+/// routing decision off the [`PaladinError`] — shared with
+/// [`AddWorkerEffect::Failure`] on the manual / URI side because
+/// the post-save rollback / durability-unconfirmed semantics are
+/// identical regardless of the input batch shape.
+#[derive(Debug, Clone)]
+pub enum QrWorkerEffect {
+    /// `Vault::mutate_and_save(|v| v.import_accounts(...))` returned
+    /// `Ok(report)`. The dialog parks the projected
+    /// [`QrImportSummary`] on
+    /// [`AddDialogState::qr_success_counts`] and renders the post-
+    /// success counts panel.
+    Success(ImportReport),
+    /// `Vault::mutate_and_save(|v| v.import_accounts(...))` returned
+    /// a typed failure. The carried [`AddPostEffectOutcome`] tells
+    /// the dialog whether to stay open with an inline error
+    /// (`save_not_committed`, `io_error`, defensive
+    /// `validation_error` / `invalid_state` / …) or report success
+    /// with an attached durability warning
+    /// (`save_durability_unconfirmed`).
+    Failure(AddPostEffectOutcome),
+}
+
+/// Bundle returned by [`run_qr_worker`].
+///
+/// Carries the live `(Vault, Store)` pair on every branch so
+/// `AppModel::update` can reinstall it before applying the UI
+/// outcome — `Vault::mutate_and_save` already restores the snapshot
+/// on `save_not_committed`, so the returned vault is the
+/// authoritative post-effect state regardless of the
+/// [`QrWorkerEffect`] variant. Per `IMPLEMENTATION_PLAN_04_GTK.md`
+/// §"Vault interaction" > "Every worker returns `(Vault, Store,
+/// EffectOutcome)`".
+///
+/// Symmetric partner of [`AddWorkerCompletion`] on the QR sub-path.
+/// `Clone` / `PartialEq` are deliberately not derived for the same
+/// reason as on [`QrWorkerInput`].
+#[derive(Debug)]
+pub struct QrWorkerCompletion {
+    /// Routed effect for `AppModel::update` to apply to the dialog.
+    pub effect: QrWorkerEffect,
+    /// Live vault after the `mutate_and_save` call. On
+    /// [`QrWorkerEffect::Success`] every non-skipped account in the
+    /// input batch is present; on [`QrWorkerEffect::Failure`] the
+    /// vault is whatever `mutate_and_save` rolled back to
+    /// (pre-commit snapshot for `save_not_committed`; post-commit
+    /// state with the merged accounts for
+    /// `save_durability_unconfirmed`; pre-call state for defensive
+    /// `validation_error` / `invalid_state` cases).
+    pub vault: Vault,
+    /// Live store moved through unchanged so `AppModel::update` can
+    /// reinstall the `(Vault, Store)` pair after the worker returns.
+    pub store: Store,
+}
+
+/// Synchronous body of the `gio::spawn_blocking
+/// Vault::mutate_and_save(|v| v.import_accounts(...))` clipboard-QR
+/// worker fired by `AppModel::update` from the
+/// `AddAccountOutput::SubmitQr` boundary (lands in a follow-up
+/// commit alongside the `AppModel`-side handler).
+///
+/// Consumes the [`QrWorkerInput`] by value, calls
+/// `vault.mutate_and_save(&store, |v| v.import_accounts(accounts,
+/// CLIPBOARD_QR_CONFLICT_POLICY, import_time))`, and bundles the
+/// outcome into a [`QrWorkerCompletion`] via
+/// [`classify_add_post_effect_error`]. The live `(Vault, Store)`
+/// pair is always returned so `AppModel` reinstalls it regardless
+/// of the typed effect — `mutate_and_save` is authoritative for
+/// the rollback / durability-unconfirmed semantics per
+/// DESIGN.md §4.3.
+///
+/// The clipboard-image-read pre-flight
+/// ([`crate::qr_clipboard::decode_clipboard_qr`]) runs at the
+/// `AppModel` layer before this worker is dispatched; an
+/// `Err(...)` from the pre-flight (no clipboard image, decode
+/// failure, zero decoded QRs, validation rejection) surfaces
+/// inline in the Add dialog without reaching the worker, so the
+/// worker therefore makes no decode decisions — it merges whatever
+/// `Vec<ValidatedAccount>` the caller hands it under the fixed
+/// `Skip` policy.
+///
+/// Extracting the worker body as a pure function lets
+/// `AppModel::update`'s closure stay a thin
+/// `gio::spawn_blocking(move || run_qr_worker(input))` while the
+/// real `mutate_and_save` call stays unit-testable against
+/// tempfile-backed plaintext vaults — no GTK / libadwaita main
+/// loop required.
+#[must_use]
+pub fn run_qr_worker(input: QrWorkerInput) -> QrWorkerCompletion {
+    let QrWorkerInput {
+        mut vault,
+        store,
+        accounts,
+        import_time,
+    } = input;
+    let effect = match vault.mutate_and_save(&store, |v| {
+        v.import_accounts(accounts, ImportConflict::Skip, import_time)
+    }) {
+        Ok(report) => QrWorkerEffect::Success(report),
+        Err(err) => QrWorkerEffect::Failure(classify_add_post_effect_error(&err)),
+    };
+    QrWorkerCompletion {
         effect,
         vault,
         store,
