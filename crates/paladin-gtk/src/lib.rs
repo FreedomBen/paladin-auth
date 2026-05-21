@@ -98,15 +98,21 @@ pub fn run() -> ExitCode {
     app::model::register_app_gresource_bundle();
 
     // Layer Paladin's `data/style.css` on top of the Adwaita
-    // stylesheet via `gtk::CssProvider` against the default display.
-    // Adwaita owns the base palette / colors / widget styles; this
-    // layer only adds the Paladin-specific tweaks the v0.2 GUI
-    // needs and never re-skins the Adwaita palette.
+    // stylesheet via `gtk::CssProvider` against the default display,
+    // and register the bundled icon-theme root with `gtk::IconTheme`
+    // so the row-factory placeholder symbolic
+    // (`icon_resolution::PLACEHOLDER_ICON_NAME`) resolves identically
+    // in native and Flatpak builds per `IMPLEMENTATION_PLAN_04_GTK.md`
+    // §"Icon resolution". Adwaita owns the base palette / colors /
+    // widget styles; the CSS layer only adds the Paladin-specific
+    // tweaks the v0.2 GUI needs and never re-skins the Adwaita
+    // palette.
     if let Some(display) = relm4::gtk::gdk::Display::default() {
         app::model::wire_app_css_provider(&display);
+        app::model::wire_app_icon_theme_resource_path(&display);
     } else {
         eprintln!(
-            "paladin-gtk: no default GDK display available; skipping Paladin CSS layer (Adwaita defaults still apply)",
+            "paladin-gtk: no default GDK display available; skipping Paladin CSS layer and bundled icon-theme attach (Adwaita defaults still apply)",
         );
     }
 

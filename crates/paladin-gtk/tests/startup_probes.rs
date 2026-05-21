@@ -30649,6 +30649,167 @@ fn wire_app_css_provider_signature_takes_display_reference() {
     let _: fn(&relm4::gtk::gdk::Display) = paladin_gtk::app::model::wire_app_css_provider;
 }
 
+// ---- Bundled placeholder icon (Milestone 7 — IMPLEMENTATION_PLAN_04_GTK.md
+// §"Icon resolution") ---------------------------------------------------------
+//
+// The placeholder `dialog-password-symbolic` icon must ride inside the
+// gresource bundle so the lookup resolves identically in native and
+// Flatpak builds even when the sandboxed icon theme omits the system
+// `dialog-password-symbolic`. The tests below pin the gresource path
+// shape, the bundled SVG payload, and the runtime-side
+// `wire_app_icon_theme_resource_path` helper signature. The actual
+// `IconTheme::add_resource_path` attach lives behind GTK initialization
+// and is covered by the `xvfb-run` smoke test in `tests/gtk_smoke.rs`;
+// the pure-logic assertions below run without a display.
+
+#[test]
+fn format_app_icon_theme_resource_path_returns_org_tamx_paladin_gui_icons() {
+    // The icon-theme root sits under the same reverse-DNS app-id
+    // prefix as the CSS payload so the gresource pool namespaces by
+    // `crate::APP_ID` and never collides with other gresource-shipping
+    // apps. The `icons` segment follows the standard icon-theme
+    // directory layout consumed by `gtk::IconTheme::add_resource_path`,
+    // which expects `<root>/<size>/<context>/<name>.svg` underneath.
+    use paladin_gtk::app::model::format_app_icon_theme_resource_path;
+
+    assert_eq!(
+        format_app_icon_theme_resource_path(),
+        "/org/tamx/Paladin/Gui/icons",
+        "gresource path for the Paladin-bundled icon theme stays in lockstep with `data/paladin-gtk.gresource.xml` and the `wire_app_icon_theme_resource_path` runtime call site",
+    );
+}
+
+#[test]
+fn format_app_icon_theme_resource_path_is_an_absolute_gresource_path() {
+    // gresource paths handed to `IconTheme::add_resource_path` are
+    // rooted at `/`; a relative form would silently mis-route the
+    // lookup at runtime.
+    use paladin_gtk::app::model::format_app_icon_theme_resource_path;
+
+    let path = format_app_icon_theme_resource_path();
+    assert!(
+        path.starts_with('/'),
+        "gresource path must be rooted at `/`; got {path:?}",
+    );
+}
+
+#[test]
+fn format_app_icon_theme_resource_path_carries_app_id_segments() {
+    // The path prefix mirrors `crate::APP_ID` (`org.tamx.Paladin.Gui`)
+    // segmented on `.`, so the icon-theme namespace is isolated from
+    // every other gresource-shipping app loaded in the same process.
+    use paladin_gtk::app::model::format_app_icon_theme_resource_path;
+
+    let path = format_app_icon_theme_resource_path();
+    for segment in ["/org/", "/tamx/", "/Paladin/", "/Gui/"] {
+        assert!(
+            path.contains(segment),
+            "gresource path must carry the `{segment}` segment derived from `crate::APP_ID`; got {path:?}",
+        );
+    }
+}
+
+#[test]
+fn format_app_placeholder_icon_resource_path_ends_with_dialog_password_symbolic_svg() {
+    // The bundled SVG is named after `icon_resolution::PLACEHOLDER_ICON_NAME`
+    // so the icon theme resolves the placeholder by the exact key
+    // `bind_row_icon` looks up. A drift between the constant and the
+    // bundle path would cause a silent fall-through to the system
+    // theme (which may not ship the icon in a Flatpak sandbox).
+    use paladin_gtk::app::model::format_app_placeholder_icon_resource_path;
+
+    assert!(
+        format_app_placeholder_icon_resource_path().ends_with("/dialog-password-symbolic.svg"),
+        "placeholder icon must be bundled under its `PLACEHOLDER_ICON_NAME` filename so `IconTheme` resolves it by that key",
+    );
+}
+
+#[test]
+fn format_app_placeholder_icon_resource_path_lives_under_icon_theme_root() {
+    // `IconTheme::add_resource_path(root)` resolves icons relative to
+    // the root in the standard hicolor layout; the placeholder must
+    // therefore live below the root the runtime registers.
+    use paladin_gtk::app::model::{
+        format_app_icon_theme_resource_path, format_app_placeholder_icon_resource_path,
+    };
+
+    let placeholder = format_app_placeholder_icon_resource_path();
+    let root = format_app_icon_theme_resource_path();
+    let prefix = format!("{root}/");
+    assert!(
+        placeholder.starts_with(&prefix),
+        "placeholder path {placeholder:?} must live below the icon-theme root {root:?}",
+    );
+}
+
+#[test]
+fn format_app_placeholder_icon_resource_path_follows_scalable_actions_layout() {
+    // `gtk::IconTheme` discovers symbolic SVGs under
+    // `<root>/scalable/actions/<name>.svg` per the freedesktop icon
+    // theme spec. Pinning the directory shape here protects against
+    // silent drift to a non-discoverable path inside the bundle.
+    use paladin_gtk::app::model::format_app_placeholder_icon_resource_path;
+
+    let path = format_app_placeholder_icon_resource_path();
+    assert!(
+        path.contains("/scalable/actions/"),
+        "placeholder gresource path must follow the freedesktop `scalable/actions/<name>.svg` layout so `IconTheme` discovers it; got {path:?}",
+    );
+}
+
+#[test]
+fn data_placeholder_icon_file_is_shipped_in_the_crate() {
+    // `data/icons/scalable/actions/dialog-password-symbolic.svg`
+    // must exist in the crate root so the build-time
+    // `glib-build-tools::compile_resources` invocation can bundle it.
+    // Without this file the runtime `IconTheme` lookup would silently
+    // fall back to the system theme — which the Flatpak sandbox may
+    // not provide — leaving rows iconless.
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("data/icons/scalable/actions/dialog-password-symbolic.svg");
+    assert!(
+        path.is_file(),
+        "expected the bundled placeholder icon at {}; ensure the SVG is committed alongside the gresource XML per IMPLEMENTATION_PLAN_04_GTK.md §\"Crate layout\"",
+        path.display(),
+    );
+}
+
+#[test]
+fn data_gresource_xml_references_placeholder_icon_under_scalable_actions() {
+    // The gresource manifest must declare both the
+    // `icons/scalable/actions/dialog-password-symbolic.svg` payload
+    // and the `/org/tamx/Paladin/Gui` prefix consumed by
+    // `format_app_placeholder_icon_resource_path` so the bundle
+    // compiled by build.rs and the runtime `IconTheme` lookup resolve
+    // to the same path.
+    let path =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("data/paladin-gtk.gresource.xml");
+    let xml = std::fs::read_to_string(&path)
+        .unwrap_or_else(|err| panic!("read {}: {err}", path.display()));
+    assert!(
+        xml.contains("dialog-password-symbolic.svg"),
+        "gresource manifest at {} must reference the placeholder SVG payload",
+        path.display(),
+    );
+    assert!(
+        xml.contains("icons/scalable/actions/"),
+        "gresource manifest at {} must place the placeholder under the freedesktop `scalable/actions/` layout so the icon theme discovers it",
+        path.display(),
+    );
+}
+
+#[test]
+fn wire_app_icon_theme_resource_path_signature_takes_display_reference() {
+    // Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Icon resolution",
+    // `wire_app_icon_theme_resource_path` adds the gresource icon
+    // root to `gtk::IconTheme::for_display(display)` so the bundled
+    // placeholder is discoverable. The compile-only signature check
+    // pins `fn(&gtk::gdk::Display)` so the smoke-test and runtime
+    // call sites stay in lockstep.
+    let _: fn(&relm4::gtk::gdk::Display) =
+        paladin_gtk::app::model::wire_app_icon_theme_resource_path;
+}
+
 #[test]
 fn format_app_toast_overlay_widget_name_returns_toast_overlay() {
     // Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Window shell and toast

@@ -5251,3 +5251,84 @@ pub fn wire_app_css_provider(display: &gtk::gdk::Display) {
         gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
     );
 }
+
+/// Absolute gresource path to the Paladin-bundled icon-theme root.
+///
+/// Returns the static absolute resource path
+/// `"/org/tamx/Paladin/Gui/icons"`. The prefix segments
+/// (`org` / `tamx` / `Paladin` / `Gui`) mirror [`crate::APP_ID`]
+/// (`"org.tamx.Paladin.Gui"`) split on `.` so the resource pool
+/// namespaces by reverse-DNS app ID and never collides with other
+/// gresource-shipping apps in the same process. The terminal
+/// `icons` segment plays the role of the icon-theme root the
+/// freedesktop spec / `gtk::IconTheme::add_resource_path` consume,
+/// with `<root>/scalable/actions/<name>.svg` and the matching
+/// pixel-size paths discovered beneath it.
+///
+/// Pure — returns a `'static str` without allocating. Companion of
+/// [`register_app_gresource_bundle`] (which hands the compiled
+/// gresource bytes to `gio::resources_register` so this root
+/// resolves at runtime),
+/// [`format_app_placeholder_icon_resource_path`] (which spells the
+/// full path of the bundled placeholder symbolic), and
+/// [`wire_app_icon_theme_resource_path`] (which adds this root to
+/// the `gtk::IconTheme` for a given display); together they pin
+/// the gresource side of the Paladin icon-theme layer against a
+/// single source of truth.
+#[must_use]
+pub fn format_app_icon_theme_resource_path() -> &'static str {
+    "/org/tamx/Paladin/Gui/icons"
+}
+
+/// Absolute gresource path to the bundled placeholder symbolic icon.
+///
+/// Returns the static absolute resource path
+/// `"/org/tamx/Paladin/Gui/icons/scalable/actions/dialog-password-symbolic.svg"`.
+/// The filename matches
+/// [`crate::icon_resolution::PLACEHOLDER_ICON_NAME`] so the
+/// `gtk::IconTheme` lookup the row factory performs by that
+/// constant resolves to this bundled payload instead of the
+/// (potentially missing) system symbolic. The directory shape
+/// (`scalable/actions/<name>.svg`) is the freedesktop icon-theme
+/// layout consumed by `gtk::IconTheme::add_resource_path`.
+///
+/// Pure — returns a `'static str` without allocating. Companion of
+/// [`format_app_icon_theme_resource_path`] (which is the prefix
+/// `wire_app_icon_theme_resource_path` registers) and the bundled
+/// `data/icons/scalable/actions/dialog-password-symbolic.svg`
+/// payload itself.
+#[must_use]
+pub fn format_app_placeholder_icon_resource_path() -> &'static str {
+    "/org/tamx/Paladin/Gui/icons/scalable/actions/dialog-password-symbolic.svg"
+}
+
+/// Add the gresource-bundled icon-theme root to `display`'s
+/// `gtk::IconTheme`.
+///
+/// Resolves the `gtk::IconTheme` for `display` and calls
+/// `add_resource_path` with [`format_app_icon_theme_resource_path`]
+/// so subsequent lookups by name (notably the `bind_row_icon`
+/// fallback to [`crate::icon_resolution::PLACEHOLDER_ICON_NAME`])
+/// discover the bundled SVGs through the standard freedesktop
+/// directory layout. Distributions whose icon theme omits
+/// `dialog-password-symbolic` — Flatpak sandboxes in particular —
+/// then resolve the placeholder against the embedded copy rather
+/// than rendering an empty `gtk::Image`.
+///
+/// [`register_app_gresource_bundle`] must run before this helper so
+/// the `gio::Resource` carrying
+/// `format_app_placeholder_icon_resource_path()` is live in the
+/// process-wide pool; otherwise the icon-theme path attach
+/// succeeds but the icon lookup silently falls back to the system
+/// theme. [`crate::run`] orders the two calls correctly at
+/// startup.
+///
+/// Sibling of [`register_app_gresource_bundle`] on the gresource
+/// side and [`format_app_icon_theme_resource_path`] on the path
+/// side; together they pin the three halves of the Paladin
+/// icon-theme layer (bundle bytes, resource path, `IconTheme`
+/// attach) against a single source of truth.
+pub fn wire_app_icon_theme_resource_path(display: &gtk::gdk::Display) {
+    let theme = gtk::IconTheme::for_display(display);
+    theme.add_resource_path(format_app_icon_theme_resource_path());
+}

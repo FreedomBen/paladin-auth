@@ -1732,8 +1732,15 @@ sign-off.
     `None`, empty, or unresolved. (`PLACEHOLDER_ICON_NAME =
     "dialog-password-symbolic"`; pinned by
     `tests/icon_resolution.rs` and used by `bind_row_icon`.)
-  - [ ] Ship the placeholder icon in the gresource bundle so it is
-    available identically in native and Flatpak builds.
+  - [x] Ship the placeholder icon in the gresource bundle so it is
+    available identically in native and Flatpak builds. (Lives at
+    `crates/paladin-gtk/data/icons/scalable/actions/dialog-password-symbolic.svg`
+    and is bundled by `data/paladin-gtk.gresource.xml`; the runtime
+    `wire_app_icon_theme_resource_path` helper in
+    `crates/paladin-gtk/src/app/model.rs` calls
+    `IconTheme::for_display(display).add_resource_path(format_app_icon_theme_resource_path())`
+    so the placeholder resolves against the embedded payload even in
+    sandboxed Flatpak runtimes.)
 - [ ] In-app account rename (`RenameDialog` reachable from the row
   kebab menu; calls `Vault::rename` inside `Vault::mutate_and_save`).
   - [ ] Add a `gtk::MenuButton` kebab on each row whose `gio::Menu`
