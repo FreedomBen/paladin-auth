@@ -173,6 +173,207 @@ fn row_models_drop_empty_issuer_in_display_label() {
     assert_eq!(rows[0].display_label, "alice");
 }
 
+// ---------------------------------------------------------------------------
+// Refresh-after-mutation order invariants (`IMPLEMENTATION_PLAN_04_GTK.md`
+// §"Milestone 7 checklist" > `AccountListComponent` > "Refresh the store
+// after every vault mutation (Add / Remove / Rename / Import / settings
+// change that toggles a row's presentation) **without reordering surviving
+// rows**").
+//
+// `AppModel::refresh_account_list` re-projects the live `(Vault, Store)`
+// pair through `filtered_row_models_from_vault` and emits the resulting
+// row set as `AccountListMsg::Refresh`. The surviving-row preservation
+// rule therefore reduces to a property of the projection helpers — if the
+// vault appends on add, drops in place on remove, and mutates labels in
+// place on rename, the projection (which walks `Vault::iter` /
+// `Vault::summaries`) carries those same ordering guarantees through to
+// the row set the GTK `gio::ListStore` is spliced with.
+//
+// Pinning the invariant here keeps the refresh contract honest as the
+// vault internals evolve: a future change that reorders surviving accounts
+// on add / remove / rename (e.g. an alphabetical sort) would surface as a
+// failing test rather than as a silent cursor jump after every mutation.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn row_models_after_vault_add_keeps_prior_rows_in_their_positions() {
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+
+    let a = add_totp(&mut vault, &store, Some("Acme"), "alice");
+    let b = add_totp(&mut vault, &store, Some("Acme"), "bob");
+    let c = add_totp(&mut vault, &store, Some("Other"), "carol");
+    let before: Vec<AccountId> = row_models_from_vault(&vault).iter().map(|r| r.id).collect();
+    assert_eq!(
+        before,
+        vec![a, b, c],
+        "baseline projection follows insertion order"
+    );
+
+    // Append a new account through the same `Vault::add` path
+    // `AppModel`'s Add worker uses.
+    let d = add_totp(&mut vault, &store, Some("Other"), "dan");
+
+    let after: Vec<AccountId> = row_models_from_vault(&vault).iter().map(|r| r.id).collect();
+    assert_eq!(
+        after,
+        vec![a, b, c, d],
+        "Vault::add appends; prior rows keep their positions and the new row lands at the end",
+    );
+}
+
+#[test]
+fn row_models_after_vault_remove_keeps_surviving_rows_in_relative_order() {
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+
+    let a = add_totp(&mut vault, &store, Some("Acme"), "alice");
+    let b = add_totp(&mut vault, &store, Some("Acme"), "bob");
+    let c = add_totp(&mut vault, &store, Some("Acme"), "carol");
+    let d = add_totp(&mut vault, &store, Some("Acme"), "dan");
+
+    // Remove a row in the middle through the same `Vault::remove` path
+    // `AppModel`'s Remove worker uses.
+    let removed = vault.remove(b);
+    assert!(
+        removed.is_some(),
+        "Vault::remove returns the removed account"
+    );
+    vault.save(&store).expect("commit removal");
+
+    let after: Vec<AccountId> = row_models_from_vault(&vault).iter().map(|r| r.id).collect();
+    assert_eq!(
+        after,
+        vec![a, c, d],
+        "Vault::remove drops the entry in place; surviving rows keep their relative order \
+         (no swap with the tail to fill the gap)",
+    );
+}
+
+#[test]
+fn row_models_after_vault_rename_keeps_every_row_in_its_position() {
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+
+    let a = add_totp(&mut vault, &store, Some("Acme"), "alice");
+    let b = add_totp(&mut vault, &store, Some("Acme"), "bob");
+    let c = add_totp(&mut vault, &store, Some("Acme"), "carol");
+
+    // Rename through the same `Vault::rename` path `AppModel`'s Rename
+    // worker uses; the new label sorts before the prior siblings to
+    // catch any sneaky lexicographic reordering.
+    vault
+        .rename(b, "aardvark", SystemTime::now())
+        .expect("rename succeeds");
+    vault.save(&store).expect("commit rename");
+
+    let rows = row_models_from_vault(&vault);
+    let ids: Vec<AccountId> = rows.iter().map(|r| r.id).collect();
+    assert_eq!(
+        ids,
+        vec![a, b, c],
+        "Vault::rename mutates in place; rows keep their positions even when the new label \
+         would sort earlier alphabetically",
+    );
+    assert_eq!(
+        rows[1].display_label, "Acme:aardvark",
+        "renamed row carries the freshly-projected display label so the refresh re-renders it",
+    );
+}
+
+#[test]
+fn filtered_row_models_after_vault_add_keeps_prior_matches_in_their_positions() {
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+
+    let a = add_totp(&mut vault, &store, Some("Acme"), "alice");
+    add_totp(&mut vault, &store, Some("Other"), "filler");
+    let c = add_totp(&mut vault, &store, Some("Acme"), "carol");
+    let before: Vec<AccountId> = filtered_row_models_from_vault(&vault, "acme")
+        .iter()
+        .map(|r| r.id)
+        .collect();
+    assert_eq!(before, vec![a, c], "baseline match set");
+
+    // Add another matching row after a non-matching insertion so the
+    // append lands at the end of the filtered projection too.
+    add_totp(&mut vault, &store, Some("Different"), "noise");
+    let d = add_totp(&mut vault, &store, Some("Acme"), "dan");
+
+    let after: Vec<AccountId> = filtered_row_models_from_vault(&vault, "acme")
+        .iter()
+        .map(|r| r.id)
+        .collect();
+    assert_eq!(
+        after,
+        vec![a, c, d],
+        "filtered refresh preserves prior matches in place and appends the new match at the end",
+    );
+}
+
+#[test]
+fn filtered_row_models_after_vault_remove_keeps_surviving_matches_in_relative_order() {
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+
+    let a = add_totp(&mut vault, &store, Some("Acme"), "alice");
+    let b = add_totp(&mut vault, &store, Some("Acme"), "bob");
+    add_totp(&mut vault, &store, Some("Other"), "filler");
+    let c = add_totp(&mut vault, &store, Some("Acme"), "carol");
+
+    // Removing a matching row mid-projection must not swap the trailing
+    // match into the gap — the filter's surviving order is the vault's
+    // surviving order.
+    vault.remove(b);
+    vault.save(&store).expect("commit removal");
+
+    let after: Vec<AccountId> = filtered_row_models_from_vault(&vault, "acme")
+        .iter()
+        .map(|r| r.id)
+        .collect();
+    assert_eq!(
+        after,
+        vec![a, c],
+        "filtered refresh drops the removed match and keeps surviving matches in their \
+         vault-insertion order",
+    );
+}
+
+#[test]
+fn filtered_row_models_after_vault_rename_updates_label_in_place() {
+    let dir = secure_tempdir();
+    let path = dir.path().join("vault.bin");
+    let (mut vault, store) = open_plaintext_pair(&path);
+
+    let a = add_totp(&mut vault, &store, Some("Acme"), "alice");
+    let b = add_totp(&mut vault, &store, Some("Acme"), "bob");
+    let c = add_totp(&mut vault, &store, Some("Acme"), "carol");
+
+    vault
+        .rename(b, "zebra", SystemTime::now())
+        .expect("rename succeeds");
+    vault.save(&store).expect("commit rename");
+
+    // Filter still resolves on the issuer substring; the renamed row
+    // matches via its still-issuer-carrying display label.
+    let rows = filtered_row_models_from_vault(&vault, "acme");
+    let ids: Vec<AccountId> = rows.iter().map(|r| r.id).collect();
+    assert_eq!(
+        ids,
+        vec![a, b, c],
+        "rename does not reorder filtered matches",
+    );
+    assert_eq!(
+        rows[1].display_label, "Acme:zebra",
+        "filtered projection re-reads the renamed label so the refresh re-renders it in place",
+    );
+}
+
 // Variant of `add_totp` that lets a test specify the icon-hint mode
 // (Default / Clear / explicit Slug) — the default helpers above always
 // pass `IconHintInput::Default`, which is the right contract for the
