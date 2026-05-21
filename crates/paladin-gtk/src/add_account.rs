@@ -2283,6 +2283,33 @@ pub fn format_manual_kind_selected(kind: AccountKindInput) -> u32 {
     }
 }
 
+/// Inverse of [`format_manual_kind_selected`]: map the kind
+/// dropdown's `gtk::DropDown::selected()` index back to the typed
+/// [`AccountKindInput`].
+///
+/// Returns `Some(AccountKindInput::Totp)` for index `0`,
+/// `Some(AccountKindInput::Hotp)` for index `1`, and `None` for
+/// every other value (including `gtk::INVALID_LIST_POSITION` =
+/// `u32::MAX`, which `gtk::DropDown::selected()` returns when no row
+/// is selected). The widget's `connect_selected_notify` signal calls
+/// this helper before dispatching
+/// [`AddAccountMsg::ManualKindChanged`], so a stray selection beyond
+/// the known model rows skips the dispatch rather than silently
+/// mapping to a fallback variant.
+///
+/// Pure — takes a `u32` by `Copy` and returns an `Option`. Sibling of
+/// [`format_manual_kind_selected`]; together they round-trip every
+/// variant so a future enum addition / reorder surfaces as a failing
+/// test rather than a silent misroute.
+#[must_use]
+pub fn parse_manual_kind_from_selected(selected: u32) -> Option<AccountKindInput> {
+    match selected {
+        0 => Some(AccountKindInput::Totp),
+        1 => Some(AccountKindInput::Hotp),
+        _ => None,
+    }
+}
+
 /// Fixed `gtk::StringList` model labels for the manual sub-path's
 /// TOTP/HOTP kind dropdown, in the same enum-declaration order that
 /// [`format_manual_kind_selected`] indexes (TOTP first, HOTP second).
@@ -2349,6 +2376,31 @@ pub fn format_manual_algorithm_selected(algorithm: Algorithm) -> u32 {
         Algorithm::Sha1 => 0,
         Algorithm::Sha256 => 1,
         Algorithm::Sha512 => 2,
+    }
+}
+
+/// Inverse of [`format_manual_algorithm_selected`]: map the algorithm
+/// dropdown's `gtk::DropDown::selected()` index back to the typed
+/// [`Algorithm`].
+///
+/// Returns `Some(Algorithm::Sha1)` for index `0`,
+/// `Some(Algorithm::Sha256)` for index `1`,
+/// `Some(Algorithm::Sha512)` for index `2`, and `None` for every
+/// other value (including `gtk::INVALID_LIST_POSITION` = `u32::MAX`,
+/// which `gtk::DropDown::selected()` returns when no row is
+/// selected). Sibling of [`parse_manual_kind_from_selected`] on the
+/// algorithm dropdown side; together they round-trip every variant
+/// so a future enum addition / reorder surfaces as a failing test
+/// rather than a silent misroute.
+///
+/// Pure — takes a `u32` by `Copy` and returns an `Option`.
+#[must_use]
+pub fn parse_manual_algorithm_from_selected(selected: u32) -> Option<Algorithm> {
+    match selected {
+        0 => Some(Algorithm::Sha1),
+        1 => Some(Algorithm::Sha256),
+        2 => Some(Algorithm::Sha512),
+        _ => None,
     }
 }
 
@@ -3554,10 +3606,10 @@ impl SimpleComponent for AddAccountComponent {
 
             // The three sub-path pages share one `adw::ViewStack`
             // so the `AdwViewSwitcherBar` below toggles between
-            // them. Per-page bodies (the editable manual form,
-            // the URI entry row, the clipboard-QR action) land in
-            // follow-up commits; mounting empty `gtk::Box`
-            // placeholders behind named pages now is what makes
+            // them. The manual page below now carries the editable
+            // form rows; the URI and QR pages stay as empty
+            // placeholders until their follow-up commits land —
+            // mounting them as named pages now is what makes
             // `connect_visible_child_notify` routable, which in
             // turn carries the L2122 contract that switching
             // pages wipes the leaving path's hidden secret-bearing
@@ -3574,6 +3626,192 @@ impl SimpleComponent for AddAccountComponent {
                 ] = &gtk::Box {
                     set_orientation: gtk::Orientation::Vertical,
                     set_spacing: 12,
+
+                    // Identity group: label + issuer + icon hint.
+                    // Non-secret entries — the §8 secret-buffer
+                    // contract applies to the Base32 secret only.
+                    // Every keystroke shadows into
+                    // `ManualDraftState` so retry / cancel flows
+                    // see the live typed text.
+                    adw::PreferencesGroup {
+                        #[name = "manual_label_row"]
+                        add = &adw::EntryRow {
+                            set_title: format_manual_label_title(),
+                            connect_changed[sender] => move |entry| {
+                                sender.input(AddAccountMsg::ManualLabelChanged(
+                                    entry.text().to_string(),
+                                ));
+                            },
+                        },
+                        #[name = "manual_issuer_row"]
+                        add = &adw::EntryRow {
+                            set_title: format_manual_issuer_title(),
+                            connect_changed[sender] => move |entry| {
+                                sender.input(AddAccountMsg::ManualIssuerChanged(
+                                    entry.text().to_string(),
+                                ));
+                            },
+                        },
+                        #[name = "manual_icon_hint_row"]
+                        add = &adw::EntryRow {
+                            set_title: format_manual_icon_hint_title(),
+                            connect_changed[sender] => move |entry| {
+                                sender.input(AddAccountMsg::ManualIconHintChanged(
+                                    entry.text().to_string(),
+                                ));
+                            },
+                        },
+                    },
+
+                    // Secret group: Base32 OTP secret behind an
+                    // `adw::PasswordEntryRow` so the bytes are
+                    // obscured at the visible UI boundary. The
+                    // keystroke shadow lands in the Paladin-owned
+                    // `SecretEntry` inside `secret_state.manual_secret`
+                    // per §"Secret entry handling".
+                    adw::PreferencesGroup {
+                        #[name = "manual_secret_row"]
+                        add = &adw::PasswordEntryRow {
+                            set_title: format_manual_secret_title(),
+                            connect_changed[sender] => move |entry| {
+                                sender.input(AddAccountMsg::ManualSecretChanged(
+                                    entry.text().to_string(),
+                                ));
+                            },
+                        },
+                    },
+
+                    // Kind / algorithm / digits group. The kind and
+                    // algorithm dropdowns drive `set_selected` via
+                    // `#[watch]` projections so the visible dropdown
+                    // tracks `ManualDraftState`. The
+                    // `connect_selected_notify` signals map the
+                    // index back to the typed enum through the
+                    // `parse_manual_kind_from_selected` /
+                    // `parse_manual_algorithm_from_selected`
+                    // inverses; an out-of-range selection routes as
+                    // `None` and the dispatch arm leaves the draft
+                    // untouched.
+                    adw::PreferencesGroup {
+                        #[name = "manual_kind_row"]
+                        add = &adw::ComboRow {
+                            set_title: format_manual_kind_title(),
+                            set_model: Some(&gtk::StringList::new(
+                                format_manual_kind_labels(),
+                            )),
+                            #[watch]
+                            set_selected: compose_manual_kind_selected(&model.state),
+                            connect_selected_notify[sender] => move |combo| {
+                                if let Some(kind) =
+                                    parse_manual_kind_from_selected(combo.selected())
+                                {
+                                    sender.input(AddAccountMsg::ManualKindChanged(kind));
+                                }
+                            },
+                        },
+                        #[name = "manual_algorithm_row"]
+                        add = &adw::ComboRow {
+                            set_title: format_manual_algorithm_title(),
+                            set_model: Some(&gtk::StringList::new(
+                                format_manual_algorithm_labels(),
+                            )),
+                            #[watch]
+                            set_selected: compose_manual_algorithm_selected(&model.state),
+                            connect_selected_notify[sender] => move |combo| {
+                                if let Some(algorithm) =
+                                    parse_manual_algorithm_from_selected(combo.selected())
+                                {
+                                    sender.input(AddAccountMsg::ManualAlgorithmChanged(
+                                        algorithm,
+                                    ));
+                                }
+                            },
+                        },
+                        #[name = "manual_digits_row"]
+                        add = &adw::SpinRow {
+                            set_title: format_manual_digits_title(),
+                            set_adjustment: Some(&{
+                                let (lower, upper, step) =
+                                    format_manual_digits_adjustment();
+                                gtk::Adjustment::new(
+                                    compose_manual_digits_value(&model.state),
+                                    lower,
+                                    upper,
+                                    step,
+                                    step,
+                                    0.0,
+                                )
+                            }),
+                            #[watch]
+                            set_value: compose_manual_digits_value(&model.state),
+                            connect_changed[sender] => move |spin| {
+                                #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+                                let digits = spin.value() as u8;
+                                sender.input(AddAccountMsg::ManualDigitsChanged(digits));
+                            },
+                        },
+                    },
+
+                    // Kind-conditional group: TOTP period or HOTP
+                    // counter, never both. The
+                    // `compose_manual_period_secs_visible` /
+                    // `compose_manual_counter_visible` projections
+                    // are mutually exclusive per the existing pure-
+                    // logic invariant; the `#[watch]` bindings let
+                    // the relm4 view tick toggle visibility on
+                    // every kind flip without rebuilding the row.
+                    adw::PreferencesGroup {
+                        #[name = "manual_period_row"]
+                        add = &adw::SpinRow {
+                            set_title: format_manual_period_title(),
+                            set_adjustment: Some(&{
+                                let (lower, upper, step) =
+                                    format_manual_period_adjustment();
+                                gtk::Adjustment::new(
+                                    compose_manual_period_secs_value(&model.state),
+                                    lower,
+                                    upper,
+                                    step,
+                                    step,
+                                    0.0,
+                                )
+                            }),
+                            #[watch]
+                            set_value: compose_manual_period_secs_value(&model.state),
+                            #[watch]
+                            set_visible: compose_manual_period_secs_visible(&model.state),
+                            connect_changed[sender] => move |spin| {
+                                #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+                                let period = spin.value() as u32;
+                                sender.input(AddAccountMsg::ManualPeriodChanged(period));
+                            },
+                        },
+                        #[name = "manual_counter_row"]
+                        add = &adw::SpinRow {
+                            set_title: format_manual_counter_title(),
+                            set_adjustment: Some(&{
+                                let (lower, upper, step) =
+                                    format_manual_counter_adjustment();
+                                gtk::Adjustment::new(
+                                    compose_manual_counter_value(&model.state),
+                                    lower,
+                                    upper,
+                                    step,
+                                    step,
+                                    0.0,
+                                )
+                            }),
+                            #[watch]
+                            set_value: compose_manual_counter_value(&model.state),
+                            #[watch]
+                            set_visible: compose_manual_counter_visible(&model.state),
+                            connect_changed[sender] => move |spin| {
+                                #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+                                let counter = spin.value() as u64;
+                                sender.input(AddAccountMsg::ManualCounterChanged(counter));
+                            },
+                        },
+                    },
                 },
 
                 add_titled_with_icon[

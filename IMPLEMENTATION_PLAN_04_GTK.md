@@ -2233,9 +2233,38 @@ sign-off.
 - [ ] `AddAccountComponent` manual fields path (label, issuer,
   Base32 secret, algorithm, digits, kind, TOTP period, HOTP counter,
   icon hint).
-  - [ ] Mount the manual form on the `AdwViewStack`'s "Manual" page
+  - [x] Mount the manual form on the `AdwViewStack`'s "Manual" page
     using `AdwEntryRow` / `AdwSpinRow` / `AdwComboRow` rows that map
-    onto `paladin_core::AccountInput`.
+    onto `paladin_core::AccountInput`. The `AddAccountComponent`'s
+    `view!` macro now populates the Manual page with four
+    `adw::PreferencesGroup` clusters: an identity group
+    (`adw::EntryRow` for label / issuer / icon-hint), a secret group
+    (`adw::PasswordEntryRow` for the Base32 secret), a kind /
+    algorithm / digits group (`adw::ComboRow` × 2 + `adw::SpinRow`),
+    and a kind-conditional period / counter group
+    (`adw::SpinRow` × 2 toggled via
+    `compose_manual_period_secs_visible` /
+    `compose_manual_counter_visible`). Every row's keystroke /
+    selection signal dispatches the matching
+    `AddAccountMsg::Manual*Changed` arm so `ManualDraftState` /
+    `AddSecretState::manual_secret` stay in lockstep with the
+    visible widget. The two `adw::ComboRow` dropdowns map index →
+    enum through the new `parse_manual_kind_from_selected` /
+    `parse_manual_algorithm_from_selected` inverses (each rejecting
+    out-of-range / `gtk::INVALID_LIST_POSITION` values to `None` so
+    a stray selection never dispatches a fallback enum). Pinned by
+    `tests/add_account_logic.rs::parse_manual_kind_from_selected_zero_returns_totp`,
+    `parse_manual_kind_from_selected_one_returns_hotp`,
+    `parse_manual_kind_from_selected_out_of_range_returns_none`,
+    `parse_manual_kind_from_selected_round_trips_format_manual_kind_selected`,
+    `parse_manual_algorithm_from_selected_zero_returns_sha1`,
+    `parse_manual_algorithm_from_selected_one_returns_sha256`,
+    `parse_manual_algorithm_from_selected_two_returns_sha512`,
+    `parse_manual_algorithm_from_selected_out_of_range_returns_none`,
+    and `parse_manual_algorithm_from_selected_round_trips_format_manual_algorithm_selected`,
+    plus the existing `apply_msg_manual_*_changed_*` /
+    `format_manual_*_title` / `compose_manual_*` invariants that
+    cover the dispatch and projection layers.
   - [ ] Default the form fields to the CLI manual-add defaults from
     DESIGN §5 (TOTP, SHA1, 6 digits, 30 s period, HOTP counter 0,
     icon-hint mode `Default from issuer`).

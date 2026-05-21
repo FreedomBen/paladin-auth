@@ -9222,3 +9222,168 @@ fn apply_msg_save_clicked_does_not_clear_inline_error() {
     assert_eq!(stored.kind, err.kind);
     assert_eq!(stored.rendered, err.rendered);
 }
+
+// ---------------------------------------------------------------------------
+// `parse_manual_kind_from_selected` — index → AccountKindInput
+// ---------------------------------------------------------------------------
+
+#[test]
+fn parse_manual_kind_from_selected_zero_returns_totp() {
+    // The kind dropdown's `gtk::StringList` model is populated in
+    // enum-declaration order (TOTP first, HOTP second). The widget's
+    // `connect_selected_notify` reads the selected `u32` and maps it
+    // back to the typed enum via `parse_manual_kind_from_selected`
+    // so the dispatched `AddAccountMsg::ManualKindChanged` carries
+    // the correct variant.
+    use paladin_core::AccountKindInput;
+    use paladin_gtk::add_account::parse_manual_kind_from_selected;
+
+    assert_eq!(
+        parse_manual_kind_from_selected(0),
+        Some(AccountKindInput::Totp),
+        "index 0 → TOTP (first item in the kind dropdown's model)",
+    );
+}
+
+#[test]
+fn parse_manual_kind_from_selected_one_returns_hotp() {
+    // Mirror of `parse_manual_kind_from_selected_zero_returns_totp`
+    // on the HOTP variant.
+    use paladin_core::AccountKindInput;
+    use paladin_gtk::add_account::parse_manual_kind_from_selected;
+
+    assert_eq!(
+        parse_manual_kind_from_selected(1),
+        Some(AccountKindInput::Hotp),
+        "index 1 → HOTP (second item in the kind dropdown's model)",
+    );
+}
+
+#[test]
+fn parse_manual_kind_from_selected_out_of_range_returns_none() {
+    // `gtk::DropDown::selected()` returns `gtk::INVALID_LIST_POSITION`
+    // (`u32::MAX`) when no row is selected, plus any future model
+    // bumps would shift the valid range. The parser routes anything
+    // outside the known `{0, 1}` set to `None` so the widget can
+    // skip dispatching a `ManualKindChanged` for a stray selection,
+    // rather than silently mapping to TOTP / HOTP.
+    use paladin_gtk::add_account::parse_manual_kind_from_selected;
+
+    assert_eq!(
+        parse_manual_kind_from_selected(2),
+        None,
+        "index 2 is past the known kind dropdown rows; reject",
+    );
+    assert_eq!(
+        parse_manual_kind_from_selected(u32::MAX),
+        None,
+        "gtk::INVALID_LIST_POSITION rejects rather than mapping to TOTP / HOTP",
+    );
+}
+
+#[test]
+fn parse_manual_kind_from_selected_round_trips_format_manual_kind_selected() {
+    // Round-trip every variant through `format_manual_kind_selected`
+    // → `parse_manual_kind_from_selected` so the two helpers stay in
+    // lockstep. A future enum addition / reorder would break this
+    // test, surfacing the drift instead of silently misrouting the
+    // dropdown's selected index.
+    use paladin_core::AccountKindInput;
+    use paladin_gtk::add_account::{format_manual_kind_selected, parse_manual_kind_from_selected};
+
+    for kind in [AccountKindInput::Totp, AccountKindInput::Hotp] {
+        let idx = format_manual_kind_selected(kind);
+        assert_eq!(
+            parse_manual_kind_from_selected(idx),
+            Some(kind),
+            "round-trip mismatch for {kind:?}",
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// `parse_manual_algorithm_from_selected` — index → Algorithm
+// ---------------------------------------------------------------------------
+
+#[test]
+fn parse_manual_algorithm_from_selected_zero_returns_sha1() {
+    // The algorithm dropdown's `gtk::StringList` model is populated
+    // in enum-declaration order (SHA-1 first, SHA-256 second,
+    // SHA-512 third). Mirror of
+    // `parse_manual_kind_from_selected_zero_returns_totp` on the
+    // algorithm dropdown side.
+    use paladin_core::Algorithm;
+    use paladin_gtk::add_account::parse_manual_algorithm_from_selected;
+
+    assert_eq!(
+        parse_manual_algorithm_from_selected(0),
+        Some(Algorithm::Sha1),
+        "index 0 → SHA-1 (first item in the algorithm dropdown's model)",
+    );
+}
+
+#[test]
+fn parse_manual_algorithm_from_selected_one_returns_sha256() {
+    use paladin_core::Algorithm;
+    use paladin_gtk::add_account::parse_manual_algorithm_from_selected;
+
+    assert_eq!(
+        parse_manual_algorithm_from_selected(1),
+        Some(Algorithm::Sha256),
+        "index 1 → SHA-256 (second item in the algorithm dropdown's model)",
+    );
+}
+
+#[test]
+fn parse_manual_algorithm_from_selected_two_returns_sha512() {
+    use paladin_core::Algorithm;
+    use paladin_gtk::add_account::parse_manual_algorithm_from_selected;
+
+    assert_eq!(
+        parse_manual_algorithm_from_selected(2),
+        Some(Algorithm::Sha512),
+        "index 2 → SHA-512 (third item in the algorithm dropdown's model)",
+    );
+}
+
+#[test]
+fn parse_manual_algorithm_from_selected_out_of_range_returns_none() {
+    // Same gate as the kind dropdown: anything outside the known
+    // `{0, 1, 2}` set rejects to `None` so the widget can skip
+    // dispatching a `ManualAlgorithmChanged` for a stray selection.
+    use paladin_gtk::add_account::parse_manual_algorithm_from_selected;
+
+    assert_eq!(
+        parse_manual_algorithm_from_selected(3),
+        None,
+        "index 3 is past the known algorithm dropdown rows; reject",
+    );
+    assert_eq!(
+        parse_manual_algorithm_from_selected(u32::MAX),
+        None,
+        "gtk::INVALID_LIST_POSITION rejects rather than mapping to a known algorithm",
+    );
+}
+
+#[test]
+fn parse_manual_algorithm_from_selected_round_trips_format_manual_algorithm_selected() {
+    // Round-trip every variant through
+    // `format_manual_algorithm_selected` →
+    // `parse_manual_algorithm_from_selected` so the two helpers stay
+    // in lockstep. A future enum addition / reorder would break this
+    // test, surfacing the drift instead of silently misrouting the
+    // dropdown's selected index.
+    use paladin_core::Algorithm;
+    use paladin_gtk::add_account::{
+        format_manual_algorithm_selected, parse_manual_algorithm_from_selected,
+    };
+
+    for algorithm in [Algorithm::Sha1, Algorithm::Sha256, Algorithm::Sha512] {
+        let idx = format_manual_algorithm_selected(algorithm);
+        assert_eq!(
+            parse_manual_algorithm_from_selected(idx),
+            Some(algorithm),
+            "round-trip mismatch for {algorithm:?}",
+        );
+    }
+}
