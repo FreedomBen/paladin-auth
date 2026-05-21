@@ -1743,8 +1743,25 @@ sign-off.
     sandboxed Flatpak runtimes.)
 - [ ] In-app account rename (`RenameDialog` reachable from the row
   kebab menu; calls `Vault::rename` inside `Vault::mutate_and_save`).
-  - [ ] Add a `gtk::MenuButton` kebab on each row whose `gio::Menu`
+  - [x] Add a `gtk::MenuButton` kebab on each row whose `gio::Menu`
     exposes "Rename…" alongside the existing "Remove…".
+    (`account_list::build_row_factory` mounts a
+    `gtk::MenuButton::builder().menu_model(&build_kebab_menu_model())`
+    as the trailing row child; `build_kebab_menu_model` appends
+    "Rename…" first and "Remove…" second, targeting
+    `row.rename` / `row.remove` against the per-row
+    `gio::SimpleActionGroup` installed by `install_row_action_group`.
+    `kebab_visible` returns `true` for every `AccountKindSummary`
+    and `kebab_enabled` returns `true`, so HOTP and TOTP rows both
+    expose the menu unconditionally. Pinned by
+    `account_row_logic::kebab_visible_always_on_for_totp_and_hotp`,
+    `kebab_enabled_always_on`,
+    `account_list_logic::build_kebab_menu_model_exposes_rename_and_remove_in_order`,
+    `row_rename_action_name_is_rename`,
+    `row_remove_action_name_is_remove`,
+    `dispatch_row_action_routes_rename_to_open_rename_dialog`,
+    `dispatch_row_action_routes_remove_to_open_remove_dialog`, and
+    `account_row_output_request_rename_carries_account_id`.)
   - [x] Build `RenameDialogComponent` as a modal carrying a
     pre-populated `AdwEntryRow` for the label plus Save / Cancel
     buttons. The Save `gtk::Button` (with the `suggested-action`
@@ -1760,14 +1777,65 @@ sign-off.
     `#[watch]` so the affirmative affordance dims whenever
     `last_validation` is `SubmitOutcome::InlineError` and the
     inline-error label renders the matching §4.1 rejection.
-  - [ ] On submit, call `Vault::rename(id, new_label, now)` inside
+  - [x] On submit, call `Vault::rename(id, new_label, now)` inside
     `Vault::mutate_and_save` regardless of whether the new label
     equals the current one (so `updated_at` always bumps, matching
-    the CLI).
-  - [ ] Handle `save_not_committed` by restoring the prior label in
+    the CLI). (`run_rename_worker` in `crate::rename_dialog`
+    unconditionally invokes
+    `Vault::mutate_and_save(|v| v.rename(account_id, &label, now))`
+    against the live `(Vault, Store)` pair carried by the
+    `RenameWorkerInput`; `classify_submit_with_label_matching_prior_after_trim_still_proceeds`
+    pins that even a same-label draft routes to `SubmitOutcome::Proceed`
+    rather than short-circuiting, and
+    `run_rename_worker_same_label_still_bumps_updated_at` exercises
+    the end-to-end worker with `new_label == prior_label` and asserts
+    that the post-worker `updated_at` strictly exceeds the pre-worker
+    timestamp. `run_rename_worker_plaintext_rename_succeeds_and_returns_live_pair`
+    and `run_rename_worker_persists_label_to_disk` cover the happy-
+    path projection and on-disk persistence respectively.)
+  - [x] Handle `save_not_committed` by restoring the prior label in
     memory and keeping the dialog open with the inline error.
-  - [ ] Handle `save_durability_unconfirmed` by keeping the new label
+    (`classify_rename_error` routes
+    `PaladinError::SaveNotCommitted { .. }` to
+    `RenameErrorOutcome::RestorePrior(InlineError {
+    kind: ErrorKind::SaveNotCommitted, .. })` regardless of whether
+    a `.bak` rotation ran; `apply_msg` on
+    `RenameDialogMsg::WorkerFailed(RestorePrior(_))` resets
+    `state.draft` to `prior_label` so the visible label matches the
+    rolled-back in-memory vault, then stores the outcome on
+    `state.worker_outcome` for the body re-render. At the dispatch
+    layer, `should_drop_rename_dialog_after` returns `false` for
+    `RenameWorkerEffect::Failure(RestorePrior(_))` so the dialog
+    stays mounted, and `should_refresh_list_after_rename` returns
+    `false` because the rolled-back vault already matches what the
+    row renders. Pinned by
+    `classify_rename_error_save_not_committed_restores_prior`,
+    `classify_rename_error_save_not_committed_with_backup_restores_prior`,
+    `apply_msg_worker_failed_restore_prior_stores_outcome`,
+    `apply_msg_worker_failed_restore_prior_resets_draft_to_init_label`,
+    `apply_msg_worker_failed_restore_prior_with_backup_resets_draft_to_init_label`,
+    `should_drop_rename_dialog_after_failure_restore_prior_returns_false`,
+    and `should_refresh_list_after_rename_failure_restore_prior_returns_false`.)
+  - [x] Handle `save_durability_unconfirmed` by keeping the new label
     in memory and attaching the warning to the dialog body.
+    (`classify_rename_error` routes
+    `PaladinError::SaveDurabilityUnconfirmed` to
+    `RenameErrorOutcome::KeepNewWithWarning(InlineWarning {
+    kind: ErrorKind::SaveDurabilityUnconfirmed, .. })`; `apply_msg`
+    on `RenameDialogMsg::WorkerFailed(KeepNewWithWarning(_))` leaves
+    `state.draft` unchanged on the user-typed new label and stores
+    the outcome on `state.worker_outcome` so the dialog body
+    re-renders with the warning attached. At the dispatch layer,
+    `should_drop_rename_dialog_after` returns `false` for
+    `Failure(KeepNewWithWarning(_))` so the warning surfaces inside
+    the still-mounted dialog, while `should_refresh_list_after_rename`
+    returns `true` because the rename did commit to memory and the
+    `AccountListComponent` row must re-project off the reinstalled
+    `(Vault, Store)` pair to show the new label. Pinned by
+    `classify_rename_error_save_durability_unconfirmed_keeps_new_label`,
+    `apply_msg_worker_failed_keep_new_with_warning_keeps_draft`,
+    `should_drop_rename_dialog_after_failure_keep_new_with_warning_returns_false`,
+    and `should_refresh_list_after_rename_failure_keep_new_with_warning_returns_true`.)
   - [x] On success, refresh `AccountListComponent` from the returned
     vault, close the dialog, and surface a status / toast confirmation.
     `AppMsg::RenameWorkerCompleted` routes the worker outcome through
@@ -1786,7 +1854,40 @@ sign-off.
     outcome. Wording is pinned through `format_rename_dialog_success_toast`
     (`"Account renamed."`) so the helper, the projection, and the
     bundled `RenameDispatch::success_toast` field stay in lockstep.
-  - [ ] Reset the entry buffer on cancel / submit / dialog close.
+  - [x] Reset the entry buffer on cancel / submit / dialog close.
+    The label is non-secret, so the obligation is the standard
+    widget-buffer reset (no zeroize-on-drop, unlike the URI /
+    passphrase / manual-secret buffers covered by §"Secret entry
+    handling"). Three dismissal paths converge on releasing the
+    underlying `gtk::EntryBuffer`:
+      * Cancel — `apply_msg(RenameDialogMsg::Cancel)` calls
+        `RenameDialogState::clear()` (which delegates to
+        `set_draft(String::new())`, wiping the shadow draft,
+        cached `last_validation`, and any pending `worker_outcome`)
+        and then emits `RenameDialogOutput::Cancel`; `AppModel`
+        drops the live `RenameDialogComponent` controller on
+        receipt, releasing the widget tree (and its
+        `gtk::EntryBuffer`) with it.
+      * Submit success — the worker reports
+        `RenameWorkerEffect::Success`; the dispatch composer flips
+        `RenameDispatch::drop_dialog = true`, and the same
+        `AppModel` drop path runs.
+      * Dialog close (auto-lock / parent navigation) — `AppModel`
+        drops the controller as part of the lock transition,
+        releasing the widget tree with it.
+      `RenameDialogState::clear` survives the reset for
+      `account_id` and `prior_label` so a defensive re-render
+      against the cleared state still targets the same row.
+      Pinned by `rename_dialog_state_clear_resets_draft_per_l1789`,
+      `rename_dialog_state_clear_resets_worker_outcome_per_l1789`,
+      `rename_dialog_state_clear_resets_last_validation_per_l1789`,
+      `rename_dialog_state_clear_preserves_account_id_per_l1789`,
+      `rename_dialog_state_clear_is_idempotent_per_l1789`,
+      `apply_msg_cancel_clears_state_per_l1789`, and
+      `apply_msg_cancel_still_emits_cancel_output_after_clear_per_l1789`;
+      the submit-success drop path is pinned by
+      `should_drop_rename_dialog_after_success_returns_true` in
+      `tests/app_state_logic.rs`.
 - [ ] `RemoveDialog` confirmation flow (`AdwAlertDialog` with
   `destructive-action` styling gating `Vault::remove` inside
   `Vault::mutate_and_save`).

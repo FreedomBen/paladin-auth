@@ -23,10 +23,12 @@
 //! reacts to the [`RenameErrorOutcome`] routing decision.
 //!
 //! The widget layer also routes the `Cancel` button click through
-//! [`apply_msg`] so the dialog dismissal contract — Cancel emits
-//! [`RenameDialogOutput::Cancel`] without touching the draft —
-//! lives in pure logic alongside the validation / error-routing
-//! helpers and stays unit-testable here.
+//! [`apply_msg`] so the dialog dismissal contract — Cancel resets
+//! the entry buffer's shadow state (`L1789` in
+//! `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+//! `RenameDialog`) and emits [`RenameDialogOutput::Cancel`] — lives
+//! in pure logic alongside the validation / error-routing helpers
+//! and stays unit-testable here.
 
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -602,17 +604,145 @@ fn apply_msg_cancel_emits_cancel_output() {
     assert_eq!(out, Some(RenameDialogOutput::Cancel));
 }
 
+// ---------------------------------------------------------------------------
+// L1789 — Reset the entry buffer on cancel / submit / dialog close
+//
+// The rename dialog's `adw::EntryRow` carries a non-secret label,
+// so the L1789 reset obligation is the standard widget-buffer
+// reset (not the zeroize-on-drop the URI / passphrase / manual-
+// secret buffers require in §"Secret entry handling"). Three
+// dismissal paths converge on resetting the underlying
+// `gtk::EntryBuffer`:
+//
+// * Cancel — `apply_msg(Cancel)` calls `state.clear()` to wipe the
+//   shadow draft / cached validation / worker outcome and emits
+//   [`RenameDialogOutput::Cancel`]; `AppModel` then drops the live
+//   [`RenameDialogComponent`] controller, releasing the widget
+//   tree (and its `gtk::EntryBuffer`) with it.
+// * Submit success — the worker reports
+//   [`RenameWorkerEffect::Success`], the dispatch composer flips
+//   `drop_dialog = true`
+//   (pinned by
+//   `should_drop_rename_dialog_after_success_returns_true` in
+//   `tests/app_state_logic.rs`), and the same `AppModel` drop
+//   path runs.
+// * Dialog close (auto-lock / parent navigation) — `AppModel`
+//   drops the controller as part of the lock transition,
+//   releasing the widget tree with it.
+//
+// The state-level `clear` API is exercised here so a future
+// refactor that decouples the dialog state from the widget
+// controller cannot silently drop the L1789 obligation.
+// ---------------------------------------------------------------------------
+
 #[test]
-fn apply_msg_cancel_does_not_mutate_draft() {
-    // Cancel is a pure dismissal — the draft must round-trip
-    // unchanged so the user's typed value is not silently dropped
-    // before a future `save_not_committed` rollback that re-opens
-    // the same dialog instance can re-seed the prior label.
+fn rename_dialog_state_clear_resets_draft_per_l1789() {
+    // The visible draft is the shadow of the `adw::EntryRow`'s
+    // text; clearing it pre-drop ensures a defensive re-render
+    // against an undropped state cannot leak the cancelled draft.
     let mut state = RenameDialogState::new(&dummy_init("ben"));
     state.set_draft("draft-in-progress".to_string());
-    let before = state.draft().to_string();
+    state.clear();
+    assert!(
+        state.draft().is_empty(),
+        "clear must reset the draft per L1789, got {:?}",
+        state.draft()
+    );
+}
+
+#[test]
+fn rename_dialog_state_clear_resets_worker_outcome_per_l1789() {
+    // A pending `KeepNewWithWarning` / `RestorePrior` outcome from
+    // a prior worker completion must not survive the reset so a
+    // future re-mount cannot inherit a stale body warning.
+    let mut state = RenameDialogState::new(&dummy_init("alice"));
+    state.set_draft("alicia".to_string());
+    let outcome = classify_rename_error(&PaladinError::SaveDurabilityUnconfirmed);
+    let _ = apply_msg(&mut state, RenameDialogMsg::WorkerFailed(outcome));
+    assert!(
+        state.worker_outcome().is_some(),
+        "precondition: outcome stored before clear",
+    );
+    state.clear();
+    assert!(
+        state.worker_outcome().is_none(),
+        "clear must reset the worker outcome per L1789",
+    );
+}
+
+#[test]
+fn rename_dialog_state_clear_resets_last_validation_per_l1789() {
+    // The cached `SubmitOutcome` must reflect the cleared draft;
+    // an empty draft fails §4.1 validation, so `last_validation`
+    // routes to `SubmitOutcome::InlineError` after `clear`. This
+    // pins the invariant `last_validation == classify_submit(draft)`
+    // even across a reset.
+    let mut state = RenameDialogState::new(&dummy_init("ben"));
+    state.set_draft("benji".to_string());
+    state.clear();
+    let inline = state
+        .inline_error()
+        .expect("cleared draft must surface the empty-label inline error");
+    assert_eq!(inline.kind, ErrorKind::ValidationError);
+}
+
+#[test]
+fn rename_dialog_state_clear_preserves_account_id_per_l1789() {
+    // The reset is scoped to the visible draft / worker outcome —
+    // the stable `AccountId` stays on the state so a defensive
+    // re-render against the cleared state still targets the same
+    // row.
+    let mut state = RenameDialogState::new(&dummy_init("ben"));
+    let id = state.account_id();
+    state.set_draft("benji".to_string());
+    state.clear();
+    assert_eq!(state.account_id(), id);
+}
+
+#[test]
+fn rename_dialog_state_clear_is_idempotent_per_l1789() {
+    // A second `clear` on an already-empty state is a no-op so the
+    // dismissal path is safe to call from multiple AppModel hooks
+    // (e.g. Cancel button click race with parent navigation) without
+    // re-classifying or re-routing the validation outcome twice.
+    let mut state = RenameDialogState::new(&dummy_init("ben"));
+    state.set_draft("benji".to_string());
+    state.clear();
+    let after_first = state.draft().to_string();
+    state.clear();
+    assert_eq!(state.draft(), after_first);
+    assert!(state.worker_outcome().is_none());
+}
+
+#[test]
+fn apply_msg_cancel_clears_state_per_l1789() {
+    // Cancel is the primary dismissal hook for L1789. `apply_msg`
+    // calls `state.clear()` before emitting Cancel so the
+    // controller-drop path that follows runs against an already-
+    // reset state. Asserting the full reset here pins the
+    // dismissal contract end-to-end without a separate widget
+    // probe.
+    let mut state = RenameDialogState::new(&dummy_init("ben"));
+    state.set_draft("draft-in-progress".to_string());
+    let outcome = classify_rename_error(&PaladinError::SaveDurabilityUnconfirmed);
+    let _ = apply_msg(&mut state, RenameDialogMsg::WorkerFailed(outcome));
     let _ = apply_msg(&mut state, RenameDialogMsg::Cancel);
-    assert_eq!(state.draft(), before);
+    assert!(state.draft().is_empty(), "Cancel must reset the draft");
+    assert!(
+        state.worker_outcome().is_none(),
+        "Cancel must reset the worker outcome",
+    );
+}
+
+#[test]
+fn apply_msg_cancel_still_emits_cancel_output_after_clear_per_l1789() {
+    // The clear step must not swallow the Cancel output: `AppModel`
+    // relies on the output to drop the controller (and with it the
+    // widget tree) so the underlying `gtk::EntryBuffer` is released.
+    let mut state = RenameDialogState::new(&dummy_init("ben"));
+    state.set_draft("draft-in-progress".to_string());
+    let out = apply_msg(&mut state, RenameDialogMsg::Cancel);
+    assert_eq!(out, Some(RenameDialogOutput::Cancel));
 }
 
 #[test]

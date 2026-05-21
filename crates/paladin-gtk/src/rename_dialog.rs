@@ -661,6 +661,32 @@ impl RenameDialogState {
         self.worker_outcome = None;
     }
 
+    /// Reset the visible draft and any pending worker outcome on
+    /// dialog dismissal.
+    ///
+    /// [`apply_msg`] calls this from the [`RenameDialogMsg::Cancel`]
+    /// arm so the state's shadow of the `adw::EntryRow` is wiped
+    /// before `AppModel` drops the controller and releases the
+    /// widget tree. The dismissal contract — L1789 in
+    /// `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+    /// `RenameDialog` — covers cancel, successful submit, and
+    /// auto-lock / parent-navigation close; for non-secret label
+    /// state, the obligation is the standard widget-buffer reset
+    /// (without the zeroize-on-drop the URI / passphrase / manual-
+    /// secret buffers require). The successful-submit and dialog-
+    /// close paths reset the buffer implicitly through widget drop,
+    /// so `clear` is exposed primarily to wipe the state-side
+    /// shadow on Cancel and to defend against any future refactor
+    /// that decouples the dialog state from the widget controller.
+    ///
+    /// [`Self::account_id`] and [`Self::prior_label`] survive the
+    /// reset so a defensive re-render against the cleared state
+    /// still targets the same row, and a future re-seed could
+    /// restore the persisted-label snapshot.
+    pub fn clear(&mut self) {
+        self.set_draft(String::new());
+    }
+
     /// Latest [`RenameErrorOutcome`] from a completed
     /// `Vault::mutate_and_save` rename worker.
     ///
@@ -669,8 +695,11 @@ impl RenameDialogState {
     /// `KeepNewWithWarning` (warning attached, draft kept on the
     /// new value), or the defensive `InlineError` (inline error,
     /// draft kept) without re-deriving the typed routing decision.
-    /// Cleared by [`Self::set_draft`] and [`RenameDialogMsg::SubmitClicked`]
-    /// so a retry never renders stale text.
+    /// Cleared by [`Self::set_draft`] (which [`Self::clear`]
+    /// delegates to), [`RenameDialogMsg::SubmitClicked`], and
+    /// [`RenameDialogMsg::Cancel`] so a retry never renders stale
+    /// text and the dismissal path resets the state-side shadow per
+    /// L1789.
     #[must_use]
     pub fn worker_outcome(&self) -> Option<&RenameErrorOutcome> {
         self.worker_outcome.as_ref()
@@ -813,8 +842,11 @@ pub enum RenameDialogOutput {
 /// Pulled out of [`RenameDialogComponent::update`] so the routing
 /// decision — [`RenameDialogMsg::DraftChanged`] mutates the cached
 /// validation and emits no output; [`RenameDialogMsg::Cancel`]
-/// emits [`RenameDialogOutput::Cancel`] without touching the draft;
-/// [`RenameDialogMsg::SubmitClicked`] routes through
+/// resets the state-side shadow via [`RenameDialogState::clear`]
+/// (the L1789 dismissal obligation for non-secret labels) and emits
+/// [`RenameDialogOutput::Cancel`] so `AppModel` drops the controller
+/// and releases the widget tree; [`RenameDialogMsg::SubmitClicked`]
+/// routes through
 /// [`RenameDialogState::submit`] and forwards
 /// [`RenameDialogOutput::SubmitLabel`] on
 /// [`SubmitOutcome::Proceed`] or emits no output on
@@ -830,7 +862,17 @@ pub fn apply_msg(
             state.set_draft(text);
             None
         }
-        RenameDialogMsg::Cancel => Some(RenameDialogOutput::Cancel),
+        RenameDialogMsg::Cancel => {
+            // L1789: reset the entry buffer's state-side shadow on
+            // dismissal. `AppModel` drops the controller (and with
+            // it the `gtk::EntryBuffer`) after receiving the Cancel
+            // output; clearing the state first ensures a defensive
+            // re-render against the undropped state cannot leak the
+            // cancelled draft, and that any future state-reuse
+            // refactor cannot silently drop the L1789 obligation.
+            state.clear();
+            Some(RenameDialogOutput::Cancel)
+        }
         RenameDialogMsg::SubmitClicked => {
             // Clear any prior worker outcome so the body does not
             // render stale post-effect text alongside the live
