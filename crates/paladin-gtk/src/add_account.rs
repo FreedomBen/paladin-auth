@@ -3065,6 +3065,40 @@ pub fn format_uri_text_title() -> &'static str {
     "otpauth:// URI"
 }
 
+/// State-driven projection of the URI sub-path's `AdwEntryRow`
+/// buffer text, surfaced as the borrowed `&str` that
+/// `adw::EntryRow::set_text:` (the `#[watch]`-driven binding the
+/// widget layer attaches to the URI page's entry row) expects.
+///
+/// Returns the live contents of
+/// [`crate::secret_fields::AddSecretState::uri_text`] as a borrowed
+/// `&str` — `""` on a freshly-opened dialog ([`AddSecretState::default`]
+/// seeds the URI buffer at the empty string), the post-
+/// [`AddAccountMsg::UriTextChanged`] value on every subsequent
+/// dispatch, and `""` again after the §"Secret entry handling"
+/// clears (`Cancel`, `SwitchPath` away from the URI page, `Close`,
+/// `SubmitProceed`, `ConfirmAddAnyway`, and auto-lock route through
+/// [`AddSecretState::clear_for`] / [`AddSecretState::switch_path`]
+/// to wipe the Paladin-owned `Zeroizing<String>` and zeroize the
+/// bytes).
+///
+/// Sibling of [`compose_manual_label_text`] /
+/// [`compose_manual_issuer_text`] / [`compose_manual_icon_hint_text`]
+/// on the URI-sub-path-text side; together they cover the per-row
+/// text projection for every editable row in the dialog. The URI
+/// row is the only buffer whose underlying storage is a
+/// [`crate::secret_fields::SecretEntry`] (the URI bytes embed the
+/// user's Base32 secret), so the projection reads
+/// `state.secret_state().uri_text.text()` straight rather than
+/// re-shadowing into a separate `AddDialogState` field.
+///
+/// Pure — borrows the state and returns a borrowed `&str` without
+/// allocating.
+#[must_use]
+pub fn compose_uri_text_value(state: &AddDialogState) -> &str {
+    state.secret_state().uri_text.text()
+}
+
 /// Body text for the `AdwToast` raised on the
 /// [`AddWorkerEffect::Success`] branch.
 ///
@@ -4141,6 +4175,51 @@ impl SimpleComponent for AddAccountComponent {
                 ] = &gtk::Box {
                     set_orientation: gtk::Orientation::Vertical,
                     set_spacing: 12,
+
+                    // URI sub-path: single `adw::EntryRow` for the
+                    // `otpauth://` string. Per `IMPLEMENTATION_PLAN_04_GTK.md`
+                    // §"Component tree" > `AddAccountComponent` and
+                    // §"Secret entry handling", every keystroke
+                    // shadows into
+                    // `AddSecretState::uri_text` (a Paladin-owned
+                    // `SecretEntry` whose bytes zeroize on drop /
+                    // `take` / `set`) through the `UriTextChanged`
+                    // dispatch — the URI text embeds the user's
+                    // Base32 secret, so it must follow the same
+                    // §8 clear-on-cancel / clear-on-switch-path
+                    // contract the manual Base32 secret already
+                    // follows. The `#[watch] set_text:` binding
+                    // reads `compose_uri_text_value(&model.state)`
+                    // so programmatic clears
+                    // (`Cancel` / `SwitchPath` / `Close` /
+                    // `SubmitProceed` / `ConfirmAddAnyway` /
+                    // auto-lock all route through
+                    // `AddSecretState::clear_for` /
+                    // `switch_path`) flush back to the visible
+                    // entry. On Save, `compose_submit_outcome`
+                    // dispatches to `compose_uri_submit_outcome`
+                    // which threads
+                    // `state.secret_state().uri_text.text()`
+                    // through `paladin_core::parse_otpauth` —
+                    // synchronous on the main thread (no I/O,
+                    // cheap) — and the resulting
+                    // `ValidatedAccount` flows through the same
+                    // `Vault::find_duplicate` / "add anyway" /
+                    // `Vault::mutate_and_save` insertion path
+                    // the manual form already uses.
+                    adw::PreferencesGroup {
+                        #[name = "uri_text_row"]
+                        add = &adw::EntryRow {
+                            set_title: format_uri_text_title(),
+                            #[watch]
+                            set_text: compose_uri_text_value(&model.state),
+                            connect_changed[sender] => move |entry| {
+                                sender.input(AddAccountMsg::UriTextChanged(
+                                    entry.text().to_string(),
+                                ));
+                            },
+                        },
+                    },
                 },
 
                 add_titled_with_icon[

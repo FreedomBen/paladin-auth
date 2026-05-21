@@ -2551,21 +2551,100 @@ sign-off.
     zeroize invariants and
     `tests/add_account_logic.rs::inline_error_does_not_echo_manual_secret_text`
     for the §"Secret entry handling" redaction contract.
-- [ ] Add-via-`otpauth://`-URI paste path in `AddAccountComponent`,
+- [x] Add-via-`otpauth://`-URI paste path in `AddAccountComponent`,
   decoded via `paladin_core::parse_otpauth` and sharing the manual
   duplicate / validation paths.
-  - [ ] Add a URI `AdwEntryRow` for the `otpauth://` string on its
-    dedicated stack page.
-  - [ ] On submit, call `paladin_core::parse_otpauth` synchronously
+  - [x] Add a URI `AdwEntryRow` for the `otpauth://` string on its
+    dedicated stack page. The `AddAccountComponent`'s `view!` macro
+    now mounts an `adw::PreferencesGroup` on the
+    `AdwViewStack`'s "URI" page that wraps a single `adw::EntryRow`
+    (`#[name = "uri_text_row"]`) whose `set_title` reads
+    `format_uri_text_title()` (the existing `"otpauth:// URI"`
+    helper) and whose `#[watch] set_text:` binding reads
+    `compose_uri_text_value(&model.state)` so programmatic clears
+    flush the visible entry text. The keystroke `connect_changed`
+    signal dispatches `AddAccountMsg::UriTextChanged(entry.text())`
+    so the typed bytes shadow into
+    `AddSecretState::uri_text` — the same Paladin-owned
+    `SecretEntry` that drains on cancel / switch / close / submit /
+    auto-lock per the §"Secret entry handling" contract. Pinned by
+    `tests/add_account_logic.rs::compose_uri_text_value_fresh_dialog_returns_empty`,
+    `compose_uri_text_value_after_uri_text_changed_reflects_new_value`,
+    `compose_uri_text_value_replaces_prior_shadow`,
+    `compose_uri_text_value_returns_empty_after_cancel_clears_secret_state`,
+    and `compose_uri_text_value_returns_empty_after_switch_path_away_from_uri`,
+    on top of the existing
+    `format_uri_text_title_returns_otpauth_uri` /
+    `apply_msg_uri_text_changed_shadows_into_secret_state` /
+    `apply_msg_uri_text_changed_replaces_prior_shadow` siblings.
+  - [x] On submit, call `paladin_core::parse_otpauth` synchronously
     on the main thread (no I/O); surface parse failures inline
-    without echoing the URI text.
-  - [ ] Route the resulting `ValidatedAccount` through the same
+    without echoing the URI text. `compose_submit_outcome`
+    dispatches to `compose_uri_submit_outcome` when the active path
+    is `AddPath::Uri`; the helper threads
+    `state.secret_state().uri_text.text()` through
+    `paladin_core::parse_otpauth` synchronously
+    (`tests/otpauth_uri_paste_logic.rs::classify_uri_submit_signature_takes_borrowed_str_so_caller_retains_buffer`
+    pins the borrowed-`&str` signature so the call cannot escape
+    the GTK main loop into a worker). Parse failures route as
+    `UriSubmitOutcome::InlineError(InlineError { kind, rendered })`
+    and surface through the shared `compose_save_click_outcome`
+    pipeline → `AddAccountMsg::RenderInlineError` →
+    `AddDialogState::inline_error`, which the `view!` macro
+    `#[watch]`-binds onto the `inline_error_label`. Pinned by
+    `tests/otpauth_uri_paste_logic.rs::classify_uri_submit_malformed_uri_rejects_inline`,
+    `classify_uri_submit_unsupported_scheme_rejects_inline`,
+    `inline_error_does_not_echo_uri_label_or_issuer`,
+    `inline_error_does_not_echo_uri_secret_text`,
+    `inline_error_does_not_echo_full_uri_text`,
+    `classify_uri_submit_outcome_carries_only_validated_account_or_inline_error`,
+    plus the
+    `tests/add_account_logic.rs::compose_uri_submit_outcome_*` /
+    `compose_inline_error_body_*` invariants that pin the
+    dispatch and projection layers.
+  - [x] Route the resulting `ValidatedAccount` through the same
     duplicate-detection / "add anyway" / `Vault::mutate_and_save`
-    insertion path the manual form already uses.
-  - [ ] Clear the URI entry buffer (and any pending duplicate-add
+    insertion path the manual form already uses. The
+    `compose_save_click_outcome` pipeline routes the URI sub-path's
+    `UriSubmitOutcome::Proceed(validated)` through the unified
+    `SubmitOutcome::Proceed` arm — identical to the manual sub-
+    path's surface — so `Vault::find_duplicate(&validated)` and the
+    duplicate-confirm `AdwAlertDialog` consume the URI-derived
+    `ValidatedAccount` from the same
+    `AddSecretState::pending` slot the manual flow uses. Pinned by
+    `tests/add_account_logic.rs::compose_save_click_outcome_uri_path_await_confirmation_on_duplicate`,
+    `proceed_validated_account_threads_through_add_secret_state_pending`,
+    and the existing `apply_msg_stage_pending_duplicate_*` /
+    `apply_msg_confirm_add_anyway_*` siblings (the `mutate_and_save`
+    worker and `classify_add_post_effect_error` routing are shared
+    with the manual path so the URI sub-path inherits the
+    `save_not_committed` rollback and
+    `save_durability_unconfirmed` keep-with-warning behavior
+    without per-sub-path branching).
+  - [x] Clear the URI entry buffer (and any pending duplicate-add
     state) when the user switches stack pages, on submit, on cancel,
     on dialog close, and on auto-lock; never carry the URI in
-    `AppMsg` or `AppOutput`.
+    `AppMsg` or `AppOutput`. `AddSecretState::uri_text` is a
+    Paladin-owned `SecretEntry` whose bytes wipe on drop /
+    `take` / `set`; `apply_msg` drains it through
+    `AddSecretState::clear_for(ClearReason::Submit | Cancel |
+    Close)` on the corresponding arms and through
+    `AddSecretState::switch_path` on `SwitchPath` away from the URI
+    page, and auto-lock routes through the shared dialog-drop path.
+    The `view!` macro's `#[watch] set_text:
+    compose_uri_text_value(&model.state)` flushes the cleared
+    buffer back to the visible entry. The §8 source guardrail in
+    `tests/secret_message_boundaries.rs` keeps URI text out of the
+    `AppMsg` / `AppOutput` long-lived types. Pinned by
+    `tests/add_account_logic.rs::apply_msg_cancel_wipes_secret_state_buffers`,
+    `apply_msg_close_wipes_secret_state_buffers`,
+    `apply_msg_submit_proceed_wipes_secret_state_buffers`,
+    `apply_msg_switch_path_to_uri_flips_active_path_and_emits_no_output`,
+    plus the new
+    `compose_uri_text_value_returns_empty_after_cancel_clears_secret_state` /
+    `compose_uri_text_value_returns_empty_after_switch_path_away_from_uri`
+    siblings, alongside `tests/secret_fields_logic.rs::*` for the
+    `SecretEntry` zeroize invariants.
 - [ ] `AddAccountComponent` QR clipboard image path (`gdk::Clipboard`
   texture read → `paladin_core::import::qr_image_bytes` with
   `ImportConflict::Skip`).

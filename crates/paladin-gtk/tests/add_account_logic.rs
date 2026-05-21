@@ -8754,6 +8754,154 @@ fn format_uri_text_title_returns_otpauth_uri() {
 }
 
 // ---------------------------------------------------------------------------
+// `compose_uri_text_value` — state-driven projection of the URI sub-path's
+// `AdwEntryRow` buffer text. Sibling of `compose_manual_label_text` on the
+// URI-buffer side. The URI EntryRow's `#[watch] set_text:` binding reads
+// this projection so programmatic state changes (e.g. the `Cancel` /
+// `SwitchPath` clears that drop the URI buffer via
+// `AddSecretState::clear_for` / `switch_path`) flush back to the widget.
+// Reads `state.secret_state().uri_text.text()` so the same Paladin-owned
+// `SecretEntry` that zeroizes the URI bytes on drop drives the displayed
+// text — no shadow string in `AddDialogState` past the secret-state
+// boundary.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn compose_uri_text_value_fresh_dialog_returns_empty() {
+    // `AddSecretState::default` seeds the URI buffer at the empty
+    // string, so a freshly-opened dialog must expose an empty string
+    // through the projection — the widget binds a `#[watch]` over
+    // the projection to drive the URI entry's
+    // `adw::EntryRow::set_text:` so the entry reflects state on
+    // initial render. Mirror of
+    // `compose_manual_label_text_fresh_dialog_returns_empty` on the
+    // URI-buffer side.
+    use paladin_gtk::add_account::{compose_uri_text_value, AddDialogState};
+
+    let state = AddDialogState::new();
+
+    assert_eq!(
+        compose_uri_text_value(&state),
+        "",
+        "fresh dialog → composer surfaces the empty URI buffer",
+    );
+}
+
+#[test]
+fn compose_uri_text_value_after_uri_text_changed_reflects_new_value() {
+    // `AddAccountMsg::UriTextChanged("otpauth://...")` shadows the
+    // entry text into `AddSecretState::uri_text`; the projection
+    // must surface the new value as a borrowed `&str` so the
+    // widget's `#[watch]`-driven `set_text:` binding stays in
+    // lockstep with the underlying state on every dispatch. Mirror
+    // of `compose_manual_label_text_after_label_changed_reflects_new_value`
+    // on the URI-buffer side.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_uri_text_value, AddAccountMsg, AddDialogState,
+    };
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::UriTextChanged("otpauth://totp/alice?secret=ABC".to_string()),
+    );
+
+    assert_eq!(
+        compose_uri_text_value(&state),
+        "otpauth://totp/alice?secret=ABC",
+        "UriTextChanged → composer surfaces the new URI text",
+    );
+}
+
+#[test]
+fn compose_uri_text_value_replaces_prior_shadow() {
+    // A second `UriTextChanged` dispatch must overwrite the first —
+    // the projection must not latch on the first transition, so the
+    // widget's `#[watch]`-driven entry text stays bidirectional with
+    // the user's latest keystrokes. Mirror of
+    // `compose_manual_label_text_replaces_prior_shadow` on the
+    // URI-buffer side.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_uri_text_value, AddAccountMsg, AddDialogState,
+    };
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::UriTextChanged("otpauth://totp/a?secret=A".to_string()),
+    );
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::UriTextChanged("otpauth://totp/b?secret=B".to_string()),
+    );
+
+    assert_eq!(
+        compose_uri_text_value(&state),
+        "otpauth://totp/b?secret=B",
+        "second UriTextChanged replaces the prior shadow in the projection",
+    );
+}
+
+#[test]
+fn compose_uri_text_value_returns_empty_after_cancel_clears_secret_state() {
+    // `AddAccountMsg::Cancel` drains the URI buffer via
+    // `AddSecretState::clear_for(ClearReason::Cancel)` per the
+    // §"Secret entry handling" contract. The projection must surface
+    // the cleared empty buffer so the widget's `#[watch]`-driven
+    // `set_text:` flushes the entry text on the next render — keeping
+    // a stale URI on screen would defeat the secret-clearing rule
+    // and could leak the user's typed URI text after they cancelled
+    // the add.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_uri_text_value, AddAccountMsg, AddDialogState,
+    };
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::UriTextChanged("otpauth://totp/alice?secret=ABC".to_string()),
+    );
+    let _ = apply_msg(&mut state, AddAccountMsg::Cancel);
+
+    assert_eq!(
+        compose_uri_text_value(&state),
+        "",
+        "Cancel clears the URI buffer; projection must surface the empty buffer for the widget watch binding",
+    );
+}
+
+#[test]
+fn compose_uri_text_value_returns_empty_after_switch_path_away_from_uri() {
+    // `AddAccountMsg::SwitchPath(AddPath::Manual)` drains the URI
+    // buffer via `AddSecretState::switch_path` per the §"Secret
+    // entry handling" path-switch contract. The projection must
+    // surface the cleared empty buffer so the URI entry text resets
+    // when the user navigates away from the URI page — leaving the
+    // typed URI on screen would defeat the path-switch wipe and let
+    // the user step back to the URI page to retrieve a stale value.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_uri_text_value, AddAccountMsg, AddDialogState,
+    };
+    use paladin_gtk::secret_fields::AddPath;
+
+    let mut state = AddDialogState::new();
+    // The default `active_path` is `Manual`, so first switch to
+    // `Uri` and shadow a value, then switch away.
+    let _ = apply_msg(&mut state, AddAccountMsg::SwitchPath(AddPath::Uri));
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::UriTextChanged("otpauth://totp/alice?secret=ABC".to_string()),
+    );
+    let _ = apply_msg(&mut state, AddAccountMsg::SwitchPath(AddPath::Manual));
+
+    assert_eq!(
+        compose_uri_text_value(&state),
+        "",
+        "SwitchPath away from URI clears the URI buffer; projection must surface the empty buffer",
+    );
+}
+
+// ---------------------------------------------------------------------------
 // `format_add_dialog_success_toast` — body text for the `AdwToast` raised
 // after a successful add worker outcome per
 // `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" > `AddAccountComponent`
