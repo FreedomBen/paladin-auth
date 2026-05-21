@@ -1062,7 +1062,12 @@ fn build_row_widget() -> gtk::Box {
 /// Centralizing the model here means the rows share a single
 /// canonical menu shape and the labels stay in lockstep with the
 /// smoke test.
-fn build_kebab_menu_model() -> gio::Menu {
+///
+/// Public so `tests/account_list_logic.rs` can pin the menu's item
+/// labels and action targets — drift in either would surface as a
+/// failing test rather than as a silent kebab-menu regression.
+#[must_use]
+pub fn build_kebab_menu_model() -> gio::Menu {
     let menu = gio::Menu::new();
     menu.append(
         Some("Rename\u{2026}"),

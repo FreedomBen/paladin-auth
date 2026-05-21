@@ -1597,9 +1597,27 @@ sign-off.
     directly. A future GDK with a fallible write surface would gate
     the `schedule_copy` call on the result without changing the
     surrounding pure-logic plumbing.
-  - [ ] Add a kebab `gtk::MenuButton` whose `gio::Menu` exposes
+  - [x] Add a kebab `gtk::MenuButton` whose `gio::Menu` exposes
     "Rename…" (opens `RenameDialog` for that row) and "Remove…"
-    (opens `RemoveDialog` for that row).
+    (opens `RemoveDialog` for that row). The kebab
+    `gtk::MenuButton` is built by
+    `account_list::build_row_widget` with the
+    `view-more-symbolic` icon and the `.flat` style class, and
+    carries the `gio::Menu` returned by
+    `account_list::build_kebab_menu_model` ("Rename…" →
+    `row.rename`, "Remove…" → `row.remove`). The per-row
+    `gio::SimpleActionGroup` installed by
+    `install_row_action_group` registers both actions;
+    activations route through `dispatch_row_action` into
+    `AccountListOutput::OpenRenameDialog(AccountId)` /
+    `AccountListOutput::OpenRemoveDialog(AccountId)`, which the
+    `AppMsg::AccountListAction` arm in `app/model.rs` consumes
+    to launch `RenameDialogComponent` / `RemoveDialogComponent`
+    against the live `Vault`. The menu shape (item count,
+    labels, action targets) is pinned by
+    `tests/account_list_logic.rs::build_kebab_menu_model_exposes_rename_and_remove_in_order`
+    so drift between the kebab UI, the per-row action group, and
+    the dispatch table surfaces as a failing test.
   - [x] Disable mutating row controls (copy, "next", kebab) while
     `AppModel` is `UnlockedBusy` per §"In-flight effect ownership".
     `account_row::apply_busy_mask` flips `RowDisplay::copy_enabled`,

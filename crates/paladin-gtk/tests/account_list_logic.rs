@@ -27,13 +27,15 @@ use paladin_core::{
     IconHintInput, Store, Vault, VaultInit, VaultLock,
 };
 use paladin_gtk::account_list::{
-    bind_display_for_row, dispatch_row_action, filtered_row_models_from_vault,
-    format_rendered_marker, format_widget_states_marker, hidden_row_display, prune_cache_to_rows,
-    row_model_for_account, row_models_from_vault, selected_row_after_refresh, AccountListOutput,
-    AccountRowModel, ACCOUNT_LIST_WIDGET_STATES_MARKER_PREFIX, ROW_ACTION_GROUP_NAME,
-    ROW_COPY_ACTION_NAME, ROW_NEXT_ACTION_NAME, ROW_REMOVE_ACTION_NAME, ROW_RENAME_ACTION_NAME,
+    bind_display_for_row, build_kebab_menu_model, dispatch_row_action,
+    filtered_row_models_from_vault, format_rendered_marker, format_widget_states_marker,
+    hidden_row_display, prune_cache_to_rows, row_model_for_account, row_models_from_vault,
+    selected_row_after_refresh, AccountListOutput, AccountRowModel,
+    ACCOUNT_LIST_WIDGET_STATES_MARKER_PREFIX, ROW_ACTION_GROUP_NAME, ROW_COPY_ACTION_NAME,
+    ROW_NEXT_ACTION_NAME, ROW_REMOVE_ACTION_NAME, ROW_RENAME_ACTION_NAME,
 };
 use paladin_gtk::account_row::{CodeDisplay, CounterText, ProgressDisplay, RowDisplay};
+use relm4::gtk::gio::prelude::*;
 
 // --- fixtures ----------------------------------------------------------------
 
@@ -731,6 +733,53 @@ fn row_copy_action_name_is_copy() {
     // [`install_row_action_group`] in lockstep with
     // [`dispatch_row_action`].
     assert_eq!(ROW_COPY_ACTION_NAME, "copy");
+}
+
+#[test]
+fn build_kebab_menu_model_exposes_rename_and_remove_in_order() {
+    // The row kebab `gtk::MenuButton` carries the `gio::Menu`
+    // produced by [`build_kebab_menu_model`]. Per
+    // `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+    // `AccountRowComponent`, the menu must expose exactly two
+    // entries — "Rename…" then "Remove…" — whose action targets
+    // resolve through the per-row `gio::SimpleActionGroup` named
+    // [`ROW_ACTION_GROUP_NAME`]. Pinning the labels and targets
+    // here catches drift between the kebab menu, the action group
+    // installed by `install_row_action_group`, and the dispatch
+    // table in `dispatch_row_action` — any of which would otherwise
+    // leave the user with a kebab item that activates into the void.
+    let menu = build_kebab_menu_model();
+    assert_eq!(menu.n_items(), 2, "kebab menu carries exactly two items");
+
+    let rename_label: String = menu
+        .item_attribute_value(0, "label", None)
+        .and_then(|v| v.get())
+        .expect("kebab item 0 carries a label attribute");
+    assert_eq!(rename_label, "Rename\u{2026}");
+
+    let rename_action: String = menu
+        .item_attribute_value(0, "action", None)
+        .and_then(|v| v.get())
+        .expect("kebab item 0 carries an action attribute");
+    assert_eq!(
+        rename_action,
+        format!("{ROW_ACTION_GROUP_NAME}.{ROW_RENAME_ACTION_NAME}"),
+    );
+
+    let remove_label: String = menu
+        .item_attribute_value(1, "label", None)
+        .and_then(|v| v.get())
+        .expect("kebab item 1 carries a label attribute");
+    assert_eq!(remove_label, "Remove\u{2026}");
+
+    let remove_action: String = menu
+        .item_attribute_value(1, "action", None)
+        .and_then(|v| v.get())
+        .expect("kebab item 1 carries an action attribute");
+    assert_eq!(
+        remove_action,
+        format!("{ROW_ACTION_GROUP_NAME}.{ROW_REMOVE_ACTION_NAME}"),
+    );
 }
 
 #[test]
