@@ -1160,6 +1160,28 @@ pub enum AddAccountMsg {
     /// output, no state change) so a stray click cannot punch through
     /// to the worker without a validated account in hand.
     ConfirmAddAnyway,
+    /// "Cancel" response from the duplicate-collision
+    /// [`adw::AlertDialog`]. Drops the pending
+    /// [`paladin_core::ValidatedAccount`] out of
+    /// [`crate::secret_fields::AddSecretState::pending`] and clears
+    /// [`AddDialogState::pending_duplicate_existing`] so a
+    /// subsequent Save click starts from a clean projection — but
+    /// emits **no** [`AddAccountOutput`] so the parent
+    /// [`AddAccountComponent`] stays open. The user is returned to
+    /// the manual / URI form with the typed buffers intact so they
+    /// can edit the colliding field and retry without re-entering
+    /// everything.
+    ///
+    /// Mirror of [`crate::init_dialog::InitDialogMsg::ForceCancelClicked`]
+    /// on the add path: the in-modal Cancel response stays
+    /// dialog-local and is distinct from [`Self::Cancel`] (which
+    /// closes the whole add dialog by emitting
+    /// [`AddAccountOutput::Cancel`]).
+    ///
+    /// Defensive: a stray dispatch with no pending parked is a
+    /// benign no-op (no output, no state change beyond
+    /// re-confirming the empty slots).
+    DismissDuplicateAlert,
     /// Typed §5 inline-error projection produced by the widget when
     /// [`compose_save_click_outcome`] returned
     /// [`SaveClickOutcome::InlineError`] — the active sub-path's
@@ -3310,6 +3332,27 @@ impl AddDialogState {
         self.pending_duplicate_existing.as_ref()
     }
 
+    /// Predicate the widget `update()` post-routing branch checks
+    /// before presenting the duplicate-confirmation
+    /// [`adw::AlertDialog`]. Returns `true` when a
+    /// [`SaveClickOutcome::AwaitConfirmation`] is parked — both
+    /// halves of the duplicate-collision projection are populated:
+    /// the validated account in
+    /// [`crate::secret_fields::AddSecretState::pending`] and the
+    /// colliding [`AccountSummary`] in
+    /// [`Self::pending_duplicate_existing`].
+    ///
+    /// Mirror of
+    /// [`crate::init_dialog::InitDialogState::has_pending_force`] on
+    /// the add path. Pairs with the
+    /// [`should_present_duplicate_alert`] free function the
+    /// widget's `update()` consults so the present-once-on-stage
+    /// guard cannot accidentally re-fire on subsequent dispatches.
+    #[must_use]
+    pub fn has_pending_duplicate_for_alert(&self) -> bool {
+        self.pending_duplicate_existing.is_some() && self.secret_state.pending.is_some()
+    }
+
     /// Non-fatal [`ValidationWarning`]s carried by the pending
     /// [`ValidatedAccount`] staged in
     /// [`crate::secret_fields::AddSecretState::pending`], or an
@@ -3419,6 +3462,37 @@ pub fn save_click_outcome_to_msg(outcome: SaveClickOutcome) -> AddAccountMsg {
         },
         SaveClickOutcome::InlineError(err) => AddAccountMsg::RenderInlineError(err),
     }
+}
+
+/// Predicate the widget `update()` post-routing branch checks
+/// before presenting the duplicate-collision [`adw::AlertDialog`].
+///
+/// Returns `true` iff the most recent dispatch was
+/// [`AddAccountMsg::StagePendingDuplicate`] **and** the resulting
+/// state reports
+/// [`AddDialogState::has_pending_duplicate_for_alert`] — both
+/// halves of the duplicate-collision projection are populated
+/// (the validated account in
+/// [`crate::secret_fields::AddSecretState::pending`] and the
+/// colliding [`AccountSummary`] in
+/// [`AddDialogState::pending_duplicate_existing`]).
+///
+/// Mirror of [`crate::init_dialog`]'s
+/// `was_worker_destructive && state.has_pending_force()` guard on
+/// the add path. The "newly arrived" half (`was_stage_pending`)
+/// keeps the alert from re-presenting on every subsequent edit
+/// dispatch (`ManualLabelChanged`, etc.) that leaves the pending
+/// slot populated; the state-side half
+/// ([`AddDialogState::has_pending_duplicate_for_alert`]) prevents
+/// a stale captured discriminant from firing against an
+/// already-drained state.
+///
+/// Pure — borrows the state read-only and consults the captured
+/// discriminant flag the widget passes down. Unit-testable in
+/// `tests/add_account_logic.rs` without GTK.
+#[must_use]
+pub fn should_present_duplicate_alert(was_stage_pending: bool, state: &AddDialogState) -> bool {
+    was_stage_pending && state.has_pending_duplicate_for_alert()
 }
 
 /// Per-message routing decisions for [`AddAccountComponent`].
@@ -3655,6 +3729,37 @@ pub fn apply_msg(state: &mut AddDialogState, msg: AddAccountMsg) -> Option<AddAc
                 account: validated.account,
             })
         }
+        AddAccountMsg::DismissDuplicateAlert => {
+            // In-modal Cancel response on the duplicate-collision
+            // `adw::AlertDialog`. Drop the pending validated account
+            // and the colliding-summary projection so a subsequent
+            // Save click starts from a clean state, but do NOT
+            // emit `AddAccountOutput::Cancel` — the parent
+            // `AddAccountComponent` stays open and the user is
+            // returned to the manual / URI form with their typed
+            // buffers intact so they can edit and retry.
+            //
+            // Distinct from [`AddAccountMsg::Cancel`] (which closes
+            // the whole dialog and wipes the §"Secret entry
+            // handling" buffers via `clear_for`). `drop_pending`
+            // (not `consume_pending`) only drains the
+            // `Box<ValidatedAccount>` slot — the manual Base32 and
+            // URI shadow buffers stay populated so the user can
+            // edit the colliding field without re-entering
+            // everything. The §"Secret entry handling" clear
+            // boundaries are Submit / Cancel / Close / auto-lock,
+            // not dismiss-alert. The let-binding names the
+            // returned `Option<Box<ValidatedAccount>>` so the
+            // prior pending drops at the end of this arm (zeroize
+            // via `paladin_core::Secret`'s `ZeroizeOnDrop`).
+            //
+            // Defensive: a stray dispatch with no pending parked is
+            // a benign no-op (no output, no state change beyond
+            // re-confirming the empty slots).
+            let _dropped_pending = state.secret_state.drop_pending();
+            state.pending_duplicate_existing = None;
+            None
+        }
         AddAccountMsg::RenderInlineError(err) => {
             // Replace any prior projection so the dialog never
             // renders stale text from an earlier Save click. The
@@ -3786,6 +3891,16 @@ pub struct AddAccountComponent {
     /// crate boundary still owns the dialog state — only the
     /// in-crate `AppModel` reads it, not downstream consumers.
     pub(crate) state: AddDialogState,
+    /// Reference-counted handle to the root [`gtk::Box`] so the
+    /// duplicate-collision [`adw::AlertDialog`] presented by
+    /// [`Self::present_duplicate_alert`] can use it as a
+    /// presentation parent (`AdwDialog::present` walks up to the
+    /// active [`adw::ApplicationWindow`] from any descendant).
+    /// Mirror of
+    /// [`crate::init_dialog::InitDialogComponent::root_box`] on the
+    /// add path. `gtk::Box` is a `GObject`, so cloning just bumps
+    /// the reference count rather than duplicating the widget.
+    root_box: gtk::Box,
 }
 
 #[allow(missing_docs)]
@@ -4203,20 +4318,46 @@ impl SimpleComponent for AddAccountComponent {
         root: Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
+        let root_box = root.clone();
         let model = AddAccountComponent {
             init,
             state: AddDialogState::new(),
+            root_box,
         };
         let widgets = view_output!();
         ComponentParts { model, widgets }
     }
 
     fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>) {
+        // Capture whether this dispatch is the
+        // duplicate-collision stage signal *before* `apply_msg`
+        // consumes the message, so the post-routing branch below
+        // can react after the validated account and the colliding
+        // summary have been parked. Mirror of
+        // [`crate::init_dialog::InitDialogComponent::update`]'s
+        // `was_worker_destructive` snapshot.
+        let was_stage_pending = matches!(msg, AddAccountMsg::StagePendingDuplicate { .. });
+
         if let Some(output) = apply_msg(&mut self.state, msg) {
             // Ignore send failures: if `AppModel` has already dropped
             // the controller (e.g. window closed mid-click), there's
             // nothing left to dismiss.
             let _ = sender.output(output);
+        }
+
+        // After `apply_msg` parks the duplicate-collision pending,
+        // present the duplicate-confirmation [`adw::AlertDialog`]
+        // worded by [`format_duplicate_alert_heading`] /
+        // [`format_duplicate_alert_body`] (which threads the
+        // staged warnings through [`format_pending_warnings_body`]
+        // → [`paladin_core::format_validation_warning`]). Response
+        // callbacks dispatch back through the same sender so
+        // `apply_msg` remains the single routing entry point for
+        // both `ConfirmAddAnyway` (consumes the pending and
+        // submits) and `DismissDuplicateAlert` (drops the pending
+        // and returns to the form).
+        if should_present_duplicate_alert(was_stage_pending, &self.state) {
+            self.present_duplicate_alert(&sender);
         }
     }
 }
@@ -4241,5 +4382,52 @@ impl AddAccountComponent {
     #[must_use]
     pub fn state(&self) -> &AddDialogState {
         &self.state
+    }
+
+    /// Construct and present the duplicate-collision
+    /// [`adw::AlertDialog`] worded by the pinned format helpers.
+    ///
+    /// The alert is built fresh each presentation so heading /
+    /// body / button labels resolve through
+    /// [`format_duplicate_alert_heading`] /
+    /// [`format_duplicate_alert_body`] /
+    /// [`format_duplicate_alert_confirm_label`] /
+    /// [`format_duplicate_alert_cancel_label`] without re-binding
+    /// stateful widgets across presentations. The `add-anyway`
+    /// response is styled `suggested-action` (the user confirmed
+    /// past the duplicate-collision warning; this is not a
+    /// destructive replace, it is an explicit "append a duplicate"
+    /// confirmation matching the CLI `--allow-duplicate` flag).
+    /// The `cancel` response is the default and is invoked on
+    /// Escape / outside-click via `set_close_response`. Both
+    /// responses dispatch the matching [`AddAccountMsg`] through
+    /// `sender` so [`apply_msg`] remains the single routing entry
+    /// point.
+    ///
+    /// Mirror of
+    /// [`crate::init_dialog::InitDialogComponent::present_destructive_alert`]
+    /// on the add path.
+    fn present_duplicate_alert(&self, sender: &ComponentSender<Self>) {
+        let body = compose_pending_duplicate_alert_body(&self.state).unwrap_or_default();
+        let alert = adw::AlertDialog::new(Some(format_duplicate_alert_heading()), Some(&body));
+        let cancel_id = "cancel";
+        let confirm_id = "add-anyway";
+        alert.add_response(cancel_id, format_duplicate_alert_cancel_label());
+        alert.add_response(confirm_id, format_duplicate_alert_confirm_label());
+        alert.set_response_appearance(confirm_id, adw::ResponseAppearance::Suggested);
+        alert.set_default_response(Some(cancel_id));
+        alert.set_close_response(cancel_id);
+
+        let confirm_id_owned = confirm_id.to_string();
+        let sender = sender.clone();
+        alert.connect_response(None, move |_dialog, response| {
+            if response == confirm_id_owned {
+                sender.input(AddAccountMsg::ConfirmAddAnyway);
+            } else {
+                sender.input(AddAccountMsg::DismissDuplicateAlert);
+            }
+        });
+
+        alert.present(Some(&self.root_box));
     }
 }

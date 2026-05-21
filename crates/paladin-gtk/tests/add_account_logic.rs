@@ -10157,3 +10157,367 @@ fn compose_post_effect_inline_error_and_warning_revealed_both_false_when_no_outc
         "fresh dialog has no worker_outcome → durability-warning label hidden",
     );
 }
+
+// ---------------------------------------------------------------------------
+// Duplicate-confirm AdwAlertDialog: has_pending_duplicate_for_alert getter
+// + DismissDuplicateAlert message arm + should_present_duplicate_alert
+// pure helper. Mirrors the InitDialog destructive-gate pattern at
+// `init_dialog::{has_pending_force, present_destructive_alert,
+// ForceCancelClicked}` so the AddAccount duplicate confirmation surfaces
+// an `adw::AlertDialog` whose body is composed by
+// `compose_pending_duplicate_alert_body` (which threads warnings through
+// `format_pending_warnings_body` → `paladin_core::format_validation_warning`)
+// and whose responses route Confirm → `ConfirmAddAnyway` and Cancel →
+// `DismissDuplicateAlert`. The pure-logic surface here pins the
+// state-transition decision behind the imperative `present_duplicate_alert`
+// helper so the dispatch stays unit-testable without a display server.
+
+#[test]
+fn add_dialog_state_new_has_pending_duplicate_for_alert_is_false() {
+    // Sibling of `add_dialog_state_new_pending_duplicate_existing_is_none` /
+    // `add_dialog_state_new_pending_validation_warnings_is_empty`: a
+    // fresh dialog cannot have a duplicate alert in flight because no
+    // Save click has staged the pending validated account yet.
+    use paladin_gtk::add_account::AddDialogState;
+
+    let state = AddDialogState::new();
+
+    assert!(
+        !state.has_pending_duplicate_for_alert(),
+        "fresh AddDialogState reports no pending duplicate alert",
+    );
+}
+
+#[test]
+fn has_pending_duplicate_for_alert_true_after_stage_pending() {
+    // After `StagePendingDuplicate` parks the validated account + the
+    // colliding summary, the getter must return `true` so the widget
+    // `update()` post-routing branch presents the `adw::AlertDialog`.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    let validated = match classify_manual_submit(manual_totp_defaults(), now_for_tests()) {
+        ManualSubmitOutcome::Proceed(v) => v,
+        ManualSubmitOutcome::InlineError(err) => panic!("fixture failed: {err:?}"),
+    };
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::StagePendingDuplicate {
+            account: validated.account,
+            warnings: validated.warnings,
+            existing: dummy_existing_summary(),
+        },
+    );
+
+    assert!(
+        state.has_pending_duplicate_for_alert(),
+        "StagePendingDuplicate flips has_pending_duplicate_for_alert to true",
+    );
+}
+
+#[test]
+fn has_pending_duplicate_for_alert_false_after_confirm_add_anyway() {
+    // ConfirmAddAnyway consumes the pending + drains
+    // `pending_duplicate_existing`, so the getter must collapse back to
+    // `false`. The next dispatch must not re-present a stale alert.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    let validated = match classify_manual_submit(manual_totp_defaults(), now_for_tests()) {
+        ManualSubmitOutcome::Proceed(v) => v,
+        ManualSubmitOutcome::InlineError(err) => panic!("fixture failed: {err:?}"),
+    };
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::StagePendingDuplicate {
+            account: validated.account,
+            warnings: validated.warnings,
+            existing: dummy_existing_summary(),
+        },
+    );
+    assert!(state.has_pending_duplicate_for_alert(), "precondition");
+
+    let _ = apply_msg(&mut state, AddAccountMsg::ConfirmAddAnyway);
+
+    assert!(
+        !state.has_pending_duplicate_for_alert(),
+        "ConfirmAddAnyway drains the pending alert state",
+    );
+}
+
+#[test]
+fn has_pending_duplicate_for_alert_false_after_dismiss_duplicate_alert() {
+    // DismissDuplicateAlert is the in-modal Cancel response — it must
+    // drain the pending alert state so a subsequent Save click can
+    // re-stage without ghost state, but it must NOT close the parent
+    // dialog (no AddAccountOutput emitted; see
+    // `apply_msg_dismiss_duplicate_alert_emits_no_output`).
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    let validated = match classify_manual_submit(manual_totp_defaults(), now_for_tests()) {
+        ManualSubmitOutcome::Proceed(v) => v,
+        ManualSubmitOutcome::InlineError(err) => panic!("fixture failed: {err:?}"),
+    };
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::StagePendingDuplicate {
+            account: validated.account,
+            warnings: validated.warnings,
+            existing: dummy_existing_summary(),
+        },
+    );
+    assert!(state.has_pending_duplicate_for_alert(), "precondition");
+
+    let _ = apply_msg(&mut state, AddAccountMsg::DismissDuplicateAlert);
+
+    assert!(
+        !state.has_pending_duplicate_for_alert(),
+        "DismissDuplicateAlert drains the pending alert state",
+    );
+}
+
+#[test]
+fn apply_msg_dismiss_duplicate_alert_drains_pending_validated_account() {
+    // The `Box<ValidatedAccount>` stashed in
+    // `AddSecretState::pending` by `StagePendingDuplicate` must be
+    // released so a subsequent Save click cannot accidentally consume
+    // a stale pending into the worker. Mirror of
+    // `apply_msg_confirm_add_anyway_drains_pending_duplicate_existing`
+    // on the dismiss path.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    let validated = match classify_manual_submit(manual_totp_defaults(), now_for_tests()) {
+        ManualSubmitOutcome::Proceed(v) => v,
+        ManualSubmitOutcome::InlineError(err) => panic!("fixture failed: {err:?}"),
+    };
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::StagePendingDuplicate {
+            account: validated.account,
+            warnings: validated.warnings,
+            existing: dummy_existing_summary(),
+        },
+    );
+    assert!(state.secret_state().pending.is_some(), "precondition");
+
+    let _ = apply_msg(&mut state, AddAccountMsg::DismissDuplicateAlert);
+
+    assert!(
+        state.secret_state().pending.is_none(),
+        "DismissDuplicateAlert drains AddSecretState::pending",
+    );
+    assert!(
+        state.pending_duplicate_existing().is_none(),
+        "DismissDuplicateAlert drains pending_duplicate_existing alongside the pending slot",
+    );
+}
+
+#[test]
+fn apply_msg_dismiss_duplicate_alert_emits_no_output() {
+    // The in-modal Cancel response must stay dialog-local — closing
+    // the parent dialog would force the user to re-enter the manual
+    // form. Mirror of init_dialog's `ForceCancelClicked` returning
+    // `None`. The widget then re-renders the manual form with the
+    // existing buffers intact.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    let validated = match classify_manual_submit(manual_totp_defaults(), now_for_tests()) {
+        ManualSubmitOutcome::Proceed(v) => v,
+        ManualSubmitOutcome::InlineError(err) => panic!("fixture failed: {err:?}"),
+    };
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::StagePendingDuplicate {
+            account: validated.account,
+            warnings: validated.warnings,
+            existing: dummy_existing_summary(),
+        },
+    );
+
+    let output = apply_msg(&mut state, AddAccountMsg::DismissDuplicateAlert);
+
+    assert!(
+        output.is_none(),
+        "DismissDuplicateAlert stays dialog-local; no output flows to AppModel",
+    );
+}
+
+#[test]
+fn apply_msg_dismiss_duplicate_alert_with_no_pending_is_noop() {
+    // Defensive: a stray dispatch with no pending parked must be a
+    // benign no-op (no panic, no output, no state change beyond
+    // re-confirming the empty slots). Mirror of
+    // `apply_msg_confirm_add_anyway_with_no_pending_emits_no_output`.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    assert!(!state.has_pending_duplicate_for_alert(), "precondition");
+
+    let output = apply_msg(&mut state, AddAccountMsg::DismissDuplicateAlert);
+
+    assert!(
+        output.is_none(),
+        "DismissDuplicateAlert with no pending emits no output",
+    );
+    assert!(
+        !state.has_pending_duplicate_for_alert(),
+        "DismissDuplicateAlert with no pending leaves the empty state empty",
+    );
+}
+
+#[test]
+fn apply_msg_dismiss_duplicate_alert_preserves_manual_draft_state() {
+    // The manual form's typed buffers (label / issuer / icon-hint /
+    // algorithm / digits / kind / period / counter) must survive the
+    // dismiss so the user can adjust the colliding field and retry
+    // without re-entering everything. The Base32 secret entry buffer
+    // is secret-bearing per §"Secret entry handling" but the
+    // dismiss-alert path is *not* the §8 secret-clearing
+    // boundary (submit / cancel / close / auto-lock); dismissal
+    // returns the user to the form so they can edit, so the
+    // manual_secret shadow stays put.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    // Seed manual draft fields through the public message API so the
+    // test exercises the same dispatch the widget uses.
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualLabelChanged("alice".to_string()),
+    );
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualIssuerChanged("Acme".to_string()),
+    );
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualSecretChanged(SECRET_20_B32.to_string()),
+    );
+
+    let validated = match classify_manual_submit(manual_totp_defaults(), now_for_tests()) {
+        ManualSubmitOutcome::Proceed(v) => v,
+        ManualSubmitOutcome::InlineError(err) => panic!("fixture failed: {err:?}"),
+    };
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::StagePendingDuplicate {
+            account: validated.account,
+            warnings: validated.warnings,
+            existing: dummy_existing_summary(),
+        },
+    );
+
+    let _ = apply_msg(&mut state, AddAccountMsg::DismissDuplicateAlert);
+
+    assert_eq!(
+        paladin_gtk::add_account::compose_manual_label_text(&state),
+        "alice",
+        "DismissDuplicateAlert preserves the manual label buffer",
+    );
+    assert_eq!(
+        paladin_gtk::add_account::compose_manual_issuer_text(&state),
+        "Acme",
+        "DismissDuplicateAlert preserves the manual issuer buffer",
+    );
+    assert_eq!(
+        state.secret_state().manual_secret.text(),
+        SECRET_20_B32,
+        "DismissDuplicateAlert preserves the manual Base32 secret buffer so the user can edit on retry",
+    );
+}
+
+#[test]
+fn should_present_duplicate_alert_fires_after_stage_pending_with_existing() {
+    // The widget `update()` post-routing branch calls
+    // `should_present_duplicate_alert(was_stage_pending, &state)` to
+    // decide whether to present an `adw::AlertDialog`. The contract:
+    // present iff the most recent dispatch was `StagePendingDuplicate`
+    // *and* the state's pending slot is now populated. Mirror of
+    // init_dialog's
+    // `was_worker_destructive && state.has_pending_force()` guard.
+    use paladin_gtk::add_account::{
+        apply_msg, should_present_duplicate_alert, AddAccountMsg, AddDialogState,
+    };
+
+    let mut state = AddDialogState::new();
+    let validated = match classify_manual_submit(manual_totp_defaults(), now_for_tests()) {
+        ManualSubmitOutcome::Proceed(v) => v,
+        ManualSubmitOutcome::InlineError(err) => panic!("fixture failed: {err:?}"),
+    };
+    let stage_msg = AddAccountMsg::StagePendingDuplicate {
+        account: validated.account,
+        warnings: validated.warnings,
+        existing: dummy_existing_summary(),
+    };
+    // Use `matches!` shape because `AddAccountMsg` is moved by
+    // `apply_msg` — the widget captures the discriminant before
+    // dispatching, mirroring init_dialog's `was_worker_destructive`.
+    let was_stage_pending = matches!(stage_msg, AddAccountMsg::StagePendingDuplicate { .. });
+    let _ = apply_msg(&mut state, stage_msg);
+
+    assert!(
+        should_present_duplicate_alert(was_stage_pending, &state),
+        "the stage-pending dispatch with a populated pending slot must present the alert",
+    );
+}
+
+#[test]
+fn should_present_duplicate_alert_does_not_fire_on_other_messages() {
+    // A `ManualLabelChanged` (or any other dispatch) does not present
+    // the alert even if the state happens to have a pending slot
+    // populated — only the actual stage dispatch is the
+    // "newly-arrived" signal that fires the modal. The guard prevents
+    // re-presentation on every subsequent message tick.
+    use paladin_gtk::add_account::{
+        apply_msg, should_present_duplicate_alert, AddAccountMsg, AddDialogState,
+    };
+
+    let mut state = AddDialogState::new();
+    let validated = match classify_manual_submit(manual_totp_defaults(), now_for_tests()) {
+        ManualSubmitOutcome::Proceed(v) => v,
+        ManualSubmitOutcome::InlineError(err) => panic!("fixture failed: {err:?}"),
+    };
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::StagePendingDuplicate {
+            account: validated.account,
+            warnings: validated.warnings,
+            existing: dummy_existing_summary(),
+        },
+    );
+
+    // Now the state has pending parked, but the dispatch is
+    // ManualLabelChanged — the alert was already presented on the
+    // prior tick; re-presenting on every edit would steal focus.
+    let was_stage_pending = false;
+    assert!(
+        !should_present_duplicate_alert(was_stage_pending, &state),
+        "non-stage dispatches must not re-present the alert even if pending is parked",
+    );
+}
+
+#[test]
+fn should_present_duplicate_alert_does_not_fire_when_state_has_no_pending() {
+    // A stale `was_stage_pending` (or a stage dispatch whose
+    // apply_msg arm drained the pending immediately for some
+    // defensive reason) must not present the alert against an empty
+    // state.
+    use paladin_gtk::add_account::{should_present_duplicate_alert, AddDialogState};
+
+    let state = AddDialogState::new();
+    assert!(!state.has_pending_duplicate_for_alert(), "precondition");
+
+    // Both halves of the guard must hold; with no pending parked,
+    // even a `was_stage_pending = true` snapshot must not fire.
+    assert!(
+        !should_present_duplicate_alert(true, &state),
+        "an empty pending slot must not present the alert even if the dispatch was StagePendingDuplicate",
+    );
+    assert!(
+        !should_present_duplicate_alert(false, &state),
+        "the negative-on-both-sides case must not fire either",
+    );
+}

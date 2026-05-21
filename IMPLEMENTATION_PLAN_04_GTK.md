@@ -2422,14 +2422,79 @@ sign-off.
     `tests/add_account_logic.rs::compose_inline_error_body_*` /
     `compose_inline_error_revealed_*` plus the existing
     `classify_manual_submit_*` rejection invariants.
-  - [ ] Render validation warnings inline via
+  - [x] Render validation warnings inline via
     `paladin_core::format_validation_warning()` without blocking
-    creation.
-  - [ ] On successful validation, call
+    creation. The duplicate-collision `adw::AlertDialog` (presented
+    by `AddAccountComponent::present_duplicate_alert` and worded by
+    `compose_pending_duplicate_alert_body`) embeds the staged
+    [`ValidationWarning`]s beneath the duplicate-confirm body
+    through `format_duplicate_alert_body` →
+    `format_pending_warnings_body` → `format_validation_warning`,
+    so the warnings render alongside the "add anyway" prompt that
+    consumes them — and they never block creation, since the
+    confirm response forwards through to the normal Submit
+    pipeline. Pinned by
+    `tests/add_account_logic.rs::format_duplicate_alert_body_threads_through_pending_warnings_projection`,
+    `format_pending_warnings_body_threads_through_format_validation_warning`,
+    and the
+    `compose_pending_duplicate_alert_body_with_staged_pending_returns_formatted_body`
+    invariant that asserts the alert body equals
+    `format_duplicate_alert_body(existing, warnings)`.
+  - [x] On successful validation, call
     `Vault::find_duplicate(&validated)` and reject inline with the
     existing account; offer the "add anyway" confirmation that
     consumes the pending `ValidatedAccount` on the duplicate-allowed
     path (CLI parity with `--allow-duplicate`).
+    `compose_save_click_outcome` (L630) calls
+    `vault.find_duplicate(&validated)` synchronously before the
+    mutation worker spawns; a collision routes to
+    `SaveClickOutcome::AwaitConfirmation` and through
+    `save_click_outcome_to_msg` into
+    `AddAccountMsg::StagePendingDuplicate`, parking the pending
+    [`ValidatedAccount`] in `AddSecretState::pending` and the
+    colliding `AccountSummary` in
+    `AddDialogState::pending_duplicate_existing`. The widget's
+    `update()` post-routing branch captures
+    `was_stage_pending = matches!(msg, StagePendingDuplicate { .. })`
+    *before* `apply_msg` consumes the message and then consults
+    `should_present_duplicate_alert(was_stage_pending, &state)` —
+    which guards on
+    `AddDialogState::has_pending_duplicate_for_alert` — to call
+    `present_duplicate_alert(&sender)`. The
+    `adw::AlertDialog` (heading
+    `format_duplicate_alert_heading()` = `"Add anyway?"`, body
+    `compose_pending_duplicate_alert_body`, buttons
+    `format_duplicate_alert_confirm_label()` = `"Add anyway"` and
+    `format_duplicate_alert_cancel_label()` = `"Cancel"`) routes
+    the suggested-action confirm response to
+    `AddAccountMsg::ConfirmAddAnyway` (which `consume_pending`s
+    the validated account and emits `AddAccountOutput::Submit`)
+    and the default cancel response — including Escape /
+    outside-click via `set_close_response` — to the new
+    `AddAccountMsg::DismissDuplicateAlert` arm, which calls
+    `AddSecretState::drop_pending` (a fresh sibling of
+    `consume_pending` that drains the pending without wiping the
+    manual / URI shadow buffers, so the user can edit the
+    colliding field and retry) plus clears
+    `pending_duplicate_existing`, all *without* emitting
+    `AddAccountOutput::Cancel` so the parent
+    `AddAccountComponent` stays open. Pinned by
+    `tests/add_account_logic.rs::compose_save_click_outcome_manual_await_confirmation_on_duplicate`,
+    `compose_save_click_outcome_uri_path_await_confirmation_on_duplicate`,
+    `should_present_duplicate_alert_fires_after_stage_pending_with_existing`,
+    `should_present_duplicate_alert_does_not_fire_on_other_messages`,
+    `should_present_duplicate_alert_does_not_fire_when_state_has_no_pending`,
+    `has_pending_duplicate_for_alert_true_after_stage_pending`,
+    `has_pending_duplicate_for_alert_false_after_confirm_add_anyway`,
+    `has_pending_duplicate_for_alert_false_after_dismiss_duplicate_alert`,
+    `apply_msg_dismiss_duplicate_alert_drains_pending_validated_account`,
+    `apply_msg_dismiss_duplicate_alert_emits_no_output`,
+    `apply_msg_dismiss_duplicate_alert_preserves_manual_draft_state`,
+    `apply_msg_dismiss_duplicate_alert_with_no_pending_is_noop`,
+    plus the existing
+    `apply_msg_stage_pending_duplicate_*` /
+    `apply_msg_confirm_add_anyway_*` invariants over the
+    state-staging and consumption side of the round trip.
   - [x] Run successful manual additions inside
     `Vault::mutate_and_save`; handle `save_not_committed` rollback
     (the just-inserted account is removed) and

@@ -262,6 +262,25 @@ impl AddSecretState {
         taken
     }
 
+    /// Drop the pending duplicate-add (returning it to the caller)
+    /// without touching the manual / URI secret buffers. Called from
+    /// the in-modal "Cancel" response on the duplicate-collision
+    /// `adw::AlertDialog` (see
+    /// [`crate::add_account::AddAccountMsg::DismissDuplicateAlert`]):
+    /// the user is returned to the manual / URI form to edit the
+    /// colliding field and retry, so the typed buffers must stay
+    /// intact.
+    ///
+    /// Distinct from [`Self::consume_pending`] (which wipes the
+    /// buffers for the worker-spawn boundary) and [`Self::clear_for`]
+    /// (which wipes the buffers for the §"Secret entry handling"
+    /// dismissal trigger). The returned `Option` lets the caller
+    /// drop the prior pending explicitly (or via end-of-scope Drop)
+    /// so the zeroize trail stays auditable.
+    pub fn drop_pending(&mut self) -> Option<Box<ValidatedAccount>> {
+        self.pending.take()
+    }
+
     /// Clear both secret buffers and drop any pending duplicate-add.
     ///
     /// Covers Submit / Cancel / Close / `AutoLock` / Replace — every
