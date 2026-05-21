@@ -328,6 +328,73 @@ pub fn format_remove_dialog_title() -> &'static str {
     "Remove account"
 }
 
+/// `set_label` body the widget hands to the
+/// [`RemoveDialogComponent`]'s inline error `gtk::Label::set_label`.
+///
+/// Reads through [`RemoveDialogState::inline_error`] and projects the
+/// `RestorePrior` / defensive `InlineError` body as the rendered
+/// string; returns an empty string when there is no error to render
+/// (pre-failure state or `KeepRemovedWithWarning` branch, which uses
+/// [`format_remove_dialog_inline_warning_text`] instead). Pulling the
+/// projection through a helper keeps the `#[watch]` binding in the
+/// view! macro a one-liner and makes the projection unit-testable in
+/// `tests/remove_dialog_logic.rs` without spinning up GTK.
+///
+/// Pairs with [`format_remove_dialog_inline_error_visible`]: when this
+/// helper returns an empty string, the visibility helper returns
+/// `false` so the error label is removed from the layout flow rather
+/// than rendered as an empty error.
+#[must_use]
+pub fn format_remove_dialog_inline_error_text(state: &RemoveDialogState) -> &str {
+    state.inline_error().map_or("", |err| err.rendered.as_str())
+}
+
+/// `set_visible` flag the widget hands to the
+/// [`RemoveDialogComponent`]'s inline error `gtk::Label::set_visible`.
+///
+/// Returns `true` when [`RemoveDialogState::inline_error`] resolves to
+/// `Some(_)` (the `RestorePrior` or defensive `InlineError` branches)
+/// so the error label appears in the layout flow; `false` otherwise
+/// (pre-failure state or `KeepRemovedWithWarning`, which surfaces
+/// through the warning helpers instead). Pairs with
+/// [`format_remove_dialog_inline_error_text`].
+#[must_use]
+pub fn format_remove_dialog_inline_error_visible(state: &RemoveDialogState) -> bool {
+    state.inline_error().is_some()
+}
+
+/// `set_label` body the widget hands to the
+/// [`RemoveDialogComponent`]'s inline warning `gtk::Label::set_label`.
+///
+/// Reads through [`RemoveDialogState::inline_warning`] and projects
+/// the `KeepRemovedWithWarning` body as the rendered string; returns
+/// an empty string when there is no warning to render (pre-failure
+/// state or any non-durability-unconfirmed failure). Pairs with
+/// [`format_remove_dialog_inline_warning_visible`].
+///
+/// The warning label is a distinct widget from the error label so the
+/// CSS classes (`warning` vs. `error`) can paint the two surfaces
+/// differently and so the layout never doubles a single failure under
+/// two classes.
+#[must_use]
+pub fn format_remove_dialog_inline_warning_text(state: &RemoveDialogState) -> &str {
+    state
+        .inline_warning()
+        .map_or("", |warning| warning.rendered.as_str())
+}
+
+/// `set_visible` flag the widget hands to the
+/// [`RemoveDialogComponent`]'s inline warning `gtk::Label::set_visible`.
+///
+/// Returns `true` only when [`RemoveDialogState::inline_warning`]
+/// resolves to `Some(_)` — the `KeepRemovedWithWarning` branch — so
+/// the warning label appears in the layout flow; `false` otherwise.
+/// Pairs with [`format_remove_dialog_inline_warning_text`].
+#[must_use]
+pub fn format_remove_dialog_inline_warning_visible(state: &RemoveDialogState) -> bool {
+    state.inline_warning().is_some()
+}
+
 /// Worker input bundled by
 /// `AppMsg::RemoveDialogAction(RemoveDialogOutput::SubmitConfirm)`
 /// for the `gio::spawn_blocking
@@ -754,6 +821,39 @@ impl SimpleComponent for RemoveDialogComponent {
                 )),
                 set_hexpand: true,
                 set_vexpand: true,
+            },
+
+            // `RestorePrior` and defensive `InlineError` branches surface
+            // here so the user sees why the remove rolled back / refused
+            // before deciding to retry. The `error` CSS class paints the
+            // text in the platform's destructive red to match the dialog's
+            // Remove button affordance.
+            #[name = "error_label"]
+            gtk::Label {
+                set_xalign: 0.0,
+                set_wrap: true,
+                add_css_class: "error",
+                #[watch]
+                set_label: format_remove_dialog_inline_error_text(&model.state),
+                #[watch]
+                set_visible: format_remove_dialog_inline_error_visible(&model.state),
+            },
+
+            // `KeepRemovedWithWarning` (save_durability_unconfirmed)
+            // surfaces here so the user can dismiss the parent-fsync
+            // uncertainty explicitly while the remove stays committed.
+            // The `warning` CSS class paints the text in the platform's
+            // warning amber so the message reads as advisory rather than
+            // a rollback gate.
+            #[name = "warning_label"]
+            gtk::Label {
+                set_xalign: 0.0,
+                set_wrap: true,
+                add_css_class: "warning",
+                #[watch]
+                set_label: format_remove_dialog_inline_warning_text(&model.state),
+                #[watch]
+                set_visible: format_remove_dialog_inline_warning_visible(&model.state),
             },
 
             gtk::Box {

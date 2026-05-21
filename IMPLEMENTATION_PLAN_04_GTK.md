@@ -1894,25 +1894,98 @@ sign-off.
   - [ ] Open `RemoveDialog` as an `AdwAlertDialog` with
     `destructive-action` styling on the destructive button when the
     user picks "Remove…" from the row kebab menu.
-  - [ ] Render the dialog body using
+  - [x] Render the dialog body using
     `summary_display_label(&AccountSummary)` so the wording matches
     the CLI / TUI (`<issuer>:<label>` when issuer is set; empty
     issuer collapses to the bare-label form so the body never
     renders a dangling `:label` colon).
-  - [ ] On confirm, call `Vault::remove(id)` inside
+    (`decide_remove_target` in `crate::remove_dialog` projects the
+    matching `AccountSummary` through the re-exported
+    `summary_display_label` into `RemoveDialogInit::display_label`;
+    `RemoveDialogState::new` retains the pre-formatted heading on
+    `self.init` so `RemoveDialogState::display_label()` returns the
+    same `<issuer>:<label>` body the row factory uses, and the view!
+    macro hands it to `format_remove_dialog_subtitle` for the
+    `adw::StatusPage::set_description` binding. Empty-issuer collapse
+    is pinned by
+    `tests/remove_dialog_logic.rs::summary_display_label_with_empty_issuer_collapses_to_bare_label`
+    and
+    `decide_remove_target_drops_empty_issuer_in_display_label`; the
+    subtitle helper is pinned by
+    `format_remove_dialog_subtitle_renders_display_label`.)
+  - [x] On confirm, call `Vault::remove(id)` inside
     `Vault::mutate_and_save`; handle `save_not_committed` by
     restoring the account at its previous position and keeping the
     dialog open with the inline error, and handle
     `save_durability_unconfirmed` by keeping the account removed
     from in-memory state and attaching the warning to the dialog
     body.
-  - [ ] Surface `invalid_state { state: "account_not_found" }`,
+    (`run_remove_worker` calls
+    `vault.mutate_and_save(&store, |v| v.remove(account_id))` on
+    `gio::spawn_blocking` so the §4.3 atomic-write pipeline rolls back
+    the in-memory removal on `save_not_committed` before returning;
+    `classify_remove_error` routes the typed
+    `PaladinError::SaveNotCommitted` to
+    `RemoveErrorOutcome::RestorePrior(InlineError)` and
+    `PaladinError::SaveDurabilityUnconfirmed` to
+    `RemoveErrorOutcome::KeepRemovedWithWarning(InlineWarning)`.
+    `apply_msg(WorkerFailed(...))` stashes the typed outcome on
+    `RemoveDialogState::worker_outcome` so the view's #[watch]
+    bindings re-render the matching inline error / warning text;
+    `format_remove_dialog_inline_error_text` /
+    `format_remove_dialog_inline_error_visible` /
+    `format_remove_dialog_inline_warning_text` /
+    `format_remove_dialog_inline_warning_visible` keep the projection
+    pure and unit-testable. The dispatch site keeps the dialog
+    mounted on both failure classes via the existing dispatch
+    helpers in `app/state.rs`. Pinned by
+    `tests/remove_dialog_logic.rs::classify_remove_error_save_not_committed_restores_prior`,
+    `classify_remove_error_save_durability_unconfirmed_keeps_removed_with_warning`,
+    `format_remove_dialog_inline_error_text_renders_restore_prior_body`,
+    `format_remove_dialog_inline_warning_text_renders_keep_removed_body`,
+    `format_remove_dialog_inline_error_and_warning_are_mutually_exclusive`,
+    and the end-to-end
+    `run_remove_worker_plaintext_remove_succeeds_and_returns_live_pair`
+    / `run_remove_worker_persists_removal_to_disk` integration tests
+    against tempfile-backed plaintext vaults.)
+  - [x] Surface `invalid_state { state: "account_not_found" }`,
     `io_error`, and defensive `validation_error` inline without
     closing the dialog; the dialog never mutates visible state
     until the worker returns.
+    (Every other typed `PaladinError` falls into the
+    `classify_remove_error` defensive arm
+    `RemoveErrorOutcome::InlineError(InlineError)`, which
+    `apply_msg(WorkerFailed(...))` stashes onto
+    `RemoveDialogState::worker_outcome`; the view! macro's
+    `error_label` reads through
+    `format_remove_dialog_inline_error_text` /
+    `format_remove_dialog_inline_error_visible` so the typed message
+    renders beneath the confirmation body without dropping the
+    dialog. `Vault::mutate_and_save` is authoritative on rolling the
+    in-memory state back, and `AppModel` reinstalls the returned
+    `(Vault, Store)` pair before applying the typed outcome so visible
+    state never drifts from disk until the worker returns. Pinned by
+    `tests/remove_dialog_logic.rs::classify_remove_error_invalid_state_account_not_found_stays_inline`,
+    `classify_remove_error_io_error_stays_inline`,
+    `classify_remove_error_validation_error_stays_inline`,
+    `apply_msg_worker_failed_defensive_inline_error_stores_outcome`,
+    `format_remove_dialog_inline_error_text_renders_defensive_inline_error`,
+    `format_remove_dialog_inline_error_visible_true_for_defensive_inline_error`,
+    and the end-to-end
+    `run_remove_worker_unknown_account_routes_inline_error_and_returns_pair`.)
   - [ ] On success, refresh `AccountListComponent` from the returned
     vault, close the dialog, and surface a status / toast confirmation.
-  - [ ] Cancel closes the dialog without mutating the vault.
+  - [x] Cancel closes the dialog without mutating the vault.
+    (`apply_msg(RemoveDialogMsg::Cancel)` emits
+    `RemoveDialogOutput::Cancel` without touching
+    `RemoveDialogState::worker_outcome` or the seeded init; the
+    `AppMsg::RemoveDialogAction(RemoveDialogOutput::Cancel)` arm in
+    `app/model.rs` drops the live `RemoveDialogComponent` controller
+    and removes the dialog widget from the content tree without
+    touching `(Vault, Store)`. Pinned by
+    `tests/remove_dialog_logic.rs::apply_msg_cancel_emits_cancel_output`,
+    `apply_msg_cancel_does_not_mutate_worker_outcome`, and
+    `remove_dialog_output_cancel_is_distinct_variant`.)
 - [ ] `AddAccountComponent` shared shell and mutation pipeline.
   - [ ] Wrap the manual form, the URI entry, and the clipboard QR path
     in an `AdwViewStack` controlled by an `AdwViewSwitcher` before the

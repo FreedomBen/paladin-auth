@@ -961,3 +961,234 @@ fn format_remove_dialog_title_returns_remove_account() {
         "AdwStatusPage title uses the GNOME-HIG verb-led wording for the destructive action",
     );
 }
+
+// ---------------------------------------------------------------------------
+// `format_remove_dialog_inline_error_*` / `format_remove_dialog_inline_warning_*`
+//
+// The view! macro's `#[watch]` bindings for the inline error and warning
+// labels read through these helpers so the `set_label` / `set_visible`
+// projection stays unit-testable without spinning up GTK. The error label
+// renders the typed `RestorePrior` / defensive `InlineError` body via the
+// `error` CSS class; the warning label renders the
+// `KeepRemovedWithWarning` body via the `warning` CSS class.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn format_remove_dialog_inline_error_text_returns_empty_when_no_outcome() {
+    // Pre-failure state: the dialog has not yet attempted a remove, so
+    // the inline error label must render as empty text and be hidden by
+    // the sibling visibility helper. The two helpers always agree on
+    // emptiness vs. visibility.
+    use paladin_gtk::remove_dialog::format_remove_dialog_inline_error_text;
+
+    let init = dummy_init();
+    let state = RemoveDialogState::new(&init);
+    assert_eq!(format_remove_dialog_inline_error_text(&state), "");
+}
+
+#[test]
+fn format_remove_dialog_inline_error_visible_false_when_no_outcome() {
+    use paladin_gtk::remove_dialog::format_remove_dialog_inline_error_visible;
+
+    let init = dummy_init();
+    let state = RemoveDialogState::new(&init);
+    assert!(!format_remove_dialog_inline_error_visible(&state));
+}
+
+#[test]
+fn format_remove_dialog_inline_error_text_renders_restore_prior_body() {
+    // `save_not_committed` routes to `RestorePrior(InlineError)`; the
+    // dialog body re-renders the typed inline error so the user sees
+    // why the remove rolled back and can retry.
+    use paladin_gtk::remove_dialog::format_remove_dialog_inline_error_text;
+
+    let init = dummy_init();
+    let mut state = RemoveDialogState::new(&init);
+    let err = save_not_committed_no_backup();
+    seed_worker_outcome(&mut state, &err);
+    assert_eq!(
+        format_remove_dialog_inline_error_text(&state),
+        err.to_string(),
+    );
+}
+
+#[test]
+fn format_remove_dialog_inline_error_visible_true_for_restore_prior() {
+    use paladin_gtk::remove_dialog::format_remove_dialog_inline_error_visible;
+
+    let init = dummy_init();
+    let mut state = RemoveDialogState::new(&init);
+    seed_worker_outcome(&mut state, &save_not_committed_no_backup());
+    assert!(format_remove_dialog_inline_error_visible(&state));
+}
+
+#[test]
+fn format_remove_dialog_inline_error_text_renders_defensive_inline_error() {
+    // Defensive `invalid_state { state: "account_not_found" }` also
+    // surfaces as an inline error so the user sees the typed reason
+    // before dismissing.
+    use paladin_gtk::remove_dialog::format_remove_dialog_inline_error_text;
+
+    let init = dummy_init();
+    let mut state = RemoveDialogState::new(&init);
+    let err = account_not_found_error();
+    seed_worker_outcome(&mut state, &err);
+    assert_eq!(
+        format_remove_dialog_inline_error_text(&state),
+        err.to_string(),
+    );
+}
+
+#[test]
+fn format_remove_dialog_inline_error_visible_true_for_defensive_inline_error() {
+    use paladin_gtk::remove_dialog::format_remove_dialog_inline_error_visible;
+
+    let init = dummy_init();
+    let mut state = RemoveDialogState::new(&init);
+    seed_worker_outcome(&mut state, &account_not_found_error());
+    assert!(format_remove_dialog_inline_error_visible(&state));
+}
+
+#[test]
+fn format_remove_dialog_inline_error_text_empty_for_keep_removed_warning() {
+    // `KeepRemovedWithWarning` routes through the warning label, not
+    // the error label; the error helpers must read empty so the body
+    // never doubles the message under two CSS classes.
+    use paladin_gtk::remove_dialog::format_remove_dialog_inline_error_text;
+
+    let init = dummy_init();
+    let mut state = RemoveDialogState::new(&init);
+    seed_worker_outcome(&mut state, &save_durability_unconfirmed());
+    assert_eq!(format_remove_dialog_inline_error_text(&state), "");
+}
+
+#[test]
+fn format_remove_dialog_inline_error_visible_false_for_keep_removed_warning() {
+    use paladin_gtk::remove_dialog::format_remove_dialog_inline_error_visible;
+
+    let init = dummy_init();
+    let mut state = RemoveDialogState::new(&init);
+    seed_worker_outcome(&mut state, &save_durability_unconfirmed());
+    assert!(!format_remove_dialog_inline_error_visible(&state));
+}
+
+#[test]
+fn format_remove_dialog_inline_warning_text_returns_empty_when_no_outcome() {
+    use paladin_gtk::remove_dialog::format_remove_dialog_inline_warning_text;
+
+    let init = dummy_init();
+    let state = RemoveDialogState::new(&init);
+    assert_eq!(format_remove_dialog_inline_warning_text(&state), "");
+}
+
+#[test]
+fn format_remove_dialog_inline_warning_visible_false_when_no_outcome() {
+    use paladin_gtk::remove_dialog::format_remove_dialog_inline_warning_visible;
+
+    let init = dummy_init();
+    let state = RemoveDialogState::new(&init);
+    assert!(!format_remove_dialog_inline_warning_visible(&state));
+}
+
+#[test]
+fn format_remove_dialog_inline_warning_text_renders_keep_removed_body() {
+    // `save_durability_unconfirmed` routes to
+    // `KeepRemovedWithWarning(InlineWarning)`; the dialog body attaches
+    // the warning beneath the confirmation so the user can dismiss the
+    // parent-fsync uncertainty explicitly.
+    use paladin_gtk::remove_dialog::format_remove_dialog_inline_warning_text;
+
+    let init = dummy_init();
+    let mut state = RemoveDialogState::new(&init);
+    let err = save_durability_unconfirmed();
+    seed_worker_outcome(&mut state, &err);
+    assert_eq!(
+        format_remove_dialog_inline_warning_text(&state),
+        err.to_string(),
+    );
+}
+
+#[test]
+fn format_remove_dialog_inline_warning_visible_true_for_keep_removed() {
+    use paladin_gtk::remove_dialog::format_remove_dialog_inline_warning_visible;
+
+    let init = dummy_init();
+    let mut state = RemoveDialogState::new(&init);
+    seed_worker_outcome(&mut state, &save_durability_unconfirmed());
+    assert!(format_remove_dialog_inline_warning_visible(&state));
+}
+
+#[test]
+fn format_remove_dialog_inline_warning_text_empty_for_restore_prior() {
+    // RestorePrior routes through the error label, not the warning
+    // label; the warning helpers must read empty so the body never
+    // doubles the message.
+    use paladin_gtk::remove_dialog::format_remove_dialog_inline_warning_text;
+
+    let init = dummy_init();
+    let mut state = RemoveDialogState::new(&init);
+    seed_worker_outcome(&mut state, &save_not_committed_no_backup());
+    assert_eq!(format_remove_dialog_inline_warning_text(&state), "");
+}
+
+#[test]
+fn format_remove_dialog_inline_warning_visible_false_for_restore_prior() {
+    use paladin_gtk::remove_dialog::format_remove_dialog_inline_warning_visible;
+
+    let init = dummy_init();
+    let mut state = RemoveDialogState::new(&init);
+    seed_worker_outcome(&mut state, &save_not_committed_no_backup());
+    assert!(!format_remove_dialog_inline_warning_visible(&state));
+}
+
+#[test]
+fn format_remove_dialog_inline_warning_text_empty_for_defensive_inline_error() {
+    // Defensive `InlineError` routes through the error label, not the
+    // warning label.
+    use paladin_gtk::remove_dialog::format_remove_dialog_inline_warning_text;
+
+    let init = dummy_init();
+    let mut state = RemoveDialogState::new(&init);
+    seed_worker_outcome(&mut state, &account_not_found_error());
+    assert_eq!(format_remove_dialog_inline_warning_text(&state), "");
+}
+
+#[test]
+fn format_remove_dialog_inline_warning_visible_false_for_defensive_inline_error() {
+    use paladin_gtk::remove_dialog::format_remove_dialog_inline_warning_visible;
+
+    let init = dummy_init();
+    let mut state = RemoveDialogState::new(&init);
+    seed_worker_outcome(&mut state, &account_not_found_error());
+    assert!(!format_remove_dialog_inline_warning_visible(&state));
+}
+
+#[test]
+fn format_remove_dialog_inline_error_and_warning_are_mutually_exclusive() {
+    // Each worker outcome routes through exactly one of the two
+    // labels — error or warning, never both — so the dialog body never
+    // surfaces a single failure under two CSS classes. Pin the
+    // mutual-exclusion invariant across every typed outcome the
+    // dialog can render.
+    use paladin_gtk::remove_dialog::{
+        format_remove_dialog_inline_error_visible, format_remove_dialog_inline_warning_visible,
+    };
+
+    let init = dummy_init();
+
+    for err in [
+        save_not_committed_no_backup(),
+        save_not_committed_with_backup(),
+        save_durability_unconfirmed(),
+        account_not_found_error(),
+    ] {
+        let mut state = RemoveDialogState::new(&init);
+        seed_worker_outcome(&mut state, &err);
+        let error_visible = format_remove_dialog_inline_error_visible(&state);
+        let warning_visible = format_remove_dialog_inline_warning_visible(&state);
+        assert!(
+            error_visible ^ warning_visible,
+            "exactly one of error/warning must surface for {err:?}; got error={error_visible} warning={warning_visible}",
+        );
+    }
+}
