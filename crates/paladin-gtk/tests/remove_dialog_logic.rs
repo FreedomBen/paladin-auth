@@ -1270,3 +1270,42 @@ fn format_remove_dialog_inline_error_and_warning_are_mutually_exclusive() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// `format_remove_dialog_success_toast` — body text for the `AdwToast` raised
+// after a successful remove worker outcome per
+// `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" > `RemoveDialog`
+// confirmation flow ("On success, refresh `AccountListComponent` from the
+// returned vault, close the dialog, and surface a status / toast
+// confirmation."). Mirrors the rename equivalent
+// `format_rename_dialog_success_toast` so wording stays single-sourced and
+// the dispatch projection `remove_success_toast_after` can rely on the
+// helper for the bundled toast body.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn format_remove_dialog_success_toast_returns_removed() {
+    use paladin_gtk::remove_dialog::format_remove_dialog_success_toast;
+
+    assert_eq!(
+        format_remove_dialog_success_toast(),
+        "Account removed.",
+        "wording must stay in one place shared by the widget toast binding and the dispatch projection",
+    );
+}
+
+#[test]
+fn format_remove_dialog_success_toast_is_non_empty_single_sentence() {
+    use paladin_gtk::remove_dialog::format_remove_dialog_success_toast;
+
+    let body = format_remove_dialog_success_toast();
+    assert!(!body.is_empty(), "toast body must not be empty");
+    assert!(
+        body.ends_with('.'),
+        "toast body should read as a complete sentence so it matches the rename success toast wording style",
+    );
+    assert!(
+        !body.contains('\n'),
+        "toast body must stay on one line so `adw::Toast::new` renders a single-line confirmation",
+    );
+}

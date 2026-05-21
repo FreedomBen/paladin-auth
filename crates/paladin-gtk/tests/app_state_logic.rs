@@ -7469,6 +7469,99 @@ fn compose_remove_dispatch_from_non_unlocked_busy_returns_no_app_state() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// remove_success_toast_after — toast-body projection for the remove worker
+// outcome. `AppMsg::RemoveWorkerCompleted` consults this to decide whether
+// to raise an `AdwToast` on the `adw::ToastOverlay` per
+// `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" > `RemoveDialog`
+// confirmation flow ("On success, refresh `AccountListComponent` from the
+// returned vault, close the dialog, and surface a status / toast
+// confirmation."). The projection inspects only the typed
+// `RemoveWorkerEffect` variant so the side-effect decision in
+// `AppModel::update` stays unit-testable without spinning up GTK /
+// libadwaita.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn remove_success_toast_after_success_returns_body() {
+    use paladin_gtk::app::state::remove_success_toast_after;
+    use paladin_gtk::remove_dialog::{format_remove_dialog_success_toast, RemoveWorkerEffect};
+
+    let toast = remove_success_toast_after(&RemoveWorkerEffect::Success)
+        .expect("Success must surface a confirmation toast");
+    assert_eq!(
+        toast,
+        format_remove_dialog_success_toast(),
+        "toast body must come from format_remove_dialog_success_toast so wording stays single-sourced",
+    );
+}
+
+#[test]
+fn remove_success_toast_after_failure_returns_none() {
+    use paladin_gtk::app::state::remove_success_toast_after;
+    use paladin_gtk::remove_dialog::{
+        account_not_found_error, classify_remove_error, RemoveWorkerEffect,
+    };
+
+    let failures = [
+        PaladinError::SaveNotCommitted {
+            committed: false,
+            backup_path: None,
+        },
+        PaladinError::SaveNotCommitted {
+            committed: true,
+            backup_path: None,
+        },
+        PaladinError::SaveDurabilityUnconfirmed,
+        account_not_found_error(),
+    ];
+    for err in &failures {
+        let outcome = classify_remove_error(err);
+        let effect = RemoveWorkerEffect::Failure(outcome);
+        assert!(
+            remove_success_toast_after(&effect).is_none(),
+            "Failure must not raise a success toast for err={err:?}",
+        );
+    }
+}
+
+#[test]
+fn compose_remove_dispatch_populates_success_toast_only_on_success() {
+    // `compose_remove_dispatch` bundles `remove_success_toast_after`
+    // alongside the existing drop-dialog / refresh-list / dialog-msg /
+    // app-state decisions so the dispatch site can raise the toast in
+    // one shot. The success branch carries the toast body so the
+    // widget layer just adds it as an `adw::Toast::new(&body)`; the
+    // failure branches stay `None` so the dialog's inline error /
+    // warning is the only surface that conveys the typed outcome.
+    use paladin_gtk::app::state::{compose_remove_dispatch, remove_success_toast_after};
+    use paladin_gtk::remove_dialog::{
+        account_not_found_error, classify_remove_error, RemoveWorkerEffect,
+    };
+
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let effects = [
+        RemoveWorkerEffect::Success,
+        RemoveWorkerEffect::Failure(classify_remove_error(&PaladinError::SaveNotCommitted {
+            committed: false,
+            backup_path: None,
+        })),
+        RemoveWorkerEffect::Failure(classify_remove_error(
+            &PaladinError::SaveDurabilityUnconfirmed,
+        )),
+        RemoveWorkerEffect::Failure(classify_remove_error(&account_not_found_error())),
+    ];
+    for effect in &effects {
+        let dispatch = compose_remove_dispatch(&busy, effect);
+        assert_eq!(
+            dispatch.success_toast,
+            remove_success_toast_after(effect),
+            "success_toast must mirror the projection for effect={effect:?}",
+        );
+    }
+}
+
 #[test]
 fn apply_remove_dispatch_inplace_success_rolls_back_to_unlocked_and_returns_true() {
     use paladin_gtk::app::state::{apply_remove_dispatch_inplace, compose_remove_dispatch};

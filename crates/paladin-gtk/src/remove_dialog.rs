@@ -320,6 +320,31 @@ pub fn format_remove_dialog_subtitle(display_label: &str) -> String {
     format!("Removing {display_label}.")
 }
 
+/// Body text for the `AdwToast` raised on the
+/// [`RemoveWorkerEffect::Success`] branch.
+///
+/// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" >
+/// `RemoveDialog` confirmation flow ("On success, refresh
+/// `AccountListComponent` from the returned vault, close the dialog,
+/// and surface a status / toast confirmation."). The widget layer
+/// raises the toast on the `adw::ToastOverlay` after the dispatch
+/// drops the dialog and the row drops out of `AccountListComponent`
+/// through `AccountListMsg::Refresh`. Sibling of
+/// [`crate::rename_dialog::format_rename_dialog_success_toast`] on
+/// the toast-body-text side.
+///
+/// The wording is intentionally generic so the toast does not need
+/// to carry the removed account's display label across the worker
+/// boundary — the affected row is already gone from the list, and the
+/// toast is a confirmation that the save committed rather than a
+/// recap of which account was removed.
+///
+/// Pure — returns a `'static str` without allocating.
+#[must_use]
+pub fn format_remove_dialog_success_toast() -> &'static str {
+    "Account removed."
+}
+
 /// Freedesktop icon name the widget hands to the
 /// [`RemoveDialogComponent`]'s `adw::StatusPage::set_icon_name`.
 ///

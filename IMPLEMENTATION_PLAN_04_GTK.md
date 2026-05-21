@@ -1888,7 +1888,7 @@ sign-off.
       the submit-success drop path is pinned by
       `should_drop_rename_dialog_after_success_returns_true` in
       `tests/app_state_logic.rs`.
-- [ ] `RemoveDialog` confirmation flow (`AdwAlertDialog` with
+- [x] `RemoveDialog` confirmation flow (`AdwAlertDialog` with
   `destructive-action` styling gating `Vault::remove` inside
   `Vault::mutate_and_save`).
   - [x] Open `RemoveDialog` as an `AdwAlertDialog` with
@@ -1993,8 +1993,30 @@ sign-off.
     `format_remove_dialog_inline_error_visible_true_for_defensive_inline_error`,
     and the end-to-end
     `run_remove_worker_unknown_account_routes_inline_error_and_returns_pair`.)
-  - [ ] On success, refresh `AccountListComponent` from the returned
+  - [x] On success, refresh `AccountListComponent` from the returned
     vault, close the dialog, and surface a status / toast confirmation.
+    `AppMsg::RemoveWorkerCompleted` routes the worker outcome through
+    `compose_remove_dispatch`, which now bundles
+    `should_drop_remove_dialog_after` (drops the dialog on `Success`),
+    `should_refresh_list_after_remove` (re-emits
+    `AccountListMsg::Refresh` from the reinstalled `(Vault, Store)`
+    pair on `Success` and `KeepRemovedWithWarning`), and
+    `remove_success_toast_after` (returns
+    `Some(format_remove_dialog_success_toast().to_string())` on
+    `Success` only). The dispatch site raises the body as
+    `self.toast_overlay.add_toast(adw::Toast::new(&body))` on the same
+    `adw::ToastOverlay` used by the rename / HOTP durability-unconfirmed
+    surfaces; the failure branches stay `None` so the dialog's inline
+    error / body warning is the only surface that conveys the typed
+    outcome. Wording is pinned through `format_remove_dialog_success_toast`
+    (`"Account removed."`) so the helper, the projection, and the
+    bundled `RemoveDispatch::success_toast` field stay in lockstep.
+    Pinned by
+    `tests/remove_dialog_logic.rs::format_remove_dialog_success_toast_returns_removed`,
+    `format_remove_dialog_success_toast_is_non_empty_single_sentence`,
+    `tests/app_state_logic.rs::remove_success_toast_after_success_returns_body`,
+    `remove_success_toast_after_failure_returns_none`, and
+    `compose_remove_dispatch_populates_success_toast_only_on_success`.
   - [x] Cancel closes the dialog without mutating the vault.
     (`apply_msg(RemoveDialogMsg::Cancel)` emits
     `RemoveDialogOutput::Cancel` without touching

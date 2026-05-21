@@ -2511,6 +2511,14 @@ pub struct RemoveDispatch {
     /// `InlineError` (both leave the vault unchanged so the
     /// visible rows already match disk).
     pub refresh_list: bool,
+    /// Optional `AdwToast` body to raise on the `adw::ToastOverlay`
+    /// after applying the remove worker outcome. Mirrors
+    /// [`remove_success_toast_after`] — `Some(body)` on
+    /// [`RemoveWorkerEffect::Success`] and `None` on every
+    /// `Failure` variant so the dialog's inline error / body
+    /// warning stays the only surface that conveys the typed
+    /// outcome.
+    pub success_toast: Option<String>,
 }
 
 /// Bundle the trio of remove-dispatch decisions into a single
@@ -2552,6 +2560,44 @@ pub fn compose_remove_dispatch(current: &AppState, effect: &RemoveWorkerEffect) 
         dialog_msg: remove_dialog_msg_after(effect),
         drop_dialog: should_drop_remove_dialog_after(effect),
         refresh_list: should_refresh_list_after_remove(effect),
+        success_toast: remove_success_toast_after(effect),
+    }
+}
+
+/// Toast-body projection for the remove worker outcome.
+///
+/// `AppMsg::RemoveWorkerCompleted` consults this to decide whether
+/// to raise an `AdwToast` on the `adw::ToastOverlay` per
+/// `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" >
+/// `RemoveDialog` confirmation flow ("On success, refresh
+/// `AccountListComponent` from the returned vault, close the
+/// dialog, and surface a status / toast confirmation."):
+///
+/// * [`RemoveWorkerEffect::Success`] → `Some(body)`. The dialog
+///   dismisses and the row disappears from the list; the toast
+///   confirms the save committed.
+/// * [`RemoveWorkerEffect::Failure`] → `None`. The dialog stays
+///   mounted with the inline error / body warning, which is the
+///   surface that conveys the typed outcome — no toast layered on
+///   top.
+///
+/// The body comes from
+/// [`crate::remove_dialog::format_remove_dialog_success_toast`] so
+/// the wording stays in one place shared by the widget binding and
+/// the pure-logic tests. Sibling of [`rename_success_toast_after`]
+/// on the dispatch-side projection set.
+///
+/// The projection inspects only the typed [`RemoveWorkerEffect`]
+/// variant so the side-effect decision in `AppModel::update` stays
+/// unit-testable in `tests/app_state_logic.rs` without spinning up
+/// GTK / libadwaita.
+#[must_use]
+pub fn remove_success_toast_after(effect: &RemoveWorkerEffect) -> Option<String> {
+    match effect {
+        RemoveWorkerEffect::Success => {
+            Some(crate::remove_dialog::format_remove_dialog_success_toast().to_string())
+        }
+        RemoveWorkerEffect::Failure(_) => None,
     }
 }
 
