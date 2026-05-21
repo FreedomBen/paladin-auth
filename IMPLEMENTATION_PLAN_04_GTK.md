@@ -2029,9 +2029,54 @@ sign-off.
     `apply_msg_cancel_does_not_mutate_worker_outcome`, and
     `remove_dialog_output_cancel_is_distinct_variant`.)
 - [ ] `AddAccountComponent` shared shell and mutation pipeline.
-  - [ ] Wrap the manual form, the URI entry, and the clipboard QR path
+  - [x] Wrap the manual form, the URI entry, and the clipboard QR path
     in an `AdwViewStack` controlled by an `AdwViewSwitcher` before the
     path-specific pages are wired.
+    (`crate::secret_fields::AddPath` now carries three variants —
+    `Manual`, `Uri`, `Qr` — and `crate::add_account` exposes
+    `format_add_path_label` (`"Manual"` / `"URI"` /
+    `"Scan clipboard"`), `format_add_path_name` (`"manual"` / `"uri"` /
+    `"qr"`), and `format_add_path_order()` (`[Manual, Uri, Qr]`) so the
+    widget can loop over the slice, calling
+    `AdwViewStack::add_titled_with_name(child, format_add_path_name,
+    format_add_path_label)` to seed the three pages in declared order
+    without re-deriving the wording inline. `compose_active_path` /
+    `compose_active_path_label` / `compose_active_path_name` project
+    the live `AddSecretState::active_path` so the widget binds a single
+    `#[watch]` to drive `AdwViewStack::set_visible_child_name` and any
+    header subtitle beside the switcher.
+    `compose_save_button_sensitive` returns `false` on the Qr path so
+    the shared Save footer stays greyed out while the page-local
+    "Scan clipboard" action button (lands in L2099) is the path's
+    activation. `compose_submit_outcome`'s defensive Qr arm returns
+    `SubmitOutcome::InlineError` with `ErrorKind::InvalidState` so a
+    future caller that bypasses the sensitivity gate surfaces a benign
+    rejection rather than a vault mutation it has no validated account
+    for. `AddSecretState::switch_path` owns no buffer to wipe on a
+    Qr-leaving switch (the QR page reads the clipboard texture on
+    activation, not from a held buffer) and still drops any pending
+    duplicate-add `Box<ValidatedAccount>` so the `ZeroizeOnDrop` impl on
+    `paladin_core::Secret` wipes the carried bytes when the returned
+    `Option` drops. Pinned by
+    `tests/add_account_logic.rs::format_add_path_label_qr_returns_scan_clipboard`,
+    `format_add_path_name_qr_returns_qr_slug`,
+    `format_add_path_name_qr_is_distinct_from_label`,
+    `format_add_path_order_matches_view_switcher_page_order`,
+    `format_add_path_order_covers_every_addpath_variant`,
+    `format_add_path_order_labels_align_with_format_add_path_label`,
+    `format_add_path_order_names_align_with_format_add_path_name`,
+    `compose_active_path_after_switch_to_qr_returns_qr`,
+    `compose_active_path_label_after_switch_to_qr_returns_scan_clipboard`,
+    `compose_active_path_name_after_switch_to_qr_returns_qr_slug`,
+    `compose_save_button_sensitive_qr_path_is_false`,
+    `compose_save_button_sensitive_qr_path_remains_false_with_prior_buffers`,
+    `compose_submit_outcome_qr_path_rejects_inline_defensively`, and
+    `tests/secret_fields_logic.rs::add_state_switch_manual_to_qr_clears_hidden_manual_secret`,
+    `add_state_switch_uri_to_qr_clears_hidden_uri_text`,
+    `add_state_switch_qr_to_manual_preserves_manual_buffer`,
+    `add_state_switch_qr_to_uri_preserves_uri_buffer`,
+    `add_state_switch_same_qr_is_noop`,
+    `add_state_path_switch_to_qr_drops_pending_duplicate_add`.)
   - [ ] Keep Add dialog submit / cancel / close handling centralized so
     every path can disable submit while a worker is in flight and can
     clear path-local pending state on dismissal.

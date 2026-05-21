@@ -153,6 +153,12 @@ pub enum AddPath {
     Manual,
     /// Pasted `otpauth://` URI.
     Uri,
+    /// QR clipboard image — activates via the page-local "Scan
+    /// clipboard" button rather than the shared Save submit. Owns
+    /// no secret-bearing buffer of its own; the clipboard texture
+    /// is read on activation and decoded straight into
+    /// [`paladin_core::import::qr_image_bytes`].
+    Qr,
 }
 
 /// Secret-bearing state owned by the `AddAccountComponent`.
@@ -221,6 +227,12 @@ impl AddSecretState {
         match self.active_path {
             AddPath::Manual => self.manual_secret.clear(),
             AddPath::Uri => self.uri_text.clear(),
+            // The clipboard-QR page owns no secret-bearing buffer
+            // (the clipboard texture is read on activation, not
+            // held in component state), so leaving it has nothing
+            // to wipe. Per-path duplicate-add state is still
+            // dropped below.
+            AddPath::Qr => {}
         }
         self.active_path = to;
         self.pending.take()

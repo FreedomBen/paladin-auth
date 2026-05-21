@@ -471,6 +471,19 @@ pub fn compose_submit_outcome(state: &AddDialogState, now: SystemTime) -> Submit
                 })
             }
         },
+        // The clipboard-QR page activates via its own page-local
+        // "Scan clipboard" action button rather than the shared
+        // Save submit, and `compose_save_button_sensitive` returns
+        // `false` for this path so the user cannot reach this arm
+        // through a click. Defensively returning a typed inline
+        // error (rather than panicking or proceeding) keeps the
+        // composer honest: any future caller that bypasses the
+        // sensitivity gate surfaces a benign rejection rather than
+        // a vault mutation it has no validated account for.
+        crate::secret_fields::AddPath::Qr => SubmitOutcome::InlineError(InlineError {
+            kind: paladin_core::ErrorKind::InvalidState,
+            rendered: "QR clipboard scan uses its own activation button".to_string(),
+        }),
     }
 }
 
@@ -1802,6 +1815,7 @@ pub fn format_add_path_label(path: crate::secret_fields::AddPath) -> &'static st
     match path {
         crate::secret_fields::AddPath::Manual => "Manual",
         crate::secret_fields::AddPath::Uri => "URI",
+        crate::secret_fields::AddPath::Qr => "Scan clipboard",
     }
 }
 
@@ -1847,6 +1861,7 @@ pub fn format_add_path_name(path: crate::secret_fields::AddPath) -> &'static str
     match path {
         crate::secret_fields::AddPath::Manual => "manual",
         crate::secret_fields::AddPath::Uri => "uri",
+        crate::secret_fields::AddPath::Qr => "qr",
     }
 }
 
@@ -1875,6 +1890,7 @@ pub fn format_add_path_order() -> &'static [crate::secret_fields::AddPath] {
     &[
         crate::secret_fields::AddPath::Manual,
         crate::secret_fields::AddPath::Uri,
+        crate::secret_fields::AddPath::Qr,
     ]
 }
 
@@ -2370,6 +2386,14 @@ pub fn compose_save_button_sensitive(state: &AddDialogState) -> bool {
             !state.manual_draft().label.is_empty() && !state.secret_state().manual_secret.is_empty()
         }
         crate::secret_fields::AddPath::Uri => !state.secret_state().uri_text.is_empty(),
+        // The clipboard-QR page activates via its own page-local
+        // "Scan clipboard" action button rather than the shared
+        // Save submit at the dialog footer. Keeping the shared
+        // button greyed out on this path steers the user toward
+        // the page-local action and prevents the shared submit
+        // pipeline from being entered on a path that does not
+        // consume it.
+        crate::secret_fields::AddPath::Qr => false,
     }
 }
 

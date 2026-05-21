@@ -230,6 +230,135 @@ fn add_state_path_switch_drops_pending_duplicate_add() {
     drop(prior);
 }
 
+#[test]
+fn add_state_switch_manual_to_qr_clears_hidden_manual_secret() {
+    // Switching from Manual to the clipboard-QR page wipes the
+    // hidden Base32 buffer for the leaving Manual path, matching
+    // the Manual→Uri contract. The QR page has no secret-bearing
+    // buffer of its own (it activates against a fresh clipboard
+    // texture read), so there is nothing to preserve on the
+    // arriving side.
+    let mut s = AddSecretState::new();
+    s.manual_secret.set(BASE32_SECRET);
+    let prior = s.switch_path(AddPath::Qr);
+    assert!(prior.is_none(), "no pending was set");
+    assert_eq!(s.active_path, AddPath::Qr);
+    assert!(
+        s.manual_secret.is_empty(),
+        "leaving Manual must wipe the hidden Base32 buffer when arriving on Qr"
+    );
+}
+
+#[test]
+fn add_state_switch_uri_to_qr_clears_hidden_uri_text() {
+    // Switching from Uri to the clipboard-QR page wipes the hidden
+    // URI buffer for the leaving Uri path, matching the Uri→Manual
+    // contract. The QR page has no secret-bearing buffer of its
+    // own.
+    let mut s = AddSecretState::new();
+    s.switch_path(AddPath::Uri);
+    s.uri_text
+        .set("otpauth://totp/Example:bob@example.com?secret=ABC&issuer=Example");
+    let prior = s.switch_path(AddPath::Qr);
+    assert!(prior.is_none(), "no pending was set");
+    assert_eq!(s.active_path, AddPath::Qr);
+    assert!(
+        s.uri_text.is_empty(),
+        "leaving Uri must wipe the hidden URI buffer when arriving on Qr"
+    );
+}
+
+#[test]
+fn add_state_switch_qr_to_manual_preserves_manual_buffer() {
+    // Returning from the clipboard-QR page to Manual leaves the
+    // Manual buffer untouched because the QR page does not own a
+    // secret-bearing buffer to wipe on departure. Pinning this
+    // keeps a future `switch_path` change from accidentally
+    // erasing typed input on the arriving Manual page.
+    let mut s = AddSecretState::new();
+    s.manual_secret.set(BASE32_SECRET);
+    s.switch_path(AddPath::Qr);
+    assert!(
+        s.manual_secret.is_empty(),
+        "precondition: Manual→Qr wiped the Manual buffer"
+    );
+    // Re-populate Manual before switching back so the test
+    // verifies the return-to-Manual path preserves what the user
+    // re-typed on the QR page's hidden adjacent state.
+    s.manual_secret.set(BASE32_SECRET);
+    let prior = s.switch_path(AddPath::Manual);
+    assert!(prior.is_none(), "no pending was set");
+    assert_eq!(s.active_path, AddPath::Manual);
+    assert_eq!(
+        s.manual_secret.text(),
+        BASE32_SECRET,
+        "Qr→Manual must preserve the Manual buffer because Qr owns no buffer to wipe",
+    );
+}
+
+#[test]
+fn add_state_switch_qr_to_uri_preserves_uri_buffer() {
+    // Mirror of `add_state_switch_qr_to_manual_preserves_manual_buffer`
+    // on the URI side: the QR page owns no leaving buffer, so a
+    // Qr→Uri switch must keep the URI buffer intact.
+    let mut s = AddSecretState::new();
+    s.switch_path(AddPath::Qr);
+    s.uri_text
+        .set("otpauth://totp/Example:bob@example.com?secret=ABC&issuer=Example");
+    let prior = s.switch_path(AddPath::Uri);
+    assert!(prior.is_none(), "no pending was set");
+    assert_eq!(s.active_path, AddPath::Uri);
+    assert_eq!(
+        s.uri_text.text(),
+        "otpauth://totp/Example:bob@example.com?secret=ABC&issuer=Example",
+        "Qr→Uri must preserve the URI buffer because Qr owns no buffer to wipe",
+    );
+}
+
+#[test]
+fn add_state_switch_same_qr_is_noop() {
+    // Idempotent same-path switch on the QR page mirrors
+    // `add_state_switch_same_path_is_noop` for Manual: pending
+    // duplicate-add state survives the re-entry so the alert dialog
+    // re-presented on a redundant SwitchPath dispatch keeps its
+    // staged validated account.
+    let mut s = AddSecretState::new();
+    s.switch_path(AddPath::Qr);
+    let pending_before = s.replace_pending(sample_validated("acct"));
+    assert!(pending_before.is_none());
+    let prior = s.switch_path(AddPath::Qr);
+    assert!(
+        prior.is_none(),
+        "idempotent same-path switch on Qr returns no prior"
+    );
+    assert!(
+        s.pending.is_some(),
+        "idempotent same-path switch on Qr must not drop pending"
+    );
+}
+
+#[test]
+fn add_state_path_switch_to_qr_drops_pending_duplicate_add() {
+    // A path switch into the QR page drops any pending
+    // duplicate-add state, mirroring the Manual→Uri contract. The
+    // caller receives the prior `Box<ValidatedAccount>` so the
+    // `ZeroizeOnDrop` impl on `paladin_core::Secret` wipes the
+    // staged secret when the return drops.
+    let mut s = AddSecretState::new();
+    s.manual_secret.set(BASE32_SECRET);
+    let _ = s.replace_pending(sample_validated("acct"));
+    let prior = s.switch_path(AddPath::Qr);
+    assert!(
+        prior.is_some(),
+        "switch_path returns the prior pending so caller drops it"
+    );
+    assert!(
+        s.pending.is_none(),
+        "pending duplicate-add slot must be cleared on Manual→Qr switch"
+    );
+    drop(prior);
+}
+
 // ---------------------------------------------------------------------------
 // Pending ValidatedAccount zeroized on cancel / close / replacement / auto-lock
 // ---------------------------------------------------------------------------

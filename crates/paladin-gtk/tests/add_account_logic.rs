@@ -3068,6 +3068,44 @@ fn compose_submit_outcome_routes_by_active_path_not_by_buffer_contents() {
 }
 
 #[test]
+fn compose_submit_outcome_qr_path_rejects_inline_defensively() {
+    // The clipboard-QR sub-path activates via its own dedicated
+    // "Scan clipboard" action button rather than the shared Save
+    // submit pipeline, and `compose_save_button_sensitive` returns
+    // `false` for the QR path so the shared button stays greyed
+    // out. The unified path-aware `compose_submit_outcome` still
+    // needs a defensive arm in case the routing is invoked
+    // (e.g. on a defensive re-render or by a future caller); the
+    // arm returns a typed inline error rather than panicking or
+    // proceeding so the shared shell stays consistent with the
+    // "shared submit ignored on Qr" contract.
+    use paladin_core::ErrorKind;
+    use paladin_gtk::add_account::{
+        apply_msg, compose_submit_outcome, AddAccountMsg, AddDialogState, SubmitOutcome,
+    };
+    use paladin_gtk::secret_fields::AddPath;
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(&mut state, AddAccountMsg::SwitchPath(AddPath::Qr));
+
+    let outcome = compose_submit_outcome(&state, now_for_tests());
+
+    match outcome {
+        SubmitOutcome::InlineError(err) => {
+            assert_eq!(
+                err.kind,
+                ErrorKind::InvalidState,
+                "Qr path's shared-submit defensive arm uses ErrorKind::InvalidState",
+            );
+        }
+        SubmitOutcome::Proceed(_) => panic!(
+            "Qr path must never produce a Proceed through the shared submit composer; \
+             the page activates via its own action button",
+        ),
+    }
+}
+
+#[test]
 fn compose_submit_outcome_preserves_state_so_retry_keeps_typing() {
     // The helper borrows the state so the dialog can re-call it on
     // every Save click after a typed-but-inline-rejected attempt —
@@ -5880,6 +5918,63 @@ fn compose_save_button_sensitive_uri_path_with_text_is_true() {
 }
 
 #[test]
+fn compose_save_button_sensitive_qr_path_is_false() {
+    // The clipboard-QR sub-path activates via its own dedicated
+    // "Scan clipboard" action button rather than the shared Save
+    // button at the dialog footer. The shared Save button must
+    // therefore stay greyed out whenever the QR page is active so
+    // the user reaches for the page-local action — pinning the
+    // gate here keeps the shared-shell submit pipeline from being
+    // entered on a path that does not consume it.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_save_button_sensitive, AddAccountMsg, AddDialogState,
+    };
+    use paladin_gtk::secret_fields::AddPath;
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(&mut state, AddAccountMsg::SwitchPath(AddPath::Qr));
+
+    assert!(
+        !compose_save_button_sensitive(&state),
+        "Qr path → shared Save button is greyed out (page-local action button drives the scan)",
+    );
+}
+
+#[test]
+fn compose_save_button_sensitive_qr_path_remains_false_with_prior_buffers() {
+    // Pre-existing input on the Manual / URI buffers (typed before
+    // a `SwitchPath(Qr)` switch wiped them) must not lift the QR
+    // page's gate — the gate keys off the active path only, not the
+    // adjacent buffers, so re-entering the Manual / URI path is the
+    // only way back to a sensitive Save button. Sibling of the
+    // `compose_save_button_sensitive_uri_path_empty_is_false`
+    // cross-buffer guard on the URI side.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_save_button_sensitive, AddAccountMsg, AddDialogState,
+    };
+    use paladin_gtk::secret_fields::AddPath;
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualLabelChanged("Work".to_string()),
+    );
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualSecretChanged("JBSWY3DPEHPK3PXP".to_string()),
+    );
+    // Path switch into Qr wipes the manual buffer per
+    // `AddSecretState::switch_path`; the label survives because it
+    // is not secret-bearing, but the gate must stay off regardless.
+    let _ = apply_msg(&mut state, AddAccountMsg::SwitchPath(AddPath::Qr));
+
+    assert!(
+        !compose_save_button_sensitive(&state),
+        "Qr path → Save button stays greyed out even with prior Manual buffer history",
+    );
+}
+
+#[test]
 fn format_add_path_label_manual_returns_manual() {
     // The `AdwViewSwitcher` page title for the manual sub-path is
     // the fixed label "Manual". Surfacing the wording through a
@@ -5909,6 +6004,127 @@ fn format_add_path_label_uri_returns_uri() {
         format_add_path_label(AddPath::Uri),
         "URI",
         "URI sub-path page label is the fixed CLI / TUI parity wording",
+    );
+}
+
+#[test]
+fn format_add_path_label_qr_returns_scan_clipboard() {
+    // The `AdwViewSwitcher` page title for the clipboard-QR sub-path
+    // is the fixed label `"Scan clipboard"`, matching the
+    // IMPLEMENTATION_PLAN_04_GTK.md §"Component tree" wording for
+    // the `AdwViewStack`'s "Scan clipboard" page. The widget
+    // binding feeds each `AddPath` in `format_add_path_order`
+    // through this helper to set the page title, so pinning the
+    // QR-page wording here keeps the view-switcher tab label in
+    // lockstep with the plan.
+    use paladin_gtk::add_account::format_add_path_label;
+    use paladin_gtk::secret_fields::AddPath;
+
+    assert_eq!(
+        format_add_path_label(AddPath::Qr),
+        "Scan clipboard",
+        "Qr sub-path page label matches the plan's \"Scan clipboard\" wording",
+    );
+}
+
+#[test]
+fn format_add_path_name_qr_returns_qr_slug() {
+    // The `AdwViewStack` page slug for the clipboard-QR sub-path is
+    // the machine-readable token `"qr"` (lowercased, matching the
+    // CLI import format slug for QR images and the
+    // `format_add_path_name` pattern). Distinct from the display
+    // label so a future caller cannot pass the localized title
+    // string as the stack key.
+    use paladin_gtk::add_account::format_add_path_name;
+    use paladin_gtk::secret_fields::AddPath;
+
+    assert_eq!(
+        format_add_path_name(AddPath::Qr),
+        "qr",
+        "Qr sub-path machine-readable slug is \"qr\"",
+    );
+}
+
+#[test]
+fn format_add_path_name_qr_is_distinct_from_label() {
+    // Pin that the QR sub-path's machine-readable slug
+    // (`format_add_path_name`) is distinct from its display label
+    // (`format_add_path_label`). The Manual / URI pair already gets
+    // this invariant through case alone (`"Manual"` vs `"manual"`;
+    // `"URI"` vs `"uri"`), and the QR page's label `"Scan
+    // clipboard"` and slug `"qr"` are unrelated tokens — so the
+    // invariant is doubly important here.
+    use paladin_gtk::add_account::{format_add_path_label, format_add_path_name};
+    use paladin_gtk::secret_fields::AddPath;
+
+    assert_ne!(
+        format_add_path_label(AddPath::Qr),
+        format_add_path_name(AddPath::Qr),
+        "QR page label and slug must not collide so a future caller cannot pass the wrong one",
+    );
+}
+
+#[test]
+fn compose_active_path_after_switch_to_qr_returns_qr() {
+    // `SwitchPath(Qr)` drives the active-path projection to
+    // `AddPath::Qr`, mirroring the `compose_active_path_label`
+    // contract on the display-label side. The widget's
+    // `#[watch]`-driven `AdwViewSwitcher` page selection follows
+    // this projection.
+    use paladin_gtk::add_account::{apply_msg, compose_active_path, AddAccountMsg, AddDialogState};
+    use paladin_gtk::secret_fields::AddPath;
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(&mut state, AddAccountMsg::SwitchPath(AddPath::Qr));
+
+    assert_eq!(
+        compose_active_path(&state),
+        AddPath::Qr,
+        "SwitchPath(Qr) flips the active-path projection to Qr",
+    );
+}
+
+#[test]
+fn compose_active_path_label_after_switch_to_qr_returns_scan_clipboard() {
+    // `SwitchPath(Qr)` drives the active-path label projection to
+    // `"Scan clipboard"` in lockstep with `compose_active_path`
+    // flipping to `AddPath::Qr`. The widget's `#[watch]`-driven
+    // display label (e.g. a header subtitle beside the switcher)
+    // follows the switcher selection.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_active_path_label, format_add_path_label, AddAccountMsg, AddDialogState,
+    };
+    use paladin_gtk::secret_fields::AddPath;
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(&mut state, AddAccountMsg::SwitchPath(AddPath::Qr));
+
+    assert_eq!(
+        compose_active_path_label(&state),
+        format_add_path_label(AddPath::Qr),
+        "SwitchPath(Qr) surfaces the Qr sub-path label \"Scan clipboard\"",
+    );
+}
+
+#[test]
+fn compose_active_path_name_after_switch_to_qr_returns_qr_slug() {
+    // Mirror of `compose_active_path_label_after_switch_to_qr_returns_scan_clipboard`
+    // on the AdwViewStack page-name slug side: the widget binds the
+    // `set_visible_child_name` call to this projection, so the slug
+    // must follow the active-path enum without per-call
+    // pattern-matching.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_active_path_name, format_add_path_name, AddAccountMsg, AddDialogState,
+    };
+    use paladin_gtk::secret_fields::AddPath;
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(&mut state, AddAccountMsg::SwitchPath(AddPath::Qr));
+
+    assert_eq!(
+        compose_active_path_name(&state),
+        format_add_path_name(AddPath::Qr),
+        "SwitchPath(Qr) surfaces the Qr machine-readable slug \"qr\"",
     );
 }
 
@@ -7553,15 +7769,15 @@ fn format_manual_algorithm_labels_index_aligns_with_format_manual_algorithm_sele
 #[test]
 fn format_add_path_order_matches_view_switcher_page_order() {
     // The AdwViewSwitcher renders its pages in the order the widget
-    // adds them to the AdwViewStack — Manual first, URI second —
-    // matching the enum-declaration order and the
-    // `AddSecretState::active_path` default of `AddPath::Manual` on a
-    // freshly-opened dialog. Pinning the order through a helper keeps
-    // the page-add loop and the snapshot tests in
-    // `tests/add_account_logic.rs` aligned against a single source of
-    // truth so a future caller cannot accidentally add the pages in
-    // a different order than the dropdown labels / selected-index
-    // helpers expect. Sibling of
+    // adds them to the AdwViewStack — Manual first, URI second,
+    // Scan clipboard third — matching the enum-declaration order
+    // and the `AddSecretState::active_path` default of
+    // `AddPath::Manual` on a freshly-opened dialog. Pinning the
+    // order through a helper keeps the page-add loop and the
+    // snapshot tests in `tests/add_account_logic.rs` aligned
+    // against a single source of truth so a future caller cannot
+    // accidentally add the pages in a different order than the
+    // dropdown labels / selected-index helpers expect. Sibling of
     // `format_manual_kind_labels_matches_tui_wording` /
     // `format_manual_algorithm_labels_matches_tui_wording` on the
     // sub-path-order side.
@@ -7570,8 +7786,8 @@ fn format_add_path_order_matches_view_switcher_page_order() {
 
     assert_eq!(
         format_add_path_order(),
-        [AddPath::Manual, AddPath::Uri],
-        "page-add order is Manual first, URI second",
+        [AddPath::Manual, AddPath::Uri, AddPath::Qr],
+        "page-add order is Manual first, URI second, Qr third",
     );
 }
 
@@ -7595,10 +7811,11 @@ fn format_add_path_order_covers_every_addpath_variant() {
         order.contains(&AddPath::Uri),
         "Uri is in the page-add order",
     );
+    assert!(order.contains(&AddPath::Qr), "Qr is in the page-add order",);
     assert_eq!(
         order.len(),
-        2,
-        "page-add order covers exactly the two AddPath variants",
+        3,
+        "page-add order covers exactly the three AddPath variants",
     );
 }
 
@@ -7606,11 +7823,11 @@ fn format_add_path_order_covers_every_addpath_variant() {
 fn format_add_path_order_labels_align_with_format_add_path_label() {
     // The widget feeds each `AddPath` in `format_add_path_order`
     // through `format_add_path_label` to set the AdwViewStack page
-    // title; the resulting labels must come out in the same `Manual`
-    // / `URI` wording order the AdwViewSwitcher renders to the user.
-    // Pinning the chain in a test guards against a future addition
-    // to either helper that lands the order or the label wording
-    // out of sync.
+    // title; the resulting labels must come out in the same
+    // `Manual` / `URI` / `Scan clipboard` wording order the
+    // AdwViewSwitcher renders to the user. Pinning the chain in a
+    // test guards against a future addition to either helper that
+    // lands the order or the label wording out of sync.
     use paladin_gtk::add_account::{format_add_path_label, format_add_path_order};
 
     let labels: Vec<&'static str> = format_add_path_order()
@@ -7619,8 +7836,8 @@ fn format_add_path_order_labels_align_with_format_add_path_label() {
         .collect();
     assert_eq!(
         labels,
-        ["Manual", "URI"],
-        "page-add order through format_add_path_label renders Manual / URI in order",
+        ["Manual", "URI", "Scan clipboard"],
+        "page-add order through format_add_path_label renders Manual / URI / Scan clipboard in order",
     );
 }
 
@@ -7630,8 +7847,8 @@ fn format_add_path_order_names_align_with_format_add_path_name() {
     // `format_add_path_order_labels_align_with_format_add_path_label`
     // on the AdwViewStack page-name (machine-readable slug) side:
     // feeding each `AddPath` in `format_add_path_order` through
-    // `format_add_path_name` must produce the `manual` / `uri` slugs
-    // in the same order the widget addresses them.
+    // `format_add_path_name` must produce the `manual` / `uri` /
+    // `qr` slugs in the same order the widget addresses them.
     use paladin_gtk::add_account::{format_add_path_name, format_add_path_order};
 
     let names: Vec<&'static str> = format_add_path_order()
@@ -7640,8 +7857,8 @@ fn format_add_path_order_names_align_with_format_add_path_name() {
         .collect();
     assert_eq!(
         names,
-        ["manual", "uri"],
-        "page-add order through format_add_path_name renders manual / uri in order",
+        ["manual", "uri", "qr"],
+        "page-add order through format_add_path_name renders manual / uri / qr in order",
     );
 }
 
