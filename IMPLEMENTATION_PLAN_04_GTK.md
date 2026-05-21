@@ -1525,9 +1525,27 @@ sign-off.
     seeded from `Vault::iter()` projected through
     `paladin_core::AccountSummary` (no secret bytes leave
     `paladin_core`).
-  - [ ] Mount a `gtk::ListView` bound to the store via a
+  - [x] Mount a `gtk::ListView` bound to the store via a
     `SignalListItemFactory` whose row body is the
-    `AccountRowComponent` (see the row item below).
+    `AccountRowComponent` (see the row item below). The list-level
+    wiring (the `gtk::ListView`, the `SignalListItemFactory`
+    instantiation, the `gio::ListStore` splice, and the search bar)
+    stays in `account_list.rs`; the row body — the per-row
+    `gtk::Box` (`build_row_widget`), the bind walk (`bind_row`),
+    the `gtk::IconTheme` resolve (`bind_row_icon`), and the per-row
+    `gio::SimpleActionGroup` install (`install_row_action_group`) —
+    lives in `account_row.rs` so the `AccountRowComponent` module
+    is the canonical owner of row body construction. The
+    `SignalListItemFactory::connect_setup` / `connect_bind`
+    callbacks import those four helpers from
+    `paladin_gtk::account_row`; the helper ownership is pinned by
+    `tests/account_row_logic.rs::{build_row_widget_is_exposed_from_account_row_module,
+    bind_row_is_exposed_from_account_row_module,
+    bind_row_icon_is_exposed_from_account_row_module,
+    install_row_action_group_is_exposed_from_account_row_module}`
+    so a silent move back into `account_list.rs` surfaces as a
+    hard-error import drift rather than as an undetected re-shuffle
+    of widget ownership.
   - [x] Host a `gtk::SearchEntry` inside a `gtk::SearchBar` whose
     `search-mode-enabled` is bound to the header-bar search-toggle
     button.

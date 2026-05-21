@@ -652,3 +652,42 @@ fn account_row_component_input_and_output_match_dispatch_edges() {
     }
     assert_types::<AccountRowComponent>();
 }
+
+// ---------------------------------------------------------------------------
+// Row widget construction lives in `paladin_gtk::account_row` per
+// `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+// `AccountListComponent` ("Mount a `gtk::ListView` bound to the store
+// via a `SignalListItemFactory` whose row body is the
+// `AccountRowComponent`"). The `SignalListItemFactory` in
+// `account_list.rs` is the binding mechanism, but the row body
+// construction (the per-row `gtk::Box`, the bind walk, the icon
+// theme resolve, and the per-row `gio::SimpleActionGroup` install)
+// lives in the `AccountRowComponent` module so the row body's
+// canonical owner matches the plan. These compile-only assertions
+// pin those four helpers to `paladin_gtk::account_row` — a silent
+// move back into `account_list.rs` surfaces as a hard-error import
+// drift rather than as an undetected re-shuffle of widget ownership.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn build_row_widget_is_exposed_from_account_row_module() {
+    let _: fn() -> relm4::gtk::Box = paladin_gtk::account_row::build_row_widget;
+}
+
+#[test]
+fn bind_row_is_exposed_from_account_row_module() {
+    let _: fn(&relm4::gtk::Box, &RowDisplay) = paladin_gtk::account_row::bind_row;
+}
+
+#[test]
+fn bind_row_icon_is_exposed_from_account_row_module() {
+    let _: fn(&relm4::gtk::Box, Option<&str>) = paladin_gtk::account_row::bind_row_icon;
+}
+
+#[test]
+fn install_row_action_group_is_exposed_from_account_row_module() {
+    use paladin_gtk::account_list::AccountListOutput;
+
+    let _: fn(&relm4::gtk::Box, AccountId, relm4::Sender<AccountListOutput>) =
+        paladin_gtk::account_row::install_row_action_group;
+}
