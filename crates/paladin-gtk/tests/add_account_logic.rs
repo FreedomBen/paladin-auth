@@ -5974,6 +5974,405 @@ fn compose_save_button_sensitive_qr_path_remains_false_with_prior_buffers() {
     );
 }
 
+// `AddAccountMsg::SetBusy(bool)` is the parent's hook for
+// `IMPLEMENTATION_PLAN_04_GTK.md` L2080 — "every path can disable
+// submit while a worker is in flight". `AppModel` flips this around
+// the `gio::spawn_blocking Vault::mutate_and_save(|v| v.add(...))`
+// worker the same way `AccountListMsg::SetBusy` flips
+// `AccountListComponent`'s busy mask. The tests below pin the
+// shared-shell contract (busy stays orthogonal to per-path form
+// state; the gate flips back to the form's intrinsic sensitivity
+// when busy clears) so a future centralization refactor cannot
+// silently drop the gate.
+
+#[test]
+fn add_dialog_state_fresh_is_not_busy() {
+    use paladin_gtk::add_account::AddDialogState;
+
+    let state = AddDialogState::new();
+
+    assert!(
+        !state.is_busy(),
+        "fresh dialog has no worker in flight → is_busy() == false",
+    );
+}
+
+#[test]
+fn apply_msg_set_busy_true_emits_no_output_and_marks_busy() {
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+
+    let output = apply_msg(&mut state, AddAccountMsg::SetBusy(true));
+
+    assert!(
+        output.is_none(),
+        "SetBusy is a parent-driven status update; the dialog never forwards an output for it",
+    );
+    assert!(
+        state.is_busy(),
+        "SetBusy(true) flips the worker-in-flight flag on so the Save / dismissal gates dim",
+    );
+}
+
+#[test]
+fn apply_msg_set_busy_false_clears_busy() {
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(&mut state, AddAccountMsg::SetBusy(true));
+
+    let output = apply_msg(&mut state, AddAccountMsg::SetBusy(false));
+
+    assert!(
+        output.is_none(),
+        "SetBusy(false) is also parent-driven status; no output is emitted",
+    );
+    assert!(
+        !state.is_busy(),
+        "SetBusy(false) releases the worker-in-flight flag so the gates re-evaluate against the form state",
+    );
+}
+
+#[test]
+fn apply_msg_set_busy_same_value_is_idempotent() {
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+
+    let _ = apply_msg(&mut state, AddAccountMsg::SetBusy(false));
+    assert!(
+        !state.is_busy(),
+        "SetBusy(false) on a not-busy dialog is a benign no-op",
+    );
+
+    let _ = apply_msg(&mut state, AddAccountMsg::SetBusy(true));
+    let _ = apply_msg(&mut state, AddAccountMsg::SetBusy(true));
+    assert!(
+        state.is_busy(),
+        "Two consecutive SetBusy(true)s leave the flag set; the second is a benign no-op",
+    );
+}
+
+#[test]
+fn compose_save_button_sensitive_manual_path_busy_returns_false() {
+    // The manual sub-path's intrinsic sensitivity gate
+    // (non-empty label + secret) goes false the moment SetBusy(true)
+    // arrives, so a fresh click cannot kick off a second
+    // `Vault::mutate_and_save` while the prior one is still in flight.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_save_button_sensitive, AddAccountMsg, AddDialogState,
+    };
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualLabelChanged("Work".to_string()),
+    );
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualSecretChanged("JBSWY3DPEHPK3PXP".to_string()),
+    );
+    assert!(
+        compose_save_button_sensitive(&state),
+        "precondition: filled manual form is intrinsically sensitive",
+    );
+
+    let _ = apply_msg(&mut state, AddAccountMsg::SetBusy(true));
+
+    assert!(
+        !compose_save_button_sensitive(&state),
+        "manual path → SetBusy(true) dims Save even when label + secret are populated",
+    );
+}
+
+#[test]
+fn compose_save_button_sensitive_uri_path_busy_returns_false() {
+    // URI sub-path parity with the manual busy test — the gate
+    // closes on busy regardless of which path drove the form state.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_save_button_sensitive, AddAccountMsg, AddDialogState,
+    };
+    use paladin_gtk::secret_fields::AddPath;
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(&mut state, AddAccountMsg::SwitchPath(AddPath::Uri));
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::UriTextChanged(
+            "otpauth://totp/Example:alice?secret=JBSWY3DPEHPK3PXP&issuer=Example".to_string(),
+        ),
+    );
+    assert!(
+        compose_save_button_sensitive(&state),
+        "precondition: filled URI form is intrinsically sensitive",
+    );
+
+    let _ = apply_msg(&mut state, AddAccountMsg::SetBusy(true));
+
+    assert!(
+        !compose_save_button_sensitive(&state),
+        "URI path → SetBusy(true) dims Save even when URI text is populated",
+    );
+}
+
+#[test]
+fn compose_save_button_sensitive_re_enables_after_set_busy_false() {
+    // The busy gate composes with — does not replace — the per-path
+    // intrinsic gate: once SetBusy(false) arrives, the Save button
+    // returns to its prior intrinsic sensitivity (sensitive when the
+    // manual form is filled in this case).
+    use paladin_gtk::add_account::{
+        apply_msg, compose_save_button_sensitive, AddAccountMsg, AddDialogState,
+    };
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualLabelChanged("Work".to_string()),
+    );
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualSecretChanged("JBSWY3DPEHPK3PXP".to_string()),
+    );
+    let _ = apply_msg(&mut state, AddAccountMsg::SetBusy(true));
+    assert!(
+        !compose_save_button_sensitive(&state),
+        "precondition: SetBusy(true) dims the Save button",
+    );
+
+    let _ = apply_msg(&mut state, AddAccountMsg::SetBusy(false));
+
+    assert!(
+        compose_save_button_sensitive(&state),
+        "SetBusy(false) restores the intrinsic sensitivity (filled form → sensitive)",
+    );
+}
+
+#[test]
+fn compose_save_button_sensitive_qr_path_busy_returns_false() {
+    // Belt-and-suspenders: the Qr path already returns false from
+    // the intrinsic gate, so the busy short-circuit returning false
+    // is a tautology in this state. Pinning the intersection
+    // explicitly guards against a future refactor that splits the
+    // QR page's gate logic away from `compose_save_button_sensitive`
+    // and forgets to thread the busy short-circuit through.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_save_button_sensitive, AddAccountMsg, AddDialogState,
+    };
+    use paladin_gtk::secret_fields::AddPath;
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(&mut state, AddAccountMsg::SwitchPath(AddPath::Qr));
+    let _ = apply_msg(&mut state, AddAccountMsg::SetBusy(true));
+
+    assert!(
+        !compose_save_button_sensitive(&state),
+        "Qr path + busy → shared Save stays greyed out (page-local action button is the path's activation)",
+    );
+}
+
+#[test]
+fn apply_msg_set_busy_preserves_form_buffers() {
+    // Centralization guard: a busy flip is a parent-driven status
+    // signal, not a form-state mutation. The label / secret /
+    // pending-duplicate buffers must survive both SetBusy(true) and
+    // SetBusy(false) so the user's typed input is not lost when the
+    // worker rolls back via WorkerFailed.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualLabelChanged("Work".to_string()),
+    );
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualSecretChanged("JBSWY3DPEHPK3PXP".to_string()),
+    );
+
+    let _ = apply_msg(&mut state, AddAccountMsg::SetBusy(true));
+    assert_eq!(
+        state.manual_draft().label,
+        "Work",
+        "SetBusy(true) must not clear the non-secret manual label buffer",
+    );
+    assert_eq!(
+        state.secret_state().manual_secret.text(),
+        "JBSWY3DPEHPK3PXP",
+        "SetBusy(true) must not clear the manual secret buffer",
+    );
+
+    let _ = apply_msg(&mut state, AddAccountMsg::SetBusy(false));
+    assert_eq!(
+        state.manual_draft().label,
+        "Work",
+        "SetBusy(false) must not clear the non-secret manual label buffer",
+    );
+    assert_eq!(
+        state.secret_state().manual_secret.text(),
+        "JBSWY3DPEHPK3PXP",
+        "SetBusy(false) must not clear the manual secret buffer",
+    );
+}
+
+#[test]
+fn compose_save_button_sensitive_busy_then_form_cleared_stays_false() {
+    // Composition guard: SetBusy(false) restoring sensitivity does
+    // not override the per-path empty-buffer gate. Clearing the
+    // form *while busy* leaves it greyed out after the busy flag
+    // clears.
+    use paladin_gtk::add_account::{
+        apply_msg, compose_save_button_sensitive, AddAccountMsg, AddDialogState,
+    };
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualLabelChanged("Work".to_string()),
+    );
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualSecretChanged("JBSWY3DPEHPK3PXP".to_string()),
+    );
+    let _ = apply_msg(&mut state, AddAccountMsg::SetBusy(true));
+    let _ = apply_msg(&mut state, AddAccountMsg::ManualLabelChanged(String::new()));
+
+    let _ = apply_msg(&mut state, AddAccountMsg::SetBusy(false));
+
+    assert!(
+        !compose_save_button_sensitive(&state),
+        "intrinsic gate still vetoes Save even after SetBusy(false) (empty label)",
+    );
+}
+
+// `AddAccountMsg::Close` is the parent's hook for window-close /
+// parent-navigation / modal-dismissal cases that `Cancel` does not
+// cover. The dispatch routes through the same centralized
+// secret-clearing helper as `Cancel` (per `IMPLEMENTATION_PLAN_04_GTK.md`
+// §"Secret entry handling": submit / cancel / close / auto-lock all
+// wipe the relevant buffers) and emits a distinct
+// `AddAccountOutput::Close` so `AppModel` can tell the two dismissal
+// sources apart without an `_` catch-all silently swallowing one of
+// them.
+
+#[test]
+fn apply_msg_close_routes_to_close_output() {
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddAccountOutput, AddDialogState};
+
+    let mut state = AddDialogState::new();
+
+    let output = apply_msg(&mut state, AddAccountMsg::Close);
+
+    assert!(
+        matches!(output, Some(AddAccountOutput::Close)),
+        "Close routes to AddAccountOutput::Close, not Cancel — the variants stay distinct",
+    );
+}
+
+#[test]
+fn apply_msg_close_wipes_secret_state_buffers() {
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::ManualSecretChanged("JBSWY3DPEHPK3PXP".to_string()),
+    );
+    assert!(
+        !state.secret_state().manual_secret.is_empty(),
+        "precondition: manual secret buffer is populated before Close",
+    );
+
+    let _ = apply_msg(&mut state, AddAccountMsg::Close);
+
+    assert!(
+        state.secret_state().manual_secret.is_empty(),
+        "Close wipes the manual secret buffer (DESIGN §8 clear-on-dismiss)",
+    );
+}
+
+#[test]
+fn apply_msg_close_wipes_uri_buffer() {
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+    use paladin_gtk::secret_fields::AddPath;
+
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(&mut state, AddAccountMsg::SwitchPath(AddPath::Uri));
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::UriTextChanged(
+            "otpauth://totp/Example:alice?secret=JBSWY3DPEHPK3PXP&issuer=Example".to_string(),
+        ),
+    );
+    assert!(
+        !state.secret_state().uri_text.is_empty(),
+        "precondition: URI buffer is populated before Close",
+    );
+
+    let _ = apply_msg(&mut state, AddAccountMsg::Close);
+
+    assert!(
+        state.secret_state().uri_text.is_empty(),
+        "Close wipes the URI buffer (URI text embeds the secret per §8)",
+    );
+}
+
+#[test]
+fn apply_msg_close_drops_pending_duplicate_and_existing_summary() {
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+    use paladin_gtk::secret_fields::AddPath;
+
+    // Drive a duplicate-stage scenario through the URI path so the
+    // pending validated account + colliding-summary projection both
+    // populate.
+    let mut state = AddDialogState::new();
+    let _ = apply_msg(&mut state, AddAccountMsg::SwitchPath(AddPath::Uri));
+    let validated = validate_manual_totp("alice", Some("Acme"));
+    let existing = dummy_existing_summary();
+    let _ = apply_msg(
+        &mut state,
+        AddAccountMsg::StagePendingDuplicate {
+            account: validated.account,
+            warnings: validated.warnings,
+            existing,
+        },
+    );
+    assert!(
+        state.secret_state().pending.is_some(),
+        "precondition: pending duplicate is parked before Close",
+    );
+    assert!(
+        state.pending_duplicate_existing().is_some(),
+        "precondition: existing-collision summary is parked before Close",
+    );
+
+    let _ = apply_msg(&mut state, AddAccountMsg::Close);
+
+    assert!(
+        state.secret_state().pending.is_none(),
+        "Close drops the pending validated account (zeroizing the carried secret)",
+    );
+    assert!(
+        state.pending_duplicate_existing().is_none(),
+        "Close drops the colliding existing-summary projection (no stale render after re-open)",
+    );
+}
+
+#[test]
+fn add_account_output_close_is_distinct_variant() {
+    use paladin_gtk::add_account::AddAccountOutput;
+
+    // Pin the typed-enum distinction so a future shrink to a single
+    // `Dismiss` variant has to come with an explicit decision (and
+    // updated callers). Mirror of
+    // `apply_msg_cancel_routes_to_cancel_output`'s shape-only check.
+    assert!(
+        !matches!(AddAccountOutput::Close, AddAccountOutput::Cancel),
+        "Close is a distinct AddAccountOutput variant from Cancel",
+    );
+}
+
 #[test]
 fn format_add_path_label_manual_returns_manual() {
     // The `AdwViewSwitcher` page title for the manual sub-path is

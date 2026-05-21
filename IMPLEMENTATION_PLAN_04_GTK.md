@@ -2077,9 +2077,48 @@ sign-off.
     `add_state_switch_qr_to_uri_preserves_uri_buffer`,
     `add_state_switch_same_qr_is_noop`,
     `add_state_path_switch_to_qr_drops_pending_duplicate_add`.)
-  - [ ] Keep Add dialog submit / cancel / close handling centralized so
+  - [x] Keep Add dialog submit / cancel / close handling centralized so
     every path can disable submit while a worker is in flight and can
     clear path-local pending state on dismissal.
+    (`AddDialogState::busy` is the per-dialog mirror of the
+    [`crate::account_list::BusyFlag`] latch; the
+    `AddAccountMsg::SetBusy(bool)` dispatch arm in `apply_msg` flips
+    the flag without forwarding an output, and
+    `compose_save_button_sensitive` short-circuits to `false` while
+    `state.is_busy()` so the shared Save footer dims regardless of
+    the active sub-path. `AppModel` propagates the flip through
+    `sync_add_dialog_busy`, the peer of `sync_account_list_busy` —
+    both run after every dispatch (alongside
+    `apply_ticker_transition` / `prune_reveals_if_locked`) and
+    debounce against `AppModel::last_add_dialog_busy` so the
+    `Unlocked → UnlockedBusy` transition that brackets the
+    `gio::spawn_blocking Vault::mutate_and_save(|v| v.add(...))`
+    worker emits a single message in each direction. The new
+    `AddAccountMsg::Close` arm centralizes window-close /
+    parent-navigation / modal-dismissal handling by routing through
+    the same `AddSecretState::clear_for` helper as `Cancel` and
+    `SubmitProceed` (with `ClearReason::Close`), draining
+    `pending_duplicate_existing`, and forwarding the typed
+    `AddAccountOutput::Close` so the existing
+    `AppMsg::AddAccountAction(...)` dispatch in `app/model.rs`
+    detaches the dialog through the same drop-controller arm Cancel
+    uses without a `_` catch-all silently swallowing a future
+    Close-only behavior. Pinned by
+    `tests/add_account_logic.rs::add_dialog_state_fresh_is_not_busy`,
+    `apply_msg_set_busy_true_emits_no_output_and_marks_busy`,
+    `apply_msg_set_busy_false_clears_busy`,
+    `apply_msg_set_busy_same_value_is_idempotent`,
+    `apply_msg_set_busy_preserves_form_buffers`,
+    `compose_save_button_sensitive_manual_path_busy_returns_false`,
+    `compose_save_button_sensitive_uri_path_busy_returns_false`,
+    `compose_save_button_sensitive_qr_path_busy_returns_false`,
+    `compose_save_button_sensitive_re_enables_after_set_busy_false`,
+    `compose_save_button_sensitive_busy_then_form_cleared_stays_false`,
+    `apply_msg_close_routes_to_close_output`,
+    `apply_msg_close_wipes_secret_state_buffers`,
+    `apply_msg_close_wipes_uri_buffer`,
+    `apply_msg_close_drops_pending_duplicate_and_existing_summary`,
+    and `add_account_output_close_is_distinct_variant`.)
   - [ ] On path switch, clear hidden secret-bearing fields (manual
     Base32 secret and URI text) plus any pending duplicate/add-anyway
     state before the newly selected page becomes active.

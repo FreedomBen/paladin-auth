@@ -1175,6 +1175,39 @@ pub enum AddAccountMsg {
     /// covers post-effect (`Vault::mutate_and_save`) failures
     /// instead.
     RenderInlineError(InlineError),
+    /// Parent-driven worker-in-flight latch flipped by `AppModel`
+    /// when it enters / leaves the `Unlocked → UnlockedBusy` window
+    /// around the `gio::spawn_blocking Vault::mutate_and_save(|v|
+    /// v.add(...))` worker.
+    ///
+    /// [`apply_msg`] writes the boolean into
+    /// [`AddDialogState::busy`] so [`compose_save_button_sensitive`]
+    /// can dim the shared Save footer (and any per-path activation
+    /// button) for the worker's lifetime, matching the
+    /// §"In-flight effect ownership" rule that mutating dialog
+    /// submit buttons stay disabled while the parent owns the live
+    /// `(Vault, Store)` pair. Dialog-local — no [`AddAccountOutput`]
+    /// is emitted (the parent already knows it kicked the worker
+    /// off; the message exists so the dialog observes the same flip
+    /// `AccountListMsg::SetBusy` drives on the row factory).
+    SetBusy(bool),
+    /// Window-close / parent-navigation / modal-dismissal
+    /// dispatch, distinct from the explicit Cancel button.
+    ///
+    /// [`apply_msg`] routes this through the same centralized
+    /// dismissal helper as [`Self::Cancel`] (wipe the manual / URI
+    /// shadow buffers via
+    /// [`crate::secret_fields::ClearReason::Close`], drop any
+    /// pending duplicate-add, drain the colliding-summary
+    /// projection) and emits the typed
+    /// [`AddAccountOutput::Close`] so `AppModel` can tell the two
+    /// dismissal sources apart in the
+    /// `AppMsg::AddAccountAction(...)` dispatch. The split mirrors
+    /// the [`crate::secret_fields::ClearReason`] split between
+    /// `Cancel` and `Close`: both wipe the secret state but they
+    /// stay distinct so future telemetry / smoke markers can
+    /// attribute the dismissal source without a heuristic.
+    Close,
 }
 
 /// Outbound messages emitted by [`AddAccountComponent`] back to
@@ -1197,6 +1230,16 @@ pub enum AddAccountOutput {
     /// the live [`AddAccountComponent`] controller and removes its
     /// widget from the content tree.
     Cancel,
+    /// Window-close / parent-navigation / modal-dismissal pathway
+    /// distinct from the explicit Cancel button. `AppModel` drops
+    /// the live [`AddAccountComponent`] controller the same way it
+    /// does on [`Self::Cancel`]; the variant stays distinct so the
+    /// `AppMsg::AddAccountAction(...)` dispatch can keep an
+    /// explicit per-source arm rather than relying on a `_`
+    /// catch-all that would silently swallow a future Close-only
+    /// behavior (e.g. surfacing a "Discard draft?" prompt before
+    /// dismissal).
+    Close,
     /// Save button pressed with a validated account from either the
     /// manual or URI sub-path. The widget pre-runs
     /// [`classify_manual_submit`] / [`crate::otpauth_uri_paste::classify_uri_submit`]
@@ -2381,6 +2424,17 @@ pub fn compose_manual_icon_hint_text(state: &AddDialogState) -> &str {
 /// allocating.
 #[must_use]
 pub fn compose_save_button_sensitive(state: &AddDialogState) -> bool {
+    // Short-circuit: a save worker in flight blocks every path's
+    // Save click regardless of the per-path intrinsic gate so the
+    // user cannot kick off a second `Vault::mutate_and_save` while
+    // the prior one still owns the live `(Vault, Store)` pair per
+    // `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership".
+    // `AppModel` flips this via `AddAccountMsg::SetBusy(bool)`
+    // around the `gio::spawn_blocking` worker, the same way
+    // `sync_account_list_busy` drives `AccountListMsg::SetBusy`.
+    if state.is_busy() {
+        return false;
+    }
     match state.secret_state().active_path {
         crate::secret_fields::AddPath::Manual => {
             !state.manual_draft().label.is_empty() && !state.secret_state().manual_secret.is_empty()
@@ -2846,6 +2900,22 @@ pub struct AddDialogState {
     /// carries the `existing: AccountSummary` field across the
     /// Component boundary.
     pending_duplicate_existing: Option<AccountSummary>,
+    /// Worker-in-flight latch flipped by [`AddAccountMsg::SetBusy`]
+    /// when `AppModel` enters / leaves the
+    /// `Unlocked → UnlockedBusy` window around the
+    /// `gio::spawn_blocking Vault::mutate_and_save(|v| v.add(...))`
+    /// worker.
+    ///
+    /// Surfaces through [`Self::is_busy`] so
+    /// [`compose_save_button_sensitive`] can dim the shared Save
+    /// footer (and any per-path activation button) while a save is
+    /// in flight, matching the §"In-flight effect ownership" rule
+    /// ("mutating dialog submit buttons … are disabled and show
+    /// the active spinner / busy affordance for the current
+    /// surface"). Per-dialog mirror of the
+    /// [`crate::account_list::BusyFlag`] latch that
+    /// `AccountListComponent` uses for its row affordances.
+    busy: bool,
 }
 
 impl AddDialogState {
@@ -2954,6 +3024,20 @@ impl AddDialogState {
             .pending
             .as_ref()
             .map_or(&[], |p| p.warnings.as_slice())
+    }
+
+    /// Read-only view of the worker-in-flight latch flipped by
+    /// [`AddAccountMsg::SetBusy`].
+    ///
+    /// Returns `true` while `AppModel` owns the live `(Vault, Store)`
+    /// pair in a `gio::spawn_blocking Vault::mutate_and_save` add
+    /// worker and `false` otherwise. The widget binds a `#[watch]`
+    /// over this through [`compose_save_button_sensitive`] so the
+    /// shared Save footer (and the per-path activation button) dim
+    /// in lockstep with the parent's busy gate.
+    #[must_use]
+    pub fn is_busy(&self) -> bool {
+        self.busy
     }
 }
 
@@ -3236,6 +3320,43 @@ pub fn apply_msg(state: &mut AddDialogState, msg: AddAccountMsg) -> Option<AddAc
             // can retry without losing the in-flight buffers.
             state.inline_error = Some(err);
             None
+        }
+        AddAccountMsg::SetBusy(busy) => {
+            // Parent-driven flag flip — the worker spawn site in
+            // `AppModel` brackets the `gio::spawn_blocking
+            // Vault::mutate_and_save(|v| v.add(...))` call with
+            // `SetBusy(true)` / `SetBusy(false)` so
+            // `compose_save_button_sensitive` dims the shared Save
+            // footer (and any per-path activation button) while the
+            // worker owns the live `(Vault, Store)` pair. Idempotent
+            // — a same-value flip is a benign no-op (no allocation,
+            // no extra view tick beyond the `#[watch]` binding's
+            // own change detection). Dialog-local — the parent
+            // already knows it kicked the worker off, so no output
+            // is forwarded.
+            state.busy = busy;
+            None
+        }
+        AddAccountMsg::Close => {
+            // Window-close / parent-navigation / modal-dismissal
+            // dispatch, sibling of
+            // [`AddAccountMsg::Cancel`]. Both arms wipe the secret
+            // state through [`AddSecretState::clear_for`] and drain
+            // the colliding-summary projection so the dialog opens
+            // clean on the next mount; the distinction is the
+            // [`ClearReason`] passed through (so the secret-fields
+            // layer's clear hook can attribute the dismissal source
+            // without a heuristic) and the typed output variant
+            // forwarded to `AppModel` so the
+            // `AppMsg::AddAccountAction(...)` dispatch can keep an
+            // explicit per-source arm. The let-binding names the
+            // returned `Option<Box<ValidatedAccount>>` so the prior
+            // pending (if any) drops at the end of this arm —
+            // `paladin_core::Secret`'s `ZeroizeOnDrop` wipes the
+            // carried bytes.
+            let _dropped_pending = state.secret_state.clear_for(ClearReason::Close);
+            state.pending_duplicate_existing = None;
+            Some(AddAccountOutput::Close)
         }
     }
 }

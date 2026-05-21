@@ -78,7 +78,8 @@ use crate::account_list::{
     AccountListInit, AccountListMsg, AccountListOutput, AccountRowModel,
 };
 use crate::add_account::{
-    run_add_worker, AddAccountComponent, AddAccountInit, AddAccountOutput, AddWorkerCompletion,
+    run_add_worker, AddAccountComponent, AddAccountInit, AddAccountMsg, AddAccountOutput,
+    AddWorkerCompletion,
 };
 use crate::app::state::{
     apply_add_dispatch_inplace, apply_add_vault_install_inplace, apply_remove_dispatch_inplace,
@@ -332,6 +333,21 @@ pub struct AppModel {
     /// [`AppState::Locked`], [`AppState::Unlocked`],
     /// [`AppState::StartupError`]) yields `is_busy() == false`.
     last_account_list_busy: bool,
+    /// Last `AppState::is_busy()` value dispatched to the live
+    /// [`AddAccountComponent`] via [`AddAccountMsg::SetBusy`].
+    ///
+    /// Tracked here so [`AppModel::sync_add_dialog_busy`] can
+    /// debounce — the per-dispatch reconcile only emits the message
+    /// when the busy flag actually flips. The
+    /// `Unlocked → UnlockedBusy` transition that brackets the
+    /// `gio::spawn_blocking Vault::mutate_and_save(|v| v.add(...))`
+    /// worker drives the dialog's Save-button gate per
+    /// `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership";
+    /// the debounce avoids a redundant view tick on every
+    /// steady-state dispatch (e.g. search-query changes while the
+    /// Add dialog is not mounted). Initialized to `false` for the
+    /// same reason as [`Self::last_account_list_busy`].
+    last_add_dialog_busy: bool,
 }
 
 impl std::fmt::Debug for AppModel {
@@ -397,6 +413,7 @@ impl std::fmt::Debug for AppModel {
                 &self.pending_clipboard.as_ref().map(|_| "<armed>"),
             )
             .field("last_account_list_busy", &self.last_account_list_busy)
+            .field("last_add_dialog_busy", &self.last_add_dialog_busy)
             .finish()
     }
 }
@@ -1187,6 +1204,7 @@ impl SimpleComponent for AppModel {
             toast_overlay: widgets.toast_overlay.clone(),
             pending_clipboard: None,
             last_account_list_busy: false,
+            last_add_dialog_busy: false,
         };
 
         // Install the TOTP ticker if the resolved startup state is
@@ -1749,11 +1767,23 @@ impl SimpleComponent for AppModel {
                     }
                 }
             }
-            AppMsg::AddAccountAction(AddAccountOutput::Cancel) => {
+            AppMsg::AddAccountAction(AddAccountOutput::Cancel | AddAccountOutput::Close) => {
                 // Detach the dialog widget from the content tree and
-                // drop the controller. Defensive: if the field is
-                // already `None` (controller swapped under us by a
-                // future race), this is a benign no-op.
+                // drop the controller. Both arms behave identically
+                // today — `AddAccountOutput::Cancel` (explicit Cancel
+                // button) and `AddAccountOutput::Close` (window-close
+                // / modal-dismissal) flow through the same dismissal
+                // path because the dialog already wiped its
+                // path-local secret state in `apply_msg` before
+                // forwarding the output (see the centralized
+                // `ClearReason::Cancel` / `ClearReason::Close`
+                // handlers). The variants stay distinct so a future
+                // Close-only behavior (e.g. surfacing a "Discard
+                // draft?" prompt) can split the arm without a `_`
+                // catch-all silently swallowing the new behavior.
+                // Defensive: if the field is already `None`
+                // (controller swapped under us by a future race),
+                // this is a benign no-op.
                 if let Some(controller) = self.add_dialog.take() {
                     self.content.remove(controller.widget());
                 }
@@ -2337,6 +2367,7 @@ impl SimpleComponent for AppModel {
         self.apply_ticker_transition(&sender);
         self.prune_reveals_if_locked();
         self.sync_account_list_busy();
+        self.sync_add_dialog_busy();
     }
 }
 
@@ -2370,6 +2401,36 @@ impl AppModel {
         self.last_account_list_busy = busy;
         if let Some(controller) = self.account_list.as_ref() {
             controller.emit(AccountListMsg::SetBusy(busy));
+        }
+    }
+
+    /// Reconcile the live [`crate::add_account::AddAccountComponent`]'s
+    /// busy flag against the current [`AppState::is_busy()`] reading.
+    ///
+    /// Peer of [`Self::sync_account_list_busy`] on the Add dialog
+    /// side. Per `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect
+    /// ownership" the `Unlocked → UnlockedBusy` transition that
+    /// brackets the `gio::spawn_blocking Vault::mutate_and_save(|v|
+    /// v.add(...))` worker disables the dialog's submit (and
+    /// dismissal) affordances; centralizing the dispatch here means
+    /// every flip — including the `UnlockedBusy → Unlocked` rollback
+    /// applied by [`apply_add_dispatch_inplace`] on worker
+    /// completion — propagates through the same path that the row
+    /// factory uses for its busy mask.
+    ///
+    /// Debounced through [`Self::last_add_dialog_busy`]. A
+    /// flip-without-dialog-mounted is still recorded so a later
+    /// dialog mount can pick up the current busy reading from the
+    /// component's initial state rather than from a stale message;
+    /// the message itself is only emitted when a controller is live.
+    fn sync_add_dialog_busy(&mut self) {
+        let busy = self.state.as_ref().is_some_and(AppState::is_busy);
+        if busy == self.last_add_dialog_busy {
+            return;
+        }
+        self.last_add_dialog_busy = busy;
+        if let Some(controller) = self.add_dialog.as_ref() {
+            controller.emit(AddAccountMsg::SetBusy(busy));
         }
     }
 }
