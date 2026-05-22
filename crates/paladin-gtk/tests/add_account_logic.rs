@@ -11476,3 +11476,151 @@ fn apply_msg_qr_preflight_failure_renders_through_compose_inline_error_body() {
         "compose_inline_error_body returns the parked QR preflight body verbatim",
     );
 }
+
+// ---------------------------------------------------------------------------
+// Item: route_qr_clipboard_loaded routes the texture-load result.
+// ---------------------------------------------------------------------------
+//
+// `AppMsg::QrClipboardLoaded(result)` is the AppModel-side wake-up
+// after the live `gdk::Clipboard::read_texture_async` round trip
+// resolves. The two outcomes split cleanly:
+//
+// * `Err(QrPreflightError)` → forward the typed preflight error to
+//   the dialog via `AddAccountMsg::RenderInlineError`, mirroring the
+//   manual / URI submit-side validation rejection routing. Never
+//   spawns a worker; never mutates vault state.
+// * `Ok(Vec<ValidatedAccount>)` → hand the batch to the
+//   `compose_qr_worker_input` + `apply_submit_add_inplace` +
+//   `gio::spawn_blocking run_qr_worker` worker pipeline.
+//
+// `route_qr_clipboard_loaded` is the pure-logic projection that
+// captures the dispatch decision so the live AppModel handler stays
+// a thin shell around tested helpers.
+
+#[test]
+fn route_qr_clipboard_loaded_err_no_clipboard_image_routes_to_inline_error() {
+    use paladin_gtk::add_account::{route_qr_clipboard_loaded, QrClipboardLoadedDispatch};
+    use paladin_gtk::qr_clipboard::QrPreflightError;
+
+    let routing = route_qr_clipboard_loaded(Err(QrPreflightError::NoClipboardImage));
+    match routing {
+        QrClipboardLoadedDispatch::InlineError(inline) => {
+            assert_eq!(
+                inline.kind,
+                ErrorKind::InvalidState,
+                "no-clipboard-image carries the InvalidState §5 discriminator",
+            );
+            assert!(
+                !inline.rendered.is_empty(),
+                "rendered body must be non-empty",
+            );
+        }
+        QrClipboardLoadedDispatch::SpawnWorker(_) => {
+            panic!("Err preflight must not spawn the worker")
+        }
+    }
+}
+
+#[test]
+fn route_qr_clipboard_loaded_err_layout_rejected_routes_to_inline_error_with_invalid_payload_kind()
+{
+    use paladin_gtk::add_account::{route_qr_clipboard_loaded, QrClipboardLoadedDispatch};
+    use paladin_gtk::qr_clipboard::{QrLayoutError, QrPreflightError};
+
+    let err = QrPreflightError::LayoutRejected(QrLayoutError::ZeroDimensions);
+    let routing = route_qr_clipboard_loaded(Err(err));
+    match routing {
+        QrClipboardLoadedDispatch::InlineError(inline) => {
+            assert_eq!(inline.kind, ErrorKind::InvalidPayload);
+        }
+        QrClipboardLoadedDispatch::SpawnWorker(_) => {
+            panic!("Err preflight must not spawn the worker")
+        }
+    }
+}
+
+#[test]
+fn route_qr_clipboard_loaded_err_decode_routes_to_inline_error_with_underlying_kind() {
+    use paladin_gtk::add_account::{route_qr_clipboard_loaded, QrClipboardLoadedDispatch};
+    use paladin_gtk::qr_clipboard::QrPreflightError;
+
+    let err = QrPreflightError::Decode(PaladinError::NoEntriesToImport);
+    let routing = route_qr_clipboard_loaded(Err(err));
+    match routing {
+        QrClipboardLoadedDispatch::InlineError(inline) => {
+            assert_eq!(
+                inline.kind,
+                ErrorKind::NoEntriesToImport,
+                "Decode wraps the underlying PaladinError so the §5 kind passes through",
+            );
+        }
+        QrClipboardLoadedDispatch::SpawnWorker(_) => {
+            panic!("Err preflight must not spawn the worker")
+        }
+    }
+}
+
+#[test]
+fn route_qr_clipboard_loaded_ok_empty_batch_routes_to_spawn_worker_with_empty_vec() {
+    // Defensive: `classify_qr_outcome` filters empty Decoded batches
+    // into Err(Decode(NoEntriesToImport)), so an Ok(empty) is
+    // unreachable from the live pipeline. The router still passes
+    // through whatever is in Ok so callers' invariants stay shape-
+    // only and a future change to the upstream classifier doesn't
+    // silently change routing here.
+    use paladin_gtk::add_account::{route_qr_clipboard_loaded, QrClipboardLoadedDispatch};
+
+    let routing = route_qr_clipboard_loaded(Ok(Vec::new()));
+    match routing {
+        QrClipboardLoadedDispatch::SpawnWorker(accounts) => {
+            assert!(
+                accounts.is_empty(),
+                "Ok(empty) round-trips through SpawnWorker"
+            );
+        }
+        QrClipboardLoadedDispatch::InlineError(err) => {
+            panic!("Ok must not synthesize an InlineError: {err:?}");
+        }
+    }
+}
+
+#[test]
+fn route_qr_clipboard_loaded_ok_non_empty_routes_to_spawn_worker_with_batch() {
+    // Reuse the validated-account fixture the `run_qr_worker_*`
+    // tests use — the route helper is shape-only, so a synthetic
+    // batch produced by `validate_manual_totp` exercises the
+    // routing decision without rebuilding the QR decoder pipeline
+    // (which lives behind `compose_qr_decode_outcome` and is pinned
+    // separately in `tests/qr_clipboard_logic.rs`).
+    use paladin_gtk::add_account::{route_qr_clipboard_loaded, QrClipboardLoadedDispatch};
+
+    let validated = validate_manual_totp("alice", Some("Acme"));
+    let expected_label = validated.account.label().to_string();
+
+    let routing = route_qr_clipboard_loaded(Ok(vec![validated]));
+    match routing {
+        QrClipboardLoadedDispatch::SpawnWorker(batch) => {
+            assert_eq!(batch.len(), 1);
+            assert_eq!(batch[0].account.label(), expected_label);
+        }
+        QrClipboardLoadedDispatch::InlineError(err) => {
+            panic!("Ok must route through SpawnWorker, got InlineError {err:?}");
+        }
+    }
+}
+
+#[test]
+fn route_qr_clipboard_loaded_signature_takes_qr_preflight_result() {
+    // Signature pin: keep the routing helper's parameter shape stable
+    // so the live AppModel handler can pass the result of
+    // `classify_qr_outcome(compose_qr_decode_outcome(...))` directly.
+    use paladin_gtk::add_account::{route_qr_clipboard_loaded, QrClipboardLoadedDispatch};
+    use paladin_gtk::qr_clipboard::QrPreflightError;
+    fn assert_signature(
+        _: fn(
+            std::result::Result<Vec<paladin_core::ValidatedAccount>, QrPreflightError>,
+        ) -> QrClipboardLoadedDispatch,
+    ) {
+    }
+    assert_signature(route_qr_clipboard_loaded);
+}

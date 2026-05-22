@@ -2645,9 +2645,25 @@ sign-off.
     `compose_uri_text_value_returns_empty_after_switch_path_away_from_uri`
     siblings, alongside `tests/secret_fields_logic.rs::*` for the
     `SecretEntry` zeroize invariants.
-- [ ] `AddAccountComponent` QR clipboard image path (`gdk::Clipboard`
+- [x] `AddAccountComponent` QR clipboard image path (`gdk::Clipboard`
   texture read → `paladin_core::import::qr_image_bytes` with
-  `ImportConflict::Skip`).
+  `ImportConflict::Skip`). The live `AppMsg::AddAccountAction(
+  AddAccountOutput::RequestScanClipboard)` arm now drives
+  `gdk::Clipboard::read_texture_async` whose callback runs the four-
+  step preflight pipeline (`load_clipboard_qr_capture`:
+  no-image gate → `classify_layout_preflight` → `gdk::TextureDownloader`
+  with `clipboard_qr_memory_format()` → `compose_qr_decode_outcome` +
+  `classify_qr_outcome`) and posts the typed
+  `Result<Vec<ValidatedAccount>, QrPreflightError>` back as the new
+  `AppMsg::QrClipboardLoaded` variant. The wake-up handler routes
+  through the new pure-logic `route_qr_clipboard_loaded` projection:
+  `InlineError` arms emit `AddAccountMsg::RenderInlineError` to the
+  still-mounted dialog without mutating vault state; `SpawnWorker`
+  arms run the mirror of the manual / URI Save-click dispatch
+  (`compose_qr_worker_input` + `apply_submit_add_inplace` +
+  `gio::spawn_blocking run_qr_worker` → `AppMsg::QrWorkerCompleted`).
+  Routing decisions pinned by
+  `tests/add_account_logic.rs::route_qr_clipboard_loaded_*`.
   - [x] Mount the QR-clipboard action on the `AdwViewStack`'s "Scan
     clipboard" page; on activation, read a `gdk::Texture` from the
     GDK clipboard. The `AddAccountComponent`'s `view!` macro now

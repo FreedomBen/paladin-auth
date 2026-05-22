@@ -1062,6 +1062,78 @@ impl InlineError {
     }
 }
 
+/// Routing decision for `AppMsg::QrClipboardLoaded`.
+///
+/// `AppModel::update` calls [`route_qr_clipboard_loaded`] on the
+/// `Result<Vec<ValidatedAccount>, QrPreflightError>` produced by the
+/// live `gdk::Clipboard::read_texture_async` →
+/// [`crate::qr_clipboard::classify_layout_preflight`] →
+/// [`crate::qr_clipboard::compose_qr_decode_outcome`] →
+/// [`crate::qr_clipboard::classify_qr_outcome`] pipeline. The two
+/// variants name the only two follow-up actions:
+///
+/// * [`Self::InlineError`] — forward the typed preflight error to
+///   the still-mounted [`AddAccountComponent`] via
+///   [`AddAccountMsg::RenderInlineError`]. Never spawns a worker;
+///   never mutates vault state.
+/// * [`Self::SpawnWorker`] — hand the decoded batch to the
+///   [`crate::app::state::compose_qr_worker_input`] +
+///   [`crate::app::state::apply_submit_add_inplace`] +
+///   `gio::spawn_blocking` [`run_qr_worker`] pipeline (mirror of
+///   the manual / URI Save-click worker spawn, but with a
+///   `Vec<ValidatedAccount>` batch instead of a single `Account`).
+///
+/// Symmetric partner of the manual / URI sub-paths' inline-error
+/// vs. proceed routing — the live handler matches on this enum to
+/// stay a thin shell around tested pure-logic helpers.
+#[derive(Debug)]
+pub enum QrClipboardLoadedDispatch {
+    /// The preflight pipeline rejected the clipboard capture (no
+    /// image, oversized layout, GDK download mismatch, or decoder
+    /// failure). The carried [`InlineError`] is the projection
+    /// `AppModel` emits through [`AddAccountMsg::RenderInlineError`]
+    /// so the dialog renders the typed body via
+    /// [`compose_inline_error_body`] / [`compose_inline_error_revealed`].
+    InlineError(InlineError),
+    /// The preflight pipeline produced a decoded batch. The carried
+    /// `Vec<ValidatedAccount>` is what `AppModel` hands to
+    /// [`crate::app::state::compose_qr_worker_input`] before
+    /// spawning [`run_qr_worker`] on `gio::spawn_blocking`.
+    SpawnWorker(Vec<ValidatedAccount>),
+}
+
+/// Route a clipboard-QR preflight result into the AppModel-side
+/// dispatch decision.
+///
+/// Pure-logic projection invoked from the
+/// `AppMsg::QrClipboardLoaded` handler in `AppModel::update`. The
+/// `Err` arm projects the typed [`crate::qr_clipboard::QrPreflightError`]
+/// through [`InlineError::from_qr_preflight_error`] so the dialog's
+/// inline-error rendering reuses the same converter the existing
+/// `inline_error_from_qr_preflight_*` tests cover; the `Ok` arm
+/// passes the decoded batch through unchanged so the worker
+/// dispatch can run [`crate::app::state::compose_qr_worker_input`]
+/// against the live `(Vault, Store)` pair.
+///
+/// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"`AddAccountComponent` QR
+/// clipboard image path", the four user-visible failure categories
+/// (no clipboard image, oversized layout, decoder failure, invalid
+/// payload) surface inline through this helper without mutating
+/// vault state; the success path threads through the worker pipeline
+/// to merge the batch under
+/// [`crate::qr_clipboard::CLIPBOARD_QR_CONFLICT_POLICY`].
+#[must_use]
+pub fn route_qr_clipboard_loaded(
+    result: std::result::Result<Vec<ValidatedAccount>, crate::qr_clipboard::QrPreflightError>,
+) -> QrClipboardLoadedDispatch {
+    match result {
+        Ok(accounts) => QrClipboardLoadedDispatch::SpawnWorker(accounts),
+        Err(err) => {
+            QrClipboardLoadedDispatch::InlineError(InlineError::from_qr_preflight_error(&err))
+        }
+    }
+}
+
 /// Durability-warning projection for the post-effect `Add` path.
 ///
 /// Returned by [`classify_add_post_effect_error`] on

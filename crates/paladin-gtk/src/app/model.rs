@@ -78,8 +78,9 @@ use crate::account_list::{
     AccountListInit, AccountListMsg, AccountListOutput, AccountRowModel,
 };
 use crate::add_account::{
-    run_add_worker, AddAccountComponent, AddAccountInit, AddAccountMsg, AddAccountOutput,
-    AddWorkerCompletion, QrWorkerCompletion,
+    route_qr_clipboard_loaded, run_add_worker, run_qr_worker, AddAccountComponent, AddAccountInit,
+    AddAccountMsg, AddAccountOutput, AddWorkerCompletion, QrClipboardLoadedDispatch,
+    QrWorkerCompletion,
 };
 use crate::app::state::{
     apply_add_dispatch_inplace, apply_add_vault_install_inplace, apply_qr_dispatch_inplace,
@@ -87,11 +88,11 @@ use crate::app::state::{
     apply_rename_dispatch_inplace, apply_rename_vault_install_inplace, apply_submit_add_inplace,
     apply_submit_remove_inplace, apply_submit_rename_inplace, apply_submit_unlock_inplace,
     apply_unlock_dispatch_inplace, apply_unlock_vault_install_inplace, compose_add_dispatch,
-    compose_add_worker_input, compose_qr_dispatch, compose_remove_dispatch,
-    compose_remove_worker_input, compose_rename_dispatch, compose_rename_worker_input,
-    compose_unlock_dispatch, compose_unlock_worker_input, decide_state_from_inspect,
-    decide_state_from_open_error, run_unlock_worker, AppState, OpenErrorOutcome,
-    UnlockWorkerCompletion,
+    compose_add_worker_input, compose_qr_dispatch, compose_qr_worker_input,
+    compose_remove_dispatch, compose_remove_worker_input, compose_rename_dispatch,
+    compose_rename_worker_input, compose_unlock_dispatch, compose_unlock_worker_input,
+    decide_state_from_inspect, decide_state_from_open_error, run_unlock_worker, AppState,
+    OpenErrorOutcome, UnlockWorkerCompletion,
 };
 use crate::clipboard_clear::{
     evaluate_wake, prepare_copy_bytes, schedule_copy, PendingClipboardClear, WakeDecision,
@@ -820,6 +821,55 @@ pub enum AppMsg {
     /// installer because both workers consume and return the live
     /// `(Vault, Store)` pair through `Vault::mutate_and_save`.
     QrWorkerCompleted(QrWorkerCompletion),
+    /// Posted by the `gdk::Clipboard::read_texture_async` callback
+    /// that the [`Self::AddAccountAction(AddAccountOutput::RequestScanClipboard)`]
+    /// arm fires after the user clicks the "Scan clipboard" button
+    /// on the QR sub-path of [`crate::add_account::AddAccountComponent`].
+    ///
+    /// The asynchronous read callback runs the four-step pure-logic
+    /// preflight pipeline before posting the typed result back to
+    /// `AppModel`:
+    ///
+    /// 1. `Option<gdk::Texture>` from the GDK clipboard read —
+    ///    `None` (or any `glib::Error`) projects to
+    ///    [`crate::qr_clipboard::QrPreflightError::NoClipboardImage`].
+    /// 2. [`crate::qr_clipboard::classify_layout_preflight`] on the
+    ///    texture's `(width, height)` — the §5
+    ///    [`paladin_core::QR_RGBA_MAX_BYTES`] gate rejects oversized
+    ///    images *before* allocation / download.
+    /// 3. [`crate::qr_clipboard::allocate_rgba_buffer`] plus a
+    ///    `gdk::TextureDownloader` configured with
+    ///    [`crate::qr_clipboard::clipboard_qr_memory_format`]
+    ///    (straight `R8g8b8a8`, never premultiplied — the QR
+    ///    decoder upstream requires it).
+    /// 4. [`crate::qr_clipboard::classify_qr_outcome`] on the
+    ///    [`crate::qr_clipboard::compose_qr_decode_outcome`] result
+    ///    — `verify_download_layout` rejects GDK stride / length
+    ///    drift, then `decode_clipboard_qr` forwards the buffer to
+    ///    [`paladin_core::import::qr_image_bytes`] which returns
+    ///    `Vec<ValidatedAccount>` regardless of QR count.
+    ///
+    /// The handler in `AppModel::update` routes the payload through
+    /// [`route_qr_clipboard_loaded`]:
+    ///
+    /// * [`QrClipboardLoadedDispatch::InlineError`] →
+    ///   `controller.emit(AddAccountMsg::RenderInlineError(inline))`
+    ///   so the Add dialog renders the typed body via
+    ///   [`crate::add_account::compose_inline_error_body`].
+    /// * [`QrClipboardLoadedDispatch::SpawnWorker`] → mirror of the
+    ///   manual / URI [`Self::AddAccountAction(AddAccountOutput::Submit { account })`]
+    ///   spawn pattern, using
+    ///   [`crate::app::state::compose_qr_worker_input`] +
+    ///   [`crate::app::state::apply_submit_add_inplace`] +
+    ///   [`gtk::gio::spawn_blocking`] [`crate::add_account::run_qr_worker`].
+    ///   The worker completion lands back as
+    ///   [`Self::QrWorkerCompleted`].
+    QrClipboardLoaded(
+        std::result::Result<
+            Vec<paladin_core::ValidatedAccount>,
+            crate::qr_clipboard::QrPreflightError,
+        >,
+    ),
     /// Posted by the `gio::spawn_blocking` worker that runs
     /// `Vault::hotp_peek` + `Vault::hotp_advance` after it consumes
     /// the bundled [`HotpAdvanceWorkerInput`] and reports its routed
@@ -1948,32 +1998,110 @@ impl SimpleComponent for AppModel {
                 // v.import_accounts(...))` worker both live on the
                 // parent.
                 //
-                // Initial-stage landing: the request is wired
-                // through the dispatch so the staged rollout's next
-                // commits (texture-layout validation via
-                // `crate::qr_clipboard::prepare_rgba_layout`,
-                // `gdk::MemoryFormat::R8g8b8a8` download,
-                // `run_qr_worker` dispatch on `gio::spawn_blocking`,
-                // and `QrSuccess` / `WorkerFailed` routing) can
-                // attach behavior on top of this arm without
-                // re-plumbing the message path. The current arm is
-                // a defensive no-op: short-circuit when the cached
-                // `(Vault, Store)` pair or `AppState::Unlocked`
-                // cache is unavailable (`UnlockedBusy`, `Locked`,
-                // `Missing`, `StartupError`) so a stray dispatch
-                // during a worker round trip cannot punch through.
-                if let (Some(_controller), Some(_), Some(app_state)) = (
-                    self.add_dialog.as_ref(),
-                    self.vault.as_ref(),
-                    self.state.as_ref(),
-                ) {
-                    if matches!(app_state, AppState::Unlocked { .. }) {
-                        // GDK clipboard read + texture download +
-                        // `run_qr_worker` dispatch land in follow-
-                        // up commits per
-                        // `IMPLEMENTATION_PLAN_04_GTK.md` §
-                        // "`AddAccountComponent` QR clipboard image
-                        // path" sub-items L2666-L2673.
+                // Defensive: a `None` controller, a `None` vault
+                // slot, or a non-`Unlocked` cached state all
+                // short-circuit to a benign no-op so a stray click
+                // during a worker round trip cannot punch through
+                // (mirror of `RequestSaveClick`).
+                let ready = matches!(
+                    (
+                        self.add_dialog.as_ref(),
+                        self.vault.as_ref(),
+                        self.state.as_ref(),
+                    ),
+                    (Some(_), Some(_), Some(AppState::Unlocked { .. })),
+                );
+                if ready {
+                    // Capture the import-time stamp at the dispatch
+                    // site so a long async clipboard read cannot
+                    // stamp a stale `updated_at` for any replaced
+                    // row (parity with `RequestSaveClick`'s
+                    // `SystemTime::now()` capture).
+                    let import_time = SystemTime::now();
+                    let clipboard = WidgetExt::display(&self.content).clipboard();
+                    let dispatch = sender.clone();
+                    clipboard.read_texture_async(None::<&gtk::gio::Cancellable>, move |result| {
+                        let outcome = load_clipboard_qr_capture(result, import_time);
+                        dispatch.input(AppMsg::QrClipboardLoaded(outcome));
+                    });
+                }
+            }
+            AppMsg::QrClipboardLoaded(result) => {
+                // Wake-up after the asynchronous
+                // `gdk::Clipboard::read_texture_async` callback
+                // resolves. The callback runs the pre-worker
+                // preflight pipeline (`classify_layout_preflight`
+                // → `gdk::TextureDownloader::download_bytes` →
+                // `compose_qr_decode_outcome` →
+                // `classify_qr_outcome`) before posting back so the
+                // dispatch decision below is shape-only.
+                //
+                // `route_qr_clipboard_loaded` projects the typed
+                // result into two arms: an `InlineError` for any of
+                // the four preflight failure categories (no
+                // clipboard image, oversized layout, GDK download
+                // mismatch, decoder failure) and a `SpawnWorker` for
+                // the success path. The dialog stays mounted on
+                // every branch (parity with the QR sub-path's
+                // `compose_qr_dispatch` keep-mounted invariant).
+                match route_qr_clipboard_loaded(result) {
+                    QrClipboardLoadedDispatch::InlineError(inline) => {
+                        if let Some(controller) = self.add_dialog.as_ref() {
+                            controller.emit(AddAccountMsg::RenderInlineError(inline));
+                        }
+                    }
+                    QrClipboardLoadedDispatch::SpawnWorker(accounts) => {
+                        // Mirror of the `Submit { account }` Add-
+                        // worker dispatch — `compose_qr_worker_input`
+                        // gates on `Unlocked` (every other variant
+                        // refuses and returns the live pair so
+                        // `apply_add_vault_install_inplace` can put
+                        // it back); `apply_submit_add_inplace` flips
+                        // the busy gate; `gtk::gio::spawn_blocking`
+                        // runs `run_qr_worker` so the
+                        // `mutate_and_save` durability fsync hop
+                        // does not block the GTK main loop.
+                        //
+                        // Re-uses the captured `SystemTime::now()`
+                        // from the dispatch site that fired the
+                        // clipboard read so the import_time threads
+                        // through the entire pipeline (the read may
+                        // resolve seconds later but the decode time
+                        // the user saw is the wake-up time).
+                        let worker_input = match (self.state.as_ref(), self.vault.take()) {
+                            (Some(state), Some(pair)) => {
+                                match compose_qr_worker_input(
+                                    state,
+                                    pair,
+                                    accounts,
+                                    SystemTime::now(),
+                                ) {
+                                    Ok(input) => Some(input),
+                                    Err(pair) => {
+                                        apply_add_vault_install_inplace(&mut self.vault, pair);
+                                        None
+                                    }
+                                }
+                            }
+                            (None, Some(pair)) => {
+                                apply_add_vault_install_inplace(&mut self.vault, pair);
+                                None
+                            }
+                            (_, None) => None,
+                        };
+                        if let Some(state) = self.state.as_mut() {
+                            apply_submit_add_inplace(state);
+                        }
+                        if let Some(input) = worker_input {
+                            let sender = sender.clone();
+                            gtk::glib::spawn_future_local(async move {
+                                let completion =
+                                    gtk::gio::spawn_blocking(move || run_qr_worker(input))
+                                        .await
+                                        .expect("Vault::mutate_and_save QR worker panicked");
+                                sender.input(AppMsg::QrWorkerCompleted(completion));
+                            });
+                        }
                     }
                 }
             }
@@ -5589,4 +5717,66 @@ pub fn format_app_placeholder_icon_resource_path() -> &'static str {
 pub fn wire_app_icon_theme_resource_path(display: &gtk::gdk::Display) {
     let theme = gtk::IconTheme::for_display(display);
     theme.add_resource_path(format_app_icon_theme_resource_path());
+}
+
+/// Convert the result of `gdk::Clipboard::read_texture_async` into
+/// the typed payload for [`AppMsg::QrClipboardLoaded`].
+///
+/// Runs the four-step clipboard-QR preflight pipeline so the
+/// `QrClipboardLoaded` arm in [`AppModel::update`] can route the
+/// result through [`route_qr_clipboard_loaded`] without
+/// re-implementing the GDK round trip:
+///
+/// 1. `Ok(None)` and any `glib::Error` project to
+///    [`crate::qr_clipboard::QrPreflightError::NoClipboardImage`]
+///    — the clipboard either has nothing on it or holds a
+///    non-image payload that GDK could not decode.
+/// 2. The texture's `(width, height)` are passed through
+///    [`crate::qr_clipboard::classify_layout_preflight`] which
+///    gates against the §5 [`paladin_core::QR_RGBA_MAX_BYTES`]
+///    ceiling *before* allocation / download. Negative dimensions
+///    (defensive: GDK contract forbids it) project to
+///    [`crate::qr_clipboard::QrLayoutError::ZeroDimensions`].
+/// 3. A `gdk::TextureDownloader` is configured with the
+///    [`crate::qr_clipboard::clipboard_qr_memory_format`]
+///    (`R8g8b8a8`, straight / non-premultiplied — the QR decoder
+///    upstream requires it) and the bytes are pulled via
+///    `download_bytes()`.
+/// 4. [`crate::qr_clipboard::compose_qr_decode_outcome`] runs
+///    `verify_download_layout` against the validated `RgbaLayout`
+///    (rejecting GDK stride / length drift) before forwarding the
+///    buffer to [`paladin_core::import::qr_image_bytes`];
+///    [`crate::qr_clipboard::classify_qr_outcome`] filters the
+///    empty-decoded-batch defensive case.
+///
+/// The helper touches `gdk::TextureDownloader` so it is not unit-
+/// tested without a display; every preflight step it composes is
+/// pinned by pure-logic tests in `tests/qr_clipboard_logic.rs`.
+fn load_clipboard_qr_capture(
+    result: Result<Option<gtk::gdk::Texture>, glib::Error>,
+    import_time: SystemTime,
+) -> std::result::Result<Vec<paladin_core::ValidatedAccount>, crate::qr_clipboard::QrPreflightError>
+{
+    use crate::qr_clipboard::{
+        classify_layout_preflight, classify_qr_outcome, clipboard_qr_memory_format,
+        compose_qr_decode_outcome, QrLayoutError, QrPreflightError,
+    };
+
+    let Ok(Some(texture)) = result else {
+        return Err(QrPreflightError::NoClipboardImage);
+    };
+    let width = u32::try_from(texture.width())
+        .map_err(|_| QrPreflightError::LayoutRejected(QrLayoutError::ZeroDimensions))?;
+    let height = u32::try_from(texture.height())
+        .map_err(|_| QrPreflightError::LayoutRejected(QrLayoutError::ZeroDimensions))?;
+    let layout = classify_layout_preflight(width, height)?;
+    let mut downloader = gtk::gdk::TextureDownloader::new(&texture);
+    downloader.set_format(clipboard_qr_memory_format());
+    let (bytes, stride) = downloader.download_bytes();
+    classify_qr_outcome(compose_qr_decode_outcome(
+        &layout,
+        bytes.as_ref(),
+        stride,
+        import_time,
+    ))
 }
