@@ -2833,9 +2833,65 @@ sign-off.
     `apply_msg_worker_failed_emits_no_output_and_stores_outcome`, and
     `apply_msg_worker_failed_keep_with_warning_stores_outcome`
     invariants.
-  - [ ] Surface no-image, image-decode failure, zero-decoded-QRs,
+  - [x] Surface no-image, image-decode failure, zero-decoded-QRs,
     and invalid-payload errors inline in the Add dialog; never
     mutate vault state on failure.
+    The pure-logic chain is the new typed
+    `crate::qr_clipboard::QrPreflightError` enum (four variants:
+    `NoClipboardImage`, `LayoutRejected(QrLayoutError)`,
+    `DownloadMismatch(DownloadMismatch)`, `Decode(PaladinError)`)
+    plus the `classify_qr_outcome(QrDecodeOutcome) ->
+    Result<Vec<ValidatedAccount>, QrPreflightError>` classifier
+    that handles the post-download verify + decode + empty-batch-
+    defense path (steps 3-5 of the clipboard-QR pipeline); the
+    `NoClipboardImage` / `LayoutRejected` variants are constructed
+    directly by the `AppModel`-side clipboard handler for steps
+    1-2. `QrPreflightError::kind()` threads the stable §5
+    `ErrorKind` through to the dialog: `NoClipboardImage` →
+    `InvalidState`; `LayoutRejected` / `DownloadMismatch` →
+    `InvalidPayload`; `Decode(PaladinError)` → the underlying
+    `PaladinError::kind()` (`NoEntriesToImport` for zero decoded
+    QRs, `ValidationError` for invalid payload, etc.). The
+    `crate::add_account::InlineError::from_qr_preflight_error`
+    converter feeds the projection into the existing
+    `AddAccountMsg::RenderInlineError` arm so the dialog body
+    surfaces the typed error via the shared
+    `compose_inline_error_body` / `compose_inline_error_revealed`
+    projections — same render path the manual / URI Save-click
+    rejections use — and the vault is never mutated because the
+    failure runs before the `Vault::mutate_and_save(|v|
+    v.import_accounts(...))` worker is dispatched. The live GDK
+    clipboard texture read / download / decode wiring on
+    `AppModel::update` lands in a follow-up commit (initial-stage
+    parity with the other QR sub-items L2651-L2798); the pure-
+    logic helpers and routing decisions are pinned by
+    `tests/qr_clipboard_logic.rs::qr_preflight_error_no_clipboard_image_kind_is_invalid_state`,
+    `qr_preflight_error_layout_rejected_kind_is_invalid_payload`,
+    `qr_preflight_error_download_mismatch_kind_is_invalid_payload`,
+    `qr_preflight_error_decode_no_entries_kind_is_no_entries_to_import`,
+    `qr_preflight_error_decode_validation_error_kind_is_validation_error`,
+    `qr_preflight_error_no_clipboard_image_display_is_non_empty_and_does_not_panic`,
+    `qr_preflight_error_layout_rejected_display_includes_underlying_qr_layout_error_body`,
+    `qr_preflight_error_download_mismatch_display_includes_underlying_download_mismatch_body`,
+    `qr_preflight_error_decode_display_includes_underlying_paladin_error_body`,
+    `qr_preflight_error_display_does_not_echo_secret_bytes`,
+    `qr_preflight_error_implements_std_error`,
+    `classify_qr_outcome_decoded_non_empty_returns_ok_accounts`,
+    `classify_qr_outcome_decoded_empty_returns_zero_decoded_qrs`,
+    `classify_qr_outcome_download_mismatch_returns_preflight_error`,
+    `classify_qr_outcome_decode_error_returns_preflight_decode_variant`,
+    `classify_qr_outcome_routes_validation_error_through_decode_variant`,
+    and
+    `tests/add_account_logic.rs::inline_error_from_qr_preflight_no_clipboard_image_uses_invalid_state_kind`,
+    `inline_error_from_qr_preflight_layout_rejected_uses_invalid_payload_kind`,
+    `inline_error_from_qr_preflight_download_mismatch_uses_invalid_payload_kind`,
+    `inline_error_from_qr_preflight_decode_no_entries_uses_no_entries_to_import_kind`,
+    `inline_error_from_qr_preflight_decode_validation_error_uses_validation_error_kind`,
+    `inline_error_from_qr_preflight_decode_uses_underlying_paladin_error_display_body`,
+    `inline_error_from_qr_preflight_no_image_body_mentions_clipboard_or_image`,
+    `apply_msg_qr_preflight_failure_routes_through_render_inline_error_arm`,
+    and
+    `apply_msg_qr_preflight_failure_renders_through_compose_inline_error_body`.
 - [ ] `ImportDialogComponent` full implementation (file picker,
   format selector, on-conflict selector, passphrase prompt routing,
   merge call, error display).

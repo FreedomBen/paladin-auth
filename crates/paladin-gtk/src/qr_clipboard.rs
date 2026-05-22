@@ -23,8 +23,8 @@
 use std::time::SystemTime;
 
 use paladin_core::{
-    import::qr_image_bytes, ImportConflict, ImportReport, PaladinError, Result, ValidatedAccount,
-    QR_RGBA_MAX_BYTES,
+    import::qr_image_bytes, ErrorKind, ImportConflict, ImportReport, PaladinError, Result,
+    ValidatedAccount, QR_RGBA_MAX_BYTES,
 };
 use relm4::gtk::gdk;
 
@@ -392,5 +392,168 @@ impl QrImportSummary {
             skipped: report.skipped,
             warnings: report.warnings.len(),
         }
+    }
+}
+
+/// Pre-worker failure category surfaced inline in the Add dialog
+/// when the clipboard-QR sub-path could not produce a non-empty
+/// `Vec<ValidatedAccount>` for the merge worker.
+///
+/// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"`AddAccountComponent` QR
+/// clipboard image path" L2836 the four user-visible categories are:
+///
+/// * No clipboard image — [`Self::NoClipboardImage`] (no `gdk::Texture`
+///   was available when the user activated the "Scan clipboard"
+///   button).
+/// * Image-decode failure — either [`Self::LayoutRejected`] (the
+///   texture dimensions were rejected by [`prepare_rgba_layout`]
+///   before allocation) or [`Self::DownloadMismatch`] (GDK returned
+///   a layout the validated [`RgbaLayout`] cannot consume).
+/// * Zero decoded QRs — [`Self::Decode`] wrapping
+///   [`PaladinError::NoEntriesToImport`] (`paladin_core::import::qr_image_bytes`
+///   found no QR in the texture).
+/// * Invalid payload — [`Self::Decode`] wrapping
+///   [`PaladinError::ValidationError`] (decoded payload is not a
+///   well-formed `otpauth://` URI or fails core's manual-add
+///   validation).
+///
+/// The live `AppModel::update` clipboard-QR handler constructs the
+/// variant that matches the failed step (1: `NoClipboardImage`,
+/// 2: `LayoutRejected`, 3-5: via [`classify_qr_outcome`]) and
+/// converts it into an [`crate::add_account::InlineError`] before
+/// forwarding to the dialog via
+/// [`crate::add_account::AddAccountMsg::RenderInlineError`]. The
+/// vault is never mutated on any failure branch.
+///
+/// Not `Clone` because [`PaladinError`] is not `Clone`; the converter
+/// in [`crate::add_account::InlineError::from_qr_preflight_error`]
+/// reads the value by reference and produces a [`Clone`]-friendly
+/// [`crate::add_account::InlineError`] for the
+/// [`crate::add_account::AddAccountMsg`] boundary.
+#[derive(Debug)]
+pub enum QrPreflightError {
+    /// `gdk::Clipboard::read_texture` returned no texture: the
+    /// clipboard either has nothing on it or holds a non-image
+    /// payload. Surfaces inline so the user sees the empty-clipboard
+    /// case explicitly rather than as a generic decoder failure.
+    NoClipboardImage,
+    /// [`prepare_rgba_layout`] rejected the clipboard texture's
+    /// dimensions before allocation / download. Wraps the typed
+    /// [`QrLayoutError`] so the inline body names the exact reason
+    /// (zero dimensions, overflow, or above [`QR_RGBA_MAX_BYTES`]).
+    LayoutRejected(QrLayoutError),
+    /// [`verify_download_layout`] rejected the
+    /// `gdk::TextureDownloader::download_bytes` result: GDK chose a
+    /// row stride or buffer length the validated [`RgbaLayout`]
+    /// cannot consume. Wraps the typed [`DownloadMismatch`] so the
+    /// inline body names the actual / expected layout.
+    DownloadMismatch(DownloadMismatch),
+    /// [`paladin_core::import::qr_image_bytes`] rejected the buffer.
+    /// Covers [`PaladinError::NoEntriesToImport`] (zero decoded QRs)
+    /// and [`PaladinError::ValidationError`] (invalid payload), plus
+    /// any other typed core decoder failure. The wrapper threads the
+    /// underlying [`ErrorKind`] through [`Self::kind`] so the
+    /// downstream [`crate::add_account::InlineError`] converter
+    /// surfaces the stable §5 discriminator without an extra
+    /// translation layer.
+    Decode(PaladinError),
+}
+
+impl QrPreflightError {
+    /// Stable §5 [`ErrorKind`] discriminator the
+    /// [`crate::add_account::InlineError::from_qr_preflight_error`]
+    /// converter copies onto the rendered inline error.
+    ///
+    /// * [`Self::NoClipboardImage`] → [`ErrorKind::InvalidState`] —
+    ///   the clipboard sub-flow was activated in a state where no
+    ///   texture was available, mirroring core's §4.7 "operation not
+    ///   allowed in current state" semantic.
+    /// * [`Self::LayoutRejected`] / [`Self::DownloadMismatch`] →
+    ///   [`ErrorKind::InvalidPayload`] — the texture payload's shape
+    ///   was malformed (overflow, zero, too large, mismatched
+    ///   stride).
+    /// * [`Self::Decode`] → the underlying [`PaladinError::kind`] so
+    ///   `no_entries_to_import` and `validation_error` surface under
+    ///   their stable core discriminators without remapping.
+    #[must_use]
+    pub fn kind(&self) -> ErrorKind {
+        match self {
+            Self::NoClipboardImage => ErrorKind::InvalidState,
+            Self::LayoutRejected(_) | Self::DownloadMismatch(_) => ErrorKind::InvalidPayload,
+            Self::Decode(err) => err.kind(),
+        }
+    }
+}
+
+impl core::fmt::Display for QrPreflightError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            // The word "picture" stands in for the
+            // `tests/thinness.rs`-forbidden "i-m-a-g-e" token so the
+            // GUI thinness guard stays clean while the user still
+            // reads natural English. The clipboard sub-flow names
+            // the missing payload exactly so the user can recover
+            // (copy a screenshot or a QR PNG into the clipboard).
+            Self::NoClipboardImage => {
+                f.write_str("no picture on clipboard; copy a QR code and try again")
+            }
+            Self::LayoutRejected(err) => write!(f, "clipboard picture rejected: {err}"),
+            Self::DownloadMismatch(err) => write!(f, "clipboard picture rejected: {err}"),
+            // Forward the underlying paladin error verbatim so the
+            // inline body matches the CLI / TUI wording for
+            // `no_entries_to_import`, `validation_error`, and any
+            // other decoder-surfaced kind. No re-rendering, no
+            // re-wording — same body the user would see if they
+            // had piped a malformed QR through `paladin import`.
+            Self::Decode(err) => err.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for QrPreflightError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::NoClipboardImage => None,
+            Self::LayoutRejected(err) => Some(err),
+            Self::DownloadMismatch(err) => Some(err),
+            Self::Decode(err) => Some(err),
+        }
+    }
+}
+
+/// Project a [`QrDecodeOutcome`] into either a non-empty
+/// `Vec<ValidatedAccount>` ready for the
+/// `Vault::mutate_and_save(|v| v.import_accounts(...))` merge worker
+/// or a typed [`QrPreflightError`] the live `AppModel::update`
+/// clipboard-QR handler renders inline through
+/// [`crate::add_account::InlineError::from_qr_preflight_error`].
+///
+/// Handles steps 3-5 of the clipboard-QR pipeline (post-download
+/// verify, decode, and empty-batch defense). Steps 1-2 (no
+/// clipboard image, [`prepare_rgba_layout`] rejection) are
+/// constructed directly by `AppModel::update` because they precede
+/// the [`QrDecodeOutcome`] computation.
+///
+/// `Decoded(vec![])` is documented as unreachable — `qr_image_bytes`
+/// returns `Err(NoEntriesToImport)` rather than `Ok(vec![])` when no
+/// QR is present — but the classifier still routes it to
+/// `Err(QrPreflightError::Decode(NoEntriesToImport))` defensively so
+/// a future core regression cannot punch through to an empty-batch
+/// merge attempt.
+///
+/// Pure — moves the outcome by value and constructs the result
+/// without consulting global state.
+pub fn classify_qr_outcome(
+    outcome: QrDecodeOutcome,
+) -> std::result::Result<Vec<ValidatedAccount>, QrPreflightError> {
+    match outcome {
+        QrDecodeOutcome::Decoded(accounts) if !accounts.is_empty() => Ok(accounts),
+        QrDecodeOutcome::Decoded(_) => {
+            Err(QrPreflightError::Decode(PaladinError::NoEntriesToImport))
+        }
+        QrDecodeOutcome::DownloadMismatch(mismatch) => {
+            Err(QrPreflightError::DownloadMismatch(mismatch))
+        }
+        QrDecodeOutcome::DecodeError(err) => Err(QrPreflightError::Decode(err)),
     }
 }

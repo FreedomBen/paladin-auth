@@ -11291,3 +11291,188 @@ fn run_qr_worker_save_failure_routes_inline_and_returns_pair() {
     let _ = completion.vault;
     let _ = completion.store;
 }
+
+// ---------------------------------------------------------------------------
+// QR preflight inline-error projection
+//
+// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"`AddAccountComponent` QR clipboard
+// image path" L2836 ("Surface no-image, image-decode failure,
+// zero-decoded-QRs, and invalid-payload errors inline in the Add dialog;
+// never mutate vault state on failure"), the live `AppModel::update`
+// clipboard-QR handler converts a `crate::qr_clipboard::QrPreflightError`
+// into an `add_account::InlineError` and dispatches the inline-error
+// rendering through `AddAccountMsg::RenderInlineError`. The existing
+// `apply_msg_render_inline_error_stores_in_state` /
+// `apply_msg_render_inline_error_replaces_prior` tests cover the
+// `apply_msg` arm; these tests pin the converter from `QrPreflightError`
+// to `InlineError` so each typed category surfaces under the right
+// stable §5 ErrorKind discriminator.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn inline_error_from_qr_preflight_no_clipboard_image_uses_invalid_state_kind() {
+    use paladin_gtk::qr_clipboard::QrPreflightError;
+
+    let inline = InlineError::from_qr_preflight_error(&QrPreflightError::NoClipboardImage);
+    assert_eq!(
+        inline.kind,
+        ErrorKind::InvalidState,
+        "no-clipboard-image surfaces as invalid_state for instrumentation parity with core's §4.7",
+    );
+    assert!(
+        !inline.rendered.is_empty(),
+        "rendered body must be non-empty"
+    );
+}
+
+#[test]
+fn inline_error_from_qr_preflight_layout_rejected_uses_invalid_payload_kind() {
+    use paladin_gtk::qr_clipboard::{QrLayoutError, QrPreflightError};
+
+    let err = QrPreflightError::LayoutRejected(QrLayoutError::ImageTooLarge {
+        requested_bytes: 128 * 1024 * 1024,
+        max_bytes: 64 * 1024 * 1024,
+    });
+    let inline = InlineError::from_qr_preflight_error(&err);
+    assert_eq!(
+        inline.kind,
+        ErrorKind::InvalidPayload,
+        "layout-rejected surfaces as invalid_payload (texture dimensions were malformed)",
+    );
+}
+
+#[test]
+fn inline_error_from_qr_preflight_download_mismatch_uses_invalid_payload_kind() {
+    use paladin_gtk::qr_clipboard::{DownloadMismatch, QrPreflightError};
+
+    let err = QrPreflightError::DownloadMismatch(DownloadMismatch::RowStride {
+        actual_stride: 64,
+        expected_stride: 40,
+    });
+    let inline = InlineError::from_qr_preflight_error(&err);
+    assert_eq!(
+        inline.kind,
+        ErrorKind::InvalidPayload,
+        "download-mismatch surfaces as invalid_payload (GDK returned an unusable layout)",
+    );
+}
+
+#[test]
+fn inline_error_from_qr_preflight_decode_no_entries_uses_no_entries_to_import_kind() {
+    use paladin_gtk::qr_clipboard::QrPreflightError;
+
+    let inline = InlineError::from_qr_preflight_error(&QrPreflightError::Decode(
+        PaladinError::NoEntriesToImport,
+    ));
+    assert_eq!(
+        inline.kind,
+        ErrorKind::NoEntriesToImport,
+        "zero-decoded-QRs surfaces under core's stable no_entries_to_import discriminator",
+    );
+}
+
+#[test]
+fn inline_error_from_qr_preflight_decode_validation_error_uses_validation_error_kind() {
+    use paladin_gtk::qr_clipboard::QrPreflightError;
+
+    let err = QrPreflightError::Decode(validation_error("secret", "invalid_base32"));
+    let inline = InlineError::from_qr_preflight_error(&err);
+    assert_eq!(
+        inline.kind,
+        ErrorKind::ValidationError,
+        "invalid-payload surfaces under core's stable validation_error discriminator",
+    );
+}
+
+#[test]
+fn inline_error_from_qr_preflight_decode_uses_underlying_paladin_error_display_body() {
+    use paladin_gtk::qr_clipboard::QrPreflightError;
+
+    // Decode-variant inline bodies thread through `PaladinError`'s
+    // `Display`, identical to `InlineError::from_error`, so the QR
+    // sub-path's invalid-payload rendering stays in lockstep with the
+    // CLI / TUI verbatim.
+    let underlying = PaladinError::NoEntriesToImport;
+    let body = underlying.to_string();
+    let inline = InlineError::from_qr_preflight_error(&QrPreflightError::Decode(underlying));
+    assert_eq!(
+        inline.rendered, body,
+        "decode-variant body must equal the underlying PaladinError Display verbatim",
+    );
+}
+
+#[test]
+fn inline_error_from_qr_preflight_no_image_body_mentions_clipboard_or_image() {
+    use paladin_gtk::qr_clipboard::QrPreflightError;
+
+    let inline = InlineError::from_qr_preflight_error(&QrPreflightError::NoClipboardImage);
+    let lower = inline.rendered.to_lowercase();
+    assert!(
+        lower.contains("clipboard") || lower.contains("image"),
+        "no-image inline body must reference the clipboard/image: {:?}",
+        inline.rendered,
+    );
+}
+
+#[test]
+fn apply_msg_qr_preflight_failure_routes_through_render_inline_error_arm() {
+    // The `AppModel::update` clipboard-QR handler converts a
+    // `QrPreflightError` into an `InlineError` via
+    // `InlineError::from_qr_preflight_error` and dispatches the
+    // existing `AddAccountMsg::RenderInlineError(inline)` variant.
+    // This test pins the round trip: the converted InlineError lands
+    // in `state.inline_error()` so `compose_inline_error_body` / `_revealed`
+    // surface it on the dialog body. Re-uses the
+    // `apply_msg_render_inline_error_stores_in_state` invariant
+    // because the QR preflight path intentionally reuses that arm
+    // rather than introducing a parallel "QrPreflightFailed" message.
+    use paladin_gtk::add_account::{apply_msg, AddAccountMsg, AddDialogState};
+    use paladin_gtk::qr_clipboard::QrPreflightError;
+
+    let preflight = QrPreflightError::NoClipboardImage;
+    let inline = InlineError::from_qr_preflight_error(&preflight);
+    let expected_kind = inline.kind;
+    let expected_rendered = inline.rendered.clone();
+    let mut state = AddDialogState::new();
+
+    let output = apply_msg(&mut state, AddAccountMsg::RenderInlineError(inline));
+
+    assert!(
+        output.is_none(),
+        "QR preflight failure is dialog-local; no AddAccountOutput escapes",
+    );
+    let stored = state
+        .inline_error()
+        .expect("RenderInlineError from QR preflight parks the projection");
+    assert_eq!(stored.kind, expected_kind);
+    assert_eq!(stored.rendered, expected_rendered);
+}
+
+#[test]
+fn apply_msg_qr_preflight_failure_renders_through_compose_inline_error_body() {
+    use paladin_gtk::add_account::{
+        apply_msg, compose_inline_error_body, compose_inline_error_revealed, AddAccountMsg,
+        AddDialogState,
+    };
+    use paladin_gtk::qr_clipboard::{DownloadMismatch, QrPreflightError};
+
+    let preflight = QrPreflightError::DownloadMismatch(DownloadMismatch::RowStride {
+        actual_stride: 64,
+        expected_stride: 40,
+    });
+    let inline = InlineError::from_qr_preflight_error(&preflight);
+    let expected_body = inline.rendered.clone();
+    let mut state = AddDialogState::new();
+
+    let _ = apply_msg(&mut state, AddAccountMsg::RenderInlineError(inline));
+
+    assert!(
+        compose_inline_error_revealed(&state),
+        "compose_inline_error_revealed must flip true after QR preflight failure parks the projection",
+    );
+    assert_eq!(
+        compose_inline_error_body(&state),
+        Some(expected_body.as_str()),
+        "compose_inline_error_body returns the parked QR preflight body verbatim",
+    );
+}

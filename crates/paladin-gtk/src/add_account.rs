@@ -1032,6 +1032,34 @@ impl InlineError {
             rendered: err.to_string(),
         }
     }
+
+    /// Build an [`InlineError`] from a
+    /// [`crate::qr_clipboard::QrPreflightError`].
+    ///
+    /// The live `AppModel::update` clipboard-QR handler calls this
+    /// to convert the QR sub-path's typed preflight error into the
+    /// Clone-friendly [`InlineError`] that crosses the
+    /// [`AddAccountMsg::RenderInlineError`] boundary into the
+    /// dialog. `kind` comes from
+    /// [`crate::qr_clipboard::QrPreflightError::kind`] (stable §5
+    /// discriminator) and `rendered` comes from the preflight
+    /// error's [`std::fmt::Display`] (the same body the underlying
+    /// `QrLayoutError` / `DownloadMismatch` / `PaladinError` would
+    /// render, prefixed by the preflight category where the wrapper
+    /// adds context).
+    ///
+    /// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"`AddAccountComponent`
+    /// QR clipboard image path" L2836, the four user-visible
+    /// categories (no image, image-decode failure, zero decoded
+    /// QRs, invalid payload) surface inline through this converter
+    /// without mutating vault state.
+    #[must_use]
+    pub fn from_qr_preflight_error(err: &crate::qr_clipboard::QrPreflightError) -> Self {
+        Self {
+            kind: err.kind(),
+            rendered: err.to_string(),
+        }
+    }
 }
 
 /// Durability-warning projection for the post-effect `Add` path.

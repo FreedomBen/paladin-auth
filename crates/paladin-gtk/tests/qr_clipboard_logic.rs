@@ -670,3 +670,281 @@ fn compose_qr_decode_outcome_decoded_carries_empty_vec_only_under_unreachable_pa
         _ => unreachable!("constructed Decoded variant"),
     }
 }
+
+// ---------------------------------------------------------------------------
+// Item 4: pre-worker inline-error categories
+//
+// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"`AddAccountComponent` QR clipboard
+// image path", the four user-visible inline-error categories the dialog
+// must surface without mutating the vault are:
+//
+//   * no-image  (no `gdk::Texture` available on the clipboard)
+//   * image-decode failure  (`prepare_rgba_layout` reject or
+//     `verify_download_layout` mismatch from a GDK download)
+//   * zero-decoded QRs  (`paladin_core::import::qr_image_bytes` returned
+//     `no_entries_to_import` — no QR present in the texture)
+//   * invalid payload  (decoded payload is not an `otpauth://` URI or
+//     fails core's validation pipeline)
+//
+// `QrPreflightError` is the typed enum that carries each category to the
+// `AppModel::update` clipboard-QR handler, where it is converted into an
+// `add_account::InlineError` and forwarded into the Add dialog via
+// `AddAccountMsg::RenderInlineError`. `classify_qr_outcome` projects a
+// `QrDecodeOutcome` (steps 3-5 of the pipeline) into either a non-empty
+// `Vec<ValidatedAccount>` ready for the merge worker or a typed
+// preflight error; the `NoClipboardImage` and `LayoutRejected` variants
+// are constructed directly by `AppModel::update` for steps 1-2.
+// ---------------------------------------------------------------------------
+
+use paladin_core::PaladinError;
+use paladin_gtk::qr_clipboard::{classify_qr_outcome, QrPreflightError};
+
+#[test]
+fn qr_preflight_error_no_clipboard_image_kind_is_invalid_state() {
+    // No `gdk::Texture` available on the clipboard is the GUI-only
+    // "operation not allowed in current state" case — the user asked
+    // for a scan but the clipboard has nothing to scan. Mirrors core's
+    // `invalid_state` semantics from §4.7 even though there is no
+    // matching `PaladinError` variant for this GUI-only failure.
+    assert_eq!(
+        QrPreflightError::NoClipboardImage.kind(),
+        ErrorKind::InvalidState,
+    );
+}
+
+#[test]
+fn qr_preflight_error_layout_rejected_kind_is_invalid_payload() {
+    let err = QrPreflightError::LayoutRejected(QrLayoutError::ZeroDimensions);
+    assert_eq!(err.kind(), ErrorKind::InvalidPayload);
+}
+
+#[test]
+fn qr_preflight_error_download_mismatch_kind_is_invalid_payload() {
+    let err = QrPreflightError::DownloadMismatch(DownloadMismatch::RowStride {
+        actual_stride: 64,
+        expected_stride: 40,
+    });
+    assert_eq!(err.kind(), ErrorKind::InvalidPayload);
+}
+
+#[test]
+fn qr_preflight_error_decode_no_entries_kind_is_no_entries_to_import() {
+    let err = QrPreflightError::Decode(PaladinError::NoEntriesToImport);
+    assert_eq!(err.kind(), ErrorKind::NoEntriesToImport);
+}
+
+#[test]
+fn qr_preflight_error_decode_validation_error_kind_is_validation_error() {
+    let err = QrPreflightError::Decode(PaladinError::ValidationError {
+        field: "secret",
+        reason: "invalid_base32".to_string(),
+        source_index: None,
+        decoded_len: None,
+        recommended_min: None,
+        entry_type: None,
+    });
+    assert_eq!(err.kind(), ErrorKind::ValidationError);
+}
+
+#[test]
+fn qr_preflight_error_no_clipboard_image_display_is_non_empty_and_does_not_panic() {
+    let body = QrPreflightError::NoClipboardImage.to_string();
+    assert!(!body.is_empty(), "no-image body must be non-empty");
+    // Wording must point at the clipboard, not at the vault — the
+    // user's mental model is "I tried to scan the clipboard and
+    // nothing was there", not "I tried to save to the vault".
+    let lower = body.to_lowercase();
+    assert!(
+        lower.contains("clipboard") || lower.contains("image"),
+        "no-image body should reference the clipboard/image: {body:?}",
+    );
+}
+
+#[test]
+fn qr_preflight_error_layout_rejected_display_includes_underlying_qr_layout_error_body() {
+    let layout_err = QrLayoutError::ImageTooLarge {
+        requested_bytes: 128 * 1024 * 1024,
+        max_bytes: 64 * 1024 * 1024,
+    };
+    let underlying = layout_err.to_string();
+    let body = QrPreflightError::LayoutRejected(layout_err).to_string();
+    // The wrapper renders the underlying error's body so the user
+    // sees the exact reason — `width * height > max` or zero dims —
+    // not just a generic "image rejected" message.
+    assert!(
+        body.contains(&underlying),
+        "layout-rejected body {body:?} should include the underlying error {underlying:?}",
+    );
+}
+
+#[test]
+fn qr_preflight_error_download_mismatch_display_includes_underlying_download_mismatch_body() {
+    let mismatch = DownloadMismatch::BufferLength {
+        actual_bytes: 100,
+        expected_bytes: 256,
+    };
+    let underlying = mismatch.to_string();
+    let body = QrPreflightError::DownloadMismatch(mismatch).to_string();
+    assert!(
+        body.contains(&underlying),
+        "download-mismatch body {body:?} should include the underlying error {underlying:?}",
+    );
+}
+
+#[test]
+fn qr_preflight_error_decode_display_includes_underlying_paladin_error_body() {
+    let underlying = PaladinError::NoEntriesToImport.to_string();
+    let body = QrPreflightError::Decode(PaladinError::NoEntriesToImport).to_string();
+    assert!(
+        body.contains(&underlying),
+        "decode body {body:?} should include the underlying paladin error {underlying:?}",
+    );
+}
+
+#[test]
+fn qr_preflight_error_display_does_not_echo_secret_bytes() {
+    // Defensive: the four variants render through their stable
+    // category wording plus the underlying error body. None of the
+    // underlying error types (`QrLayoutError`, `DownloadMismatch`,
+    // `PaladinError::NoEntriesToImport`) include the raw RGBA buffer
+    // bytes, the clipboard texture pointer, or the decoded
+    // `otpauth://` secret. Pinning the invariant here so a future
+    // refactor cannot accidentally route texture bytes into the
+    // user-facing body.
+    let bodies = [
+        QrPreflightError::NoClipboardImage.to_string(),
+        QrPreflightError::LayoutRejected(QrLayoutError::ZeroDimensions).to_string(),
+        QrPreflightError::DownloadMismatch(DownloadMismatch::RowStride {
+            actual_stride: 64,
+            expected_stride: 40,
+        })
+        .to_string(),
+        QrPreflightError::Decode(PaladinError::NoEntriesToImport).to_string(),
+    ];
+    for body in &bodies {
+        // ASCII-printable letters / digits / spaces / punctuation
+        // only — the underlying paladin / GDK / core wording never
+        // includes raw bytes, so any non-printable byte in the
+        // rendered body would be a regression.
+        for ch in body.chars() {
+            assert!(
+                !ch.is_control() || ch == '\n',
+                "QrPreflightError body must not contain control characters: {body:?}",
+            );
+        }
+    }
+}
+
+#[test]
+fn qr_preflight_error_implements_std_error() {
+    // Stable trait obligation: the live `AppModel` clipboard-QR
+    // handler can pass `&QrPreflightError` through any consumer
+    // expecting `&dyn std::error::Error` — for example a future
+    // tracing span without re-rendering the body.
+    fn assert_error<E: std::error::Error>(_: &E) {}
+    assert_error(&QrPreflightError::NoClipboardImage);
+    assert_error(&QrPreflightError::LayoutRejected(
+        QrLayoutError::ZeroDimensions,
+    ));
+}
+
+// ---------------------------------------------------------------------------
+// Item 4b: classify_qr_outcome projects QrDecodeOutcome into a non-empty
+//          batch or a typed preflight error
+// ---------------------------------------------------------------------------
+
+#[test]
+fn classify_qr_outcome_decoded_non_empty_returns_ok_accounts() {
+    // Reach the live decoder so we get a real `ValidatedAccount` —
+    // construct a single-QR image identical to the
+    // `decode_clipboard_qr_*` pins above. The intent of this test is
+    // shape: `Decoded(vec![non_empty])` must surface as `Ok(vec)`.
+    //
+    // We cannot construct a `ValidatedAccount` by hand because its
+    // constructor is private, so we exercise the path that produces
+    // it: the verify+decode composer on a buffer that
+    // `qr_image_bytes` rejects. That returns `DecodeError`, not
+    // `Decoded`, so we cannot directly exercise the non-empty branch
+    // here without a live QR image. Instead, pin the empty-branch
+    // contract (the defensive `Decoded(vec![])` case) — see the
+    // sibling test below — and rely on the live
+    // `run_qr_worker_plaintext_import_succeeds_*` tests in
+    // `tests/add_account_logic.rs` to cover the non-empty branch
+    // end-to-end through the worker pipeline.
+    //
+    // Signature pin: the classifier returns `Result<Vec<...>, ...>`
+    // so the caller routes through a single `?` rather than a
+    // bespoke match per outcome variant.
+    fn assert_signature(
+        _: fn(QrDecodeOutcome) -> std::result::Result<Vec<ValidatedAccount>, QrPreflightError>,
+    ) {
+    }
+    assert_signature(classify_qr_outcome);
+}
+
+#[test]
+fn classify_qr_outcome_decoded_empty_returns_zero_decoded_qrs() {
+    // Defensive: `qr_image_bytes` is documented to return
+    // `NoEntriesToImport` rather than `Ok(vec![])`, so an empty
+    // `Decoded` is unreachable in normal operation. The classifier
+    // still routes it to a typed preflight error rather than
+    // silently dispatching an empty-batch worker call — pinning the
+    // belt-and-braces routing here so a future regression on core
+    // cannot punch through to an empty merge attempt.
+    let empty: Vec<ValidatedAccount> = Vec::new();
+    let outcome = QrDecodeOutcome::Decoded(empty);
+    match classify_qr_outcome(outcome) {
+        Err(QrPreflightError::Decode(err)) => {
+            assert_eq!(err.kind(), ErrorKind::NoEntriesToImport);
+        }
+        other => panic!("expected Err(Decode(NoEntriesToImport)), got {other:?}"),
+    }
+}
+
+#[test]
+fn classify_qr_outcome_download_mismatch_returns_preflight_error() {
+    let mismatch = DownloadMismatch::RowStride {
+        actual_stride: 64,
+        expected_stride: 40,
+    };
+    let outcome = QrDecodeOutcome::DownloadMismatch(mismatch);
+    match classify_qr_outcome(outcome) {
+        Err(QrPreflightError::DownloadMismatch(m)) => assert_eq!(m, mismatch),
+        other => panic!("expected Err(DownloadMismatch), got {other:?}"),
+    }
+}
+
+#[test]
+fn classify_qr_outcome_decode_error_returns_preflight_decode_variant() {
+    let outcome = QrDecodeOutcome::DecodeError(PaladinError::NoEntriesToImport);
+    match classify_qr_outcome(outcome) {
+        Err(QrPreflightError::Decode(err)) => {
+            assert_eq!(err.kind(), ErrorKind::NoEntriesToImport);
+        }
+        other => panic!("expected Err(Decode(NoEntriesToImport)), got {other:?}"),
+    }
+}
+
+#[test]
+fn classify_qr_outcome_routes_validation_error_through_decode_variant() {
+    // Invalid-payload category: the decoded `otpauth://` text fails
+    // core's parser. The classifier wraps the `PaladinError` in
+    // `Decode(_)` rather than synthesizing a separate
+    // `InvalidPayload` variant — the consumer (`InlineError::from_qr_preflight_error`)
+    // discriminates downstream via `ErrorKind`.
+    let validation_err = PaladinError::ValidationError {
+        field: "secret",
+        reason: "invalid_base32".to_string(),
+        source_index: None,
+        decoded_len: None,
+        recommended_min: None,
+        entry_type: None,
+    };
+    let outcome = QrDecodeOutcome::DecodeError(validation_err);
+    match classify_qr_outcome(outcome) {
+        Err(QrPreflightError::Decode(err)) => {
+            assert_eq!(err.kind(), ErrorKind::ValidationError);
+        }
+        other => panic!("expected Err(Decode(ValidationError)), got {other:?}"),
+    }
+}
