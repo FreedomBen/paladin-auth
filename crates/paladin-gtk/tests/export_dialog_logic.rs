@@ -682,7 +682,7 @@ fn export_dialog_state_set_destination_updates_path() {
     use paladin_gtk::export_dialog::ExportDialogState;
 
     let mut state = ExportDialogState::new();
-    state.set_destination(dest_a());
+    state.set_destination(dest_a(), false);
     assert_eq!(state.destination_path(), Some(dest_a().as_path()));
 }
 
@@ -691,8 +691,8 @@ fn export_dialog_state_set_destination_replaces_prior_path() {
     use paladin_gtk::export_dialog::ExportDialogState;
 
     let mut state = ExportDialogState::new();
-    state.set_destination(dest_a());
-    state.set_destination(dest_b());
+    state.set_destination(dest_a(), false);
+    state.set_destination(dest_b(), false);
     assert_eq!(state.destination_path(), Some(dest_b().as_path()));
 }
 
@@ -738,7 +738,7 @@ fn compose_destination_row_subtitle_renders_display_path_when_set() {
     use paladin_gtk::export_dialog::{compose_destination_row_subtitle, ExportDialogState};
 
     let mut state = ExportDialogState::new();
-    state.set_destination(dest_a());
+    state.set_destination(dest_a(), false);
     assert_eq!(
         compose_destination_row_subtitle(&state),
         dest_a().display().to_string()
@@ -758,15 +758,16 @@ fn compose_submit_button_sensitive_false_when_no_destination() {
 }
 
 #[test]
-fn compose_submit_button_sensitive_true_when_destination_set() {
+fn compose_submit_button_sensitive_true_when_destination_set_and_no_overwrite_needed() {
     use paladin_gtk::export_dialog::{compose_submit_button_sensitive, ExportDialogState};
 
     let mut state = ExportDialogState::new();
-    state.set_destination(dest_a());
-    // Later sub-items add the overwrite gate, plaintext-warning gate,
-    // and the twice-confirm passphrase row to this projection. For
-    // the format-selector + destination-picker sub-item the only
-    // gate is the destination presence — subsequent sub-items extend
+    state.set_destination(dest_a(), false);
+    // Later sub-items add the plaintext-warning gate and the
+    // twice-confirm passphrase row to this projection. For the
+    // format-selector + destination-picker + overwrite-gate
+    // sub-items the gating is: destination present AND (no overwrite
+    // needed OR overwrite acknowledged) — subsequent sub-items extend
     // the assertion as their gates land.
     assert!(compose_submit_button_sensitive(&state));
 }
@@ -780,7 +781,13 @@ fn apply_msg_destination_picked_updates_state_and_emits_no_output() {
     use paladin_gtk::export_dialog::{apply_msg, ExportDialogMsg, ExportDialogState};
 
     let mut state = ExportDialogState::new();
-    let output = apply_msg(&mut state, ExportDialogMsg::DestinationPicked(dest_a()));
+    let output = apply_msg(
+        &mut state,
+        ExportDialogMsg::DestinationPicked {
+            path: dest_a(),
+            exists: false,
+        },
+    );
     assert!(output.is_none());
     assert_eq!(state.destination_path(), Some(dest_a().as_path()));
 }
@@ -825,8 +832,20 @@ fn apply_msg_destination_picked_replaces_prior_destination() {
     use paladin_gtk::export_dialog::{apply_msg, ExportDialogMsg, ExportDialogState};
 
     let mut state = ExportDialogState::new();
-    apply_msg(&mut state, ExportDialogMsg::DestinationPicked(dest_a()));
-    apply_msg(&mut state, ExportDialogMsg::DestinationPicked(dest_b()));
+    apply_msg(
+        &mut state,
+        ExportDialogMsg::DestinationPicked {
+            path: dest_a(),
+            exists: false,
+        },
+    );
+    apply_msg(
+        &mut state,
+        ExportDialogMsg::DestinationPicked {
+            path: dest_b(),
+            exists: false,
+        },
+    );
     assert_eq!(state.destination_path(), Some(dest_b().as_path()));
 }
 
@@ -843,4 +862,274 @@ fn export_dialog_output_cancel_is_distinct_from_close() {
     let close = ExportDialogOutput::Close;
     assert!(!matches!(cancel, ExportDialogOutput::Close));
     assert!(!matches!(close, ExportDialogOutput::Cancel));
+}
+
+// ---------------------------------------------------------------------------
+// Overwrite gate — reject overwriting an existing file unless ack'd
+// ---------------------------------------------------------------------------
+//
+// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" >
+// `ExportDialogComponent` > "Reject overwriting an existing file
+// unless the user confirms an inline overwrite gate (parity with CLI
+// `--force`); resolve the overwrite gate before accepting any
+// encrypted-bundle passphrase rows." The widget runs
+// `Path::try_exists` after the `gtk::FileDialog::save` callback and
+// passes the result into `ExportDialogMsg::DestinationPicked { path,
+// exists }`; the state machine arms the inline overwrite gate iff
+// `exists == true`, and `compose_submit_button_sensitive` refuses
+// submission until the user toggles the gate on.
+
+#[test]
+fn export_dialog_state_new_has_destination_exists_false() {
+    use paladin_gtk::export_dialog::ExportDialogState;
+
+    let state = ExportDialogState::new();
+    assert!(!state.destination_exists());
+}
+
+#[test]
+fn export_dialog_state_new_overwrite_not_acknowledged() {
+    use paladin_gtk::export_dialog::ExportDialogState;
+
+    let state = ExportDialogState::new();
+    assert!(!state.is_overwrite_acknowledged());
+}
+
+#[test]
+fn export_dialog_state_set_destination_records_exists_true() {
+    use paladin_gtk::export_dialog::ExportDialogState;
+
+    let mut state = ExportDialogState::new();
+    state.set_destination(dest_a(), true);
+    assert!(state.destination_exists());
+}
+
+#[test]
+fn export_dialog_state_set_destination_records_exists_false() {
+    use paladin_gtk::export_dialog::ExportDialogState;
+
+    let mut state = ExportDialogState::new();
+    state.set_destination(dest_a(), false);
+    assert!(!state.destination_exists());
+}
+
+#[test]
+fn export_dialog_state_set_destination_replaces_exists_value() {
+    use paladin_gtk::export_dialog::ExportDialogState;
+
+    let mut state = ExportDialogState::new();
+    state.set_destination(dest_a(), true);
+    state.set_destination(dest_b(), false);
+    assert!(!state.destination_exists());
+}
+
+#[test]
+fn export_dialog_state_set_overwrite_acknowledged_true() {
+    use paladin_gtk::export_dialog::ExportDialogState;
+
+    let mut state = ExportDialogState::new();
+    state.set_overwrite_acknowledged(true);
+    assert!(state.is_overwrite_acknowledged());
+}
+
+#[test]
+fn export_dialog_state_set_overwrite_acknowledged_back_to_false() {
+    use paladin_gtk::export_dialog::ExportDialogState;
+
+    let mut state = ExportDialogState::new();
+    state.set_overwrite_acknowledged(true);
+    state.set_overwrite_acknowledged(false);
+    assert!(!state.is_overwrite_acknowledged());
+}
+
+#[test]
+fn export_dialog_state_set_destination_resets_overwrite_ack_on_path_change() {
+    use paladin_gtk::export_dialog::ExportDialogState;
+
+    // The user has ack'd the gate for `dest_a`. Picking a different
+    // path must clear the prior ack so the new destination's gate
+    // starts unticked.
+    let mut state = ExportDialogState::new();
+    state.set_destination(dest_a(), true);
+    state.set_overwrite_acknowledged(true);
+    state.set_destination(dest_b(), true);
+    assert!(!state.is_overwrite_acknowledged());
+}
+
+#[test]
+fn export_dialog_state_set_destination_keeps_overwrite_ack_when_path_and_format_match() {
+    use paladin_gtk::export_dialog::ExportDialogState;
+
+    // Setting the same destination twice (with the same format) must
+    // not invalidate the ack — the widget may re-emit the picker
+    // result on focus restoration or window-close races.
+    let mut state = ExportDialogState::new();
+    state.set_destination(dest_a(), true);
+    state.set_overwrite_acknowledged(true);
+    state.set_destination(dest_a(), true);
+    assert!(state.is_overwrite_acknowledged());
+}
+
+#[test]
+fn export_dialog_state_set_format_resets_overwrite_ack_on_format_change() {
+    use paladin_gtk::export_dialog::ExportDialogState;
+
+    // Switching the active format invalidates the prior ack: the
+    // overwrite gate is keyed to (path, format) per
+    // `overwrite_gate_needs_reset`. Plaintext otpauth and encrypted
+    // bundle write distinct files even at the same path.
+    let mut state = ExportDialogState::new();
+    state.set_destination(dest_a(), true);
+    state.set_overwrite_acknowledged(true);
+    state.set_format(ExportFormatChoice::EncryptedPaladin);
+    assert!(!state.is_overwrite_acknowledged());
+}
+
+#[test]
+fn export_dialog_state_set_format_keeps_overwrite_ack_when_format_unchanged() {
+    use paladin_gtk::export_dialog::ExportDialogState;
+
+    let mut state = ExportDialogState::new();
+    state.set_destination(dest_a(), true);
+    state.set_overwrite_acknowledged(true);
+    // Re-set the same format — should not invalidate the ack.
+    state.set_format(ExportFormatChoice::PlaintextOtpauth);
+    assert!(state.is_overwrite_acknowledged());
+}
+
+// ---------------------------------------------------------------------------
+// compose_overwrite_gate_visible — armed iff destination exists
+// ---------------------------------------------------------------------------
+
+#[test]
+fn compose_overwrite_gate_visible_false_when_no_destination() {
+    use paladin_gtk::export_dialog::{compose_overwrite_gate_visible, ExportDialogState};
+
+    let state = ExportDialogState::new();
+    assert!(!compose_overwrite_gate_visible(&state));
+}
+
+#[test]
+fn compose_overwrite_gate_visible_false_when_destination_does_not_exist() {
+    use paladin_gtk::export_dialog::{compose_overwrite_gate_visible, ExportDialogState};
+
+    let mut state = ExportDialogState::new();
+    state.set_destination(dest_a(), false);
+    assert!(!compose_overwrite_gate_visible(&state));
+}
+
+#[test]
+fn compose_overwrite_gate_visible_true_when_destination_exists() {
+    use paladin_gtk::export_dialog::{compose_overwrite_gate_visible, ExportDialogState};
+
+    let mut state = ExportDialogState::new();
+    state.set_destination(dest_a(), true);
+    assert!(compose_overwrite_gate_visible(&state));
+}
+
+// ---------------------------------------------------------------------------
+// compose_submit_button_sensitive — gated on overwrite ack when armed
+// ---------------------------------------------------------------------------
+
+#[test]
+fn compose_submit_button_sensitive_false_when_overwrite_gate_armed_unacked() {
+    use paladin_gtk::export_dialog::{compose_submit_button_sensitive, ExportDialogState};
+
+    let mut state = ExportDialogState::new();
+    state.set_destination(dest_a(), true);
+    assert!(!compose_submit_button_sensitive(&state));
+}
+
+#[test]
+fn compose_submit_button_sensitive_true_when_overwrite_gate_acked() {
+    use paladin_gtk::export_dialog::{compose_submit_button_sensitive, ExportDialogState};
+
+    let mut state = ExportDialogState::new();
+    state.set_destination(dest_a(), true);
+    state.set_overwrite_acknowledged(true);
+    assert!(compose_submit_button_sensitive(&state));
+}
+
+#[test]
+fn compose_submit_button_sensitive_false_again_after_overwrite_ack_revoked() {
+    use paladin_gtk::export_dialog::{compose_submit_button_sensitive, ExportDialogState};
+
+    // The widget binds the gate to an `AdwSwitchRow` — the user can
+    // toggle it off after acking. The submit button must dim again.
+    let mut state = ExportDialogState::new();
+    state.set_destination(dest_a(), true);
+    state.set_overwrite_acknowledged(true);
+    state.set_overwrite_acknowledged(false);
+    assert!(!compose_submit_button_sensitive(&state));
+}
+
+#[test]
+fn compose_submit_button_sensitive_false_after_destination_change_resets_ack() {
+    use paladin_gtk::export_dialog::{compose_submit_button_sensitive, ExportDialogState};
+
+    // After the ack-reset on destination change, the submit button
+    // must reflect the rearmed (unacked) gate.
+    let mut state = ExportDialogState::new();
+    state.set_destination(dest_a(), true);
+    state.set_overwrite_acknowledged(true);
+    state.set_destination(dest_b(), true);
+    assert!(!compose_submit_button_sensitive(&state));
+}
+
+// ---------------------------------------------------------------------------
+// apply_msg — DestinationPicked struct variant + OverwriteAcknowledged
+// ---------------------------------------------------------------------------
+
+#[test]
+fn apply_msg_destination_picked_records_exists_true() {
+    use paladin_gtk::export_dialog::{apply_msg, ExportDialogMsg, ExportDialogState};
+
+    let mut state = ExportDialogState::new();
+    let output = apply_msg(
+        &mut state,
+        ExportDialogMsg::DestinationPicked {
+            path: dest_a(),
+            exists: true,
+        },
+    );
+    assert!(output.is_none());
+    assert!(state.destination_exists());
+}
+
+#[test]
+fn apply_msg_overwrite_acknowledged_true_updates_state() {
+    use paladin_gtk::export_dialog::{apply_msg, ExportDialogMsg, ExportDialogState};
+
+    let mut state = ExportDialogState::new();
+    let output = apply_msg(&mut state, ExportDialogMsg::OverwriteAcknowledged(true));
+    assert!(output.is_none());
+    assert!(state.is_overwrite_acknowledged());
+}
+
+#[test]
+fn apply_msg_overwrite_acknowledged_false_clears_state() {
+    use paladin_gtk::export_dialog::{apply_msg, ExportDialogMsg, ExportDialogState};
+
+    let mut state = ExportDialogState::new();
+    apply_msg(&mut state, ExportDialogMsg::OverwriteAcknowledged(true));
+    apply_msg(&mut state, ExportDialogMsg::OverwriteAcknowledged(false));
+    assert!(!state.is_overwrite_acknowledged());
+}
+
+// ---------------------------------------------------------------------------
+// Overwrite gate row labels — non-empty fixed strings the view! binds
+// ---------------------------------------------------------------------------
+
+#[test]
+fn format_export_dialog_overwrite_gate_title_is_non_empty() {
+    use paladin_gtk::export_dialog::format_export_dialog_overwrite_gate_title;
+
+    assert!(!format_export_dialog_overwrite_gate_title().is_empty());
+}
+
+#[test]
+fn format_export_dialog_overwrite_gate_subtitle_is_non_empty() {
+    use paladin_gtk::export_dialog::format_export_dialog_overwrite_gate_subtitle;
+
+    assert!(!format_export_dialog_overwrite_gate_subtitle().is_empty());
 }

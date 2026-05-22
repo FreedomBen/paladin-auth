@@ -3018,10 +3018,66 @@ sign-off.
     `apply_msg_close_emits_close_output`,
     `apply_msg_destination_picked_replaces_prior_destination`, and
     `export_dialog_output_cancel_is_distinct_from_close`.)
-  - [ ] Reject overwriting an existing file unless the user
+  - [x] Reject overwriting an existing file unless the user
     confirms an inline overwrite gate (parity with CLI `--force`);
     resolve the overwrite gate before accepting any
     encrypted-bundle passphrase rows.
+    (`ExportDialogState` gains `destination_exists: bool` and
+    `overwrite_acknowledged: bool` fields with paired
+    `destination_exists()` / `is_overwrite_acknowledged()` /
+    `set_overwrite_acknowledged(bool)` accessors;
+    `set_destination(path, exists)` now takes the picker's
+    `Path::try_exists` probe alongside the path and resets the
+    acknowledgement on path / format change per the existing
+    `overwrite_gate_needs_reset` helper. `set_format` mirrors the
+    reset so switching formats invalidates a stale ack against the
+    same destination — the two formats write distinct payloads.
+    `ExportDialogMsg::DestinationPicked(PathBuf)` becomes the
+    struct variant `DestinationPicked { path, exists }`, and a new
+    `OverwriteAcknowledged(bool)` variant routes through `apply_msg`
+    into `set_overwrite_acknowledged`. The view! now mounts an
+    `adw::SwitchRow` underneath the destination row whose visibility
+    is bound to `compose_overwrite_gate_visible(state)` — only
+    revealed when the picked file already exists — and whose
+    `connect_active_notify` handler dispatches the toggle through
+    `ExportDialogMsg::OverwriteAcknowledged`. The "Choose file…"
+    callback runs `path.try_exists().unwrap_or(true)` after the
+    `gtk::FileDialog::save` round trip so I/O errors default to
+    arming the gate (silent overwrites are always the worse failure
+    mode). `compose_submit_button_sensitive` is extended to dim the
+    Export button until either the destination does not exist or the
+    user has ack'd the gate; subsequent sub-items extend it further
+    with the plaintext-warning and twice-confirm passphrase gates.
+    Title / subtitle wording lives in
+    `format_export_dialog_overwrite_gate_title` (`"Overwrite existing
+    file"`) and `format_export_dialog_overwrite_gate_subtitle`
+    (`"The selected file already exists. Toggle on to replace it on
+    Export."`) so the strings stay testable from
+    `tests/export_dialog_logic.rs` without touching the GTK runtime.
+    Pinned by
+    `tests/export_dialog_logic.rs::export_dialog_state_new_has_destination_exists_false`,
+    `export_dialog_state_new_overwrite_not_acknowledged`,
+    `export_dialog_state_set_destination_records_exists_true`,
+    `export_dialog_state_set_destination_records_exists_false`,
+    `export_dialog_state_set_destination_replaces_exists_value`,
+    `export_dialog_state_set_overwrite_acknowledged_true`,
+    `export_dialog_state_set_overwrite_acknowledged_back_to_false`,
+    `export_dialog_state_set_destination_resets_overwrite_ack_on_path_change`,
+    `export_dialog_state_set_destination_keeps_overwrite_ack_when_path_and_format_match`,
+    `export_dialog_state_set_format_resets_overwrite_ack_on_format_change`,
+    `export_dialog_state_set_format_keeps_overwrite_ack_when_format_unchanged`,
+    `compose_overwrite_gate_visible_false_when_no_destination`,
+    `compose_overwrite_gate_visible_false_when_destination_does_not_exist`,
+    `compose_overwrite_gate_visible_true_when_destination_exists`,
+    `compose_submit_button_sensitive_false_when_overwrite_gate_armed_unacked`,
+    `compose_submit_button_sensitive_true_when_overwrite_gate_acked`,
+    `compose_submit_button_sensitive_false_again_after_overwrite_ack_revoked`,
+    `compose_submit_button_sensitive_false_after_destination_change_resets_ack`,
+    `apply_msg_destination_picked_records_exists_true`,
+    `apply_msg_overwrite_acknowledged_true_updates_state`,
+    `apply_msg_overwrite_acknowledged_false_clears_state`,
+    `format_export_dialog_overwrite_gate_title_is_non_empty`, and
+    `format_export_dialog_overwrite_gate_subtitle_is_non_empty`.)
   - [ ] Render `paladin_core::format_plaintext_export_warning()`
     verbatim on the plaintext path and require explicit
     confirmation before the write proceeds.

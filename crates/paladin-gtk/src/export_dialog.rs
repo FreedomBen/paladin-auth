@@ -207,6 +207,23 @@ pub fn format_export_dialog_format_row_title() -> &'static str {
     "Format"
 }
 
+/// `AdwSwitchRow` title for the inline overwrite-acknowledgement
+/// gate. The widget reveals the row only when the destination
+/// already exists per [`compose_overwrite_gate_visible`]; the
+/// wording mirrors the CLI's `--force` semantics.
+#[must_use]
+pub fn format_export_dialog_overwrite_gate_title() -> &'static str {
+    "Overwrite existing file"
+}
+
+/// `AdwSwitchRow` subtitle for the inline overwrite-acknowledgement
+/// gate. Explains that the file already exists and that toggling the
+/// switch on replaces it on Export.
+#[must_use]
+pub fn format_export_dialog_overwrite_gate_subtitle() -> &'static str {
+    "The selected file already exists. Toggle on to replace it on Export."
+}
+
 /// Footer Cancel button label.
 #[must_use]
 pub fn format_export_dialog_cancel_label() -> &'static str {
@@ -478,11 +495,11 @@ pub struct ExportDialogInit {
 
 /// Messages handled by [`ExportDialogComponent`].
 ///
-/// The set covers the format-selector + destination-picker sub-item
-/// from `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" >
-/// `ExportDialogComponent` plus the explicit Cancel / Close
-/// dismissal paths. Subsequent sub-items extend the enum with the
-/// overwrite-gate toggle, the plaintext-warning toggle, the
+/// The set covers the format-selector + destination-picker +
+/// overwrite-gate sub-items from `IMPLEMENTATION_PLAN_04_GTK.md`
+/// §"Milestone 7 checklist" > `ExportDialogComponent` plus the
+/// explicit Cancel / Close dismissal paths. Subsequent sub-items
+/// extend the enum with the plaintext-warning toggle, the
 /// twice-confirm passphrase entries, the submit click, and the
 /// worker-completion dispatch.
 #[derive(Debug)]
@@ -493,13 +510,33 @@ pub enum ExportDialogMsg {
     /// ([`overwrite_gate_needs_reset`] /
     /// [`plaintext_warning_needs_reset`] / [`passphrase_needs_reset`])
     /// compare raw paths so a switch between two equivalent forms
-    /// still rearms the gates.
-    DestinationPicked(PathBuf),
+    /// still rearms the gates. `exists` carries the result of the
+    /// widget's `Path::try_exists` probe run synchronously after
+    /// the picker returns; the state machine arms the inline
+    /// overwrite gate iff `exists == true`. On `try_exists` I/O
+    /// errors the widget passes `true` (assume the file exists, force
+    /// the user to ack) — silent overwrites are always the worse
+    /// failure mode.
+    DestinationPicked {
+        /// Picked destination file path. Stored verbatim.
+        path: PathBuf,
+        /// Result of `Path::try_exists` against `path`. Drives the
+        /// inline overwrite-gate visibility.
+        exists: bool,
+    },
     /// User changed the active format on the [`adw::ComboRow`]
     /// selector. Carries the [`ExportFormatChoice`] decoded by
     /// [`format_choice_from_index`]; an out-of-range selection is
     /// dropped by the widget rather than dispatched.
     FormatChanged(ExportFormatChoice),
+    /// User toggled the inline overwrite-acknowledgement gate on
+    /// the destination `AdwSwitchRow`. The dispatch arm forwards the
+    /// new boolean into [`ExportDialogState::set_overwrite_acknowledged`].
+    /// When the gate is rearmed (false), the submit button dims again;
+    /// when it is acknowledged (true), the submit button enables
+    /// (subject to subsequent sub-items' plaintext-warning and
+    /// twice-confirm passphrase gates).
+    OverwriteAcknowledged(bool),
     /// User clicked the explicit Cancel button. The dispatch arm
     /// emits [`ExportDialogOutput::Cancel`] so `AppModel` drops the
     /// live controller and the form draft is discarded.
@@ -541,17 +578,21 @@ pub enum ExportDialogOutput {
 
 /// Pure-logic state machine for [`ExportDialogComponent`].
 ///
-/// Owns the destination-path + format form draft. Subsequent
-/// sub-items extend the struct with the overwrite-acknowledgement
-/// gate, plaintext-warning gate, the twice-confirm passphrase
-/// [`crate::secret_fields::SecretEntry`] buffer, the busy latch, and
-/// the post-worker rendering slots. The widget layer drives this
-/// via [`apply_msg`] and reads it via the `compose_*` helpers so
-/// the state stays unit-testable in `tests/export_dialog_logic.rs`.
+/// Owns the destination-path + format form draft plus the inline
+/// overwrite-acknowledgement gate that arms when the picked
+/// destination already exists on disk. Subsequent sub-items extend
+/// the struct with the plaintext-warning gate, the twice-confirm
+/// passphrase [`crate::secret_fields::SecretEntry`] buffer, the busy
+/// latch, and the post-worker rendering slots. The widget layer
+/// drives this via [`apply_msg`] and reads it via the `compose_*`
+/// helpers so the state stays unit-testable in
+/// `tests/export_dialog_logic.rs`.
 #[derive(Debug, Default)]
 pub struct ExportDialogState {
     destination_path: Option<PathBuf>,
+    destination_exists: bool,
     format: ExportFormatChoice,
+    overwrite_acknowledged: bool,
 }
 
 impl ExportDialogState {
@@ -570,31 +611,88 @@ impl ExportDialogState {
         self.destination_path.as_deref()
     }
 
+    /// Whether the currently selected destination already exists on
+    /// disk per the widget's `Path::try_exists` probe. Returns
+    /// `false` when no destination has been picked yet, or when the
+    /// probe returned `Ok(false)`. The widget treats
+    /// `try_exists` I/O errors as `true` (assume it exists, arm the
+    /// gate) — silent overwrites are always the worse failure mode.
+    #[must_use]
+    pub fn destination_exists(&self) -> bool {
+        self.destination_exists
+    }
+
     /// Currently selected format.
     #[must_use]
     pub fn format(&self) -> ExportFormatChoice {
         self.format
     }
 
-    /// Update the destination path. The widget calls this from the
-    /// [`gtk::FileDialog`] callback after the user picks a file.
-    /// Subsequent sub-items extend this setter to clear the
-    /// overwrite-acknowledgement and plaintext-warning gates and the
-    /// twice-confirm passphrase entries via
-    /// [`overwrite_gate_needs_reset`] /
+    /// Whether the user has ack'd the inline overwrite gate for the
+    /// current `(destination, format)` pair. Resets to `false`
+    /// whenever the destination or format changes per
+    /// [`overwrite_gate_needs_reset`].
+    #[must_use]
+    pub fn is_overwrite_acknowledged(&self) -> bool {
+        self.overwrite_acknowledged
+    }
+
+    /// Update the destination path and the cached existence probe.
+    /// The widget calls this from the [`gtk::FileDialog`] callback
+    /// after the user picks a file and runs `Path::try_exists`.
+    ///
+    /// Resets the overwrite acknowledgement when the path or format
+    /// has changed per [`overwrite_gate_needs_reset`]: a stale ack
+    /// must never carry across to a different file. Subsequent
+    /// sub-items extend this setter to clear the plaintext-warning
+    /// gate and the twice-confirm passphrase entries via
     /// [`plaintext_warning_needs_reset`] / [`passphrase_needs_reset`].
-    pub fn set_destination(&mut self, path: PathBuf) {
+    pub fn set_destination(&mut self, path: PathBuf, exists: bool) {
+        let format = self.format;
+        let needs_reset = match self.destination_path.as_deref() {
+            Some(prev) => overwrite_gate_needs_reset(prev, format, &path, format),
+            None => true,
+        };
+        if needs_reset {
+            self.overwrite_acknowledged = false;
+        }
         self.destination_path = Some(path);
+        self.destination_exists = exists;
     }
 
     /// Update the active format. The widget calls this from the
     /// `adw::ComboRow` `connect_selected_notify` handler when
-    /// [`format_choice_from_index`] decodes the selection. Subsequent
-    /// sub-items extend this setter to clear gates / passphrase
-    /// entries when the format changes, mirroring the existing
-    /// reset helpers.
+    /// [`format_choice_from_index`] decodes the selection.
+    ///
+    /// Resets the overwrite acknowledgement when the format changes
+    /// per [`overwrite_gate_needs_reset`]: the gate is keyed to
+    /// `(path, format)` because the two formats write distinct
+    /// payloads even at the same path. Subsequent sub-items extend
+    /// this setter to clear plaintext-warning / passphrase state when
+    /// the format changes, mirroring the existing reset helpers.
     pub fn set_format(&mut self, format: ExportFormatChoice) {
+        let prev_format = self.format;
+        let needs_reset = match self.destination_path.as_deref() {
+            Some(prev_dest) => {
+                overwrite_gate_needs_reset(prev_dest, prev_format, prev_dest, format)
+            }
+            // No destination yet — a format change cannot invalidate
+            // an ack against nothing. Setting the field is a no-op
+            // for the gate.
+            None => false,
+        };
+        if needs_reset {
+            self.overwrite_acknowledged = false;
+        }
         self.format = format;
+    }
+
+    /// Toggle the inline overwrite-acknowledgement gate. The widget
+    /// binds this to the `AdwSwitchRow` `connect_active_notify`
+    /// handler; flipping the switch off rearms the gate so a future
+    /// careful user can step back from an ack they regret.
+    pub fn set_overwrite_acknowledged(&mut self, acknowledged: bool) {
+        self.overwrite_acknowledged = acknowledged;
     }
 }
 
@@ -611,16 +709,40 @@ pub fn compose_destination_row_subtitle(state: &ExportDialogState) -> String {
     }
 }
 
+/// `gtk::Revealer::set_reveal_child` binding for the inline overwrite
+/// gate row.
+///
+/// Returns `true` iff the destination has been picked AND the
+/// widget's `Path::try_exists` probe reported the file already
+/// existed. The widget mounts an `AdwSwitchRow` underneath the
+/// destination row and reveals it through this predicate so the user
+/// only sees the gate when an actual overwrite is at stake. The CLI
+/// `--force` flag is the same idea inverted: refuse silently in the
+/// default case, accept on explicit acknowledgement.
+#[must_use]
+pub fn compose_overwrite_gate_visible(state: &ExportDialogState) -> bool {
+    state.destination_path().is_some() && state.destination_exists()
+}
+
 /// `gtk::Button::set_sensitive` binding for the footer Export button.
 ///
-/// Returns `true` only when the user has picked a destination path.
+/// Returns `true` only when:
+/// * The user has picked a destination path, and
+/// * Either the destination does not already exist, or the user has
+///   ack'd the inline overwrite gate.
+///
 /// Subsequent sub-items extend the predicate with the
-/// overwrite-acknowledgement, plaintext-warning, and twice-confirm
-/// passphrase gates so the Export button enables only when every
-/// required gate is satisfied.
+/// plaintext-warning and twice-confirm passphrase gates so the
+/// Export button enables only when every required gate is satisfied.
 #[must_use]
 pub fn compose_submit_button_sensitive(state: &ExportDialogState) -> bool {
-    state.destination_path().is_some()
+    if state.destination_path().is_none() {
+        return false;
+    }
+    if compose_overwrite_gate_visible(state) && !state.is_overwrite_acknowledged() {
+        return false;
+    }
+    true
 }
 
 /// Apply an [`ExportDialogMsg`] to the [`ExportDialogState`] and
@@ -637,12 +759,16 @@ pub fn apply_msg(
     msg: ExportDialogMsg,
 ) -> Option<ExportDialogOutput> {
     match msg {
-        ExportDialogMsg::DestinationPicked(path) => {
-            state.set_destination(path);
+        ExportDialogMsg::DestinationPicked { path, exists } => {
+            state.set_destination(path, exists);
             None
         }
         ExportDialogMsg::FormatChanged(format) => {
             state.set_format(format);
+            None
+        }
+        ExportDialogMsg::OverwriteAcknowledged(acknowledged) => {
+            state.set_overwrite_acknowledged(acknowledged);
             None
         }
         ExportDialogMsg::Cancel => Some(ExportDialogOutput::Cancel),
@@ -724,6 +850,21 @@ impl SimpleComponent for ExportDialogComponent {
                                 set_valign: gtk::Align::Center,
                             },
                         },
+
+                        #[name = "overwrite_gate_row"]
+                        add = &adw::SwitchRow {
+                            set_title: format_export_dialog_overwrite_gate_title(),
+                            set_subtitle: format_export_dialog_overwrite_gate_subtitle(),
+                            #[watch]
+                            set_visible: compose_overwrite_gate_visible(&model.state),
+                            #[watch]
+                            set_active: model.state.is_overwrite_acknowledged(),
+                            connect_active_notify[sender] => move |row| {
+                                sender.input(ExportDialogMsg::OverwriteAcknowledged(
+                                    row.is_active(),
+                                ));
+                            },
+                        },
                     },
 
                     #[name = "options_group"]
@@ -801,9 +942,13 @@ impl SimpleComponent for ExportDialogComponent {
 
         // Wire the "Choose file…" button to `gtk::FileDialog::save`.
         // The async result feeds back as
-        // `ExportDialogMsg::DestinationPicked` with the user's
-        // selection; the picker's choice is stored verbatim per
-        // §"`ExportDialog`" raw-path semantics.
+        // `ExportDialogMsg::DestinationPicked { path, exists }` with
+        // the user's selection. The picker's choice is stored
+        // verbatim per §"`ExportDialog`" raw-path semantics; the
+        // `exists` flag arms the inline overwrite gate. On
+        // `Path::try_exists` I/O errors we pass `true` (assume the
+        // file exists, force the user to ack) — silent overwrites
+        // are always the worse failure mode.
         let dialog_root = root.clone();
         let sender_clone = sender.clone();
         widgets.choose_destination_button.connect_clicked(move |_| {
@@ -819,7 +964,8 @@ impl SimpleComponent for ExportDialogComponent {
                 move |result| {
                     if let Ok(file) = result {
                         if let Some(path) = file.path() {
-                            sender_inner.input(ExportDialogMsg::DestinationPicked(path));
+                            let exists = path.try_exists().unwrap_or(true);
+                            sender_inner.input(ExportDialogMsg::DestinationPicked { path, exists });
                         }
                     }
                 },
