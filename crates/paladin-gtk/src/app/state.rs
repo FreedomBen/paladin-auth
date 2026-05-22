@@ -64,7 +64,9 @@ use paladin_core::{
 use crate::add_account::{
     AddAccountMsg, AddWorkerEffect, AddWorkerInput, QrWorkerEffect, QrWorkerInput,
 };
-use crate::effect_ownership::{EffectOwnership, QuitDecision};
+use crate::effect_ownership::{
+    CompleteOutcome, EffectKind, EffectOwnership, EffectStart, LockDecision, QuitDecision,
+};
 use crate::export_dialog::{
     ExportDialogMsg, ExportOutcome, ExportSubmitPayload, ExportWorkerInput,
 };
@@ -4555,5 +4557,125 @@ pub fn handle_quit_request(effects: Option<&mut EffectOwnership>) -> QuitDecisio
     match effects {
         Some(state) => state.request_quit(),
         None => QuitDecision::Now,
+    }
+}
+
+/// Routing decision for a vault-touching dispatch attempt: open the
+/// busy gate now (transitioning `Unlocked → UnlockedBusy` on the
+/// effect-ownership state machine), or refuse the dispatch.
+///
+/// Wraps [`EffectOwnership::start_effect`] over the
+/// `Option<EffectOwnership>` slot stored on
+/// [`crate::app::model::AppModel`]'s `effects` field. When the slot
+/// is `None` (no vault open — `Missing` / `Locked` / `StartupError`
+/// startups leave it unallocated per [`initial_effects_for`]), there
+/// is no machinery to drive a worker through, so the decision is
+/// unconditionally [`EffectStart::Rejected`]: a stray vault-touching
+/// dispatch on a non-vault surface must never run. When the slot is
+/// `Some(_)`, the contained `EffectOwnership` decides — `Accepted`
+/// while idle, `Rejected` while another worker is already in flight
+/// or the machinery has routed to [`crate::effect_ownership::AppState::StartupError`].
+///
+/// `AppModel::update`'s vault-touching dispatch branches call this
+/// helper before moving the `(Vault, Store)` pair into a
+/// `gio::spawn_blocking` worker, per `IMPLEMENTATION_PLAN_04_GTK.md`
+/// §"In-flight effect ownership". An `Accepted` return is the gate
+/// the caller respects when transitioning `AppState` via
+/// [`AppState::enter_busy`].
+pub fn handle_effect_request(
+    effects: Option<&mut EffectOwnership>,
+    kind: EffectKind,
+) -> EffectStart {
+    match effects {
+        Some(state) => state.start_effect(kind),
+        None => EffectStart::Rejected,
+    }
+}
+
+/// Resolution of a worker completion against the in-flight machinery:
+/// release the busy gate and propagate any deferred quit / lock
+/// decisions accumulated while the worker was running.
+///
+/// Wraps [`EffectOwnership::complete_effect`] over the
+/// `Option<EffectOwnership>` slot. When the slot is `None`
+/// (defensive — a stray completion arriving after the slot was
+/// already dropped, e.g. after [`handle_worker_lost`] routed the app
+/// to `StartupError`), there is no machinery to update and no
+/// deferred state to drain, so the decision is unconditionally
+/// [`CompleteOutcome::Ready`]. When the slot is `Some(_)`, the
+/// contained `EffectOwnership` decides — `vault_still_encrypted` is
+/// the on-return `Vault::is_encrypted()` reading and gates whether a
+/// `pending_lock` actually fires.
+///
+/// `AppModel::update`'s `*WorkerCompleted` branches call this helper
+/// after reinstalling the returned `(Vault, Store)` pair so the
+/// dispatch epilogue's deferred-quit and deferred-lock handlers see
+/// the post-worker state, per `IMPLEMENTATION_PLAN_04_GTK.md`
+/// §"In-flight effect ownership".
+pub fn handle_effect_completion(
+    effects: Option<&mut EffectOwnership>,
+    vault_still_encrypted: bool,
+) -> CompleteOutcome {
+    match effects {
+        Some(state) => state.complete_effect(vault_still_encrypted),
+        None => CompleteOutcome::Ready,
+    }
+}
+
+/// Routing decision for an auto-lock expiry signal: fire the
+/// lock-on-expiry teardown now, defer until the in-flight worker
+/// returns, or drop the signal (the vault is plaintext or no vault
+/// is open).
+///
+/// Wraps [`EffectOwnership::auto_lock_expired`] over the
+/// `Option<EffectOwnership>` slot. When the slot is `None` (no vault
+/// open — `Missing` / `Locked` / `StartupError` startups leave it
+/// unallocated), there is nothing to lock, so the decision is
+/// unconditionally [`LockDecision::Ignored`]. When the slot is
+/// `Some(_)`, the contained `EffectOwnership` decides — `Now` from
+/// the idle `Unlocked` state on an encrypted vault, `Deferred` from
+/// `UnlockedBusy` (with `pending_lock` recorded so
+/// [`handle_effect_completion`] can resolve it against the
+/// post-worker mode), and `Ignored` from the idle `Unlocked` state on
+/// a plaintext vault (DESIGN §7 plaintext auto-lock no-op).
+///
+/// `AppModel::update`'s `AppMsg::AutoLockTimerFired` handler calls
+/// this helper to decide whether to lock now, drop the signal, or
+/// just record the deferral, per `IMPLEMENTATION_PLAN_04_GTK.md`
+/// §"In-flight effect ownership" and §"Auto-lock and clipboard
+/// auto-clear".
+pub fn handle_auto_lock_expiry(
+    effects: Option<&mut EffectOwnership>,
+    vault_is_encrypted: bool,
+) -> LockDecision {
+    match effects {
+        Some(state) => state.auto_lock_expired(vault_is_encrypted),
+        None => LockDecision::Ignored,
+    }
+}
+
+/// Resolution of a worker that failed before returning the
+/// `(Vault, Store)` pair: route the in-flight machinery to
+/// [`crate::effect_ownership::AppState::StartupError`] and drop the
+/// deferred quit / lock flags.
+///
+/// Wraps [`EffectOwnership::worker_lost`] over the
+/// `Option<EffectOwnership>` slot. When the slot is `None`
+/// (defensive — a stray completion arriving after a prior
+/// `worker_lost` already dropped the slot), there is no machinery to
+/// update and the call is a no-op. When the slot is `Some(_)`, the
+/// contained `EffectOwnership` transitions to
+/// [`crate::effect_ownership::AppState::StartupError`] so the
+/// `control_gating()` projection returns `all_disabled_for_busy`
+/// until the user retries through `StartupErrorComponent`.
+///
+/// `AppModel::update`'s `*WorkerCompleted` branches call this helper
+/// on the failure-before-return paths, then route the surface to
+/// `StartupErrorComponent` without trying to reconstruct in-memory
+/// vault state, per `IMPLEMENTATION_PLAN_04_GTK.md`
+/// §"In-flight effect ownership".
+pub fn handle_worker_lost(effects: Option<&mut EffectOwnership>) {
+    if let Some(state) = effects {
+        state.worker_lost();
     }
 }

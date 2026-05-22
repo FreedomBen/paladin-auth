@@ -12099,3 +12099,374 @@ fn handle_quit_request_with_busy_effects_is_deferred_and_records_pending_quit() 
         "Deferred decision must set the pending_quit flag so the worker-completion hook fires the teardown",
     );
 }
+
+// ---------------------------------------------------------------------------
+// handle_effect_request — vault-touching dispatch routing over the
+// `Option<EffectOwnership>` slot on `AppModel.effects`.
+//
+// `None` slot (no vault open): a stray vault-touching dispatch on a
+// non-vault surface (`Missing` / `Locked` / `StartupError`) must
+// never run, so the helper returns `Rejected` unconditionally.
+//
+// `Some` slot: delegate to `EffectOwnership::start_effect`. `Accepted`
+// on the idle `Unlocked` state — transitions the machinery to
+// `UnlockedBusy(kind)`; `Rejected` from `UnlockedBusy` (another
+// worker is in flight) or `StartupError`. Per
+// `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership".
+// ---------------------------------------------------------------------------
+
+#[test]
+fn handle_effect_request_with_no_effects_slot_is_rejected() {
+    use paladin_gtk::app::state::handle_effect_request;
+    use paladin_gtk::effect_ownership::{EffectKind, EffectStart};
+
+    // `None` slot covers every startup surface that owns no vault:
+    // `Missing`, `Locked`, `StartupError` all leave the slot
+    // unallocated per `initial_effects_for`. A vault-touching
+    // dispatch on those surfaces is a stray click and must never
+    // start a worker.
+    let decision = handle_effect_request(None, EffectKind::HotpAdvance);
+    assert_eq!(decision, EffectStart::Rejected);
+}
+
+#[test]
+fn handle_effect_request_with_idle_effects_is_accepted_and_opens_busy_gate() {
+    use paladin_gtk::app::state::handle_effect_request;
+    use paladin_gtk::effect_ownership::{
+        AppState as OwnershipAppState, EffectKind, EffectOwnership, EffectStart,
+    };
+
+    let mut effects = EffectOwnership::unlocked();
+    let decision = handle_effect_request(Some(&mut effects), EffectKind::AddAccount);
+    assert_eq!(decision, EffectStart::Accepted);
+    assert_eq!(
+        effects.state(),
+        OwnershipAppState::UnlockedBusy(EffectKind::AddAccount),
+        "Accepted decision must transition the state machine to UnlockedBusy carrying the dispatched effect kind",
+    );
+    assert!(
+        effects.is_busy(),
+        "Accepted decision must open the busy gate",
+    );
+}
+
+#[test]
+fn handle_effect_request_while_already_busy_is_rejected_and_does_not_swap_in_flight() {
+    use paladin_gtk::app::state::handle_effect_request;
+    use paladin_gtk::effect_ownership::{EffectKind, EffectOwnership, EffectStart};
+
+    let mut effects = EffectOwnership::unlocked();
+    // Force a first effect so the helper sees an in-flight worker.
+    let first = handle_effect_request(Some(&mut effects), EffectKind::HotpAdvance);
+    assert_eq!(first, EffectStart::Accepted);
+
+    let second = handle_effect_request(Some(&mut effects), EffectKind::Settings);
+    assert_eq!(second, EffectStart::Rejected);
+    assert_eq!(
+        effects.current_effect(),
+        Some(EffectKind::HotpAdvance),
+        "Rejected second dispatch must not swap the in-flight effect kind",
+    );
+}
+
+#[test]
+fn handle_effect_request_after_completion_re_opens_busy_gate_for_next_effect() {
+    use paladin_gtk::app::state::handle_effect_request;
+    use paladin_gtk::effect_ownership::{EffectKind, EffectOwnership, EffectStart};
+
+    let mut effects = EffectOwnership::unlocked();
+    let first = handle_effect_request(Some(&mut effects), EffectKind::HotpAdvance);
+    assert_eq!(first, EffectStart::Accepted);
+    // Simulate the worker returning so the busy gate releases.
+    effects.complete_effect(/* vault_still_encrypted */ true);
+
+    let second = handle_effect_request(Some(&mut effects), EffectKind::RenameAccount);
+    assert_eq!(second, EffectStart::Accepted);
+    assert_eq!(
+        effects.current_effect(),
+        Some(EffectKind::RenameAccount),
+        "After complete_effect, a new dispatch must open the busy gate carrying the new effect kind",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// handle_effect_completion — worker-return routing over the
+// `Option<EffectOwnership>` slot on `AppModel.effects`.
+//
+// `None` slot (defensive — a stray completion after the slot was
+// dropped via `handle_worker_lost`): there is no machinery to
+// update, so the decision is unconditionally `CompleteOutcome::Ready`.
+//
+// `Some` slot: delegate to `EffectOwnership::complete_effect`. The
+// `vault_still_encrypted` argument gates whether a `pending_lock`
+// actually fires (Now vs LockDiscarded), and a `pending_quit` always
+// wins over a `pending_lock` per
+// `EffectOwnership::complete_effect`'s contract. Per
+// `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership".
+// ---------------------------------------------------------------------------
+
+#[test]
+fn handle_effect_completion_with_no_effects_slot_is_ready() {
+    use paladin_gtk::app::state::handle_effect_completion;
+    use paladin_gtk::effect_ownership::CompleteOutcome;
+
+    let outcome = handle_effect_completion(None, /* vault_still_encrypted */ true);
+    assert_eq!(outcome, CompleteOutcome::Ready);
+    let outcome = handle_effect_completion(None, /* vault_still_encrypted */ false);
+    assert_eq!(
+        outcome,
+        CompleteOutcome::Ready,
+        "None slot must ignore the vault_still_encrypted argument and return Ready unconditionally",
+    );
+}
+
+#[test]
+fn handle_effect_completion_releases_busy_gate_and_returns_ready_when_no_pending_flags() {
+    use paladin_gtk::app::state::handle_effect_completion;
+    use paladin_gtk::effect_ownership::{
+        AppState as OwnershipAppState, CompleteOutcome, EffectKind, EffectOwnership,
+    };
+
+    let mut effects = EffectOwnership::unlocked();
+    effects.start_effect(EffectKind::Import);
+
+    let outcome =
+        handle_effect_completion(Some(&mut effects), /* vault_still_encrypted */ true);
+    assert_eq!(outcome, CompleteOutcome::Ready);
+    assert_eq!(
+        effects.state(),
+        OwnershipAppState::Unlocked,
+        "complete_effect must release the busy gate before the helper returns",
+    );
+    assert!(
+        !effects.is_busy(),
+        "Released gate must report is_busy() == false",
+    );
+}
+
+#[test]
+fn handle_effect_completion_with_pending_quit_fires_quit_now() {
+    use paladin_gtk::app::state::{handle_effect_completion, handle_quit_request};
+    use paladin_gtk::effect_ownership::{
+        CompleteOutcome, EffectKind, EffectOwnership, QuitDecision,
+    };
+
+    let mut effects = EffectOwnership::unlocked();
+    effects.start_effect(EffectKind::Export);
+    // Quit arrives while busy → recorded as pending_quit.
+    let quit = handle_quit_request(Some(&mut effects));
+    assert_eq!(quit, QuitDecision::Deferred);
+
+    let outcome =
+        handle_effect_completion(Some(&mut effects), /* vault_still_encrypted */ true);
+    assert_eq!(outcome, CompleteOutcome::QuitNow);
+    assert!(
+        !effects.pending_quit(),
+        "QuitNow must consume the pending_quit flag",
+    );
+}
+
+#[test]
+fn handle_effect_completion_with_pending_lock_on_still_encrypted_vault_fires_lock_now() {
+    use paladin_gtk::app::state::{handle_auto_lock_expiry, handle_effect_completion};
+    use paladin_gtk::effect_ownership::{
+        CompleteOutcome, EffectKind, EffectOwnership, LockDecision,
+    };
+
+    let mut effects = EffectOwnership::unlocked();
+    effects.start_effect(EffectKind::AddAccount);
+    // Auto-lock fires while busy → recorded as pending_lock.
+    let lock = handle_auto_lock_expiry(Some(&mut effects), /* vault_is_encrypted */ true);
+    assert_eq!(lock, LockDecision::Deferred);
+
+    let outcome =
+        handle_effect_completion(Some(&mut effects), /* vault_still_encrypted */ true);
+    assert_eq!(outcome, CompleteOutcome::LockNow);
+}
+
+#[test]
+fn handle_effect_completion_with_pending_lock_on_plaintext_converted_vault_discards_lock() {
+    use paladin_gtk::app::state::{handle_auto_lock_expiry, handle_effect_completion};
+    use paladin_gtk::effect_ownership::{
+        CompleteOutcome, EffectKind, EffectOwnership, LockDecision,
+    };
+
+    let mut effects = EffectOwnership::unlocked();
+    effects.start_effect(EffectKind::PassphraseRemove);
+    let lock = handle_auto_lock_expiry(Some(&mut effects), /* vault_is_encrypted */ true);
+    assert_eq!(lock, LockDecision::Deferred);
+
+    // Worker returned and converted the vault to plaintext via
+    // PassphraseRemove — the pending lock is silently dropped per
+    // the plaintext auto-lock no-op rule.
+    let outcome =
+        handle_effect_completion(Some(&mut effects), /* vault_still_encrypted */ false);
+    assert_eq!(outcome, CompleteOutcome::LockDiscarded);
+}
+
+// ---------------------------------------------------------------------------
+// handle_auto_lock_expiry — `AppMsg::AutoLockTimerFired` routing over
+// the `Option<EffectOwnership>` slot on `AppModel.effects`.
+//
+// `None` slot (no vault open): there is nothing to lock, so the
+// decision is unconditionally `LockDecision::Ignored`.
+//
+// `Some` slot: delegate to `EffectOwnership::auto_lock_expired`. The
+// `vault_is_encrypted` argument carries the pre-effect on-disk mode
+// (plaintext vaults short-circuit to `Ignored`); while busy, the
+// expiry is recorded as `pending_lock` and resolved by
+// `handle_effect_completion` against the post-worker mode. Per
+// `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership" and
+// §"Auto-lock and clipboard auto-clear".
+// ---------------------------------------------------------------------------
+
+#[test]
+fn handle_auto_lock_expiry_with_no_effects_slot_is_ignored() {
+    use paladin_gtk::app::state::handle_auto_lock_expiry;
+    use paladin_gtk::effect_ownership::LockDecision;
+
+    // `None` slot covers every startup surface that owns no vault.
+    // A stray timer fire on those surfaces must be a no-op.
+    let decision = handle_auto_lock_expiry(None, /* vault_is_encrypted */ true);
+    assert_eq!(decision, LockDecision::Ignored);
+    let decision = handle_auto_lock_expiry(None, /* vault_is_encrypted */ false);
+    assert_eq!(decision, LockDecision::Ignored);
+}
+
+#[test]
+fn handle_auto_lock_expiry_while_idle_and_encrypted_fires_now() {
+    use paladin_gtk::app::state::handle_auto_lock_expiry;
+    use paladin_gtk::effect_ownership::{EffectOwnership, LockDecision};
+
+    let mut effects = EffectOwnership::unlocked();
+    let decision = handle_auto_lock_expiry(Some(&mut effects), /* vault_is_encrypted */ true);
+    assert_eq!(decision, LockDecision::Now);
+    assert!(
+        !effects.pending_lock(),
+        "Now decision must not set the pending_lock flag",
+    );
+}
+
+#[test]
+fn handle_auto_lock_expiry_while_idle_and_plaintext_is_ignored() {
+    use paladin_gtk::app::state::handle_auto_lock_expiry;
+    use paladin_gtk::effect_ownership::{EffectOwnership, LockDecision};
+
+    let mut effects = EffectOwnership::unlocked();
+    let decision = handle_auto_lock_expiry(Some(&mut effects), /* vault_is_encrypted */ false);
+    assert_eq!(decision, LockDecision::Ignored);
+    assert!(
+        !effects.pending_lock(),
+        "Ignored decision must not set the pending_lock flag",
+    );
+}
+
+#[test]
+fn handle_auto_lock_expiry_while_busy_is_deferred_and_records_pending_lock() {
+    use paladin_gtk::app::state::handle_auto_lock_expiry;
+    use paladin_gtk::effect_ownership::{EffectKind, EffectOwnership, LockDecision};
+
+    let mut effects = EffectOwnership::unlocked();
+    effects.start_effect(EffectKind::Import);
+
+    let decision = handle_auto_lock_expiry(Some(&mut effects), /* vault_is_encrypted */ true);
+    assert_eq!(decision, LockDecision::Deferred);
+    assert!(
+        effects.pending_lock(),
+        "Deferred decision must set the pending_lock flag so the worker-completion hook can resolve it",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// handle_worker_lost — worker-failure routing over the
+// `Option<EffectOwnership>` slot on `AppModel.effects`.
+//
+// `None` slot (defensive — a stray loss-callback after the slot was
+// already dropped): no-op.
+//
+// `Some` slot: delegate to `EffectOwnership::worker_lost`. The
+// machinery transitions to `AppState::StartupError`, clears
+// `pending_quit` / `pending_lock`, and the control-gating projection
+// stays `all_disabled_for_busy` until the user retries through
+// `StartupErrorComponent`. Per
+// `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership".
+// ---------------------------------------------------------------------------
+
+#[test]
+fn handle_worker_lost_with_no_effects_slot_is_noop() {
+    use paladin_gtk::app::state::handle_worker_lost;
+
+    // Compiles and returns without touching anything. The `None`
+    // slot has no machinery to update — this is the defensive case
+    // for a stray loss-callback after `handle_worker_lost` already
+    // dropped the slot.
+    handle_worker_lost(None);
+}
+
+#[test]
+fn handle_worker_lost_transitions_busy_machinery_to_startup_error() {
+    use paladin_gtk::app::state::handle_worker_lost;
+    use paladin_gtk::effect_ownership::{
+        AppState as OwnershipAppState, EffectKind, EffectOwnership,
+    };
+
+    let mut effects = EffectOwnership::unlocked();
+    effects.start_effect(EffectKind::Export);
+    assert!(effects.is_busy());
+
+    handle_worker_lost(Some(&mut effects));
+    assert_eq!(effects.state(), OwnershipAppState::StartupError);
+    assert!(
+        !effects.is_busy(),
+        "StartupError state must report is_busy() == false",
+    );
+}
+
+#[test]
+fn handle_worker_lost_clears_pending_lock_and_quit_flags() {
+    use paladin_gtk::app::state::{
+        handle_auto_lock_expiry, handle_quit_request, handle_worker_lost,
+    };
+    use paladin_gtk::effect_ownership::{EffectKind, EffectOwnership};
+
+    let mut effects = EffectOwnership::unlocked();
+    effects.start_effect(EffectKind::AddAccount);
+    handle_quit_request(Some(&mut effects));
+    handle_auto_lock_expiry(Some(&mut effects), /* vault_is_encrypted */ true);
+    assert!(effects.pending_quit());
+    assert!(effects.pending_lock());
+
+    handle_worker_lost(Some(&mut effects));
+    assert!(
+        !effects.pending_quit(),
+        "worker_lost must clear the deferred quit flag — StartupErrorComponent owns its own quit affordance",
+    );
+    assert!(
+        !effects.pending_lock(),
+        "worker_lost must clear the deferred lock flag — there is no vault to lock once the worker dropped the pair",
+    );
+}
+
+#[test]
+fn handle_worker_lost_followed_by_effect_completion_does_not_resurrect_unlocked() {
+    use paladin_gtk::app::state::{handle_effect_completion, handle_worker_lost};
+    use paladin_gtk::effect_ownership::{
+        AppState as OwnershipAppState, CompleteOutcome, EffectKind, EffectOwnership,
+    };
+
+    let mut effects = EffectOwnership::unlocked();
+    effects.start_effect(EffectKind::Import);
+    handle_worker_lost(Some(&mut effects));
+    assert_eq!(effects.state(), OwnershipAppState::StartupError);
+
+    // A stale completion arrives after worker_lost — must NOT
+    // resurrect Unlocked (the in-memory vault state is gone).
+    let outcome =
+        handle_effect_completion(Some(&mut effects), /* vault_still_encrypted */ true);
+    assert_eq!(outcome, CompleteOutcome::Ready);
+    assert_eq!(
+        effects.state(),
+        OwnershipAppState::StartupError,
+        "Stale completion after worker_lost must not transition out of StartupError",
+    );
+}
