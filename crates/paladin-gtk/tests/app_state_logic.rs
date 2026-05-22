@@ -11990,3 +11990,54 @@ fn run_settings_worker_success_persists_clipboard_clear_secs_change() {
     assert!(matches!(completion.effect.outcome, SaveOutcome::Success));
     assert_eq!(completion.vault.settings().clipboard_clear_secs(), target);
 }
+
+// ---------------------------------------------------------------------------
+// initial_effects_for — pre-init projection of `AppState` to the
+// `EffectOwnership` slot stored on `AppModel.effects`.
+//
+// `AppModel` consults `EffectOwnership` only when a vault is open
+// (Unlocked / UnlockedBusy); every other startup surface leaves the
+// slot `None` so a stray `request_quit` / `auto_lock_expired` cannot
+// transition a startup-error / locked / missing surface through the
+// in-flight machinery per `IMPLEMENTATION_PLAN_04_GTK.md`
+// §"In-flight effect ownership".
+// ---------------------------------------------------------------------------
+
+#[test]
+fn initial_effects_for_unlocked_returns_some_idle_ownership() {
+    use paladin_gtk::app::state::initial_effects_for;
+    use paladin_gtk::effect_ownership::AppState as OwnershipAppState;
+
+    let state = AppState::Unlocked { path: vault_path() };
+    let effects =
+        initial_effects_for(&state).expect("Unlocked startup must seed an EffectOwnership");
+    assert_eq!(effects.state(), OwnershipAppState::Unlocked);
+    assert!(!effects.is_busy());
+    assert!(!effects.pending_lock());
+    assert!(!effects.pending_quit());
+}
+
+#[test]
+fn initial_effects_for_non_unlocked_returns_none() {
+    use paladin_gtk::app::state::initial_effects_for;
+
+    let path = vault_path();
+    for state in [
+        AppState::Missing { path: path.clone() },
+        AppState::Locked { path: path.clone() },
+        AppState::UnlockedBusy { path: path.clone() },
+        AppState::StartupError {
+            path: Some(path),
+            error: paladin_gtk::startup_error::StartupError {
+                source: StartupErrorSource::Inspect,
+                kind: paladin_core::ErrorKind::InvalidHeader,
+                rendered: String::new(),
+            },
+        },
+    ] {
+        assert!(
+            initial_effects_for(&state).is_none(),
+            "non-Unlocked startup state must leave AppModel.effects None: {state:?}",
+        );
+    }
+}

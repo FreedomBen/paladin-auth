@@ -64,6 +64,7 @@ use paladin_core::{
 use crate::add_account::{
     AddAccountMsg, AddWorkerEffect, AddWorkerInput, QrWorkerEffect, QrWorkerInput,
 };
+use crate::effect_ownership::EffectOwnership;
 use crate::export_dialog::{
     ExportDialogMsg, ExportOutcome, ExportSubmitPayload, ExportWorkerInput,
 };
@@ -4495,5 +4496,37 @@ pub fn apply_settings_dispatch_inplace(state: &mut AppState, dispatch: &Settings
         true
     } else {
         false
+    }
+}
+
+/// Seed the [`EffectOwnership`] slot stored on
+/// `AppModel.effects` from the resolved startup [`AppState`].
+///
+/// Returns `Some(EffectOwnership::unlocked())` iff `state` is
+/// [`AppState::Unlocked`], and `None` from every other variant
+/// (`Missing` / `Locked` / `UnlockedBusy` / `StartupError`).
+///
+/// The `UnlockedBusy` arm returns `None` because that variant is
+/// only ever reached *from* an existing `EffectOwnership::unlocked()`
+/// via [`EffectOwnership::start_effect`]; an `AppModel` constructor
+/// that ran startup probes and ended up there would be reconstructing
+/// a stale in-flight state without a live worker, which the plan's
+/// §"In-flight effect ownership" forbids. The `StartupError` arm
+/// returns `None` because that surface intentionally owns no
+/// `(Vault, Store)` pair — every mutating control is disabled until
+/// the user retries through `StartupErrorComponent`.
+///
+/// `AppModel::init` calls this once from the
+/// [`crate::app::model::run_startup_probes`] result so the in-flight
+/// effect machinery is wired up immediately on a plaintext-open
+/// success and stays unallocated for every other startup branch.
+#[must_use]
+pub fn initial_effects_for(state: &AppState) -> Option<EffectOwnership> {
+    match state {
+        AppState::Unlocked { .. } => Some(EffectOwnership::unlocked()),
+        AppState::Missing { .. }
+        | AppState::Locked { .. }
+        | AppState::UnlockedBusy { .. }
+        | AppState::StartupError { .. } => None,
     }
 }

@@ -100,7 +100,7 @@ use crate::app::state::{
     compose_remove_worker_input, compose_rename_dispatch, compose_rename_worker_input,
     compose_settings_dispatch, compose_settings_worker_input, compose_unlock_dispatch,
     compose_unlock_worker_input, decide_state_from_inspect, decide_state_from_open_error,
-    run_unlock_worker, AppState, OpenErrorOutcome, UnlockWorkerCompletion,
+    initial_effects_for, run_unlock_worker, AppState, OpenErrorOutcome, UnlockWorkerCompletion,
 };
 use crate::auto_lock::{
     auto_lock_timer_transition, evaluate_timer_fire, idle_should_arm, lock_on_expiry,
@@ -110,6 +110,7 @@ use crate::auto_lock::{
 use crate::clipboard_clear::{
     evaluate_wake, prepare_copy_bytes, schedule_copy, PendingClipboardClear, WakeDecision,
 };
+use crate::effect_ownership::EffectOwnership;
 use crate::export_dialog::{
     run_export_worker, ExportDialogComponent, ExportDialogInit, ExportDialogMsg,
     ExportDialogOutput, ExportWorkerCompletion,
@@ -400,6 +401,21 @@ pub struct AppModel {
     /// `IMPLEMENTATION_PLAN_04_GTK.md` §"Milestone 7 checklist" >
     /// "Drive the auto-lock timer via `glib::timeout_add_local`".
     auto_lock_source: Option<glib::SourceId>,
+    /// In-flight vault-effect ownership state machine.
+    ///
+    /// `Some(EffectOwnership::unlocked())` when a vault is open
+    /// (`AppState::Unlocked` / `AppState::UnlockedBusy`); `None` for
+    /// every other state. Seeded by
+    /// [`crate::app::state::initial_effects_for`] at startup so the
+    /// in-flight machinery is wired up immediately on a plaintext-open
+    /// success and stays unallocated for `Missing` / `Locked` /
+    /// `StartupError` startups. Subsequent transitions (Locked →
+    /// Unlocked after a successful unlock, Unlocked → Locked on
+    /// auto-lock, etc.) install or drop the slot in lockstep with
+    /// [`Self::vault`]. See `IMPLEMENTATION_PLAN_04_GTK.md`
+    /// §"In-flight effect ownership".
+    #[allow(dead_code)]
+    effects: Option<EffectOwnership>,
 }
 
 impl std::fmt::Debug for AppModel {
@@ -471,6 +487,7 @@ impl std::fmt::Debug for AppModel {
                 "auto_lock_source",
                 &self.auto_lock_source.as_ref().map(|_| "<installed>"),
             )
+            .field("effects", &self.effects)
             .finish()
     }
 }
@@ -1463,6 +1480,7 @@ impl SimpleComponent for AppModel {
             None
         };
 
+        let effects = initial_effects_for(&state);
         let model = AppModel {
             vault_path: vault_path_override,
             state: Some(state),
@@ -1488,6 +1506,7 @@ impl SimpleComponent for AppModel {
             last_add_dialog_busy: false,
             idle_source: IdleSource::new(),
             auto_lock_source: None,
+            effects,
         };
 
         // Install the TOTP ticker if the resolved startup state is
