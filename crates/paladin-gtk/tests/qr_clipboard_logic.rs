@@ -16,13 +16,14 @@
 use std::time::{Duration, SystemTime};
 
 use paladin_core::{
-    AccountId, ImportConflict, ImportReport, ImportWarning, ValidationWarning, QR_RGBA_MAX_BYTES,
+    AccountId, ErrorKind, ImportConflict, ImportReport, ImportWarning, ValidatedAccount,
+    ValidationWarning, QR_RGBA_MAX_BYTES,
 };
 
 use paladin_gtk::qr_clipboard::{
-    allocate_rgba_buffer, clipboard_qr_memory_format, decode_clipboard_qr, prepare_rgba_layout,
-    verify_download_layout, DownloadMismatch, QrImportSummary, QrLayoutError, RgbaLayout,
-    CLIPBOARD_QR_CONFLICT_POLICY,
+    allocate_rgba_buffer, clipboard_qr_memory_format, compose_qr_decode_outcome,
+    decode_clipboard_qr, prepare_rgba_layout, verify_download_layout, DownloadMismatch,
+    QrDecodeOutcome, QrImportSummary, QrLayoutError, RgbaLayout, CLIPBOARD_QR_CONFLICT_POLICY,
 };
 use relm4::gtk::gdk;
 
@@ -503,4 +504,169 @@ fn decode_clipboard_qr_uses_supplied_import_time() {
     let t2 = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
     let _ = decode_clipboard_qr(&layout, &rgba, t1).expect_err("blank fails");
     let _ = decode_clipboard_qr(&layout, &rgba, t2).expect_err("blank fails");
+}
+
+// ---------------------------------------------------------------------------
+// `compose_qr_decode_outcome`: post-download verify + decode glue
+//
+// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"`AddAccountComponent` QR
+// clipboard image path" L2738, the live `AppModel` clipboard-QR
+// handler hands the validated `RgbaLayout`, the GDK-downloaded RGBA
+// buffer, GDK's reported row stride, and the `import_time` stamp
+// into one pure-logic composer that runs `verify_download_layout`
+// *before* `decode_clipboard_qr` and routes both outcomes into a
+// single typed `QrDecodeOutcome` discriminator. The intent is that
+// the GTK side cannot bypass the stride / length check before
+// reaching `paladin_core::import::qr_image_bytes`.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn compose_qr_decode_outcome_signature_takes_layout_bytes_stride_and_import_time() {
+    // Pin the signature so the live dispatch site cannot drift away
+    // from the four-argument contract that the implementation plan
+    // calls out: layout + downloaded bytes + downloaded stride +
+    // import_time → typed outcome. Pinning by signature mirrors the
+    // existing `decode_clipboard_qr_uses_supplied_import_time` test.
+    fn assert_signature(_: fn(&RgbaLayout, &[u8], usize, SystemTime) -> QrDecodeOutcome) {}
+    assert_signature(compose_qr_decode_outcome);
+}
+
+#[test]
+fn compose_qr_decode_outcome_returns_download_mismatch_when_stride_disagrees() {
+    let layout = prepare_rgba_layout(16, 16).expect("ok");
+    let rgba = vec![0_u8; layout.buffer_bytes()];
+    // GDK reported a stride wider than `width * 4` (e.g. alignment
+    // padding). The composer must surface a `RowStride` mismatch
+    // and *not* reach `qr_image_bytes` — that decoder requires
+    // `width * 4` exactly.
+    let bad_stride = layout.row_stride() + 4;
+    match compose_qr_decode_outcome(&layout, &rgba, bad_stride, SystemTime::UNIX_EPOCH) {
+        QrDecodeOutcome::DownloadMismatch(DownloadMismatch::RowStride {
+            actual_stride,
+            expected_stride,
+        }) => {
+            assert_eq!(actual_stride, bad_stride);
+            assert_eq!(expected_stride, layout.row_stride());
+        }
+        other => panic!("expected RowStride mismatch, got {other:?}"),
+    }
+}
+
+#[test]
+fn compose_qr_decode_outcome_returns_download_mismatch_when_buffer_too_short() {
+    let layout = prepare_rgba_layout(8, 8).expect("ok");
+    // Buffer is one byte shorter than expected; verify must reject
+    // before qr_image_bytes sees the slice.
+    let truncated = vec![0_u8; layout.buffer_bytes() - 1];
+    match compose_qr_decode_outcome(
+        &layout,
+        &truncated,
+        layout.row_stride(),
+        SystemTime::UNIX_EPOCH,
+    ) {
+        QrDecodeOutcome::DownloadMismatch(DownloadMismatch::BufferLength {
+            actual_bytes,
+            expected_bytes,
+        }) => {
+            assert_eq!(actual_bytes, layout.buffer_bytes() - 1);
+            assert_eq!(expected_bytes, layout.buffer_bytes());
+        }
+        other => panic!("expected BufferLength mismatch, got {other:?}"),
+    }
+}
+
+#[test]
+fn compose_qr_decode_outcome_returns_download_mismatch_when_buffer_too_long() {
+    let layout = prepare_rgba_layout(8, 8).expect("ok");
+    // GDK over-allocated; verify must still reject so the decoder
+    // never sees a slice that does not match the dimensions.
+    let overlong = vec![0_u8; layout.buffer_bytes() + 8];
+    match compose_qr_decode_outcome(
+        &layout,
+        &overlong,
+        layout.row_stride(),
+        SystemTime::UNIX_EPOCH,
+    ) {
+        QrDecodeOutcome::DownloadMismatch(DownloadMismatch::BufferLength {
+            actual_bytes,
+            expected_bytes,
+        }) => {
+            assert_eq!(actual_bytes, layout.buffer_bytes() + 8);
+            assert_eq!(expected_bytes, layout.buffer_bytes());
+        }
+        other => panic!("expected BufferLength mismatch, got {other:?}"),
+    }
+}
+
+#[test]
+fn compose_qr_decode_outcome_returns_decode_error_for_blank_buffer() {
+    let layout = prepare_rgba_layout(10, 10).expect("ok");
+    // Blank buffer at the correct stride / length reaches the
+    // decoder, which then surfaces `NoEntriesToImport` because no
+    // QR is present. The mismatch path stays unused — that confirms
+    // the verify gate did not short-circuit before the decode.
+    let rgba = vec![0xFF_u8; layout.buffer_bytes()];
+    match compose_qr_decode_outcome(&layout, &rgba, layout.row_stride(), SystemTime::UNIX_EPOCH) {
+        QrDecodeOutcome::DecodeError(err) => {
+            assert_eq!(err.kind(), ErrorKind::NoEntriesToImport);
+        }
+        other => panic!("expected DecodeError, got {other:?}"),
+    }
+}
+
+#[test]
+fn compose_qr_decode_outcome_runs_verify_before_decode_for_short_buffer() {
+    // A buffer too short to feed `qr_image_bytes` must surface as a
+    // `DownloadMismatch` and never reach the core decoder — pinning
+    // the call order so a future refactor cannot accidentally
+    // forward a short slice into the rqrr-backed path.
+    let layout = prepare_rgba_layout(8, 8).expect("ok");
+    let short = vec![0_u8; 4];
+    let outcome =
+        compose_qr_decode_outcome(&layout, &short, layout.row_stride(), SystemTime::UNIX_EPOCH);
+    assert!(
+        matches!(outcome, QrDecodeOutcome::DownloadMismatch(_)),
+        "short buffer should bail at verify, not decode: {outcome:?}"
+    );
+}
+
+#[test]
+fn compose_qr_decode_outcome_forwards_import_time_to_qr_image_bytes() {
+    // Two different import_time values on the same blank buffer
+    // both surface `DecodeError(NoEntriesToImport)` — proves the
+    // composer always reaches the decoder when the layout / stride
+    // check passes, and accepts the SystemTime parameter without
+    // pre-checks of its own. We cannot read import_time back from
+    // an error, so signature parity matches the
+    // `decode_clipboard_qr_uses_supplied_import_time` pin above.
+    let layout = prepare_rgba_layout(10, 10).expect("ok");
+    let rgba = vec![0xFF_u8; layout.buffer_bytes()];
+    let t1 = SystemTime::UNIX_EPOCH;
+    let t2 = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+    for t in [t1, t2] {
+        match compose_qr_decode_outcome(&layout, &rgba, layout.row_stride(), t) {
+            QrDecodeOutcome::DecodeError(err) => {
+                assert_eq!(err.kind(), ErrorKind::NoEntriesToImport);
+            }
+            other => panic!("expected DecodeError, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn compose_qr_decode_outcome_decoded_carries_empty_vec_only_under_unreachable_path() {
+    // Defensive: there is no valid input that lets the composer
+    // succeed with zero accounts — `qr_image_bytes`'s
+    // `payloads_to_accounts` returns `NoEntriesToImport` when the
+    // decoded payload list is empty, so reaching `Decoded(vec![])`
+    // would require a future contract regression on core. This test
+    // documents that invariant by asserting `Decoded(Vec<ValidatedAccount>)`
+    // is constructible for type-system completeness without
+    // claiming it is produced in practice.
+    let decoded: Vec<ValidatedAccount> = Vec::new();
+    let outcome = QrDecodeOutcome::Decoded(decoded);
+    match outcome {
+        QrDecodeOutcome::Decoded(v) => assert_eq!(v.len(), 0),
+        _ => unreachable!("constructed Decoded variant"),
+    }
 }

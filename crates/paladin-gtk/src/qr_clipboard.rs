@@ -23,7 +23,7 @@
 use std::time::SystemTime;
 
 use paladin_core::{
-    import::qr_image_bytes, ImportConflict, ImportReport, Result, ValidatedAccount,
+    import::qr_image_bytes, ImportConflict, ImportReport, PaladinError, Result, ValidatedAccount,
     QR_RGBA_MAX_BYTES,
 };
 use relm4::gtk::gdk;
@@ -297,6 +297,73 @@ pub fn decode_clipboard_qr(
     import_time: SystemTime,
 ) -> Result<Vec<ValidatedAccount>> {
     qr_image_bytes(layout.width, layout.height, rgba, import_time)
+}
+
+/// Post-download outcome the live `AppModel` clipboard-QR handler
+/// projects from a single call.
+///
+/// Wraps the post-download verify + decode pipeline so the live
+/// dispatch site cannot reach
+/// [`paladin_core::import::qr_image_bytes`] without first running
+/// the [`verify_download_layout`] check. Each variant maps onto an
+/// inline error category surfaced in the Add dialog without
+/// mutating the vault, per `IMPLEMENTATION_PLAN_04_GTK.md`
+/// §"`AddAccountComponent` QR clipboard image path".
+#[derive(Debug)]
+pub enum QrDecodeOutcome {
+    /// `qr_image_bytes` returned a populated batch. The
+    /// [`AppModel`] dispatch site hands the vector into a
+    /// [`crate::add_account::QrWorkerInput`] for
+    /// `Vault::mutate_and_save(|v| v.import_accounts(...))` under
+    /// [`CLIPBOARD_QR_CONFLICT_POLICY`].
+    Decoded(Vec<ValidatedAccount>),
+    /// `gdk::TextureDownloader::download_bytes` returned a layout
+    /// the validated [`RgbaLayout`] cannot consume — surfaces as an
+    /// inline error in the Add dialog. The decode is never
+    /// attempted on a buffer whose layout disagrees with the
+    /// pre-allocation gate.
+    DownloadMismatch(DownloadMismatch),
+    /// [`paladin_core::import::qr_image_bytes`] rejected the
+    /// buffer. Covers `NoEntriesToImport` (no QR present),
+    /// `validation_error` (decoded payload is not an `otpauth://`
+    /// URI or fails [`paladin_core::parse_otpauth`]), and any
+    /// other typed [`PaladinError`] the core decoder surfaces.
+    DecodeError(PaladinError),
+}
+
+/// Compose the post-download QR decode outcome for the live
+/// `AppModel` clipboard-QR handler.
+///
+/// Runs [`verify_download_layout`] first so a mismatched download
+/// layout never reaches [`decode_clipboard_qr`]. On a matching
+/// layout, forwards width / height (from `layout`), `rgba`, and
+/// `import_time` into [`paladin_core::import::qr_image_bytes`] via
+/// [`decode_clipboard_qr`]. Per
+/// `IMPLEMENTATION_PLAN_04_GTK.md` §"`AddAccountComponent` QR
+/// clipboard image path", the call returns `Vec<ValidatedAccount>`
+/// regardless of QR count, and the dispatch site forwards it
+/// through [`crate::app::state::compose_qr_worker_input`] for the
+/// `gio::spawn_blocking` merge under [`CLIPBOARD_QR_CONFLICT_POLICY`].
+///
+/// Keeping the verify + decode glue here means the live `AppModel`
+/// handler stays a thin GDK shim and the cross-cutting rule
+/// "verify before decode" is unit-testable in
+/// [`tests/qr_clipboard_logic.rs`] without a live `gdk::Display` /
+/// clipboard round-trip.
+#[must_use]
+pub fn compose_qr_decode_outcome(
+    layout: &RgbaLayout,
+    rgba: &[u8],
+    downloaded_stride: usize,
+    import_time: SystemTime,
+) -> QrDecodeOutcome {
+    if let Err(mismatch) = verify_download_layout(layout, rgba.len(), downloaded_stride) {
+        return QrDecodeOutcome::DownloadMismatch(mismatch);
+    }
+    match decode_clipboard_qr(layout, rgba, import_time) {
+        Ok(accounts) => QrDecodeOutcome::Decoded(accounts),
+        Err(err) => QrDecodeOutcome::DecodeError(err),
+    }
 }
 
 /// Post-merge counts surfaced by the clipboard-QR add modal.

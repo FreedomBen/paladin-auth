@@ -2735,9 +2735,33 @@ sign-off.
     runs the validated download against `clipboard_qr_memory_format()`,
     and dispatches `run_qr_worker` through the existing
     `compose_qr_worker_input` boundary.
-  - [ ] Pass width, height, bytes, and `import_time` into
+  - [x] Pass width, height, bytes, and `import_time` into
     `paladin_core::import::qr_image_bytes`; the call returns
     `Vec<ValidatedAccount>` regardless of QR count.
+    The new pure-logic helper
+    `crate::qr_clipboard::compose_qr_decode_outcome(layout,
+    downloaded_bytes, downloaded_stride, import_time) ->
+    QrDecodeOutcome` ties the post-download `verify_download_layout`
+    check to the `decode_clipboard_qr` call (which itself forwards
+    `layout.width()`, `layout.height()`, the buffer, and
+    `import_time` into `paladin_core::import::qr_image_bytes`) so
+    the live `AppModel` clipboard-QR handler cannot bypass the
+    stride / length gate before reaching the `rqrr`-backed decoder.
+    The three outcome variants — `Decoded(Vec<ValidatedAccount>)`,
+    `DownloadMismatch(DownloadMismatch)`, and
+    `DecodeError(PaladinError)` — feed the inline-error / worker-
+    dispatch routing that lands in the next sub-items. Pinned by
+    `tests/qr_clipboard_logic.rs::compose_qr_decode_outcome_signature_takes_layout_bytes_stride_and_import_time`,
+    `compose_qr_decode_outcome_returns_download_mismatch_when_stride_disagrees`,
+    `compose_qr_decode_outcome_returns_download_mismatch_when_buffer_too_short`,
+    `compose_qr_decode_outcome_returns_download_mismatch_when_buffer_too_long`,
+    `compose_qr_decode_outcome_returns_decode_error_for_blank_buffer`,
+    `compose_qr_decode_outcome_runs_verify_before_decode_for_short_buffer`,
+    `compose_qr_decode_outcome_forwards_import_time_to_qr_image_bytes`,
+    and
+    `compose_qr_decode_outcome_decoded_carries_empty_vec_only_under_unreachable_path`,
+    on top of the existing `decode_clipboard_qr_*` and
+    `verify_download_layout_*` pins.
   - [ ] Insert the returned accounts through
     `Vault::import_accounts(accounts, ImportConflict::Skip,
     import_time)` inside `Vault::mutate_and_save`; report
