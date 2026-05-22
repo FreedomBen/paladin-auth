@@ -3751,7 +3751,7 @@ sign-off.
     `format_app_about_dialog_website_matches_cargo_pkg_homepage`,
     `format_app_about_dialog_issue_url_appends_issues_to_cargo_pkg_repository`,
     and `format_app_about_dialog_issue_url_and_support_url_share_cargo_pkg_repository_prefix`.)
-- [ ] Clipboard + auto-lock parity with TUI (opt-in). Use
+- [x] Clipboard + auto-lock parity with TUI (opt-in). Use
   `Vault::is_encrypted()` to decide whether to arm the auto-lock
   timer (encrypted only) and to track the visible vault-mode flag
   across passphrase transitions.
@@ -3922,25 +3922,77 @@ sign-off.
   mutating controls disabled while busy, and worker results restore
   `(Vault, Store)` before UI state applies success / typed failure handling;
   quit and auto-lock requests are deferred until the worker returns.
-  - [ ] Add the `AppState::UnlockedBusy { effect, ui_snapshot }`
+  - [x] Add the `AppState::UnlockedBusy { effect, ui_snapshot }`
     variant and the transition from `Unlocked` whenever a
     vault-touching effect dispatches.
-  - [ ] Move `(Vault, Store)` into the worker on
+    (Implemented as `AppState::UnlockedBusy { path }` carrying the
+    resolved vault path plus a sibling `EffectOwnership` state
+    machine on `AppModel.effects` that tracks the in-flight
+    [`EffectKind`] and the `pending_quit` / `pending_lock` flags.
+    The pure-logic shadow lives in `src/effect_ownership.rs`; the
+    `Unlocked → UnlockedBusy` transition is opened by
+    `AppState::enter_busy()` and gated through the typed
+    `handle_effect_request` helper at every vault-touching dispatch
+    site so the busy gate and the visible state stay in lockstep.)
+  - [x] Move `(Vault, Store)` into the worker on
     `gio::spawn_blocking` for HOTP `next`, add / remove / rename /
     import / settings / passphrase / export operations.
-  - [ ] Standardize the worker return type as
+    (Every dispatch site in `AppModel::update` takes
+    `self.vault.take()`, moves the pair into the typed
+    `XWorkerInput`, and spawns
+    `gtk::glib::spawn_future_local(async move {
+        gtk::gio::spawn_blocking(move || run_X_worker(input)).await
+    })`. The completion message hands the pair back so the
+    completion handler re-installs it via
+    `apply_X_vault_install_inplace` before applying any UI side
+    effect, matching this section's contract.)
+  - [x] Standardize the worker return type as
     `(Vault, Store, EffectOutcome)` on both success and typed
     failure; reinstall the pair before applying the UI outcome.
+    (`HotpAdvanceWorkerCompletion`, `AddWorkerCompletion`,
+    `RemoveWorkerCompletion`, `RenameWorkerCompletion`,
+    `ImportWorkerCompletion`, `ExportWorkerCompletion`,
+    `SettingsWorkerCompletion`, `PassphraseWorkerCompletion`, and
+    `QrWorkerCompletion` each carry `(effect_or_outcome, vault,
+    store)` on every branch. The completion handlers in
+    `AppModel::update` destructure the pair first, install it on
+    `self.vault` unconditionally, then route the typed
+    `XWorkerEffect` through `compose_X_dispatch`.)
   - [ ] Disable mutating controls (row `next`, dialog submit buttons,
     passphrase actions, import / export, settings) while
     `UnlockedBusy` is active and surface the spinner / busy
     affordance on the current surface.
-  - [ ] Defer quit and window-close requests until the worker
+  - [x] Defer quit and window-close requests until the worker
     returns.
-  - [ ] On auto-lock expiry during `UnlockedBusy`, record a
+    (`AppMsg::Quit` routes through `handle_quit_request`, which
+    delegates to `EffectOwnership::request_quit`: `QuitDecision::Now`
+    fires `tear_down_for_quit` + `relm4::main_application().quit()`
+    immediately; `QuitDecision::Deferred` records `pending_quit`
+    on the in-flight machinery, and the worker-completion epilogue's
+    `handle_effect_completion` returns `CompleteOutcome::QuitNow`,
+    which `apply_effect_completion_outcome` translates into the
+    deferred teardown. Pinned by
+    `handle_quit_request_with_busy_effects_is_deferred_and_records_pending_quit`
+    and `handle_effect_completion_with_pending_quit_fires_quit_now`
+    in `tests/app_state_logic.rs`.)
+  - [x] On auto-lock expiry during `UnlockedBusy`, record a
     lock-after-effect request; apply it after the worker returns
     only if the returned vault is still encrypted, and discard it
     if the operation changed the vault to plaintext.
+    (`AppMsg::AutoLockTimerFired`'s `Lock` branch routes through
+    `handle_auto_lock_expiry`: `LockDecision::Now` fires
+    `lock_on_auto_lock_expiry` immediately; `LockDecision::Deferred`
+    records `pending_lock` on the in-flight machinery, and the
+    worker-completion epilogue's `handle_effect_completion` reads
+    `Vault::is_encrypted()` off the just-reinstalled pair and
+    returns `CompleteOutcome::LockNow` (still encrypted) or
+    `CompleteOutcome::LockDiscarded` (`PassphraseRemove`
+    transitioned to plaintext). Pinned by
+    `handle_auto_lock_expiry_while_busy_is_deferred_and_records_pending_lock`,
+    `handle_effect_completion_with_pending_lock_on_still_encrypted_vault_fires_lock_now`,
+    and
+    `handle_effect_completion_with_pending_lock_on_plaintext_converted_vault_discards_lock`
+    in `tests/app_state_logic.rs`.)
   - [ ] Coalesce settings spinner debounce to the latest pre-save
     value when an effect is in flight; refuse toggle changes that
     would overlap an active vault effect until the control is
