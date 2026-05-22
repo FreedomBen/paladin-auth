@@ -195,6 +195,14 @@ pub struct StartupOutcome {
 /// drives which child view is rendered. The live `(Vault, Store)`
 /// pair lives in [`AppModel::vault`] alongside the state machine
 /// per `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree".
+///
+/// `struct_excessive_bools` is allowed because the per-dialog
+/// `last_*_busy` cache fields each shadow a distinct controller's
+/// emitted `SetBusy(bool)` flip — one bool per controller is the
+/// minimal representation, and packing them into a bitset would just
+/// rename the same flags without changing the per-dispatch reconcile
+/// pattern they exist to debounce.
+#[allow(clippy::struct_excessive_bools)]
 pub struct AppModel {
     /// Vault path override from [`AppInit`]. Preserved for the
     /// `StartupErrorComponent` retry action wired by a follow-up
@@ -335,6 +343,13 @@ pub struct AppModel {
     /// completion arms without rebuilding the overlay reference.
     #[allow(dead_code)]
     toast_overlay: adw::ToastOverlay,
+    /// Header-bar busy spinner cloned out of `widgets.busy_spinner`
+    /// at init so [`AppModel::sync_app_busy_spinner`] can flip its
+    /// visibility / spin state imperatively from each dispatch tick
+    /// without going through `update_view`. The clone is a refcount
+    /// bump on the underlying `GObject`. Mirrors the pattern used
+    /// for [`Self::toast_overlay`] / [`Self::content`].
+    busy_spinner: gtk::Spinner,
     /// Pending wipe-after-copy slot for the clipboard auto-clear
     /// policy.
     ///
@@ -376,6 +391,50 @@ pub struct AppModel {
     /// Add dialog is not mounted). Initialized to `false` for the
     /// same reason as [`Self::last_account_list_busy`].
     last_add_dialog_busy: bool,
+    /// Last `AppState::is_busy()` value dispatched to the live
+    /// [`crate::rename_dialog::RenameDialogComponent`] via
+    /// [`crate::rename_dialog::RenameDialogMsg::SetBusy`].
+    ///
+    /// Tracked here so [`AppModel::sync_rename_dialog_busy`] can
+    /// debounce, same pattern as [`Self::last_add_dialog_busy`].
+    /// Initialized to `false` for the same reason as
+    /// [`Self::last_account_list_busy`].
+    last_rename_dialog_busy: bool,
+    /// Last `AppState::is_busy()` value dispatched to the live
+    /// [`crate::remove_dialog::RemoveDialogComponent`] via
+    /// [`crate::remove_dialog::RemoveDialogMsg::SetBusy`].
+    ///
+    /// Tracked here so [`AppModel::sync_remove_dialog_busy`] can
+    /// debounce, same pattern as [`Self::last_add_dialog_busy`].
+    last_remove_dialog_busy: bool,
+    /// Last `AppState::is_busy()` value dispatched to the live
+    /// [`crate::import_dialog::ImportDialogComponent`] via
+    /// [`crate::import_dialog::ImportDialogMsg::SetBusy`].
+    ///
+    /// Tracked here so [`AppModel::sync_import_dialog_busy`] can
+    /// debounce, same pattern as [`Self::last_add_dialog_busy`].
+    last_import_dialog_busy: bool,
+    /// Last `AppState::is_busy()` value dispatched to the live
+    /// [`crate::export_dialog::ExportDialogComponent`] via
+    /// [`crate::export_dialog::ExportDialogMsg::SetBusy`].
+    ///
+    /// Tracked here so [`AppModel::sync_export_dialog_busy`] can
+    /// debounce, same pattern as [`Self::last_add_dialog_busy`].
+    last_export_dialog_busy: bool,
+    /// Last `AppState::is_busy()` value dispatched to the live
+    /// [`crate::passphrase_dialog::PassphraseDialogComponent`] via
+    /// [`crate::passphrase_dialog::PassphraseDialogMsg::SetBusy`].
+    ///
+    /// Tracked here so [`AppModel::sync_passphrase_dialog_busy`]
+    /// can debounce, same pattern as [`Self::last_add_dialog_busy`].
+    last_passphrase_dialog_busy: bool,
+    /// Last `AppState::is_busy()` value dispatched to the live
+    /// [`crate::settings::SettingsComponent`] via
+    /// [`crate::settings::SettingsMsg::SetBusy`].
+    ///
+    /// Tracked here so [`AppModel::sync_settings_busy`] can
+    /// debounce, same pattern as [`Self::last_add_dialog_busy`].
+    last_settings_busy: bool,
     /// Current auto-lock idle-deadline tracker.
     ///
     /// Refreshed on every [`AppMsg::IdleEvent`] dispatched by the
@@ -486,6 +545,16 @@ impl std::fmt::Debug for AppModel {
             )
             .field("last_account_list_busy", &self.last_account_list_busy)
             .field("last_add_dialog_busy", &self.last_add_dialog_busy)
+            .field("last_rename_dialog_busy", &self.last_rename_dialog_busy)
+            .field("last_remove_dialog_busy", &self.last_remove_dialog_busy)
+            .field("last_import_dialog_busy", &self.last_import_dialog_busy)
+            .field("last_export_dialog_busy", &self.last_export_dialog_busy)
+            .field(
+                "last_passphrase_dialog_busy",
+                &self.last_passphrase_dialog_busy,
+            )
+            .field("last_settings_busy", &self.last_settings_busy)
+            .field("busy_spinner", &"<gtk::Spinner>")
             .field("idle_source", &self.idle_source)
             .field(
                 "auto_lock_source",
@@ -1307,6 +1376,25 @@ impl SimpleComponent for AppModel {
                         set_tooltip_text: Some(format_app_menu_button_tooltip()),
                     },
 
+                    // Header-bar busy spinner per
+                    // `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight
+                    // effect ownership" ("surface the spinner / busy
+                    // affordance on the current surface"). The
+                    // initial visibility / spin state come from the
+                    // resolved startup `state`; subsequent state
+                    // changes flip the spinner imperatively via
+                    // [`apply_app_busy_spinner`] called from the
+                    // same per-dispatch hook that drives
+                    // [`Self::sync_account_list_busy`]. This mirrors
+                    // the imperative-update pattern used by the
+                    // `+` / search-toggle header-bar buttons.
+                    #[name = "busy_spinner"]
+                    pack_end = &gtk::Spinner {
+                        set_visible: format_app_busy_spinner_visible(Some(&state)),
+                        set_spinning: format_app_busy_spinner_visible(Some(&state)),
+                        set_tooltip_text: Some(format_app_busy_spinner_tooltip()),
+                    },
+
                     #[name = "search_button"]
                     pack_end = &gtk::ToggleButton {
                         set_icon_name: format_app_search_button_icon_name(),
@@ -1516,9 +1604,16 @@ impl SimpleComponent for AppModel {
             ticker_source: None,
             reveal_windows: HashMap::new(),
             toast_overlay: widgets.toast_overlay.clone(),
+            busy_spinner: widgets.busy_spinner.clone(),
             pending_clipboard: None,
             last_account_list_busy: false,
             last_add_dialog_busy: false,
+            last_rename_dialog_busy: false,
+            last_remove_dialog_busy: false,
+            last_import_dialog_busy: false,
+            last_export_dialog_busy: false,
+            last_passphrase_dialog_busy: false,
+            last_settings_busy: false,
             idle_source: IdleSource::new(),
             auto_lock_source: None,
             effects,
@@ -3741,6 +3836,13 @@ impl SimpleComponent for AppModel {
         self.prune_reveals_if_locked();
         self.sync_account_list_busy();
         self.sync_add_dialog_busy();
+        self.sync_rename_dialog_busy();
+        self.sync_remove_dialog_busy();
+        self.sync_import_dialog_busy();
+        self.sync_export_dialog_busy();
+        self.sync_passphrase_dialog_busy();
+        self.sync_settings_busy();
+        self.sync_app_busy_spinner();
     }
 }
 
@@ -3805,6 +3907,135 @@ impl AppModel {
         if let Some(controller) = self.add_dialog.as_ref() {
             controller.emit(AddAccountMsg::SetBusy(busy));
         }
+    }
+
+    /// Reconcile the live
+    /// [`crate::rename_dialog::RenameDialogComponent`]'s busy flag
+    /// against the current [`AppState::is_busy()`] reading. Peer of
+    /// [`Self::sync_add_dialog_busy`] on the Rename dialog side.
+    ///
+    /// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect
+    /// ownership", the dialog's Save button dims while the
+    /// `gio::spawn_blocking Vault::mutate_and_save(|v|
+    /// v.rename(...))` worker owns the live `(Vault, Store)` pair.
+    /// Debounced through [`Self::last_rename_dialog_busy`].
+    fn sync_rename_dialog_busy(&mut self) {
+        let busy = self.state.as_ref().is_some_and(AppState::is_busy);
+        if busy == self.last_rename_dialog_busy {
+            return;
+        }
+        self.last_rename_dialog_busy = busy;
+        if let Some(controller) = self.rename_dialog.as_ref() {
+            controller.emit(crate::rename_dialog::RenameDialogMsg::SetBusy(busy));
+        }
+    }
+
+    /// Reconcile the live
+    /// [`crate::remove_dialog::RemoveDialogComponent`]'s busy flag
+    /// against the current [`AppState::is_busy()`] reading. Peer of
+    /// [`Self::sync_add_dialog_busy`] on the Remove dialog side.
+    ///
+    /// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect
+    /// ownership", the dialog's Remove button dims while the
+    /// `gio::spawn_blocking Vault::mutate_and_save(|v|
+    /// v.remove(...))` worker owns the live `(Vault, Store)` pair.
+    /// Debounced through [`Self::last_remove_dialog_busy`].
+    fn sync_remove_dialog_busy(&mut self) {
+        let busy = self.state.as_ref().is_some_and(AppState::is_busy);
+        if busy == self.last_remove_dialog_busy {
+            return;
+        }
+        self.last_remove_dialog_busy = busy;
+        if let Some(controller) = self.remove_dialog.as_ref() {
+            controller.emit(crate::remove_dialog::RemoveDialogMsg::SetBusy(busy));
+        }
+    }
+
+    /// Reconcile the live
+    /// [`crate::import_dialog::ImportDialogComponent`]'s busy flag
+    /// against the current [`AppState::is_busy()`] reading. Peer of
+    /// [`Self::sync_add_dialog_busy`] on the Import dialog side.
+    /// Debounced through [`Self::last_import_dialog_busy`].
+    fn sync_import_dialog_busy(&mut self) {
+        let busy = self.state.as_ref().is_some_and(AppState::is_busy);
+        if busy == self.last_import_dialog_busy {
+            return;
+        }
+        self.last_import_dialog_busy = busy;
+        if let Some(controller) = self.import_dialog.as_ref() {
+            controller.emit(crate::import_dialog::ImportDialogMsg::SetBusy(busy));
+        }
+    }
+
+    /// Reconcile the live
+    /// [`crate::export_dialog::ExportDialogComponent`]'s busy flag
+    /// against the current [`AppState::is_busy()`] reading. Peer of
+    /// [`Self::sync_add_dialog_busy`] on the Export dialog side.
+    /// Debounced through [`Self::last_export_dialog_busy`].
+    fn sync_export_dialog_busy(&mut self) {
+        let busy = self.state.as_ref().is_some_and(AppState::is_busy);
+        if busy == self.last_export_dialog_busy {
+            return;
+        }
+        self.last_export_dialog_busy = busy;
+        if let Some(controller) = self.export_dialog.as_ref() {
+            controller.emit(crate::export_dialog::ExportDialogMsg::SetBusy(busy));
+        }
+    }
+
+    /// Reconcile the live
+    /// [`crate::passphrase_dialog::PassphraseDialogComponent`]'s
+    /// busy flag against the current [`AppState::is_busy()`]
+    /// reading. Peer of [`Self::sync_add_dialog_busy`] on the
+    /// Passphrase dialog side. Debounced through
+    /// [`Self::last_passphrase_dialog_busy`].
+    fn sync_passphrase_dialog_busy(&mut self) {
+        let busy = self.state.as_ref().is_some_and(AppState::is_busy);
+        if busy == self.last_passphrase_dialog_busy {
+            return;
+        }
+        self.last_passphrase_dialog_busy = busy;
+        if let Some(controller) = self.passphrase_dialog.as_ref() {
+            // The passphrase dialog already exposes the worker-in-
+            // flight latch as `SetDispatching(bool)` (set / unset by
+            // its own apply_msg on `dispatching` plus by parent-
+            // driven refusal paths). Routing the AppModel-level busy
+            // state through the same message keeps a single
+            // source of truth for the dialog's submit / cancel
+            // gating rather than introducing a parallel `SetBusy`
+            // variant.
+            controller.emit(crate::passphrase_dialog::PassphraseDialogMsg::SetDispatching(busy));
+        }
+    }
+
+    /// Reconcile the live [`crate::settings::SettingsComponent`]'s
+    /// busy flag against the current [`AppState::is_busy()`]
+    /// reading. Peer of [`Self::sync_add_dialog_busy`] on the
+    /// Settings side. Debounced through
+    /// [`Self::last_settings_busy`].
+    fn sync_settings_busy(&mut self) {
+        let busy = self.state.as_ref().is_some_and(AppState::is_busy);
+        if busy == self.last_settings_busy {
+            return;
+        }
+        self.last_settings_busy = busy;
+        if let Some(controller) = self.settings_dialog.as_ref() {
+            controller.emit(crate::settings::SettingsDialogMsg::SetBusy(busy));
+        }
+    }
+
+    /// Drive the header-bar busy spinner's visibility / spin state
+    /// from the current [`AppState::is_busy`] reading.
+    ///
+    /// Idempotent (the underlying `GObject` setters no-op on a same-
+    /// value flip), so running this from every per-dispatch sync
+    /// tick keeps the spinner in lockstep with `is_busy` without
+    /// branching. Called alongside the other `sync_*_busy`
+    /// reconcilers from the post-dispatch hook so a single state
+    /// change propagates to the row factory, every open dialog,
+    /// and the header-bar visual in one pass.
+    fn sync_app_busy_spinner(&mut self) {
+        apply_app_busy_spinner(&self.busy_spinner, self.state.as_ref());
     }
 
     /// Tear down the per-session GTK / `GLib` resources that must not
@@ -5712,6 +5943,53 @@ pub fn format_app_add_button_sensitive(state: &AppState) -> bool {
 #[must_use]
 pub fn format_app_add_button_visible(state: &AppState) -> bool {
     state.is_unlocked()
+}
+
+/// Whether the header-bar busy spinner should be visible.
+///
+/// Returns `true` only on [`AppState::UnlockedBusy`] — the
+/// surface-level visual cue that a vault-touching worker is in
+/// flight per `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect
+/// ownership". `Missing` / `Locked` / `Unlocked` / `StartupError`
+/// hide the spinner. The widget layer binds the header bar
+/// `gtk::Spinner`'s `set_visible` and `set_spinning` to this
+/// projector via `#[watch]` against `model.state.as_ref()` so the
+/// pre-init `None` lifecycle window matches the same `false`
+/// projection as the post-init idle states.
+///
+/// Pure — pinned by `tests/app_state_logic.rs::format_app_busy_spinner_visible_*`.
+#[must_use]
+pub fn format_app_busy_spinner_visible(state: Option<&AppState>) -> bool {
+    state.is_some_and(AppState::is_busy)
+}
+
+/// Tooltip text for the header-bar busy spinner.
+///
+/// The spinner is wordless (a single rotating glyph) so the
+/// tooltip is the only on-hover affordance that explains it.
+/// Returns the static "Working…" string used as the
+/// `gtk::Widget::tooltip-text` hint.
+///
+/// Pure — returns a `'static str` without allocating.
+#[must_use]
+pub fn format_app_busy_spinner_tooltip() -> &'static str {
+    "Working…"
+}
+
+/// Apply the busy-spinner visibility / spin state for the supplied
+/// `state` onto the header-bar `gtk::Spinner`.
+///
+/// Idempotent — both `set_visible` and `set_spinning` no-op on a
+/// same-value flip, so this can be called from every per-dispatch
+/// sync hook without batching. Mirrors
+/// [`apply_app_add_button_visibility`] on the visibility-imperative
+/// side. The widget layer calls this from
+/// [`AppModel::sync_app_busy_spinner`] alongside the other
+/// `sync_*_busy` reconcilers.
+pub fn apply_app_busy_spinner(spinner: &gtk::Spinner, state: Option<&AppState>) {
+    let visible = format_app_busy_spinner_visible(state);
+    spinner.set_visible(visible);
+    spinner.set_spinning(visible);
 }
 
 /// Build the header-bar `+` button's

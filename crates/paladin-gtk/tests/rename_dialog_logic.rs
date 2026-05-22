@@ -1598,3 +1598,172 @@ fn format_rename_dialog_success_toast_returns_renamed() {
         "wording must stay stable so the success toast does not drift silently",
     );
 }
+
+// ---------------------------------------------------------------------------
+// Busy gating — `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership":
+// while the AppModel is in `UnlockedBusy`, every mutating control surface
+// disables. The rename dialog's Save button is one such surface; while a
+// `Vault::mutate_and_save` worker is in flight, the dialog dims its Save
+// button so the user cannot kick off a second rename worker before the
+// first one returns the `(Vault, Store)` pair.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn fresh_rename_dialog_state_is_not_busy() {
+    // A freshly opened dialog has not dispatched any worker yet, so the
+    // busy latch must start cleared. `AppModel::sync_rename_dialog_busy`
+    // would otherwise emit an immediate `SetBusy(false)` on mount,
+    // which is harmless but wastes a view tick.
+    let init = RenameDialogInit {
+        account_id: AccountId::new(),
+        current_label: "alice".to_string(),
+        display_label: "GitHub:alice".to_string(),
+    };
+    let state = RenameDialogState::new(&init);
+
+    assert!(
+        !state.is_busy(),
+        "fresh state must not be busy — no worker has been dispatched",
+    );
+}
+
+#[test]
+fn apply_msg_set_busy_true_marks_state_busy() {
+    // `AppModel` brackets the `gio::spawn_blocking
+    // Vault::mutate_and_save(|v| v.rename(...))` call with
+    // `SetBusy(true)` / `SetBusy(false)` so the dialog can dim its
+    // Save button while the worker owns the `(Vault, Store)` pair.
+    let init = RenameDialogInit {
+        account_id: AccountId::new(),
+        current_label: "alice".to_string(),
+        display_label: "GitHub:alice".to_string(),
+    };
+    let mut state = RenameDialogState::new(&init);
+    let out = apply_msg(&mut state, RenameDialogMsg::SetBusy(true));
+
+    assert!(out.is_none(), "SetBusy must not emit a dialog output");
+    assert!(state.is_busy(), "SetBusy(true) must flip the busy latch on");
+}
+
+#[test]
+fn apply_msg_set_busy_false_clears_busy_state() {
+    // On worker return `AppModel` emits `SetBusy(false)` so the Save
+    // button re-enables alongside the reinstalled `(Vault, Store)`
+    // pair.
+    let init = RenameDialogInit {
+        account_id: AccountId::new(),
+        current_label: "alice".to_string(),
+        display_label: "GitHub:alice".to_string(),
+    };
+    let mut state = RenameDialogState::new(&init);
+    apply_msg(&mut state, RenameDialogMsg::SetBusy(true));
+    let out = apply_msg(&mut state, RenameDialogMsg::SetBusy(false));
+
+    assert!(out.is_none(), "SetBusy must not emit a dialog output");
+    assert!(
+        !state.is_busy(),
+        "SetBusy(false) must flip the busy latch off",
+    );
+}
+
+#[test]
+fn apply_msg_set_busy_same_value_is_idempotent() {
+    // The reconciler in `AppModel::sync_rename_dialog_busy`
+    // debounces same-value flips, but the dialog itself must also be
+    // idempotent so a stray duplicate emit does not corrupt the
+    // latch.
+    let init = RenameDialogInit {
+        account_id: AccountId::new(),
+        current_label: "alice".to_string(),
+        display_label: "GitHub:alice".to_string(),
+    };
+    let mut state = RenameDialogState::new(&init);
+    apply_msg(&mut state, RenameDialogMsg::SetBusy(true));
+    apply_msg(&mut state, RenameDialogMsg::SetBusy(true));
+    assert!(state.is_busy(), "two SetBusy(true) calls leave busy on");
+
+    apply_msg(&mut state, RenameDialogMsg::SetBusy(false));
+    apply_msg(&mut state, RenameDialogMsg::SetBusy(false));
+    assert!(!state.is_busy(), "two SetBusy(false) calls leave busy off");
+}
+
+#[test]
+fn apply_msg_set_busy_does_not_disturb_draft_or_validation() {
+    // The busy latch is orthogonal to the draft / validation state
+    // — flipping it must not clear the user-typed draft or the
+    // cached `last_validation`, otherwise a worker round trip would
+    // reset the entry row mid-edit.
+    let init = RenameDialogInit {
+        account_id: AccountId::new(),
+        current_label: "alice".to_string(),
+        display_label: "GitHub:alice".to_string(),
+    };
+    let mut state = RenameDialogState::new(&init);
+    state.set_draft("alice-renamed".to_string());
+    let draft_before = state.draft().to_string();
+    let validation_before = matches!(state.last_validation(), SubmitOutcome::Proceed(_));
+
+    apply_msg(&mut state, RenameDialogMsg::SetBusy(true));
+
+    assert_eq!(state.draft(), draft_before, "draft survives SetBusy");
+    assert_eq!(
+        matches!(state.last_validation(), SubmitOutcome::Proceed(_)),
+        validation_before,
+        "cached validation survives SetBusy",
+    );
+}
+
+#[test]
+fn format_rename_dialog_save_button_sensitive_dimmed_when_busy() {
+    // Even with a fully validated draft, the Save button must dim
+    // while a `Vault::mutate_and_save` worker is in flight so the
+    // user cannot kick off a second rename worker before the first
+    // returns the `(Vault, Store)` pair.
+    use paladin_gtk::rename_dialog::format_rename_dialog_save_button_sensitive;
+
+    let init = RenameDialogInit {
+        account_id: AccountId::new(),
+        current_label: "alice".to_string(),
+        display_label: "GitHub:alice".to_string(),
+    };
+    let mut state = RenameDialogState::new(&init);
+    assert!(
+        matches!(state.last_validation(), SubmitOutcome::Proceed(_)),
+        "seeded label passes §4.1 validation",
+    );
+    assert!(
+        format_rename_dialog_save_button_sensitive(&state),
+        "Save button sensitive while idle and validation succeeds",
+    );
+
+    apply_msg(&mut state, RenameDialogMsg::SetBusy(true));
+
+    assert!(
+        !format_rename_dialog_save_button_sensitive(&state),
+        "Save button dims while the AppModel is busy",
+    );
+}
+
+#[test]
+fn format_rename_dialog_save_button_sensitive_re_enables_after_busy_clears() {
+    // After the worker returns `AppModel` emits `SetBusy(false)`;
+    // the Save button must re-enable so the user can retry / edit
+    // again.
+    use paladin_gtk::rename_dialog::format_rename_dialog_save_button_sensitive;
+
+    let init = RenameDialogInit {
+        account_id: AccountId::new(),
+        current_label: "alice".to_string(),
+        display_label: "GitHub:alice".to_string(),
+    };
+    let mut state = RenameDialogState::new(&init);
+    apply_msg(&mut state, RenameDialogMsg::SetBusy(true));
+    assert!(!format_rename_dialog_save_button_sensitive(&state));
+
+    apply_msg(&mut state, RenameDialogMsg::SetBusy(false));
+
+    assert!(
+        format_rename_dialog_save_button_sensitive(&state),
+        "Save button re-enables after busy clears",
+    );
+}

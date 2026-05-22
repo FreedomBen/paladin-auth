@@ -3958,10 +3958,44 @@ sign-off.
     `AppModel::update` destructure the pair first, install it on
     `self.vault` unconditionally, then route the typed
     `XWorkerEffect` through `compose_X_dispatch`.)
-  - [ ] Disable mutating controls (row `next`, dialog submit buttons,
+  - [x] Disable mutating controls (row `next`, dialog submit buttons,
     passphrase actions, import / export, settings) while
     `UnlockedBusy` is active and surface the spinner / busy
     affordance on the current surface.
+    Each per-dialog state machine carries a `busy: bool` latch
+    flipped by an `XxxMsg::SetBusy(bool)` message (or
+    `PassphraseDialogMsg::SetDispatching(bool)` for the passphrase
+    sub-flows that already had the equivalent `dispatching` field).
+    `AppModel` reconciles the latches against `AppState::is_busy()`
+    once per dispatch tick through the per-dialog
+    `sync_<name>_dialog_busy()` peers of
+    `sync_account_list_busy` / `sync_add_dialog_busy`, debounced
+    against the corresponding `last_<name>_busy` cache so a
+    same-value flip is a benign no-op. The header-bar Import…
+    / Export… / Passphrase… / Preferences… menu entries inherit
+    the `AppState::allows_mutating_menu()` projection
+    (`format_app_primary_menu_action_sensitivities`), so opening
+    a fresh dialog while busy is already blocked. The header-bar
+    busy spinner (`gtk::Spinner` `pack_end` on the
+    `AdwHeaderBar`) is driven imperatively through
+    `apply_app_busy_spinner` from `sync_app_busy_spinner` — the
+    visibility / spin state come from
+    `format_app_busy_spinner_visible`, pinned by
+    `tests/app_state_logic.rs::format_app_busy_spinner_visible_*`.
+    Per-dialog sensitivity gating is pinned by
+    `tests/rename_dialog_logic.rs::{apply_msg_set_busy_*,
+    format_rename_dialog_save_button_sensitive_dimmed_when_busy,
+    format_rename_dialog_save_button_sensitive_re_enables_after_busy_clears}`,
+    `tests/remove_dialog_logic.rs::{apply_msg_set_busy_*,
+    format_remove_dialog_destructive_response_enabled_dimmed_when_busy}`,
+    `tests/settings_logic.rs::{dispatch_settings_dialog_msg_set_busy_*,
+    compose_settings_dialog_auto_lock_enabled_sensitive_busy_returns_false,
+    compose_settings_dialog_clipboard_clear_enabled_sensitive_busy_returns_false,
+    compose_settings_dialog_auto_lock_secs_sensitive_busy_returns_false_even_when_toggle_on,
+    compose_settings_dialog_clipboard_clear_secs_sensitive_busy_returns_false_even_when_toggle_on}`,
+    on top of the existing add / import / export / passphrase
+    busy-latch tests covered by §"Tests > Pure-logic unit
+    tests".
   - [x] Defer quit and window-close requests until the worker
     returns.
     (`AppMsg::Quit` routes through `handle_quit_request`, which

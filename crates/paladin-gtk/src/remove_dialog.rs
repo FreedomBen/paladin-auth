@@ -320,6 +320,28 @@ pub fn format_remove_dialog_subtitle(display_label: &str) -> String {
     format!("Removing {display_label}.")
 }
 
+/// Decide whether the destructive Remove `AdwAlertDialog` response
+/// should be enabled given the dialog's busy latch.
+///
+/// Returns `true` while idle and `false` while
+/// [`RemoveDialogState::is_busy`] — the
+/// `gio::spawn_blocking Vault::mutate_and_save(|v| v.remove(...))`
+/// worker owns the live `(Vault, Store)` pair so the user cannot
+/// kick off a second remove worker before the first returns. The
+/// widget layer drives `adw::AlertDialog::set_response_enabled` for
+/// the destructive response id through this projector per
+/// `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership".
+///
+/// Pure — inspects only the busy latch. Sibling of
+/// [`crate::rename_dialog::format_rename_dialog_save_button_sensitive`]
+/// on the destructive-confirm side; the rename projector also
+/// guards against the validation gate, but the Remove dialog has
+/// no editable draft so the busy latch is the only gate here.
+#[must_use]
+pub fn format_remove_dialog_destructive_response_enabled(state: &RemoveDialogState) -> bool {
+    !state.is_busy()
+}
+
 /// Body text for the `AdwToast` raised on the
 /// [`RemoveWorkerEffect::Success`] branch.
 ///
@@ -669,6 +691,15 @@ pub struct RemoveDialogState {
     /// glue in `AppModel` can read it during a re-render after the
     /// dialog mounts.
     pub(crate) worker_outcome: Option<RemoveErrorOutcome>,
+    /// Worker-in-flight latch flipped by [`RemoveDialogMsg::SetBusy`]
+    /// from `AppModel` around the `gio::spawn_blocking
+    /// Vault::mutate_and_save(|v| v.remove(...))` worker. While
+    /// `true`, [`format_remove_dialog_destructive_response_enabled`]
+    /// returns `false` so the `AlertDialog`'s destructive Remove
+    /// response dims, mirroring the rename / add submit dimming per
+    /// `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect
+    /// ownership".
+    busy: bool,
 }
 
 impl RemoveDialogState {
@@ -681,7 +712,23 @@ impl RemoveDialogState {
         Self {
             init: init.clone(),
             worker_outcome: None,
+            busy: false,
         }
+    }
+
+    /// `true` while a `Vault::mutate_and_save` remove worker is in
+    /// flight; flipped by [`RemoveDialogMsg::SetBusy`] from
+    /// `AppModel`. While set,
+    /// [`format_remove_dialog_destructive_response_enabled`]
+    /// returns `false`.
+    #[must_use]
+    pub fn is_busy(&self) -> bool {
+        self.busy
+    }
+
+    /// Parent-driven setter for the worker-in-flight latch.
+    pub fn set_busy(&mut self, busy: bool) {
+        self.busy = busy;
     }
 
     /// Stable account id from the seeded [`RemoveDialogInit`].
@@ -781,6 +828,13 @@ pub enum RemoveDialogMsg {
     /// the confirmation body is immutable, so `apply_msg` only
     /// stores the outcome.
     WorkerFailed(RemoveErrorOutcome),
+    /// Parent-driven worker-in-flight latch.
+    ///
+    /// `AppModel::sync_remove_dialog_busy` emits `SetBusy(true)`
+    /// when entering `AppState::UnlockedBusy` (with this dialog as
+    /// the originating effect) and `SetBusy(false)` on the worker
+    /// return, mirroring the rename / add submit dimming pattern.
+    SetBusy(bool),
 }
 
 /// Outputs forwarded from [`RemoveDialogComponent`] up to
@@ -850,6 +904,16 @@ pub fn apply_msg(
             state.worker_outcome = Some(outcome);
             None
         }
+        RemoveDialogMsg::SetBusy(busy) => {
+            // Parent-driven flag flip — the worker spawn site in
+            // `AppModel` brackets the `gio::spawn_blocking
+            // Vault::mutate_and_save(|v| v.remove(...))` call with
+            // `SetBusy(true)` / `SetBusy(false)` so the
+            // AlertDialog's destructive Remove response dims while
+            // the worker owns the live `(Vault, Store)` pair.
+            state.set_busy(busy);
+            None
+        }
     }
 }
 
@@ -872,6 +936,16 @@ pub struct RemoveDialogComponent {
     /// Pure-logic state machine. `apply_msg` mutates this in place;
     /// the widget reads back through accessors for re-renders.
     state: RemoveDialogState,
+    /// Cloned reference to the root [`adw::AlertDialog`] so the
+    /// [`SimpleComponent::update`] handler can drive
+    /// `set_response_enabled` for the destructive response id
+    /// after each [`RemoveDialogMsg::SetBusy`] flip. The view!
+    /// macro covers single-arg property setters via `#[watch]` but
+    /// `set_response_enabled` is a two-arg method keyed by
+    /// response id, so the gating call lives in `update` against
+    /// this clone. `gtk::glib::Object`-backed handles are cheap to
+    /// clone (refcount bump) per the `GObject` convention.
+    root: Option<adw::AlertDialog>,
 }
 
 #[allow(missing_docs)]
@@ -932,10 +1006,17 @@ impl SimpleComponent for RemoveDialogComponent {
         root: Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
-        let model = RemoveDialogComponent {
+        let mut model = RemoveDialogComponent {
             state: RemoveDialogState::new(&init),
+            root: None,
         };
         let widgets = view_output!();
+        // Stash the AlertDialog handle so `update` can drive
+        // `set_response_enabled(destructive_id, enabled)` after
+        // each `SetBusy` flip. Cloning the `adw::AlertDialog`
+        // handle is a refcount bump — the live widget is the same
+        // GObject instance.
+        model.root = Some(root.clone());
 
         // Register the AlertDialog's two responses imperatively after
         // `view_output!` builds the root. `add_response` must run
@@ -983,6 +1064,20 @@ impl SimpleComponent for RemoveDialogComponent {
             // the controller (e.g. window closed mid-click), there's
             // nothing left to dismiss.
             let _ = sender.output(output);
+        }
+        // Re-drive the destructive response's enabled flag from the
+        // pure-logic projector after every message dispatch so the
+        // `RemoveDialogMsg::SetBusy(bool)` flip dims / re-enables the
+        // AlertDialog's Remove button in lockstep. Cheap (single
+        // GObject method call) and idempotent (`set_response_enabled`
+        // no-ops on a same-value flip), so re-running it on every
+        // update keeps the gating in one place without per-message
+        // branching.
+        if let Some(root) = self.root.as_ref() {
+            root.set_response_enabled(
+                format_remove_dialog_destructive_response_id(),
+                format_remove_dialog_destructive_response_enabled(&self.state),
+            );
         }
     }
 }

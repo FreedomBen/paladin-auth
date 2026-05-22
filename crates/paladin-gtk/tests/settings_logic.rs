@@ -2761,3 +2761,144 @@ fn dispatch_settings_dialog_msg_debounce_tick_idle_returns_noop() {
     let action = dispatch_settings_dialog_msg(&mut state, SettingsDialogMsg::DebounceTick);
     assert_eq!(action, SettingsDialogAction::Noop);
 }
+
+// ---------------------------------------------------------------------------
+// Busy gating — `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership":
+// while the AppModel is in `UnlockedBusy`, the settings toggles and spinner
+// rows dim so the user cannot kick off a second `apply_setting_patch` worker
+// before the first returns the `(Vault, Store)` pair.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn fresh_settings_state_is_not_busy() {
+    let state = SettingsState::new(defaults());
+    assert!(
+        !state.is_busy(),
+        "fresh state must not be busy — no worker has been dispatched",
+    );
+}
+
+#[test]
+fn dispatch_settings_dialog_msg_set_busy_true_marks_state_busy() {
+    use paladin_gtk::settings::{
+        dispatch_settings_dialog_msg, SettingsDialogAction, SettingsDialogMsg, SettingsState,
+    };
+    let mut state = SettingsState::new(defaults());
+    let action = dispatch_settings_dialog_msg(&mut state, SettingsDialogMsg::SetBusy(true));
+    assert_eq!(action, SettingsDialogAction::Noop);
+    assert!(state.is_busy());
+}
+
+#[test]
+fn dispatch_settings_dialog_msg_set_busy_false_clears_busy_state() {
+    use paladin_gtk::settings::{
+        dispatch_settings_dialog_msg, SettingsDialogAction, SettingsDialogMsg, SettingsState,
+    };
+    let mut state = SettingsState::new(defaults());
+    dispatch_settings_dialog_msg(&mut state, SettingsDialogMsg::SetBusy(true));
+    let action = dispatch_settings_dialog_msg(&mut state, SettingsDialogMsg::SetBusy(false));
+    assert_eq!(action, SettingsDialogAction::Noop);
+    assert!(!state.is_busy());
+}
+
+#[test]
+fn dispatch_settings_dialog_msg_set_busy_idempotent_same_value() {
+    use paladin_gtk::settings::{dispatch_settings_dialog_msg, SettingsDialogMsg, SettingsState};
+    let mut state = SettingsState::new(defaults());
+    dispatch_settings_dialog_msg(&mut state, SettingsDialogMsg::SetBusy(true));
+    dispatch_settings_dialog_msg(&mut state, SettingsDialogMsg::SetBusy(true));
+    assert!(state.is_busy());
+}
+
+#[test]
+fn compose_settings_dialog_auto_lock_enabled_sensitive_idle_returns_true() {
+    use paladin_gtk::settings::{
+        compose_settings_dialog_auto_lock_enabled_sensitive, SettingsState,
+    };
+    let state = SettingsState::new(defaults());
+    assert!(
+        compose_settings_dialog_auto_lock_enabled_sensitive(&state),
+        "auto-lock toggle enabled while AppModel is idle",
+    );
+}
+
+#[test]
+fn compose_settings_dialog_auto_lock_enabled_sensitive_busy_returns_false() {
+    use paladin_gtk::settings::{
+        compose_settings_dialog_auto_lock_enabled_sensitive, dispatch_settings_dialog_msg,
+        SettingsDialogMsg, SettingsState,
+    };
+    let mut state = SettingsState::new(defaults());
+    dispatch_settings_dialog_msg(&mut state, SettingsDialogMsg::SetBusy(true));
+    assert!(
+        !compose_settings_dialog_auto_lock_enabled_sensitive(&state),
+        "auto-lock toggle dims while the AppModel is busy",
+    );
+}
+
+#[test]
+fn compose_settings_dialog_clipboard_clear_enabled_sensitive_idle_returns_true() {
+    use paladin_gtk::settings::{
+        compose_settings_dialog_clipboard_clear_enabled_sensitive, SettingsState,
+    };
+    let state = SettingsState::new(defaults());
+    assert!(compose_settings_dialog_clipboard_clear_enabled_sensitive(
+        &state
+    ));
+}
+
+#[test]
+fn compose_settings_dialog_clipboard_clear_enabled_sensitive_busy_returns_false() {
+    use paladin_gtk::settings::{
+        compose_settings_dialog_clipboard_clear_enabled_sensitive, dispatch_settings_dialog_msg,
+        SettingsDialogMsg, SettingsState,
+    };
+    let mut state = SettingsState::new(defaults());
+    dispatch_settings_dialog_msg(&mut state, SettingsDialogMsg::SetBusy(true));
+    assert!(!compose_settings_dialog_clipboard_clear_enabled_sensitive(
+        &state
+    ));
+}
+
+#[test]
+fn compose_settings_dialog_auto_lock_secs_sensitive_busy_returns_false_even_when_toggle_on() {
+    // The spinner is normally sensitive when the toggle is on, but
+    // a busy `AppModel` must dim it regardless so the user cannot
+    // edit the buffered value mid-worker. The toggle gate keys off
+    // the `committed` snapshot (not the staged toggle action), so
+    // the test seeds a `CommittedSettings` with auto_lock_enabled
+    // already on rather than dispatching a `Toggled` that only
+    // routes a `Submit` and waits on the worker to commit.
+    use paladin_gtk::settings::{
+        compose_settings_dialog_auto_lock_secs_sensitive, dispatch_settings_dialog_msg,
+        CommittedSettings, SettingsDialogMsg, SettingsState,
+    };
+    let committed = CommittedSettings::new(true, 300, false, 30);
+    let mut state = SettingsState::new(committed);
+    assert!(
+        compose_settings_dialog_auto_lock_secs_sensitive(&state),
+        "spinner enabled when toggle is on and AppModel is idle",
+    );
+    dispatch_settings_dialog_msg(&mut state, SettingsDialogMsg::SetBusy(true));
+    assert!(
+        !compose_settings_dialog_auto_lock_secs_sensitive(&state),
+        "spinner dims while the AppModel is busy",
+    );
+}
+
+#[test]
+fn compose_settings_dialog_clipboard_clear_secs_sensitive_busy_returns_false_even_when_toggle_on() {
+    use paladin_gtk::settings::{
+        compose_settings_dialog_clipboard_clear_secs_sensitive, dispatch_settings_dialog_msg,
+        CommittedSettings, SettingsDialogMsg, SettingsState,
+    };
+    let committed = CommittedSettings::new(false, 300, true, 30);
+    let mut state = SettingsState::new(committed);
+    assert!(compose_settings_dialog_clipboard_clear_secs_sensitive(
+        &state
+    ));
+    dispatch_settings_dialog_msg(&mut state, SettingsDialogMsg::SetBusy(true));
+    assert!(!compose_settings_dialog_clipboard_clear_secs_sensitive(
+        &state
+    ));
+}

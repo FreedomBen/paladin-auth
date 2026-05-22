@@ -1309,3 +1309,82 @@ fn format_remove_dialog_success_toast_is_non_empty_single_sentence() {
         "toast body must stay on one line so `adw::Toast::new` renders a single-line confirmation",
     );
 }
+
+// ---------------------------------------------------------------------------
+// Busy gating — `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership":
+// the dialog's destructive Remove response dims while the
+// `Vault::mutate_and_save` worker owns the live `(Vault, Store)` pair,
+// matching the rename / add submit dimming pattern.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn fresh_remove_dialog_state_is_not_busy() {
+    let state = RemoveDialogState::new(&dummy_init());
+    assert!(
+        !state.is_busy(),
+        "fresh state must not be busy — no worker has been dispatched",
+    );
+}
+
+#[test]
+fn apply_msg_set_busy_true_marks_remove_state_busy() {
+    let mut state = RemoveDialogState::new(&dummy_init());
+    let out = apply_msg(&mut state, RemoveDialogMsg::SetBusy(true));
+
+    assert!(out.is_none(), "SetBusy must not emit a dialog output");
+    assert!(state.is_busy(), "SetBusy(true) must flip the busy latch on");
+}
+
+#[test]
+fn apply_msg_set_busy_false_clears_remove_state_busy() {
+    let mut state = RemoveDialogState::new(&dummy_init());
+    apply_msg(&mut state, RemoveDialogMsg::SetBusy(true));
+    let out = apply_msg(&mut state, RemoveDialogMsg::SetBusy(false));
+
+    assert!(out.is_none(), "SetBusy must not emit a dialog output");
+    assert!(
+        !state.is_busy(),
+        "SetBusy(false) must flip the busy latch off",
+    );
+}
+
+#[test]
+fn apply_msg_set_busy_remove_idempotent_same_value() {
+    let mut state = RemoveDialogState::new(&dummy_init());
+    apply_msg(&mut state, RemoveDialogMsg::SetBusy(true));
+    apply_msg(&mut state, RemoveDialogMsg::SetBusy(true));
+    assert!(state.is_busy());
+
+    apply_msg(&mut state, RemoveDialogMsg::SetBusy(false));
+    apply_msg(&mut state, RemoveDialogMsg::SetBusy(false));
+    assert!(!state.is_busy());
+}
+
+#[test]
+fn format_remove_dialog_destructive_response_enabled_dimmed_when_busy() {
+    // The destructive `Remove` AlertDialog response must dim while
+    // a `Vault::mutate_and_save` worker is in flight so the user
+    // cannot kick off a second remove worker before the first
+    // returns the `(Vault, Store)` pair.
+    use paladin_gtk::remove_dialog::format_remove_dialog_destructive_response_enabled;
+
+    let mut state = RemoveDialogState::new(&dummy_init());
+    assert!(
+        format_remove_dialog_destructive_response_enabled(&state),
+        "destructive response enabled while idle",
+    );
+
+    apply_msg(&mut state, RemoveDialogMsg::SetBusy(true));
+
+    assert!(
+        !format_remove_dialog_destructive_response_enabled(&state),
+        "destructive response dims while the AppModel is busy",
+    );
+
+    apply_msg(&mut state, RemoveDialogMsg::SetBusy(false));
+
+    assert!(
+        format_remove_dialog_destructive_response_enabled(&state),
+        "destructive response re-enables after busy clears",
+    );
+}

@@ -12470,3 +12470,86 @@ fn handle_worker_lost_followed_by_effect_completion_does_not_resurrect_unlocked(
         "Stale completion after worker_lost must not transition out of StartupError",
     );
 }
+
+// ---------------------------------------------------------------------------
+// Header-bar busy spinner visibility — `IMPLEMENTATION_PLAN_04_GTK.md`
+// §"In-flight effect ownership" requires the busy affordance to surface on
+// the current surface. The header-bar spinner is the visual that tells the
+// user a worker is in flight; the projector below is what the widget binds
+// `gtk::Spinner::set_visible` / `set_spinning` to.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn format_app_busy_spinner_visible_none_returns_false() {
+    // Pre-init lifecycle: `AppModel::state` is `None` until startup
+    // probes resolve. The spinner must stay hidden during that
+    // window so the `#[watch]` binding does not flash on mount.
+    use paladin_gtk::app::model::format_app_busy_spinner_visible;
+
+    assert!(!format_app_busy_spinner_visible(None));
+}
+
+#[test]
+fn format_app_busy_spinner_visible_missing_returns_false() {
+    use paladin_gtk::app::model::format_app_busy_spinner_visible;
+    use paladin_gtk::app::state::AppState;
+
+    let state = AppState::Missing {
+        path: PathBuf::from("/tmp/vault.paladin"),
+    };
+    assert!(!format_app_busy_spinner_visible(Some(&state)));
+}
+
+#[test]
+fn format_app_busy_spinner_visible_locked_returns_false() {
+    use paladin_gtk::app::model::format_app_busy_spinner_visible;
+    use paladin_gtk::app::state::AppState;
+
+    let state = AppState::Locked {
+        path: PathBuf::from("/tmp/vault.paladin"),
+    };
+    assert!(!format_app_busy_spinner_visible(Some(&state)));
+}
+
+#[test]
+fn format_app_busy_spinner_visible_unlocked_returns_false() {
+    use paladin_gtk::app::model::format_app_busy_spinner_visible;
+    use paladin_gtk::app::state::AppState;
+
+    let state = AppState::Unlocked {
+        path: PathBuf::from("/tmp/vault.paladin"),
+    };
+    assert!(
+        !format_app_busy_spinner_visible(Some(&state)),
+        "spinner hidden while idle Unlocked",
+    );
+}
+
+#[test]
+fn format_app_busy_spinner_visible_unlocked_busy_returns_true() {
+    use paladin_gtk::app::model::format_app_busy_spinner_visible;
+    use paladin_gtk::app::state::AppState;
+
+    let state = AppState::UnlockedBusy {
+        path: PathBuf::from("/tmp/vault.paladin"),
+    };
+    assert!(
+        format_app_busy_spinner_visible(Some(&state)),
+        "spinner visible while UnlockedBusy",
+    );
+}
+
+#[test]
+fn format_app_busy_spinner_visible_startup_error_returns_false() {
+    use paladin_core::PaladinError;
+    use paladin_gtk::app::model::format_app_busy_spinner_visible;
+    use paladin_gtk::app::state::AppState;
+    use paladin_gtk::startup_error::StartupError;
+
+    let err = PaladinError::InvalidHeader;
+    let state = AppState::StartupError {
+        path: None,
+        error: StartupError::from_inspect(&err),
+    };
+    assert!(!format_app_busy_spinner_visible(Some(&state)));
+}

@@ -672,7 +672,25 @@ pub fn compose_settings_dialog_clipboard_clear_enabled_active(state: &SettingsSt
 /// (the gating toggle) on the auto-lock side.
 #[must_use]
 pub fn compose_settings_dialog_auto_lock_secs_sensitive(state: &SettingsState) -> bool {
+    if state.is_busy() {
+        return false;
+    }
     state.committed().auto_lock_enabled()
+}
+
+/// Whether the auto-lock `AdwSwitchRow` should be sensitive.
+///
+/// Returns `false` while [`SettingsState::is_busy`] so the toggle
+/// dims alongside the spinner while a `Vault::mutate_and_save`
+/// settings worker is in flight; `true` otherwise. The widget
+/// binds `AdwSwitchRow::set_sensitive` to this through `#[watch]`.
+///
+/// Pure — sibling of
+/// [`compose_settings_dialog_auto_lock_secs_sensitive`] on the
+/// toggle-row side. Pinned by `tests/settings_logic.rs`.
+#[must_use]
+pub fn compose_settings_dialog_auto_lock_enabled_sensitive(state: &SettingsState) -> bool {
+    !state.is_busy()
 }
 
 /// State-driven projection of the clipboard-clear seconds
@@ -694,7 +712,21 @@ pub fn compose_settings_dialog_auto_lock_secs_sensitive(state: &SettingsState) -
 /// Pure — borrows the state and returns a `bool` without allocating.
 #[must_use]
 pub fn compose_settings_dialog_clipboard_clear_secs_sensitive(state: &SettingsState) -> bool {
+    if state.is_busy() {
+        return false;
+    }
     state.committed().clipboard_clear_enabled()
+}
+
+/// Whether the clipboard-clear `AdwSwitchRow` should be sensitive.
+///
+/// Returns `false` while [`SettingsState::is_busy`]; `true`
+/// otherwise. Sibling of
+/// [`compose_settings_dialog_auto_lock_enabled_sensitive`] on the
+/// other toggle. Pure — pinned by `tests/settings_logic.rs`.
+#[must_use]
+pub fn compose_settings_dialog_clipboard_clear_enabled_sensitive(state: &SettingsState) -> bool {
+    !state.is_busy()
 }
 
 /// Toast body rendered by `SettingsComponent` on an accepted
@@ -1487,6 +1519,17 @@ pub struct SettingsState {
     committed: CommittedSettings,
     pending: Option<PendingSpinner>,
     last_outcome: Option<SaveOutcome>,
+    /// Worker-in-flight latch flipped by
+    /// [`SettingsDialogMsg::SetBusy`] from `AppModel` around the
+    /// `gio::spawn_blocking Vault::mutate_and_save(|v|
+    /// v.apply_setting_patch(...))` worker. While `true`, the
+    /// toggle and spinner sensitivity helpers all return `false`
+    /// so the user cannot kick off a second settings worker before
+    /// the first returns the `(Vault, Store)` pair per
+    /// `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership".
+    /// Independent of [`Self::pending`] (the staged spinner value)
+    /// — `busy` is the pre-return latch.
+    busy: bool,
 }
 
 impl SettingsState {
@@ -1498,7 +1541,21 @@ impl SettingsState {
             committed,
             pending: None,
             last_outcome: None,
+            busy: false,
         }
+    }
+
+    /// `true` while a `Vault::mutate_and_save` settings worker is
+    /// in flight; flipped by [`SettingsDialogMsg::SetBusy`] from
+    /// `AppModel`.
+    #[must_use]
+    pub fn is_busy(&self) -> bool {
+        self.busy
+    }
+
+    /// Parent-driven setter for the worker-in-flight latch.
+    pub fn set_busy(&mut self, busy: bool) {
+        self.busy = busy;
     }
 
     /// Committed (on-disk) snapshot.
@@ -1731,6 +1788,15 @@ pub enum SettingsDialogMsg {
     /// helpers can paint the row body / CSS class on the next
     /// `#[watch]` tick.
     WorkerCompleted(SettingsWorkerEffect),
+    /// Parent-driven worker-in-flight latch.
+    ///
+    /// `AppModel::sync_settings_busy` emits `SetBusy(true)` when
+    /// entering `AppState::UnlockedBusy` (with this dialog as the
+    /// originating effect) and `SetBusy(false)` on the worker
+    /// return, mirroring the add / rename / remove submit dimming
+    /// pattern. The toggle and spinner sensitivity helpers consult
+    /// the latch through [`SettingsState::is_busy`].
+    SetBusy(bool),
 }
 
 /// Result of dispatching a [`SettingsDialogMsg`] through
@@ -1795,6 +1861,16 @@ pub fn dispatch_settings_dialog_msg(
         },
         SettingsDialogMsg::WorkerCompleted(SettingsWorkerEffect { change, outcome }) => {
             state.apply_save_outcome(change, outcome);
+            SettingsDialogAction::Noop
+        }
+        SettingsDialogMsg::SetBusy(busy) => {
+            // Parent-driven flag flip — `AppModel` brackets the
+            // `gio::spawn_blocking
+            // Vault::mutate_and_save(|v| v.apply_setting_patch(...))`
+            // call with `SetBusy(true)` / `SetBusy(false)` so the
+            // toggle / spinner sensitivity projectors dim the dialog
+            // while the worker owns the live `(Vault, Store)` pair.
+            state.set_busy(busy);
             SettingsDialogAction::Noop
         }
     }
@@ -1887,6 +1963,10 @@ impl SimpleComponent for SettingsComponent {
                         set_title: format_settings_dialog_auto_lock_enabled_row_title(),
                         #[watch]
                         set_active: compose_settings_dialog_auto_lock_enabled_active(&model.state),
+                        #[watch]
+                        set_sensitive: compose_settings_dialog_auto_lock_enabled_sensitive(
+                            &model.state,
+                        ),
                         connect_active_notify[sender] => move |row| {
                             sender.input(SettingsDialogMsg::AutoLockToggled(row.is_active()));
                         },
@@ -1937,6 +2017,11 @@ impl SimpleComponent for SettingsComponent {
                         set_active: compose_settings_dialog_clipboard_clear_enabled_active(
                             &model.state,
                         ),
+                        #[watch]
+                        set_sensitive:
+                            compose_settings_dialog_clipboard_clear_enabled_sensitive(
+                                &model.state,
+                            ),
                         connect_active_notify[sender] => move |row| {
                             sender.input(SettingsDialogMsg::ClipboardClearToggled(row.is_active()));
                         },

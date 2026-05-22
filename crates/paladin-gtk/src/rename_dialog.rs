@@ -462,21 +462,27 @@ pub fn format_rename_dialog_success_toast() -> &'static str {
 }
 
 /// Decide whether the Save `gtk::Button` should be sensitive given
-/// the dialog's cached validation state.
+/// the dialog's cached validation state and busy latch.
 ///
 /// Returns `true` when [`RenameDialogState::last_validation`] is a
-/// [`SubmitOutcome::Proceed`] — the draft passes §4.1 validation and
-/// `RenameDialogState::submit` would forward
-/// [`RenameDialogOutput::SubmitLabel`] — and `false` on
-/// [`SubmitOutcome::InlineError`] so the user cannot bypass the
-/// inline error to submit an empty / overlong label.
+/// [`SubmitOutcome::Proceed`] *and* the dialog is not busy. Returns
+/// `false` on [`SubmitOutcome::InlineError`] (the user cannot bypass
+/// the inline error to submit an empty / overlong label) and on
+/// [`RenameDialogState::is_busy`] (a `Vault::mutate_and_save` worker
+/// is in flight; the user cannot kick off a second rename worker
+/// before the first returns the `(Vault, Store)` pair per
+/// `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect ownership").
 ///
-/// Pure — inspects only the cached [`SubmitOutcome`] and never
-/// re-runs validation. The widget binds this through `#[watch]` so
-/// the button updates in lockstep with `connect_changed` keystrokes
-/// without spinning up GTK in `tests/rename_dialog_logic.rs`.
+/// Pure — inspects only the cached [`SubmitOutcome`] and the busy
+/// latch, never re-runs validation. The widget binds this through
+/// `#[watch]` so the button updates in lockstep with
+/// `connect_changed` keystrokes and `SetBusy(bool)` flips without
+/// spinning up GTK in `tests/rename_dialog_logic.rs`.
 #[must_use]
 pub fn format_rename_dialog_save_button_sensitive(state: &RenameDialogState) -> bool {
+    if state.is_busy() {
+        return false;
+    }
     matches!(state.last_validation(), SubmitOutcome::Proceed(_))
 }
 
@@ -594,6 +600,17 @@ pub struct RenameDialogState {
     /// [`RenameDialogMsg::SubmitClicked`] so a retry does not
     /// render stale text alongside the live attempt.
     worker_outcome: Option<RenameErrorOutcome>,
+    /// Worker-in-flight latch flipped by [`RenameDialogMsg::SetBusy`]
+    /// from `AppModel` around the `gio::spawn_blocking
+    /// Vault::mutate_and_save(|v| v.rename(...))` worker. While
+    /// `true`, [`format_rename_dialog_save_button_sensitive`] dims
+    /// the Save button so the user cannot kick off a second rename
+    /// worker before the first returns the `(Vault, Store)` pair
+    /// per `IMPLEMENTATION_PLAN_04_GTK.md` §"In-flight effect
+    /// ownership". Independent of [`Self::worker_outcome`], which
+    /// is the post-return projection; `busy` is the pre-return
+    /// latch.
+    busy: bool,
 }
 
 impl RenameDialogState {
@@ -613,6 +630,7 @@ impl RenameDialogState {
             draft,
             last_validation,
             worker_outcome: None,
+            busy: false,
         }
     }
 
@@ -739,6 +757,29 @@ impl RenameDialogState {
     pub fn submit(&self) -> SubmitOutcome {
         classify_submit(&self.draft)
     }
+
+    /// `true` while a `Vault::mutate_and_save` rename worker is in
+    /// flight.
+    ///
+    /// Flipped by [`RenameDialogMsg::SetBusy`] from `AppModel`
+    /// around the `gio::spawn_blocking` call. While set,
+    /// [`format_rename_dialog_save_button_sensitive`] dims the
+    /// Save button so the user cannot kick off a second worker
+    /// before the first returns the `(Vault, Store)` pair.
+    #[must_use]
+    pub fn is_busy(&self) -> bool {
+        self.busy
+    }
+
+    /// Parent-driven setter for the worker-in-flight latch.
+    ///
+    /// `AppModel::sync_rename_dialog_busy` calls this through
+    /// [`RenameDialogMsg::SetBusy`]; same-value flips are benign
+    /// no-ops (no allocation, no extra view tick beyond the
+    /// `#[watch]` binding's own change detection).
+    pub fn set_busy(&mut self, busy: bool) {
+        self.busy = busy;
+    }
 }
 
 /// Messages handled by [`RenameDialogComponent`].
@@ -799,6 +840,17 @@ pub enum RenameDialogMsg {
     /// no-op so the dispatch path can build cleanly while the
     /// rendering side catches up.
     WorkerFailed(RenameErrorOutcome),
+    /// Parent-driven worker-in-flight latch.
+    ///
+    /// `AppModel::sync_rename_dialog_busy` emits `SetBusy(true)`
+    /// when entering `AppState::UnlockedBusy` (with this dialog as
+    /// the originating effect) and `SetBusy(false)` on the worker
+    /// return, mirroring the `AddAccountMsg::SetBusy` /
+    /// `AccountListMsg::SetBusy` pattern. The handler delegates to
+    /// [`RenameDialogState::set_busy`]; the cached
+    /// [`format_rename_dialog_save_button_sensitive`] picks up the
+    /// flip through `#[watch]`.
+    SetBusy(bool),
 }
 
 /// Outputs forwarded from [`RenameDialogComponent`] up to
@@ -903,6 +955,20 @@ pub fn apply_msg(
                 state.set_draft(prior);
             }
             state.worker_outcome = Some(outcome);
+            None
+        }
+        RenameDialogMsg::SetBusy(busy) => {
+            // Parent-driven flag flip — the worker spawn site in
+            // `AppModel` brackets the `gio::spawn_blocking
+            // Vault::mutate_and_save(|v| v.rename(...))` call with
+            // `SetBusy(true)` / `SetBusy(false)` so
+            // `format_rename_dialog_save_button_sensitive` dims the
+            // Save button while the worker owns the live
+            // `(Vault, Store)` pair. Idempotent — a same-value flip
+            // is a benign no-op. Dialog-local — the parent already
+            // knows it kicked the worker off, so no output is
+            // forwarded.
+            state.set_busy(busy);
             None
         }
     }
