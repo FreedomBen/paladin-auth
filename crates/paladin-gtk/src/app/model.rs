@@ -88,17 +88,19 @@ use crate::app::state::{
     apply_import_vault_install_inplace, apply_passphrase_dispatch_inplace,
     apply_passphrase_vault_install_inplace, apply_qr_dispatch_inplace,
     apply_remove_dispatch_inplace, apply_remove_vault_install_inplace,
-    apply_rename_dispatch_inplace, apply_rename_vault_install_inplace, apply_submit_add_inplace,
-    apply_submit_export_inplace, apply_submit_import_inplace, apply_submit_passphrase_inplace,
-    apply_submit_remove_inplace, apply_submit_rename_inplace, apply_submit_unlock_inplace,
-    apply_unlock_dispatch_inplace, apply_unlock_vault_install_inplace, compose_add_dispatch,
-    compose_add_worker_input, compose_export_dispatch, compose_export_worker_input,
-    compose_import_dispatch, compose_import_worker_input, compose_passphrase_dispatch,
-    compose_passphrase_worker_input, compose_qr_dispatch, compose_qr_worker_input,
-    compose_remove_dispatch, compose_remove_worker_input, compose_rename_dispatch,
-    compose_rename_worker_input, compose_unlock_dispatch, compose_unlock_worker_input,
-    decide_state_from_inspect, decide_state_from_open_error, run_unlock_worker, AppState,
-    OpenErrorOutcome, UnlockWorkerCompletion,
+    apply_rename_dispatch_inplace, apply_rename_vault_install_inplace,
+    apply_settings_dispatch_inplace, apply_settings_vault_install_inplace,
+    apply_submit_add_inplace, apply_submit_export_inplace, apply_submit_import_inplace,
+    apply_submit_passphrase_inplace, apply_submit_remove_inplace, apply_submit_rename_inplace,
+    apply_submit_settings_inplace, apply_submit_unlock_inplace, apply_unlock_dispatch_inplace,
+    apply_unlock_vault_install_inplace, compose_add_dispatch, compose_add_worker_input,
+    compose_export_dispatch, compose_export_worker_input, compose_import_dispatch,
+    compose_import_worker_input, compose_passphrase_dispatch, compose_passphrase_worker_input,
+    compose_qr_dispatch, compose_qr_worker_input, compose_remove_dispatch,
+    compose_remove_worker_input, compose_rename_dispatch, compose_rename_worker_input,
+    compose_settings_dispatch, compose_settings_worker_input, compose_unlock_dispatch,
+    compose_unlock_worker_input, decide_state_from_inspect, decide_state_from_open_error,
+    run_unlock_worker, AppState, OpenErrorOutcome, UnlockWorkerCompletion,
 };
 use crate::auto_lock::idle_should_arm;
 use crate::clipboard_clear::{
@@ -135,7 +137,8 @@ use crate::rename_dialog::{
     RenameWorkerCompletion,
 };
 use crate::settings::{
-    CommittedSettings, SettingsComponent, SettingsDialogInit, SettingsDialogOutput,
+    run_settings_worker, CommittedSettings, SettingsComponent, SettingsDialogInit,
+    SettingsDialogOutput, SettingsWorkerCompletion,
 };
 use crate::startup_error::{
     format_startup_error_marker, StartupError, StartupErrorComponent, StartupErrorInit,
@@ -630,14 +633,15 @@ pub enum AppMsg {
     /// in follow-up commits alongside the editable form widgets.
     AddAccountAction(AddAccountOutput),
     /// Forwarded from the live [`SettingsComponent`] when the user
-    /// interacts with the `AdwPreferencesDialog`. Today only
-    /// [`SettingsDialogOutput::Close`] is emitted — `AppModel`
-    /// responds by dropping the controller so the dialog disappears
-    /// and any in-flight pending spinner draft is discarded. Toggle
-    /// / spinner / debounce outputs that propagate
-    /// [`paladin_core::SettingPatch`] values to
-    /// `Vault::mutate_and_save` land in follow-up commits alongside
-    /// the editable rows in the dialog body.
+    /// interacts with the `AdwPreferencesDialog`.
+    /// [`SettingsDialogOutput::Close`] drops the live controller so
+    /// the dialog disappears and any in-flight pending spinner draft
+    /// is discarded; [`SettingsDialogOutput::Submit`] propagates an
+    /// accepted [`paladin_core::SettingPatch`] (from a toggle click
+    /// or a 500 ms debounce resolved with a pending spinner change)
+    /// into the `gio::spawn_blocking` `Vault::mutate_and_save`
+    /// worker. The completion arrives back as
+    /// [`Self::SettingsWorkerCompleted`].
     SettingsDialogAction(SettingsDialogOutput),
     /// Forwarded from the live [`ImportDialogComponent`] when the
     /// user interacts with the `adw::Dialog`. Today only
@@ -1010,6 +1014,24 @@ pub enum AppMsg {
     /// [`PassphraseDialogComponent`] on failure, the dialog drop on
     /// success, and the optional `AdwToast` body.
     PassphraseWorkerCompleted(PassphraseWorkerCompletion),
+    /// Posted by the `gio::spawn_blocking` worker spawned in
+    /// `AppMsg::SettingsDialogAction(SettingsDialogOutput::Submit)`
+    /// once the `Vault::mutate_and_save(|v| v.apply_setting_patch(patch))`
+    /// call returns. The handler reinstalls the returned
+    /// `(Vault, Store)` pair into [`AppModel::vault`] (the §4.3
+    /// `Vault::mutate_and_save` rollback / durability semantics are
+    /// authoritative, so the pair always rides back through here),
+    /// routes the typed
+    /// [`crate::settings::SettingsWorkerEffect`] through
+    /// [`compose_settings_dispatch`], and applies the four dispatch
+    /// decisions: the `UnlockedBusy → Unlocked` rollback, the
+    /// [`crate::settings::SettingsDialogMsg::WorkerCompleted`] forward
+    /// to the live [`SettingsComponent`] so the dialog promotes /
+    /// rolls back the visible value, the optional settings-saved
+    /// `AdwToast`, and the `reask_idle` flag that consults
+    /// [`paladin_core::policy::auto_lock::IdlePolicy::should_arm`] on
+    /// the reinstalled vault per the §"`SettingsComponent`" L3468 hook.
+    SettingsWorkerCompleted(SettingsWorkerCompletion),
     /// Posted by [`dispatch_startup_error_output`] when
     /// [`StartupErrorComponent`](crate::startup_error::StartupErrorComponent)
     /// emits [`StartupErrorOutput::Retry`].
@@ -1776,6 +1798,101 @@ impl SimpleComponent for AppModel {
                 // (controller swapped under us by a future race),
                 // this is a benign no-op.
                 self.settings_dialog = None;
+            }
+            AppMsg::SettingsDialogAction(SettingsDialogOutput::Submit(patch)) => {
+                // Toggle clicked or 500 ms debounce resolved with a
+                // pending spinner change. Bundle the live
+                // `(Vault, Store)` pair with the typed `SettingPatch`
+                // into a `SettingsWorkerInput` via
+                // `compose_settings_worker_input`, transition the
+                // state machine to `UnlockedBusy` via
+                // `apply_submit_settings_inplace`, and spawn the
+                // `gio::spawn_blocking` `Vault::mutate_and_save`
+                // worker. The completion arrives back as
+                // `AppMsg::SettingsWorkerCompleted` for the
+                // dispatch handler below.
+                let worker_input = match (self.state.as_ref(), self.vault.take()) {
+                    (Some(state), Some(pair)) => {
+                        match compose_settings_worker_input(state, pair, patch) {
+                            Ok(input) => Some(input),
+                            Err(pair) => {
+                                apply_settings_vault_install_inplace(&mut self.vault, pair);
+                                None
+                            }
+                        }
+                    }
+                    (None, Some(pair)) => {
+                        apply_settings_vault_install_inplace(&mut self.vault, pair);
+                        None
+                    }
+                    (_, None) => None,
+                };
+                if let Some(input) = worker_input {
+                    if let Some(state) = self.state.as_mut() {
+                        apply_submit_settings_inplace(state);
+                    }
+                    let sender = sender.clone();
+                    gtk::glib::spawn_future_local(async move {
+                        let completion =
+                            gtk::gio::spawn_blocking(move || run_settings_worker(input))
+                                .await
+                                .expect("Vault settings worker panicked");
+                        sender.input(AppMsg::SettingsWorkerCompleted(completion));
+                    });
+                }
+            }
+            AppMsg::SettingsWorkerCompleted(completion) => {
+                // Worker-outcome dispatch. Mirrors the
+                // `RenameWorkerCompleted` shape but the dialog stays
+                // mounted across every save (live-apply):
+                //
+                // * `app_state` — `UnlockedBusy → Unlocked` rollback
+                //   regardless of typed effect.
+                // * `dialog_msg` — always `Some(WorkerCompleted(effect))`
+                //   forwarded to the live `SettingsComponent` so the
+                //   state machine promotes / rolls back the visible
+                //   value and stamps `last_outcome` for the inline-
+                //   subtitle helpers.
+                // * `success_toast` — `Some(body)` on Success only,
+                //   raised on the shared `adw::ToastOverlay`.
+                // * `reask_idle` — `true` iff an auto-lock change
+                //   committed (Success / DurabilityWarning); we call
+                //   `idle_should_arm(vault)` on the reinstalled pair
+                //   as the integration hook for the auto-lock timer
+                //   arm/disarm side (§"Clipboard + auto-lock parity"
+                //   wires the actual `glib::timeout_add_local`
+                //   plumbing in a follow-up checklist item).
+                //
+                // The carried `(vault, store)` pair is reinstalled
+                // unconditionally — `Vault::mutate_and_save` is
+                // authoritative for the post-effect state across
+                // every branch per DESIGN.md §4.3.
+                let SettingsWorkerCompletion {
+                    effect,
+                    vault,
+                    store,
+                } = completion;
+                apply_settings_vault_install_inplace(&mut self.vault, (vault, store));
+                let dispatch = self.state.as_mut().map(|state| {
+                    let dispatch = compose_settings_dispatch(state, &effect);
+                    apply_settings_dispatch_inplace(state, &dispatch);
+                    dispatch
+                });
+                if let Some(dispatch) = dispatch {
+                    if let Some(msg) = dispatch.dialog_msg {
+                        if let Some(controller) = self.settings_dialog.as_ref() {
+                            controller.emit(msg);
+                        }
+                    }
+                    if let Some(body) = dispatch.success_toast {
+                        self.toast_overlay.add_toast(adw::Toast::new(&body));
+                    }
+                    if dispatch.reask_idle {
+                        if let Some((vault, _)) = self.vault.as_ref() {
+                            let _should_arm = idle_should_arm(vault);
+                        }
+                    }
+                }
             }
             AppMsg::OpenImportDialog => {
                 // Application menu "Import…" activation. Mount a fresh

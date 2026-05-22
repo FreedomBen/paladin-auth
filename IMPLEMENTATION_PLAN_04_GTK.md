@@ -3440,34 +3440,109 @@ sign-off.
     `apply_msg_submit_set_with_match_emits_submit_and_clears_secrets`
     and `apply_msg_cancel_emits_close_and_wipes_secrets`, plus the
     existing `passphrase_state_clear_for_*` suite.)
-- [ ] `SettingsComponent` full implementation
+- [x] `SettingsComponent` full implementation
   (`AdwPreferencesDialog` with toggles and spinners; live-apply
   through `Vault::mutate_and_save`).
-  - [ ] Render the surface as an `AdwPreferencesDialog` with one
+  - [x] Render the surface as an `AdwPreferencesDialog` with one
     `AdwPreferencesGroup` for auto-lock and one for
     clipboard-clear; do not use the libadwaita 1.6-deprecated
     `AdwPreferencesWindow`.
-  - [ ] Mount toggles as `AdwSwitchRow` and timeouts as
+    (`SettingsComponent`'s `view!` mounts an `adw::PreferencesDialog`
+    with one `adw::PreferencesGroup` per concept, titled via the
+    pre-existing `format_settings_dialog_auto_lock_group_title` /
+    `format_settings_dialog_clipboard_clear_group_title` helpers.)
+  - [x] Mount toggles as `AdwSwitchRow` and timeouts as
     `AdwSpinRow` inside the matching `AdwPreferencesGroup`.
-  - [ ] Clamp the timeout spinners to
+    (`auto_lock_enabled_row` / `clipboard_clear_enabled_row` are
+    `adw::SwitchRow`; `auto_lock_secs_row` / `clipboard_clear_secs_row`
+    are `adw::SpinRow`. Titles, active state, spinner values, and row
+    sensitivity bind via `#[watch]` against the existing
+    `compose_settings_dialog_*` helpers.)
+  - [x] Clamp the timeout spinners to
     `paladin_core::AUTO_LOCK_SECS_MIN..=paladin_core::AUTO_LOCK_SECS_MAX`
     and
     `paladin_core::CLIPBOARD_CLEAR_SECS_MIN..=paladin_core::CLIPBOARD_CLEAR_SECS_MAX`.
-  - [ ] Live-apply each accepted change by invoking the matching
+    (Both spinners construct their `gtk::Adjustment` from the existing
+    `format_settings_dialog_*_secs_adjustment` helpers, which already
+    return the §5-pinned `(lower, upper, step)` tuple from
+    `paladin_core::*_SECS_MIN`/`MAX`. The state machine clamps any
+    out-of-range value at `stage_auto_lock_secs` / `stage_clipboard_clear_secs`
+    via `clamp_auto_lock_secs` / `clamp_clipboard_clear_secs`, asserted
+    by the existing `clamp_*` test suite.)
+  - [x] Live-apply each accepted change by invoking the matching
     setter inside `Vault::mutate_and_save`; debounce spinner
     changes 500 ms via `glib::timeout_add_local` so holding +/-
     coalesces to a single save with the most recent buffered value.
-  - [ ] Revert the visible widget value on `save_not_committed`
+    (`dispatch_settings_dialog_msg` returns `SettingsDialogAction::Submit(patch)`
+    on toggles and on `DebounceTick` with a pending spinner draft;
+    `SettingsComponent::update` cancels any prior
+    `glib::timeout_add_local_once` and arms a fresh 500 ms timer on
+    `StageDebounce`, and forwards `SettingsDialogOutput::Submit(patch)`
+    on `Submit`. `AppMsg::SettingsDialogAction(Submit)` bundles a
+    `SettingsWorkerInput` via `compose_settings_worker_input` and
+    spawns `run_settings_worker` on `gtk::gio::spawn_blocking`, which
+    runs `vault.mutate_and_save(&store, |v| v.apply_setting_patch(patch))`.
+    Pinned by
+    `dispatch_settings_dialog_msg_auto_lock_secs_spinner_change_returns_stage_debounce`,
+    `dispatch_settings_dialog_msg_debounce_tick_with_pending_returns_submit`,
+    `dispatch_settings_dialog_msg_debounce_tick_idle_returns_noop`,
+    `dispatch_settings_dialog_msg_auto_lock_toggled_value_change_returns_submit`,
+    and the existing `multiple_*_spinner_changes_coalesce_to_latest_on_debounce`
+    suite.)
+  - [x] Revert the visible widget value on `save_not_committed`
     pre-commit rollback so memory matches disk.
-  - [ ] Keep the new value visible on
+    (`run_settings_worker` runs `Vault::mutate_and_save`, which
+    restores the pre-call snapshot on `save_not_committed` per
+    DESIGN.md §4.3. `classify_settings_save_result` routes the typed
+    error to `SaveOutcome::Rollback`; `apply_save_outcome` leaves the
+    committed snapshot unchanged on that branch so the
+    `compose_settings_dialog_*_value` projections paint the prior
+    value on the next `#[watch]` tick. Pinned by
+    `apply_save_outcome_rollback_leaves_committed_unchanged` and
+    `classify_settings_save_result_save_not_committed_maps_to_rollback`.)
+  - [x] Keep the new value visible on
     `save_durability_unconfirmed` and attach the warning to the
     changed `AdwPreferencesGroup` row.
-  - [ ] On successful live-apply, keep the committed value visible
+    (`classify_settings_save_result` routes the typed error to
+    `SaveOutcome::DurabilityWarning { warning, field }`;
+    `apply_save_outcome` promotes the attempted value to committed
+    and stamps `last_outcome` with the warning so the pre-existing
+    `compose_settings_dialog_inline_subtitle_*_for_field` helpers
+    paint the row's warning body on the next `#[watch]` tick. Pinned
+    by `apply_save_outcome_durability_warning_promotes_attempted_value_to_committed`,
+    `classify_settings_save_result_save_durability_unconfirmed_maps_to_durability_warning`,
+    and the existing
+    `apply_save_durability_unconfirmed_keeps_*_visible_with_warning`
+    suite.)
+  - [x] On successful live-apply, keep the committed value visible
     and post a non-blocking settings-saved `AdwToast` through the
     shared toast overlay.
-  - [ ] Re-ask `IdlePolicy::should_arm` after auto-lock toggle or
+    (`compose_settings_dispatch` projects
+    `success_toast = Some(format_settings_dialog_saved_toast().to_string())`
+    on `SaveOutcome::Success` and `None` on every other outcome.
+    `AppModel::update`'s `SettingsWorkerCompleted` arm raises the body
+    on `self.toast_overlay`. Pinned by
+    `compose_settings_dispatch_success_rolls_busy_back_and_forwards_worker_completed`,
+    `compose_settings_dispatch_durability_warning_keeps_committed_and_reasks_idle`,
+    `compose_settings_dispatch_rollback_does_not_reask_idle`, and
+    `compose_settings_dispatch_inline_does_not_reask_idle`.)
+  - [x] Re-ask `IdlePolicy::should_arm` after auto-lock toggle or
     timeout changes so the timer state tracks the new policy
     without re-inspecting the file.
+    (`settings_reask_idle_after` returns `true` iff the change is an
+    auto-lock field AND the outcome left the new value on disk
+    (Success / DurabilityWarning); clipboard-clear changes always
+    return `false`. `AppModel::update`'s `SettingsWorkerCompleted`
+    arm consults `crate::auto_lock::idle_should_arm(vault)` on the
+    reinstalled pair whenever `dispatch.reask_idle == true`. The
+    return value is bound to `_should_arm` until §"Clipboard +
+    auto-lock parity with TUI" wires the timer arm/disarm side.
+    Pinned by
+    `compose_settings_dispatch_success_auto_lock_reasks_idle`,
+    `compose_settings_dispatch_success_clipboard_does_not_reask_idle`,
+    `compose_settings_dispatch_durability_warning_keeps_committed_and_reasks_idle`,
+    `compose_settings_dispatch_rollback_does_not_reask_idle`, and
+    `compose_settings_dispatch_inline_does_not_reask_idle`.)
 - [ ] Header-bar `+` button and primary menu wired with the pinned
   entries (Import…, Export…, Passphrase…, Preferences, About Paladin,
   Quit) per §"libadwaita usage", with Unlocked / `UnlockedBusy` gating

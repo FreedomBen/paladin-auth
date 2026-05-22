@@ -2611,10 +2611,10 @@ fn apply_save_outcome_inline_leaves_committed_unchanged() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn apply_settings_dialog_msg_worker_completed_promotes_on_success() {
+fn dispatch_settings_dialog_msg_worker_completed_promotes_on_success_and_returns_noop() {
     use paladin_gtk::settings::{
-        apply_settings_dialog_msg, AcceptedChange, SaveOutcome, SettingsDialogMsg, SettingsState,
-        SettingsWorkerEffect,
+        dispatch_settings_dialog_msg, AcceptedChange, SaveOutcome, SettingsDialogAction,
+        SettingsDialogMsg, SettingsState, SettingsWorkerEffect,
     };
     let mut state = SettingsState::new(defaults());
     let prior = state.committed().auto_lock_enabled();
@@ -2622,15 +2622,18 @@ fn apply_settings_dialog_msg_worker_completed_promotes_on_success() {
         change: AcceptedChange::AutoLockEnabled(!prior),
         outcome: SaveOutcome::Success,
     };
-    apply_settings_dialog_msg(&mut state, SettingsDialogMsg::WorkerCompleted(effect));
+    let action =
+        dispatch_settings_dialog_msg(&mut state, SettingsDialogMsg::WorkerCompleted(effect));
+    assert_eq!(action, SettingsDialogAction::Noop);
     assert_eq!(state.committed().auto_lock_enabled(), !prior);
 }
 
 #[test]
-fn apply_settings_dialog_msg_worker_completed_rolls_back_inline_error() {
+fn dispatch_settings_dialog_msg_worker_completed_rolls_back_inline_error() {
     use paladin_gtk::settings::{
-        apply_settings_dialog_msg, AcceptedChange, InlineError, SaveOutcome, SettingsDialogMsg,
-        SettingsField, SettingsState, SettingsWorkerEffect,
+        dispatch_settings_dialog_msg, AcceptedChange, InlineError, SaveOutcome,
+        SettingsDialogAction, SettingsDialogMsg, SettingsField, SettingsState,
+        SettingsWorkerEffect,
     };
     let mut state = SettingsState::new(defaults());
     let prior = state.committed().auto_lock_secs();
@@ -2642,10 +2645,119 @@ fn apply_settings_dialog_msg_worker_completed_rolls_back_inline_error() {
             field: SettingsField::AutoLockSecs,
         },
     };
-    apply_settings_dialog_msg(&mut state, SettingsDialogMsg::WorkerCompleted(effect));
+    let action =
+        dispatch_settings_dialog_msg(&mut state, SettingsDialogMsg::WorkerCompleted(effect));
+    assert_eq!(action, SettingsDialogAction::Noop);
     assert_eq!(state.committed().auto_lock_secs(), prior);
     assert!(matches!(
         state.last_outcome(),
         Some(SaveOutcome::Rollback { .. })
     ));
+}
+
+// ---------------------------------------------------------------------------
+// dispatch_settings_dialog_msg — toggle / spinner / debounce variants
+// route into the existing `SettingsState::toggle_*` / `stage_*` /
+// `resolve_debounce` so the widget layer only owns the side-effect
+// decision (Noop / StageDebounce / Submit).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn dispatch_settings_dialog_msg_auto_lock_toggled_value_change_returns_submit() {
+    use paladin_core::SettingPatch;
+    use paladin_gtk::settings::{
+        dispatch_settings_dialog_msg, SettingsDialogAction, SettingsDialogMsg, SettingsState,
+    };
+    let mut state = SettingsState::new(defaults());
+    let new = !state.committed().auto_lock_enabled();
+    let action = dispatch_settings_dialog_msg(&mut state, SettingsDialogMsg::AutoLockToggled(new));
+    assert_eq!(
+        action,
+        SettingsDialogAction::Submit(SettingPatch::AutoLockEnabled(new))
+    );
+}
+
+#[test]
+fn dispatch_settings_dialog_msg_auto_lock_toggled_noop_returns_noop() {
+    use paladin_gtk::settings::{
+        dispatch_settings_dialog_msg, SettingsDialogAction, SettingsDialogMsg, SettingsState,
+    };
+    let mut state = SettingsState::new(defaults());
+    let same = state.committed().auto_lock_enabled();
+    let action = dispatch_settings_dialog_msg(&mut state, SettingsDialogMsg::AutoLockToggled(same));
+    assert_eq!(action, SettingsDialogAction::Noop);
+}
+
+#[test]
+fn dispatch_settings_dialog_msg_clipboard_clear_toggled_value_change_returns_submit() {
+    use paladin_core::SettingPatch;
+    use paladin_gtk::settings::{
+        dispatch_settings_dialog_msg, SettingsDialogAction, SettingsDialogMsg, SettingsState,
+    };
+    let mut state = SettingsState::new(defaults());
+    let new = !state.committed().clipboard_clear_enabled();
+    let action =
+        dispatch_settings_dialog_msg(&mut state, SettingsDialogMsg::ClipboardClearToggled(new));
+    assert_eq!(
+        action,
+        SettingsDialogAction::Submit(SettingPatch::ClipboardClearEnabled(new))
+    );
+}
+
+#[test]
+fn dispatch_settings_dialog_msg_auto_lock_secs_spinner_change_returns_stage_debounce() {
+    use paladin_gtk::settings::{
+        dispatch_settings_dialog_msg, SettingsDialogAction, SettingsDialogMsg, SettingsState,
+    };
+    let mut state = SettingsState::new(defaults());
+    let raw = state.committed().auto_lock_secs().wrapping_add(60);
+    let action = dispatch_settings_dialog_msg(
+        &mut state,
+        SettingsDialogMsg::AutoLockSecsSpinnerChanged(raw),
+    );
+    assert_eq!(action, SettingsDialogAction::StageDebounce);
+    assert_eq!(
+        state.visible_auto_lock_secs(),
+        raw.min(paladin_core::AUTO_LOCK_SECS_MAX)
+    );
+}
+
+#[test]
+fn dispatch_settings_dialog_msg_clipboard_clear_secs_spinner_change_returns_stage_debounce() {
+    use paladin_gtk::settings::{
+        dispatch_settings_dialog_msg, SettingsDialogAction, SettingsDialogMsg, SettingsState,
+    };
+    let mut state = SettingsState::new(defaults());
+    let raw = state.committed().clipboard_clear_secs().wrapping_add(10);
+    let action = dispatch_settings_dialog_msg(
+        &mut state,
+        SettingsDialogMsg::ClipboardClearSecsSpinnerChanged(raw),
+    );
+    assert_eq!(action, SettingsDialogAction::StageDebounce);
+}
+
+#[test]
+fn dispatch_settings_dialog_msg_debounce_tick_with_pending_returns_submit() {
+    use paladin_core::SettingPatch;
+    use paladin_gtk::settings::{
+        dispatch_settings_dialog_msg, SettingsDialogAction, SettingsDialogMsg, SettingsState,
+    };
+    let mut state = SettingsState::new(defaults());
+    let raw = state.committed().auto_lock_secs().wrapping_add(60);
+    let staged = state.stage_auto_lock_secs(raw);
+    let action = dispatch_settings_dialog_msg(&mut state, SettingsDialogMsg::DebounceTick);
+    assert_eq!(
+        action,
+        SettingsDialogAction::Submit(SettingPatch::AutoLockTimeoutSecs(staged))
+    );
+}
+
+#[test]
+fn dispatch_settings_dialog_msg_debounce_tick_idle_returns_noop() {
+    use paladin_gtk::settings::{
+        dispatch_settings_dialog_msg, SettingsDialogAction, SettingsDialogMsg, SettingsState,
+    };
+    let mut state = SettingsState::new(defaults());
+    let action = dispatch_settings_dialog_msg(&mut state, SettingsDialogMsg::DebounceTick);
+    assert_eq!(action, SettingsDialogAction::Noop);
 }

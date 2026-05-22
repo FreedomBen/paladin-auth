@@ -48,6 +48,8 @@
 
 use libadwaita as adw;
 use libadwaita::prelude::*;
+use relm4::gtk;
+use relm4::gtk::glib;
 use relm4::prelude::*;
 
 use paladin_core::{
@@ -1697,16 +1699,29 @@ pub struct SettingsDialogInit {
 
 /// Messages handled by [`SettingsComponent`].
 ///
-/// Toggle / spinner / debounce-tick variants are wired in a follow-up
-/// commit alongside the `AdwSwitchRow` / `AdwSpinRow` widget mount.
-/// The [`Self::WorkerCompleted`] variant is forwarded from
-/// `AppModel::update`'s
-/// `AppMsg::SettingsWorkerCompleted` arm so the dialog can route the
-/// typed [`SettingsWorkerEffect`] through
-/// [`SettingsState::apply_save_outcome`] without taking another lap
-/// through the `Vault::mutate_and_save` round-trip.
+/// Toggle messages route through [`SettingsState::toggle_*`] and emit
+/// `SettingsDialogOutput::Submit` immediately on a value change
+/// (toggles never debounce). Spinner messages route through
+/// [`SettingsState::stage_*`] and signal that the 500 ms debounce
+/// timer should arm / re-arm. [`Self::DebounceTick`] fires when the
+/// timer expires and routes through
+/// [`SettingsState::resolve_debounce`] to either submit the pending
+/// patch or stay idle. [`Self::WorkerCompleted`] consumes the typed
+/// [`SettingsWorkerEffect`] from the AppModel-side worker dispatch.
 #[derive(Debug, Clone)]
 pub enum SettingsDialogMsg {
+    /// Auto-lock toggle (`AdwSwitchRow`) flipped to `enabled`.
+    AutoLockToggled(bool),
+    /// Clipboard-clear toggle (`AdwSwitchRow`) flipped to `enabled`.
+    ClipboardClearToggled(bool),
+    /// Auto-lock timeout spinner (`AdwSpinRow`) was edited.
+    AutoLockSecsSpinnerChanged(u32),
+    /// Clipboard-clear timeout spinner (`AdwSpinRow`) was edited.
+    ClipboardClearSecsSpinnerChanged(u32),
+    /// 500 ms debounce timer fired. Routed through
+    /// [`SettingsState::resolve_debounce`] to either consume the
+    /// pending spinner draft (and submit it) or stay idle.
+    DebounceTick,
     /// `gio::spawn_blocking` worker finished. Carries the typed
     /// [`SettingsWorkerEffect`] (the [`AcceptedChange`] the worker
     /// attempted to commit and the routed [`SaveOutcome`]) so the
@@ -1718,14 +1733,81 @@ pub enum SettingsDialogMsg {
     WorkerCompleted(SettingsWorkerEffect),
 }
 
+/// Result of dispatching a [`SettingsDialogMsg`] through
+/// [`dispatch_settings_dialog_msg`].
+///
+/// Extracted so the widget-side `update()` method stays a thin
+/// `apply pure-logic transition + apply side effects` pair while the
+/// pure-logic transition stays unit-testable in
+/// `tests/settings_logic.rs`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SettingsDialogAction {
+    /// Nothing further to do — the message has been absorbed into
+    /// `SettingsState` (worker outcome promoted / no-op toggle / idle
+    /// debounce tick / spinner staged but value unchanged).
+    Noop,
+    /// Spinner change buffered — the widget layer should arm or
+    /// re-arm the 500 ms `glib::timeout_add_local` debounce timer so
+    /// a [`SettingsDialogMsg::DebounceTick`] arrives in
+    /// [`format_settings_dialog_spinner_debounce`].
+    StageDebounce,
+    /// A typed [`SettingPatch`] is ready to dispatch — the widget
+    /// layer should emit
+    /// [`SettingsDialogOutput::Submit`] to `AppModel` so the
+    /// `gio::spawn_blocking` `Vault::mutate_and_save` worker fires.
+    Submit(SettingPatch),
+}
+
+/// Pure-logic dispatch over [`SettingsDialogMsg`] for the
+/// [`SettingsComponent`] update loop. Threads the state machine
+/// (`stage_*` / `toggle_*` / `resolve_debounce` /
+/// `apply_save_outcome`) under the message variants and returns the
+/// side-effect decision the widget layer applies (timer arming,
+/// `SettingsDialogOutput::Submit` emission, or noop).
+pub fn dispatch_settings_dialog_msg(
+    state: &mut SettingsState,
+    msg: SettingsDialogMsg,
+) -> SettingsDialogAction {
+    match msg {
+        SettingsDialogMsg::AutoLockToggled(enabled) => {
+            match state.toggle_auto_lock_enabled(enabled) {
+                ToggleOutcome::Noop => SettingsDialogAction::Noop,
+                ToggleOutcome::Save { patch, .. } => SettingsDialogAction::Submit(patch),
+            }
+        }
+        SettingsDialogMsg::ClipboardClearToggled(enabled) => {
+            match state.toggle_clipboard_clear_enabled(enabled) {
+                ToggleOutcome::Noop => SettingsDialogAction::Noop,
+                ToggleOutcome::Save { patch, .. } => SettingsDialogAction::Submit(patch),
+            }
+        }
+        SettingsDialogMsg::AutoLockSecsSpinnerChanged(value) => {
+            state.stage_auto_lock_secs(value);
+            SettingsDialogAction::StageDebounce
+        }
+        SettingsDialogMsg::ClipboardClearSecsSpinnerChanged(value) => {
+            state.stage_clipboard_clear_secs(value);
+            SettingsDialogAction::StageDebounce
+        }
+        SettingsDialogMsg::DebounceTick => match state.resolve_debounce() {
+            DebounceOutcome::Idle => SettingsDialogAction::Noop,
+            DebounceOutcome::Save { patch, .. } => SettingsDialogAction::Submit(patch),
+        },
+        SettingsDialogMsg::WorkerCompleted(SettingsWorkerEffect { change, outcome }) => {
+            state.apply_save_outcome(change, outcome);
+            SettingsDialogAction::Noop
+        }
+    }
+}
+
 /// Messages emitted by [`SettingsComponent`] for `AppModel` to consume.
 ///
 /// `AppModel` forwards these into `AppMsg::SettingsDialogAction(...)`;
-/// the dispatch arm drops the live `Controller<SettingsComponent>` so
-/// the underlying `AdwPreferencesDialog` is torn down. Toggle / spinner
-/// outputs that propagate accepted [`SettingPatch`] values to
-/// `Vault::mutate_and_save` land in the same follow-up commits that
-/// add the matching [`SettingsDialogMsg`] variants.
+/// the `Close` arm drops the live `Controller<SettingsComponent>` so
+/// the underlying `AdwPreferencesDialog` is torn down; the `Submit`
+/// arm bundles a [`SettingsWorkerInput`] via
+/// `compose_settings_worker_input` and dispatches the
+/// `gio::spawn_blocking` `Vault::mutate_and_save` worker.
 #[derive(Debug, Clone)]
 pub enum SettingsDialogOutput {
     /// User dismissed the dialog (Close button / Escape / window
@@ -1733,41 +1815,54 @@ pub enum SettingsDialogOutput {
     /// so the dialog disappears and any in-flight pending spinner
     /// draft is discarded.
     Close,
+    /// Toggle clicked or 500 ms debounce resolved with a pending
+    /// spinner change. `AppModel` bundles this patch into a
+    /// [`SettingsWorkerInput`] and spawns the
+    /// `gio::spawn_blocking` `Vault::mutate_and_save` worker; the
+    /// `AppMsg::SettingsWorkerCompleted` arm routes the typed
+    /// [`SettingsWorkerEffect`] back through the dialog as
+    /// [`SettingsDialogMsg::WorkerCompleted`].
+    Submit(SettingPatch),
 }
 
 /// Widget-bearing `AdwPreferencesDialog` for the Preferences menu entry.
 ///
 /// Mounts the libadwaita preferences surface described in DESIGN.md §7
 /// (`SettingsComponent`) and `IMPLEMENTATION_PLAN_04_GTK.md`
-/// §"Component tree" > `SettingsComponent`. The widget body is a
-/// read-only scaffold at this milestone: two `AdwPreferencesGroup`
-/// sections, titled via the existing
-/// `format_settings_dialog_auto_lock_group_title` /
-/// `format_settings_dialog_clipboard_clear_group_title` helpers, so
-/// the wording stays in lock-step with the pure-logic tests in
-/// `tests/settings_logic.rs`. Follow-up commits attach the
-/// `AdwSwitchRow` toggles and `AdwSpinRow` spinners that drive
-/// [`SettingsState`] / [`SettingPatch`] live-apply.
+/// §"Component tree" > `SettingsComponent`. Two `AdwPreferencesGroup`
+/// sections host an `AdwSwitchRow` toggle and an `AdwSpinRow` spinner
+/// each (auto-lock + clipboard-clear); the values are driven by the
+/// existing `compose_settings_dialog_*_active` /
+/// `compose_settings_dialog_*_value` /
+/// `compose_settings_dialog_*_sensitive` view helpers via `#[watch]`
+/// bindings so a single source of truth ([`SettingsState`]) feeds the
+/// widget surface.
+///
+/// The dialog stays mounted across every save — live-apply does not
+/// close the surface on success — so the [`SettingsDialogOutput::Submit`]
+/// arm runs through `AppModel`'s `gio::spawn_blocking` worker and the
+/// returned [`SettingsWorkerEffect`] is forwarded back as
+/// [`SettingsDialogMsg::WorkerCompleted`].
+///
+/// Spinner edits buffer through [`SettingsState::stage_auto_lock_secs`] /
+/// [`SettingsState::stage_clipboard_clear_secs`] and arm the 500 ms
+/// debounce timer via [`format_settings_dialog_spinner_debounce`].
+/// Holding +/- coalesces to a single save with the most recent
+/// buffered value per `IMPLEMENTATION_PLAN_04_GTK.md` line 3456.
 pub struct SettingsComponent {
     /// Live state machine seeded from [`SettingsDialogInit::settings`]
-    /// in `init`. Kept on `self` so the upcoming toggle / spinner
-    /// message handlers can mutate it without re-plumbing the value
-    /// through every signal. The pure-logic round-trip is asserted by
-    /// `tests/settings_logic.rs`.
-    #[allow(dead_code)]
+    /// in `init`. The pure-logic round-trip is asserted by
+    /// `tests/settings_logic.rs`; the widget layer holds it behind
+    /// the relm4 component so the `view!` macro's `#[watch]`
+    /// bindings re-paint on every `dispatch_settings_dialog_msg`.
     state: SettingsState,
-}
-
-/// Apply a single [`SettingsDialogMsg`] to the dialog's
-/// [`SettingsState`]. Extracted so the message routing can be
-/// exercised in pure-logic tests without driving the real
-/// `relm4::Component::update` runtime.
-pub fn apply_settings_dialog_msg(state: &mut SettingsState, msg: SettingsDialogMsg) {
-    match msg {
-        SettingsDialogMsg::WorkerCompleted(SettingsWorkerEffect { change, outcome }) => {
-            state.apply_save_outcome(change, outcome);
-        }
-    }
+    /// Live `glib::timeout_add_local_once` source for the 500 ms
+    /// spinner debounce. Stored as an `Option<SourceId>` so each
+    /// fresh spinner change can drop the prior pending tick (via
+    /// `SourceId::remove`) before scheduling a new one — keeping
+    /// only the latest buffered value per
+    /// `IMPLEMENTATION_PLAN_04_GTK.md` line 3458.
+    debounce_source: Option<glib::SourceId>,
 }
 
 #[allow(missing_docs)]
@@ -1786,10 +1881,102 @@ impl SimpleComponent for SettingsComponent {
             add = &adw::PreferencesPage {
                 add = &adw::PreferencesGroup {
                     set_title: format_settings_dialog_auto_lock_group_title(),
+
+                    #[name = "auto_lock_enabled_row"]
+                    add = &adw::SwitchRow {
+                        set_title: format_settings_dialog_auto_lock_enabled_row_title(),
+                        #[watch]
+                        set_active: compose_settings_dialog_auto_lock_enabled_active(&model.state),
+                        connect_active_notify[sender] => move |row| {
+                            sender.input(SettingsDialogMsg::AutoLockToggled(row.is_active()));
+                        },
+                    },
+
+                    #[name = "auto_lock_secs_row"]
+                    add = &adw::SpinRow {
+                        set_title: format_settings_dialog_auto_lock_secs_row_title(),
+                        set_adjustment: Some(&{
+                            let (lower, upper, step) =
+                                format_settings_dialog_auto_lock_secs_adjustment();
+                            gtk::Adjustment::new(
+                                compose_settings_dialog_auto_lock_secs_value(&model.state),
+                                lower,
+                                upper,
+                                step,
+                                format_settings_dialog_spinner_page_increment(),
+                                format_settings_dialog_spinner_page_size(),
+                            )
+                        }),
+                        set_climb_rate: format_settings_dialog_spinner_climb_rate(),
+                        set_digits: format_settings_dialog_spinner_digits(),
+                        set_wrap: format_settings_dialog_spinner_wrap(),
+                        set_numeric: format_settings_dialog_spinner_numeric(),
+                        set_snap_to_ticks: format_settings_dialog_spinner_snap_to_ticks(),
+                        #[watch]
+                        set_value: compose_settings_dialog_auto_lock_secs_value(&model.state),
+                        #[watch]
+                        set_sensitive: compose_settings_dialog_auto_lock_secs_sensitive(
+                            &model.state,
+                        ),
+                        connect_changed[sender] => move |spin| {
+                            #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+                            let secs = spin.value() as u32;
+                            sender.input(SettingsDialogMsg::AutoLockSecsSpinnerChanged(secs));
+                        },
+                    },
                 },
 
                 add = &adw::PreferencesGroup {
                     set_title: format_settings_dialog_clipboard_clear_group_title(),
+
+                    #[name = "clipboard_clear_enabled_row"]
+                    add = &adw::SwitchRow {
+                        set_title:
+                            format_settings_dialog_clipboard_clear_enabled_row_title(),
+                        #[watch]
+                        set_active: compose_settings_dialog_clipboard_clear_enabled_active(
+                            &model.state,
+                        ),
+                        connect_active_notify[sender] => move |row| {
+                            sender.input(SettingsDialogMsg::ClipboardClearToggled(row.is_active()));
+                        },
+                    },
+
+                    #[name = "clipboard_clear_secs_row"]
+                    add = &adw::SpinRow {
+                        set_title: format_settings_dialog_clipboard_clear_secs_row_title(),
+                        set_adjustment: Some(&{
+                            let (lower, upper, step) =
+                                format_settings_dialog_clipboard_clear_secs_adjustment();
+                            gtk::Adjustment::new(
+                                compose_settings_dialog_clipboard_clear_secs_value(&model.state),
+                                lower,
+                                upper,
+                                step,
+                                format_settings_dialog_spinner_page_increment(),
+                                format_settings_dialog_spinner_page_size(),
+                            )
+                        }),
+                        set_climb_rate: format_settings_dialog_spinner_climb_rate(),
+                        set_digits: format_settings_dialog_spinner_digits(),
+                        set_wrap: format_settings_dialog_spinner_wrap(),
+                        set_numeric: format_settings_dialog_spinner_numeric(),
+                        set_snap_to_ticks: format_settings_dialog_spinner_snap_to_ticks(),
+                        #[watch]
+                        set_value: compose_settings_dialog_clipboard_clear_secs_value(
+                            &model.state,
+                        ),
+                        #[watch]
+                        set_sensitive:
+                            compose_settings_dialog_clipboard_clear_secs_sensitive(&model.state),
+                        connect_changed[sender] => move |spin| {
+                            #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+                            let secs = spin.value() as u32;
+                            sender.input(
+                                SettingsDialogMsg::ClipboardClearSecsSpinnerChanged(secs),
+                            );
+                        },
+                    },
                 },
             },
         }
@@ -1798,21 +1985,52 @@ impl SimpleComponent for SettingsComponent {
     fn init(
         init: Self::Init,
         root: Self::Root,
-        _sender: ComponentSender<Self>,
+        sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
         let state = SettingsState::new(init.settings);
-        let model = SettingsComponent { state };
+        let model = SettingsComponent {
+            state,
+            debounce_source: None,
+        };
         let widgets = view_output!();
+        // Forward the dialog's intrinsic close signal (Escape /
+        // window close button) as `SettingsDialogOutput::Close` so
+        // `AppModel` drops the controller. `adw::Dialog` self-detaches
+        // from its toplevel parent on close, so no explicit
+        // `force_close` is needed.
+        let close_sender = sender.output_sender().clone();
+        root.connect_closed(move |_| {
+            let _ = close_sender.send(SettingsDialogOutput::Close);
+        });
         ComponentParts { model, widgets }
     }
 
-    fn update(&mut self, msg: Self::Input, _sender: ComponentSender<Self>) {
-        // Pure-logic dispatch lives in
-        // [`apply_settings_dialog_msg`] so the message-routing rules
-        // can be exercised in `tests/settings_logic.rs` without
-        // driving the real relm4 `Component::update` runtime. Toggle /
-        // spinner inbound variants land in a follow-up commit
-        // alongside the `AdwSwitchRow` / `AdwSpinRow` widget mount.
-        apply_settings_dialog_msg(&mut self.state, msg);
+    fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>) {
+        let action = dispatch_settings_dialog_msg(&mut self.state, msg);
+        match action {
+            SettingsDialogAction::Noop => {}
+            SettingsDialogAction::StageDebounce => {
+                if let Some(source) = self.debounce_source.take() {
+                    source.remove();
+                }
+                let send = sender.input_sender().clone();
+                let source_id = glib::timeout_add_local_once(
+                    format_settings_dialog_spinner_debounce(),
+                    move || {
+                        let _ = send.send(SettingsDialogMsg::DebounceTick);
+                    },
+                );
+                self.debounce_source = Some(source_id);
+            }
+            SettingsDialogAction::Submit(patch) => {
+                // A fresh save dispatch consumes the buffered spinner
+                // draft; drop any pending debounce so a stale tick
+                // does not double-fire after the worker returns.
+                if let Some(source) = self.debounce_source.take() {
+                    source.remove();
+                }
+                let _ = sender.output(SettingsDialogOutput::Submit(patch));
+            }
+        }
     }
 }
