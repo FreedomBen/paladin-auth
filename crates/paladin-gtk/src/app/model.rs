@@ -83,13 +83,15 @@ use crate::add_account::{
     QrWorkerCompletion,
 };
 use crate::app::state::{
-    apply_add_dispatch_inplace, apply_add_vault_install_inplace, apply_import_dispatch_inplace,
+    apply_add_dispatch_inplace, apply_add_vault_install_inplace, apply_export_dispatch_inplace,
+    apply_export_vault_install_inplace, apply_import_dispatch_inplace,
     apply_import_vault_install_inplace, apply_qr_dispatch_inplace, apply_remove_dispatch_inplace,
     apply_remove_vault_install_inplace, apply_rename_dispatch_inplace,
-    apply_rename_vault_install_inplace, apply_submit_add_inplace, apply_submit_import_inplace,
-    apply_submit_remove_inplace, apply_submit_rename_inplace, apply_submit_unlock_inplace,
-    apply_unlock_dispatch_inplace, apply_unlock_vault_install_inplace, compose_add_dispatch,
-    compose_add_worker_input, compose_import_dispatch, compose_import_worker_input,
+    apply_rename_vault_install_inplace, apply_submit_add_inplace, apply_submit_export_inplace,
+    apply_submit_import_inplace, apply_submit_remove_inplace, apply_submit_rename_inplace,
+    apply_submit_unlock_inplace, apply_unlock_dispatch_inplace, apply_unlock_vault_install_inplace,
+    compose_add_dispatch, compose_add_worker_input, compose_export_dispatch,
+    compose_export_worker_input, compose_import_dispatch, compose_import_worker_input,
     compose_qr_dispatch, compose_qr_worker_input, compose_remove_dispatch,
     compose_remove_worker_input, compose_rename_dispatch, compose_rename_worker_input,
     compose_unlock_dispatch, compose_unlock_worker_input, decide_state_from_inspect,
@@ -99,7 +101,10 @@ use crate::app::state::{
 use crate::clipboard_clear::{
     evaluate_wake, prepare_copy_bytes, schedule_copy, PendingClipboardClear, WakeDecision,
 };
-use crate::export_dialog::{ExportDialogComponent, ExportDialogInit, ExportDialogOutput};
+use crate::export_dialog::{
+    run_export_worker, ExportDialogComponent, ExportDialogInit, ExportDialogMsg,
+    ExportDialogOutput, ExportWorkerCompletion,
+};
 use crate::hotp_reveal::{
     apply_advance_decision, apply_advance_outcome, expired_reveals,
     format_hotp_advance_failed_toast, format_hotp_durability_unconfirmed_toast,
@@ -643,17 +648,37 @@ pub enum AppMsg {
     /// form widgets in the dialog body.
     ImportDialogAction(ImportDialogOutput),
     /// Forwarded from the live [`ExportDialogComponent`] when the
-    /// user interacts with the `adw::Dialog`. Today only
-    /// [`ExportDialogOutput::Close`] is emitted — `AppModel`
-    /// responds by dropping the controller so the dialog disappears
-    /// and any in-flight pending form draft (selected destination
-    /// path, format choice, overwrite acknowledgement, plaintext-
-    /// warning acknowledgement, twice-confirm passphrase entries) is
-    /// discarded. Submit / export-result outputs that propagate the
-    /// typed [`crate::export_dialog::classify_export_result`] verdict
-    /// to `AppModel` land in follow-up commits alongside the
-    /// editable form widgets in the dialog body.
+    /// user interacts with the `adw::Dialog`.
+    /// [`ExportDialogOutput::Cancel`] / [`ExportDialogOutput::Close`]
+    /// drop the controller so the dialog disappears and any
+    /// in-flight pending form draft (selected destination path,
+    /// format choice, overwrite acknowledgement, plaintext-warning
+    /// acknowledgement, twice-confirm passphrase entries) is
+    /// discarded. [`ExportDialogOutput::Submit`] hands the validated
+    /// [`crate::export_dialog::ExportSubmitPayload`] to the
+    /// `gio::spawn_blocking
+    /// paladin_core::write_secret_file_atomic(.., otpauth_list /
+    /// encrypted)` worker that posts back via
+    /// [`AppMsg::ExportWorkerCompleted`].
     ExportDialogAction(ExportDialogOutput),
+    /// Worker-completion message for the `gio::spawn_blocking` export
+    /// path. `AppModel` reinstalls the returned `(Vault, Store)` pair
+    /// (export does not mutate the vault, so it is the same pair
+    /// passed in, but the round-trip keeps the busy-gate semantics in
+    /// lock-step with the other vault-touching workers), rolls the
+    /// `UnlockedBusy → Unlocked` transition, and dispatches the typed
+    /// [`crate::export_dialog::ExportOutcome`] via
+    /// [`crate::app::state::compose_export_dispatch`]:
+    /// * `Success` → drop the dialog controller and raise an
+    ///   [`AdwToast`](adw::Toast) naming the written path on the main
+    ///   overlay.
+    /// * `DurabilityWarning` → forward
+    ///   [`ExportDialogMsg::WorkerCompleted`] so the dialog renders
+    ///   the `save_durability_unconfirmed` warning inline; the
+    ///   controller stays mounted.
+    /// * `Inline` → forward the typed error so the dialog renders it
+    ///   inline; the controller stays mounted.
+    ExportWorkerCompleted(ExportWorkerCompletion),
     /// Forwarded from the live [`PassphraseDialogComponent`] when
     /// the user interacts with the `adw::Dialog`. Today only
     /// [`PassphraseDialogOutput::Close`] is emitted — `AppModel`
@@ -1948,15 +1973,16 @@ impl SimpleComponent for AppModel {
             }
             AppMsg::ExportDialogAction(ExportDialogOutput::Cancel | ExportDialogOutput::Close) => {
                 // User dismissed the `adw::Dialog` — either by the
-                // explicit Cancel button (`ExportDialogOutput::Cancel`)
-                // or by Escape / window close
-                // (`ExportDialogOutput::Close`). Both currently drop
-                // the live controller so the widget is released and
-                // any in-flight pending form draft (selected
-                // destination path, format choice, overwrite
-                // acknowledgement, plaintext-warning acknowledgement,
-                // twice-confirm passphrase entries) is discarded; the
-                // variants stay distinct in
+                // explicit Cancel button (`ExportDialogOutput::Cancel`),
+                // by Escape / window close (`ExportDialogOutput::Close`),
+                // or by the dialog's own post-success `Close` emitted
+                // from `WorkerCompleted(Success)`. All three drop the
+                // live controller so the widget is released and any
+                // in-flight pending form draft (selected destination
+                // path, format choice, overwrite acknowledgement,
+                // plaintext-warning acknowledgement, twice-confirm
+                // passphrase entries) is discarded; the variants stay
+                // distinct in
                 // [`crate::export_dialog::ExportDialogOutput`] so a
                 // future "Discard draft?" prompt can attach to one
                 // path without affecting the other. `adw::Dialog`
@@ -1968,6 +1994,127 @@ impl SimpleComponent for AppModel {
                 // is already `None` (controller swapped under us by
                 // a future race), this is a benign no-op.
                 self.export_dialog = None;
+            }
+            AppMsg::ExportDialogAction(ExportDialogOutput::Submit(payload)) => {
+                // Entry side of the `gio::spawn_blocking
+                // write_secret_file_atomic(otpauth_list | encrypted)`
+                // worker. Mirrors the import-dialog submit handler
+                // step-for-step:
+                //
+                // 1. Take the live `(Vault, Store)` pair from
+                //    `self.vault` and bundle it with the dispatch
+                //    payload (destination, format, encryption
+                //    options) into an `ExportWorkerInput` via
+                //    `compose_export_worker_input`. Only `Unlocked`
+                //    returns `Ok(input)`; every other variant returns
+                //    `Err(pair)` so the wrapper can reinstall the
+                //    pair via `apply_export_vault_install_inplace`.
+                //    A `None` state or a `None` vault slot is the
+                //    defensive no-op (a stray `Submit` from a locked
+                //    / missing / busy state).
+                // 2. Apply the `Unlocked → UnlockedBusy` busy-gate
+                //    transition via `apply_submit_export_inplace`,
+                //    then push `SetBusy(true)` to the dialog so the
+                //    Export button dims.
+                // 3. Spawn `run_export_worker` on
+                //    `gtk::gio::spawn_blocking` so the encrypted-
+                //    bundle path's fresh-AEAD-key derivation and the
+                //    multi-fsync `write_secret_file_atomic` pipeline
+                //    do not block the GTK main loop. The wrapping
+                //    `gtk::glib::spawn_future_local` awaits the
+                //    blocking handle and posts the bundled
+                //    `ExportWorkerCompletion` back to `AppModel` via
+                //    `AppMsg::ExportWorkerCompleted`.
+                let worker_input = match (self.state.as_ref(), self.vault.take()) {
+                    (Some(state), Some(pair)) => {
+                        match compose_export_worker_input(state, pair, payload) {
+                            Ok(input) => Some(input),
+                            Err(pair) => {
+                                apply_export_vault_install_inplace(&mut self.vault, pair);
+                                None
+                            }
+                        }
+                    }
+                    (None, Some(pair)) => {
+                        apply_export_vault_install_inplace(&mut self.vault, pair);
+                        None
+                    }
+                    (_, None) => None,
+                };
+                if let Some(state) = self.state.as_mut() {
+                    apply_submit_export_inplace(state);
+                }
+                if let Some(input) = worker_input {
+                    if let Some(controller) = self.export_dialog.as_ref() {
+                        controller.emit(ExportDialogMsg::SetBusy(true));
+                    }
+                    let sender = sender.clone();
+                    gtk::glib::spawn_future_local(async move {
+                        let completion = gtk::gio::spawn_blocking(move || run_export_worker(input))
+                            .await
+                            .expect("write_secret_file_atomic export worker panicked");
+                        sender.input(AppMsg::ExportWorkerCompleted(completion));
+                    });
+                }
+            }
+            AppMsg::ExportWorkerCompleted(completion) => {
+                // Worker-outcome dispatch. `compose_export_dispatch`
+                // bundles the typed `ExportOutcome` over the cached
+                // `AppState` and the worker's destination path into:
+                //
+                // * `app_state` — `UnlockedBusy → Unlocked` rollback
+                //   regardless of typed outcome (export does not
+                //   mutate the vault, but the busy gate releases on
+                //   every branch).
+                // * `dialog_msg` — `Some(WorkerCompleted(outcome))`
+                //   on every branch so the dialog renders the typed
+                //   success / warning / inline error inline (on
+                //   `Success` the dialog itself emits
+                //   `ExportDialogOutput::Close`, which drops the
+                //   controller via the `Cancel | Close` arm above).
+                // * `drop_dialog` — `true` on Success so `AppModel`
+                //   force-closes the dialog widget immediately;
+                //   `false` on `DurabilityWarning` / `Inline` so the
+                //   inline body stays visible.
+                // * `success_toast` — `Some(body)` only on Success
+                //   (names the written destination); `None`
+                //   otherwise.
+                //
+                // The carried `(vault, store)` pair is reinstalled
+                // into `AppModel::vault` via
+                // `apply_export_vault_install_inplace`
+                // unconditionally — export does not mutate the
+                // vault, so the returned pair is the same one we
+                // moved into the worker; the round-trip keeps the
+                // ownership model identical to the import / rename /
+                // remove paths.
+                let ExportWorkerCompletion {
+                    outcome,
+                    vault,
+                    store,
+                    destination,
+                } = completion;
+                apply_export_vault_install_inplace(&mut self.vault, (vault, store));
+                let dispatch = self.state.as_mut().map(|state| {
+                    let dispatch = compose_export_dispatch(state, &outcome, &destination);
+                    apply_export_dispatch_inplace(state, &dispatch);
+                    dispatch
+                });
+                if let Some(dispatch) = dispatch {
+                    if let Some(msg) = dispatch.dialog_msg {
+                        if let Some(controller) = self.export_dialog.as_ref() {
+                            controller.emit(msg);
+                        }
+                    }
+                    if dispatch.drop_dialog {
+                        if let Some(controller) = self.export_dialog.take() {
+                            controller.widget().force_close();
+                        }
+                    }
+                    if let Some(body) = dispatch.success_toast {
+                        self.toast_overlay.add_toast(adw::Toast::new(&body));
+                    }
+                }
             }
             AppMsg::OpenPassphraseDialog => {
                 // Application menu "Passphrase…" activation. Mount a

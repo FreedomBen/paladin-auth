@@ -63,6 +63,9 @@ use paladin_core::{
 use crate::add_account::{
     AddAccountMsg, AddWorkerEffect, AddWorkerInput, QrWorkerEffect, QrWorkerInput,
 };
+use crate::export_dialog::{
+    ExportDialogMsg, ExportOutcome, ExportSubmitPayload, ExportWorkerInput,
+};
 use crate::import_dialog::{ImportDialogMsg, ImportSubmitPayload, ImportWorkerInput, MergeOutcome};
 use crate::remove_dialog::{RemoveDialogMsg, RemoveWorkerEffect, RemoveWorkerInput};
 use crate::rename_dialog::{RenameDialogMsg, RenameWorkerEffect, RenameWorkerInput};
@@ -3563,6 +3566,313 @@ pub fn apply_import_dispatch_inplace(state: &mut AppState, dispatch: &ImportDisp
 /// `(Vault, Store)` pairs constructed via `paladin_core::Store::create`
 /// over a tempfile vault.
 pub fn apply_import_vault_install_inplace(
+    vault_slot: &mut Option<(Vault, Store)>,
+    pair: (Vault, Store),
+) {
+    *vault_slot = Some(pair);
+}
+
+// ===========================================================================
+// Export dispatch — entry / worker-input / final state / dialog-drop
+// projections symmetric to the import family above.
+// ===========================================================================
+
+/// Bundled export-dispatch result returned by [`compose_export_dispatch`].
+///
+/// Bundles the worker-outcome → (state, dialog, drop, toast) projections
+/// the import / rename / remove dispatchers expose individually. Export's
+/// success path adds the [`Self::success_toast`] field because the
+/// `ExportDialog` closes on success and surfaces the written path through
+/// an [`AdwToast`](adw::Toast) on the main overlay rather than an inline
+/// counts panel (per `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+/// `ExportDialog`).
+///
+/// `Clone` is intentionally not derived: the contained
+/// [`ExportDialogMsg`] wraps an [`crate::export_dialog::InlineError`] /
+/// [`crate::export_dialog::InlineWarning`] which carry stable §5
+/// `ErrorKind` discriminators plus rendered bodies, and the dispatch
+/// site moves the bundle by value into the handler.
+#[derive(Debug)]
+pub struct ExportDispatch {
+    /// New [`AppState`] to install on `AppModel.state`. `Some` for
+    /// the `UnlockedBusy → Unlocked` rollback that
+    /// [`export_final_app_state`] returns regardless of typed
+    /// outcome. `None` is the defensive case where the worker
+    /// outcome arrives but `current` is not [`AppState::UnlockedBusy`].
+    pub app_state: Option<AppState>,
+    /// Inline message to forward to the live
+    /// [`crate::export_dialog::ExportDialogComponent`] controller —
+    /// always `Some(ExportDialogMsg::WorkerCompleted(outcome))` so
+    /// the dialog can clear its busy latch and (on `Success`) emit
+    /// `ExportDialogOutput::Close`, on `DurabilityWarning` stage
+    /// the inline warning, on `Inline` stage the inline error.
+    pub dialog_msg: Option<ExportDialogMsg>,
+    /// Whether `AppModel::update` should drop the live
+    /// [`crate::export_dialog::ExportDialogComponent`] controller
+    /// after applying [`Self::app_state`]. `true` on
+    /// [`ExportOutcome::Success`] so the dialog tears down and the
+    /// success toast is the only post-action surface; `false` on
+    /// `DurabilityWarning` / `Inline` so the inline warning / error
+    /// stays visible until the user dismisses it.
+    pub drop_dialog: bool,
+    /// Toast body for the main [`adw::ToastOverlay`]. `Some(body)`
+    /// on [`ExportOutcome::Success`] (names the written destination
+    /// path via [`crate::export_dialog::format_export_success_toast`]);
+    /// `None` on every other branch — `DurabilityWarning` and
+    /// `Inline` surface inline in the dialog, not as toasts.
+    pub success_toast: Option<String>,
+}
+
+/// Entry-side `AppState` transition for an export submit click.
+///
+/// Symmetric partner of [`submit_import_app_state`] for the export
+/// path: `Unlocked → UnlockedBusy` so the busy gate dims the Export
+/// button until the worker reports completion. Export does not
+/// mutate the vault, but the same `(Vault, Store)` ownership model
+/// applies — the pair moves into the worker for the duration of the
+/// read.
+///
+/// Returns `Some(UnlockedBusy { path })` iff `current` is
+/// [`AppState::Unlocked`]; returns `None` for every other source
+/// state so a stray export dispatch from a non-`Unlocked` window is
+/// a benign no-op for the worker spawn.
+#[must_use]
+pub fn submit_export_app_state(current: &AppState) -> Option<AppState> {
+    current.clone().enter_busy()
+}
+
+/// Apply [`submit_export_app_state`] in-place to `state`, leaving it
+/// unchanged when the composer returns `None`.
+///
+/// Symmetric partner of [`apply_submit_import_inplace`]. Returns
+/// `true` iff the state transitioned (source was `Unlocked` →
+/// destination is `UnlockedBusy`); `AppModel::update` uses the
+/// `true` return to gate the `gio::spawn_blocking` worker spawn so
+/// the busy gate and the worker open and close in lockstep.
+pub fn apply_submit_export_inplace(state: &mut AppState) -> bool {
+    if let Some(new_state) = submit_export_app_state(state) {
+        *state = new_state;
+        true
+    } else {
+        false
+    }
+}
+
+/// Bundle the live `(Vault, Store)` pair plus the dialog's validated
+/// [`ExportSubmitPayload`] into an [`ExportWorkerInput`] so the
+/// `gio::spawn_blocking
+/// write_secret_file_atomic(otpauth_list | encrypted)` worker can
+/// move both into its closure.
+///
+/// Symmetric partner of [`compose_import_worker_input`] for the
+/// export path: inspects the [`AppState`] variant before taking the
+/// pair so a stray Submit from a non-`Unlocked` source returns the
+/// pair back through the `Err` arm so the caller can reinstall it
+/// via [`apply_export_vault_install_inplace`] rather than dropping
+/// it.
+///
+/// `payload.encryption_options` is consumed by value because
+/// [`paladin_core::EncryptionOptions`] holds a
+/// [`secrecy::SecretString`] that must move (not clone) into the
+/// worker closure to keep zeroize-on-drop semantics intact across
+/// the `gio::spawn_blocking` boundary.
+///
+/// The composer stays shape-only — it inspects only the
+/// [`AppState`] variant discriminant on `current` — so the
+/// side-effect decision in `AppModel::update` stays unit-testable in
+/// `tests/app_state_logic.rs` against real `(Vault, Store)` pairs
+/// constructed via `paladin_core::Store::create` over a tempfile
+/// vault.
+pub fn compose_export_worker_input(
+    current: &AppState,
+    pair: (Vault, Store),
+    payload: ExportSubmitPayload,
+) -> Result<ExportWorkerInput, (Vault, Store)> {
+    match current {
+        AppState::Unlocked { .. } => {
+            let (vault, store) = pair;
+            let ExportSubmitPayload {
+                destination,
+                format,
+                encryption_options,
+            } = payload;
+            Ok(ExportWorkerInput {
+                vault,
+                store,
+                destination,
+                format,
+                encryption_options,
+            })
+        }
+        AppState::Missing { .. }
+        | AppState::Locked { .. }
+        | AppState::UnlockedBusy { .. }
+        | AppState::StartupError { .. } => Err(pair),
+    }
+}
+
+/// Unified state-transition composer for the export worker outcome.
+///
+/// Symmetric partner of [`import_final_app_state`] for the export
+/// path: every [`ExportOutcome`] variant rolls
+/// `UnlockedBusy → Unlocked` via [`AppState::leave_busy`] because
+/// export does not mutate the vault; the busy gate releases on every
+/// branch.
+///
+/// `outcome` is accepted for signature symmetry with the rename /
+/// remove / add composers but is not inspected: every variant rolls
+/// the busy gate back.
+///
+/// Returns `Some(Unlocked { path })` iff `current` is
+/// [`AppState::UnlockedBusy`], and `None` from every other state so
+/// a stray completion arriving while the cached state has already
+/// transitioned away from `UnlockedBusy` does not install a phantom
+/// `Unlocked` over another idle state.
+#[must_use]
+pub fn export_final_app_state(current: &AppState, _outcome: &ExportOutcome) -> Option<AppState> {
+    current.clone().leave_busy()
+}
+
+/// Drop-decision projection for the
+/// [`crate::export_dialog::ExportDialogComponent`] after an export
+/// worker outcome.
+///
+/// The export dialog tears down on [`ExportOutcome::Success`] (the
+/// post-action surface is the [`adw::Toast`] naming the written
+/// path, not an inline counts panel); it stays mounted on
+/// `DurabilityWarning` and `Inline` so the inline warning / error
+/// is visible until the user dismisses it.
+#[must_use]
+pub fn should_drop_export_dialog_after(outcome: &ExportOutcome) -> bool {
+    matches!(outcome, ExportOutcome::Success)
+}
+
+/// Dialog-message projection for the
+/// [`crate::export_dialog::ExportDialogComponent`] after an export
+/// worker outcome.
+///
+/// Always `Some(ExportDialogMsg::WorkerCompleted(outcome))` so the
+/// dialog routes the typed outcome through `apply_msg` (clears the
+/// busy latch on every branch; stages the inline warning / error
+/// for `DurabilityWarning` / `Inline`; emits `Close` on `Success`).
+///
+/// `outcome` is consumed by value because [`ExportOutcome`] is not
+/// `Clone` — `InlineError` / `InlineWarning` carry rendered bodies
+/// that move into the dialog's reactive state.
+#[must_use]
+pub fn export_dialog_msg_after(outcome: ExportOutcome) -> Option<ExportDialogMsg> {
+    Some(ExportDialogMsg::WorkerCompleted(outcome))
+}
+
+/// Success-toast projection for the main
+/// [`adw::ToastOverlay`] after an export worker outcome.
+///
+/// Returns `Some(body)` only on [`ExportOutcome::Success`]; the body
+/// is built from
+/// [`crate::export_dialog::format_export_success_toast`] so the
+/// wording stays in one place. `DurabilityWarning` and `Inline`
+/// surface inline in the dialog (which stays mounted), not as
+/// toasts.
+#[must_use]
+pub fn export_success_toast_after(outcome: &ExportOutcome, destination: &Path) -> Option<String> {
+    match outcome {
+        ExportOutcome::Success => Some(crate::export_dialog::format_export_success_toast(
+            destination,
+        )),
+        ExportOutcome::DurabilityWarning(_) | ExportOutcome::Inline(_) => None,
+    }
+}
+
+/// Bundle the quartet of export-dispatch decisions into a single
+/// [`ExportDispatch`] result so `AppModel::update` can apply the
+/// worker outcome in one shot.
+///
+/// The composer is a pure aggregator over the existing quartet — it
+/// never re-derives the routing:
+///
+/// * `app_state` mirrors [`export_final_app_state`] (the
+///   `UnlockedBusy → Unlocked` rollback).
+/// * `dialog_msg` mirrors [`export_dialog_msg_after`] (always
+///   `Some(WorkerCompleted(outcome))`).
+/// * `drop_dialog` mirrors [`should_drop_export_dialog_after`]
+///   (`true` on `Success`, `false` otherwise).
+/// * `success_toast` mirrors [`export_success_toast_after`]
+///   (`Some(body)` on `Success`, `None` otherwise).
+///
+/// `outcome` is consumed by value because [`ExportOutcome`] is not
+/// `Clone`. The `app_state` and `success_toast` branches inspect the
+/// discriminant beforehand so the dispatch stays unit-testable in
+/// `tests/app_state_logic.rs` without re-constructing the typed
+/// outcome.
+#[must_use]
+pub fn compose_export_dispatch(
+    current: &AppState,
+    outcome: &ExportOutcome,
+    destination: &Path,
+) -> ExportDispatch {
+    let app_state = export_final_app_state(current, outcome);
+    let drop_dialog = should_drop_export_dialog_after(outcome);
+    let success_toast = export_success_toast_after(outcome, destination);
+    // `dialog_msg` is the last projection because it consumes the
+    // outcome by value — the earlier projections all take `&outcome`.
+    let dialog_msg = export_dialog_msg_after(clone_export_outcome(outcome));
+    ExportDispatch {
+        app_state,
+        dialog_msg,
+        drop_dialog,
+        success_toast,
+    }
+}
+
+// `ExportOutcome` is intentionally non-`Clone` (carries
+// `InlineError` / `InlineWarning` rendered strings; the type
+// stays out of `AppMsg` clone semantics). The dispatch composer
+// needs the outcome twice — once by reference for the toast /
+// state projections, once by value for the dialog message — so
+// reconstitute a shallow copy by inspecting the discriminant.
+fn clone_export_outcome(outcome: &ExportOutcome) -> ExportOutcome {
+    match outcome {
+        ExportOutcome::Success => ExportOutcome::Success,
+        ExportOutcome::DurabilityWarning(w) => ExportOutcome::DurabilityWarning(w.clone()),
+        ExportOutcome::Inline(e) => ExportOutcome::Inline(e.clone()),
+    }
+}
+
+/// Apply [`compose_export_dispatch`]'s state field in-place to
+/// `state`, leaving it unchanged when the dispatch carries
+/// `app_state = None`.
+///
+/// Symmetric partner of [`apply_import_dispatch_inplace`] for the
+/// export path. Returns `true` when the state actually transitioned
+/// (`dispatch.app_state` was `Some(_)` and `*state` now mirrors the
+/// composer's projection), `false` otherwise.
+pub fn apply_export_dispatch_inplace(state: &mut AppState, dispatch: &ExportDispatch) -> bool {
+    if let Some(new_state) = dispatch.app_state.as_ref() {
+        *state = new_state.clone();
+        true
+    } else {
+        false
+    }
+}
+
+/// Install the worker's `(Vault, Store)` pair from
+/// [`crate::export_dialog::ExportWorkerCompletion`] into
+/// `AppModel::vault` in-place.
+///
+/// Symmetric partner of [`apply_import_vault_install_inplace`] for
+/// the export path. Export does not mutate the vault, so the
+/// returned pair is the same one we moved into the worker — but
+/// the round-trip keeps the ownership model identical to the import
+/// / rename / remove / add paths so `AppModel::vault` is never
+/// orphaned across the `gio::spawn_blocking` boundary.
+///
+/// `pair` is consumed by value because [`Vault`] and [`Store`] are
+/// non-`Clone`. The wrapper stays shape-only — it does not inspect
+/// the pair — so the side-effect decision in `AppModel::update`
+/// stays unit-testable in `tests/app_state_logic.rs` against real
+/// `(Vault, Store)` pairs constructed via `paladin_core::Store::create`
+/// over a tempfile vault.
+pub fn apply_export_vault_install_inplace(
     vault_slot: &mut Option<(Vault, Store)>,
     pair: (Vault, Store),
 ) {

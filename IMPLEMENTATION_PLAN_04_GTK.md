@@ -2948,7 +2948,7 @@ sign-off.
     `kdf_params_out_of_bounds`, `io_error`.
   - [x] Zeroize the bundle-passphrase widget buffer on submit /
     cancel / dialog close / auto-lock.
-- [ ] `ExportDialogComponent` full implementation (format selector,
+- [x] `ExportDialogComponent` full implementation (format selector,
   destination picker, overwrite gate, plaintext warning,
   twice-confirm passphrase, `write_secret_file_atomic` call).
   - [x] Add a format selector (plaintext `otpauth://` JSON list or
@@ -3238,19 +3238,76 @@ sign-off.
     `compose_inline_error_revealed_returns_true_when_error_staged`,
     `compose_inline_error_body_returns_none_when_no_error`, and
     `compose_inline_error_body_renders_staged_invalid_passphrase`.)
-  - [ ] Dispatch the write on `gio::spawn_blocking` (encrypted
+  - [x] Dispatch the write on `gio::spawn_blocking` (encrypted
     bundle to keep the fresh-AEAD-key derivation off the main loop;
     plaintext for symmetry since `write_secret_file_atomic` chains
     multiple `fsync`s); the write goes through
     `paladin_core::write_secret_file_atomic`.
-  - [ ] On success, close the dialog and surface the written path
+    (`run_export_worker(ExportWorkerInput) -> ExportWorkerCompletion`
+    consumes the live `(Vault, Store)` pair, builds the bytes via
+    `paladin_core::export::otpauth_list` / `paladin_core::export::encrypted`,
+    and hands them to `paladin_core::write_secret_file_atomic`. The
+    typed result routes through `classify_export_result` into
+    `ExportOutcome::{Success, DurabilityWarning, Inline}`. `AppModel`
+    spawns it via `gtk::glib::spawn_future_local` wrapping
+    `gtk::gio::spawn_blocking` symmetric to the import worker; the
+    bundled `ExportWorkerCompletion` posts back as
+    `AppMsg::ExportWorkerCompleted`. `compose_export_worker_input`,
+    `apply_submit_export_inplace`, `apply_export_vault_install_inplace`,
+    `compose_export_dispatch`, and `apply_export_dispatch_inplace` in
+    `app::state` mirror the import dispatch family. Pinned by
+    `tests/export_dialog_logic.rs::worker_integration::run_export_worker_plaintext_writes_otpauth_json_and_returns_success`,
+    `run_export_worker_encrypted_writes_paladin_bundle_and_returns_success`,
+    and `run_export_worker_plaintext_io_error_returns_inline` (real
+    `(Vault, Store)` round-trip through tempfile vault).)
+  - [x] On success, close the dialog and surface the written path
     via `AdwToast` on the main toast overlay.
-  - [ ] Surface writer errors (`io_error`, `save_not_committed`,
+    (`apply_msg::WorkerCompleted(Success)` emits
+    `ExportDialogOutput::Close` and clears the form; the dispatch arm
+    drops the controller, force-closing the `adw::Dialog`.
+    `compose_export_dispatch` returns
+    `success_toast = Some(format_export_success_toast(&destination))`
+    on the success branch, which `AppModel::update` raises on the
+    main `toast_overlay`. Pinned by
+    `apply_msg_worker_completed_success_clears_busy_and_emits_close`
+    and `apply_msg_worker_completed_success_clears_prior_inline_error_and_warning`.)
+  - [x] Surface writer errors (`io_error`, `save_not_committed`,
     `save_durability_unconfirmed`, `invalid_passphrase`) and the
     refused overwrite gate inline; export does not mutate the
     vault, so there is no rollback path.
-  - [ ] Zeroize the encrypted-bundle passphrase widget buffers on
+    (`classify_export_result` routes
+    `SaveDurabilityUnconfirmed` to `ExportOutcome::DurabilityWarning`
+    rendered via the new `compose_inline_warning_revealed` /
+    `compose_inline_warning_body` view helpers; every other typed
+    error falls through to `ExportOutcome::Inline` rendered via the
+    pre-existing `compose_inline_error_*` helpers.
+    `apply_msg::WorkerCompleted` stages the typed projection,
+    releases the busy gate, and emits no output so the dialog stays
+    mounted with the inline body. The overwrite-gate refusal stays
+    on the existing `compose_submit_button_sensitive` dim — submit
+    cannot dispatch the worker until the gate is acked. Pinned by
+    `apply_msg_worker_completed_durability_warning_stages_warning_keeps_dialog_open`,
+    `apply_msg_worker_completed_inline_stages_error_keeps_dialog_open`,
+    `compose_inline_warning_revealed_returns_true_when_warning_staged`,
+    and `compose_inline_warning_body_returns_durability_unconfirmed_display`.)
+  - [x] Zeroize the encrypted-bundle passphrase widget buffers on
     submit / cancel / dialog close / auto-lock.
+    (`ExportDialogState`'s `passphrase` / `confirm_passphrase`
+    `SecretEntry` shadows zeroize on drop / clear and are cleared
+    inside `apply_msg` on `SubmitClicked` (Proceed path), `Cancel`,
+    `Close`, and `WorkerCompleted(Success)`. The `update()` method
+    stashes the live `adw::PasswordEntryRow` widget refs in
+    `init()` after `view_output!()` and calls
+    `row.set_text("")` after the same set of `apply_msg` outcomes —
+    the `gtk::EntryBuffer` is the unavoidable UI-side copy; a
+    `#[watch] set_text:` binding would loop because
+    `gtk_editable_set_text` always re-emits `changed`. Auto-lock is
+    covered transitively: the locked transition drops the dialog
+    controller, destroying the widget and freeing the GTK buffer.
+    Pinned by
+    `apply_msg_submit_clicked_proceed_encrypted_emits_submit_and_clears_passphrase_buffers`,
+    `apply_msg_cancel_clears_passphrase_buffers`, and
+    `apply_msg_close_clears_passphrase_buffers`.)
 - [ ] `PassphraseDialogComponent` full implementation (`set` /
   `change` / `remove` sub-flows, gating, validation, error
   handling).

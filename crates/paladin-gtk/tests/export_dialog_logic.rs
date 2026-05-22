@@ -2058,3 +2058,591 @@ fn compose_inline_error_body_renders_staged_invalid_passphrase() {
     .to_string();
     assert_eq!(compose_inline_error_body(&state), Some(expected.as_str()));
 }
+
+// ---------------------------------------------------------------------------
+// compose_submit_outcome — Proceed / Rejected / NotReady routing
+// ---------------------------------------------------------------------------
+
+#[test]
+fn compose_submit_outcome_plaintext_ready_returns_proceed_with_destination() {
+    use paladin_gtk::export_dialog::{compose_submit_outcome, ExportDialogState, SubmitOutcome};
+
+    let mut state = ExportDialogState::new();
+    state.set_destination(dest_a(), false);
+    state.set_plaintext_warning_acknowledged(true);
+
+    let outcome = compose_submit_outcome(&state);
+    let SubmitOutcome::Proceed(payload) = outcome else {
+        panic!("expected Proceed, got something else");
+    };
+    assert_eq!(payload.destination, dest_a());
+    assert_eq!(payload.format, ExportFormatChoice::PlaintextOtpauth);
+    assert!(payload.encryption_options.is_none());
+}
+
+#[test]
+fn compose_submit_outcome_encrypted_ready_returns_proceed_with_options() {
+    use paladin_gtk::export_dialog::{compose_submit_outcome, ExportDialogState, SubmitOutcome};
+
+    let mut state = ExportDialogState::new();
+    state.set_destination(dest_a(), false);
+    state.set_format(ExportFormatChoice::EncryptedPaladin);
+    state.set_passphrase("hunter2");
+    state.set_confirm_passphrase("hunter2");
+
+    let outcome = compose_submit_outcome(&state);
+    let SubmitOutcome::Proceed(payload) = outcome else {
+        panic!("expected Proceed, got something else");
+    };
+    assert_eq!(payload.destination, dest_a());
+    assert_eq!(payload.format, ExportFormatChoice::EncryptedPaladin);
+    let opts = payload
+        .encryption_options
+        .expect("encrypted Proceed carries EncryptionOptions");
+    assert_eq!(opts.passphrase.expose_secret(), "hunter2");
+}
+
+#[test]
+fn compose_submit_outcome_encrypted_mismatch_returns_rejected_invalid_passphrase() {
+    use paladin_gtk::export_dialog::{compose_submit_outcome, ExportDialogState, SubmitOutcome};
+
+    let mut state = ExportDialogState::new();
+    state.set_destination(dest_a(), false);
+    state.set_format(ExportFormatChoice::EncryptedPaladin);
+    state.set_passphrase("hunter2");
+    state.set_confirm_passphrase("hunter3");
+
+    let outcome = compose_submit_outcome(&state);
+    let SubmitOutcome::Rejected(inline) = outcome else {
+        panic!("expected Rejected for mismatched twice-confirm");
+    };
+    assert_eq!(inline.kind, ErrorKind::InvalidPassphrase);
+}
+
+#[test]
+fn compose_submit_outcome_encrypted_empty_returns_rejected_zero_length() {
+    use paladin_gtk::export_dialog::{compose_submit_outcome, ExportDialogState, SubmitOutcome};
+
+    let mut state = ExportDialogState::new();
+    state.set_destination(dest_a(), false);
+    state.set_format(ExportFormatChoice::EncryptedPaladin);
+
+    let outcome = compose_submit_outcome(&state);
+    let SubmitOutcome::Rejected(inline) = outcome else {
+        panic!("expected Rejected for both-empty twice-confirm");
+    };
+    assert_eq!(inline.kind, ErrorKind::InvalidPassphrase);
+    assert_eq!(
+        inline.rendered,
+        PaladinError::InvalidPassphrase {
+            reason: "zero_length",
+        }
+        .to_string()
+    );
+}
+
+#[test]
+fn compose_submit_outcome_no_destination_returns_not_ready() {
+    use paladin_gtk::export_dialog::{compose_submit_outcome, ExportDialogState, SubmitOutcome};
+
+    let state = ExportDialogState::new();
+    assert!(matches!(
+        compose_submit_outcome(&state),
+        SubmitOutcome::NotReady
+    ));
+}
+
+#[test]
+fn compose_submit_outcome_overwrite_unacked_returns_not_ready() {
+    use paladin_gtk::export_dialog::{compose_submit_outcome, ExportDialogState, SubmitOutcome};
+
+    let mut state = ExportDialogState::new();
+    state.set_destination(dest_a(), true);
+    state.set_plaintext_warning_acknowledged(true);
+    // overwrite still unacked.
+    assert!(matches!(
+        compose_submit_outcome(&state),
+        SubmitOutcome::NotReady
+    ));
+}
+
+#[test]
+fn compose_submit_outcome_plaintext_warning_unacked_returns_not_ready() {
+    use paladin_gtk::export_dialog::{compose_submit_outcome, ExportDialogState, SubmitOutcome};
+
+    let mut state = ExportDialogState::new();
+    state.set_destination(dest_a(), false);
+    // plaintext warning still unacked.
+    assert!(matches!(
+        compose_submit_outcome(&state),
+        SubmitOutcome::NotReady
+    ));
+}
+
+// ---------------------------------------------------------------------------
+// apply_msg::SubmitClicked emits Submit on Proceed
+// ---------------------------------------------------------------------------
+
+#[test]
+fn apply_msg_submit_clicked_proceed_plaintext_emits_submit_output() {
+    use paladin_gtk::export_dialog::{
+        apply_msg, ExportDialogMsg, ExportDialogOutput, ExportDialogState,
+    };
+
+    let mut state = ExportDialogState::new();
+    state.set_destination(dest_a(), false);
+    state.set_plaintext_warning_acknowledged(true);
+
+    let out = apply_msg(&mut state, ExportDialogMsg::SubmitClicked);
+    match out {
+        Some(ExportDialogOutput::Submit(payload)) => {
+            assert_eq!(payload.destination, dest_a());
+            assert_eq!(payload.format, ExportFormatChoice::PlaintextOtpauth);
+            assert!(payload.encryption_options.is_none());
+        }
+        other => panic!("expected Submit, got {other:?}"),
+    }
+}
+
+#[test]
+fn apply_msg_submit_clicked_proceed_encrypted_emits_submit_and_clears_passphrase_buffers() {
+    use paladin_gtk::export_dialog::{
+        apply_msg, ExportDialogMsg, ExportDialogOutput, ExportDialogState,
+    };
+
+    let mut state = ExportDialogState::new();
+    state.set_destination(dest_a(), false);
+    state.set_format(ExportFormatChoice::EncryptedPaladin);
+    state.set_passphrase("hunter2");
+    state.set_confirm_passphrase("hunter2");
+
+    let out = apply_msg(&mut state, ExportDialogMsg::SubmitClicked);
+    let Some(ExportDialogOutput::Submit(payload)) = out else {
+        panic!("expected Submit, got {out:?}");
+    };
+    // Passphrase has moved into the payload's EncryptionOptions; the
+    // state-side SecretEntry buffers must be cleared on submit per
+    // §"Secret entry handling".
+    assert!(state.passphrase_text().is_empty());
+    assert!(state.confirm_passphrase_text().is_empty());
+    let opts = payload
+        .encryption_options
+        .expect("encrypted Proceed carries EncryptionOptions");
+    assert_eq!(opts.passphrase.expose_secret(), "hunter2");
+}
+
+#[test]
+fn apply_msg_submit_clicked_rejected_stays_in_dialog_with_inline_error() {
+    use paladin_gtk::export_dialog::{apply_msg, ExportDialogMsg, ExportDialogState};
+
+    let mut state = ExportDialogState::new();
+    state.set_destination(dest_a(), false);
+    state.set_format(ExportFormatChoice::EncryptedPaladin);
+    state.set_passphrase("a");
+    state.set_confirm_passphrase("b");
+
+    let out = apply_msg(&mut state, ExportDialogMsg::SubmitClicked);
+    assert!(out.is_none(), "Rejected pre-flight emits no output");
+    let inline = state.inline_error().expect("inline error staged");
+    assert_eq!(inline.kind, ErrorKind::InvalidPassphrase);
+}
+
+#[test]
+fn apply_msg_submit_clicked_not_ready_emits_no_output() {
+    use paladin_gtk::export_dialog::{apply_msg, ExportDialogMsg, ExportDialogState};
+
+    let mut state = ExportDialogState::new();
+    // No destination — submit button shouldn't have been enabled, but
+    // defense-in-depth: a stray click emits no output and stages no
+    // inline error.
+    let out = apply_msg(&mut state, ExportDialogMsg::SubmitClicked);
+    assert!(out.is_none());
+    assert!(state.inline_error().is_none());
+}
+
+// ---------------------------------------------------------------------------
+// apply_msg::Cancel / Close zeroize passphrase buffers
+// ---------------------------------------------------------------------------
+
+#[test]
+fn apply_msg_cancel_clears_passphrase_buffers() {
+    use paladin_gtk::export_dialog::{
+        apply_msg, ExportDialogMsg, ExportDialogOutput, ExportDialogState,
+    };
+
+    let mut state = ExportDialogState::new();
+    state.set_format(ExportFormatChoice::EncryptedPaladin);
+    state.set_passphrase("hunter2");
+    state.set_confirm_passphrase("hunter2");
+
+    let out = apply_msg(&mut state, ExportDialogMsg::Cancel);
+    assert!(matches!(out, Some(ExportDialogOutput::Cancel)));
+    assert!(state.passphrase_text().is_empty());
+    assert!(state.confirm_passphrase_text().is_empty());
+}
+
+#[test]
+fn apply_msg_close_clears_passphrase_buffers() {
+    use paladin_gtk::export_dialog::{
+        apply_msg, ExportDialogMsg, ExportDialogOutput, ExportDialogState,
+    };
+
+    let mut state = ExportDialogState::new();
+    state.set_format(ExportFormatChoice::EncryptedPaladin);
+    state.set_passphrase("hunter2");
+    state.set_confirm_passphrase("hunter2");
+
+    let out = apply_msg(&mut state, ExportDialogMsg::Close);
+    assert!(matches!(out, Some(ExportDialogOutput::Close)));
+    assert!(state.passphrase_text().is_empty());
+    assert!(state.confirm_passphrase_text().is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// Busy state + submit-button sensitivity gate
+// ---------------------------------------------------------------------------
+
+#[test]
+fn apply_msg_set_busy_toggles_state() {
+    use paladin_gtk::export_dialog::{apply_msg, ExportDialogMsg, ExportDialogState};
+
+    let mut state = ExportDialogState::new();
+    assert!(!state.is_busy());
+    let _ = apply_msg(&mut state, ExportDialogMsg::SetBusy(true));
+    assert!(state.is_busy());
+    let _ = apply_msg(&mut state, ExportDialogMsg::SetBusy(false));
+    assert!(!state.is_busy());
+}
+
+#[test]
+fn compose_submit_button_sensitive_false_when_busy() {
+    use paladin_gtk::export_dialog::{
+        apply_msg, compose_submit_button_sensitive, ExportDialogMsg, ExportDialogState,
+    };
+
+    let mut state = ExportDialogState::new();
+    state.set_destination(dest_a(), false);
+    state.set_plaintext_warning_acknowledged(true);
+    assert!(compose_submit_button_sensitive(&state));
+
+    let _ = apply_msg(&mut state, ExportDialogMsg::SetBusy(true));
+    assert!(
+        !compose_submit_button_sensitive(&state),
+        "busy state dims the Export button"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// apply_msg::WorkerCompleted — Success / DurabilityWarning / Inline routing
+// ---------------------------------------------------------------------------
+
+#[test]
+fn apply_msg_worker_completed_success_clears_busy_and_emits_close() {
+    use paladin_gtk::export_dialog::{
+        apply_msg, ExportDialogMsg, ExportDialogOutput, ExportDialogState, ExportOutcome,
+    };
+
+    let mut state = ExportDialogState::new();
+    state.set_destination(dest_a(), false);
+    state.set_format(ExportFormatChoice::EncryptedPaladin);
+    state.set_passphrase("hunter2");
+    state.set_confirm_passphrase("hunter2");
+    let _ = apply_msg(&mut state, ExportDialogMsg::SubmitClicked);
+    assert!(state.passphrase_text().is_empty());
+    let _ = apply_msg(&mut state, ExportDialogMsg::SetBusy(true));
+
+    let out = apply_msg(
+        &mut state,
+        ExportDialogMsg::WorkerCompleted(ExportOutcome::Success),
+    );
+    assert!(matches!(out, Some(ExportDialogOutput::Close)));
+    assert!(!state.is_busy());
+}
+
+#[test]
+fn apply_msg_worker_completed_durability_warning_stages_warning_keeps_dialog_open() {
+    use paladin_gtk::export_dialog::{
+        apply_msg, classify_export_result, ExportDialogMsg, ExportDialogState, ExportOutcome,
+    };
+
+    let mut state = ExportDialogState::new();
+    state.set_destination(dest_a(), false);
+    let _ = apply_msg(&mut state, ExportDialogMsg::SetBusy(true));
+
+    let outcome = classify_export_result(Err(PaladinError::SaveDurabilityUnconfirmed));
+    let ExportOutcome::DurabilityWarning(_) = outcome else {
+        panic!("setup: classify_export_result should map SaveDurabilityUnconfirmed to DurabilityWarning");
+    };
+    let out = apply_msg(&mut state, ExportDialogMsg::WorkerCompleted(outcome));
+    assert!(out.is_none(), "durability-warning keeps the dialog open");
+    assert!(!state.is_busy());
+    assert!(state.inline_warning().is_some());
+    assert!(state.inline_error().is_none());
+}
+
+#[test]
+fn apply_msg_worker_completed_inline_stages_error_keeps_dialog_open() {
+    use paladin_gtk::export_dialog::{
+        apply_msg, classify_export_result, ExportDialogMsg, ExportDialogState, ExportOutcome,
+    };
+
+    let mut state = ExportDialogState::new();
+    state.set_destination(dest_a(), false);
+    let _ = apply_msg(&mut state, ExportDialogMsg::SetBusy(true));
+
+    let outcome = classify_export_result(Err(io_error_export()));
+    let ExportOutcome::Inline(_) = outcome else {
+        panic!("setup: classify_export_result should map IoError to Inline");
+    };
+    let out = apply_msg(&mut state, ExportDialogMsg::WorkerCompleted(outcome));
+    assert!(out.is_none(), "writer error keeps the dialog open");
+    assert!(!state.is_busy());
+    assert!(state.inline_error().is_some());
+    assert!(state.inline_warning().is_none());
+}
+
+#[test]
+fn apply_msg_worker_completed_success_clears_prior_inline_error_and_warning() {
+    use paladin_gtk::export_dialog::{
+        apply_msg, classify_export_result, ExportDialogMsg, ExportDialogState, ExportOutcome,
+    };
+
+    let mut state = ExportDialogState::new();
+    state.set_destination(dest_a(), false);
+    state.set_inline_error(Some(InlineError::from_error(&io_error_export())));
+    let ExportOutcome::DurabilityWarning(warning) =
+        classify_export_result(Err(PaladinError::SaveDurabilityUnconfirmed))
+    else {
+        panic!("setup")
+    };
+    state.set_inline_warning(Some(warning));
+
+    let _ = apply_msg(
+        &mut state,
+        ExportDialogMsg::WorkerCompleted(ExportOutcome::Success),
+    );
+    assert!(state.inline_error().is_none());
+    assert!(state.inline_warning().is_none());
+}
+
+// ---------------------------------------------------------------------------
+// compose_inline_warning_revealed / compose_inline_warning_body view helpers
+// ---------------------------------------------------------------------------
+
+#[test]
+fn compose_inline_warning_revealed_returns_false_when_no_warning() {
+    use paladin_gtk::export_dialog::{compose_inline_warning_revealed, ExportDialogState};
+
+    let state = ExportDialogState::new();
+    assert!(!compose_inline_warning_revealed(&state));
+}
+
+#[test]
+fn compose_inline_warning_revealed_returns_true_when_warning_staged() {
+    use paladin_gtk::export_dialog::{
+        classify_export_result, compose_inline_warning_revealed, ExportDialogState, ExportOutcome,
+    };
+
+    let mut state = ExportDialogState::new();
+    let ExportOutcome::DurabilityWarning(warning) =
+        classify_export_result(Err(PaladinError::SaveDurabilityUnconfirmed))
+    else {
+        panic!("setup")
+    };
+    state.set_inline_warning(Some(warning));
+    assert!(compose_inline_warning_revealed(&state));
+}
+
+#[test]
+fn compose_inline_warning_body_returns_durability_unconfirmed_display() {
+    use paladin_gtk::export_dialog::{
+        classify_export_result, compose_inline_warning_body, ExportDialogState, ExportOutcome,
+    };
+
+    let mut state = ExportDialogState::new();
+    let ExportOutcome::DurabilityWarning(warning) =
+        classify_export_result(Err(PaladinError::SaveDurabilityUnconfirmed))
+    else {
+        panic!("setup")
+    };
+    state.set_inline_warning(Some(warning));
+    let expected = PaladinError::SaveDurabilityUnconfirmed.to_string();
+    assert_eq!(compose_inline_warning_body(&state), Some(expected.as_str()));
+}
+
+// ---------------------------------------------------------------------------
+// run_export_worker — integration against a real Vault / Store
+// ---------------------------------------------------------------------------
+
+mod worker_integration {
+    use super::*;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use tempfile::TempDir;
+
+    use paladin_gtk::export_dialog::{
+        run_export_worker, ExportFormatChoice, ExportOutcome, ExportWorkerCompletion,
+        ExportWorkerInput,
+    };
+
+    fn secure_tempdir() -> TempDir {
+        let dir = tempfile::tempdir().expect("create tempdir");
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700))
+            .expect("chmod 0700 so paladin_core::Store::create accepts the parent");
+        dir
+    }
+
+    fn open_plaintext_vault(
+        dir: &TempDir,
+        name: &str,
+    ) -> (paladin_core::Vault, paladin_core::Store) {
+        use paladin_core::{Store, VaultInit};
+        let path = dir.path().join(name);
+        Store::create(&path, VaultInit::Plaintext).expect("create plaintext vault")
+    }
+
+    #[test]
+    fn run_export_worker_plaintext_writes_otpauth_json_and_returns_success() {
+        let dir = secure_tempdir();
+        let (vault, store) = open_plaintext_vault(&dir, "vault.bin");
+        let dest = dir.path().join("export.json");
+
+        let input = ExportWorkerInput {
+            vault,
+            store,
+            destination: dest.clone(),
+            format: ExportFormatChoice::PlaintextOtpauth,
+            encryption_options: None,
+        };
+        let ExportWorkerCompletion {
+            outcome,
+            destination,
+            ..
+        } = run_export_worker(input);
+        assert!(matches!(outcome, ExportOutcome::Success));
+        assert_eq!(destination, dest);
+        let bytes = fs::read(&dest).expect("read written export");
+        let s = String::from_utf8(bytes).expect("utf8");
+        // Empty vault → JSON array of zero `otpauth://` URIs.
+        assert_eq!(s, "[]");
+        let mode = fs::metadata(&dest).expect("stat").permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "write_secret_file_atomic enforces 0600");
+    }
+
+    fn light_params() -> paladin_core::Argon2Params {
+        // §4.4 acceptance-bound minimum so encrypted-bundle round-trips
+        // run quickly in the suite (the production default 64 MiB would
+        // balloon the test runtime). The bounds check still passes —
+        // `m_kib >= 8192`, `t >= 1`, `p >= 1`.
+        paladin_core::Argon2Params {
+            m_kib: 8_192,
+            t: 1,
+            p: 1,
+        }
+    }
+
+    #[test]
+    fn run_export_worker_encrypted_writes_paladin_bundle_and_returns_success() {
+        use paladin_core::EncryptionOptions;
+        use secrecy::SecretString;
+
+        let dir = secure_tempdir();
+        let (vault, store) = open_plaintext_vault(&dir, "vault.bin");
+        let dest = dir.path().join("export.paladin");
+
+        let opts = EncryptionOptions::with_params(SecretString::from("hunter2"), light_params())
+            .expect("EncryptionOptions::with_params");
+        let input = ExportWorkerInput {
+            vault,
+            store,
+            destination: dest.clone(),
+            format: ExportFormatChoice::EncryptedPaladin,
+            encryption_options: Some(opts),
+        };
+        let ExportWorkerCompletion { outcome, .. } = run_export_worker(input);
+        assert!(matches!(outcome, ExportOutcome::Success));
+        let bytes = fs::read(&dest).expect("read written bundle");
+        // Encrypted bundle is not JSON — assert it does not start with
+        // the plaintext JSON sentinel `[`.
+        assert_ne!(bytes.first().copied(), Some(b'['));
+        // Paladin bundle starts with the magic header bytes; confirm
+        // it's not empty.
+        assert!(!bytes.is_empty(), "encrypted bundle should not be empty");
+    }
+
+    #[test]
+    fn run_export_worker_plaintext_io_error_returns_inline() {
+        let dir = secure_tempdir();
+        let (vault, store) = open_plaintext_vault(&dir, "vault.bin");
+        // Write into a path whose parent is read-only so
+        // write_secret_file_atomic fails with io_error.
+        let ro_parent = dir.path().join("readonly");
+        fs::create_dir(&ro_parent).expect("create dir");
+        fs::set_permissions(&ro_parent, fs::Permissions::from_mode(0o500)).expect("chmod 0500");
+        let dest = ro_parent.join("export.json");
+
+        let input = ExportWorkerInput {
+            vault,
+            store,
+            destination: dest,
+            format: ExportFormatChoice::PlaintextOtpauth,
+            encryption_options: None,
+        };
+        let ExportWorkerCompletion { outcome, vault, .. } = run_export_worker(input);
+        let ExportOutcome::Inline(err) = outcome else {
+            panic!("expected Inline for read-only destination, got {outcome:?}");
+        };
+        // `write_secret_file_atomic` may surface either `IoError`
+        // (the tmpfile create / fsync failed) or `SaveNotCommitted`
+        // (the staging rename did not commit) depending on which
+        // step inside the staged-clobber pipeline fails first. Both
+        // are valid Inline outcomes per `IMPLEMENTATION_PLAN_04_GTK.md`
+        // §"Effect errors" > Export.
+        assert!(
+            matches!(err.kind, ErrorKind::IoError | ErrorKind::SaveNotCommitted),
+            "expected IoError or SaveNotCommitted, got {:?}",
+            err.kind
+        );
+        // Export does not mutate the vault.
+        assert_eq!(vault.iter().count(), 0);
+
+        // Restore permissions so TempDir can clean up.
+        fs::set_permissions(&ro_parent, fs::Permissions::from_mode(0o700)).ok();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ExportSubmitPayload — shape test for the dispatch payload
+// ---------------------------------------------------------------------------
+
+#[test]
+fn export_submit_payload_carries_destination_format_and_optional_options() {
+    use paladin_core::{Argon2Params, EncryptionOptions};
+    use paladin_gtk::export_dialog::ExportSubmitPayload;
+    use secrecy::SecretString;
+
+    let plain = ExportSubmitPayload {
+        destination: dest_a(),
+        format: ExportFormatChoice::PlaintextOtpauth,
+        encryption_options: None,
+    };
+    assert_eq!(plain.destination, dest_a());
+    assert_eq!(plain.format, ExportFormatChoice::PlaintextOtpauth);
+    assert!(plain.encryption_options.is_none());
+
+    let params = Argon2Params {
+        m_kib: 8_192,
+        t: 1,
+        p: 1,
+    };
+    let opts = EncryptionOptions::with_params(SecretString::from("hunter2"), params)
+        .expect("EncryptionOptions::with_params");
+    let enc = ExportSubmitPayload {
+        destination: dest_b(),
+        format: ExportFormatChoice::EncryptedPaladin,
+        encryption_options: Some(opts),
+    };
+    assert_eq!(enc.destination, dest_b());
+    assert_eq!(enc.format, ExportFormatChoice::EncryptedPaladin);
+    assert!(enc.encryption_options.is_some());
+}

@@ -63,7 +63,10 @@ use libadwaita::prelude::*;
 use relm4::gtk;
 use relm4::prelude::*;
 
-use paladin_core::{format_plaintext_export_warning, EncryptionOptions, ErrorKind, PaladinError};
+use paladin_core::{
+    format_plaintext_export_warning, write_secret_file_atomic, EncryptionOptions, ErrorKind,
+    PaladinError, Store, Vault,
+};
 use secrecy::SecretString;
 
 use crate::secret_fields::SecretEntry;
@@ -541,6 +544,222 @@ impl InlineWarning {
     }
 }
 
+/// Validated payload emitted by [`ExportDialogOutput::Submit`].
+///
+/// `AppModel` hands this to its `gio::spawn_blocking` worker that runs
+/// either [`paladin_core::export::otpauth_list`] (plaintext) or
+/// [`paladin_core::export::encrypted`] (encrypted) and writes the
+/// resulting bytes via [`paladin_core::write_secret_file_atomic`].
+/// Export does not mutate the vault, so this payload carries no
+/// `(Vault, Store)` references — those move from `AppModel::vault`
+/// into the matching [`ExportWorkerInput`].
+///
+/// Not `Clone` because [`EncryptionOptions`] wraps a
+/// [`secrecy::SecretString`] that is intentionally non-`Clone`: the
+/// bundle passphrase moves once into the worker and zeroizes on drop.
+#[derive(Debug)]
+pub struct ExportSubmitPayload {
+    /// Destination path the writer commits to. Stored verbatim from
+    /// the picker; canonicalization belongs to the picker.
+    pub destination: PathBuf,
+    /// Format choice. Drives the worker's branch between
+    /// [`paladin_core::export::otpauth_list`] and
+    /// [`paladin_core::export::encrypted`].
+    pub format: ExportFormatChoice,
+    /// `Some(options)` on the encrypted path; `None` on the
+    /// plaintext path. The worker treats this field as authoritative
+    /// — it does not re-check the format-passphrase invariant.
+    pub encryption_options: Option<EncryptionOptions>,
+}
+
+/// Routing decision after a Submit click against the current
+/// [`ExportDialogState`].
+///
+/// The dispatch arm in [`apply_msg`] runs [`compose_submit_outcome`]
+/// to decide:
+/// * [`Self::Proceed`] — every gate is acknowledged and the
+///   twice-confirm passphrase pair (encrypted path) is valid. The
+///   widget forwards the payload through
+///   [`ExportDialogOutput::Submit`].
+/// * [`Self::Rejected`] — the encrypted twice-confirm pair is empty
+///   or mismatched. The dialog stages the inline `invalid_passphrase`
+///   body and stays open.
+/// * [`Self::NotReady`] — a non-passphrase gate is unmet (no
+///   destination, overwrite-gate visible-and-unacked, plaintext-
+///   warning unacked). The submit button should have been dimmed in
+///   the first place; this variant is the defense-in-depth no-op for
+///   stray clicks.
+#[derive(Debug)]
+pub enum SubmitOutcome {
+    /// Submission is ready. The carried [`ExportSubmitPayload`] is
+    /// the value the widget forwards through
+    /// [`ExportDialogOutput::Submit`].
+    Proceed(ExportSubmitPayload),
+    /// The encrypted twice-confirm pre-flight rejected the typed
+    /// pair. The widget keeps the inline error visible and does not
+    /// dispatch the worker.
+    Rejected(InlineError),
+    /// One or more non-passphrase gates were unmet. The widget does
+    /// not stage an inline error (the submit button was dimmed; the
+    /// click should not have reached the dispatch path).
+    NotReady,
+}
+
+/// Decide what to do with a Submit click against the current state.
+///
+/// Reads the gate predicates ([`compose_overwrite_gate_visible`] /
+/// [`compose_plaintext_warning_visible`] /
+/// [`compose_passphrase_rows_visible`]) and the matching acks, runs
+/// the encrypted twice-confirm pre-flight via
+/// [`prepare_encrypted_export`] for the encrypted path, and bundles a
+/// validated [`ExportSubmitPayload`] on success. The destination path
+/// is cloned (`PathBuf::clone`) so the state still carries it for the
+/// post-success dialog flow; the encrypted passphrase moves into the
+/// payload's [`EncryptionOptions`].
+///
+/// Symmetric to [`crate::import_dialog::compose_submit_outcome`] for
+/// the export path: keeps the routing pure-logic so
+/// `tests/export_dialog_logic.rs` can drive the dispatch without
+/// mounting a GTK widget.
+#[must_use]
+pub fn compose_submit_outcome(state: &ExportDialogState) -> SubmitOutcome {
+    let Some(destination) = state.destination_path().map(Path::to_path_buf) else {
+        return SubmitOutcome::NotReady;
+    };
+    if compose_overwrite_gate_visible(state) && !state.is_overwrite_acknowledged() {
+        return SubmitOutcome::NotReady;
+    }
+    if compose_plaintext_warning_visible(state) && !state.is_plaintext_warning_acknowledged() {
+        return SubmitOutcome::NotReady;
+    }
+    let format = state.format();
+    let encryption_options = if format.requires_passphrase() {
+        match prepare_encrypted_export(state.passphrase_text(), state.confirm_passphrase_text()) {
+            Ok(opts) => Some(opts),
+            Err(rejection) => {
+                return SubmitOutcome::Rejected(InlineError::from_rejection(rejection));
+            }
+        }
+    } else {
+        None
+    };
+    SubmitOutcome::Proceed(ExportSubmitPayload {
+        destination,
+        format,
+        encryption_options,
+    })
+}
+
+/// Input bundle moved into the `gio::spawn_blocking` worker.
+///
+/// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+/// `ExportDialog`: the live `(Vault, Store)` pair is moved into the
+/// worker so the export read happens off the main loop (the
+/// encrypted-bundle path runs the §4.4 Argon2id KDF and a fresh AEAD
+/// derivation), and returned on every branch through
+/// [`ExportWorkerCompletion`] so `AppModel` can reinstall it. Export
+/// does not mutate the vault — `Vault::mutate_and_save` is not on this
+/// path — but the pair still round-trips so `AppModel::vault` is never
+/// orphaned across the spawn boundary.
+///
+/// Not `Clone` / not `PartialEq`: [`Store`] holds non-`Clone`
+/// filesystem state and [`EncryptionOptions::passphrase`] is a
+/// [`secrecy::SecretString`] that zeroizes on drop. `AppModel::update`
+/// consumes the input exactly once when it moves it into the closure.
+#[derive(Debug)]
+pub struct ExportWorkerInput {
+    /// Live vault from the `Unlocked` `(Vault, Store)` pair.
+    pub vault: Vault,
+    /// Live store moved through unchanged.
+    pub store: Store,
+    /// Destination path the writer commits to.
+    pub destination: PathBuf,
+    /// Format choice — selects between
+    /// [`paladin_core::export::otpauth_list`] and
+    /// [`paladin_core::export::encrypted`].
+    pub format: ExportFormatChoice,
+    /// `Some(options)` on the encrypted path; `None` on plaintext.
+    /// The worker treats this as authoritative.
+    pub encryption_options: Option<EncryptionOptions>,
+}
+
+/// Bundle returned by [`run_export_worker`].
+///
+/// Carries the `(Vault, Store)` pair on every branch so
+/// `AppModel::update` reinstalls it before applying the UI outcome.
+/// Export does not mutate the vault, so the returned pair is the same
+/// as the input pair byte-for-byte. The destination path is round-
+/// tripped so the success-toast surface can render it without
+/// reaching back into the dialog state.
+#[derive(Debug)]
+pub struct ExportWorkerCompletion {
+    /// Routed outcome — `Success`, `DurabilityWarning`, or `Inline`.
+    pub outcome: ExportOutcome,
+    /// Live vault moved through unchanged.
+    pub vault: Vault,
+    /// Live store moved through unchanged.
+    pub store: Store,
+    /// Destination path the worker committed (or attempted to commit)
+    /// to. Carried through so the post-success toast can render it.
+    pub destination: PathBuf,
+}
+
+/// Synchronous body of the `gio::spawn_blocking` export worker.
+///
+/// Per `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+/// `ExportDialog`:
+///
+/// 1. Render the export bytes:
+///    * [`ExportFormatChoice::PlaintextOtpauth`] →
+///      [`paladin_core::export::otpauth_list`] (a JSON array of
+///      `otpauth://` URIs).
+///    * [`ExportFormatChoice::EncryptedPaladin`] →
+///      [`paladin_core::export::encrypted`] with the worker-supplied
+///      [`EncryptionOptions`], which runs the §4.4 Argon2id KDF and
+///      a fresh AEAD key derivation.
+/// 2. Hand the bytes to
+///    [`paladin_core::write_secret_file_atomic`], which writes
+///    through a tmpfile + rename and enforces mode `0600` on the
+///    final file (DESIGN §4.3 staged-clobber pipeline).
+/// 3. Bundle the typed result into an [`ExportWorkerCompletion`] via
+///    [`classify_export_result`].
+///
+/// Export does not mutate the vault, so `Vault::mutate_and_save` is
+/// not on this path. The `(Vault, Store)` pair is moved through
+/// unchanged on every branch so `AppModel::vault` is never orphaned
+/// across the `gio::spawn_blocking` boundary.
+#[must_use]
+pub fn run_export_worker(input: ExportWorkerInput) -> ExportWorkerCompletion {
+    let ExportWorkerInput {
+        vault,
+        store,
+        destination,
+        format,
+        encryption_options,
+    } = input;
+    let bytes_result: Result<Vec<u8>, PaladinError> = match format {
+        ExportFormatChoice::PlaintextOtpauth => {
+            Ok(paladin_core::export::otpauth_list(&vault).into_bytes())
+        }
+        ExportFormatChoice::EncryptedPaladin => {
+            // The widget gate (`compose_submit_outcome`) guarantees
+            // `encryption_options` is `Some` on the encrypted path.
+            // Matches the TUI's `execute_export` precedent: a `None`
+            // here is a dispatch-site bug.
+            let opts = encryption_options
+                .expect("EncryptedPaladin format requires EncryptionOptions from the dispatch");
+            paladin_core::export::encrypted(&vault, opts)
+        }
+    };
+    let result = bytes_result.and_then(|bytes| write_secret_file_atomic(&destination, &bytes));
+    ExportWorkerCompletion {
+        outcome: classify_export_result(result),
+        vault,
+        store,
+        destination,
+    }
+}
+
 /// Construction parameters for [`ExportDialogComponent`].
 ///
 /// The dialog opens against the live vault so the export worker that
@@ -634,14 +853,38 @@ pub enum ExportDialogMsg {
     SubmitClicked,
     /// User clicked the explicit Cancel button. The dispatch arm
     /// emits [`ExportDialogOutput::Cancel`] so `AppModel` drops the
-    /// live controller and the form draft is discarded.
+    /// live controller and the form draft is discarded. Passphrase
+    /// buffers are zeroized before the output is emitted per
+    /// `IMPLEMENTATION_PLAN_04_GTK.md` §"Secret entry handling".
     Cancel,
     /// User dismissed the dialog via the parent close path (Escape /
     /// window close). The dispatch arm emits
     /// [`ExportDialogOutput::Close`]; the variant stays distinct
     /// from [`ExportDialogMsg::Cancel`] so a future "Discard draft?"
     /// prompt can attach to one path without affecting the other.
+    /// Passphrase buffers are zeroized before the output is emitted.
     Close,
+    /// `AppModel` pushes the busy latch back to the dialog after it
+    /// has moved the `(Vault, Store)` pair into the
+    /// `gio::spawn_blocking` worker. The dialog dims the Export
+    /// button until [`Self::WorkerCompleted`] resets the latch via
+    /// [`ExportDialogState::set_busy`].
+    SetBusy(bool),
+    /// `AppModel` pushes the typed [`ExportOutcome`] back to the
+    /// dialog after the worker reports completion. [`apply_msg`]
+    /// routes the variant through:
+    /// * [`ExportOutcome::Success`] → clear the form, clear the busy
+    ///   latch, emit [`ExportDialogOutput::Close`]. `AppModel` raises
+    ///   the success [`AdwToast`] on the main overlay (see the
+    ///   `compose_export_dispatch` helper in
+    ///   `crate::app::state`).
+    /// * [`ExportOutcome::DurabilityWarning`] → stage the inline
+    ///   warning, clear the busy latch, emit no output. The dialog
+    ///   stays open so the user dismisses the warning explicitly.
+    /// * [`ExportOutcome::Inline`] → stage the inline error, clear
+    ///   the busy latch, emit no output. The dialog stays open so
+    ///   the user can retry.
+    WorkerCompleted(ExportOutcome),
 }
 
 /// Messages emitted by [`ExportDialogComponent`] for `AppModel` to consume.
@@ -653,7 +896,7 @@ pub enum ExportDialogMsg {
 /// [`classify_export_result`] verdict to `AppModel` land in the same
 /// follow-up commits that add the submit and worker-completion
 /// transitions.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum ExportDialogOutput {
     /// User clicked the explicit Cancel button. `AppModel` drops the
     /// live controller so the dialog disappears and any in-flight
@@ -663,12 +906,27 @@ pub enum ExportDialogOutput {
     /// other.
     Cancel,
     /// User dismissed the dialog via the parent close path (Escape /
-    /// window close). `AppModel` responds by dropping the live
-    /// controller so the dialog disappears and any in-flight pending
-    /// form draft (selected destination path, format choice,
-    /// overwrite acknowledgement, plaintext-warning acknowledgement,
-    /// twice-confirm passphrase entries) is discarded.
+    /// window close), or the worker reported
+    /// [`ExportOutcome::Success`] and `apply_msg` closed the dialog.
+    /// `AppModel` responds by dropping the live controller so the
+    /// dialog disappears and any in-flight pending form draft
+    /// (selected destination path, format choice, overwrite
+    /// acknowledgement, plaintext-warning acknowledgement, twice-
+    /// confirm passphrase entries) is discarded.
     Close,
+    /// Submit button activation with a validated
+    /// [`ExportSubmitPayload`]. `AppModel` hands the payload to its
+    /// `gio::spawn_blocking` worker that runs
+    /// [`paladin_core::export::otpauth_list`] or
+    /// [`paladin_core::export::encrypted`] then
+    /// [`paladin_core::write_secret_file_atomic`] (the encrypted
+    /// variant runs Argon2id; keep it off the main loop).
+    ///
+    /// Not `Clone` because [`EncryptionOptions`] wraps a
+    /// [`secrecy::SecretString`] that is intentionally non-`Clone`:
+    /// the bundle passphrase moves once into the worker and zeroizes
+    /// on drop.
+    Submit(ExportSubmitPayload),
 }
 
 /// Pure-logic state machine for [`ExportDialogComponent`].
@@ -688,6 +946,7 @@ pub enum ExportDialogOutput {
 /// `Debug` so a stray `dbg!` cannot leak the bundle passphrase
 /// through the error log; not `Clone` for the same reason — the
 /// zeroizing buffers must not be duplicated.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Default)]
 pub struct ExportDialogState {
     destination_path: Option<PathBuf>,
@@ -702,14 +961,28 @@ pub struct ExportDialogState {
     /// Confirm-passphrase entry buffer. Same lifecycle as
     /// [`Self::passphrase`].
     confirm_passphrase: SecretEntry,
-    /// Inline error staged by the dialog body. Currently the only
-    /// producer is the `SubmitClicked` twice-confirm pre-flight: a
-    /// mismatched / zero-length encrypted passphrase pair stages an
-    /// `invalid_passphrase` projection here. Cleared on edits to the
-    /// passphrase rows, destination / format changes, and the next
-    /// accepted `SubmitClicked` so a dismissed failure never lingers
-    /// beside the freshly accepted input.
+    /// Inline error staged by the dialog body. Producers are the
+    /// `SubmitClicked` twice-confirm pre-flight (`invalid_passphrase`)
+    /// and the post-worker `WorkerCompleted` dispatch for
+    /// [`ExportOutcome::Inline`] (`io_error`, `save_not_committed`,
+    /// other writer errors). Cleared on edits to the passphrase rows,
+    /// destination / format changes, the next accepted
+    /// `SubmitClicked`, and `WorkerCompleted(Success)` so a dismissed
+    /// failure never lingers beside the freshly accepted input.
     inline_error: Option<InlineError>,
+    /// Inline warning staged after a `save_durability_unconfirmed`
+    /// writer outcome. Carries the typed [`InlineWarning`] so the
+    /// dialog body can render the committed-but-uncertain warning per
+    /// `IMPLEMENTATION_PLAN_04_GTK.md` §"Effect errors". Cleared on
+    /// `WorkerCompleted(Success)` and on subsequent successful
+    /// submissions.
+    inline_warning: Option<InlineWarning>,
+    /// Busy latch toggled by [`ExportDialogMsg::SetBusy`]. `true`
+    /// while a `gio::spawn_blocking` export worker is in flight; the
+    /// view dims the Export / Cancel buttons via
+    /// [`compose_submit_button_sensitive`] so the user cannot dispatch
+    /// a second worker over the first.
+    busy: bool,
 }
 
 impl ExportDialogState {
@@ -922,6 +1195,38 @@ impl ExportDialogState {
     pub fn set_inline_error(&mut self, err: Option<InlineError>) {
         self.inline_error = err;
     }
+
+    /// Currently staged inline warning, if any. The
+    /// `compose_inline_warning_*` view-layer helpers read this; the
+    /// only producer is `WorkerCompleted(DurabilityWarning)`.
+    #[must_use]
+    pub fn inline_warning(&self) -> Option<&InlineWarning> {
+        self.inline_warning.as_ref()
+    }
+
+    /// Replace the staged inline warning. Internal callers stage a
+    /// [`classify_export_result`]-derived warning via [`apply_msg`];
+    /// tests use this to seed prior-state fixtures.
+    pub fn set_inline_warning(&mut self, warning: Option<InlineWarning>) {
+        self.inline_warning = warning;
+    }
+
+    /// Whether a vault-touching export worker is currently in flight.
+    /// The view binds this through [`compose_submit_button_sensitive`]
+    /// so the user cannot dispatch a second worker over the first.
+    #[must_use]
+    pub fn is_busy(&self) -> bool {
+        self.busy
+    }
+
+    /// Toggle the busy latch. `AppModel` pushes `true` when it spawns
+    /// the export worker (via [`ExportDialogMsg::SetBusy(true)`]) and
+    /// `false` once the worker reports completion. The plumbing
+    /// mirrors `ImportDialogState::set_busy` so the two dialogs stay
+    /// in lock-step.
+    pub fn set_busy(&mut self, busy: bool) {
+        self.busy = busy;
+    }
 }
 
 /// Subtitle binding for the destination `adw::ActionRow`.
@@ -1014,6 +1319,9 @@ pub fn compose_passphrase_rows_visible(state: &ExportDialogState) -> bool {
 ///   mismatched pair to [`prepare_encrypted_export`]).
 #[must_use]
 pub fn compose_submit_button_sensitive(state: &ExportDialogState) -> bool {
+    if state.is_busy() {
+        return false;
+    }
     if state.destination_path().is_none() {
         return false;
     }
@@ -1072,41 +1380,82 @@ pub fn apply_msg(
             None
         }
         ExportDialogMsg::SubmitClicked => {
-            // Pre-flight the twice-confirm passphrase on the encrypted
-            // path. The widget gates the Submit button via
-            // `compose_submit_button_sensitive`, but the same check
-            // here is defense in depth: a stale widget state can never
-            // sneak an empty / mismatched pair into the worker dispatch
-            // that lands in the subsequent sub-item.
-            //
-            // The plaintext path has no passphrase pair to validate;
-            // the writer dispatch will land in the same subsequent sub-
-            // item. For now this arm just clears any stale inline error
-            // so the user does not see a dismissed `invalid_passphrase`
-            // body after switching off the encrypted path.
-            if state.format().requires_passphrase() {
-                match prepare_encrypted_export(
-                    state.passphrase_text(),
-                    state.confirm_passphrase_text(),
-                ) {
-                    Ok(_options) => {
-                        // The validated `EncryptionOptions` will be
-                        // handed to the writer worker by the subsequent
-                        // sub-item. For now clear any stale inline
-                        // error so the next pass starts clean.
-                        state.set_inline_error(None);
-                    }
-                    Err(rejection) => {
-                        state.set_inline_error(Some(InlineError::from_rejection(rejection)));
-                    }
-                }
-            } else {
-                state.set_inline_error(None);
+            // Defense-in-depth: a stray click while busy or with
+            // unmet gates emits no output. `compose_submit_outcome`
+            // owns the routing decision so the dispatch matches
+            // `compose_submit_button_sensitive` exactly.
+            if state.is_busy() {
+                return None;
             }
+            match compose_submit_outcome(state) {
+                SubmitOutcome::Proceed(payload) => {
+                    // The accepted twice-confirm pair has moved into
+                    // the payload's `EncryptionOptions`; the state-
+                    // side buffers must be zeroized so the secret
+                    // does not linger in the dialog while the worker
+                    // runs. `SecretEntry::clear` wipes the inner
+                    // `Zeroizing<String>` in place.
+                    state.passphrase.clear();
+                    state.confirm_passphrase.clear();
+                    state.set_inline_error(None);
+                    Some(ExportDialogOutput::Submit(payload))
+                }
+                SubmitOutcome::Rejected(inline) => {
+                    state.set_inline_error(Some(inline));
+                    None
+                }
+                SubmitOutcome::NotReady => None,
+            }
+        }
+        ExportDialogMsg::SetBusy(busy) => {
+            state.set_busy(busy);
             None
         }
-        ExportDialogMsg::Cancel => Some(ExportDialogOutput::Cancel),
-        ExportDialogMsg::Close => Some(ExportDialogOutput::Close),
+        ExportDialogMsg::WorkerCompleted(outcome) => {
+            // The worker always releases the busy latch; the dialog
+            // body re-evaluates `compose_submit_button_sensitive` so
+            // the Export button re-enables (or stays dim if a gate is
+            // unmet).
+            state.set_busy(false);
+            match outcome {
+                ExportOutcome::Success => {
+                    // Defense-in-depth: clear any lingering
+                    // passphrase buffer (should already be empty
+                    // because `SubmitClicked` zeroized them on
+                    // dispatch, but the worker outcome is the
+                    // authoritative success surface).
+                    state.passphrase.clear();
+                    state.confirm_passphrase.clear();
+                    state.set_inline_error(None);
+                    state.set_inline_warning(None);
+                    Some(ExportDialogOutput::Close)
+                }
+                ExportOutcome::DurabilityWarning(warning) => {
+                    state.set_inline_warning(Some(warning));
+                    state.set_inline_error(None);
+                    None
+                }
+                ExportOutcome::Inline(err) => {
+                    state.set_inline_error(Some(err));
+                    state.set_inline_warning(None);
+                    None
+                }
+            }
+        }
+        ExportDialogMsg::Cancel => {
+            // §"Secret entry handling": zeroize the passphrase
+            // buffers before the dialog tears down so the secret
+            // does not linger in memory while `AppModel` drops the
+            // controller.
+            state.passphrase.clear();
+            state.confirm_passphrase.clear();
+            Some(ExportDialogOutput::Cancel)
+        }
+        ExportDialogMsg::Close => {
+            state.passphrase.clear();
+            state.confirm_passphrase.clear();
+            Some(ExportDialogOutput::Close)
+        }
     }
 }
 
@@ -1129,6 +1478,36 @@ pub fn compose_inline_error_body(state: &ExportDialogState) -> Option<&str> {
     state.inline_error().map(|e| e.rendered.as_str())
 }
 
+/// `gtk::Revealer::set_reveal_child` binding for the inline-warning row.
+///
+/// Returns `true` iff the state has a staged [`InlineWarning`] —
+/// currently only `WorkerCompleted(DurabilityWarning)` stages one.
+/// The dialog body wraps the rendered text in a `gtk::Revealer` so
+/// the slot collapses cleanly when no warning is staged.
+#[must_use]
+pub fn compose_inline_warning_revealed(state: &ExportDialogState) -> bool {
+    state.inline_warning().is_some()
+}
+
+/// `gtk::Label::set_label` binding for the inline-warning body.
+/// Returns the rendered `save_durability_unconfirmed` body when a
+/// warning is staged, or `None` when the slot is collapsed.
+#[must_use]
+pub fn compose_inline_warning_body(state: &ExportDialogState) -> Option<&str> {
+    state.inline_warning().map(|w| w.rendered.as_str())
+}
+
+/// Pinned text rendered on the success [`AdwToast`]. Mirrors the CLI's
+/// "Exported N entries to <path>" stdout line, but the dialog flow
+/// has no entry count to surface (the user picks the destination,
+/// not the row set), so the toast names the destination only. The
+/// toast surface in `AppModel` builds this string from
+/// [`ExportWorkerCompletion::destination`].
+#[must_use]
+pub fn format_export_success_toast(destination: &Path) -> String {
+    format!("Exported to {}", destination.display())
+}
+
 /// Widget-bearing `adw::Dialog` for the application menu's Export… entry.
 ///
 /// Mounts the libadwaita dialog described in DESIGN.md §7
@@ -1149,10 +1528,25 @@ pub struct ExportDialogComponent {
     #[allow(dead_code)]
     vault_path: PathBuf,
     /// Form-draft state machine driven by [`apply_msg`]. Holds the
-    /// destination path + format choice; subsequent sub-items extend
-    /// the struct with the gate / passphrase / busy / post-worker
-    /// slots. The widget view reads this via the `compose_*` helpers.
+    /// destination path + format choice + gate / passphrase / busy /
+    /// post-worker slots. The widget view reads this via the
+    /// `compose_*` helpers.
     state: ExportDialogState,
+    /// Stashed reference to the bundle-passphrase
+    /// `AdwPasswordEntryRow` so [`Self::update`] can call
+    /// [`adw::PasswordEntryRow::set_text("")`] to wipe the GTK
+    /// `gtk::EntryBuffer` on Submit / Cancel / Close per
+    /// `IMPLEMENTATION_PLAN_04_GTK.md` §"Secret entry handling". A
+    /// `#[watch]` binding on `set_text:` would loop indefinitely
+    /// because `gtk_editable_set_text` is implemented as `delete +
+    /// insert` and always emits `changed`; the explicit call here
+    /// fires once per zeroize event with no feedback loop. Set
+    /// inside [`Self::init`] after `view_output!`.
+    passphrase_row: Option<adw::PasswordEntryRow>,
+    /// Stashed reference to the confirm-passphrase
+    /// `AdwPasswordEntryRow`. Same lifecycle / clear semantics as
+    /// [`Self::passphrase_row`].
+    confirm_passphrase_row: Option<adw::PasswordEntryRow>,
 }
 
 #[allow(missing_docs)]
@@ -1309,10 +1703,11 @@ impl SimpleComponent for ExportDialogComponent {
                         },
                     },
 
-                    // Inline error revealer (`invalid_passphrase`
-                    // staged by the SubmitClicked twice-confirm pre-
-                    // flight; subsequent sub-items extend this to the
-                    // writer outcome's `Inline` arm).
+                    // Inline error revealer. Producers: the
+                    // SubmitClicked twice-confirm pre-flight
+                    // (`invalid_passphrase`) and `WorkerCompleted`'s
+                    // `ExportOutcome::Inline` arm (`io_error`,
+                    // `save_not_committed`, other writer errors).
                     #[name = "inline_error_revealer"]
                     gtk::Revealer {
                         #[watch]
@@ -1328,6 +1723,31 @@ impl SimpleComponent for ExportDialogComponent {
                             set_xalign: 0.0,
                             set_wrap: true,
                             add_css_class: "error",
+                        },
+                    },
+
+                    // Inline warning revealer. Producer:
+                    // `WorkerCompleted`'s
+                    // `ExportOutcome::DurabilityWarning` arm
+                    // (`save_durability_unconfirmed`) — the export
+                    // file is on disk but the parent-directory
+                    // `fsync` failed. The dialog stays open so the
+                    // user explicitly dismisses the warning.
+                    #[name = "inline_warning_revealer"]
+                    gtk::Revealer {
+                        #[watch]
+                        set_reveal_child: compose_inline_warning_revealed(&model.state),
+                        set_transition_type: gtk::RevealerTransitionType::SlideDown,
+                        set_transition_duration: 150,
+
+                        #[name = "inline_warning_label"]
+                        gtk::Label {
+                            #[watch]
+                            set_label: compose_inline_warning_body(&model.state)
+                                .unwrap_or(""),
+                            set_xalign: 0.0,
+                            set_wrap: true,
+                            add_css_class: "warning",
                         },
                     },
 
@@ -1379,11 +1799,18 @@ impl SimpleComponent for ExportDialogComponent {
         root: Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
-        let model = ExportDialogComponent {
+        let mut model = ExportDialogComponent {
             vault_path: init.vault_path,
             state: ExportDialogState::new(),
+            passphrase_row: None,
+            confirm_passphrase_row: None,
         };
         let widgets = view_output!();
+        // Stash widget refs for the SecretEntry-widget zeroize hook
+        // in `update()`. `adw::PasswordEntryRow` is a `GObject`;
+        // `clone()` just bumps the refcount.
+        model.passphrase_row = Some(widgets.passphrase_row.clone());
+        model.confirm_passphrase_row = Some(widgets.confirm_passphrase_row.clone());
 
         // Wire the "Choose file…" button to `gtk::FileDialog::save`.
         // The async result feeds back as
@@ -1421,7 +1848,34 @@ impl SimpleComponent for ExportDialogComponent {
     }
 
     fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>) {
-        if let Some(output) = apply_msg(&mut self.state, msg) {
+        // Inspect the msg discriminant before consuming it so the
+        // post-`apply_msg` widget-zeroize hook below knows which paths
+        // require wiping the `gtk::EntryBuffer`. The matching
+        // `SecretEntry` shadows are cleared inside `apply_msg`; the
+        // explicit `set_text("")` here wipes the widget buffer (the
+        // unavoidable UI-side copy of the typed passphrase) per
+        // `IMPLEMENTATION_PLAN_04_GTK.md` §"Secret entry handling".
+        // `WorkerCompleted(Success)` also triggers a wipe because the
+        // dialog tears down on the emitted `Close` output, and the
+        // widget should not hold the typed passphrase between the
+        // Submit dispatch and the controller drop.
+        let wipe_secret_widgets = matches!(
+            msg,
+            ExportDialogMsg::SubmitClicked
+                | ExportDialogMsg::Cancel
+                | ExportDialogMsg::Close
+                | ExportDialogMsg::WorkerCompleted(ExportOutcome::Success)
+        );
+        let output = apply_msg(&mut self.state, msg);
+        if wipe_secret_widgets {
+            if let Some(row) = self.passphrase_row.as_ref() {
+                row.set_text("");
+            }
+            if let Some(row) = self.confirm_passphrase_row.as_ref() {
+                row.set_text("");
+            }
+        }
+        if let Some(output) = output {
             // Forward to `AppModel`. A closed output channel only happens
             // if `AppModel` already dropped the controller, in which case
             // the dialog is about to be torn down — drop the output.
