@@ -4460,9 +4460,48 @@ sign-off.
     together these fail if the toolchain pin drifts, the AppImage
     script stops propagating `SOURCE_DATE_EPOCH`, or a `cargo
     build` invocation in the script drops `--locked` / `--release`.)
-  - [ ] Sign `.deb`, `.rpm`, and AppImage with `minisign` per §11.6;
+  - [x] Sign `.deb`, `.rpm`, and AppImage with `minisign` per §11.6;
     publish the public key + signature alongside each artifact on
     GitHub Releases.
+    (`packaging/sign/sign-artifact.sh` wraps `minisign -S` with the
+    release-pipeline conventions: the secret key is mounted from a
+    CI secret at runtime via `MINISIGN_SECRET_KEY` (a filesystem
+    path the workflow writes the secret to — the secret never lands
+    in the script source); the optional passphrase is piped through
+    stdin when `MINISIGN_PASSWORD` is set so the signing step runs
+    non-interactively in CI; the trusted-comment string defaults to
+    `"<artifact-basename> signed by paladin release pipeline"` but
+    the release pipeline can override it via
+    `MINISIGN_TRUSTED_COMMENT` (typically to embed the release tag).
+    The script takes the artifact path as `$1`, invokes `minisign
+    -S -s "${MINISIGN_SECRET_KEY}" -m "${ARTIFACT}" -t
+    "${TRUSTED_COMMENT}"`, and asserts the expected
+    `<artifact>.minisig` lands alongside the input before declaring
+    success — a missing output would otherwise let the release
+    workflow upload an unsigned blob. The public-key file the
+    release workflow ships alongside each artifact lives at
+    `packaging/sign/minisign.pub` (the published trust anchor for
+    downstream verifiers; the actual key bytes get generated and
+    committed once during release-pipeline bootstrap). Pinned by
+    `tests/packaging_signing_script_logic.rs::sign_script_exists_at_expected_path`,
+    `sign_script_is_executable`,
+    `sign_script_starts_with_bash_shebang`,
+    `sign_script_carries_spdx_license_header`,
+    `sign_script_enables_strict_shell_mode`,
+    `sign_script_reads_minisign_secret_key_from_environment`,
+    `sign_script_reads_trusted_comment_from_environment_with_a_default`,
+    `sign_script_takes_artifact_path_as_first_positional`,
+    `sign_script_invokes_minisign_sign_subcommand`,
+    `sign_script_passes_secret_key_flag_to_minisign`,
+    `sign_script_passes_artifact_path_via_message_flag`,
+    `sign_script_documents_public_key_location`,
+    `sign_script_emits_minisig_filename_alongside_artifact`,
+    `join_continuations_concatenates_backslash_terminated_lines`,
+    `join_continuations_preserves_non_continuation_lines`, and
+    `minisign_sign_invocations_returns_logical_invocations_only` —
+    together these fail if the script drops a flag, hard-codes a
+    secret-key path, swaps `minisign` for another signer, or stops
+    asserting the `.minisig` post-condition.)
   - [ ] File the Flathub submission and inherit Flatpak signing from
     Flathub.
   - [ ] Add the packaging dry-run job to CI: produces `.deb`,
