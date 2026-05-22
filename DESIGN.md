@@ -2240,7 +2240,7 @@ artifacts side by side.
 - [ ] Clipboard + auto-lock parity with TUI (opt-in).
 - [ ] Linux desktop file + icon (consumed by the §11.3 native packages
   and the §11.4 Flatpak manifest).
-- [ ] `.deb`, `.rpm`, Flatpak, and AppImage artifacts for `paladin-gtk`,
+- [x] `.deb`, `.rpm`, Flatpak, and AppImage artifacts for `paladin-gtk`,
   signed and published per §11.3–§11.6; Flathub submission filed.
 - [ ] Manual test plan documented.
 

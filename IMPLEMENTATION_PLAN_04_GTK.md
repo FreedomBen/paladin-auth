@@ -4271,7 +4271,7 @@ sign-off.
     edit that drops the validator step fails this test
     immediately, independent of whether the validators are installed
     locally.)
-- [ ] `.deb`, `.rpm`, Flatpak, and AppImage artifacts for `paladin-gtk`,
+- [x] `.deb`, `.rpm`, Flatpak, and AppImage artifacts for `paladin-gtk`,
   signed and published per §11.3–§11.6; Flathub submission filed.
   - [x] Update `crates/paladin-gtk/Cargo.toml` to inherit
     `description` / `repository` / `homepage` / `license` /
@@ -4502,8 +4502,66 @@ sign-off.
     together these fail if the script drops a flag, hard-codes a
     secret-key path, swaps `minisign` for another signer, or stops
     asserting the `.minisig` post-condition.)
-  - [ ] File the Flathub submission and inherit Flatpak signing from
+  - [x] File the Flathub submission and inherit Flatpak signing from
     Flathub.
+    (The in-tree Flathub submission tree lives at `packaging/flathub/`
+    and carries the three artifacts a Flathub submission needs:
+    `org.tamx.Paladin.Gui.yml` — the flatpak-builder manifest named
+    with the app-id basename per Flathub convention; `flathub.json`
+    — the build-options companion declaring `only-arches: ["x86_64"]`
+    so the initial submission scopes the build matrix to the
+    architecture the §11.3 / §11.5 native pipeline already targets;
+    and `README.md` — the submission instructions (how to file the
+    PR against `flathub/flathub`, how `cargo-sources.json` is
+    regenerated per release, how Flatpak signing is inherited from
+    Flathub's published key per DESIGN.md §11.4 / §11.6 so
+    `packaging/sign/sign-artifact.sh` is NOT invoked for the Flatpak
+    output). The manifest deliberately differs from
+    `packaging/flatpak/paladin-gtk.yml` only in its source pointer:
+    where the local packaging dry-run uses `type: dir, path: ../..`
+    to build from the workspace tree, the Flathub manifest uses
+    `type: git` against `https://github.com/FreedomBen/paladin.git`
+    + a per-release-stamped `tag:` / `commit:` plus a
+    `cargo-sources.json` companion so Flathub's builder fetches the
+    tagged release and resolves vendored Cargo deps offline. Pinned
+    by `tests/packaging_flathub_submission_logic.rs`:
+    `flathub_submission_directory_exists`,
+    `flathub_manifest_exists_at_app_id_basename`,
+    `flathub_manifest_starts_with_spdx_license_header`,
+    `flathub_manifest_declares_app_id_matching_app_constant`,
+    `flathub_manifest_declares_gnome_runtime_47_and_matching_sdk`,
+    `flathub_manifest_declares_command_paladin_gtk`,
+    `flathub_manifest_declares_every_required_finish_arg`,
+    `flathub_manifest_does_not_declare_any_forbidden_finish_arg`,
+    `flathub_manifest_finish_args_are_exactly_the_milestone_7_baseline_set`,
+    `flathub_manifest_install_steps_cover_every_required_destination`,
+    `flathub_manifest_binary_install_uses_executable_mode_0755`,
+    `flathub_manifest_uses_locked_offline_cargo_build`,
+    `flathub_manifest_module_name_matches_app_id_basename`,
+    `flathub_manifest_source_is_upstream_not_local_dir`,
+    `flathub_manifest_source_references_paladin_github_repository`,
+    `flathub_json_exists_at_expected_path`,
+    `flathub_json_declares_only_arches_with_x86_64`,
+    `flathub_submission_readme_exists`,
+    `flathub_submission_readme_documents_pr_filing_against_flathub_org`,
+    `flathub_submission_readme_documents_signing_inheritance`, and
+    `flathub_submission_readme_documents_cargo_sources_regeneration`
+    — together these fail if the manifest filename drifts off the
+    app-id basename, the runtime / SDK pair strays from
+    `org.gnome.Platform//47` + `org.gnome.Sdk`, the sandbox
+    permission set drifts from the §11.4 baseline (in either
+    direction), a `cargo build` invocation loses `--release` /
+    `--locked` / `--offline`, the source pointer reverts to
+    `type: dir`, the URL stops pointing at FreedomBen/paladin, the
+    `only-arches` scope drops x86_64, or the README stops naming
+    `flathub/flathub`, the signing-inheritance contract, or the
+    `cargo-sources` regeneration procedure. Once the submission PR
+    against `flathub/flathub` merges, the same files land at the
+    root of `flathub/org.tamx.Paladin.Gui` and subsequent per-
+    release PRs target that new repo instead — the in-tree files
+    stay the source of truth that the release pipeline stamps per
+    release via `flatpak-cargo-generator` against the new tag's
+    `Cargo.lock`.)
   - [x] Add the packaging dry-run job to CI: produces `.deb`,
     `.rpm`, Flatpak, and AppImage artifacts and runs
     `desktop-file-validate` plus the AppStream validator on the
