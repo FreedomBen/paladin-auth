@@ -21,9 +21,10 @@ use paladin_core::{
 };
 
 use paladin_gtk::qr_clipboard::{
-    allocate_rgba_buffer, clipboard_qr_memory_format, compose_qr_decode_outcome,
-    decode_clipboard_qr, prepare_rgba_layout, verify_download_layout, DownloadMismatch,
-    QrDecodeOutcome, QrImportSummary, QrLayoutError, RgbaLayout, CLIPBOARD_QR_CONFLICT_POLICY,
+    allocate_rgba_buffer, classify_layout_preflight, clipboard_qr_memory_format,
+    compose_qr_decode_outcome, decode_clipboard_qr, prepare_rgba_layout, verify_download_layout,
+    DownloadMismatch, QrDecodeOutcome, QrImportSummary, QrLayoutError, RgbaLayout,
+    CLIPBOARD_QR_CONFLICT_POLICY,
 };
 use relm4::gtk::gdk;
 
@@ -947,4 +948,135 @@ fn classify_qr_outcome_routes_validation_error_through_decode_variant() {
         }
         other => panic!("expected Err(Decode(ValidationError)), got {other:?}"),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Item: classify_layout_preflight bridges QrLayoutError into QrPreflightError
+// ---------------------------------------------------------------------------
+//
+// `prepare_rgba_layout` is the pre-download gate; its typed
+// `QrLayoutError` rejections (zero dimensions, overflow, above
+// `QR_RGBA_MAX_BYTES`) precede the `QrDecodeOutcome` computation
+// that `classify_qr_outcome` consumes. The live
+// `AppModel::update` clipboard-QR handler needs a uniform
+// `Result<_, QrPreflightError>` for both the pre-download and the
+// post-download halves of the pipeline so the same
+// `InlineError::from_qr_preflight_error` routing covers every
+// failure branch.
+//
+// `classify_layout_preflight(width, height) -> Result<RgbaLayout,
+// QrPreflightError>` is the missing bridge: it forwards
+// `prepare_rgba_layout` on success and lifts every `QrLayoutError`
+// into `QrPreflightError::LayoutRejected(_)` so the live handler
+// does not have to map the error type itself.
+
+#[test]
+fn classify_layout_preflight_signature_takes_width_height_returns_preflight_result() {
+    fn assert_signature(_: fn(u32, u32) -> Result<RgbaLayout, QrPreflightError>) {}
+    assert_signature(classify_layout_preflight);
+}
+
+#[test]
+fn classify_layout_preflight_accepts_valid_dims_and_returns_same_layout_as_prepare_rgba_layout() {
+    let bridged = classify_layout_preflight(33, 17).expect("small size accepted");
+    let direct = prepare_rgba_layout(33, 17).expect("small size accepted directly");
+    assert_eq!(bridged.width(), direct.width());
+    assert_eq!(bridged.height(), direct.height());
+    assert_eq!(bridged.row_stride(), direct.row_stride());
+    assert_eq!(bridged.buffer_bytes(), direct.buffer_bytes());
+}
+
+#[test]
+fn classify_layout_preflight_zero_width_returns_layout_rejected_zero_dimensions() {
+    let err = classify_layout_preflight(0, 64).expect_err("zero width rejected");
+    match err {
+        QrPreflightError::LayoutRejected(QrLayoutError::ZeroDimensions) => {}
+        other => panic!("expected LayoutRejected(ZeroDimensions), got {other:?}"),
+    }
+}
+
+#[test]
+fn classify_layout_preflight_zero_height_returns_layout_rejected_zero_dimensions() {
+    let err = classify_layout_preflight(64, 0).expect_err("zero height rejected");
+    match err {
+        QrPreflightError::LayoutRejected(QrLayoutError::ZeroDimensions) => {}
+        other => panic!("expected LayoutRejected(ZeroDimensions), got {other:?}"),
+    }
+}
+
+#[test]
+fn classify_layout_preflight_oversized_returns_layout_rejected_image_too_large() {
+    let max_pixels = QR_RGBA_MAX_BYTES / 4;
+    let overshoot = max_pixels + 1;
+    let w = u32::try_from(overshoot).expect("fits in u32");
+    let err = classify_layout_preflight(w, 1).expect_err("oversized rejected");
+    match err {
+        QrPreflightError::LayoutRejected(QrLayoutError::ImageTooLarge {
+            requested_bytes,
+            max_bytes,
+        }) => {
+            assert_eq!(max_bytes, QR_RGBA_MAX_BYTES);
+            assert!(requested_bytes > max_bytes);
+        }
+        other => panic!("expected LayoutRejected(ImageTooLarge), got {other:?}"),
+    }
+}
+
+#[test]
+fn classify_layout_preflight_overflow_returns_layout_rejected_dimensions_or_too_large() {
+    // `u32::MAX * u32::MAX` overflows the pixel-count or byte-count
+    // multiplication. Either typed reason is acceptable so long as it
+    // arrives as `LayoutRejected(_)` and never as a generic core
+    // failure or a panic.
+    let err = classify_layout_preflight(u32::MAX, u32::MAX).expect_err("overflow rejected");
+    match err {
+        QrPreflightError::LayoutRejected(
+            QrLayoutError::DimensionsOverflow | QrLayoutError::ImageTooLarge { .. },
+        ) => {}
+        other => panic!("expected LayoutRejected(overflow/too-large), got {other:?}"),
+    }
+}
+
+#[test]
+fn classify_layout_preflight_at_qr_rgba_max_bytes_succeeds() {
+    let pixels = QR_RGBA_MAX_BYTES / 4;
+    let w = u32::try_from(pixels).expect("fits in u32");
+    let layout = classify_layout_preflight(w, 1).expect("at-cap accepted");
+    assert_eq!(layout.buffer_bytes(), QR_RGBA_MAX_BYTES);
+}
+
+#[test]
+fn classify_layout_preflight_rejection_kind_is_invalid_payload() {
+    // The live handler routes the bridged error straight into
+    // `InlineError::from_qr_preflight_error`, which copies the
+    // `kind()` onto the rendered inline error. All `LayoutRejected`
+    // variants must surface under the stable §5 `InvalidPayload`
+    // discriminator so the dialog's inline rendering matches every
+    // other "the texture shape is malformed" failure.
+    let zero = classify_layout_preflight(0, 1).expect_err("zero rejected");
+    assert_eq!(zero.kind(), ErrorKind::InvalidPayload);
+
+    let max_pixels = QR_RGBA_MAX_BYTES / 4;
+    let overshoot = max_pixels + 1;
+    let w = u32::try_from(overshoot).expect("fits in u32");
+    let too_large = classify_layout_preflight(w, 1).expect_err("oversized rejected");
+    assert_eq!(too_large.kind(), ErrorKind::InvalidPayload);
+}
+
+#[test]
+fn classify_layout_preflight_rejection_source_chain_points_at_underlying_layout_error() {
+    // `QrPreflightError::source` wraps the underlying `QrLayoutError`
+    // so error-chain consumers (test diagnostics, future logging) can
+    // reach the typed reason without re-parsing the rendered body.
+    use std::error::Error as _;
+
+    let err = classify_layout_preflight(0, 1).expect_err("zero rejected");
+    let source = err
+        .source()
+        .expect("LayoutRejected wraps the underlying QrLayoutError");
+    let downcast = source.downcast_ref::<QrLayoutError>();
+    assert!(
+        matches!(downcast, Some(QrLayoutError::ZeroDimensions)),
+        "expected ZeroDimensions source, got {downcast:?}",
+    );
 }

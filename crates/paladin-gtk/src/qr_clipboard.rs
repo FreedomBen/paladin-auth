@@ -159,6 +159,42 @@ pub fn prepare_rgba_layout(
     })
 }
 
+/// Pre-download bridge from [`prepare_rgba_layout`] into the unified
+/// [`QrPreflightError`] surface.
+///
+/// `IMPLEMENTATION_PLAN_04_GTK.md` §"`AddAccountComponent` QR clipboard
+/// image path" defines four preflight failure categories:
+///
+/// 1. no clipboard image — constructed as
+///    [`QrPreflightError::NoClipboardImage`] by the live
+///    `AppModel::update` handler when
+///    `gdk::Clipboard::read_texture_async` returns no texture.
+/// 2. layout rejected — [`prepare_rgba_layout`] rejects the texture's
+///    dimensions before any allocation or GDK download. This bridge
+///    lifts each typed [`QrLayoutError`] into
+///    [`QrPreflightError::LayoutRejected`].
+/// 3. download mismatch — [`compose_qr_decode_outcome`] /
+///    [`classify_qr_outcome`] handle this after the GDK
+///    `download_bytes` round trip.
+/// 4. decode failure — same downstream pipeline (steps 3-5 in
+///    [`classify_qr_outcome`]).
+///
+/// Returning the same [`QrPreflightError`] type for the pre-download
+/// (steps 1-2) and post-download (steps 3-5) halves lets the live
+/// `AppModel::update` handler route every preflight failure through
+/// a single [`crate::add_account::InlineError::from_qr_preflight_error`]
+/// conversion rather than mapping [`QrLayoutError`] separately.
+///
+/// Pure — forwards to [`prepare_rgba_layout`] without touching the
+/// GDK clipboard, the heap, or global state, and never allocates an
+/// RGBA buffer on the rejection path.
+pub fn classify_layout_preflight(
+    width: u32,
+    height: u32,
+) -> std::result::Result<RgbaLayout, QrPreflightError> {
+    prepare_rgba_layout(width, height).map_err(QrPreflightError::LayoutRejected)
+}
+
 /// `gdk::MemoryFormat` the clipboard-QR download must request.
 ///
 /// `IMPLEMENTATION_PLAN_04_GTK.md` §"`AddAccountComponent` QR clipboard
@@ -529,10 +565,12 @@ impl std::error::Error for QrPreflightError {
 /// [`crate::add_account::InlineError::from_qr_preflight_error`].
 ///
 /// Handles steps 3-5 of the clipboard-QR pipeline (post-download
-/// verify, decode, and empty-batch defense). Steps 1-2 (no
-/// clipboard image, [`prepare_rgba_layout`] rejection) are
-/// constructed directly by `AppModel::update` because they precede
-/// the [`QrDecodeOutcome`] computation.
+/// verify, decode, and empty-batch defense). Step 1 (no clipboard
+/// image) is constructed directly by `AppModel::update` because it
+/// precedes the [`QrDecodeOutcome`] computation; step 2 ([`prepare_rgba_layout`]
+/// rejection) is bridged through [`classify_layout_preflight`] so
+/// pre-download and post-download failures share a single
+/// [`QrPreflightError`] surface.
 ///
 /// `Decoded(vec![])` is documented as unreachable — `qr_image_bytes`
 /// returns `Err(NoEntriesToImport)` rather than `Ok(vec![])` when no
