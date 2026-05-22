@@ -4211,9 +4211,43 @@ sign-off.
     `symbolic_svg_is_well_formed_svg_root`,
     `symbolic_svg_carries_spdx_header`, and
     `symbolic_svg_uses_currentcolor_for_recoloring`.)
-  - [ ] Wire `build.rs` + `data/paladin-gtk.gresource.xml` to compile
+  - [x] Wire `build.rs` + `data/paladin-gtk.gresource.xml` to compile
     the gresource bundle deterministically via
     `glib-compile-resources` (fixed input order).
+    (`build.rs` calls
+    `glib_build_tools::compile_resources(&["data", "../.."], "data/paladin-gtk.gresource.xml", "paladin-gtk.gresource")`
+    so `glib-compile-resources` consumes the XML manifest and emits
+    a packed bundle under `OUT_DIR`. The manifest declares each
+    payload explicitly (no globs), every `<file>` entry sets
+    `compressed="true"`, and aliases are unique, so the bundle's
+    write order is determined entirely by the manifest's textual
+    order — no filesystem-walk dependency. The bundle now ships
+    the app stylesheet, the placeholder symbolic icon, the
+    workspace `LICENSE` body, the scalable app icon
+    (`icons/scalable/apps/org.tamx.Paladin.Gui.svg`), and the
+    symbolic app icon
+    (`icons/symbolic/apps/org.tamx.Paladin.Gui-symbolic.svg`); the
+    bundled app icons let the in-app `gtk::IconTheme` resolve
+    `APP_ID` even when the system hicolor theme has not yet
+    indexed the freshly installed PNG fallbacks (notably during
+    `cargo run`, the `xvfb-run` smoke test, and Flatpak sandboxes
+    whose runtime theme omits the package). The build script's
+    `cargo:rerun-if-changed=../../LICENSE` directive keeps the
+    bundled license body in lockstep with the on-disk source of
+    truth. Pinned by `tests/gresource_manifest_logic.rs`:
+    `manifest_exists_at_expected_path`,
+    `manifest_carries_spdx_header`,
+    `manifest_prefix_matches_app_id_reverse_dns_path`,
+    `manifest_uses_explicit_file_entries_not_globs`,
+    `manifest_aliases_are_unique`,
+    `manifest_carries_app_stylesheet_entry`,
+    `manifest_carries_placeholder_icon_entry`,
+    `manifest_carries_license_text_entry`,
+    `manifest_carries_app_icon_entries_for_in_app_lookup`,
+    `manifest_file_entries_are_compressed`,
+    `build_script_invokes_glib_compile_resources_against_manifest`,
+    `build_script_tracks_workspace_license_for_rerun`, and
+    `build_script_declares_workspace_root_as_secondary_source_dir`.)
   - [ ] Add `desktop-file-validate` and the AppStream validator to
     the CI / packaging dry-run so both files are checked on every
     build.

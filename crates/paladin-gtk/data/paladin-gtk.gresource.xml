@@ -25,6 +25,24 @@
     <file compressed="true" alias="style.css">style.css</file>
     <file compressed="true" alias="icons/scalable/actions/dialog-password-symbolic.svg">icons/scalable/actions/dialog-password-symbolic.svg</file>
     <!--
+      App icon (colored + symbolic) bundled under the freedesktop
+      `<root>/scalable/apps/<name>.svg` and
+      `<root>/symbolic/apps/<name>-symbolic.svg` layout. With
+      `wire_app_icon_theme_resource_path` attaching
+      `/org/tamx/Paladin/Gui/icons` to the live `gtk::IconTheme`,
+      the in-app `IconTheme::lookup_icon(APP_ID, …)` resolves
+      these payloads even when the system hicolor theme has not
+      yet indexed the freshly installed PNG fallbacks — useful
+      during `cargo run`, the `xvfb-run` smoke test, and Flatpak
+      sandboxes whose runtime theme omits the package. The PNG
+      fallbacks are not bundled because the gresource bundle is
+      consumed only by the in-app icon-theme layer; PNG
+      consumers (legacy panels, certain embedded launchers)
+      always read from `/usr/share/icons/hicolor/<size>/apps/`.
+    -->
+    <file compressed="true" alias="icons/scalable/apps/org.tamx.Paladin.Gui.svg">icons/hicolor/scalable/apps/org.tamx.Paladin.Gui.svg</file>
+    <file compressed="true" alias="icons/symbolic/apps/org.tamx.Paladin.Gui-symbolic.svg">icons/hicolor/symbolic/apps/org.tamx.Paladin.Gui-symbolic.svg</file>
+    <!--
       Repo-root `LICENSE` (AGPL-3.0-or-later, FSF AGPLv3 verbatim
       text) shipped under `/org/tamx/Paladin/Gui/LICENSE` so the
       §"About dialog" `AdwAboutDialog` can hand the bundled body
