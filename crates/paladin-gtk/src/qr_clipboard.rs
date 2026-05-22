@@ -26,6 +26,7 @@ use paladin_core::{
     import::qr_image_bytes, ImportConflict, ImportReport, Result, ValidatedAccount,
     QR_RGBA_MAX_BYTES,
 };
+use relm4::gtk::gdk;
 
 /// Fixed merge policy for clipboard-QR additions.
 ///
@@ -156,6 +157,110 @@ pub fn prepare_rgba_layout(
         row_stride,
         buffer_bytes,
     })
+}
+
+/// `gdk::MemoryFormat` the clipboard-QR download must request.
+///
+/// `IMPLEMENTATION_PLAN_04_GTK.md` §"`AddAccountComponent` QR clipboard
+/// image path" pins the download format to
+/// [`gdk::MemoryFormat::R8g8b8a8`] — straight (non-premultiplied)
+/// 8-bit RGBA. The default `gdk::Texture::download` path yields
+/// `R8g8b8a8Premultiplied`, which silently produces wrong pixels for
+/// the `rqrr`-based QR decoder behind
+/// [`paladin_core::import::qr_image_bytes`]. The live wiring in
+/// `AppModel`'s clipboard-QR worker passes the return value of this
+/// helper into [`gdk::TextureDownloader::set_format`] so the format
+/// selection stays in one place rather than scattering the constant
+/// across the call site.
+#[must_use]
+pub fn clipboard_qr_memory_format() -> gdk::MemoryFormat {
+    gdk::MemoryFormat::R8g8b8a8
+}
+
+/// Why a downloaded clipboard texture failed the post-download layout
+/// check against the validated [`RgbaLayout`].
+///
+/// `gdk::TextureDownloader::download_bytes` returns `(glib::Bytes,
+/// usize)` — the GDK-owned buffer plus the row stride GDK chose. GDK
+/// is allowed to return a larger-than-asked stride (e.g. for
+/// alignment), and the buffer length is whatever GDK allocated. The
+/// `rqrr` decoder upstream requires `width * 4` row stride exactly,
+/// so a mismatch here is a hard reject rather than a recoverable
+/// realignment. Pre-allocation rejection lives on [`QrLayoutError`];
+/// this enum covers the post-download path where GDK's actual layout
+/// might still drift from our expected layout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DownloadMismatch {
+    /// Downloaded buffer's length disagrees with
+    /// [`RgbaLayout::buffer_bytes`].
+    BufferLength {
+        /// `bytes.len()` returned by `gdk::TextureDownloader::download_bytes`.
+        actual_bytes: usize,
+        /// `layout.buffer_bytes()` from the pre-download
+        /// [`prepare_rgba_layout`] gate.
+        expected_bytes: usize,
+    },
+    /// GDK chose a row stride other than [`RgbaLayout::row_stride`].
+    RowStride {
+        /// Stride returned by `gdk::TextureDownloader::download_bytes`.
+        actual_stride: usize,
+        /// `layout.row_stride()` — exactly `width * 4`.
+        expected_stride: usize,
+    },
+}
+
+impl core::fmt::Display for DownloadMismatch {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::BufferLength {
+                actual_bytes,
+                expected_bytes,
+            } => write!(
+                f,
+                "clipboard texture download returned {actual_bytes} bytes, expected {expected_bytes}"
+            ),
+            Self::RowStride {
+                actual_stride,
+                expected_stride,
+            } => write!(
+                f,
+                "clipboard texture download returned row stride {actual_stride}, expected {expected_stride}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for DownloadMismatch {}
+
+/// Defensively verify that `gdk::TextureDownloader::download_bytes`'s
+/// returned `(bytes_len, row_stride)` matches the pre-download
+/// [`RgbaLayout`].
+///
+/// The downloader is configured via [`clipboard_qr_memory_format`]
+/// and the validated dimensions, so a matching layout is the
+/// expected case. A mismatch indicates GDK returned an unexpected
+/// stride (e.g. row padding for alignment) or buffer length —
+/// surfaces as a typed [`DownloadMismatch`] the `AppModel` clipboard-
+/// QR dispatch projects into an inline error before
+/// [`decode_clipboard_qr`] sees the bytes.
+pub fn verify_download_layout(
+    layout: &RgbaLayout,
+    downloaded_bytes: usize,
+    downloaded_stride: usize,
+) -> std::result::Result<(), DownloadMismatch> {
+    if downloaded_stride != layout.row_stride() {
+        return Err(DownloadMismatch::RowStride {
+            actual_stride: downloaded_stride,
+            expected_stride: layout.row_stride(),
+        });
+    }
+    if downloaded_bytes != layout.buffer_bytes() {
+        return Err(DownloadMismatch::BufferLength {
+            actual_bytes: downloaded_bytes,
+            expected_bytes: layout.buffer_bytes(),
+        });
+    }
+    Ok(())
 }
 
 /// Materialize the destination RGBA8 buffer for a validated layout.

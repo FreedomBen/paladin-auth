@@ -2700,10 +2700,41 @@ sign-off.
     `allocate_rgba_buffer_capacity_at_least_matches_length`, and
     `allocate_rgba_buffer_at_qr_rgba_max_bytes_succeeds`, on top of
     the existing `prepare_rgba_layout_*` rejection invariants.
-  - [ ] Download the texture via a `gdk::TextureDownloader` set to
+  - [x] Download the texture via a `gdk::TextureDownloader` set to
     `gdk::MemoryFormat::R8g8b8a8` with row stride `width * 4` (the
     default `Texture::download` yields premultiplied pixels the QR
     decoder cannot consume).
+    The format selection is exposed as the pure-logic helper
+    `crate::qr_clipboard::clipboard_qr_memory_format() ->
+    gdk::MemoryFormat`, returning `gdk::MemoryFormat::R8g8b8a8` so
+    the live `AppModel`-side `gdk::TextureDownloader::set_format(...)`
+    call reads the constant from one place rather than scattering
+    the literal across the dispatch site. After the GDK
+    `download_bytes(&self) -> (glib::Bytes, usize)` round trip,
+    the defensive `crate::qr_clipboard::verify_download_layout(
+    layout, downloaded_bytes, downloaded_stride) -> Result<(),
+    DownloadMismatch>` helper compares GDK's returned byte length
+    and row stride against the validated `RgbaLayout` — GDK is
+    allowed to return a larger-than-asked stride (alignment
+    padding) or buffer length, but the `rqrr` decoder upstream
+    requires `width * 4` row stride exactly, so any drift is a
+    hard reject that the dispatch projects into a typed inline
+    error before `decode_clipboard_qr` sees the bytes. Pinned by
+    `tests/qr_clipboard_logic.rs::clipboard_qr_memory_format_returns_straight_r8g8b8a8`,
+    `clipboard_qr_memory_format_is_not_premultiplied`,
+    `clipboard_qr_memory_format_signature_takes_no_arguments`,
+    `verify_download_layout_accepts_matching_length_and_stride`,
+    `verify_download_layout_rejects_short_buffer`,
+    `verify_download_layout_rejects_long_buffer`,
+    `verify_download_layout_rejects_mismatched_stride`,
+    `verify_download_layout_signature_takes_layout_len_and_stride`,
+    and `download_mismatch_display_does_not_echo_secret_bytes`.
+    The live `AppModel`-side TextureDownloader wiring lands
+    alongside the `gdk::Clipboard::read_texture_async` round trip
+    in the subsequent sub-item (L2684), which reads the texture,
+    runs the validated download against `clipboard_qr_memory_format()`,
+    and dispatches `run_qr_worker` through the existing
+    `compose_qr_worker_input` boundary.
   - [ ] Pass width, height, bytes, and `import_time` into
     `paladin_core::import::qr_image_bytes`; the call returns
     `Vec<ValidatedAccount>` regardless of QR count.

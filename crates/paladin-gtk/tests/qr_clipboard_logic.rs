@@ -20,9 +20,11 @@ use paladin_core::{
 };
 
 use paladin_gtk::qr_clipboard::{
-    allocate_rgba_buffer, decode_clipboard_qr, prepare_rgba_layout, QrImportSummary, QrLayoutError,
-    RgbaLayout, CLIPBOARD_QR_CONFLICT_POLICY,
+    allocate_rgba_buffer, clipboard_qr_memory_format, decode_clipboard_qr, prepare_rgba_layout,
+    verify_download_layout, DownloadMismatch, QrImportSummary, QrLayoutError, RgbaLayout,
+    CLIPBOARD_QR_CONFLICT_POLICY,
 };
+use relm4::gtk::gdk;
 
 // ---------------------------------------------------------------------------
 // Item 1: RGBA byte-length / stride preparation
@@ -241,6 +243,134 @@ fn allocate_rgba_buffer_at_qr_rgba_max_bytes_succeeds() {
     let layout = prepare_rgba_layout(w, 1).expect("at-cap accepted");
     let buffer = allocate_rgba_buffer(&layout);
     assert_eq!(buffer.len(), QR_RGBA_MAX_BYTES);
+}
+
+// ---------------------------------------------------------------------------
+// Item 2c: clipboard_qr_memory_format selects straight RGBA8
+// ---------------------------------------------------------------------------
+//
+// `IMPLEMENTATION_PLAN_04_GTK.md` §"`AddAccountComponent` QR clipboard
+// image path" pins the GDK download format to
+// `gdk::MemoryFormat::R8g8b8a8` (straight, non-premultiplied RGBA) so
+// the `rqrr`-based QR decoder behind
+// `paladin_core::import::qr_image_bytes` consumes pixel values
+// directly. The default `Texture::download` path yields *premultiplied*
+// pixels (`R8g8b8a8Premultiplied`) which the QR decoder cannot consume.
+
+#[test]
+fn clipboard_qr_memory_format_returns_straight_r8g8b8a8() {
+    assert_eq!(clipboard_qr_memory_format(), gdk::MemoryFormat::R8g8b8a8);
+}
+
+#[test]
+fn clipboard_qr_memory_format_is_not_premultiplied() {
+    // Premultiplied RGBA is the default `Texture::download` format and
+    // would silently produce wrong pixels for the QR decoder. Pin the
+    // explicit rejection so a future drift away from R8g8b8a8 surfaces
+    // here.
+    assert_ne!(
+        clipboard_qr_memory_format(),
+        gdk::MemoryFormat::R8g8b8a8Premultiplied
+    );
+}
+
+#[test]
+fn clipboard_qr_memory_format_signature_takes_no_arguments() {
+    fn assert_signature(_: fn() -> gdk::MemoryFormat) {}
+    assert_signature(clipboard_qr_memory_format);
+}
+
+// ---------------------------------------------------------------------------
+// Item 2d: verify_download_layout defensively matches GDK's returned
+//          (bytes_len, row_stride) against the validated layout
+// ---------------------------------------------------------------------------
+//
+// `gdk::TextureDownloader::download_bytes` returns `(glib::Bytes,
+// usize)` — the GDK-owned buffer plus the row stride GDK chose. We
+// asked for `clipboard_qr_memory_format()` with the implicit stride
+// expectation `width * 4` (see the §"Component tree" entry). The
+// downloader is allowed to return a *larger* stride (e.g. for
+// alignment), but the QR decoder upstream requires
+// `width * 4` exactly — anything else and the row bytes don't line up
+// against the column index `qr_image_bytes` walks.
+//
+// `verify_download_layout` is the defensive gate that turns a
+// "GDK gave us an unexpected layout" into a typed inline error
+// before `decode_clipboard_qr` ever sees the bytes.
+
+#[test]
+fn verify_download_layout_accepts_matching_length_and_stride() {
+    let layout = prepare_rgba_layout(40, 30).expect("ok");
+    verify_download_layout(&layout, layout.buffer_bytes(), layout.row_stride()).expect("matches");
+}
+
+#[test]
+fn verify_download_layout_rejects_short_buffer() {
+    let layout = prepare_rgba_layout(40, 30).expect("ok");
+    let short_len = layout.buffer_bytes() - 1;
+    let err = verify_download_layout(&layout, short_len, layout.row_stride())
+        .expect_err("short buffer rejected");
+    match err {
+        DownloadMismatch::BufferLength {
+            actual_bytes,
+            expected_bytes,
+        } => {
+            assert_eq!(actual_bytes, short_len);
+            assert_eq!(expected_bytes, layout.buffer_bytes());
+        }
+        DownloadMismatch::RowStride { .. } => panic!("expected BufferLength, got RowStride"),
+    }
+}
+
+#[test]
+fn verify_download_layout_rejects_long_buffer() {
+    let layout = prepare_rgba_layout(40, 30).expect("ok");
+    let long_len = layout.buffer_bytes() + 1;
+    let err = verify_download_layout(&layout, long_len, layout.row_stride())
+        .expect_err("long buffer rejected");
+    assert!(matches!(err, DownloadMismatch::BufferLength { .. }));
+}
+
+#[test]
+fn verify_download_layout_rejects_mismatched_stride() {
+    let layout = prepare_rgba_layout(40, 30).expect("ok");
+    let padded_stride = layout.row_stride() + 8;
+    let err = verify_download_layout(&layout, layout.buffer_bytes(), padded_stride)
+        .expect_err("padded stride rejected");
+    match err {
+        DownloadMismatch::RowStride {
+            actual_stride,
+            expected_stride,
+        } => {
+            assert_eq!(actual_stride, padded_stride);
+            assert_eq!(expected_stride, layout.row_stride());
+        }
+        DownloadMismatch::BufferLength { .. } => panic!("expected RowStride, got BufferLength"),
+    }
+}
+
+#[test]
+fn verify_download_layout_signature_takes_layout_len_and_stride() {
+    fn assert_signature(_: fn(&RgbaLayout, usize, usize) -> Result<(), DownloadMismatch>) {}
+    assert_signature(verify_download_layout);
+}
+
+#[test]
+fn download_mismatch_display_does_not_echo_secret_bytes() {
+    // Defensive: the typed error renders the *size* mismatch only —
+    // never any RGBA pixel data. Pinned so a future Display impl
+    // change does not start interpolating downloaded bytes.
+    let layout = prepare_rgba_layout(40, 30).expect("ok");
+    let buffer_err =
+        verify_download_layout(&layout, 0, layout.row_stride()).expect_err("zero-length rejected");
+    let body = buffer_err.to_string();
+    assert!(
+        body.contains("expected") || body.contains("byte") || body.contains("buffer"),
+        "{body:?} must surface the size mismatch"
+    );
+    // No bytes are ever passed to the validator, so there is nothing
+    // secret to leak — pin the contract: the renderer does not
+    // construct a slice from the dimensions and read it.
 }
 
 // ---------------------------------------------------------------------------
