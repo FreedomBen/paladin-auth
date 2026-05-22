@@ -4273,10 +4273,24 @@ sign-off.
     locally.)
 - [ ] `.deb`, `.rpm`, Flatpak, and AppImage artifacts for `paladin-gtk`,
   signed and published per §11.3–§11.6; Flathub submission filed.
-  - [ ] Update `crates/paladin-gtk/Cargo.toml` to inherit
+  - [x] Update `crates/paladin-gtk/Cargo.toml` to inherit
     `description` / `repository` / `homepage` / `license` /
     `edition` / `rust-version` from `[workspace.package]` and set
-    the binary-specific `keywords` / `categories` locally.
+    the binary-specific `keywords` / `categories` locally. Pinned by
+    `tests/cargo_manifest_workspace_inheritance_logic.rs`:
+    `crate_manifest_inherits_required_fields_from_workspace_package`,
+    `crate_manifest_declares_keywords_locally_with_expected_values`,
+    `crate_manifest_declares_categories_locally_with_expected_values`,
+    `crate_manifest_does_not_inherit_keywords_or_categories_from_workspace`,
+    and `workspace_manifest_supplies_each_inherited_field` — together
+    these read both `crates/paladin-gtk/Cargo.toml` and the workspace
+    `Cargo.toml` as plain text and fail if any of `version` /
+    `edition` / `rust-version` / `license` / `repository` / `homepage`
+    / `description` stops resolving through
+    `<field>.workspace = true`, if `keywords` / `categories` ever drift
+    from the GUI-binary set `["otp", "totp", "hotp", "authenticator",
+    "gtk"]` / `["gui", "authentication"]`, or if either facet is
+    accidentally moved onto `[workspace.package]`.
   - [ ] Add `packaging/deb/paladin-gtk.yaml` (`nfpm`) installing
     `/usr/bin/paladin-gtk`, the desktop entry, the AppStream
     metainfo, and the hicolor icon set; declare
