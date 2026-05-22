@@ -158,6 +158,26 @@ pub fn prepare_rgba_layout(
     })
 }
 
+/// Materialize the destination RGBA8 buffer for a validated layout.
+///
+/// Returns a zero-initialized `Vec<u8>` of exactly
+/// [`RgbaLayout::buffer_bytes`] in length, ready for
+/// `gdk::TextureDownloader::download_into(...)` to fill in pixel
+/// values at row stride [`RgbaLayout::row_stride`]. The signature takes
+/// `&RgbaLayout` rather than raw `(width, height)` so a caller cannot
+/// bypass [`prepare_rgba_layout`]'s overflow / size gate — the
+/// `RgbaLayout` value is the proof that the layout passed the gate.
+///
+/// Zero-initialization protects against a partial download leaking
+/// prior heap contents into the QR decode buffer. The allocation is
+/// the *first* time we touch the heap on the clipboard-QR add path —
+/// [`prepare_rgba_layout`] runs to acceptance before this call, so
+/// rejecting an oversized clipboard image never lands here.
+#[must_use]
+pub fn allocate_rgba_buffer(layout: &RgbaLayout) -> Vec<u8> {
+    vec![0_u8; layout.buffer_bytes()]
+}
+
 /// Hand a downloaded RGBA8 buffer to
 /// [`paladin_core::import::qr_image_bytes`] and surface its
 /// `Vec<ValidatedAccount>` (or [`PaladinError`]) verbatim.

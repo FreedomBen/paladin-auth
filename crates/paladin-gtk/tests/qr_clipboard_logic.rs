@@ -20,8 +20,8 @@ use paladin_core::{
 };
 
 use paladin_gtk::qr_clipboard::{
-    decode_clipboard_qr, prepare_rgba_layout, QrImportSummary, QrLayoutError, RgbaLayout,
-    CLIPBOARD_QR_CONFLICT_POLICY,
+    allocate_rgba_buffer, decode_clipboard_qr, prepare_rgba_layout, QrImportSummary, QrLayoutError,
+    RgbaLayout, CLIPBOARD_QR_CONFLICT_POLICY,
 };
 
 // ---------------------------------------------------------------------------
@@ -146,6 +146,101 @@ fn prepare_rgba_layout_runs_before_buffer_is_allocated() {
     // cannot have allocated anything before signalling the error.
     fn assert_signature(_: fn(u32, u32) -> Result<RgbaLayout, QrLayoutError>) {}
     assert_signature(prepare_rgba_layout);
+}
+
+// ---------------------------------------------------------------------------
+// Item 2b: allocate_rgba_buffer materializes the validated layout
+// ---------------------------------------------------------------------------
+//
+// `prepare_rgba_layout` is the gate; `allocate_rgba_buffer` is the
+// materialization step that runs *after* the gate has accepted the
+// layout. Together they satisfy the
+// `IMPLEMENTATION_PLAN_04_GTK.md` §"`AddAccountComponent` QR
+// clipboard image path" sub-item:
+//   "Allocate an exact width * height * 4 straight (non-premultiplied)
+//    RGBA8 buffer with overflow-checked multiplication; reject sizes
+//    above paladin_core::QR_RGBA_MAX_BYTES before allocation /
+//    download."
+//
+// The signature takes `&RgbaLayout` so a caller cannot bypass the
+// overflow / size checks by handing in raw u32 dimensions.
+
+#[test]
+fn allocate_rgba_buffer_takes_validated_layout_so_callers_cannot_bypass_size_gate() {
+    fn assert_signature(_: fn(&RgbaLayout) -> Vec<u8>) {}
+    assert_signature(allocate_rgba_buffer);
+}
+
+#[test]
+fn allocate_rgba_buffer_returns_vec_with_length_matching_buffer_bytes() {
+    let layout = prepare_rgba_layout(33, 17).expect("small size succeeds");
+    let buffer = allocate_rgba_buffer(&layout);
+    assert_eq!(buffer.len(), layout.buffer_bytes());
+}
+
+#[test]
+fn allocate_rgba_buffer_returns_vec_with_length_width_times_height_times_four() {
+    let layout = prepare_rgba_layout(640, 480).expect("standard QR-sized image succeeds");
+    let buffer = allocate_rgba_buffer(&layout);
+    assert_eq!(buffer.len(), 640 * 480 * 4);
+}
+
+#[test]
+fn allocate_rgba_buffer_returns_vec_with_length_row_stride_times_height() {
+    let layout = prepare_rgba_layout(120, 80).expect("ok");
+    let buffer = allocate_rgba_buffer(&layout);
+    assert_eq!(
+        buffer.len(),
+        layout
+            .row_stride()
+            .checked_mul(layout.height() as usize)
+            .unwrap()
+    );
+}
+
+#[test]
+fn allocate_rgba_buffer_is_zero_initialized() {
+    let layout = prepare_rgba_layout(4, 4).expect("ok");
+    let buffer = allocate_rgba_buffer(&layout);
+    assert!(
+        buffer.iter().all(|byte| *byte == 0),
+        "fresh buffer must be zero-initialized so a partial download cannot leak prior heap bytes"
+    );
+}
+
+#[test]
+fn allocate_rgba_buffer_zero_initialization_extends_across_full_capacity() {
+    let layout = prepare_rgba_layout(40, 40).expect("ok");
+    let buffer = allocate_rgba_buffer(&layout);
+    assert_eq!(buffer.len(), layout.buffer_bytes());
+    // Iterate every byte to ensure we are not relying on a shorter
+    // internal `len` that hides uninit tail bytes.
+    for (i, byte) in buffer.iter().enumerate() {
+        assert_eq!(*byte, 0, "byte {i} expected to be zero");
+    }
+}
+
+#[test]
+fn allocate_rgba_buffer_capacity_at_least_matches_length() {
+    let layout = prepare_rgba_layout(32, 32).expect("ok");
+    let buffer = allocate_rgba_buffer(&layout);
+    assert!(
+        buffer.capacity() >= buffer.len(),
+        "Vec capacity must cover the requested length so TextureDownloader can write into it"
+    );
+}
+
+#[test]
+fn allocate_rgba_buffer_at_qr_rgba_max_bytes_succeeds() {
+    // The validated layout already accepts a size exactly at
+    // QR_RGBA_MAX_BYTES (see prepare_rgba_layout_accepts_size_exactly_at_qr_rgba_max_bytes).
+    // allocate_rgba_buffer must materialize that exact size without
+    // truncation.
+    let pixels = QR_RGBA_MAX_BYTES / 4;
+    let w = u32::try_from(pixels).expect("fits in u32");
+    let layout = prepare_rgba_layout(w, 1).expect("at-cap accepted");
+    let buffer = allocate_rgba_buffer(&layout);
+    assert_eq!(buffer.len(), QR_RGBA_MAX_BYTES);
 }
 
 // ---------------------------------------------------------------------------

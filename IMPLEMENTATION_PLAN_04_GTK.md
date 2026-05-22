@@ -2673,10 +2673,33 @@ sign-off.
     `apply_msg_scan_clipboard_clicked_emits_no_output_in_initial_stage`,
     `apply_msg_scan_clipboard_clicked_preserves_active_path`, and
     `apply_msg_scan_clipboard_clicked_does_not_disturb_manual_or_uri_buffers`.
-  - [ ] Allocate an exact `width * height * 4` straight
+  - [x] Allocate an exact `width * height * 4` straight
     (non-premultiplied) RGBA8 buffer with overflow-checked
     multiplication; reject sizes above
     `paladin_core::QR_RGBA_MAX_BYTES` before allocation / download.
+    `crate::qr_clipboard::prepare_rgba_layout` runs the
+    overflow-checked multiplications (`u32 -> usize` widening +
+    `checked_mul(height) -> checked_mul(4)`) and rejects oversized
+    inputs with `QrLayoutError::ImageTooLarge` *before* any heap
+    allocation; the validated `RgbaLayout` is then materialized via
+    the new `crate::qr_clipboard::allocate_rgba_buffer(&RgbaLayout)
+    -> Vec<u8>` helper, which returns a zero-initialized
+    `Vec<u8>` of exactly `layout.buffer_bytes()` bytes — the
+    destination for `gdk::TextureDownloader::download_into(...)` in
+    the next sub-item. The helper signature takes `&RgbaLayout`
+    rather than raw `(width, height)` so a caller cannot bypass
+    the gate by handing in unvalidated dimensions; zero-init
+    protects against a partial download leaking prior heap bytes
+    into the QR decode buffer. Pinned by
+    `tests/qr_clipboard_logic.rs::allocate_rgba_buffer_takes_validated_layout_so_callers_cannot_bypass_size_gate`,
+    `allocate_rgba_buffer_returns_vec_with_length_matching_buffer_bytes`,
+    `allocate_rgba_buffer_returns_vec_with_length_width_times_height_times_four`,
+    `allocate_rgba_buffer_returns_vec_with_length_row_stride_times_height`,
+    `allocate_rgba_buffer_is_zero_initialized`,
+    `allocate_rgba_buffer_zero_initialization_extends_across_full_capacity`,
+    `allocate_rgba_buffer_capacity_at_least_matches_length`, and
+    `allocate_rgba_buffer_at_qr_rgba_max_bytes_succeeds`, on top of
+    the existing `prepare_rgba_layout_*` rejection invariants.
   - [ ] Download the texture via a `gdk::TextureDownloader` set to
     `gdk::MemoryFormat::R8g8b8a8` with row stride `width * 4` (the
     default `Texture::download` yields premultiplied pixels the QR
