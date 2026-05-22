@@ -4378,11 +4378,39 @@ sign-off.
     `--locked` / `--offline`, or if any install destination /
     binary mode drifts from the byte-identical layout the deb / rpm
     manifests already pin.
-  - [ ] Wire AppImage assembly via `linuxdeploy` +
+  - [x] Wire AppImage assembly via `linuxdeploy` +
     `linuxdeploy-plugin-gtk` so GTK4 modules, schemas, and pixbuf
     loaders ship inside the bundle; output
     `paladin-gtk-<version>-x86_64.AppImage` with embedded `zsync`
-    pointing at GitHub Releases.
+    pointing at GitHub Releases. Implemented as
+    `packaging/appimage/build-appimage.sh` (executable, bash strict
+    mode), which pre-stages the AppStream metainfo and the non-
+    primary hicolor icon sizes into the AppDir, then invokes
+    `linuxdeploy --appdir … --desktop-file … --icon-file … --executable
+    … --plugin gtk --output appimage` with `OUTPUT=paladin-gtk-
+    ${PALADIN_VERSION}-x86_64.AppImage`,
+    `UPDATE_INFORMATION=gh-releases-zsync|FreedomBen|paladin|latest|
+    paladin-gtk-*-x86_64.AppImage.zsync`, and `ARCH=x86_64`. Pinned
+    by `tests/packaging_appimage_build_script_logic.rs`:
+    `appimage_script_exists_at_expected_path`,
+    `appimage_script_is_executable`,
+    `appimage_script_starts_with_bash_shebang`,
+    `appimage_script_carries_spdx_license_header`,
+    `appimage_script_enables_strict_shell_mode`,
+    `appimage_script_invokes_linuxdeploy_with_gtk_plugin` (covers
+    `--appdir` / `--desktop-file` / `--icon-file` / `--executable` /
+    `--plugin gtk` / `--output appimage`),
+    `appimage_script_references_every_required_in_tree_source`,
+    `appimage_script_in_tree_references_all_exist_under_the_workspace`,
+    `appimage_script_carries_zsync_update_information_pointing_at_github_releases`,
+    `appimage_script_declares_versioned_output_filename`,
+    `appimage_script_reads_paladin_version_from_environment`,
+    `appimage_script_does_not_hardcode_a_version_string`, and
+    `appimage_script_targets_x86_64_architecture_explicitly` —
+    together these fail if the script stops being executable, loses
+    the strict-shell-mode directive, drops any `linuxdeploy` flag,
+    bakes in a literal semver, or drifts the `UPDATE_INFORMATION`
+    pointer away from the `FreedomBen/paladin` GitHub Releases feed.
   - [ ] Make the build reproducible: vendored deps,
     `cargo build --locked`, `SOURCE_DATE_EPOCH` from the release
     tag, with the gresource bundle and `linuxdeploy` step both
