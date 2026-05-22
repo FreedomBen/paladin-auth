@@ -53,9 +53,16 @@ use paladin_core::{
 };
 
 use paladin_gtk::import_dialog::{
-    build_import_options, classify_merge_result, classify_precheck, passphrase_needs_reset,
-    ConflictChoice, FormatChoice, InlineError, InlineWarning, MergeOutcome, MergeSummary,
-    PrecheckOutcome,
+    apply_msg, build_import_options, classify_merge_result, classify_precheck,
+    compose_counts_panel_appended_label, compose_counts_panel_imported_label,
+    compose_counts_panel_replaced_label, compose_counts_panel_skipped_label,
+    compose_counts_panel_visible, compose_counts_panel_warnings_label, compose_inline_error_body,
+    compose_inline_error_revealed, compose_inline_warning_body, compose_inline_warning_revealed,
+    compose_passphrase_row_visible, compose_submit_button_sensitive, compose_submit_outcome,
+    passphrase_needs_reset, run_import_worker, ConflictChoice, FormatChoice, ImportDialogMsg,
+    ImportDialogOutput, ImportDialogState, ImportSubmitPayload, ImportWorkerCompletion,
+    ImportWorkerInput, InlineError, InlineWarning, MergeOutcome, MergeSummary, PrecheckOutcome,
+    SubmitOutcome,
 };
 use secrecy::{ExposeSecret, SecretString};
 use tempfile::TempDir;
@@ -758,4 +765,696 @@ fn import_dialog_component_input_and_output_match_dispatch_edges() {
     {
     }
     assert_types::<ImportDialogComponent>();
+}
+
+// ---------------------------------------------------------------------------
+// ImportDialogState — accessors / mutators
+// ---------------------------------------------------------------------------
+
+fn proceed_state(path: PathBuf) -> ImportDialogState {
+    // Build a state whose `compose_submit_outcome` is `Proceed`:
+    // a source path picked, an auto-detect format, and a `NoPrompt`
+    // precheck routing so no passphrase is needed.
+    let mut state = ImportDialogState::new();
+    state.set_source_path(path, PaladinImportPrecheck::NoPrompt);
+    state
+}
+
+#[test]
+fn import_dialog_state_new_defaults_to_auto_detect_skip_no_source() {
+    let state = ImportDialogState::new();
+    assert!(state.source_path().is_none());
+    assert_eq!(state.format(), FormatChoice::AutoDetect);
+    assert_eq!(state.conflict(), ConflictChoice::Skip);
+    assert!(state.precheck_outcome().is_none());
+    assert!(!state.is_busy());
+    assert!(state.inline_error().is_none());
+    assert!(state.inline_warning().is_none());
+    assert!(state.merge_summary().is_none());
+    assert!(state.passphrase_text().is_empty());
+    assert!(!state.passphrase_visible());
+}
+
+#[test]
+fn import_dialog_state_set_source_path_updates_path_and_precheck() {
+    let mut state = ImportDialogState::new();
+    let path = PathBuf::from("/tmp/import-source.json");
+    state.set_source_path(path.clone(), PaladinImportPrecheck::NoPrompt);
+    assert_eq!(state.source_path(), Some(path.as_path()));
+    assert!(matches!(
+        state.precheck_outcome(),
+        Some(PrecheckOutcome::Proceed)
+    ));
+}
+
+#[test]
+fn import_dialog_state_set_source_path_with_prompt_routes_passphrase_visible() {
+    let mut state = ImportDialogState::new();
+    state.set_source_path(
+        PathBuf::from("/tmp/encrypted.bin"),
+        PaladinImportPrecheck::PromptForPassphrase,
+    );
+    assert!(state.passphrase_visible());
+    assert!(matches!(
+        state.precheck_outcome(),
+        Some(PrecheckOutcome::PromptForPassphrase)
+    ));
+}
+
+#[test]
+fn import_dialog_state_set_source_path_with_reject_stages_inline_error() {
+    let mut state = ImportDialogState::new();
+    state.set_source_path(
+        PathBuf::from("/tmp/plaintext.bin"),
+        PaladinImportPrecheck::Reject(PaladinError::UnsupportedPlaintextVault),
+    );
+    let err = state.inline_error().expect("inline error staged");
+    assert_eq!(err.kind, ErrorKind::UnsupportedPlaintextVault);
+}
+
+#[test]
+fn import_dialog_state_set_format_changes_format_and_refreshes_precheck() {
+    let mut state = ImportDialogState::new();
+    state.set_source_path(
+        PathBuf::from("/tmp/source"),
+        PaladinImportPrecheck::NoPrompt,
+    );
+    state.set_format(
+        FormatChoice::Paladin,
+        PaladinImportPrecheck::PromptForPassphrase,
+    );
+    assert_eq!(state.format(), FormatChoice::Paladin);
+    assert!(state.passphrase_visible());
+}
+
+#[test]
+fn import_dialog_state_set_conflict_updates_policy() {
+    let mut state = ImportDialogState::new();
+    state.set_conflict(ConflictChoice::Replace);
+    assert_eq!(state.conflict(), ConflictChoice::Replace);
+}
+
+#[test]
+fn import_dialog_state_set_passphrase_shadows_buffer() {
+    let mut state = ImportDialogState::new();
+    state.set_passphrase("hunter2");
+    assert_eq!(state.passphrase_text(), "hunter2");
+}
+
+#[test]
+fn import_dialog_state_set_passphrase_dismisses_prior_inline_error() {
+    let mut state = ImportDialogState::new();
+    state.set_source_path(
+        PathBuf::from("/tmp/plaintext.bin"),
+        PaladinImportPrecheck::Reject(PaladinError::UnsupportedPlaintextVault),
+    );
+    assert!(state.inline_error().is_some());
+    state.set_passphrase("a");
+    assert!(state.inline_error().is_none());
+}
+
+#[test]
+fn import_dialog_state_set_source_path_clears_passphrase_on_path_change() {
+    let mut state = ImportDialogState::new();
+    state.set_source_path(
+        PathBuf::from("/tmp/first.bin"),
+        PaladinImportPrecheck::PromptForPassphrase,
+    );
+    state.set_passphrase("hunter2");
+    assert_eq!(state.passphrase_text(), "hunter2");
+    state.set_source_path(
+        PathBuf::from("/tmp/second.bin"),
+        PaladinImportPrecheck::PromptForPassphrase,
+    );
+    assert_eq!(state.passphrase_text(), "");
+}
+
+#[test]
+fn import_dialog_state_set_format_clears_passphrase_on_format_change() {
+    let mut state = ImportDialogState::new();
+    state.set_source_path(
+        PathBuf::from("/tmp/source.bin"),
+        PaladinImportPrecheck::PromptForPassphrase,
+    );
+    state.set_passphrase("hunter2");
+    state.set_format(FormatChoice::Otpauth, PaladinImportPrecheck::NoPrompt);
+    assert_eq!(state.passphrase_text(), "");
+}
+
+#[test]
+fn import_dialog_state_set_busy_toggles_busy() {
+    let mut state = ImportDialogState::new();
+    state.set_busy(true);
+    assert!(state.is_busy());
+    state.set_busy(false);
+    assert!(!state.is_busy());
+}
+
+// ---------------------------------------------------------------------------
+// apply_merge_outcome — post-worker rendering routing
+// ---------------------------------------------------------------------------
+
+#[test]
+fn apply_merge_outcome_success_parks_summary_clears_busy_and_errors() {
+    let mut state = ImportDialogState::new();
+    state.set_busy(true);
+    let summary = MergeSummary::from_report(&import_report_with_counts(3, 1, 0, 0));
+    state.apply_merge_outcome(MergeOutcome::Success(summary.clone()));
+    assert!(!state.is_busy());
+    assert_eq!(state.merge_summary(), Some(&summary));
+    assert!(state.inline_error().is_none());
+    assert!(state.inline_warning().is_none());
+}
+
+#[test]
+fn apply_merge_outcome_durability_warning_parks_warning_and_clears_summary() {
+    let mut state = ImportDialogState::new();
+    state.set_busy(true);
+    let warning = InlineWarning::from_error(&PaladinError::SaveDurabilityUnconfirmed);
+    state.apply_merge_outcome(MergeOutcome::DurabilityWarning(warning.clone()));
+    assert!(!state.is_busy());
+    assert_eq!(state.inline_warning().map(|w| w.kind), Some(warning.kind));
+    assert!(state.merge_summary().is_none());
+    assert!(state.inline_error().is_none());
+}
+
+#[test]
+fn apply_merge_outcome_not_committed_parks_inline_error() {
+    let mut state = ImportDialogState::new();
+    state.set_busy(true);
+    let err = InlineError::from_error(&save_not_committed_no_backup());
+    state.apply_merge_outcome(MergeOutcome::NotCommitted(err.clone()));
+    assert!(!state.is_busy());
+    assert_eq!(
+        state.inline_error().map(|e| e.kind),
+        Some(ErrorKind::SaveNotCommitted)
+    );
+}
+
+#[test]
+fn apply_merge_outcome_inline_parks_inline_error() {
+    let mut state = ImportDialogState::new();
+    state.set_busy(true);
+    let err = InlineError::from_error(&PaladinError::DecryptFailed);
+    state.apply_merge_outcome(MergeOutcome::Inline(err.clone()));
+    assert!(!state.is_busy());
+    assert_eq!(
+        state.inline_error().map(|e| e.kind),
+        Some(ErrorKind::DecryptFailed)
+    );
+}
+
+#[test]
+fn dismiss_counts_clears_summary() {
+    let mut state = ImportDialogState::new();
+    state.apply_merge_outcome(MergeOutcome::Success(MergeSummary::from_report(
+        &import_report_with_counts(1, 0, 0, 0),
+    )));
+    state.dismiss_counts();
+    assert!(state.merge_summary().is_none());
+}
+
+// ---------------------------------------------------------------------------
+// compose_submit_outcome — Submit-button routing
+// ---------------------------------------------------------------------------
+
+#[test]
+fn compose_submit_outcome_needs_source_when_path_unset() {
+    let state = ImportDialogState::new();
+    assert!(matches!(
+        compose_submit_outcome(&state),
+        SubmitOutcome::NeedsSourcePath
+    ));
+}
+
+#[test]
+fn compose_submit_outcome_proceed_with_no_prompt() {
+    let state = proceed_state(PathBuf::from("/tmp/source.json"));
+    let outcome = compose_submit_outcome(&state);
+    let SubmitOutcome::Proceed(payload) = outcome else {
+        panic!("expected Proceed");
+    };
+    assert_eq!(payload.source_path, PathBuf::from("/tmp/source.json"));
+    assert_eq!(payload.options.format, None);
+    assert!(payload.options.paladin_passphrase.is_none());
+    assert_eq!(payload.conflict, ImportConflict::Skip);
+}
+
+#[test]
+fn compose_submit_outcome_awaiting_passphrase_when_prompt_and_buffer_empty() {
+    let mut state = ImportDialogState::new();
+    state.set_source_path(
+        PathBuf::from("/tmp/encrypted.bin"),
+        PaladinImportPrecheck::PromptForPassphrase,
+    );
+    assert!(matches!(
+        compose_submit_outcome(&state),
+        SubmitOutcome::AwaitingPassphrase
+    ));
+}
+
+#[test]
+fn compose_submit_outcome_proceed_with_prompt_and_passphrase_filled() {
+    let mut state = ImportDialogState::new();
+    state.set_source_path(
+        PathBuf::from("/tmp/encrypted.bin"),
+        PaladinImportPrecheck::PromptForPassphrase,
+    );
+    state.set_passphrase("hunter2");
+    let outcome = compose_submit_outcome(&state);
+    let SubmitOutcome::Proceed(payload) = outcome else {
+        panic!("expected Proceed");
+    };
+    let pp = payload
+        .options
+        .paladin_passphrase
+        .as_ref()
+        .expect("passphrase present");
+    assert_eq!(pp.expose_secret(), "hunter2");
+}
+
+#[test]
+fn compose_submit_outcome_rejected_carries_precheck_inline_error() {
+    let mut state = ImportDialogState::new();
+    state.set_source_path(
+        PathBuf::from("/tmp/plaintext.bin"),
+        PaladinImportPrecheck::Reject(PaladinError::UnsupportedPlaintextVault),
+    );
+    let outcome = compose_submit_outcome(&state);
+    let SubmitOutcome::Rejected(err) = outcome else {
+        panic!("expected Rejected");
+    };
+    assert_eq!(err.kind, ErrorKind::UnsupportedPlaintextVault);
+}
+
+// ---------------------------------------------------------------------------
+// apply_msg — dialog state-machine routing
+// ---------------------------------------------------------------------------
+
+#[test]
+fn apply_msg_cancel_emits_cancel_output() {
+    let mut state = ImportDialogState::new();
+    let out = apply_msg(&mut state, ImportDialogMsg::Cancel);
+    assert!(matches!(out, Some(ImportDialogOutput::Cancel)));
+}
+
+#[test]
+fn apply_msg_close_emits_close_output() {
+    let mut state = ImportDialogState::new();
+    let out = apply_msg(&mut state, ImportDialogMsg::Close);
+    assert!(matches!(out, Some(ImportDialogOutput::Close)));
+}
+
+#[test]
+fn apply_msg_source_path_picked_updates_state_emits_none() {
+    let mut state = ImportDialogState::new();
+    let out = apply_msg(
+        &mut state,
+        ImportDialogMsg::SourcePathPicked {
+            path: PathBuf::from("/tmp/source.json"),
+            precheck: PaladinImportPrecheck::NoPrompt,
+        },
+    );
+    assert!(out.is_none());
+    assert_eq!(state.source_path(), Some(Path::new("/tmp/source.json")));
+}
+
+#[test]
+fn apply_msg_format_changed_updates_state_emits_none() {
+    let mut state = ImportDialogState::new();
+    let out = apply_msg(
+        &mut state,
+        ImportDialogMsg::FormatChanged {
+            format: FormatChoice::Otpauth,
+            precheck: PaladinImportPrecheck::NoPrompt,
+        },
+    );
+    assert!(out.is_none());
+    assert_eq!(state.format(), FormatChoice::Otpauth);
+}
+
+#[test]
+fn apply_msg_conflict_changed_updates_state_emits_none() {
+    let mut state = ImportDialogState::new();
+    let out = apply_msg(
+        &mut state,
+        ImportDialogMsg::ConflictChanged(ConflictChoice::Append),
+    );
+    assert!(out.is_none());
+    assert_eq!(state.conflict(), ConflictChoice::Append);
+}
+
+#[test]
+fn apply_msg_passphrase_changed_shadows_buffer_emits_none() {
+    let mut state = ImportDialogState::new();
+    let out = apply_msg(
+        &mut state,
+        ImportDialogMsg::PassphraseChanged("hunter2".to_string()),
+    );
+    assert!(out.is_none());
+    assert_eq!(state.passphrase_text(), "hunter2");
+}
+
+#[test]
+fn apply_msg_submit_clicked_proceed_emits_submit_sets_busy() {
+    let mut state = proceed_state(PathBuf::from("/tmp/source.json"));
+    let out = apply_msg(&mut state, ImportDialogMsg::SubmitClicked);
+    assert!(matches!(out, Some(ImportDialogOutput::Submit(_))));
+    assert!(state.is_busy());
+}
+
+#[test]
+fn apply_msg_submit_clicked_needs_source_emits_none() {
+    let mut state = ImportDialogState::new();
+    let out = apply_msg(&mut state, ImportDialogMsg::SubmitClicked);
+    assert!(out.is_none());
+    assert!(!state.is_busy());
+}
+
+#[test]
+fn apply_msg_submit_clicked_awaiting_passphrase_emits_none() {
+    let mut state = ImportDialogState::new();
+    state.set_source_path(
+        PathBuf::from("/tmp/encrypted.bin"),
+        PaladinImportPrecheck::PromptForPassphrase,
+    );
+    let out = apply_msg(&mut state, ImportDialogMsg::SubmitClicked);
+    assert!(out.is_none());
+    assert!(!state.is_busy());
+}
+
+#[test]
+fn apply_msg_submit_clicked_rejected_stages_inline_error_emits_none() {
+    let mut state = ImportDialogState::new();
+    state.set_source_path(
+        PathBuf::from("/tmp/plaintext.bin"),
+        PaladinImportPrecheck::Reject(PaladinError::UnsupportedPlaintextVault),
+    );
+    // Clear inline_error first so we can verify SubmitClicked re-stages it.
+    let _ = apply_msg(
+        &mut state,
+        ImportDialogMsg::PassphraseChanged(String::new()),
+    );
+    let out = apply_msg(&mut state, ImportDialogMsg::SubmitClicked);
+    assert!(out.is_none());
+    assert_eq!(
+        state.inline_error().map(|e| e.kind),
+        Some(ErrorKind::UnsupportedPlaintextVault)
+    );
+    assert!(!state.is_busy());
+}
+
+#[test]
+fn apply_msg_set_busy_toggles_busy_emits_none() {
+    let mut state = ImportDialogState::new();
+    let out = apply_msg(&mut state, ImportDialogMsg::SetBusy(true));
+    assert!(out.is_none());
+    assert!(state.is_busy());
+}
+
+#[test]
+fn apply_msg_worker_completed_success_parks_summary_lifts_busy() {
+    let mut state = proceed_state(PathBuf::from("/tmp/source.json"));
+    let _ = apply_msg(&mut state, ImportDialogMsg::SubmitClicked);
+    let summary = MergeSummary::from_report(&import_report_with_counts(2, 0, 0, 0));
+    let out = apply_msg(
+        &mut state,
+        ImportDialogMsg::WorkerCompleted(MergeOutcome::Success(summary.clone())),
+    );
+    assert!(out.is_none());
+    assert_eq!(state.merge_summary(), Some(&summary));
+    assert!(!state.is_busy());
+}
+
+#[test]
+fn apply_msg_worker_completed_inline_parks_inline_error_lifts_busy() {
+    let mut state = proceed_state(PathBuf::from("/tmp/source.json"));
+    let _ = apply_msg(&mut state, ImportDialogMsg::SubmitClicked);
+    let err = InlineError::from_error(&PaladinError::DecryptFailed);
+    let out = apply_msg(
+        &mut state,
+        ImportDialogMsg::WorkerCompleted(MergeOutcome::Inline(err)),
+    );
+    assert!(out.is_none());
+    assert_eq!(
+        state.inline_error().map(|e| e.kind),
+        Some(ErrorKind::DecryptFailed)
+    );
+    assert!(!state.is_busy());
+}
+
+#[test]
+fn apply_msg_dismiss_counts_clears_summary_emits_close() {
+    let mut state = ImportDialogState::new();
+    state.apply_merge_outcome(MergeOutcome::Success(MergeSummary::from_report(
+        &import_report_with_counts(1, 0, 0, 0),
+    )));
+    let out = apply_msg(&mut state, ImportDialogMsg::DismissCounts);
+    assert!(matches!(out, Some(ImportDialogOutput::Close)));
+    assert!(state.merge_summary().is_none());
+}
+
+// ---------------------------------------------------------------------------
+// compose render helpers
+// ---------------------------------------------------------------------------
+
+#[test]
+fn compose_submit_button_sensitive_false_no_path() {
+    let state = ImportDialogState::new();
+    assert!(!compose_submit_button_sensitive(&state));
+}
+
+#[test]
+fn compose_submit_button_sensitive_false_when_busy() {
+    let mut state = proceed_state(PathBuf::from("/tmp/source.json"));
+    state.set_busy(true);
+    assert!(!compose_submit_button_sensitive(&state));
+}
+
+#[test]
+fn compose_submit_button_sensitive_true_when_proceed_and_not_busy() {
+    let state = proceed_state(PathBuf::from("/tmp/source.json"));
+    assert!(compose_submit_button_sensitive(&state));
+}
+
+#[test]
+fn compose_passphrase_row_visible_only_on_prompt() {
+    let mut state = ImportDialogState::new();
+    assert!(!compose_passphrase_row_visible(&state));
+    state.set_source_path(
+        PathBuf::from("/tmp/encrypted.bin"),
+        PaladinImportPrecheck::PromptForPassphrase,
+    );
+    assert!(compose_passphrase_row_visible(&state));
+}
+
+#[test]
+fn compose_counts_panel_visible_only_on_summary() {
+    let mut state = ImportDialogState::new();
+    assert!(!compose_counts_panel_visible(&state));
+    state.apply_merge_outcome(MergeOutcome::Success(MergeSummary::from_report(
+        &import_report_with_counts(1, 0, 0, 0),
+    )));
+    assert!(compose_counts_panel_visible(&state));
+}
+
+#[test]
+fn compose_counts_panel_labels_format_summary_fields() {
+    let mut state = ImportDialogState::new();
+    state.apply_merge_outcome(MergeOutcome::Success(MergeSummary::from_report(
+        &import_report_with_counts(3, 1, 2, 4),
+    )));
+    let summary = state.merge_summary().expect("summary parked");
+    let _ = summary; // suppress unused; we tested via counts below.
+    assert_eq!(
+        compose_counts_panel_imported_label(&state).as_deref(),
+        Some("Imported: 3")
+    );
+    assert_eq!(
+        compose_counts_panel_skipped_label(&state).as_deref(),
+        Some("Skipped: 1")
+    );
+    assert_eq!(
+        compose_counts_panel_replaced_label(&state).as_deref(),
+        Some("Replaced: 2")
+    );
+    assert_eq!(
+        compose_counts_panel_appended_label(&state).as_deref(),
+        Some("Appended: 4")
+    );
+    assert_eq!(
+        compose_counts_panel_warnings_label(&state).as_deref(),
+        Some("Warnings: 0")
+    );
+}
+
+#[test]
+fn compose_counts_panel_warnings_label_threads_warning_count() {
+    let mut state = ImportDialogState::new();
+    state.apply_merge_outcome(MergeOutcome::Success(MergeSummary::from_report(
+        &import_report_with_warnings(2),
+    )));
+    assert_eq!(
+        compose_counts_panel_warnings_label(&state).as_deref(),
+        Some("Warnings: 2")
+    );
+}
+
+#[test]
+fn compose_inline_error_revealed_when_set() {
+    let mut state = ImportDialogState::new();
+    assert!(!compose_inline_error_revealed(&state));
+    state.apply_merge_outcome(MergeOutcome::Inline(InlineError::from_error(
+        &PaladinError::DecryptFailed,
+    )));
+    assert!(compose_inline_error_revealed(&state));
+    assert!(compose_inline_error_body(&state).is_some());
+}
+
+#[test]
+fn compose_inline_warning_revealed_when_set() {
+    let mut state = ImportDialogState::new();
+    assert!(!compose_inline_warning_revealed(&state));
+    state.apply_merge_outcome(MergeOutcome::DurabilityWarning(InlineWarning::from_error(
+        &PaladinError::SaveDurabilityUnconfirmed,
+    )));
+    assert!(compose_inline_warning_revealed(&state));
+    assert!(compose_inline_warning_body(&state).is_some());
+}
+
+// ---------------------------------------------------------------------------
+// run_import_worker — integration against a real Vault / Store / source file
+// ---------------------------------------------------------------------------
+
+fn open_plaintext_vault(dir: &TempDir, name: &str) -> (paladin_core::Vault, paladin_core::Store) {
+    use paladin_core::{Store, VaultInit};
+    let path = dir.path().join(name);
+    Store::create(&path, VaultInit::Plaintext).expect("create plaintext vault")
+}
+
+fn write_otpauth_json(dir: &TempDir, name: &str) -> PathBuf {
+    let path = dir.path().join(name);
+    let body = r#"["otpauth://totp/Example:alice?secret=JBSWY3DPEHPK3PXP&issuer=Example"]"#;
+    fs::write(&path, body).expect("write otpauth json");
+    let mut perms = fs::metadata(&path).expect("stat").permissions();
+    perms.set_mode(0o600);
+    fs::set_permissions(&path, perms).expect("chmod");
+    path
+}
+
+fn import_time() -> std::time::SystemTime {
+    std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000)
+}
+
+#[test]
+fn run_import_worker_otpauth_success_threads_summary() {
+    let dir = secure_tempdir();
+    let (vault, store) = open_plaintext_vault(&dir, "vault.bin");
+    let source = write_otpauth_json(&dir, "import.json");
+
+    let input = ImportWorkerInput {
+        vault,
+        store,
+        source_path: source,
+        options: paladin_core::ImportOptions {
+            format: Some(ImportFormat::Otpauth),
+            paladin_passphrase: None,
+        },
+        conflict: ImportConflict::Skip,
+        import_time: import_time(),
+    };
+    let ImportWorkerCompletion {
+        outcome,
+        vault,
+        store: _,
+    } = run_import_worker(input);
+    let MergeOutcome::Success(summary) = outcome else {
+        panic!("expected Success, got {outcome:?}");
+    };
+    assert_eq!(summary.imported, 1);
+    assert_eq!(summary.skipped, 0);
+    // The merge landed in memory: the returned vault has the account.
+    assert_eq!(vault.iter().count(), 1);
+}
+
+#[test]
+fn run_import_worker_missing_source_returns_inline_io_error() {
+    let dir = secure_tempdir();
+    let (vault, store) = open_plaintext_vault(&dir, "vault.bin");
+    let missing = dir.path().join("does-not-exist.json");
+
+    let input = ImportWorkerInput {
+        vault,
+        store,
+        source_path: missing,
+        options: paladin_core::ImportOptions {
+            format: Some(ImportFormat::Otpauth),
+            paladin_passphrase: None,
+        },
+        conflict: ImportConflict::Skip,
+        import_time: import_time(),
+    };
+    let ImportWorkerCompletion { outcome, vault, .. } = run_import_worker(input);
+    let MergeOutcome::Inline(err) = outcome else {
+        panic!("expected Inline for missing source");
+    };
+    assert_eq!(err.kind, ErrorKind::IoError);
+    // Vault is unchanged (the error fired before any mutation).
+    assert_eq!(vault.iter().count(), 0);
+}
+
+#[test]
+fn run_import_worker_unsupported_format_returns_inline() {
+    let dir = secure_tempdir();
+    let (vault, store) = open_plaintext_vault(&dir, "vault.bin");
+    // Write non-JSON, non-Aegis bytes and force `Otpauth` — the
+    // importer rejects with `validation_error` / `invalid_payload`.
+    let source = dir.path().join("garbage.bin");
+    fs::write(&source, b"\x00\x01\x02not-json").expect("write garbage");
+    let mut perms = fs::metadata(&source).expect("stat").permissions();
+    perms.set_mode(0o600);
+    fs::set_permissions(&source, perms).expect("chmod");
+
+    let input = ImportWorkerInput {
+        vault,
+        store,
+        source_path: source,
+        options: paladin_core::ImportOptions {
+            format: Some(ImportFormat::Otpauth),
+            paladin_passphrase: None,
+        },
+        conflict: ImportConflict::Skip,
+        import_time: import_time(),
+    };
+    let ImportWorkerCompletion { outcome, .. } = run_import_worker(input);
+    assert!(
+        matches!(outcome, MergeOutcome::Inline(_)),
+        "expected Inline, got {outcome:?}"
+    );
+}
+
+#[test]
+fn import_submit_payload_carries_path_format_conflict_passphrase() {
+    let path = PathBuf::from("/tmp/source.bin");
+    let options = paladin_core::ImportOptions {
+        format: Some(ImportFormat::Paladin),
+        paladin_passphrase: Some(SecretString::from("hunter2".to_string())),
+    };
+    let payload = ImportSubmitPayload {
+        source_path: path.clone(),
+        options,
+        conflict: ImportConflict::Replace,
+    };
+    assert_eq!(payload.source_path, path);
+    assert_eq!(payload.options.format, Some(ImportFormat::Paladin));
+    assert_eq!(payload.conflict, ImportConflict::Replace);
+    assert_eq!(
+        payload
+            .options
+            .paladin_passphrase
+            .as_ref()
+            .expect("passphrase")
+            .expose_secret(),
+        "hunter2"
+    );
 }

@@ -1737,6 +1737,31 @@ impl SimpleComponent for AppModel {
                 // a future race), this is a benign no-op.
                 self.import_dialog = None;
             }
+            AppMsg::ImportDialogAction(ImportDialogOutput::Cancel) => {
+                // Explicit Cancel button activation. Treated the same
+                // as `Close`: drop the live controller so the widget
+                // tears down and any pending form draft / bundle-
+                // passphrase entry is discarded (the
+                // `crate::secret_fields::SecretEntry` inside
+                // `ImportDialogState` zeroes on drop).
+                self.import_dialog = None;
+            }
+            AppMsg::ImportDialogAction(ImportDialogOutput::Submit(_payload)) => {
+                // Submit forwarded with a validated
+                // `ImportSubmitPayload`. The
+                // `gio::spawn_blocking
+                // Vault::mutate_and_save(|v| { from_file(...) ->
+                // v.import_accounts(...) })` worker dispatch lands in
+                // the follow-up commit that introduces
+                // `compose_import_worker_input` and the matching
+                // `AppMsg::ImportWorkerCompleted` routing. Until
+                // then the payload drops here (the `SecretString`
+                // inside `_payload.options` zeroizes on drop) and
+                // the dialog stays mounted because the controller
+                // is not taken out of `self.import_dialog` — the
+                // submit click appears to no-op rather than tearing
+                // down a draft the worker plumbing cannot yet honor.
+            }
             AppMsg::OpenExportDialog => {
                 // Application menu "Export…" activation. Mount a fresh
                 // `ExportDialogComponent` seeded with the resolved
