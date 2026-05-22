@@ -1318,6 +1318,54 @@ pub fn should_refresh_list_after_qr(effect: &QrWorkerEffect) -> bool {
     }
 }
 
+/// Inline-message projection for the live
+/// [`crate::add_account::AddAccountComponent`] after a clipboard-QR
+/// worker outcome.
+///
+/// Symmetric partner of [`add_dialog_msg_after`] for the QR sub-
+/// path. Diverges from the manual / URI add path on `Success`:
+/// where the manual / URI flow returns `None` (the dialog is being
+/// dropped, so there is no controller to forward to), the QR sub-
+/// path returns `Some(AddAccountMsg::QrSuccess(summary))` so the
+/// counts panel can render the post-merge counts inside the still-
+/// mounted dialog. The carried [`crate::qr_clipboard::QrImportSummary`]
+/// is the [`QrImportSummary::from_report`] projection of the worker's
+/// [`paladin_core::ImportReport`].
+///
+/// On every Failure branch the projection returns
+/// `Some(AddAccountMsg::WorkerFailed(outcome.clone()))` so the
+/// dialog can re-render the typed
+/// [`crate::add_account::AddPostEffectOutcome`] (`Inline` for
+/// `save_not_committed` / `io_error` / defensive `validation_error`
+/// / `invalid_state` and `KeepWithWarning` for
+/// `save_durability_unconfirmed`) — same contract as the manual /
+/// URI failure branches because the dialog stays mounted on every
+/// failure.
+///
+/// The projection returns an *owned* [`Option<AddAccountMsg>`]
+/// rather than a borrow into the effect because [`QrWorkerEffect`]
+/// carries the [`paladin_core::ImportReport`] /
+/// [`crate::add_account::AddPostEffectOutcome`] payloads rather
+/// than a pre-built dialog message. The clone is cheap — the
+/// summary is three `usize` counts and the outcome only holds an
+/// [`crate::add_account::InlineError`] /
+/// [`crate::add_account::InlineWarning`] of a stable
+/// [`paladin_core::ErrorKind`] and a `String` body.
+///
+/// `dialog_msg.is_some()` is always `true` for the QR sub-path
+/// because the dialog stays mounted on every effect — pinned in
+/// `tests/app_state_logic.rs` so the dispatch composer can rely on
+/// the invariant without re-deriving it.
+#[must_use]
+pub fn qr_dialog_msg_after(effect: &QrWorkerEffect) -> Option<AddAccountMsg> {
+    match effect {
+        QrWorkerEffect::Success(report) => Some(AddAccountMsg::QrSuccess(
+            crate::qr_clipboard::QrImportSummary::from_report(report),
+        )),
+        QrWorkerEffect::Failure(outcome) => Some(AddAccountMsg::WorkerFailed(outcome.clone())),
+    }
+}
+
 /// Apply [`submit_unlock_app_state`] in-place to `state`, leaving
 /// it unchanged when the composer returns `None`.
 ///

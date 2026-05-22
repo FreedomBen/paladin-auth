@@ -4767,6 +4767,191 @@ fn should_refresh_list_after_qr_mirrors_add_for_every_shared_branch() {
 }
 
 // ---------------------------------------------------------------------------
+// qr_dialog_msg_after — clipboard-QR inline-message projection
+// ---------------------------------------------------------------------------
+//
+// Symmetric partner of `add_dialog_msg_after` for the clipboard-QR
+// sub-path. Both project the worker's typed outcome into the
+// downstream `AddAccountMsg` that `AppModel::update` forwards into
+// the live `AddAccountComponent` controller. Diverges from the
+// manual / URI add path on `Success`: where the manual / URI flow
+// returns `None` (the dialog is being dropped, so there is no
+// controller to forward to), the QR sub-path returns
+// `Some(AddAccountMsg::QrSuccess(summary))` so the counts panel can
+// render the post-merge counts inside the still-mounted dialog. On
+// every Failure branch the projection returns
+// `Some(AddAccountMsg::WorkerFailed(outcome.clone()))` so the
+// dialog can re-render the inline error / durability warning —
+// same contract as the manual / URI failure branches.
+
+#[test]
+fn qr_dialog_msg_after_success_returns_qr_success_with_summary_from_report() {
+    use paladin_core::{AccountId, ImportReport};
+    use paladin_gtk::add_account::{AddAccountMsg, QrWorkerEffect};
+    use paladin_gtk::app::state::qr_dialog_msg_after;
+    use paladin_gtk::qr_clipboard::QrImportSummary;
+
+    let report = ImportReport {
+        imported: 3,
+        skipped: 1,
+        replaced: 0,
+        appended: 0,
+        accounts: vec![AccountId::new(), AccountId::new(), AccountId::new()],
+        warnings: Vec::new(),
+    };
+    let expected = QrImportSummary::from_report(&report);
+    let effect = QrWorkerEffect::Success(report);
+    match qr_dialog_msg_after(&effect) {
+        Some(AddAccountMsg::QrSuccess(summary)) => {
+            assert_eq!(
+                summary, expected,
+                "QrSuccess must carry the QrImportSummary::from_report projection",
+            );
+        }
+        other => panic!(
+            "QrWorkerEffect::Success must project to Some(AddAccountMsg::QrSuccess(_)), got {other:?}",
+        ),
+    }
+}
+
+#[test]
+fn qr_dialog_msg_after_failure_inline_returns_worker_failed_inline() {
+    use paladin_gtk::add_account::{
+        classify_add_post_effect_error, AddAccountMsg, AddPostEffectOutcome, QrWorkerEffect,
+    };
+    use paladin_gtk::app::state::qr_dialog_msg_after;
+
+    let outcome = classify_add_post_effect_error(&PaladinError::SaveNotCommitted {
+        committed: false,
+        backup_path: None,
+    });
+    assert!(matches!(outcome, AddPostEffectOutcome::Inline(_)));
+    let effect = QrWorkerEffect::Failure(outcome);
+    match qr_dialog_msg_after(&effect) {
+        Some(AddAccountMsg::WorkerFailed(AddPostEffectOutcome::Inline(_))) => {}
+        other => panic!(
+            "Inline failure must project to Some(AddAccountMsg::WorkerFailed(Inline)), got {other:?}",
+        ),
+    }
+}
+
+#[test]
+fn qr_dialog_msg_after_failure_keep_with_warning_returns_worker_failed_keep_with_warning() {
+    use paladin_gtk::add_account::{
+        classify_add_post_effect_error, AddAccountMsg, AddPostEffectOutcome, QrWorkerEffect,
+    };
+    use paladin_gtk::app::state::qr_dialog_msg_after;
+
+    let outcome = classify_add_post_effect_error(&PaladinError::SaveDurabilityUnconfirmed);
+    assert!(matches!(outcome, AddPostEffectOutcome::KeepWithWarning(_)));
+    let effect = QrWorkerEffect::Failure(outcome);
+    match qr_dialog_msg_after(&effect) {
+        Some(AddAccountMsg::WorkerFailed(AddPostEffectOutcome::KeepWithWarning(_))) => {}
+        other => panic!(
+            "KeepWithWarning failure must project to Some(AddAccountMsg::WorkerFailed(KeepWithWarning)), got {other:?}",
+        ),
+    }
+}
+
+#[test]
+fn qr_dialog_msg_after_diverges_from_add_on_success() {
+    // Cross-check: the manual / URI add path's `Success` returns
+    // `None` because the dialog is being dropped. The QR sub-path's
+    // `Success` must return `Some(QrSuccess(summary))` because the
+    // dialog stays mounted to show the counts panel. Pin the
+    // divergence so a future refactor cannot silently align them
+    // and erase the counts panel surface.
+    use paladin_core::{AccountId, ImportReport};
+    use paladin_gtk::add_account::{AddAccountMsg, AddWorkerEffect, QrWorkerEffect};
+    use paladin_gtk::app::state::{add_dialog_msg_after, qr_dialog_msg_after};
+
+    let add_effect = AddWorkerEffect::Success {
+        account_id: AccountId::new(),
+    };
+    let qr_effect = QrWorkerEffect::Success(ImportReport::default());
+    assert!(
+        add_dialog_msg_after(&add_effect).is_none(),
+        "manual / URI add path Success returns None (dialog drops)",
+    );
+    assert!(
+        matches!(
+            qr_dialog_msg_after(&qr_effect),
+            Some(AddAccountMsg::QrSuccess(_))
+        ),
+        "QR sub-path Success returns Some(QrSuccess(summary)) (counts panel)",
+    );
+}
+
+#[test]
+fn qr_dialog_msg_after_failure_branches_mirror_add_failure_routing() {
+    // Cross-check: both paths share the same outcome type
+    // (`AddPostEffectOutcome`) on failure and route them identically
+    // through `AddAccountMsg::WorkerFailed`. Pin parity on every
+    // shared failure branch so the dialog stays the only surface
+    // for inline errors / durability warnings on both sub-paths.
+    use paladin_gtk::add_account::{
+        classify_add_post_effect_error, AddAccountMsg, AddWorkerEffect, QrWorkerEffect,
+    };
+    use paladin_gtk::app::state::{add_dialog_msg_after, qr_dialog_msg_after};
+
+    let errs = [
+        PaladinError::SaveNotCommitted {
+            committed: false,
+            backup_path: None,
+        },
+        PaladinError::SaveDurabilityUnconfirmed,
+        PaladinError::InvalidState {
+            operation: "import",
+            state: "account_not_found",
+        },
+    ];
+    for err in &errs {
+        let outcome = classify_add_post_effect_error(err);
+        let add_effect = AddWorkerEffect::Failure(outcome.clone());
+        let qr_effect = QrWorkerEffect::Failure(outcome);
+        let add_msg = add_dialog_msg_after(&add_effect);
+        let qr_msg = qr_dialog_msg_after(&qr_effect);
+        match (&add_msg, &qr_msg) {
+            (
+                Some(AddAccountMsg::WorkerFailed(ref a)),
+                Some(AddAccountMsg::WorkerFailed(ref b)),
+            ) => {
+                assert_eq!(
+                    std::mem::discriminant(a),
+                    std::mem::discriminant(b),
+                    "WorkerFailed outcome discriminants must agree for err={err:?}",
+                );
+            }
+            other => panic!("add/qr failure routing diverged for err={err:?}: {other:?}",),
+        }
+    }
+}
+
+#[test]
+fn qr_dialog_msg_after_drop_dialog_partition_inverts_add_on_success() {
+    // Cross-check pin: `dialog_msg.is_some() == !drop_dialog` is the
+    // contract on the manual / URI add path (a dropped dialog gets
+    // no message; a mounted dialog gets a `WorkerFailed`). The QR
+    // sub-path inverts this on `Success`: the dialog is NOT dropped,
+    // so `dialog_msg` is `Some(QrSuccess(_))`. Pin both sides of
+    // the partition so the dispatch composer below cannot drift
+    // (e.g. forward a `QrSuccess` while still dropping the dialog).
+    use paladin_core::ImportReport;
+    use paladin_gtk::add_account::QrWorkerEffect;
+    use paladin_gtk::app::state::{qr_dialog_msg_after, should_drop_add_dialog_after_qr};
+
+    let effect = QrWorkerEffect::Success(ImportReport::default());
+    assert!(
+        !should_drop_add_dialog_after_qr(&effect),
+        "QR Success keeps the dialog mounted",
+    );
+    assert!(
+        qr_dialog_msg_after(&effect).is_some(),
+        "QR Success forwards QrSuccess(summary) to the still-mounted dialog",
+    );
+}
+
+// ---------------------------------------------------------------------------
 // apply_submit_unlock_inplace — `AppModel::update` mut-state wrapper
 // ---------------------------------------------------------------------------
 //
