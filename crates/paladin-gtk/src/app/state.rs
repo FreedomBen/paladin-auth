@@ -1279,6 +1279,45 @@ pub fn should_drop_add_dialog_after_qr(_effect: &QrWorkerEffect) -> bool {
     false
 }
 
+/// List-refresh projection after a clipboard-QR worker outcome.
+///
+/// Symmetric partner of [`should_refresh_list_after_add`] for the QR
+/// sub-path. Both pivot on whether the vault is committed-or-
+/// uncertain (refresh) versus rolled-back (no refresh):
+///
+/// * [`QrWorkerEffect::Success`] → `true`. The import committed and
+///   the merged accounts must surface in the list. Mirrors the
+///   manual / URI add path's `Success` arm.
+/// * [`QrWorkerEffect::Failure`] with
+///   [`crate::add_account::AddPostEffectOutcome::Inline`] → `false`.
+///   `Vault::mutate_and_save` rolled back to the pre-attempt
+///   snapshot (or never mutated for the defensive
+///   `validation_error` / `invalid_state` branches); the visible
+///   rows already match the post-rollback state.
+/// * [`QrWorkerEffect::Failure`] with
+///   [`crate::add_account::AddPostEffectOutcome::KeepWithWarning`]
+///   → `true`. Primary save succeeded so the merged accounts are
+///   durable in memory; the list must surface them even though the
+///   parent fsync was uncertain.
+///
+/// The projection inspects only the typed [`QrWorkerEffect`]
+/// variant — it does not consult [`AppState`], the live
+/// `(Vault, Store)` pair, or any
+/// [`crate::add_account::AddAccountComponent`] state — so the
+/// side-effect decision in `AppModel::update` stays unit-testable
+/// in `tests/app_state_logic.rs` without spinning up GTK /
+/// libadwaita.
+#[must_use]
+pub fn should_refresh_list_after_qr(effect: &QrWorkerEffect) -> bool {
+    match effect {
+        QrWorkerEffect::Success(_) => true,
+        QrWorkerEffect::Failure(outcome) => match outcome {
+            crate::add_account::AddPostEffectOutcome::KeepWithWarning(_) => true,
+            crate::add_account::AddPostEffectOutcome::Inline(_) => false,
+        },
+    }
+}
+
 /// Apply [`submit_unlock_app_state`] in-place to `state`, leaving
 /// it unchanged when the composer returns `None`.
 ///

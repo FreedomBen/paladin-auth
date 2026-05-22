@@ -4635,6 +4635,138 @@ fn should_drop_add_dialog_after_qr_mirrors_add_on_failure() {
 }
 
 // ---------------------------------------------------------------------------
+// should_refresh_list_after_qr — clipboard-QR list-refresh projection
+// ---------------------------------------------------------------------------
+//
+// Symmetric partner of `should_refresh_list_after_add` for the
+// clipboard-QR sub-path. Both pivot on whether the vault is
+// committed-or-uncertain (refresh) versus rolled-back (no refresh).
+// Success and `KeepWithWarning` mean the import landed durably (or
+// at least at the bincode-payload level), so the visible row set
+// must surface the newly merged accounts; `Inline` (every
+// `save_not_committed` / `io_error` / defensive `validation_error`
+// / `invalid_state` projection) means `Vault::mutate_and_save`
+// restored its pre-attempt snapshot, so the visible rows already
+// match disk and no refresh is needed.
+
+#[test]
+fn should_refresh_list_after_qr_returns_true_on_success() {
+    use paladin_core::ImportReport;
+    use paladin_gtk::add_account::QrWorkerEffect;
+    use paladin_gtk::app::state::should_refresh_list_after_qr;
+
+    let effect = QrWorkerEffect::Success(ImportReport::default());
+    assert!(
+        should_refresh_list_after_qr(&effect),
+        "QR Success refreshes the visible list so newly imported accounts surface",
+    );
+}
+
+#[test]
+fn should_refresh_list_after_qr_returns_false_on_failure_inline() {
+    use paladin_gtk::add_account::{
+        classify_add_post_effect_error, AddPostEffectOutcome, QrWorkerEffect,
+    };
+    use paladin_gtk::app::state::should_refresh_list_after_qr;
+
+    let outcome = classify_add_post_effect_error(&PaladinError::SaveNotCommitted {
+        committed: false,
+        backup_path: None,
+    });
+    assert!(matches!(outcome, AddPostEffectOutcome::Inline(_)));
+    let effect = QrWorkerEffect::Failure(outcome);
+    assert!(
+        !should_refresh_list_after_qr(&effect),
+        "Inline failure rolls back the import; visible rows already match disk",
+    );
+}
+
+#[test]
+fn should_refresh_list_after_qr_returns_true_on_failure_keep_with_warning() {
+    use paladin_gtk::add_account::{
+        classify_add_post_effect_error, AddPostEffectOutcome, QrWorkerEffect,
+    };
+    use paladin_gtk::app::state::should_refresh_list_after_qr;
+
+    let outcome = classify_add_post_effect_error(&PaladinError::SaveDurabilityUnconfirmed);
+    assert!(matches!(outcome, AddPostEffectOutcome::KeepWithWarning(_)));
+    let effect = QrWorkerEffect::Failure(outcome);
+    assert!(
+        should_refresh_list_after_qr(&effect),
+        "KeepWithWarning leaves the merged accounts in memory; list must surface them",
+    );
+}
+
+#[test]
+fn should_refresh_list_after_qr_returns_false_for_defensive_inline() {
+    // Defensive: `invalid_state` would only fire if
+    // `Vault::mutate_and_save`'s closure observed an unexpected
+    // post-condition; the vault was not mutated, so no refresh.
+    use paladin_gtk::add_account::{
+        classify_add_post_effect_error, AddPostEffectOutcome, QrWorkerEffect,
+    };
+    use paladin_gtk::app::state::should_refresh_list_after_qr;
+
+    let outcome = classify_add_post_effect_error(&PaladinError::InvalidState {
+        operation: "import",
+        state: "account_not_found",
+    });
+    assert!(matches!(outcome, AddPostEffectOutcome::Inline(_)));
+    let effect = QrWorkerEffect::Failure(outcome);
+    assert!(
+        !should_refresh_list_after_qr(&effect),
+        "defensive Inline does not mutate the vault; visible rows unchanged",
+    );
+}
+
+#[test]
+fn should_refresh_list_after_qr_mirrors_add_for_every_shared_branch() {
+    // Cross-check: the failure projections share the same outcome
+    // type (`AddPostEffectOutcome`) and the same in-memory rollback
+    // semantics between the manual / URI add path and the QR sub-
+    // path. The `Success` branches both refresh because the
+    // committed-or-uncertain mutations leave the vault dirty.
+    // Pin agreement across every typed branch so a future refactor
+    // cannot silently diverge the two paths.
+    use paladin_core::{AccountId, ImportReport};
+    use paladin_gtk::add_account::{
+        classify_add_post_effect_error, AddWorkerEffect, QrWorkerEffect,
+    };
+    use paladin_gtk::app::state::{should_refresh_list_after_add, should_refresh_list_after_qr};
+
+    let add_success = AddWorkerEffect::Success {
+        account_id: AccountId::new(),
+    };
+    let qr_success = QrWorkerEffect::Success(ImportReport::default());
+    assert_eq!(
+        should_refresh_list_after_add(&add_success),
+        should_refresh_list_after_qr(&qr_success),
+        "add/qr Success branches must agree on refresh decision",
+    );
+    let errs = [
+        PaladinError::SaveNotCommitted {
+            committed: false,
+            backup_path: None,
+        },
+        PaladinError::SaveDurabilityUnconfirmed,
+        PaladinError::InvalidState {
+            operation: "import",
+            state: "account_not_found",
+        },
+    ];
+    for err in &errs {
+        let outcome = classify_add_post_effect_error(err);
+        let add_effect = AddWorkerEffect::Failure(outcome.clone());
+        let qr_effect = QrWorkerEffect::Failure(outcome);
+        assert_eq!(
+            should_refresh_list_after_add(&add_effect),
+            should_refresh_list_after_qr(&qr_effect),
+            "add/qr Failure refresh decisions must agree for err={err:?}",
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // apply_submit_unlock_inplace — `AppModel::update` mut-state wrapper
 // ---------------------------------------------------------------------------
 //
