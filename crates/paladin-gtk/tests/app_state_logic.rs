@@ -10645,3 +10645,455 @@ fn qr_pipeline_failure_keep_with_warning_keeps_pair_installed_refreshes_list_and
         "state must roll back to Unlocked on KeepWithWarning (busy gate always releases)",
     );
 }
+
+// ---------------------------------------------------------------------------
+// Import dispatch — entry-side bundling
+// (submit_import_app_state / apply_submit_import_inplace /
+// compose_import_worker_input). Symmetric partners of the rename /
+// remove / add entry-side trio. The composer stays shape-only —
+// `AppState` discriminant + carried-path cloning — so the tests
+// exercise the routing rules without spinning up GTK / libadwaita.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn submit_import_app_state_from_unlocked_returns_unlocked_busy_preserving_path() {
+    use paladin_gtk::app::state::submit_import_app_state;
+    let path = vault_path();
+    let unlocked = AppState::Unlocked { path: path.clone() };
+    let next =
+        submit_import_app_state(&unlocked).expect("Unlocked enters UnlockedBusy on Import submit");
+    assert!(matches!(next, AppState::UnlockedBusy { .. }));
+    assert_path_eq(&next, &path);
+}
+
+#[test]
+fn submit_import_app_state_from_non_unlocked_returns_none() {
+    use paladin_gtk::app::state::submit_import_app_state;
+    let path = vault_path();
+    assert!(submit_import_app_state(&AppState::Missing { path: path.clone() }).is_none());
+    assert!(submit_import_app_state(&AppState::Locked { path: path.clone() }).is_none());
+    assert!(submit_import_app_state(&AppState::UnlockedBusy { path: path.clone() }).is_none());
+    let startup = decide_state_from_inspect(&path, Err(invalid_header_err()))
+        .expect("inspect Err yields StartupError state");
+    assert!(submit_import_app_state(&startup).is_none());
+}
+
+#[test]
+fn apply_submit_import_inplace_from_unlocked_mutates_to_unlocked_busy_and_returns_true() {
+    use paladin_gtk::app::state::apply_submit_import_inplace;
+    let path = vault_path();
+    let mut state = AppState::Unlocked { path: path.clone() };
+    let mutated = apply_submit_import_inplace(&mut state);
+    assert!(mutated);
+    assert!(matches!(state, AppState::UnlockedBusy { .. }));
+    assert_path_eq(&state, &path);
+}
+
+#[test]
+fn apply_submit_import_inplace_from_non_unlocked_leaves_state_unchanged_and_returns_false() {
+    use paladin_gtk::app::state::apply_submit_import_inplace;
+    let path = vault_path();
+    let sources = [
+        AppState::Missing { path: path.clone() },
+        AppState::Locked { path: path.clone() },
+        AppState::UnlockedBusy { path: path.clone() },
+    ];
+    for source in sources {
+        let mut state = source.clone();
+        let mutated = apply_submit_import_inplace(&mut state);
+        assert!(
+            !mutated,
+            "non-Unlocked source must not transition: {source:?}"
+        );
+        // The state stays byte-for-byte the same except for the
+        // shadow `Debug` form — compare the discriminant via
+        // `mem::discriminant`.
+        assert_eq!(
+            std::mem::discriminant(&state),
+            std::mem::discriminant(&source),
+        );
+    }
+}
+
+#[test]
+fn compose_import_worker_input_from_unlocked_bundles_pair_payload_and_import_time() {
+    use paladin_core::ImportFormat;
+    use paladin_gtk::app::state::compose_import_worker_input;
+    use paladin_gtk::import_dialog::{
+        build_import_options, ImportSubmitPayload, ImportWorkerInput,
+    };
+
+    let (_tempdir, _path, vault, store) = fresh_plaintext_pair();
+    let path = vault_path();
+    let unlocked = AppState::Unlocked { path: path.clone() };
+
+    let payload = ImportSubmitPayload {
+        source_path: PathBuf::from("/tmp/some-source.json"),
+        options: build_import_options(paladin_gtk::import_dialog::FormatChoice::Otpauth, None),
+        conflict: paladin_core::ImportConflict::Skip,
+    };
+    let import_time = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(54_321);
+
+    let bundled: ImportWorkerInput =
+        compose_import_worker_input(&unlocked, (vault, store), payload, import_time)
+            .expect("Unlocked bundles the worker input");
+    assert_eq!(bundled.source_path, PathBuf::from("/tmp/some-source.json"));
+    assert_eq!(bundled.options.format, Some(ImportFormat::Otpauth));
+    assert_eq!(bundled.conflict, paladin_core::ImportConflict::Skip);
+    assert_eq!(
+        bundled.import_time, import_time,
+        "composer must preserve the dispatch-site import_time so a long worker queue \
+         still uses the same timestamp the user submitted at",
+    );
+}
+
+#[test]
+fn compose_import_worker_input_from_non_unlocked_returns_pair_back() {
+    use paladin_gtk::app::state::compose_import_worker_input;
+    use paladin_gtk::import_dialog::{build_import_options, ImportSubmitPayload};
+
+    let path = vault_path();
+    let sources = [
+        AppState::Missing { path: path.clone() },
+        AppState::Locked { path: path.clone() },
+        AppState::UnlockedBusy { path: path.clone() },
+    ];
+    for source in &sources {
+        let (_tempdir, _path, vault, store) = fresh_plaintext_pair();
+        let payload = ImportSubmitPayload {
+            source_path: PathBuf::from("/tmp/source.json"),
+            options: build_import_options(
+                paladin_gtk::import_dialog::FormatChoice::AutoDetect,
+                None,
+            ),
+            conflict: paladin_core::ImportConflict::Skip,
+        };
+        let import_time = SystemTime::UNIX_EPOCH;
+        let result = compose_import_worker_input(source, (vault, store), payload, import_time);
+        assert!(
+            result.is_err(),
+            "non-Unlocked source must return the pair back: {source:?}",
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Import dispatch — completion-side trio
+// (import_final_app_state / should_drop_import_dialog_after /
+// import_dialog_msg_after / should_refresh_list_after_import) plus
+// the bundled ImportDispatch / compose_import_dispatch /
+// apply_import_dispatch_inplace / apply_import_vault_install_inplace
+// wrapping pair. The dialog stays mounted on every outcome (per
+// IMPLEMENTATION_PLAN_04_GTK.md §"Component tree" > ImportDialog).
+// ---------------------------------------------------------------------------
+
+fn import_report_success(imported: usize) -> paladin_core::ImportReport {
+    paladin_core::ImportReport {
+        imported,
+        ..paladin_core::ImportReport::default()
+    }
+}
+
+#[test]
+fn import_final_app_state_success_rolls_back_to_unlocked_preserving_path() {
+    use paladin_gtk::app::state::import_final_app_state;
+    use paladin_gtk::import_dialog::classify_merge_result;
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let outcome = classify_merge_result(Ok(import_report_success(3)));
+    let next = import_final_app_state(&busy, &outcome)
+        .expect("Success rolls UnlockedBusy back to Unlocked");
+    assert!(matches!(next, AppState::Unlocked { .. }));
+    assert_path_eq(&next, &path);
+}
+
+#[test]
+fn import_final_app_state_failure_rolls_back_to_unlocked_for_every_outcome() {
+    use paladin_gtk::app::state::import_final_app_state;
+    use paladin_gtk::import_dialog::classify_merge_result;
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let outcomes = [
+        classify_merge_result(Err(PaladinError::SaveNotCommitted {
+            committed: false,
+            backup_path: None,
+        })),
+        classify_merge_result(Err(PaladinError::SaveDurabilityUnconfirmed)),
+        classify_merge_result(Err(PaladinError::NoEntriesToImport)),
+    ];
+    for outcome in &outcomes {
+        let next = import_final_app_state(&busy, outcome)
+            .expect("every outcome rolls UnlockedBusy back to Unlocked");
+        assert!(matches!(next, AppState::Unlocked { .. }));
+        assert_path_eq(&next, &path);
+    }
+}
+
+#[test]
+fn import_final_app_state_from_non_unlocked_busy_returns_none() {
+    use paladin_gtk::app::state::import_final_app_state;
+    use paladin_gtk::import_dialog::classify_merge_result;
+    let path = vault_path();
+    let outcome = classify_merge_result(Ok(import_report_success(0)));
+    let sources = [
+        AppState::Missing { path: path.clone() },
+        AppState::Locked { path: path.clone() },
+        AppState::Unlocked { path: path.clone() },
+    ];
+    for source in &sources {
+        assert!(
+            import_final_app_state(source, &outcome).is_none(),
+            "non-UnlockedBusy source must not install a phantom Unlocked: {source:?}",
+        );
+    }
+}
+
+#[test]
+fn should_drop_import_dialog_after_is_always_false() {
+    use paladin_gtk::app::state::should_drop_import_dialog_after;
+    use paladin_gtk::import_dialog::classify_merge_result;
+    let outcomes = [
+        classify_merge_result(Ok(import_report_success(1))),
+        classify_merge_result(Err(PaladinError::SaveNotCommitted {
+            committed: false,
+            backup_path: None,
+        })),
+        classify_merge_result(Err(PaladinError::SaveDurabilityUnconfirmed)),
+        classify_merge_result(Err(PaladinError::NoEntriesToImport)),
+        classify_merge_result(Err(PaladinError::InvalidHeader)),
+    ];
+    for outcome in &outcomes {
+        assert!(
+            !should_drop_import_dialog_after(outcome),
+            "ImportDialog must stay mounted on every outcome (counts panel / inline error): {outcome:?}",
+        );
+    }
+}
+
+#[test]
+fn import_dialog_msg_after_always_forwards_worker_completed() {
+    use paladin_gtk::app::state::import_dialog_msg_after;
+    use paladin_gtk::import_dialog::{classify_merge_result, ImportDialogMsg, MergeOutcome};
+    let outcomes = [
+        classify_merge_result(Ok(import_report_success(2))),
+        classify_merge_result(Err(PaladinError::SaveNotCommitted {
+            committed: false,
+            backup_path: None,
+        })),
+        classify_merge_result(Err(PaladinError::SaveDurabilityUnconfirmed)),
+        classify_merge_result(Err(PaladinError::NoEntriesToImport)),
+    ];
+    for outcome in &outcomes {
+        let msg =
+            import_dialog_msg_after(outcome).expect("every outcome forwards a WorkerCompleted msg");
+        match (msg, outcome) {
+            (ImportDialogMsg::WorkerCompleted(a), b) => {
+                assert!(
+                    matches!(
+                        (&a, b),
+                        (MergeOutcome::Success(_), MergeOutcome::Success(_))
+                            | (MergeOutcome::NotCommitted(_), MergeOutcome::NotCommitted(_))
+                            | (
+                                MergeOutcome::DurabilityWarning(_),
+                                MergeOutcome::DurabilityWarning(_),
+                            )
+                            | (MergeOutcome::Inline(_), MergeOutcome::Inline(_))
+                    ),
+                    "msg must carry the matching variant for outcome",
+                );
+            }
+            (other, _) => panic!("dialog_msg must be WorkerCompleted, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn should_refresh_list_after_import_partitions_on_committed_outcomes() {
+    use paladin_gtk::app::state::should_refresh_list_after_import;
+    use paladin_gtk::import_dialog::classify_merge_result;
+    let refresh = [
+        classify_merge_result(Ok(import_report_success(0))),
+        classify_merge_result(Ok(import_report_success(7))),
+        classify_merge_result(Err(PaladinError::SaveDurabilityUnconfirmed)),
+    ];
+    let skip = [
+        classify_merge_result(Err(PaladinError::SaveNotCommitted {
+            committed: false,
+            backup_path: None,
+        })),
+        classify_merge_result(Err(PaladinError::SaveNotCommitted {
+            committed: true,
+            backup_path: None,
+        })),
+        classify_merge_result(Err(PaladinError::NoEntriesToImport)),
+        classify_merge_result(Err(PaladinError::InvalidHeader)),
+        classify_merge_result(Err(PaladinError::DecryptFailed)),
+    ];
+    for outcome in &refresh {
+        assert!(
+            should_refresh_list_after_import(outcome),
+            "refresh partition expects true: {outcome:?}",
+        );
+    }
+    for outcome in &skip {
+        assert!(
+            !should_refresh_list_after_import(outcome),
+            "skip partition expects false: {outcome:?}",
+        );
+    }
+}
+
+#[test]
+fn compose_import_dispatch_success_bundles_dialog_msg_and_unlocked_rollback() {
+    use paladin_gtk::app::state::compose_import_dispatch;
+    use paladin_gtk::import_dialog::{classify_merge_result, ImportDialogMsg, MergeOutcome};
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let outcome = classify_merge_result(Ok(import_report_success(3)));
+    let dispatch = compose_import_dispatch(&busy, &outcome);
+    assert!(
+        !dispatch.drop_dialog,
+        "ImportDialog stays mounted on Success so the counts panel renders",
+    );
+    assert!(
+        dispatch.refresh_list,
+        "Success refreshes the list so merged accounts appear",
+    );
+    let msg = dispatch
+        .dialog_msg
+        .as_ref()
+        .expect("forwards WorkerCompleted");
+    assert!(matches!(
+        msg,
+        ImportDialogMsg::WorkerCompleted(MergeOutcome::Success(_)),
+    ));
+    let next = dispatch.app_state.expect("Success rolls back to Unlocked");
+    assert!(matches!(next, AppState::Unlocked { .. }));
+    assert_path_eq(&next, &path);
+}
+
+#[test]
+fn compose_import_dispatch_failure_keeps_dialog_with_msg_and_unlocked_rollback() {
+    use paladin_gtk::app::state::compose_import_dispatch;
+    use paladin_gtk::import_dialog::{classify_merge_result, ImportDialogMsg, MergeOutcome};
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let outcome = classify_merge_result(Err(PaladinError::SaveNotCommitted {
+        committed: false,
+        backup_path: None,
+    }));
+    let dispatch = compose_import_dispatch(&busy, &outcome);
+    assert!(!dispatch.drop_dialog);
+    assert!(
+        !dispatch.refresh_list,
+        "NotCommitted leaves vault state unchanged so no list refresh is needed",
+    );
+    let msg = dispatch
+        .dialog_msg
+        .as_ref()
+        .expect("forwards WorkerCompleted");
+    assert!(matches!(
+        msg,
+        ImportDialogMsg::WorkerCompleted(MergeOutcome::NotCommitted(_)),
+    ));
+    let next = dispatch
+        .app_state
+        .expect("Failure still rolls UnlockedBusy back to Unlocked");
+    assert!(matches!(next, AppState::Unlocked { .. }));
+    assert_path_eq(&next, &path);
+}
+
+#[test]
+fn compose_import_dispatch_durability_warning_keeps_dialog_and_refreshes_list() {
+    use paladin_gtk::app::state::compose_import_dispatch;
+    use paladin_gtk::import_dialog::{classify_merge_result, ImportDialogMsg, MergeOutcome};
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let outcome = classify_merge_result(Err(PaladinError::SaveDurabilityUnconfirmed));
+    let dispatch = compose_import_dispatch(&busy, &outcome);
+    assert!(!dispatch.drop_dialog);
+    assert!(
+        dispatch.refresh_list,
+        "DurabilityWarning commits merged accounts in memory so the list must surface them",
+    );
+    let msg = dispatch
+        .dialog_msg
+        .as_ref()
+        .expect("forwards WorkerCompleted");
+    assert!(matches!(
+        msg,
+        ImportDialogMsg::WorkerCompleted(MergeOutcome::DurabilityWarning(_)),
+    ));
+}
+
+#[test]
+fn compose_import_dispatch_from_non_unlocked_busy_returns_no_app_state() {
+    use paladin_gtk::app::state::compose_import_dispatch;
+    use paladin_gtk::import_dialog::classify_merge_result;
+    let path = vault_path();
+    let outcome = classify_merge_result(Ok(import_report_success(1)));
+    let sources = [
+        AppState::Missing { path: path.clone() },
+        AppState::Locked { path: path.clone() },
+        AppState::Unlocked { path: path.clone() },
+    ];
+    for source in &sources {
+        let dispatch = compose_import_dispatch(source, &outcome);
+        assert!(dispatch.app_state.is_none(), "source={source:?}");
+        assert!(
+            !dispatch.drop_dialog,
+            "drop_dialog stays false even for stray dispatches",
+        );
+        assert!(
+            dispatch.dialog_msg.is_some(),
+            "dialog_msg still mirrors import_dialog_msg_after",
+        );
+    }
+}
+
+#[test]
+fn apply_import_dispatch_inplace_success_rolls_back_to_unlocked_and_returns_true() {
+    use paladin_gtk::app::state::{apply_import_dispatch_inplace, compose_import_dispatch};
+    use paladin_gtk::import_dialog::classify_merge_result;
+    let path = vault_path();
+    let busy = AppState::UnlockedBusy { path: path.clone() };
+    let outcome = classify_merge_result(Ok(import_report_success(2)));
+    let dispatch = compose_import_dispatch(&busy, &outcome);
+    let mut state = busy.clone();
+    let mutated = apply_import_dispatch_inplace(&mut state, &dispatch);
+    assert!(mutated);
+    assert!(matches!(state, AppState::Unlocked { .. }));
+    assert_path_eq(&state, &path);
+}
+
+#[test]
+fn apply_import_dispatch_inplace_from_non_unlocked_busy_leaves_state_unchanged_and_returns_false() {
+    use paladin_gtk::app::state::{apply_import_dispatch_inplace, compose_import_dispatch};
+    use paladin_gtk::import_dialog::classify_merge_result;
+    let path = vault_path();
+    let mut state = AppState::Unlocked { path: path.clone() };
+    let outcome = classify_merge_result(Ok(import_report_success(1)));
+    let dispatch = compose_import_dispatch(&state, &outcome);
+    let mutated = apply_import_dispatch_inplace(&mut state, &dispatch);
+    assert!(!mutated);
+    assert!(matches!(state, AppState::Unlocked { .. }));
+}
+
+#[test]
+fn apply_import_vault_install_inplace_writes_pair_into_empty_slot() {
+    use paladin_gtk::app::state::apply_import_vault_install_inplace;
+    let (_tempdir, _path, vault, store) = fresh_plaintext_pair();
+    let mut slot: Option<(Vault, Store)> = None;
+    apply_import_vault_install_inplace(&mut slot, (vault, store));
+    assert!(slot.is_some());
+}
+
+#[test]
+fn apply_import_vault_install_inplace_replaces_existing_slot() {
+    use paladin_gtk::app::state::apply_import_vault_install_inplace;
+    let (_tempdir1, _path1, vault1, store1) = fresh_plaintext_pair();
+    let (_tempdir2, _path2, vault2, store2) = fresh_plaintext_pair();
+    let mut slot: Option<(Vault, Store)> = Some((vault1, store1));
+    apply_import_vault_install_inplace(&mut slot, (vault2, store2));
+    assert!(slot.is_some());
+}

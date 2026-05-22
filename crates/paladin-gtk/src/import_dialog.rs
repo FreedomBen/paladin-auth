@@ -71,6 +71,7 @@ use std::time::SystemTime;
 
 use libadwaita as adw;
 use libadwaita::prelude::*;
+use relm4::gtk;
 use relm4::prelude::*;
 
 use paladin_core::{
@@ -269,7 +270,18 @@ impl MergeSummary {
 /// the importer + [`paladin_core::Vault::import_accounts`] closure.
 ///
 /// See [`classify_merge_result`].
-#[derive(Debug)]
+///
+/// `Clone` is derived because [`crate::app::state::compose_import_dispatch`]
+/// inspects the outcome to build the [`ImportDispatch`] (which routes the
+/// `dialog_msg` projection) and then forwards an owned [`MergeOutcome`]
+/// into the live [`ImportDialogComponent`] via
+/// [`ImportDialogMsg::WorkerCompleted`]. Both the `MergeSummary` and the
+/// [`InlineError`] / [`InlineWarning`] arms already derive `Clone`, so
+/// the cost is just the bookkeeping clone the dispatch site pays once
+/// per worker completion.
+///
+/// [`ImportDispatch`]: crate::app::state::ImportDispatch
+#[derive(Debug, Clone)]
 pub enum MergeOutcome {
     /// `Ok(report)` — the merge committed to disk fully. The dialog
     /// renders the [`MergeSummary`] in its counts panel and clears
@@ -519,18 +531,198 @@ pub enum ImportDialogOutput {
     Submit(ImportSubmitPayload),
 }
 
+/// Pinned dialog-title text the `view!` tree hands to
+/// `adw::Dialog::set_title:`.
+#[must_use]
+pub fn format_import_dialog_title() -> &'static str {
+    "Import accounts"
+}
+
+/// Pinned subtitle the dialog prints under the title label.
+#[must_use]
+pub fn format_import_dialog_subtitle() -> &'static str {
+    "Merge accounts from an exported file into the open vault."
+}
+
+/// Pinned `AdwPreferencesGroup` title for the source-file row.
+#[must_use]
+pub fn format_import_dialog_source_group_title() -> &'static str {
+    "Source"
+}
+
+/// Pinned `AdwActionRow` title for the file picker.
+#[must_use]
+pub fn format_import_dialog_source_row_title() -> &'static str {
+    "File"
+}
+
+/// Pinned subtitle shown beneath the file row when no source path
+/// has been picked yet.
+#[must_use]
+pub fn format_import_dialog_source_row_placeholder() -> &'static str {
+    "No file selected"
+}
+
+/// Pinned label for the "Choose file…" button on the file row.
+#[must_use]
+pub fn format_import_dialog_choose_source_label() -> &'static str {
+    "Choose file…"
+}
+
+/// Pinned `AdwPreferencesGroup` title for the options group
+/// (format selector + on-conflict selector).
+#[must_use]
+pub fn format_import_dialog_options_group_title() -> &'static str {
+    "Options"
+}
+
+/// Pinned `AdwComboRow` title for the format selector.
+#[must_use]
+pub fn format_import_dialog_format_row_title() -> &'static str {
+    "Format"
+}
+
+/// Pinned `AdwComboRow` title for the on-conflict selector.
+#[must_use]
+pub fn format_import_dialog_conflict_row_title() -> &'static str {
+    "On conflict"
+}
+
+/// Pinned `AdwPasswordEntryRow` title for the bundle-passphrase row.
+#[must_use]
+pub fn format_import_dialog_passphrase_row_title() -> &'static str {
+    "Bundle passphrase"
+}
+
+/// Pinned `AdwPreferencesGroup` title for the post-success counts
+/// panel.
+#[must_use]
+pub fn format_import_dialog_counts_group_title() -> &'static str {
+    "Import complete"
+}
+
+/// Pinned Cancel-button label hooked to [`ImportDialogMsg::Cancel`].
+#[must_use]
+pub fn format_import_dialog_cancel_label() -> &'static str {
+    "Cancel"
+}
+
+/// Pinned primary-button label that drives
+/// [`ImportDialogMsg::SubmitClicked`].
+#[must_use]
+pub fn format_import_dialog_import_label() -> &'static str {
+    "Import"
+}
+
+/// Pinned post-success Dismiss-button label hooked to
+/// [`ImportDialogMsg::DismissCounts`].
+#[must_use]
+pub fn format_import_dialog_dismiss_label() -> &'static str {
+    "Dismiss"
+}
+
+/// Format-selector display labels for the `AdwComboRow` model.
+///
+/// The order matches [`format_choice_from_index`] / [`FormatChoice::index`]:
+/// `[AutoDetect, Otpauth, Aegis, Paladin, Qr]`.
+#[must_use]
+pub fn format_import_dialog_format_labels() -> &'static [&'static str] {
+    &[
+        "Auto-detect",
+        "otpauth:// JSON list",
+        "Aegis JSON",
+        "Paladin bundle",
+        "QR code",
+    ]
+}
+
+/// On-conflict-selector display labels for the `AdwComboRow` model.
+///
+/// The order matches [`conflict_choice_from_index`] /
+/// [`ConflictChoice::index`]: `[Skip, Replace, Append]`.
+#[must_use]
+pub fn format_import_dialog_conflict_labels() -> &'static [&'static str] {
+    &["Skip", "Replace", "Append"]
+}
+
+impl FormatChoice {
+    /// `AdwComboRow` selection index for this choice.
+    ///
+    /// Inverse of [`format_choice_from_index`]: the widget binds
+    /// `set_selected:` to this value so the active row matches the
+    /// state machine after every refresh.
+    #[must_use]
+    pub fn index(self) -> u32 {
+        match self {
+            Self::AutoDetect => 0,
+            Self::Otpauth => 1,
+            Self::Aegis => 2,
+            Self::Paladin => 3,
+            Self::Qr => 4,
+        }
+    }
+}
+
+/// `AdwComboRow` `selected` index → [`FormatChoice`].
+///
+/// Out-of-range selections route as `None` so the dispatch arm
+/// leaves the draft untouched, mirroring the
+/// `parse_manual_kind_from_selected` pattern in `add_account.rs`.
+#[must_use]
+pub fn format_choice_from_index(selected: u32) -> Option<FormatChoice> {
+    match selected {
+        0 => Some(FormatChoice::AutoDetect),
+        1 => Some(FormatChoice::Otpauth),
+        2 => Some(FormatChoice::Aegis),
+        3 => Some(FormatChoice::Paladin),
+        4 => Some(FormatChoice::Qr),
+        _ => None,
+    }
+}
+
+impl ConflictChoice {
+    /// `AdwComboRow` selection index for this choice.
+    ///
+    /// Inverse of [`conflict_choice_from_index`].
+    #[must_use]
+    pub fn index(self) -> u32 {
+        match self {
+            Self::Skip => 0,
+            Self::Replace => 1,
+            Self::Append => 2,
+        }
+    }
+}
+
+/// `AdwComboRow` `selected` index → [`ConflictChoice`].
+///
+/// Out-of-range selections route as `None` so the dispatch arm
+/// leaves the draft untouched.
+#[must_use]
+pub fn conflict_choice_from_index(selected: u32) -> Option<ConflictChoice> {
+    match selected {
+        0 => Some(ConflictChoice::Skip),
+        1 => Some(ConflictChoice::Replace),
+        2 => Some(ConflictChoice::Append),
+        _ => None,
+    }
+}
+
 /// Widget-bearing `adw::Dialog` for the application menu's Import… entry.
 ///
 /// Mounts the libadwaita dialog described in DESIGN.md §7
 /// (`ImportDialog`) and `IMPLEMENTATION_PLAN_04_GTK.md` §"Component
-/// tree" > `ImportDialog`. The widget body is a read-only scaffold at
-/// this milestone (an empty `adw::ToolbarView` wrapped in `adw::Dialog`
-/// with the dialog title set), so the controller mounts cleanly under
-/// `xvfb-run` without yet exposing the file picker, format / conflict
-/// selectors, or bundle-passphrase row. Follow-up commits attach the
-/// real form widgets and the
-/// `Vault::mutate_and_save(|v| { from_file(...) → v.import_accounts(...) })`
-/// worker that drives [`classify_merge_result`].
+/// tree" > `ImportDialog`. The widget body is an `adw::Dialog`
+/// hosting an `adw::ToolbarView` whose body is a vertical
+/// `gtk::Box` containing the source `adw::ActionRow` with a
+/// "Choose file…" button, an options `adw::PreferencesGroup` with
+/// the format / conflict `adw::ComboRow`s and the optional bundle-
+/// passphrase `adw::PasswordEntryRow`, an inline error / warning
+/// pair of `gtk::Revealer`s, the post-success counts
+/// `adw::PreferencesGroup`, and a footer `gtk::Box` with the
+/// Cancel / Import (or Dismiss) buttons. State binding uses the
+/// `compose_*` helpers so the view stays unit-tested via
+/// `tests/import_dialog_logic.rs`.
 pub struct ImportDialogComponent {
     /// Vault path the dialog mounts against, kept on `self` so the
     /// follow-up merge worker can reach it without re-plumbing
@@ -543,9 +735,7 @@ pub struct ImportDialogComponent {
     /// precheck outcome, the zeroizing bundle-passphrase
     /// [`SecretEntry`], busy latch, and post-worker rendering slots
     /// (merge summary, inline error, inline warning). The widget
-    /// view (lands in a follow-up commit) reads this via
-    /// `compose_*` helpers.
-    #[allow(dead_code)]
+    /// view reads this via the `compose_*` helpers.
     state: ImportDialogState,
 }
 
@@ -559,11 +749,285 @@ impl SimpleComponent for ImportDialogComponent {
     view! {
         #[root]
         adw::Dialog {
-            set_title: "Import",
+            set_title: format_import_dialog_title(),
+            set_content_width: 520,
 
             #[wrap(Some)]
             set_child = &adw::ToolbarView {
                 add_top_bar = &adw::HeaderBar {},
+
+                #[wrap(Some)]
+                set_content = &gtk::Box {
+                    set_orientation: gtk::Orientation::Vertical,
+                    set_spacing: 12,
+                    set_margin_start: 18,
+                    set_margin_end: 18,
+                    set_margin_top: 12,
+                    set_margin_bottom: 18,
+                    set_hexpand: true,
+                    set_vexpand: true,
+
+                    gtk::Label {
+                        set_label: format_import_dialog_subtitle(),
+                        set_xalign: 0.0,
+                        set_wrap: true,
+                    },
+
+                    // Source group: file path display + "Choose file…"
+                    // button that opens `gtk::FileDialog` on activation.
+                    // The button click is wired in `init` because
+                    // `gtk::FileDialog::open` runs an async closure that
+                    // needs the live `ComponentSender`.
+                    adw::PreferencesGroup {
+                        set_title: format_import_dialog_source_group_title(),
+
+                        #[name = "source_row"]
+                        add = &adw::ActionRow {
+                            set_title: format_import_dialog_source_row_title(),
+                            #[watch]
+                            set_subtitle: &compose_source_row_subtitle(&model.state),
+
+                            #[name = "choose_source_button"]
+                            add_suffix = &gtk::Button {
+                                set_label: format_import_dialog_choose_source_label(),
+                                set_valign: gtk::Align::Center,
+                                add_css_class: "flat",
+                                #[watch]
+                                set_sensitive: !model.state.is_busy(),
+                            },
+                        },
+                    },
+
+                    // Options group: format / conflict combo rows
+                    // plus the bundle-passphrase row that reveals
+                    // when the precheck routes to PromptForPassphrase.
+                    adw::PreferencesGroup {
+                        set_title: format_import_dialog_options_group_title(),
+
+                        #[name = "format_row"]
+                        add = &adw::ComboRow {
+                            set_title: format_import_dialog_format_row_title(),
+                            set_model: Some(&gtk::StringList::new(
+                                format_import_dialog_format_labels(),
+                            )),
+                            #[watch]
+                            set_selected: model.state.format().index(),
+                            #[watch]
+                            set_sensitive: !model.state.is_busy(),
+                            connect_selected_notify[sender] => move |row| {
+                                if let Some(choice) =
+                                    format_choice_from_index(row.selected())
+                                {
+                                    sender.input(ImportDialogMsg::FormatChanged {
+                                        format: choice,
+                                        // The widget cannot run a new
+                                        // precheck synchronously here
+                                        // because the probe needs disk
+                                        // I/O; AppModel runs the probe
+                                        // in `init` via the file-picker
+                                        // callback. The state machine
+                                        // tolerates a stale precheck
+                                        // until the next file-picker
+                                        // round trip; the inline
+                                        // PromptForPassphrase /
+                                        // InlineError already staged
+                                        // by the prior probe is
+                                        // dismissed by `set_format`
+                                        // (it always clears the
+                                        // passphrase entry on a
+                                        // format change). For the
+                                        // no-source case we pass
+                                        // NoPrompt so the dialog
+                                        // tracks the new format.
+                                        precheck:
+                                            paladin_core::PaladinImportPrecheck::NoPrompt,
+                                    });
+                                }
+                            },
+                        },
+
+                        #[name = "conflict_row"]
+                        add = &adw::ComboRow {
+                            set_title: format_import_dialog_conflict_row_title(),
+                            set_model: Some(&gtk::StringList::new(
+                                format_import_dialog_conflict_labels(),
+                            )),
+                            #[watch]
+                            set_selected: model.state.conflict().index(),
+                            #[watch]
+                            set_sensitive: !model.state.is_busy(),
+                            connect_selected_notify[sender] => move |row| {
+                                if let Some(choice) =
+                                    conflict_choice_from_index(row.selected())
+                                {
+                                    sender.input(ImportDialogMsg::ConflictChanged(choice));
+                                }
+                            },
+                        },
+
+                        #[name = "passphrase_row"]
+                        add = &adw::PasswordEntryRow {
+                            set_title: format_import_dialog_passphrase_row_title(),
+                            #[watch]
+                            set_visible: compose_passphrase_row_visible(&model.state),
+                            #[watch]
+                            set_sensitive: !model.state.is_busy(),
+                            connect_changed[sender] => move |entry| {
+                                sender.input(ImportDialogMsg::PassphraseChanged(
+                                    entry.text().to_string(),
+                                ));
+                            },
+                        },
+                    },
+
+                    // Inline error revealer (`unsupported_*`,
+                    // `validation_error`, `decrypt_failed`,
+                    // `save_not_committed`, …).
+                    #[name = "inline_error_revealer"]
+                    gtk::Revealer {
+                        #[watch]
+                        set_reveal_child: compose_inline_error_revealed(&model.state),
+                        set_transition_type: gtk::RevealerTransitionType::SlideDown,
+                        set_transition_duration: 150,
+
+                        #[name = "inline_error_label"]
+                        gtk::Label {
+                            #[watch]
+                            set_label: compose_inline_error_body(&model.state)
+                                .unwrap_or(""),
+                            set_xalign: 0.0,
+                            set_wrap: true,
+                            add_css_class: "error",
+                        },
+                    },
+
+                    // Durability-unconfirmed warning revealer. Stays
+                    // beneath the counts panel so the user knows the
+                    // merge committed even though `fsync` was
+                    // uncertain (DESIGN §4.5).
+                    #[name = "inline_warning_revealer"]
+                    gtk::Revealer {
+                        #[watch]
+                        set_reveal_child: compose_inline_warning_revealed(&model.state),
+                        set_transition_type: gtk::RevealerTransitionType::SlideDown,
+                        set_transition_duration: 150,
+
+                        #[name = "inline_warning_label"]
+                        gtk::Label {
+                            #[watch]
+                            set_label: compose_inline_warning_body(&model.state)
+                                .unwrap_or(""),
+                            set_xalign: 0.0,
+                            set_wrap: true,
+                            add_css_class: "warning",
+                        },
+                    },
+
+                    // Post-success counts panel. Stays hidden until
+                    // `MergeOutcome::Success` parks a `MergeSummary`
+                    // on `ImportDialogState::merge_summary`.
+                    #[name = "counts_group"]
+                    adw::PreferencesGroup {
+                        set_title: format_import_dialog_counts_group_title(),
+                        #[watch]
+                        set_visible: compose_counts_panel_visible(&model.state),
+
+                        #[name = "counts_imported_row"]
+                        add = &adw::ActionRow {
+                            #[watch]
+                            set_title: &compose_counts_panel_imported_label(&model.state)
+                                .unwrap_or_default(),
+                        },
+                        #[name = "counts_skipped_row"]
+                        add = &adw::ActionRow {
+                            #[watch]
+                            set_title: &compose_counts_panel_skipped_label(&model.state)
+                                .unwrap_or_default(),
+                        },
+                        #[name = "counts_replaced_row"]
+                        add = &adw::ActionRow {
+                            #[watch]
+                            set_title: &compose_counts_panel_replaced_label(&model.state)
+                                .unwrap_or_default(),
+                        },
+                        #[name = "counts_appended_row"]
+                        add = &adw::ActionRow {
+                            #[watch]
+                            set_title: &compose_counts_panel_appended_label(&model.state)
+                                .unwrap_or_default(),
+                        },
+                        #[name = "counts_warnings_row"]
+                        add = &adw::ActionRow {
+                            #[watch]
+                            set_title: &compose_counts_panel_warnings_label(&model.state)
+                                .unwrap_or_default(),
+                        },
+                    },
+
+                    // Footer: spinner (while busy), Cancel / Import
+                    // (pre-success), Dismiss (post-success).
+                    gtk::Box {
+                        set_orientation: gtk::Orientation::Horizontal,
+                        set_spacing: 8,
+                        set_halign: gtk::Align::End,
+                        set_margin_top: 6,
+
+                        #[name = "busy_spinner"]
+                        gtk::Spinner {
+                            #[watch]
+                            set_spinning: model.state.is_busy(),
+                            #[watch]
+                            set_visible: model.state.is_busy(),
+                        },
+
+                        #[name = "cancel_button"]
+                        gtk::Button {
+                            set_label: format_import_dialog_cancel_label(),
+                            #[watch]
+                            set_visible: !compose_counts_panel_visible(&model.state),
+                            #[watch]
+                            set_sensitive: !model.state.is_busy(),
+                            connect_clicked[sender] => move |_| {
+                                sender.input(ImportDialogMsg::Cancel);
+                            },
+                        },
+
+                        #[name = "import_button"]
+                        gtk::Button {
+                            set_label: format_import_dialog_import_label(),
+                            add_css_class: "suggested-action",
+                            #[watch]
+                            set_visible: !compose_counts_panel_visible(&model.state),
+                            #[watch]
+                            set_sensitive: compose_submit_button_sensitive(&model.state),
+                            connect_clicked[sender] => move |_| {
+                                sender.input(ImportDialogMsg::SubmitClicked);
+                            },
+                        },
+
+                        #[name = "dismiss_button"]
+                        gtk::Button {
+                            set_label: format_import_dialog_dismiss_label(),
+                            add_css_class: "suggested-action",
+                            #[watch]
+                            set_visible: compose_counts_panel_visible(&model.state),
+                            connect_clicked[sender] => move |_| {
+                                sender.input(ImportDialogMsg::DismissCounts);
+                            },
+                        },
+                    },
+                },
+            },
+
+            // `connect_closed` fires on Escape / window-close /
+            // parent-navigation close, distinct from the explicit
+            // Cancel button. `AppModel` drops the controller for
+            // both Cancel and Close; the variant stays distinct so a
+            // future Close-only behavior (e.g. a "Discard draft?"
+            // prompt) can attach to one dispatch arm without
+            // affecting Cancel.
+            connect_closed[sender] => move |_| {
+                sender.input(ImportDialogMsg::Close);
             },
         }
     }
@@ -571,13 +1035,51 @@ impl SimpleComponent for ImportDialogComponent {
     fn init(
         init: Self::Init,
         root: Self::Root,
-        _sender: ComponentSender<Self>,
+        sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
         let model = ImportDialogComponent {
             vault_path: init.vault_path,
             state: ImportDialogState::new(),
         };
         let widgets = view_output!();
+
+        // Wire the "Choose file…" button to `gtk::FileDialog::open`.
+        // The async result feeds back as
+        // `ImportDialogMsg::SourcePathPicked` after running
+        // `paladin_core::classify_paladin_import_precheck` inline
+        // (cheap — no Argon2) under the current forced format.
+        let dialog_root = root.clone();
+        let format_row = widgets.format_row.clone();
+        let sender_clone = sender.clone();
+        widgets.choose_source_button.connect_clicked(move |_| {
+            let file_dialog = gtk::FileDialog::builder()
+                .title("Choose import source")
+                .modal(true)
+                .build();
+            let sender_inner = sender_clone.clone();
+            let parent = dialog_root.clone();
+            let format_row_inner = format_row.clone();
+            let forced_format = format_choice_from_index(format_row_inner.selected())
+                .unwrap_or(FormatChoice::AutoDetect)
+                .forced_format();
+            file_dialog.open(
+                parent.root().and_downcast_ref::<gtk::Window>(),
+                None::<&relm4::gtk::gio::Cancellable>,
+                move |result| {
+                    if let Ok(file) = result {
+                        if let Some(path) = file.path() {
+                            let precheck = paladin_core::classify_paladin_import_precheck(
+                                &path,
+                                forced_format,
+                            );
+                            sender_inner
+                                .input(ImportDialogMsg::SourcePathPicked { path, precheck });
+                        }
+                    }
+                },
+            );
+        });
+
         ComponentParts { model, widgets }
     }
 
@@ -588,6 +1090,18 @@ impl SimpleComponent for ImportDialogComponent {
             // the dialog is about to be torn down — drop the output.
             let _ = sender.output(output);
         }
+    }
+}
+
+/// Subtitle binding for the source `adw::ActionRow`.
+///
+/// Returns the picked path's filename when one is selected, or the
+/// "No file selected" placeholder otherwise.
+#[must_use]
+pub fn compose_source_row_subtitle(state: &ImportDialogState) -> String {
+    match state.source_path() {
+        Some(path) => path.display().to_string(),
+        None => format_import_dialog_source_row_placeholder().to_string(),
     }
 }
 

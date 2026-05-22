@@ -63,6 +63,7 @@ use paladin_core::{
 use crate::add_account::{
     AddAccountMsg, AddWorkerEffect, AddWorkerInput, QrWorkerEffect, QrWorkerInput,
 };
+use crate::import_dialog::{ImportDialogMsg, ImportSubmitPayload, ImportWorkerInput, MergeOutcome};
 use crate::remove_dialog::{RemoveDialogMsg, RemoveWorkerEffect, RemoveWorkerInput};
 use crate::rename_dialog::{RenameDialogMsg, RenameWorkerEffect, RenameWorkerInput};
 use crate::startup_error::{classify_open_error, OpenErrorRouting, StartupError};
@@ -3224,4 +3225,346 @@ pub fn run_unlock_worker(input: UnlockWorkerInput) -> UnlockWorkerCompletion {
     let UnlockWorkerInput { path, lock } = input;
     let outcome = Store::open(&path, lock);
     route_unlock_open_completion(&path, outcome)
+}
+
+// ---------------------------------------------------------------------------
+// Import dispatch helpers
+//
+// Symmetric partners of the rename / remove / add dispatch trios:
+// `submit_import_app_state` + `apply_submit_import_inplace` for the
+// entry side, `compose_import_worker_input` for the worker-input
+// capture, `import_final_app_state` + `should_drop_import_dialog_after`
+// + `import_dialog_msg_after` + `should_refresh_list_after_import` for
+// the worker-completion trio, and `ImportDispatch` +
+// `compose_import_dispatch` + `apply_import_dispatch_inplace` +
+// `apply_import_vault_install_inplace` for the bundled apply path.
+//
+// Every helper stays shape-only (`AppState` discriminant inspection
+// plus carried-path cloning) so `tests/app_state_logic.rs` exercises
+// the routing and transition rules without spinning up GTK /
+// libadwaita or running the real `Vault::mutate_and_save` import
+// merge.
+// ---------------------------------------------------------------------------
+
+/// Transition [`AppState::Unlocked`] → [`AppState::UnlockedBusy`]
+/// when [`crate::import_dialog::ImportDialogOutput::Submit`] dispatches
+/// the `gio::spawn_blocking`
+/// `Vault::mutate_and_save(|v| { from_file(...) → v.import_accounts(...) })`
+/// import worker.
+///
+/// Symmetric partner of [`submit_remove_app_state`] /
+/// [`submit_rename_app_state`] / [`submit_add_app_state`] for the
+/// import path. The composer stays shape-only — it delegates to
+/// [`AppState::enter_busy`] without re-deriving the transition — so
+/// `tests/app_state_logic.rs` exercises the entry-side handoff
+/// without spinning up GTK / libadwaita.
+///
+/// Returns `Some(UnlockedBusy { path })` iff `current` is
+/// [`AppState::Unlocked`]; returns `None` for every other source state
+/// so a stray import dispatch from a non-`Unlocked` window is a
+/// benign no-op for the worker spawn.
+#[must_use]
+pub fn submit_import_app_state(current: &AppState) -> Option<AppState> {
+    current.clone().enter_busy()
+}
+
+/// Apply [`submit_import_app_state`] in-place to `state`, leaving it
+/// unchanged when the composer returns `None`.
+///
+/// Symmetric partner of [`apply_submit_remove_inplace`] /
+/// [`apply_submit_rename_inplace`] / [`apply_submit_add_inplace`].
+/// Returns `true` iff the state transitioned (source was `Unlocked`
+/// → destination is `UnlockedBusy`); `AppModel::update` uses the
+/// `true` return to gate the `gio::spawn_blocking` worker spawn so
+/// the busy gate and the worker open and close in lockstep.
+pub fn apply_submit_import_inplace(state: &mut AppState) -> bool {
+    if let Some(new_state) = submit_import_app_state(state) {
+        *state = new_state;
+        true
+    } else {
+        false
+    }
+}
+
+/// Bundle the live `(Vault, Store)` pair plus the dialog's validated
+/// [`ImportSubmitPayload`] and the dispatch-site `import_time` into
+/// an [`ImportWorkerInput`] so the
+/// `gio::spawn_blocking
+/// Vault::mutate_and_save(|v| { from_file(...) → v.import_accounts(...) })`
+/// worker can move both into its closure.
+///
+/// Symmetric partner of [`compose_remove_worker_input`] /
+/// [`compose_add_worker_input`] / [`compose_qr_worker_input`] for the
+/// import path: that family inspects the [`AppState`] variant before
+/// taking the pair so a stray Submit from a non-`Unlocked` source
+/// (`Missing`, `Locked`, `UnlockedBusy`, `StartupError`) returns the
+/// pair back through the `Err` arm so the caller can reinstall it via
+/// [`apply_import_vault_install_inplace`] rather than dropping it.
+///
+/// `payload.options.paladin_passphrase` is consumed by value because
+/// it wraps a [`secrecy::SecretString`] that must move (not clone)
+/// into the worker closure to keep zeroize-on-drop semantics intact
+/// across the `gio::spawn_blocking` boundary.
+///
+/// The composer stays shape-only — it inspects only the [`AppState`]
+/// variant discriminant on `current` — so the side-effect decision
+/// in `AppModel::update` stays unit-testable in
+/// `tests/app_state_logic.rs` against real `(Vault, Store)` pairs
+/// constructed via `paladin_core::Store::create` over a tempfile
+/// vault.
+pub fn compose_import_worker_input(
+    current: &AppState,
+    pair: (Vault, Store),
+    payload: ImportSubmitPayload,
+    import_time: SystemTime,
+) -> Result<ImportWorkerInput, (Vault, Store)> {
+    match current {
+        AppState::Unlocked { .. } => {
+            let (vault, store) = pair;
+            let ImportSubmitPayload {
+                source_path,
+                options,
+                conflict,
+            } = payload;
+            Ok(ImportWorkerInput {
+                vault,
+                store,
+                source_path,
+                options,
+                conflict,
+                import_time,
+            })
+        }
+        AppState::Missing { .. }
+        | AppState::Locked { .. }
+        | AppState::UnlockedBusy { .. }
+        | AppState::StartupError { .. } => Err(pair),
+    }
+}
+
+/// Unified state-transition composer for the import worker outcome.
+///
+/// Symmetric partner of [`remove_final_app_state`] for the import
+/// path: every [`MergeOutcome`] variant — `Success`,
+/// `DurabilityWarning`, `NotCommitted`, defensive `Inline` — lands on
+/// the same `UnlockedBusy → Unlocked` rollback via
+/// [`AppState::leave_busy`] because `Vault::mutate_and_save` is
+/// authoritative for the rollback / durability-unconfirmed semantics
+/// per DESIGN.md §4.3. The dialog-drop / inline-message decisions
+/// split off the typed outcome in sibling composers; this composer
+/// owns only the state-machine rollback.
+///
+/// `outcome` is accepted for signature symmetry with the rename /
+/// remove / add composers but is not inspected: every variant rolls
+/// the busy gate back.
+///
+/// Returns `Some(Unlocked { path })` iff `current` is
+/// [`AppState::UnlockedBusy`], and `None` from every other state so
+/// a stray completion arriving while the cached state has already
+/// transitioned away from `UnlockedBusy` does not install a phantom
+/// `Unlocked` over another idle state.
+#[must_use]
+pub fn import_final_app_state(current: &AppState, _outcome: &MergeOutcome) -> Option<AppState> {
+    current.clone().leave_busy()
+}
+
+/// Drop-decision projection for the
+/// [`crate::import_dialog::ImportDialogComponent`] after an import
+/// worker outcome.
+///
+/// The import dialog stays mounted on every outcome: success keeps
+/// the dialog open on the post-merge counts panel until the user
+/// clicks Dismiss, and every failure / warning keeps it open with
+/// the inline error / warning visible so the user can retry. This
+/// diverges from the rename / remove / add path where success drops
+/// the dialog — matching the `IMPLEMENTATION_PLAN_04_GTK.md`
+/// §"Component tree" > `ImportDialog` rule "keep the dialog on a
+/// post-success counts panel until the user dismisses it".
+///
+/// The projection inspects only the typed [`MergeOutcome`] variant
+/// — it does not consult [`AppState`] or the live `(Vault, Store)`
+/// pair — so the side-effect decision in `AppModel::update` stays
+/// unit-testable in `tests/app_state_logic.rs` without spinning up
+/// GTK / libadwaita.
+#[must_use]
+pub fn should_drop_import_dialog_after(_outcome: &MergeOutcome) -> bool {
+    false
+}
+
+/// Inline-message projection for the live
+/// [`crate::import_dialog::ImportDialogComponent`] after an import
+/// worker outcome.
+///
+/// Every outcome forwards
+/// [`ImportDialogMsg::WorkerCompleted`] carrying the typed
+/// [`MergeOutcome`]: success populates the merge summary so the
+/// counts panel surfaces the `imported`/`skipped`/`replaced`/
+/// `appended`/`warnings` rows; `DurabilityWarning` stages the inline
+/// warning beneath the counts panel; `NotCommitted` / `Inline` stage
+/// the inline error and leave the form draft intact so the user can
+/// retry without re-entering options.
+///
+/// The projection clones the carried outcome so the
+/// `Option<ImportDialogMsg>` it returns owns the inner state
+/// independently of the dispatch site's borrow on `outcome`. The
+/// clone is cheap because [`MergeOutcome`]'s arms wrap `MergeSummary`,
+/// [`crate::import_dialog::InlineError`], or
+/// [`crate::import_dialog::InlineWarning`] — all `Clone`-derived
+/// value types — and the dispatch site pays it exactly once per
+/// worker completion.
+#[must_use]
+pub fn import_dialog_msg_after(outcome: &MergeOutcome) -> Option<ImportDialogMsg> {
+    Some(ImportDialogMsg::WorkerCompleted(outcome.clone()))
+}
+
+/// List-refresh projection after an import worker outcome.
+///
+/// Mirrors `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+/// `AccountListComponent` ("Refresh the store after every vault
+/// mutation … without reordering surviving rows"):
+///
+/// * [`MergeOutcome::Success`] → `true`. The merge committed and the
+///   list must reflect the new accounts.
+/// * [`MergeOutcome::DurabilityWarning`] → `true`. Primary save
+///   succeeded so the merged accounts are durable in memory; the
+///   list must surface them even though the parent `fsync` was
+///   uncertain.
+/// * [`MergeOutcome::NotCommitted`] → `false`. `Vault::mutate_and_save`
+///   restored the pre-attempt snapshot; the visible rows already
+///   match the post-rollback state.
+/// * [`MergeOutcome::Inline`] → `false`. The error fired before the
+///   save path; vault state is unchanged.
+#[must_use]
+pub fn should_refresh_list_after_import(outcome: &MergeOutcome) -> bool {
+    match outcome {
+        MergeOutcome::Success(_) | MergeOutcome::DurabilityWarning(_) => true,
+        MergeOutcome::NotCommitted(_) | MergeOutcome::Inline(_) => false,
+    }
+}
+
+/// Bundled `AppModel::update` instructions for an import-worker
+/// completion. Carries the four decisions the existing trio projects
+/// ([`should_drop_import_dialog_after`], [`import_dialog_msg_after`],
+/// [`import_final_app_state`], and [`should_refresh_list_after_import`])
+/// so the dispatch site can apply the worker outcome in a single
+/// shot without re-routing the [`MergeOutcome`].
+///
+/// Symmetric partner of [`RemoveDispatch`] / [`AddDispatch`] /
+/// [`RenameDispatch`] for the import path. The shape mirrors the
+/// remove variant: an optional state replacement, an optional inline
+/// message, a drop-dialog flag, and a refresh-list flag. No
+/// `success_toast` field because the import dialog renders the post-
+/// merge counts panel inline — the dialog itself is the success
+/// surface — and the manual test plan is the authority for the
+/// "confirm via toast on every success" sibling decision.
+///
+/// Not `Clone` because [`ImportDialogMsg::WorkerCompleted`] carries a
+/// [`MergeOutcome`] in `dialog_msg` and `ImportDialogMsg` is not
+/// `Clone` (its `PassphraseChanged(String)` arm carries a transient
+/// keystroke shadow that we deliberately do not duplicate). The
+/// dispatch is consumed exactly once per worker completion — the
+/// dispatch site moves the bundle by value into the handler.
+#[derive(Debug)]
+pub struct ImportDispatch {
+    /// New [`AppState`] to install on `AppModel.state`. `Some` for
+    /// the `UnlockedBusy → Unlocked` rollback that
+    /// [`import_final_app_state`] returns regardless of typed
+    /// outcome. `None` is the defensive case where the worker
+    /// outcome arrives but `current` is not [`AppState::UnlockedBusy`]
+    /// — `AppModel::update` leaves the state untouched rather than
+    /// installing a phantom `Unlocked` over another idle state.
+    pub app_state: Option<AppState>,
+    /// Inline message to forward to the live
+    /// [`crate::import_dialog::ImportDialogComponent`] controller —
+    /// always `Some(ImportDialogMsg::WorkerCompleted(outcome))` so
+    /// the dialog can populate the counts panel (on `Success`),
+    /// the inline warning (on `DurabilityWarning`), or the inline
+    /// error (on `NotCommitted` / `Inline`).
+    pub dialog_msg: Option<ImportDialogMsg>,
+    /// Whether `AppModel::update` should drop the live
+    /// [`crate::import_dialog::ImportDialogComponent`] controller
+    /// after applying [`Self::app_state`]. Always `false` because
+    /// the dialog stays mounted on every outcome per
+    /// `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+    /// `ImportDialog` ("keep the dialog on a post-success counts
+    /// panel until the user dismisses it").
+    pub drop_dialog: bool,
+    /// Whether `AppModel::update` should re-project rows off the
+    /// freshly reinstalled `(Vault, Store)` pair and emit
+    /// [`crate::account_list::AccountListMsg::Refresh`] so the merged
+    /// accounts appear in the visible row set. Mirrors
+    /// [`should_refresh_list_after_import`] — `true` on `Success`
+    /// and `DurabilityWarning`, `false` on `NotCommitted` / `Inline`.
+    pub refresh_list: bool,
+}
+
+/// Bundle the trio of import-dispatch decisions into a single
+/// [`ImportDispatch`] result so `AppModel::update` can apply the
+/// worker outcome in one shot.
+///
+/// The composer is a pure aggregator over the existing trio — it
+/// never re-derives the routing:
+///
+/// * `drop_dialog` mirrors [`should_drop_import_dialog_after`] (always
+///   `false`).
+/// * `dialog_msg` mirrors [`import_dialog_msg_after`] (always
+///   `Some(WorkerCompleted(outcome))`).
+/// * `app_state` mirrors [`import_final_app_state`] (the
+///   `UnlockedBusy → Unlocked` rollback).
+/// * `refresh_list` mirrors [`should_refresh_list_after_import`]
+///   (`true` on `Success` / `DurabilityWarning`, `false` on
+///   `NotCommitted` / `Inline`).
+#[must_use]
+pub fn compose_import_dispatch(current: &AppState, outcome: &MergeOutcome) -> ImportDispatch {
+    ImportDispatch {
+        app_state: import_final_app_state(current, outcome),
+        dialog_msg: import_dialog_msg_after(outcome),
+        drop_dialog: should_drop_import_dialog_after(outcome),
+        refresh_list: should_refresh_list_after_import(outcome),
+    }
+}
+
+/// Apply [`compose_import_dispatch`]'s state field in-place to
+/// `state`, leaving it unchanged when the dispatch carries
+/// `app_state = None`.
+///
+/// Symmetric partner of [`apply_remove_dispatch_inplace`] /
+/// [`apply_rename_dispatch_inplace`] / [`apply_add_dispatch_inplace`]
+/// for the import path. Returns `true` when the state actually
+/// transitioned (`dispatch.app_state` was `Some(_)` and `*state` now
+/// mirrors the composer's projection), `false` otherwise.
+pub fn apply_import_dispatch_inplace(state: &mut AppState, dispatch: &ImportDispatch) -> bool {
+    if let Some(new_state) = dispatch.app_state.as_ref() {
+        *state = new_state.clone();
+        true
+    } else {
+        false
+    }
+}
+
+/// Install the worker's `(Vault, Store)` pair from
+/// [`crate::import_dialog::ImportWorkerCompletion`] into
+/// `AppModel::vault` in-place.
+///
+/// Symmetric partner of [`apply_remove_vault_install_inplace`] /
+/// [`apply_rename_vault_install_inplace`] /
+/// [`apply_add_vault_install_inplace`] for the import path. The
+/// import worker always returns the pair on every branch (`Success`,
+/// `DurabilityWarning`, `NotCommitted`, `Inline`) because
+/// `Vault::mutate_and_save` is the authoritative rollback /
+/// durability source per DESIGN.md §4.3. There is no `None` case to
+/// dispatch on, so the helper takes the pair by value and always
+/// installs.
+///
+/// `pair` is consumed by value because [`Vault`] and [`Store`] are
+/// non-`Clone`. The wrapper stays shape-only — it does not inspect
+/// the pair — so the side-effect decision in `AppModel::update`
+/// stays unit-testable in `tests/app_state_logic.rs` against real
+/// `(Vault, Store)` pairs constructed via `paladin_core::Store::create`
+/// over a tempfile vault.
+pub fn apply_import_vault_install_inplace(
+    vault_slot: &mut Option<(Vault, Store)>,
+    pair: (Vault, Store),
+) {
+    *vault_slot = Some(pair);
 }

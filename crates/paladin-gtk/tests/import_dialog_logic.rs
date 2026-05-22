@@ -58,11 +58,19 @@ use paladin_gtk::import_dialog::{
     compose_counts_panel_replaced_label, compose_counts_panel_skipped_label,
     compose_counts_panel_visible, compose_counts_panel_warnings_label, compose_inline_error_body,
     compose_inline_error_revealed, compose_inline_warning_body, compose_inline_warning_revealed,
-    compose_passphrase_row_visible, compose_submit_button_sensitive, compose_submit_outcome,
-    passphrase_needs_reset, run_import_worker, ConflictChoice, FormatChoice, ImportDialogMsg,
-    ImportDialogOutput, ImportDialogState, ImportSubmitPayload, ImportWorkerCompletion,
-    ImportWorkerInput, InlineError, InlineWarning, MergeOutcome, MergeSummary, PrecheckOutcome,
-    SubmitOutcome,
+    compose_passphrase_row_visible, compose_source_row_subtitle, compose_submit_button_sensitive,
+    compose_submit_outcome, conflict_choice_from_index, format_choice_from_index,
+    format_import_dialog_cancel_label, format_import_dialog_choose_source_label,
+    format_import_dialog_conflict_labels, format_import_dialog_conflict_row_title,
+    format_import_dialog_counts_group_title, format_import_dialog_dismiss_label,
+    format_import_dialog_format_labels, format_import_dialog_format_row_title,
+    format_import_dialog_import_label, format_import_dialog_options_group_title,
+    format_import_dialog_passphrase_row_title, format_import_dialog_source_group_title,
+    format_import_dialog_source_row_placeholder, format_import_dialog_source_row_title,
+    format_import_dialog_subtitle, format_import_dialog_title, passphrase_needs_reset,
+    run_import_worker, ConflictChoice, FormatChoice, ImportDialogMsg, ImportDialogOutput,
+    ImportDialogState, ImportSubmitPayload, ImportWorkerCompletion, ImportWorkerInput, InlineError,
+    InlineWarning, MergeOutcome, MergeSummary, PrecheckOutcome, SubmitOutcome,
 };
 use secrecy::{ExposeSecret, SecretString};
 use tempfile::TempDir;
@@ -1457,4 +1465,242 @@ fn import_submit_payload_carries_path_format_conflict_passphrase() {
             .expose_secret(),
         "hunter2"
     );
+}
+
+// ---------------------------------------------------------------------------
+// format_import_dialog_* — pinned label / title strings shared by the
+// `view!` tree and the pure-logic tests. Each helper returns a `'static`
+// `&str` so the wording is single-sourced; the test guards keep label
+// churn from drifting away from the dialog header / footer / row titles
+// the user actually sees.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn format_import_dialog_title_is_import_accounts() {
+    assert_eq!(format_import_dialog_title(), "Import accounts");
+}
+
+#[test]
+fn format_import_dialog_subtitle_describes_merge() {
+    let subtitle = format_import_dialog_subtitle();
+    assert!(
+        subtitle.contains("Merge") || subtitle.contains("merge"),
+        "subtitle wording must reference the merge semantics: {subtitle:?}",
+    );
+    assert!(
+        subtitle.contains("vault") || subtitle.contains("Vault"),
+        "subtitle wording must reference the target vault: {subtitle:?}",
+    );
+}
+
+#[test]
+fn format_import_dialog_source_titles_are_distinct() {
+    let group = format_import_dialog_source_group_title();
+    let row = format_import_dialog_source_row_title();
+    let placeholder = format_import_dialog_source_row_placeholder();
+    let button = format_import_dialog_choose_source_label();
+    assert_ne!(group, row);
+    assert_ne!(row, placeholder);
+    assert_ne!(row, button);
+    assert!(
+        button.ends_with('…'),
+        "button label uses an ellipsis to signal it opens a follow-up dialog: {button:?}",
+    );
+}
+
+#[test]
+fn format_import_dialog_options_titles_are_distinct() {
+    let group = format_import_dialog_options_group_title();
+    let format = format_import_dialog_format_row_title();
+    let conflict = format_import_dialog_conflict_row_title();
+    let passphrase = format_import_dialog_passphrase_row_title();
+    assert_ne!(group, format);
+    assert_ne!(format, conflict);
+    assert_ne!(conflict, passphrase);
+    assert_ne!(format, passphrase);
+}
+
+#[test]
+fn format_import_dialog_counts_group_title_is_import_complete() {
+    assert_eq!(format_import_dialog_counts_group_title(), "Import complete");
+}
+
+#[test]
+fn format_import_dialog_footer_labels_are_distinct() {
+    let cancel = format_import_dialog_cancel_label();
+    let import = format_import_dialog_import_label();
+    let dismiss = format_import_dialog_dismiss_label();
+    assert_eq!(cancel, "Cancel");
+    assert_eq!(import, "Import");
+    assert_eq!(dismiss, "Dismiss");
+    assert_ne!(cancel, import);
+    assert_ne!(import, dismiss);
+}
+
+// ---------------------------------------------------------------------------
+// format_import_dialog_format_labels / format_import_dialog_conflict_labels
+// — `AdwComboRow` model display labels, ordered to match the inverse
+// mapping in `format_choice_from_index` / `conflict_choice_from_index`.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn format_import_dialog_format_labels_has_five_choices_in_canonical_order() {
+    let labels = format_import_dialog_format_labels();
+    assert_eq!(labels.len(), 5);
+    assert_eq!(labels[0], "Auto-detect");
+    // Each subsequent label must match the explicit format choice
+    // produced by `format_choice_from_index(idx)`.
+    let canonical = [
+        FormatChoice::AutoDetect,
+        FormatChoice::Otpauth,
+        FormatChoice::Aegis,
+        FormatChoice::Paladin,
+        FormatChoice::Qr,
+    ];
+    for (idx, choice) in canonical.iter().enumerate() {
+        let from_index = format_choice_from_index(u32::try_from(idx).unwrap())
+            .expect("canonical index has a choice");
+        assert_eq!(from_index, *choice, "canonical order at idx={idx}");
+    }
+}
+
+#[test]
+fn format_import_dialog_conflict_labels_has_three_choices_in_canonical_order() {
+    let labels = format_import_dialog_conflict_labels();
+    assert_eq!(labels.len(), 3);
+    let canonical = [
+        ConflictChoice::Skip,
+        ConflictChoice::Replace,
+        ConflictChoice::Append,
+    ];
+    for (idx, choice) in canonical.iter().enumerate() {
+        let from_index = conflict_choice_from_index(u32::try_from(idx).unwrap())
+            .expect("canonical index has a choice");
+        assert_eq!(from_index, *choice, "canonical order at idx={idx}");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// `FormatChoice::index` / `format_choice_from_index` and
+// `ConflictChoice::index` / `conflict_choice_from_index` are inverses
+// over the canonical [0, n) range; out-of-range selections route to
+// `None` so the dispatch arm leaves the draft untouched (matching the
+// `parse_manual_kind_from_selected` pattern in `add_account.rs`).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn format_choice_index_round_trips() {
+    let canonical = [
+        FormatChoice::AutoDetect,
+        FormatChoice::Otpauth,
+        FormatChoice::Aegis,
+        FormatChoice::Paladin,
+        FormatChoice::Qr,
+    ];
+    for choice in canonical {
+        let idx = choice.index();
+        assert_eq!(
+            format_choice_from_index(idx),
+            Some(choice),
+            "format choice round-trips through index for choice={choice:?} idx={idx}",
+        );
+    }
+}
+
+#[test]
+fn format_choice_from_index_rejects_out_of_range() {
+    assert_eq!(format_choice_from_index(5), None);
+    assert_eq!(format_choice_from_index(42), None);
+    assert_eq!(format_choice_from_index(u32::MAX), None);
+}
+
+#[test]
+fn conflict_choice_index_round_trips() {
+    let canonical = [
+        ConflictChoice::Skip,
+        ConflictChoice::Replace,
+        ConflictChoice::Append,
+    ];
+    for choice in canonical {
+        let idx = choice.index();
+        assert_eq!(
+            conflict_choice_from_index(idx),
+            Some(choice),
+            "conflict choice round-trips through index for choice={choice:?} idx={idx}",
+        );
+    }
+}
+
+#[test]
+fn conflict_choice_from_index_rejects_out_of_range() {
+    assert_eq!(conflict_choice_from_index(3), None);
+    assert_eq!(conflict_choice_from_index(99), None);
+    assert_eq!(conflict_choice_from_index(u32::MAX), None);
+}
+
+// ---------------------------------------------------------------------------
+// `compose_source_row_subtitle` — subtitle binding for the source
+// `adw::ActionRow`. Pure projection over `ImportDialogState::source_path`.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn compose_source_row_subtitle_shows_placeholder_when_no_source() {
+    let state = ImportDialogState::new();
+    assert_eq!(
+        compose_source_row_subtitle(&state),
+        format_import_dialog_source_row_placeholder(),
+        "no-source state surfaces the placeholder verbatim",
+    );
+}
+
+#[test]
+fn compose_source_row_subtitle_shows_picked_path_after_source_picked() {
+    let mut state = ImportDialogState::new();
+    let path = PathBuf::from("/tmp/import-source.json");
+    state.set_source_path(path.clone(), PaladinImportPrecheck::NoPrompt);
+    let subtitle = compose_source_row_subtitle(&state);
+    assert_eq!(subtitle, path.display().to_string());
+    assert_ne!(
+        subtitle,
+        format_import_dialog_source_row_placeholder(),
+        "with a path picked the subtitle must not be the placeholder",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// MergeOutcome must be Clone-able so `compose_import_dispatch` can
+// embed it in `ImportDialogMsg::WorkerCompleted` without consuming the
+// dispatch-site outcome (the dispatch composer takes the outcome by
+// reference and the call site needs to keep it for refresh / state
+// inspection).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn merge_outcome_success_is_clone() {
+    let report = import_report_with_counts(2, 1, 3, 4);
+    let outcome = classify_merge_result(Ok(report));
+    let cloned = outcome.clone();
+    match (outcome, cloned) {
+        (MergeOutcome::Success(a), MergeOutcome::Success(b)) => {
+            assert_eq!(a.imported, b.imported);
+            assert_eq!(a.skipped, b.skipped);
+            assert_eq!(a.replaced, b.replaced);
+            assert_eq!(a.appended, b.appended);
+            assert_eq!(a.warnings, b.warnings);
+        }
+        _ => panic!("expected Success on both sides"),
+    }
+}
+
+#[test]
+fn merge_outcome_inline_is_clone() {
+    let outcome = classify_merge_result(Err(PaladinError::NoEntriesToImport));
+    let cloned = outcome.clone();
+    match (outcome, cloned) {
+        (MergeOutcome::Inline(a), MergeOutcome::Inline(b)) => {
+            assert_eq!(a.kind, b.kind);
+            assert_eq!(a.rendered, b.rendered);
+        }
+        _ => panic!("expected Inline on both sides"),
+    }
 }

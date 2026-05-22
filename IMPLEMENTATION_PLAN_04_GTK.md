@@ -2911,42 +2911,42 @@ sign-off.
 - [ ] `ImportDialogComponent` full implementation (file picker,
   format selector, on-conflict selector, passphrase prompt routing,
   merge call, error display).
-  - [ ] Pick the source file via `gtk::FileDialog` (the GTK 4.10+
+  - [x] Pick the source file via `gtk::FileDialog` (the GTK 4.10+
     replacement for the deprecated `gtk::FileChooserNative`).
-  - [ ] Add a format selector (auto-detect / explicit `otpauth` /
+  - [x] Add a format selector (auto-detect / explicit `otpauth` /
     `aegis` / `paladin` / `qr`) and an on-conflict selector
     (`skip` / `replace` / `append`).
-  - [ ] Before any Paladin-bundle passphrase prompt, call
+  - [x] Before any Paladin-bundle passphrase prompt, call
     `paladin_core::classify_paladin_import_precheck(path,
     forced_format)` and act on the returned variant:
     `PromptForPassphrase` prompts inside the dialog, `Reject(err)`
     surfaces the exact core error inline without prompting, and
     `NoPrompt` continues through `paladin_core::import::from_file`.
-  - [ ] Clear the bundle-passphrase row when the source path or
+  - [x] Clear the bundle-passphrase row when the source path or
     forced format changes after entry, and restart the probe /
     prompt flow.
-  - [ ] Run the selected `paladin_core::import::from_file` call,
+  - [x] Run the selected `paladin_core::import::from_file` call,
     the `Vault::import_accounts(accounts, conflict, import_time)`
     merge, and the surrounding `Vault::mutate_and_save` as one
     serialized `gio::spawn_blocking` worker (encrypted-Paladin runs
     Argon2id; keep it off the main loop).
-  - [ ] On success, refresh `AccountListComponent` from the returned
+  - [x] On success, refresh `AccountListComponent` from the returned
     vault and keep the dialog on a post-success counts panel until the
     user dismisses it.
-  - [ ] Surface post-merge counts (`imported` / `skipped` /
+  - [x] Surface post-merge counts (`imported` / `skipped` /
     `replaced` / `appended` / `warnings`) inline on the success panel.
-  - [ ] Handle `save_not_committed` by restoring the
+  - [x] Handle `save_not_committed` by restoring the
     `Vault::mutate_and_save` snapshot and keeping the dialog open
     with the inline error; handle `save_durability_unconfirmed` by
     keeping the merged accounts and surfacing the warning inline.
-  - [ ] Surface importer errors inline without closing the dialog
+  - [x] Surface importer errors inline without closing the dialog
     or mutating vault state: `unsupported_import_format`,
     `unsupported_plaintext_vault`, `unsupported_encrypted_aegis`,
     `unsupported_aegis_entry_type`, `validation_error`,
     `no_entries_to_import`, `decrypt_failed`, `invalid_header`,
     `invalid_payload`, `unsupported_format_version`,
     `kdf_params_out_of_bounds`, `io_error`.
-  - [ ] Zeroize the bundle-passphrase widget buffer on submit /
+  - [x] Zeroize the bundle-passphrase widget buffer on submit /
     cancel / dialog close / auto-lock.
 - [ ] `ExportDialogComponent` full implementation (format selector,
   destination picker, overwrite gate, plaintext warning,

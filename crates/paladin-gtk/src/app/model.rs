@@ -83,16 +83,18 @@ use crate::add_account::{
     QrWorkerCompletion,
 };
 use crate::app::state::{
-    apply_add_dispatch_inplace, apply_add_vault_install_inplace, apply_qr_dispatch_inplace,
-    apply_remove_dispatch_inplace, apply_remove_vault_install_inplace,
-    apply_rename_dispatch_inplace, apply_rename_vault_install_inplace, apply_submit_add_inplace,
+    apply_add_dispatch_inplace, apply_add_vault_install_inplace, apply_import_dispatch_inplace,
+    apply_import_vault_install_inplace, apply_qr_dispatch_inplace, apply_remove_dispatch_inplace,
+    apply_remove_vault_install_inplace, apply_rename_dispatch_inplace,
+    apply_rename_vault_install_inplace, apply_submit_add_inplace, apply_submit_import_inplace,
     apply_submit_remove_inplace, apply_submit_rename_inplace, apply_submit_unlock_inplace,
     apply_unlock_dispatch_inplace, apply_unlock_vault_install_inplace, compose_add_dispatch,
-    compose_add_worker_input, compose_qr_dispatch, compose_qr_worker_input,
-    compose_remove_dispatch, compose_remove_worker_input, compose_rename_dispatch,
-    compose_rename_worker_input, compose_unlock_dispatch, compose_unlock_worker_input,
-    decide_state_from_inspect, decide_state_from_open_error, run_unlock_worker, AppState,
-    OpenErrorOutcome, UnlockWorkerCompletion,
+    compose_add_worker_input, compose_import_dispatch, compose_import_worker_input,
+    compose_qr_dispatch, compose_qr_worker_input, compose_remove_dispatch,
+    compose_remove_worker_input, compose_rename_dispatch, compose_rename_worker_input,
+    compose_unlock_dispatch, compose_unlock_worker_input, decide_state_from_inspect,
+    decide_state_from_open_error, run_unlock_worker, AppState, OpenErrorOutcome,
+    UnlockWorkerCompletion,
 };
 use crate::clipboard_clear::{
     evaluate_wake, prepare_copy_bytes, schedule_copy, PendingClipboardClear, WakeDecision,
@@ -104,7 +106,10 @@ use crate::hotp_reveal::{
     row_display_for_reveal, run_hotp_advance_worker, HotpAdvanceWorkerCompletion,
     HotpAdvanceWorkerInput, RevealEffect, RevealWindow,
 };
-use crate::import_dialog::{ImportDialogComponent, ImportDialogInit, ImportDialogOutput};
+use crate::import_dialog::{
+    run_import_worker, ImportDialogComponent, ImportDialogInit, ImportDialogOutput,
+    ImportWorkerCompletion,
+};
 use crate::init_dialog::{
     format_init_dialog_marker, run_init_worker, InitDialogComponent, InitDialogInit, InitDialogMsg,
     InitDialogOutput, InitWorkerCompletion, InitWorkerEffect, InitWorkerInput, InitWorkerMode,
@@ -788,6 +793,36 @@ pub enum AppMsg {
     /// [`crate::app::state::apply_add_vault_install_inplace`]
     /// unconditionally.
     AddWorkerCompleted(AddWorkerCompletion),
+    /// Posted by the `gio::spawn_blocking` worker that runs
+    /// `Vault::mutate_and_save(|v| { from_file(...) -> v.import_accounts(...) })`
+    /// for the application menu's Import… entry after it consumes a
+    /// [`crate::import_dialog::ImportWorkerInput`] and reports its
+    /// routed outcome as an
+    /// [`crate::import_dialog::ImportWorkerCompletion`] — the typed
+    /// [`crate::import_dialog::MergeOutcome`] bundled with the live
+    /// `(Vault, Store)` pair returned by `mutate_and_save` regardless
+    /// of typed outcome.
+    ///
+    /// Mirrors the [`Self::RemoveWorkerCompleted`] /
+    /// [`Self::AddWorkerCompleted`] dispatch paths with one
+    /// divergence pinned by
+    /// [`crate::app::state::compose_import_dispatch`]:
+    /// `drop_dialog` is always `false` — the import dialog keeps the
+    /// post-merge counts panel mounted (on `Success`) or the inline
+    /// error / warning visible (on every failure branch) until the
+    /// user clicks Dismiss or Cancel per
+    /// `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+    /// `ImportDialog` ("keep the dialog on a post-success counts
+    /// panel until the user dismisses it"). `dialog_msg` is always
+    /// `Some(ImportDialogMsg::WorkerCompleted(outcome))` so the
+    /// dialog populates the counts panel / inline warning / inline
+    /// error per the typed outcome.
+    ///
+    /// The carried pair is reinstalled into [`AppModel::vault`] via
+    /// [`crate::app::state::apply_import_vault_install_inplace`]
+    /// unconditionally — `mutate_and_save` is authoritative for the
+    /// post-merge / rollback state across every outcome branch.
+    ImportWorkerCompleted(ImportWorkerCompletion),
     /// Posted by the `gio::spawn_blocking` worker that runs
     /// `Vault::mutate_and_save(|v| v.import_accounts(...))` for the
     /// clipboard-QR add path after it consumes a
@@ -1746,21 +1781,144 @@ impl SimpleComponent for AppModel {
                 // `ImportDialogState` zeroes on drop).
                 self.import_dialog = None;
             }
-            AppMsg::ImportDialogAction(ImportDialogOutput::Submit(_payload)) => {
-                // Submit forwarded with a validated
-                // `ImportSubmitPayload`. The
-                // `gio::spawn_blocking
+            AppMsg::ImportDialogAction(ImportDialogOutput::Submit(payload)) => {
+                // Entry side of the `gio::spawn_blocking
                 // Vault::mutate_and_save(|v| { from_file(...) ->
-                // v.import_accounts(...) })` worker dispatch lands in
-                // the follow-up commit that introduces
-                // `compose_import_worker_input` and the matching
-                // `AppMsg::ImportWorkerCompleted` routing. Until
-                // then the payload drops here (the `SecretString`
-                // inside `_payload.options` zeroizes on drop) and
-                // the dialog stays mounted because the controller
-                // is not taken out of `self.import_dialog` — the
-                // submit click appears to no-op rather than tearing
-                // down a draft the worker plumbing cannot yet honor.
+                // v.import_accounts(...) })` worker. Mirrors the
+                // rename / remove / add submit handlers
+                // step-for-step:
+                //
+                // 1. Take the live `(Vault, Store)` pair from
+                //    `self.vault` and bundle it with the dispatch
+                //    payload (source path, importer options including
+                //    the bundle passphrase, on-conflict policy) plus
+                //    the dispatch-site `import_time` into an
+                //    `ImportWorkerInput` via
+                //    `compose_import_worker_input`. Only `Unlocked`
+                //    returns `Ok(input)`; every other variant returns
+                //    `Err(pair)` so the wrapper can reinstall the
+                //    pair via `apply_import_vault_install_inplace`.
+                //    A `None` state or a `None` vault slot is the
+                //    defensive no-op (a stray `Submit` from a locked
+                //    / missing / busy state).
+                // 2. Apply the `Unlocked → UnlockedBusy` busy-gate
+                //    transition via `apply_submit_import_inplace`.
+                //    The dialog stays mounted —
+                //    `should_drop_import_dialog_after` keeps it on
+                //    every outcome so the post-success counts panel
+                //    or post-failure inline error / warning surfaces
+                //    inline (the dialog itself is the success
+                //    surface per
+                //    `IMPLEMENTATION_PLAN_04_GTK.md` §"Component
+                //    tree" > `ImportDialog`).
+                // 3. Spawn `run_import_worker` on
+                //    `gtk::gio::spawn_blocking` so the encrypted-
+                //    Paladin variant's §4.4 Argon2id KDF and the
+                //    `mutate_and_save` durability fsync hop do not
+                //    block the GTK main loop. The wrapping
+                //    `gtk::glib::spawn_future_local` awaits the
+                //    blocking handle and posts the bundled
+                //    `ImportWorkerCompletion` back to `AppModel` via
+                //    `AppMsg::ImportWorkerCompleted`, which is
+                //    consumed by the dispatch branch wired below.
+                let import_time = SystemTime::now();
+                let worker_input = match (self.state.as_ref(), self.vault.take()) {
+                    (Some(state), Some(pair)) => {
+                        match compose_import_worker_input(state, pair, payload, import_time) {
+                            Ok(input) => Some(input),
+                            Err(pair) => {
+                                apply_import_vault_install_inplace(&mut self.vault, pair);
+                                None
+                            }
+                        }
+                    }
+                    (None, Some(pair)) => {
+                        apply_import_vault_install_inplace(&mut self.vault, pair);
+                        None
+                    }
+                    (_, None) => None,
+                };
+                if let Some(state) = self.state.as_mut() {
+                    apply_submit_import_inplace(state);
+                }
+                if let Some(input) = worker_input {
+                    let sender = sender.clone();
+                    gtk::glib::spawn_future_local(async move {
+                        let completion = gtk::gio::spawn_blocking(move || run_import_worker(input))
+                            .await
+                            .expect("Vault::mutate_and_save import worker panicked");
+                        sender.input(AppMsg::ImportWorkerCompleted(completion));
+                    });
+                }
+            }
+            AppMsg::ImportWorkerCompleted(completion) => {
+                // Worker-outcome dispatch. Mirrors `RemoveWorkerCompleted`
+                // / `RenameWorkerCompleted` / `AddWorkerCompleted` with
+                // one divergence pinned by `compose_import_dispatch`:
+                // `drop_dialog` is always `false` because the import
+                // dialog keeps the post-merge counts panel mounted
+                // until the user clicks Dismiss (per
+                // `IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" >
+                // `ImportDialog`). The dispatch bundles the worker
+                // outcome over the cached `AppState` into an
+                // `ImportDispatch`:
+                //
+                // * `app_state` — `UnlockedBusy → Unlocked` rollback
+                //   regardless of typed outcome
+                //   (`Vault::mutate_and_save` is authoritative for
+                //   the rollback / durability-unconfirmed semantics).
+                //   The `None` defensive case (worker outcome arrived
+                //   but the cached state was not `UnlockedBusy`)
+                //   leaves `AppModel::state` intact.
+                // * `dialog_msg` — always
+                //   `Some(WorkerCompleted(outcome))` so the dialog
+                //   can populate the counts panel (on `Success`),
+                //   the inline warning (on `DurabilityWarning`), or
+                //   the inline error (on `NotCommitted` / `Inline`).
+                // * `drop_dialog` — always `false`.
+                // * `refresh_list` — `true` on `Success` and
+                //   `DurabilityWarning` so the merged accounts appear
+                //   in the visible row set; `false` on `NotCommitted`
+                //   (rollback restored snapshot) and `Inline` (error
+                //   fired before save path).
+                //
+                // The carried `(vault, store)` pair is reinstalled
+                // into `AppModel::vault` via
+                // `apply_import_vault_install_inplace`
+                // unconditionally — `mutate_and_save` is
+                // authoritative for the post-merge / rollback state
+                // across every outcome branch.
+                let ImportWorkerCompletion {
+                    outcome,
+                    vault,
+                    store,
+                } = completion;
+                apply_import_vault_install_inplace(&mut self.vault, (vault, store));
+                let dispatch = self.state.as_mut().map(|state| {
+                    let dispatch = compose_import_dispatch(state, &outcome);
+                    apply_import_dispatch_inplace(state, &dispatch);
+                    dispatch
+                });
+                if let Some(dispatch) = dispatch {
+                    if let Some(msg) = dispatch.dialog_msg {
+                        if let Some(controller) = self.import_dialog.as_ref() {
+                            controller.emit(msg);
+                        }
+                    }
+                    if dispatch.drop_dialog {
+                        // Defensive only — `should_drop_import_dialog_after`
+                        // always returns `false`. Kept as a hook so a
+                        // future `IMPLEMENTATION_PLAN_04_GTK.md`
+                        // policy change can attach to this arm
+                        // without modifying every call site.
+                        if let Some(controller) = self.import_dialog.take() {
+                            controller.widget().force_close();
+                        }
+                    }
+                    if dispatch.refresh_list {
+                        self.refresh_account_list();
+                    }
+                }
             }
             AppMsg::OpenExportDialog => {
                 // Application menu "Export…" activation. Mount a fresh
