@@ -134,7 +134,7 @@ use crate::init_dialog::{
 };
 use crate::passphrase_dialog::{
     run_passphrase_worker, PassphraseDialogComponent, PassphraseDialogInit, PassphraseDialogMsg,
-    PassphraseDialogOutput, PassphraseWorkerCompletion,
+    PassphraseDialogOutput, PassphraseWorkerCompletion, SubFlow,
 };
 use crate::remove_dialog::{
     decide_remove_target, run_remove_worker, RemoveDialogComponent, RemoveDialogOutput,
@@ -1885,7 +1885,32 @@ impl SimpleComponent for AppModel {
                 let worker_input = match (self.state.as_ref(), self.vault.take()) {
                     (Some(state), Some(pair)) => {
                         match compose_rename_worker_input(state, pair, account_id, label, now) {
-                            Ok(input) => Some(input),
+                            Ok(input) => {
+                                // Gate through the in-flight effect-
+                                // ownership state machine so the busy
+                                // gate / deferred-quit / deferred-lock
+                                // tracking covers this dispatch. By
+                                // invariant `compose` returned Ok only
+                                // on `Unlocked` state, which implies
+                                // `effects` is idle, so `Accepted` is
+                                // the expected branch. `Rejected` is
+                                // defensive — reinstall the pair from
+                                // the input fields and drop the
+                                // dispatch.
+                                match handle_effect_request(
+                                    self.effects.as_mut(),
+                                    EffectKind::RenameAccount,
+                                ) {
+                                    EffectStart::Accepted => Some(input),
+                                    EffectStart::Rejected => {
+                                        apply_rename_vault_install_inplace(
+                                            &mut self.vault,
+                                            (input.vault, input.store),
+                                        );
+                                        None
+                                    }
+                                }
+                            }
                             Err(pair) => {
                                 apply_rename_vault_install_inplace(&mut self.vault, pair);
                                 None
@@ -1989,7 +2014,19 @@ impl SimpleComponent for AppModel {
                 let worker_input = match (self.state.as_ref(), self.vault.take()) {
                     (Some(state), Some(pair)) => {
                         match compose_settings_worker_input(state, pair, patch) {
-                            Ok(input) => Some(input),
+                            Ok(input) => match handle_effect_request(
+                                self.effects.as_mut(),
+                                EffectKind::Settings,
+                            ) {
+                                EffectStart::Accepted => Some(input),
+                                EffectStart::Rejected => {
+                                    apply_settings_vault_install_inplace(
+                                        &mut self.vault,
+                                        (input.vault, input.store),
+                                    );
+                                    None
+                                }
+                            },
                             Err(pair) => {
                                 apply_settings_vault_install_inplace(&mut self.vault, pair);
                                 None
@@ -2068,6 +2105,10 @@ impl SimpleComponent for AppModel {
                         }
                     }
                 }
+                let vault_still_encrypted =
+                    self.vault.as_ref().is_some_and(|(v, _)| v.is_encrypted());
+                let post = handle_effect_completion(self.effects.as_mut(), vault_still_encrypted);
+                self.apply_effect_completion_outcome(post, &sender);
             }
             AppMsg::OpenImportDialog => {
                 // Application menu "Import…" activation. Mount a fresh
@@ -2163,7 +2204,19 @@ impl SimpleComponent for AppModel {
                 let worker_input = match (self.state.as_ref(), self.vault.take()) {
                     (Some(state), Some(pair)) => {
                         match compose_import_worker_input(state, pair, payload, import_time) {
-                            Ok(input) => Some(input),
+                            Ok(input) => match handle_effect_request(
+                                self.effects.as_mut(),
+                                EffectKind::Import,
+                            ) {
+                                EffectStart::Accepted => Some(input),
+                                EffectStart::Rejected => {
+                                    apply_import_vault_install_inplace(
+                                        &mut self.vault,
+                                        (input.vault, input.store),
+                                    );
+                                    None
+                                }
+                            },
                             Err(pair) => {
                                 apply_import_vault_install_inplace(&mut self.vault, pair);
                                 None
@@ -2257,6 +2310,10 @@ impl SimpleComponent for AppModel {
                         self.refresh_account_list();
                     }
                 }
+                let vault_still_encrypted =
+                    self.vault.as_ref().is_some_and(|(v, _)| v.is_encrypted());
+                let post = handle_effect_completion(self.effects.as_mut(), vault_still_encrypted);
+                self.apply_effect_completion_outcome(post, &sender);
             }
             AppMsg::OpenExportDialog => {
                 // Application menu "Export…" activation. Mount a fresh
@@ -2341,7 +2398,19 @@ impl SimpleComponent for AppModel {
                 let worker_input = match (self.state.as_ref(), self.vault.take()) {
                     (Some(state), Some(pair)) => {
                         match compose_export_worker_input(state, pair, payload) {
-                            Ok(input) => Some(input),
+                            Ok(input) => match handle_effect_request(
+                                self.effects.as_mut(),
+                                EffectKind::Export,
+                            ) {
+                                EffectStart::Accepted => Some(input),
+                                EffectStart::Rejected => {
+                                    apply_export_vault_install_inplace(
+                                        &mut self.vault,
+                                        (input.vault, input.store),
+                                    );
+                                    None
+                                }
+                            },
                             Err(pair) => {
                                 apply_export_vault_install_inplace(&mut self.vault, pair);
                                 None
@@ -2428,6 +2497,10 @@ impl SimpleComponent for AppModel {
                         self.toast_overlay.add_toast(adw::Toast::new(&body));
                     }
                 }
+                let vault_still_encrypted =
+                    self.vault.as_ref().is_some_and(|(v, _)| v.is_encrypted());
+                let post = handle_effect_completion(self.effects.as_mut(), vault_still_encrypted);
+                self.apply_effect_completion_outcome(post, &sender);
             }
             AppMsg::OpenPassphraseDialog => {
                 // Application menu "Passphrase…" activation. Mount a
@@ -2519,7 +2592,23 @@ impl SimpleComponent for AppModel {
                 let worker_input = match (self.state.as_ref(), self.vault.take()) {
                     (Some(state), Some(pair)) => {
                         match compose_passphrase_worker_input(state, pair, payload) {
-                            Ok(input) => Some(input),
+                            Ok(input) => {
+                                let kind = match input.payload.sub_flow() {
+                                    SubFlow::Set => EffectKind::PassphraseSet,
+                                    SubFlow::Change => EffectKind::PassphraseChange,
+                                    SubFlow::Remove => EffectKind::PassphraseRemove,
+                                };
+                                match handle_effect_request(self.effects.as_mut(), kind) {
+                                    EffectStart::Accepted => Some(input),
+                                    EffectStart::Rejected => {
+                                        apply_passphrase_vault_install_inplace(
+                                            &mut self.vault,
+                                            (input.vault, input.store),
+                                        );
+                                        None
+                                    }
+                                }
+                            }
                             Err(pair) => {
                                 apply_passphrase_vault_install_inplace(&mut self.vault, pair);
                                 None
@@ -2660,6 +2749,10 @@ impl SimpleComponent for AppModel {
                         );
                     }
                 }
+                let vault_still_encrypted =
+                    self.vault.as_ref().is_some_and(|(v, _)| v.is_encrypted());
+                let post = handle_effect_completion(self.effects.as_mut(), vault_still_encrypted);
+                self.apply_effect_completion_outcome(post, &sender);
             }
             AppMsg::OpenAddDialog => {
                 // Header-bar `+` button activation. Mount a fresh
@@ -2750,7 +2843,19 @@ impl SimpleComponent for AppModel {
                 let worker_input = match (self.state.as_ref(), self.vault.take()) {
                     (Some(state), Some(pair)) => {
                         match compose_add_worker_input(state, pair, account) {
-                            Ok(input) => Some(input),
+                            Ok(input) => match handle_effect_request(
+                                self.effects.as_mut(),
+                                EffectKind::AddAccount,
+                            ) {
+                                EffectStart::Accepted => Some(input),
+                                EffectStart::Rejected => {
+                                    apply_add_vault_install_inplace(
+                                        &mut self.vault,
+                                        (input.vault, input.store),
+                                    );
+                                    None
+                                }
+                            },
                             Err(pair) => {
                                 apply_add_vault_install_inplace(&mut self.vault, pair);
                                 None
@@ -2910,7 +3015,27 @@ impl SimpleComponent for AppModel {
                                     accounts,
                                     SystemTime::now(),
                                 ) {
-                                    Ok(input) => Some(input),
+                                    Ok(input) => match handle_effect_request(
+                                        self.effects.as_mut(),
+                                        // QR clipboard imports live
+                                        // inside `AddAccountComponent`
+                                        // and call `Vault::add` via
+                                        // `mutate_and_save`, so the
+                                        // effect-class is the same as
+                                        // a manual / URI add. See
+                                        // `EffectKind::AddAccount`
+                                        // docs.
+                                        EffectKind::AddAccount,
+                                    ) {
+                                        EffectStart::Accepted => Some(input),
+                                        EffectStart::Rejected => {
+                                            apply_add_vault_install_inplace(
+                                                &mut self.vault,
+                                                (input.vault, input.store),
+                                            );
+                                            None
+                                        }
+                                    },
                                     Err(pair) => {
                                         apply_add_vault_install_inplace(&mut self.vault, pair);
                                         None
@@ -2974,7 +3099,19 @@ impl SimpleComponent for AppModel {
                 let worker_input = match (self.state.as_ref(), self.vault.take()) {
                     (Some(state), Some(pair)) => {
                         match compose_remove_worker_input(state, pair, account_id) {
-                            Ok(input) => Some(input),
+                            Ok(input) => match handle_effect_request(
+                                self.effects.as_mut(),
+                                EffectKind::RemoveAccount,
+                            ) {
+                                EffectStart::Accepted => Some(input),
+                                EffectStart::Rejected => {
+                                    apply_remove_vault_install_inplace(
+                                        &mut self.vault,
+                                        (input.vault, input.store),
+                                    );
+                                    None
+                                }
+                            },
                             Err(pair) => {
                                 apply_remove_vault_install_inplace(&mut self.vault, pair);
                                 None
@@ -3267,6 +3404,10 @@ impl SimpleComponent for AppModel {
                         self.toast_overlay.add_toast(adw::Toast::new(&body));
                     }
                 }
+                let vault_still_encrypted =
+                    self.vault.as_ref().is_some_and(|(v, _)| v.is_encrypted());
+                let post = handle_effect_completion(self.effects.as_mut(), vault_still_encrypted);
+                self.apply_effect_completion_outcome(post, &sender);
             }
             AppMsg::RenameWorkerCompleted(completion) => {
                 // Worker-outcome dispatch. `compose_rename_dispatch`
@@ -3333,6 +3474,10 @@ impl SimpleComponent for AppModel {
                         self.toast_overlay.add_toast(adw::Toast::new(&body));
                     }
                 }
+                let vault_still_encrypted =
+                    self.vault.as_ref().is_some_and(|(v, _)| v.is_encrypted());
+                let post = handle_effect_completion(self.effects.as_mut(), vault_still_encrypted);
+                self.apply_effect_completion_outcome(post, &sender);
             }
             AppMsg::HotpAdvanceWorkerCompleted(completion) => {
                 // Worker-outcome dispatch per `IMPLEMENTATION_PLAN_04_GTK.md`
@@ -3447,6 +3592,10 @@ impl SimpleComponent for AppModel {
                         self.toast_overlay.add_toast(adw::Toast::new(&body));
                     }
                 }
+                let vault_still_encrypted =
+                    self.vault.as_ref().is_some_and(|(v, _)| v.is_encrypted());
+                let post = handle_effect_completion(self.effects.as_mut(), vault_still_encrypted);
+                self.apply_effect_completion_outcome(post, &sender);
             }
             AppMsg::QrWorkerCompleted(completion) => {
                 // Clipboard-QR worker-outcome dispatch. Symmetric
@@ -3501,6 +3650,10 @@ impl SimpleComponent for AppModel {
                         self.refresh_account_list();
                     }
                 }
+                let vault_still_encrypted =
+                    self.vault.as_ref().is_some_and(|(v, _)| v.is_encrypted());
+                let post = handle_effect_completion(self.effects.as_mut(), vault_still_encrypted);
+                self.apply_effect_completion_outcome(post, &sender);
             }
         }
 
